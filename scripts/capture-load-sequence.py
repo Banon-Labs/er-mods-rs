@@ -95,7 +95,7 @@ def main() -> int:
     ap.add_argument("--report", type=Path, default=None)
     args = ap.parse_args()
 
-    telem = args.artifact_dir / "er-effects-telemetry.json"
+    telem = args.artifact_dir / "er-quickload-telemetry.json"
     slots = [int(s) for s in args.slots.replace(",", " ").split()]
     files = [s.strip() for s in args.switch_files.split(",")] if args.switch_files.strip() else []
     snapshots = []  # (label, fields)

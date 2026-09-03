@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban ending a turn on a promise nothing is going to keep
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-UNEXECUTED-PROMISE
@@ -18,7 +18,10 @@
 #
 #     THE VIOLATION IS A CONJUNCTION OF FOUR FACTS, computed in the signal:
 #       1. the turn's FINAL prose block commits the agent to a CONCRETE action ("I'll re-run the
-#          gate", "I'm going to patch it", "let me check the offsets");
+#          gate", "I'm going to patch it", "let me check the offsets", and the bare present
+#          continuous "I'm closing it" -- the shape that walked through this guard on 2026-09-01,
+#          because present continuous reads as already underway and is therefore the more seductive
+#          way to make a promise nothing keeps);
 #       2. no tool_use follows that prose in the turn -- nothing executed it;
 #       3. no background work is live -- no backgrounded Bash still awaiting its result, no async
 #          subagent that has not notified, no detached shell / Monitor / SendMessage in the turn;

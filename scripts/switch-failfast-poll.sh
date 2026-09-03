@@ -6,9 +6,9 @@
 #
 # Usage: scripts/switch-failfast-poll.sh   (defaults to the repro-selfdrive artifact dir)
 set -u
-REPO=/home/banon/projects/er-effects-rs
+REPO=/home/banon/projects/er-mods-rs
 ART="${ARTIFACT_DIR:-$REPO/target/runtime-probe/system-quit-repro-selfdrive}"
-TELEM="$ART/er-effects-telemetry.json"
+TELEM="$ART/er-quickload-telemetry.json"
 ORACLE="$REPO/scripts/switch-character-oracle.py"
 DEADLINE_S=${DEADLINE_S:-125}
 POLL_S=${POLL_S:-3}

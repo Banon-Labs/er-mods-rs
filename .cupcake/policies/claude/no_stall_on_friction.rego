@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban stalling on friction -- confession or hand-back INSTEAD of the corrective action
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-STALL-ON-FRICTION

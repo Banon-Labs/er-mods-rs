@@ -2,7 +2,7 @@
 # Same-character-3x milestone runner (docs/goals/repeatable-multi-save-load-acceptance.md SS4a).
 #
 # Two DLLs via me3, unioned hooks (single MinHook instance owned by the product DLL):
-#   - er_effects_rs.dll        (PRODUCT, being tuned): boot autoload = load1; sq-repro XInput autopilot
+#   - er_quickload.dll        (PRODUCT, being tuned): boot autoload = load1; sq-repro XInput autopilot
 #                              drives 2 same-slot reloads (load2 = freeze, load3 = recovery), with the
 #                              load-2 freeze force-advanced to load3 by the DLL's freeze-recovery deadline.
 #   - er_reload_trace.dll  (COMPANION, log-only): routes every native load/menu hook through the
@@ -19,7 +19,7 @@ BOOT_SLOT="${BOOT_SLOT:-0}"
 TARGET_SLOTS="${TARGET_SLOTS:-0,0,0}" # same-slot (angrE) x3
 SWITCHES="${SWITCHES:-3}"             # 3 reloads after autoload = 4 loads total
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/samechar-3x-$(date +%Y%m%d-%H%M%S)}"
-PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+PRODUCT_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
 TRACE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_reload_trace.dll"
 CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 180)"
 
@@ -58,7 +58,7 @@ mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
 # --- stage BOTH DLLs to GAME_DIR + a TWO-native me3 profile (trace first, product second) ---
-PRODUCT_GAMEDIR="$GAME_DIR/er_effects_rs.dll"
+PRODUCT_GAMEDIR="$GAME_DIR/er_quickload.dll"
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 cp -f "$PRODUCT_DLL" "$PRODUCT_GAMEDIR"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
@@ -79,25 +79,25 @@ PROFILE="$ARTIFACT_DIR/samechar-3x.me3"
 } >"$PROFILE"
 
 # --- boot TOML (in-memory read-only redirect) for load1 = angrE ---
-[[ -f "$GAME_DIR/er-effects.toml" ]] && cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
+[[ -f "$GAME_DIR/er-quickload.toml" ]] && cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 {
 	echo "# staged by run-samechar-3x-twodll.sh"
 	echo "save_file = '$(win_path "$BOOT_FILE")'"
 	echo "slot = $BOOT_SLOT"
-} >"$GAME_DIR/er-effects.toml"
+} >"$GAME_DIR/er-quickload.toml"
 
 # --- arm sq-repro XInput autopilot for SWITCHES same-slot reloads ---
 # NO_SQREPRO=1 => pure AUTOLOAD-ONLY diagnostic (no sq-repro arming, no input-block, no driving):
 # observes whether the boot autoload alone reaches render_ready, isolating "sq-repro arming breaks
 # load1" from "the staged autoload itself freezes". Remove any stale sq-repro markers either way.
-rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
-	"$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
-	"$GAME_DIR/er-effects-switch-slot.txt" 2>/dev/null
+rm -f "$GAME_DIR/er-quickload-system-quit-repro.txt" "$GAME_DIR/er-quickload-system-quit-load-switch.txt" \
+	"$GAME_DIR/er-quickload-sq-target-switches.txt" "$GAME_DIR/er-quickload-sq-target-slots.txt" \
+	"$GAME_DIR/er-quickload-switch-slot.txt" 2>/dev/null
 if [[ "${NO_SQREPRO:-0}" != "1" ]]; then
-	printf '1\n' >"$GAME_DIR/er-effects-system-quit-repro.txt"
-	printf '1\n' >"$GAME_DIR/er-effects-system-quit-load-switch.txt"
-	printf '%s\n' "$SWITCHES" >"$GAME_DIR/er-effects-sq-target-switches.txt"
-	printf '%s\n' "$TARGET_SLOTS" >"$GAME_DIR/er-effects-sq-target-slots.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-system-quit-repro.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-system-quit-load-switch.txt"
+	printf '%s\n' "$SWITCHES" >"$GAME_DIR/er-quickload-sq-target-switches.txt"
+	printf '%s\n' "$TARGET_SLOTS" >"$GAME_DIR/er-quickload-sq-target-slots.txt"
 else
 	echo "NO_SQREPRO=1: autoload-only diagnostic (no driving) -- watching if load1 renders"
 fi
@@ -106,36 +106,40 @@ fi
 #     product DLL also self-truncates its debug log on first write per process; this sweep additionally
 #     clears the trace log + stale telemetry + any other *.log the run left behind. Control files
 #     (*.txt) and the boot TOML are intentionally NOT touched. ---
-rm -f "$GAME_DIR"/er-effects-*.log "$GAME_DIR"/er-reload-trace.log "$GAME_DIR"/er-effects-telemetry.json \
-	"$GAME_DIR"/er-effects-input-trace.jsonl 2>/dev/null
+# THE SWEEP OF GAME_DIR IS GONE ON PURPOSE. It used to read
+#   rm -f "$GAME_DIR"/er-quickload-*.log "$GAME_DIR"/er-reload-trace.log \
+#         "$GAME_DIR"/er-quickload-telemetry.json "$GAME_DIR"/er-quickload-input-trace.jsonl
+# and it destroyed TWO generations of ANOTHER run's evidence at a time: `begin_fresh_run` removes
+# `<name>.prev` unconditionally when the live file is absent. Every log this run writes now lands in
+# a fresh per-run ARTIFACT_DIR, so the clean slate costs nothing and takes nobody else's run with it.
 
 # --- movement-proof gate: authorize the in-DLL can-move probe to inject a forward stick in-world and
 #     prove input moves the character (havok delta) -- the only reliable good-vs-frozen signal. Proof-
 #     only (absent in normal user sessions so it never fights the player). Skip in NO_SQREPRO+user-watch.
-rm -f "$GAME_DIR/er-effects-probe-foreground.txt" 2>/dev/null
+rm -f "$GAME_DIR/er-quickload-probe-foreground.txt" 2>/dev/null
 # Canonical ordered semaphore trace for boot-vs-reload diffing. The DLL writes in GAME_DIR so the
 # Windows process never needs to open a WSL path; we copy it into ARTIFACT_DIR after capture.
-printf '1\n' >"$GAME_DIR/er-effects-input-trace.txt"
+printf '1\n' >"$GAME_DIR/er-quickload-input-trace.txt"
 
 if [[ "${PROVE_MOVEMENT:-1}" == "1" ]]; then
-	printf '1\n' >"$GAME_DIR/er-effects-prove-movement.txt"
-	printf '1\n' >"$GAME_DIR/er-effects-stay-active.txt" # accept injected input while unfocused
+	printf '1\n' >"$GAME_DIR/er-quickload-prove-movement.txt"
+	printf '1\n' >"$GAME_DIR/er-quickload-stay-active.txt" # accept injected input while unfocused
 	# PROBE_FOREGROUND=1 (unattended proof only): let the probe force ER foreground so gameplay movement
 	# input registers. Default OFF so a user-present run is never focus-stolen.
-	[[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' >"$GAME_DIR/er-effects-probe-foreground.txt"
+	[[ "${PROBE_FOREGROUND:-0}" == "1" ]] && printf '1\n' >"$GAME_DIR/er-quickload-probe-foreground.txt"
 else
-	rm -f "$GAME_DIR/er-effects-prove-movement.txt" 2>/dev/null
+	rm -f "$GAME_DIR/er-quickload-prove-movement.txt" 2>/dev/null
 fi
 
 # shellcheck disable=SC2317
 cleanup() {
 	taskkill.exe /F /IM eldenring.exe >/dev/null 2>&1
 	taskkill.exe /F /IM me3.exe >/dev/null 2>&1
-	rm -f "$GAME_DIR/er-effects-system-quit-repro.txt" "$GAME_DIR/er-effects-system-quit-load-switch.txt" \
-		"$GAME_DIR/er-effects-sq-target-switches.txt" "$GAME_DIR/er-effects-sq-target-slots.txt" \
-		"$GAME_DIR/er-effects-prove-movement.txt" "$GAME_DIR/er-effects-stay-active.txt" \
-		"$GAME_DIR/er-effects-probe-foreground.txt" "$GAME_DIR/er-effects-input-trace.txt" 2>/dev/null
-	[[ -f "$ARTIFACT_DIR/er-effects.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-effects.toml.bak" "$GAME_DIR/er-effects.toml"
+	rm -f "$GAME_DIR/er-quickload-system-quit-repro.txt" "$GAME_DIR/er-quickload-system-quit-load-switch.txt" \
+		"$GAME_DIR/er-quickload-sq-target-switches.txt" "$GAME_DIR/er-quickload-sq-target-slots.txt" \
+		"$GAME_DIR/er-quickload-prove-movement.txt" "$GAME_DIR/er-quickload-stay-active.txt" \
+		"$GAME_DIR/er-quickload-probe-foreground.txt" "$GAME_DIR/er-quickload-input-trace.txt" 2>/dev/null
+	[[ -f "$ARTIFACT_DIR/er-quickload.toml.bak" ]] && cp -f "$ARTIFACT_DIR/er-quickload.toml.bak" "$GAME_DIR/er-quickload.toml"
 }
 trap cleanup EXIT
 
@@ -148,7 +152,31 @@ echo "==   artifacts -> $ARTIFACT_DIR"
 echo "==   semaphore trace -> $ARTIFACT_DIR/load-semaphore-trace.jsonl"
 echo "======================================================================"
 
-"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last, and
+# several sessions launch concurrently here. A copy at teardown cannot fix it -- by then this run has
+# already clobbered the previous one's file -- and a crashed or killed run never reaches the copy.
+env \
+	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+	ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+	ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+	ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+	ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+	ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+	ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+	ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 
 CAPTURE_ARGS=()
 if [[ "${CAPTURE_LOAD1_IMPRINT:-0}" == "1" ]]; then
@@ -166,8 +194,8 @@ python3 "$REPO_ROOT/scripts/capture-samechar-3x.py" \
 	"${CAPTURE_ARGS[@]}"
 RC=$?
 
-if [[ -f "$GAME_DIR/er-effects-input-trace.jsonl" ]]; then
-	cp -f "$GAME_DIR/er-effects-input-trace.jsonl" "$ARTIFACT_DIR/load-semaphore-trace.jsonl"
+if [[ -f "$GAME_DIR/er-quickload-input-trace.jsonl" ]]; then
+	cp -f "$GAME_DIR/er-quickload-input-trace.jsonl" "$ARTIFACT_DIR/load-semaphore-trace.jsonl"
 fi
 
 echo "== capture done rc=$RC ; artifacts in $ARTIFACT_DIR =="

@@ -1,0 +1,24 @@
+[package]
+name = "er-boot-background"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_boot_background"
+
+[dependencies]
+# RGBA8_BPP: the tight-buffer pixel stride both this crate and the loading bar rasterize into.
+er-loading-bar-core = { path = "../er-loading-bar-core" }
+
+[target.'cfg(windows)'.dependencies]
+# WIC decode of a local .jpg/.png/.gif into RGBA8. Local file decode only: no network, no helper
+# process. `Win32_Foundation` is here for GENERIC_READ, which CreateDecoderFromFilename takes.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Imaging",
+  "Win32_System_Com",
+] }
+
+[lints]
+workspace = true

@@ -10,7 +10,7 @@ use std::{
 };
 
 use eldenring::cs::{ChrInsExt, PlayerIns};
-use er_effects_data::{
+use er_quickload_data::{
     EffectKindSpec, parse_effect_hotkeys_json, parse_effect_id_catalog_json,
     parse_effect_master_catalog_json,
 };
@@ -22,13 +22,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::{
+    bindings::SelectorAction,
     config::runtime_config,
     crash_telemetry, duration_filter, input_suppression,
     log::net_effects_log,
     present_overlay,
     selector_gate::{
-        self, SelectorInputState, SelectorKey, VK_0, VK_ADD, VK_DOWN, VK_INSERT, VK_LEFT,
-        VK_NUMPAD0, VK_OEM_7, VK_RIGHT, VK_SUBTRACT, VK_UP,
+        self, SelectorInputState, SelectorKey, VK_ADD, VK_DOWN, VK_LEFT, VK_NUMPAD0, VK_OEM_7,
+        VK_RIGHT, VK_SUBTRACT, VK_UP,
     },
     stacked_config,
 };
@@ -43,6 +44,8 @@ const EFFECT_HOTKEY_SELECTOR_TOGGLE: usize = 1 << 5;
 const EFFECT_HOTKEY_STACK_ADD: usize = 1 << 6;
 /// Numpad `-`: take it back out.
 const EFFECT_HOTKEY_STACK_REMOVE: usize = 1 << 7;
+/// Alt+9: expand the bar from its `[+]` button to the effect list, or minimize it back.
+const EFFECT_HOTKEY_EXPAND_COLLAPSE: usize = 1 << 8;
 
 // The selector-command keys live in `selector_gate`, which owns their classification; only the
 // extra names the trigger-hotkey FILE can spell are declared here.
@@ -101,6 +104,7 @@ static EFFECT_HOTKEY_PENDING_LEFT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EffectCallKind {
@@ -777,17 +781,22 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
     (calls, catalogs, load_error)
 }
 
+/// Which pending-action bit a virtual key sets, against the bindings in force.
+///
+/// The `VK_*` table this used to match on moved into `crate::bindings`, because every one of these
+/// keys is now configurable. The mapping itself is unchanged.
 fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
-    match vk {
-        VK_LEFT => EFFECT_HOTKEY_LEFT,
-        VK_UP => EFFECT_HOTKEY_UP,
-        VK_RIGHT => EFFECT_HOTKEY_RIGHT,
-        VK_DOWN => EFFECT_HOTKEY_DOWN,
-        VK_ADD => EFFECT_HOTKEY_STACK_ADD,
-        VK_SUBTRACT => EFFECT_HOTKEY_STACK_REMOVE,
-        VK_OEM_7 if alt_down => EFFECT_HOTKEY_TOGGLE,
-        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => EFFECT_HOTKEY_SELECTOR_TOGGLE,
-        _ => 0,
+    match crate::bindings::live().action_for(vk, alt_down) {
+        Some(SelectorAction::CursorLeft) => EFFECT_HOTKEY_LEFT,
+        Some(SelectorAction::CursorUp) => EFFECT_HOTKEY_UP,
+        Some(SelectorAction::CursorRight) => EFFECT_HOTKEY_RIGHT,
+        Some(SelectorAction::CursorDown) => EFFECT_HOTKEY_DOWN,
+        Some(SelectorAction::StackAdd) => EFFECT_HOTKEY_STACK_ADD,
+        Some(SelectorAction::StackRemove) => EFFECT_HOTKEY_STACK_REMOVE,
+        Some(SelectorAction::EffectToggle) => EFFECT_HOTKEY_TOGGLE,
+        Some(SelectorAction::ShowHide) => EFFECT_HOTKEY_SELECTOR_TOGGLE,
+        Some(SelectorAction::ExpandCollapse) => EFFECT_HOTKEY_EXPAND_COLLAPSE,
+        None => 0,
     }
 }
 
@@ -840,6 +849,9 @@ pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
     }
     if action & EFFECT_HOTKEY_SELECTOR_TOGGLE != 0 {
         EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_EXPAND_COLLAPSE != 0 {
+        EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -1027,6 +1039,7 @@ fn discard_pending_effect_selector_inputs() -> usize {
         + EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst)
         + EFFECT_HOTKEY_PENDING_TOGGLE.swap(0, Ordering::SeqCst)
         + EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE.swap(0, Ordering::SeqCst)
+        + EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE.swap(0, Ordering::SeqCst)
         + discard_pending_effect_trigger_keys()
 }
 
@@ -1121,6 +1134,28 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
             }
         ));
         EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(selector_toggles, Ordering::SeqCst);
+    }
+    let expand_toggles = EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE.swap(0, Ordering::SeqCst);
+    if expand_toggles != 0 {
+        // Drained BEFORE `sync_selector_input_gate` below, so the gate that decides whether the
+        // cursor keys may act sees this tick's collapsed state rather than last tick's. An
+        // expand whose arrow keys only wake up on the following tick is a key that "sometimes"
+        // does nothing.
+        let collapsed = if expand_toggles % 2 == 1 {
+            present_overlay::toggle_collapsed_by_key()
+        } else {
+            present_overlay::overlay_collapsed()
+        };
+        if !collapsed {
+            // Expanding a bar the player has hidden would draw nothing and read as a dead key.
+            // Only the expand direction touches visibility: minimizing is not a request to hide.
+            state.effect_selector_visible = true;
+        }
+        state.last_driver_command = Some(format!(
+            "effect-selector: {}",
+            if collapsed { "minimized" } else { "expanded" }
+        ));
+        EFFECT_HOTKEY_APPLIED_ACTIONS.fetch_add(expand_toggles, Ordering::SeqCst);
     }
     STACKED_EFFECT_COUNT.store(
         state.calls.iter().filter(|call| call.stacked).count(),
@@ -1915,6 +1950,22 @@ fn execute_driver_command(
             sync_selector_input_gate(state);
             Ok(())
         }
+        // EXPAND/COLLAPSE is a different axis from on/off: on/off decides whether the bar is
+        // drawn at all, expand/collapse decides whether the drawn bar is the `[+]` button or the
+        // effect list. Exposed as a command so the state machine can be driven with no pointer
+        // and no keyboard -- the click path had no such handle, and that is part of how it went
+        // an entire session without anyone noticing it could not fire.
+        ["selector", "expand"] | ["overlay", "expand"] => {
+            present_overlay::set_collapsed_by_command(false);
+            state.effect_selector_visible = true;
+            sync_selector_input_gate(state);
+            Ok(())
+        }
+        ["selector", "collapse"] | ["overlay", "collapse"] => {
+            present_overlay::set_collapsed_by_command(true);
+            sync_selector_input_gate(state);
+            Ok(())
+        }
         ["network", "on"] => {
             state.network_sync = true;
             Ok(())
@@ -1958,7 +2009,7 @@ fn execute_driver_command(
                 .enabled;
             set_call_enabled(player, state, index, enabled)
         }
-        _ => Err("expected selector/overlay on|off|toggle, network on|off|toggle, apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, or toggle <index>".to_owned()),
+        _ => Err("expected selector/overlay on|off|toggle|expand|collapse, network on|off|toggle, apply_all, remove_all, apply <index>, remove <index>, set <index> on|off, or toggle <index>".to_owned()),
     }
 }
 

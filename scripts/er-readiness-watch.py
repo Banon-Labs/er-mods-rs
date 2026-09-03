@@ -106,7 +106,7 @@ TIMING_MILESTONES = (
 # player map block registered) can succeed while the player map block never actually streams --
 # per-block phase pinned at 2, zero IO inflight, player never present -- held flat to the wall-clock
 # cap. A healthy stream advances within ~2-5s (io_inflight goes non-zero, wbr_max_phase climbs past
-# 2, the m28 dispatch counter increments, player_present flips true). We track a monotonic progress
+# 2, the mms state advances past 3, player_present flips true). We track a monotonic progress
 # watermark and, once map-load has begun, fail fast if it does not improve within this window. 3s of
 # NO movement (flat watermark) is sufficient to call it stalled -- just above a healthy ~2s golden
 # stream, and the watermark resets on ANY forward progress so a working-but-slightly-plateauing stream
@@ -752,17 +752,23 @@ def maybe_capture_loading_screen_portrait(artifact_dir: Path, telemetry: dict[st
                 "reason": "portrait_cover_loading_screen_portrait_oracle_asserted",
                 "screenshot": str(out),
                 "note": str(note),
-                "oracle_title_portrait_visible_surface_bound": bool(
-                    telemetry.get("oracle_title_portrait_visible_surface_bound") if telemetry else False
+                # THE CAPTURE PREDICATE'S OWN INPUTS, which are the honest context for the frame
+                # this screenshot caught. Four fields stood here until 2026-08-31 --
+                # `oracle_title_portrait_visible_surface_bound`, `..._bind_rewrites`,
+                # `oracle_title_loaded_character_portrait_rendered` and `..._visible_during_boot` --
+                # and not one of them could ever be anything but false/0: the bind rewrite behind
+                # the first pair was never implemented, and the second pair were conjunctions
+                # containing pinned-`false` literals and a counter with no write site. A permanent
+                # `false` sitting beside the screenshot reads as "it did not render", which is the
+                # worst possible caption for an image whose whole job is to answer that question.
+                "oracle_portrait_onto_draw_hits": as_int(
+                    telemetry.get("oracle_portrait_onto_draw_hits") if telemetry else 0, 0
                 ),
-                "oracle_title_portrait_visible_surface_bind_rewrites": as_int(
-                    telemetry.get("oracle_title_portrait_visible_surface_bind_rewrites") if telemetry else 0, 0
+                "oracle_loadscreen_table_builds": as_int(
+                    telemetry.get("oracle_loadscreen_table_builds") if telemetry else 0, 0
                 ),
-                "oracle_title_loaded_character_portrait_rendered": bool(
-                    telemetry.get("oracle_title_loaded_character_portrait_rendered") if telemetry else False
-                ),
-                "oracle_title_loaded_character_portrait_visible_during_boot": bool(
-                    telemetry.get("oracle_title_loaded_character_portrait_visible_during_boot") if telemetry else False
+                "oracle_loading_bg_portrait_gx_nonblack": bool(
+                    telemetry.get("oracle_loading_bg_portrait_gx_nonblack") if telemetry else False
                 ),
             },
             sort_keys=True,
@@ -833,7 +839,7 @@ def world_stream_armed(telemetry: dict[str, Any] | None) -> bool:
     return as_int(telemetry.get("oracle_own_load_target_block_present"), 0) == 1
 
 
-def world_stream_progress_watermark(telemetry: dict[str, Any] | None) -> tuple[int, int, int, int, int] | None:
+def world_stream_progress_watermark(telemetry: dict[str, Any] | None) -> tuple[int, int, int, int] | None:
     """Comparable monotonic progress watermark for the streaming player map block.
 
     Returns None when the map-load has not begun (predicate disarmed). Otherwise a tuple that
@@ -841,7 +847,6 @@ def world_stream_progress_watermark(telemetry: dict[str, Any] | None) -> tuple[i
       - oracle_own_load_wbr_max_phase     (per-block phase; hex string, stuck at 0x2 when stalled)
       - oracle_own_load_stream_io_inflight (hex string; 0 -> no IO dispatched; 1 once it goes non-zero)
       - oracle_own_load_stream_mms_state   (3 when stalled; advances past 3 when progressing)
-      - oracle_own_m28_dispatch_fired      (dispatch counter; increments on a working stream)
       - oracle_player_present              (terminal: 1 once the player exists)
     Null/missing/unparseable fields contribute 0 (treated as "no progress"), never a crash.
     """
@@ -851,18 +856,22 @@ def world_stream_progress_watermark(telemetry: dict[str, Any] | None) -> tuple[i
     wbr_max_phase = max(as_int(telemetry.get("oracle_own_load_wbr_max_phase"), 0), 0)
     io_inflight = 1 if as_int(telemetry.get("oracle_own_load_stream_io_inflight"), 0) > 0 else 0
     mms_state = max(as_int(telemetry.get("oracle_own_load_stream_mms_state"), 0), 0)
-    m28_dispatch = max(as_int(telemetry.get("oracle_own_m28_dispatch_fired"), 0), 0)
     player_present = 1 if telemetry.get("oracle_player_present") is True else 0
-    return (player_present, m28_dispatch, mms_state, io_inflight, wbr_max_phase)
+    # `oracle_own_m28_dispatch_fired` used to sit between player_present and mms_state here, described
+    # as "increments on a working stream". It never incremented on ANY stream: `own_load_m28_dispatch`
+    # is VERIFY-ONLY (its AddDefaultFileLoadProcess call was disabled after the block getter
+    # AV-faulted), so the counter had no write site and contributed a constant 0 to every stall
+    # verdict this watcher made. Removed with the counter, 2026-08-31.
+    return (player_present, mms_state, io_inflight, wbr_max_phase)
 
 
 def world_stream_stall_step(
     telemetry: dict[str, Any] | None,
-    prev_watermark: tuple[int, int, int, int, int] | None,
+    prev_watermark: tuple[int, int, int, int] | None,
     progress_since: float | None,
     now: float,
     stall_seconds: float,
-) -> tuple[tuple[int, int, int, int, int] | None, float | None, bool]:
+) -> tuple[tuple[int, int, int, int] | None, float | None, bool]:
     """One poll's worth of world-stream stall bookkeeping.
 
     Pure so the loop and the tests share the exact same decision. Returns the carried-forward
@@ -890,7 +899,6 @@ def world_stream_stall_snapshot(telemetry: dict[str, Any] | None, stuck_seconds:
             "oracle_own_load_wbr_max_phase",
             "oracle_own_load_stream_io_inflight",
             "oracle_own_load_stream_mms_state",
-            "oracle_own_m28_dispatch_fired",
             "oracle_player_present",
             "oracle_now_loading",
         ):
@@ -2239,7 +2247,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
     appear_animation_seen = args.expected_animation_id is None
     # World-stream stall semaphore state: a monotonic progress watermark and the monotonic time it
     # last improved. Both stay None until the OWN-LOAD map-load arms (continue fired + block present).
-    world_stream_watermark: tuple[int, int, int, int, int] | None = None
+    world_stream_watermark: tuple[int, int, int, int] | None = None
     world_stream_progress_since: float | None = None
     # Per-phase progress watchdog carry-state: which watched phase (title/continue) was last active,
     # its last progress watermark, and the monotonic time that watermark last improved. Reset on any
@@ -2811,7 +2819,7 @@ def wait_readiness(args: argparse.Namespace, timing: TimingTracker) -> Readiness
             elif telemetry is not None:
                 # Reset the world-stable dwell ONLY on a GENUINE not-loaded read (telemetry present but
                 # the world-loaded oracle is false). A transient None telemetry -- the fast poll loop
-                # (~hundreds/s) caught a partial write while the DLL flushed er-effects-telemetry.json,
+                # (~hundreds/s) caught a partial write while the DLL flushed er-quickload-telemetry.json,
                 # so read_json returned None -- is NOT evidence the world unloaded. Resetting on it
                 # prevented headless world-stable from ever accumulating its 5s dwell even though the
                 # in-process oracles showed a stable in-world character the whole time. The oracles are

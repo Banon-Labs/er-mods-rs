@@ -44,7 +44,13 @@ pub unsafe fn capture_menu_font_gfx(base: usize, file: usize) {
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + SCALEFORM_MEMORY_FILE_VTABLE_RVA {
+    if vtable
+        != er_game_base::mem::game_data_addr(
+            base,
+            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
+            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+        )
+    {
         return;
     }
     let data = unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
@@ -111,12 +117,17 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     // (which the still-resident char-1 PGD then "validated" as live) under character 2's loading screen.
     // Same priority as portrait_target_slot(), keeping the boot-time best_active_slot fallback.
     let sel = SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT.load(Ordering::SeqCst);
-    let slot = if sel <= i32::MAX as usize
-        && (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&(sel as i32))
-    {
-        sel as i32
-    } else {
-        portrait_loaded_slot_confirmed().unwrap_or_else(|| unsafe { best_active_slot() })
+    let slot = match crate::portrait_identity::loading_screen_stats_slot_source(
+        sel,
+        portrait_loaded_slot_confirmed(),
+        TITLE_PROFILE_SLOT_COUNT as i32,
+    ) {
+        crate::portrait_identity::StatsSlotSource::SwitchSelection(slot)
+        | crate::portrait_identity::StatsSlotSource::PortraitWindow(slot) => slot,
+        // Only reached when nothing named a slot; the scan is unsafe and is paid for here alone.
+        crate::portrait_identity::StatsSlotSource::BestActiveFallback => unsafe {
+            best_active_slot()
+        },
     };
     let slot_u = if (0..TITLE_PROFILE_SLOT_COUNT as i32).contains(&slot) {
         slot as usize
@@ -127,13 +138,46 @@ pub unsafe fn read_loading_screen_stats() -> Option<LoadingScreenStats> {
     // playtime at PROFILE_SUMMARY_PLAYTIME_OFFSET, which this panel no longer shows (user
     // 2026-08-07: line 2 is RL + WL); that offset is still live for the save-slot writer.
     let summary = unsafe { safe_read_usize(gdm + SLOT_MANAGER_CONTAINER_OFFSET) }.unwrap_or(0);
-    let mut name = String::new();
-    let mut level = 0i32;
-    if valid(summary) {
-        let rec = profile_summary_record_address(summary, slot_u);
-        let (units, len) = unsafe { read_utf16_name_units(rec) };
-        name = String::from_utf16_lossy(&units[..len]);
-        level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+    if !valid(summary) {
+        return None;
+    }
+    let rec = profile_summary_record_address(summary, slot_u);
+    let (units, len) = unsafe { read_utf16_name_units(rec) };
+    let name = String::from_utf16_lossy(&units[..len]);
+    let level = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_LEVEL_OFFSET) }.unwrap_or(0);
+    let map = unsafe { safe_read_i32(rec + PROFILE_SUMMARY_MAP_OFFSET) }.unwrap_or(0);
+    // THE RECORD MUST BE A CHARACTER BEFORE ANY OF IT IS RENDERED (2026-08-30).
+    //
+    // These bytes are GAME-OWNED and this mod writes them. The in-game save picker stages its
+    // browse rows straight into the live records -- `save_picker_write_row_records` memsets each
+    // 0x2a0-byte record to zero and copies the row LABEL into the name field -- so a record can
+    // hold `[..] EldenRing` or `[ new ]` with every other field zero. The user watched exactly
+    // those two strings render as character names beside `RL 0` on three loading screens, because
+    // the picker's restore was gated behind a sticky `committed` flag and never ran (fixed in
+    // `save_swap_profile_table.rs`; this gate is the independent second half, and it holds
+    // whatever else ever writes these records).
+    //
+    // TWO THINGS THE FAILURE PROVED, WORTH NOT RE-DERIVING:
+    //  * the ATTRIBUTE lines were byte-identical across each garbage/live pair (`HP 522 FP 78
+    //    Stamina 97`, `VIG 15 MND 10 END 11 STR 14`) because they come from the decoded `.sl2`
+    //    slot cache below, not from this record. "Wrong stats" was ONLY the name plus `RL 0`.
+    //  * the `pgd_validated` filter below worked exactly as designed: it refused the live PGD
+    //    *because* this record was garbage (no name/level match), which is why the panel fell back
+    //    to the correct cached attributes instead of the level-9 default template.
+    //
+    // So refuse the whole read and draw NOTHING, as the portrait already refuses to publish a head
+    // it cannot attribute. The counter is what keeps that blank distinguishable from the feature
+    // being switched off.
+    let verdict = crate::portrait_identity::profile_record_character_verdict(&name, level, map);
+    if !verdict.is_character() {
+        let n = STATS_RECORD_NOT_A_CHARACTER.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "stats-text: DECLINED slot {slot_u} -- its live ProfileSummary record is not a character ({}) name={name:?} level={level} map=0x{map:08x} #{n}; drawing nothing rather than a wrong panel",
+                verdict.tag()
+            ));
+        }
+        return None;
     }
     // Live PlayerGameData ONLY if it provably holds the LOADING slot's character. Before the save
     // deserializes, PGD is the game's default level-9 template (name empty, stats
@@ -228,6 +272,9 @@ static STATS_TEXT_SCREEN_CACHE: std::sync::Mutex<Option<StatsTextScreenCache>> =
     std::sync::Mutex::new(None);
 pub use er_telemetry_core::counters::STATS_TEXT_SCREEN_VERSION;
 
+/// Cumulative count of stats reads refused because the slot's record is not a character
+/// (telemetry oracle `oracle_stats_record_not_a_character`; never reset).
+pub use er_telemetry_core::counters::STATS_RECORD_NOT_A_CHARACTER;
 /// Cumulative stats-bitmap build count (telemetry oracle `oracle_stats_text_built`; never reset).
 pub use er_telemetry_core::counters::STATS_TEXT_BUILT;
 /// `(name, level, live)` of the last logged build -- gates the debug log so repeat builds of the same
@@ -418,8 +465,13 @@ pub unsafe extern "system" fn knowledge_tip_refresh_hook(this: usize) {
         if base == 0 || base == null || this == 0 || this == null {
             return;
         }
+        let Ok(settext_addr) =
+            er_game_base::mem::game_rva_named(PROFILE_SETTEXT_RVA as u32, "PROFILE_SETTEXT_RVA")
+        else {
+            return;
+        };
         let settext: unsafe extern "system" fn(usize, usize) =
-            unsafe { std::mem::transmute(base + PROFILE_SETTEXT_RVA) };
+            unsafe { std::mem::transmute(settext_addr) };
         let empty = [0u16; 1];
         unsafe {
             settext(
@@ -484,38 +536,53 @@ pub fn install_tip_suppression_hook() {
             return;
         }
     }
-    let Ok(target) = game_rva(KNOWLEDGE_TIP_REFRESH_RVA as u32) else {
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            target as *mut c_void,
-            knowledge_tip_refresh_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            KNOWLEDGE_TIP_REFRESH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if unsafe { hook.queue_enable() }.is_err() {
-                append_autoload_debug(format_args!(
-                    "stats-text: tip-suppression queue_enable failed for 0x{target:x}"
-                ));
-                return;
-            }
-            // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
-            // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
-            // address -- so letting the handle go does NOT uninstall the hook.
-        }
-        Err(status) => {
+    // TWO INDEPENDENT DETOURS (2026-08-30). This was a bare `let Ok(..) else { return; }` with no
+    // log, so a refused tip-refresh RVA on 1.17 silently took the tip-ADVANCE detour with it -- the
+    // one whose own comment says its failure is meant to "log and continue rather than abort the
+    // batch". A refusal is now local and named, and the pair is honestly reported.
+    // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
+    let refresh_target = match game_rva(KNOWLEDGE_TIP_REFRESH_RVA as u32) {
+        Ok(addr) => Some(addr),
+        Err(_) => {
             append_autoload_debug(format_args!(
-                "stats-text: tip-suppression MhHook::new failed: {status:?}"
+                "stats-text: REFUSED tip-suppression -- rva 0x{KNOWLEDGE_TIP_REFRESH_RVA:x} has no verified mapping for the running build; the tip-advance detour is unaffected"
             ));
-            return;
+            None
+        }
+    };
+    let mut refresh_queued = false;
+    if let Some(target) = refresh_target {
+        match unsafe {
+            MhHook::new(
+                target as *mut c_void,
+                knowledge_tip_refresh_hook as *mut c_void,
+            )
+        } {
+            Ok(hook) => {
+                KNOWLEDGE_TIP_REFRESH_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
+                if unsafe { hook.queue_enable() }.is_err() {
+                    append_autoload_debug(format_args!(
+                        "stats-text: tip-suppression queue_enable failed for 0x{target:x}"
+                    ));
+                    KNOWLEDGE_TIP_REFRESH_ORIG.store(0, Ordering::SeqCst);
+                } else {
+                    refresh_queued = true;
+                }
+                // The handle is deliberately dropped here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address -- so letting the handle go does NOT uninstall the hook.
+            }
+            Err(status) => {
+                append_autoload_debug(format_args!(
+                    "stats-text: tip-suppression MhHook::new failed: {status:?}"
+                ));
+            }
         }
     }
     // Second detour in the same apply batch: the advance enabled-predicate. A failure here degrades to
     // tips-blank-but-keyguide-visible, so log and continue rather than abort the batch.
     let mut advance_target = 0usize;
-    if let Ok(target2) = game_rva(KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA as u32) {
+    if let Ok(target2) = game_rva_for_hook(KNOWLEDGE_TIP_ADVANCE_ENABLED_RVA as u32) {
         match unsafe {
             MhHook::new(
                 target2 as *mut c_void,
@@ -543,14 +610,23 @@ pub fn install_tip_suppression_hook() {
             }
         }
     }
+    if !refresh_queued && advance_target == 0 {
+        append_autoload_debug(format_args!(
+            "stats-text: NOTHING ARMED -- neither the tip-suppression nor the tip-advance detour \
+             queued; native tips keep rotating this run"
+        ));
+        return;
+    }
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {
-            KNOWLEDGE_TIP_REFRESH_INSTALLED.store(1, Ordering::SeqCst);
+            if refresh_queued {
+                KNOWLEDGE_TIP_REFRESH_INSTALLED.store(1, Ordering::SeqCst);
+            }
             if advance_target != 0 {
                 KNOWLEDGE_TIP_ADVANCE_ENABLED_INSTALLED.store(1, Ordering::SeqCst);
             }
             append_autoload_debug(format_args!(
-                "stats-text: installed tip-suppression detour 0x{target:x} + advance-disable 0x{advance_target:x} (native tips + keyguide -> our stats text)"
+                "stats-text: tip-suppression detour {refresh_target:x?} + advance-disable 0x{advance_target:x} (None/0 = refused for this build; native tips + keyguide -> our stats text)"
             ));
         }
         status => append_autoload_debug(format_args!(

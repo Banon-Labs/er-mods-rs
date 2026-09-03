@@ -23,23 +23,51 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-GAMEDIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-LOG = os.path.join(GAMEDIR, "er-effects-autoload-debug.log")
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_source_dirs, resolve_artifact  # noqa: E402
+
+# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+#
+# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
+# last. A monitor pinned to the game directory therefore finds NOTHING for a redirected run and
+# reports a perfectly healthy run as silent -- a false negative indistinguishable from the very stall
+# this monitor exists to catch. `resolve_artifact` looks in the run directory first and falls back to
+# the game directory, by EXISTENCE, and the inotify watch below covers BOTH for the same reason.
+#
+# The `/mnt/c/SteamLibrary/...` default was WSL-era and does not exist on a native Linux Steam box:
+# every read against it came back empty, which reads as "the DLL wrote nothing".
+GAMEDIR = os.environ.get(
+    "ER_GAME_DIR",
+    os.path.join(os.path.expanduser("~"), ".local/share/Steam/steamapps/common/ELDEN RING/Game"),
+)
+
+
+def LOG():
+    return str(resolve_artifact("er-quickload-autoload-debug.log", GAMEDIR))
+
+
+def watch_dirs():
+    """Every directory the DLL might be writing into, for the inotify readiness primitive."""
+    return [str(d) for d in artifact_source_dirs(GAMEDIR) if os.path.isdir(d)] or [GAMEDIR]
+
 ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
-BUILT_DLL = "/home/choza/projects/er-effects-rs/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
-DEPLOY_DIR_WSL = "/mnt/c/Users/choza/er-effects-live"
-DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_effects_rs.dll")
-DEPLOY_DLL_WIN = r"C:\Users\choza\er-effects-live\er_effects_rs.dll"
+BUILT_DLL = "/home/choza/projects/er-mods-rs/target/x86_64-pc-windows-msvc/release/er_quickload.dll"
+DEPLOY_DIR_WSL = "/mnt/c/Users/choza/er-quickload-live"
+DEPLOY_DLL_WSL = os.path.join(DEPLOY_DIR_WSL, "er_quickload.dll")
+DEPLOY_DLL_WIN = r"C:\Users\choza\er-quickload-live\er_quickload.dll"
 MARKERS = [
-    os.path.join(GAMEDIR, "er-effects-system-quit-repro.txt"),
-    # Select the PROFILE-LOAD-SWITCH mode. NOT er-effects-system-quit-allow-profile-load.txt: that
+    os.path.join(GAMEDIR, "er-quickload-system-quit-repro.txt"),
+    # Select the PROFILE-LOAD-SWITCH mode. NOT er-quickload-system-quit-allow-profile-load.txt: that
     # opt-in makes the ProfileSelect slot-activate FORWARD to the guarded native load instead of
     # DIRECT-ARMING the save-safe switch, so quickload_phase never advances and the switch never runs.
-    os.path.join(GAMEDIR, "er-effects-system-quit-load-switch.txt"),
+    os.path.join(GAMEDIR, "er-quickload-system-quit-load-switch.txt"),
     # STAY-ACTIVE: force ER's input-accept flag every tick (headless launch leaves the window
     # unfocused). Combined with the foreground-force + SendInput, this lets keyboard input route.
-    os.path.join(GAMEDIR, "er-effects-stay-active.txt"),
+    os.path.join(GAMEDIR, "er-quickload-stay-active.txt"),
 ]
 START_OFFSET = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 360
@@ -59,11 +87,12 @@ try:
     _libc = ctypes.CDLL("libc.so.6", use_errno=True)
     _inotify_fd = _libc.inotify_init1(0)
     if _inotify_fd >= 0:
-        _libc.inotify_add_watch(
-            _inotify_fd,
-            GAMEDIR.encode("utf-8"),
-            _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
-        )
+        for _directory in watch_dirs():
+            _libc.inotify_add_watch(
+                _inotify_fd,
+                _directory.encode("utf-8"),
+                _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
+            )
 except OSError:
     _inotify_fd = -1
 
@@ -160,11 +189,11 @@ def main():
         if game_alive():
             game_seen = True
         try:
-            sz = os.path.getsize(LOG)
+            sz = os.path.getsize(LOG())
         except OSError:
             sz = offset
         if sz > offset:
-            with open(LOG, "rb") as f:
+            with open(LOG(), "rb") as f:
                 f.seek(offset)
                 data = f.read()
             offset = sz

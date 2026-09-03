@@ -1,0 +1,175 @@
+# Counters that are DECLARED but have NO WRITE SITE anywhere in the tree -- known debt.
+# Enforced by scripts/check-counter-writers.py.
+#
+# This is the SUPERSET the sibling scripts/oracle-writers-allowlist.txt could never see. That gate
+# fires only on `writes == 0 and reads > 0`; its own selftest pins the exclusion ("unread counters
+# are out of scope"). So a counter that is declared, written nowhere, and never `.load()`ed was
+# DELIBERATELY invisible to it -- and that is most of this list.
+#
+# THIS LIST MAY ONLY SHRINK, same contract as its sibling: the checker fails on any offender not
+# listed here, and ALSO on any name listed here that is no longer an offender. Fixing a counter is
+# not finished until its line is gone.
+#
+# To clear an entry, pick one:
+#   WIRE   -- the feature exists and the signal is wanted: increment/store at the real site.
+#   DELETE -- the feature is unbuilt, removed, or deliberately not installed: delete the counter AND
+#             everything that prints it (log line, oracle key, and every script that consumes it).
+# A permanently-0 counter is indistinguishable from a feature that ran and did nothing.
+#
+# CENSUS OF 2026-08-31, and a correction it produced. A handover put this at "151 of the 1,412
+# counters declared in crates/er-telemetry-core/src/counters.rs". The 1,412 is exact. The 151 is
+# not: it is what you get by dropping the by-reference and indexed-write rules that
+# check-oracle-writers.py already documents (measured: 152 without them, 147 without by-ref alone,
+# 66 with the full rule set). The true figure was 66 in counters.rs, 97 repo-wide -- and then 68/99
+# once two false-WRITE shapes were fixed in the shared rule (`&& NAME.load(..)`, where the `&` of a
+# boolean AND was reading as `&NAME`, and `let _ = &NAME;`, a discard binding). Those two shapes had
+# been concealing PROFILE_ALPHA0_CLEARS and TITLE_CUSTOM_COVER_RUN_CALLS -- the latter being why
+# `oracle_title_loaded_character_portrait_rendered` could never be true.
+#
+# NOTHING here is written from a macro, a `concat!`/`stringify!` construction, generated code, or
+# another crate: the 13 files in the tree that construct identifiers inside macros were quarantined
+# and checked, and not one offender's name appears in any of them.
+#
+# The entries deleted rather than allowlisted on 2026-08-31 were chosen by CONSEQUENCE -- printed in
+# a log line, emitted as an oracle key, or consumed by a scoring script:
+#   OWN_LOAD_M28_DISPATCH_FIRED   fed `world_stream_progress_watermark` in er-readiness-watch.py, a
+#                                 run-STOPPING stall decision, documented there as "increments on a
+#                                 working stream"; own_load_m28_dispatch is VERIFY-ONLY.
+#   PROFILE_PERFRAME_SPARED_DRAWS / PROFILE_READBACK_DEFERRED_SOME / _NONBLACK
+#                                 printed as `draws=` / `defer_some=` / `defer_nonblack=` on every
+#                                 `lookat-phase-sweep` line (six such lines in the 2026-08-31 run).
+#   PROFILE_BOUND_GX_RGB_MAX / _ALPHA_MAX
+#                                 sentinel-initialised 0xffff, so `boundtex[...]` printed a
+#                                 plausible 65535 rather than an obviously-absent 0.
+#   PROFILE_ALPHA0_CLEARS         emitted `oracle_portrait_alpha0_clears`; the clear is compiled off.
+#   TITLE_CUSTOM_COVER_RUN_CALLS  + the three `title_loaded_character_portrait_*` oracles it made
+#                                 structurally false.
+#   TITLE_PROFILE_VISIBLE_SURFACE_BIND_* (4)
+#                                 five oracle keys, one of which er-readiness-watch.py copied into
+#                                 the loading-screen-portrait event JSON a human reads.
+#
+# CLASSIFICATION of what remains. `[R]` marks a counter that is still READ somewhere, so it is also
+# on oracle-writers-allowlist.txt and is emitting a permanent 0 today.
+
+
+# DELETE -- the hook was never codegen'd. title_custom_cover_menu_window_run_hook's only
+#          address-taker (install_title_custom_cover_run_hook) has no callers, so rustc emitted
+#          neither. See crates/er-quickload/src/experiments/startup_hooks/loading_cover/
+#          title_scaleform_msgbox.rs:771 and the pinned literals in oracles_title_visuals.rs.
+TITLE_CUSTOM_COVER_RUN_INSTALLED
+TITLE_CUSTOM_COVER_RUN_LAST_COVER_JOB
+TITLE_CUSTOM_COVER_RUN_LAST_COVER_WINDOW
+TITLE_CUSTOM_COVER_RUN_LAST_NATIVE_JOB
+TITLE_CUSTOM_COVER_RUN_LAST_RET
+TITLE_CUSTOM_COVER_RUN_ORIG
+
+# DELETE -- the gaitem/GameMan-load-save guards were REVERTED on 2026-07-16 and their installers
+#          deleted: install_system_quit_gaitem_{finalize,lookup,deserialize}_hook had no callers
+#          (er-title-flow/src/title_tick_cover.rs:2835), and the wiring was pulled because the
+#          SKIP path leaves the gaitem singleton inconsistent and the game DL_PANICs
+#          (system_quit_repro_guards.rs:632). These count a guard that must not be re-installed.
+SYSTEM_QUIT_GAITEM_DESERIALIZE_ALLOW_COUNT
+SYSTEM_QUIT_GAITEM_DESERIALIZE_INSTALLED
+SYSTEM_QUIT_GAITEM_DESERIALIZE_ORIG
+SYSTEM_QUIT_GAITEM_DESERIALIZE_RESET_COUNT
+SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT
+SYSTEM_QUIT_GAITEM_FINALIZE_ALLOW_COUNT
+SYSTEM_QUIT_GAITEM_FINALIZE_INSTALLED
+SYSTEM_QUIT_GAITEM_FINALIZE_ORIG
+SYSTEM_QUIT_GAITEM_FINALIZE_SKIP_COUNT
+SYSTEM_QUIT_GAITEM_LOOKUP_ALLOW_COUNT
+SYSTEM_QUIT_GAITEM_LOOKUP_EMPTY_COUNT
+SYSTEM_QUIT_GAITEM_LOOKUP_INSTALLED
+SYSTEM_QUIT_GAITEM_LOOKUP_ORIG
+SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ADDR
+SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT
+SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT
+SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_INSTALLED
+SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ORIG
+
+# DELETE -- install_system_quit_menu_window_job_run_hook is commented out at its one call site
+#          (startup_hooks/diagnostics/layout_global_hooks.rs:47) and therefore never codegen'd.
+SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_INSTALLED
+SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
+
+# TRIAGE -- the sq-repro self-drive autopilot. Its menu-navigation states are unreachable in a
+#          product-only profile: WAIT_WORLD requires HARNESS_MOVE_VERDICT==1, which needs
+#          er_input_harness.dll, which is a declared conflict with er_quickload (bd
+#          claims76-structurally-unsettleable-2026-08-31). Unreachable is not the same as
+#          deleted, so these need a look at the state machine before WIRE-or-DELETE.
+SQ_REPRO_BOX_NAV_BASELINE
+SQ_REPRO_BOX_NAV_BUTTON
+SQ_REPRO_BOX_NAV_CANDIDATE
+SQ_REPRO_INITIAL_FOREGROUND_LOGGED
+SQ_REPRO_OPEN_KEY_VK
+SQ_REPRO_TAB_RETURN_DWELL_START
+SQ_REPRO_TAB_RETURN_MAX_TAB
+SQ_REPRO_TAB_RETURN_PHASE
+
+# DELETE -- recorded as removed behaviour or a duplicate of a live counter.
+#          RAWINPUT_BLOCKED_UNFOCUSED_EVENTS [R]: input_block.rs:806-816 records that the
+#            unfocused keyboard drop was deliberately removed.
+#          SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS [R]: delete with the unreachable
+#            'blocked_direct_file_mode' arm of shgfp_decision (path_hooks.rs). Its siblings ARE
+#            written.
+#          MSGBOX_TOTAL_BUILDS [R]: a DISTINCT dead static from the live oracle_msgbox_total_builds
+#            (er-effects-rs-mtq) -- same name, different counter, no writer.
+#          OWN_STEPPER_DIRECT_BUILT / OWN_STEPPER_LIVE_FIRED: own_stepper_direct_build was deleted
+#            (bd claims76-structurally-unsettleable-2026-08-31).
+MSGBOX_TOTAL_BUILDS  # [R] read but never written
+OWN_STEPPER_DIRECT_BUILT
+OWN_STEPPER_LIVE_FIRED
+RAWINPUT_BLOCKED_UNFOCUSED_EVENTS  # [R] read but never written
+SAVE_REDIRECT_SHGFP_DIRECT_FILE_BLOCKS  # [R] read but never written
+
+# TRIAGE -- declared and never connected to anything. Every one of these is mentioned NOWHERE in
+#          the tree except its own declaration (or a bare re-export), so there is no feature to
+#          point at and no removal to cite: they were declared in anticipation and left. They are
+#          the cheapest entries to clear -- deleting one cannot break a reader, because there is
+#          none -- but each still needs someone to confirm the anticipated feature is not landing.
+AUTO_ACCEPT_COUNT
+AUTO_ACCEPT_VT_LAST
+AUTO_ACCEPT_VT_LOG
+BOOT_VIEW_UPLOAD
+BOOT_VIEW_UPLOAD_SIZE
+C30_WRITER_HOOK_INSTALLED
+C30_WRITER_LOG_COUNT
+DEPTH_KEY_CACHED
+DEPTH_KEY_NOMASK
+DEPTH_RB_DIMS_MISMATCHES
+DEPTH_RB_FIND_FAILS
+DEPTH_RB_INFLIGHT_SKIPS
+DEPTH_RB_NOGAP
+EFFECT_HOTKEY_PENDING_OVERLAY_TOGGLE
+EFFECT_SELECTOR_DINPUT_HOOK_INSTALL_ATTEMPTED
+EFFECT_SELECTOR_OVERLAY_VISIBLE_FOR_HOOK
+ER_TPF_COVER_REGISTER_ATTEMPTED
+ER_TPF_COVER_TARGET_REWRITE_FIRED
+FORCE_PLAY_GAME_CALLED
+MASQUERADE_PRESERVED_JOBS
+MENU_DRIVE_ENTER_LOG
+MENU_NAV_FRAME
+MSGBOX_FINISHED_ORIG
+MSGBOX_POSTLOAD_BUILDS
+MSGBOX_STALL_JOB
+NATIVE_PROFILE_READ_LAST_POLL_STATUS
+NATIVE_PROFILE_READ_PHASE
+PORTRAIT_LAST_CONFIRMED_SLOT
+PORTRAIT_SLOT_FLIP_CANDIDATE
+PORTRAIT_SLOT_FLIP_STREAK
+PRESENT
+PROFILE_SRV_DUMPED
+RENDER_FRAME_COUNT
+RETURN_DESKTOP_CONTROLLER_DIAG
+SAVE_PICKER_GRID_VIEW_RESTORES
+SEAMLESS_TOS_SKIP_COUNT
+SWITCH_ORACLE_TRACKED_SLOT
+SYNTHETIC_OUTER_PTR
+SYSTEM_QUIT_QUICKLOAD_LS10_REARM_COUNT
+SYSTEM_QUIT_QUICKLOAD_LS11_CLEAR_COUNT
+SYSTEM_QUIT_QUICKLOAD_MMS244_HOLD_COUNT
+SYSTEM_QUIT_QUICKLOAD_NATIVE_QUIT_ACTION_COUNT  # [R] read but never written
+SYSTEM_QUIT_TOP_HIDE_COUNT
+SYSTEM_QUIT_TOP_RESTORE_COUNT
+TFC_DRAIN_DIALOG
+TITLE_TEXT_GFX_VALUES

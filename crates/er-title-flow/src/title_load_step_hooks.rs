@@ -1,171 +1,9 @@
-/// Walk `FD4FileCap::loadProcess -> FD4FileLoadProcess::fileLoadProcessor` and sample the content
-/// state the MSB load-complete callback gates on, returning `(processor, content, size, acquires)`.
-///
-/// This is the exact chain `FD4FileCap::AcquireContent` (`FUN_1426591c0`) walks: it returns null if
-/// either `loadProcess` or `fileLoadProcessor` is null, and otherwise hands back `processor.content_`
-/// -- re-fetching it through a vtable call only on the acquire refcount's `0 -> 1` edge, while the
-/// matching release nulls `content_` on the `1 -> 0` edge. A null content is what makes
-/// `MsbFileCap::msbResCap` stay `0` even at `loadState == 4`, so sampling it says whether the freeze
-/// is "no buffer at all" or "buffer present but never parsed". Read-only: no acquire, no refcount
-/// touch, no vtable call.
-pub unsafe fn fd4_filecap_content_state(load_process: usize) -> (usize, usize, usize, i64) {
-    if load_process <= 0x10000 {
-        return (0, 0, 0, -1);
-    }
-    let Some(processor) =
-        (unsafe { safe_read_usize(load_process + FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET) })
-            .filter(|&v| v > 0x10000)
-    else {
-        return (0, 0, 0, -1);
-    };
-    let content =
-        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET) }.unwrap_or(0);
-    let size =
-        unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_SIZE_28_OFFSET) }.unwrap_or(0);
-    let acquires = unsafe { safe_read_usize(processor + FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET) }
-        .map(|v| (v & 0xffff_ffff) as i64)
-        .unwrap_or(-1);
-    (processor, content, size, acquires)
-}
-
-/// Read an `FD4ResCapHolderItem`'s resource name (the msb filename) off a file cap, as ASCII.
-///
-/// `resourceString` is an `FD4BasicHashString` whose `DLString<wchar_t>` is small-string-optimized:
-/// `capacity > 7` means the union at `+0x18` holds a heap POINTER, otherwise the characters sit
-/// inline in the union itself. Both `length` and the read are clamped so a garbage capacity cannot
-/// walk the probe off a page, every character goes through `safe_read_u8`, and non-ASCII collapses
-/// to `?` -- this runs on the game thread during a stall, so it must not fault or allocate wildly.
-pub unsafe fn fd4_filecap_name(cap: usize) -> String {
-    let capacity =
-        unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_CAPACITY_30_OFFSET) }.unwrap_or(0);
-    let length = unsafe { safe_read_usize(cap + FD4_FILECAP_NAME_LENGTH_28_OFFSET) }.unwrap_or(0);
-    let union_addr = cap + FD4_FILECAP_NAME_UNION_18_OFFSET;
-    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
-        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
-            Some(ptr) => ptr,
-            None => return String::from("<badptr>"),
-        }
-    } else {
-        union_addr
-    };
-    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
-    let mut out = String::with_capacity(count);
-    for i in 0..count {
-        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
-            safe_read_u8(chars_addr + i * 2 + 1)
-        }) else {
-            out.push_str("<trunc>");
-            break;
-        };
-        let unit = u16::from(lo) | (u16::from(hi) << 8);
-        if unit == 0 {
-            break;
-        }
-        out.push(if (0x20..0x7f).contains(&unit) {
-            unit as u8 as char
-        } else {
-            '?'
-        });
-    }
-    out
-}
-
-/// Read a `DLString<wchar_t>` (given the address of the string itself) as clamped ASCII.
-///
-/// Same small-string-optimization rule as `fd4_filecap_name`: `capacity > 7` means the union holds
-/// a heap pointer, otherwise the characters are inline. Kept separate because that helper takes a
-/// cap and bakes in the `+0x10` string base, while virtual-root entries hold bare `DLString`s.
-pub unsafe fn dlstring_wide_ascii(string_base: usize) -> String {
-    if string_base <= 0x10000 {
-        return String::new();
-    }
-    let capacity =
-        unsafe { safe_read_usize(string_base + DLSTRING_CAPACITY_20_OFFSET) }.unwrap_or(0);
-    let length = unsafe { safe_read_usize(string_base + DLSTRING_LENGTH_18_OFFSET) }.unwrap_or(0);
-    let union_addr = string_base + DLSTRING_UNION_08_OFFSET;
-    let chars_addr = if capacity > DLSTRING_INLINE_CAPACITY_MAX {
-        match unsafe { safe_read_usize(union_addr) }.filter(|&v| v > 0x10000) {
-            Some(ptr) => ptr,
-            None => return String::from("<badptr>"),
-        }
-    } else {
-        union_addr
-    };
-    let count = length.min(FD4_FILECAP_NAME_MAX_CHARS);
-    let mut out = String::with_capacity(count);
-    for i in 0..count {
-        let (Some(lo), Some(hi)) = (unsafe { safe_read_u8(chars_addr + i * 2) }, unsafe {
-            safe_read_u8(chars_addr + i * 2 + 1)
-        }) else {
-            out.push_str("<trunc>");
-            break;
-        };
-        let unit = u16::from(lo) | (u16::from(hi) << 8);
-        if unit == 0 {
-            break;
-        }
-        out.push(if (0x20..0x7f).contains(&unit) {
-            unit as u8 as char
-        } else {
-            '?'
-        });
-    }
-    out
-}
-
-/// Report the DLIO virtual-root aliases that back the stalled `mapstudio_dlc2:/m28_*.msb` reads.
-///
-/// The phase-2 freeze's file caps resolve through `mapstudio_dlc2:`, which is an alias in
-/// `DLFileDeviceManager::virtualRoots`, NOT a data archive. That alias is registered EMPTY (`L""`)
-/// by the title start-game flow and only filled in by `CSDlcImp::AddVirtualFileRoots` behind the
-/// `STEP_LoadListWait` gate. So an alias present with an EMPTY path at the stall means the read had
-/// nowhere to resolve to -- which is exactly a 0-byte read and a null `msbResCap`. Emitting
-/// `mapstudio` alongside it is the control: base-game populated + dlc2 empty is decisive on its own.
-///
-/// Strictly read-only -- a vector walk with bounded length and per-field `safe_read_*`, no locks and
-/// no allocation beyond the returned string, because this runs on the game thread mid-stall.
-pub unsafe fn dlio_virtual_roots_summary(base: usize) -> String {
-    if base == 0 {
-        return String::from("<nobase>");
-    }
-    let Some(manager) =
-        (unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }).filter(|&v| v > 0x10000)
-    else {
-        return String::from("<mgrnull>");
-    };
-    let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
-    let (Some(start), Some(end)) = (
-        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET) },
-        unsafe { safe_read_usize(roots + FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET) },
-    ) else {
-        return String::from("<vecunreadable>");
-    };
-    if start <= 0x10000 || end <= start {
-        return format!("<vecempty start={start:#x} end={end:#x}>");
-    }
-    let count =
-        ((end - start) / FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE).min(FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES);
-    let mut out = String::new();
-    let mut seen = 0usize;
-    for i in 0..count {
-        let entry = start + i * FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE;
-        let name = unsafe { dlstring_wide_ascii(entry) };
-        if !VIRTUAL_ROOTS_OF_INTEREST.iter().any(|w| *w == name) {
-            continue;
-        }
-        seen += 1;
-        let path =
-            unsafe { dlstring_wide_ascii(entry + FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET) };
-        // An EMPTY path on a present alias is the whole point of this probe -- label it loudly so a
-        // log scan cannot mistake it for a formatting artifact.
-        let verdict = if path.is_empty() { "EMPTY" } else { "ok" };
-        let _ = core::fmt::Write::write_fmt(
-            &mut out,
-            format_args!("{name}='{path}'({verdict}),"),
-        );
-    }
-    format!("total={count}/matched={seen}/{out}")
-}
+// FD4FileCap / DLString / DLIO virtual-root readers MOVED DOWN to `er_game_base::filecap`
+// (2026-08-25). The msb-parse, DLC-root and loadlist-wait traces that used to compile into the
+// product DLL now live in the `er-diag-harness` shell, and they name file caps and virtual roots
+// in every log line -- so a second image needed these walks. Copying them would have put two
+// literal declarations on one address; `crate::filecap_readers` re-exports the single owner
+// instead, and every call site in this crate is unchanged.
 
 /// Read the TitleTopDialog FD4 state machine by NAME (is_in_state) given the title `owner` (rcx of
 /// STEP_MenuJobWait). Returns `(dialog_ptr, in_fadein, in_loop, in_textfadeout, menu_opened_latch)` or
@@ -182,17 +20,17 @@ unsafe fn title_dialog_sm_state(
         return None;
     }
     let dialog_vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
-    if dialog_vt != base + TITLE_TOP_DIALOG_VTABLE_RVA {
+    if dialog_vt != er_game_base::mem::game_data_addr(base, TITLE_TOP_DIALOG_VTABLE_RVA, "TITLE_TOP_DIALOG_VTABLE_RVA") {
         return None;
     }
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
     let is_in_state: unsafe extern "system" fn(usize, usize) -> u8 =
-        unsafe { std::mem::transmute(base + TITLE_TOP_DIALOG_IS_IN_STATE_RVA) };
+        unsafe { std::mem::transmute(title_fn(TITLE_TOP_DIALOG_IS_IN_STATE_RVA, "TITLE_TOP_DIALOG_IS_IN_STATE_RVA")?) };
     let in_fadein =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_FADEIN_RVA) } != OWN_STEPPER_FALSE;
-    let in_loop = unsafe { is_in_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_FADEIN_RVA, "TITLE_STATE_DESC_FADEIN_RVA")) } != OWN_STEPPER_FALSE;
+    let in_loop = unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_LOOP_RVA, "TITLE_STATE_DESC_LOOP_RVA")) } != OWN_STEPPER_FALSE;
     let in_textfadeout =
-        unsafe { is_in_state(sm, base + TITLE_STATE_DESC_TEXTFADEOUT_RVA) } != OWN_STEPPER_FALSE;
+        unsafe { is_in_state(sm, er_game_base::mem::game_data_addr(base, TITLE_STATE_DESC_TEXTFADEOUT_RVA, "TITLE_STATE_DESC_TEXTFADEOUT_RVA")) } != OWN_STEPPER_FALSE;
     let latch = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
         .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
         .unwrap_or(0);
@@ -249,13 +87,27 @@ unsafe fn title_anim_fadein_skip(owner: usize) {
     {
         return; // lost the one-shot race
     }
+    let Some(set_state_addr) = title_fn(TITLE_FD4_SETSTATE_RVA, "TITLE_FD4_SETSTATE_RVA") else {
+        return;
+    };
     let set_state: unsafe extern "system" fn(usize, usize) =
-        unsafe { std::mem::transmute(base + TITLE_FD4_SETSTATE_RVA) };
+        unsafe { std::mem::transmute(set_state_addr) };
+    // THE ARGUMENT NEEDED RESOLVING TOO. The call target was already gated by `title_fn`, but the
+    // Loop state DESCRIPTOR was passed as a raw `base + RVA` -- and `set_state` dereferences it.
+    // `.rdata` moved on 1.17 like everything else (0x2a8f9e8 -> 0x2a92a68), so the FD4 state
+    // machine was being handed a pointer to whatever now occupies the 1.16.2 slot and told to
+    // transition to whatever it found there. A refusal returns instead: the fade is not skipped,
+    // which is cosmetic, where the wrong descriptor is not.
+    let Some(loop_desc) = er_game_base::game_build::resolve_game_address(
+        base + TITLE_STATE_DESC_LOOP_RVA,
+        "TITLE_STATE_DESC_LOOP_RVA",
+    ) else {
+        return;
+    };
     let sm = dialog + TITLE_TOP_DIALOG_STATE_MACHINE_A60_OFFSET;
-    unsafe { set_state(sm, base + TITLE_STATE_DESC_LOOP_RVA) };
+    unsafe { set_state(sm, loop_desc) };
     append_autoload_debug(format_args!(
-        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop) via 0x{:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***",
-        base + TITLE_FD4_SETSTATE_RVA
+        "title-anim-skip: *** SetState(sm=0x{sm:x}, Loop desc=0x{loop_desc:x}) via 0x{set_state_addr:x} -- zero-input FadeIn->Loop transition (game's own input-skip path, save-safe), skipping the title fade ***"
     ));
 }
 
@@ -309,7 +161,11 @@ pub unsafe fn install_title_anim_speed_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-anim-speed-hook: INSTALLED on STEP_MenuJobWait 0x{:x} -- one-shot FadeIn->Loop skip armed (zero-input, save-safe)",
-            base + TITLE_MENU_JOB_WAIT_RVA,
+            er_game_base::mem::game_data_addr(
+                base,
+                TITLE_MENU_JOB_WAIT_RVA,
+                "TITLE_MENU_JOB_WAIT_RVA"
+            ),
         )),
         status => append_autoload_debug(format_args!(
             "title-anim-speed-hook: MH_ApplyQueued failed: {status:?}"
@@ -428,7 +284,11 @@ pub unsafe fn install_movemapstep_step_move_map_gate_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "movemapstep-step-movemap-gate-hook: INSTALLED on 0x{:x} -- after-original +0x4b8/+0x4c reload hold armed",
-        base + MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            MOVEMAPSTEP_STEP_MOVEMAP_RVA,
+            "MOVEMAPSTEP_STEP_MOVEMAP_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -538,7 +398,11 @@ pub unsafe fn install_ingamestep_step_movemap_update_defer_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "ingamestep-step-movemap-update-defer-hook: INSTALLED on 0x{:x} -- defers d8=2/teardown while MoveMapStep finalize in [1..8] on a committed reload (default, no marker)",
-        base + INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+        er_game_base::mem::game_data_addr(
+            base,
+            INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA,
+            "INGAMESTEP_STEP_MOVEMAP_UPDATE_RVA"
+        ),
     ));
     std::mem::forget(hooks);
 }
@@ -666,7 +530,7 @@ pub unsafe fn install_child_done_query_override_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "child-done-query-override-hook: INSTALLED on 0x{:x} -- holds MoveMapStep child (mms+0x108) done->not-done while finalize<9 on a committed reload (prevents premature teardown)",
-        base + CHILD_DONE_QUERY_RVA,
+        er_game_base::mem::game_data_addr(base, CHILD_DONE_QUERY_RVA, "CHILD_DONE_QUERY_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -753,7 +617,7 @@ pub unsafe fn install_loadlist_init_capture_hook(base: usize) {
     }
     append_autoload_debug(format_args!(
         "loadlist-init-capture-hook: INSTALLED on 0x{:x} -- logs worldloadlistlistVirtualPath (InGameStep+0x108) per epoch to disambiguate the mms18 stall (empty-loadlist root vs downstream)",
-        base + LOADLIST_INIT_RVA,
+        er_game_base::mem::game_data_addr(base, LOADLIST_INIT_RVA, "LOADLIST_INIT_RVA"),
     ));
     std::mem::forget(hooks);
 }
@@ -792,7 +656,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
             && let Ok(base) = game_module_base() {
                 let table = unsafe { safe_read_usize(owner + TITLE_OWNER_INSTANCE_TABLE_OFFSET) }
                     .unwrap_or(0);
-                if table == base + INNER_TITLE_STATE_TABLE_RVA {
+                if table == er_game_base::mem::game_data_addr(base, INNER_TITLE_STATE_TABLE_RVA, "INNER_TITLE_STATE_TABLE_RVA") {
                     let previous = TITLE_OWNER_PTR.swap(owner, Ordering::SeqCst);
                     TITLE_OWNER_SCAN_COUNTDOWN
                         .store(TITLE_OWNER_SCAN_CALL_INTERVAL, Ordering::SeqCst);
@@ -840,7 +704,7 @@ pub unsafe extern "system" fn title_setstate_trace_detour(owner: usize, state: i
         };
         let (md5d, md5e) = game_module_base()
             .ok()
-            .and_then(|base| unsafe { safe_read_usize(base + CS_MENU_MAN_GLOBAL_RVA) })
+            .and_then(|base| unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, CS_MENU_MAN_GLOBAL_RVA, "CS_MENU_MAN_GLOBAL_RVA")) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)
             .and_then(|m| unsafe { safe_read_usize(m + CS_MENU_MAN_MENU_DATA_OFFSET) })
             .filter(|&m| m > PAB_MIN_HEAP_PTR)
@@ -910,7 +774,7 @@ pub unsafe fn install_title_setstate_trace_hook(base: usize) {
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: INSTALLED on SetState(owner,int) 0x{:x} -- read-only native state-transition timeline armed",
-            base + TITLE_SET_STATE_RVA,
+            er_game_base::mem::game_data_addr(base, TITLE_SET_STATE_RVA, "TITLE_SET_STATE_RVA"),
         )),
         status => append_autoload_debug(format_args!(
             "title-setstate-trace-hook: MH_ApplyQueued failed: {status:?}"

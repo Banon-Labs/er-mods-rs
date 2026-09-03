@@ -1,6 +1,6 @@
 //! Crate-internal flat-namespace prelude.
 //!
-//! The moved modules were `include!`-concatenated flat namespaces inside er-effects-rs
+//! The moved modules were `include!`-concatenated flat namespaces inside er-quickload
 //! (experiments/gpu_readback.rs, experiments/startup_hooks.rs, constants.rs), where every
 //! file saw every other file's items plus the module's shared import block. Each moved
 //! module now starts with `use crate::prelude::*;`, and this prelude re-creates that flat
@@ -19,6 +19,8 @@
 pub(crate) use crate::bridge::*;
 #[cfg(windows)]
 pub(crate) use crate::cached_depth_readback::*;
+#[cfg(windows)]
+pub(crate) use crate::chr_asm_layout::*;
 #[cfg(windows)]
 pub(crate) use crate::depth_mask_upload::*;
 #[cfg(windows)]
@@ -53,7 +55,7 @@ pub(crate) use crate::stats_loading_text::*;
 // `native_overlay`, `player_identity`, `stats_overlay` and `title_stats_text` are NOT re-exported:
 // nothing in the crate resolves a name through them, and their own modules are reachable directly.
 
-// --- telemetry counters whose canonical product re-export stays in er-effects-rs ----
+// --- telemetry counters whose canonical product re-export stays in er-quickload ----
 #[cfg(windows)]
 pub(crate) use er_telemetry_core::counters::{
     PROFILE_SPARE_ORPHAN, SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT,
@@ -61,11 +63,16 @@ pub(crate) use er_telemetry_core::counters::{
 
 // --- private sentinels (values copied EXACTLY from the product originals; the product
 // --- keeps its own copies, so these deliberately never leak out of this crate) ------
-/// er-effects-rs `constants/anti_debug.rs`: `TITLE_OWNER_SCAN_START_ADDRESS = usize::MIN`.
+/// er-quickload `constants/anti_debug.rs`: `TITLE_OWNER_SCAN_START_ADDRESS = usize::MIN`.
 pub(crate) const TITLE_OWNER_SCAN_START_ADDRESS: usize = usize::MIN;
-/// er-effects-rs `constants.rs`: `HOOK_ORIGINAL_UNSET = 0`.
+/// er-quickload `constants.rs`: `HOOK_ORIGINAL_UNSET = 0`.
 pub(crate) const HOOK_ORIGINAL_UNSET: usize = 0;
-/// er-effects-rs `constants/own_load_pump.rs`: `OWN_STEPPER_CALL_INC = true as usize`.
+/// er-title-flow `MENU_TRACE_UNSEEN_SEQ = NULL_MODULE_BASE = 0`: "this menu sequence has never
+/// been observed". Copied rather than imported because er-title-flow DEPENDS on this crate, so
+/// depending back on it is a cycle; the product keeps its own re-export.
+#[cfg(windows)]
+pub(crate) const MENU_TRACE_UNSEEN_SEQ: usize = 0;
+/// er-quickload `constants/own_load_pump.rs`: `OWN_STEPPER_CALL_INC = true as usize`.
 /// Only the hook-hit counters in the `#[cfg(windows)]` modules consume it.
 #[cfg(windows)]
 pub(crate) const OWN_STEPPER_CALL_INC: usize = true as usize;
@@ -90,6 +97,10 @@ pub(crate) use eldenring::fd4::FD4TaskData;
 pub(crate) use er_game_base::mem::*;
 #[cfg(windows)]
 pub(crate) use er_game_base::pgd::{read_utf16_name_units, utf16_name_empty_like};
+#[cfg(windows)]
+pub(crate) use er_game_base::profile_summary::{
+    PROFILE_SUMMARY_CHR_ASM_OFFSET, profile_summary_record_address,
+};
 #[cfg(windows)]
 pub(crate) use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 

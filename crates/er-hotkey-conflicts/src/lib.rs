@@ -402,22 +402,29 @@ fn tick() {
 }
 
 #[cfg(windows)]
-fn wait_for_task_instance() -> &'static CSTaskImp {
-    loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(instance) => return instance,
-            Err(_) => std::thread::yield_now(),
-        }
-    }
-}
-
-#[cfg(windows)]
 fn spawn_game_task() {
     let _ = std::thread::Builder::new()
         .name("er-hotkey-conflicts-task".to_owned())
         .spawn(move || {
             conflict_log(format_args!("game task thread waiting for CSTaskImp"));
-            let task = wait_for_task_instance();
+            // BOUNDED, and spinning in user space rather than yielding per attempt. A bare
+            // `yield_now()` loop is one wineserver round trip per attempt, and the wineserver is
+            // shared and serialising: measured 2026-08-29, two such threads starved the game to
+            // 104 CPU ticks in three minutes with no window and no crash. See
+            // `er_game_base::wait`, whose docs open with exactly the loop this replaced.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                // A shell that cannot find the task manager stays INERT rather than hanging the
+                // game. The user32 hooks are already installed and keep observing; only the
+                // FrameBegin tick -- which is what prints the settled report -- is lost.
+                conflict_log(format_args!(
+                    "game task NOT registered: CSTaskImp never appeared within \
+                     er_game_base::wait::MAX_YIELDS rounds. The input hooks stay armed and keep \
+                     observing, but the settled conflict report will not print."
+                ));
+                return;
+            };
             conflict_log(format_args!("game task registering FrameBegin tick"));
             task.run_recurring(
                 move |_data: &FD4TaskData| tick(),

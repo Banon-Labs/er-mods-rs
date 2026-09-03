@@ -81,7 +81,7 @@ def rules_for(checker) -> set[str]:
     return {f.rule for f in findings}
 
 
-BRAND = "ER_EFFECTS_BRAND_NEW"
+BRAND = "ER_QUICKLOAD_BRAND_NEW"
 KEY = f"{BRAND}@src/new_gate.rs"
 GATE_SRC = (
     "pub(crate) fn brand_new_gate() -> bool {\n"

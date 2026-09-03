@@ -241,7 +241,7 @@ mod tests {
 
     /// The captured 3-load session, in witness form: boot Continue + two reloads of the SAME save
     /// slot through the in-game picker. Ground truth for these numbers is the run captured in
-    /// `er-effects-telemetry.json` / `er-effects-autoload-debug.log`, whose log carries three
+    /// `er-quickload-telemetry.json` / `er-quickload-autoload-debug.log`, whose log carries three
     /// `+0x35(phase)=10` world-residency transitions, four ProfileLoadDialog `ACTIVATE` lines (two
     /// picker + two slot), and two `applied selected save preview` picks.
     fn captured_three_load_run() -> LoadCountWitnesses {

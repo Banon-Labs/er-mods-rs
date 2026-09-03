@@ -1,14 +1,14 @@
 //! Optional ME3-loadable harness for product (B), the customized System>Quit menu.
 //!
 //! Required product behavior is statically linked into the single shipped
-//! `er_effects_rs.dll`; its product profile never requires this shell. The harness exists
+//! `er_quickload.dll`; its product profile never requires this shell. The harness exists
 //! for isolated/coexistence tests, logs its attach, and installs a standalone host seam.
 //! It arms nothing yet because `er-quit-menu-core` still has no moved code to arm.
 //!
 //! An explicit coexistence test may load this harness alongside the product or companions.
 //! It contends on game addresses the product also hooks, so its detours go through the
 //! `er-hook` union -- never a bare `MhHook::new` -- and the union owner is elected at load
-//! time rather than assumed to be `er_effects_rs.dll`.
+//! time rather than assumed to be `er_quickload.dll`.
 
 // A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd

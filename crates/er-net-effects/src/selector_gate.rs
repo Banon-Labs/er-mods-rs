@@ -38,17 +38,47 @@
 //!   `er-net-effects.toml` to match.
 //! - Deliberate chords and player-chosen bindings stay live whether the bar is open or not:
 //!   [`SelectorKey::ShowHide`] (the only way back to a hidden bar),
+//!   [`SelectorKey::ExpandCollapse`] (the only way OPEN -- see below),
 //!   [`SelectorKey::EffectToggle`], and [`SelectorKey::Other`] -- which is where the hotkeys from
 //!   `.er-net-effects-hotkeys.json` land. Firing an effect while the bar is minimized IS this
 //!   DLL's primary use; the bar ships minimized precisely so it can be played that way. Gating
 //!   those on open would make the DLL useless for the thing it is for.
 //!
-//! None of the three can be taken from the game in the first place: two need Alt, and Elden Ring
-//! binds nothing to Alt+0 or Alt+'.
+//! None of them can be taken from the game in the first place: they need Alt, and Elden Ring binds
+//! nothing to Alt+0, Alt+9 or Alt+'.
+//!
+//! # Why expanding needs a KEY, not just the button
+//!
+//! The `[+]` header is a mouse target at absolute screen coordinates, hit-tested against
+//! `imgui::Io::mouse_pos`, which hudhook fills from `WM_MOUSEMOVE` / `WM_INPUT` on the game's
+//! window. From #317 until 2026-08-31 that click was the ONLY thing that could expand the bar,
+//! and it never once fired.
+//!
+//! WHAT WAS MEASURED, live, run `br-20260831-063324-0a97`, `/proc/<pid>/mem` (no injection):
+//!
+//! - `overlay_toggle_clicks` finished the ~8-hour session at **0** across 1,296,264 rendered
+//!   frames. The button was drawn on every one of them.
+//! - The wndproc path itself WORKS -- `MouseClickedPos[0]` held `(2155, 821)`, so imgui had seen
+//!   real positions and a real left click at some point. This was not a dead hook.
+//! - `MousePos` was nevertheless FROZEN at `(3190, 794)` on a 3840x2160 display across 12s of
+//!   sampling while the game rendered at ~45fps -- far from the button's corner box, which sits
+//!   within `SCREEN_MARGIN` of the top right.
+//!
+//! WHAT IS INFERRED, not proven: that the freeze is Elden Ring holding the mouse for the camera
+//! through DirectInput and leaving the Windows cursor where it lies. It fits (the game polls a
+//! DirectInput device every frame, and the cursor is hidden in play), but a still pointer is also
+//! what a player who is not touching the mouse produces, and that was not separable from a read.
+//!
+//! Either way the conclusion is the same and does not rest on the mechanism: a hit box in a screen
+//! corner is the wrong affordance on a host that may own the pointer, and a feature with exactly
+//! one affordance that scores zero in 1.3M frames needs a second one. The click stays -- it works
+//! wherever the pointer IS free -- and the key is what the player uses.
 
 // Windows-only in practice; kept portable so `cargo test` proves the decision table on the host
 // instead of it being reasoned about in a review.
 #![cfg_attr(not(windows), allow(dead_code))]
+
+use crate::bindings::SelectorAction;
 
 /// Left arrow.
 pub(crate) const VK_LEFT: u32 = 0x25;
@@ -58,11 +88,8 @@ pub(crate) const VK_UP: u32 = 0x26;
 pub(crate) const VK_RIGHT: u32 = 0x27;
 /// Down arrow.
 pub(crate) const VK_DOWN: u32 = 0x28;
-/// Insert -- with Alt, one of the three show/hide keys.
-pub(crate) const VK_INSERT: u32 = 0x2d;
-/// The top-row `0` -- with Alt, one of the three show/hide keys.
-pub(crate) const VK_0: u32 = 0x30;
-/// Numpad `0` -- with Alt, one of the three show/hide keys.
+/// Numpad `0` -- with Alt, one of the three show/hide keys, and the base the effect-trigger
+/// hotkey file's `numpad<N>` names count up from.
 pub(crate) const VK_NUMPAD0: u32 = 0x60;
 /// Numpad `+` -- add the highlighted effect to the always-on stack.
 pub(crate) const VK_ADD: u32 = 0x6b;
@@ -83,21 +110,40 @@ pub(crate) enum SelectorKey {
     StackEdit,
     /// Alt+`'` -- apply or remove whatever the cursor highlights.
     EffectToggle,
+    /// Alt+9 -- expand the bar from its `[+]` button, or minimize it back.
+    ///
+    /// The way OPEN, and on this game the only one. See the module note.
+    ExpandCollapse,
     /// Everything else, including whatever the player bound in the effect-trigger hotkey file.
     Other,
 }
 
-/// Classify a virtual-key code the way the selector reads it.
+/// Classify a virtual-key code the way the selector reads it, against the bindings in force.
 ///
 /// `alt_down` matters: bare `0` is a game key and bare `'` is a chat key, and neither may be
 /// mistaken for a selector command. Only the Alt-modified forms mean anything here.
+///
+/// The table this used to match on is now `crate::bindings`, because every one of these keys is
+/// configurable -- the arrows are the game's own menu keys, and `Alt+Insert` is a chord another
+/// mod may have taken. The classification is unchanged; only where the keys come from moved.
 pub(crate) fn key_for_vk(vk: u32, alt_down: bool) -> SelectorKey {
-    match vk {
-        VK_LEFT | VK_RIGHT | VK_UP | VK_DOWN => SelectorKey::Arrow,
-        VK_ADD | VK_SUBTRACT => SelectorKey::StackEdit,
-        VK_OEM_7 if alt_down => SelectorKey::EffectToggle,
-        VK_0 | VK_NUMPAD0 | VK_INSERT if alt_down => SelectorKey::ShowHide,
-        _ => SelectorKey::Other,
+    key_for_vk_in(&crate::bindings::live(), vk, alt_down)
+}
+
+/// The pure form, so the decision table can be exercised against explicit bindings.
+pub(crate) fn key_for_vk_in(
+    bindings: &crate::bindings::SelectorBindings,
+    vk: u32,
+    alt_down: bool,
+) -> SelectorKey {
+    match bindings.action_for(vk, alt_down) {
+        Some(SelectorAction::CursorUp | SelectorAction::CursorDown) => SelectorKey::Arrow,
+        Some(SelectorAction::CursorLeft | SelectorAction::CursorRight) => SelectorKey::Arrow,
+        Some(SelectorAction::StackAdd | SelectorAction::StackRemove) => SelectorKey::StackEdit,
+        Some(SelectorAction::EffectToggle) => SelectorKey::EffectToggle,
+        Some(SelectorAction::ShowHide) => SelectorKey::ShowHide,
+        Some(SelectorAction::ExpandCollapse) => SelectorKey::ExpandCollapse,
+        None => SelectorKey::Other,
     }
 }
 
@@ -130,6 +176,11 @@ pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
     match key {
         // Without it a hidden bar can never be brought back from the keyboard.
         SelectorKey::ShowHide => true,
+        // Gating this on `open` would be circular: open MEANS expanded, so the key that expands
+        // the bar would need the bar already expanded. That is not a hypothetical -- the bar ships
+        // collapsed, and until this key existed the only thing that could expand it was a mouse
+        // click the game does not let the player make.
+        SelectorKey::ExpandCollapse => true,
         // Alt+' is a deliberate chord on the effect the player already chose, and the trigger
         // hotkeys are the player's own bindings. Both are meant to be pressed WHILE PLAYING --
         // which is exactly when the bar is minimized -- so neither waits for the bar.
@@ -151,6 +202,13 @@ pub(crate) fn should_consume_key(open: bool, key: SelectorKey) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// The shipped defaults for the two chords this module's tests name directly. They are no
+    /// longer crate constants -- every key is configurable now -- but the DECISION TABLE below is
+    /// about the shipped bindings, so it needs their codes.
+    const VK_INSERT: u32 = 0x2d;
+    const VK_0: u32 = 0x30;
+    const VK_9: u32 = 0x39;
+
     use super::*;
 
     const SHOWN_EXPANDED_IN_WORLD: SelectorInputState = SelectorInputState {
@@ -290,6 +348,7 @@ mod tests {
         assert!(should_consume_key(true, SelectorKey::Arrow));
         for key in [
             SelectorKey::ShowHide,
+            SelectorKey::ExpandCollapse,
             SelectorKey::StackEdit,
             SelectorKey::EffectToggle,
             SelectorKey::Other,
@@ -349,5 +408,36 @@ mod tests {
             assert_eq!(key_for_vk(vk, false), SelectorKey::Other);
             assert_eq!(key_for_vk(vk, true), SelectorKey::Other);
         }
+    }
+
+    #[test]
+    fn the_expand_key_needs_alt() {
+        assert_eq!(key_for_vk(VK_9, true), SelectorKey::ExpandCollapse);
+        assert_eq!(
+            key_for_vk(VK_9, false),
+            SelectorKey::Other,
+            "bare 9 is a game key"
+        );
+    }
+
+    /// THE REGRESSION. The bar ships minimized, and from #317 until 2026-08-31 the only thing that
+    /// could expand it was a left click on a hit box in a screen corner -- which scored
+    /// `overlay_toggle_clicks == 0` across a measured 1,296,264 rendered frames. So the shipped
+    /// default MUST have a key that acts while the bar is closed, or the effect list and the four
+    /// cursor keys behind it are dead.
+    #[test]
+    fn the_shipped_default_can_be_expanded_from_the_keyboard() {
+        let open = SHIPPED_DEFAULT.is_open();
+        assert!(!open, "the shipped default is collapsed, hence not open");
+        let expand = key_for_vk(VK_9, true);
+        assert_eq!(expand, SelectorKey::ExpandCollapse);
+        assert!(
+            should_handle_key(open, expand),
+            "the key that OPENS the bar may not require the bar to be open"
+        );
+        assert!(
+            !should_consume_key(open, expand),
+            "expanding is read, never taken: the game must still see the key"
+        );
     }
 }

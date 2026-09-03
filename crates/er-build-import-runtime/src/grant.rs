@@ -51,32 +51,32 @@ use er_build_import_core::plan::{Grant, NO_SKILL, armament_item_id};
 
 /// `CS::EquipGameData::AddInventoryEquipByItemId(egd, int *itemId, u32 amount,
 /// bool updateTrophyStats, bool updateAutoEquip) -> int`.
-const ADD_INVENTORY_EQUIP_BY_ITEM_ID: usize = 0x246840;
+const ADD_INVENTORY_EQUIP_BY_ITEM_ID_RVA: usize = 0x246840;
 /// `CS::EquipGameData::AddInventoryEquip(egd, uint *gaItemHandle, u32 amount,
 /// bool updateTrophyStats, bool updateAutoEquip) -> int` -- returns the inventory index.
 ///
 /// The half of the call above that takes a handle somebody else minted, which is the only way to
 /// hand the inventory an instance that already carries a gem.
-const ADD_INVENTORY_EQUIP: usize = 0x246480;
+const ADD_INVENTORY_EQUIP_RVA: usize = 0x246480;
 /// `CS::CSGaitemImp::GetGaItemHandleWeaponWithGem(CSGaitemImp*, uint *out, int weaponId,
 /// int gemId)` (Ghidra `FUN_140671ce0`).
 ///
 /// Mints a weapon gaitem and, when `gemId >= 0`, a gem gaitem mounted in its slot 0 -- the exact
 /// pair `EquipParamCustomWeapon` drops go through. A negative `gemId` skips the gem entirely, so
 /// this one entry point covers armaments with and without an ash.
-const GET_GAITEM_HANDLE_WEAPON_WITH_GEM: usize = 0x671ce0;
+const GET_GAITEM_HANDLE_WEAPON_WITH_GEM_RVA: usize = 0x671ce0;
 /// `GaItemHandle::~GaItemHandle(uint *handle)`.
 ///
 /// Releases the reference the mint took. `CSGaitemImp` is a BOUNDED refcounted table (0x1400
 /// entries) and every native caller of the mint destructs its local handle once the inventory has
 /// taken its own reference; skipping it leaks table entries until the free queue is exhausted,
 /// which this repository has already crashed on once.
-const GAITEM_HANDLE_DTOR: usize = 0x682480;
+const GAITEM_HANDLE_DTOR_RVA: usize = 0x682480;
 /// `CS::GaitemLookupResult::SetReinforcement(GaitemLookupResult*, int)` -- `vtable + 0x20` on the
 /// resolved instance, the same virtual `EquipInventoryData::InsertItem` calls.
-const SET_REINFORCEMENT: usize = 0x672e00;
+const SET_REINFORCEMENT_RVA: usize = 0x672e00;
 /// `CS::GaitemLookupResult::GetReinforcement(GaitemLookupResult*) -> int` -- `vtable + 0x18`.
-const GET_REINFORCEMENT: usize = 0x672740;
+const GET_REINFORCEMENT_RVA: usize = 0x672740;
 // Declared once in `er-game-base::rva`; `er-better-refills` and `equip_native` read the
 // same values from there.
 use er_game_base::rva::{
@@ -90,6 +90,11 @@ use crate::gaitem::GaitemLookupResult;
 ///
 /// The typed upstream field is an `OwnedPtr`, which asserts non-null; before a character is
 /// loaded this slot really is null, so it is read as a plain pointer and checked.
+///
+/// The offset itself is measured, not read off that declaration: `GetMainPlayerGameData`
+/// (`0x140e9fc30`) is `mov rax,[rip+GLOBAL_GameDataMan] ; mov rax,[rax+0x8] ; ret`, and the
+/// `GameDataMan` constructor pairs 351/351 with zero moved offsets across 1.16.2/1.17. Full
+/// witness in `storage::GAME_DATA_MAN_PLAYER_OFFSET`.
 const GAME_DATA_MAN_PLAYER_OFFSET: usize = 0x08;
 /// `PlayerGameData::equipGameData`, held by value.
 const PLAYER_GAME_DATA_EQUIP_OFFSET: usize = 0x2b0;
@@ -144,7 +149,7 @@ pub struct ArmamentOutcome {
     ///
     /// # Why the number outlives our own reference
     ///
-    /// [`grant_armament`] destructs its local handle before returning, as every native caller
+    /// `grant_armament` destructs its local handle before returning, as every native caller
     /// does. That is a refcount decrement, not an invalidation: `AddInventoryEquip` took the
     /// inventory's own reference first, so the entry stays live for exactly as long as the item
     /// stays in the inventory -- which is longer than the equip pass. When the insert is REFUSED
@@ -161,15 +166,133 @@ impl ArmamentOutcome {
     }
 }
 
+/// One grant that landed, but at fewer than the number the build asked for.
+///
+/// A category of its own because it is neither of the two the report used to have. `missing`
+/// means the item is not there at all -- a refusal, and loud. This is the QUIET failure: the add
+/// ran, the engine reported nothing, and the inventory holds three of the five that were asked
+/// for. `EquipInventoryData::InsertItem` and `UpdateQuantity` both clamp with a bare
+/// `if (max < amount) amount = max;`, so the shortfall exists only in the difference between two
+/// numbers, and it exists only if something keeps both.
+#[derive(Debug, Clone)]
+pub struct Short {
+    /// The id the read-back asked about.
+    pub item_id: u32,
+    /// What the item is, for the log line.
+    pub label: String,
+    /// How many the build asked for.
+    pub requested: u32,
+    /// How many the inventory actually holds, counting every id under the same name.
+    pub held: u32,
+    /// The pot group that capped this, when one did.
+    ///
+    /// SHORT AND SHORT-BECAUSE-OF-POTS ARE DIFFERENT REPORTS, and only one of them is a defect.
+    /// A build asking for a Fire Pot's declared maximum on a character carrying three Cracked
+    /// Pots will come up short every single time, correctly and permanently -- the group's
+    /// ceiling is the number of vessels, and no importer can raise it past what the player owns.
+    /// Without this the line is indistinguishable from a grant the engine refused, and a reader
+    /// chasing the second would keep finding the first.
+    pub pot_group: Option<u8>,
+}
+
+/// One grant's demand, kept so the read-back can COMPARE rather than merely look.
+struct Requested {
+    /// The id the inventory will file it under, which for an armament includes its level.
+    item_id: u32,
+    /// Other ids the same name resolves to; empty for an armament (see the call site).
+    also_known_as: Vec<u32>,
+    /// How many the build asked for.
+    requested: u32,
+    /// What the item is, for the log line.
+    label: String,
+    /// The pot group capping it, carried so a shortfall can name its cause. See [`Short`].
+    pot_group: Option<u8>,
+}
+
+impl Requested {
+    /// The demand a minted armament satisfies, keyed on the id it actually came out under.
+    fn armament(outcome: &ArmamentOutcome, requested: u32) -> Self {
+        Self {
+            item_id: outcome.item_id,
+            also_known_as: Vec::new(),
+            requested,
+            label: outcome.label.clone(),
+            // An armament is not a goods row and has no pot group; the mint path never sets one.
+            pot_group: None,
+        }
+    }
+}
+
+/// `EquipGameData.lastItemAddResult`, at `+0x3fc` in a `0x4b0`-byte `EquipGameData`.
+///
+/// Confirmed on BOTH images rather than carried over: the 1.16.2 dump names the field at that
+/// offset, and `AddInventoryEquip`'s entry sequence writes it as
+/// `XOR ESI,ESI / MOV dword ptr [RCX + 0x3fc],ESI` -- the bytes `33 f6 89 b1 fc 03 00 00`, which
+/// occur at `0x1402464b8` in `eldenring-deobf.bin` (1.16.2) and at the SAME address in
+/// `eldenring-deobf-1.17.bin`.
+const LAST_ITEM_ADD_RESULT_OFFSET: usize = 0x3fc;
+
+/// `lastItemAddResult` when the engine flagged nothing.
+///
+/// NOT a delivery receipt. `AddInventoryEquip` zeroes the field on entry and only ever writes it
+/// again to REFUSE; the pot-group clamp happens further in, inside `InsertItem` /
+/// `UpdateQuantity`, which reduce the amount and return normally. So a zero here means "no
+/// refusal", and the quantity read-back remains the only evidence that the requested number
+/// arrived.
+const ADD_RESULT_OK: i32 = 0;
+/// `lastItemAddResult` when the stackable merge was refused: the item is unique and one is
+/// already held, or `EquipInventoryData::AdjustQuantityBy` reported failure. Nothing was added.
+const ADD_RESULT_MERGE_REFUSED: i32 = 2;
+/// `lastItemAddResult` when `EquipInventoryData::InsertItem` returned a negative index -- no free
+/// entry, or the insert was rejected. Nothing was added.
+const ADD_RESULT_INSERT_FAILED: i32 = 4;
+
+/// Read `EquipGameData.lastItemAddResult`.
+///
+/// # Safety
+///
+/// `egd` must be a live `EquipGameData*`; the read itself is fault-checked.
+unsafe fn last_item_add_result(egd: usize) -> Option<i32> {
+    // Safety: a fault-checked four-byte read at a verified offset inside a live object.
+    unsafe { er_game_base::mem::safe_read_i32(egd + LAST_ITEM_ADD_RESULT_OFFSET) }
+}
+
+/// The engine's meaning for a `lastItemAddResult` value, for the log.
+fn describe_add_result(result: i32) -> &'static str {
+    match result {
+        ADD_RESULT_OK => "no refusal recorded",
+        ADD_RESULT_MERGE_REFUSED => {
+            "the stack merge was refused -- unique item already held, or AdjustQuantityBy failed"
+        }
+        ADD_RESULT_INSERT_FAILED => "InsertItem refused: no inventory entry was taken",
+        _ => "an undocumented result code",
+    }
+}
+
 /// What actually ended up in the inventory.
 #[derive(Debug, Default)]
 pub struct GrantOutcome {
     /// Grants the plan asked for.
     pub attempted: usize,
-    /// Grants confirmed present afterwards by reading the inventory back.
+    /// Grants confirmed present AT THE REQUESTED QUANTITY afterwards, by reading the inventory
+    /// back.
+    ///
+    /// The comparison is against `Grant::quantity`, not against zero. Before 2026-08-31 this
+    /// counted anything the inventory held at all, so a build that asked for five Fire Pots and
+    /// received three -- the ordinary result of a full pot group -- reported
+    /// `GRANTED: n/n confirmed present, 0 missing`.
     pub confirmed: usize,
-    /// Item ids that were requested but could not be found afterwards.
+    /// Item ids that were requested but could not be found afterwards AT ALL.
     pub missing: Vec<u32>,
+    /// Grants that landed at fewer than the requested number. See [`Short`].
+    pub short: Vec<Short>,
+    /// Items moved OUT of the storage box back into the inventory, rather than minted anew.
+    pub pulled_from_storage: u32,
+    /// Items moved INTO the storage box to free a pot group's capacity.
+    pub deposited_to_storage: u32,
+    /// Whether the storage box was reachable at all this run. `false` means both storage rungs
+    /// were inert, which a reader has to know before concluding anything from the two counts.
+    pub storage_available: bool,
     /// Grants skipped because the character already had at least the quantity asked for.
     ///
     /// Counted rather than inferred: this is the difference between "the build was already
@@ -248,8 +371,22 @@ pub unsafe fn player_present() -> bool {
 }
 
 /// Whether a grant is an armament, i.e. the only kind that can carry a gem or a level.
+///
+/// # The category nibble is necessary and NOT sufficient
+///
+/// This used to be the nibble test alone, and that was correct only while ammunition was
+/// unimplemented. Arrows and bolts are `EquipParamWeapon` rows and carry the SAME
+/// [`WEAPON_CATEGORY`] nibble, so the nibble by itself now answers "armament" for a quiver of
+/// Bone Arrows -- and that answer sends them down [`grant_armament`], which mints ONE
+/// `GaItemHandle`, writes an upgrade level into the instance and mounts a gem. A stack of 99
+/// arrows is not one instance, and none of those three things exist for ammunition.
+///
+/// So the deciding fact travels on the grant ([`Grant::armament`]), set where the catalog kind is
+/// still known. The nibble is kept as the second half of the test because the two must agree: a
+/// grant flagged as an armament whose id is not in the weapon category is a plan bug, and taking
+/// the mint path on it would mint from the wrong table.
 fn is_armament(grant: &Grant) -> bool {
-    grant.item_id & ITEM_CATEGORY_MASK == WEAPON_CATEGORY
+    grant.armament && grant.item_id & ITEM_CATEGORY_MASK == WEAPON_CATEGORY
 }
 
 /// The `EquipParamGem` row a grant's `weapon_skill` names, or `None` for "no ash".
@@ -294,23 +431,51 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         return outcome;
     };
 
-    // Safety: the RVAs are verified 1.16.2 addresses inside the loaded image.
-    let add: AddInventoryFn =
-        unsafe { core::mem::transmute(module_base + ADD_INVENTORY_EQUIP_BY_ITEM_ID) };
-    let get_inventory: GetInventoryFn =
-        unsafe { core::mem::transmute(module_base + GET_EQUIP_INVENTORY_DATA) };
-    let get_quantity: GetQuantityFn =
-        unsafe { core::mem::transmute(module_base + GET_QUANTITY_BY_ITEM_ID) };
+    // RESOLVED FOR THE RUNNING BUILD. All three are direct calls into game code at 1.16.2
+    // addresses; on 1.17 an unresolved one transfers control into whatever moved there. Refusing
+    // takes the same path a null EquipGameData already takes -- every item reported missing,
+    // which is exactly what happens when nothing is granted.
+    let natives = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                ADD_INVENTORY_EQUIP_BY_ITEM_ID_RVA,
+                "AddInventoryEquipByItemId",
+            ),
+            (
+                GET_EQUIP_INVENTORY_DATA,
+                "CS::EquipGameData::GetEquipInventoryData",
+            ),
+            (GET_QUANTITY_BY_ITEM_ID, "GetQuantityByItemId"),
+        ],
+    );
+    let Ok([add, get_inventory, get_quantity]) = natives else {
+        outcome.missing = grants.iter().map(|grant| grant.item_id).collect();
+        return outcome;
+    };
+    // Safety: all three addresses were resolved for the running build immediately above.
+    let add: AddInventoryFn = unsafe { core::mem::transmute(add) };
+    // Safety: as above.
+    let get_inventory: GetInventoryFn = unsafe { core::mem::transmute(get_inventory) };
+    // Safety: as above.
+    let get_quantity: GetQuantityFn = unsafe { core::mem::transmute(get_quantity) };
 
     // Read once: the clamp needs the whole `ReinforceParamWeapon` id set, and every armament in
     // the plan asks it the same question.
     let levels = crate::catalog::ReinforceLevels::read();
 
-    // THE ID EACH GRANT ENDS UP UNDER, which for an armament is not `grant.item_id`: the upgrade
-    // level lives in the id's last two digits, so a +25 weapon is a DIFFERENT id from the +0 one
-    // the plan names. The read-back below has to ask about the id the inventory actually holds,
-    // or every armament reports missing.
-    let mut confirm_ids: Vec<u32> = Vec::with_capacity(grants.len());
+    // WHAT EACH GRANT ASKED FOR, AND THE IDS TO ASK ABOUT AFTERWARDS.
+    //
+    // The id is not always `grant.item_id`: for an armament the upgrade level lives in the id's
+    // last two digits, so a +25 weapon is a DIFFERENT id from the +0 one the plan names, and a
+    // read-back that asked about the planned id would report every armament missing.
+    //
+    // The REQUESTED quantity is carried alongside it because the confirmation is a comparison,
+    // not a presence test. Until 2026-08-31 the check was `if held > 0 { confirmed += 1 }`, which
+    // reports `GRANTED: n/n confirmed, 0 missing` for a build that asked for five Fire Pots and
+    // got three -- the exact case the pot cap produces, silently, on a character whose Cracked
+    // Pots are already spoken for. A number that cannot go down is not an instrument.
+    let mut confirms: Vec<Requested> = Vec::with_capacity(grants.len());
 
     // Read the inventory BEFORE granting, so a grant can ask what is already held.
     //
@@ -325,28 +490,75 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // Safety: game thread, live EquipGameData.
     let inventory_before = unsafe { get_inventory(egd) };
 
+    // THE STORAGE BOX, AND WHAT THE GAME POT-CAPS. Both are optional and both fail the same way:
+    // the ladder below loses a rung and says so, rather than the grant failing.
+    //
+    // Safety: game thread, `egd` live, `inventory_before` the carried inventory it owns.
+    let storage = if inventory_before == 0 {
+        None
+    } else {
+        unsafe { crate::storage::Storage::open(module_base, egd, inventory_before) }
+    };
+    outcome.storage_available = storage.is_some();
+    let pots = crate::catalog::PotGroups::read();
+    if storage.is_none() {
+        crate::log_line(
+            "[build-import] no storage box this session: an item already in the box cannot be \
+             moved back, so it will be granted as a new copy, and a pot-group conflict cannot be \
+             cleared",
+        );
+    }
+
+    // EVERY ID THE BUILD WANTS, so the pot rung never deposits something the build asked for.
+    // Alternates included: a name that resolves to several rows wants all of them left alone.
+    let wanted_ids: std::collections::BTreeSet<u32> = grants
+        .iter()
+        .flat_map(|grant| std::iter::once(grant.item_id).chain(grant.also_known_as.iter().copied()))
+        .collect();
+
     for grant in grants {
-        if is_armament(grant) {
+        let armament = is_armament(grant);
+        if armament {
             // Safety: same context; the armament path is documented on the helper.
-            if let Some(armament) = unsafe { grant_armament(module_base, egd, grant, &levels) } {
-                confirm_ids.push(armament.item_id);
-                outcome.armaments.push(armament);
+            if let Some(outcome_of_mint) =
+                unsafe { grant_armament(module_base, egd, grant, &levels) }
+            {
+                confirms.push(Requested::armament(&outcome_of_mint, grant.quantity));
+                outcome.armaments.push(outcome_of_mint);
                 continue;
             }
             // The mint declined (no `CSGaitemImp`, or the table is full). Fall through to the
             // plain call so the player at least gets a bare weapon rather than nothing -- still
             // at the right level, which is the one part of an armament that id alone can carry.
         }
-        let full_id = if is_armament(grant) {
+        let full_id = if armament {
             armament_item_id(
                 grant.item_id,
-                levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv),
+                levels.game_level_for(
+                    grant.item_id & ITEM_ROW_MASK,
+                    grant.reinforce_lv,
+                    grant.upgrade_is_character_default,
+                ),
             )
         } else {
             grant.item_id
         };
-        confirm_ids.push(full_id);
-        let id = full_id as i32;
+        // AN ARMAMENT'S ALTERNATES ARE NOT ITS UPGRADE ROWS. They are other weapons sharing its
+        // name, offset by the same affinity but NOT by the level folded into `full_id`, so
+        // counting them would credit a different weapon at a different level. Only the plain
+        // categories, whose ids carry no level, can use them.
+        let also_known_as: Vec<u32> = if armament {
+            Vec::new()
+        } else {
+            grant.also_known_as.clone()
+        };
+        confirms.push(Requested {
+            item_id: full_id,
+            also_known_as: also_known_as.clone(),
+            requested: grant.quantity,
+            label: grant.label.clone(),
+            pot_group: grant.pot_group,
+        });
         // RECONCILE TO THE TARGET rather than adding to whatever is there. The build names a
         // quantity the character should end up with, so only the shortfall is granted, and an
         // item already held in sufficient number is left completely alone.
@@ -358,11 +570,12 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         // different row of it. That is what handed out a second flask beside the one already in
         // the inventory, and the same collision made the Crimson and Cerulean flasks report "not
         // in the inventory" while sitting in the player's belt.
-        let shortfall: u32 = if inventory_before == 0 {
-            grant.quantity
-        } else {
+        //
+        // `None` is "the inventory could not be read", which is NOT the same fact as "holds
+        // none" and must not be printed as it.
+        let held: Option<u32> = (inventory_before != 0).then(|| {
             let mut held: i32 = 0;
-            for candidate in std::iter::once(full_id).chain(grant.also_known_as.iter().copied()) {
+            for candidate in std::iter::once(full_id).chain(also_known_as.iter().copied()) {
                 let candidate = candidate as i32;
                 // Safety: engine-owned inventory pointer, read only; the id outlives the call.
                 // A negative answer means "cannot say", not "owns a negative number".
@@ -370,8 +583,41 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                     unsafe { get_quantity(inventory_before, &raw const candidate) }.max(0),
                 );
             }
-            grant.quantity.saturating_sub(held.unsigned_abs())
-        };
+            held.unsigned_abs()
+        });
+        let mut shortfall: u32 = grant.quantity.saturating_sub(held.unwrap_or(0));
+        // WHAT WAS ASKED FOR AND WHY, for the grants where that is a real question. A grant of one
+        // needs no explanation; a grant of ninety-nine does, and the number's provenance is the
+        // difference between the importer honouring the item's own limit and the importer
+        // emptying a gib table into the player's pockets. Printed before the ladder runs, so a
+        // reader can tell an ask that was clamped from an ask that was never made.
+        if grant.quantity > 1 {
+            crate::log_line(&format!(
+                "[build-import]   STACK {:?} item 0x{full_id:08X}: build wants {} ({}), character \
+                 holds {}, granting {shortfall}{}",
+                grant.label,
+                grant.quantity,
+                // WHICH FIELD THE NUMBER CAME FROM, because there are two and they live in
+                // different tables. A consumable's ceiling is `EquipParamGoods.maxNum` clamped to
+                // 99; an arrow's is `EquipParamWeapon.maxArrowQuantity`, which the engine reads
+                // instead and which needs no clamp. A line that named the wrong one would send
+                // the next reader to a field that has no row for this item.
+                if grant.item_id & ITEM_CATEGORY_MASK == WEAPON_CATEGORY {
+                    "the item's own EquipParamWeapon.maxArrowQuantity"
+                } else {
+                    "the item's own EquipParamGoods.maxNum, capped at 99"
+                },
+                match held {
+                    Some(count) => count.to_string(),
+                    None => "an unreadable number of".to_owned(),
+                },
+                match grant.pot_group {
+                    Some(group) =>
+                        format!(" -- pot group {group} will clamp this to the group's headroom"),
+                    None => String::new(),
+                }
+            ));
+        }
         if shortfall == 0 {
             // Say so. A skipped grant and a grant that never ran look identical in a log that
             // only records what it added, and "why do I have two flasks" is exactly the question
@@ -380,23 +626,167 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             crate::log_line(&format!(
                 "[build-import]   ALREADY HELD, not granted: item 0x{full_id:08X}{} \
                  (build wants {}, character has at least that many)",
-                if grant.also_known_as.is_empty() {
+                if also_known_as.is_empty() {
                     String::new()
                 } else {
-                    format!(
-                        " (+{} id(s) under the same name)",
-                        grant.also_known_as.len()
-                    )
+                    format!(" (+{} id(s) under the same name)", also_known_as.len())
                 },
                 grant.quantity
             ));
             continue;
         }
+
+        // THE LADDER. Everything above this point decides HOW MANY are missing; everything below
+        // decides WHERE THEY COME FROM, cheapest and least destructive first:
+        //
+        //   1 ASK       -- how many would the carried inventory actually accept? A pot cap is
+        //                  the only thing that answers "fewer than you asked for" while every
+        //                  other signal says the add will work.
+        //   2 PULL      -- the player's own copy, out of the storage box.
+        //   3 MAKE ROOM -- deposit pot-group members the build does not want, which is what
+        //                  raises the group's ceiling. Only for a pot-capped item.
+        //   4 GIB       -- mint the rest.
+        //
+        // Nothing here removes an item from the game. A deposit puts it in the box the player can
+        // walk to; a pull moves their own copy back into their pockets.
+        if !armament && let Some(storage) = storage.as_ref() {
+            // Safety for every call in this block: game thread, and `storage` holds only
+            // engine-owned pointers resolved for the running build.
+            let headroom = unsafe { storage.carried_headroom(full_id, shortfall as i32) };
+            if headroom < shortfall as i32 {
+                crate::log_line(&format!(
+                    "[build-import]   CAPPED {:?} item 0x{full_id:08X}: the inventory will accept \
+                     {headroom} of the {shortfall} still needed{}",
+                    grant.label,
+                    match grant.pot_group {
+                        Some(group) => format!(" (pot group {group})"),
+                        None => String::new(),
+                    }
+                ));
+            }
+
+            // RUNG 2 -- PULL. Run whenever the box holds one, NOT only when rung 1 said the
+            // inventory is full. The build is a statement about the character, and minting a
+            // second copy beside one the player already owns contradicts it just as surely as
+            // minting a second Flask of Wondrous Physick did; the shortfall calculation above
+            // cannot see into the box, so without this the boxed copy is invisible and duplicated.
+            let mut pulled = 0u32;
+            for candidate in std::iter::once(full_id).chain(also_known_as.iter().copied()) {
+                if shortfall == 0 {
+                    break;
+                }
+                // Safety: as above.
+                if unsafe { storage.stored_quantity(candidate) } <= 0 {
+                    continue;
+                }
+                // Safety: as above; `pull` re-resolves the index itself and re-measures.
+                let got = unsafe { storage.pull(candidate, shortfall as i32) }.max(0) as u32;
+                if got > 0 {
+                    pulled += got;
+                    shortfall = shortfall.saturating_sub(got);
+                    crate::log_line(&format!(
+                        "[build-import]   FROM STORAGE {:?} item 0x{candidate:08X}: {got} moved \
+                         back into the inventory, {shortfall} still needed",
+                        grant.label
+                    ));
+                }
+            }
+            outcome.pulled_from_storage += pulled;
+
+            // RUNG 3 -- MAKE ROOM. Only a pot-capped item has a group whose ceiling can be
+            // raised, and only members the build does not want may be moved. The box has no pot
+            // cap (`unlimitedConsumables`), so a deposit really does free the group.
+            if shortfall > 0
+                && let Some(group) = grant.pot_group
+                // Safety: as above.
+                && unsafe { storage.carried_headroom(full_id, shortfall as i32) } < shortfall as i32
+            {
+                let mut deposited = 0u32;
+                for other in pots.members(group) {
+                    if wanted_ids.contains(other) {
+                        continue;
+                    }
+                    // MOVE AS FEW AS THE GROUP NEEDS, not everything in it. A group's headroom is
+                    // `potItemsCapacity[g] - potItemsCount[g]`, and every consumable deposited
+                    // decrements the count by one -- so the deficit IS the number to move, and
+                    // emptying a player's thirty Poison Pots into the box to make room for one
+                    // Fire Pot would be a correct result reached by an obnoxious route.
+                    // Safety: as above.
+                    let deficit = shortfall as i32
+                        - unsafe { storage.carried_headroom(full_id, shortfall as i32) };
+                    if deficit <= 0 {
+                        break;
+                    }
+                    // Safety: as above.
+                    let carried = unsafe { storage.carried_quantity(*other) };
+                    if carried <= 0 {
+                        continue;
+                    }
+                    // Safety: as above. `deposit` asks the box what it will take, refuses an
+                    // equipped entry, re-resolves the index, and passes reassignQuickSlot=false.
+                    let moved =
+                        unsafe { storage.deposit(*other, carried.min(deficit)) }.max(0) as u32;
+                    if moved == 0 {
+                        continue;
+                    }
+                    deposited += moved;
+                    crate::log_line(&format!(
+                        "[build-import]   TO STORAGE item 0x{other:08X}: {moved} deposited to free \
+                         pot group {group} for {:?}",
+                        grant.label
+                    ));
+                }
+                outcome.deposited_to_storage += deposited;
+
+                // The box may still hold the wanted item and there may now be room for it, so
+                // the pull is worth one more try before anything is minted.
+                if deposited > 0 && shortfall > 0 {
+                    for candidate in std::iter::once(full_id).chain(also_known_as.iter().copied()) {
+                        if shortfall == 0 {
+                            break;
+                        }
+                        // Safety: as above.
+                        let got =
+                            unsafe { storage.pull(candidate, shortfall as i32) }.max(0) as u32;
+                        if got > 0 {
+                            outcome.pulled_from_storage += got;
+                            shortfall = shortfall.saturating_sub(got);
+                            crate::log_line(&format!(
+                                "[build-import]   FROM STORAGE {:?} item 0x{candidate:08X}: \
+                                 {got} moved back after freeing pot group {group}, {shortfall} \
+                                 still needed",
+                                grant.label
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        if shortfall == 0 {
+            continue;
+        }
+
+        // RUNG 4 -- GIB.
         // `updateTrophyStats` and `updateAutoEquip` both true: the same arguments the engine's
         // own pickup path uses, so achievements and auto-equip behave as if the item were
         // found in the world.
+        let id = full_id as i32;
         // Safety: game thread, live EquipGameData, and `id` outlives the call.
         unsafe { add(egd, &raw const id, shortfall, true, true) };
+        // AND READ WHAT THE GAME THOUGHT OF IT. The call's own return is an inventory index the
+        // caller has no use for; the verdict is written to `EquipGameData.lastItemAddResult`.
+        // Safety: a fault-checked read at a verified offset inside a live object.
+        if let Some(result) = unsafe { last_item_add_result(egd) }
+            && result != ADD_RESULT_OK
+        {
+            crate::log_line(&format!(
+                "[build-import]   ADD REFUSED {:?} item 0x{full_id:08X}: \
+                 EquipGameData.lastItemAddResult = {result} ({})",
+                grant.label,
+                describe_add_result(result)
+            ));
+        }
     }
 
     // Safety: same context; the inventory pointer is engine-owned and only read.
@@ -405,14 +795,31 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         outcome.missing = grants.iter().map(|grant| grant.item_id).collect();
         return outcome;
     }
-    for full_id in &confirm_ids {
-        let id = *full_id as i32;
-        // Safety: as above.
-        let held = unsafe { get_quantity(inventory, &raw const id) };
-        if held > 0 {
+    for want in &confirms {
+        let mut held: i32 = 0;
+        for candidate in std::iter::once(want.item_id).chain(want.also_known_as.iter().copied()) {
+            let candidate = candidate as i32;
+            // Safety: as above.
+            held = held
+                .saturating_add(unsafe { get_quantity(inventory, &raw const candidate) }.max(0));
+        }
+        let held = held.unsigned_abs();
+        // CONFIRMED MEANS "AT THE QUANTITY THE BUILD ASKED FOR", not "present". The three
+        // outcomes are distinct on purpose: five of five is a success, three of five is a
+        // silently clamped add, and zero of five is a refusal -- and the middle one used to be
+        // reported as the first.
+        if held >= want.requested {
             outcome.confirmed += 1;
+        } else if held == 0 {
+            outcome.missing.push(want.item_id);
         } else {
-            outcome.missing.push(*full_id);
+            outcome.short.push(Short {
+                item_id: want.item_id,
+                label: want.label.clone(),
+                requested: want.requested,
+                held,
+                pot_group: want.pot_group,
+            });
         }
     }
 
@@ -434,17 +841,39 @@ unsafe fn grant_armament(
     levels: &crate::catalog::ReinforceLevels,
 ) -> Option<ArmamentOutcome> {
     // Safety: a fault-checked read of one pointer-sized slot in the loaded image.
-    let gaitem = unsafe { er_game_base::mem::safe_read_usize(module_base + GLOBAL_CSGAITEM_RVA) }?;
+    let gaitem = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            GLOBAL_CSGAITEM_RVA,
+            "GLOBAL_CSGAITEM_RVA",
+        ))
+    }?;
     if gaitem == 0 {
         return None;
     }
 
-    // Safety: verified 1.16.2 RVAs inside the loaded image.
-    let mint: MintWeaponFn =
-        unsafe { core::mem::transmute(module_base + GET_GAITEM_HANDLE_WEAPON_WITH_GEM) };
-    let add_by_handle: AddInventoryByHandleFn =
-        unsafe { core::mem::transmute(module_base + ADD_INVENTORY_EQUIP) };
-    let release: HandleDtorFn = unsafe { core::mem::transmute(module_base + GAITEM_HANDLE_DTOR) };
+    // Resolved for the running build. The three move together and MUST: the mint takes a
+    // reference on the `CSGaitemImp` table and the release gives it back, so minting without
+    // being able to release would leak a table entry on every armament in the build. `None`
+    // means this armament is not minted at all, which the caller already handles.
+    let [mint, add_by_handle, release] = crate::native::resolve_all(
+        module_base,
+        [
+            (
+                GET_GAITEM_HANDLE_WEAPON_WITH_GEM_RVA,
+                "GetGaitemHandleWeaponWithGem",
+            ),
+            (ADD_INVENTORY_EQUIP_RVA, "AddInventoryEquip"),
+            (GAITEM_HANDLE_DTOR_RVA, "GaItemHandle destructor"),
+        ],
+    )
+    .ok()?;
+    // Safety: all three addresses were resolved for the running build immediately above.
+    let mint: MintWeaponFn = unsafe { core::mem::transmute(mint) };
+    // Safety: as above.
+    let add_by_handle: AddInventoryByHandleFn = unsafe { core::mem::transmute(add_by_handle) };
+    // Safety: as above.
+    let release: HandleDtorFn = unsafe { core::mem::transmute(release) };
 
     let wanted_gem = gem_row(grant);
     // `-1` is the engine's own "no gem": the mint tests `-1 < gemId` before touching the slot.
@@ -456,11 +885,16 @@ unsafe fn grant_armament(
     let mut handle = [0u32; 4];
 
     // THE LEVEL IS PART OF THE ITEM ID, and it has to be decided before the mint rather than
-    // after it. The build's level is what the AUTHOR asked for, not necessarily a level this
-    // armament has -- somber armaments stop at +10 and a build's `weaponUpgrade` is one number
-    // for the whole character -- so the game is asked which `reinforceTypeId + level` rows exist
-    // and the request is clamped to one of them.
-    let wanted_level = levels.clamp(grant.item_id & ITEM_ROW_MASK, grant.reinforce_lv);
+    // after it. The build's level is what the AUTHOR asked for, on the PLANNER's scale, not
+    // necessarily a level this armament has -- somber armaments stop at +10 while the planner
+    // still counts them in regular smithing-stone levels, and a build's `weaponUpgrade` is one
+    // number for the whole character -- so the game is asked which `reinforceTypeId + level` rows
+    // exist and the request is translated onto them.
+    let wanted_level = levels.game_level_for(
+        grant.item_id & ITEM_ROW_MASK,
+        grant.reinforce_lv,
+        grant.upgrade_is_character_default,
+    );
     let minted_id = armament_item_id(grant.item_id, wanted_level);
 
     // Safety: our own buffer, the live singleton, and ids that are plain integers.
@@ -513,9 +947,22 @@ unsafe fn apply_reinforcement(module_base: usize, handle: &[u32; 4], level: u16)
     else {
         return -1;
     };
-    // Safety: verified RVAs; both are one-line forwarders to the instance's own virtual.
-    let set: SetReinforcementFn = unsafe { core::mem::transmute(module_base + SET_REINFORCEMENT) };
-    let get: GetReinforcementFn = unsafe { core::mem::transmute(module_base + GET_REINFORCEMENT) };
+    // Resolved for the running build; both are one-line forwarders to the instance's own virtual.
+    // `-1` on refusal is this function's own "the level could not be read", which the caller
+    // already reports rather than presenting as a level.
+    let Ok([set, get]) = crate::native::resolve_all(
+        module_base,
+        [
+            (SET_REINFORCEMENT_RVA, "SetReinforcement"),
+            (GET_REINFORCEMENT_RVA, "GetReinforcement"),
+        ],
+    ) else {
+        return -1;
+    };
+    // Safety: both addresses were resolved for the running build immediately above.
+    let set: SetReinforcementFn = unsafe { core::mem::transmute(set) };
+    // Safety: as above.
+    let get: GetReinforcementFn = unsafe { core::mem::transmute(get) };
     // Safety: the lookup resolved a live instance, which is what both forwarders dereference.
     unsafe { set(&raw mut lookup, i32::from(level)) };
     // Safety: as above.

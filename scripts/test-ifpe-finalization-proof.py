@@ -31,7 +31,7 @@ def write_run(root: Path, *, passing: bool) -> None:
         "oracle_fake_loading_visible": 0,
         "oracle_loading_screen_close_sent_hits": 1,
     }
-    (root / "er-effects-telemetry.json").write_text(
+    (root / "er-quickload-telemetry.json").write_text(
         json.dumps(terminal), encoding="utf-8"
     )
     readiness = {

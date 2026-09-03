@@ -7,7 +7,7 @@
 //! opaque strip onto the current swapchain backbuffer immediately before the
 //! original Present. Product DLL state and Elden Ring semaphores enter only through
 //! a caller-supplied frame provider; the standalone wrapper can still prove the
-//! Present path without pulling in er-effects-rs.
+//! Present path without pulling in er-quickload.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;

@@ -81,11 +81,11 @@ fn install() {
         "er-input-harness attach: TITLE-ACTIVE CSTaskImp FrameBegin self-drive (fires at title + in-world); direct input-memory injection (keystate bitmap + DLUID + accept byte); no SendInput/XInput"
     );
     // Wait for the game's task manager (no sleep: yield + re-poll, the product's wait pattern).
-    let task = loop {
-        match unsafe { CSTaskImp::instance() } {
-            Ok(t) => break t,
-            Err(_) => std::thread::yield_now(),
-        }
+    // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop starved
+    // the wineserver and hung a boot.
+    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+    else {
+        return;
     };
     let base = resolve_base();
     input_inject::log_resolution(base);
@@ -115,6 +115,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-input-harness", crate::log::log_line);
+        er_hook::set_hook_logger(crate::log::log_line);
         START.call_once(|| {
             let _ = std::thread::Builder::new()
                 .name("er-input-harness-install".to_owned())

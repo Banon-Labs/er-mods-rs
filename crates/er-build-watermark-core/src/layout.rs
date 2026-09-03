@@ -142,7 +142,7 @@ mod tests {
     #[test]
     fn a_behind_row_is_hoisted_above_the_quiet_ones() {
         let identities = [
-            identity("er_effects_rs.dll", "ba46f81cc930"),
+            identity("er_quickload.dll", "ba46f81cc930"),
             identity("er_invasion_warp.dll", "c1adc6c89a49"),
             identity("er_quit_menu.dll", "ba46f81cc930+dirty"),
         ];

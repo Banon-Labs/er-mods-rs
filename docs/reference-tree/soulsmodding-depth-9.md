@@ -33,7 +33,7 @@ Repo-local code and local sibling reference code:
 
 Local data availability check:
 
-- No local `regulation.bin` or CSV param row dump was found under `er-effects-rs` / `fromsoftware-rs`.
+- No local `regulation.bin` or CSV param row dump was found under `er-quickload` / `fromsoftware-rs`.
 - Local FromSoftware param material available here is schema XML, not live row data for SpEffect `5008` or the seeded IDs.
 
 ## Current repo trigger behavior

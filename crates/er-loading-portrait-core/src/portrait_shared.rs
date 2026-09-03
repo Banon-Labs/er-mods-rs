@@ -356,6 +356,16 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // character. Without this reset the latch would pin the boot character's face across every
     // later System->Quit->Load switch -- the same wrong-face class in the opposite direction.
     PORTRAIT_WINDOW_TARGET_SLOT.store(0, Ordering::SeqCst);
+    // ...and its AUTHORITY with it. A stale `from_pick` would make the next window's guessed latch
+    // claim the user had chosen it, permanently disabling the one promotion a real pick is owed.
+    PORTRAIT_WINDOW_TARGET_FROM_PICK.store(
+        crate::portrait_lookat::PORTRAIT_WINDOW_TARGET_PICK_NO,
+        Ordering::SeqCst,
+    );
+    // Same for the finer-grained rank the yield rule actually compares. A carried-over rank would
+    // make the next window's first latch look like it already rested on the strongest evidence,
+    // which is the exact failure the boolean above already documents, one level down.
+    crate::portrait_lookat::PORTRAIT_WINDOW_TARGET_SOURCE.store(0, Ordering::SeqCst);
     // The kick-target name hash re-stamps at the next window's build kick (both modes).
     PORTRAIT_TARGET_NAME_HASH.store(0, Ordering::SeqCst);
     if let Ok(mut g) = PORTRAIT_MOTION_PREV_PLANES.lock() {
@@ -369,12 +379,25 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // Animation-stall semaphore: snapshot this window's animated-vs-displayed frame counts, then zero
     // for the next window. drive << display == the head froze early (freeze-after-capture); the
     // user's "stopped animating / frozen the whole loading screen" symptom shows here as a low ratio.
+    //
+    // `drive` counts the POSE drive only (model update task + per-frame push), which sits behind
+    // `off_resources_ready` in `profile_lookat_realtime_draw_tick`. When that gate is shut the pose
+    // drive contributes nothing while the pipeline is otherwise healthy, so `drive` alone cannot
+    // distinguish "the head froze" from "the pose drive was never allowed to run". `render_drive`
+    // and `pose_blocked` below supply that distinction; do not read `drive` without them.
     let drive = PROFILE_DRIVE_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
     let display = PROFILE_DISPLAY_FRAMES_WINDOW.swap(0, Ordering::SeqCst);
     // `PROFILE_RT_SRV_COPIES_WINDOW` is a true per-window counter used by the fast-fail gate. Reset it
     // here with the other per-window counters; leaving stale copies from an earlier window makes a later
     // no-copy failure report as cause=0/unknown instead of the actionable no-copy class.
     let copies = PROFILE_RT_SRV_COPIES_WINDOW.swap(0, Ordering::SeqCst);
+    // SESSION TOTAL beside the per-window delta. Run br-20260831-160354-2513 closed every window
+    // with `copies=0` -- including windows that published 181 and 268 clean portraits -- which
+    // leaves two very different readings indistinguishable from the window number alone: the copy
+    // never succeeds at all, or it succeeds outside these windows. The cumulative count separates
+    // them without adding instrumentation, and it is the fact the mid-window FAST-FAIL in
+    // `lookat_bone_hooks` is currently blocked on (see its comment).
+    let copies_total = er_telemetry_core::counters::PROFILE_RT_SRV_COPIES.load(Ordering::SeqCst);
     PROFILE_DRIVE_FRAMES_WINDOW_LAST.store(drive, Ordering::SeqCst);
     PROFILE_DISPLAY_FRAMES_WINDOW_LAST.store(display, Ordering::SeqCst);
     // PUBLISH-STARVATION ATTRIBUTION (2026-07-03 soak: windows froze on the PRIOR character with the
@@ -386,6 +409,19 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
         let c = cum.load(Ordering::SeqCst);
         c.saturating_sub(last.swap(c, Ordering::SeqCst))
     };
+    // The render-thread tick that owns the RT->SRV copy, readback and publish attempt -- the tick
+    // that actually feeds `published`. Unlike `drive` this is not behind `off_resources_ready`, so
+    // it is the number that answers "did the portrait pipeline run at all this window".
+    let render_drive = winof(
+        &er_telemetry_core::counters::PROFILE_RENDER_DRIVE_HITS,
+        &er_telemetry_core::counters::PROFILE_RENDER_DRIVE_HITS_WINDOW_MARK,
+    );
+    // Attribution for a zero `drive`: frames the pose drive was deliberately skipped because the
+    // offscreen nest had a null native GX resource wrapper.
+    let pose_blocked = winof(
+        &er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF_RESOURCE,
+        &er_telemetry_core::counters::PORTRAIT_PUMP_BLOCK_OFF_RESOURCE_WINDOW_MARK,
+    );
     let published = winof(&PROFILE_PUBLISH_CLEAN, &PROFILE_PUBLISH_CLEAN_WINDOW_MARK);
     let torn = winof(
         &PROFILE_PUBLISH_SKIPPED_TORN,
@@ -471,8 +507,19 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     // the frame the render misses, not here at window close. This is the BACKSTOP: it records the
     // precise per-window dominant cause for the log, and only increments the failure counter if the
     // fast-fail latch did not already count this window (defensive; ~never with grace=0). Guarded on
-    // `drive > 0` -- a window that never got a model (build-side gap) is not a publish-gate fault.
-    if published == 0 && drive > 0 {
+    // the pipeline having RUN -- a window that never got a model (build-side gap) is not a
+    // publish-gate fault.
+    //
+    // ANCHOR CHANGED FROM `drive` TO `render_drive` (run br-20260831-160354-2513). `drive` sits
+    // behind `off_resources_ready`, which was shut for the whole run
+    // (`oracle_portrait_pump_block_off_resource = 710`), so `drive > 0` was NEVER true and this
+    // entire backstop was dead code. The window it existed for went by unreported: window #4 closed
+    // `PORTRAIT-LOADWIN VERDICT #4: cause=kicked-no-publish ... publishes=0` and
+    // `oracle_portrait_window_publish_failures` still read 0. `render_drive` is the tick that owns
+    // the copy/readback/publish attempt, which is what "the window drove and still published
+    // nothing" was always trying to say. Evaluated once, at close, so unlike the mid-window
+    // FAST-FAIL it cannot trip on frame 1 of a healthy window.
+    if published == 0 && render_drive > 0 {
         let cause = if torn >= unkeyed && torn >= badiou && torn >= lowmask && torn > 0 {
             1 // torn: usable frames the tear metric rejected
         } else if unkeyed >= badiou && unkeyed >= lowmask && unkeyed > 0 {
@@ -502,7 +549,7 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
             PORTRAIT_WINDOW_PUBLISH_FAILURES.fetch_add(1, Ordering::SeqCst) + 1
         };
         append_autoload_debug(format_args!(
-            "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window drove {drive} frames but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask} checker={checker} multi={multi} unpaired={unpaired} copies={copies} cb={cb} cs={cs} dc={dc} db={db}); HARNESS MUST FAIL until the root render is fixed",
+            "present-overlay: PORTRAIT PUBLISH FAILURE #{n}{} -- window ran {render_drive} render-drive ticks (pose_drive={drive} pose_blocked={pose_blocked}) but published 0 (dominant cause={} torn={torn} unkeyed={unkeyed} badiou={badiou} lowmask={lowmask} checker={checker} multi={multi} unpaired={unpaired} copies={copies} cb={cb} cs={cs} dc={dc} db={db}); HARNESS MUST FAIL until the root render is fixed",
             if already {
                 " (already fast-failed)"
             } else {
@@ -526,8 +573,41 @@ fn loading_portrait_window_reset_inner(reason: &str, hold_bridge: bool) {
     PROFILE_PUBLISH_CLEAN_WINDOW.store(0, Ordering::SeqCst);
     PORTRAIT_WINDOW_PUBLISH_FAIL_LATCHED.store(0, Ordering::SeqCst);
     PORTRAIT_LAST_SKIP_CLASS.store(0, Ordering::SeqCst);
+    // THE VERDICTS ARE COMPUTED, NOT ASSERTED (run br-20260831-160354-2513). This line used to end
+    // with two parentheticals stated as findings about the window it was describing:
+    // `(drive<<display == froze early)` and `(clean=0 with drive>0 == PUBLISH FAILURE ...)`. They
+    // were legends for how to READ the numbers, printed unconditionally -- so the line fired
+    // "froze early" and "PUBLISH FAILURE" on windows that had done neither, in the same sentence as
+    // the numbers refuting it (`displayed 0` beside a verdict of `displayed=270`; `clean=0 ==
+    // PUBLISH FAILURE` beside `clean=268`). An instrument that reports a fault on a healthy window
+    // is worse than no instrument: this project lost real time to it. Both are now derived from
+    // this window's own data, and say nothing when the data does not support them.
+    let anim_verdict = if display == 0 {
+        // Nothing reached the screen, so there is no animation question to answer -- the publish
+        // and cover halves own this window, not the drive.
+        "not-displayed"
+    } else if pose_blocked > 0 && drive == 0 {
+        // The pose drive was skipped on purpose (null native GX resource wrapper), so a static head
+        // here is a BLOCKED pose drive, not a freeze. Naming the block is the whole point.
+        "pose-drive-blocked"
+    } else if drive == 0 {
+        "pose-drive-idle"
+    } else if drive * 4 < display {
+        // The original freeze signature: many displayed frames off few driven ones.
+        "FROZE-EARLY"
+    } else {
+        "animated"
+    };
+    let publish_verdict = if published > 0 {
+        "ok"
+    } else if render_drive > 0 {
+        "PUBLISH-FAILURE (see the failure line above; the dominant skip class is the cause)"
+    } else {
+        // No pipeline tick at all: a build-side gap, not a publish-gate fault.
+        "no-render-drive"
+    };
     append_autoload_debug(format_args!(
-        "present-overlay: loading-portrait window reset ({reason}{}) -- animated {drive} / displayed {display} frames (drive<<display == froze early); publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}] (clean=0 with drive>0 == PUBLISH FAILURE, see the failure line above; the dominant skip class is the cause); pins/spare cleared for the next load",
+        "present-overlay: loading-portrait window reset ({reason}{}) -- displayed {display} frames / pose_drive {drive} (blocked={pose_blocked}) / render_drive {render_drive}; anim={anim_verdict} publish={publish_verdict}; publish[clean={published} torn={torn} unkeyed={unkeyed} lowmask={lowmask} badiou={badiou} checker={checker} multi={multi} pin_moves={pin_moves} fence_skips={fence_skips} unpaired={unpaired} copies={copies} copies_total={copies_total} first_keyed={first_keyed_s}] share[pass_min={share_min_s} held_max={held_max}] src[color bundle={cb}/scan={cs} depth chain={dc}/bfs={db}]; pins/spare cleared for the next load",
         if hold_bridge {
             ", same-identity bridge HELD"
         } else {

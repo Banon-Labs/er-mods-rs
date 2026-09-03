@@ -137,6 +137,9 @@ pub enum SessionGate {
         state: i32,
         lobby_state: Option<i32>,
     },
+    /// `SetupMapReentry` has no address on the running build, so nothing was called. Distinct
+    /// from every other variant here: those describe the session, this describes us.
+    AddressUnavailable,
 }
 
 impl SessionGate {
@@ -171,6 +174,9 @@ impl SessionGate {
             Self::ManagerUnreadable => "SKIPPED (session-manager global unreadable)".into(),
             Self::ManagerNull => "SKIPPED (session-manager global is null)".into(),
             Self::StateUnreadable => "SKIPPED (protocolState unreadable)".into(),
+            Self::AddressUnavailable => {
+                "SKIPPED (SetupMapReentry has no address on the running build)".into()
+            }
             Self::NotInGame { state, lobby_state } => {
                 let named = if state == SESSION_PROTOCOL_STATE_WAIT_REENTRY_TO_MAP {
                     " WaitReentryToMap -- the state OUR OWN previous warp set; the engine has not \
@@ -317,6 +323,12 @@ pub enum WarpError {
     /// `MoveMapStep` would use that stale coordinate instead of the destination block's own
     /// spawn, dropping the player at another map's position inside this one.
     StaleSpawnSlotArmed { flag: u8 },
+    /// The running build is not the one these RVAs were reverse-engineered against, and this
+    /// address has no mapping onto it. Refused before the call, because making it is not a
+    /// degraded warp but a dead process: on 1.17 `GET_CURRENT_MAP_ID_RVA` is the second byte of
+    /// a five-byte `call`, and the `9a` it lands on is a far call, invalid in long mode -- which
+    /// is exactly how this crate killed the game 491ms after load on 2026-08-29.
+    AddressUnavailable { what: &'static str },
 }
 
 impl core::fmt::Display for WarpError {
@@ -339,6 +351,10 @@ impl core::fmt::Display for WarpError {
                 "explicit-spawn flag read back as {flag} before a coordinate-free warp, expected \
                  0; a previous warp's coordinate is still armed and would be used instead of the \
                  destination's own spawn, so the stage was not kicked"
+            ),
+            Self::AddressUnavailable { what } => write!(
+                f,
+                "{what} has no mapping onto the running game build, so the call was not made"
             ),
         }
     }
@@ -452,8 +468,13 @@ mod native {
         // Where we are now -- recorded before anything is written, so a failed warp still
         // reports a truthful origin.
         let mut origin_block: u32 = BLOCK_ID_NONE;
-        let get_current_map_id: GetBlockIdFn =
-            unsafe { core::mem::transmute(base + GET_CURRENT_MAP_ID_RVA) };
+        let get_current_map_id: GetBlockIdFn = unsafe {
+            core::mem::transmute(game_call_or_err(
+                base,
+                GET_CURRENT_MAP_ID_RVA,
+                "GET_CURRENT_MAP_ID_RVA",
+            )?)
+        };
         unsafe { get_current_map_id(&raw mut origin_block) };
 
         // Vanilla step 1: the session-manager re-entry, gated exactly as TriggerAreaReload
@@ -463,19 +484,34 @@ mod native {
         let session_gate = unsafe { setup_map_reentry_if_in_game(base) };
 
         // Vanilla step 2: suppress the map-enter animation.
-        let set_disable_map_enter_anim: SetBoolFn =
-            unsafe { core::mem::transmute(base + SET_DISABLE_MAP_ENTER_ANIM_RVA) };
+        let set_disable_map_enter_anim: SetBoolFn = unsafe {
+            core::mem::transmute(game_call_or_err(
+                base,
+                SET_DISABLE_MAP_ENTER_ANIM_RVA,
+                "SET_DISABLE_MAP_ENTER_ANIM_RVA",
+            )?)
+        };
         unsafe { set_disable_map_enter_anim(DISABLE_MAP_ENTER_ANIM) };
 
         // Vanilla step 3: choose the destination block. `effective_block` is the OUT slot and
         // may differ from what we asked for (disaster remap over areas 50..=88).
         let mut effective_block: u32 = requested_block;
-        let set_move_map_step_block_id: SetMoveMapStepBlockIdFn =
-            unsafe { core::mem::transmute(base + SET_MOVE_MAP_STEP_BLOCK_ID_RVA) };
+        let set_move_map_step_block_id: SetMoveMapStepBlockIdFn = unsafe {
+            core::mem::transmute(game_call_or_err(
+                base,
+                SET_MOVE_MAP_STEP_BLOCK_ID_RVA,
+                "SET_MOVE_MAP_STEP_BLOCK_ID_RVA",
+            )?)
+        };
         unsafe { set_move_map_step_block_id(&raw mut effective_block, &raw const requested_block) };
 
-        let get_explicit_spawn_flag: GetExplicitSpawnFlagFn =
-            unsafe { core::mem::transmute(base + GET_EXPLICIT_SPAWN_FLAG_RVA) };
+        let get_explicit_spawn_flag: GetExplicitSpawnFlagFn = unsafe {
+            core::mem::transmute(game_call_or_err(
+                base,
+                GET_EXPLICIT_SPAWN_FLAG_RVA,
+                "GET_EXPLICIT_SPAWN_FLAG_RVA",
+            )?)
+        };
 
         // Vanilla step 4: arm the explicit spawn with the .aip record, untouched.
         //
@@ -500,15 +536,25 @@ mod native {
             // Spawn point 0 selects the map's own default Player part. Every non-overworld map
             // that has Player parts at all has one with entity id 0.
             let entity_id: u32 = DEFAULT_SPAWN_ENTITY_ID;
-            let set_initial_area_entity_id: SetInitialAreaEntityIdFn =
-                unsafe { core::mem::transmute(base + SET_INITIAL_AREA_ENTITY_ID_RVA) };
+            let set_initial_area_entity_id: SetInitialAreaEntityIdFn = unsafe {
+                core::mem::transmute(game_call_or_err(
+                    base,
+                    SET_INITIAL_AREA_ENTITY_ID_RVA,
+                    "SET_INITIAL_AREA_ENTITY_ID_RVA",
+                )?)
+            };
             unsafe { set_initial_area_entity_id(&raw const entity_id) };
             (flag, FloatVector4::default(), FloatVector4::default())
         } else {
             let position = spawn_position(target.position);
             let orientation = spawn_orientation(target.yaw);
-            let set_explicit_spawn: SetExplicitSpawnFn =
-                unsafe { core::mem::transmute(base + SET_EXPLICIT_SPAWN_RVA) };
+            let set_explicit_spawn: SetExplicitSpawnFn = unsafe {
+                core::mem::transmute(game_call_or_err(
+                    base,
+                    SET_EXPLICIT_SPAWN_RVA,
+                    "SET_EXPLICIT_SPAWN_RVA",
+                )?)
+            };
             unsafe { set_explicit_spawn(&raw const position, &raw const orientation) };
 
             // Read the slot back BEFORE kicking. If the flag did not latch, MoveMapStep ignores
@@ -520,8 +566,13 @@ mod native {
             }
             let mut position_readback = FloatVector4::default();
             let mut orientation_readback = FloatVector4::default();
-            let get_explicit_spawn: GetExplicitSpawnFn =
-                unsafe { core::mem::transmute(base + GET_EXPLICIT_SPAWN_RVA) };
+            let get_explicit_spawn: GetExplicitSpawnFn = unsafe {
+                core::mem::transmute(game_call_or_err(
+                    base,
+                    GET_EXPLICIT_SPAWN_RVA,
+                    "GET_EXPLICIT_SPAWN_RVA",
+                )?)
+            };
             unsafe {
                 get_explicit_spawn(&raw mut position_readback, &raw mut orientation_readback);
             }
@@ -529,8 +580,13 @@ mod native {
         };
 
         // Vanilla step 5: kick the stage. Past this point the load is the engine's.
-        let warp_next_stage_kick: VoidFn =
-            unsafe { core::mem::transmute(base + WARP_NEXT_STAGE_KICK_RVA) };
+        let warp_next_stage_kick: VoidFn = unsafe {
+            core::mem::transmute(game_call_or_err(
+                base,
+                WARP_NEXT_STAGE_KICK_RVA,
+                "WARP_NEXT_STAGE_KICK_RVA",
+            )?)
+        };
         unsafe { warp_next_stage_kick() };
 
         Ok(WarpOutcome {
@@ -576,8 +632,13 @@ mod native {
             0.0,
         );
         let mut world = FloatVector4::default();
-        let convert: ConvertBlockCoordsFn =
-            unsafe { core::mem::transmute(base + CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA) };
+        let convert: ConvertBlockCoordsFn = unsafe {
+            core::mem::transmute(game_call(
+                base,
+                CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA,
+                "CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA",
+            )?)
+        };
         // The engine writes only x/y/z; `world.w` stays at the default and is never read.
         let ok = unsafe { convert(&raw mut world, &raw const local, &raw const block) };
         if !ok {
@@ -600,10 +661,22 @@ mod native {
         // ChrIns pointer the engine expects here (RespawnPlayer relies on the same identity).
         let chr_ins = core::ptr::from_ref(&player.chr_ins) as usize;
         let mut out = FloatVector4::default();
-        let get_physics_position: GetPhysicsPositionFn =
-            unsafe { core::mem::transmute(base + CHR_INS_GET_PHYSICS_POSITION_RVA) };
+        let get_physics_position: GetPhysicsPositionFn = unsafe {
+            core::mem::transmute(game_call(
+                base,
+                CHR_INS_GET_PHYSICS_POSITION_RVA,
+                "CHR_INS_GET_PHYSICS_POSITION_RVA",
+            )?)
+        };
         unsafe { get_physics_position(chr_ins, &raw mut out) };
         Some([out.x, out.y, out.z])
+    }
+
+    use crate::game_call;
+
+    /// [`game_call`], for callers that report a reason rather than an `Option`.
+    fn game_call_or_err(base: usize, rva: usize, what: &'static str) -> Result<usize, WarpError> {
+        game_call(base, rva, what).ok_or(WarpError::AddressUnavailable { what })
     }
 
     /// The block the player is currently in, or `None` when the read is not plausible.
@@ -613,8 +686,13 @@ mod native {
     /// Game task thread.
     pub unsafe fn current_block_id(base: usize) -> Option<u32> {
         let mut block: u32 = BLOCK_ID_NONE;
-        let get_current_map_id: GetBlockIdFn =
-            unsafe { core::mem::transmute(base + GET_CURRENT_MAP_ID_RVA) };
+        let get_current_map_id: GetBlockIdFn = unsafe {
+            core::mem::transmute(game_call(
+                base,
+                GET_CURRENT_MAP_ID_RVA,
+                "GET_CURRENT_MAP_ID_RVA",
+            )?)
+        };
         unsafe { get_current_map_id(&raw mut block) };
         if block == BLOCK_ID_NONE {
             return None;
@@ -640,9 +718,13 @@ mod native {
         //
         // Each bail returns a DISTINCT reason. They used to collapse to a bare `0`, which made a
         // live failure unattributable without another launch.
-        let Some(manager) =
-            (unsafe { er_game_base::mem::safe_read_usize(base + SESSION_MANAGER_GLOBAL_RVA) })
-        else {
+        let Some(manager) = (unsafe {
+            er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+                base,
+                SESSION_MANAGER_GLOBAL_RVA,
+                "SESSION_MANAGER_GLOBAL_RVA",
+            ))
+        }) else {
             return SessionGate::ManagerUnreadable;
         };
         if manager == 0 {
@@ -659,8 +741,10 @@ mod native {
                 unsafe { er_game_base::mem::safe_read_i32(manager + SESSION_LOBBY_STATE_OFFSET) };
             return SessionGate::NotInGame { state, lobby_state };
         }
-        let setup_map_reentry: SetupMapReentryFn =
-            unsafe { core::mem::transmute(base + SETUP_MAP_REENTRY_RVA) };
+        let Some(address) = game_call(base, SETUP_MAP_REENTRY_RVA, "SETUP_MAP_REENTRY_RVA") else {
+            return SessionGate::AddressUnavailable;
+        };
+        let setup_map_reentry: SetupMapReentryFn = unsafe { core::mem::transmute(address) };
         unsafe { setup_map_reentry(manager, SETUP_MAP_REENTRY_ARG) };
         SessionGate::Entered
     }

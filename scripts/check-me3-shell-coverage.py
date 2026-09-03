@@ -3,7 +3,7 @@
 
 `scripts/check-rust-build.sh` carries an `me3_shells` array of `package:artifact` pairs and links
 each one, because `cargo xwin check` stops at metadata and never invokes the linker, and the plain
-`cargo xwin build` honours `default-members` (= `crates/er-effects-rs`) and so builds only the
+`cargo xwin build` honours `default-members` (= `crates/er-quickload`) and so builds only the
 product. Before that array existed, 13 of the cdylibs a user can list in an me3 `[[natives]]` entry
 were never linked by ANY gate: a shell that could not link -- a missing `#[no_mangle] DllMain`, a
 wrong crate-type, an unresolved import inside a `cfg(windows)` block -- passed the whole suite
@@ -48,7 +48,7 @@ CRATES_DIR = REPO_ROOT / "crates"
 
 # The product DLL. `cargo xwin build --release` builds it via `default-members`, so it is linked
 # without appearing in the shells array.
-PRODUCT_PACKAGE = "er-effects-rs"
+PRODUCT_PACKAGE = "er-quickload"
 
 # cdylib crates that define no `DllMain` and are therefore not ME3-loadable natives. Each needs a
 # reason: an unexplained exemption is how a real shell gets quietly dropped from the gate.

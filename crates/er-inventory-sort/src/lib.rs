@@ -5,6 +5,14 @@
 //! name, own config file, own log file, and no dependency on save/autoload/render
 //! product crates.
 
+// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
+// warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-inventory-sort`
+// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
+// target is unaffected: this allow does not exist there.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 use std::{
     fmt,
     path::PathBuf,
@@ -109,6 +117,10 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // This DLL installs no detours (it registers a FrameBegin tick), so it has no er-hook
+        // dependency -- but it still resolves game addresses, and a refusal is silent HERE unless
+        // the sink is installed, because every cdylib links its own copy of er-game-base.
+        er_game_base::game_build::set_address_logger(log_message);
         START.call_once(spawn_inventory_sort_task);
     }
     DLL_MAIN_SUCCESS
@@ -142,11 +154,12 @@ fn spawn_inventory_sort_task() {
             };
             use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-            let task = loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(task) => break task,
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // starved the wineserver and hung a boot.
+            let Some(task) =
+                er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+            else {
+                return;
             };
             log_message(format_args!(
                 "task: CSTaskImp ready; registering FrameBegin tick"
@@ -245,8 +258,14 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
 }
 
 unsafe fn resolve_menu_system_save_load(base: usize) -> Option<usize> {
-    let gdm =
-        unsafe { safe_read_usize(base + GAME_DATA_MAN_GLOBAL_RVA) }.filter(|&value| value != 0)?;
+    let gdm = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            GAME_DATA_MAN_GLOBAL_RVA,
+            "GAME_DATA_MAN_GLOBAL_RVA",
+        ))
+    }
+    .filter(|&value| value != 0)?;
     unsafe { safe_read_usize(gdm + GAME_DATA_MAN_MENU_SAVELOAD_60_OFFSET) }
         .filter(|&value| value != 0)
 }

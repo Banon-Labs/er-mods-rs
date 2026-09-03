@@ -10,7 +10,7 @@ Flow:
   2. Poll Hyprland for ONLY the exact ER window (class steam_app_1245620; never enumerate or log
      other clients). When it maps with stable geometry, start
      `wf-recorder -g <geom> -r 60 -D` (no-damage => constant framerate, so frame N <-> N/60s).
-  3. Poll er-effects-telemetry.json for the loading-screen trigger:
+  3. Poll er-quickload-telemetry.json for the loading-screen trigger:
      oracle_loadscreen_table_builds > 0 (the native "Now Loading" table build -- the same latch
      that drives the custom boot bar to its 700 permille native-handoff stop) OR
      oracle_boot_view_last_permille >= 700. RAM oracles only; screenshots are never the oracle.
@@ -249,7 +249,7 @@ def main() -> int:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     video_path = artifact_dir / "boot-video.mkv"
     frames_dir = artifact_dir / "boot-video-frames"
-    telemetry_path = artifact_dir / "er-effects-telemetry.json"
+    telemetry_path = artifact_dir / "er-quickload-telemetry.json"
     recorder_log = artifact_dir / "wf-recorder.log"
     timeline_path = artifact_dir / "video-timeline.json"
     caveats: list[str] = []

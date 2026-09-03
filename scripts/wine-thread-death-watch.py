@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture WHY/WHERE a thread of a live Wine/Proton process dies.
 
-Aimed at the er-effects-rs wedge: the game boots, our DLL opens a synchronous
+Aimed at the er-quickload wedge: the game boots, our DLL opens a synchronous
 `GetOpenFileNameW` on a DLL-owned thread, and ~12.5s later the game's *initial*
 thread terminates (`/proc/<pid>/status` -> `State: Z`) while ~60 other threads park
 forever in ordinary waits.  A post-mortem stack capture is worthless there: the thread
@@ -14,7 +14,7 @@ Two independent tiers, deliberately ordered by risk to the live game:
       target -- it cannot perturb or stop the game.  Samples the focus thread (default:
       the initial thread, tid == pid) at a high rate, keeping a ring buffer of its
       kernel wait state *and* a scan of its stack for return addresses inside
-      eldenring.exe / er_effects_rs.dll.  The instant the focus thread dies, it dumps
+      eldenring.exe / er_quickload.dll.  The instant the focus thread dies, it dumps
       the last N samples -- i.e. where the thread was immediately before it died -- plus
       a full snapshot of every surviving thread.
       CANNOT see a thread that dies while in state R (running in userspace): `/proc`
@@ -201,7 +201,36 @@ class MemReader:
 
     def __init__(self, pid: int):
         self.pid = pid
-        self.fd = os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        self.fd = self._open_through_a_live_thread(pid)
+
+    @staticmethod
+    def _open_through_a_live_thread(pid: int) -> int:
+        """`/proc/<pid>/mem`, falling back to a live thread's when the LEADER is a zombie.
+
+        `/proc/<pid>/mem` IS `/proc/<pid>/task/<leader>/mem`, so once the thread-group leader
+        becomes a zombie that open fails with ESRCH -- while the process is alive and every other
+        thread is readable. This tool's whole subject is a game whose initial thread dies and
+        leaves ~60 threads running, i.e. exactly that state, and the failure was silent: it
+        printed "not readable ... Kernel/yama denies it for non-Proton processes" and disabled
+        stack scans, which reads as a permissions problem rather than "you asked the corpse".
+        Measured 2026-08-29.
+        """
+        try:
+            return os.open(f"/proc/{pid}/mem", os.O_RDONLY)
+        except OSError:
+            pass
+        for task in sorted(glob.glob(f"/proc/{pid}/task/*")):
+            try:
+                with open(f"{task}/stat", encoding="utf-8") as handle:
+                    if handle.read().split()[2] == "Z":
+                        continue
+            except (OSError, IndexError):
+                continue
+            try:
+                return os.open(f"{task}/mem", os.O_RDONLY)
+            except OSError:
+                continue
+        raise OSError(f"no readable thread memory for pid {pid}")
 
     def read(self, addr: int, size: int) -> bytes:
         os.lseek(self.fd, addr, os.SEEK_SET)
@@ -218,7 +247,7 @@ def pe_size_of_image(mem: MemReader, base: int) -> int | None:
     """SizeOfImage straight out of the live PE header.
 
     Needed because Wine/me3 leave most of a PE image's sections as anonymous mappings
-    (inode 0), so /proc/maps alone under-reports an image's extent -- er_effects_rs.dll
+    (inode 0), so /proc/maps alone under-reports an image's extent -- er_quickload.dll
     shows only its 1-page file-backed header, and eldenring.exe only 2 lines.
     """
     try:
@@ -710,9 +739,9 @@ def selftest() -> int:
 
     print("== 3. module attribution ==")
     mods = [{"name": "eldenring.exe", "start": 0x140000000, "end": 0x145E01800},
-            {"name": "er_effects_rs.dll", "start": 0x6FFFF9ED0000, "end": 0x6FFFFA087000}]
+            {"name": "er_quickload.dll", "start": 0x6FFFF9ED0000, "end": 0x6FFFFA087000}]
     check("in-image address attributed", attribute(mods, 0x1409B2F00) == ("eldenring.exe", 0x9B2F00))
-    check("dll address attributed", attribute(mods, 0x6FFFF9ED1234)[0] == "er_effects_rs.dll")
+    check("dll address attributed", attribute(mods, 0x6FFFF9ED1234)[0] == "er_quickload.dll")
     check("outside address rejected", attribute(mods, 0x7F0000000000) is None)
 
     print("== 4. return-address validation ==")
@@ -946,7 +975,7 @@ def main() -> int:
     parser.add_argument("--scan-bytes", type=lambda v: int(v, 0), default=0x8000,
                         help="bytes of stack to scan upward from SP")
     parser.add_argument("--max-frames", type=int, default=48)
-    parser.add_argument("--modules", nargs="*", default=["eldenring.exe", "er_effects_rs.dll"],
+    parser.add_argument("--modules", nargs="*", default=["eldenring.exe", "er_quickload.dll"],
                         help="module names whose addresses are worth reporting")
     parser.add_argument("--max-seconds", type=float, default=300.0,
                         help="hard backstop; the real stop signal is the thread dying")

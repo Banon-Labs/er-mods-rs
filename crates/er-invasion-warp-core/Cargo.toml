@@ -9,7 +9,7 @@
 #
 # Product state crosses the seam through `host::install_host` function pointers (the
 # `er-loading-portrait-core` / `er-quit-menu-core` pattern). This crate must NOT depend on the root
-# `er-effects-rs` crate.
+# `er-quickload` crate.
 #
 # Most of the crate is deliberately platform-independent so the catalog, the block grouping,
 # the on-disk `.aip` decoder and the coordinate/yaw math are provable by `cargo test` on the
@@ -28,6 +28,9 @@ name = "er_invasion_warp_core"
 er-telemetry-core = { path = "../er-telemetry-core" }
 # Shared zero-dependency content fingerprint owner.
 er-game-base = { path = "../er-game-base" }
+# Key names and the by-content config reload. Host-buildable, so `keybind` and the hot-reload
+# decision stay covered by `cargo test` on Linux.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }

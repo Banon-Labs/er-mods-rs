@@ -12,7 +12,7 @@ fail to decode are cataloged as skipped-with-reason, never silently dropped.
 
 Corpus root precedence: --root -> $ER_SAVE_CORPUS_ROOT ->
   /mnt/a/Code Projects/Elden Ring Save Manager/data/save-files  (WSL default).
-Staged redirect subtrees (er-effects-save-redirect-stage/) are skipped -- they are private
+Staged redirect subtrees (er-quickload-save-redirect-stage/) are skipped -- they are private
 copies produced by the save-redirect probe path, not source saves.
 
 Usage:
@@ -56,7 +56,7 @@ def enumerate_corpus(root: Path, exts: tuple[str, ...]) -> dict:
     for p in sorted(root.rglob("ER0000.*")):
         if p.suffix.lower().lstrip(".") not in exts:
             continue
-        if "er-effects-save-redirect-stage" in p.as_posix():
+        if "er-quickload-save-redirect-stage" in p.as_posix():
             continue
         files.append(p)
 

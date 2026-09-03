@@ -102,7 +102,7 @@ Expected payload after the separate WitchyBND pack phase:
   facegen/facegen.fgbnd.dcx
 
 Runtime intent:
-  Use an existing or new character through the normal naked/body path. FC_M_0000 is the primary naked/full-body target; FC_M_0000_M/L and the FC_F aliases cover model/LOD/body-type variants. The generated regulation.bin override sets every EquipParamProtector head/body/arms/legs row to the default no-armor visual model, so the mushroom body remains visible regardless of equipped armor. The FG_A_0000_M/F face-part overrides zero the rendered generated-face/head mesh; the facegen override also zeroes base face/eye face-set indices. No er_effects_rs.dll or unrelated repo DLL features are required by this profile.
+  Use an existing or new character through the normal naked/body path. FC_M_0000 is the primary naked/full-body target; FC_M_0000_M/L and the FC_F aliases cover model/LOD/body-type variants. The generated regulation.bin override sets every EquipParamProtector head/body/arms/legs row to the default no-armor visual model, so the mushroom body remains visible regardless of equipped armor. The FG_A_0000_M/F face-part overrides zero the rendered generated-face/head mesh; the facegen override also zeroes base face/eye face-set indices. No er_quickload.dll or unrelated repo DLL features are required by this profile.
 
 This package has not been runtime-tested yet. No game launch is performed by the offline build scripts.
 EOF

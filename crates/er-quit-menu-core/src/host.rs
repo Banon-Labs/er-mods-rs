@@ -10,7 +10,7 @@
 //! pipeline, and the save-suppression bypass belongs to `er-save-suppress`. Every field
 //! below is one MEASURED cross-call with a consumer OUTSIDE the quit-menu feature -- a
 //! cross-call whose only consumers are inside the feature is a MOVE, not a seam entry, per
-//! the 2026-07-30 rule that no extracted crate reaches back into `er-effects-rs`.
+//! the 2026-07-30 rule that no extracted crate reaches back into `er-quickload`.
 //!
 //! Fields land per slice: this scaffold carries the entries that cross with std/primitive
 //! types. Entries needing a reshaped type (the save-swap ledger, the serialized-slot

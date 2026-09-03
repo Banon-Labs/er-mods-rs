@@ -472,9 +472,45 @@ fn slot_pgd_score(body: &[u8], offset: usize) -> usize {
         + usize::from(rd_u32(body, offset + SAVE_PGD_LEVEL_OFFSET).unwrap_or(0) > 0)
 }
 
-fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
+/// Locate a slot body's serialized `PlayerGameData`.
+///
+/// TWO CANDIDATE SOURCES, ONE ACCEPTANCE TEST. The acceptance test is unchanged
+/// (`slot_pgd_core_plausible` + best `slot_pgd_score`); what changed is where candidates come from.
+///
+/// The original source was the `0xa000..=0xa600` window before each of the leading `FACE` magics.
+/// That window is an OBSERVATION of one save's layout, not an invariant, and it is too narrow:
+/// across the ten characters of `~/Downloads/ER0000.co2` the true PGD->FACE delta ran
+/// `0x9d14..=0xa05c`, and on the live default container it was `0x959c`, so the window matched ONE
+/// character out of eleven. Everything downstream read that as "these slots are empty" -- the
+/// System>Quit "Load Character from File" preview showed a single row of ten
+/// (`slot_mask=0x8`), and `save_bytes_have_any_character` called the live default save a
+/// characterless container (`has ZERO readable character slots (native empty container)`) while
+/// `scripts/dump-save-slots.py` and the game itself both read a character out of it. Measured
+/// 2026-08-25 with `scripts/er-save-active-slots.py --deep`.
+///
+/// So the Rune Level invariant -- eight attributes in `1..=99` summing to `level + 79`, which
+/// nothing but a real attribute block satisfies -- is now a candidate source too. It is ADDITIVE
+/// and ordered after the window: a body the window already resolved keeps the exact offset it had,
+/// because an equal score does not displace the incumbent.
+///
+/// `pub(crate)` since 2026-09-01 because the dependency also runs the other way: when the Rune
+/// Level identity REFUSES a real character (a stored level that disagrees with its own attribute
+/// sum -- measured, see `stats::slot_stats_from_body`), `stats` falls back to this locator. Only
+/// [`crate::stats::located_stat_block_offset`] is called from here, so the two directions cannot
+/// recurse.
+pub(crate) fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
     let mut best = None;
     let mut best_score = 0usize;
+    let consider = |offset: usize, best: &mut Option<usize>, best_score: &mut usize| {
+        if !slot_pgd_core_plausible(body, offset) {
+            return;
+        }
+        let score = slot_pgd_score(body, offset);
+        if score > *best_score {
+            *best_score = score;
+            *best = Some(offset);
+        }
+    };
     let mut search_from = 0usize;
     for _ in 0..SAVE_PGD_SCAN_LEADING_FACE_COUNT {
         let Some(tail) = body.get(search_from..) else {
@@ -491,17 +527,30 @@ fn slot_player_game_data_offset(body: &[u8]) -> Option<usize> {
         let start = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_HIGH);
         let stop = face_offset.saturating_sub(SAVE_PGD_FACE_DELTA_WINDOW_LOW);
         for offset in start..=stop {
-            if !slot_pgd_core_plausible(body, offset) {
-                continue;
-            }
-            let score = slot_pgd_score(body, offset);
-            if score > best_score {
-                best_score = score;
-                best = Some(offset);
-            }
+            consider(offset, &mut best, &mut best_score);
         }
     }
+    if let Some(offset) = crate::stats::located_stat_block_offset(body)
+        .and_then(|stat_base| stat_base.checked_sub(SAVE_PGD_STAT_BASE_OFFSET))
+    {
+        consider(offset, &mut best, &mut best_score);
+    }
     best
+}
+
+/// The offset of a slot body's eight-attribute stat block, in the vocabulary
+/// `crate::stats` uses (the first attribute word, i.e. runtime `PlayerGameData + 0x3c`).
+///
+/// THE TWO MODULES ANCHOR THE SAME STRUCT EIGHT BYTES APART, which is why this exists
+/// rather than a caller adding an offset. `bnd4` addresses the SL2.bt `PlayerGameData`,
+/// whose struct is `CS::PlayerGameData + 0x8` (stat base `+0x34`, level `+0x60`, name
+/// `+0x94`); `stats` addresses the runtime base (`+0x3c`, `+0x68`, `+0x9c`). Handing a
+/// `slot_player_game_data_offset` result straight to a `stats`-relative reader is off by
+/// eight and lands mid-field. The conversion therefore lives here, beside the constant it
+/// depends on -- and it is the exact inverse of the `checked_sub(SAVE_PGD_STAT_BASE_OFFSET)`
+/// that turns a `stats` stat base into a candidate for the locator above.
+pub(crate) fn slot_stat_block_offset(body: &[u8]) -> Option<usize> {
+    slot_player_game_data_offset(body)?.checked_add(SAVE_PGD_STAT_BASE_OFFSET)
 }
 
 fn slot_add_offset(offset: &mut usize, len: usize) -> Option<()> {
@@ -949,6 +998,77 @@ mod tests {
         walk(&corpus_root(), &mut out);
         out.sort();
         out
+    }
+
+    /// A slot body carrying exactly one synthetic serialized `PlayerGameData` at `pgd`, plus a
+    /// `FACE` magic `face_delta` bytes after it. No game bytes: every field is written here, so
+    /// the layout the locator is asserted against is visible in this function.
+    ///
+    /// The attributes satisfy the Rune Level invariant (`sum == level + 79`) because a real
+    /// character's do, and one of the two candidate sources is exactly that invariant.
+    fn synthetic_slot_body(pgd: usize, face_delta: usize) -> Vec<u8> {
+        const LEVEL: u32 = 21;
+        // Eight attributes summing to LEVEL + 79 = 100.
+        const ATTRIBUTES: [u32; SAVE_PGD_STAT_COUNT] = [30, 10, 10, 10, 10, 10, 10, 10];
+        let mut body = vec![0u8; pgd + face_delta + SAVE_FACE_MAGIC.len() + 0x100];
+        let put_u32 = |body: &mut Vec<u8>, at: usize, value: u32| {
+            body[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        };
+        put_u32(&mut body, pgd + SAVE_PGD_HEALTH_OFFSET, 800);
+        put_u32(&mut body, pgd + SAVE_PGD_MAX_HEALTH_OFFSET, 800);
+        put_u32(&mut body, pgd + SAVE_PGD_BASE_MAX_HEALTH_OFFSET, 800);
+        for (index, attribute) in ATTRIBUTES.iter().enumerate() {
+            put_u32(
+                &mut body,
+                pgd + SAVE_PGD_STAT_BASE_OFFSET + index * 4,
+                *attribute,
+            );
+        }
+        put_u32(&mut body, pgd + SAVE_PGD_LEVEL_OFFSET, LEVEL);
+        for (index, unit) in "Tarnished".encode_utf16().enumerate() {
+            let at = pgd + SAVE_PGD_CHARACTER_NAME_OFFSET + index * 2;
+            body[at..at + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+        body[pgd + SAVE_PGD_GENDER_OFFSET] = 1;
+        body[pgd + SAVE_PGD_MAX_CRIMSON_FLASK_OFFSET] = 7;
+        body[pgd + SAVE_PGD_MAX_CERULEAN_FLASK_OFFSET] = 7;
+        let face_at = pgd + face_delta;
+        body[face_at..face_at + SAVE_FACE_MAGIC.len()].copy_from_slice(SAVE_FACE_MAGIC);
+        body
+    }
+
+    /// A character whose FaceData lands inside the historical `0xa000..=0xa600` window was always
+    /// found. Pinned so the added candidate source cannot regress the case that already worked.
+    #[test]
+    fn a_character_inside_the_face_window_is_still_located() {
+        let pgd = 0xe000;
+        let body = synthetic_slot_body(pgd, 0xa05c);
+        assert_eq!(slot_player_game_data_offset(&body), Some(pgd));
+    }
+
+    /// THE REGRESSION. Measured on the user's own container (2026-08-25): nine of its ten
+    /// characters had a PGD->FACE delta in `0x9d14..=0x9fcc`, just under the window's low bound, and
+    /// the locator called all nine empty -- so the "Load Character from File" preview offered one
+    /// row of ten. The live default container's only character sat at `0x959c` and read as a
+    /// characterless save. Both are found by the Rune Level invariant.
+    #[test]
+    fn a_character_whose_face_data_falls_short_of_the_window_is_still_located() {
+        for face_delta in [0x959c, 0x9d14, 0x9d5c, 0x9fcc] {
+            let pgd = 0xe000;
+            let body = synthetic_slot_body(pgd, face_delta);
+            assert_eq!(
+                slot_player_game_data_offset(&body),
+                Some(pgd),
+                "PGD->FACE delta 0x{face_delta:x} must not decide whether a character exists"
+            );
+        }
+    }
+
+    /// A body with no character must still decode as none: the added candidate source is an
+    /// invariant, not a relaxation.
+    #[test]
+    fn an_empty_slot_body_still_has_no_player_game_data() {
+        assert_eq!(slot_player_game_data_offset(&vec![0u8; 0x40000]), None);
     }
 
     fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {

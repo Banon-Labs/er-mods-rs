@@ -14,7 +14,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use er_game_base::mem::game_rva;
+use er_game_base::mem::game_rva_for_hook;
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use er_telemetry_core::counters::{
     SCALEFORM_DESC_ADVANCE_INSTALLED, SCALEFORM_DESC_PROVIDER_NULL_HITS,
@@ -69,7 +69,7 @@ unsafe extern "system" fn scaleform_descriptor_advance_hook(this: usize, count: 
 /// This install site used to end in `std::mem::forget(hook)`. That was a no-op: `MhHook` is
 /// three raw pointers with no `Drop` impl, so dropping it never uninstalled anything --
 /// MinHook has owned the detour since `MH_CreateHook`. `clippy::forget_non_drop` flags
-/// exactly that. Same statement (and same wording) as `er_effects_rs::mh::leak_installed_hook`,
+/// exactly that. Same statement (and same wording) as `er_quickload::mh::leak_installed_hook`,
 /// restated here so this crate needs no dependency on the product DLL.
 ///
 /// Takes `MhHook` by value rather than a generic on purpose: a generic would silently accept a
@@ -91,7 +91,7 @@ pub fn install_scaleform_descriptor_guard()
         status => return Err(DescriptorGuardInstallError::Initialize(status)),
     }
 
-    let target = game_rva(SCALEFORM_DESC_ADVANCE_RVA as u32)
+    let target = game_rva_for_hook(SCALEFORM_DESC_ADVANCE_RVA as u32)
         .map_err(|_| DescriptorGuardInstallError::ResolveGameRva)?;
     let hook = unsafe {
         MhHook::new(

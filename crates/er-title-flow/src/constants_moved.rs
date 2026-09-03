@@ -1,10 +1,10 @@
 //! Constants, statics, and plain data types moved VERBATIM out of the root
-//! er-effects-rs crate for the title-flow extraction (Stage B of
+//! er-quickload crate for the title-flow extraction (Stage B of
 //! docs/plans/title-flow-crate-extraction.md). Each item's original site now
 //! carries a `pub(crate) use er_title_flow::NAME;` shim, so the root crate and
 //! this crate share the single definition below. Only visibility changed
 //! (`pub(crate)` -> `pub`); bodies and doc comments are untouched.
-// PARITY: DEBT -- verbatim transcription of constants moved out of er-effects-rs, kept
+// PARITY: DEBT -- verbatim transcription of constants moved out of er-quickload, kept
 // import-for-import identical to keep that move reviewable as a pure move. The unused
 // imports are the cost of that fidelity and should go once the move stops being audited.
 #![allow(unused_imports)]
@@ -23,13 +23,13 @@ use er_telemetry_core::counters::*;
 #[cfg(windows)]
 use fromsoftware_shared::F32Vector4;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants.rs =====
 
 pub const NULL_MODULE_BASE: usize = 0;
 
 pub const HOOK_FALSE_RETURN: u8 = 0;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/anti_debug.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/anti_debug.rs =====
 
 pub const TITLE_OWNER_VTABLE_RVA: usize = TitleSessionRva::TitleOwnerVtable as usize;
 
@@ -192,7 +192,7 @@ pub static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_754: AtomicUsize =
 pub static TITLE_CUSTOM_COVER_PROFILE_SOURCE_READY_755: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/autoload_state.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/autoload_state.rs =====
 
 /// CS::MenuMemberFuncJob<TitleTopDialog> vtable 0x142b265d0 (RVA): the registry-entry node the
 /// registrar 0x1409b24e0 inserts into [dialog+0xa48]; its run is MENU_MEMBER_FUNC_JOB_RUN_RVA.
@@ -204,9 +204,9 @@ pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
 pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
-/// GameMan+0xb80 (== GameMan.save_state == load_in_progress) FSM values. The full-save read walks
+/// GameMan+0xb80 (== GameMan.save_state == save_state) FSM values. The full-save read walks
 /// IDLE(0) -> OPENING(1) -> READING(2) -> RESIDENT(3); a healthy load then drains RESIDENT -> IDLE as
-/// the deserialize consumes the 0x280000 buffer. `load_in_progress_b80_name` (constants::return_title)
+/// the deserialize consumes the 0x280000 buffer. `save_state_b80_name` (constants::return_title)
 /// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
 /// reaching IDLE; on the warm reload it is stuck at RESIDENT because the deserialize never consumes it.
 pub const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
@@ -414,7 +414,7 @@ pub const MENU_JOB_SUBMIT_RVA: u32 = 0x7a9250;
 /// Live/deobf native menu-job queue idle predicate (`FUN_1407a9320` dump -> live `0x1407a9230`).
 pub const MENU_JOB_QUEUE_READY_RVA: u32 = 0x7a9230;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/gaitem_restore.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/gaitem_restore.rs =====
 
 /// Direct poke of the streaming-enable flag [resmgr+0xb7c1]=1 (the virtual enabler
 /// 0x14066e2e4 crashes -- wrong receiver). The virtual also builds session singletons
@@ -470,150 +470,86 @@ pub const BLOCK_LOADSTATE_GAVEUP_06_OFFSET: usize = 0x06;
 /// (a `longlong*`, so byte offsets 0x40/0x48/0x50/0x58), taking `cap+0x90` from each.
 pub const BLOCK_LOADSTATE_FILECAP_SLOTS: [usize; 4] = [0x40, 0x48, 0x50, 0x58];
 
-/// FD4FileCap load status; `0x04` == load complete. Paired with a non-null bytes pointer.
-pub const FD4_FILECAP_STATUS_88_OFFSET: usize = 0x88;
-
-/// `MsbFileCap::msbResCap` -- the PARSED MSB resource, not the raw file buffer. `FD4FileCap` is
-/// exactly 0x90 bytes, so this is the first field of the `MsbFileCap` subclass.
-///
-/// IT HAS EXACTLY ONE ASSIGNMENT SITE (1.16.2 static RE, bd
-/// `msbrescap-single-assignment-site-and-null-content-shortcircuit-2026-07-30`): the load-complete
-/// callback `FUN_14021bbf0`, which does
-/// `content = AcquireContent(cap); if (content != 0 && header_ok) { msbResCap = MsbRepository::
-/// GetOrCreate(name, content, size); } ReleaseContent(cap);`
-/// -- and returns NORMALLY when `content` is null. `loadState` is already `4` by then, nothing
-/// errors and nothing retries, so `(loadState=4, msbResCap=0)` is a reachable SILENT TERMINAL state.
-/// That is precisely the profile-switch reload freeze: WorldBlockRes case 2 advances to phase 3 only
-/// on `cap+0x90 != 0`, and its only other escape is also closed, so the block spins at phase 2 with
-/// no timeout.
-///
-/// `0` and `0xDEADBEEF` mean DIFFERENT things and the distinction is the key discriminator:
-/// `MsbFileCap::MsbFileCap` (0x14021b880) inits it to `0`, while `~MsbFileCap` (0x14021b940)
-/// releases through the repository and then stores `0xDEADBEEF`. So `0` == NEVER PARSED, never
-/// "freed after use".
-pub const FD4_FILECAP_BYTES_90_OFFSET: usize = 0x90;
-
-/// `FD4ResCapHolderItem::resourceString` is an `FD4BasicHashString` at `cap+0x08`, whose
-/// `DLString<wchar_t>` starts at `cap+0x10`: union (inline `wchar[8]` OR pointer) at `+0x08`,
-/// `length` at `+0x18`, `capacity` at `+0x20`. `capacity > 7` means the union holds a POINTER.
-/// Reading it names WHICH msb the stalled cap is, which separates "wrong file requested" from
-/// "right file, empty read".
-pub const FD4_FILECAP_NAME_UNION_18_OFFSET: usize = 0x18;
-
-pub const FD4_FILECAP_NAME_LENGTH_28_OFFSET: usize = 0x28;
-
-pub const FD4_FILECAP_NAME_CAPACITY_30_OFFSET: usize = 0x30;
-
-/// Inline-vs-pointer threshold for `DLString<wchar_t>` (SSO capacity).
-pub const DLSTRING_INLINE_CAPACITY_MAX: usize = 7;
-
-/// Cap the wide-name read so a garbage `length` cannot walk the probe off a page.
-pub const FD4_FILECAP_NAME_MAX_CHARS: usize = 96;
+// FD4FileCap / DLString / DLIO virtual-root LAYOUT AND WALKERS MOVED DOWN to
+// `er_game_base::filecap` (2026-08-25), re-exported here so every call site in this crate, and
+// the product's `constants/gaitem_restore.rs` re-export chain, are unchanged.
+//
+// WHY THEY MOVED: `er-diag-harness` now carries the msb-parse / DLC-root / loadlist-wait traces
+// that used to compile into the product DLL, and each of those traces names a file cap or a
+// virtual root in its log line. A second image needed the same walks, and one game address must
+// have exactly one literal declaration (`scripts/check-rva-alias-drift.py`) -- so the owner sank
+// below both rather than being copied into the new one.
+pub use er_game_base::filecap::{
+    DL_FILE_DEVICE_MANAGER_SINGLETON_RVA, DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET,
+    DLSTRING_CAPACITY_20_OFFSET, DLSTRING_INLINE_CAPACITY_MAX, DLSTRING_LENGTH_18_OFFSET,
+    DLSTRING_UNION_08_OFFSET, FD4_FILECAP_BYTES_90_OFFSET, FD4_FILECAP_LOADPROCESS_78_OFFSET,
+    FD4_FILECAP_NAME_CAPACITY_30_OFFSET, FD4_FILECAP_NAME_LENGTH_28_OFFSET,
+    FD4_FILECAP_NAME_MAX_CHARS, FD4_FILECAP_NAME_UNION_18_OFFSET, FD4_FILECAP_STATUS_88_OFFSET,
+    FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET, FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET,
+    FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET, FD4_FILELOADPROCESSOR_SIZE_28_OFFSET,
+    FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET, FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE,
+    FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES, FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET,
+    FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET, VIRTUAL_ROOTS_OF_INTEREST,
+    dlio_virtual_roots_summary, dlstring_wide_ascii, fd4_filecap_content_state, fd4_filecap_name,
+};
 
 /// `FD4ResCapHolderItem::referenceCount`. Discriminates a FRESH cap (the reload built it) from a
 /// CACHE-HIT SURVIVOR still held by the outgoing world -- the two remaining explanations for a
 /// null `msbResCap`.
 pub const FD4_FILECAP_REFCOUNT_58_OFFSET: usize = 0x58;
 
-/// `FD4FileCap::loadProcess` -> `FD4FileLoadProcess::fileLoadProcessor` (`+0x20`) -> the content
-/// the load-complete callback gates on. A null anywhere along this chain makes `AcquireContent`
-/// return null, which is exactly the short-circuit that leaves `msbResCap` at `0`.
-pub const FD4_FILECAP_LOADPROCESS_78_OFFSET: usize = 0x78;
-
 /// `FD4FileCap::flags`; the `MsbFileCap` factory `FUN_1401f3560` sets `0x20` on every cap it builds
 /// before handing it to `AddFileCap`.
 pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 
-/// `DLIO::DLFileDeviceManager` singleton. `GetFileDeviceManager` (0x141f48b40) is literally
-/// `MOV RAX,[0x1448464a8]` plus a null-check branch, so this global IS the manager pointer.
-///
-/// NOTE this corrects bd `step3-census-registry-null-on-load2-mount-skip-confirmed-2026-07-17`,
-/// which called the same address "the mounted-archive registry". It is not: a genuinely null
-/// manager would break every file read in the process, so that census reading `null` was a
-/// deref-depth/timing artifact and the conclusion drawn from it does not follow.
-pub const DL_FILE_DEVICE_MANAGER_SINGLETON_RVA: usize = 0x0484_64a8;
-
-/// `FUN_140e05fb0(CSDlcImp*, bool)` -- the DLC virtual-root REFILL: re-queries Steam DLC ownership
-/// and calls `CSDlcImp::AddVirtualFileRoots`.
-// Consumed only by dlc_roots_self_heal.rs, which is `#[cfg(windows)]`-gated in lib.rs.
-#[cfg(windows)]
-pub(crate) const DLC_ROOTS_REFILL_RVA: usize = er_game_base::rva::DLC_ROOTS_REFILL_RVA;
-
-/// `GLOBAL_CSDlc` -- the `CSDlcImp` singleton.
-#[cfg(windows)]
-pub(crate) const CSDLC_SINGLETON_RVA: usize = er_game_base::rva::CSDLC_SINGLETON_RVA;
-
-/// The DLIO alias every failing `m28` read resolves through.
-#[cfg(windows)]
-pub(crate) const DLC_ROOT_ALIAS_NAME: &str = "mapstudio_dlc2";
-
-/// `DLFileDeviceManager::virtualRoots` -- a `FileDeviceVirtualRootVector`
-/// (`allocator +0x00`, `start +0x08`, `end +0x10`, `capacity +0x18`).
-///
-/// THIS IS THE PHASE-2 FREEZE SUSPECT. The stalled caps are named
-/// `mapstudio_dlc2:/m28_00_00_00.msb`, and `mapstudio_dlc2` is an entry in THIS vector, not a data
-/// archive. It has a two-phase lifecycle: `FUN_140e06490(CSDlc, true)` -- called only from the title
-/// start-game flow `FUN_1409b24e0` -- registers 13 `*_dlc2` aliases with an EMPTY root `L""`, and
-/// only `CSDlcImp::AddVirtualFileRoots` (0x140e06b80, reachable solely via `FUN_140e05fb0`, whose
-/// callers are `CS::MoveMapListStep::STEP_LoadListWait` and one title-flow function) fills in the
-/// real `mapstudio_dlc2 -> "map_dlc2:/mapstudio"`. If the title blanks it and the
-/// `STEP_LoadListWait` gate (`loadList == NULL || *loadList in {2,3}`) does not pass on the warm
-/// reload, the alias stays empty, the msb read resolves against nothing and returns 0 bytes, and
-/// `msbResCap` never gets written. Reading the alias AT the stall settles that without any hook.
-pub const DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET: usize = 0x48;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_START_08_OFFSET: usize = 0x08;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_VECTOR_END_10_OFFSET: usize = 0x10;
-
-/// `FileDeviceVirtualRootVectorEntry`: `root` (the alias name) and `path` (what it resolves to),
-/// both `DLString<wchar_t>` (48 bytes each), so the entry stride is 0x60.
-pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_STRIDE: usize = 0x60;
-
-pub const FILE_DEVICE_VIRTUAL_ROOT_ENTRY_PATH_30_OFFSET: usize = 0x30;
-
-/// `DLString<wchar_t>` field offsets RELATIVE TO THE STRING ITSELF (`allocator +0x00`,
-/// union `+0x08`, `length +0x18`, `capacity +0x20`). The `FD4_FILECAP_NAME_*` constants above are
-/// the same layout pre-added to the cap's `+0x10` string base, which is why their numbers differ.
-pub const DLSTRING_UNION_08_OFFSET: usize = 0x08;
-
-pub const DLSTRING_LENGTH_18_OFFSET: usize = 0x18;
-
-pub const DLSTRING_CAPACITY_20_OFFSET: usize = 0x20;
-
-/// Bound the virtual-root walk: the table is a few dozen aliases, so anything past this is a
-/// corrupt/mid-teardown vector and the probe must stop rather than walk off a page.
-pub const FILE_DEVICE_VIRTUAL_ROOT_MAX_ENTRIES: usize = 256;
-
-/// Alias prefixes worth reporting at the stall: the DLC roots that back `m28`, plus the base-game
-/// `mapstudio` for contrast (if the base alias is populated and the dlc2 one is not, that is the
-/// answer outright).
-pub const VIRTUAL_ROOTS_OF_INTEREST: [&str; 4] =
-    ["mapstudio_dlc2", "map_dlc2", "game_dlc2", "mapstudio"];
-
-pub const FD4_FILELOADPROCESS_PROCESSOR_20_OFFSET: usize = 0x20;
-
-/// `FD4FileLoadProcessor`: `content_` at `+0x20`, its byte count at `+0x28`, and the
-/// acquire/release refcount at `+0x30` whose `1 -> 0` edge nulls `content_` and frees the buffer.
-pub const FD4_FILELOADPROCESSOR_CONTENT_20_OFFSET: usize = 0x20;
-
-pub const FD4_FILELOADPROCESSOR_SIZE_28_OFFSET: usize = 0x28;
-
-pub const FD4_FILELOADPROCESSOR_ACQUIRE_30_OFFSET: usize = 0x30;
+// DLC_ROOTS_REFILL_RVA / CSDLC_SINGLETON_RVA / DLC_ROOT_ALIAS_NAME used to be declared here as
+// crate-private copies for `dlc_roots_self_heal.rs`, duplicating the root crate's
+// `constants/autoload_state.rs` declarations of the same three addresses. That table now lives in
+// this crate (`constants_autoload_state.rs`, autoload/title-flow slice), so the duplicate is gone
+// and `dlc_roots_self_heal.rs` reads the one remaining declaration. One address, one literal --
+// the invariant `scripts/check-rva-alias-drift.py` exists to hold.
 
 /// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
 pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
 
-/// Save-manager load-in-progress flag (GameMan/save-mgr singleton 0x143d69918):
-/// `0x14067b570` sets `[mgr+0xb80]=1` when it begins the load and clears it to 0
-/// when finished. The native autoload (recipe A) arms the load by setting the
-/// slot (`+0xac0`) and the force flag `0x143d856a0`, then the save-manager
-/// per-frame update `0x14067f5d0` performs it.
-/// Bound to upstream `GameMan::save_state` (compiler-verified equal to our offset); our research
-/// reads this same dword as the load-in-progress lane (set 1 on load begin, cleared on finish).
+/// `CS::GameMan::saveState` -- the ONE-SLOT ARBITER over the single SL device, off the GameMan
+/// singleton `0x143d69918`. NOT a load flag, in either direction.
+///
+/// CORRECTED 2026-08-31. This was `GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET`, and two more crates
+/// spelled the same field `GAME_MAN_LOAD_PHASE_B80_OFFSET` (er-reload-trace) and
+/// `GAME_MAN_LOAD_FSM_B80_OFFSET` (er-input-harness). Three constants saying "load" is how the
+/// save-wedge diagnosis gets re-derived backwards: the wedge turned on the SAVE lane owning this
+/// slot while a clear-to-0 ran underneath it, which is unreadable if the field is a load flag.
+///
+/// THREE WITNESSES, none of them the name it used to carry:
+///
+///   1. The type. Ghidra's curated 1.16.2 `CS::GameMan` names `+0xb80` `saveState`, `int`;
+///      `fromsoftware-rs` independently declares `pub save_state: u32` at the same slot, which is
+///      what the `offset_of!` below binds to and what the compiler checks.
+///   2. The game's own predicates. `IsSaveState1` (`0x14067a010`) and `IsSaveState2`
+///      (`0x140679ff0`) are two-instruction leaves -- `mov rax,[rip+GameMan] ; cmp dword ptr
+///      [rax+0xb80],N ; sete al ; ret` -- so the field's SPELLING is in the image, not inferred.
+///   3. The constructor. `mov %r14d,0xb80(%rsi)` at `0x14067616f` (1.17 `0x140676fbf`), pinned in
+///      `scripts/check-object-field-offsets-1170.py`, 1296/1296 aligned across both images.
+///
+/// THE VALUE TABLE, from a complete scan of every access in the 288 functions that reference the
+/// GameMan singleton (37 sites, all of them `[reg+0xb80]`):
+///
+/// ```text
+///   0  IDLE -- nothing owns the SL device
+///   1  a SAVE or the preview read owns it: 0x14067b4e0 (preview), 0x14067b570, 0x14067b750,
+///      0x14067b940, 0x14067bc10 all store 1, each after a `cmp [rax+0xb80],0` idle check
+///   2  a LOAD owns it: 0x14067b1a0, 0x14067b200, 0x14067b480
+///   3  the load's payload is RESIDENT: 0x140679180
+///   4  0x14067b0b0        7  0x14067b030 (tested back by 0x140679fd0)
+/// ```
+///
+/// So BOTH lanes stamp it, which is exactly why "load in progress" was wrong and why the correct
+/// name is the game's: the field says WHO owns the device, not WHAT KIND of operation is running.
+/// A reader that only wants "is the device busy" should test `!= 0`, never `== 2`.
 #[cfg(windows)]
-pub const GAME_MAN_LOAD_IN_PROGRESS_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
+pub const GAME_MAN_SAVE_STATE_B80_OFFSET: usize = core::mem::offset_of!(GameMan, save_state);
 
 /// GameDataMan -> main player save data (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
@@ -622,9 +558,48 @@ pub const SLOT_MANAGER_DATA_OFFSET: usize =
 
 pub const CSFEMAN_SINGLETON_RVA: usize = 0x3d6b880;
 
-/// Session manager singleton (absolute 0x1447ef360; NULL at the title, built by
-/// the move-map/load path). RVA = 0x1447ef360 - 0x140000000 = 0x47ef360.
-pub const SESSION_SINGLETON_RVA: usize = TitleSessionRva::MoveMapSession as usize;
+/// `g_GxDrawContext` -- the GXSR rendering system's draw-context singleton (absolute
+/// 0x1447ef360; RVA = 0x1447ef360 - 0x140000000 = 0x47ef360).
+///
+/// CORRECTED 2026-08-30. This was declared as `SESSION_SINGLETON_RVA` /
+/// `TitleSessionRva::MoveMapSession` and documented as a "session manager singleton;
+/// NULL at the title, built by the move-map/load path". Both halves were wrong. The
+/// 1.16.2 dump names the global itself `g_GxDrawContext`, typed `GxDrawContext *`.
+///
+/// EVIDENCE. Of the global's 1242 xrefs exactly TWO are WRITES, and both are the
+/// ctor/dtor pair in the render region -- nothing in the move-map/load region (0x140a)
+/// writes it at all, which a "built by the move-map/load path" singleton would require:
+///   * `0x1419e6340` allocates 0x1010 bytes (== `sizeof(GxDrawContext)`, corroborated
+///     by the struct's own size) from `GLOBAL_RenderingSystemAllocator`, runs
+///     `GXSR::GxDrawContext::GxDrawContext`, stores the result here, then calls
+///     `GXSR::GxDrawContext::Initilize` (entry `0x1419e7cf0`).
+///   * `0x1419e63a0` deallocates it and writes NULL back.
+///
+/// The 1240 readers are the graphics stack: `GXRayTracingSystem`, `GXLightBase`,
+/// `GXSimpleDrawContextImplBase`, `FD4HkDrawSceneContext`, `render`, `SetupSubsystems`,
+/// `enter_/leave_gxrendermanager_critical_section`, `CSMovieGxTexture`, `~StageRend`.
+///
+/// IT IS NOT NULL AT THE TITLE, so it is worthless as a readiness or progress gate --
+/// testing `!= null` here tests a constant. `CS::CSMovieGxTexture::CSMovieGxTexture`
+/// dereferences it with NO null check (`FUN_1419e7990(g_GxDrawContext)`) and the title
+/// background movie is exactly such a texture; `CS::OptionSettingDialog`'s constructor
+/// reads it too, and that dialog opens from the title screen.
+///
+/// The GENUINE title/boot session singleton is a DIFFERENT address --
+/// `TitleSessionRva::SaveSafeBeginLogoSession` (0x4588e98), 38 xrefs, read by
+/// `STEP_BeginLogo` / `STEP_InitProfile` / `STEP_LoadList` / `STEP_PlayGame` /
+/// `STEP_Finish`. `title_tick_cover.rs`'s `PRODUCT_CORE_BLOCKER_SESSION` readiness gate
+/// uses that one, correctly. Do not let the two converge again: this file previously
+/// spelled a render pointer `SESSION_SINGLETON_RVA` while a real session singleton was
+/// spelled `SESSION_SINGLETON_144588E98_RVA`, so two different log lines both printed
+/// `session=0x...` for two unrelated objects.
+///
+/// Deliberately NOT spelled `GX_DRAW_CONTEXT_RVA`: `er-loading-portrait-core` declares
+/// that name for this same address, and the 1.16.2->1.17 data ledger emits one row per
+/// declaring name, so an exact name match would produce the byte-identical duplicate row
+/// that `check-no-duplicate-ledger-rows.py` R4 forbids. The two declarations remain
+/// parked as `todo:centralize-global-rva` in `scripts/rva-alias-allowlist.txt`.
+pub const GX_DRAW_CONTEXT_SINGLETON_RVA: usize = TitleSessionRva::GxDrawContextSingleton as usize;
 
 /// Alias of the `CSMenuMan` singleton. Derived from `er-game-base`'s table so the value has
 /// exactly one definition (2026-08-01 RVA dedupe); the name is kept for its call sites.
@@ -649,7 +624,7 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 /// `owner+0x8`).
 ///
 /// CORRECTED 2026-08-01 -- the two safety properties this doc used to assert are BOTH FALSE, and
-/// the transmute at `er-effects-rs .../own_load/loaders.rs` cites them as its justification:
+/// the transmute at `er-quickload .../own_load/loaders.rs` cites them as its justification:
 ///   * "does NOT ... zero `*src`" -- it DOES. The tail Unrefs the caller's reference and then
 ///     executes `*param_2 = 0`, clearing the source slot.
 ///   * "is overflow-safe (NOT the cap-8 FixOrderJobSequence)" -- the insert it delegates to,
@@ -665,7 +640,7 @@ pub static OBSERVE_LAST_SIG: std::sync::atomic::AtomicI64 =
 /// bd continue-load-POST-primitive-pushbackjob-kick-2026-06-22.
 pub const MENUJOB_PUSHBACK_RVA: usize = MENU_JOB_SUBMIT_RVA as usize;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/own_load_pump.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/own_load_pump.rs =====
 
 /// `FD4::FD4Time` size (dump `/FD4/FD4Time` len 16): `+0x0 vtable ptr`, `+0x8 f32 time` (the frame
 /// delta the map-stream sub-job advances on). Run only READS `time+8`. Pass a 16-byte buffer with the
@@ -706,6 +681,13 @@ pub const TFC_NOT_RELEASE_FLAG_CLEAR: u8 = 0;
 /// Verified by disasm of 0x1409a8eb0 + the live user-Continue capture (selector body 0x9a8f09 ->
 /// 0x9b3070). bd LIVE-continue-chain-via-selector-NOT-confirm-handler.
 pub const TITLE_CONTINUE_SELECTOR_RVA: usize = 0x9a8eb0;
+
+/// The load dispatcher `0x1409b3070` the selector above tail-calls on its LOAD branch -- the proper
+/// `CS::MenuJob::ChainMenuJobs` enqueue. Named here because `fire_tfc_continue` used to print it as
+/// a bare `base + 0x9b3070usize` in the line that reports the dispatch, which on 1.17 named an
+/// address the dispatch did not go to. Nothing CALLS this constant; it exists so the log can
+/// resolve what it claims.
+pub const TITLE_CONTINUE_LOAD_DISPATCHER_RVA: usize = 0x9b3070;
 
 /// CS::TitleTopDialog MenuJobQueue at `dialog+0x10` (ring at +0x18) -- the queue the native Continue
 /// path posts the built LoadGame job into, drained each frame by the menu pump `0x1409aa680` (which
@@ -813,7 +795,7 @@ pub static OWN_STEPPER_SLOT: std::sync::atomic::AtomicI32 =
 
 pub static OWN_STEPPER_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/player_correctness.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/player_correctness.rs =====
 
 pub static OBSERVE_MENU_OPEN_EMITTED: AtomicUsize = AtomicUsize::new(OBSERVE_MARKER_NOT_EMITTED);
 
@@ -823,7 +805,7 @@ pub const OBSERVE_MARKER_EMITTED: usize = 1;
 
 pub static OWN_STEPPER_BASE: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/profile_render.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/profile_render.rs =====
 
 pub const SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE: usize = 0;
 
@@ -849,14 +831,14 @@ pub const INWORLD_FINALIZE_DRIVE_RELEASE_FRAMES: usize = 40;
 /// Sustained stuck-at-18 frames before the recovery drives the ending request (~2s at task rate).
 pub const ENDING_REQUEST_STALL_RELEASE_FRAMES: usize = 120;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/render_handoff.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/render_handoff.rs =====
 
 /// `CSMenuMan+0x728` -- `loadingScreenData.mode` written by deobf `FUN_14067a410` via the helper at
 /// `0x140860d80`: `CSMenuMan+0x720+8 = mode`.
 #[allow(dead_code)]
 pub const CSMENUMAN_LOADINGSCREEN_MODE_728_OFFSET: usize = 0x728;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/return_title.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/return_title.rs =====
 
 /// The "return-to-title / menu-rebuild requested" byte at menuData+0x5d.
 pub const CS_MENU_DATA_RETURN_TITLE_REQUEST_5D_OFFSET: usize = 0x5d;
@@ -881,9 +863,21 @@ pub const GAME_MAN_ENDING_FLAG_B7C_OFFSET: usize = 0xb7c;
 
 pub const GAME_MAN_ENDING_FLAG_B7D_OFFSET: usize = 0xb7d;
 
-/// Gate used by the loading-screen mode setter at deobf `FUN_14067a410`: when this byte is 0,
-/// mode 2 is normalized to mode 0 before calling the `CSMenuMan+0x720` mode writer.
-pub const GAME_MAN_LOADING_MODE_BF5_OFFSET: usize = 0xbf5;
+/// `CS::GameMan::loadingScreenTextState` (+0xbf5), a bool -- NOT the loading mode itself.
+///
+/// RENAMED 2026-08-31 from `GAME_MAN_LOADING_MODE_BF5_OFFSET`, whose own doc comment already
+/// described a GATE while its name claimed to be the MODE. The two accesses in the image are the
+/// whole story, and the cited `FUN_14067a410` does not exist in 1.16.2 (it is an address from the
+/// retired 1.16.1 dump; it lands inside `FUN_14067a3a0`):
+///
+///   * WRITER `FUN_14067a860` -- a one-line setter, `GLOBAL_GameMan->loadingScreenTextState = arg`.
+///   * READER `FUN_14067a320` -- `if (loadingScreenTextState == false && mode == 2) mode = 0;`
+///     then writes `mode` into `CSMenuMan->loadingScreenData.field_0x8`. So the byte decides
+///     whether loading-screen mode 2 SURVIVES; the mode is the caller's argument.
+///
+/// `fromsoftware-rs` names the same slot `simple_loading_screen` and records the EMEVD command
+/// that sets it (`2003[80] ShowTextOnLoadingScreen`), which agrees on the mechanism.
+pub const GAME_MAN_LOADING_SCREEN_TEXT_STATE_BF5_OFFSET: usize = 0xbf5;
 
 pub const GAME_MAN_WARP_REQUESTED_10_OFFSET: usize = 0x10;
 
@@ -906,9 +900,16 @@ pub const TITLE_STEP_IN_GAME_STEP_2E8_OFFSET: usize = 0x2e8;
 /// stable in-world idle (see block comment above).
 pub const IN_GAME_STEP_REQUEST_CODE_D8_OFFSET: usize = 0xd8;
 
-/// In-game menu job pointer at CSMenuMan+0x798 (unnamed in fromsoftware-rs `unk748`); nonzero while
-/// the in-game session's menu job lives. STEP_RequestWait ends the session when it reads 0 at
-/// request code 2.
+/// In-game menu job pointer at CSMenuMan+0x798; nonzero while the in-game session's menu job
+/// lives. STEP_RequestWait ends the session when it reads 0 at request code 2.
+///
+/// "Unnamed in fromsoftware-rs `unk748`" is what this comment used to offer as provenance, and it
+/// is not one: that a filler array SPANS a byte says nothing about where a member starts. The
+/// offset is now measured -- `CS::CSMenuManImp::CSMenuManImp` (1.16.2 0x1407650a0, 1.17
+/// 0x140765ef0) aligns 121/121 instructions with 30 field offsets, zero moved, and does
+/// `lea 0x798(%rbx),%rax` at 0x14076517b with 0x790 and 0x7a0 witnessed on either side. Frozen in
+/// `scripts/check-object-field-offsets-1170.py`. That fixes the BOUNDARY; that the member is a
+/// `MenuJob*` is a separate claim resting on STEP_RequestWait's own read, not on this alignment.
 pub const CS_MENU_MAN_IN_GAME_MENU_JOB_798_OFFSET: usize = 0x798;
 
 /// Loading-screen active bit written by `CS::InGameStep::STEP_MoveMap_Finish` before common finalize
@@ -948,7 +949,7 @@ pub static SWITCH_ORACLE_REQUEST_CODE: AtomicI32 = AtomicI32::new(-1);
 /// -1 = no live MoveMapStep. See MOVEMAPSTEP_FINALIZE_SUBSTATE_NAMES.
 pub static SWITCH_ORACLE_FINALIZE_12A: AtomicI32 = AtomicI32::new(-1);
 
-/// Last sampled GameMan load-in-progress FSM (b80, == GameMan.save_state): 0 idle/done, 2 read
+/// Last sampled `GameMan::saveState` (b80): 0 idle/done, 2 read
 /// submitted, 3 resident. Published for the loading bar (a distinct, meaningful load-state the user
 /// asked to see). The finalize case-7 gate (FUN_14067a170 = saveState==0) needs this back at 0.
 pub static SWITCH_ORACLE_B80: AtomicI32 = AtomicI32::new(-1);
@@ -1092,7 +1093,7 @@ pub static SYSTEM_QUIT_QUICKLOAD_RETURN_CHAIN_SYSTEM_DIALOG: AtomicUsize = Atomi
 /// directly is the dismiss lever. 0 = none captured.
 pub static CONNECTION_ERROR_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stage2_menu_drive.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stage2_menu_drive.rs =====
 
 /// PHASE 6 (S2 INVOKE): fire d180's +0xa8 action functor to build the ProfileLoadDialog.
 pub const OWN_STEPPER_PHASE_S2_INVOKE: usize = OwnStepperPhase::S2Invoke as usize;
@@ -1118,6 +1119,24 @@ pub const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
 
 pub const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogVtableLayout, load_activate);
+
+/// Dialog vtable slot 18: the embedded ProfileSelect ROW LIST (`FUN_1409a3480`).
+pub const DIALOG_ROW_LIST_VTSLOT_90_OFFSET: usize =
+    core::mem::offset_of!(ProfileLoadDialogVtableLayout, row_list);
+
+/// `CS::MenuViewItemList<T>::at(index)` -- the row accessor, called with a LIST INDEX.
+pub const MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET: usize =
+    core::mem::offset_of!(MenuViewItemListVtableLayout, item_at);
+
+/// The ProfileSummary slot a ProfileSelect row describes.
+pub const MENU_SAVE_DATA_SUMMARY_SLOT_OFFSET: usize =
+    core::mem::offset_of!(MenuSaveDataSummaryLayout, save_slot);
+
+// Compile-time guards pinning the reverse-engineered 1.16.2 vtable/row ABI these three read.
+const _: () = assert!(DIALOG_ROW_LIST_VTSLOT_90_OFFSET == 0x90);
+const _: () = assert!(DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET == 0xa0);
+const _: () = assert!(MENU_VIEW_ITEM_LIST_AT_VTSLOT_20_OFFSET == 0x20);
+const _: () = assert!(MENU_SAVE_DATA_SUMMARY_SLOT_OFFSET == 0x08);
 
 #[repr(C)]
 pub struct ProfileLoadDialogLayout {
@@ -1146,7 +1165,7 @@ pub static OWN_STEPPER_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_S
 /// re-fire. Readers still treat "not `TITLE_NATIVE_JOB_NOT_CALLED`" as "the menu stage has run".
 pub static OWN_STEPPER_TITLE_FIRED: AtomicUsize = AtomicUsize::new(TITLE_NATIVE_JOB_NOT_CALLED);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_background.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stats_panel_background.rs =====
 
 pub const TITLE_STEP_BEGIN_NEW_GAME: i32 = TitleStepState::BeginNewGame as i32;
 
@@ -1209,22 +1228,41 @@ pub const TITLE_TOP_DIALOG_UPDATE_RVA: usize = 0x9aac10;
 /// already valid.
 pub const TITLE_TOP_DIALOG_CLEANUP_RVA: usize = TitleDialogRva::Cleanup as usize;
 
-/// Active-screen array 0x143d6d8d0 (RVA): the per-frame pump 0x1409aa680 iterates it. 10 contiguous
-/// screen* slots (stride 8). The LIVE-dialog scan reads each slot's [scr] vtable to find the live
-/// TitleTopDialog and MenuWindow (the factory's SceneProxy capture + rdx) -- no blind heap scan.
-pub const ACTIVE_SCREEN_ARRAY_RVA: usize = TitleDialogRva::ActiveScreenArray as usize;
+/// Profile model-renderer table 0x143d6d8d0 (RVA): 10 contiguous `CS::CSMenuProfModelRend*`
+/// slots (stride 8), one per profile/save slot. The per-frame pump 0x1409aa680 iterates it.
+///
+/// CORRECTED 2026-08-30 (was `ACTIVE_SCREEN_ARRAY_RVA`, "10 contiguous screen* slots ... the
+/// LIVE-dialog scan reads each slot's [scr] vtable to find the live TitleTopDialog and
+/// MenuWindow"). These are not screens and no TitleTopDialog vtable will ever appear in them.
+/// Evidence, 1.16.2 dump -- 9 xrefs total, all in the title-dialog region:
+///   * `0x1409af3a0` BUILDS the table: it calls the clear below, then loops 10 times doing
+///     `HeapAlloc(0xa30, 0x10, GLOBAL_GfxHeapAllocator)` and
+///     `CS::CSMenuProfModelRend::CSMenuProfModelRend(mem, i)`, storing each into
+///     `DAT_143d6d8d0[i]`.
+///   * `0x1409b2db0` CLEARS it: for all 10 slots it hands the pointer to
+///     `GLOBAL_CSDelayDeleteMan` and writes 0 back. `TitleTopDialog::Cleanup` (0x1409a8890)
+///     calls it, which is why counting non-null slots after cleanup is a real signal.
+///   * `0x1409aa680` PUMPS it: `CS::GameDataMan::GetProfileSummary()`, then per slot feeds
+///     `CS::FaceData::GetFaceDataBuffer(...)` and friends into the renderer -- it is building
+///     each save slot's character portrait, which is what `CSMenuProfModelRend` renders.
+///
+/// `er-loading-portrait-core`'s `TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA` was the
+/// accurate name of the two (and `scripts/read-portrait-chain.py` already documented the slots
+/// as `CSMenuProfModelRend*`). Renamed to agree without an exact collision, for the
+/// duplicate-ledger-row reason noted on `GX_DRAW_CONTEXT_SINGLETON_RVA`.
+pub const PROFILE_MODEL_REND_TABLE_RVA: usize = TitleDialogRva::ProfileModelRendTable as usize;
 
-/// Active-screen array slot count (bounded scan; the native pump iterates the same span).
-pub const ACTIVE_SCREEN_ARRAY_SLOTS: usize =
-    core::mem::size_of::<ActiveScreenArrayLayout>() / core::mem::size_of::<usize>();
+/// Table slot count (bounded scan; the native pump iterates the same span).
+pub const PROFILE_MODEL_REND_TABLE_SLOTS: usize =
+    core::mem::size_of::<ProfileModelRendTableLayout>() / core::mem::size_of::<usize>();
 
-/// Active-screen array slot stride (one screen* per slot).
-pub const ACTIVE_SCREEN_ARRAY_STRIDE: usize = core::mem::size_of::<usize>();
+/// Table slot stride (one `CSMenuProfModelRend*` per slot).
+pub const PROFILE_MODEL_REND_TABLE_STRIDE: usize = core::mem::size_of::<usize>();
 
 /// Scan slot start / step.
-pub const ACTIVE_SCREEN_SLOT_START: usize = usize::MIN;
+pub const PROFILE_MODEL_REND_SLOT_START: usize = usize::MIN;
 
-pub const ACTIVE_SCREEN_SLOT_STEP: usize = true as usize;
+pub const PROFILE_MODEL_REND_SLOT_STEP: usize = true as usize;
 
 /// TitleTopDialog SceneProxy capture slot: [dialog+0xa38] holds the live SceneProxy* the
 /// TitleTopDialog ctor 0x1409a81a0 stored at 0x1409a8213. The LIVE-dialog factory 0x14081ead0
@@ -1265,7 +1303,7 @@ pub const TITLE_PRESS_START_SET_VISIBLE_RVA: usize = 0x733340;
 pub static TITLE_PRESS_START_GFX_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/stats_panel_text.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/stats_panel_text.rs =====
 
 pub static TITLE_PRESS_START_GFX_HIDE_LAST_DIALOG: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
@@ -1361,9 +1399,35 @@ pub const FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA: usize = er_save_loader::SET_SAVE_SL
 /// (force_play_game wrote owner+0x4c=5 raw + a raw slot in +0xbc, so it orphaned.)
 pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 
-/// Private saved-map slot inside the GameMan block immediately after
-/// `stay_in_multiplay_area_saved_rotation`; derive it from the adjacent typed
-/// vector layout instead of retaining the raw absolute field offset.
+/// `CS::GameMan::stayInMultipleAreaBlockId` (+0xc30). KEPT UNDER THE PRODUCT NAME "saved map"
+/// after a 2026-08-31 audit, because that is what the value IS in the window every consumer reads
+/// it in -- but the field has THREE writers and only one of them is the save, so read this before
+/// using it anywhere else.
+///
+/// The complete access set (5 sites, from a scan of every function referencing the GameMan
+/// singleton, each one decompiled):
+///
+///   * `FUN_14067bd70`, the slot DESERIALIZER: `param_1->stayInMultipleAreaBlockId =
+///     local_50._4_4_` -- the dword at slot body+0x04, which is exactly what
+///     `er_save_loader::bnd4::slot_saved_map` reads off the file. THIS is the writer the
+///     `oracle_saved_map_c30` contract rests on, and it makes "saved map" literally true at mount.
+///   * `FUN_14067dc00`, the slot SERIALIZER: reads it back out through the getter below.
+///   * `FUN_14067afa0`: writes it when `CS::GameMan::UpdateStayInMultiplayPosition` succeeds.
+///   * `FUN_14067aac0`: resets the `stayInMultiplaySaved{Position,MapId,Rotation}` family and then
+///     stores `MakeBlockId(10,1,0,0)` here -- m10_01_00_00, the "new game default map" this repo
+///     already tracks by that name in `constants/stage2_menu_drive.rs`.
+///   * `FUN_140679560`: a one-line getter. Its consumer is `SetMoveMapStepBlockId`
+///     (`0x14067abd0`), which writes `GameMan::moveMapStepBlockId` at **+0x14**.
+///
+/// TWO CONSEQUENCES. (a) +0xc30 is the SOURCE of the map you load into, not the map you are in --
+/// so it is not "the current map"; er-reload-trace called it that until this audit and no longer
+/// does. (b) During play it is stay-in-multiplay bookkeeping, so a mid-session read is not a
+/// "saved map" at all. Every current consumer reads it inside the load window, where writer 1
+/// owns it.
+///
+/// The offset is derived from the adjacent typed vector layout rather than retained as a raw
+/// literal; the ctor store `movl $-1,0xc30(%rsi)` at `0x14067628d` (1.17 `0x1406770dd`) is pinned
+/// in `scripts/check-object-field-offsets-1170.py`.
 #[cfg(windows)]
 pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
@@ -1387,7 +1451,7 @@ pub const GAME_MAN_RETURN_TITLE_JOB_PREDICATE_PENDING: usize = 1;
 
 pub const INGAMESTEP_MOVEMAPSTEP_PTR_OFFSET: usize = 0xe8;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/switch_liveness.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/switch_liveness.rs =====
 
 /// inputmgr keystate bitmap offset (inputmgr = [0x143d6b7b0]); bit0 = pressed-this-frame (edge).
 pub const INPUTMGR_BITMAP_90_OFFSET: usize = 0x90;
@@ -1404,27 +1468,16 @@ pub const AUTO_CONFIRM_SET_FRAMES: u64 = 3;
 
 pub const AUTO_CONFIRM_LOG_INTERVAL: u64 = 60;
 
-// ===== moved verbatim from crates/er-effects-rs/src/constants/system_quit.rs =====
+// ===== moved verbatim from crates/er-quickload/src/constants/system_quit.rs =====
 
 /// XINPUT_GAMEPAD.wButtons D-pad Down bit (the menu "move down" gamepad input).
 pub const XINPUT_GAMEPAD_DPAD_DOWN: u16 = 0x0002;
 
-/// Settle the freshly-opened menu before injecting (poll-frames).
-pub const INJECT_NAV_SETTLE_FRAMES: usize = 90;
-
-/// Down asserted for this many consecutive poll-frames = one clean edge (one cursor step).
-pub const INJECT_NAV_TAP_LEN: usize = 4;
-
-/// Released gap between taps (edge re-arm; menu nav is edge-triggered, not auto-repeat).
-pub const INJECT_NAV_GAP_LEN: usize = 16;
-
-/// One tap+gap cycle length.
-pub const INJECT_NAV_CYCLE: usize = INJECT_NAV_TAP_LEN + INJECT_NAV_GAP_LEN;
-
-/// Number of Down taps to drive. The problem is fully deterministic: the cursor starts on
-/// Continue (index 0) and Load Game is index 1, so EXACTLY ONE Down reaches it. There is no state
-/// of knowledge that justifies more than one tap, so this is a literal 1 (not a tunable).
-pub const INJECT_NAV_MAX_CYCLES: usize = 1;
+// The INJECT-NAV tap/gap schedule constants (SETTLE_FRAMES / TAP_LEN / GAP_LEN / CYCLE /
+// MAX_CYCLES) lived here. They only ever fed `inject_nav_buttons` (title_tick_cover.rs), the D-pad-Down
+// fabrication schedule for the `inject_nav_enabled()` gate -- a gate that could only return `false`.
+// Gate, schedule and constants were deleted together (2026-08-26). XINPUT_GAMEPAD_DPAD_DOWN above
+// stays: the System->Quit repro autopilot and the DInput/VK translation tables still use it.
 
 /// Latched true once a load sustained >=MOVE_PROBE_REQUIRED_FRAMES consecutive frames of havok-position
 /// motion under the injected stick (input-causes-movement PROVEN). Cleared when a new load epoch begins.
@@ -1550,7 +1603,7 @@ pub static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =
 pub static TITLE_OWNER_SCAN_COUNTDOWN: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_COUNTDOWN_READY);
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/mod/own_stepper_idx6_memory.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/mod/own_stepper_idx6_memory.rs =====
 
 /// Pseudo-handle for the current process (GetCurrentProcess() is constant -1).
 pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
@@ -1560,7 +1613,7 @@ pub const CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 /// fault-tolerant scan fast -- a syscall per 8-byte cursor would stall the thread.
 pub const SCAN_CHUNK_SIZE: usize = 0x10000;
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/mod/product_core_own_stepper.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/mod/product_core_own_stepper.rs =====
 
 pub const PRODUCT_CORE_BLOCKER_UNSEEN: usize = 0;
 
@@ -1727,7 +1780,7 @@ pub struct TitleDialogState {
     pub menu_opened_latch: usize,
 }
 
-// ===== moved verbatim from crates/er-effects-rs/src/experiments/own_load/drive.rs =====
+// ===== moved verbatim from crates/er-quickload/src/experiments/own_load/drive.rs =====
 
 /// How often (in own_stepper frames) the OWN-LOAD world-stream stall telemetry emits a throttled
 /// debug line. The oracle_* atomics are refreshed EVERY frame; only the human-readable log is
@@ -1736,7 +1789,7 @@ pub const OWN_LOAD_STREAM_LOG_INTERVAL: u64 = 30;
 
 // ===== wave 2: layout/enum types the wave-1 constants reference (moved verbatim) =====
 
-// ----- from crates/er-effects-rs/src/constants/anti_debug.rs -----
+// ----- from crates/er-quickload/src/constants/anti_debug.rs -----
 
 #[repr(usize)]
 pub enum TitleSessionRva {
@@ -1744,7 +1797,9 @@ pub enum TitleSessionRva {
     SaveSafeBeginLogoSession = 0x4588e98,
     SessionA = 0x3d687a0,
     SessionB = 0x3d67bd0,
-    MoveMapSession = 0x47ef360,
+    /// `g_GxDrawContext`, the GXSR render draw-context singleton -- NOT a session and
+    /// NOT null at the title. See `GX_DRAW_CONTEXT_SINGLETON_RVA` for the evidence.
+    GxDrawContextSingleton = 0x47ef360,
 }
 
 /// Partial SimpleTitleStep owner layout used by the zero-input title/menu driver.
@@ -1805,7 +1860,7 @@ pub enum TitleNativeJobTiming {
     FrameRate = 60,
 }
 
-// ----- from crates/er-effects-rs/src/constants/autoload_state.rs -----
+// ----- from crates/er-quickload/src/constants/autoload_state.rs -----
 
 #[repr(C)]
 pub struct GameManAutoloadFlagCluster {
@@ -1830,7 +1885,7 @@ pub struct MsgBoxDialogLayout {
     pub button_count: i32,
 }
 
-// ----- from crates/er-effects-rs/src/constants/own_load_pump.rs -----
+// ----- from crates/er-quickload/src/constants/own_load_pump.rs -----
 
 #[repr(usize)]
 pub enum OwnStepperPhase {
@@ -1846,30 +1901,106 @@ pub enum OwnStepperPhase {
     S2Confirm,
 }
 
-// ----- from crates/er-effects-rs/src/constants/stage2_menu_drive.rs -----
+// ----- from crates/er-quickload/src/constants/stage2_menu_drive.rs -----
 
 #[repr(usize)]
 pub enum ProfileLoadMenuRva {
     ProfileSlotActivate = 0x262250,
     MenuItemUpdate = 0x007ad1c0,
-    ProfileLoadSelectorTick = 0x826d50,
+    /// `vt[2]` (slot +0x10) of the `CS::MenuJobWithContext<LoadJobContext, lambda>` vtable
+    /// below -- the load job's Run/Execute virtual, NOT a per-frame "selector tick".
+    ///
+    /// CORRECTED 2026-08-30 (was `ProfileLoadSelectorTick`). Evidence, 1.16.2 dump: the
+    /// function at `0x140826d50` has NO callers and only three DATA xrefs (it is reached
+    /// through a vtable); Ghidra types it `MenuJobResult *FUN_140826d50(longlong this,
+    /// MenuJobResult *out, undefined8 *time, ...)` and its body calls
+    /// `MenuJobResult::SetResult(out, Failed, 0)` before dispatching through
+    /// `(**(this + 0x70))(...)`. Taking a `MenuJobResult` out-param and setting the job
+    /// result is the MenuJob Run signature. One of its DATA xrefs is `0x142ac71f0`, which
+    /// is `SelectorStepVtable`'s address + 0x10 -- i.e. this function IS that vtable's
+    /// third slot, and the RTTI on that vtable names the class (see below).
+    ///
+    /// `er-quickload`'s `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA` was the accurate name of the
+    /// two; this declaration is renamed to agree with it without colliding (an exact name
+    /// match would emit a byte-identical 1.17 ledger row, which
+    /// `check-no-duplicate-ledger-rows.py` R4 forbids).
+    LoadJobRun = 0x826d50,
     MenuDeser = 0x0082c240,
     CsMenuCtor = 0x009060d0,
     MenuMemberFuncJobRun = 0x9aaba0,
     MenuLoadGameFunctorVtable = 0x02ac3ea8,
-    SelectorStepVtable = 0x2ac71e0,
+    /// Vtable of `CS::MenuJobWithContext<LoadJobContext, lambda_1af212c996936ea2325f4f98c4366979>`
+    /// -- a MenuJob vtable, NOT a "selector step" vtable.
+    ///
+    /// CORRECTED 2026-08-30 (was `SelectorStepVtable`). Proven by RTTI rather than
+    /// inference, read out of `eldenring-deobf.bin` (flat image, `VA = 0x140000000 + file
+    /// offset`, shift 0): `vtable[-1]` at `0x142ac71d8` -> complete-object-locator
+    /// `0x1432fc230` (signature 1) -> `COL+0x0c` type-descriptor RVA `0x3ca5d40` ->
+    /// `TD+0x10` mangled name
+    /// `.?AV?$MenuJobWithContext@VLoadJobContext@?A0x7c8d539b@@V<lambda_...>@@@CS@@`.
+    /// Slots: `vt[0]=0x140744d90`, `vt[1]=0x140826100`, `vt[2]=0x140826d50` (== `LoadJobRun`).
+    ///
+    /// `er-quickload`'s `MENUJOB_LOADGAME_VTABLE_DUMP_VA` was the accurate name of the two.
+    MenuJobLoadContextVtable = 0x2ac71e0,
     ProfileLoadDialogVtable = 0x2b229f8,
+    /// `CS::ProfileLoadDialog::SelectSaveSlot(this, int slot) -> bool` -- the game's OWN
+    /// "park the list cursor on the row that describes slot N". Its constructor
+    /// (`0x1409a3d90`) calls it with `GetMenuSystemSaveLoad()->saveSlot`, which is the only
+    /// caller in the image, so driving the cursor through it is exactly what the engine does.
+    ///
+    /// It is also the inverse of what `load_activate` reads, and its disassembly is the proof
+    /// that the cursor indexes ROWS rather than slots (byte-identical in the 1.16.2 dump and
+    /// `eldenring-deobf.bin`, shift 0):
+    ///
+    /// ```text
+    ///   1409a5f36: cmp  ebx,[rcx+0xb08]      ; row count
+    ///   1409a5f46: call qword [rax+0x90]     ; list = dialog->vt[+0x90](dialog)
+    ///   1409a5f54: call qword [r8+0x20]      ; row  = list->vt[+0x20](list, index)
+    ///   1409a5f58: cmp  esi,[rax+8]          ; row->save_slot == wanted?
+    ///   1409a5f79: lea  rcx,[rdi+0xa38] / call 0x140738d40   ; set the widget's cursor
+    ///   1409a5f8f: mov  al,1                 ; found
+    ///   1409a5f67: xor  al,al                ; no row carries that slot
+    /// ```
+    ProfileLoadSelectSaveSlot = 0x9a5f20,
 }
 
 /// Dialog vtable slot 20 (offset 0xa0) = load_activate 0x1409a4670. Read the live slot from
 /// the dialog vtable (robust to relocation) rather than hard-calling the RVA.
+///
+/// Slot 18 (offset 0x90) is the dialog's ROW LIST accessor -- `FUN_1409a3480`, which is just
+/// `return this + 0x1260`, the embedded
+/// `CS::BasicViewItemList<CS::MenuSaveDataSummary, 10>` the constructor fills. Both
+/// `load_activate` and `SelectSaveSlot` reach the rows through this slot rather than through a
+/// fixed field offset, so callers do too.
 #[repr(C)]
 pub struct ProfileLoadDialogVtableLayout {
-    pub unknown_slots_00_19: [usize; 20],
+    pub unknown_slots_00_17: [usize; 18],
+    pub row_list: usize,
+    pub unknown_slot_18: usize,
     pub load_activate: usize,
 }
 
-// ----- from crates/er-effects-rs/src/constants/stats_panel_background.rs -----
+/// `CS::MenuViewItemList<T>` vtable. Slot 4 (offset 0x20) is `at(index) -> T*`: the row accessor
+/// both `load_activate` and `SelectSaveSlot` call with a LIST INDEX.
+#[repr(C)]
+pub struct MenuViewItemListVtableLayout {
+    pub unknown_slots_00_03: [usize; 4],
+    pub item_at: usize,
+}
+
+/// One `CS::MenuSaveDataSummary` row of the ProfileSelect list.
+///
+/// The row list is COMPACTED -- `FUN_140875590` pushes a row only for a slot whose
+/// `ProfileSummary->saveSlotsStates[slot]` byte is set -- so the row remembers which slot it came
+/// from, and `save_slot` is the field every native consumer reads. It is the only field this
+/// codebase needs; the rest of the 0x108-byte row is the row's own display state.
+#[repr(C)]
+pub struct MenuSaveDataSummaryLayout {
+    pub unknown_000: [u8; 0x08],
+    pub save_slot: i32,
+}
+
+// ----- from crates/er-quickload/src/constants/stats_panel_background.rs -----
 
 #[repr(i32)]
 pub enum TitleStepState {
@@ -1918,11 +2049,13 @@ pub enum TitleDialogRva {
     Cleanup = 0x9a8890,
     OpenMenu = 0x9b24e0,
     Vtable = 0x2b26468,
-    ActiveScreenArray = 0x3d6d8d0,
+    /// 10-slot `CS::CSMenuProfModelRend*` table -- profile portrait renderers, NOT screens.
+    /// See `PROFILE_MODEL_REND_TABLE_RVA` for the evidence.
+    ProfileModelRendTable = 0x3d6d8d0,
 }
 
 #[repr(C)]
-pub struct ActiveScreenArrayLayout {
+pub struct ProfileModelRendTableLayout {
     pub slots: [usize; 10],
 }
 
@@ -1938,7 +2071,7 @@ pub struct TitleTopDialogLayout {
     pub state_machine: usize,
 }
 
-// ----- from crates/er-effects-rs/src/constants/switch_liveness.rs -----
+// ----- from crates/er-quickload/src/constants/switch_liveness.rs -----
 
 /// Front-end menu event ids (verified): Confirm/OK, and the two vertical-move candidates (one is
 /// Down, one Up -- we inject both; only Down moves the cursor down, Up saturates at the top so it
@@ -1949,3 +2082,55 @@ pub enum MenuEventId {
     Confirm = 0x3d,
     MoveB = 0x45,
 }
+
+// ----- from crates/er-quickload/src/constants.rs (autoload/title-flow slice) -----
+
+/// Sentinel for a MinHook trampoline slot that has not been filled yet. Read by every
+/// `*_ORIG: AtomicUsize` initializer in `constants_own_load_pump.rs` /
+/// `constants_autoload_state.rs`, which is why it moved with those tables rather than staying
+/// behind a shim the moved code could not see.
+pub const HOOK_ORIGINAL_UNSET: usize = 0;
+
+/// Singleton pointer globals the autoload tables resolve against, as data RVAs off the game
+/// image base.
+#[repr(usize)]
+pub enum RuntimeGlobalRva {
+    NowLoadingSingleton = 0x3d60ec8,
+    FakeLoadingScreenSingleton = 0x3d74868,
+    CsGraphicsSingleton = 0x3d71c48,
+    RendManSingleton = 0x3d7b0c0,
+    CsScaleformSingleton = 0x3d83148,
+    Fd4IoPool = 0x4853048,
+    /// `SaveLoad2::SLSystemImpl*`. Named `Fd4IoWorkerManager` until 2026-08-01, which was
+    /// wrong: the 1.16.2 dump shows its lazy initializer `FUN_14240dee0` opens with
+    /// `*param_1 = SaveLoad2::SLSystemImpl::vftable`, and all 11 xrefs sit in the SaveLoad2
+    /// region (`0x14240a...`, alongside requestLoad). `experiments/own_stepper/
+    /// bootstrap_drive.rs` already had it right in a comment. See bd
+    /// `rva-4852f88-is-saveload2-slsystemimpl-not-fd4-io-worker-2026-08-01`.
+    SaveLoad2SlSystemImpl = 0x4852f88,
+    IoDeviceSingleton = 0x4589390,
+    DluidInputManager = 0x485dc18,
+}
+
+// ----- from crates/er-quickload/src/constants/render_handoff.rs -----
+
+/// MoveMap child wrapper (`InGameStep+0xe0`) AFTER WorldRes is resident; may skip STEP_Finish teardown,
+/// so prefer satisfying the real sub-gate. Verify state before use.
+pub const EZ_CHILDSTEP_REQUEST_FINISH_RVA: usize = 0xeb5570;
+
+// ----- from crates/er-quickload/src/constants/stats_panel_text.rs -----
+
+/// `mov eax,[owner+0xbc]` and feeds it through submit -> validate -> pair, which
+/// writes the value to GameMan+0x14 (the load value). The +0xac0 save slot only
+/// feeds global+0x1200, not the load pair -- so this is the field to select.
+pub const TITLE_OWNER_PLAY_GAME_SLOT_OFFSET: usize =
+    core::mem::offset_of!(TitleOwnerLayout, play_game_slot);
+
+pub const TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET: usize =
+    core::mem::offset_of!(TitleOwnerLayout, new_game_flag);
+
+/// Packed map id for m60_42_34_00 (the new-game default; resolver 0x14071fd60 packs
+/// mAA_BB_CC_DD decimal -> byte3=AA..byte0=DD). A valid map to pass the PlayGame
+/// map-area gate (area byte 0x32..0x58) while we prove the SetState(5) path builds
+/// CSFeMan; the real slot map comes from GameMan+0xc30 once peeked.
+pub const DEFAULT_PLAY_GAME_MAP: i32 = 0x3c2a2200;

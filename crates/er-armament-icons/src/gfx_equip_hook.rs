@@ -49,7 +49,7 @@ const PARSE_SIG: &str =
 /// File-open observer (logs the `.gfx` open sequence AND provides a live loader to resolve
 /// FileOpener::OpenFile from). Known-good hardcoded 1.16.2 RVA.
 ///
-/// SHARED WITH THE PRODUCT DLL. `er-effects-rs` detours this same prologue for its title / stats /
+/// SHARED WITH THE PRODUCT DLL. `er-quickload` detours this same prologue for its title / stats /
 /// System>Quit / text-input GFx swaps. Because a statically linked crate's statics are per-DLL,
 /// each of us owns a SEPARATE MinHook instance, and two instances on one prologue overwrite each
 /// other's trampolines: the loser reports installed, never fires, and its whole feature looks
@@ -272,7 +272,18 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable != base + MEMORY_FILE_VTABLE_RVA {
+    // RESOLVED, and never satisfied by zero. The Scaleform `MemoryFile` vtable moved on 1.17
+    // (0x2ba4c80 -> 0x2ba7d70), so a raw `base + RVA` matched nothing and every badge swap on the
+    // parse path was declined without a word -- no refusal line, no counter, the feature simply
+    // absent. The zero screen closes the other direction: `game_data_addr` answers 0 for a
+    // refusal and `vtable` arrives here as `unwrap_or(0)`, so `0 == 0` would treat an unreadable
+    // File as a MemoryFile and go on to read its data/len fields.
+    let memory_file_vtable = er_game_base::mem::game_data_addr(
+        base,
+        MEMORY_FILE_VTABLE_RVA,
+        "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
+    );
+    if memory_file_vtable == 0 || vtable != memory_file_vtable {
         return; // not a MemoryFile (e.g. an image/font stream)
     }
     let data = unsafe { safe_read_usize(file + MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
@@ -505,12 +516,18 @@ unsafe fn try_install_openfile_hook(loader: usize) {
         ));
         return;
     }
-    let hook = match unsafe { MhHook::new(openfile as *mut c_void, openfile_hook as *mut c_void) } {
+    // RUNTIME-DERIVED, like the parse hook: `openfile` was just read out of the LIVE
+    // `FileOpener` vtable a few lines up, so it is this build's address by construction and the
+    // 1.16.2 -> 1.17 table has no key for it. `MhHook::new` refused it for that reason, which cost
+    // this DLL its async tag-dict swap on 1.17 with a log line that blamed the address map.
+    let hook = match unsafe {
+        MhHook::new_runtime_derived(openfile as *mut c_void, openfile_hook as *mut c_void)
+    } {
         Ok(h) => h,
         Err(status) => {
             OPENFILE_STATE.store(2, Ordering::SeqCst);
             log_message(format_args!(
-                "gfx-equip: MhHook::new(openfile @0x{openfile:x}) failed: {status:?}"
+                "gfx-equip: MhHook::new_runtime_derived(openfile @0x{openfile:x}) failed: {status:?}"
             ));
             return;
         }
@@ -603,13 +620,27 @@ pub(crate) fn install(base: usize) {
     }
     GAME_BASE.store(base, Ordering::SeqCst);
 
-    // Queue a detour on absolute `target`, storing its trampoline into `orig`.
-    let queue = |target: usize, detour: *mut c_void, orig: &AtomicUsize, label: &str| -> bool {
-        let hook = match unsafe { MhHook::new(target as *mut c_void, detour) } {
+    // Queue a detour on a RUNTIME-DERIVED absolute `target`, storing its trampoline into `orig`.
+    //
+    // `new_runtime_derived`, not `new`: the one caller below passes the hit from the `.text` AOB
+    // scan of the RUNNING image, so the address is already correct for whatever build is loaded
+    // and there is nothing to translate. Sending it through the translating entry point is what
+    // turned this feature off on 1.17 -- the scan found the right address (`0x1411cf1a0` ->
+    // `0x1411d0fa0`, byte-identical body) and the version gate refused it, because a 1.17 address
+    // is not a key in a table of 1.16.2 RVAs. Fixing that with a ledger row would be worse: the
+    // row would translate a second time, +0x1e00 into a live body. The resolved entry point drops
+    // the translation and keeps the audit -- the running image's own `.pdata` must call this a
+    // function entry (or an unwind-less leaf) with room for MinHook's five bytes.
+    let queue_runtime_derived = |target: usize,
+                                 detour: *mut c_void,
+                                 orig: &AtomicUsize,
+                                 label: &str|
+     -> bool {
+        let hook = match unsafe { MhHook::new_runtime_derived(target as *mut c_void, detour) } {
             Ok(h) => h,
             Err(status) => {
                 log_message(format_args!(
-                    "gfx-equip: MhHook::new({label} @0x{target:x}) failed: {status:?}"
+                    "gfx-equip: MhHook::new_runtime_derived({label} @0x{target:x}) failed: {status:?}"
                 ));
                 return false;
             }
@@ -651,7 +682,7 @@ pub(crate) fn install(base: usize) {
             ));
             break 'parse false;
         };
-        if queue(addr, parse_hook as *mut c_void, &PARSE_ORIG, "parse") {
+        if queue_runtime_derived(addr, parse_hook as *mut c_void, &PARSE_ORIG, "parse") {
             log_message(format_args!("gfx-equip: parse hook resolved @0x{addr:x}"));
             true
         } else {
@@ -675,7 +706,7 @@ pub(crate) fn install(base: usize) {
     }
 
     // SHARED prologue -- never a bare MhHook here. `register_shared_hook` chains us into the
-    // product DLL's single MinHook instance when `er_effects_rs.dll` is co-loaded, and falls back
+    // product DLL's single MinHook instance when `er_quickload.dll` is co-loaded, and falls back
     // to our own union when it is not, so a standalone run of this DLL is unchanged. Which route
     // it took is logged, because "LOCAL while the product is present" is precisely the state that
     // used to silently break both DLLs.
@@ -684,13 +715,13 @@ pub(crate) fn install(base: usize) {
     } {
         Ok(route) => log_message(format_args!(
             "gfx-equip: file-open observer @0x{:x} registered via {route:?} \
-             (shared prologue with er_effects_rs.dll)",
-            base + FILE_OPEN_RVA
+             (shared prologue with er_quickload.dll)",
+            er_game_base::mem::game_data_addr(base, FILE_OPEN_RVA, "FILE_OPEN_RVA")
         )),
         Err(status) => log_message(format_args!(
             "gfx-equip: file-open observer @0x{:x} register FAILED: {status:?} -- \
              FileOpener::OpenFile stays unarmed (async tag-dict swap off; no crash)",
-            base + FILE_OPEN_RVA
+            er_game_base::mem::game_data_addr(base, FILE_OPEN_RVA, "FILE_OPEN_RVA")
         )),
     }
 }

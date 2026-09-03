@@ -179,7 +179,7 @@ Three kinds of "result", with different distribution stories:
    confidence scores**, deobf-native (base `0x140000000`, no shift). Pure addresses, not game
    code, so shareable as research data; useful to anyone with the **same** ER 1.16.1 deobf image.
 2. **Tooling** -- every script/dict/patch/doc here is in the repo. Another user clones
-   `er-effects-rs` and runs `scripts/ghidra/bootstrap.sh` to rebuild the whole stack (installs the
+   `er-quickload` and runs `scripts/ghidra/bootstrap.sh` to rebuild the whole stack (installs the
    Ghidra ML extension, clones+builds 13bm GhidraMCP with our patch, installs it, points at the
    deobf project). One command instead of reconstructing the steps.
 3. **Heavy analyzed artifacts** -- the `erdeobf`/`ermaporch` Ghidra projects, the 94MB deobf

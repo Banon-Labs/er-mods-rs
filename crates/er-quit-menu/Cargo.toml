@@ -1,6 +1,6 @@
 # Optional standalone ME3-loadable HARNESS for the `er-quit-menu-core` feature crate (product B):
 # own DllMain and own log file for isolated/coexistence tests. Required product behavior is
-# statically linked into er_effects_rs.dll; the shipped product profile never lists this DLL.
+# statically linked into er_quickload.dll; the shipped product profile never lists this DLL.
 #
 # Harness matrices may explicitly load this DLL alone or alongside companions. That does not
 # make it a second product artifact or a dependency of the supported product profile.

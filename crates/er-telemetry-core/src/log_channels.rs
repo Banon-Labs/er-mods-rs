@@ -135,11 +135,11 @@ macro_rules! log_channel {
     }};
 }
 
-/// Title-rebuild diagnostic channel: marker `er-effects-log-title-rebuild.txt` ->
-/// `er-effects-title-rebuild.log`. DEFAULT OFF. Provided as the first channel now; rerouting the
+/// Title-rebuild diagnostic channel: marker `er-quickload-log-title-rebuild.txt` ->
+/// `er-quickload-title-rebuild.log`. DEFAULT OFF. Provided as the first channel now; rerouting the
 /// title-rebuild call sites through it is Phase D follow-up (this only defines the channel + macro).
 pub static TITLE_REBUILD: Channel = Channel::new(
     "title-rebuild",
-    "er-effects-log-title-rebuild.txt",
-    "er-effects-title-rebuild.log",
+    "er-quickload-log-title-rebuild.txt",
+    "er-quickload-title-rebuild.log",
 );

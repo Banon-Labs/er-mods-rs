@@ -1,6 +1,12 @@
 [workspace]
 members = [
-  "crates/er-effects-rs",
+  "crates/er-quickload",
+  # One vocabulary for naming a key in a config file, plus the reload decision that makes an
+  # edit take effect without a restart. Extracted after a hard-coded VK_F7 in er-invasion-warp
+  # collided with another mod's default and warped a live session, with no config key on either
+  # side to move. Host-buildable and game-free: the key table, the parser and the reload
+  # decision are all `cargo test`-able on Linux.
+  "crates/er-hotkey-config",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",
@@ -11,14 +17,29 @@ members = [
   "crates/er-crash-logging",
   "crates/er-reload-trace",
   "crates/er-input-harness",
+  # The agent trace detours the SHIPPING DLL used to install unconditionally: the sole
+  # `msbResCap` writer, `STEP_LoadListWait`, and the three DLC virtual-root entry points. All
+  # observe-and-forward, none feeding an `oracle_*` field, so every player carried five detours
+  # for a log nothing read back. Same contract as er-input-harness: a separate `[[natives]]`
+  # entry, enabled by presence, omitted from a production profile.
+  "crates/er-diag-harness",
   "crates/er-ags-stub",
+  # Lets Seamless Co-op v1.9.9 boot on ELDEN RING 1.17: rebuilds the one AOB locator ersc
+  # lost to the patch (the object behind `GetWwiseSettings` grew 0x38, so its trailing
+  # `lea rcx,[rbx+0x20]` became `+0x58`) in a code cave, with the operands re-based so ersc
+  # still resolves the real allocator getter. Loads BEFORE ersc.dll.
+  "crates/er-ersc-sigshim",
   "crates/er-inventory-sort",
   "crates/er-better-refills",
+  # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
+  # Runs from inside the storage box dialog's own update, which is what confines it to the only
+  # menu with refill options rather than a check that could be got wrong.
+  "crates/er-refill-all",
   "crates/er-armament-icons",
   "crates/er-net-effects",
-  # Hotkey toggle that keeps every loaded enemy under the Charming Branch SpEffect. Standalone
+  # Hotkey toggle that keeps every loaded enemy under a configured SpEffect. Standalone
   # shell with no product dependency: a DirectInput keyboard read and a FrameBegin sweep.
-  "crates/er-charm-enemies",
+  "crates/er-enemynpc-effects",
   "crates/er-player-name-filter",
   "crates/er-save-disable",
   "crates/er-save-suppress",
@@ -27,19 +48,34 @@ members = [
   "crates/effects-data",
   "crates/er-gfx",
   "crates/er-scaleform-hooks",
+  # The boot/loading cover's optional screenshot background: disk discovery (configured path,
+  # pre-decoded cache, newest local Steam screenshot), the WIC decode, and the aspect-cover fill +
+  # bar vignette. Extracted from er-quickload's boot_progress.rs, which had passed the hard Rust
+  # file-size limit; it left first because it reads no game memory, writes no counter and installs
+  # no hook, so nothing about it needed to live in the DLL crate.
+  "crates/er-boot-background",
   "crates/er-loading-bar-core",
   "crates/er-d3d12-compositor",
   "crates/er-loading-bar",
   "crates/er-loading-portrait-core",
   "crates/er-loading-portrait",
+  # The loading cover's one-way release fade at the D3D12 level: its command objects, its root
+  # signature / PSO / texture slot, and the single alpha-blended full-screen frame it composites.
+  # Holds no product decision -- when to fade, at what alpha and what the frame looks like all stay
+  # in er-quickload, which feeds the pixels through a rasterize callback.
+  "crates/er-cover-fade",
   # Save-picker crate extraction (docs/plans/save-picker-crate-extraction.md).
   # (A) the DLL-drawn boot picker + the shared row model + the OS-native dialog surface;
   # (B) the customized System>Quit menu, which depends on (A) one way. The product links
-  # er-quit-menu-core into er_effects_rs.dll; er-quit-menu is an optional harness only.
+  # er-quit-menu-core into er_quickload.dll; er-quit-menu is an optional harness only.
   "crates/er-save-picker-core",
   "crates/er-save-picker",
   "crates/er-save-redirect",
   "crates/er-quit-menu-core",
+  # `CS::ProfileSummary` -- the ten in-memory character records every character-identity
+  # surface reads (the title Continue row, the System>Quit load rows, the ProfileSelect list,
+  # the loading-screen portrait). Was four files of the er-quickload shim, one verb each.
+  "crates/er-profile-summary-core",
   "crates/er-quit-menu",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
@@ -55,6 +91,10 @@ members = [
   # from, and prints ONE warning once the profile has settled. Every detour chains straight back
   # to the original -- it swallows no input, injects none, and writes no game memory.
   "crates/er-hotkey-conflicts",
+  # A walkable route to every other player in the session, drawn on the ground and following the
+  # terrain, with a direction arrow when the navmesh cannot reach them. Standalone shell: reads
+  # the roster, asks the engine's own Havok-AI navmesh, draws through the shared overlay host.
+  "crates/er-invasion-path",
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
   "crates/er-seamless-bugfixes",
@@ -75,7 +115,7 @@ members = [
   "crates/erpx-rs",
   "crates/soulsformats",
   # Host-only shader subcrates (naga/wgpu/bevy). NOT depended on by the root
-  # `er-effects-rs` cdylib, so `cargo xwin check` (which selects only the root
+  # `er-quickload` cdylib, so `cargo xwin check` (which selects only the root
   # package) never cross-compiles them into the game DLL; built only when
   # targeted explicitly (`cargo check -p er-shaderkit ...`).
   "crates/er-shaderkit",
@@ -87,7 +127,7 @@ members = [
   "tools/er-shader-viewer",
 ]
 resolver = "2"
-default-members = ["crates/er-effects-rs"]
+default-members = ["crates/er-quickload"]
 
 # LINT PARITY WITH `../fromsoftware-rs` (2026-08-21).
 #
@@ -114,3 +154,27 @@ warnings = { level = "deny", priority = -1 }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+# LOCAL PATCH of hudhook 0.9.2, vendored at third_party/hudhook.
+#
+# It lives under `third_party/` rather than `vendor/` because that is the directory this
+# repo's own linters already skip (scripts/check-no-lossy-utf8.py and friends), and a house
+# rule applied to somebody else's source is a rule that has to be satisfied again every time
+# the crate is re-vendored.
+#
+# Upstream's `Pipeline::new` starts with `GetClientRect(swap_chain.GetDesc().OutputWindow).unwrap()`.
+# Under Wine/Proton with vkd3d-proton that HWND is sometimes not a live window and the call returns
+# 0x80070578 ERROR_INVALID_WINDOW_HANDLE, so the unwrap panics -- inside an `extern "system"`
+# callback the game owns, which is an abort, not a caught error.
+#
+# MEASURED 2026-08-29, in two different modules and therefore not a property of either:
+# er_build_watermark died that way 229ms after the first backbuffer draw, and with that shell
+# excluded er_net_effects -- the next module to win the overlay-host claim -- died identically at
+# +2060ms. A cosmetic overlay must not be able to end the process.
+#
+# The patch is two functions: `util::try_win_size` returns `Option` instead of unwrapping, and
+# `Pipeline::new` returns `Err(E_HANDLE)` when the window cannot be sized, which puts the failure
+# down hudhook's own "pipeline not initialised" path. 0.9.2 is the latest published version, so
+# there is nothing to upgrade to instead.
+[patch.crates-io]
+hudhook = { path = "third_party/hudhook" }

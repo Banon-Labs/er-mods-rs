@@ -2,7 +2,7 @@
 """Autonomous multi-save-load PROOF monitor + report generator.
 
 For docs/goals/repeatable-multi-save-load-acceptance.md. Given a live (or finished) runtime
-artifact dir (er-effects-telemetry.json + er-effects-autoload-debug.log) and an ordered list of
+artifact dir (er-quickload-telemetry.json + er-quickload-autoload-debug.log) and an ordered list of
 expected load targets, this:
   - watches the RAM telemetry for each distinct STABLE, finished-loading world (mechanism-agnostic:
     it keys on the observed character identity becoming stable, not on any particular reload path);
@@ -300,8 +300,8 @@ def monitor(artifact_dir: Path, targets: list[dict], per_load_deadline: float,
             overall_deadline: float, poll: float, replay: bool, liveness_check: bool = True,
             debug_log_offset: int = 0, drive_slot_file: Path | None = None,
             drive_file_override: Path | None = None) -> dict:
-    telem = artifact_dir / "er-effects-telemetry.json"
-    log = artifact_dir / "er-effects-autoload-debug.log"
+    telem = artifact_dir / "er-quickload-telemetry.json"
+    log = artifact_dir / "er-quickload-autoload-debug.log"
     expected = [
         {**t, "expected": expected_identity(Path(t["file"]), int(t["slot"]))}
         for t in targets

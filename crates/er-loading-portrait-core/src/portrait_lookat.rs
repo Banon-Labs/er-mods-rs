@@ -80,14 +80,9 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_HEAD_IDX;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_NECK_IDX;
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_SPINE2_IDX;
 pub use er_telemetry_core::counters::PROFILE_READBACK_CHECKER;
-pub use er_telemetry_core::counters::PROFILE_READBACK_DEFERRED_NONBLACK;
-/// DEFERRED-READBACK DIAGNOSTIC (H2 vs H3): a readback of the content RT taken at the START of the draw
-/// tick, BEFORE this frame's `drive(r)` queues a new rasterize -- so it captures the texture state left by
-/// the PREVIOUS frame's GX work. If `_deferred_nonblack` is high while the post-drive immediate
-/// `_some - _checker` is ~4, the blackness is a cross-queue TIMING artifact (the rasterize lands but our
-/// same-tick readback races ahead of the game's GX queue) -> fix by syncing/reading at a settled point.
-/// If `_deferred_nonblack` is ALSO ~4, the rasterize genuinely is not landing in this texture (H3).
-pub use er_telemetry_core::counters::PROFILE_READBACK_DEFERRED_SOME;
+// PROFILE_READBACK_DEFERRED_SOME / _NONBLACK re-exports removed 2026-08-31 with the counters: the
+// deferred-readback diagnostic they described was deleted, so both read 0 forever while still being
+// printed as `defer_some=`/`defer_nonblack=`. See er-telemetry-core/src/counters.rs.
 /// DIAGNOSTIC: per-frame readback outcomes -- how many readbacks returned content, and how many of those
 /// were classified as a checker/placeholder (so did NOT publish). `oracle_profile_readback_some` /
 /// `oracle_profile_readback_checker`; `_some - _checker` == the publish count.
@@ -205,6 +200,16 @@ pub use er_telemetry_core::counters::PORTRAIT_SLOT_FLIP_CANDIDATE;
 pub use er_telemetry_core::counters::PORTRAIT_SLOT_FLIP_STREAK;
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_RETARGETS_SUPPRESSED;
 pub use er_telemetry_core::counters::PORTRAIT_WINDOW_TARGET_SLOT;
+pub use er_telemetry_core::counters::{
+    PORTRAIT_WINDOW_TARGET_FROM_PICK, PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS,
+    PORTRAIT_WINDOW_TARGET_SOURCE,
+};
+
+/// `PORTRAIT_WINDOW_TARGET_FROM_PICK`: this window's latch came from a guess.
+pub const PORTRAIT_WINDOW_TARGET_PICK_NO: usize = 0;
+/// `PORTRAIT_WINDOW_TARGET_FROM_PICK`: this window's latch came from the user's explicit pick, so
+/// nothing may replace it for the life of the window.
+pub const PORTRAIT_WINDOW_TARGET_PICK_YES: usize = 1;
 pub const PORTRAIT_SLOT_FLIP_ACCEPT_TICKS: usize = 60;
 /// DEPTH-KEY branch attribution (the black-background-on-reload bug): every key call ends in
 /// exactly one of applied-fresh / applied-cached / NO-MASK (fail-open, the black frames); the
@@ -355,8 +360,6 @@ pub const GX_CLEAR_RTV_WRAPPER_RVA: usize = 0x19e0e10;
 pub const GX_FRAME_CTX_RELEASE_RVA: usize = 0x19eaa20;
 /// Offset of the clear-target subcontext pointer inside a popped GX frame context.
 pub const GX_FRAME_SUBCTX_OFFSET: usize = 0x25c8;
-/// Per-frame alpha-0 clears issued by the pump (`oracle_portrait_alpha0_clears`).
-pub use er_telemetry_core::counters::PROFILE_ALPHA0_CLEARS;
 /// Diagnostic: the captured engine ctx pointer + its `+8` delta-time bits, logged once, to learn whether the
 /// context is a stable persistent structure (safe to reuse across frames) or a transient per-call one.
 pub use er_telemetry_core::counters::PROFILE_DRAW_TASK_CTX_LOGGED;
@@ -366,9 +369,9 @@ pub use er_telemetry_core::counters::PROFILE_MODEL_PARTS_DUMPED;
 /// `oracle_loading_bg_portrait_rgba_version`: once this is ~per-frame, the version should climb past the
 /// old stuck ~4 if the per-frame rasterize lands.
 pub use er_telemetry_core::counters::PROFILE_PERFRAME_MODEL_DRAWS;
-/// Count of direct draws of the POST-Continue SPARED renderer (via the offscreen thunk), and an oracle of
-/// whether it still has a live model post-Continue -- the persistent-model path the cycling menu can't give.
-pub use er_telemetry_core::counters::PROFILE_PERFRAME_SPARED_DRAWS;
+/// Oracle of whether the POST-Continue SPARED renderer still has a live model post-Continue -- the
+/// persistent-model path the cycling menu can't give. (Its companion PROFILE_PERFRAME_SPARED_DRAWS was
+/// removed 2026-08-31: no writer, printed as `spared[... draws=]` forever at 0.)
 pub use er_telemetry_core::counters::PROFILE_SPARED_MODEL_OK;
 /// Q4 keepalive oracle: g_GxDrawContext global (gamebase + this RVA). The offscreen draw rasterizes only
 /// when FUN_1419e5850(ctx) returns non-zero, i.e. the GX render-pass queue is non-empty: *(ctx+0xf8) !=
@@ -424,7 +427,7 @@ pub use er_telemetry_core::counters::PROFILE_LOOKAT_RENDER_DRIVES;
 /// task-group phases; every registration bumps its own `PROFILE_LOOKAT_PHASE_TICKS[i]` each frame, but
 /// only the phase whose index == `PROFILE_LOOKAT_SELECTED_PHASE` actually drives the draw. This lets one
 /// run measure which phases tick per-frame at the menu (vs GameSceneDraw, world-gated ~11%) AND switch
-/// the active draw phase live (write the index to `er-effects-lookat-phase.txt`) without recompiling,
+/// the active draw phase live (write the index to `er-quickload-lookat-phase.txt`) without recompiling,
 /// until one renders the portrait smoothly every frame. Order MUST match `LOOKAT_DRAW_PHASE_NAMES` and
 /// the registration array in `spawn_game_task`. Default = AdhocDraw (index 5): adjacent to GameSceneDraw
 /// (same draw region -> live GX pool) but not world-scene-gated, so the best first bet for per-frame.
@@ -597,12 +600,11 @@ pub use er_telemetry_core::counters::PROFILE_DISPLAY_FRAMES_WINDOW_LAST;
 /// to `_LAST` at the window reset for the oracle, then zeroed for the next window.
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FRAMES_WINDOW;
 pub use er_telemetry_core::counters::PROFILE_DRIVE_FRAMES_WINDOW_LAST;
-/// Same RGB/ALPHA-max stats but from a readback of the texture actually BOUND into the now-loading
-/// container (what GFx samples), not the renderer's offscreen RT. If the RT (above) has content but this
-/// reads black, the sampleable CSGxTexture is a separate/unresolved resource from the render target.
-/// 0xffff sentinel = readback did not run / found no resource this sample.
-pub static PROFILE_BOUND_GX_RGB_MAX: AtomicUsize = AtomicUsize::new(0xffff);
-pub static PROFILE_BOUND_GX_ALPHA_MAX: AtomicUsize = AtomicUsize::new(0xffff);
+// PROFILE_BOUND_GX_RGB_MAX / _ALPHA_MAX removed 2026-08-31. They were meant to carry RGB/alpha-max
+// stats from a readback of the texture actually BOUND into the now-loading container, but no readback
+// ever wrote them. Worse than a plain dead counter: both are sentinel-initialised to 0xffff, so the
+// `loading-portrait-chain: ... boundtex[rgb_max= alpha_max=]` log line printed a plausible-looking
+// 65535 rather than an obviously-absent 0. Re-add WITH the readback that fills them.
 pub use er_telemetry_core::counters::PROFILE_LOOKAT_RT_LASTHASH;
 /// Last slot the oracle sampled (the present-model slot cycles), so "changed" is only counted when two
 /// consecutive samples are the SAME slot -- otherwise a slot switch (different character) would look like

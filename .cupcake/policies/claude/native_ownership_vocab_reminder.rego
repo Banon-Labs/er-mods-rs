@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Advisory native-ownership vocabulary caution
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-NATIVE-OWNERSHIP-VOCAB-REMINDER

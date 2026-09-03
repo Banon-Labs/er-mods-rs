@@ -15,13 +15,16 @@ Pipeline, in order, each step refusing rather than guessing:
   5. SAVE -- scripts/er-pick-save.py. Random, but DECODED FIRST: the character's name, level
      and slot are known and printed before anything launches (AGENTS.md's Autoload Identity
      Launch Gate). `--seed` reproduces a pick exactly.
-  6. STAGE -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-effects.toml
+  6. STAGE -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-quickload.toml
      is never written.
-  7. LAUNCH -- ~/Elden/launch.sh with ME3_PROFILE, detached into its own session.
+  7. LAUNCH -- ~/Elden/launch.sh with ME3_PROFILE, detached into its own session, and with every
+     DLL artifact REDIRECTED into this run's own directory (ARTIFACT_ENV). A game-directory log is
+     single-slot; two launches and the run before last is gone.
   8. TESTIMONY -- the block is printed only after the DLL says, in its own debug log, that it
      loaded and read THIS run's sidecar. Otherwise a FAILED block is printed and the run is
      cleaned up.
-  9. REAP -- a detached reaper removes the staged files when the game exits.
+  9. REAP -- a detached reaper removes the staged files when the game exits. It removes what the
+     run STAGED, never what the run WROTE: the artifact directory survives.
 
 WHY THE BLOCK WAITS FOR THE DLL RATHER THAN THE WINDOW
 ------------------------------------------------------
@@ -62,15 +65,37 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import er_run_lib  # noqa: E402
+from er_artifact_env import ARTIFACT_ENV  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 LAUNCHER = Path.home() / "Elden" / "launch.sh"
 PROFILE_DIR = Path.home() / "Elden"
-AUTOLOAD_LOG_NAME = "er-effects-autoload-debug.log"
-# The log above belongs to THIS DLL and no other. The sidecar-testimony contract is only
+AUTOLOAD_LOG_NAME = "er-quickload-autoload-debug.log"
+# me3's own stdout/stderr for the run, kept beside the run state. See the comment at the Popen
+# that writes it: this used to be DEVNULL, which cost a diagnosis.
+LAUNCHER_LOG_NAME = "me3-launcher.log"
+
+# EVERY PER-RUN ARTIFACT GOES INTO THIS RUN'S OWN DIRECTORY, keyed by the run id this tool already
+# mints. A game-directory artifact is SINGLE-SLOT, not a log that accumulates: `er_game_base::log::
+# begin_fresh_run` renames `<name>` to `<name>.prev` and truncates on the DLL's first write, one
+# generation only. Two launches and the run before last is gone -- and several sessions launch
+# concurrently here, so that is the normal case, not a race. Measured 2026-08-31: an 11:09 launch
+# destroyed the 5.4 MB `er-quickload-continue-trace.log` belonging to the 09:07 run, whose evidence
+# nobody had read.
+#
+# Copying the files out at teardown does not fix that, which is why this is a redirect: by teardown
+# THIS run has already clobbered the previous one's file, and a run that crashes or is killed never
+# reaches a teardown step at all -- exactly the run whose evidence matters most.
+#
+# The table itself lives in `scripts/er_artifact_env.py`, shared with every other Python launcher,
+# because the original bug WAS a table with one line missing. Add a new artifact there, once;
+# `scripts/er-artifact-redirect-audit.py` fails when a knob the DLLs honour is missing from it, and
+# this tool's own selftest asserts `ARTIFACT_ENV` covers every knob the audit finds in the Rust.
+
+# `AUTOLOAD_LOG_NAME` above belongs to THIS DLL and no other. The sidecar-testimony contract is only
 # available when it is loaded, because it is the only shell that reads the sidecar at all.
-PRODUCT_DLL_NAME = "er_effects_rs.dll"
+PRODUCT_DLL_NAME = "er_quickload.dll"
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -91,8 +116,7 @@ SUBPROCESS_TIMEOUT = 28
 
 
 def game_dir() -> Path:
-    steam = Path(os.environ.get("ME3_STEAM_DIR", Path.home() / ".local/share/Steam"))
-    return steam / "steamapps/common/ELDEN RING/Game"
+    return er_run_lib.game_dir()
 
 
 def target_dir() -> Path:
@@ -189,7 +213,54 @@ class LogTail:
         return data[: end + 1].decode("utf-8", errors="replace")
 
 
-def await_testimony(log_path: Path, tail: LogTail, sidecar: Path, launcher_pid: int) -> dict:
+class WatchSet:
+    """Watch several directories at once, so a caller can tail logs that do not share a parent."""
+
+    def __init__(self, directories) -> None:
+        seen: list[Path] = []
+        for directory in directories:
+            if directory not in seen:
+                seen.append(directory)
+        self.watches = [er_run_lib.DirectoryWatch(directory) for directory in seen]
+
+    @property
+    def available(self) -> bool:
+        return any(watch.available for watch in self.watches)
+
+    def wait(self, timeout: float) -> bool:
+        """Return on the FIRST event from any watched directory, or on the timeout.
+
+        One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
+        turn would spend the whole budget on the first quiet directory and never look at the second.
+        """
+        import select
+
+        fds = [watch.fd for watch in self.watches if watch.fd >= 0]
+        if not fds:
+            return False
+        try:
+            ready, _, _ = select.select(fds, [], [], max(0.0, timeout))
+        except OSError:
+            return False
+        for fd in ready:
+            try:
+                os.read(fd, 65536)
+            except OSError:
+                pass
+        return bool(ready)
+
+    def close(self) -> None:
+        for watch in self.watches:
+            watch.close()
+
+    def __enter__(self) -> "WatchSet":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+
+def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> dict:
     """Block until the DLL states it loaded THIS run's sidecar. Event-driven, never a sleep.
 
     Returns a verdict dict with `status`:
@@ -199,20 +270,39 @@ def await_testimony(log_path: Path, tail: LogTail, sidecar: Path, launcher_pid: 
                         ignored the overlay, so the character on screen is NOT the one picked.
                         Conflating the two sends you hunting a launch failure that did not happen.
       silent         -- no `runtime-config: loaded` line at all within the window.
+
+    SEVERAL TAILS, ON PURPOSE. This run redirects the autoload debug log into its own artifact
+    directory (see ARTIFACT_ENV), so that is where the testimony should land. But the redirect rides
+    an environment variable through `launch.sh` -> me3 -> the Proton compat tool -> the game, and if
+    any link drops it the DLL falls back to the game directory and logs there instead. Watching only
+    the redirected path would then report a perfectly healthy run as silent -- the exact false
+    negative this gate has produced twice before, for different reasons. So watch both, and let the
+    verdict say which one spoke.
     """
     wanted = normalize_path(str(sidecar))
     seen: dict | None = None
     deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
-    with er_run_lib.DirectoryWatch(log_path.parent) as watch:
+    with WatchSet([tail.path.parent for tail in tails]) as watch:
         while True:
-            for line in tail.new_text().splitlines():
-                if "runtime-config: loaded" not in line:
-                    continue
-                fields = parse_loaded_line(line)
-                reported = normalize_path(fields.get("sidecar", ""))
-                if reported and reported == wanted:
-                    return {"status": "confirmed", "line": line.strip(), **fields}
-                seen = {"status": "wrong-sidecar", "line": line.strip(), **fields}
+            for tail in tails:
+                for line in tail.new_text().splitlines():
+                    if "runtime-config: loaded" not in line:
+                        continue
+                    fields = parse_loaded_line(line)
+                    reported = normalize_path(fields.get("sidecar", ""))
+                    if reported and reported == wanted:
+                        return {
+                            "status": "confirmed",
+                            "line": line.strip(),
+                            "log": str(tail.path),
+                            **fields,
+                        }
+                    seen = {
+                        "status": "wrong-sidecar",
+                        "line": line.strip(),
+                        "log": str(tail.path),
+                        **fields,
+                    }
             if seen:
                 # The DLL has spoken and it did not name our file. Waiting longer cannot change
                 # that -- it reads its config once, at DllMain.
@@ -235,7 +325,7 @@ def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float)
     """Weaker witness, for a run whose DLL set does not include the product shell.
 
     WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
-    our config read -- but only `er_effects_rs.dll` writes it, because it is the only shell that
+    our config read -- but only `er_quickload.dll` writes it, because it is the only shell that
     reads the sidecar. Once the launcher/watchdog/guard work merged to main, the closure started
     selecting DLL sets that legitimately EXCLUDE that shell, and the gate went on waiting for a
     witness the run never loaded. It then condemned a perfectly healthy game: run
@@ -324,7 +414,7 @@ def running_block(context: dict) -> str:
             "  PROVEN BY     the DLL's own log line, not by the process existing:"
             if context.get("witness") != "weak"
             else "  PROVEN BY     one of this run's DLLs writing its log, not by the process\n"
-            "                existing. This run does not load er_effects_rs.dll, which is the\n"
+            "                existing. This run does not load er_quickload.dll, which is the\n"
             "                only shell that reports a sidecar, so the sidecar was NOT verified:"
         ),
         f"    {context['testimony'][:96]}",
@@ -336,7 +426,14 @@ def running_block(context: dict) -> str:
             "                save the DLLs actually read."
         ),
         f"                re-check later: scripts/er-run-branch.py --status {context['run_id']}",
-        "  cleanup       automatic when the game exits; the next launch collects it otherwise.",
+        f"  me3 log       {context.get('launcher_log', '(not captured)')}",
+        # The artifact dir OUTLIVES the run on purpose. Cleanup removes the files this run STAGED
+        # (profile, sidecar, run.json); it does not touch what the run WROTE, and the directory
+        # survives because it is not empty. That is what makes the run before last still readable.
+        f"  artifacts     {context.get('artifact_dir', '(none)')}",
+        f"                {len(ARTIFACT_ENV)} DLL log/telemetry paths redirected here, so the next",
+        "                launch cannot overwrite them the way a game-directory log is overwritten.",
+        "  cleanup       staged files only, when the game exits; the artifacts above are kept.",
         "=======================================================",
         "```",
     ]
@@ -501,8 +598,20 @@ def launch(args) -> int:
         print(f"  python3 scripts/er-run-reaper.py --run-id {run_id}")
         return EXIT_OK
 
-    log_path = game_dir() / AUTOLOAD_LOG_NAME
-    tail = LogTail(log_path)
+    # This run's own artifact directory: the same per-run directory that already holds run.json,
+    # closure.json and me3-launcher.log, now also the destination for every DLL artifact.
+    artifact_dir = er_run_lib.RUN_STATE_ROOT / run_id
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    artifact_env = {env: str(artifact_dir / name) for env, name in ARTIFACT_ENV.items()}
+    # Named once, for the watchers. `scripts/er-user-session-watch.py` and the other observers used
+    # to look in the game directory unconditionally; with the redirect in place that directory holds
+    # nothing for this run, and a watcher that finds nothing reports a healthy session as silent.
+    artifact_env["ER_RUN_ARTIFACT_DIR"] = str(artifact_dir)
+
+    # Both candidate homes for the DLL's testimony -- the redirect, and the game directory it falls
+    # back to if the environment does not survive the launch chain. See `await_testimony`.
+    log_paths = [artifact_dir / AUTOLOAD_LOG_NAME, game_dir() / AUTOLOAD_LOG_NAME]
+    tails = [LogTail(path) for path in log_paths]
 
     if not LAUNCHER.is_file():
         raise RuntimeError(f"launcher not found: {LAUNCHER}")
@@ -510,18 +619,28 @@ def launch(args) -> int:
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Monotonic-free on purpose: compared against file mtimes, which are wall clock.
     launched_at = time.time()
+    # KEEP me3's OUTPUT. It used to go to DEVNULL, and on 2026-08-29 that was the difference
+    # between diagnosing a run and guessing at it: the game exited ~2.2s in with no coredump, no
+    # OOM, no fatal record and no exit-hook stamp -- meaning nothing faulted and something asked
+    # the process to stop. The only witness to that is me3's own stdout/stderr, and it was being
+    # thrown away. Discarding the loader's output on a probe whose entire purpose is evidence is
+    # a contradiction; this file is small, per-run, and reaped with the rest.
+    launcher_log = er_run_lib.RUN_STATE_ROOT / run_id / LAUNCHER_LOG_NAME
+    launcher_log.parent.mkdir(parents=True, exist_ok=True)
+    launcher_out = launcher_log.open("wb")
     process = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
-        env={**os.environ, "ME3_PROFILE": staged["profile"]},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        env={**os.environ, "ME3_PROFILE": staged["profile"], **artifact_env},
+        stdout=launcher_out,
+        stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
         start_new_session=True,  # survives this shell, and this agent turn
         cwd=str(REPO_ROOT),
     )
+    launcher_out.close()  # the child holds its own duplicate of the descriptor
     state.pid = process.pid
     state.save()
 
@@ -531,9 +650,9 @@ def launch(args) -> int:
         Path(dll).name == PRODUCT_DLL_NAME for dll in staged["dlls"]
     )
     if loads_product_dll:
-        testimony = await_testimony(log_path, tail, Path(staged["sidecar"]), process.pid)
+        testimony = await_testimony(tails, Path(staged["sidecar"]), process.pid)
     else:
-        testimony = await_any_dll_log(log_path.parent, process.pid, launched_at)
+        testimony = await_any_dll_log(game_dir(), process.pid, launched_at)
     if testimony["status"] not in ("confirmed", "confirmed-weak"):
         alive = er_run_lib.process_alive(process.pid)
         if testimony["status"] == "wrong-sidecar":
@@ -558,8 +677,14 @@ def launch(args) -> int:
                     else f"waited {TESTIMONY_BUDGET_SECONDS:.0f}s (wall clock) for ANY DLL log to "
                     f"be written in"
                 ),
-                f"  {log_path if loads_product_dll else log_path.parent}",
-            ]
+            ] + (
+                # Name BOTH watched paths. The DLL writes to the redirect when the environment
+                # survives the launch chain and to the game directory when it does not, and a
+                # failure report that names one of them leaves the reader guessing which.
+                [f"  {path}" for path in log_paths]
+                if loads_product_dll
+                else [f"  {game_dir()}"]
+            )
 
         # Only tear down staged files if nothing is using them. A game still booting will read
         # the sidecar AFTER this point, and deleting it mid-boot both breaks that run and
@@ -603,6 +728,8 @@ def launch(args) -> int:
                 "sidecar": staged["sidecar"],
                 "evidence_class": staged["evidence_class"],
                 "testimony": testimony["line"],
+                "launcher_log": str(launcher_log),
+                "artifact_dir": str(artifact_dir),
                 "witness": "weak" if testimony["status"] == "confirmed-weak" else "strong",
             }
         )
@@ -631,10 +758,37 @@ def _spawn_reaper(run_id: str, monitor: str | None) -> None:
 def status(run_id: str) -> int:
     state = er_run_lib.RunState.load(er_run_lib.RUN_STATE_ROOT / run_id / "run.json")
     if state is None:
-        print(f"no such run: {run_id} (already cleaned up?)")
+        # `run.json` is removed by cleanup; the ARTIFACTS are not. Reporting "no such run" over a
+        # directory full of a finished run's evidence would hide exactly what the redirect exists to
+        # keep -- and a finished run is the normal case when someone comes back to read it.
+        finished = er_run_lib.RUN_STATE_ROOT / run_id
+        if finished.is_dir():
+            print(
+                json.dumps(
+                    {
+                        "run_id": run_id,
+                        "state": "finished (staged files cleaned up; artifacts kept)",
+                        "artifact_dir": str(finished),
+                        "artifacts": [
+                            {"name": path.name, "bytes": path.stat().st_size}
+                            for path in sorted(finished.iterdir())
+                            if path.is_file()
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            return EXIT_OK
+        print(f"no such run: {run_id}")
         return EXIT_ERROR
     alive = er_run_lib.process_alive(state.pid)
     game = er_run_lib.find_game_pids()
+    artifact_dir = er_run_lib.RUN_STATE_ROOT / run_id
+    artifacts = sorted(
+        (path.name, path.stat().st_size)
+        for path in artifact_dir.iterdir()
+        if path.is_file()
+    ) if artifact_dir.is_dir() else []
     print(
         json.dumps(
             {
@@ -644,6 +798,11 @@ def status(run_id: str) -> int:
                 "game_pids": game,
                 "profile": state.profile,
                 "meta": state.meta,
+                "artifact_dir": str(artifact_dir),
+                # Names AND sizes: "the file exists" and "the file has anything in it" are different
+                # claims, and a zero-byte log is the signature of a redirect that reached the DLL
+                # while the run died before writing.
+                "artifacts": [{"name": name, "bytes": size} for name, size in artifacts],
             },
             indent=2,
         )
@@ -661,8 +820,8 @@ def selftest() -> int:
         print(("  ok   " if condition else "  FAIL ") + label)
 
     check(
-        normalize_path("Z:\\home\\banon\\x\\er_effects_rs.toml")
-        == normalize_path("/home/banon/x/er_effects_rs.toml"),
+        normalize_path("Z:\\home\\banon\\x\\er_quickload.toml")
+        == normalize_path("/home/banon/x/er_quickload.toml"),
         "a Wine Z:\\ path and its Linux path compare equal",
     )
     check(
@@ -671,13 +830,13 @@ def selftest() -> int:
     )
 
     line = (
-        "runtime-config: loaded 'Z:/game/er-effects.toml' sidecar=Z:/t/er_effects_rs.toml "
+        "runtime-config: loaded 'Z:/game/er-quickload.toml' sidecar=Z:/t/er_quickload.toml "
         "save_file=Z:/c/ER0000.sl2 slot=3 method=<unset>"
     )
     fields = parse_loaded_line(line)
     check(fields.get("slot") == "3", "the slot is parsed out of the loaded line")
     check(
-        normalize_path(fields.get("sidecar", "")) == normalize_path("/t/er_effects_rs.toml"),
+        normalize_path(fields.get("sidecar", "")) == normalize_path("/t/er_quickload.toml"),
         "the sidecar path is parsed and normalises to the staged path",
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
@@ -721,15 +880,15 @@ def selftest() -> int:
         partial.write_text("", encoding="utf-8")
         partial_tail = LogTail(partial)
         with partial.open("a", encoding="utf-8") as handle:
-            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+            handle.write("runtime-config: loaded 'S:/g/er-quickload.toml' side")
         check(
             partial_tail.new_text() == "",
             "a half-written line is withheld until its newline arrives",
         )
         with partial.open("a", encoding="utf-8") as handle:
-            handle.write("car=Z:/t/er_effects_rs.toml slot=4\n")
+            handle.write("car=Z:/t/er_quickload.toml slot=4\n")
         check(
-            "sidecar=Z:/t/er_effects_rs.toml" in partial_tail.new_text(),
+            "sidecar=Z:/t/er_quickload.toml" in partial_tail.new_text(),
             "the completed line is delivered whole on the next read",
         )
 
@@ -743,7 +902,7 @@ def selftest() -> int:
             "merge_base": "b" * 40,
             "base_ref": "origin/main",
             "dirty": False,
-            "dlls": [("er_effects_rs.dll", "c" * 64)],
+            "dlls": [("er_quickload.dll", "c" * 64)],
             "ersc": "/game/ersc.dll",
             "excluded": [{"artifact": "er_loading_bar.dll", "kind": "present-compositor"}],
             "save": {
@@ -756,7 +915,7 @@ def selftest() -> int:
                 "seed": 7,
             },
             "profile": "/p.me3",
-            "sidecar": "/t/er_effects_rs.toml",
+            "sidecar": "/t/er_quickload.toml",
             "evidence_class": "explicit-save-source",
             "testimony": "runtime-config: loaded ...",
         }
@@ -783,11 +942,11 @@ def selftest() -> int:
         log.write_text("", encoding="utf-8")
         tail = LogTail(log)
         log.write_text(
-            "runtime-config: loaded 'S:/g/er-effects.toml' sidecar=<none> "
+            "runtime-config: loaded 'S:/g/er-quickload.toml' sidecar=<none> "
             "save_file=Z:/other/ER0000.sl2 slot=0\n",
             encoding="utf-8",
         )
-        verdict = await_testimony(log, tail, Path("/t/er_effects_rs.toml"), os.getpid())
+        verdict = await_testimony([tail], Path("/t/er_quickload.toml"), os.getpid())
         check(
             verdict["status"] == "wrong-sidecar",
             f"a loaded-but-different-sidecar line is 'wrong-sidecar', not silence (got {verdict['status']})",
@@ -801,15 +960,42 @@ def selftest() -> int:
         log2.write_text("", encoding="utf-8")
         tail2 = LogTail(log2)
         log2.write_text(
-            "runtime-config: loaded 'S:/g/er-effects.toml' sidecar=Z:/t/er_effects_rs.toml slot=3\n",
+            "runtime-config: loaded 'S:/g/er-quickload.toml' sidecar=Z:/t/er_quickload.toml slot=3\n",
             encoding="utf-8",
         )
-        verdict2 = await_testimony(log2, tail2, Path("/t/er_effects_rs.toml"), os.getpid())
+        verdict2 = await_testimony([tail2], Path("/t/er_quickload.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
+
+        # THE REDIRECT'S OWN FAILURE MODE. The artifacts now go to this run's directory via
+        # ER_QUICKLOAD_*_PATH, which has to survive launch.sh -> me3 -> the compat tool -> the game.
+        # If any link drops the environment the DLL falls back to the game directory, and a gate
+        # watching only the redirected path would call a healthy run silent. Both are watched, and
+        # the verdict must name whichever one actually spoke.
+        redirected = Path(raw) / "run-dir"
+        redirected.mkdir()
+        fallback_dir = Path(raw) / "game-dir"
+        fallback_dir.mkdir()
+        for which, home in (("redirect", redirected), ("fallback", fallback_dir)):
+            live = home / AUTOLOAD_LOG_NAME
+            live.write_text("", encoding="utf-8")
+            other = (fallback_dir if home is redirected else redirected) / AUTOLOAD_LOG_NAME
+            other.write_text("", encoding="utf-8")
+            both = [LogTail(redirected / AUTOLOAD_LOG_NAME), LogTail(fallback_dir / AUTOLOAD_LOG_NAME)]
+            live.write_text(
+                "runtime-config: loaded 'S:/g/er-quickload.toml' "
+                "sidecar=Z:/t/er_quickload.toml slot=3\n",
+                encoding="utf-8",
+            )
+            verdict_either = await_testimony(both, Path("/t/er_quickload.toml"), os.getpid())
+            check(
+                verdict_either["status"] == "confirmed"
+                and verdict_either.get("log") == str(live),
+                f"testimony written to the {which} path confirms, and the verdict names that path",
+            )
 
         # THE FALSE NEGATIVE THAT CONDEMNED A RUNNING GAME, br-20260817-184836-d6a7. Once the
         # launcher/watchdog/guard commits merged to main, the closure legitimately stopped
-        # selecting er_effects_rs.dll -- the only shell that writes a `runtime-config: loaded`
+        # selecting er_quickload.dll -- the only shell that writes a `runtime-config: loaded`
         # line. The gate kept waiting for it and printed ELDEN RING DID NOT START while
         # eldenring.exe was up and the invasion DLL was heartbeating into its own log.
         weak_dir = Path(raw) / "weakwitness"
@@ -833,7 +1019,7 @@ def selftest() -> int:
             writer_weak.join(timeout=2)
         check(
             weak["status"] == "confirmed-weak",
-            f"a run without er_effects_rs.dll confirms from any DLL's log (got {weak['status']})",
+            f"a run without er_quickload.dll confirms from any DLL's log (got {weak['status']})",
         )
         check(
             weak.get("log") == "er-net-effects.log",
@@ -878,18 +1064,18 @@ def selftest() -> int:
 
         split_tail = SignallingTail(split_log)
         with split_log.open("a", encoding="utf-8") as handle:
-            handle.write("runtime-config: loaded 'S:/g/er-effects.toml' side")
+            handle.write("runtime-config: loaded 'S:/g/er-quickload.toml' side")
 
         def finish_line() -> None:
             observed_partial.wait(timeout=5)
             with split_log.open("a", encoding="utf-8") as handle:
-                handle.write("car=Z:/t/er_effects_rs.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
+                handle.write("car=Z:/t/er_quickload.toml save_file=Z:/c/ER0000.sl2 slot=4\n")
 
         writer = threading.Thread(target=finish_line, daemon=True)
         writer.start()
         try:
             verdict_split = await_testimony(
-                split_log, split_tail, Path("/t/er_effects_rs.toml"), os.getpid()
+                [split_tail], Path("/t/er_quickload.toml"), os.getpid()
             )
         finally:
             writer.join(timeout=2)
@@ -925,7 +1111,7 @@ def selftest() -> int:
         try:
             started_at = time.monotonic()
             verdict3 = await_testimony(
-                quiet_log, tail3, Path("/t/er_effects_rs.toml"), os.getpid()
+                [tail3], Path("/t/er_quickload.toml"), os.getpid()
             )
             elapsed = time.monotonic() - started_at
         finally:
@@ -939,6 +1125,127 @@ def selftest() -> int:
             f"a directory churning with events still consumes the FULL wall-clock budget "
             f"(waited {elapsed:.2f}s of 2.0s)",
         )
+
+    # THE ARTIFACT REDIRECT, checked against the audit's view of what the DLLs actually honour.
+    # Two lists that must agree, so neither can rot alone: the audit reads the knobs out of the Rust
+    # sources, and this is the launcher that has to set them. A knob added to the DLLs and not here
+    # means that artifact silently goes back to the single-slot game directory.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "er_artifact_redirect_audit", SCRIPTS / "er-artifact-redirect-audit.py"
+    )
+    audit_module = importlib.util.module_from_spec(spec)
+    # Registered BEFORE execution: `@dataclass` resolves its own module out of `sys.modules` while
+    # the class body runs, and an unregistered module makes that lookup return None.
+    sys.modules[spec.name] = audit_module
+    spec.loader.exec_module(audit_module)
+    honoured = {knob.env for knob in audit_module.discover_knobs()}
+    check(
+        len(honoured) >= 6,
+        f"the audit found the DLLs' redirect knobs to compare against ({len(honoured)})",
+    )
+    check(
+        honoured == set(ARTIFACT_ENV),
+        "ARTIFACT_ENV redirects EVERY knob the DLLs honour "
+        f"(missing here: {sorted(honoured - set(ARTIFACT_ENV))}; "
+        f"here but not honoured: {sorted(set(ARTIFACT_ENV) - honoured)})",
+    )
+    check(
+        len(set(ARTIFACT_ENV.values())) == len(ARTIFACT_ENV),
+        "no two knobs are pointed at the same filename, which would have them overwrite each other",
+    )
+
+    # TWO CONSECUTIVE RUNS, END TO END, with no game: the real ARTIFACT_ENV, the real per-run
+    # directory, the real `RunState.cleanup`, and a stand-in writer that reproduces the DLL's
+    # rotation (`er_game_base::log::begin_fresh_run`: drop `<name>.prev`, rename, truncate).
+    # The claim under test is the only one that matters -- after run 2, run 1 is still readable.
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        game_dir_stub = root / "Game"
+        game_dir_stub.mkdir()
+        previous_root, er_run_lib.RUN_STATE_ROOT = er_run_lib.RUN_STATE_ROOT, root
+
+        def fake_dll_write(env: dict[str, str], marker: str) -> None:
+            """One process's worth of writing, through the same rotation the DLL performs."""
+            for path_text in env.values():
+                path = Path(path_text)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                previous = path.with_name(path.name + ".prev")
+                previous.unlink(missing_ok=True)
+                if path.exists():
+                    path.rename(previous)
+                path.write_text(f"{marker}\n", encoding="utf-8")
+
+        try:
+            run_dirs = []
+            for marker in ("RUN-1 EVIDENCE", "RUN-2 EVIDENCE"):
+                run_id = f"br-selftest-{marker[4]}"
+                run_dir = er_run_lib.RUN_STATE_ROOT / run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                fake_dll_write(
+                    {env: str(run_dir / name) for env, name in ARTIFACT_ENV.items()}, marker
+                )
+                staged = root / f"{run_id}.me3"
+                staged.write_text("profileVersion = \"v1\"\n", encoding="utf-8")
+                state = er_run_lib.RunState(
+                    run_id=run_id, pid=999_999_997, profile=str(staged),
+                    remove_paths=[str(staged)],
+                )
+                state.save()
+                state.cleanup()  # the reaper's job, run immediately
+                run_dirs.append(run_dir)
+
+            first = (run_dirs[0] / AUTOLOAD_LOG_NAME).read_text(encoding="utf-8").strip()
+            second = (run_dirs[1] / AUTOLOAD_LOG_NAME).read_text(encoding="utf-8").strip()
+            check(
+                first == "RUN-1 EVIDENCE" and second == "RUN-2 EVIDENCE",
+                f"after two runs BOTH are readable in their own directories (got {first!r}, "
+                f"{second!r})",
+            )
+            check(
+                all(
+                    (run_dirs[0] / name).is_file() for name in ARTIFACT_ENV.values()
+                ),
+                f"all {len(ARTIFACT_ENV)} of run 1's artifacts survived run 2 and both cleanups",
+            )
+            check(
+                not (run_dirs[0] / f"{AUTOLOAD_LOG_NAME}.prev").exists(),
+                "run 1's file was never rotated, because run 2 never wrote to its path",
+            )
+
+            # THE SAME TWO RUNS WITHOUT THE REDIRECT -- the bug, reproduced, so the check above is
+            # measuring the fix rather than an accident of the fixture.
+            shared = {env: str(game_dir_stub / name) for env, name in ARTIFACT_ENV.items()}
+            fake_dll_write(shared, "RUN-1 EVIDENCE")
+            fake_dll_write(shared, "RUN-2 EVIDENCE")
+            fake_dll_write(shared, "RUN-3 EVIDENCE")
+            surviving = (game_dir_stub / f"{AUTOLOAD_LOG_NAME}.prev").read_text(encoding="utf-8")
+            check(
+                "RUN-1 EVIDENCE" not in surviving,
+                "unredirected, run 1 is GONE two launches later -- the failure being fixed",
+            )
+        finally:
+            er_run_lib.RUN_STATE_ROOT = previous_root
+
+    redirect_block = running_block(
+        {
+            "run_id": "r3", "pid": 1, "started": "now", "branch": "b", "head": "a" * 40,
+            "merge_base": "b" * 40, "base_ref": "origin/main", "dirty": False,
+            "dlls": [("er_quickload.dll", "c" * 64)], "ersc": None, "excluded": [], "save": None,
+            "profile": "/p.me3", "sidecar": "/s.toml", "evidence_class": "x",
+            "testimony": "runtime-config: loaded ...",
+            "artifact_dir": "/cache/er-me3-runs/r3",
+        }
+    )
+    check(
+        "/cache/er-me3-runs/r3" in redirect_block,
+        "the block tells the reader where this run's artifacts are",
+    )
+    check(
+        "artifacts above are kept" in redirect_block,
+        "the block states that cleanup does NOT remove the artifacts, so they can be relied on",
+    )
 
     check(LAUNCHER.is_file(), f"the user launcher this delegates to exists ({LAUNCHER})")
     check((SCRIPTS / "er-run-reaper.py").is_file(), "the reaper it detaches exists")

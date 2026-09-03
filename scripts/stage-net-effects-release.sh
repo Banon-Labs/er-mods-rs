@@ -95,7 +95,7 @@ EOF
 cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
 # Copy to er-net-effects.toml next to eldenring.exe.
 # This file belongs to er_net_effects.dll and is intentionally separate from
-# er-effects-rs product/autoload configuration.
+# er-quickload product/autoload configuration.
 network_sync = true
 # Start with the visible selector overlay shown. Press Alt+Numpad0,
 # Alt+0, or Alt+Insert to hide/show it while in-game.

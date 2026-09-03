@@ -87,7 +87,7 @@ LOBBY_MAP_KEY = "er_invasion_warp_map"
 #: A key no lobby publishes, used to answer the one question hunt's whole mechanism rests on: does
 #: Steam EXCLUDE a lobby that lacks a filtered key? Namespaced so it cannot collide with a real key
 #: and is obvious in a capture.
-PROBE_KEY = "er_effects_probe_absent_key"
+PROBE_KEY = "er_quickload_probe_absent_key"
 PROBE_VALUE = "1"
 
 #: The filter ersc attaches LAST. Injection rides its return, so the probe filter joins the same

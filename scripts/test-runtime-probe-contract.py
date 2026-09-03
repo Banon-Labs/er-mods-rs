@@ -78,11 +78,11 @@ def base_fixture(cap: int) -> None:
     )
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.png\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\ntrap cleanup EXIT\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_QUICKLOAD_TITLE_RESOURCE_MEMORY_GFX ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.png\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\ntrap cleanup EXIT\n",
     )
     write_fixture(
         "scripts/er-readiness-watch.py",
-        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_loading_screen_portrait_capture_ready(t):\n    return bool(t and t.get('oracle_title_portrait_visible_surface_bound'))\ndef maybe_capture_loading_screen_portrait(artifact_dir, telemetry):\n    return Path('loading-screen-portrait-screenshot.jpg').name and 'loading-screen-portrait-screenshot-analysis.json' and 'capture-er-window.py' and 'analyze-loading-screen-portrait-screenshot.py'\n",
+        "from runtime_timeout_cap import runtime_timeout_cap_seconds\nMAX_ALLOWED_RUNTIME_SECONDS = float(runtime_timeout_cap_seconds())\nTIMEOUT_BUDGET_EXHAUSTED = 'timeout_seconds_budget_exhausted'\n# --max-runtime-seconds\nfrom pathlib import Path\ndef telemetry_loading_screen_portrait_capture_ready(t):\n    return bool(t and t.get('oracle_portrait_onto_draw_hits'))\ndef maybe_capture_loading_screen_portrait(artifact_dir, telemetry):\n    return Path('loading-screen-portrait-screenshot.jpg').name and 'loading-screen-portrait-screenshot-analysis.json' and 'capture-er-window.py' and 'analyze-loading-screen-portrait-screenshot.py'\n",
     )
     write_fixture(
         "scripts/capture-er-window.py",
@@ -90,7 +90,7 @@ def base_fixture(cap: int) -> None:
     )
     write_fixture(
         "scripts/er-smoke-driver.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nrequire_runtime_driver_opt_in() { [[ \"${ER_EFFECTS_ALLOW_RUNTIME_DRIVER:-0}\" == \"1\" ]] || exit 2; }\npreflight() { :; }\ndrive() {\n  require_runtime_driver_opt_in\n  preflight\n}\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nrequire_runtime_driver_opt_in() { [[ \"${ER_QUICKLOAD_ALLOW_RUNTIME_DRIVER:-0}\" == \"1\" ]] || exit 2; }\npreflight() { :; }\ndrive() {\n  require_runtime_driver_opt_in\n  preflight\n}\n",
     )
 
 
@@ -156,14 +156,14 @@ def main() -> int:
 
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_QUICKLOAD_TITLE_RESOURCE_MEMORY_GFX ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() {\n  python3 \"$REPO_ROOT/scripts/capture-er-window.py\" \"$ARTIFACT_DIR/teardown-screenshot.jpg\" 2>/dev/null || true\n  terminate_runtime_pids\n}\nrm -f \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.jpg\" \"$ARTIFACT_DIR/loading-screen-portrait-screenshot.txt\"\n",
     )
     assert_rules(checker, {"teardown-screenshot-still-wired"})
     base_fixture(cap)
 
     write_fixture(
         "scripts/run-product-continue-direct-probe.sh",
-        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_EFFECTS_TITLE_RESOURCE_MEMORY_GFX ER_EFFECTS_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() { terminate_runtime_pids; }\nrm -f \"$ARTIFACT_DIR/other.jpg\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nVISUAL_RESOURCE_MUTATION_ENVS=(ER_QUICKLOAD_TITLE_RESOURCE_MEMORY_GFX ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX)\nvisual_resource_mutation_envs_set() { :; }\npreflight() {\n  fatal \"RUNTIME_TELEMETRY_ONLY=1 cannot be combined with mutating visual resource env(s)\"\n}\nterminate_runtime_pids() { :; }\ncleanup() { terminate_runtime_pids; }\nrm -f \"$ARTIFACT_DIR/other.jpg\"\n",
     )
     assert_rules(checker, {"loading-screen-portrait-screenshot-stale-reset-missing"})
     base_fixture(cap)

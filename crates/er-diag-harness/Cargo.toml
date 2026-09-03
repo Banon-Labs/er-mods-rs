@@ -1,0 +1,47 @@
+[package]
+name = "er-diag-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_diag_harness"
+crate-type = ["cdylib"]
+
+# AGENT DIAGNOSTIC HARNESS. Same shape and same contract as `er-input-harness`: a separate
+# cdylib loaded as its own `[[natives]]` entry ALONGSIDE the product, enabled by its mere
+# PRESENCE (no env var, no marker file), and omitted from a production profile.
+#
+# It exists because these three detours used to be installed UNCONDITIONALLY by the shipping
+# `er_quickload.dll` -- from `DllMain` -> `install_profile_and_system_quit_hooks` ->
+# `install_system_quit_duplicate_button_hook`, with no gate at all. Every player was carrying a
+# detour on the sole `msbResCap` writer (fires once per MSB on every boot), on `STEP_LoadListWait`
+# (a per-frame step), and on the three DLC virtual-root entry points, purely so an agent could
+# read a log. None of them feeds an `oracle_*` field, so nothing in the product was reading them
+# back either.
+#
+# DEPENDENCIES ARE DELIBERATELY THIN. `er-hook` for the shared MinHook FFI, `er-game-base` at
+# tier A for fault-safe RAM reads, `game_rva`, the one-shot-truncating logger and the FD4FileCap /
+# DLIO virtual-root walkers. It does NOT link `er-title-flow` or `er-telemetry-core`: a second
+# image linking a FEATURE crate gets its own copy of that feature's statics, threads and tasks,
+# which `scripts/me3-dll-conflicts.toml` classifies as `duplicate-owner`. A trace shell must be
+# co-loadable with the product, so it carries only leaf dependencies.
+[dependencies]
+er-hook = { path = "../er-hook" }
+# Tier A only (default features = zero external deps): shared RVA table, fault-safe readers,
+# fresh-per-run logging, and the FD4FileCap/DLIO walkers the three traces name in every line.
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_SystemServices",
+] }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint set,
+# denied, with zero `# DEBT:` allows AND no crate-root `allow` of any kind -- unlike the sibling
+# shells, whose modules compile on the host with their only callers cfg'd out. Here every module
+# below the entry point is itself `#[cfg(windows)]`, so the host build is the `DllMain` stub alone
+# and is warning-clean. See the comment at the top of `src/lib.rs`.
+[lints]
+workspace = true

@@ -8,11 +8,11 @@ its cache-hit branch, which returns early WITHOUT calling `PushFileCap` -- so no
 and `FUN_1406157f0` (case 2) polls `FD4FileCap::loadState == 4` forever with no timeout.
 
 The candidate fix is the existing opt-in Phase-3 outgoing-world teardown
-(`er-effects-enable-outgoing-teardown.txt`), which routes the outgoing world through
+(`er-quickload-enable-outgoing-teardown.txt`), which routes the outgoing world through
 `CS::InGameStep::_Common_Finalize` so the map FD4FileCap is released and the next `AddEntry` MISSES.
 
 Both arms are DETERMINISTIC and fully agent-driven: load 1 is the configured autoload, and load 2 is
-triggered by the product's own control file (`er-effects-switch-slot.txt`, polled every in-world
+triggered by the product's own control file (`er-quickload-switch-slot.txt`, polled every in-world
 frame), which is the same code path the user's menu click reaches. No input harness, no menu nav.
 
   ARM off  -> expect FROZEN  (reproduces the bug)
@@ -23,7 +23,7 @@ Usage:
   python3 scripts/run-reload-freeze-ab.py --teardown on  --label fix
 
 Save safety: the configured source save is opened READ-ONLY by the DLL (staged into a private tree);
-this script never writes it. It backs up and restores the game-dir er-effects.toml and the marker.
+this script never writes it. It backs up and restores the game-dir er-quickload.toml and the marker.
 """
 
 from __future__ import annotations
@@ -41,6 +41,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_env  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 GAME_DIR = Path(
     os.environ.get(
@@ -49,12 +52,12 @@ GAME_DIR = Path(
     )
 )
 LAUNCHER = Path(os.environ.get("ER_LAUNCHER", str(Path.home() / "Elden/launch.sh")))
-TELEMETRY = GAME_DIR / "er-effects-telemetry.json"
-DEBUG_LOG = GAME_DIR / "er-effects-autoload-debug.log"
-TOML = GAME_DIR / "er-effects.toml"
-MARKER = GAME_DIR / "er-effects-enable-outgoing-teardown.txt"
-SWITCH_SLOT = GAME_DIR / "er-effects-switch-slot.txt"
-SWITCH_SAVE = GAME_DIR / "er-effects-switch-save-file.txt"
+TELEMETRY = GAME_DIR / "er-quickload-telemetry.json"
+DEBUG_LOG = GAME_DIR / "er-quickload-autoload-debug.log"
+TOML = GAME_DIR / "er-quickload.toml"
+MARKER = GAME_DIR / "er-quickload-enable-outgoing-teardown.txt"
+SWITCH_SLOT = GAME_DIR / "er-quickload-switch-slot.txt"
+SWITCH_SAVE = GAME_DIR / "er-quickload-switch-save-file.txt"
 
 # The GAME runtime portion is bounded by the single canonical cap; never hardcode it here.
 CAP_FILE = REPO / ".auto/runtime_timeout_cap_seconds"
@@ -67,7 +70,7 @@ class GameDirWatch:
     """Block until the DLL WRITES something, instead of sleeping on a guess.
 
     The repo bans sleep-as-synchronization (scripts/check-no-timeouts.py `python-sleep-or-wait-for`).
-    The DLL rewrites er-effects-telemetry.json and appends the debug log every frame, so an inotify
+    The DLL rewrites er-quickload-telemetry.json and appends the debug log every frame, so an inotify
     watch on the game dir is the deterministic readiness primitive for "new state exists": each wait
     returns as soon as the game produces evidence, and the budget is only a backstop for a dead game.
     """
@@ -76,15 +79,27 @@ class GameDirWatch:
     IN_CREATE = 0x00000100
     IN_NONBLOCK = 0o4000
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, *directories: Path) -> None:
+        """Watch EVERY directory the DLL might write into, not just the game directory.
+
+        Since 2026-08-31 the artifacts are redirected into this run's own directory, so an inotify
+        watch on the game directory alone would sit quiet through a perfectly healthy run and the
+        readiness primitive would time out on a game that was writing the whole time. The game
+        directory stays watched because the redirect has to survive `launch.sh` -> me3 -> Proton,
+        and when it does not the DLL falls back there.
+        """
         self._libc = ctypes.CDLL("libc.so.6", use_errno=True)
         self.fd = self._libc.inotify_init1(self.IN_NONBLOCK)
         if self.fd < 0:
             raise OSError("inotify_init1 failed")
-        if self._libc.inotify_add_watch(
-            self.fd, str(directory).encode(), self.IN_MODIFY | self.IN_CREATE
-        ) < 0:
-            raise OSError(f"inotify_add_watch failed on {directory}")
+        watched = 0
+        for directory in directories:
+            if self._libc.inotify_add_watch(
+                self.fd, str(directory).encode(), self.IN_MODIFY | self.IN_CREATE
+            ) >= 0:
+                watched += 1
+        if watched == 0:
+            raise OSError(f"inotify_add_watch failed on all of {directories}")
 
     def wait(self, budget_s: float) -> bool:
         """Return True when the game wrote something within the budget, False on a quiet timeout."""
@@ -205,6 +220,27 @@ def tail_oracle(fh) -> list[tuple[int, int, int, int]]:
     return rows
 
 
+
+def redirect_artifacts(art: Path) -> dict[str, str]:
+    """Send this run's DLL artifacts into `art`, and point OUR OWN readers at the same place.
+
+    A game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames `<name>`
+    to `<name>.prev` and truncates on the first write of each process, so two launches lose the run
+    before last -- and several sessions launch concurrently here, which makes that normal rather
+    than a race. Redirecting at LAUNCH is the only fix that works: a copy at teardown can preserve
+    only this run's own output (the previous one was clobbered before the copy existed) and never
+    runs at all when the game crashes, which is the run whose evidence matters most.
+
+    THE READERS MOVE WITH THE WRITER. `TELEMETRY` and `DEBUG_LOG` are rebound here rather than left
+    on the game directory, because a reader on the old path finds nothing for a redirected run and
+    reports it as SILENT -- a false negative indistinguishable from a broken feature.
+    """
+    global TELEMETRY, DEBUG_LOG
+    env = artifact_env(art)
+    TELEMETRY = Path(env["ER_QUICKLOAD_TELEMETRY_PATH"])
+    DEBUG_LOG = Path(env["ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH"])
+    return {**os.environ, **env}
+
 def rotate_outputs(art: Path) -> None:
     """Move the previous run's telemetry/log aside.
 
@@ -299,14 +335,15 @@ def main() -> int:
     proc = subprocess.Popen(
         # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
-        # with ER_EFFECTS_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
+        # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
         cwd=str(LAUNCHER.parent),
+        env=redirect_artifacts(art),
         stdout=open(art / "launcher.log", "w"),
         stderr=subprocess.STDOUT,
     )
     log(f"launched {LAUNCHER} pid={proc.pid}")
-    watch = GameDirWatch(GAME_DIR)
+    watch = GameDirWatch(art, GAME_DIR)
 
     try:
         # ---- phase 1: load1 to world -------------------------------------------------
@@ -363,10 +400,10 @@ def main() -> int:
         # write is what arms the switch and own_load resolves the source at arm time.
         if args.switch_save:
             SWITCH_SAVE.write_text(win_path(Path(args.switch_save)) + "\n")
-            log(f"WROTE er-effects-switch-save-file.txt = {win_path(Path(args.switch_save))}")
+            log(f"WROTE er-quickload-switch-save-file.txt = {win_path(Path(args.switch_save))}")
         SWITCH_SLOT.write_text(f"{args.slot_b}\n")
         t_switch = time.time()
-        log(f"WROTE er-effects-switch-slot.txt = {args.slot_b}  (this is the menu click)")
+        log(f"WROTE er-quickload-switch-slot.txt = {args.slot_b}  (this is the menu click)")
 
         # ---- phase 3: watch for freeze or completion ----------------------------------
         # Reuse the SAME handle from phase 1 -- reopening would re-read load1's oracle lines and

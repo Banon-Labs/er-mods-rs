@@ -1,6 +1,6 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
-use er_effects_data::embedded_effects;
+use er_quickload_data::embedded_effects;
 use er_soulsformats::{ParamRowsResponse, SoulsFormats, recon::parse_recon_report};
 
 const PROGRAM_NAME: &str = "er-param-inspect";
@@ -26,6 +26,10 @@ usage:
   er-param-inspect validate <regulation.bin>
       Check every entry of data/effects.json against SpEffectParam.
       Exits non-zero if any built-in catalog ID has no param row.
+      SUPERSEDED FOR GATING by `python3 scripts/diff-regulation-params.py --effects-json`,
+      which answers the same pass/fail with no Smithbox checkout and no dotnet bridge
+      (row EXISTENCE needs no paramdef), in about a fifth of a second. This mode still
+      exists because it also prints each row's NAME, which does need the bridge.
   er-param-inspect recon <recon-report.txt> [regulation.bin]
       Summarize FastSpEffectRecon output and extract candidate SpEffect IDs.
       With a regulation path, also checks candidates against SpEffectParam.";

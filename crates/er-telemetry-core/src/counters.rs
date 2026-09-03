@@ -118,8 +118,11 @@ pub static PROFILE_LOOKAT_BONE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_LOOKAT_BONES_DUMPED_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_SOME: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_CHECKER: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_READBACK_DEFERRED_SOME: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_READBACK_DEFERRED_NONBLACK: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_READBACK_DEFERRED_SOME / _NONBLACK removed 2026-08-31: the H2-vs-H3 deferred-readback
+// diagnostic that wrote them was deleted (see lookat_bone_hooks.rs, "has been removed now that the
+// ..."), but both were still PRINTED every `lookat-phase-sweep` line as `defer_some=`/`defer_nonblack=`.
+// The 2026-08-31 settlement run emitted six such lines reading 0, which is indistinguishable from
+// "the deferred readback ran and found nothing". er-effects-rs counter census.
 pub static PROFILE_CHECKER_DUMPED: AtomicBool = AtomicBool::new(false);
 pub static PROFILE_PERFRAME_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PERFRAME_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -145,6 +148,27 @@ pub static PORTRAIT_WINDOW_TARGET_SLOT: AtomicUsize = AtomicUsize::new(0);
 /// retargets that were suppressed. Each one is a mid-load face change the user did not see.
 /// Nonzero proves the latch is load-bearing; it was 1 in the 2026-08-02 21:05 repro (slot 0 -> 9).
 pub static PORTRAIT_WINDOW_RETARGETS_SUPPRESSED: AtomicUsize = AtomicUsize::new(0);
+/// Times a window latch adopted from a GUESS was promoted to the user's explicit pick.
+///
+/// The window latch exists so a committed face cannot change mid-load, but it was committing to
+/// whatever the boot autoload guessed before the user had picked anything -- and then refusing the
+/// pick as a "mid-window retarget". Measured 2026-08-26: latched slot 0 at +1061ms with
+/// `picker=None b78=None ac0=-1`, user picked slot 1 eighteen minutes later, retarget suppressed,
+/// and the loading screen showed slot 0's character. Exactly one promotion per window is possible
+/// (a latch that came FROM the pick never yields), so this counts windows the pick rescued.
+pub static PORTRAIT_WINDOW_TARGET_PICK_PROMOTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Whether this window's latched portrait target came from the user's explicit pick (1) or from a
+/// guess (0). Reset with `PORTRAIT_WINDOW_TARGET_SLOT` on window close.
+pub static PORTRAIT_WINDOW_TARGET_FROM_PICK: AtomicUsize = AtomicUsize::new(0);
+/// WHICH source this window's latch rests on, as `PortraitSlotSource::rank()`: 0 = not committed,
+/// 1 = `GameMan.save_slot` (ac0), 2 = the `GameMan+0xb78` load-REQUEST register, 3 = the user's
+/// explicit pick. Reset with `PORTRAIT_WINDOW_TARGET_SLOT` on window close.
+///
+/// `PORTRAIT_WINDOW_TARGET_FROM_PICK` is the top rank collapsed to a bit, and that collapse is
+/// what hid bd `er-effects-rs-fmy6`: a latch taken off a STALE `ac0` and a latch taken off the
+/// user's pick were the same value, so the window refused the load request that superseded it.
+/// The rank is what the yield rule compares; the boolean is kept because it is a published oracle.
+pub static PORTRAIT_WINDOW_TARGET_SOURCE: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_KICK_RENDERER: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_LAST_CONFIRMED_SLOT: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_SLOT_FLIP_CANDIDATE: AtomicUsize = AtomicUsize::new(0);
@@ -177,6 +201,17 @@ pub static PROFILE_DRIVE_FENCE_SKIPS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_DRIVE_CLOTH_SKIPS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_TEARDOWN_FENCE_WAITS: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_TEARDOWN_FENCE_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
+/// Window mark for [`PROFILE_RENDER_DRIVE_HITS`] -- the render-thread tick that owns the RT->SRV
+/// copy, the readback and the publish attempt. This is the tick that actually FEEDS the publish
+/// path, so its per-window delta is the honest "did the portrait pipeline run this window" number.
+/// Distinct from [`PROFILE_DRIVE_FRAMES_WINDOW`], which counts the separate POSE drive (model
+/// update task + per-frame push) and is gated behind `off_resources_ready`.
+pub static PROFILE_RENDER_DRIVE_HITS_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Window mark for [`PORTRAIT_PUMP_BLOCK_OFF_RESOURCE`]. Its per-window delta is the ATTRIBUTION for
+/// a zero pose-drive count: the offscreen nest had a null native GX resource wrapper, so the pose
+/// drive was skipped deliberately (to avoid the FUN_141e90290 rcx=0x20 AV) rather than the head
+/// having "frozen early". Without this delta beside it, `animated 0` reads as a freeze.
+pub static PORTRAIT_PUMP_BLOCK_OFF_RESOURCE_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PUBLISH_CLEAN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PUBLISH_SKIPPED_TORN_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PUBLISH_SKIPPED_UNKEYED_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
@@ -195,11 +230,16 @@ pub static PROFILE_WINDOW_FIRST_KEYED_DISPLAY_LAST: AtomicUsize = AtomicUsize::n
 pub static PROFILE_SLOT_NAMES_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_READBACK_CHECKER_WINDOW_MARK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_TEAR_EMA: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_ALPHA0_CLEARS: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_ALPHA0_CLEARS removed 2026-08-31: the scene-alpha clear it counted is compiled off
+// (lookat_bone_hooks.rs keeps `portrait_alpha0_clear` alive only through a `let _ =` discard), so
+// `oracle_portrait_alpha0_clears` emitted 0 forever. Note the discard `let _ = &PROFILE_ALPHA0_CLEARS`
+// is exactly what made the by-reference write rule read this as a live counter.
 pub static PROFILE_MODEL_PARTS_DUMPED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_DRAW_TASK_CTX_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_PERFRAME_MODEL_DRAWS: AtomicUsize = AtomicUsize::new(0);
-pub static PROFILE_PERFRAME_SPARED_DRAWS: AtomicUsize = AtomicUsize::new(0);
+// PROFILE_PERFRAME_SPARED_DRAWS removed 2026-08-31: no writer, yet printed twice per
+// `lookat-phase-sweep` line as `spared[... draws=]`. PROFILE_PERFRAME_MODEL_DRAWS (written) is the
+// live per-frame draw counter; the spared-model variant counted a draw path that no longer exists.
 pub static PROFILE_SPARED_MODEL_OK: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_GX_QUEUE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_GX_QUEUE_NONEMPTY: AtomicUsize = AtomicUsize::new(0);
@@ -256,7 +296,11 @@ pub static PORTRAIT_RENDER_WINDOW_DONE: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES: AtomicUsize = AtomicUsize::new(0);
+// TITLE_PROFILE_VISIBLE_SURFACE_BIND_REWRITES removed 2026-08-31 with its three
+// TITLE_PROFILE_VISIBLE_SURFACE_BIND_LAST_* siblings in constants/anti_debug.rs: the visible-surface
+// bind rewrite they were declared for was never implemented, so all four read 0 forever while five
+// oracles emitted them -- one of which scripts/er-readiness-watch.py copied into the
+// loading-screen-portrait event JSON.
 pub static LS_PORTRAIT_LAST_W: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_LAST_H: AtomicUsize = AtomicUsize::new(0);
 pub static LS_PORTRAIT_LAST_NEUTRAL_PCT: AtomicUsize = AtomicUsize::new(0);
@@ -414,13 +458,32 @@ pub static TITLE_CUSTOM_COVER_PROFILE_SELECT_BUILDS: AtomicUsize = AtomicUsize::
 pub static TITLE_CUSTOM_COVER_BLACK_BUILDS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_CUSTOM_COVER_RUN_RECURSION: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_CUSTOM_COVER_RUN_CALLS: AtomicUsize = AtomicUsize::new(0);
+// TITLE_CUSTOM_COVER_RUN_CALLS removed 2026-08-31. Its sole writer
+// (title_custom_cover_menu_window_run_hook) was never codegen'd -- the same reason its siblings
+// TITLE_CUSTOM_COVER_RUN_LAST_* are pinned to literals in oracles_title_visuals.rs. It was the fifth
+// AND-term of `oracle_title_loaded_character_portrait_rendered`, whose second and third terms are
+// already pinned `false`/`0`, so that oracle was STRUCTURALLY incapable of being true and has been
+// removed with it rather than left emitting a permanent `false`.
 pub static PAB_RUN_POST_CALLS: AtomicUsize = AtomicUsize::new(0);
 // TITLE_OVERLAY_COVER_* removed 2026-07-31: six counters with zero writers, read once each to emit
 // oracles for the unbuilt custom title render surface (er-effects-rs-trp). A permanently-0 counter
 // cannot be distinguished from a feature that ran and did nothing, so they reported an ABSENT
 // feature as a FAILING one. Re-add with writers at the real render site when trp lands.
+// LOADING-SCREEN OBSERVER INSTALL STATE (2026-08-30). These are not booleans any more: 0 = not
+// attempted yet, 1 = installed, 2 = permanently refused, 3 = created and queued, waiting on
+// MH_ApplyQueued. The third value is the one that had to exist. Five observers used to share one
+// install flag, so a counter reading 0 could equally mean "installed and the game never called it"
+// or "never installed at all", and the run where four detours were created but never applied read
+// exactly like a quiet loading screen. See `install_now_loading_helper_observer_hooks`.
+//
+// `NOW_LOADING_HELPER_HOOKS_INSTALLED` is the AGGREGATE, and it is also the caller's poll gate:
+// it stays 0 for as long as any one observer is still worth retrying, then latches 1 (at least one
+// observer live) or 2 (all five terminal, none live). Callers must keep treating non-zero as "stop
+// calling the installer".
 pub static NOW_LOADING_HELPER_HOOKS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub static NOW_LOADING_HELPER_CTOR_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub static NOW_LOADING_HELPER_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+pub static SCALEFORM_LABEL_GOTO_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static NOW_LOADING_HELPER_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static NOW_LOADING_HELPER_UPDATE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_SCREEN_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -450,7 +513,6 @@ pub static RENDER_LOADING_LAYER_SAMPLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_NONNULL_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_LAST_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK: AtomicUsize = AtomicUsize::new(0);
-pub static LOADING_COVER_SUPPRESS_WRITES: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_KEPT: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_GX_CAPTURE_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static LOADING_BG_PORTRAIT_NONBLACK: AtomicUsize = AtomicUsize::new(0);
@@ -470,6 +532,44 @@ pub static PROFILE_STATS_PUSH_STALE_LAST_VT: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_ROW_POPULATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_SLOT_STATS_CACHE_STATE: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_SLOT_STATS_DECODED: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = save slot N) of slots the per-slot cache NAMED but could not decode STATS for.
+///
+/// This is the semaphore for a Load Character row that renders its header and nothing else. The
+/// two caches already disagreed in the log (`9/10 slots decoded, 10/10 names decoded`, run
+/// `br-20260901-161521-9f7d`) and no oracle carried the disagreement, so a row with a name, no
+/// attribute line and no `WL` reached the user as a visual observation. Non-zero is BAD and names
+/// exactly which rows are affected; the count alone could not, because `decoded < named` does not
+/// say which slot lost its stats.
+pub static PROFILE_SLOT_STATS_NAMED_WITHOUT_STATS_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask (bit N = save slot N) of live `CS::ProfileSummary` slots found marked OCCUPIED while
+/// holding something that is not a character, at a moment when no save picker owned the rows.
+///
+/// This is the RAM signature of `er-effects-rs-fmy6`. The in-game picker renders its browse rows by
+/// writing them into these game-owned records, and every exit is supposed to put the real ones
+/// back; when one did not (the sticky-`committed` defect, 2026-08-29) the labels stayed, and the
+/// user's next loading screens showed `[..] EldenRing` and `[ new ]` as character names beside
+/// `RL 0`. That reached the user as something they SAW, while `oracle_stats_text_slot_decoded` and
+/// `oracle_profile_player_name_slot_decoded` were both already published and nothing compared them.
+///
+/// STICKY BY DESIGN (`fetch_or`, never reset): the per-frame sweep heals an orphaned stomp within a
+/// frame, so a counter that could be cleared would read 0 in the very run that proved the defect.
+/// Non-zero is a DEFECT, not a state, and it names exactly which rows were affected.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_MASK: AtomicUsize = AtomicUsize::new(0);
+/// Cumulative samples the orphaned-record scan judged. Read `PROFILE_SUMMARY_ORPHANED_RECORD_MASK`
+/// WITH this: a zero mask means "checked and clean" only when this is non-zero, and "never checked"
+/// otherwise -- the distinction a bare mask of 0 cannot make, and the one that turns a silent
+/// oracle into false assurance.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_SCANS: AtomicUsize = AtomicUsize::new(0);
+/// 1 once the live record table has been seen holding at least one real character, i.e. the boot
+/// `CS::ProfileSummary::Deserialize` has run and the bytes are worth judging.
+///
+/// A LATCH, NOT A PER-SAMPLE TEST, and that is the whole point. The allocation exists long before
+/// it is filled, so an unread table must not be judged -- but "does THIS sample hold a character"
+/// is the wrong way to ask: a picker staging its browse rows marks the slots past its listing
+/// unoccupied and zeroes all ten records, so during the very defect the mask exists to report, the
+/// table holds no character at all. Latching once and gating on the latch keeps the oracle awake
+/// exactly then.
+pub static PROFILE_SUMMARY_ORPHANED_RECORD_TABLE_READ: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_BIND_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_PRESS_START_GFX_HIDE_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -555,10 +655,6 @@ pub static PROFILE_CAM_LAST_FOV_BITS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_RELEASED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_RESET_LAST_SLACK_BEFORE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_FRAME: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_D180_PRECONFIRM: AtomicUsize = AtomicUsize::new(0);
-pub static INPUT_PROBE_DOWN_LEAF_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_CONFIRM_MODAL_SEEN: AtomicUsize = AtomicUsize::new(0);
 pub static LOAD_CORRECTNESS_DUMPED: AtomicUsize = AtomicUsize::new(0);
@@ -574,6 +670,14 @@ pub static LOADED_PEAK_LEVEL: AtomicUsize = AtomicUsize::new(0);
 pub static LOADED_PEAK_C30: AtomicI32 = AtomicI32::new(0);
 pub static LOADED_PEAK_NAME_LEN: AtomicUsize = AtomicUsize::new(0);
 pub static MSGBOX_STALL_JOB: AtomicUsize = AtomicUsize::new(0);
+/// `MSGBOX_BUILDER_LOG` (== `oracle_msgbox_total_builds`) sampled at the instant a System->Quit
+/// ->Load-Character switch ARMS, so a reload can be scored on its OWN `CS::MessageBoxDialog`
+/// builds instead of the process-lifetime total. `usize::MAX` == no switch has armed yet.
+/// `oracle_msgbox_builds_since_switch_arm` is the delta, and AGENTS.md's "product proof requires
+/// zero MessageBoxDialog builds" is exactly `delta == 0` across the reload. A process-total of 0
+/// proves nothing about a reload that has not happened yet, which is how run
+/// br-20260831-160354-2513 shipped a "zero MessageBox" claim 0.67 s before a build.
+pub static MSGBOX_BUILDS_AT_SWITCH_ARM: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static AUTO_ACCEPT_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static AUTO_ACCEPT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static IN_WORLD_REACHED: AtomicUsize = AtomicUsize::new(0);
@@ -814,54 +918,21 @@ pub static MENU_WINDOW_JOB_FINALIZE_GUARDS: AtomicUsize = AtomicUsize::new(0);
 /// Last window pointer the finalize hook neutralized (diagnostic).
 pub static MENU_WINDOW_JOB_FINALIZE_LAST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 
-/// One-shot install guard for the msb-parse trace (the sole `msbResCap` writer, deobf 0x14021bbf0).
-pub static MSB_PARSE_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the msb-parse trace. 0 = not hooked.
-pub static MSB_PARSE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Total msb load-complete callbacks observed. Read from the `msb-parse #N` debug-log lines;
-/// despite the name pattern there is no `oracle_msb_parse_calls` JSON field.
-pub static MSB_PARSE_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Callbacks that returned with `msbResCap` STILL null -- i.e. the content was null and the parse
-/// silently short-circuited. Every one of these is a cap that will wedge `WorldBlockRes` case 2 if a
-/// block ever waits on it, so a non-zero value here IS the freeze precursor. Read from the
-/// `msb-parse-NULL-RESULT` debug-log lines; there is no JSON export for it.
-pub static MSB_PARSE_TRACE_NULL_RESULTS: AtomicUsize = AtomicUsize::new(0);
-
-/// One-shot install guard for the `STEP_LoadListWait` gate trace (deobf 0x140af1800).
-pub static LOADLIST_WAIT_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the `STEP_LoadListWait` gate trace. 0 = not hooked.
-pub static LOADLIST_WAIT_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Total `STEP_LoadListWait` entries observed. THE ZERO CASE IS THE POINT: the DLC virtual roots are
-/// refilled only from inside this step, so if this stays flat across a profile-switch reload the
-/// blocker is "the step never ran", which is NOT any of its three internal gates. Read from the
-/// `loadlist-wait #N` debug-log lines; there is no JSON export for it.
-pub static LOADLIST_WAIT_TRACE_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Last gate verdict seen, so the trace can log on CHANGE instead of every frame. Encoding matches
-/// `loadlist_wait_verdict`: 0 = both readable gates pass, 1 = loadList state gate, 2 = the `+0xb8`
-/// gate. `usize::MAX` = nothing observed yet.
-pub static LOADLIST_WAIT_TRACE_LAST_VERDICT: AtomicUsize = AtomicUsize::new(usize::MAX);
-/// Entries where BOTH readable gates passed, i.e. the step reached the storage-status check. If this
-/// is non-zero on a reload whose roots stayed empty, the blocker is that third check -- the one the
-/// trace deliberately does NOT evaluate itself, because it allocates and would perturb the run.
-/// Reported inline as `reachedC=` on each `loadlist-wait` line; there is no JSON export for it.
-pub static LOADLIST_WAIT_TRACE_REACHED_STATUS_GATE: AtomicUsize = AtomicUsize::new(0);
-
-/// One-shot install guard for the DLC virtual-root blank/refill traces.
-pub static DLC_ROOTS_TRACE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root BLANK (`FUN_140e06490`). 0 = not hooked.
-pub static DLC_ROOTS_BLANK_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`). 0 = not hooked.
+// THE MSB-PARSE / LOADLIST-WAIT / DLC-ROOT TRACE COUNTERS LEFT THIS TABLE on 2026-08-25, with the
+// traces that owned them: `crates/er-diag-harness/` now holds them as private statics. They were
+// never read outside those traces -- no `push_json_*` consumer, no `oracle_*` field -- and a second
+// image gets its own copy of any static regardless, so hosting them centrally bought nothing.
+//
+// `DLC_ROOTS_REFILL_ORIG` below is the one that stayed: the DLC-root self-heal in
+// `er-title-flow/src/dlc_roots_self_heal.rs` reads it, and it belongs beside that self-heal's own
+// state rather than with the departed traces.
+/// Trampoline for the DLC-root REFILL (`FUN_140e05fb0`), stored by whichever image detoured it.
+///
+/// NOW ALWAYS 0 IN THE PRODUCT, and that is the intended reading. The `er-diag-harness` trace that
+/// used to fill it in lives in another image, so the self-heal takes the `game_rva` fallback it has
+/// always carried: in a product-only profile that resolves the un-detoured native (identical
+/// behaviour), and in a product + harness profile it enters the harness's detour, which forwards.
 pub static DLC_ROOTS_REFILL_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Times the DLC virtual roots were blanked to `L""`. Read from the `dlc-roots-BLANK` log lines.
-pub static DLC_ROOTS_BLANK_CALLS: AtomicUsize = AtomicUsize::new(0);
-/// Trampoline for the DLC-root refill JOB BODY (`FUN_140836f30`). 0 = not hooked.
-pub static DLC_ROOTS_JOB_ORIG: AtomicUsize = AtomicUsize::new(0);
-/// Times the refill JOB BODY ran. THIS IS THE FORK: the job body sits one level above the refill
-/// (body -> FUN_14082e230 -> FUN_14082eb60 -> FUN_14082dbf0 -> FUN_14082faf0 -> ... -> the refill).
-/// If this fires on a reload whose roots stay empty, the job runs and diverges INSIDE, so a native
-/// fix exists. If it stays flat, the job was never enqueued -- and its creator is a dynamically
-/// built `std::function` with no static registration, so there is no call site to patch.
-pub static DLC_ROOTS_JOB_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Cached address of the `mapstudio_dlc2` entry in `DLFileDeviceManager::virtualRoots`.
 pub static DLC_ROOT_ENTRY_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -880,10 +951,6 @@ pub static DLC_ROOT_HEAL_OK: AtomicUsize = AtomicUsize::new(0);
 /// when DLC ownership is unresolved). Non-zero means the heal fired too early and DLC content is
 /// resolving to the wrong place -- treat as a failure, not a partial success.
 pub static DLC_ROOT_HEAL_WRONG: AtomicUsize = AtomicUsize::new(0);
-
-/// Times the DLC virtual-root refill ran. IF THIS TRAILS THE BLANK COUNT ACROSS A RELOAD, the roots
-/// were emptied and never restored -- which is the softlock. Read from the `dlc-roots-REFILL` lines.
-pub static DLC_ROOTS_REFILL_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 /// Blocks whose stale file cap stayed (status=0x04, data=null) AFTER the single native re-enqueue.
 /// This is the DETERMINISTIC "the map archive backing this file is not mounted" signal -- the read
@@ -993,7 +1060,6 @@ pub static SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_SLOT_COUNT: AtomicUsize = AtomicUsi
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_BLOCK_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAMEMAN_LOAD_SAVE_ALLOW_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_GAITEM_DESERIALIZE_SKIP_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1017,7 +1083,7 @@ pub static SWITCH_TRIGGER_DEFERRED_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_MTIME: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_SLOT_CONTROL_PRIMED: AtomicUsize = AtomicUsize::new(0);
 /// Set to 1 by poll_switch_slot_control_file the moment the switch control file
-/// (er-effects-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
+/// (er-quickload-switch-slot.txt) EXISTS, marking that the DETERMINISTIC control-file driver owns the
 /// switch. The product's sq-repro menu-nav switch driver stands down when this is set, so the two
 /// drivers never fight (which was arming extra switches AND suppressing the move-probe). 0 = not seen.
 pub static DETERMINISTIC_SWITCH_DRIVER_ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -1066,8 +1132,11 @@ pub static SYSTEM_QUIT_QUICKLOAD_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(u
 pub static INJECT_NAV_FRAME: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_XINPUT_BUTTONS: AtomicUsize = AtomicUsize::new(0);
 pub static SQ_REPRO_INITIAL_CURSOR: AtomicUsize = AtomicUsize::new(usize::MAX);
-pub static INJECT_NAV_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static INJECT_NAV_CUR_BUTTONS: AtomicUsize = AtomicUsize::new(0);
+// INJECT_NAV_LOG_COUNT (per-tap log throttle) and INJECT_NAV_CUR_BUTTONS (the schedule's per-frame
+// synthesized wButtons) were the INJECT-NAV drive's own counters. Writer and reader both sat behind
+// `inject_nav_enabled()`, which could only return `false`; they were left with no writer AND no
+// reader in any crate and went with the gate (2026-08-26). INJECT_NAV_FRAME above keeps its name
+// but is now purely the sq-repro fresh-packet counter, which is a real live reader.
 pub static FRAME_TIME_WORST_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static MOVE_PROBE_MOVED_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SUPPLIED_MOVEMENT_INPUT_FRAMES: AtomicUsize = AtomicUsize::new(0);
@@ -1107,6 +1176,14 @@ pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static AV_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
+/// Nested VEH entries the crash logger's re-entrancy latch refused.
+///
+/// THE VEH stack-overflow semaphore. Non-zero means describing one fault faulted again on the same
+/// thread and the latch caught it -- the descent that killed ELDEN RING 1.17 with no crash record
+/// on 2026-08-28, at 4704 bytes of stack a level against a 1 MiB stack. A run that reports a fault
+/// AND a non-zero refusal count is telling you the report you are reading is the outermost of a
+/// pile, and that the first `access-violation` line is the real one.
+pub static VEH_REENTRANT_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 /// Crash-log lines spent on the process-FATAL exception codes (stack overflow, fastfail, heap
 /// corruption, illegal instruction). Separate from the general budget below so a first-chance
 /// C++/Rust throw storm cannot consume the line that names the actual kill.
@@ -1352,6 +1429,14 @@ pub static SAVE_PICKER_OVERLAY_HELD_POLLS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGE_CHARS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CHAR_CURSOR: AtomicUsize = AtomicUsize::new(0);
 pub static MISSING_SAVE_PICKER_SELECTED_SLOT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Consecutive ticks the product autoload has read an empty-like profile for its Continue slot.
+/// Reset by a single real read, so it measures an unbroken window rather than uptime; past
+/// `er_title_flow::boot_hold::EMPTY_PROFILE_ESCALATE_TICKS` the autoload rejects its own save
+/// selection and arms the missing-save picker.
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: the empty-profile window has already handed the choice back to the user, so the
+/// loud hand-back line is never repeated (the arm itself is idempotent regardless).
+pub static PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);
@@ -1361,7 +1446,12 @@ pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);
 // frame is an EXPOSURE frame when the game's own CS::LoadingScreen is live but our cover did not
 // draw over the backbuffer -- exactly the frame the user sees vanilla. Counted in the Present
 // detour, attributed to the gate that blocked the composite (`NATIVE_LS_GATE_*`).
-/// Present frames with the native loading screen live and our cover NOT drawn (the defect).
+/// Present frames with the native loading screen live and our cover NOT drawn.
+///
+/// NOT the defect count on its own -- read [`NATIVE_LS_EXPOSURE_OWNED_FRAMES`] for that. This stays
+/// the total of every such frame so no information is lost, but a loading screen the product does
+/// not cover (fast travel, death, area transition) lands in it too; see
+/// [`cover_owns_current_loading_screen`] for the split and the run that forced it.
 pub static NATIVE_LS_EXPOSURE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Present frames with the native loading screen live and our cover drawn (the healthy case).
 pub static NATIVE_LS_COVERED_FRAMES: AtomicUsize = AtomicUsize::new(0);
@@ -1416,6 +1506,10 @@ pub static BOOT_VIEW_DRAW_AFTER_STOP_FIRST_MS: AtomicUsize = AtomicUsize::new(0)
 pub static BOOT_VIEW_STOP_MS: AtomicUsize = AtomicUsize::new(0);
 /// `LOADING_SCREEN_UPDATE_HITS` snapshotted at the stop, so post-release native ticks are a delta.
 pub static BOOT_VIEW_STOP_LS_UPDATE_BASELINE: AtomicUsize = AtomicUsize::new(0);
+/// `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` snapshotted at the stop, so a world load STARTED
+/// after the cover let go is a delta rather than a guess. Read by
+/// [`cover_owns_current_loading_screen`], which is the whole reason it exists.
+pub static BOOT_VIEW_STOP_LOAD_WITNESS: AtomicUsize = AtomicUsize::new(0);
 /// `LOADING_SCREEN_GFX_FADEOUT_HITS` snapshotted at the stop, for the same reason.
 pub static BOOT_VIEW_STOP_LS_FADEOUT_BASELINE: AtomicUsize = AtomicUsize::new(0);
 /// Present frames the post-release watch actually sampled. 0 means the watch never opened, which
@@ -1453,7 +1547,7 @@ pub static NATIVE_LS_ACTIVITY_AFTER_RELEASE_FIRST_MS: AtomicUsize = AtomicUsize:
 // pause/System menu -- the window Escape opens. The job runs once per frame WHILE that menu is up
 // and not at all otherwise, so a tick after a gap IS the open. Ground truth for both halves of
 // that claim, from the shipped DLL's own log of a real session (2026-08-22 11:41:30 run, game-dir
-// `er-effects-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
+// `er-quickload-autoload-debug.log`): zero `02_000_IngameTop` `MenuWindowJob::Run` lines through the
 // first 39.9 s of boot, character load and gameplay, then a first line at `[+39905ms]` carrying
 // `prev=0x0`, followed by lines every ~20-60 ms -- one per presented frame -- while the menu was
 // open.
@@ -1578,6 +1672,25 @@ pub static BOOT_VIEW_RELEASE_HELD_FOR_CONFIRM: AtomicUsize = AtomicUsize::new(0)
 /// Releases that still landed before their switch's character load began. MUST stay 0.
 pub static BOOT_VIEW_RELEASE_BEFORE_CONFIRM: AtomicUsize = AtomicUsize::new(0);
 
+// ABSOLUTE COVER BACKSTOP (user report 2026-08-30). A session spent 7+ minutes with the loading
+// cover full-clearing the backbuffer over live gameplay, with no way out short of killing the
+// process: the proximate cause was a game-image detour that failed to install, and BOTH of the
+// cover's exits are downstream of that same detour (see `boot_view_absolute_backstop`). These
+// three count/describe the last-resort release that now exists for that case.
+//
+// EVERY ONE OF THESE IS A DEFECT REPORT, NOT A SUCCESS. `BOOT_VIEW_BACKSTOP_RELEASES` is expected
+// to be 0 for the life of a healthy process; a run that reports any is a run to investigate, and
+// `_TRIGGER` says which of the two arms fired so the investigation starts in the right place.
+// Deliberately NOT cleared by `boot_view_reset_cover_window`: a detector a rearm can silently
+// empty is not a detector (same argument as `BOOT_VIEW_DRAW_AFTER_STOP_TOTAL`).
+/// Cover windows released by the absolute backstop rather than by any healthy exit. MUST stay 0.
+pub static BOOT_VIEW_BACKSTOP_RELEASES: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view epoch ms at which the backstop FIRST tripped in this process; 0 = never.
+pub static BOOT_VIEW_BACKSTOP_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+/// Which arm tripped most recently: 0 = never, 1 = world demonstrably live under an opaque cover,
+/// 2 = wall-clock cover lifetime exceeded (see `BOOT_VIEW_BACKSTOP_TRIGGER_*`).
+pub static BOOT_VIEW_BACKSTOP_TRIGGER: AtomicUsize = AtomicUsize::new(0);
+
 /// The cover drew this frame -- not an exposure.
 pub const NATIVE_LS_GATE_DREW: usize = 0;
 /// `portrait_overlay_enabled()` was false, so the composite was never attempted.
@@ -1588,7 +1701,67 @@ pub const NATIVE_LS_GATE_EPOCH_WORLD_LIVE: usize = 2;
 pub const NATIVE_LS_GATE_NATIVE_SUPPRESSED: usize = 3;
 /// The composite ran but drew nothing (internally gated: `BOOT_VIEW_STOPPED` / draw-state).
 pub const NATIVE_LS_GATE_COVER_STOPPED: usize = 4;
-pub const NATIVE_LS_GATE_COUNT: usize = 5;
+/// The composite drew nothing because THE PRODUCT DOES NOT COVER THIS LOADING SCREEN -- see
+/// [`cover_owns_current_loading_screen`]. Expected, not a defect: the cover is a boot/character-load
+/// surface, and a fast travel, a death respawn or an area transition is the game's own screen.
+pub const NATIVE_LS_GATE_UNOWNED_LOAD: usize = 5;
+pub const NATIVE_LS_GATE_COUNT: usize = 6;
+
+/// Present frames the cover SHOULD have covered and did not: [`NATIVE_LS_EXPOSURE_FRAMES`] minus
+/// the [`NATIVE_LS_GATE_UNOWNED_LOAD`] frames. THIS is the number an acceptance gate reads.
+pub static NATIVE_LS_EXPOSURE_OWNED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Boot-view epoch ms of the first owned exposure frame (0 = none).
+pub static NATIVE_LS_EXPOSURE_OWNED_FIRST_MS: AtomicUsize = AtomicUsize::new(0);
+
+/// Is the native loading screen currently on screen one the product's loading cover OWNS?
+///
+/// # Why this question has to be asked at all
+///
+/// The cover is not a replacement for every vanilla loading screen. It covers the dead early-boot
+/// gap, and it covers a System->Quit -> Load Character switch, which re-arms it through
+/// `rearm_boot_progress_for_own_menu_load`. Everything else the engine puts a `CS::LoadingScreen`
+/// up for -- a world-map fast travel, a death respawn, a legacy-dungeon transition -- is the game's
+/// own screen and always has been.
+///
+/// Without this distinction `NATIVE_LS_EXPOSURE_FRAMES` files those screens as the vanilla
+/// flash-through defect. Measured 2026-08-30, run `dll:d37d919a`: a fast travel at 589 409 ms
+/// (`02_120_WorldMap` -> confirm `01_010_MessageBox` -> `warp_requested=true` -> `02_903_NowLoading2`)
+/// produced 331 exposure frames filed as `gate=4 (cover-stopped-or-nothing-to-draw)` in a session
+/// with ZERO character reloads (`oracle_current_load_epoch = 0`, no rearm line in 6.8 M lines).
+/// Read literally that says the cover failed on a second load; there was no second load.
+///
+/// # Why the answer must NOT come from the loading screen itself
+///
+/// The tempting signal -- "a native loading screen is up, so re-arm" -- is the one that must never
+/// be used, and the release predicate is why. On a fast travel the player never leaves, so
+/// `boot_view_player_loaded()` is ALREADY true, and the native bar still reaches 998; a cover armed
+/// on that signal is releasable on its first frame (a cover flash over gameplay), and with
+/// `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM` set it is releasable NEVER, because the fresh-deser count it
+/// waits on only bumps when a character deserializes. That second case is an opaque full-screen
+/// cover over live gameplay until `BOOT_VIEW_BACKSTOP_LIFETIME_MS`.
+///
+/// # The three ways the cover can own the screen, and why they cannot hide a real hole
+///
+/// `SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT` is documented as the authoritative total-load witness
+/// -- exactly one increment per forwarded `continue_confirm`, boot included -- and a warp does not
+/// forward one. It bumps at the CONFIRM, i.e. before the character load's screen appears, so the
+/// er-effects-rs-q6vk shape (a switch whose cover released early during the return-to-title
+/// teardown, leaving the character load bare) still answers TRUE here and stays filed as gate 4.
+pub fn cover_owns_current_loading_screen() -> bool {
+    // Armed: either the boot window, or a switch that re-armed it. `BOOT_VIEW_STOPPED` is cleared
+    // by `boot_view_reset_cover_window`, so this is live state and not a one-shot.
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) == 0 {
+        return true;
+    }
+    // A System->Quit switch is in flight. Cleared at the stop, so it covers only the armed span --
+    // the delta below is what carries the case where the cover stopped too early.
+    if BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    // A world load was requested after the cover last let go.
+    SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
+        != BOOT_VIEW_STOP_LOAD_WITNESS.load(Ordering::SeqCst)
+}
 pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MAXX: AtomicUsize = AtomicUsize::new(0);
@@ -1756,6 +1929,18 @@ pub static SAVE_SL2_QUERY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_WATCHDOG_ZERO_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static BLOCK_INPUT_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static XINPUT_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// ONE INSTALLER AT A TIME for the XInput detours (2026-08-31). `XINPUT_GET_STATE_ORIG == 0` was the
+/// only guard, and it is set AFTER `MhHook::new` returns -- so two threads that both read 0 both call
+/// `MhHook::new` on the same export. `install_xinput_block` is reached from the GAME task
+/// (`enforce_input_block_now` / `input_trace_tick`) and from the MENU thread
+/// (`system_quit_menu_window_run_post` -> `save_picker_menu_pump_drive_strip_mouse`), which is the last
+/// live path that can print `HOOK REGISTRY DUPLICATE`. Claimed with compare-exchange and RELEASED again
+/// when the install genuinely did not land: the xinput DLL loads late, so the retry is real and a
+/// permanent claim would disarm the harness on every run where the first attempt is early.
+pub static XINPUT_BLOCK_INSTALL_CLAIMED: AtomicUsize = AtomicUsize::new(0);
+/// Times that claim was released for a retry (no xinput DLL yet, or no hook landed). Non-zero is
+/// normal on an early first attempt; a value that keeps climbing means the DLL never appeared.
+pub static XINPUT_BLOCK_INSTALL_RETRIES: AtomicUsize = AtomicUsize::new(0);
 pub static XINPUT_KEEPALIVE_PACKET: AtomicUsize = AtomicUsize::new(0);
 pub static XINPUT_GET_CAPABILITIES_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static XINPUT_SLOT0_POLLS: AtomicUsize = AtomicUsize::new(0);
@@ -1798,7 +1983,14 @@ pub static OWN_LOAD_BODY_LEN: AtomicUsize = AtomicUsize::new(0);
 pub static OWN_LOAD_FED_BYTES: AtomicUsize = AtomicUsize::new(0);
 pub static OWN_LOAD_WBR_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
 pub static OWN_LOAD_WBR_MAX_PHASE: AtomicU64 = AtomicU64::new(0);
-pub static OWN_LOAD_M28_DISPATCH_FIRED: AtomicUsize = AtomicUsize::new(0);
+// OWN_LOAD_M28_DISPATCH_FIRED removed 2026-08-31. `own_load_m28_dispatch` is VERIFY-ONLY: the
+// AddDefaultFileLoadProcess call it counted was disabled after the block getter AV-faulted, and the
+// function's own comment says "NO native call is made here". The counter therefore could not move,
+// yet it was one of five components of `world_stream_progress_watermark` in
+// scripts/er-readiness-watch.py -- a run-STOPPING stall decision -- documented there as
+// "increments on a working stream". It contributed a constant 0 to every stall verdict. Re-add it
+// WITH the increment if and when the dispatch is re-enabled. OWN_LOAD_M28_DISPATCH_DIAG_CALLS (the
+// throttle counter, genuinely written) stays.
 pub static WBR_PHASE2_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static WBR_UPDATE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static REQUEST_MOVE_MAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -1897,6 +2089,31 @@ pub static SHOW_PROGRESS_SHORTCIRCUIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SHOW_PROGRESS_TYPE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_OPEN_MENU_SUPPRESS_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_OPEN_MENU_SUPPRESSED_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// `TitleTopDialog::open_menu` calls the suppression detour let THROUGH.
+///
+/// The suppressed count alone cannot answer "did the native title ever open its menu again",
+/// because a pass-through is invisible: the detour only logged the calls it DROPPED. That
+/// ambiguity is what made the 2026-08-26 softlock unreadable from the log. Counting both sides
+/// makes the question a subtraction.
+pub static TITLE_OPEN_MENU_PASSTHROUGH_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Pass-throughs that happened AFTER at least one suppression, i.e. after the missing-save hold
+/// released.
+///
+/// **This is the decisive one.** If a late pick releases the hold and this stays 0, the native
+/// title never re-issued `open_menu` and its rows can never be rebuilt with the save present --
+/// the pick must then TRIGGER the open rather than wait for a retry. Nonzero says the title does
+/// retry on its own and the drop-and-retry model is sound.
+pub static TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Boot default-save check vs. the container the runtime opens: 0 = not decided yet,
+/// 1 = the accepted container IS the one the runtime opens (or nothing was accepted and the
+/// picker is armed, which is also correct), 2 = MISMATCH -- the check validated a file the
+/// runtime will never read.
+///
+/// 2 is the 2026-08-26 failure: under Seamless the blank `ER0000.co2` was rejected, the check
+/// fell back to `ER0000.sl2`, and reported "there is a save" while ersc.dll went on to open the
+/// blank `.co2`. It cost two runs while being invisible in RAM. See
+/// `er_save_redirect::boot_save_container_matches_runtime`.
+pub static BOOT_SAVE_CONTAINER_MATCHES_RUNTIME: AtomicUsize = AtomicUsize::new(0);
 pub static SCENE_OBJ_PROXY_CTOR_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_MODE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REOPEN_PENDING: AtomicUsize = AtomicUsize::new(0);
@@ -1909,11 +2126,32 @@ pub static SAVE_PICKER_PICK_REJECT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_RESUBMIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_CANCEL_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_STAGED_ROW_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Times the game's own `CS::ProfileSummary` records were restored over the picker's staged
+/// browse-row labels (telemetry oracle `oracle_save_picker_row_records_restored`; cumulative).
+///
+/// PAIR IT WITH `oracle_save_picker_open_count`. The defect this counter exists to make visible was
+/// diagnosed by ABSENCE -- a 600 MB debug log with pickers opening and not one restore line -- and
+/// absence is exactly what a counter turns into a number. Fewer restores than picker opens means
+/// staged labels were left in a game-owned structure, which is what put `[..] EldenRing` and
+/// `[ new ]` on the user's loading screens as character names.
+pub static SAVE_PICKER_ROW_RECORDS_RESTORED: AtomicUsize = AtomicUsize::new(0);
+/// Of those restores, the ones that could NOT write the snapshot back because the live
+/// `CS::ProfileSummary` allocation is no longer the one it was taken from
+/// (`oracle_save_picker_row_records_restore_unwritable`). The latch is still cleared -- writing a
+/// dead allocation's image into whatever now occupies the address would be worse than losing it --
+/// so a non-zero here means some records stayed stale and the restore knew it.
+pub static SAVE_PICKER_ROW_RECORDS_RESTORE_UNWRITABLE: AtomicUsize = AtomicUsize::new(0);
+/// Staged-row restores that were POSTPONED because `GameDataMan+0x78` read as 0 -- the live
+/// summary is unreadable this frame, which is normal through the clean-title window
+/// (`oracle_save_picker_row_records_restore_deferred`). The snapshot stays armed and the per-frame
+/// sweep retries, so a non-zero here is expected and only interesting beside a non-zero
+/// `_restore_unwritable`.
+pub static SAVE_PICKER_ROW_RECORDS_RESTORE_DEFERRED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_REBUILD_PENDING_DIALOG: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_LIST_BUILDER_RESTAGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Which file-picker surface this session runs: 0 = the in-game `05_010` browser (default),
-/// 1 = the OS common file dialog (`er-effects.toml os_native_save_picker = true`).
+/// 1 = the OS common file dialog (`er-quickload.toml os_native_save_picker = true`).
 ///
 /// A LATCH set once from `init_runtime_config`, not a lazy read, so it is exported even in a
 /// session where no picker ever opens. Every other `SAVE_PICKER_OS_*` counter is only meaningful
@@ -1996,7 +2234,7 @@ pub static SAVE_PICKER_OS_BOOT_PICK_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// and the game is quitting.
 ///
 /// Only trustworthy when `SAVE_PICKER_BOOT_TELEMETRY_FLUSHED` reads 1. When it reads 0 this field
-/// is whatever it was before the cancel, and `er-effects-bootstrap.jsonl`'s
+/// is whatever it was before the cancel, and `er-quickload-bootstrap.jsonl`'s
 /// `boot_picker_cancel_exit` record is the outcome instead.
 pub static SAVE_PICKER_OS_BOOT_CANCEL_EXIT_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// 1 once the picker thread is calling `ExitProcess(0)`.
@@ -2017,7 +2255,7 @@ pub static SAVE_PICKER_OS_BOOT_DEFER_TICKS: AtomicUsize = AtomicUsize::new(0);
 ///
 /// `1` the file you are reading describes the cancel. `0` the flush could not run (the state mutex
 /// was held by a thread that is not giving it back), so **every other field in this file predates
-/// the cancel** and only `er-effects-bootstrap.jsonl` plus the debug log describe the outcome.
+/// the cancel** and only `er-quickload-bootstrap.jsonl` plus the debug log describe the outcome.
 ///
 /// THIS FIELD EXISTS BECAUSE ITS ABSENCE COST A DIAGNOSIS. In run pr109-boot-oscancel-20260730-110704
 /// the cancel worked perfectly and the telemetry showed `boot_state = OPEN`, `cancel_exit_count = 0`
@@ -2324,6 +2562,17 @@ pub static OPTIONS_02_040_QUIT6_RUNTIME_SERVES: AtomicUsize = AtomicUsize::new(0
 pub static OPTIONS_02_040_QUIT6_RUNTIME_FAILURES: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_SCREEN_VERSION: AtomicUsize = AtomicUsize::new(0);
 pub static STATS_TEXT_BUILT: AtomicUsize = AtomicUsize::new(0);
+/// Loading-screen stats panel reads that were DECLINED because the slot's live
+/// `CS::ProfileSummary` record is not a character (telemetry oracle
+/// `oracle_stats_record_not_a_character`; cumulative, never reset).
+///
+/// THE POINT OF THIS COUNTER IS THAT A BLANK PANEL IS AMBIGUOUS. When the in-game save picker's
+/// browse-row labels were left in the live records, the panel rendered `[..] EldenRing` / `[ new ]`
+/// beside `RL 0` -- and once it correctly refuses to draw that, the screen looks EXACTLY like a
+/// build with the stats feature switched off. A non-zero here says "we saw a record and refused
+/// it"; a zero alongside `oracle_stats_text_built > 0` says the feature ran and every record it
+/// read was a character. Nothing else in the telemetry can tell those two apart.
+pub static STATS_RECORD_NOT_A_CHARACTER: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static MODEL_WAS_LIVE: AtomicUsize = AtomicUsize::new(0);
 pub static RETURN_DESKTOP_CONTROLLER_DIAG: AtomicUsize = AtomicUsize::new(0);
@@ -2698,3 +2947,32 @@ pub static SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT: AtomicUsize = AtomicUsize::new(0
 /// [`er_save_suppress::save_job_completions`] sampled immediately before the forced request was
 /// fired. The teardown gate and the degraded completion test are both relative to this.
 pub static SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE: AtomicUsize = AtomicUsize::new(0);
+
+// ---- picked/loose save source: title-time ProfileSummary re-read + deser accounting -------------
+//
+// A save the user picks after boot has no `CS::ProfileSummary` record: the boot save-data job that
+// would have read one already ran and passed through. Without a record the native Continue row has
+// nothing to load, which is why every picked save used to be routed into a TITLE-TIME deserialize
+// -- `0x14067b290`, a function whose only caller in the whole image is `CS::MoveMapStep::DoSaveStuff`
+// (in-world). These counters make both halves of that visible.
+
+/// Total autoload ticks that entered the direct-source summary refresh (throttle denominator).
+pub static PICKED_SUMMARY_REFRESH_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Real re-read attempts made (a file read + record rewrite), not ticks. Capped.
+pub static PICKED_SUMMARY_REFRESH_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+/// How the picked container's summary came to be readable, if it did:
+/// 0 = not (yet) readable, 1 = the game's own boot save-data read had already populated it,
+/// 2 = this DLL re-read it from the staged container at the title.
+pub static PICKED_SUMMARY_REFRESH_STATE: AtomicUsize = AtomicUsize::new(0);
+/// Bitmask of slots whose records the re-read rewrote (bit N = slot N).
+pub static PICKED_SUMMARY_REFRESH_SLOT_MASK: AtomicUsize = AtomicUsize::new(0);
+
+/// Calls into the TITLE-TIME save deserialize `0x14067b290` from the full-read chain.
+///
+/// **A correct run reports 0.** Non-zero means a save was deserialized at the boot title rather
+/// than in-world from `CS::MoveMapStep::DoSaveStuff`, which is the crash this counter exists to
+/// stop being silent about (`gaitemInsTable[-1]` AV at `0x67141a`). It counts the call being made,
+/// not the call surviving, so a run that dies inside the deserialize still leaves the 1 behind.
+pub static TITLE_TIME_DESER_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// Slot (+1, so 0 means "never") passed to the most recent title-time deserialize.
+pub static TITLE_TIME_DESER_LAST_SLOT: AtomicUsize = AtomicUsize::new(0);

@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 # Standalone ME3-loadable DLL for filtering remote player display names copied through
 # CS::SessionManagerPlayerEntryBase::Copy. It intentionally has no dependency on the
-# product er-effects-rs DLL or config surface.
+# product er-quickload DLL or config surface.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
 regex = "1"

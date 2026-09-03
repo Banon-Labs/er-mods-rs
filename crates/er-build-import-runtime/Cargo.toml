@@ -24,6 +24,9 @@ er-build-import-core = { path = "../er-build-import-core" }
 # `cargo test`, and nothing provable that way belongs in this crate.
 er-build-export = { path = "../er-build-export" }
 er-game-base = { path = "../er-game-base" }
+# The upload path speaks the planner's own JSON: the request envelope it wants around a document,
+# and the two ids its answers carry.
+serde_json = "1"
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 

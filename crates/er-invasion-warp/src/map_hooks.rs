@@ -1,5 +1,20 @@
 //! The world-map detours.
 //!
+//! # Where the rest of it lives
+//!
+//! Two child modules came out of this file on 2026-08-30, when it stood 29 lines under the
+//! 3200-line FAIL threshold in `scripts/check-rust-file-sizes.py` with more than one writer still
+//! appending to it. Both are children rather than siblings so that nothing had to be made more
+//! public than it was:
+//!
+//! * [`install`] -- where the three detours go and whether they may go there. Installed ONCE,
+//!   from the game task thread, and the three installs are INDEPENDENT of each other.
+//! * [`msb_catalog`] -- the two session-lifetime caches (MSB invasion points, block -> place
+//!   names). No detour of any kind; the injection and the local-invasion filter both read them.
+//!
+//! What stays here is what runs INSIDE a detour: the ctor handler, the row-filter handler, the
+//! injection they drive, and the row/list layout those three agree on.
+//!
 //! # The injection, and why it is gated the way it is
 //!
 //! The seam is the `CS::WorldMapViewModel` constructor: the pin-row list at `+0x2d8` is populated
@@ -43,7 +58,7 @@
 //! # Hooking rules this module obeys
 //!
 //! * Every detour goes through the `er_hook` UNION, never a bare `MhHook`. Two MinHook instances
-//!   patching one prologue corrupt each other's trampolines, and `er_effects_rs.dll` may be
+//!   patching one prologue corrupt each other's trampolines, and `er_quickload.dll` may be
 //!   loaded alongside this DLL.
 //! * Nothing is patched until [`crate::map_seams::verify_seam`] has re-read the live prologue.
 //! * A handler that finds no trampoline does NOT invent a return value -- see
@@ -71,6 +86,24 @@ use crate::map_seams::WORLDMAP_VIEWMODEL_CTOR;
 // game at all -- out of reach on Linux.
 #[cfg(windows)]
 use crate::map_seams::verify_seam;
+
+mod install;
+mod msb_catalog;
+
+// The two extracted modules are CHILDREN, not siblings, so nothing here had to change visibility
+// to be reachable from them -- a child sees its parent's private items. Only the reverse needs
+// spelling out, which is what these re-exports are. Every path a caller outside this module used
+// before the split still resolves: `crate::map_hooks::msb_coverage`, `::install_map_observers`,
+// `::record_place_name` and the rest are unmoved as far as any caller can tell.
+#[cfg(windows)]
+pub use install::install_map_observers;
+use msb_catalog::msb_has_observed;
+pub use msb_catalog::{
+    block_area_is_legacy, msb_coverage, registry_named_block_count, registry_place_names_for_block,
+};
+#[cfg(windows)]
+pub(crate) use msb_catalog::{harvest_resident_msb_points, refresh_msb_catalog};
+pub(crate) use msb_catalog::{msb_block_targets, record_place_name};
 
 /// Offsets into `CS::WorldMapViewModel` for the pin-row list, from the RE
 /// (docs/plans/world-map-invasion-warp.md section 5.3).
@@ -178,9 +211,6 @@ static OBSERVED_ROW_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Set when `(end - begin)` did not divide by [`PIN_ROW_STRIDE`] -- i.e. the list is not the
 /// shape the RE describes and NOTHING should be appended to it.
 static ROW_STRIDE_MISMATCH: AtomicUsize = AtomicUsize::new(0);
-
-/// Whether the ctor hook is installed.
-static CTOR_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 
 /// A read-back of the pin-row list, as observed on the game thread.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -725,20 +755,26 @@ unsafe fn sample_donor(begin: usize, row_count: usize) -> Option<DonorParamField
 /// exactly as the engine does. `None` when no converter owns the area -- a free fail-closed
 /// filter, so an unplaceable point never becomes a pin.
 ///
+/// # Why the address is a parameter
+///
+/// It was `base + CONVERT_MSB_COORDS_TO_MAP_COORDS.rva`, transmuted per target, ~365 times per
+/// world load -- 365 calls into whatever 1.17 put at a 1.16.2 address. It is now resolved once by
+/// [`crate::map_seams::call_target`] in `inject_pins`, the one place that can refuse for free.
+///
 /// # Safety
-/// Game thread; `view_model` live.
+/// Game thread; `view_model` live; `convert_address` must be the resolved address of
+/// `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` on the running build.
 #[cfg(windows)]
 pub(crate) unsafe fn project_to_map(
-    base: usize,
+    convert_address: usize,
     view_model: usize,
     block_id: u32,
     msb_pos: [f32; 3],
 ) -> Option<(MapCoordinates, usize, u8)> {
     type ConvertFn =
         unsafe extern "system" fn(usize, *mut MapCoordinates, *const u32, *const [f32; 3]) -> bool;
-    let convert: ConvertFn = unsafe {
-        core::mem::transmute(base + crate::map_seams::CONVERT_MSB_COORDS_TO_MAP_COORDS.rva)
-    };
+    // SAFETY: resolved for the running build by the caller; see the doc above.
+    let convert: ConvertFn = unsafe { core::mem::transmute(convert_address) };
     let count =
         unsafe { er_game_base::mem::safe_read_usize(view_model + AREA_CONVERTER_COUNT_OFFSET) }?;
     // Bounded: the field is a DLFixedVector<_, 8>, so a larger value is corruption.
@@ -857,7 +893,15 @@ pub(crate) fn layer_bit_for_converter(
         return None;
     }
     let table: [u8; LAYERED_CONVERTER_COUNT] = core::array::from_fn(|i| {
-        unsafe { er_game_base::mem::safe_read_u8(base + LAYER_ID_TABLE_RVA + i) }.unwrap_or(0xFF)
+        unsafe {
+            er_game_base::mem::safe_read_u8(er_game_base::mem::game_data_addr_offset(
+                base,
+                LAYER_ID_TABLE_RVA,
+                "LAYER_ID_TABLE_RVA",
+                i,
+            ))
+        }
+        .unwrap_or(0xFF)
     });
     // Fail closed on an unexpected table: the layer ids are what the whole mapping rests on.
     if table != [0, 1, 10] {
@@ -1294,6 +1338,36 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         return;
     }
 
+    // RESOLVE EVERY NATIVE CALL BEFORE ANY WORK, and refuse as one unit. Five game functions are
+    // called below and each was a hand-built `base + rva` transmuted into a function pointer --
+    // i.e. a call into whatever 1.17 put at a 1.16.2 address. Resolved TOGETHER and HERE because
+    // partial success is worse than none: the grow helper runs first and RELOCATES the list's
+    // buffer, so a per-use resolve could enlarge the ViewModel and then find the row ctor
+    // unmapped. Here a refusal is also free -- before the leaked param-row slab and before the
+    // projection loop's ~365 native calls.
+    let (
+        Some(convert_address),
+        Some(grow_address),
+        Some(ctor_address),
+        Some(copy_ctor_address),
+        Some(dtor_address),
+    ) = (
+        crate::map_seams::call_target(base, &crate::map_seams::CONVERT_MSB_COORDS_TO_MAP_COORDS),
+        crate::map_seams::call_target(base, &crate::map_seams::WORLDMAP_PIN_LIST_GROW),
+        crate::map_seams::call_target(base, &crate::map_seams::WORLDMAP_PIN_ROW_CTOR),
+        crate::map_seams::call_target(base, &crate::map_seams::WORLDMAP_PIN_ROW_COPY_CTOR),
+        crate::map_seams::call_target(base, &crate::map_seams::WORLDMAP_PIN_ROW_DTOR),
+    )
+    else {
+        INJECTIONS_SKIPPED.fetch_add(1, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "map-inject: at least one of the five world-map natives has no verified address for \
+             the running build (each refusal is logged above); NOTHING is injected and the game \
+             is left exactly as it was"
+        ));
+        return;
+    };
+
     // PROJECT FIRST. The layer bit a pin must carry is decided by WHICH converter accepted it,
     // not by anything readable off the block on its own, so the projection has to run before the
     // param rows are authored rather than after them.
@@ -1301,7 +1375,12 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
         .targets()
         .iter()
         .map(|target| unsafe {
-            project_to_map(base, view_model, target.block.raw(), target.position)
+            project_to_map(
+                convert_address,
+                view_model,
+                target.block.raw(),
+                target.position,
+            )
         })
         .collect();
 
@@ -1540,8 +1619,8 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     // into a new block and destructs the originals, so per-row reserves are O(N*size) and
     // transiently double the peak menu-heap footprint.
     type ReserveFn = unsafe extern "system" fn(usize, usize);
-    let reserve: ReserveFn =
-        unsafe { core::mem::transmute(base + crate::map_seams::WORLDMAP_PIN_LIST_GROW.rva) };
+    // SAFETY: resolved for the running build at the top of this function.
+    let reserve: ReserveFn = unsafe { core::mem::transmute(grow_address) };
     let vector = view_model + PIN_VECTOR_OFFSET;
     // Reserve for the dormant rows in the SAME call. This is the only relocation that will ever
     // happen to this buffer, and it happens at the one moment it is provably safe: no map dialog
@@ -1572,12 +1651,10 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     ) -> *mut u8;
     type CopyCtorFn = unsafe extern "system" fn(*mut u8, *const u8) -> *mut u8;
     type DtorFn = unsafe extern "system" fn(*mut u8);
-    let make_row: MakeRowFn =
-        unsafe { core::mem::transmute(base + crate::map_seams::WORLDMAP_PIN_ROW_CTOR.rva) };
-    let copy_ctor: CopyCtorFn =
-        unsafe { core::mem::transmute(base + crate::map_seams::WORLDMAP_PIN_ROW_COPY_CTOR.rva) };
-    let dtor: DtorFn =
-        unsafe { core::mem::transmute(base + crate::map_seams::WORLDMAP_PIN_ROW_DTOR.rva) };
+    // SAFETY: all three resolved for the running build at the top of this function.
+    let make_row: MakeRowFn = unsafe { core::mem::transmute(ctor_address) };
+    let copy_ctor: CopyCtorFn = unsafe { core::mem::transmute(copy_ctor_address) };
+    let dtor: DtorFn = unsafe { core::mem::transmute(dtor_address) };
 
     let mut injected = 0_usize;
     let mut unplaceable = 0_usize;
@@ -1928,435 +2005,6 @@ unsafe fn inject_pins(base: usize, view_model: usize) {
     ));
 }
 
-/// Invasion points harvested from the MSBs of maps that have been resident this session.
-///
-/// Session-scoped and only ever grown. It is NOT reset when the catalog signature changes: a mod
-/// rewriting the `.aip` table says nothing about MSB region data, and throwing away coverage the
-/// player has already walked past would make the surface worse for no reason.
-static MSB_CATALOG: std::sync::Mutex<
-    er_invasion_warp_core::msb_invasion_points::MsbInvasionCatalog,
-> = std::sync::Mutex::new(er_invasion_warp_core::msb_invasion_points::MsbInvasionCatalog::new());
-
-/// Read every resident map's `InvasionPoint` regions into [`MSB_CATALOG`].
-///
-/// Returns `(points known, maps read)` after the fold. Skips maps already read: the geometry is
-/// static per map, so re-reading one is pure cost on the game thread during a map open.
-///
-/// # Safety
-/// Game task thread, with the world up.
-#[cfg(windows)]
-pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
-    use er_invasion_warp_core::msb_invasion_points::{read_map_invasion_points, resident_blocks};
-    let Ok(base) = er_game_base::mem::game_module_base() else {
-        return (0, 0);
-    };
-    let mut catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    for (block, cap) in unsafe { resident_blocks() } {
-        if catalog.has_observed(block) {
-            continue;
-        }
-        // `None` = the map is not loaded, so nothing was looked at. Leaving it UNOBSERVED is what
-        // makes the harvest accumulate: `resident_blocks` walks the world's static block list, so
-        // most entries are dead caps on any given frame, and absorbing them would mark every map in
-        // the game as read during the boot pass and skip them forever afterwards. That is exactly
-        // what happened before this check existed -- the player reached the Haligtree and its 88
-        // invasion points were never read, because m15 had been "observed" at boot with a null cap.
-        if let Some(read) = unsafe { read_map_invasion_points(base, block, cap) } {
-            // SAY WHAT WAS LOST. The engine reports a region count; only the regions that carry shape
-            // data yield a position. Absorbing the difference in silence is what made "not all of a
-            // dungeon's icons" indistinguishable from "that dungeon only has that many spawns" -- the
-            // catalog recorded 40 points and nothing anywhere recorded that 88 were on offer.
-            //
-            // Emitted per map and only when the two numbers disagree, so a clean read is silent.
-            let dropped = read.dropped();
-            if dropped > 0 {
-                crate::standalone_log(format_args!(
-                    "map-msb: block {:#010x} reported {} InvasionPoint region(s) but only {} carried \
-                     shape data -- {dropped} produced NO pin. The map will show fewer markers than \
-                     the map actually has spawns, and this is the only place that difference is \
-                     visible.",
-                    block.raw(),
-                    read.reported,
-                    read.points.len()
-                ));
-            }
-            catalog.absorb(block, read.points);
-        }
-    }
-    (catalog.len(), catalog.observed_block_count())
-}
-
-/// How many blocks the world lists that the catalog has NOT read yet.
-///
-/// Reported alongside coverage because the two together are the whole diagnosis: `read` climbing
-/// while `pending` falls is the harvest working; `pending` frozen at the full block count means
-/// every cap is dead, which is what a boot-time-only pass looks like.
-/// Whether the harvest has actually READ this block's MSB this session.
-///
-/// Distinguishes "we have not looked inside this dungeon yet" from "we looked and it has no
-/// invasion points at all". Only the first deserves a provisional marker; the second would be a
-/// marker promising an invasion spawn that does not exist.
-#[cfg(windows)]
-fn msb_has_observed(block: er_invasion_warp_core::invasion_warp::BlockKey) -> bool {
-    let catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    catalog.has_observed(block)
-}
-
-#[cfg(not(windows))]
-fn msb_has_observed(_block: er_invasion_warp_core::invasion_warp::BlockKey) -> bool {
-    false
-}
-
-#[cfg(windows)]
-fn msb_pending_block_count() -> usize {
-    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
-    let catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    unsafe { resident_blocks() }
-        .into_iter()
-        .filter(|(block, _)| !catalog.has_observed(*block))
-        .count()
-}
-
-/// Resident blocks that have answered "no invasion points" at least once but are not believed yet.
-///
-/// Without this, a block mid-confirmation and a block never looked at are both just "pending", and
-/// the distinction is the whole point of requiring repeated empty reads: one says the map answered
-/// and we are waiting to be sure, the other says its cap has never been live. A block stuck here
-/// across many seconds while the player stands in it means the map genuinely has no invasion
-/// points; a block that leaves it by gaining points was a mistimed read caught in the act.
-#[cfg(windows)]
-fn msb_confirming_block_count() -> usize {
-    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
-    let catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    unsafe { resident_blocks() }
-        .into_iter()
-        .filter(|(block, _)| catalog.pending_empty_reads(*block) > 0)
-        .count()
-}
-
-#[cfg(not(windows))]
-pub(crate) unsafe fn refresh_msb_catalog() -> (usize, usize) {
-    (0, 0)
-}
-
-/// How many frames between resident-map harvests.
-///
-/// The harvest itself is nearly free once a map has been read (`has_observed` short-circuits), but
-/// the walk that finds the resident maps is a native call plus a list iteration, and running it on
-/// every single frame buys nothing: the resident set only changes when the player crosses a load
-/// boundary. A one-second stride bounds the cost while keeping the latency between "the player walks
-/// into a catacomb" and "that catacomb can contribute a marker" far below the time it takes to open
-/// the map. This is a cost/latency choice, not a guess at an unknown -- correctness does not depend
-/// on the value.
-#[cfg(windows)]
-const MSB_HARVEST_FRAME_STRIDE: u64 = 60;
-
-/// Fold whatever maps are resident right now into the session catalog.
-///
-/// WHY THIS RUNS PER FRAME AND NOT FROM THE MAP HOOK (2026-08-04). The harvest used to be called only
-/// from [`inject_pins`], which runs from the `WorldMapViewModel` constructor -- and that constructor
-/// has exactly one call site in the image, reached only from `STEP_MoveMap_Init`. So it fires once
-/// per WORLD ENTRY, during the loading screen, before `MoveMapStep` has ticked and before the
-/// destination's `MsbResCap`s exist. It does NOT fire when the player opens the map. That made the
-/// legacy-dungeon source able to see only whatever happened to be resident at world-entry init --
-/// never the catacomb the player is standing in. Harvesting from the recurring task instead means a
-/// map contributes from the moment the player has actually been in it.
-///
-/// # Safety
-/// Game task thread with the world up; the harvest itself is fault-closed.
-///
-/// Say which blocks the world list actually offers a usable `MsbResCap` for, and which one the
-/// player is standing in.
-///
-/// THIS IS THE MEASUREMENT, not decoration. The feature rests on one unverified assumption: that
-/// while the player is inside a legacy dungeon, that dungeon's block appears in
-/// `world_block_info()` with a live cap at `+0x48`. Run 1615 falsified the old code but could not
-/// distinguish WHY -- the player was in the Haligtree (`block=0x0f000000`, m15, 88 invasion points
-/// on disk) and coverage read `0 points/111 maps`, which is equally consistent with "m15 is absent
-/// from the list", "m15 is listed but its cap is null", and "the cap is there but the liveness test
-/// rejects it". Those need three different fixes, so the next run must name which one it is.
-///
-/// Bounded: emits only when the non-null-cap population CHANGES, so travelling logs a handful of
-/// lines rather than one per second.
-#[cfg(windows)]
-unsafe fn log_msb_cap_census() {
-    use er_invasion_warp_core::msb_invasion_points::resident_blocks;
-    let Ok(base) = er_game_base::mem::game_module_base() else {
-        return;
-    };
-    let blocks = unsafe { resident_blocks() };
-    let total = blocks.len();
-    let non_null = blocks.iter().filter(|(_, cap)| *cap != 0).count();
-    let live = blocks
-        .iter()
-        .filter(|(_, cap)| unsafe {
-            er_invasion_warp_core::msb_invasion_points::msb_res_cap_looks_live(base, *cap)
-        })
-        .count();
-
-    // The block the player is actually in, and whether the list can see it. `None` means the world
-    // does not list it at all, which would make retrying pointless and send the fix elsewhere.
-    let player_block = unsafe { current_player_block() };
-
-    // The dedup signature MUST include the player's block. Keying it on the population counts alone
-    // meant one block going live while another died -- equal totals -- printed nothing, so walking
-    // into the Haligtree could be silent, which is the one event this census exists to capture.
-    static LAST: AtomicUsize = AtomicUsize::new(usize::MAX);
-    let signature =
-        (total << 44) | (non_null << 34) | (live << 24) | (player_block.unwrap_or(0) as usize >> 8);
-    if LAST.swap(signature, Ordering::SeqCst) == signature {
-        return;
-    }
-    let player_entry = player_block.and_then(|raw| {
-        blocks
-            .iter()
-            .find(|(block, _)| block.raw() == raw)
-            .map(|(_, cap)| *cap)
-    });
-    let player_desc = match (player_block, player_entry) {
-        (None, _) => "player block UNKNOWN".to_owned(),
-        (Some(raw), None) => {
-            format!("player block {raw:#010x} is NOT IN the world block list at all")
-        }
-        (Some(raw), Some(cap)) => {
-            let live = unsafe {
-                er_invasion_warp_core::msb_invasion_points::msb_res_cap_looks_live(base, cap)
-            };
-            format!("player block {raw:#010x} listed with cap {cap:#x} live={live}")
-        }
-    };
-    crate::standalone_log(format_args!(
-        "map-msb-census: {total} blocks listed, {non_null} with a non-null cap, {live} passing the \
-         vtable-in-image liveness test -- {player_desc}"
-    ));
-}
-
-#[cfg(not(windows))]
-unsafe fn log_msb_cap_census() {}
-
-/// The block id the player is currently in, read the same way the warp path reads it.
-#[cfg(windows)]
-unsafe fn current_player_block() -> Option<u32> {
-    let base = er_game_base::mem::game_module_base().ok()?;
-    unsafe { er_invasion_warp_core::warp::current_block_id(base) }
-}
-
-#[cfg(not(windows))]
-unsafe fn current_player_block() -> Option<u32> {
-    None
-}
-
-#[cfg(windows)]
-pub(crate) unsafe fn harvest_resident_msb_points(frame: u64) {
-    if !frame.is_multiple_of(MSB_HARVEST_FRAME_STRIDE) {
-        return;
-    }
-    unsafe { log_msb_cap_census() };
-    let before = msb_coverage();
-    let after = unsafe { refresh_msb_catalog() };
-    if after.1 != before.1 {
-        crate::standalone_log(format_args!(
-            "map-msb: read {} newly resident map(s) -- MSB InvasionPoint coverage is now {} points \
-             across {} maps, {} block(s) still unread (a block stays unread until the player is \
-             actually in it, so this falls as you travel; the .aip table has no entries outside \
-             areas 60/61, making this the ONLY source for a legacy dungeon, cave or catacomb), {} \
-             of them mid-confirmation (answered zero at least once; a zero is not believed until it \
-             repeats, because a constructed-but-unparsed MsbResCap also answers zero and latching \
-             that used to cost the map both its pins and its standby marker for the session)",
-            after.1 - before.1,
-            after.0,
-            after.1,
-            msb_pending_block_count(),
-            msb_confirming_block_count()
-        ));
-    }
-}
-
-/// One pin per map that has MSB invasion points, using that map's first point.
-///
-/// Per-map rather than per-point deliberately: a legacy dungeon is a single place on the world
-/// map, and 285 catacomb points would stack 285 markers on one icon. This matches the
-/// `PinGranularity::PerBlock` the `.aip` side already uses.
-pub(crate) fn msb_block_targets() -> Vec<er_invasion_warp_core::invasion_warp::InvasionWarpTarget> {
-    let catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    // GRANULARITY IS PER-BLOCK FOR THE OVERWORLD AND PER-POINT FOR A LEGACY DUNGEON, because a
-    // "block" means two completely different sizes of place.
-    //
-    // An overworld block is one map tile, so one marker per tile is already fine resolution --
-    // and collapsing is what keeps the `.aip` table's 7073 points down to 365 readable markers.
-    //
-    // A legacy dungeon's block is the WHOLE dungeon. m15 is the entire Haligtree with 88
-    // invasion points; m11 is all of Leyndell with 168. One representative for that is a marker
-    // saying "somewhere in this castle", which throws away everything that makes the feature
-    // worth having there. The user's report was exactly this: warped to the Haligtree and found
-    // a single marker where there should have been dozens.
-    //
-    // Legacy points only ever exist for maps the player has actually been in, so this grows with
-    // where they have been rather than all at once.
-    let mut targets: Vec<_> = catalog
-        .block_representatives()
-        .into_iter()
-        .filter(|point| !block_area_is_legacy(point.block.raw()))
-        .map(|point| {
-            er_invasion_warp_core::invasion_warp::InvasionWarpTarget::new(
-                point.block,
-                point.index,
-                point.position,
-                point.yaw,
-            )
-        })
-        .collect();
-    // ONE ROW PER SEPARABLE MARKER, NOT ONE PER POINT. Per-point was the right correction to
-    // one-per-dungeon, but it overshot: the map projects 1:1 in metres and throws Y away, and a
-    // legacy dungeon is stacked vertically -- so the Haligtree's 88 points draw as ~39 icons and
-    // Volcano Manor's 115 draw as ~21 no matter how many rows are injected. The surplus rows do not
-    // add markers; they stack invisibly on the ones already there while consuming list rows and
-    // Scaleform clip-pool slots, and they make the pin count a claim about resolution the map
-    // cannot honour. Merging per BLOCK (a cluster only means anything within one map's space).
-    let mut legacy_points: std::collections::BTreeMap<u32, Vec<_>> =
-        std::collections::BTreeMap::new();
-    for point in catalog
-        .points()
-        .iter()
-        .filter(|point| block_area_is_legacy(point.block.raw()))
-    {
-        legacy_points
-            .entry(point.block.raw())
-            .or_default()
-            .push(*point);
-    }
-    let legacy_raw: usize = legacy_points.values().map(Vec::len).sum();
-    let mut legacy_merged = 0_usize;
-    for points in legacy_points.values() {
-        let merged = er_invasion_warp_core::msb_invasion_points::merge_coincident_points(
-            points,
-            er_invasion_warp_core::msb_invasion_points::MARKER_MERGE_RADIUS_METRES,
-        );
-        legacy_merged += merged.len();
-        targets.extend(merged.into_iter().map(|point| {
-            er_invasion_warp_core::invasion_warp::InvasionWarpTarget::new(
-                point.block,
-                point.index,
-                point.position,
-                point.yaw,
-            )
-        }));
-    }
-    // ONCE PER OUTCOME, NOT ONCE PER FRAME. The live top-up calls this function every frame, so an
-    // unconditional line here wrote 35,900 duplicates and 11.8 MB into one session's log -- noise
-    // that buries the lines a diagnosis actually needs, and disk I/O on the game task thread.
-    // Latched on (raw, merged), which changes exactly when the harvest does.
-    let outcome = ((legacy_raw as u64) << 32) | legacy_merged as u64;
-    if legacy_raw != legacy_merged && MERGE_REPORTED.swap(outcome, Ordering::SeqCst) != outcome {
-        crate::standalone_log(format_args!(
-            "map-msb: {legacy_raw} legacy invasion point(s) across {} map(s) -> {legacy_merged} \
-             separable marker(s) after merging anything closer than {:.0}m. The map projects 1:1 in \
-             metres and discards height, so points nearer than that cannot draw as separate icons \
-             -- injecting them anyway would stack rows on the same pixel, not add markers.",
-            legacy_points.len(),
-            er_invasion_warp_core::msb_invasion_points::MARKER_MERGE_RADIUS_METRES
-        ));
-    }
-    targets
-}
-
-/// Whether a block belongs to a legacy dungeon rather than the open world.
-///
-/// Areas 60 and 61 are the two overworlds and are the only areas the `.aip` table covers;
-/// everything else is a legacy dungeon, cave, catacomb or tunnel.
-#[must_use]
-pub const fn block_area_is_legacy(block_id: u32) -> bool {
-    let area = block_area(block_id);
-    area != 60 && area != er_invasion_warp_core::param_row::AREA_SHADOW_LANDS
-}
-
-/// MSB invasion-point coverage so far: `(points, maps read)`.
-///
-/// Surfaced on the heartbeat because it is the one number that says whether the legacy-dungeon
-/// source is doing anything at all, and waiting for a map open to find out is too late.
-#[must_use]
-pub fn msb_coverage() -> (usize, usize) {
-    let catalog = match MSB_CATALOG.lock() {
-        Ok(catalog) => catalog,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    (catalog.len(), catalog.observed_block_count())
-}
-
-/// Block -> `PlaceName` text ids, recorded as the pins are named.
-///
-/// The registry stores TARGETS, and the resolved name was previously written into the param row
-/// and then forgotten. The local-invasion filter judges by AREA NAME, so the name has to outlive
-/// injection: this is where it is kept. Recording it here costs one map insert per pin and makes
-/// "somewhere in the Haligtree" answerable later, when a match arrives and the map row list is
-/// long gone.
-///
-/// A block can carry SEVERAL names -- that is the whole point of the "five names, five places to
-/// look" rule -- so the value is a set, not a single id.
-static PLACE_NAMES_BY_BLOCK: std::sync::Mutex<
-    Option<std::collections::BTreeMap<u32, std::collections::BTreeSet<i32>>>,
-> = std::sync::Mutex::new(None);
-
-/// Record a resolved place name for a block. `-1` (unresolved) is dropped: an unnamed pin
-/// contributes no name, and storing the sentinel would make "no name" look like a name.
-pub(crate) fn record_place_name(block: u32, place_name_text_id: i32) {
-    if place_name_text_id < 0 {
-        return;
-    }
-    let Ok(mut guard) = PLACE_NAMES_BY_BLOCK.lock() else {
-        return;
-    };
-    guard
-        .get_or_insert_with(std::collections::BTreeMap::new)
-        .entry(block)
-        .or_default()
-        .insert(place_name_text_id);
-}
-
-/// `PlaceName` text ids known for a block. Empty when the map has not been opened this session --
-/// which the filter treats as "no names", failing closed in the name-based modes rather than
-/// matching everything.
-#[must_use]
-pub fn registry_place_names_for_block(block: u32) -> Vec<i32> {
-    let Ok(guard) = PLACE_NAMES_BY_BLOCK.lock() else {
-        return Vec::new();
-    };
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&block))
-        .map(|names| names.iter().copied().collect())
-        .unwrap_or_default()
-}
-
-/// How many blocks have at least one recorded `PlaceName`.
-///
-/// Exists so a diagnostic can tell "the map has never been opened, so NOTHING has a name" apart
-/// from "the map has been read and this particular block simply has no named pin". Those two have
-/// opposite fixes -- open the map, versus nothing the player can do -- and a message that asserts
-/// the first without checking will confidently give useless advice for the second.
-#[must_use]
-pub fn registry_named_block_count() -> usize {
-    let Ok(guard) = PLACE_NAMES_BY_BLOCK.lock() else {
-        return 0;
-    };
-    guard.as_ref().map_or(0, std::collections::BTreeMap::len)
-}
-
 /// The injected registry, leaked so the confirm hook can map a synthetic entity id back to its
 /// target for the rest of the session. 0 until the injection runs.
 pub(crate) static INJECTED_REGISTRY: AtomicUsize = AtomicUsize::new(0);
@@ -2643,51 +2291,6 @@ pub fn injection_tallies() -> (usize, usize, usize) {
     )
 }
 
-/// Install the world-map observation hooks. Returns how many bound.
-///
-/// Every failure is logged and stepped over: losing an observer costs this run its evidence and
-/// nothing else. Nothing here can disarm the already-proven warp.
-///
-/// # Safety
-///
-/// Call once, from the game task thread after the runtime is up.
-#[cfg(windows)]
-pub unsafe fn install_map_observers() -> usize {
-    if CTOR_HOOK_INSTALLED.swap(1, Ordering::SeqCst) != 0 {
-        return 0;
-    }
-    let address = match unsafe { verify_seam(&WORLDMAP_VIEWMODEL_CTOR) } {
-        Ok(address) => address,
-        Err(error) => {
-            crate::standalone_log(format_args!("map-hooks: {error}"));
-            return 0;
-        }
-    };
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            worldmap_viewmodel_ctor_hook as er_hook::UnionFn,
-            &ORIG_WORLDMAP_VIEWMODEL_CTOR,
-        )
-    } {
-        Ok(()) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: hooked {} @0x{address:x} (verified prologue)",
-                WORLDMAP_VIEWMODEL_CTOR.name
-            ));
-            1 + unsafe { install_row_filter_observer() } + unsafe { install_confirm_interceptor() }
-        }
-        Err(status) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: union registration for {} @0x{address:x} failed: {status:?} -- the \
-                 map surface stays absent; the F7/F8/F9 warp is unaffected",
-                WORLDMAP_VIEWMODEL_CTOR.name
-            ));
-            0
-        }
-    }
-}
-
 /// Observed row count, or `None` if the ctor has not fired or the stride did not divide.
 #[must_use]
 pub fn observed_row_count() -> Option<usize> {
@@ -2707,88 +2310,6 @@ pub fn viewmodel_ctor_hits() -> usize {
 #[must_use]
 pub fn row_stride_mismatches() -> usize {
     ROW_STRIDE_MISMATCH.load(Ordering::SeqCst)
-}
-
-/// Install the row-filter observer. Failure costs the visibility oracle and nothing else.
-///
-/// # Safety
-/// Game task thread.
-#[cfg(windows)]
-unsafe fn install_row_filter_observer() -> usize {
-    let seam = crate::map_seams::WORLDMAP_ROW_FILTER;
-    let address = match unsafe { verify_seam(&seam) } {
-        Ok(address) => address,
-        Err(error) => {
-            crate::standalone_log(format_args!("map-hooks: {error}"));
-            return 0;
-        }
-    };
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            worldmap_row_filter_hook as er_hook::UnionFn,
-            &ORIG_ROW_FILTER,
-        )
-    } {
-        Ok(()) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: observing {} @0x{address:x} -- this is the visibility oracle",
-                seam.name
-            ));
-            1
-        }
-        Err(status) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: union registration for {} failed: {status:?} -- pins may still be \
-                 fine, but this run cannot say whether they pass the filter",
-                seam.name
-            ));
-            0
-        }
-    }
-}
-
-/// Install the confirm interceptor. Without it, selecting an injected pin softlocks, so a
-/// failure here is logged loudly -- the pins are already in the list by then.
-///
-/// # Safety
-/// Game task thread.
-#[cfg(windows)]
-unsafe fn install_confirm_interceptor() -> usize {
-    let seam = crate::map_seams::WARP_JOB_ASSEMBLER;
-    let address = match unsafe { verify_seam(&seam) } {
-        Ok(address) => address,
-        Err(error) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: {error} -- WITHOUT THIS HOOK, SELECTING AN INJECTED PIN SOFTLOCKS"
-            ));
-            return 0;
-        }
-    };
-    match unsafe {
-        er_hook::register_union_hook(
-            address,
-            crate::map_confirm::warp_job_assembler_hook as er_hook::UnionFn,
-            &crate::map_confirm::ORIG_WARP_JOB_ASSEMBLER,
-        )
-    } {
-        Ok(()) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: intercepting {} @0x{address:x} -- selecting an invasion pin is now \
-                 answered by us instead of handing a synthetic id to Lua_Warp",
-                seam.name
-            ));
-            1
-        }
-        Err(status) => {
-            crate::standalone_log(format_args!(
-                "map-hooks: union registration for {} failed: {status:?} -- SELECTING AN \
-                 INJECTED PIN WILL SOFTLOCK",
-                seam.name
-            ));
-            0
-        }
-    }
 }
 
 #[cfg(test)]

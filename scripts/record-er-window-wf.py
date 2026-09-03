@@ -154,7 +154,7 @@ def main() -> int:
     parser.add_argument("--stable-interval", type=float, default=0.15)
     parser.add_argument("--allow-unfocused", action="store_true", help="debug only: record even if Hyprland does not report focusHistoryID==0")
     parser.add_argument("--stop-after-player-present", action="store_true", help="keep recording until oracle_player_present, then hold before stopping")
-    parser.add_argument("--telemetry", type=Path, help="telemetry JSON path; defaults to <artifact_dir>/er-effects-telemetry.json")
+    parser.add_argument("--telemetry", type=Path, help="telemetry JSON path; defaults to <artifact_dir>/er-quickload-telemetry.json")
     parser.add_argument("--min-seconds", type=float, default=0.0, help="minimum recording duration even if the stop condition appears early")
     parser.add_argument("--post-confirm-seconds", type=float, default=8.0, help="extra recording time after player-present is first observed")
     args = parser.parse_args()
@@ -174,7 +174,7 @@ def main() -> int:
     size = list(map(int, w["size"]))
     geom = f"{at[0]},{at[1]} {size[0]}x{size[1]}"
     out = args.artifact_dir / f"wf-{args.fps:g}fps.mkv"
-    telemetry_path = args.telemetry or (args.artifact_dir / "er-effects-telemetry.json")
+    telemetry_path = args.telemetry or (args.artifact_dir / "er-quickload-telemetry.json")
     meta = {
         "window": summarize(w),
         "stability_proof": proof,

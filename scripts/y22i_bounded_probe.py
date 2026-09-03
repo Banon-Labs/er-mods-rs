@@ -12,14 +12,43 @@ loop deterministically. Every subprocess call carries an explicit <=30s timeout.
 Usage: python3 scripts/y22i_bounded_probe.py [hard_cap_seconds]
 Artifacts (data only) go to /tmp; this source lives in-repo per script-authoring policy.
 """
-import subprocess, sys, time, json
+import os, subprocess, sys, time, json
+from pathlib import Path
 
-ME3 = "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe"
-DLL = r"C:\Users\choza\build\y22i\guard\er-effects-rs\target\x86_64-pc-windows-msvc\release\er_effects_rs.dll"
-CWD = "/mnt/c/Users/choza/build/y22i"
-GAMEDIR = "/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"
-LOG = GAMEDIR + "/er-effects-autoload-debug.log"
-TELE = GAMEDIR + "/er-effects-telemetry.json"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import resolve_artifact  # noqa: E402
+
+ME3 = os.environ.get("ME3_BIN", "/mnt/c/Users/choza/AppData/Local/garyttierney/me3/bin/me3.exe")
+DLL = os.environ.get(
+    "ER_QUICKLOAD_DLL",
+    r"C:\Users\choza\build\y22i\guard\er-mods-rs\target\x86_64-pc-windows-msvc\release\er_quickload.dll",
+)
+CWD = os.environ.get("ER_PROBE_CWD", "/mnt/c/Users/choza/build/y22i")
+# The `/mnt/c/SteamLibrary/...` default is WSL-era and does not exist on a native Linux Steam box,
+# where a `find` over it comes back empty and reads as "the file is missing" rather than "you looked
+# in the wrong place". Env-overridable, with the native install as the fallback.
+GAMEDIR = os.environ.get(
+    "ER_GAME_DIR",
+    str(Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"),
+)
+
+# WHERE THIS RUN'S ARTIFACTS ACTUALLY ARE.
+#
+# Launchers redirect the DLL's per-run artifacts into the run's OWN directory (`ER_QUICKLOAD_*_PATH`)
+# because a game-directory artifact is SINGLE-SLOT: `er_game_base::log::begin_fresh_run` renames
+# `<name>` to `<name>.prev` on the first write of each process, so two launches lose the run before
+# last. A reader pinned to the game directory therefore finds NOTHING for a redirected run and
+# reports a perfectly healthy run as silent -- a false negative indistinguishable from a broken
+# feature, which is the more dangerous half of that change. `resolve_artifact` looks in the run
+# directory first and falls back to the game directory, by EXISTENCE, so both cases are read.
+
+
+def LOG():
+    return str(resolve_artifact("er-quickload-autoload-debug.log", GAMEDIR))
+
+
+def TELE():
+    return str(resolve_artifact("er-quickload-telemetry.json", GAMEDIR))
 TASKLIST = "/mnt/c/Windows/System32/tasklist.exe"
 TASKKILL = "/mnt/c/Windows/System32/taskkill.exe"
 POLL_SECS = 3.0
@@ -32,8 +61,8 @@ def up(name):
 
 def run_start_offset():
     try:
-        lines = open(LOG, encoding="utf-8", errors="replace").readlines()
-        idx = [i for i, l in enumerate(lines) if "er-effects log opened" in l]
+        lines = open(LOG(), encoding="utf-8", errors="replace").readlines()
+        idx = [i for i, l in enumerate(lines) if "er-quickload log opened" in l]
         return idx[-1] if idx else 0
     except FileNotFoundError:
         return 0
@@ -90,13 +119,13 @@ try:
             misses = 0
             pl = None
             try:
-                d = json.load(open(TELE, encoding="utf-8"))
+                d = json.load(open(TELE(), encoding="utf-8"))
                 pl = d.get("player_available") or d.get("player_seen")
             except Exception:
                 pass
             rp = 0; ingame = False; av = 0
             try:
-                lines = open(LOG, encoding="utf-8", errors="replace").readlines()[base_off:]
+                lines = open(LOG(), encoding="utf-8", errors="replace").readlines()[base_off:]
                 rp = sum(1 for l in lines if "pab-run-post" in l.lower() or "real-system-window" in l.lower())
                 ingame = any("02_000_IngameTop" in l for l in lines)
                 av = sum(1 for l in lines if "AV #" in l or "ExitProcess" in l or "DLPanic" in l)

@@ -5,7 +5,7 @@ export const meta = {
 }
 
 const TOOLS = [
-  'TOOLING (er-effects-rs, /home/choza/projects/er-effects-rs):',
+  'TOOLING (er-quickload, /home/choza/projects/er-mods-rs):',
   '- PRIMARY try Ghidra (real symbols/types): scripts/ghidra-query.sh <PostScript>.java [args] on /home/banon/ghidra_maporch/proj program ermaporch (~5s). Reusable Java postScripts in scripts/ghidra/ (DecompAddr.java, DecompAt.java, XrefsToAddr.java, StructAt.java, FindFieldWrite.java, FindFieldAccess.java). Batch all decompiles into ONE script. If it errors with a LOCK or permission problem, try Ghidra MCP tools (ghidra_decompile_function_by_address, xrefs).',
   '- FALLBACK (if Ghidra unavailable): offline disassembly of the deobf binary. Use the project Pi tool er_disasm (er_disasm kind=deobf va=0x140XXXXXX nbytes=0x200) or scripts/disas-deobf.sh --color=never 0x140XXXXXX 0x200. Addresses below are DEOBF/runtime VAs unless marked dump.',
   '- Do NOT use bash grep/cat/ls (rtk redaction); use the Read tool and python3 -c regex.',

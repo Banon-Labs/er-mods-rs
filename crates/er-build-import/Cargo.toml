@@ -14,13 +14,18 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
+er-build-import-core = { path = "../er-build-import-core" }
 er-build-import-runtime = { path = "../er-build-import-runtime" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 
 [target.'cfg(windows)'.dependencies]
+# For the BOUNDED singleton wait -- an unbounded `loop { yield_now() }` of this exact shape
+# saturated the wineserver and hung a boot on 2026-08-29. See er_game_base::wait.
+er-game-base = { path = "../er-game-base" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
 ] }
 

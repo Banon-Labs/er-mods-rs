@@ -1,4 +1,4 @@
-# Title/autoload/switch flow feature crate, extracted from the root er-effects-rs DLL
+# Title/autoload/switch flow feature crate, extracted from the root er-quickload DLL
 # (docs/plans/title-flow-crate-extraction.md). The product autoload tick, b78 guard,
 # switch-slot control, profile-select flow, and the mms18 finalize machinery live here.
 # Product state crosses the seam through `host::install_host` function pointers

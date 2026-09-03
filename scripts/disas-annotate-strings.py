@@ -23,7 +23,12 @@ Usage
   python3 scripts/disas-annotate-strings.py --at 0x142ad25c8         # just read one string
 
 Capstone is not installed system-wide; the script re-execs itself under `uv run --with
-capstone` exactly like `scripts/dump-deobf-shift.py` does.
+capstone`, the same self-bootstrap the other capstone-using tools here use.
+
+`--image dump` reads `dump-exec.bin`, whose only other consumer -- `scripts/dump-deobf-shift.py`
+-- was deleted on 2026-08-31 as unrepairably cross-version. That image is 1.16.1 and stays
+SEMANTICS-ONLY: never take an address from it. If the file is absent this exits cleanly and
+`--image deobf`, the default, is unaffected.
 """
 
 from __future__ import annotations

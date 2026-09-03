@@ -22,10 +22,15 @@ const SUPPORT: &str = "../../build-support/prologue_build.rs";
 
 /// The MSVC `/GS` cookie slot every one of these frames seeds with `-2` before anything else.
 const GS_COOKIE_SEED: i32 = -2;
-/// `GLOBAL_CSGameMan`, the singleton `FUN_14067a980` loads RIP-relative. Naming the ABSOLUTE
-/// address lets iced compute the displacement for the VA being assembled at, instead of a
-/// transcribed `+0x36eef91` that means nothing on its own.
-const GAME_MAN_SINGLETON_VA: u64 = 0x143d69918;
+/// `GLOBAL_CSGameMan` at its 1.17 address, the singleton the quit-phase settle loads RIP-relative.
+/// Naming the ABSOLUTE address lets iced compute the displacement for the VA being assembled at,
+/// instead of a transcribed `+0x36f21b1` that means nothing on its own.
+///
+/// 1.16.2 had it at `0x143d69918`; 1.17 moved it `+0x4070` with the rest of `.data`
+/// (`GAME_MAN_SINGLETON_RVA` in the tracked data map, 136 of 137 references agreeing). Only
+/// `QUIT_PHASE_SETTLE_SIG` uses it, and that signature is what decides whether the settle patch
+/// is applied at all -- see the spec for why the address has to be the 1.17 one.
+const GAME_MAN_SINGLETON_VA: u64 = 0x143d6d988;
 /// `GameMan+0xbc4`, the quit-to-title phase field.
 const GAME_MAN_QUIT_PHASE_OFFSET: i64 = 0xbc4;
 /// The phase value the settle function tests for.
@@ -35,11 +40,12 @@ const QUIT_PHASE_WAITING: i32 = 2;
 const SL_ENQUEUE_SAVE_JOB_VA: u64 = 0x140e6fb50;
 /// `SaveLoad2::SLSystemImpl::PollSaveStatus`.
 const SL_POLL_SAVE_STATUS_VA: u64 = 0x140e6e430;
-/// `FUN_14067a980` -- the ONLY code that moves `GameMan+0xbc4` from 2 to 3.
-const QUIT_PHASE_SETTLE_VA: u64 = 0x14067a980;
-/// Where `FUN_14067a980` jumps when the phase is not 2 -- the branch is inside the checked
-/// window, so its destination is part of the prologue.
-const QUIT_PHASE_SETTLE_NOT_WAITING_VA: u64 = 0x14067a99a;
+/// The ONLY code that moves `GameMan+0xbc4` from 2 to 3, at its 1.17 address. 1.16.2
+/// `FUN_14067a980`; 1.17 `0x14067b7d0`, `+0xe50`, the whole-region delta for this part of `.text`.
+const QUIT_PHASE_SETTLE_VA: u64 = 0x14067b7d0;
+/// Where it jumps when the phase is not 2 -- the branch is inside the checked window, so its
+/// destination is part of the prologue. Still exactly `+0x1a` from the entry in 1.17.
+const QUIT_PHASE_SETTLE_NOT_WAITING_VA: u64 = 0x14067b7ea;
 /// `SaveLoad2::SLSystemImpl::ReleaseRequest`.
 const SL_RELEASE_REQUEST_VA: u64 = 0x140e6f200;
 /// `FUN_14067b940`, the combined character+system save lane.
@@ -134,14 +140,21 @@ fn main() {
                 PrologueSpec {
                     name: "QUIT_PHASE_SETTLE_SIG",
                     doc: "`mov rax,[rip+..]; cmp dword [rax+0xbc4],2; jne`. The whole function is\n\
-                          `if (bc4 == 2) bc4 = 3;`, so the checked window covers its only test.",
+                          `if (bc4 == 2) bc4 = 3;`, so the checked window covers its only test.\n\
+                          \n\
+                          Assembled for 1.17. The instructions, the field offset and the tested\n\
+                          value are all unchanged from 1.16.2 -- only the RIP displacement moved,\n\
+                          because both the function and the singleton did. That is three bytes,\n\
+                          and until 2026-08-30 they were 1.16.2's: the signature failed at its\n\
+                          own site on the installed game, the settle patch declined to apply, and\n\
+                          nothing said so.",
                     visibility: "",
                     shape: Shape::Slice,
-                    image: Image::EldenRing,
+                    image: Image::EldenRing1170,
                     va: QUIT_PHASE_SETTLE_VA,
                     take: 0,
                     pin: &[
-                        0x48, 0x8B, 0x05, 0x91, 0xEF, 0x6E, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00,
+                        0x48, 0x8B, 0x05, 0xB1, 0x21, 0x6F, 0x03, 0x83, 0xB8, 0xC4, 0x0B, 0x00,
                         0x00, 0x02, 0x75, 0x0A,
                     ],
                 },

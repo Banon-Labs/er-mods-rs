@@ -52,14 +52,17 @@ PROFILE="$ARTIFACT_DIR/vanilla-trace.me3"
 } >"$PROFILE"
 
 # --- PURE VANILLA: back up + remove any product save-redirect TOML so nothing redirects the save ---
-if [[ -f "$GAME_DIR/er-effects.toml" ]]; then
-	cp -f "$GAME_DIR/er-effects.toml" "$ARTIFACT_DIR/er-effects.toml.bak"
-	rm -f "$GAME_DIR/er-effects.toml"
-	echo "== backed up + removed er-effects.toml (pure vanilla, no save redirect) -> $ARTIFACT_DIR/er-effects.toml.bak"
+if [[ -f "$GAME_DIR/er-quickload.toml" ]]; then
+	cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
+	rm -f "$GAME_DIR/er-quickload.toml"
+	echo "== backed up + removed er-quickload.toml (pure vanilla, no save redirect) -> $ARTIFACT_DIR/er-quickload.toml.bak"
 fi
 
 # --- clean slate: reset the trace log so this run is isolated ---
-rm -f "$GAME_DIR/er-reload-trace.log" 2>/dev/null
+# The trace is redirected into ARTIFACT_DIR (see the launch below), so it starts empty by
+# construction. This line used to clear the game directory's copy, which belongs to whichever session
+# wrote it -- and took its `.prev` along, since `begin_fresh_run` drops a stale `.prev` when the live
+# file is absent.
 
 echo "======================================================================"
 echo "== LAUNCHING ELDEN RING (offline me3) -- VANILLA, USER-DRIVEN load1 baseline"
@@ -67,9 +70,33 @@ echo "==   native: er_reload_trace.dll ONLY (log-only; NO product, NO autodrive,
 echo "==   YOU drive (CONTINUE is the product-matching path): PRESS ANY BUTTON -> Continue -> into the world."
 echo "==   Nothing auto-tears-down; the game stays live. Tell me when you've reached a stable, movable world"
 echo "==   (or if anything crashes / a message box appears)."
-echo "==   trace log -> $GAME_DIR/er-reload-trace.log   (artifacts: $ARTIFACT_DIR)"
+echo "==   trace log -> $ARTIFACT_DIR/er-reload-trace.log   (artifacts: $ARTIFACT_DIR)"
 echo "======================================================================"
 
-nohup "$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
+# and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
+# this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
+nohup env \
+	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+	ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+	ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+	ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+	ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+	ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+	ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+	ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 echo "me3 pid $! ; launch log: $ARTIFACT_DIR/me3-launch.log"
 echo "ARTIFACT_DIR=$ARTIFACT_DIR"

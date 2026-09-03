@@ -316,6 +316,31 @@ pub fn save_dest_write_atomic(path: &Path, bytes: &[u8], tag: &str) -> Result<()
     Ok(())
 }
 
+/// Scratch directory for one test, keyed by PROCESS as well as by name.
+///
+/// The pid is what makes the tests independent. Every suite in this crate wipes its directory on
+/// entry, `%TEMP%` is one shared directory for every process in the wine prefix, and two test
+/// binaries running at once -- two checkouts, the gate run twice over, or two agents running
+/// `check.sh` concurrently -- then delete each other's files mid-test. Measured both ways, with
+/// nothing wrong in the code under test either time: a `rename` onto a target whose parent had
+/// just been removed came back `File not found (os error 2)`, and the identity tests below
+/// answered `Unknown` from two probes that were `Absent` only because a sibling process had wiped
+/// the directory between the `fs::write` and the probe.
+///
+/// It lives at module scope rather than inside either `#[cfg(test)]` module so the whole crate
+/// shares ONE implementation. A private copy per test module is exactly how the identity tests
+/// came to use a fixed name while the commit tests next door were already pid-keyed.
+#[cfg(all(test, windows))]
+pub(crate) fn save_dest_test_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "er-save-dest-{name}-p{pid}",
+        pid = std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("test dir");
+    dir
+}
+
 #[cfg(test)]
 mod save_dest_identity_tests {
     use super::*;
@@ -399,11 +424,7 @@ mod save_dest_identity_tests {
     #[cfg(windows)]
     #[test]
     fn two_paths_that_are_one_file_are_the_same_file() {
-        let dir = std::env::temp_dir().join("er-save-dest-identity-alias");
-        let _ = fs::remove_dir_all(&dir);
-        if fs::create_dir_all(&dir).is_err() {
-            return;
-        }
+        let dir = save_dest_test_dir("identity-alias");
         let real = dir.join("ER0000.sl2");
         let alias = dir.join("another-name.sl2");
         if fs::write(&real, b"one container").is_err() {
@@ -437,11 +458,7 @@ mod save_dest_identity_tests {
     #[cfg(windows)]
     #[test]
     fn a_destination_that_does_not_exist_is_distinct_from_the_loaded_save() {
-        let dir = std::env::temp_dir().join("er-save-dest-identity-new");
-        let _ = fs::remove_dir_all(&dir);
-        if fs::create_dir_all(&dir).is_err() {
-            return;
-        }
+        let dir = save_dest_test_dir("identity-new");
         let live = dir.join("ER0000.sl2");
         if fs::write(&live, b"loaded save").is_err() {
             let _ = fs::remove_dir_all(&dir);

@@ -24,7 +24,7 @@ had already shed **364** lines, not 373, and the two files together shed **1,250
 2,141, not 1,259. This is a re-measurement error in SS0.1, not drift; nothing moved.
 
 **Scope:** at baseline, 32 files / 20,834 lines under
-`crates/er-effects-rs/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
+`crates/er-quickload/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
 in-directory, plus `startup_hooks.rs` (197) = **25,525** (SS0.1 said 25,516; corrected above). The rest of `experiments/` is covered by
 `docs/plans/experiments-crate-targets.md`.
 
@@ -160,7 +160,7 @@ Four facts shape every slice:
 
 ## 3. Per-file assignment -- all 32 analysed files (+ 2 unanalysed)
 
-Paths relative to `crates/er-effects-rs/src/experiments/startup_hooks/`. **`plan` is the line count
+Paths relative to `crates/er-quickload/src/experiments/startup_hooks/`. **`plan` is the line count
 the destination split was measured against (`f15cce1a`); `now` is `877f1261`.** Where they differ,
 the destinations still hold but the line *quantities* -- and any offset derived from them -- do not.
 
@@ -191,9 +191,9 @@ the destinations still hold but the line *quantities* -- and any offset derived 
 | `loading_cover/mod.rs` | 189 | 189 | STAY 188 | 1 |
 | `diagnostics/mod.rs` | 174 | 174 | STAY 172 | 1 |
 | `save_picker/mod.rs` | 171 | 171 | STAY 169 | 1 |
-| `diagnostics/dlc_roots_trace.rs` | 169 | 169 | STAY 162 | 1 |
-| `diagnostics/msb_parse_trace.rs` | 139 | 139 | STAY 136 | 1 |
-| `diagnostics/loadlist_wait_trace.rs` | 139 | 139 | STAY 135 | 1 |
+| `diagnostics/dlc_roots_trace.rs` | 169 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 162) | 1 |
+| `diagnostics/msb_parse_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 136) | 1 |
+| `diagnostics/loadlist_wait_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 135) | 1 |
 | `save_picker/save_picker_surface.rs` | 122 | 122 | er-quit-menu-core 53 / STAY 32 / er-save-picker-core 23 / DELETE 10 | 4 |
 | `loading_cover/scaleform_descriptor_guard.rs` | 95 | 95 | NEW:er-scaleform-hooks 94 | 1 |
 | `save_picker/save_picker_os_dialog.rs` | 27 | 27 | DELETE 25 | 1 |

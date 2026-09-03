@@ -232,7 +232,7 @@ offered for the movable window.
   move verdict, with NO `menuData+0x5d` forcing and NO product mms path; epoch clock advances.
 - **Phase C:** load1 framerate baseline; load2/load3 average-framerate parity; final video.
 - **Build/quality gate:** `cargo xwin build --release --target x86_64-pc-windows-msvc -p
-  er-effects-rs` (verify DLL sha changed), `bash scripts/check.sh`. Commit immediately after
+  er-quickload` (verify DLL sha changed), `bash scripts/check.sh`. Commit immediately after
   each runtime validation run (fix + harness + the run's evidence).
 
 ## Deliverable location

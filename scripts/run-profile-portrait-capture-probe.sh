@@ -3,10 +3,10 @@ set -euo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/profile-portrait-capture-$(date +%Y%m%d-%H%M%S)}"
-TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
+TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
-GOLD_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}"
+GOLD_SLOT="${ER_QUICKLOAD_GOLD_SLOT:-0}"
 DRY_RUN=0
 
 usage() {
@@ -68,17 +68,17 @@ fi
 
 # Start the existing approved direct/offline launcher. It owns save staging, exact-process teardown,
 # Steam/environment preflight, input blocking, and watcher cleanup. The env below deliberately avoids
-# ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD/direct_menu_load so PRODUCT_AUTOLOAD_ARMED stays false.
+# ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD/direct_menu_load so PRODUCT_AUTOLOAD_ARMED stays false.
 (
   cd "$REPO_ROOT"
   ARTIFACT_DIR="$ARTIFACT_DIR" \
   TELEMETRY_PATH="$TELEMETRY_PATH" \
   RUNTIME_TIMEOUT_SECONDS="$RUNTIME_TIMEOUT_SECONDS" \
-  ER_EFFECTS_AUTHORIZED_DIRECT_RUNTIME=1 \
+  ER_QUICKLOAD_AUTHORIZED_DIRECT_RUNTIME=1 \
   AUTO_ALLOW_MANUAL_RUNTIME_PROBE=1 \
-  ER_EFFECTS_PROFILE_CAPTURE_NATIVE=1 \
-  ER_EFFECTS_NATIVE_LOAD=1 \
-  ER_EFFECTS_GOLD_SLOT="$GOLD_SLOT" \
+  ER_QUICKLOAD_PROFILE_CAPTURE_NATIVE=1 \
+  ER_QUICKLOAD_NATIVE_LOAD=1 \
+  ER_QUICKLOAD_GOLD_SLOT="$GOLD_SLOT" \
   RUNTIME_EXTRA_WATCH_ARGS="${RUNTIME_EXTRA_WATCH_ARGS:---no-phase-watchdog --no-world-load-deadline}" \
   scripts/run-product-continue-direct-probe.sh --autoload-request "$AUTOLOAD_REQUEST"
 ) > "$ARTIFACT_DIR/profile-capture-launcher.out" 2> "$ARTIFACT_DIR/profile-capture-launcher.err" &
@@ -143,7 +143,10 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         "native_profile_capture_enabled": t.get("oracle_native_profile_capture_enabled") is True,
         "product_autoload_not_armed": t.get("product_autoload_armed") is False,
         "no_custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built") is False,
-        "no_custom_cover_run": t.get("oracle_title_custom_cover_run_any") is False,
+        # "no_custom_cover_run" was here until 2026-08-31: `oracle_title_custom_cover_run_any is
+        # False`. It could never be anything but True -- the counter behind that oracle had no write
+        # site, so the check passed unconditionally and proved nothing. The oracle has been removed;
+        # keeping the check would have flipped it to permanently FAILING on the absent key.
         "no_title_visual_suppression": as_int(t.get("oracle_title_native_menu_visual_suppressed_builds"), 0) == 0,
         "source_ready": t.get("oracle_native_profile_source_ready") is True,
         "source_slot0": as_int(t.get("oracle_title_custom_cover_profile_source_slot"), -1) == 0,
@@ -157,7 +160,6 @@ def ready_reason(t: dict | None) -> tuple[bool, list[str], dict]:
         "autoload_method": t.get("autoload_method"),
         "product_autoload_armed": t.get("product_autoload_armed"),
         "custom_profile_select_built": t.get("oracle_title_custom_cover_profile_select_any_built"),
-        "custom_cover_run": t.get("oracle_title_custom_cover_run_any"),
         "title_visual_suppressed_builds": t.get("oracle_title_native_menu_visual_suppressed_builds"),
         "renderer": t.get("oracle_title_custom_cover_profile_source_renderer"),
         "renderer_vtable": t.get("oracle_title_custom_cover_profile_source_renderer_vtable"),

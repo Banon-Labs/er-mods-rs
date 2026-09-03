@@ -1,0 +1,33 @@
+# cdylib	ungated_exec	ungated_write
+# Written by scripts/audit-1170-readiness.py --refresh. A RATCHET: the
+# checker fails when a count RISES. Lower is the only direction that
+# passes silently. 0 ungated writes across every cdylib is a safety
+# property of this tree -- no DLL can corrupt the 1.17 image with a
+# stale address -- and this file is what keeps it true.
+er-ags-stub	0	0
+er-armament-icons	0	0
+er-better-refills	0	0
+er-build-import	0	0
+er-build-watermark	0	0
+er-enemynpc-effects	0	0
+er-crash-logging	0	0
+er-death-persist	0	0
+er-diag-harness	0	0
+er-ersc-sigshim	0	0
+er-input-harness	0	0
+er-invasion-path	0	0
+er-invasion-warp	0	0
+er-inventory-sort	0	0
+er-loading-bar	0	0
+er-loading-portrait	0	0
+er-net-effects	0	0
+er-player-name-filter	0	0
+er-quickload	0	1
+er-quit-menu	0	0
+er-refill-all	0	0
+er-reload-trace	0	0
+er-save-disable	0	0
+er-save-picker	0	0
+er-seamless-bugfixes	0	0
+er-telemetry	0	0
+mushroom-man-runtime	0	0

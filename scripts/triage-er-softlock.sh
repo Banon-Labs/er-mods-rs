@@ -7,7 +7,7 @@ Usage: scripts/triage-er-softlock.sh [--close] [--artifact-dir DIR] [--me3-log P
 
 Collect Elden Ring soft-lock evidence without visual inspection, then optionally close only exact
 Elden Ring/ME3 processes identified by target path. This is the default agent route when a user
-reports a soft lock during an er-effects-rs runtime smoke.
+reports a soft lock during an er-quickload runtime smoke.
 
 Steps:
   1. create an artifact directory,
@@ -35,8 +35,8 @@ done
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 GAME_DIR="${ER_GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-TELEMETRY="${TELEMETRY_OVERRIDE:-$GAME_DIR/er-effects-telemetry.json}"
-CRASH_LOG="$GAME_DIR/er-effects-crash-log.txt"
+TELEMETRY="${TELEMETRY_OVERRIDE:-$GAME_DIR/er-quickload-telemetry.json}"
+CRASH_LOG="$GAME_DIR/er-quickload-crash-log.txt"
 if [[ -z "$ARTIFACT_DIR" ]]; then
   ARTIFACT_DIR="$ROOT/target/runtime-probe/softlock-triage-$(date +%Y%m%d-%H%M%S)"
 fi
@@ -68,8 +68,8 @@ copy_if_present() {
   printf 'softlock triage artifact_dir=%s\n' "$ARTIFACT_DIR"
   printf 'timestamp=%s\n' "$(date --iso-8601=seconds)"
   printf 'game_dir=%s\n' "$GAME_DIR"
-  printf 'telemetry_copy=%s\n' "$(copy_if_present "$TELEMETRY" er-effects-telemetry.json || true)"
-  printf 'crash_log_copy=%s\n' "$(copy_if_present "$CRASH_LOG" er-effects-crash-log.txt || true)"
+  printf 'telemetry_copy=%s\n' "$(copy_if_present "$TELEMETRY" er-quickload-telemetry.json || true)"
+  printf 'crash_log_copy=%s\n' "$(copy_if_present "$CRASH_LOG" er-quickload-crash-log.txt || true)"
   printf 'me3_log_copy=%s\n' "$(copy_if_present "$ME3_LOG" me3-launch.log || true)"
   printf '\n## telemetry summary\n'
 } >"$SUMMARY"

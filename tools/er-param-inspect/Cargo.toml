@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-er-effects-data = { path = "../../crates/effects-data" }
+er-quickload-data = { path = "../../crates/effects-data" }
 er-soulsformats = { path = "../../crates/soulsformats" }
 
 [lints]

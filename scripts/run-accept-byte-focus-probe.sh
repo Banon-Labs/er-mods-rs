@@ -12,11 +12,11 @@ set -a
 # shellcheck disable=SC1091
 source "$REPO_ROOT/.envs/own-load-pump.env"
 set +a
-export ER_EFFECTS_TITLE_ACCEPT_BYTE=1
-export ER_EFFECTS_STAY_ACTIVE=1
-export ER_EFFECTS_BLOCK_INPUT=1
+export ER_QUICKLOAD_TITLE_ACCEPT_BYTE=1
+export ER_QUICKLOAD_STAY_ACTIVE=1
+export ER_QUICKLOAD_BLOCK_INPUT=1
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-: > "$GAME_DIR/er-effects-block-input.txt"
+: > "$GAME_DIR/er-quickload-block-input.txt"
 export ARTIFACT_DIR="$REPO_ROOT/target/runtime-probe/accept-byte-focus"
 exec bash "$REPO_ROOT/scripts/run-product-continue-direct-probe.sh" \
   --autoload-request "$REPO_ROOT/target/runtime-probe-requests/accept-byte-focus.txt"

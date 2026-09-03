@@ -359,21 +359,21 @@ ersc_naming_statement_tokens contains tokens if {
 #
 # False positive fixed 2026-07-30 (bd er-effects-rs-gkqa): restoring the
 # user's own game-installed Seamless Co-op module -- renaming the
-# `.er-effects-staged` file back to its normal name -- was denied by the
+# `.er-quickload-staged` file back to its normal name -- was denied by the
 # file-moving arms, which match the verb + DLL name with no destination
 # scoping. The denied command:
 #
-#   mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'
+#   mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged' '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'
 #
 # The guard's mandate keys on the DESTINATION: no ersc.dll into me3/product
 # release artifacts or repo target/ bundles. A same-path rename that only
-# strips the repo's own `.er-effects-staged` suffix puts the DLL back exactly
+# strips the repo's own `.er-quickload-staged` suffix puts the DLL back exactly
 # where it already lives -- the user's game install -- which is the OPPOSITE
 # of bundling.
 #
 # Fail-closed shape: the WHOLE command must be a single `mv` with two quoted
 # operands and nothing else -- no chaining, no substitution, no redirects --
-# and the destination must equal the source minus the `.er-effects-staged`
+# and the destination must equal the source minus the `.er-quickload-staged`
 # suffix (same directory, same filename, byte-for-byte). Any other
 # destination (a repo `target/`/`dist/` path, a different directory, an extra
 # command) fails the shape and the file-moving arms deny as before.
@@ -388,8 +388,8 @@ ersc_user_restore_rename_command if {
 	regex.match(`^mv( -{1,2}[a-zA-Z-]+)* $`, quote_parts[0])
 	quote_parts[2] == " "
 	quote_parts[4] == ""
-	regex.match(`/ersc\.dll\.er-effects-staged$`, quote_parts[1])
-	concat("", [quote_parts[3], ".er-effects-staged"]) == quote_parts[1]
+	regex.match(`/ersc\.dll\.er-quickload-staged$`, quote_parts[1])
+	concat("", [quote_parts[3], ".er-quickload-staged"]) == quote_parts[1]
 }
 
 # Whitespace-normalized command with `"` folded to `'` so one split handles
@@ -439,7 +439,7 @@ ersc_interpreter_gameinstall_scan_only if {
 # Every ersc.dll occurrence in the quote-scrubbed command must be the tail of
 # an absolute /mnt/<drive>/ path (the piece BEFORE it ends with that path
 # prefix, escaped spaces allowed) and must be terminal (the piece AFTER it
-# starts with whitespace or is empty; the read-only `.er-effects-staged`
+# starts with whitespace or is empty; the read-only `.er-quickload-staged`
 # sibling suffix is also accepted).
 ersc_scan_operands_all_gameinstall if {
 	pieces := split(lower(scrubbed_command), "ersc.dll")
@@ -454,7 +454,7 @@ ersc_scan_operands_all_gameinstall if {
 	suffix_ok := count([idx |
 		some idx, piece in pieces
 		idx > 0
-		regex.match(`^(\.er-effects-staged)?([[:space:]]|$)`, piece)
+		regex.match(`^(\.er-quickload-staged)?([[:space:]]|$)`, piece)
 	])
 	suffix_ok == n - 1
 }

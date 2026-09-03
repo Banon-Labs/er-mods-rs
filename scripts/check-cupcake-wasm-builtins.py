@@ -156,6 +156,23 @@ def run_probes(targets: dict[str, str]) -> set[str]:
         root = Path(tmp) / ".cupcake"
         (root / "policies" / "claude").mkdir(parents=True)
         (root / "system").mkdir(parents=True)
+        # ISOLATION, and it has to be an EMPTY DIRECTORY. This probe measures one thing -- does
+        # the WASM runtime execute this builtin -- so the ONLY policies in the evaluation must be
+        # the throwaway ones generated below. Left to itself cupcake discovers a global config at
+        # ${XDG_CONFIG_HOME:-$HOME/.config}/cupcake, which on a developer machine carries live
+        # custom policies; one of them denying could put a second `rule_id|` line in stdout and
+        # make a probe's presence or absence depend on the user's personal setup.
+        #
+        # This used to pass a FILE (`root / "rulebook.yml"`) and it did isolate the probe -- but
+        # only by accident. cupcake 0.5.2 rejects any --global-config that is not a directory,
+        # logs "Global config path must be a directory" at DEBUG, and continues project-only
+        # WITHOUT falling back to discovery; the isolation was a side effect of a rejection, and
+        # would evaporate the day a bad path became fatal or started falling back. An empty
+        # directory is instead ACCEPTED and loaded -- measured against 0.5.2: "Global
+        # configuration discovered at ..." / "Global configuration initialization complete" --
+        # and contributes no policy, so the isolation is now what the argument says it is.
+        global_root = Path(tmp) / "empty-global-config"
+        global_root.mkdir()
         # The repo's own aggregator, so the probe exercises the real evaluation path.
         shutil.copy(CUPCAKE_DIR / "system" / "evaluate.rego", root / "system" / "evaluate.rego")
         (root / "rulebook.yml").write_text("signals: {}\nbuiltins: {}\n", encoding="utf-8")
@@ -181,7 +198,7 @@ def run_probes(targets: dict[str, str]) -> set[str]:
                 "cupcake", "eval",
                 "--harness", "claude",
                 "--policy-dir", str(root),
-                "--global-config", str(root / "rulebook.yml"),
+                "--global-config", str(global_root),
             ],
             input=event, capture_output=True, text=True, timeout=25,
         )

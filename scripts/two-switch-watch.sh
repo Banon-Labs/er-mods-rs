@@ -4,10 +4,10 @@
 # records each switch's deserialized slot. Reads the final loaded identity via the switch oracle.
 # Does NOT tear down on the transient stale state; only on ER self-exit, both switches done, or a cap.
 set -u
-REPO=/home/banon/projects/er-effects-rs
+REPO=/home/banon/projects/er-mods-rs
 ART="${ARTIFACT_DIR:-$REPO/target/runtime-probe/system-quit-repro-selfdrive}"
-TELEM="$ART/er-effects-telemetry.json"
-LOG="$ART/er-effects-autoload-debug.log"
+TELEM="$ART/er-quickload-telemetry.json"
+LOG="$ART/er-quickload-autoload-debug.log"
 DEADLINE_S=${DEADLINE_S:-115}
 POLL_S=${POLL_S:-3}
 

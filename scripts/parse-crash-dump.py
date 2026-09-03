@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deep-trace an Elden Ring crash from its Windows minidump.
 
-WHY: our in-process VEH crash logger (crates/er-effects-rs/src/crashlog/) can only catch faults that
+WHY: our in-process VEH crash logger (crates/er-quickload/src/crashlog/) can only catch faults that
 happen AFTER our DLL loads. A crash in the me3 loader (me3_mod_host.dll) during early boot -- before any
 er_*.dll is injected -- is invisible to it (observed 2026-07-24: run 075217 crashed ~3s after launch in
 ntdll heap code with me3_mod_host frames, and the ONLY record was the Windows minidump, parsed by hand).

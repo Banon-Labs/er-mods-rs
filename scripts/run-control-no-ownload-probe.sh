@@ -12,15 +12,15 @@ source "$REPO_ROOT/.envs/own-load-pump.env"
 set +a
 # Override: splash-skip via env (own_load is off, so the splash_skip_enabled() own_load arm won't fire);
 # separate artifact dir; keep the same authorization + cap from own-load-pump.env.
-export ER_EFFECTS_SPLASH_SKIP=1
+export ER_QUICKLOAD_SPLASH_SKIP=1
 # ZERO-INPUT INVARIANT (always-block-input-zero-input-invariant-2026-06-22): with own_load=0 the DLL's
 # block_input_enabled() would NOT auto-arm (it gates on own_stepper), so foreign input could reach the
 # game and contaminate the control. FORCE the unconditional block by planting the game-dir gate file so
 # block_input_enabled() returns true for the whole run -- the game cannot receive any keyboard/mouse/
 # gamepad input. Also force it via env for belt-and-braces.
-export ER_EFFECTS_BLOCK_INPUT=1
+export ER_QUICKLOAD_BLOCK_INPUT=1
 GAME_DIR="${GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
-: > "$GAME_DIR/er-effects-block-input.txt"
+: > "$GAME_DIR/er-quickload-block-input.txt"
 export ARTIFACT_DIR="$REPO_ROOT/target/runtime-probe/control-no-ownload"
 exec bash "$REPO_ROOT/scripts/run-product-continue-direct-probe.sh" \
   --autoload-request "$REPO_ROOT/target/runtime-probe-requests/control-no-ownload.txt"

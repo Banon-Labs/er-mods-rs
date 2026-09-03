@@ -25,6 +25,10 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import resolve_artifact  # noqa: E402
 
 POLL_SECONDS = 2.0
 
@@ -160,8 +164,17 @@ def main() -> int:
 
     pre_er = {int(x) for x in args.pre_er_pids.split() if x.isdigit()}
     pre_me3 = {int(x) for x in args.pre_me3_pids.split() if x.isdigit()}
-    badge_log = args.game_dir / "er-armament-icons.log"
-    phases = args.game_dir / "er-input-harness-phases.jsonl"
+    # BOTH files are redirected into the run's own directory by the launcher, because a
+    # game-directory artifact is single-slot and the next launch destroys it. Reading only the game
+    # directory would show no badge lines and no phases for a healthy run, and report the feature as
+    # never having fired. `resolve_artifact` prefers the run directory (by existence) and falls back
+    # to the game directory for a run whose env did not survive me3 -> Proton.
+    badge_log = resolve_artifact(
+        "er-armament-icons.log", args.game_dir, prefer=args.artifact_dir
+    )
+    phases = resolve_artifact(
+        "er-input-harness-phases.jsonl", args.game_dir, prefer=args.artifact_dir
+    )
 
     start = time.monotonic()
     decisive = 0.0
@@ -209,15 +222,19 @@ def main() -> int:
 
     status_line = teardown(pre_er, pre_me3)
 
+    # FALLBACK SNAPSHOT ONLY: all four are redirected into the artifact directory at launch.
+    # This copy covers the run whose env did not survive me3 -> Proton and whose DLL fell back to the
+    # game directory; it is not how the evidence is preserved.
     for name in (
         "er-armament-icons.log",
         "er-input-harness.log",
         "er-input-harness-phases.jsonl",
         "er-telemetry-timeseries.jsonl",
     ):
-        src = args.game_dir / name
-        if src.exists():
-            shutil.copy(src, args.artifact_dir / name)
+        destination = args.artifact_dir / name
+        src = resolve_artifact(name, args.game_dir, prefer=args.artifact_dir)
+        if src.exists() and src != destination:
+            shutil.copy(src, destination)
 
     # PIXEL-DIFF ORACLE (when configured): the authoritative verdict is the tile crop vs the
     # vanilla baseline. TIMEOUT if the menu was never reached / nothing captured.

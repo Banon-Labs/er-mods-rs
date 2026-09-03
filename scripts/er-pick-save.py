@@ -30,7 +30,7 @@ CORPUS ROOT
 `--root`, else `$ER_SAVE_CORPUS_ROOT`, else `<repo>/save-files`. The older enumerator in this
 directory still defaults to a `/mnt/a/...` WSL path that does not exist on this machine, so
 every run of it silently found nothing; the default here is the corpus that is actually
-present. Staged redirect subtrees (`er-effects-save-redirect-stage/`) are skipped -- they are
+present. Staged redirect subtrees (`er-quickload-save-redirect-stage/`) are skipped -- they are
 private copies the DLL writes, not sources.
 
 Usage:
@@ -55,7 +55,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORACLE_SCRIPT = REPO_ROOT / "scripts" / "save-slot-oracle.py"
 SAVE_REDIRECT_LIB = REPO_ROOT / "crates" / "er-save-redirect" / "src" / "lib.rs"
-STAGE_DIR_MARKER = "er-effects-save-redirect-stage"
+STAGE_DIR_MARKER = "er-quickload-save-redirect-stage"
 
 EXIT_OK = 0
 EXIT_ERROR = 1

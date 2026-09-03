@@ -130,7 +130,7 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
     }
     let mut expected = BTreeSet::from([
         "er-armament-icons".to_owned(),
-        "er-effects-rs".to_owned(),
+        "er-quickload".to_owned(),
         "er-invasion-warp".to_owned(),
         "er-loading-portrait-core".to_owned(),
     ]);
@@ -152,7 +152,7 @@ fn codec_stays_below_the_native_hook_layer() {
     // er-game-base's default tier is the zero-dependency owner for shared content primitives.
     let forbidden = [
         "eldenring",
-        "er-effects-rs",
+        "er-quickload",
         "er-hook",
         "er-loading-portrait-core",
         "er-scaleform-hooks",
@@ -215,7 +215,7 @@ fn the_selected_sibling_owner_points_toward_the_codec_when_present() {
     );
 
     let forbidden = [
-        "er-effects-rs",
+        "er-quickload",
         "er-loading-portrait-core",
         "er-scaleform-hooks",
         "er-title-flow",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Untangle: move a NAMED SET of top-level items out of crates/er-effects-rs/src/experiments/mod.rs
+"""Untangle: move a NAMED SET of top-level items out of crates/er-quickload/src/experiments/mod.rs
 into a sibling submodule, preserving behavior (pure code motion).
 
     extract-experiments-items.py <module> <name1> [<name2> ...]
@@ -10,7 +10,7 @@ Unlike the line-range carver, this pulls items by NAME wherever they sit in the
 interleaved core. For each requested top-level item (fn / unsafe fn / static /
 const / struct / enum / impl-with-name), it takes the item plus its immediately
 preceding contiguous doc-comment / attribute block, removes them from mod.rs,
-and writes them (in original file order) to crates/er-effects-rs/src/experiments/<module>.rs with a
+and writes them (in original file order) to crates/er-quickload/src/experiments/<module>.rs with a
 copy of mod.rs's import preamble + `use super::*;`. A
 `mod <module>; pub(crate) use <module>::*;` decl is inserted into mod.rs after
 the preamble.
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RUNTIME_SRC = REPO_ROOT / "crates" / "er-effects-rs" / "src"
+RUNTIME_SRC = REPO_ROOT / "crates" / "er-quickload" / "src"
 MOD = RUNTIME_SRC / "experiments" / "mod.rs"
 
 ITEM_RE = re.compile(

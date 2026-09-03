@@ -5,18 +5,23 @@ use std::{
         Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
     },
-    time::SystemTime,
 };
+
+use er_hotkey_config::{FileChange, HotFile};
 
 use crate::{duration_filter::PermanentEffects, log::net_effects_log, stacked_config};
 
 const CONFIG_FILE_NAME: &str = "er-net-effects.toml";
-const DEFAULT_CONFIG_TOML: &str = r#"# er-net-effects standalone DLL configuration.
+/// Everything in the shipped config file EXCEPT the key section, which lives in
+/// [`crate::bindings::SHIPPED_KEY_SECTION`] next to the table it documents -- this module is
+/// windows-gated, so a test that the documented key names actually parse could never run here.
+const DEFAULT_CONFIG_HEAD: &str = r#"# er-net-effects standalone DLL configuration.
 # The DLL is optional; include er_net_effects.dll as its own ME3 native when
 # you want keyboard-controlled network-synced SpEffect application.
 network_sync = true
 # Start with the selector overlay bar shown. Press Alt+Numpad0, Alt+0, or
-# Alt+Insert to hide/show it while in-game.
+# Alt+Insert to hide/show it while in-game -- or whatever you set
+# `selector_show_hide_key` to at the bottom of this file.
 #
 # SHOWN IS NOT OPEN. The bar starts MINIMIZED to its [+] button; click that
 # button to expand it. The DLL takes the arrow keys away from the game ONLY
@@ -46,8 +51,8 @@ master_catalog_file = "er-net-effect-master-catalog.json"
 # they die or reload. 516 of the 842 entries in the shipped visuals-only catalog are -1.
 permanent_effects = "include"
 # Effects that stay applied no matter where the selector cursor is, so several can run at once.
-# Numpad + adds the highlighted effect to this list, numpad - removes it; the DLL rewrites this
-# line as you do, leaving the rest of the file alone.
+# The stack-add key adds the highlighted effect to this list, stack-remove takes it back out; the
+# DLL rewrites this line as you do, leaving the rest of the file alone.
 stacked_effects = []
 "#;
 
@@ -67,8 +72,14 @@ pub(crate) struct RuntimeConfig {
     /// Which effects the selector offers, by duration -- see [`PermanentEffects`].
     pub(crate) permanent_effects: PermanentEffects,
     /// Effects that stay applied regardless of the selector cursor, edited in-game with
-    /// numpad +/- and written back to this file.
+    /// the stack keys and written back to this file.
     pub(crate) stacked_effects: Vec<i32>,
+    /// Raw `(config key, value)` for every selector binding line the file carries.
+    ///
+    /// Kept as TEXT rather than parsed here because the parse has to happen where the PREVIOUS
+    /// binding is known: a value that does not parse must keep the key that was working, and this
+    /// type has no idea what that was. See [`crate::bindings`].
+    pub(crate) key_bindings: Vec<(String, String)>,
     pub(crate) load_error: Option<String>,
 }
 
@@ -94,6 +105,9 @@ impl Default for RuntimeConfig {
             // keeps behaving exactly as it did.
             permanent_effects: PermanentEffects::Include,
             stacked_effects: Vec::new(),
+            // Empty means "the file mentions no bindings", which leaves every key at its shipped
+            // default -- see `bindings::SelectorBindings::default`.
+            key_bindings: Vec::new(),
             load_error: None,
         }
     }
@@ -152,25 +166,63 @@ pub(crate) fn live_stacked_effects() -> Vec<i32> {
 }
 
 static CONFIG_POLLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// (mtime, signature) of the last parse, so an unchanged file costs a `stat` and nothing else.
-static LIVE_CONFIG_SIGNATURE: Mutex<(u128, String)> = Mutex::new((u128::MAX, String::new()));
+/// The last signature published, returned unchanged while the file's text has not moved.
+static LIVE_CONFIG_SIGNATURE: Mutex<String> = Mutex::new(String::new());
+/// The file watcher. Compares the file's TEXT and reads at most about once a second.
+static LIVE_CONFIG_FILE: Mutex<Option<HotFile>> = Mutex::new(None);
+/// Reloads that changed at least one binding. A telemetry number rather than a log-only fact:
+/// "the config never reloaded" and "the poller never ran" are otherwise the same silence.
+static BINDING_RELOADS: AtomicUsize = AtomicUsize::new(0);
 
-/// Signature of the live settings, re-parsing the file only when its mtime moved.
+/// How many reloads have moved a selector binding.
+pub(crate) fn binding_reloads() -> usize {
+    BINDING_RELOADS.load(Ordering::Relaxed)
+}
+
+/// Signature of the live settings, re-parsing the file only when its TEXT changed.
 ///
-/// Called every frame by the catalog poller, so the steady-state cost is one `stat` -- parsing
-/// 20 lines of TOML per frame would be a silly thing to spend a game's frame budget on.
+/// # Why text, and why throttled
+///
+/// This used to `stat` the file EVERY FRAME and compare the mtime. Two problems, and the second is
+/// the one that made key rebinding unreliable:
+///
+/// * mtime has one-second resolution on several filesystems, including the kind a Wine prefix sits
+///   on, so two saves inside one second lose the second one -- which reads as the edit not working.
+/// * a `touch`, a re-save with no changes, and this DLL's own write-back of `stacked_effects` all
+///   move mtime without changing anything. Every one of those would now report a reload, and a
+///   reload RESETS the key edge mask, so a key held at that instant fires again.
+///
+/// `er_hotkey_config::HotFile` compares the text instead and reads at most about once a second, so
+/// the steady-state cost per frame is one integer comparison rather than a syscall.
 pub(crate) fn poll_live_config() -> String {
-    let path = &runtime_config().config_path;
-    let modified = fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map_or(0, |since| since.as_nanos());
+    let unchanged = || {
+        LIVE_CONFIG_SIGNATURE.lock().map_or_else(
+            |poisoned| poisoned.into_inner().clone(),
+            |cached| cached.clone(),
+        )
+    };
 
-    if let Ok(cached) = LIVE_CONFIG_SIGNATURE.lock()
-        && cached.0 == modified
-    {
-        return cached.1.clone();
+    let change = {
+        let mut guard = match LIVE_CONFIG_FILE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let watcher =
+            guard.get_or_insert_with(|| HotFile::new(runtime_config().config_path.clone()));
+        watcher.poll()
+    };
+    let Some(change) = change else {
+        return unchanged();
+    };
+    // A deleted config leaves the settings that were working in force. Re-reading a file that is
+    // not there would swap the player's whole configuration for the defaults mid-session, which is
+    // a far bigger consequence than the edit they were making.
+    if matches!(change, FileChange::Missing) {
+        net_effects_log(format_args!(
+            "runtime-config: {} disappeared; keeping the settings already in force",
+            runtime_config().config_path.display()
+        ));
+        return unchanged();
     }
 
     let reparsed = load_runtime_config();
@@ -181,16 +233,42 @@ pub(crate) fn poll_live_config() -> String {
     if let Ok(mut guard) = LIVE_STACKED_EFFECTS.lock() {
         *guard = reparsed.stacked_effects.clone();
     }
+    apply_live_key_bindings(&reparsed);
     CONFIG_POLLED.store(true, Ordering::Relaxed);
     let signature = format!(
-        "config:{modified}:{}:{:?}",
+        "config:{}:{}:{:?}",
+        BINDING_RELOADS.load(Ordering::Relaxed),
         reparsed.permanent_effects.as_str(),
         reparsed.stacked_effects
     );
     if let Ok(mut cached) = LIVE_CONFIG_SIGNATURE.lock() {
-        *cached = (modified, signature.clone());
+        *cached = signature.clone();
     }
     signature
+}
+
+/// Push the file's binding lines at the live bindings, and clear the key edge state if any moved.
+///
+/// The edge reset is the half that is easy to leave out and impossible to notice in review. The
+/// DirectInput poll remembers which selector keys were down as a POSITIONAL bitmask; carry it
+/// across a rebind and a key held at that instant either swallows its own press or manufactures
+/// one. A rejected value deliberately does NOT count as a move -- otherwise a config with a
+/// permanent typo in it would produce one phantom press per reload, forever.
+fn apply_live_key_bindings(config: &RuntimeConfig) {
+    let update = crate::bindings::refresh_live(|name| {
+        config
+            .key_bindings
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.clone())
+    });
+    for message in &update.messages {
+        net_effects_log(format_args!("runtime-config: {message}"));
+    }
+    if update.moved {
+        BINDING_RELOADS.fetch_add(1, Ordering::Relaxed);
+        crate::input_suppression::forget_key_edges_after_rebind();
+    }
 }
 
 pub(crate) fn init_runtime_config() {
@@ -217,13 +295,22 @@ pub(crate) fn runtime_config() -> &'static RuntimeConfig {
     RUNTIME_CONFIG.get_or_init(load_runtime_config)
 }
 
+/// The whole shipped config file: the settings above plus the key section the bindings module
+/// owns.
+fn default_config_toml() -> String {
+    format!(
+        "{DEFAULT_CONFIG_HEAD}{}",
+        crate::bindings::SHIPPED_KEY_SECTION
+    )
+}
+
 fn ensure_default_config_file() -> std::io::Result<()> {
     let path = PathBuf::from(CONFIG_FILE_NAME);
     if path.exists() {
         return Ok(());
     }
     let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, DEFAULT_CONFIG_TOML)?;
+    fs::write(&tmp, default_config_toml())?;
     fs::rename(tmp, path)
 }
 
@@ -281,6 +368,12 @@ fn load_runtime_config() -> RuntimeConfig {
                      expected include, exclude or only"
                 )),
             },
+            // Binding lines are carried through as TEXT. They are parsed by `crate::bindings`,
+            // which knows what the previous key was and can therefore keep it when a value does
+            // not read.
+            other if crate::bindings::is_binding_key(other) => {
+                config.key_bindings.push((other.to_owned(), unquote(value)));
+            }
             other => errors.push(format!("line {line_number}: unknown key {other:?}")),
         }
     }

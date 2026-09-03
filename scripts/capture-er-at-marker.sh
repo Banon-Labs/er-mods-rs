@@ -2,7 +2,7 @@
 # Capture an on-screen ER screenshot timed off a DLL TELEMETRY MARKER (not launch_epoch).
 # The launch_epoch->DLL-epoch offset (wine/proton + me3 native load) makes launch-relative offsets
 # land in the wrong place in the game timeline; this waits for a regex to appear in the live
-# er-effects-autoload-debug.log, optionally waits POST_DELAY_MS more, captures, then tears down.
+# er-quickload-autoload-debug.log, optionally waits POST_DELAY_MS more, captures, then tears down.
 #
 #   $1 MARKER_REGEX : python regex matched against each new debug-log line (required)
 #   $2 POST_DELAY_MS: ms to wait AFTER the marker before capturing (default 0)
@@ -18,7 +18,7 @@ ARTIFACT_DIR="$(realpath -m "$ARTIFACT_DIR")"
 mkdir -p "$ARTIFACT_DIR"
 SAFE_TAG="$(printf '%s' "$MARKER_REGEX" | tr -c 'A-Za-z0-9' '_' | cut -c1-32)"
 SHOT="$ARTIFACT_DIR/at-${SAFE_TAG}-plus${POST_DELAY_MS}ms.png"
-DBG="$ARTIFACT_DIR/er-effects-autoload-debug.log"
+DBG="$ARTIFACT_DIR/er-quickload-autoload-debug.log"
 RUNNER_PIDFILE="$ARTIFACT_DIR/runner.sid"
 
 teardown() {

@@ -13,7 +13,7 @@
 //! MOVE, not a seam entry. This feature is self-contained -- it reads one engine singleton
 //! and owns its own catalog -- so the only things that genuinely cross are the host's log
 //! sink and the host's decision that the feature is on at all. Nothing here reaches back
-//! into `er-effects-rs`, and nothing may be added speculatively: an entry lands with the
+//! into `er-quickload`, and nothing may be added speculatively: an entry lands with the
 //! slice that first calls it.
 
 use std::sync::OnceLock;

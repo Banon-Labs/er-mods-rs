@@ -1,0 +1,46 @@
+# `CS::ProfileSummary` -- the ten in-memory character records the game deserializes ONCE, from
+# the boot common-data load, and that every character-identity surface reads afterwards: the
+# title's native Continue row, the System>Quit "Load Character"/"Load Character from File" rows,
+# the ProfileSelect list, and the loading-screen portrait.
+#
+# The concept used to be smeared across four files inside the `er-quickload` shim -- the record
+# writer in `quit_menu/save_swap_profile_table.rs`, the live-record fingerprint in
+# `continue_load/slot_resolution.rs`, the summary pointer + the serialized-save reader that feeds
+# the writer in `loading_cover/loading_cover_save_slot.rs`, and the picked-save re-read in
+# `continue_load/picked_summary_refresh.rs`. One concept, one crate.
+#
+# Product state crosses the seam as injected function pointers: see `host::install_host`. This
+# crate must NOT depend on the root crate, and must NOT depend on `er-title-flow`
+# (er-title-flow -> er-loading-portrait-core -> ... already exists, and er-title-flow is the
+# natural future CONSUMER of this crate, so an edge the other way would close a cycle).
+[package]
+name = "er-profile-summary-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_profile_summary_core"
+
+[dependencies]
+# The typed `CS::ProfileSummary` record layout + offsets (tier A, host-safe), the fault-safe RAM
+# readers, `game_module_base`, the FNV-1a fingerprints, and the `PlayerGameData` name readers.
+er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# BND4 slot walk, the on-disk `USER_DATA010` summary table, and the stat-block locator: the
+# container side of every record this crate rebuilds.
+er-save-loader = { path = "../er-save-loader" }
+# Shared cross-platform telemetry counters (the `picked_summary_refresh_*` oracle fields).
+er-telemetry-core = { path = "../er-telemetry-core" }
+
+[target.'cfg(windows)'.dependencies]
+# `FaceData` / `FaceDataBuffer`, so the record's +0x38 block is bound to the upstream layout
+# instead of a copied number.
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+# The typed `CS::ChrAsm` member offsets a record's +0x1a8 equipment block is assembled from.
+# ONE-WAY: er-loading-portrait-core knows nothing about this crate.
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint set,
+# denied. Zero violations on the shipping target, so the deny carries no `# DEBT:` allows.
+[lints]
+workspace = true

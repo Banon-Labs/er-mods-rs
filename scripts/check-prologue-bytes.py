@@ -55,8 +55,14 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-IGNORED_DIRECTORIES = {".git", ".worktrees", ".claude", "target", "third_party", "vendor"}
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from repo_source_scan import NOT_REPO_SOURCE, REPO_ROOT, rust_source_files  # noqa: E402
+
+# The shared "not this repo's source" set (.git/.worktrees/.claude/target/third_party), plus a
+# `vendor` this gate alone excludes: a vendored crate's byte tables are not hand-typed machine
+# code this repo wrote, which is the only thing this gate is entitled to reject.
+EXTRA_IGNORED_DIRECTORIES = frozenset({"vendor"})
+IGNORED_DIRECTORIES = NOT_REPO_SOURCE | EXTRA_IGNORED_DIRECTORIES
 
 # Three is the shortest sequence that is unambiguously machine code rather than a small tuple of
 # flags: the smallest thing this repo writes at a game function is a three-byte `xor eax,eax; ret`
@@ -146,9 +152,14 @@ def scan_text(relative: Path, text: str) -> list[Finding]:
     return findings
 
 
+def rust_files(root: Path) -> list[Path]:
+    """Every `.rs` under `root` outside `IGNORED_DIRECTORIES`. See `scripts/repo_source_scan.py`."""
+    return rust_source_files(root, EXTRA_IGNORED_DIRECTORIES)
+
+
 def scan(root: Path) -> list[Finding]:
     findings: list[Finding] = []
-    for path in sorted(root.rglob("*.rs")):
+    for path in rust_files(root):
         relative = path.relative_to(root)
         if not is_scanned(relative):
             continue

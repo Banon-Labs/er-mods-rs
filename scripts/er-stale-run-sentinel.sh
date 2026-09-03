@@ -87,7 +87,7 @@
 # Twice on 2026-08-04 "what tore this run down?" could not be answered after the fact -- the reason
 # went to the hook's stdout and nowhere else -- and both guesses were wrong (frida-gadget once, a
 # subagent once). Every check now appends one tab-separated line to $ER_SENTINEL_LOG (default
-# ${XDG_STATE_HOME:-$HOME/.local/state}/er-effects-rs/stale-run-sentinel.log, outside the repo):
+# ${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-rs/stale-run-sentinel.log, outside the repo):
 # timestamp, verdict, branch, edited path, reason, live profiles, killed pids. "Which edit killed
 # the run" is now a lookup.
 #
@@ -111,7 +111,7 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # Outside the repo on purpose: a log the sentinel writes must not itself look like a repo edit, and
 # it has to survive `git clean`. Env-overridable and current-user-aware -- no /home/<someone>
 # literals (AGENTS.md "Reusable Tooling / Hard-Coded Path Corrections").
-SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-effects-rs/stale-run-sentinel.log}"
+SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-rs/stale-run-sentinel.log}"
 
 # Matched EXACTLY against /proc/<pid>/comm -- never a substring match on the full command line,
 # which is how `rsi`-matches-`version` style false positives happen.
@@ -702,7 +702,7 @@ profileVersion = "v1"
 [[supports]]
 game = "eldenring"
 [[natives]]
-path = '/nonexistent/er_effects_rs.dll'
+path = '/nonexistent/er_quickload.dll'
 [[natives]]
 path = '/nonexistent/er_invasion_warp.dll'
 [[natives]]
@@ -739,7 +739,7 @@ TOML
   echo "  -- must TEAR DOWN --"
   # The crate that directly builds a loaded DLL.
   expect_verdict "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" TEARDOWN "crate builds a loaded DLL"
-  expect_verdict "$REPO_ROOT/crates/er-effects-rs/src/lib.rs" TEARDOWN "product crate builds a loaded DLL"
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN "product crate builds a loaded DLL"
   # A DIRECT dependency whose crate name does not resemble the DLL's. This is the case a
   # filename-shaped rule gets wrong: er-invasion-warp-core is not er_invasion_warp.
   expect_verdict "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" TEARDOWN "direct dependency crate of a loaded DLL"
@@ -749,12 +749,16 @@ TOML
   # A crate manifest, not just its sources.
   expect_verdict "$REPO_ROOT/crates/er-gfx/Cargo.toml" TEARDOWN "manifest of a crate in the closure"
   # The logged reason must name the DLL the crate ACTUALLY reaches. er-invasion-warp-core is a
-  # dependency of er_invasion_warp ONLY -- er-effects-rs does not depend on it -- so a reason
-  # that also blamed er_effects_rs.dll would send the next reader hunting the wrong DLL.
+  # dependency of er_invasion_warp ONLY -- er-quickload does not depend on it -- so a reason
+  # that also blamed er_quickload.dll would send the next reader hunting the wrong DLL.
   expect_detail "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" \
     "pkg=er-invasion-warp-core feeds er_invasion_warp.dll" "reason names only the DLL it reaches"
+  # ORDER IS DERIVED, NOT AUTHORED: the reason joins the DLL list in sorted order, so this
+  # literal has to follow the artifact names rather than the other way round. It flipped in the
+  # 2026-08-26 rename -- er_effects_rs.dll sorted BEFORE er_invasion_warp.dll, er_quickload.dll
+  # sorts after it -- and a token-wise rename cannot know that.
   expect_detail "$REPO_ROOT/crates/er-game-base/src/lib.rs" \
-    "feeds er_effects_rs.dll,er_invasion_warp.dll" "reason names BOTH DLLs a shared crate feeds"
+    "feeds er_invasion_warp.dll,er_quickload.dll" "reason names BOTH DLLs a shared crate feeds"
   # Fail-safe: repo source that belongs to no crate and no inert directory.
   expect_verdict "$REPO_ROOT/Cargo.toml" TEARDOWN "workspace manifest (unclassified -> fail safe)"
   expect_verdict "$REPO_ROOT/data/effects.json" TEARDOWN "data/ (unclassified -> fail safe)"

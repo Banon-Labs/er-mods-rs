@@ -2754,6 +2754,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-boot-background"
+version = "0.1.0"
+dependencies = [
+ "er-loading-bar-core",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-boot-profiler"
 version = "0.1.0"
 dependencies = [
@@ -2765,6 +2773,7 @@ dependencies = [
 name = "er-build-export"
 version = "0.1.0"
 dependencies = [
+ "er-build-import-core",
  "serde",
  "serde_json",
 ]
@@ -2774,7 +2783,9 @@ name = "er-build-import"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-import-core",
  "er-build-import-runtime",
+ "er-game-base",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
@@ -2796,6 +2807,7 @@ dependencies = [
  "er-build-import-core",
  "er-game-base",
  "fromsoftware-shared",
+ "serde_json",
  "windows 0.62.2",
 ]
 
@@ -2817,13 +2829,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-charm-enemies"
+name = "er-cover-fade"
 version = "0.1.0"
 dependencies = [
- "eldenring",
- "er-game-base",
- "er-hook",
- "fromsoftware-shared",
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-telemetry-core",
  "windows 0.62.2",
 ]
 
@@ -2860,42 +2871,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-effects-data"
+name = "er-diag-harness"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
+ "er-game-base",
+ "er-hook",
+ "windows 0.62.2",
 ]
 
 [[package]]
-name = "er-effects-rs"
+name = "er-enemynpc-effects"
 version = "0.1.0"
 dependencies = [
- "bitflags 2.13.1",
  "eldenring",
- "er-boot-profiler",
- "er-build-import-core",
- "er-build-import-runtime",
- "er-d3d12-compositor",
  "er-game-base",
- "er-gfx",
  "er-hook",
- "er-loading-bar-core",
- "er-loading-portrait-core",
- "er-quit-menu-core",
- "er-save-loader",
- "er-save-picker-core",
- "er-save-redirect",
- "er-save-suppress",
- "er-scaleform-hooks",
- "er-telemetry-core",
- "er-title-flow",
- "er-tpf",
- "erpx-rs",
+ "er-hotkey-config",
  "fromsoftware-shared",
- "iced-x86",
- "pelite",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "er-ersc-sigshim"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-hook",
 ]
 
 [[package]]
@@ -2928,7 +2929,12 @@ name = "er-hook"
 version = "0.1.0"
 dependencies = [
  "cc",
+ "er-game-base",
 ]
+
+[[package]]
+name = "er-hotkey-config"
+version = "0.1.0"
 
 [[package]]
 name = "er-hotkey-conflicts"
@@ -2956,6 +2962,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-invasion-path"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-invasion-warp-core",
+ "fromsoftware-shared",
+ "hudhook",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-invasion-warp"
 version = "0.1.0"
 dependencies = [
@@ -2974,6 +2993,7 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-game-base",
+ "er-hotkey-config",
  "er-telemetry-core",
  "fromsoftware-shared",
 ]
@@ -3031,9 +3051,10 @@ version = "0.1.0"
 dependencies = [
  "eldenring",
  "er-build-watermark-core",
- "er-effects-data",
  "er-game-base",
  "er-hook",
+ "er-hotkey-config",
+ "er-quickload-data",
  "fromsoftware-shared",
  "hudhook",
  "windows 0.62.2",
@@ -3059,7 +3080,7 @@ dependencies = [
 name = "er-param-inspect"
 version = "0.1.0"
 dependencies = [
- "er-effects-data",
+ "er-quickload-data",
  "er-soulsformats",
 ]
 
@@ -3071,6 +3092,59 @@ dependencies = [
  "er-hook",
  "iced-x86",
  "regex",
+]
+
+[[package]]
+name = "er-profile-summary-core"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-loading-portrait-core",
+ "er-save-loader",
+ "er-telemetry-core",
+]
+
+[[package]]
+name = "er-quickload"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.13.1",
+ "eldenring",
+ "er-boot-background",
+ "er-boot-profiler",
+ "er-build-import-core",
+ "er-build-import-runtime",
+ "er-cover-fade",
+ "er-d3d12-compositor",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "er-loading-bar-core",
+ "er-loading-portrait-core",
+ "er-profile-summary-core",
+ "er-quit-menu-core",
+ "er-save-loader",
+ "er-save-picker-core",
+ "er-save-redirect",
+ "er-save-suppress",
+ "er-scaleform-hooks",
+ "er-telemetry-core",
+ "er-title-flow",
+ "er-tpf",
+ "erpx-rs",
+ "fromsoftware-shared",
+ "iced-x86",
+ "pelite",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-quickload-data"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3086,11 +3160,25 @@ name = "er-quit-menu-core"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-build-import-core",
+ "er-build-import-runtime",
  "er-game-base",
  "er-hook",
  "er-save-loader",
  "er-save-picker-core",
  "er-telemetry-core",
+ "fromsoftware-shared",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-refill-all"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
  "fromsoftware-shared",
  "windows 0.62.2",
 ]
@@ -3226,6 +3314,7 @@ name = "er-telemetry"
 version = "0.1.0"
 dependencies = [
  "eldenring",
+ "er-game-base",
  "er-hook",
  "er-telemetry-core",
  "fromsoftware-shared",
@@ -3931,8 +4020,6 @@ dependencies = [
 [[package]]
 name = "hudhook"
 version = "0.9.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "381fee177b613a67319779752059371cf6bcdb64bd287d9c22bc38b2a0660fbb"
 dependencies = [
  "bitflags 2.13.1",
  "cc",

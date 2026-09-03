@@ -4,9 +4,9 @@
 # Validated ER-window capture only (capture-er-window.py). Tears ER down after the reload commits or
 # a hard cap. Artifacts land under the probe artifact dir (not versioned).
 set -u
-REPO=/home/banon/projects/er-effects-rs
+REPO=/home/banon/projects/er-mods-rs
 ART="${ARTIFACT_DIR:-$REPO/target/runtime-probe/system-quit-repro-selfdrive}"
-TELEM="$ART/er-effects-telemetry.json"
+TELEM="$ART/er-quickload-telemetry.json"
 OUT="$ART/msgbox-capture"
 CAP="$REPO/scripts/capture-er-window.py"
 mkdir -p "$OUT"

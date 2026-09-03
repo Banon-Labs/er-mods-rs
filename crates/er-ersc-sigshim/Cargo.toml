@@ -1,0 +1,29 @@
+[package]
+name = "er-ersc-sigshim"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Signature shim for Seamless Co-op v1.9.9 on ELDEN RING 1.17.0.0.
+#
+# ersc.dll locates the game's `DLAllocator` getter by scanning for one call site inside
+# `GetWwiseSettings`. In 1.17 that object's layout grew by 0x38, so the site's trailing
+# `lea rcx,[rbx+0x20]` became `lea rcx,[rbx+0x58]`, ersc's scan finds nothing, and it aborts
+# with "No such pattern" (signatures.cpp:1399) before the game window ever appears.
+#
+# This crate does NOT rewrite that instruction -- the game needs the 0x58. It rebuilds the
+# byte sequence ersc looks for in an unused 0xCC cave, with both RIP-relative operands
+# re-based so they resolve to the SAME targets the real 1.17 site resolves to. ersc finds
+# the shape it expects and reads the correct 1.17 allocator out of it.
+[lib]
+name = "er_ersc_sigshim"
+crate-type = ["cdylib"]
+
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+
+[lints]
+workspace = true

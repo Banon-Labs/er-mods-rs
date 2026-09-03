@@ -1,5 +1,5 @@
 # Loading-screen portrait + character-stats feature crate (path B + capture pipeline),
-# extracted from the root er-effects-rs DLL (portrait crate split, docs/plans/
+# extracted from the root er-quickload DLL (portrait crate split, docs/plans/
 # portrait-stats-crate-split.md). Product state crosses the seam through
 # `host::install_host` function pointers (the `set_frame_provider` pattern); this crate
 # must NOT depend on the root crate, er-loading-bar-core, or er-d3d12-compositor.
@@ -49,6 +49,11 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Dxgi",
   "Win32_Graphics_Dxgi_Common",
   "Win32_Graphics_Direct3D",
+  # `D3DCompile`, for the boot-view fade / overlay pixel+vertex shaders in `gpu_draw_shared`
+  # (moved here by the loading-cover extraction). Cargo unified this feature in from the root
+  # crate while it was the only consumer, so a `-p er-loading-portrait-core` build is what
+  # proves the crate declares its own dependencies.
+  "Win32_Graphics_Direct3D_Fxc",
 ] }
 # LINT PARITY (root `[workspace.lints]`): this crate is at ZERO clippy + rustc warnings on its
 # shipping target (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`),

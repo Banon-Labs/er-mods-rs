@@ -22,11 +22,11 @@ const API_HOST: &str = "api.github.com";
 /// needs; asking for fewer would risk a burst of same-day pre-releases hiding an older one that
 /// somebody is actually running.
 #[cfg(windows)]
-const RELEASES_PATH: &str = "/repos/Banon-Labs/er-effects-rs/releases?per_page=12";
+const RELEASES_PATH: &str = "/repos/Banon-Labs/er-mods-rs/releases?per_page=12";
 
 /// GitHub rejects requests with no User-Agent outright, so this is required, not decoration.
 #[cfg(windows)]
-const USER_AGENT: &str = "er-effects-rs-build-watermark";
+const USER_AGENT: &str = "er-mods-rs-build-watermark";
 
 /// Body cap for the releases response.
 ///
