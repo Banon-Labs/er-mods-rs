@@ -40,6 +40,11 @@ members = [
   # Hotkey toggle that keeps every loaded enemy under a configured SpEffect. Standalone
   # shell with no product dependency: a DirectInput keyboard read and a FrameBegin sweep.
   "crates/er-enemynpc-effects",
+  # Stack layer 1 of the "become an NPC" mod: the hot-reloading config file, the keyboard and
+  # controller hotkeys, and the seam the possession engine plugs into. Installs no detour and
+  # writes no game memory -- it polls its two hotkeys from a FrameBegin task -- so nothing here
+  # depends on the reverse engineering the later layers need.
+  "crates/er-npc-possess",
   "crates/er-player-name-filter",
   "crates/er-save-disable",
   "crates/er-save-suppress",
