@@ -36,6 +36,70 @@ set -uo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 
+# --- who may run this, and how many at once -------------------------------------------------
+# BOTH REFUSALS BELOW ARE MEASUREMENTS, NOT POLICY PREFERENCES. On 2026-09-02 three subagents
+# dispatched to do reverse engineering each ran ~72 minutes. The research was not the cost: the
+# Ghidra MCP accounted for 51 calls totalling 59 seconds across one of them. What consumed the
+# time was THIS FILE, run repeatedly, concurrently, by every one of them.
+#
+# 1. AGENT WORKTREES. Each subagent works in its own .claude/worktrees/agent-<id> checkout with
+#    its own target/, so nothing shares a build cache and each run is a cold compile of the 24
+#    cargo gates below. Four overlapped on this 16-core box: load average 54.26, and a run that
+#    costs minutes on a quiet tree was still unfinished at 19 minutes. Then, because that far
+#    outruns the harness Bash timeout, each agent sleep-polled its own run -- 18x `sleep 118`
+#    = 2003s for one, 60x `timeout 28 sleep 27` = 1330s for another. A poll costs a whole model
+#    turn, not merely its sleep; one agent spent 33 of its 45 tool-minutes asleep.
+#
+#    A subagent does not need this file. It needs `cargo test -p <its crate>` plus the specific
+#    scripts/<gate>.py its edit touches -- seconds, and an answer to the question it actually
+#    has. The whole-workspace verdict is the orchestrator's, once, at integration.
+#
+# 2. CONCURRENCY, whoever the caller is. Two runs of this suite do not merely take twice as
+#    long, they degrade each other's ANSWER: the summary classifies steps as INCONCLUSIVE
+#    (killed before a verdict) and NOT RUN, and a contended box manufactures both. A green from
+#    a quiet tree is the only green that means anything, so a second concurrent run is refused
+#    rather than queued -- queueing would just re-create the polling that caused this.
+#
+# Both refusals happen BEFORE the summary trap installs, so a refusal prints one line rather
+# than a 234-row table of steps that never ran. Deliberate override: ER_CHECK_FORCE=1.
+if [[ "${ER_CHECK_FORCE:-}" != "1" && "$repo_root" == */.claude/worktrees/agent-* ]]; then
+	echo "check.sh: REFUSED -- this is an agent worktree ($repo_root)." >&2
+	echo "  Validate your own change instead: cargo test -p <crate>, plus the specific" >&2
+	echo "  scripts/<gate>.py your edit touches. Naming the crates is your work; the build" >&2
+	echo "  system's answer to an unscoped request is always 'all of it'." >&2
+	echo "  Measured 2026-09-02: three subagents ran this file repeatedly and spent 2003s and" >&2
+	echo "  1330s merely sleep-polling their own runs. See bd" >&2
+	echo "  subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02." >&2
+	echo "  Deliberate override: ER_CHECK_FORCE=1 bash scripts/check.sh" >&2
+	exit 2
+fi
+
+# Machine-wide, NOT $repo_root-relative: every agent worktree is a separate checkout, so a lock
+# under the repo would be per-worktree and would therefore never see the contention it exists to
+# prevent. XDG_RUNTIME_DIR is per-user and tmpfs-backed; /tmp is the fallback. If flock is absent
+# the gate runs anyway -- a missing tool must not make the suite unrunnable.
+_check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
+if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
+	exec 9>"$_check_lock" || true
+	if ! flock -n 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		echo "check.sh: REFUSED -- another run already holds $_check_lock (pid ${_holder:-unknown})." >&2
+		echo "  Concurrent runs do not just take longer, they corrupt each other's verdict:" >&2
+		echo "  contention produces INCONCLUSIVE and NOT RUN steps, which are not passes." >&2
+		echo "  Wait for that run and read ITS result, or override with ER_CHECK_FORCE=1." >&2
+		exit 2
+	fi
+	echo "$$" >&9
+	# ...and a STEP of this suite may re-enter this preamble. test-check-sh-accumulates.py lifts
+	# it verbatim and drives it over synthetic suites -- deliberately, because testing a copy
+	# would prove nothing about the file that runs. Those children are not a second run competing
+	# for the box; they are this run's own steps, and the lock they find held is their parent's.
+	# Without this marker every one of them exits 2 here and the gate reports thirteen failures
+	# that have nothing to do with accumulation, which is exactly what CI showed on 2026-09-02.
+	# Exported, so it reaches a grandchild through python/bash alike.
+	export ER_CHECK_LOCK_HELD=1
+fi
+
 # --- failure accumulation ------------------------------------------------------------------
 # The ERR trap fires on exactly the commands `set -e` would have exited on -- and, verified on
 # this bash, NOT on the left side of `||`/`&&` -- so the `command -v opa >/dev/null && opa test ...`
@@ -627,6 +691,7 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/edit_no_tmp_scripts_guard.rego" "$repo_root/.cupcake/tests/edit_no_tmp_scripts_guard_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_unbacked_claim.rego" "$repo_root/.cupcake/tests/no_unbacked_claim_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_repo_network_banners_prompt_context.rego" "$repo_root/.cupcake/tests/no_repo_network_banners_prompt_context_test.rego"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/require_scoped_cargo.rego" "$repo_root/.cupcake/tests/require_scoped_cargo_test.rego"
 # AND THE HALF `opa test` CANNOT REACH. A green policy suite does not mean production-allowed or
 # production-denied: these suites feed raw multi-line text the engine never delivers -- it
 # collapses newlines to spaces outside balanced quoted spans, and the production shim rewrites
@@ -1327,6 +1392,15 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-profile-summary-core
 # versioned). `check-rust-build.sh` keeps both crates building for the shipping target.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-invasion-warp-core -p er-invasion-warp
+
+# er-hotkey-conflicts is almost entirely host-testable, and deliberately so: its product is a
+# WARNING that names modules, and the ways it can be wrong -- attributing a call to the wrong DLL,
+# conflating a whole-keyboard read with a specific key, decoding the game's binding table onto the
+# wrong scancode, a settle gate that never fires -- are all pure logic that would otherwise cost a
+# game launch to find and would surface as a confident accusation against an innocent mod. The
+# crate is windows-only to ship and the workspace pins `default-members` to er-effects-rs, so
+# nothing else in any gate would ever run these.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed NOTHING ran them: the workspace

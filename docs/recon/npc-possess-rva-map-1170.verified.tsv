@@ -1,0 +1,201 @@
+# 1.16.2 VA	1.17 VA	verdict	ratio	insns compared	how it was mapped	entry	extent
+# Written by scripts/verify-rva-map-1170.py --tsv, which TRUNCATES this file and
+# writes only what that run verified. Rows it did not produce are carried forward
+# verbatim under '# CARRIED FORWARD' at the foot and named on stderr, so a narrow
+# run cannot quietly delete a hand-derived pair -- but a row still leaves the
+# moment someone deletes its line, and nothing restores it.
+#
+# A verdict is evidence, not permission: IDENTICAL means the normalised
+# instruction sequences agree, which cannot see a change in what a called
+# function does.
+#
+# IDENTICAL vs IDENTICAL-WHOLE/IDENTICAL-LEAF is the difference between a PREFIX
+# and an EXHAUSTIVE comparison. IDENTICAL stopped somewhere -- at a `ret`, at the
+# instruction limit -- and says nothing about the instruction after it, which is
+# why er-game-base/build.rs holds it to MIN_VERIFIED_INSNS. The other two covered
+# every instruction of both bodies and found them the same length, so there is no
+# next instruction to be unsure about and no floor to impose. IDENTICAL-LEAF is
+# the same claim where the end had to be DECODED because neither image declares a
+# .pdata entry; it additionally carries the relocation check .pdata would have
+# stood in for. IDENTICAL-PREFIX is what a truncated comparison says instead of
+# lying: streams matched, coverage unknown, nothing accepts it.
+#
+# IDENTICAL-LEAF-NOPATCH is an IDENTICAL-LEAF that cannot be hooked: same whole-
+# body proof, same decoded extents, same relocation check -- and the body is
+# shorter than the five bytes MinHook writes, with MinHook's own ported rules
+# refusing the site in both images. er-game-base/build.rs admits it to
+# VERIFIED_1162_TO_1170 (CALL and READ) and to NOTHING else. It exists because
+# those two decisions used to be one: a three-byte getter was reported
+# IDENTICAL-SHORT, which withdrew it from comparing as well as from hooking.
+#
+# PATCH-SITE-IDENTICAL is none of those: the two bodies DIFFER, and the
+# difference is nowhere near the detour. Both images' .pdata declare a function
+# starting at the pair, the comparison covered both bodies in full, MinHook's own
+# trampoline walk (ported from vendor/minhook) succeeds at both and consumes the
+# same instructions, and every differing instruction lies strictly after the last
+# one it relocates -- so the patch overwrites the same prologue and the trampoline
+# returns into the same instruction. The difference is additionally capped at a
+# localised edit, and any substituted instruction refuses it outright. Re-run
+# `verify-rva-map-1170.py <va>` on such a row to see the hunks and the window.
+#
+# The entry column is the OTHER half of a detour's licence: whether each image's own
+# .pdata declares a function to start at that address. er-game-base/build.rs
+# requires BOTH-ENTRIES before a row may carry a detour, because IDENTICAL over a
+# body says the code is the same and says nothing about whether MinHook may
+# relocate the five bytes it is about to overwrite.
+#
+# The extent column shows where each body's end came from and, when the two
+# disagree, by how much: PDATA:0x120b/0x1213+8 is a body that GREW, which is
+# evidence of a change that costs no decoding to see.
+0x1403c8c40	0x1403c8c50	IDENTICAL-LEAF	1.000	17	unique, 40B signature, 26B fixed	NEITHER-ENTRY	LEAF:0x35/0x35
+0x140492cb0	0x140493210	IDENTICAL-WHOLE	1.000	99	unique, 41B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x170/0x170
+0x140403a60	0x140403dd0	IDENTICAL-WHOLE	1.000	174	unique, 42B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x2a5/0x2a5
+0x14050a570	0x14050b340	IDENTICAL-WHOLE	1.000	126	unique, 42B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x233/0x233
+0x1404cd710	0x1404ce4e0	IDENTICAL-WHOLE	1.000	83	unique, 40B signature, 32B fixed	BOTH-ENTRIES	PDATA:0x118/0x118
+0x1404cd870	0x1404ce640	IDENTICAL-WHOLE	1.000	37	unique, 42B signature, 33B fixed	BOTH-ENTRIES	PDATA:0x78/0x78
+0x1403ef830	0x1403efa60	BYTE-IDENTICAL	1.000	47	unique, 39B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x2f/0x2f
+0x14048c310	0x14048c870	IDENTICAL-WHOLE	1.000	60	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x141/0x141
+0x140303ec0	0x140303ed0	IDENTICAL-LEAF	1.000	3	nearest-anchor delta +0x10, 9 shape candidates	NEITHER-ENTRY	LEAF:0xb/0xb
+0x14043aa30	0x14043af90	IDENTICAL-WHOLE	1.000	20	unique, 42B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x42/0x42
+0x1403cf340	0x1403cf350	IDENTICAL-LEAF	1.000	1	RTTI vtable slot ComManipulator+0x48	NEITHER-ENTRY	LEAF:0x5/0x5
+0x1403cf2a0	0x1403cf2b0	IDENTICAL-WHOLE	1.000	35	unique, 42B signature, 26B fixed	BOTH-ENTRIES	PDATA:0x96/0x96
+0x1403d0250	0x1403d0260	IDENTICAL-WHOLE	1.000	265	nearest-anchor delta +0x10, 9 shape candidates	BOTH-ENTRIES	PDATA:0x46f/0x46f
+0x1403c7800	0x1403c7810	IDENTICAL-WHOLE	1.000	57	unique, 40B signature, 27B fixed	BOTH-ENTRIES	PDATA:0xe6/0xe6
+0x1403c8da0	0x1403c8db0	IDENTICAL-WHOLE	1.000	134	unique, 41B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x22c/0x22c
+0x1404016d0	0x140401a30	IDENTICAL-WHOLE	1.000	296	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x4f5/0x4f5
+0x140400960	0x140400c50	IDENTICAL-LEAF	1.000	3	unique, 14B signature, 8B fixed	NEITHER-ENTRY	LEAF:0xe/0xe
+0x1403c52a0	0x1403c52b0	IDENTICAL-WHOLE	1.000	204	nearest-anchor delta +0x10, 9 shape candidates	BOTH-ENTRIES	PDATA:0x2e1/0x2e1
+0x1403c4d50	0x1403c4d60	IDENTICAL-WHOLE	1.000	245	unique, 44B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x547/0x547
+0x1403d8660	0x1403d8670	IDENTICAL-WHOLE	1.000	111	unique, 40B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x212/0x212
+0x1403d88a0	0x1403d88b0	IDENTICAL-WHOLE	1.000	62	nearest-anchor delta +0x10, 2 shape candidates	BOTH-ENTRIES	PDATA:0xe8/0xe8
+0x1403c6f40	0x1403c6f50	IDENTICAL-LEAF	1.000	5	unique, 17B signature, 11B fixed	NEITHER-ENTRY	LEAF:0x11/0x11
+0x1404d0c30	0x1404d1a00	IDENTICAL-WHOLE	1.000	33	unique, 40B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x7b/0x7b
+0x140660120	0x140660f70	NEAR	0.993	489	RTTI vtable slot PlayerIns+0x88	BOTH-ENTRIES	PDATA:0x7f0/0x7f0
+0x1403cda90	0x1403cdaa0	IDENTICAL-LEAF-NOPATCH	1.000	1	RTTI vtable slot ChrManipulator+0x48	NEITHER-ENTRY	LEAF:0x3/0x3
+0x1403d9f20	0x1403d9f30	IDENTICAL-WHOLE	1.000	60	unique, 42B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x107/0x107
+0x1403daa80	0x1403daa90	IDENTICAL-WHOLE	1.000	600	nearest-anchor delta +0x10, 3 shape candidates	BOTH-ENTRIES	PDATA:0xa46/0xa46
+0x1403d4280	0x1403d4290	BYTE-IDENTICAL	1.000	55	unique, 42B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x37/0x37
+0x1403d3b00	0x1403d3b10	IDENTICAL-WHOLE	1.000	399	nearest-anchor delta +0x10, 3 shape candidates	BOTH-ENTRIES	PDATA:0x776/0x776
+0x1403e08f0	0x1403e0900	DIVERGES	0.750	4	RTTI vtable slot RideManipulator+0x50	NEITHER-ENTRY	NONE
+0x140406d40	0x140407270	IDENTICAL-WHOLE	1.000	20	nearest-anchor delta +0x530, 9 shape candidates	BOTH-ENTRIES	PDATA:0x45/0x45
+0x140407c60	0x140408190	IDENTICAL-WHOLE	1.000	159	unique, 42B signature, 36B fixed	BOTH-ENTRIES	PDATA:0x285/0x285
+0x140507ff0	0x140508dc0	IDENTICAL-WHOLE	1.000	26	unique, 42B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x57/0x57
+0x1403f4040	0x1403f4270	IDENTICAL-WHOLE	1.000	20	unique, 41B signature, 26B fixed	BOTH-ENTRIES	PDATA:0x3f/0x3f
+0x1403b11c0	0x1403b11d0	NEAR	0.997	688	unique, 40B signature, 29B fixed	BOTH-ENTRIES	PDATA:0xc0c/0xc0c
+0x14067a7a0	0x14067b5f0	IDENTICAL-LEAF	1.000	5	unique, 22B signature, 15B fixed	NEITHER-ENTRY	LEAF:0x16/0x16
+0x140716260	0x1407170b0	IDENTICAL-WHOLE	1.000	1069	caller rel32, 2 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x1264/0x1264
+0x140508050	0x140508e20	IDENTICAL-WHOLE	1.000	40	unique, 41B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x98/0x98
+0x1403b5ac0	0x1403b5ad0	IDENTICAL-WHOLE	1.000	511	unique, 40B signature, 24B fixed	BOTH-ENTRIES	PDATA:0x948/0x948
+0x140affe40	0x140b012d0	IDENTICAL-WHOLE	1.000	184	unique, 41B signature, 32B fixed	BOTH-ENTRIES	PDATA:0x374/0x374
+0x14065a330	0x14065b180	IDENTICAL-WHOLE	1.000	48	topology size+callees+callers	BOTH-ENTRIES	PDATA:0xd8/0xd8
+0x140659eb0	0x14065ad00	IDENTICAL-WHOLE	1.000	45	nearest-anchor delta +0xe50, 2 shape candidates	BOTH-ENTRIES	PDATA:0xc5/0xc5
+0x1405110e0	0x140511ee0	IDENTICAL-WHOLE	1.000	128	unique, 46B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x273/0x273
+0x140df35f7	0x142066514	DIVERGES	0.833	6	thunk target, byte-identical mov rax,[rcx+0xb8]	NEITHER-ENTRY	NONE
+0x140513210	0x140514010	IDENTICAL-LEAF	1.000	1	caller rel32, 4 agreeing caller(s)	NEITHER-ENTRY	LEAF:0x5/0x5
+0x140492e20	0x140493380	IDENTICAL-WHOLE	1.000	166	unique, 41B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x25a/0x25a
+0x140492a90	0x140492ff0	IDENTICAL-WHOLE	1.000	144	nearest-anchor delta +0x560, 2 shape candidates	BOTH-ENTRIES	PDATA:0x217/0x217
+0x140493140	0x1404936a0	IDENTICAL-WHOLE	1.000	139	unique, 42B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x20b/0x20b
+0x1404942a0	0x140494800	IDENTICAL-WHOLE	1.000	104	nearest-anchor delta +0x560, 9 shape candidates	BOTH-ENTRIES	PDATA:0x198/0x198
+0x1404ba980	0x1404baea0	IDENTICAL-WHOLE	1.000	639	caller rel32, 2 agreeing caller(s)	BOTH-ENTRIES	PDATA:0xaf7/0xaf7
+0x140494440	0x1404949a0	IDENTICAL-WHOLE	1.000	351	nearest-anchor delta +0x560, 3 shape candidates	BOTH-ENTRIES	PDATA:0x563/0x563
+0x1403e6e00	0x1403e6e30	PATCH-SITE-IDENTICAL	0.999	467	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x998/0x99f+7
+0x140402800	0x140402b70	IDENTICAL-LEAF	1.000	16	unique, 43B signature, 38B fixed	NEITHER-ENTRY	LEAF:0x34/0x34
+0x14048dc10	0x14048e170	IDENTICAL-WHOLE	1.000	196	unique, 45B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x361/0x361
+0x1404caaf0	0x1404cb680	DIVERGES	0.728	516	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x8a8/0xa4f+423
+0x1404cd460	0x1404ce230	IDENTICAL-LEAF	1.000	9	unique, 33B signature, 19B fixed	NEITHER-ENTRY	LEAF:0x21/0x21
+0x1403e5bc0	0x1403e5bd0	IDENTICAL-LEAF	1.000	56	topology size+callees+callers	NEITHER-ENTRY	LEAF:0xc8/0xc8
+0x1403e62f0	0x1403e6320	IDENTICAL-WHOLE	1.000	73	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x14c/0x14c
+0x1404cdcc0	0x1404cea90	IDENTICAL-WHOLE	1.000	46	unique, 41B signature, 19B fixed	BOTH-ENTRIES	PDATA:0xe0/0xe0
+0x140494a50	0x140494fb0	IDENTICAL-WHOLE	1.000	69	unique, 40B signature, 28B fixed	BOTH-ENTRIES	PDATA:0xde/0xde
+0x140e76ea0	0x140e78ca0	IDENTICAL-WHOLE	1.000	73	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0xee/0xee
+0x1403f2a90	0x1403f2cc0	IDENTICAL-WHOLE	1.000	25	nearest-anchor delta +0x230, 2 shape candidates	BOTH-ENTRIES	PDATA:0x6e/0x6e
+0x1404032d0	0x140403640	IDENTICAL-LEAF	1.000	4	nearest-anchor delta +0x370, 9 shape candidates	NEITHER-ENTRY	LEAF:0xe/0xe
+0x1404032e0	0x140403650	IDENTICAL-LEAF	1.000	3	caller rel32, 10 agreeing caller(s)	NEITHER-ENTRY	LEAF:0xb/0xb
+0x1404ce0a0	0x1404cee70	IDENTICAL-WHOLE	1.000	365	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x5f8/0x5f8
+0x1403f2470	0x1403f26a0	IDENTICAL-WHOLE	1.000	274	nearest-anchor delta +0x230, 2 shape candidates	BOTH-ENTRIES	PDATA:0x439/0x439
+0x14048fbf0	0x140490150	IDENTICAL-WHOLE	1.000	420	topology size+callees+callers	BOTH-ENTRIES	PDATA:0x69e/0x69e
+0x140506f30	0x140507d00	IDENTICAL-WHOLE	1.000	18	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x43/0x43
+0x140494f50	0x1404954b0	IDENTICAL-WHOLE	1.000	58	nearest-anchor delta +0x560, 3 shape candidates	BOTH-ENTRIES	PDATA:0xed/0xed
+0x1405ee180	0x1405eefd0	IDENTICAL-WHOLE	1.000	116	unique, 45B signature, 33B fixed	BOTH-ENTRIES	PDATA:0x209/0x209
+0x1403f73e0	0x1403f7610	IDENTICAL-LEAF	1.000	27	unique, 17B signature, 13B fixed	NEITHER-ENTRY	LEAF:0x7a/0x7a
+0x14050e1a0	0x14050efa0	IDENTICAL-WHOLE	1.000	171	unique, 46B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x2f8/0x2f8
+0x140e9ce30	0x140e9ec30	IDENTICAL-WHOLE	1.000	197	topology size+callees+callers	BOTH-ENTRIES	PDATA:0x368/0x368
+0x1403ef730	0x1403ef960	IDENTICAL-WHOLE	1.000	52	unique, 42B signature, 23B fixed	BOTH-ENTRIES	PDATA:0xfe/0xfe
+0x1403c8610	0x1403c8620	IDENTICAL-WHOLE	1.000	212	unique, 41B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x368/0x368
+0x1403cd180	0x1403cd190	IDENTICAL-WHOLE	1.000	80	unique, 46B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x16a/0x16a
+0x14045f910	0x14045fe70	IDENTICAL-LEAF	1.000	7	unique, 34B signature, 20B fixed	NEITHER-ENTRY	LEAF:0x22/0x22
+0x14045f7a0	0x14045fd00	BYTE-IDENTICAL	1.000	57	unique, 43B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x39/0x39
+0x140461a00	0x140461f60	IDENTICAL-WHOLE	1.000	179	unique, 47B signature, 34B fixed	BOTH-ENTRIES	PDATA:0x332/0x332
+0x140454c00	0x140455160	IDENTICAL-LEAF-NOPATCH	1.000	2	caller rel32, 1 agreeing caller(s)	NEITHER-ENTRY	LEAF:0x4/0x4
+0x140c456b0	0x140c46d80	IDENTICAL-WHOLE	1.000	54	unique, 42B signature, 31B fixed	BOTH-ENTRIES	PDATA:0xe4/0xe4
+0x1403da750	0x1403da760	IDENTICAL-WHOLE	1.000	189	unique, 43B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x32e/0x32e
+0x1403f0bf0	0x1403f0e20	IDENTICAL-WHOLE	1.000	9	nearest-anchor delta +0x230, 9 shape candidates	BOTH-ENTRIES	PDATA:0x1b/0x1b
+0x140679630	0x14067a480	IDENTICAL-LEAF	1.000	5	nearest-anchor delta +0xe50, 9 shape candidates	NEITHER-ENTRY	LEAF:0x13/0x13
+0x14061e270	0x14061f0c0	IDENTICAL-WHOLE	1.000	69	unique, 40B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x103/0x103
+0x1404e9ad0	0x1404ea8a0	IDENTICAL-LEAF	1.000	8	unique, 30B signature, 21B fixed	NEITHER-ENTRY	LEAF:0x1e/0x1e
+0x1403d99e0	0x1403d99f0	IDENTICAL-WHOLE	1.000	100	unique, 41B signature, 26B fixed	BOTH-ENTRIES	PDATA:0x1cd/0x1cd
+0x1403d9bb0	0x1403d9bc0	IDENTICAL-WHOLE	1.000	97	nearest-anchor delta +0x10, 9 shape candidates	BOTH-ENTRIES	PDATA:0x1a6/0x1a6
+0x140c9f430	0x140ca0b00	IDENTICAL-WHOLE	1.000	160	unique, 44B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x28f/0x28f
+0x140c9f770	0x140ca0e40	IDENTICAL-WHOLE	1.000	57	unique, 44B signature, 28B fixed	BOTH-ENTRIES	PDATA:0xf5/0xf5
+0x1403cd370	0x1403cd380	IDENTICAL-LEAF	1.000	24	unique, 45B signature, 25B fixed	NEITHER-ENTRY	LEAF:0x7e/0x7e
+0x1403c76d0	0x1403c76e0	IDENTICAL-WHOLE	1.000	61	unique, 41B signature, 30B fixed	BOTH-ENTRIES	PDATA:0xf3/0xf3
+0x1404e8060	0x1404e8e30	IDENTICAL-WHOLE	1.000	144	unique, 46B signature, 33B fixed	BOTH-ENTRIES	PDATA:0x29a/0x29a
+0x1404e5860	0x1404e6630	IDENTICAL-WHOLE	1.000	100	unique, 41B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x179/0x179
+0x1404e4d20	0x1404e5af0	IDENTICAL-WHOLE	1.000	459	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x763/0x763
+0x140474550	0x140474ab0	IDENTICAL-LEAF	1.000	2	caller rel32, 3 agreeing caller(s)	NEITHER-ENTRY	LEAF:0x9/0x9
+0x140509f90	0x14050ad60	BYTE-IDENTICAL	1.000	64	nearest-anchor delta +0xdd0, 4 shape candidates	BOTH-ENTRIES	PDATA:0x40/0x40
+0x1404275e0	0x140427b30	NEAR	0.960	911	unique, 40B signature, 35B fixed	BOTH-ENTRIES	PDATA:0x12ac/0x12ac
+0x140425ba0	0x1404260f0	NEAR	0.994	452	unique, 43B signature, 33B fixed	BOTH-ENTRIES	PDATA:0x875/0x875
+0x1403f3b90	0x1403f3dc0	IDENTICAL	1.000	75	unique, 40B signature, 26B fixed	NEITHER-ENTRY	NONE
+0x1404483b0	0x140448910	IDENTICAL-WHOLE	1.000	703	unique, 40B signature, 29B fixed	BOTH-ENTRIES	PDATA:0xc03/0xc03
+0x140656e60	0x140657cb0	IDENTICAL-WHOLE	1.000	17	nearest-anchor delta +0xe50, 3 shape candidates	BOTH-ENTRIES	PDATA:0x30/0x30
+0x140401bd0	0x140401f30	IDENTICAL-WHOLE	1.000	30	unique, 45B signature, 25B fixed	BOTH-ENTRIES	PDATA:0x9d/0x9d
+0x140405b80	0x1404060b0	IDENTICAL-WHOLE	1.000	178	unique, 41B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x348/0x348
+0x140430960	0x140430eb0	IDENTICAL-WHOLE	1.000	90	unique, 40B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x16e/0x16e
+0x14041b740	0x14041bc70	IDENTICAL-WHOLE	1.000	45	unique, 43B signature, 34B fixed	BOTH-ENTRIES	PDATA:0xc1/0xc1
+0x140c14370	0x140c15a40	BYTE-IDENTICAL	1.000	80	unique, 40B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x50/0x50
+0x1404266d0	0x140426c20	IDENTICAL-WHOLE	1.000	193	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x30f/0x30f
+0x140426e60	0x1404273b0	IDENTICAL-WHOLE	1.000	199	unique, 41B signature, 24B fixed	BOTH-ENTRIES	PDATA:0x341/0x341
+0x1404269e0	0x140426f30	IDENTICAL-WHOLE	1.000	52	unique, 40B signature, 29B fixed	BOTH-ENTRIES	PDATA:0xd3/0xd3
+0x140429db0	0x14042a300	IDENTICAL-WHOLE	1.000	141	nearest-anchor delta +0x550, 9 shape candidates	BOTH-ENTRIES	PDATA:0x23c/0x23c
+0x140426ca0	0x1404271f0	IDENTICAL-WHOLE	1.000	61	unique, 41B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x110/0x110
+0x14042f150	0x14042f6a0	DIVERGES	0.881	193	unique, 44B signature, 25B fixed	BOTH-ENTRIES	PDATA:0x3f6/0x3f6
+0x1404cf040	0x1404cfe10	IDENTICAL-WHOLE	1.000	128	unique, 42B signature, 29B fixed	BOTH-ENTRIES	PDATA:0x1e9/0x1e9
+0x1403e9380	0x1403e9560	IDENTICAL-LEAF-NOPATCH	1.000	2	RTTI vtable slot ChrIns+0x320	NEITHER-ENTRY	LEAF:0x4/0x4
+0x1403f4b90	0x1403f4dc0	IDENTICAL-LEAF	1.000	3	nearest-anchor delta +0x230, 3 shape candidates	NEITHER-ENTRY	LEAF:0xa/0xa
+0x140652280	0x1406530d0	IDENTICAL-WHOLE	1.000	125	unique, 40B signature, 30B fixed	BOTH-ENTRIES	PDATA:0x1ed/0x1ed
+0x140d24130	0x140d25840	IDENTICAL-WHOLE	1.000	52	unique, 41B signature, 31B fixed	BOTH-ENTRIES	PDATA:0xe6/0xe6
+0x140d240e0	0x140d257f0	IDENTICAL-WHOLE	1.000	22	unique, 34B signature, 26B fixed	BOTH-ENTRIES	PDATA:0x44/0x44
+0x140d23090	0x140d24760	IDENTICAL-WHOLE	1.000	56	unique, 41B signature, 31B fixed	BOTH-ENTRIES	PDATA:0xe9/0xe9
+0x1404fa350	0x1404fb120	IDENTICAL-WHOLE	1.000	104	unique, 40B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x185/0x185
+0x1405ed760	0x1405ee5b0	IDENTICAL-WHOLE	1.000	37	nearest-anchor delta +0xe50, 2 shape candidates	BOTH-ENTRIES	PDATA:0x94/0x94
+0x1405e2060	0x1405e2eb0	BYTE-IDENTICAL	1.000	134	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x86/0x86
+0x140c144d0	0x140c15ba0	BYTE-IDENTICAL	1.000	134	unique, 43B signature, 28B fixed	BOTH-ENTRIES	PDATA:0x86/0x86
+0x140406a60	0x140406f90	IDENTICAL-LEAF	1.000	13	nearest-anchor delta +0x530, 3 shape candidates	NEITHER-ENTRY	LEAF:0x38/0x38
+0x1403c3f30	0x1403c3f40	IDENTICAL-LEAF	1.000	2	caller rel32, 1 agreeing caller(s)	NEITHER-ENTRY	LEAF:0x6/0x6
+0x140303a70	0x140303a80	IDENTICAL-WHOLE	1.000	53	unique, 40B signature, 25B fixed	BOTH-ENTRIES	PDATA:0xfb/0xfb
+0x14041bce0	0x14041c220	IDENTICAL-WHOLE	1.000	15	unique, 24B signature, 15B fixed	BOTH-ENTRIES	PDATA:0x42/0x42
+0x140c07a40	0x140c09110	IDENTICAL-LEAF	1.000	9	unique, 16B signature, 14B fixed	NEITHER-ENTRY	LEAF:0x17/0x17
+0x140c13f40	0x140c15610	IDENTICAL-WHOLE	1.000	129	nearest-anchor delta +0x16d0, 9 shape candidates	BOTH-ENTRIES	PDATA:0x1e9/0x1e9
+0x1403c00f0	0x1403c0100	IDENTICAL-WHOLE	1.000	38	unique, 43B signature, 28B fixed	BOTH-ENTRIES	PDATA:0xae/0xae
+0x1403c7ed0	0x1403c7ee0	IDENTICAL-LEAF	1.000	4	nearest-anchor delta +0x10, 9 shape candidates	NEITHER-ENTRY	LEAF:0x14/0x14
+0x1403b1e90	0x1403b1ea0	IDENTICAL-WHOLE	1.000	45	unique, 41B signature, 29B fixed	BOTH-ENTRIES	PDATA:0xc0/0xc0
+0x1403cda40	0x1403cda50	IDENTICAL-LEAF	1.000	3	nearest-anchor delta +0x10, 9 shape candidates	NEITHER-ENTRY	LEAF:0x8/0x8
+0x1404e2140	0x1404e2f10	IDENTICAL-WHOLE	1.000	65	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x12f/0x12f
+0x1404e0ab0	0x1404e1880	IDENTICAL-WHOLE	1.000	134	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x231/0x231
+0x1404d4a00	0x1404d57d0	BYTE-IDENTICAL	1.000	144	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x90/0x90
+0x1404d4be0	0x1404d59b0	IDENTICAL-WHOLE	1.000	36	nearest-anchor delta +0xdd0, 2 shape candidates	BOTH-ENTRIES	PDATA:0x78/0x78
+0x1404de7f0	0x1404df5c0	BYTE-IDENTICAL	1.000	117	unique, 43B signature, 31B fixed	BOTH-ENTRIES	PDATA:0x75/0x75
+0x140772a80	0x140773900	IDENTICAL-WHOLE	1.000	1366	caller rel32, 1 agreeing caller(s)	BOTH-ENTRIES	PDATA:0x16c2/0x16c2
+0x140771bd0	0x140772a50	IDENTICAL-WHOLE	1.000	98	unique, 40B signature, 32B fixed	BOTH-ENTRIES	PDATA:0x195/0x195
+0x140437280	0x1404377e0	IDENTICAL-LEAF	1.000	3	unique, 15B signature, 7B fixed	NEITHER-ENTRY	LEAF:0xf/0xf
+0x1404372c0	0x140437820	IDENTICAL-LEAF	1.000	2	caller rel32, 1 agreeing caller(s)	NEITHER-ENTRY	LEAF:0x7/0x7
+0x140438a50	0x140438fb0	IDENTICAL-WHOLE	1.000	117	unique, 40B signature, 32B fixed	BOTH-ENTRIES	PDATA:0x1af/0x1af
+0x140437140	0x1404376a0	IDENTICAL-LEAF	1.000	2	RTTI vtable slot CSChrDataModule+0x18	NEITHER-ENTRY	LEAF:0x7/0x7
+0x140437150	0x1404376b0	IDENTICAL-LEAF	1.000	2	RTTI vtable slot CSChrDataModule+0x20	NEITHER-ENTRY	LEAF:0x7/0x7
+0x140437ac0	0x140438020	IDENTICAL-WHOLE	1.000	67	nearest-anchor delta +0x560, 2 shape candidates	BOTH-ENTRIES	PDATA:0xf9/0xf9
+0x140437bc0	0x140438120	IDENTICAL-WHOLE	1.000	68	nearest-anchor delta +0x560, 2 shape candidates	BOTH-ENTRIES	PDATA:0xfd/0xfd
+0x1403f0b20	0x1403f0d50	IDENTICAL-LEAF	1.000	1	RTTI vtable slot ChrIns/EnemyIns+0x168	NEITHER-ENTRY	LEAF:0x5/0x5
+0x1403f4530	0x1403f4760	IDENTICAL-LEAF-NOPATCH	1.000	2	RTTI vtable slot ChrIns/EnemyIns+0x118	NEITHER-ENTRY	LEAF:0x3/0x3
+0x140cba510	0x140cbbbe0	IDENTICAL-WHOLE	1.000	93	unique, 44B signature, 27B fixed	BOTH-ENTRIES	PDATA:0x15c/0x15c
+0x14073cf20	0x14073dd70	IDENTICAL-WHOLE	1.000	180	unique, 42B signature, 33B fixed	BOTH-ENTRIES	PDATA:0x2f1/0x2f1

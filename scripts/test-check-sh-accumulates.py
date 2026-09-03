@@ -35,7 +35,10 @@ WHAT IT CHECKS
 """
 from __future__ import annotations
 
+import fcntl
+import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -63,13 +66,20 @@ def preamble() -> str:
     return text.split(END_OF_PREAMBLE)[0] + END_OF_PREAMBLE + "\n"
 
 
-def run_fixture(body: str, head: str | None = None) -> "tuple[int, str]":
+def run_fixture(
+    body: str, head: str | None = None, env: "dict[str, str] | None" = None
+) -> "tuple[int, str]":
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "fixture.sh"
         path.write_text((head if head is not None else preamble()) + body, encoding="utf-8")
         path.chmod(0o755)
         proc = subprocess.run(
-            ["bash", str(path)], capture_output=True, text=True, timeout=TIMEOUT_SECONDS, cwd=td
+            ["bash", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+            cwd=td,
+            env=env,
         )
         return proc.returncode, proc.stdout + proc.stderr
 
@@ -173,6 +183,48 @@ def main() -> int:
         "non-vacuity: with the ERR trap removed the failure IS missed, so these cases are "
         "watching the trap rather than passing on their own",
     )
+
+    # 9: THE LOCK MUST NOT REFUSE THIS SUITE'S OWN STEPS. The preamble takes a machine-wide flock
+    # so two runs cannot corrupt each other's verdict -- and this gate re-enters that preamble
+    # thirteen times while the run invoking it holds the lock. Without a re-entrancy marker every
+    # fixture above exits 2 before printing anything, and all thirteen cases fail for a reason
+    # that has nothing to do with accumulation. Measured in CI on 2026-09-02: exactly that.
+    #
+    # The lock is taken HERE rather than in a helper subprocess, so there is no sleep and no race:
+    # if this process cannot take it, the parent check.sh already holds it, which is the condition
+    # under test either way.
+    if shutil.which("flock"):
+        lock = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "er-mods-rs-check-sh.lock"
+        fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o644)
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                ours = True
+            except OSError:
+                ours = False  # our parent check.sh holds it; the lock is held regardless
+            nested = dict(os.environ, ER_CHECK_LOCK_HELD="1")
+            _, out = run_fixture(f"{PASSING}\n{MARKER}\n{END}", env=nested)
+            check(
+                marker_printed(out),
+                "a step of a run that already holds the lock still executes",
+            )
+            # ...and the guard is not thereby neutered: a genuinely separate run, which inherits
+            # no marker, is still refused. Without this half the fix above would pass by turning
+            # the lock off.
+            separate = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("ER_CHECK_LOCK_HELD", "ER_CHECK_FORCE")
+            }
+            rc, out = run_fixture(f"{PASSING}\n{MARKER}\n{END}", env=separate)
+            check(
+                rc == 2 and not marker_printed(out),
+                "a second run with no marker is still refused while the lock is held",
+            )
+        finally:
+            if ours:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     for f in failures:
         print(f"check-sh-accumulates FAILED: {f}", file=sys.stderr)

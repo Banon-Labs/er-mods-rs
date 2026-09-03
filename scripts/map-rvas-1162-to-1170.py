@@ -72,6 +72,10 @@ KNOWN_MAPPINGS = {
 # The matcher searches +-window around the source offset first, then widens. 1.17 moved code by
 # far more than the intra-version staircase this default was tuned for, so start wide.
 DEFAULT_WINDOW = 0x200000
+# Most masked signature matches collected before the signature is called over-wildcarded. See
+# `find_unique`: this is a ceiling on nonsense, NOT a budget, because the list is built in image
+# order and anything it truncates is silently removed from the second pass's evidence.
+MAX_SHAPE_CANDIDATES = 512
 
 
 def addresses_from_refusal_log(path):
@@ -176,7 +180,25 @@ def build_masked_pattern(image, offset, want_bytes, rip_only=False, stop_at_retu
 
 def find_unique(haystack, pattern, mask):
     """Every offset where `pattern` matches under `mask`, capped so an over-wildcarded signature
-    reports as ambiguous rather than silently taking the first of thousands."""
+    reports as ambiguous rather than silently taking the first of thousands.
+
+    THE CAP MUST NOT TRUNCATE IN IMAGE ORDER, and it did until 2026-09-01. It was 9, and
+    `bytes.find` walks the image low-to-high, so the list handed to the second pass was "the
+    first nine matches in the 1.17 image", not "the matches". Any function whose shape recurs
+    ten or more times BELOW its own address was therefore unresolvable no matter how good the
+    regional anchor was -- the right answer had already been cut off before the anchor was
+    consulted, and the note read `9 shape matches, none at the nearest anchor's delta`, which
+    reads like a disagreement and was actually a truncation.
+
+    Measured on the ProfileSelect activate function `0x1409a4670`: its 46-byte signature matches
+    51 places in 1.17, and the true counterpart `0x1409a5810` (`IDENTICAL-WHOLE`, 381
+    instructions, both `.pdata` extents 0x5a6) is hit number 40. The same truncation was hiding
+    `0x140875590`, `0x1409a4ed0` and `0x140920c90`. See bd er-effects-rs-4uw5.13.
+
+    The cap is kept, because a signature matching thousands of places really is over-wildcarded
+    and should say so rather than hand the second pass a haystack. It is just raised past the
+    point where a legitimate answer can fall off the end: the widest list observed across the
+    whole work list is 83, at the ladder's shortest 16-byte rung."""
     anchor_at = next((i for i, keep in enumerate(mask) if keep), None)
     if anchor_at is None:
         return []
@@ -193,7 +215,7 @@ def find_unique(haystack, pattern, mask):
     anchor = pattern[best_start : best_start + best_len]
     hits = []
     at = haystack.find(anchor)
-    while at >= 0 and len(hits) <= 8:
+    while at >= 0 and len(hits) <= MAX_SHAPE_CANDIDATES:
         start = at - best_start
         if start >= 0 and start + len(pattern) <= len(haystack):
             window = haystack[start : start + len(pattern)]
