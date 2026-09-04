@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1](https://github.com/Banon-Labs/er-mods-rs/compare/0.2.0...0.2.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* make inventory sort defaults force configured sort ([#400](https://github.com/Banon-Labs/er-mods-rs/issues/400)) ([aee86a0](https://github.com/Banon-Labs/er-mods-rs/commit/aee86a048fb5a1c17a521162355befacd91852ec))
+* protect committed compile gate from Git hook env ([6b92ef6](https://github.com/Banon-Labs/er-mods-rs/commit/6b92ef6b58bd3faf62ff8ba7dfe7e29d9c36a589))
+
 ## [0.2.0](https://github.com/Banon-Labs/er-mods-rs/compare/0.1.6...0.2.0) (2026-09-03)
 
 
