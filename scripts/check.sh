@@ -527,6 +527,12 @@ python3 "$repo_root/scripts/test-check-sh-accumulates.py"
 python3 "$repo_root/scripts/ci-gate-portability.py" --selftest
 python3 "$repo_root/scripts/ci-gate-portability.py" --check
 python3 "$repo_root/scripts/check-no-timeouts.py"
+# THE GRAMMAR THREE THINGS SHARE: scripts/hooks/commit-msg, and both jobs of
+# .github/workflows/conventional-commits.yml. Only the selftest runs here -- there is no
+# repo-wide "check" mode, because the thing being judged is one line that does not exist yet at
+# check time (a PR title, or a commit being written). What this catches is the grammar itself
+# rotting: drop `feat` from TYPES and the release path silently stops seeing minor bumps.
+python3 "$repo_root/scripts/conventional-commit-subject.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py" --selftest
 python3 "$repo_root/scripts/check-no-committed-build-artifacts.py"
 python3 "$repo_root/scripts/test-no-timeouts.py"
