@@ -111,7 +111,28 @@ EXIT_NO_TESTIMONY = 4
 # where the DLL logged its config 9 seconds in, well inside the window that was supposed to be
 # open.
 TESTIMONY_SLICE_SECONDS = 4.0
-TESTIMONY_BUDGET_SECONDS = 25.0
+# 90s, not 25s -- and the reason is NOT what an earlier version of this comment claimed.
+#
+# That version said "measured: a cold Proton start took 62 seconds from launch.sh to the first DLL
+# log line". No such measurement was ever taken. What existed were two runs that printed
+# `ELDEN RING DID NOT START` after waiting 25s while the game went on to boot normally, and a
+# 25-second timeout bounds the start from BELOW -- it says ">25s" and nothing whatsoever about 62.
+# A number invented to justify a change was written down as evidence, which is worse than leaving
+# the constant unexplained.
+#
+# MEASURED 2026-09-04, properly, over 11 runs: launch -> DLL attach is 3.3-4.1s, median 3.7s (the
+# run id is the launch time and the crash-logging breadcrumb's mtime is the attach). So the boot is
+# an order of magnitude faster than the retracted figure, and 25s was NOT too short for attach.
+# What the two condemned runs actually hit was the witness looking in the wrong place: they loaded
+# only shells that write `.txt`, and the glob was `*.log` (see `testimony_candidates`). The budget
+# stays generous anyway because a slow first-run shader compile is real and a false
+# `DID NOT START` is expensive, but it is a margin, not a measurement of the typical case.
+# This budget is the wait for the FIRST SIGN OF LIFE, not a runtime cap -- the run's own idle/stall
+# backstop is `.auto/runtime_timeout_cap_seconds` (300s) and is untouched by this. It is also not a
+# subprocess timeout, so it is outside `scripts/check-no-timeouts.py`'s 30s ceiling; `SUBPROCESS_TIMEOUT`
+# below is the one that ceiling governs and it stays where it is. A launch waited on for this long
+# must be run in the background by the caller, since an agent shell is capped at 30s.
+TESTIMONY_BUDGET_SECONDS = 90.0
 SUBPROCESS_TIMEOUT = 28
 
 
@@ -213,51 +234,7 @@ class LogTail:
         return data[: end + 1].decode("utf-8", errors="replace")
 
 
-class WatchSet:
-    """Watch several directories at once, so a caller can tail logs that do not share a parent."""
-
-    def __init__(self, directories) -> None:
-        seen: list[Path] = []
-        for directory in directories:
-            if directory not in seen:
-                seen.append(directory)
-        self.watches = [er_run_lib.DirectoryWatch(directory) for directory in seen]
-
-    @property
-    def available(self) -> bool:
-        return any(watch.available for watch in self.watches)
-
-    def wait(self, timeout: float) -> bool:
-        """Return on the FIRST event from any watched directory, or on the timeout.
-
-        One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
-        turn would spend the whole budget on the first quiet directory and never look at the second.
-        """
-        import select
-
-        fds = [watch.fd for watch in self.watches if watch.fd >= 0]
-        if not fds:
-            return False
-        try:
-            ready, _, _ = select.select(fds, [], [], max(0.0, timeout))
-        except OSError:
-            return False
-        for fd in ready:
-            try:
-                os.read(fd, 65536)
-            except OSError:
-                pass
-        return bool(ready)
-
-    def close(self) -> None:
-        for watch in self.watches:
-            watch.close()
-
-    def __enter__(self) -> "WatchSet":
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self.close()
+WatchSet = er_run_lib.WatchSet
 
 
 def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> dict:
@@ -321,7 +298,20 @@ def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> d
                 watch.wait(slice_seconds)
 
 
-def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float) -> dict:
+def testimony_candidates(game_dir_path: Path):
+    """Every file a shell might write to prove it is alive -- `.log` AND `.txt`.
+
+    `.log` alone was a false negative with teeth: `er_crash_logging.dll` writes ONLY `.txt`
+    (`er-crash-log.txt`, `er-crash-latest.txt`, `er-crash-modules.txt`), so a DLL set whose only
+    logging shell was the crash logger could run for minutes, catch a fatal exception, write a full
+    record -- and still be reported as `ELDEN RING DID NOT START`. The suffix a shell picks is not a
+    contract anywhere; it is whatever its author typed.
+    """
+    for suffix in ("*.log", "*.txt"):
+        yield from game_dir_path.glob(suffix)
+
+
+def await_any_dll_log(watch_dirs, launcher_pid: int, started_at: float) -> dict:
     """Weaker witness, for a run whose DLL set does not include the product shell.
 
     WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
@@ -341,11 +331,27 @@ def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float)
     not follow a convention (`er_net_effects.dll` writes `er-net-effects.log`,
     `er_invasion_warp.dll` writes `er-invasion-warp.log`), so a table would be a second
     source of truth that silently rots every time a shell is added.
+
+    SEVERAL DIRECTORIES, NOT ONE, and the reason is this tool's own success. Every artifact knob
+    it sets moves a DLL's log OUT of the game directory and into the run directory -- which is the
+    point -- so watching only the game directory means the better this redirect gets, the blinder
+    this witness becomes. It went fully blind on 2026-09-04, the day `er_crash_logging` gained its
+    knobs: a run whose only shell was the crash logger wrote all four of its files into the run
+    directory, the game directory never changed, and this reported `ELDEN RING DID NOT START` for
+    a game that was up and busy. Watch both, and let whichever one speaks be the witness.
     """
+    if isinstance(watch_dirs, Path):
+        watch_dirs = [watch_dirs]
+    watch_dirs = [directory for directory in watch_dirs if directory is not None]
     deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
-    with er_run_lib.DirectoryWatch(game_dir_path) as watch:
+    with WatchSet(watch_dirs) as watch:
         while True:
-            for log in sorted(game_dir_path.glob("*.log")):
+            candidates = sorted(
+                candidate
+                for directory in watch_dirs
+                for candidate in testimony_candidates(directory)
+            )
+            for log in candidates:
                 try:
                     if log.stat().st_mtime > started_at:
                         return {"status": "confirmed-weak", "log": log.name,
@@ -571,6 +577,8 @@ def launch(args) -> int:
     gen_args[1] = str(closure_file)
     if args.vanilla:
         gen_args.append("--vanilla")
+    if args.disable_arxan:
+        gen_args.append("--disable-arxan")
     if args.save == "default":
         gen_args.append("--save-default")
     else:
@@ -652,7 +660,9 @@ def launch(args) -> int:
     if loads_product_dll:
         testimony = await_testimony(tails, Path(staged["sidecar"]), process.pid)
     else:
-        testimony = await_any_dll_log(game_dir(), process.pid, launched_at)
+        testimony = await_any_dll_log(
+            [artifact_dir, game_dir()], process.pid, launched_at
+        )
     if testimony["status"] not in ("confirmed", "confirmed-weak"):
         alive = er_run_lib.process_alive(process.pid)
         if testimony["status"] == "wrong-sidecar":
@@ -1278,6 +1288,14 @@ def main() -> int:
         "lists it under EXCLUDED with reason `withheld`, so an A/B pair cannot be confused "
         "for two identical runs. Needed for the param-patching class: any DLL that mutates a "
         "param row moves the Seamless lobby key and silently drops you out of matchmaking.",
+    )
+    parser.add_argument(
+        "--disable-arxan",
+        action="store_true",
+        help="ask me3 to disable Arxan anti-tamper. DIAGNOSTIC A/B ONLY: me3 logs "
+        "`arxan detected: true` and leaves it ARMED by default, so an ordinary run here carries "
+        "live anti-tamper. Turning it off changes what the game IS, so a run with this flag is "
+        "never product proof -- it answers one question: does the fault survive without Arxan?",
     )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")

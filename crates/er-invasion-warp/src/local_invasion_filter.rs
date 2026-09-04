@@ -652,6 +652,87 @@ impl NoSession {
 /// Nothing is cached beyond OSM and the recognised build, and OSM is re-validated on every use: the
 /// session is a heap allocation whose lifetime this module does not own, and a stale pointer is
 /// exactly the kind of thing that turns a filter into a crash.
+/// A 32-bit read built from the two 16-bit reads `er-game-base` actually exposes.
+#[cfg(windows)]
+fn read_u32(addr: usize) -> Option<u32> {
+    let low = unsafe { er_game_base::mem::safe_read_u16(addr) }? as u32;
+    let high = unsafe { er_game_base::mem::safe_read_u16(addr + 2) }? as u32;
+    Some(low | (high << 16))
+}
+
+/// PE constants for walking `ersc.dll`'s own section table at runtime.
+const PE_LFANEW: usize = 0x3c;
+const PE_NUMBER_OF_SECTIONS: usize = 6;
+const PE_SIZE_OF_OPTIONAL_HEADER: usize = 20;
+const PE_OPTIONAL_HEADER: usize = 24;
+const SECTION_HEADER_SIZE: usize = 40;
+const SECTION_VIRTUAL_SIZE: usize = 8;
+const SECTION_VIRTUAL_ADDRESS: usize = 12;
+const SECTION_CHARACTERISTICS: usize = 36;
+const IMAGE_SCN_MEM_WRITE: u32 = 0x8000_0000;
+/// Stop after this many candidate qwords, so a malformed header cannot turn this into a hang.
+const SESSION_SCAN_QWORD_BUDGET: usize = 1 << 18;
+
+/// Find Seamless's session object WITHOUT detouring anything in `ersc.dll`.
+///
+/// WHY THIS EXISTS. Hooking `ersc.dll` at all is what kills the game. Both detours this DLL placed
+/// there fault at `0x140010043` with no input given -- `show` (ersc+0x241a0) at ~50s, the lobby-key
+/// builder (ersc+0xad6e0) at 30.6s -- while a build with neither armed cleared the same window
+/// twice. So the answer cannot be "detour a different function", and the obvious replacement of
+/// reading the pointer from the call site is unavailable too: neither function has a direct caller
+/// in `.text`, both being dispatched indirectly.
+///
+/// What is left is that the session identifies ITSELF. `read_session_state` returns `Some` only for
+/// a known state code at a known offset of a known build, which is a strong enough signature to
+/// recognise the object without being handed it. So walk `ersc.dll`'s own WRITABLE sections -- its
+/// globals, where a long-lived object's pointer will be parked -- and test each qword as a
+/// candidate. Two shapes are accepted, matching what `resolve_session` does with `OSM`: the pointer
+/// IS the session, or the session is one hop away at `+ NEXT_OBJECT_OFFSET`.
+///
+/// This reads only; it writes nothing into Seamless and patches no bytes.
+#[cfg(windows)]
+fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize)> {
+    let lfanew = unsafe { er_game_base::mem::safe_read_usize(base + PE_LFANEW) }? & 0xffff_ffff;
+    let nt = base + lfanew;
+    let sections = unsafe { er_game_base::mem::safe_read_u16(nt + PE_NUMBER_OF_SECTIONS) }?;
+    let optional = unsafe { er_game_base::mem::safe_read_u16(nt + PE_SIZE_OF_OPTIONAL_HEADER) }?;
+    let table = nt + PE_OPTIONAL_HEADER + optional as usize;
+    let mut budget = SESSION_SCAN_QWORD_BUDGET;
+    for index in 0..sections as usize {
+        let header = table + index * SECTION_HEADER_SIZE;
+        // Composed from two u16 reads: `er-game-base` exposes `safe_read_u8`, `safe_read_u16` and
+        // `safe_read_usize`, and widening its public surface for one header field is not worth it.
+        let characteristics = read_u32(header + SECTION_CHARACTERISTICS)?;
+        if characteristics & IMAGE_SCN_MEM_WRITE == 0 {
+            continue;
+        }
+        let virtual_size = read_u32(header + SECTION_VIRTUAL_SIZE)?;
+        let virtual_address = read_u32(header + SECTION_VIRTUAL_ADDRESS)?;
+        let start = base + virtual_address as usize;
+        let end = start + virtual_size as usize;
+        let mut slot = start;
+        while slot + 8 <= end && budget > 0 {
+            budget -= 1;
+            if let Some(candidate) = unsafe { er_game_base::mem::safe_read_usize(slot) }
+                && candidate >= 0x1_0000
+            {
+                if read_session_state(abi, candidate).is_some() {
+                    return Some((slot, candidate));
+                }
+                if let Some(next) = unsafe {
+                    er_game_base::mem::safe_read_usize(candidate + ersc::NEXT_OBJECT_OFFSET)
+                } && next != 0
+                    && read_session_state(abi, next).is_some()
+                {
+                    return Some((slot, next));
+                }
+            }
+            slot += 8;
+        }
+    }
+    None
+}
+
 fn resolve_session() -> Result<SeamlessSession, NoSession> {
     let base = ersc_module_base().ok_or(NoSession::ErscAbsent)?;
     // Which build, and therefore which addresses, offsets and state codes. Refuses on anything
@@ -671,7 +752,32 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
     }
     let osm = OSM.load(Ordering::SeqCst);
     if osm == 0 {
-        return Err(NoSession::MenuNeverOpened);
+        // NO DETOUR SUPPLIED IT, so go and find the session instead of giving up.
+        //
+        // `OSM` is only ever set by the `show` detour, and detouring `ersc.dll` AT ALL is what
+        // kills the game -- both hooks this DLL placed there fault at 0x140010043 with no input
+        // given, one at ~50s and one at 30.6s, while a build with neither cleared the window
+        // twice. Returning `MenuNeverOpened` here would mean the local-invasion filter can only
+        // work in a configuration that crashes, which is the same as deleting the feature.
+        //
+        // `scan_for_session` recognises the object by its own state field rather than being handed
+        // a pointer to it, so the filter keeps working with nothing hooked inside Seamless.
+        let Some((slot, session)) = scan_for_session(base, abi) else {
+            return Err(NoSession::MenuNeverOpened);
+        };
+        if OSM_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: session resolved WITHOUT hooking Seamless -- found at \
+                 0x{session:x} via a pointer in ersc's own writable data at 0x{slot:x}. This is \
+                 the path that keeps the filter alive now that detouring ersc.dll is known to \
+                 crash the game at 0x140010043."
+            ));
+        }
+        return Ok(SeamlessSession {
+            osm: 0,
+            session,
+            abi,
+        });
     }
     let session = unsafe { er_game_base::mem::safe_read_usize(osm + ersc::NEXT_OBJECT_OFFSET) }
         .filter(|session| *session != 0)
@@ -687,6 +793,8 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
 
 /// Trampoline for the lobby-key observer.
 static ORIG_BUILD_LOBBY_KEY: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch for the `ctx`-shape probe above.
+static CTX_SHAPE_PROBED: AtomicBool = AtomicBool::new(false);
 /// Whether the lobby-key observer is installed.
 static LOBBY_KEY_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// FNV-1a of the last key reported, so a re-key is one line and a steady key is silent.
@@ -752,6 +860,31 @@ unsafe extern "system" fn build_lobby_key_observer(
     let result = unsafe { core::mem::transmute::<usize, ErscActionFn>(orig)(ctx, out, c, d) };
 
     LOBBY_KEY_DERIVATIONS.fetch_add(1, Ordering::SeqCst);
+
+    // CAN THIS DETOUR REPLACE THE `show` ONE? That is the whole question keeping the
+    // local-invasion filter alive, so it is asked here rather than argued about.
+    //
+    // `show` is the only thing this DLL hooks that kills the game -- armed alone it faults at
+    // 0x140010043 in ~25s, while this detour armed alone ran clean. But `show` is currently the
+    // ONLY source of `OSM`, and `resolve_session` needs `OSM` solely to reach
+    // `[OSM + NEXT_OBJECT_OFFSET]`, the session. The session is self-identifying: `read_session_state`
+    // returns `Some` only for a known state code at a known offset. So ANY pointer that reaches it
+    // is as good as `OSM`, and this detour's first argument is a candidate nobody has tested.
+    //
+    // Two shapes are checked, once, and only reported: `ctx` being the session itself, and `ctx`
+    // standing where `OSM` stands (session one hop away). A hit means the filter can be rebuilt on
+    // a detour that does not crash; a miss rules this route out instead of leaving it as a hope.
+    if !CTX_SHAPE_PROBED.swap(true, Ordering::SeqCst)
+        && let Some(abi) = resolve_ersc_abi()
+    {
+        let direct = read_session_state(abi, ctx);
+        let hop = unsafe { er_game_base::mem::safe_read_usize(ctx + ersc::NEXT_OBJECT_OFFSET) }
+            .filter(|next| *next != 0)
+            .and_then(|next| read_session_state(abi, next).map(|state| (next, state)));
+        crate::standalone_log(format_args!(
+            "local-invasion: lobby-key ctx=0x{ctx:x} -- is it the session? direct_state={direct:?}              one_hop={hop:?}. If either is Some, the filter can resolve its session WITHOUT the              `show` detour, which is the hook that crashes the game at 0x140010043 in ~25s. If              both are None this route is dead and the session must be found another way."
+        ));
+    }
     if let Some(key) = read_std_string(out) {
         let hash = fnv1a64(key.as_bytes()) as usize;
         if LAST_LOBBY_KEY_HASH.swap(hash, Ordering::SeqCst) != hash {
@@ -2212,7 +2345,25 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // resolvable still reflects the frames that actually passed.
     TICKS.fetch_add(1, Ordering::SeqCst);
     install_join_hook();
-    install_show_observer();
+    // The two detours this DLL places inside `ersc.dll`, both withheld by one key. Read once per
+    // tick rather than cached at attach, because the config is re-read when a match arrives and a
+    // player mid-A/B should not have to restart the game to move the switch.
+    //
+    // Defaulting to ON when the snapshot is unavailable keeps the pre-config behaviour: the
+    // snapshot is absent before the first successful read, and the `show` observer is what finds
+    // the Seamless menu object, so failing closed here would disarm the filter on every launch
+    // during the window where nothing has gone wrong yet.
+    struct ErscObservers {
+        show: bool,
+        lobby_key: bool,
+    }
+    let ersc_observers = current_config_snapshot().map(|config| ErscObservers {
+        show: config.ersc_observers && config.ersc_show_observer,
+        lobby_key: config.ersc_observers && config.ersc_lobby_key_observer,
+    });
+    if ersc_observers.as_ref().map(|c| c.show).unwrap_or(true) {
+        install_show_observer();
+    }
     // Learns the live announcement view. Self-gating and idempotent: it needs the menu system,
     // which does not exist at attach, so it retries until it lands rather than failing silently
     // once. Costs one byte-check per tick until then.
@@ -2223,7 +2374,9 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     crate::announce::poll_measurement();
     // Read-only, and independent of the filter: it reports the one string that decides whether two
     // Seamless players can find each other at all.
-    install_lobby_key_observer();
+    if ersc_observers.as_ref().map(|c| c.lobby_key).unwrap_or(true) {
+        install_lobby_key_observer();
+    }
     if game_has_focus {
         keys.poll();
     } else {
