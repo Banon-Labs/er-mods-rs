@@ -125,12 +125,10 @@ pub(crate) fn config() -> CrashLogConfig {
 /// One knob EACH, not one shared directory, because the four files are read for different
 /// verdicts: the log for the record history, `-latest` for the final fault, the breadcrumb for
 /// "did the DLL even attach", the module list for resolving addresses.
-#[cfg(any(windows, test))]
 fn game_directory() -> PathBuf {
     er_game_base::log::game_directory_path().unwrap_or_else(|| PathBuf::from("."))
 }
 
-#[cfg(any(windows, test))]
 fn default_log_path() -> PathBuf {
     match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
@@ -138,7 +136,6 @@ fn default_log_path() -> PathBuf {
     }
 }
 
-#[cfg(any(windows, test))]
 fn default_latest_path() -> PathBuf {
     match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
@@ -146,7 +143,6 @@ fn default_latest_path() -> PathBuf {
     }
 }
 
-#[cfg(any(windows, test))]
 fn default_breadcrumb_path() -> PathBuf {
     match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
@@ -154,7 +150,6 @@ fn default_breadcrumb_path() -> PathBuf {
     }
 }
 
-#[cfg(any(windows, test))]
 fn default_modules_path() -> PathBuf {
     match std::env::var("ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH") {
         Ok(path) if !path.is_empty() => PathBuf::from(path),
@@ -1406,6 +1401,7 @@ fn iat_slots_holding(modules: &[(usize, usize, String)], wanted: usize) -> Strin
     out
 }
 
+#[cfg(windows)]
 fn iat_anomalies(modules: &[(usize, usize, String)]) -> String {
     use fmt::Write as _;
 
@@ -1592,10 +1588,11 @@ fn iat_export_mismatches(modules: &[(usize, usize, String)]) -> String {
         }
         let table = if ilt_rva != 0 { ilt_rva } else { iat_rva };
         let mut index = 0usize;
-        loop {
-            let Some(thunk) = (unsafe { safe_read_usize(base + table + index * 8) }) else {
-                break;
-            };
+        // A read that FAILS ends the walk the same way a null terminator does: an unreadable page
+        // in the middle of an import table is not a mismatch to report, it is the end of what can
+        // be said about this module -- and this runs inside a fault handler, where guessing past
+        // an unreadable address is how a diagnostic becomes a second crash.
+        while let Some(thunk) = unsafe { safe_read_usize(base + table + index * 8) } {
             if thunk == 0 {
                 break;
             }

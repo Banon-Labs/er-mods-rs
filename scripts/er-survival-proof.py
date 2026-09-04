@@ -1,38 +1,53 @@
 #!/usr/bin/env python3
-"""Drive F9 into a live ELDEN RING for a fixed window and report whether it survived.
+"""Watch a live ELDEN RING for a measured window and report whether it survived.
 
-WHAT THIS PROVES, AND WHY IT IS THE AGENT THAT PRESSES THE KEY
---------------------------------------------------------------
-The claim under test is "load a character and repeatedly F9-load for N minutes without crashing".
-Asking a human to hold that key for three minutes is an instruction-following failure under
-AGENTS.md's standing order of 2026-07-22 -- there is no input a user can perform that the agent
-cannot -- and it is also bad evidence: a human's press cadence is unrecorded, so a survival cannot
-be replayed and a crash cannot be attributed to a press count.
+WHAT THIS PROVES, AND WHY F9 IS NOT IN THE NAME
+------------------------------------------------
+This tool was called `er-f9-loop-proof` because the claim it was built for was "repeatedly F9-load
+for N minutes without crashing". The measurement killed that framing: the 0x140010043 fault is
+TIME-triggered, not action-triggered. Five recorded faults land at 43.8-56.1s regardless of what
+was happening, and one of them arrived with nothing pressed at all. So the press count is not the
+independent variable and never was -- the DLL combination and the wall-clock are. A name that puts
+F9 at the centre advertises a causal role the evidence does not support, and would have the next
+reader tuning a cadence that changes nothing.
 
-F9 IS REACHABLE FROM OS-LEVEL INJECTION, and that is a fact about this specific key rather than a
-general licence. AGENTS.md is explicit that synthesized OS input does NOT reach native ELDEN RING
-bindings, which the game reads through DirectInput/XInput. `er_invasion_warp`'s warp hotkeys are
-not native bindings: `er-hotkey-config` polls them with `GetAsyncKeyState` (see `keys.rs`, which
-speaks Win32 virtual keys, `VK_F9 == 0x78`). A uinput key event is a real kernel input event, so it
-reaches the compositor, then Wine, then exactly the state `GetAsyncKeyState` reads. So this driver
-is correct for the warp keys and would be WRONG for anything the game itself binds through
-DirectInput/XInput.
+So the default is to press NOTHING and watch. `--warp` remains, because the OTHER failure this
+build has to survive -- a main-thread hard lock inside me3's own infinite mutex -- has only ever
+been seen AFTER a completed map jump. The independent variable there is the WARP, not the key: F9
+is merely what `er-hotkey-config` happens to bind it to, and a run's metric is therefore warps
+COMPLETED, read from the DLL's own `ARRIVED` line. A press count says how hard the driver leaned on
+a key; only the arrival count says the feature ran.
 
 THE VERDICT IS THE PROCESS AND THE RECORDS, NEVER THE SCREEN
 ------------------------------------------------------------
 Stop/continue comes from RAM/process telemetry: the game's own liveness, the crash logger's record
-count in the run directory, and any `PANIC in` line. No screenshot is taken and none would be
-trusted -- AGENTS.md forbids a visual oracle as the run-stopping signal.
+count, a `PANIC in` line, and the watchdog's main-thread-stall HANG report -- a lockup writes no
+exception record at all, so the record count alone is blind to it. No screenshot is taken and none
+would be trusted; AGENTS.md forbids a visual oracle as the run-stopping signal.
 
-WINDOW TARGETING IS FAIL-CLOSED AND NARROW, and here that is a safety property rather than a
-nicety: a uinput press is system-wide, so an unfocused game means every press lands in whatever the
-user actually has in front of them. Focus is asserted by CLASS and confirmed before each press;
-nothing else about the desktop is enumerated or printed -- the privacy rule in AGENTS.md exists
-because a window list exposes every unrelated app the user is running.
+EVERY WAIT BLOCKS ON AN EVENT. Readiness is the game's own `player_present` telemetry, the warp
+cadence is the DLL's own `ARRIVED` line, focus is Hyprland's `.socket2.sock`, and the file waits
+are inotify. Nothing here sleeps, and the only durations are backstops: the watch window (derived
+from the worst recorded time-to-first-fault) and the repo's canonical runtime cap.
+
+F9 IS REACHABLE FROM OS-LEVEL INJECTION when it is used, and that is a fact about this specific key
+rather than a general licence. AGENTS.md is explicit that synthesized OS input does NOT reach
+native ELDEN RING bindings, which the game reads through DirectInput/XInput. `er_invasion_warp`'s
+warp hotkeys are not native bindings: `er-hotkey-config` polls them with `GetAsyncKeyState` (see
+`keys.rs`, `VK_F9 == 0x78`). A uinput key event is a real kernel input event, so it reaches the
+compositor, then Wine, then exactly the state `GetAsyncKeyState` reads. This driver is therefore
+correct for the warp keys and would be WRONG for anything the game itself binds.
+
+WINDOW TARGETING IS FAIL-CLOSED AND NARROW when pressing, and here that is a safety property: a
+uinput press is system-wide, so an unfocused game means every press lands in whatever the user
+actually has in front of them. Focus is asserted by CLASS and confirmed before each press; nothing
+else about the desktop is enumerated or printed -- the privacy rule in AGENTS.md exists because a
+window list exposes every unrelated app the user is running.
 
 USAGE
-    python3 scripts/er-f9-loop-proof.py --run-id br-... --seconds 180 --interval 6
-    python3 scripts/er-f9-loop-proof.py --selftest
+    python3 scripts/er-survival-proof.py --crash-log-dir <dir> --await-player --seconds 600
+    python3 scripts/er-survival-proof.py --crash-log-dir <dir> --warp
+    python3 scripts/er-survival-proof.py --selftest
 """
 
 from __future__ import annotations
@@ -90,6 +105,9 @@ ARRIVE_MARKER = "invasion-warp: ARRIVED"
 ARRIVE_TIMEOUT_SECONDS = 60.0
 ARRIVE_POLL_SECONDS = 1.0
 
+# The share of warps that must actually COMPLETE for a warp run to mean anything. Applied to
+# arrivals, not to keystrokes: a run whose presses all landed but whose warps never did has
+# exercised a hotkey, not a map jump, and the failure under test lives in the map jump.
 MIN_DELIVERED_FRACTION = 0.8
 
 SUBPROCESS_TIMEOUT = 10
@@ -98,6 +116,10 @@ SUBPROCESS_TIMEOUT = 10
 # a progress line followed by a verdict up to three minutes later -- so without this the caller sees
 # an empty file and cannot tell a driving run from a hung one.
 print = functools.partial(print, flush=True)  # noqa: A001 - deliberate module-local shadow
+
+# When THIS driver started, in wall-clock. Anything on disk older than this belongs to a previous
+# run: the telemetry file, the crash log and the hang report all persist between launches.
+PROCESS_STARTED = time.time()
 
 MS_SINCE_INSTALL = re.compile(r"(?m)^ms_since_install=(\d+)$")
 
@@ -345,6 +367,40 @@ def hang_report_state() -> tuple[bool, int, float]:
     return True, stat.st_size, stat.st_mtime
 
 
+# THE READINESS SIGNAL FOR "THE CHARACTER IS IN THE WORLD". Watching from the title screen would
+# score the boot, not the build: the fault window is measured from DLL install, and a run that
+# spends four of its ten minutes on a loading screen is watching a different program.
+#
+# The field is `player_available`, which `er_quickload` writes from a RAM read each frame and which
+# means the player object EXISTS RIGHT NOW. Not `player_seen`, which is sticky once the world has
+# ever been reached, and not `player_present`, which does not exist -- a first cut of this waiter
+# keyed on that invented name, found it missing from every snapshot, and sat out its entire backstop
+# beside a game that had been in the world for minutes.
+PLAYER_TELEMETRY_NAME = "er-quickload-telemetry.json"
+
+
+def player_present(newer_than: float) -> tuple[bool, str | None]:
+    """(is the player in the world, which character) from THIS run's telemetry, or (False, None)."""
+    telemetry = er_run_lib.game_dir() / PLAYER_TELEMETRY_NAME
+    try:
+        if telemetry.stat().st_mtime < newer_than:
+            return False, None
+        data = json.loads(telemetry.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return False, None
+    return bool(data.get("player_available")), data.get("oracle_char_name")
+
+
+def runtime_cap_seconds() -> float:
+    """The repo's canonical idle/stall backstop, read from its single source of truth.
+
+    Used to bound the wait for the character to load. It is a backstop, not the synchronisation --
+    the wait ends on the telemetry, and this only stops it waiting forever on a boot that hung.
+    """
+    result = run([sys.executable, str(REPO_ROOT / "scripts" / "runtime_timeout_cap.py")])
+    return float(result.stdout.strip())
+
+
 def arrivals(game_dir: Path) -> int:
     """How many completed warps this run has logged. The progress oracle, read from the DLL."""
     log = game_dir / "er-invasion-warp.log"
@@ -368,26 +424,58 @@ def drive(
     interval: float,
     crash_log_dir: str | None = None,
     no_input: bool = False,
+    await_player: bool = False,
 ) -> int:
     run_dir = Path(crash_log_dir) if crash_log_dir else RUN_STATE_ROOT / (run_id or "")
     run_id = run_id or str(run_dir)
     if not run_dir.is_dir():
-        print(f"er-f9-loop-proof: no such crash-log directory: {run_dir}")
+        print(f"er-survival-proof: no such crash-log directory: {run_dir}")
         return 2
-    window = GAME_HYPR_CLASS if no_input else game_window_id()
+    window = GAME_HYPR_CLASS if no_input else None
+    if window is None:
+        window = game_window_id()
     if window is None:
         print(
-            f"er-f9-loop-proof: could not focus an ELDEN RING window of class "
+            f"er-survival-proof: could not focus an ELDEN RING window of class "
             f"{GAME_HYPR_CLASS!r} -- refusing to inject, because a uinput press goes to whatever "
             f"IS focused, which would be someone else's application"
         )
         return 2
+    game_dir = er_run_lib.game_dir()
+    if await_player:
+        started_waiting = time.monotonic()
+        cap = runtime_cap_seconds()
+        boot_watch = er_run_lib.WatchSet([game_dir])
+        try:
+            if not boot_watch.available:
+                print("er-survival-proof: inotify unavailable; refusing to poll for readiness")
+                return 2
+            deadline = started_waiting + cap
+            character = None
+            while True:
+                ready, character = player_present(PROCESS_STARTED)
+                if ready:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    print(
+                        f"er-survival-proof: the character never loaded within the repo's "
+                        f"{cap:g}s runtime backstop -- nothing to drive"
+                    )
+                    return 2
+                boot_watch.wait(min(LIVENESS_RECHECK_SECONDS, remaining))
+        finally:
+            boot_watch.close()
+        print(
+            f"er-survival-proof: character {character!r} is loaded after "
+            f"{time.monotonic() - started_waiting:.1f}s -- starting the drive now"
+        )
+
     pid = game_pid()
     if pid is None:
-        print("er-f9-loop-proof: the game is not running; nothing to drive")
+        print("er-survival-proof: the game is not running; nothing to drive")
         return 2
 
-    game_dir = er_run_lib.game_dir()
     # EVERY WAIT IN THIS LOOP BLOCKS ON AN EVENT. The two things worth waking for both arrive as
     # writes to a file -- the DLL's `ARRIVED` line, and the crash logger's record -- and they land
     # in two different trees, so both are watched at once. If inotify is unavailable this refuses
@@ -396,7 +484,7 @@ def drive(
     watch = er_run_lib.WatchSet([run_dir, game_dir])
     if not watch.available:
         print(
-            "er-f9-loop-proof: inotify is unavailable, so there is no readiness primitive to wait "
+            "er-survival-proof: inotify is unavailable, so there is no readiness primitive to wait "
             "on -- refusing to fall back to polling"
         )
         return 2
@@ -455,9 +543,9 @@ def drive(
     arrived = 0
     stalls = 0
     deadline = started + seconds
-    how = "watching (no input)" if no_input else "driving F9"
+    how = "watching (no input)" if no_input else "driving warps"
     print(
-        f"er-f9-loop-proof: {how} into pid {pid} for {seconds:g}s (run {run_id}), "
+        f"er-survival-proof: {how} into pid {pid} for {seconds:g}s (run {run_id}), "
         f"oracle={run_dir}"
     )
 
@@ -502,7 +590,7 @@ def drive(
     reason, records, panics = verdict_now()
     if reason is not None:
         print(
-            f"er-f9-loop-proof: FAILED after {elapsed:.1f}s and {presses} press(es) -- {reason}"
+            f"er-survival-proof: FAILED after {elapsed:.1f}s and {presses} press(es) -- {reason}"
         )
         for line in panics[:3]:
             print(f"  {line.strip()}")
@@ -513,9 +601,13 @@ def drive(
     # presses never landed proves only that an idle game does not crash. The first 180s run
     # returned PASS on 3 delivered presses out of 20 -- 2 warps in three minutes -- which is not
     # the thing being claimed. A run must deliver most of its presses to say anything at all.
-    attempted = presses + failed_presses
+    # SURVIVING A WARP RUN IS NOT PASSING IT. The claim a warp run makes is "N completed map jumps
+    # and no lock", so the gate is arrivals -- warps the DLL itself said it finished. Scoring on
+    # presses instead would pass a run whose every keystroke landed and whose every warp stalled,
+    # which is the exact run that proves nothing about the failure being chased.
+    attempted_warps = arrived + stalls
     delivered_enough = no_input or (
-        attempted > 0 and presses >= (attempted * MIN_DELIVERED_FRACTION)
+        attempted_warps > 0 and arrived >= (attempted_warps * MIN_DELIVERED_FRACTION)
     )
     ok = alive and records == 0 and not panics and delivered_enough
     print(
@@ -530,15 +622,18 @@ def drive(
                 "panic_lines": len(panics),
                 "hang_report": hang_report_state() != hang_before,
                 "process_alive": alive,
-                "delivered_fraction": round(presses / attempted, 2) if attempted else 0.0,
                 "warps_completed": arrived,
                 "warps_that_never_landed": stalls,
+                "warp_completion_fraction": (
+                    round(arrived / attempted_warps, 2) if attempted_warps else 0.0
+                ),
+                "keys_delivered": presses,
                 "verdict_reason": (
                     "survived and delivered its presses"
                     if ok
                     else (
-                        "the game survived but too few presses landed -- this proves nothing "
-                        "about repeated F9 loading"
+                        "the game survived but too few warps COMPLETED -- this proves nothing "
+                        "about the failure that follows a map jump"
                         if alive and records == 0 and not panics
                         else "faulted or died"
                     )
@@ -602,6 +697,13 @@ def selftest() -> int:
         er_run_lib.process_alive(0) is False,
         "process liveness reads /proc and rejects a nonexistent pid",
     )
+    snapshot = er_run_lib.game_dir() / PLAYER_TELEMETRY_NAME
+    check(
+        (not snapshot.is_file())
+        or "player_available"
+        in snapshot.read_text(encoding="utf-8", errors="replace"),
+        "the readiness field this waits on is a field the DLL actually writes",
+    )
     print("selftest: " + ("PASS" if failures == 0 else "FAIL"))
     return 1 if failures else 0
 
@@ -630,14 +732,21 @@ def main() -> int:
     )
     parser.add_argument("--interval", type=float, default=6.0)
     parser.add_argument(
-        "--no-input",
+        "--warp",
         action="store_true",
         help=(
-            "watch only: send no keys at all. The 0x140010043 fault is TIME-triggered -- five "
-            "measured faults land at 43.8-56.1s regardless of activity, one of them with nothing "
-            "pressed -- so surviving that window with zero fault records is the real claim, and "
-            "presses are noise. Use this for a feature A/B, where the variable is which hook is "
-            "installed rather than what was typed."
+            "drive map jumps, one per completed load, and score the run on warps that LANDED. "
+            "OFF by default: the 0x140010043 fault is TIME-triggered and needs no input at all. "
+            "Use this for the other failure -- the main-thread hard lock, which has only ever "
+            "followed a completed warp."
+        ),
+    )
+    parser.add_argument(
+        "--await-player",
+        action="store_true",
+        help=(
+            "block until the game's own telemetry says the character is loaded before driving "
+            "anything. Bounded by the repo's canonical runtime backstop, never by a typed wait."
         ),
     )
     parser.add_argument("--selftest", action="store_true")
@@ -655,11 +764,16 @@ def main() -> int:
             )
         args.seconds = round(worst * SURVIVAL_MARGIN, 1)
         print(
-            f"er-f9-loop-proof: watching {args.seconds:g}s, derived from {samples} recorded "
+            f"er-survival-proof: watching {args.seconds:g}s, derived from {samples} recorded "
             f"fault(s) whose worst time-to-first-fault is {worst:.1f}s, x{SURVIVAL_MARGIN} margin"
         )
     return drive(
-        args.run_id, args.seconds, args.interval, args.crash_log_dir, args.no_input
+        args.run_id,
+        args.seconds,
+        args.interval,
+        args.crash_log_dir,
+        not args.warp,
+        args.await_player,
     )
 
 

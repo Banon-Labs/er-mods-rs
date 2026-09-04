@@ -224,8 +224,9 @@ fn refresh_config() {
         } else {
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} mode={} hunt={} dll_users_only={} \
-                 reject_notice={} named={} ids={} blocks={} excluded={} mark={} unmark={} \
-                 warp_nearest={} warp_next={} warp_other_area={}",
+                 reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
+                 ersc_show_observer={} ersc_lobby_key_observer={} named={} ids={} blocks={} \
+                 excluded={} mark={} unmark={} warp_nearest={} warp_next={} warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -237,6 +238,17 @@ fn refresh_config() {
                 // "The config reloaded" is not the question anyone has; "what is in force now" is.
                 outcome.config.dll_users_only,
                 outcome.config.reject_notice,
+                outcome.config.map_pins,
+                // THE THREE ersc_* SWITCHES ARE THE ONES THAT DECIDE WHETHER THIS DLL DETOURS
+                // Seamless AT ALL, and detouring it is what killed the game at 0x140010043. They
+                // default OFF and the filter now resolves the session by scanning ersc's writable
+                // data instead, so a run that has them ON is a different program from the one the
+                // 600s clean window was measured on -- which makes them the single most important
+                // pair of values on this line, not the least.
+                outcome.config.steam_hooks,
+                outcome.config.ersc_observers,
+                outcome.config.ersc_show_observer,
+                outcome.config.ersc_lobby_key_observer,
                 outcome.config.named_locations.len(),
                 outcome.config.named_location_text_ids.len(),
                 outcome.config.allowed_blocks.len(),
@@ -730,6 +742,15 @@ fn scan_for_session(base: usize, abi: &ersc::Abi) -> Option<(usize, usize)> {
             slot += 8;
         }
     }
+    None
+}
+
+/// The host build has no `ersc.dll` image to walk, so there is nothing to find.
+///
+/// `resolve_session` is deliberately NOT `cfg`-gated -- its state machine is what the host tests
+/// exercise -- so the scanner needs a host half or the whole crate fails to build off Windows.
+#[cfg(not(windows))]
+fn scan_for_session(_base: usize, _abi: &ersc::Abi) -> Option<(usize, usize)> {
     None
 }
 
