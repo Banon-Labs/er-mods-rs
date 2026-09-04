@@ -399,7 +399,7 @@ def write_obj(
 ) -> None:
     with path.open("w", encoding="utf-8") as file:
         file.write(
-            "# Exported from Blender EDIT_ME_c2280 for er-effects-rs donor patching\n"
+            "# Exported from Blender EDIT_ME_c2280 for er-quickload donor patching\n"
         )  # pi-lens-ignore: python-thread-global-write — sequential file write, no threading
         file.write(
             "o blender_edit_c2280\n"

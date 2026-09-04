@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run rustfmt on experiment include children that `cargo fmt` cannot see.
 
-Several files under `crates/er-effects-rs/src/experiments/` are pulled into the
+Several files under `crates/er-quickload/src/experiments/` are pulled into the
 crate with `include!`. Cargo/rustfmt only walks the module graph, so those files
 can drift forever while `cargo fmt --all -- --check` stays green. This guard
 checks the real files directly until the include shims are converted to modules.
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_EXPERIMENTS_DIR = Path("crates/er-effects-rs/src/experiments")
+DEFAULT_EXPERIMENTS_DIR = Path("crates/er-quickload/src/experiments")
 
 
 def rust_files(root: Path) -> list[Path]:

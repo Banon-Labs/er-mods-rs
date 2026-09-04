@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Block Manual pgrep in Agent Bash Commands (WSL false-negative guard)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-BLOCK-MANUAL-PGREP

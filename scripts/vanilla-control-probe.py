@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded vanilla (-v, no DLL) control run for the Windows-crash A/B.
 
-Launches `~/Elden/launch.sh -v` (me3 offline, NO er_effects_rs.dll), watches the
+Launches `~/Elden/launch.sh -v` (me3 offline, NO er_quickload.dll), watches the
 `eldenring.exe` process lifetime, then tears down ER + me3. Data artifacts go to
 target/runtime-probe/ (repo-local /tmp writes for artifacts are allowed; only
 source belongs in the repo).
@@ -12,11 +12,21 @@ Signal: vanilla ER should boot and SIT at the title screen alive for the full wi
   - never_started   -> me3/launch failure (inconclusive)
 """
 import json, os, signal, subprocess, sys, time, glob
+from pathlib import Path
 
-# argv[1] = artifact label (subdir); argv[2:] = launch.sh flags ([] = DLL profile, ['-v'] = vanilla).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import artifact_env  # noqa: E402
+
+# argv[1] = artifact label (subdir); argv[2:] = launch.sh flags (['-o'] = DLL profile without
+# Seamless, ['-v'] = vanilla). Pass the flag explicitly: since 2026-08-24 launch.sh includes
+# ersc.dll by default, so NO flag now means a Seamless run -- not the DLL-only control arm.
 LABEL = sys.argv[1] if len(sys.argv) > 1 else 'boot-ab'
 LAUNCH_ARGS = sys.argv[2:]
-ART = f"/home/banon/projects/er-effects-rs/target/runtime-probe/{LABEL}"
+# Derived, not hard-coded to one developer's home: this script used to carry `/home/banon` literals
+# for the repo, the launcher and its cwd, so it only ran for one user on one machine.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LAUNCHER = Path(os.environ.get('ER_LAUNCHER', str(Path.home() / 'Elden/launch.sh')))
+ART = str(REPO_ROOT / 'target/runtime-probe' / LABEL)
 os.makedirs(ART, exist_ok=True)
 GAME_RUNTIME_CAP = 60   # seconds to observe the game process once it appears
 LAUNCH_GRACE = 45       # seconds to allow me3 setup + logos before expecting the process
@@ -43,10 +53,15 @@ def me3_pids():
 
 start = time.monotonic()
 log = open(ART + '/vanilla-launch.out', 'w')
+# EVERY per-run artifact into THIS probe's directory. A game-directory artifact is SINGLE-SLOT --
+# `er_game_base::log::begin_fresh_run` keeps one generation -- so two launches lose the run before
+# last, and several sessions launch concurrently here. The vanilla arm (`-v`) loads no DLL and
+# writes none of these, but the same invocation takes `-o` for the DLL arm, which does.
 proc = subprocess.Popen(
-    ['/home/banon/Elden/launch.sh', *LAUNCH_ARGS],
+    [str(LAUNCHER), *LAUNCH_ARGS],
     stdout=log, stderr=subprocess.STDOUT,
-    cwd='/home/banon/Elden', start_new_session=True,
+    cwd=str(LAUNCHER.parent), start_new_session=True,
+    env={**os.environ, **artifact_env(ART)},
 )
 
 first_seen = last_seen = None

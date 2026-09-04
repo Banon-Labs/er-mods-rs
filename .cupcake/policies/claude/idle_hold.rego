@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Ban unjustified idle/hold announcements while a background task runs
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-IDLE-HOLD
@@ -53,12 +53,12 @@ halt contains decision if {
 }
 
 reason_for(p) := msg if {
-	msg := sprintf("You announced holding/idling ('%s') while a background task runs. Do productive NON-OVERLAPPING work now (RE a different function, prep the next fix, analyze prior logs, clean a gate) OR state explicitly 'I would normally have done <X> while waiting but didn't because <reason>'. Don't just wait.", [p])
+	msg := concat("", ["You announced holding/idling ('", p, "') while a background task runs. Do productive NON-OVERLAPPING work now (RE a different function, prep the next fix, analyze prior logs, clean a gate) OR state explicitly 'I would normally have done <X> while waiting but didn't because <reason>'. Don't just wait."])
 }
 
 verbose_reason := msg if {
 	some c in [verbose_chars]
-	msg := sprintf("You paused while blocked on a background task but wrote a long message (%s chars). When blocked, reply with ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. A long 'justified' hold is not acceptable.", [c])
+	msg := concat("", ["You paused while blocked on a background task but wrote a long message (", c, " chars). When blocked, reply with ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. A long 'justified' hold is not acceptable."])
 }
 
 # Parse a VERBOSEPAUSE:<n-chars> tag into the char count. Undefined when the signal is not a

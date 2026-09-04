@@ -3,7 +3,7 @@
 
 `scripts/check-rust-build.sh` carries an `me3_shells` array of `package:artifact` pairs and links
 each one, because `cargo xwin check` stops at metadata and never invokes the linker, and the plain
-`cargo xwin build` honours `default-members` (= `crates/er-effects-rs`) and so builds only the
+`cargo xwin build` honours `default-members` (= `crates/er-quickload`) and so builds only the
 product. Before that array existed, 13 of the cdylibs a user can list in an me3 `[[natives]]` entry
 were never linked by ANY gate: a shell that could not link -- a missing `#[no_mangle] DllMain`, a
 wrong crate-type, an unresolved import inside a `cfg(windows)` block -- passed the whole suite
@@ -22,6 +22,11 @@ So this checks three things:
    it silently skipped all four. Each pair's artifact must match what Cargo will actually emit.
 3. **No dead entries.** A listed package must exist and still be a cdylib, so a rename or a
    crate-type change cannot leave the array pointing at nothing while looking maintained.
+4. **No `-dll` suffix.** Every shell used to be `er-<feature>-dll` producing `er_<feature>_dll.dll`,
+   which said the same word twice and read badly in an me3 `[[natives]]` list. They were renamed to
+   `er-<feature>` / `er_<feature>.dll` (the nine with a sibling library crate pushed that library to
+   `er-<feature>-core`). A convention only survives if something enforces it, so a package or
+   artifact carrying the suffix again is a failure here rather than a thing someone notices later.
 
 Usage:
     python3 scripts/check-me3-shell-coverage.py
@@ -43,7 +48,7 @@ CRATES_DIR = REPO_ROOT / "crates"
 
 # The product DLL. `cargo xwin build --release` builds it via `default-members`, so it is linked
 # without appearing in the shells array.
-PRODUCT_PACKAGE = "er-effects-rs"
+PRODUCT_PACKAGE = "er-quickload"
 
 # cdylib crates that define no `DllMain` and are therefore not ME3-loadable natives. Each needs a
 # reason: an unexplained exemption is how a real shell gets quietly dropped from the gate.
@@ -74,24 +79,36 @@ def parse_me3_shells(script_text: str) -> list[tuple[str, str]]:
 
 
 def cdylib_crates(crates_dir: Path) -> dict[str, str]:
-    """Map package name -> the artifact stem Cargo will emit, for every cdylib crate."""
+    """Map package name -> the artifact stem Cargo will emit, for every cdylib crate.
+
+    The crate-type is read out of the `[lib]` section's `crate-type` key, NOT by looking for the
+    word "cdylib" anywhere in the manifest. That whole-file substring test was inverted by its own
+    subject matter: `er-build-import-runtime` is a plain library whose manifest COMMENT explains
+    that a cdylib cannot be linked into another cdylib, and the comment alone made this gate demand
+    a `DllMain` from it. A manifest that merely talks about cdylibs is not one.
+    """
     found: dict[str, str] = {}
     for manifest in sorted(crates_dir.glob("*/Cargo.toml")):
         text = manifest.read_text(encoding="utf-8", errors="replace")
-        if "cdylib" not in text:
-            continue
         package_match = re.search(r"^name\s*=\s*\"([^\"]+)\"", text, re.M)
         if not package_match:
             continue
         package = package_match.group(1)
+        # Everything that decides the artifact lives in `[lib]`: no section means no cdylib, since
+        # Cargo's default crate-type is `lib`.
+        lib_match = re.search(r"\[lib\](.*?)(?:\n\[|\Z)", text, re.S)
+        if not lib_match:
+            continue
+        lib_section = lib_match.group(1)
+        crate_type = re.search(r"^\s*crate-type\s*=\s*\[([^\]]*)\]", lib_section, re.M)
+        if not crate_type or "cdylib" not in crate_type.group(1):
+            continue
         # A `[lib] name` override decides the artifact; otherwise Cargo derives it from the
         # package name with dashes turned into underscores.
-        lib_match = re.search(r"\[lib\](.*?)(?:\n\[|\Z)", text, re.S)
         artifact = package.replace("-", "_")
-        if lib_match:
-            lib_name = re.search(r"^\s*name\s*=\s*\"([^\"]+)\"", lib_match.group(1), re.M)
-            if lib_name:
-                artifact = lib_name.group(1)
+        lib_name = re.search(r"^\s*name\s*=\s*\"([^\"]+)\"", lib_section, re.M)
+        if lib_name:
+            artifact = lib_name.group(1)
         found[package] = artifact
     return found
 
@@ -158,6 +175,22 @@ def check(crates_dir: Path, script_text: str) -> list[str]:
                 f"or its crate-type changed)"
             )
 
+    # 4. No `-dll` suffix, on either half of the pair. Checked against the ARRAY rather than the
+    # crate directory listing so a shell that is renamed back is caught at the place a gate would
+    # otherwise happily keep linking it.
+    for package, artifact in listed:
+        if package.endswith("-dll"):
+            failures.append(
+                f"{package}: package names must not end in `-dll` -- the crate is already a DLL. "
+                f"Name it `{package[: -len('-dll')]}` (and if a library crate already holds that "
+                f"name, give the library the `-core` suffix)"
+            )
+        if artifact.endswith("_dll"):
+            failures.append(
+                f"{package}: artifact `{artifact}.dll` must not end in `_dll` -- set `[lib] name` "
+                f"to `{artifact[: -len('_dll')]}` so the file is `{artifact[: -len('_dll')]}.dll`"
+            )
+
     # An exemption for a crate that has since grown a DllMain is worse than no exemption: it reads
     # as considered and silently drops a real shell.
     for package in sorted(EXEMPT):
@@ -183,8 +216,8 @@ def selftest() -> int:
 
     case(
         "parses pairs",
-        parse_me3_shells("me3_shells=(\n\ta-dll:a_dll\n\tb-dll:b_lib\n)")
-        == [("a-dll", "a_dll"), ("b-dll", "b_lib")],
+        parse_me3_shells("me3_shells=(\n\ta-shell:a_lib\n\tb-shell:b_lib\n)")
+        == [("a-shell", "a_lib"), ("b-shell", "b_lib")],
     )
     case("empty array parses to nothing", parse_me3_shells("me3_shells=(\n)") == [])
     case("missing array is detected", parse_me3_shells("nothing here") == [])
@@ -192,49 +225,92 @@ def selftest() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         # A loadable shell that the array forgot.
-        (root / "forgotten-dll" / "src").mkdir(parents=True)
-        (root / "forgotten-dll" / "Cargo.toml").write_text(
-            '[package]\nname = "forgotten-dll"\n[lib]\ncrate-type = ["cdylib"]\n'
+        (root / "forgotten-shell" / "src").mkdir(parents=True)
+        (root / "forgotten-shell" / "Cargo.toml").write_text(
+            '[package]\nname = "forgotten-shell"\n[lib]\ncrate-type = ["cdylib"]\n'
         )
-        (root / "forgotten-dll" / "src" / "lib.rs").write_text(
+        (root / "forgotten-shell" / "src" / "lib.rs").write_text(
             "#[no_mangle]\npub extern \"system\" fn DllMain() -> i32 { 1 }\n"
         )
-        problems = check(root, "me3_shells=(\n\tother-dll:other_dll\n)")
+        problems = check(root, "me3_shells=(\n\tother-shell:other_lib\n)")
         case(
             "an unlisted DllMain cdylib fails",
-            any("forgotten-dll" in p and "NOT in me3_shells" in p for p in problems),
+            any("forgotten-shell" in p and "NOT in me3_shells" in p for p in problems),
         )
 
         # An artifact-name override the array got wrong -- the trap that silently skipped four.
-        (root / "renamed-dll" / "src").mkdir(parents=True)
-        (root / "renamed-dll" / "Cargo.toml").write_text(
-            '[package]\nname = "renamed-dll"\n[lib]\nname = "renamed_artifact"\ncrate-type = ["cdylib"]\n'
+        (root / "renamed-shell" / "src").mkdir(parents=True)
+        (root / "renamed-shell" / "Cargo.toml").write_text(
+            '[package]\nname = "renamed-shell"\n[lib]\nname = "renamed_artifact"\ncrate-type = ["cdylib"]\n'
         )
-        (root / "renamed-dll" / "src" / "lib.rs").write_text(
+        (root / "renamed-shell" / "src" / "lib.rs").write_text(
             "#[no_mangle]\npub extern \"system\" fn DllMain() -> i32 { 1 }\n"
         )
-        problems = check(root, "me3_shells=(\n\trenamed-dll:renamed_dll\n)")
+        problems = check(root, "me3_shells=(\n\trenamed-shell:renamed_wrong\n)")
         case(
             "a wrong artifact name fails",
-            any("renamed-dll" in p and "Cargo emits" in p for p in problems),
+            any("renamed-shell" in p and "Cargo emits" in p for p in problems),
         )
 
-        problems = check(root, "me3_shells=(\n\trenamed-dll:renamed_artifact\n)")
+        problems = check(root, "me3_shells=(\n\trenamed-shell:renamed_artifact\n)")
         case(
             "the correct artifact name passes that check",
             not any("Cargo emits" in p for p in problems),
         )
 
-        problems = check(root, "me3_shells=(\n\tghost-dll:ghost_dll\n)")
+        problems = check(root, "me3_shells=(\n\tghost-shell:ghost_lib\n)")
         case(
             "a dead entry fails",
-            any("ghost-dll" in p and "not a cdylib crate" in p for p in problems),
+            any("ghost-shell" in p and "not a cdylib crate" in p for p in problems),
+        )
+
+        # A plain library whose manifest only TALKS about cdylibs. The whole-file substring test
+        # this replaced classified it as a shell and demanded a `DllMain` it must never have.
+        (root / "talks-about-cdylibs" / "src").mkdir(parents=True)
+        (root / "talks-about-cdylibs" / "Cargo.toml").write_text(
+            "# A cdylib cannot be linked into another cdylib, which is why this is a library.\n"
+            '[package]\nname = "talks-about-cdylibs"\n'
+        )
+        (root / "talks-about-cdylibs" / "src" / "lib.rs").write_text("pub fn f() {}\n")
+        problems = check(root, "me3_shells=(\n\trenamed-shell:renamed_artifact\n)")
+        case(
+            "a library that merely mentions cdylib is not a shell",
+            not any("talks-about-cdylibs" in p for p in problems),
+        )
+
+        # And a `[lib]` section that declares an rlib is still not a shell.
+        (root / "rlib-only" / "src").mkdir(parents=True)
+        (root / "rlib-only" / "Cargo.toml").write_text(
+            '[package]\nname = "rlib-only"\n[lib]\ncrate-type = ["rlib"]\n'
+        )
+        (root / "rlib-only" / "src" / "lib.rs").write_text("pub fn f() {}\n")
+        problems = check(root, "me3_shells=(\n\trenamed-shell:renamed_artifact\n)")
+        case(
+            "an rlib crate-type is not a shell",
+            not any("rlib-only" in p for p in problems),
+        )
+
+        # The retired `-dll` suffix, on each half of the pair independently.
+        problems = check(root, "me3_shells=(\n\trenamed-shell:renamed_artifact\n)")
+        case(
+            "a clean pair trips no naming failure",
+            not any("must not end in" in p for p in problems),
+        )
+        problems = check(root, "me3_shells=(\n\tsome-dll:some_lib\n)")
+        case(
+            "a `-dll` package name fails",
+            any("some-dll" in p and "package names must not end in `-dll`" in p for p in problems),
+        )
+        problems = check(root, "me3_shells=(\n\tsome-shell:some_dll\n)")
+        case(
+            "a `_dll` artifact name fails",
+            any("some_dll.dll` must not end in `_dll`" in p for p in problems),
         )
 
     if failures:
         print(f"selftest: {failures} case(s) failed", file=sys.stderr)
         return 1
-    print("[check-me3-shell-coverage] selftest ok (7 cases)")
+    print("[check-me3-shell-coverage] selftest ok (12 cases)")
     return 0
 
 

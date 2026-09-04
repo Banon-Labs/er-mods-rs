@@ -122,9 +122,9 @@ def test_script_scan_rejects_proton_command_requirement() -> None:
 
 
 def test_native_overlay_is_top_level_isolated_d3d12_overlay() -> None:
-    # Portrait crate split (2026-07-29): native_overlay.rs lives in er-loading-portrait.
+    # Portrait crate split (2026-07-29): native_overlay.rs lives in er-loading-portrait-core.
     native_overlay = (
-        REPO_ROOT / "crates" / "er-loading-portrait" / "src" / "native_overlay.rs"
+        REPO_ROOT / "crates" / "er-loading-portrait-core" / "src" / "native_overlay.rs"
     ).read_text(encoding="utf-8", errors="replace")
     assert "SEPARATE top-level window" in native_overlay
     assert "OWN D3D12 device" in native_overlay
@@ -143,7 +143,7 @@ def test_movement_probe_and_oracle_use_semantic_render_ready() -> None:
     task_registration = (
         REPO_ROOT
         / "crates"
-        / "er-effects-rs"
+        / "er-quickload"
         / "src"
         / "lib_parts"
         / "dll_entry_parts"
@@ -160,7 +160,7 @@ def test_movement_probe_and_oracle_use_semantic_render_ready() -> None:
     write_oracle = (
         REPO_ROOT
         / "crates"
-        / "er-effects-rs"
+        / "er-quickload"
         / "src"
         / "telemetry"
         / "runtime_oracles"

@@ -4,11 +4,11 @@
 //  * `host::*` -- product functions crossing the seam as installed fn pointers;
 //  * `constants_moved::*` -- the constants/statics/plain-data types moved
 //    verbatim out of the root crate (the root re-imports them from us);
-//  * `er_telemetry::counters::*` -- the shared telemetry statics (the root's
+//  * `er_telemetry_core::counters::*` -- the shared telemetry statics (the root's
 //    re-export lines were never definitions, so they are imports here too);
 //  * `er_game_base` -- fault-safe RAM readers + game base/rva resolution and
-//    the cross-cutting singleton RVA table (er-loading-portrait precedent);
-//  * `er_loading_portrait` -- the portrait crate's published layout facts and
+//    the cross-cutting singleton RVA table (er-loading-portrait-core precedent);
+//  * `er_loading_portrait_core` -- the portrait crate's published layout facts and
 //    capture entry point the title flow already consumed pre-split.
 pub use crate::constants_moved::*;
 pub use crate::host::*;
@@ -16,14 +16,14 @@ pub use er_game_base::mem::*;
 pub use er_game_base::rva::{
     CS_MENU_MAN_GLOBAL_RVA, CS_MENU_MAN_MENU_DATA_OFFSET, GAME_DATA_MAN_PLAYER_GAME_DATA_08_OFFSET,
 };
-pub use er_loading_portrait::{
+pub use er_loading_portrait_core::{
     PORTRAIT_HOLD_MAX_TICKS, PROFILE_RENDERER_REFRESH_RVA, SLOT_MANAGER_CONTAINER_OFFSET,
     TITLE_CUSTOM_COVER_PROFILE_OFFSCREEN_TEX_RESCAP_OFFSET,
     TITLE_CUSTOM_COVER_PROFILE_RENDERER_OFFSCREEN_REND_OFFSET,
     TITLE_CUSTOM_COVER_PROFILE_RENDERER_TABLE_RVA, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
     TITLE_PROFILE_SLOT_COUNT, maybe_capture_portrait_gxtexture,
 };
-pub use er_telemetry::counters::*;
+pub use er_telemetry_core::counters::*;
 
 // The moved cluster addresses a few product fns by their old submodule paths
 // (`crate::compat::gating::...` etc. after the Stage A path rewrite). These

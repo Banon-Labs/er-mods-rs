@@ -2,12 +2,28 @@
 """Measure static equivalence coverage for the FromSoft manual-const refactor.
 
 This is not a proof that the game runtime is correct by itself. It is a
-fail-closed source-level oracle for the thing this branch was supposed to be:
-refactoring manual constants into typed enums/layouts without changing the
-feature's numeric contract. It compares same-name constants changed relative to
-main, evaluates simple numeric aliases (including enum variants), and reports any
-mismatch or unresolved comparison as evidence that the refactor is not fully
-proven yet.
+source-level oracle for the thing ITS OWN branch was supposed to be: refactoring
+manual constants into typed enums/layouts without changing the feature's numeric
+contract. It compares same-name constants changed relative to `main`, evaluates
+simple numeric aliases (including enum variants), and reports any mismatch or
+unresolved comparison as evidence that the refactor is not fully proven.
+
+REPORTS BY DEFAULT; PASS `--gate` TO FAIL ON UNPROVEN FINDINGS.
+
+Until 2026-08-31 this docstring called itself "fail-closed" while `main()` returned
+0 unconditionally -- it printed 31 findings, 6 of them outright constant
+MISMATCHES, and exited green. The claim is now true, but only under `--gate`,
+because the default has to stay usable on a branch where the finding is expected.
+
+IT MUST NOT BE WIRED INTO `scripts/check.sh` ON AN ADDRESS-MIGRATION BRANCH. Its
+premise is "a refactor must not change the numeric contract"; the premise of
+`fix/repoint-rvas-to-1170` is that every game address changes. All six mismatches
+it reports there are the intentional 1.16.2 -> 1.17 repoints, four of them
+verbatim rows in `docs/recon/rva-map-1162-to-1170*.tsv` and the fifth
+(`0x14067a99a -> 0x14067b7ea`) an entry+0x1a callsite carried by the
+offset-from-entry convention that `check-no-stale-callsite-rva.py` owns. The two
+premises are mutually exclusive. Use `--gate` on a PURE-refactor branch, where a
+changed number really is a defect.
 """
 
 from __future__ import annotations
@@ -168,7 +184,7 @@ def changed_rust_files() -> list[str]:
 
 def base_ref_path(path: str) -> str:
     """Map the relocated runtime crate back to its historical root-src path."""
-    prefix = "crates/er-effects-rs/src/"
+    prefix = "crates/er-quickload/src/"
     if path.startswith(prefix):
         return "src/" + path[len(prefix) :]
     return path
@@ -407,8 +423,8 @@ def read_repo_text(path: str) -> str:
 
 
 def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_source: str) -> bool:
-    lib = read_repo_text("crates/er-effects-rs/src/lib.rs")
-    telemetry = read_repo_text("crates/er-effects-rs/src/telemetry.rs")
+    lib = read_repo_text("crates/er-quickload/src/lib.rs")
+    telemetry = read_repo_text("crates/er-quickload/src/telemetry.rs")
     combined = new_source + "\n" + lib + "\n" + telemetry
     if name in combined:
         return False
@@ -430,7 +446,7 @@ def deleted_const_is_proven(path: str, name: str, old_const: ConstantDef, new_so
             "pub(crate) fn runtime_heap_allocator_ptr_or_null()" in lib
             and "DLAllocator::runtime_heap_allocator()" in lib
         )
-    if path in {"src/telemetry.rs", "crates/er-effects-rs/src/telemetry.rs"} and name == "NOW_LOADING_UNKNOWN":
+    if path in {"src/telemetry.rs", "crates/er-quickload/src/telemetry.rs"} and name == "NOW_LOADING_UNKNOWN":
         sentinel = re.search(r"const\s+READ_FAIL_SENTINEL:\s+i32\s*=\s*(-?\d+)\s*;", telemetry)
         return sentinel is not None and int(sentinel.group(1)) == old_const.value
     return False
@@ -536,12 +552,35 @@ def emit_text(report: dict[str, object]) -> None:
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("text", "json", "metrics"), default="text")
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="exit 1 when any constant is unproven (pure-refactor branches only -- see the "
+        "module docstring for why this is wrong on an address-migration branch)",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
     report = build_report()
     if args.format == "json":
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         emit_text(report)
+    if args.gate:
+        # THROUGH `metrics`, NOT OFF THE TOP LEVEL. `build_report` nests every count under
+        # `report["metrics"]` (the `--format metrics` view is that dict verbatim), so reading
+        # `report["unproven_equivalence_total"]` raised KeyError and `--gate` could not run at
+        # all -- the flag was added, documented and never executed once.
+        metrics = report["metrics"]
+        unproven = metrics["unproven_equivalence_total"]
+        if unproven:
+            print(
+                f"\ncheck-refactor-equivalence: FAILED -- {unproven} constant(s) changed against "
+                f"{BASE_REF} without a proven numeric equivalence "
+                f"({metrics['equivalence_mismatches']} outright mismatch(es), "
+                f"{metrics['equivalence_unchecked']} unresolved). A refactor may retype a constant; "
+                f"it may not renumber one."
+            )
+            return 1
+        print("check-refactor-equivalence: OK -- every changed constant is numerically unchanged.")
     return 0
 
 

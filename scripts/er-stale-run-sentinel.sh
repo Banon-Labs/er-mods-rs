@@ -50,12 +50,12 @@
 # `-p <profile>`, the profile is TOML whose `[[natives]]` entries name the exact DLLs loaded, and
 # `cargo metadata` maps each of those DLL filenames back to the package that emits it. Deriving the
 # filename from the package name would be WRONG -- four crates override `[lib] name`
-# (er-ags-stub -> amd_ags_x64.dll, er-inventory-sort-dll -> er_inventory_sort.dll, ...), which is
+# (er-ags-stub -> amd_ags_x64.dll, er-inventory-sort -> er_inventory_sort.dll, ...), which is
 # the same trap scripts/check-me3-shell-coverage.py exists to catch -- so the cdylib TARGET name
 # from cargo metadata is used instead. Nothing here is hardcoded.
 #
-# DEPENDENCY CLOSURE IS THE LOAD-BEARING PART. Editing crates/er-invasion-warp/src/*.rs changes
-# er_invasion_warp_dll.dll even though the crate names differ, and crates/er-game-base changes both
+# DEPENDENCY CLOSURE IS THE LOAD-BEARING PART. Editing crates/er-invasion-warp-core/src/*.rs changes
+# er_invasion_warp.dll even though the crate names differ, and crates/er-game-base changes both
 # product DLLs. The closure is walked over cargo metadata's path-dependency edges, ALL kinds
 # included (normal, build and dev): a dev-dependency cannot really reach the cdylib, but counting it
 # only over-triggers, and over-triggering is the safe direction.
@@ -87,7 +87,7 @@
 # Twice on 2026-08-04 "what tore this run down?" could not be answered after the fact -- the reason
 # went to the hook's stdout and nowhere else -- and both guesses were wrong (frida-gadget once, a
 # subagent once). Every check now appends one tab-separated line to $ER_SENTINEL_LOG (default
-# ${XDG_STATE_HOME:-$HOME/.local/state}/er-effects-rs/stale-run-sentinel.log, outside the repo):
+# ${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-rs/stale-run-sentinel.log, outside the repo):
 # timestamp, verdict, branch, edited path, reason, live profiles, killed pids. "Which edit killed
 # the run" is now a lookup.
 #
@@ -111,7 +111,7 @@ REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # Outside the repo on purpose: a log the sentinel writes must not itself look like a repo edit, and
 # it has to survive `git clean`. Env-overridable and current-user-aware -- no /home/<someone>
 # literals (AGENTS.md "Reusable Tooling / Hard-Coded Path Corrections").
-SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-effects-rs/stale-run-sentinel.log}"
+SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-rs/stale-run-sentinel.log}"
 
 # Matched EXACTLY against /proc/<pid>/comm -- never a substring match on the full command line,
 # which is how `rsi`-matches-`version` style false positives happen.
@@ -702,9 +702,9 @@ profileVersion = "v1"
 [[supports]]
 game = "eldenring"
 [[natives]]
-path = '/nonexistent/er_effects_rs.dll'
+path = '/nonexistent/er_quickload.dll'
 [[natives]]
-path = '/nonexistent/er_invasion_warp_dll.dll'
+path = '/nonexistent/er_invasion_warp.dll'
 [[natives]]
 path = '/nonexistent/SeamlessCoop/ersc.dll'
 TOML
@@ -738,23 +738,27 @@ TOML
 
   echo "  -- must TEAR DOWN --"
   # The crate that directly builds a loaded DLL.
-  expect_verdict "$REPO_ROOT/crates/er-invasion-warp-dll/src/lib.rs" TEARDOWN "crate builds a loaded DLL"
-  expect_verdict "$REPO_ROOT/crates/er-effects-rs/src/lib.rs" TEARDOWN "product crate builds a loaded DLL"
+  expect_verdict "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" TEARDOWN "crate builds a loaded DLL"
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN "product crate builds a loaded DLL"
   # A DIRECT dependency whose crate name does not resemble the DLL's. This is the case a
-  # filename-shaped rule gets wrong: er-invasion-warp is not er_invasion_warp_dll.
-  expect_verdict "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" TEARDOWN "direct dependency crate of a loaded DLL"
+  # filename-shaped rule gets wrong: er-invasion-warp-core is not er_invasion_warp.
+  expect_verdict "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" TEARDOWN "direct dependency crate of a loaded DLL"
   # A TRANSITIVE dependency, several edges away from either loaded cdylib.
   expect_verdict "$REPO_ROOT/crates/er-game-base/src/lib.rs" TEARDOWN "transitive dependency crate of a loaded DLL"
   expect_verdict "$REPO_ROOT/crates/er-tpf/src/lib.rs" TEARDOWN "deep transitive dependency crate"
   # A crate manifest, not just its sources.
   expect_verdict "$REPO_ROOT/crates/er-gfx/Cargo.toml" TEARDOWN "manifest of a crate in the closure"
-  # The logged reason must name the DLL the crate ACTUALLY reaches. er-invasion-warp is a
-  # dependency of er_invasion_warp_dll ONLY -- er-effects-rs does not depend on it -- so a reason
-  # that also blamed er_effects_rs.dll would send the next reader hunting the wrong DLL.
-  expect_detail "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" \
-    "pkg=er-invasion-warp feeds er_invasion_warp_dll.dll" "reason names only the DLL it reaches"
+  # The logged reason must name the DLL the crate ACTUALLY reaches. er-invasion-warp-core is a
+  # dependency of er_invasion_warp ONLY -- er-quickload does not depend on it -- so a reason
+  # that also blamed er_quickload.dll would send the next reader hunting the wrong DLL.
+  expect_detail "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" \
+    "pkg=er-invasion-warp-core feeds er_invasion_warp.dll" "reason names only the DLL it reaches"
+  # ORDER IS DERIVED, NOT AUTHORED: the reason joins the DLL list in sorted order, so this
+  # literal has to follow the artifact names rather than the other way round. It flipped in the
+  # 2026-08-26 rename -- er_effects_rs.dll sorted BEFORE er_invasion_warp.dll, er_quickload.dll
+  # sorts after it -- and a token-wise rename cannot know that.
   expect_detail "$REPO_ROOT/crates/er-game-base/src/lib.rs" \
-    "feeds er_effects_rs.dll,er_invasion_warp_dll.dll" "reason names BOTH DLLs a shared crate feeds"
+    "feeds er_invasion_warp.dll,er_quickload.dll" "reason names BOTH DLLs a shared crate feeds"
   # Fail-safe: repo source that belongs to no crate and no inert directory.
   expect_verdict "$REPO_ROOT/Cargo.toml" TEARDOWN "workspace manifest (unclassified -> fail safe)"
   expect_verdict "$REPO_ROOT/data/effects.json" TEARDOWN "data/ (unclassified -> fail safe)"
@@ -787,11 +791,11 @@ TOML
   expect_verdict "$REPO_ROOT/.claude/settings.json" SKIP ".claude/ settings"
   expect_verdict "$REPO_ROOT/tests/pi-continuation-guard.test.ts" SKIP "tests/ (builds no DLL)"
   # A crate that builds a DLL the live profile does NOT load. This is the discrimination the
-  # whole change exists for: er_armament_icons.dll and er_input_harness_dll.dll are real, buildable,
+  # whole change exists for: er_armament_icons.dll and er_input_harness.dll are real, buildable,
   # me3-loadable DLLs -- they are simply not in THIS run.
   expect_verdict "$REPO_ROOT/crates/er-armament-icons/src/lib.rs" SKIP "crate builds an UNLOADED DLL"
-  expect_verdict "$REPO_ROOT/crates/er-input-harness-dll/src/lib.rs" SKIP "input-harness crate not in this profile"
-  expect_verdict "$REPO_ROOT/crates/er-telemetry-dll/src/lib.rs" SKIP "telemetry shell not in this profile"
+  expect_verdict "$REPO_ROOT/crates/er-input-harness/src/lib.rs" SKIP "input-harness crate not in this profile"
+  expect_verdict "$REPO_ROOT/crates/er-telemetry/src/lib.rs" SKIP "telemetry shell not in this profile"
   # Host-only tooling crates, reachable from no loaded cdylib.
   expect_verdict "$REPO_ROOT/tools/er-param-inspect/src/main.rs" SKIP "host-only tool crate"
   expect_verdict "$REPO_ROOT/crates/soulsformats/src/lib.rs" SKIP "host-only library crate"

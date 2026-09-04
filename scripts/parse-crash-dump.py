@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deep-trace an Elden Ring crash from its Windows minidump.
 
-WHY: our in-process VEH crash logger (crates/er-effects-rs/src/crashlog/) can only catch faults that
+WHY: our in-process VEH crash logger (crates/er-quickload/src/crashlog/) can only catch faults that
 happen AFTER our DLL loads. A crash in the me3 loader (me3_mod_host.dll) during early boot -- before any
 er_*.dll is injected -- is invisible to it (observed 2026-07-24: run 075217 crashed ~3s after launch in
 ntdll heap code with me3_mod_host frames, and the ONLY record was the Windows minidump, parsed by hand).
@@ -46,6 +46,89 @@ except ModuleNotFoundError:
         raise SystemExit(3)
     os.environ["_ER_CRASH_UV_REEXEC"] = "1"
     os.execvp("uv", ["uv", "run", "--with", "minidump", "python3", *sys.argv])
+
+def _tolerate_unknown_stream_types() -> None:
+    """Let an unknown minidump stream type be skipped instead of killing the whole parse.
+
+    MEASURED 2026-09-02: our own hang watchdog's dump (`er-crash-hang-minidump.dmp`, written by
+    `er-crash-logging.dll` via MiniDumpWriteDump under Wine) carries stream type `0xFFF0`, and the
+    `minidump` package builds every directory entry with `MINIDUMP_STREAM_TYPE(raw_value)`. A plain
+    `enum.Enum` raises on an unrecognised value, so the exception escapes `MinidumpFile.parse` and
+    the ENTIRE dump is unreadable -- `ValueError: 65520 is not a valid MINIDUMP_STREAM_TYPE` --
+    even though the thread list, module list and exception record it contains are all perfectly
+    well-formed. Vendor-defined streams above `LastReservedStream` (0xFFFF) are legal per the
+    format, so refusing them is the library being stricter than the spec.
+
+    `_missing_` returning a pseudo-member is the sanctioned Enum hook for exactly this: the value
+    round-trips, nothing is registered on the class, and every KNOWN stream type still resolves to
+    its real member, so no stream we care about changes behaviour.
+    """
+    from minidump.directory import MINIDUMP_STREAM_TYPE
+
+    if getattr(MINIDUMP_STREAM_TYPE, "_er_tolerates_unknown", False):
+        return
+
+    @classmethod  # type: ignore[misc]
+    def _missing_(cls, value):
+        if not isinstance(value, int):
+            return None
+        pseudo = object.__new__(cls)
+        pseudo._value_ = value
+        pseudo._name_ = f"UNKNOWN_STREAM_{value:#06x}"
+        return pseudo
+
+    MINIDUMP_STREAM_TYPE._missing_ = _missing_
+    MINIDUMP_STREAM_TYPE._er_tolerates_unknown = True
+
+
+_tolerate_unknown_stream_types()
+
+
+def _selftest() -> int:
+    """Prove the shim admits vendor streams and does not disturb the real ones."""
+    from minidump.directory import MINIDUMP_STREAM_TYPE
+
+    failures = []
+
+    def check(label, got, want):
+        if got != want:
+            failures.append(f"  {label}\n    got  {got!r}\n    want {want!r}")
+        else:
+            print(f"  ok    {label}")
+
+    # The value that made the whole file unreadable: our own hang dump's vendor stream.
+    unknown = MINIDUMP_STREAM_TYPE(0xFFF0)
+    check("an unknown stream type resolves instead of raising", unknown.value, 0xFFF0)
+    check("...and names itself as unknown", unknown.name, "UNKNOWN_STREAM_0xfff0")
+
+    # Known streams must be untouched -- the shim must not shadow real members.
+    known = MINIDUMP_STREAM_TYPE(MINIDUMP_STREAM_TYPE.ThreadListStream.value)
+    check("a known stream still resolves to its real member", known, MINIDUMP_STREAM_TYPE.ThreadListStream)
+    check("...and is not a pseudo-member", known.name, "ThreadListStream")
+
+    # The pseudo-member must not be registered on the class, or a second dump with a
+    # different vendor stream would collide with the first.
+    check(
+        "pseudo-members are not registered on the enum",
+        0xFFF0 in {member.value for member in MINIDUMP_STREAM_TYPE},
+        False,
+    )
+
+    # A non-int must still be rejected rather than silently fabricated.
+    try:
+        MINIDUMP_STREAM_TYPE("not-a-stream-type")
+        check("a non-integer value is still refused", "accepted", "ValueError")
+    except ValueError:
+        print("  ok    a non-integer value is still refused")
+
+    check("the shim is idempotent", (_tolerate_unknown_stream_types(), True)[1], True)
+
+    if failures:
+        print("\n".join(["selftest FAILED:", *failures]))
+        return 1
+    print("selftest ok")
+    return 0
+
 
 DEFAULT_DUMP_DIR = os.environ.get(
     "CRASHDUMPS_DIR", "/mnt/c/Users/choza/AppData/Local/CrashDumps"
@@ -94,7 +177,11 @@ def main() -> int:
     ap.add_argument("--dir", default=DEFAULT_DUMP_DIR, help=f"crash-dump dir (default {DEFAULT_DUMP_DIR})")
     ap.add_argument("--out", help="also write the trace to <out>/crash-trace.txt")
     ap.add_argument("--max-frames", type=int, default=40, help="max module-resolved stack frames")
+    ap.add_argument("--selftest", action="store_true", help="prove the unknown-stream shim holds")
     args = ap.parse_args()
+
+    if args.selftest:
+        return _selftest()
 
     if args.dump:
         path = args.dump

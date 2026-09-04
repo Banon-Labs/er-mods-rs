@@ -8,16 +8,16 @@ parser for it (and separately proves the array is complete and not stale). This
 module reuses that parser rather than adding a second regex over the same text:
 two independent parsers of one array is the drift this repo keeps closing.
 
-The product crate `er-effects-rs` is not in that array (the bare `cargo xwin
+The product crate `er-quickload` is not in that array (the bare `cargo xwin
 build` covers it via `default-members`), so it is prepended here.
 
 Modes:
-    --cargo-args   ->  -p er-effects-rs -p er-armament-icons ...
-    --artifacts    ->  er_effects_rs.dll er_armament_icons.dll ...
-    --pairs        ->  er-effects-rs:er_effects_rs ...   (one per line)
+    --cargo-args   ->  -p er-quickload -p er-armament-icons ...
+    --artifacts    ->  er_quickload.dll er_armament_icons.dll ...
+    --pairs        ->  er-quickload:er_quickload ...   (one per line)
 
 Note the artifact name is NOT the package name with dashes swapped for
-underscores -- four crates override `[lib] name` (er-better-refills-dll produces
+underscores -- four crates override `[lib] name` (er-better-refills produces
 er_better_refills.dll, and so on), which is why the array stores both halves.
 """
 

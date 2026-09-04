@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Reinforce the agreement/acknowledgement ban every turn (and catch interrupted-turn slips)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-NO-AUTHORITY-AGREEMENT-REMINDER
@@ -36,12 +36,12 @@ add_context contains context if {
 # Correction directive per case.
 interlock_for(h) := msg if {
 	h.case == "AUTH"
-	msg := sprintf("INTERLOCK TRIPPED: your PREVIOUS turn used the banned authority-coded agreement '%s' and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Before addressing the new request, acknowledge the slip in one line WITHOUT repeating the banned phrasing and restate the point as the verified fact plus its proof (or simply proceed). Do not use authority-coded agreement again.", [h.phrase])
+	msg := concat("", ["INTERLOCK TRIPPED: your PREVIOUS turn used the banned authority-coded agreement '", h.phrase, "' and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Before addressing the new request, acknowledge the slip in one line WITHOUT repeating the banned phrasing and restate the point as the verified fact plus its proof (or simply proceed). Do not use authority-coded agreement again."])
 }
 
 interlock_for(h) := msg if {
 	h.case == "ACK"
-	msg := sprintf("INTERLOCK TRIPPED: your PREVIOUS turn emitted feedback-acknowledgement prose '%s' with NO beads memory recorded, and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Announcing you internalized feedback is only acceptable when you actually did: before addressing the new request, either record a `bd remember` memory of that feedback now, or drop the receipt-prose. Do not emit unbacked acknowledgement prose again.", [h.phrase])
+	msg := concat("", ["INTERLOCK TRIPPED: your PREVIOUS turn emitted feedback-acknowledgement prose '", h.phrase, "' with NO beads memory recorded, and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Announcing you internalized feedback is only acceptable when you actually did: before addressing the new request, either record a `bd remember` memory of that feedback now, or drop the receipt-prose. Do not emit unbacked acknowledgement prose again."])
 }
 
 # Parse the tagged signal into {case, phrase}. Untagged-but-non-empty falls back to a Category-A hit

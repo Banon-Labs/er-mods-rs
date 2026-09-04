@@ -38,6 +38,12 @@ run "marker-file-gates" python3 scripts/check-marker-file-gates.py
 run "env-gate-comments" python3 scripts/check-env-gate-comments.py
 [[ -f scripts/check-no-lossy-utf8.py ]] && run "no-lossy-utf8" python3 scripts/check-no-lossy-utf8.py
 [[ -f scripts/check-no-timeouts.py ]] && run "no-timeouts" python3 scripts/check-no-timeouts.py
+# A test scratch path under `std::env::temp_dir()` with no per-process component. This one belongs
+# in the COMMIT cycle rather than only in check.sh: the defect is invisible to `cargo test` (it
+# passes 100% of the time in isolation) and only appears when two test binaries overlap, so the
+# author of the offending line is the last person who would see it fail. Six crates carried it on
+# 2026-08-31 and every failure it produced accused correct product code. 0.6s over the tree.
+[[ -f scripts/check-test-temp-isolation.py ]] && run "test-temp-isolation" python3 scripts/check-test-temp-isolation.py
 # Formatting drift. Use real `cargo fmt --check` (matches the crate's edition/rustfmt.toml and module
 # context -- per-file `rustfmt` formats imports differently and false-positives), but only FAIL on
 # diffs in THIS repo: `cargo fmt --all` also reaches the sibling `../fromsoftware-rs` path dependency,

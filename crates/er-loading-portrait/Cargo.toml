@@ -1,8 +1,13 @@
-# Loading-screen portrait + character-stats feature crate (path B + capture pipeline),
-# extracted from the root er-effects-rs DLL (portrait crate split, docs/plans/
-# portrait-stats-crate-split.md). Product state crosses the seam through
-# `host::install_host` function pointers (the `set_frame_provider` pattern); this crate
-# must NOT depend on the root crate, er-loading-bar, or er-d3d12-compositor.
+# Thin standalone ME3-loadable shell for the er-loading-portrait-core feature crate
+# (portrait crate split): own DllMain, VEH crash logger, own log file, individually
+# shippable. Modeled on er-loading-bar.
+#
+# WARNING: NEVER load er_loading_portrait.dll alongside er_quickload.dll in one
+# me3 profile. Both install a D3D12 Present detour and their own MinHook instance;
+# two instances patching the same prologues (Present, the now-loading observer RVAs,
+# the tip-suppression RVAs) would double-detour and corrupt each other's trampolines
+# -- the same class of silent race as the er-save-suppress warning in
+# er-quickload/Cargo.toml.
 [package]
 name = "er-loading-portrait"
 version = "0.1.0"
@@ -11,45 +16,18 @@ publish = false
 
 [lib]
 name = "er_loading_portrait"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell
+# testable on the host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# Shared cross-platform telemetry counters (the oracle_* fields the pipeline writes).
-er-telemetry = { path = "../er-telemetry" }
-# GFX (Scaleform SWF-variant) parser + glyph raster (pure-Rust, host-testable): the
-# stats text renders with the game's own menu font captured at runtime from the
-# Scaleform file-open. Cross-platform so the unified stats-line layout + raster
-# (`stats_lines`) is provable by host tests (bd er-effects-rs-qic7).
-er-gfx = { path = "../er-gfx" }
-# Tier A is host-safe and keeps shared RVA constants available to host-tested layout code;
-# `game-types` only pulls typed game bindings on Windows because er-game-base gates them there.
-er-game-base = { path = "../er-game-base", features = ["game-types"] }
-
-[target.'cfg(windows)'.dependencies]
-eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
-fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
-# Shared MinHook FFI + hook union (single MinHook instance per final DLL).
-er-hook = { path = "../er-hook" }
-# ERPX portrait-dump container (encode side) for the debug RGBA dump format.
-# Core-only (default-features off) so the DLL never pulls the host `png` dep.
-erpx-rs = { path = "../erpx-rs", default-features = false }
-bitflags = "2"
-windows = { version = "0.62", features = [
-  "Win32_Foundation",
-  "Win32_System_Threading",
-  "Win32_System_Kernel",
-  "Win32_System_Com",
-  "Win32_System_LibraryLoader",
-  "Win32_System_Memory",
-  "Win32_System_SystemServices",
-  "Win32_Graphics_Gdi",
-  "Win32_Graphics_Imaging",
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_Security",
-  "Win32_Graphics_Direct3D12",
-  "Win32_Graphics_Dxgi",
-  "Win32_Graphics_Dxgi_Common",
-  "Win32_Graphics_Direct3D",
-] }
+er-loading-portrait-core = { path = "../er-loading-portrait-core" }
+er-d3d12-compositor = { path = "../er-d3d12-compositor" }
+# RgbaFrame is the pixel-carrier type er-d3d12-compositor's CompositorFrame wraps.
+er-loading-bar-core = { path = "../er-loading-bar-core" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's run log and crash log each describe exactly one run.
+er-game-base = { path = "../er-game-base" }
 # LINT PARITY (root `[workspace.lints]`): this crate is at ZERO clippy + rustc warnings on its
 # shipping target (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`),
 # so it opts into the denied `rust.warnings` + `clippy.all` groups with no per-lint escapes.

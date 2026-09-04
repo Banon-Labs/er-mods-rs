@@ -49,7 +49,7 @@ A runtime-gated node may open its PR only after its feature-specific live oracle
 ## Constraints
 - Do not overfit or falsify the metric. A branch, commit, draft note, or Beads ticket without a real qualifying GitHub PR does not count.
 - One roadmap plan ID per PR and one PR per plan ID unless the roadmap explicitly records an evidence-backed rejection.
-- Preserve the single shipped `er_effects_rs.dll` product contract.
+- Preserve the single shipped `er_quickload.dll` product contract.
 - Parallel writers require disjoint worktrees. Beads writes are parent-owned and serialized.
 - Follow every node's static/runtime proof gates. Runtime-affecting nodes are not complete without their required live oracle.
 - Create new Beads tickets only for roadmap child expansion or newly discovered in-scope blockers.

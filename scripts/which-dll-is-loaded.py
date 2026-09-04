@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Report which `er_effects_rs.dll` a live Elden Ring actually mapped, and whether it
+"""Report which `er_quickload.dll` a live Elden Ring actually mapped, and whether it
 is the build you meant to test.
 
 Why this exists (2026-08-12): `~/Elden/launch.sh`'s default profile hard-codes the MAIN
-tree's `target/x86_64-pc-windows-msvc/release/er_effects_rs.dll`. Launching it from a
+tree's `target/x86_64-pc-windows-msvc/release/er_quickload.dll`. Launching it from a
 worktree silently validates main's build instead of the branch's, and a whole runtime
 result got attributed to a fix that was never loaded. The DLL debug log's per-line
 `dll:<8 hex>` tag IS the first 8 hex of the loaded file's md5 (see
-`crates/er-effects-rs/src/telemetry/save_policy_logs.rs::dll_md5_short`), so the mapped
+`crates/er-quickload/src/telemetry/save_policy_logs.rs::dll_md5_short`), so the mapped
 file, its md5, and that tag are all cross-checkable -- this does it in one command.
 
 Usage:
@@ -27,7 +27,7 @@ import re
 import sys
 
 GAME_COMM = "eldenring.exe"
-DLL_NAME = "er_effects_rs.dll"
+DLL_NAME = "er_quickload.dll"
 
 
 def live_game_pids() -> list[int]:

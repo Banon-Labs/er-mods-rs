@@ -1,7 +1,7 @@
 # METADATA
 # scope: package
 # title: Reinforce the no-idle-hold rule every turn (and catch interrupted-turn slips)
-# authors: ["er-effects-rs agents"]
+# authors: ["er-quickload agents"]
 # custom:
 #   severity: LOW
 #   id: ER-EFFECTS-NO-IDLE-HOLD-REMINDER
@@ -45,11 +45,11 @@ add_context contains context if {
 }
 
 interlock_for(p) := msg if {
-	msg := sprintf("INTERLOCK TRIPPED: your PREVIOUS turn announced an unjustified hold/idle ('%s') while a background task ran, and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Before addressing the new request, do the non-overlapping work you skipped (RE a different function, prep the next fix, analyze prior logs, clean a gate) or state 'I would normally have done <X> while waiting but didn't because <reason>'. Do not just wait again.", [p])
+	msg := concat("", ["INTERLOCK TRIPPED: your PREVIOUS turn announced an unjustified hold/idle ('", p, "') while a background task ran, and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). Before addressing the new request, do the non-overlapping work you skipped (RE a different function, prep the next fix, analyze prior logs, clean a gate) or state 'I would normally have done <X> while waiting but didn't because <reason>'. Do not just wait again."])
 }
 
 verbose_interlock_for(c) := msg if {
-	msg := sprintf("INTERLOCK TRIPPED: your PREVIOUS turn paused while blocked on a background task but wrote a long message (%s chars), and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). When blocked, your pause message must be ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. Keep the next blocked-pause terse.", [c])
+	msg := concat("", ["INTERLOCK TRIPPED: your PREVIOUS turn paused while blocked on a background task but wrote a long message (", c, " chars), and it was not caught at turn-end (the turn was likely interrupted, so no Stop halt fired). When blocked, your pause message must be ONLY a short, precise statement of what you're blocked on -- no status summaries, findings recaps, plans, or next-step narration. Keep the next blocked-pause terse."])
 }
 
 # Parse a VERBOSEPAUSE:<n-chars> tag into the char count. Undefined when the signal is not a

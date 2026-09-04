@@ -3,21 +3,21 @@
 Plan of record for bd `er-effects-rs-mz7q`. Baseline: `main` @ `1175610b` (PRs #99-#106
 merged). Phase 1 (this document + the crate scaffolding) changes no product behavior.
 
-**Goal.** Decouple two features completely out of `er-effects-rs` into crates that can be
+**Goal.** Decouple two features completely out of `er-quickload` into crates that can be
 bundled into other products AND shipped as independent ME3 DLLs, following the
-`er-loading-portrait` / `er-loading-portrait-dll` precedent: the feature crate holds the
+`er-loading-portrait-core` / `er-loading-portrait` precedent: the feature crate holds the
 logic, a thin `cdylib` shell makes it loadable alone, and a fn-pointer host struct
-(`crates/er-loading-portrait/src/host.rs`, `install_host()` at DllMain, inert defaults when
+(`crates/er-loading-portrait-core/src/host.rs`, `install_host()` at DllMain, inert defaults when
 no host is installed) is the ONLY coupling back to the product.
 
 The two products, as the user named them:
 
 * **(A) our own drawn picker** -- the picker we fully draw and manage, shown when the game
-  starts without a save provided. Crate `er-save-picker` + shell `er-save-picker-dll`.
+  starts without a save provided. Crate `er-save-picker-core` + shell `er-save-picker`.
 * **(B) the customized post-autoload vanilla menu**, as ONE product -- the Save Game button
   and its functionality, BOTH load buttons (Load Character + Load Character from File --
   renamed 2026-07-31 from Load Profile / Load Save Profiles), and
-  the Quit to Desktop button. Crate `er-quit-menu` + shell `er-quit-menu-dll`.
+  the Quit to Desktop button. Crate `er-quit-menu-core` + shell `er-quit-menu`.
 
 ---
 
@@ -27,7 +27,7 @@ The two products, as the user named them:
    mechanism is used by the extracted crates but NOT by the rest of the product, it moves
    into one of the pairs (or becomes its own crate). A host-seam entry is only legitimate
    when a consumer OUTSIDE the extracted features genuinely still needs the thing.
-2. **`er-effects-rs` stays byte-for-byte behaviorally identical at every slice.** This is a
+2. **`er-quickload` stays byte-for-byte behaviorally identical at every slice.** This is a
    refactor, not a rewrite -- with **no exceptions**. An earlier draft carved out one, the
    boot dialog's dim, but PR #109 has since landed that behavior on `main`, so every slice
    including S5 is now pure motion. See SS5.3.
@@ -125,12 +125,12 @@ they support is unaffected: B is several times A, and far more than "three butto
 
 ### 1.4 Product code vs agent-harness code
 
-Separating these was explicitly required. Classification evidence: no `ER_EFFECTS_*` env
+Separating these was explicitly required. Classification evidence: no `ER_QUICKLOAD_*` env
 var is read by any of these files; every remaining gate is a compile-time `false`, a
-module-presence check (`harness_dll_present()` = `GetModuleHandleA("er_input_harness_dll.dll")`),
+module-presence check (`harness_dll_present()` = `GetModuleHandleA("er_input_harness.dll")`),
 or a control file.
 
-**STAYS in `er-effects-rs` as diagnostics / harness (~1950 lines).** These are agent-only
+**STAYS in `er-quickload` as diagnostics / harness (~1950 lines).** These are agent-only
 and must not be dragged into a shipped feature crate:
 
 | Block | Why |
@@ -193,8 +193,8 @@ through the `er-hook` union.
 | `0x7633d0` | `MsgRepository::GetAndFormat` (Save Game label) | **B** | -- |
 | `0x67a3a0` | return-title request | **B** | -- |
 | `0x11a8870` / `0x11a8900` | Scaleform handler ctor / dtor | **B** | -- |
-| `0xb0e180` | continue-confirm | **B** | **product** + `er-reload-trace-dll` (already unioned) |
-| `0x67b200` / `0x67b290` | request-load-slot / in-world load | **B** | product (bare `MhHook`; `er-reload-trace-dll` skips them for that reason -- `UNION_SKIP_RVAS`) |
+| `0xb0e180` | continue-confirm | **B** | **product** + `er-reload-trace` (already unioned) |
+| `0x67b200` / `0x67b290` | request-load-slot / in-world load | **B** | product (bare `MhHook`; `er-reload-trace` skips them for that reason -- `UNION_SKIP_RVAS`) |
 | `0x7ad1c0` | `MenuWindowJob::Run` / PAB node update | **product** | B reaches it only via `system_quit_menu_window_run_post`, called from the product's PAB detour |
 | `0x1aeae60` / `0x1b3bda0` | GX queue telemetry | product (diagnostic) | -- |
 
@@ -205,14 +205,14 @@ through the `er-hook` union.
 ### 2.1 Crate list
 
 ```
-er-save-picker          (A) model + boot overlay + comdlg32 surface + picker config keys
-  +- er-save-picker-dll (A) thin cdylib shell
-er-quit-menu            (B) the customized System>Quit menu   -- depends on --> er-save-picker
-  +- er-quit-menu-dll   (B) thin cdylib shell
+er-save-picker-core          (A) model + boot overlay + comdlg32 surface + picker config keys
+  +- er-save-picker (A) thin cdylib shell
+er-quit-menu-core            (B) the customized System>Quit menu   -- depends on --> er-save-picker-core
+  +- er-quit-menu   (B) thin cdylib shell
 er-hook                 (extended, no new crate) union-ownership election
 ```
 
-**`er-quit-menu` -> `er-save-picker`, one way.** There is no shared core crate: the user
+**`er-quit-menu-core` -> `er-save-picker-core`, one way.** There is no shared core crate: the user
 ruled that out. The direction is acyclic because of one asymmetry the user pinned -- the dim
 overlay is for the in-game quit-menu case ONLY, and the boot missing-save dialog is not
 dimmed. B needs A (for the model and the dialog); A never needs the dim.
@@ -222,20 +222,20 @@ through that dependency.
 
 ### 2.2 Crate dependency is not DLL dependency
 
-`er-quit-menu` statically links `er-save-picker`, so a profile listing ONLY
-`er_quit_menu_dll.dll` still offers the OS-native surface -- but must NOT thereby acquire
+`er-quit-menu-core` statically links `er-save-picker-core`, so a profile listing ONLY
+`er_quit_menu.dll` still offers the OS-native surface -- but must NOT thereby acquire
 A's boot missing-save behavior. Two mechanisms, and only the second is a guarantee:
 
-1. **cargo feature `boot-flow`** (default on; `er-quit-menu` takes `er-save-picker` with
+1. **cargo feature `boot-flow`** (default on; `er-quit-menu-core` takes `er-save-picker-core` with
    `default-features = false, features = ["os-dialog"]`). This isolates the standalone-B
    build. It is **not** sufficient on its own: cargo unifies features across a build graph,
-   so in the product DLL -- which wants `boot-flow` -- `er-quit-menu` gets it too.
+   so in the product DLL -- which wants `boot-flow` -- `er-quit-menu-core` gets it too.
 2. **an explicit arm entry point.** Nothing in A's boot flow installs a hook, spawns a
-   thread or arms a model until a host calls `er_save_picker::arm_boot_picker()`.
-   `er-quit-menu` never calls it. This holds in every build, feature unification included.
+   thread or arms a model until a host calls `er_save_picker_core::arm_boot_picker()`.
+   `er-quit-menu-core` never calls it. This holds in every build, feature unification included.
 
 Both are checked in CI: `scripts/check-rust-build.sh` compiles the union build and the
-`--no-default-features` build of `er-save-picker` on the shipping target.
+`--no-default-features` build of `er-save-picker-core` on the shipping target.
 
 ### 2.3 `SavePickerHost` (product A)
 
@@ -288,7 +288,7 @@ The adjacent save machinery is NOT:
   commit + verify (`save_dest_commit.rs`, `save_dest_identity.rs`), and the `save_flow_tick`
   stage machine.
 * **Stays where it is** -- save SUPPRESSION and save REDIRECT internals: `er-save-suppress`
-  (already its own crate, with its own `er-save-disable-dll`) and
+  (already its own crate, with its own `er-save-disable`) and
   `experiments/save_redirect/*`. B touches them through exactly one seam entry,
   `take_save_write_bypass`.
 
@@ -313,7 +313,7 @@ gate `er-effects-rs-k85t`) can rebase against it cleanly.
    either delete it (A and B become fully independent at runtime) or keep it and route it
    through a seam.
 3. **`SAVE_PICKER_MODE_ACTIVE`, `SAVE_PICKER_DEST_MODE`, and 57 sibling counters** live in
-   `er-telemetry`, which is already a shared crate -- no work needed, both crates just
+   `er-telemetry-core`, which is already a shared crate -- no work needed, both crates just
    depend on it. 59 `SAVE_PICKER_*`, 148 `SYSTEM_QUIT_*`, 41 `SAVE_FLOW_*`, 28
    `SAVE_DEST_*`, 3 `MISSING_SAVE*`.
 
@@ -338,7 +338,7 @@ What the code shows, as supporting evidence:
 * `picker_dim_arm` now has exactly **one** call site -- the product-side
   `picker_dim_cover_factory` in `startup_hooks/save_picker/save_picker_os_dialog.rs`.
   That factory is passed only by the two System>Quit entry points. The boot flow passes
-  `er_save_picker::os_dialog::no_picker_cover`. The cover is therefore still the caller's
+  `er_save_picker_core::os_dialog::no_picker_cover`. The cover is therefore still the caller's
   decision after S5 -- see SS5.3.
 * The dialog file's own doc (rule H3) says it "reads no game pointers, calls no game
   function, and dereferences nothing from `game_module_base()`". That is exactly why the
@@ -367,10 +367,10 @@ What the code shows, as supporting evidence:
   `system_quit_open_save_dest_picker` into OS-dialog and in-game variants.
 
 * **Merging it would revert a different extraction.** The branch predates the
-  `er-loading-portrait` split (PR #98) and still carries those sources under
-  `crates/er-effects-rs/src/` -- a `git diff origin/main origin/feature/save-game-flow`
+  `er-loading-portrait-core` split (PR #98) and still carries those sources under
+  `crates/er-quickload/src/` -- a `git diff origin/main origin/feature/save-game-flow`
   shows them as renames BACK into the product
-  (`crates/{er-loading-portrait/src => er-effects-rs/src/constants}/portrait_lookat.rs`,
+  (`crates/{er-loading-portrait-core/src => er-quickload/src/constants}/portrait_lookat.rs`,
   `.../stats_loading_text.rs`, `.../resource_readback.rs`, `.../portrait_semaphores.rs`)
   plus a 2346-line `gpu_readback/overlay_composite.rs` main no longer has. This, not the
   already-landed save-flow work, is the real hazard in merging it.
@@ -387,19 +387,19 @@ owner when the product is absent.**
   per-DLL. A is safe in every combination, unconditionally.
 * **B contends on ~18 game addresses**, several shared with the product (`0xb0e180`
   continue-confirm; `0x67b200`/`0x67b290`, which the product hooks with a **bare**
-  `MhHook::new` -- `er-reload-trace-dll` skips exactly those two for that reason,
+  `MhHook::new` -- `er-reload-trace` skips exactly those two for that reason,
   `UNION_SKIP_RVAS`). Two MinHook instances patching one address corrupt each other's
   trampolines.
 * The union that solves this **already exists** in `crates/er-hook/src/lib.rs`
   (`register_union_hook`, the 96-slot dispatcher pool, `HOOK_REGISTRY`). The gap is
   ownership: the `#[no_mangle] er_effects_union_register` entry point lives ONLY in
-  `crates/er-effects-rs/src/mh.rs:37`, deliberately ("keeping it in this crate ensures ONLY
-  `er_effects_rs.dll` exports it"), and companions resolve it by the hard-coded module name
-  `er_effects_rs.dll` (`er-reload-trace-dll/src/lib.rs:77`, `resolve_union_register` :898).
+  `crates/er-quickload/src/mh.rs:37`, deliberately ("keeping it in this crate ensures ONLY
+  `er_quickload.dll` exports it"), and companions resolve it by the hard-coded module name
+  `er_quickload.dll` (`er-reload-trace/src/lib.rs:77`, `resolve_union_register` :898).
   In the user's "neither" case -- the two new DLLs and no product -- nothing exports it and
   no one owns the shared addresses. SS6 closes that.
 * There is a **second**, distinct collision the union does not solve: if the product
-  bundles `er-quit-menu` AND the user also lists `er_quit_menu_dll.dll`, the feature is
+  bundles `er-quit-menu-core` AND the user also lists `er_quit_menu.dll`, the feature is
   installed twice -- two cloned row sets, two routers. That needs a feature-ownership
   election, not a hook election. Also SS6.
 
@@ -444,21 +444,21 @@ exported entry point is in the wrong place.
 1. **Move the export into `er-hook`**, behind a macro each cdylib invokes exactly once
    (`er_hook::export_union_registrar!();`). The symbol name, C ABI and semantics of
    `er_effects_union_register(target, handler, *mut orig_slot) -> i32` are **unchanged**, so
-   `er-reload-trace-dll` and `er-input-harness-dll` keep working untouched, product present
-   or not. `er-effects-rs/src/mh.rs` keeps re-exporting for source compatibility.
+   `er-reload-trace` and `er-input-harness` keep working untouched, product present
+   or not. `er-quickload/src/mh.rs` keeps re-exporting for source compatibility.
 2. **Elect one owner per process, first-loader-wins.** At `DllMain`, each of our cdylibs:
    a. creates/opens a named OS primitive (`CreateMutexW(L"Local\\ErEffectsHookUnionOwner")`);
       the creator (i.e. `GetLastError() != ERROR_ALREADY_EXISTS`) is the owner and calls
       `MH_Initialize()` exactly once;
    b. a non-owner **discovers the live owner by scanning loaded modules for the export**
       (`EnumProcessModules` + `GetProcAddress`), never by filename. This removes the
-      hard-coded `er_effects_rs.dll` lookup and with it the "product must be listed FIRST"
+      hard-coded `er_quickload.dll` lookup and with it the "product must be listed FIRST"
       profile constraint documented at `scripts/me3-launch-lib.sh:115`.
 3. **Feature-ownership election, one layer up.** Each extractable feature declares a name
    (`"save-picker-boot"`, `"quit-menu"`). Arming takes a named claim through the same
    primitive; a second claimant logs
    `feature 'quit-menu' already provided by <module>` and stays inert. This is what makes
-   "product bundles B **and** the user lists `er_quit_menu_dll.dll`" safe rather than
+   "product bundles B **and** the user lists `er_quit_menu.dll`" safe rather than
    double-installed.
 4. **Every B detour goes through `register_union_hook`.** No bare `MhHook::new` in the new
    crates -- a lint-style check in `scripts/` should enforce that for the two crates.
@@ -484,10 +484,10 @@ Runtime matrix -- every row must smoke, and the riskiest is called out:
 | # | Profile contents | Risk |
 |---|---|---|
 | 1 | product only | baseline; must be unchanged |
-| 2 | `er_save_picker_dll` only | low (A installs no game detour) |
-| 3 | `er_quit_menu_dll` only | **elects the union owner with no product present -- the case that does not work today** |
-| 4 | product + `er_save_picker_dll` | low |
-| 5 | product + `er_quit_menu_dll` | **HIGHEST: the feature is bundled AND listed; proves the feature-ownership election, not just the hook election** |
+| 2 | `er_save_picker` only | low (A installs no game detour) |
+| 3 | `er_quit_menu` only | **elects the union owner with no product present -- the case that does not work today** |
+| 4 | product + `er_save_picker` | low |
+| 5 | product + `er_quit_menu` | **HIGHEST: the feature is bundled AND listed; proves the feature-ownership election, not just the hook election** |
 | 6 | both new DLLs, no product | medium |
 | 7 | product + both new + reload-trace + input-harness + telemetry | regression net for the whole election |
 | 8 | row 7 with the product listed LAST | proves the load-order constraint is gone |
@@ -510,7 +510,7 @@ runtime-affecting and this phase runs no game. Recorded on the bd issue.
 
 ## 5. Landable slices
 
-Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green on
+Each slice keeps `er-quickload` behaviorally identical when bundled, ends green on
 `bash scripts/check.sh`, and is its own PR.
 
 | # | Slice | Behavior risk | Gate |
@@ -518,14 +518,14 @@ Each slice keeps `er-effects-rs` behaviorally identical when bundled, ends green
 | **S0** | **This PR.** Crate skeletons, workspace members, host-seam stubs, gate coverage (host tests + windows-target check + the feature matrix). Nothing depends on the new crates | **none** -- no product file is touched | `check.sh` |
 | S1 | Hook-ownership election in `er-hook`: move the export behind a macro, module-scan discovery, named-mutex election, feature claims. Product keeps exporting the same symbol | none (same symbol, same ABI) | host tests in `er-hook`; runtime matrix rows 1, 7 |
 | S2 | Delete the ~640 dead lines from SS1.4 | none by construction (zero callers) -- but audit each before deleting | `check.sh` + one product smoke |
-| S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker`. `er-effects-rs` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
-| S4 | Move the boot overlay -> `er-save-picker`, behind `arm_boot_picker()` | low | boot-with-no-save smoke |
-| S5 | **This branch.** Split `save_picker_os_dialog.rs`: mechanism + tests -> `er-save-picker::os_dialog`; entry points stay in the product shim for now; the caller-supplied cover is the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape was already on main and is preserved across the crate seam | all three surfaces: boot, load, save-as |
-| S6 | `er-save-picker-dll` becomes real + its standalone smoke script | none to the product | matrix rows 2, 4 |
-| S7 | Move B's decision core -> `er-quit-menu`: `system_quit_row_identity.rs`, `save_dest_identity.rs`, `save_dest_commit.rs`, `save_flow_boxes.rs` (~3400 lines, ~745 of them tests) | low (near-pure, heavily tested) | `check.sh` |
-| S8 | Move B's hooked surfaces -> `er-quit-menu`: `system_quit_dialog_handlers.rs`, `save_picker_menu.rs`, `save_picker_surface.rs`, `save_picker_dim_overlay.rs`, the OS entry points, `install_system_quit_duplicate_button_hook`. Every detour switches to `register_union_hook` | **high** -- this is the feature | full System>Quit smoke: all four rows |
-| S9 | Split the partial files -> `er-quit-menu`: `system_quit_ownership_repro.rs`, `system_quit_repro_guards.rs`, `profile_rows_system_quit_menu.rs`, `system_quit_hooks.rs`, `save_swap_profile_table.rs` 1-417, `lifecycle.rs`'s `save_flow_tick`. Reshape the save-swap ledger seam (SS2.6) | high | same as S8 + a switch-load smoke |
-| S10 | `er-quit-menu-dll` becomes real; feature-ownership election wired; the full coexistence matrix | high | matrix rows 3, 5, 6, 8 |
+| S3 | Move the row model + `SaveSlotInfo`/`parse_save_character_slots` + the three config keys -> `er-save-picker-core`. `er-quickload` re-exports under the old paths so no call site changes | none | ~960 lines of tests become host-runnable -- the biggest single win |
+| S4 | Move the boot overlay -> `er-save-picker-core`, behind `arm_boot_picker()` | low | boot-with-no-save smoke |
+| S5 | **This branch.** Split `save_picker_os_dialog.rs`: mechanism + tests -> `er-save-picker-core::os_dialog`; entry points stay in the product shim for now; the caller-supplied cover is the `PickerCoverFactory` seam (SS5.3) | **none** -- the caller-decides shape was already on main and is preserved across the crate seam | all three surfaces: boot, load, save-as |
+| S6 | `er-save-picker` becomes real + its standalone smoke script | none to the product | matrix rows 2, 4 |
+| S7 | Move B's decision core -> `er-quit-menu-core`: `system_quit_row_identity.rs`, `save_dest_identity.rs`, `save_dest_commit.rs`, `save_flow_boxes.rs` (~3400 lines, ~745 of them tests) | low (near-pure, heavily tested) | `check.sh` |
+| S8 | Move B's hooked surfaces -> `er-quit-menu-core`: `system_quit_dialog_handlers.rs`, `save_picker_menu.rs`, `save_picker_surface.rs`, `save_picker_dim_overlay.rs`, the OS entry points, `install_system_quit_duplicate_button_hook`. Every detour switches to `register_union_hook` | **high** -- this is the feature | full System>Quit smoke: all four rows |
+| S9 | Split the partial files -> `er-quit-menu-core`: `system_quit_ownership_repro.rs`, `system_quit_repro_guards.rs`, `profile_rows_system_quit_menu.rs`, `system_quit_hooks.rs`, `save_swap_profile_table.rs` 1-417, `lifecycle.rs`'s `save_flow_tick`. Reshape the save-swap ledger seam (SS2.6) | high | same as S8 + a switch-load smoke |
+| S10 | `er-quit-menu` becomes real; feature-ownership election wired; the full coexistence matrix | high | matrix rows 3, 5, 6, 8 |
 
 **Ordering constraints.** S1 before S8 (B needs the union to exist). S3 before S4/S5/S7
 (everything needs the model). S5 strictly after `rsxi`. Convert the product's bare
@@ -538,7 +538,7 @@ boot missing-save dialog was dimmed too, and listed un-dimming it as S5's one de
 behavior change. **That is no longer true and S5 has no behavior change in it.** PR #109
 landed the caller-decides shape when it routed the boot flow through the OS dialog:
 
-* the extracted `er-save-picker::os_dialog::os_pick_validated` takes a `PickerCoverFactory`;
+* the extracted `er-save-picker-core::os_dialog::os_pick_validated` takes a `PickerCoverFactory`;
 * the two System>Quit entry points pass a product-side factory that arms the dim cover;
 * the boot flow passes `no_picker_cover`, preserving the existing rule: no game thread is
   blocked at a missing-save boot, so Present keeps running and there is nothing frozen for a
@@ -562,8 +562,8 @@ dialog being undimmed is current, intended, user-directed behavior.
 
 ## 6. Decisions that remain user-gated
 
-**Later resolution (roadmap D3):** the product keeps bundling B as the `er-quit-menu` library
-inside the single shipped `er_effects_rs.dll`. `er-quit-menu-dll` is an optional harness only and
+**Later resolution (roadmap D3):** the product keeps bundling B as the `er-quit-menu-core` library
+inside the single shipped `er_quickload.dll`. `er-quit-menu` is an optional harness only and
 is never a required native in the product ME3 profile. This supersedes open item 2 below.
 
 Everything the user has already settled is folded in above and is **not** re-opened here:
@@ -578,9 +578,9 @@ Still open, and each blocks the slice named:
    runtime; if it is, it needs a seam. Blocks S8. Answerable offline by proving whether the
    native Load Game list can be opened during the boot hold -- but it changes user-visible
    behavior either way, so the user should confirm the intent.
-2. **RESOLVED by roadmap D3:** the product keeps bundling B through its `er-quit-menu`
+2. **RESOLVED by roadmap D3:** the product keeps bundling B through its `er-quit-menu-core`
    library dependency. The standalone DLL is harness-only; a plain product profile lists only
-   `er_effects_rs.dll`.
+   `er_quickload.dll`.
 3. **Should the ~1950 lines of System>Quit diagnostics (SS1.4) stay, or be deleted?** They
    are agent-only and gated on the input-harness DLL's presence. Keeping them is free but
    leaves ~1300 lines of autopilot in the product; deleting them removes the ability to

@@ -2,95 +2,72 @@
 # Cupcake signal: last_assistant_wall_of_text
 #
 # Consumed by:
-#   * wall_of_text (Stop): halts turn-end when the just-emitted assistant turn wrote MORE THAN ONE
-#     paragraph of user-facing prose.
+#   * wall_of_text (UserPromptSubmit): injects an INVISIBLE, measured one-paragraph correction into
+#     the next turn's context when the previous turn's answer ran past one paragraph.
 #
 # WHY THIS EXISTS (user directive 2026-08-21, stated absolutely):
 #   "I'll never. Repeat: NEVER read more than a single paragraph of response text from you.
 #    Everything else is a skim."
-# Every word past the first paragraph is not merely unwanted -- it is UNREAD. Prose the user skims
-# is worse than no prose, because the agent believes it has communicated when it has not, and any
+# Every word past the first paragraph is not merely unwanted -- it is UNREAD. Prose the user skims is
+# worse than no prose, because the agent believes it has communicated when it has not, and any
 # caveat, blocker or correction buried past paragraph one has effectively been withheld.
 #
-# WHAT COUNTS AS A PARAGRAPH: blocks of prose separated by a blank line. Fenced code blocks, tables
-# and list blocks are NOT counted -- they are scannable structure, not prose to read, and the user's
-# objection is to reading. A single paragraph plus a code block or a table is fine; two prose
-# paragraphs are not.
+# WHY IT NO LONGER FEEDS A Stop HALT (2026-08-22, user: "That stop hook is not working if 1) I see it
+# and 2) it doesn't prevent you from spewing information."). Both halves were correct and both are
+# structural, not tuning problems:
+#   1. Claude Code renders every Stop-hook verdict into the user's transcript. A blocking `reason`
+#      becomes `stop_hook_summary.hookErrors` and prints as "Stop hook error: <reason>";
+#      `hookSpecificOutput.additionalContext` becomes `hookAdditionalContext` and prints as "Stop hook
+#      feedback: <text>". There is no agent-only channel at Stop, so the scolding was unavoidable.
+#   2. Stop fires AFTER the answer has been streamed to the terminal. Blocking cannot unsend it; it
+#      only adds a rewrite, so the user read the long version AND the scolding AND the short version
+#      -- three times the reading, from a guard whose whole purpose is less reading.
+# UserPromptSubmit `additionalContext` has neither problem: it lands in the hidden-attachment set
+# (`hook_additional_context`) that the REPL filters out of the rendered message list, and it arrives
+# BEFORE the next answer is written. So this signal now measures the turn that just ended in order to
+# constrain the turn about to start.
+#
+# WHAT COUNTS AS A PARAGRAPH: `scripts/cupcake_turn_scan.prose_paragraphs` owns that, so the signal,
+# its regression test and the false-positive audit cannot drift into three different answers. Fenced
+# code (closed or left open), tables, list items and their continuations, headings, rules, and a
+# caption line introducing structure are all STRUCTURE, not prose: the objection is to READING, and
+# those are scanned.
+#
+# WHAT IS MEASURED: the longest CONTIGUOUS run of prose -- text blocks with no tool call between them
+# -- not the turn's prose summed together. Summing was the guard's worst false positive: a tool-heavy
+# turn emits a one-line preamble before each call, and eleven of those scored identically to an
+# eleven-paragraph essay. Measured over six real transcripts (179 turns with prose),
+# `scripts/audit-wall-of-text-false-positives.py` puts 15 turns in exactly that class.
+#
+# Emits  WALLOFTEXT:<paragraph count>:<first 60 chars of the offending run>  ; empty when clean.
 set -uo pipefail
-python3 - <<'PY'
-import glob, json, os, re, sys
+CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
+export CUPCAKE_SIGNAL_REPO_ROOT
+python3 - <<'PY' 2>/dev/null || true
+import os, sys
 
-cwd = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-tdir = os.path.join(os.path.expanduser("~/.claude/projects"), cwd.replace("/", "-"))
-files = sorted(glob.glob(os.path.join(tdir, "*.jsonl")),
-               key=lambda p: os.path.getmtime(p), reverse=True)
-if not files:
-    sys.exit(0)
-
-
-def is_real_user_prompt(ev):
-    if ev.get("type") != "user":
-        return False
-    content = ev.get("message", {}).get("content")
-    if isinstance(content, str):
-        return content.strip() != ""
-    if isinstance(content, list):
-        for block in content:
-            if isinstance(block, dict) and block.get("type") == "tool_result":
-                return False
-        return True
-    return False
-
-
-def assistant_text(ev):
-    out = []
-    for block in ev.get("message", {}).get("content", []) or []:
-        if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
-            out.append(block["text"])
-    return "\n".join(out)
-
-
-turns = [[]]
+sys.path.insert(0, os.path.join(os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", "."), "scripts"))
 try:
-    with open(files[0], encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            if is_real_user_prompt(ev):
-                turns.append([])
-            elif ev.get("type") == "assistant":
-                t = assistant_text(ev)
-                if t.strip():
-                    turns[-1].append(t)
-except OSError:
+    import cupcake_turn_scan as scan
+except Exception:
+    sys.exit(0)  # fail open: a missing helper must never wedge a session
+
+path = scan.latest_transcript()
+if not path:
     sys.exit(0)
 
-text = "\n\n".join(t for t in turns[-1] if t.strip())
-if not text.strip():
+# last_text_turn, not turns[-1]: at UserPromptSubmit the new prompt may already be on disk, which
+# leaves an empty trailing turn. The turn being judged is the last one that actually said something.
+turn = scan.last_text_turn(scan.split_turns(scan.load_events(path)))
+if turn is None:
     sys.exit(0)
 
-# Strip fenced code, then classify each blank-line-delimited block. Tables and lists are structure.
-text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-paragraphs = []
-for block in re.split(r"\n\s*\n", text):
-    block = block.strip()
-    if not block:
-        continue
-    lines = [l.strip() for l in block.splitlines() if l.strip()]
-    if not lines:
-        continue
-    if all(l.startswith("|") for l in lines):          # table
-        continue
-    if all(re.match(r"^([-*+]|\d+[.)])\s", l) for l in lines):  # list
-        continue
-    paragraphs.append(block)
+worst, count = "", 0
+for run in turn.text_runs:
+    paragraphs = scan.prose_paragraphs(run)
+    if len(paragraphs) > count:
+        worst, count = paragraphs[0], len(paragraphs)
 
-if len(paragraphs) > 1:
-    first = " ".join(paragraphs[0].split())[:60]
-    print(f"WALLOFTEXT:{len(paragraphs)}:{first}")
+if count > 1:
+    print("WALLOFTEXT:%d:%s" % (count, " ".join(worst.split())[:60]))
 PY

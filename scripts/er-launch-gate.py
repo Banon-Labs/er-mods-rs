@@ -48,28 +48,28 @@ from dataclasses import dataclass, field
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-TELEMETRY_NAME = "er-effects-telemetry.json"
+TELEMETRY_NAME = "er-quickload-telemetry.json"
 # Every DLL log a predicate may name. Each product DLL writes its OWN file next to the
 # executable, and reading only the first one makes the gate structurally blind to any predicate
 # owned by another DLL -- it would score that predicate against a log its evidence can never
 # appear in, and report NEVER OBSERVED forever. The legacy-converter census lives in
-# er-invasion-warp-dll.log, so a gate that reads only the autoload log can never pass it.
+# er-invasion-warp.log, so a gate that reads only the autoload log can never pass it.
 DEBUG_LOG_NAMES = (
-    "er-effects-autoload-debug.log",
-    "er-invasion-warp-dll.log",
+    "er-quickload-autoload-debug.log",
+    "er-invasion-warp.log",
 )
 
 # Evidence a run produces OUTSIDE the game directory. Frida-gadget traces are driven from the
 # host and write where they are told, which is deliberately not the repo and not next to the
 # executable -- so without this the gate is blind to them exactly as it was blind to
-# er-invasion-warp-dll.log, and any predicate they own would read NEVER OBSERVED forever.
+# er-invasion-warp.log, and any predicate they own would read NEVER OBSERVED forever.
 # Missing files are skipped silently: absence is what "no run has looked yet" looks like.
 EXTRA_EVIDENCE_PATHS = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-matchmaking-trace.jsonl",
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/steam-vtable-trace.jsonl",
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/ersc-session-trace.jsonl",
 )
 
@@ -182,7 +182,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "the park satisfies it without ever exercising the code path"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -204,7 +204,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "satisfier that can actually run is in the build."
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(case7-savedrain-satisfy) / crates/er-title-flow/src/title_tick_cover.rs "
             "(reload-drain-b80)"
         ),
@@ -228,7 +228,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "every warp after the first reload stays dead"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
+            "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs "
             "(maybe_force_finish_stuck_testnet_step)"
         ),
         feature="reload-system-quit",
@@ -256,8 +256,8 @@ PREDICATES: tuple[Predicate, ...] = (
             "found nothing', which is exactly the ambiguity that cost a run on 2026-08-04."
         ),
         owner=(
-            "crates/er-invasion-warp/src/legacy_map_regions.rs (walk_tree) / "
-            "crates/er-invasion-warp-dll/src/map_hooks.rs (legacy_map_regions_for_view)"
+            "crates/er-invasion-warp-core/src/legacy_map_regions.rs (walk_tree) / "
+            "crates/er-invasion-warp/src/map_hooks.rs (legacy_map_regions_for_view)"
         ),
         feature="world-map-markers",
         # A non-zero block count is the only reading that proves the walk reached real nodes.
@@ -355,7 +355,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "and the oracle carries it, so a run that comes back with this false has told us "
             "something; a run that never looks has not."
         ),
-        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (install_hunt_hook)",
+        owner="crates/er-invasion-warp/src/lobby_publish.rs (install_hunt_hook)",
         feature="invasion-hunt",
         oracle_all={"oracle_invasion_warp_hunt_hooked": True},
         log_any=(r"hunt: asking Steam for hosts at m\d\d_\d\d_\d\d_\d\d only",),
@@ -376,7 +376,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "identical to a working one from outside. Only a non-zero filter count says Seamless's "
             "own outgoing search actually carried our key."
         ),
-        owner="crates/er-invasion-warp-dll/src/lobby_publish.rs (request_lobby_list_hook)",
+        owner="crates/er-invasion-warp/src/lobby_publish.rs (request_lobby_list_hook)",
         feature="invasion-hunt",
         oracle_all={
             "oracle_invasion_warp_hunt_filters": lambda v: isinstance(v, int) and v >= 1
@@ -395,7 +395,7 @@ PREDICATES: tuple[Predicate, ...] = (
             "YK0J per-frame loop"
         ),
         owner=(
-            "crates/er-effects-rs/src/experiments/save_redirect/path_hooks.rs "
+            "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs "
             "(OWN_LOAD_SAVE_REJECTION) / experiments/own_load/drive.rs"
         ),
         feature="save-load-continue",

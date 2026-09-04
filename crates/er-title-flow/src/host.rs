@@ -2,8 +2,8 @@
 //!
 //! The moved title/autoload/switch cluster used to call product functions (gates, slot
 //! resolution, logging, hook installers, the own-stepper drivers) directly out of the
-//! er-effects-rs flat namespace. Those calls now go through function pointers installed
-//! once at DLL attach via [`install_host`] (the er-loading-portrait `PortraitHost`
+//! er-quickload flat namespace. Those calls now go through function pointers installed
+//! once at DLL attach via [`install_host`] (the er-loading-portrait-core `PortraitHost`
 //! precedent). Crate-internal wrapper fns keep the EXACT original names/signatures, so
 //! the moved code compiles unchanged. Until a host installs, every seam answers a
 //! neutral default (logging is a no-op, all gates are off, lookups report "nothing"),
@@ -69,6 +69,14 @@ pub struct TitleFlowHost {
     pub direct_save_file_source_active: fn() -> bool,
     pub missing_save_selection_pending: fn() -> bool,
     pub save_override_telemetry_only: fn() -> bool,
+    /// Re-read the picked/loose container's `CS::ProfileSummary` records at the title, so the
+    /// native Continue row has something real to load. Idempotent and self-throttling: safe to
+    /// call every autoload tick. Returns true once the summary describes the picked container.
+    pub refresh_direct_source_profile_summary: fn() -> bool,
+    /// Does the slot the direct-file source will load fingerprint as a REAL character in the live
+    /// `CS::ProfileSummary` (level >= 1 + non-empty name)? This is `profile_slot_fingerprint`, not
+    /// `saveSlotsStates` -- the occupancy flag says nothing about the record's contents.
+    pub direct_source_slot_summary_real: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
     pub create_continue_trace_hook:
@@ -240,6 +248,8 @@ impl TitleFlowHost {
             direct_save_file_source_active: default_gate_off,
             missing_save_selection_pending: default_gate_off,
             save_override_telemetry_only: default_gate_off,
+            refresh_direct_source_profile_summary: default_gate_off,
+            direct_source_slot_summary_real: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
             install_auto_accept_hook: default_unit,
             decode_thunk_hop: default_decode_thunk_hop,
@@ -311,12 +321,14 @@ pub(crate) fn game_man_ptr_or_null() -> usize {
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
     (host().runtime_heap_allocator_ptr_or_null)()
 }
-pub(crate) fn ingamestep_request_code_name(v: i32) -> &'static str {
-    (host().ingamestep_request_code_name)(v)
-}
-pub(crate) fn movemapstep_step_name(idx: i32) -> &'static str {
-    (host().movemapstep_step_name)(idx)
-}
+// `ingamestep_request_code_name` and `movemapstep_step_name` no longer need a seam hop: the
+// autoload/title-flow slice moved their definitions into this crate
+// (`constants_return_title.rs`), so `title_load_step_hooks.rs` / `title_tick_cover.rs` now call
+// the real i32 -> &str tables directly and the wrappers that used to stand here were dead code.
+// The two `TitleFlowHost` FIELDS are deliberately still declared and still installed: the root
+// crate's `lib_parts/dll_entry_parts/bootstrap.rs` sets them by name, and this branch does not
+// edit that file. They point at the very functions above (via the root's `constants` re-export
+// shim), so nothing changed behaviourally -- the field is simply no longer read.
 pub(crate) fn title_step_state_name(v: i32) -> &'static str {
     (host().title_step_state_name)(v)
 }
@@ -394,6 +406,12 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 }
 pub(crate) fn save_override_telemetry_only() -> bool {
     (host().save_override_telemetry_only)()
+}
+pub(crate) fn refresh_direct_source_profile_summary() -> bool {
+    (host().refresh_direct_source_profile_summary)()
+}
+pub(crate) fn direct_source_slot_summary_real() -> bool {
+    (host().direct_source_slot_summary_real)()
 }
 pub(crate) unsafe fn create_continue_trace_hook(
     _hooks: &mut Vec<MhHook>,

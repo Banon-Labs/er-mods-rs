@@ -1,5 +1,5 @@
 //! Standalone, dependency-free proof that the Elden Ring title-cover magenta GFX
-//! asset (`TITLE_MINIMAL_MAGENTA_GFX` in `crates/er-effects-rs/src/constants.rs`) can be reconstructed
+//! asset (`TITLE_MINIMAL_MAGENTA_GFX` in `crates/er-quickload/src/constants.rs`) can be reconstructed
 //! from typed Rust structs instead of an opaque byte literal.
 //!
 //! The GFX container is an uncompressed Scaleform file: an SWF-derived on-disk
@@ -469,7 +469,7 @@ fn build_magenta() -> GfxFile {
                 flags: 0,
                 field_a: 0x000d,
                 field_b: 0x00,
-                swf_name: "er_effects_title_cover".to_string(),
+                swf_name: "er_quickload_title_cover".to_string(),
             },
             Tag::FileAttributes(0x08),
             Tag::SetBackgroundColor(magenta),

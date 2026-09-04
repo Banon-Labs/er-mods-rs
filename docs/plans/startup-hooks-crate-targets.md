@@ -24,7 +24,7 @@ had already shed **364** lines, not 373, and the two files together shed **1,250
 2,141, not 1,259. This is a re-measurement error in SS0.1, not drift; nothing moved.
 
 **Scope:** at baseline, 32 files / 20,834 lines under
-`crates/er-effects-rs/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
+`crates/er-quickload/src/experiments/startup_hooks/`. At `877f1261`: **34 files / 25,319 lines**
 in-directory, plus `startup_hooks.rs` (197) = **25,525** (SS0.1 said 25,516; corrected above). The rest of `experiments/` is covered by
 `docs/plans/experiments-crate-targets.md`.
 
@@ -78,7 +78,7 @@ proofs before opening a deletion slice here; do not assume the SS5 table is stil
 ## 0. Read this before using any number below
 
 **A wrong dependency list was fed to the gap-fill sweep.** Its brief asserted
-`er-title-flow` does NOT depend on `er-loading-portrait`, `er-save-loader` or `er-tpf`. That is
+`er-title-flow` does NOT depend on `er-loading-portrait-core`, `er-save-loader` or `er-tpf`. That is
 false; only "no `er-gfx`" was true. The gap-fill's verifier caught it, but its *mapper* had already
 assigned blocks under the wrong constraint. **Consequence: `er-title-flow` is a CHEAPER destination
 than the `loading_cover` rows assume, so those rows are conservative.** Re-check any
@@ -89,28 +89,28 @@ Re-measured from the manifests at `f15cce1a`, authoritative:
 
 ```
 er-hook              -> (none)
-er-loading-bar       -> (none)
+er-loading-bar-core       -> (none)
 er-gfx               -> (none)
 er-tpf               -> (none)
 er-game-base         -> eldenring, fromsoftware-shared
 er-save-loader       -> eldenring, er-game-base, er-safe-input
-er-telemetry         -> eldenring, er-game-base, er-save-loader, fromsoftware-shared
-er-save-picker       -> er-loading-bar, er-save-loader, er-telemetry
+er-telemetry-core         -> eldenring, er-game-base, er-save-loader, fromsoftware-shared
+er-save-picker-core       -> er-loading-bar-core, er-save-loader, er-telemetry-core
 er-save-suppress     -> er-game-base, er-hook
-er-save-redirect     -> er-hook, er-save-loader, er-telemetry
-er-d3d12-compositor  -> er-hook, er-loading-bar
-er-loading-portrait  -> eldenring, er-game-base, er-gfx, er-hook, er-telemetry, fromsoftware-shared
-er-quit-menu         -> eldenring, er-game-base, er-hook, er-save-loader, er-save-picker, er-telemetry, fromsoftware-shared
-er-title-flow        -> eldenring, er-game-base, er-hook, er-loading-portrait, er-save-loader,
-                        er-telemetry, er-tpf, fromsoftware-shared
+er-save-redirect     -> er-hook, er-save-loader, er-telemetry-core
+er-d3d12-compositor  -> er-hook, er-loading-bar-core
+er-loading-portrait-core  -> eldenring, er-game-base, er-gfx, er-hook, er-telemetry-core, fromsoftware-shared
+er-quit-menu-core         -> eldenring, er-game-base, er-hook, er-save-loader, er-save-picker-core, er-telemetry-core, fromsoftware-shared
+er-title-flow        -> eldenring, er-game-base, er-hook, er-loading-portrait-core, er-save-loader,
+                        er-telemetry-core, er-tpf, fromsoftware-shared
 ```
 
 The two edges that decide most assignments:
 
-* **`er-title-flow -> er-loading-portrait` exists.** So anything moved INTO `er-loading-portrait`
+* **`er-title-flow -> er-loading-portrait-core` exists.** So anything moved INTO `er-loading-portrait-core`
   must not need an `er-title-flow` symbol, or the cycle closes. This is the single most common
   blocker in the tables below.
-* **`er-quit-menu` does NOT depend on `er-loading-portrait`.** That is what forces the portrait
+* **`er-quit-menu-core` does NOT depend on `er-loading-portrait-core`.** That is what forces the portrait
   fields in `QuitMenuHost` to stay seams rather than becoming moves.
 
 ---
@@ -123,13 +123,13 @@ PRs #180-#188; the detours stayed.
 
 Four facts shape every slice:
 
-1. **`er-quit-menu` is the dominant owner** -- 7,529 lines, more than a third of the directory.
+1. **`er-quit-menu-core` is the dominant owner** -- 7,529 lines, more than a third of the directory.
 2. **2,141 lines are dead.** Not "probably dead": each has a whole-repo caller search returning only
    its own definition.
 3. **The directory names lie about ownership.** `quit_menu/profile_rows_system_quit_menu.rs` is
    mostly *title* code; `diagnostics/layout_global_hooks.rs` arms the entire quit-menu feature.
 4. **Extraction needs no new infrastructure.** `er-hook` already exports `MhHook` and every
-   destination crate already depends on it. `er-loading-portrait` ships 13 bare `MhHook::new` sites
+   destination crate already depends on it. `er-loading-portrait-core` ships 13 bare `MhHook::new` sites
    today, so the union-hook conversion is NOT a precondition -- it is only needed for the
    standalone-DLL coexistence matrix.
 
@@ -143,58 +143,58 @@ Four facts shape every slice:
 
 | destination | lines | new crate? |
 |---|---:|---|
-| `er-quit-menu` | 7,529 | no |
+| `er-quit-menu-core` | 7,529 | no |
 | **STAY** (product arming + genuine diagnostics) | 4,118 | -- |
 | `er-title-flow` | 2,399 | no |
 | **DELETE** (proven dead) | 2,141 | -- |
 | `NEW:er-scaleform-hooks` | 1,436 | **yes** |
-| `er-loading-portrait` | 901 | no |
+| `er-loading-portrait-core` | 901 | no |
 | `er-save-loader` (dedupe, not move) | 557 | no |
-| `er-save-picker` | 476 | no |
+| `er-save-picker-core` | 476 | no |
 | `NEW:er-boot-window` | 461 | **yes** |
-| `er-telemetry` | 366 | no |
+| `er-telemetry-core` | 366 | no |
 | `er-hook` | 50 | no |
-| `NEW:er-save-picker::path_form` | 13 | module |
+| `NEW:er-save-picker-core::path_form` | 13 | module |
 
 ---
 
 ## 3. Per-file assignment -- all 32 analysed files (+ 2 unanalysed)
 
-Paths relative to `crates/er-effects-rs/src/experiments/startup_hooks/`. **`plan` is the line count
+Paths relative to `crates/er-quickload/src/experiments/startup_hooks/`. **`plan` is the line count
 the destination split was measured against (`f15cce1a`); `now` is `877f1261`.** Where they differ,
 the destinations still hold but the line *quantities* -- and any offset derived from them -- do not.
 
 | File | plan | now | Destination(s) | Splits |
 |---|---:|---:|---|---:|
-| `quit_menu/save_picker_menu.rs` | 1096 | **2895** | er-quit-menu 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker::path_form 13 | 4 |
+| `quit_menu/save_picker_menu.rs` | 1096 | **2895** | er-quit-menu-core 1017 / STAY 21 / DELETE 13 / NEW:er-save-picker-core::path_form 13 | 4 |
 | `loading_cover/title_resources_stats_text.rs` | 1088 | **2402** | NEW:er-scaleform-hooks 648 / er-title-flow 320 / STAY 100 / DELETE 1 | 3 |
-| `quit_menu/profile_rows_system_quit_menu.rs` | 1858 | **1957** | STAY 902 / er-quit-menu 875 / DELETE 51 | 3 |
+| `quit_menu/profile_rows_system_quit_menu.rs` | 1858 | **1957** | STAY 902 / er-quit-menu-core 875 / DELETE 51 | 3 |
 | `quit_menu/profile_05_010_editor_runtime.rs` | -- | **1765** | **UNANALYSED** -- new since baseline | ? |
-| `loading_cover/loading_cover_save_slot.rs` | 1444 | **1587** | er-save-loader 557 / er-loading-portrait 458 / er-quit-menu 208 / STAY 173 / er-telemetry 10 / DELETE 1 | 6 |
-| `quit_menu/system_quit_dialog_handlers.rs` | 1452 | **1459** | er-quit-menu 1395 / er-save-picker 66 | 2 |
-| `quit_menu/system_quit_ownership_repro.rs` | 1478 | **1407** | er-quit-menu 988 / er-telemetry 347 / DELETE 83 / er-loading-portrait 32 / STAY 7 | 5 |
-| `quit_menu/save_dest_commit.rs` | 1243 | 1243 | er-quit-menu 1026 / DELETE 206 | 2 |
-| `quit_menu/system_quit_repro_guards.rs` | 2067 | **1181** | DELETE 903 / STAY 452 / er-quit-menu 396 / er-title-flow 221 / er-loading-portrait 67 -- **DELETE row largely already landed** | 5 |
-| `quit_menu/save_swap_profile_table.rs` | 1097 | **1163** | STAY 643 / er-quit-menu 367 / er-loading-portrait 73 | 3 |
-| `loading_cover/startup_modals_menu_cover.rs` | 1150 | **1075** | er-title-flow 879 / STAY 185 / DELETE 52 / er-telemetry 9 | 5 |
-| `loading_cover/profile_table_gfx_files.rs` | 810 | **898** | NEW:er-scaleform-hooks 653 / er-quit-menu 51 / er-loading-portrait 51 / DELETE 43 | 4 |
+| `loading_cover/loading_cover_save_slot.rs` | 1444 | **1587** | er-save-loader 557 / er-loading-portrait-core 458 / er-quit-menu-core 208 / STAY 173 / er-telemetry-core 10 / DELETE 1 | 6 |
+| `quit_menu/system_quit_dialog_handlers.rs` | 1452 | **1459** | er-quit-menu-core 1395 / er-save-picker-core 66 | 2 |
+| `quit_menu/system_quit_ownership_repro.rs` | 1478 | **1407** | er-quit-menu-core 988 / er-telemetry-core 347 / DELETE 83 / er-loading-portrait-core 32 / STAY 7 | 5 |
+| `quit_menu/save_dest_commit.rs` | 1243 | 1243 | er-quit-menu-core 1026 / DELETE 206 | 2 |
+| `quit_menu/system_quit_repro_guards.rs` | 2067 | **1181** | DELETE 903 / STAY 452 / er-quit-menu-core 396 / er-title-flow 221 / er-loading-portrait-core 67 -- **DELETE row largely already landed** | 5 |
+| `quit_menu/save_swap_profile_table.rs` | 1097 | **1163** | STAY 643 / er-quit-menu-core 367 / er-loading-portrait-core 73 | 3 |
+| `loading_cover/startup_modals_menu_cover.rs` | 1150 | **1075** | er-title-flow 879 / STAY 185 / DELETE 52 / er-telemetry-core 9 | 5 |
+| `loading_cover/profile_table_gfx_files.rs` | 810 | **898** | NEW:er-scaleform-hooks 653 / er-quit-menu-core 51 / er-loading-portrait-core 51 / DELETE 43 | 4 |
 | `loading_cover/title_scaleform_msgbox.rs` | 935 | **868** | er-title-flow 769 / DELETE 106 / NEW:er-scaleform-hooks 41 | 3 |
 | `quit_menu/save_picker_path_editor.rs` | -- | **758** | **UNANALYSED** -- new since baseline (#226) | ? |
-| `quit_menu/system_quit_hooks.rs` | 1046 | **682** | DELETE 439 / STAY 339 / er-quit-menu 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** | 5 |
-| `quit_menu/save_flow_boxes.rs` | 655 | 655 | er-quit-menu 628 / DELETE 7 | 2 |
+| `quit_menu/system_quit_hooks.rs` | 1046 | **682** | DELETE 439 / STAY 339 / er-quit-menu-core 150 / er-title-flow 50 / er-hook 50 -- **part of DELETE row landed** | 5 |
+| `quit_menu/save_flow_boxes.rs` | 655 | 655 | er-quit-menu-core 628 / DELETE 7 | 2 |
 | `loading_cover/window_reconfig_observer.rs` | 471 | 471 | NEW:er-boot-window 461 | 1 |
-| `save_picker/save_picker_boot.rs` | 469 | 469 | er-save-picker 387 / DELETE 64 / STAY 1 | 3 |
-| `diagnostics/layout_global_hooks.rs` | 439 | **383** | er-title-flow 160 / er-quit-menu 112 / STAY 105 / DELETE 55 | 4 |
-| `quit_menu/system_quit_row_identity.rs` | 289 | 289 | er-quit-menu 263 / DELETE 19 | 2 |
-| `loading_cover/portrait_equip_oracle.rs` | 277 | 277 | er-loading-portrait 220 / DELETE 51 | 2 |
+| `save_picker/save_picker_boot.rs` | 469 | 469 | er-save-picker-core 387 / DELETE 64 / STAY 1 | 3 |
+| `diagnostics/layout_global_hooks.rs` | 439 | **383** | er-title-flow 160 / er-quit-menu-core 112 / STAY 105 / DELETE 55 | 4 |
+| `quit_menu/system_quit_row_identity.rs` | 289 | 289 | er-quit-menu-core 263 / DELETE 19 | 2 |
+| `loading_cover/portrait_equip_oracle.rs` | 277 | 277 | er-loading-portrait-core 220 / DELETE 51 | 2 |
 | `quit_menu/mod.rs` | 198 | **204** | STAY 196 | 1 |
 | `loading_cover/mod.rs` | 189 | 189 | STAY 188 | 1 |
 | `diagnostics/mod.rs` | 174 | 174 | STAY 172 | 1 |
 | `save_picker/mod.rs` | 171 | 171 | STAY 169 | 1 |
-| `diagnostics/dlc_roots_trace.rs` | 169 | 169 | STAY 162 | 1 |
-| `diagnostics/msb_parse_trace.rs` | 139 | 139 | STAY 136 | 1 |
-| `diagnostics/loadlist_wait_trace.rs` | 139 | 139 | STAY 135 | 1 |
-| `save_picker/save_picker_surface.rs` | 122 | 122 | er-quit-menu 53 / STAY 32 / er-save-picker 23 / DELETE 10 | 4 |
+| `diagnostics/dlc_roots_trace.rs` | 169 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 162) | 1 |
+| `diagnostics/msb_parse_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 136) | 1 |
+| `diagnostics/loadlist_wait_trace.rs` | 139 | -- | **MOVED 2026-08-25 to `er-diag-harness`** (was STAY 135) | 1 |
+| `save_picker/save_picker_surface.rs` | 122 | 122 | er-quit-menu-core 53 / STAY 32 / er-save-picker-core 23 / DELETE 10 | 4 |
 | `loading_cover/scaleform_descriptor_guard.rs` | 95 | 95 | NEW:er-scaleform-hooks 94 | 1 |
 | `save_picker/save_picker_os_dialog.rs` | 27 | 27 | DELETE 25 | 1 |
 | `quit_menu/save_dest_identity.rs` | 7 | 7 | DELETE 5 | 1 |
@@ -216,9 +216,9 @@ null guard.
 Sources: `title_resources_stats_text.rs` (648), `profile_table_gfx_files.rs` (653),
 `title_scaleform_msgbox.rs` (41), `scaleform_descriptor_guard.rs` (94).
 
-Deps: `er-hook`, `er-game-base`, `er-telemetry`, `er-gfx`, and **`er-title-flow`** (for
+Deps: `er-hook`, `er-game-base`, `er-telemetry-core`, `er-gfx`, and **`er-title-flow`** (for
 `OWNER_CTX_MIN/MAX_PLAUSIBLE_PTR`, `SCENE_OBJ_*`). That last edge is acyclic
-(`er-scaleform-hooks -> er-title-flow -> er-loading-portrait`) but only if
+(`er-scaleform-hooks -> er-title-flow -> er-loading-portrait-core`) but only if
 `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`/`_RVA` move to `er-title-flow` WITH their detour and
 installer and become its public API.
 
@@ -246,7 +246,7 @@ The largest:
 | lines | site | note |
 |---:|---|---|
 | 715 | `system_quit_repro_guards.rs:442-1156` | unreachable autopilot arms |
-| 130 | `save_dest_commit.rs:897-1026` | tests duplicated into `er-quit-menu` |
+| 130 | `save_dest_commit.rs:897-1026` | tests duplicated into `er-quit-menu-core` |
 | 109 | `system_quit_hooks.rs:694-802` | `install_system_quit_gaitem_deserialize_hook` |
 | 83 | `system_quit_ownership_repro.rs:830-912` | `install_system_quit_menu_window_job_run_hook` |
 | 80 | `system_quit_hooks.rs:833-912` | `install_system_quit_gameman_load_save_hook` |
@@ -300,7 +300,7 @@ problem.
    **Status at `877f1261`: partly done.** `system_quit_repro_guards.rs` (-886) and
    `system_quit_hooks.rs` (-364) already shed 1,250 of those lines. Re-run the caller proofs in SS5
    before opening a deletion slice; several rows are already satisfied.
-2. **`er-telemetry` counter moves** (366 lines) -- mechanical, unblocks the accounting.
+2. **`er-telemetry-core` counter moves** (366 lines) -- mechanical, unblocks the accounting.
 3. **Whole-file moves** with no split: `scaleform_descriptor_guard.rs`, `window_reconfig_observer.rs`,
    `system_quit_dialog_handlers.rs` (2-way, 96% one destination).
 4. **Single-cut splits** -- the cleanest is `profile_rows_system_quit_menu.rs` at **line 511**:
@@ -346,14 +346,14 @@ that silently changes slot scoring is a product regression wearing a refactor's 
 
 | Claim | Correction |
 |---|---|
-| `er-title-flow` has no `er-loading-portrait`/`er-save-loader`/`er-tpf` dep | All three exist. Only "no `er-gfx`" is true. **This wrong list was in the gap-fill brief** -- see SS0 |
-| `er-quit-menu` has no `er-hook`/`er-game-base` | Both exist. Only "no `er-loading-portrait`" is true |
+| `er-title-flow` has no `er-loading-portrait-core`/`er-save-loader`/`er-tpf` dep | All three exist. Only "no `er-gfx`" is true. **This wrong list was in the gap-fill brief** -- see SS0 |
+| `er-quit-menu-core` has no `er-hook`/`er-game-base` | Both exist. Only "no `er-loading-portrait-core`" is true |
 | `system_quit_menu_window_job_run_hook` is a live detour | **Dead.** -> DELETE |
 | `system_quit_menu_window_run_post` has 3 outside callers | Exactly **one**: `product_core_own_stepper.rs:506` |
-| Five `QuitMenuHost` portrait fields are seams to preserve | Dead scaffolding in `er-quit-menu/src/host.rs`; DELETE them |
+| Five `QuitMenuHost` portrait fields are seams to preserve | Dead scaffolding in `er-quit-menu-core/src/host.rs`; DELETE them |
 | `er_title_flow::fnv1a64` re-exports `er-gfx`'s | Two independent FNV-1a64 implementations -- a separate duplication finding |
 | ProfileSummary record layout duplicated twice | **Five and six** independent copies found |
-| `save_picker_boot.rs:400-447` tests are byte-identical dupes | DELETE only AFTER porting two doc comments and a longer assertion message into `er-save-picker/src/boot.rs` |
+| `save_picker_boot.rs:400-447` tests are byte-identical dupes | DELETE only AFTER porting two doc comments and a longer assertion message into `er-save-picker-core/src/boot.rs` |
 
 ---
 
@@ -365,7 +365,7 @@ that silently changes slot scoring is a product regression wearing a refactor's 
    this to a human. **Recommend: delete.** It is unreachable, and the input-harness DLL is the
    supported self-drive path.
 2. **`er-scaleform-hooks` or fold into `er-gfx`?** See SS4. Blocks the 1,436-line Scaleform slice.
-3. **Does the product keep BUNDLING `er-quit-menu`, or does it become listed-only?** Unchanged from
+3. **Does the product keep BUNDLING `er-quit-menu-core`, or does it become listed-only?** Unchanged from
    the older plan; it decides whether the feature-ownership election is load-bearing.
 
 ---

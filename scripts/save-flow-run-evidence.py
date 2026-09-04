@@ -23,7 +23,7 @@ Usage:
     python3 scripts/save-flow-run-evidence.py [--baseline DIR]
 
 Environment overrides (all optional; defaults suit a Steam+Proton layout under $HOME):
-    ER_GAME_DIR        directory holding er-effects-*.log / er-effects-telemetry.json
+    ER_GAME_DIR        directory holding er-quickload-*.log / er-quickload-telemetry.json
     ER_SAVE_DIR        directory holding ER0000.sl2
     ER_STEAM_ROOT      Steam root used to derive the two above (default $HOME/.local/share/Steam)
     ER_RUN_BASELINE    directory holding pre-run-sizes.json + pre-run-save-sha.txt
@@ -41,8 +41,8 @@ import sys
 STEAM_ROOT = os.environ.get(
     "ER_STEAM_ROOT", os.path.join(os.path.expanduser("~"), ".local", "share", "Steam")
 )
-LOG_NAME = "er-effects-autoload-debug.log"
-TELEMETRY_NAME = "er-effects-telemetry.json"
+LOG_NAME = "er-quickload-autoload-debug.log"
+TELEMETRY_NAME = "er-quickload-telemetry.json"
 SAVE_NAME = "ER0000.sl2"
 
 
@@ -170,7 +170,7 @@ def report(baseline: str) -> int:
 
     print()
     print("=" * 78)
-    print("3. RAM ORACLES (er-effects-telemetry.json)")
+    print("3. RAM ORACLES (er-quickload-telemetry.json)")
     print("=" * 78)
     path = os.path.join(game_dir(), TELEMETRY_NAME)
     if not os.path.exists(path):

@@ -3,7 +3,7 @@
 
 Nothing here touches shared state. The profile is a fresh temp file the run owns outright,
 and the save selection goes into `<dll-stem>.toml` beside the staged DLL rather than into the
-game directory's `er-effects.toml` -- which is hand-edited, shared across every launch, and
+game directory's `er-quickload.toml` -- which is hand-edited, shared across every launch, and
 outlives every run.
 
 ersc.dll IS ALWAYS LISTED
@@ -45,7 +45,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXIT_OK = 0
 EXIT_ERROR = 1
 
-PRODUCT_ARTIFACT = "er_effects_rs.dll"
+PRODUCT_ARTIFACT = "er_quickload.dll"
 
 # The evidence class every random-save run carries. AGENTS.md's 2026-07-08 standing order
 # deprecates the explicit-save-source path for release/autoload validation, and picking a
@@ -72,8 +72,60 @@ def sha256_of(path: Path) -> str:
 
 
 def sidecar_for(dll: Path) -> Path:
-    """`er_effects_rs.dll` -> `er_effects_rs.toml`, matching `config.rs::sidecar_config_path`."""
+    """`er_quickload.dll` -> `er_quickload.toml`, matching `config.rs::sidecar_config_path`."""
     return dll.with_suffix(".toml")
+
+
+# The OTHER slot channel. `er-quickload-autoload.txt` sits in the game directory, no launcher owns
+# it, and several probe scripts here write it and do not always clean it up -- so it outlives the
+# run that made it and keeps steering later launches from a file nobody remembers.
+AUTOLOAD_REQUEST_FILE = "er-quickload-autoload.txt"
+
+
+def autoload_file_slot(game_dir: Path) -> tuple[Path, int, str] | None:
+    """The game-directory autoload request file's `slot=`, if it names one.
+
+    Returns `(path, line_number, line)` so the refusal can quote the exact line rather than make
+    the reader go looking for it.
+    """
+    path = game_dir / AUTOLOAD_REQUEST_FILE
+    try:
+        contents = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line_no, raw in enumerate(contents.splitlines(), 1):
+        line = raw.strip()
+        key, _, value = line.partition("=")
+        if key.strip() == "slot" and value.strip():
+            return (path, line_no, line)
+    return None
+
+
+def refuse_stale_slot_channel(game_dir: Path) -> None:
+    """A `--save-default` run must not launch while a second slot channel is open.
+
+    `--save-default` writes `save_file_default = true`, and the sidecar's whole promise is that the
+    DLL resolves the active Steam user's own container with no inherited preference. A `slot=` in
+    the game-directory autoload request file is a preference the sidecar cannot see -- it lives in
+    a different file, read by a different code path -- so the promise was only ever half kept.
+
+    Run br-20260831-014208-b1d6 is what that costs: a nine-day-old `slot=0` from a probe script
+    armed `OWN_STEPPER_SLOT`, the load correctly used the container's persisted slot 2, and the
+    loading screen showed slot 0's face for the whole window. The DLL now discards this file's slot
+    when `save_file_default` is set, so a launch through it is no longer wrong -- but a launcher
+    that saw the contradiction and said nothing is how it stayed invisible for nine days. Refuse,
+    name the file and the line, and let the user decide which channel they meant.
+    """
+    found = autoload_file_slot(game_dir)
+    if found is None:
+        return
+    path, line_no, line = found
+    raise RuntimeError(
+        f"--save-default promises the active Steam user's own container with no slot preference, "
+        f"but {path}:{line_no} still names one: '{line}'. That file is a SECOND slot channel the "
+        f"sidecar cannot reach. Delete it (rm -f '{path}'), or drop --save-default and pass the "
+        f"save you actually mean."
+    )
 
 
 def artifact_paths(closure: dict, target_dir: Path) -> list[Path]:
@@ -147,6 +199,8 @@ def render_profile(
         "",
     ]
 
+    rest = list(dlls)
+
     if ersc is not None:
         lines += [
             "# Seamless Co-op, REFERENCED from the game install (never bundled or staged).",
@@ -156,7 +210,7 @@ def render_profile(
             "",
         ]
 
-    for dll in dlls:
+    for dll in rest:
         lines += [
             f"# sha256 {sha256_of(dll)}",
             "[[natives]]",
@@ -171,8 +225,8 @@ def render_sidecar(save: dict | None, run_id: str, use_default_save: bool) -> st
     lines = [
         f"# GENERATED per-run overlay for run {run_id} -- scripts/er-gen-me3-profile.py",
         "#",
-        "# Read by er-effects-rs from beside the loaded DLL and OVERLAID onto the",
-        "# game-directory er-effects.toml key by key. Your own settings there",
+        "# Read by er-quickload from beside the loaded DLL and OVERLAID onto the",
+        "# game-directory er-quickload.toml key by key. Your own settings there",
         "# (os_native_save_picker, preferred_save_picker_dir, boot_background_image)",
         "# are untouched -- only the keys below are overridden, and only for this run.",
         "",
@@ -208,6 +262,9 @@ def generate(args) -> dict:
     save = json.loads(Path(args.save).read_text(encoding="utf-8")) if args.save else None
     if args.save_default:
         save = None
+
+    if args.save_default:
+        refuse_stale_slot_channel(steam_game_dir())
 
     target_dir = Path(args.target_dir).resolve()
     dlls = artifact_paths(closure, target_dir)
@@ -265,12 +322,12 @@ def selftest() -> int:
         print(("  ok   " if condition else "  FAIL ") + label)
 
     check(
-        sidecar_for(Path("/x/er_effects_rs.dll")) == Path("/x/er_effects_rs.toml"),
+        sidecar_for(Path("/x/er_quickload.dll")) == Path("/x/er_quickload.toml"),
         "the sidecar name is derived from the DLL, matching config.rs::sidecar_config_path",
     )
     check(
-        sidecar_for(Path("/x/er_effects_rs.dll")).name != "er-effects.toml",
-        "the sidecar cannot collide with the legacy DLL-adjacent er-effects.toml",
+        sidecar_for(Path("/x/er_quickload.dll")).name != "er-quickload.toml",
+        "the sidecar cannot collide with the legacy DLL-adjacent er-quickload.toml",
     )
 
     closure = {
@@ -278,10 +335,10 @@ def selftest() -> int:
         "merge_base": "b" * 40,
         "base_ref": "origin/main",
         "dirty": True,
-        "artifacts": ["er_effects_rs.dll"],
+        "artifacts": ["er_quickload.dll"],
         "excluded": [
             {
-                "artifact": "er_loading_portrait_dll.dll",
+                "artifact": "er_loading_portrait.dll",
                 "kind": "present-compositor",
                 "because": "double D3D12 Present hook",
             }
@@ -299,7 +356,7 @@ def selftest() -> int:
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
-        dll = tmp / "er_effects_rs.dll"
+        dll = tmp / "er_quickload.dll"
         dll.write_bytes(b"MZ fake")
         text = render_profile(
             closure, save, [dll], "r-test", tmp / "ersc.dll", EVIDENCE_EXPLICIT, sidecar_for(dll)
@@ -308,7 +365,7 @@ def selftest() -> int:
         check("--seed 4242" in text, "the header carries the seed needed to reproduce the pick")
         check("WORKING TREE DIRTY" in text, "a dirty tree is stated, not silently filed under a SHA")
         check(
-            "er_loading_portrait_dll.dll" in text and "EXCLUDED" in text,
+            "er_loading_portrait.dll" in text and "EXCLUDED" in text,
             "excluded DLLs are named in the profile as stated non-results",
         )
         check("NOT release/autoload product proof" in text, "the evidence class is on the artifact")
@@ -344,6 +401,32 @@ def selftest() -> int:
             f"default mode assigns only the explicit unset key "
             f"(got {sorted(assigned_keys(default))})",
         )
+
+        # THE SECOND SLOT CHANNEL. `save_file_default` clears the sidecar/TOML slot, and cannot
+        # reach the game-directory autoload request file at all -- so a stale `slot=` there kept
+        # steering "default container" runs (br-20260831-014208-b1d6).
+        game = tmp / "Game"
+        game.mkdir()
+        check(autoload_file_slot(game) is None, "no autoload request file means no slot channel")
+
+        stale = game / AUTOLOAD_REQUEST_FILE
+        stale.write_text("method=both\nslot=0\nrequire_title_bootstrap=false\n", encoding="utf-8")
+        found = autoload_file_slot(game)
+        check(found is not None and found[1] == 2, "the offending line is located, not just found")
+        try:
+            refuse_stale_slot_channel(game)
+            check(False, "--save-default must refuse while a stale slot channel is open")
+        except RuntimeError as err:
+            check(
+                AUTOLOAD_REQUEST_FILE in str(err) and "slot=0" in str(err),
+                "the refusal names the file and quotes the line the user has to act on",
+            )
+
+        # `slot=` with no value is not a preference, and `own_load=1` is not a slot. Neither may
+        # block a default-save run: a refusal that fires on unrelated keys gets routed around.
+        stale.write_text("own_load=1\nslot=\n", encoding="utf-8")
+        check(autoload_file_slot(game) is None, "an empty or absent slot is not a slot channel")
+        refuse_stale_slot_channel(game)
 
     print("selftest:", "PASS" if ok else "FAIL")
     return EXIT_OK if ok else EXIT_ERROR

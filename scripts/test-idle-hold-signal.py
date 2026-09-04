@@ -21,7 +21,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "last_assistant_idle_hold.sh"
 
-PROJECT_DIR = "/fake/project/er-effects-rs"
+PROJECT_DIR = "/fake/project/er-quickload"
 
 
 def user(text: str) -> dict:
@@ -316,7 +316,74 @@ def main() -> int:
         "expected VERBOSEPAUSE when a long pause turn's only Bash is a status peek",
     )
 
-    print("idle-hold signal tests passed (15 cases)")
+    # (15) REGRESSION -- a long PROSE ANSWER is not a pause. Nothing is running, the message announces
+    # no hold, the user simply asked a question that prose answers. Before 2026-08-22 this fired
+    # VERBOSEPAUSE, which halted three consecutive real answers -- twice on the corrective rewrite the
+    # wall_of_text guard demanded back when it still halted at Stop, a turn that has no tool_use BY
+    # CONSTRUCTION. Length alone is wall_of_text's jurisdiction, not this rule's.
+    # >450 chars on purpose: at 411 the length heuristic would not fire and case (15) would pass
+    # trivially, testing nothing. This is a plain ANSWER -- no idle phrasing, no pending-work
+    # phrasing, nothing running in the transcript.
+    answer_no_pending = (
+        "Yes -- intended. The build I launched before you asked for the relaunch already contained "
+        "the fade fix, I said so in the handoff and gave you the two Escape presses precisely so you "
+        "would try to reproduce it; the relaunch you asked for was the same DLL, byte-identical, so "
+        "what you just failed to reproduce is the fixed build behaving as designed rather than a "
+        "lucky run that happened to miss the timing window. The oracle table in the commit records "
+        "the press landing inside the fade and the hold being refused eight times, which is why the "
+        "absence of the symptom counts as proof here rather than as a run that simply missed it."
+    )
+    expect(
+        "verbose-long-prose-answer-nothing-pending",
+        [
+            user("Tell me before you investigate if you intended for me to notice it was fixed."),
+            assistant_text(answer_no_pending),
+        ],
+        lambda o: o == "",
+        "expected empty for a long prose ANSWER with nothing pending -- it is not a pause",
+    )
+
+    # (16) CONTROL for (15): the identical message becomes a VERBOSEPAUSE the moment something really
+    # is running, because then the turn IS stopping with work pending and owes a terse blocked-note.
+    # The job is launched in an EARLIER turn -- launching it in this one would itself be substantive
+    # work and exempt the turn for a different reason, which would not test the pause gate at all.
+    expect(
+        "verbose-long-prose-answer-with-live-background-job",
+        [
+            user("Kick off the build."),
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_bg",
+                            "name": "Bash",
+                            "input": {"command": "cargo build", "run_in_background": True},
+                        }
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_bg",
+                            "content": "Command running in background with ID: bx1",
+                        }
+                    ]
+                },
+            },
+            user("Tell me before you investigate if you intended for me to notice it was fixed."),
+            assistant_text(answer_no_pending),
+        ],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "expected VERBOSEPAUSE for the same long message when a background job is still live",
+    )
+
+    print("idle-hold signal tests passed (17 cases)")
     return 0
 
 

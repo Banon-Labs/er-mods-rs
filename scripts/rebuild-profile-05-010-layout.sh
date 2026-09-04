@@ -95,6 +95,6 @@ PY
 cargo fmt --all -- --check
 cargo test -p er-gfx profile_05_010_layout -- --nocapture
 cargo test -p er-gfx --test profile_stats stats_panel_output_scales_row_internal_chrome_to_compact_pitch -- --nocapture
-cargo xwin build -p er-effects-rs --release --target x86_64-pc-windows-msvc
-sha256sum target/x86_64-pc-windows-msvc/release/er_effects_rs.dll | awk '{print "dll_sha256=" $1}'
+cargo xwin build -p er-quickload --release --target x86_64-pc-windows-msvc
+sha256sum target/x86_64-pc-windows-msvc/release/er_quickload.dll | awk '{print "dll_sha256=" $1}'
 printf 'layout_file=%s\n' "$layout_file"

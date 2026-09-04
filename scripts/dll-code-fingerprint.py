@@ -116,7 +116,7 @@ def fingerprint(path: Path) -> dict[str, str]:
 def selftest() -> int:
     """The masking must neutralise build identity and nothing else."""
     failures = []
-    sample = Path("target/x86_64-pc-windows-msvc/release/er_effects_rs.dll")
+    sample = Path("target/x86_64-pc-windows-msvc/release/er_quickload.dll")
     if not sample.exists():
         print("[dll-code-fingerprint] selftest SKIPPED (no built DLL to sample)")
         return 0

@@ -11,7 +11,7 @@ import java.util.*;
 public class DumpAllFuncBytes extends GhidraScript {
     public void run() throws Exception {
         String[] args = getScriptArgs();
-        String out = (args.length >= 1) ? args[0] : "/home/banon/projects/er-effects-rs/scratchpad/dump_funcs.tsv";
+        String out = (args.length >= 1) ? args[0] : "/home/banon/projects/er-mods-rs/scratchpad/dump_funcs.tsv";
         int n = (args.length >= 2) ? Integer.parseInt(args[1]) : 32;
 
         FunctionManager fm = currentProgram.getFunctionManager();

@@ -1,3 +1,6 @@
+# Thin ME3-loadable shell for the reusable er-crash-logging-core crate.
+# Ships as a standalone native DLL that can be listed beside ersc.dll to capture
+# process crash breadcrumbs without loading the product er-quickload DLL.
 [package]
 name = "er-crash-logging"
 version = "0.1.0"
@@ -6,9 +9,10 @@ publish = false
 
 [lib]
 name = "er_crash_logging"
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-er-game-base = { path = "../er-game-base" }
+er-crash-logging-core = { path = "../er-crash-logging-core" }
 
 [lints]
 workspace = true

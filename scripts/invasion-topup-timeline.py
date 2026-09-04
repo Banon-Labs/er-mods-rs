@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn an `er-invasion-warp-dll.log` into a live-top-up verdict.
+"""Turn an `er-invasion-warp.log` into a live-top-up verdict.
 
 The question a world-map run answers is narrow: did a legacy dungeon's real invasion points reach
 the map WITHOUT a world re-entry? That is a specific ORDERING in the log -- a `TOP-UP claimed` line
@@ -30,7 +30,7 @@ DEFAULT_GAME_DIR = os.path.join(
     os.path.expanduser("~"),
     ".local/share/Steam/steamapps/common/ELDEN RING/Game",
 )
-LOG_NAME = "er-invasion-warp-dll.log"
+LOG_NAME = "er-invasion-warp.log"
 
 
 def default_log_path() -> str:
@@ -127,9 +127,9 @@ def verdict_lines(events: list[tuple[int, str, str]]) -> list[str]:
 
 
 def selftest() -> int:
-    entered = "er-invasion-warp-dll: map-hooks: WorldMapViewModel ctor #1 this=0x1"
-    claimed = "er-invasion-warp-dll: map-inject: TOP-UP claimed 8 of 9 fresh POINT(s)"
-    declined = "er-invasion-warp-dll: map-inject: top-up declined -- nothing new to show"
+    entered = "er-invasion-warp: map-hooks: WorldMapViewModel ctor #1 this=0x1"
+    claimed = "er-invasion-warp: map-inject: TOP-UP claimed 8 of 9 fresh POINT(s)"
+    declined = "er-invasion-warp: map-inject: top-up declined -- nothing new to show"
 
     cases: list[tuple[str, list[str], str]] = [
         ("no world", ["boot"], "never reached a loaded world"),
@@ -140,7 +140,7 @@ def selftest() -> int:
     ]
     # A single line carrying several facts must yield ALL of them.
     multi = (
-        "er-invasion-warp-dll: map-inject: restyled LIVE pins -- 10 of 476 repainted at generation "
+        "er-invasion-warp: map-inject: restyled LIVE pins -- 10 of 476 repainted at generation "
         "12, 0 of 476 span row(s) REFUSED ... 9 claimed dormant row(s) were walked alongside the "
         "injected span"
     )
@@ -153,7 +153,7 @@ def selftest() -> int:
     cases.append(
         (
             "legacy 'fresh block' wording",
-            [entered, "er-invasion-warp-dll: TOP-UP claimed 9 of 9 fresh block(s)", entered],
+            [entered, "er-invasion-warp: TOP-UP claimed 9 of 9 fresh block(s)", entered],
             "WITHOUT A WORLD RE-ENTRY",
         )
     )

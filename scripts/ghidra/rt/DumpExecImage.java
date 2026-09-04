@@ -12,7 +12,7 @@ public class DumpExecImage extends GhidraScript {
     public void run() throws Exception {
         String[] args = getScriptArgs();
         String out = (args.length >= 1) ? args[0]
-            : "/home/banon/projects/er-effects-rs/scratchpad/dump-exec.bin";
+            : "/home/banon/projects/er-mods-rs/scratchpad/dump-exec.bin";
         long base = (args.length >= 2) ? Long.decode(args[1]) : 0x140000000L;
 
         Memory mem = currentProgram.getMemory();

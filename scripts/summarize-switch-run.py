@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Summarize a single multi-save-load run's DLL debug log: does a genuine switch complete or stall?
 
-Reads an er-effects-autoload-debug.log slice (e.g. a run's my-run-debug.log) and reports the
+Reads an er-quickload-autoload-debug.log slice (e.g. a run's my-run-debug.log) and reports the
 switch-outcome story WITHOUT eyeballing: character-name transitions, the FIX-1 disarm events,
 SWITCH-ORACLE class transitions, the MoveMapStep-state histogram + the final/most-common stuck
 step, the world-res-wait / step-18 signatures, and any genuine crash/assert markers. This turns the

@@ -16,7 +16,7 @@ Two RE'd, independently-derived quit signals are REQUIRED together before any ti
 in depth against a boot-title false-positive; either alone is sufficient in principle, but a title verdict
 never fires unless BOTH agree):
   1. TELEMETRY quit signal -- a title-binding line with `epoch >= 1`. `standalone_tick`
-     (er-telemetry/src/lib.rs:525) feeds `play_time_ms = -1` while GameDataMan is null (boot title, no
+     (er-telemetry-core/src/lib.rs:525) feeds `play_time_ms = -1` while GameDataMan is null (boot title, no
      character loaded), so the load-epoch counter (read/epoch.rs) stays 0 at the boot title and only
      increments once the world has simulated. A title reached with `epoch >= 1` therefore had a prior
      in-world session + a quit -- i.e. it is the WARM title. The boot title is always epoch 0.
@@ -48,6 +48,10 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from er_artifact_env import resolve_artifact  # noqa: E402
 import time
 import threading
 
@@ -88,16 +92,21 @@ def read_jsonl(path: str) -> list[dict]:
     return rows
 
 
-def harness_quit_seen(game_dir: str) -> bool:
+def harness_quit_seen(game_dir: str, artifact_dir: str | None = None) -> bool:
     """True once the harness has driven a quit-to-title to completion (RE signal #2).
 
     Primary source: the self-describing per-phase JSONL. Fallback: the human log. Both are truncated on
     harness DLL attach, so a hit is always from THIS run.
     """
-    for row in read_jsonl(os.path.join(game_dir, HARNESS_PHASES_FILE)):
+    # BOTH files are redirected into the run's own directory by the launcher (a game-directory
+    # artifact is single-slot, so the next launch destroys it). A watcher reading only the game
+    # directory would see no quit phase for a healthy redirected run and report the harness as
+    # never having driven one. `resolve_artifact` prefers the run directory, by existence, and
+    # falls back to the game directory when the env did not survive the launch chain.
+    for row in read_jsonl(str(resolve_artifact(HARNESS_PHASES_FILE, game_dir, artifact_dir))):
         if row.get("phase") in QUIT_PHASE_NAMES and row.get("outcome") == "advanced":
             return True
-    log_path = os.path.join(game_dir, HARNESS_LOG_FILE)
+    log_path = str(resolve_artifact(HARNESS_LOG_FILE, game_dir, artifact_dir))
     try:
         with open(log_path, encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -281,7 +290,7 @@ def main() -> int:
         # WARM-title gate: BOTH RE'd quit signals must agree before any title verdict.
         title_rows = read_jsonl(title_path)
         warm_rows = [r for r in title_rows if (_int_epoch(r) or 0) >= 1]
-        quit_seen = harness_quit_seen(args.game_dir)
+        quit_seen = harness_quit_seen(args.game_dir, args.artifact_dir)
 
         if warm_rows and quit_seen:
             if warm_confirmed_at is None:

@@ -27,7 +27,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/armament-icons-live-$(date +%Y%m%d-%H%M%S)}"
-TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll"
+TELEM_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_telemetry.dll"
 BADGE_DLL="$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_armament_icons.dll"
 FRIDA_DLL="$REPO_ROOT/target/frida-gadget/frida-gadget.dll"
 
@@ -75,7 +75,7 @@ BADGE_GAMEDIR="$GAME_DIR/er_armament_icons.dll"
 cp -f "$BADGE_DLL" "$BADGE_GAMEDIR"
 TELEM_GAMEDIR=""
 if [[ -f "$TELEM_DLL" ]]; then
-	TELEM_GAMEDIR="$GAME_DIR/er_telemetry_dll.dll"
+	TELEM_GAMEDIR="$GAME_DIR/er_telemetry.dll"
 	cp -f "$TELEM_DLL" "$TELEM_GAMEDIR"
 fi
 
@@ -118,9 +118,16 @@ PROFILE="$ARTIFACT_DIR/armament-icons-live.me3"
 	fi
 } >"$PROFILE"
 
-# Sweep stale logs/markers so this run's evidence is unambiguous. No drive-mode marker and
-# no diagnostic overrides: this is a hands-on run, not an agent-driven probe.
-rm -f "$GAME_DIR"/er-armament-icons.log "$GAME_DIR"/er-harness-drive-mode.txt \
+# Sweep stale MARKERS so this run's behaviour is unambiguous. No drive-mode marker and no
+# diagnostic overrides: this is a hands-on run, not an agent-driven probe.
+#
+# THE LOG IS NO LONGER IN THIS LIST, AND THAT IS THE POINT. This line used to begin
+# `rm -f "$GAME_DIR"/er-armament-icons.log`, which destroyed TWO prior runs at once and neither of
+# them this one's: `er_game_base::log::begin_fresh_run` removes `<name>.prev` unconditionally when
+# the live file is absent, so clearing the live file takes the generation behind it as well. Several
+# sessions launch concurrently here. The log is redirected into ARTIFACT_DIR at launch, so it starts
+# empty by construction and there is nothing of anyone's in the game directory to clear.
+rm -f "$GAME_DIR"/er-harness-drive-mode.txt \
 	"$GAME_DIR"/er-armament-icons-force-icon.txt "$GAME_DIR"/er-armament-icons-target.txt \
 	2>/dev/null
 
@@ -135,7 +142,31 @@ echo "==  artifacts -> $ARTIFACT_DIR"
 echo "==  DLL log   -> $GAME_DIR/er-armament-icons.log"
 echo "======================================================================"
 
-(cd "$GAME_DIR" && "$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") \
+# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
+# and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
+# this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
+(cd "$GAME_DIR" && env \
+	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
+	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
+	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
+	ER_QUICKLOAD_INPUT_TRACE_PATH="$ARTIFACT_DIR/er-quickload-input-trace.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_PATH="$ARTIFACT_DIR/er-quickload-bootstrap.jsonl" \
+	ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$ARTIFACT_DIR/er-quickload-bootstrap-state.json" \
+	ER_QUICKLOAD_PROFILE_PATH="$ARTIFACT_DIR/er-quickload-profile.jsonl" \
+	ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+	ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+	ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+	ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+	ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+	ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	"$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") \
 	>"$ARTIFACT_DIR/me3-live.log" 2>&1 &
 LAUNCHER_PID=$!
 

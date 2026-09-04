@@ -10,6 +10,11 @@ publish = false
 # the vendored MinHook C source is cc-compiled ONCE here instead of in three build scripts.
 name = "er_hook"
 
+# The build gate below `MhHook::new` and the union registrars. `er-game-base` tier A is a
+# zero-dependency rlib and does NOT depend on this crate, so this direction adds no cycle.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
 [build-dependencies]
 cc = "1.0"
 

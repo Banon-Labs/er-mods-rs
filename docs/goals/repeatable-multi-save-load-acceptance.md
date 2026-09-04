@@ -21,7 +21,7 @@ assertion.
 
 ## 1. The goal, in spirit
 
-A single DLL (`er_effects_rs.dll`), loaded through **me3** as a `[[natives]]` profile entry, that lets
+A single DLL (`er_quickload.dll`), loaded through **me3** as a `[[natives]]` profile entry, that lets
 a user:
 
 1. **Auto-load** a chosen save file + slot at startup (default: most-recent / native Continue; optional
@@ -176,7 +176,7 @@ needs no live user input and ends in finite time with a short human-readable pas
 - `input-block-1x1-clipcursor-traps-user-native-windows-no-failsafe-release-2026-07-22`,
   `never-blanket-kill-eldenring-killed-user-game-2026-07-22` — harness safety.
 
-**Product mechanisms:** `crates/er-effects-rs/src/config.rs`, `.../experiments/save_redirect/`,
+**Product mechanisms:** `crates/er-quickload/src/config.rs`, `.../experiments/save_redirect/`,
 `.../experiments/continue_load/`, `.../experiments/own_load/`,
 `.../experiments/startup_hooks/quit_menu/system_quit_repro_guards.rs`, `.../experiments/title/title_tick_cover.rs`,
 `.../experiments/save_picker*`, `.../experiments/present_overlay.rs`.

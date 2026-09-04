@@ -12,16 +12,16 @@ worktree `.worktrees/portrait-stats-crate`
    (bd `USER-DIRECTIVE-delete-nonworking-code-not-gate-no-stale-2026-07-21`).
 2. **EXTRACT path B** -- the newer, right-scale version (frozen alpha-bbox crop,
    80%-screen-height portrait, height-scaled stats at 5%/60%) into:
-   - `crates/er-loading-portrait` -- reusable feature crate: capture pipeline
+   - `crates/er-loading-portrait-core` -- reusable feature crate: capture pipeline
      (profile-table build, renderer drive, idle-anim bind, camera override,
      staged color+depth readback, depth-key worker, frame bridge), stats-lines
      producer + raster, portrait/stats CPU compositors, native-overlay window
      host.
-   - `crates/er-loading-portrait-dll` -- thin standalone ME3-loadable cdylib
+   - `crates/er-loading-portrait` -- thin standalone ME3-loadable cdylib
      shell (own DllMain, VEH crash logger, log file), individually shippable.
-     Follows `er-loading-bar-dll` exactly (cdylib+rlib, host-testable).
-   - `er-effects-rs` keeps bundling the feature by depending on
-     `er-loading-portrait`, product behavior unchanged (same arming, no new
+     Follows `er-loading-bar` exactly (cdylib+rlib, host-testable).
+   - `er-quickload` keeps bundling the feature by depending on
+     `er-loading-portrait-core`, product behavior unchanged (same arming, no new
      env gates -- bd `no-new-env-gated-features`).
 
 ## Ground truth: the two paths (from the 2026-07-29 Explore map)
@@ -95,9 +95,14 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
    teardown) become dead -- update the script logic, don't leave dead branches.
    `y22i-windows-ab-probe.py` is A-only -- delete it. Do NOT touch
    `check-runtime-probe-contract.py` / `check-autoload-happy-path.py` unless
-   an oracle they read is actually removed; if `oracle_title_portrait_visible_surface_bound`
-   is removed with the title-cover portrait bits, change the contract checker
-   and `test-runtime-probe-contract.py` together in one commit.
+   an oracle they read is actually removed. DONE 2026-08-31 for
+   `oracle_title_portrait_visible_surface_bound`: it was removed (its counter had
+   no write site anywhere), and `check-runtime-probe-contract.py` +
+   `test-runtime-probe-contract.py` were repointed at
+   `oracle_portrait_onto_draw_hits` -- the capture predicate's real gate -- in the
+   same commit. Note the trap that instruction only half-covers: leaving the dead
+   name in a REMOVAL COMMENT still satisfies a substring contract check, so the
+   requirement has to move, not just the code.
 5. A-only deps to drop from the root crate if verified dead after deletion:
    `er-tpf` (forge-only per map), `Win32_Graphics_Direct3D_Fxc` (A's HLSL
    compile).
@@ -107,12 +112,12 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
 
 ## Crate seams (follow the existing pattern, stated in the crates themselves)
 
-- `er-loading-bar` keeps only game-free label/raster primitives;
+- `er-loading-bar-core` keeps only game-free label/raster primitives;
   `er-d3d12-compositor` takes product state through `set_log_sink` /
-  `set_frame_provider` / `copy_rgba_frame_to_swapchain`. `er-loading-bar-dll`
+  `set_frame_provider` / `copy_rgba_frame_to_swapchain`. `er-loading-bar`
   is the standalone negative control. Mirror this.
-- `er-loading-portrait` may depend on: er-game-base (+game-types), er-hook,
-  er-telemetry, er-gfx, er-loading-bar, er-d3d12-compositor, erpx-rs (core),
+- `er-loading-portrait-core` may depend on: er-game-base (+game-types), er-hook,
+  er-telemetry-core, er-gfx, er-loading-bar-core, er-d3d12-compositor, erpx-rs (core),
   eldenring/fromsoftware-shared, windows, iced-x86 if needed. It must NOT
   depend on the root crate. Product-side state the feature currently reads
   (BOOT_VIEW_* host gates, SYSTEM_QUIT_* switch phases, CAN_MOVE_CONFIRMED,
@@ -120,15 +125,15 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
   (the `set_frame_provider` pattern), not as reverse imports.
 - Portrait-specific statics move INTO the crate (`LOADING_BG_PORTRAIT_RGBA`
   bridge, `PROFILE_LOOKAT_*`, `PORTRAIT_*`, pins/rings/ledger); the product
-  imports them from the crate. Telemetry counters re-point to `er-telemetry`
+  imports them from the crate. Telemetry counters re-point to `er-telemetry-core`
   directly.
 - `native_overlay.rs` moves into the crate with a frame-provider + show-flag
   seam; the product registers its `boot_view_render_frame`-based provider
   (bar+picker+portrait+stats composition stays product-side), the standalone
   DLL registers a portrait+stats-only provider and, on Wine, uses
   `er_d3d12_compositor::install_loading_bar_present_compositor` as its host
-  exactly like `er-loading-bar-dll`.
-- The standalone DLL must never be loaded alongside `er_effects_rs.dll` in one
+  exactly like `er-loading-bar`.
+- The standalone DLL must never be loaded alongside `er_quickload.dll` in one
   me3 profile (double Present detour / double MinHook) -- document this in its
   Cargo.toml like the er-save-suppress warning.
 
@@ -145,11 +150,11 @@ machinery in `boot_progress.rs`, `startup_modals_menu_cover.rs`,
 3. **Script cleanup**: er-readiness-watch.py dead branches, delete y22i probe,
    contract-checker coordination only if actually required. Run the script
    test suite (`scripts/test-er-readiness-watch.py` etc.). Green, commit.
-4. **Create `er-loading-portrait`** and move path B + capture pipeline +
+4. **Create `er-loading-portrait-core`** and move path B + capture pipeline +
    stats producer into it as real `mod`s (no `include!`), breaking product
    coupling via the seams above. Product still compiles bundled and behaves
    identically. Green, commit (likely several commits).
-5. **Add `er-loading-portrait-dll`** shell + host smoke test, workspace
+5. **Add `er-loading-portrait`** shell + host smoke test, workspace
    member, xwin release build of both DLLs. Green, commit.
 6. **Wrap up**: full gates (`bash scripts/check.sh`,
    `cargo test -p er-soulsformats -p er-param-inspect` + new crate host tests,

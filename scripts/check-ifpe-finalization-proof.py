@@ -53,7 +53,7 @@ def as_int(value: object, default: int = -1) -> int:
 
 
 def terminal_snapshot(run_dir: Path) -> tuple[dict, dict]:
-    telemetry = load_json(run_dir / "er-effects-telemetry.json")
+    telemetry = load_json(run_dir / "er-quickload-telemetry.json")
     readiness = load_json(run_dir / "readiness-result.json")
     captured = readiness.get("telemetry")
     if isinstance(captured, dict):

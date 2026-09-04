@@ -74,8 +74,12 @@
 //! GetWeaponGaitemHandleBySlot    -> gaitem handle for a ChrAsmSlot
 //! GetGaitemInsByHandle           -> GaitemLookupResult
 //! GetSwordArtsParamForWeapon     -> SwordArtsParamLookupResult   (via the real equipped GEM)
-//! row + 0x1A                     -> SwordArtsParam.iconId
+//! resolve_gem_icon_id(paramId)   -> EquipParamGem.iconId, or no badge
 //! ```
+//!
+//! `SwordArtsParam.iconId` (row + 0x1A) is NOT part of this chain: it is a different icon
+//! family (21xxx bare skill glyphs) from the item atlas the badge draws into, and is never
+//! substituted for a missing gem icon. See the resolver below.
 //!
 //! `GetSwordArtsParamIdForWeapon` resolves through `GetGemGaitemHandleFromWeapon` ->
 //! `GetGaitemInsGem`, i.e. the ACTUAL equipped gem, so unlike the menu path's `arts_id * 100`
@@ -91,6 +95,15 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::safe_read_usize;
+// The gem chain and the player singleton are declared ONCE in `er-game-base::rva` and derived
+// here. `er-build-import-runtime` walks the same three hops to read the ash of war off an equipped
+// armament for the Generate Build Link row, and one address written out in two crates is one
+// address that a 1.16.x correction can be applied to in only one of them.
+use er_game_base::rva::{
+    GET_GAITEM_INS_BY_HANDLE_RVA, GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA,
+    GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA, WORLD_CHR_MAN_GLOBAL_RVA,
+    WORLD_CHR_MAN_PLAYER_INS_OFFSET,
+};
 
 use crate::log_message;
 
@@ -122,24 +135,6 @@ const HUD_WEAPON_SLOT_UPDATE_RVA: usize = 0x8d2110;
 const HUD_SLOT_LEFT_WEP_OFFSET: usize = 0x2040;
 const HUD_SLOT_RIGHT_WEP_OFFSET: usize = 0x2848;
 
-/// `GetWeaponGaitemHandleBySlot(PlayerIns*, u32* out, ChrAsmSlot)`.
-const GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA: usize = 0x656920;
-/// `GetGaitemInsByHandle(GaitemLookupResult* inout, GaitemLookupResult* handleSource)`.
-///
-/// Both arguments are the SAME pointer in every caller -- see [`GaitemLookupResult`] for why,
-/// and for the silent-nothing failure mode of getting it wrong.
-const GET_GAITEM_INS_BY_HANDLE_RVA: usize = 0x672e40;
-/// `GetSwordArtsParamForWeapon(GaitemLookupResult*, SwordArtsParamLookupResult* out)`.
-const GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA: usize = 0x673f30;
-
-/// `WorldChrMan` singleton global; `+0x1e508` is the local `PlayerIns`. Both dereferences are
-/// null-checked in the game's own code, so both are null-checked here.
-const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
-const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
-
-/// `SwordArtsParam.iconId`.
-const SWORD_ARTS_PARAM_ICON_ID_OFFSET: usize = 0x1a;
-
 /// The nested badge path. The binder force-hides a child literally named `ArtsIcon`, so the
 /// injected clip lives one level down inside the classless `ItemIcon` container -- out of reach
 /// of a resolver that walks one path segment at a time.
@@ -161,16 +156,28 @@ const BADGE_PATH: &std::ffi::CStr = c"ItemIcon/ArtsIcon";
 ///   slot -4/-3 -> index = sel*2 + 7         -> 7, 9       (bolts)
 /// ```
 ///
-/// ChrAsm's weapon block interleaves the hands -- 0 = Right 1, 1 = Left 1, 2 = Right 2, 3 = Left
-/// 2, 4 = Right 3, 5 = Left 3 -- so EVEN is the right hand and ODD is the left. The ammo rows
-/// confirm the reading independently: `sel*2 + 6` lands on 6/8 (Arrow 1/2) and `sel*2 + 7` on
-/// 7/9 (Bolt 1/2), exactly the known layout.
+/// ChrAsm's weapon block interleaves the hands -- 0 = Left 1, 1 = Right 1, 2 = Left 2, 3 = Right
+/// 2, 4 = Left 3, 5 = Right 3 -- so EVEN is the LEFT hand and ODD is the right. The ammo rows
+/// confirm the index arithmetic independently: `sel*2 + 6` lands on 6/8 (Arrow 1/2) and
+/// `sel*2 + 7` on 7/9 (Bolt 1/2), exactly the known layout.
 ///
-/// So **-2 is RIGHT and -1 is LEFT**. These two constants were previously assigned the other way
-/// round, which would have drawn each hand's Ash of War on the opposite slot -- a swap that still
-/// produces two plausible-looking badges and is invisible unless the hands hold different ashes.
-const CHR_ASM_SLOT_RIGHT_ACTIVE: i32 = -2;
-const CHR_ASM_SLOT_LEFT_ACTIVE: i32 = -1;
+/// So **-2 is LEFT and -1 is RIGHT**, proven rather than assumed. `CS::ChrIns::
+/// GetEquipmentEntryByTwoHandState` (1.16.2 dump 0x1403eeec0) is a single line:
+///
+/// ```text
+///   GetEquipmentEntry(this, (hand != Left) - 2)
+/// ```
+///
+/// which yields `-2` for `Left` and `-1` for `Right`. `../fromsoftware-rs` agrees independently
+/// (`ChrAsmSlot::WeaponLeft1 = 0`, `WeaponRight1 = 1`), as does the dump's own enum, which
+/// `EquipItemToChrAsmSlot` uses as `if (chrAsmSlot < WeaponLeft1) return;`.
+///
+/// These constants held the opposite values until 2026-08-22 and so drew each hand's Ash of War
+/// on the other hand's badge. The table decode above was always right; only the hand labels
+/// attached to it were wrong, and an earlier edit "fixed" the swap by flipping it the wrong way.
+/// The defect is invisible whenever both hands carry the same ash, which is how it survived.
+const CHR_ASM_SLOT_LEFT_ACTIVE: i32 = -2;
+const CHR_ASM_SLOT_RIGHT_ACTIVE: i32 = -1;
 
 const PROXY_SIZE: usize = 0x60;
 const PROXY_SCALEFORM_VALUE_OFFSET: usize = 0x28;
@@ -220,14 +227,34 @@ struct SwordArtsLookupResult {
 ///
 /// `+0x10` is not incidental: `GetSwordArtsParamIdForWeapon` reads exactly that field
 /// (`mov edx, dword ptr [rdi + 0x10]` at `0x140673fb6`).
+///
+/// THE FIELD AT `+0x10` IS THE ITEM ID, AND ITS EMPTY VALUE IS `-1`, NOT `0` (1.16.2 `getStructure`
+/// puts `itemId` last in a 20-byte record; the engine's own constructor `GaitemLookupResult(out,
+/// handle)` @0x1406726c0 writes `gaItemIns = nullptr; itemId = -1`). Zero is not "nothing" here:
+/// `GetSwordArtsParamIdForWeapon` rejects an id only when `(itemId & 0xF0000000) != 0` or it equals
+/// `0x0FFFFFFF`, and **zero passes both**, naming `EquipParamWeapon` row 0 -- unarmed -- whose
+/// `canGemBeChanged` refuses, so the gem override never runs and the function returns row 0's own
+/// default skill. That is why a badge built on a zero-initialised record shows "Kick" (arts 503) on
+/// every weapon instead of showing nothing. Starting at `-1` fails closed instead.
 #[repr(C)]
-#[derive(Default)]
 struct GaitemLookupResult {
     handle: u32,
     _pad0: u32,
     ins: usize,
-    kind: u32,
+    item_id: u32,
     _pad1: u32,
+}
+
+impl Default for GaitemLookupResult {
+    fn default() -> Self {
+        Self {
+            handle: 0,
+            _pad0: 0,
+            ins: 0,
+            item_id: u32::MAX,
+            _pad1: 0,
+        }
+    }
 }
 
 static ORIG_SCENE_UPDATE: AtomicUsize = AtomicUsize::new(0);
@@ -328,7 +355,14 @@ fn hand_for_component(component: usize) -> Option<i32> {
 /// `PlayerIns`, or `None` before the world exists. Both hops are null-checked exactly as the
 /// game checks them.
 unsafe fn player_ins(base: usize) -> Option<usize> {
-    let world = unsafe { safe_read_usize(base + WORLD_CHR_MAN_GLOBAL_RVA) }.unwrap_or(0);
+    let world = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            WORLD_CHR_MAN_GLOBAL_RVA,
+            "WORLD_CHR_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(0);
     if world == 0 {
         return None;
     }
@@ -338,19 +372,29 @@ unsafe fn player_ins(base: usize) -> Option<usize> {
 
 /// Ash-of-War icon id for the weapon in `slot`, or `None` when that hand holds no weapon or the
 /// weapon has no ash.
+use crate::icons_fn;
+
 unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
     let player = unsafe { player_ins(base) }?;
 
-    let get_handle: GetWeaponHandleFn =
-        unsafe { std::mem::transmute(base + GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA) };
+    let get_handle: GetWeaponHandleFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA,
+            "GET_WEAPON_GAITEM_HANDLE_BY_SLOT_RVA",
+        )?)
+    };
     let mut handle: u32 = 0;
     unsafe { get_handle(player, &mut handle, slot) };
     if handle == 0 {
         return None; // empty hand -- the game writes 0 before validating the slot
     }
 
-    let get_ins: GetGaitemInsFn =
-        unsafe { std::mem::transmute(base + GET_GAITEM_INS_BY_HANDLE_RVA) };
+    let get_ins: GetGaitemInsFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_GAITEM_INS_BY_HANDLE_RVA,
+            "GET_GAITEM_INS_BY_HANDLE_RVA",
+        )?)
+    };
     let mut gaitem = GaitemLookupResult {
         handle,
         ..Default::default()
@@ -362,8 +406,12 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return None; // handle did not resolve to a live gaitem
     }
 
-    let get_arts: GetArtsForWeaponFn =
-        unsafe { std::mem::transmute(base + GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA) };
+    let get_arts: GetArtsForWeaponFn = unsafe {
+        std::mem::transmute(icons_fn(
+            GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA,
+            "GET_SWORD_ARTS_PARAM_FOR_WEAPON_RVA",
+        )?)
+    };
     let mut result = SwordArtsLookupResult {
         param_id: 0,
         _pad: 0,
@@ -391,23 +439,46 @@ unsafe fn arts_icon_for_slot(base: usize, slot: i32) -> Option<u32> {
         return Some(gem_icon);
     }
 
-    // Fallback for ashes with no icon-bearing gem row. Kept because it is the game's own HUD
-    // skill-icon source (`UpdatePlayerComponents` reads this exact offset), so where it is
-    // non-zero it is authoritative.
-    let icon = unsafe { *((result.row + SWORD_ARTS_PARAM_ICON_ID_OFFSET) as *const u16) } as u32;
-    (icon != 0).then_some(icon)
+    // No fallback. `SwordArtsParam.iconId` is a DIFFERENT icon family (21xxx bare skill
+    // glyphs) from the item atlas `ICON_INFO_BUILDER_RVA`/`ICON_SETTER_RVA` draw into -- same
+    // rule the menu badge already follows (`lib.rs:736-740`). 95 of 277 `SwordArtsParam` rows
+    // have no icon-bearing gem, and none of the 95 has a recoverable item icon, so "no badge"
+    // is the correct output for them, not someone else's glyph.
+    None
 }
 
 /// Bind our badge child under `parent_clip` and remember it for `component`.
-unsafe fn bind_badge(base: usize, component: usize, parent_clip: usize) {
+unsafe fn bind_badge(_base: usize, component: usize, parent_clip: usize) {
     let Some(entry) = registry_claim(component) else {
         return;
     };
-    let assign: AssignFn =
-        unsafe { std::mem::transmute(base + crate::ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + crate::PROXY_IS_BOUND_RVA) };
-    let value_dtor: ScaleformValueDtorFn =
-        unsafe { std::mem::transmute(base + crate::SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(
+                crate::ASSIGN_COMPONENT_WITH_NAME_RVA,
+                "ASSIGN_COMPONENT_WITH_NAME_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let is_bound: IsBoundFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let value_dtor: ScaleformValueDtorFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::SCALEFORM_VALUE_DTOR_RVA, "SCALEFORM_VALUE_DTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
 
     // Release a previous binding for this component before overwriting it: the proxy owns a
     // ref-counted CSScaleformValue, and dropping the storage without the dtor leaks a movie
@@ -437,8 +508,14 @@ unsafe fn bind_badge(base: usize, component: usize, parent_clip: usize) {
         // Hide on bind. The movie already places the HUD badge with `visible = 0`, so this is
         // belt-and-braces -- but it costs one call and it means a slot that is bound and then
         // never updated (a HUD scene torn down mid-frame) cannot flash its un-set placeholder.
-        let set_visible: SetVisibleFn =
-            unsafe { std::mem::transmute(base + crate::PROXY_SET_VISIBLE_RVA) };
+        let set_visible: SetVisibleFn = unsafe {
+            std::mem::transmute(
+                match crate::icons_fn(crate::PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { set_visible(storage.as_mut_ptr(), false) };
         let n = BINDER_BOUND.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= SAMPLE_LOGS {
@@ -579,8 +656,14 @@ unsafe extern "system" fn hud_weapon_update_hook(
         return ret;
     };
 
-    let set_visible: SetVisibleFn =
-        unsafe { std::mem::transmute(base + crate::PROXY_SET_VISIBLE_RVA) };
+    let set_visible: SetVisibleFn = unsafe {
+        std::mem::transmute(
+            match crate::icons_fn(crate::PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                Some(address) => address,
+                None => return ret,
+            },
+        )
+    };
     let storage = unsafe { &mut *entry.proxy.get() };
 
     // Not one of the two weapon slots: `Arts` and the `ItemPanel2` items bind a badge because
@@ -591,12 +674,28 @@ unsafe extern "system" fn hud_weapon_update_hook(
         return ret;
     };
 
-    match unsafe { arts_icon_for_slot(base, slot) } {
+    // Carried out of the match for the heartbeat below: `SAMPLE_LOGS` (24) burns out early in a
+    // run, so the per-draw log at `d <= SAMPLE_LOGS` can miss the one weapon that exercises the
+    // no-gem-icon path entirely. The heartbeat is unconditional, so mirroring this call's
+    // outcome into it is the one place that cannot exhaust.
+    let this_icon_id = match unsafe { arts_icon_for_slot(base, slot) } {
         Some(icon_id) => {
-            let build_icon_info: IconInfoBuilderFn =
-                unsafe { std::mem::transmute(base + crate::ICON_INFO_BUILDER_RVA) };
-            let icon_setter: IconSetterFn =
-                unsafe { std::mem::transmute(base + crate::ICON_SETTER_RVA) };
+            let build_icon_info: IconInfoBuilderFn = unsafe {
+                std::mem::transmute(
+                    match crate::icons_fn(crate::ICON_INFO_BUILDER_RVA, "ICON_INFO_BUILDER_RVA") {
+                        Some(address) => address,
+                        None => return ret,
+                    },
+                )
+            };
+            let icon_setter: IconSetterFn = unsafe {
+                std::mem::transmute(
+                    match crate::icons_fn(crate::ICON_SETTER_RVA, "ICON_SETTER_RVA") {
+                        Some(address) => address,
+                        None => return ret,
+                    },
+                )
+            };
             let mut icon_info = [0u8; ICON_INFO_SIZE];
             unsafe { build_icon_info(icon_info.as_mut_ptr(), icon_id) };
             unsafe { icon_setter(storage.as_mut_ptr(), icon_info.as_ptr()) };
@@ -607,6 +706,7 @@ unsafe extern "system" fn hud_weapon_update_hook(
                     "hud-badge: draw #{d} slot={slot} icon_id={icon_id} component=0x{component:x}"
                 ));
             }
+            Some(icon_id)
         }
         None => {
             // Hide on EVERY non-draw path. The badge clip is part of the movie and the HUD slot
@@ -614,13 +714,14 @@ unsafe extern "system" fn hud_weapon_update_hook(
             // empty rows kept a stale plate in the menus (run 20260727-233703).
             unsafe { set_visible(storage.as_mut_ptr(), false) };
             HUD_HIDDEN.fetch_add(1, Ordering::SeqCst);
+            None
         }
-    }
+    };
 
     if n.is_multiple_of(512) {
         log_message(format_args!(
             "hud-badge heartbeat: ctors={} bound={} updates={} drawn={} hidden={} \
-             no_proxy={} other_slot={}",
+             no_proxy={} other_slot={} slot={slot} icon_id={this_icon_id:?}",
             CTOR_FIRES.load(Ordering::SeqCst),
             BINDER_BOUND.load(Ordering::SeqCst),
             UPDATE_FIRES.load(Ordering::SeqCst),

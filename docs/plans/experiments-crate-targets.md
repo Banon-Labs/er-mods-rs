@@ -15,7 +15,7 @@ slices have now MERGED and the directory is **1,796 lines smaller than SS0.1 mea
 number in SS0.1 and SS5 for a file those slices touched is stale by construction; SS0.2 re-pins the
 ones that still matter and states, item by item, exactly what is left of the S4 block.
 
-**Scope: `crates/er-effects-rs/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
+**Scope: `crates/er-quickload/src/experiments/**` EXCLUDING `startup_hooks/`.** startup_hooks is
 owned by a separate concurrent analysis -- see SS8.
 
 ---
@@ -69,7 +69,7 @@ Six slices, each proven by fingerprint or by a static gate reading, **none requi
 
 Measured directory effect: **27,847 -> 26,051 lines, 40 -> 38 files** (SS0.2). The PR nets sum to
 1,823 against a measured 1,796 because four of the six also deleted lines outside this directory
-(`er-telemetry/src/counters.rs`, `lib_parts/`, one startup_hooks file).
+(`er-telemetry-core/src/counters.rs`, `lib_parts/`, one startup_hooks file).
 
 ### The three proof regimes -- which one a slice is in decides the gate
 
@@ -230,23 +230,23 @@ and I sided with the verifier.
 | 1 | **`er-hook`** | no | 109 | Existing zero-dep MinHook crate; gains the raw code-patch primitives (validate byte -> VirtualProtect -> write -> restore -> flush icache) | **none** (raw `kernel32` externs, pattern already at `er-hook/src/lib.rs:181,245`) | **no** -- `set_hook_logger` already exists (`er-hook/src/lib.rs:27,32`); **deletes 2** er-title-flow seams | no | **Confident** |
 | 2 | **`er-boot-profiler`** | **yes** | 382 | Boot-phase CPU/RIP sampler on its own OS thread -> NDJSON. Diagnostic-only, never on a product path | `er-game-base`, `windows` | 1 entry (`append_autoload_debug`) or use `er_game_base::log::append_line` and have none | no | **Confident** |
 | 3 | **`er-game-base`** | no | 36 | Tier A; gains the UTF-16 save-name readers | **none** (needs its existing optional `game-types` feature) | **deletes 1** portrait seam (`read_utf16_name_units`) | no | **Confident**, rescoped |
-| 4 | **`er-loading-portrait`** | no | ~40 | Already owns PlayerGameData/ProfileSummary layout; gains `char_fingerprint` | none | **deletes 0, adds 0** | no | **Confident**, heavily rescoped -- see below |
-| 5 | **`er-gates`** | **yes** | 892 | The workspace's single gate/decision layer -- every product lever, diagnostic switch and module-presence probe that the product DLL *and* the feature crates must agree on | `er-telemetry`; `windows` avoidable via raw kernel32 externs | **+2** (`save_override_telemetry_only`, `missing_save_selection_pending`); **deletes 22** across 4 hosts | no | **Confident**, blocked on 4 const moves |
-| 6 | **`er-menu-trace`** | **yes** | ~3,500 | Native menu / dialog / save-dispatch observation and pointer latching; publishes the live pointers the autoload machine consumes | `er-hook`, `er-telemetry`, `er-game-base[game-types]`, `er-save-loader`, `eldenring`, `fromsoftware-shared`, `windows` | ~10 new (incl. the 4-fn `crashlog::module_resolution` family); **deletes 3** er-title-flow seams | no | **Plausible** -- sizing corrected from 2,870 |
-| 7 | **`er-boot-cover`** | **yes** | ~2,440 | Turn ER's RAM load semaphores into a phase/substep model, rasterize it, composite it onto the backbuffer until the world is ready | `er-loading-bar`, `er-telemetry`, `er-loading-portrait`, `er-save-picker`, `er-d3d12-compositor`, `er-game-base`, `eldenring`, `windows` | ~8 new | no | **Plausible** |
-| 8 | **`er-loading-bar`** | no | ~160 | Existing zero-dep, `forbid(unsafe_code)` bar primitives; gains the exact `BarStyle` duplicate, text-scale, FNV hash, substep combinators, 2 CPU raster helpers | **none** | no | no | **Plausible** |
-| 9 | **`er-save-redirect`** | no | ~1,900 | Existing crate finally owns the process-wide Win32/NT save hooks it says (`lib.rs:3-5`) it deferred | **+`er-game-base`, +`er-save-picker`** | **+8** new `er_save_redirect::host` | no | **Plausible**, line numbers stale |
-| 10 | **`er-load-drive`** | **yes** | ~3,500 | The menu-free save-load drive: title step-fn detours, STAGE2/fullread/continue phase machines, the System->Quit switch-reload commit | `er-title-flow`, `er-telemetry`, `er-game-base`, `er-hook`, `er-save-loader`, `er-save-suppress`, `er-save-redirect`, `er-loading-portrait`, `er-save-picker`, `eldenring`, `windows` | **25-35** new | no | **Disputed** -- see SS7 |
-| 11 | **`er-quit-menu`** | no | ~1,520 | Existing crate; gains the `save_flow_tick` stage machine its own `lib.rs:28-30` already claims | **+`er-save-suppress`** (26 fns, not 21) | uses existing | no | **Blocked on startup_hooks** |
+| 4 | **`er-loading-portrait-core`** | no | ~40 | Already owns PlayerGameData/ProfileSummary layout; gains `char_fingerprint` | none | **deletes 0, adds 0** | no | **Confident**, heavily rescoped -- see below |
+| 5 | **`er-gates`** | **yes** | 892 | The workspace's single gate/decision layer -- every product lever, diagnostic switch and module-presence probe that the product DLL *and* the feature crates must agree on | `er-telemetry-core`; `windows` avoidable via raw kernel32 externs | **+2** (`save_override_telemetry_only`, `missing_save_selection_pending`); **deletes 22** across 4 hosts | no | **Confident**, blocked on 4 const moves |
+| 6 | **`er-menu-trace`** | **yes** | ~3,500 | Native menu / dialog / save-dispatch observation and pointer latching; publishes the live pointers the autoload machine consumes | `er-hook`, `er-telemetry-core`, `er-game-base[game-types]`, `er-save-loader`, `eldenring`, `fromsoftware-shared`, `windows` | ~10 new (incl. the 4-fn `crashlog::module_resolution` family); **deletes 3** er-title-flow seams | no | **Plausible** -- sizing corrected from 2,870 |
+| 7 | **`er-boot-cover`** | **yes** | ~2,440 | Turn ER's RAM load semaphores into a phase/substep model, rasterize it, composite it onto the backbuffer until the world is ready | `er-loading-bar-core`, `er-telemetry-core`, `er-loading-portrait-core`, `er-save-picker-core`, `er-d3d12-compositor`, `er-game-base`, `eldenring`, `windows` | ~8 new | no | **Plausible** |
+| 8 | **`er-loading-bar-core`** | no | ~160 | Existing zero-dep, `forbid(unsafe_code)` bar primitives; gains the exact `BarStyle` duplicate, text-scale, FNV hash, substep combinators, 2 CPU raster helpers | **none** | no | no | **Plausible** |
+| 9 | **`er-save-redirect`** | no | ~1,900 | Existing crate finally owns the process-wide Win32/NT save hooks it says (`lib.rs:3-5`) it deferred | **+`er-game-base`, +`er-save-picker-core`** | **+8** new `er_save_redirect::host` | no | **Plausible**, line numbers stale |
+| 10 | **`er-load-drive`** | **yes** | ~3,500 | The menu-free save-load drive: title step-fn detours, STAGE2/fullread/continue phase machines, the System->Quit switch-reload commit | `er-title-flow`, `er-telemetry-core`, `er-game-base`, `er-hook`, `er-save-loader`, `er-save-suppress`, `er-save-redirect`, `er-loading-portrait-core`, `er-save-picker-core`, `eldenring`, `windows` | **25-35** new | no | **Disputed** -- see SS7 |
+| 11 | **`er-quit-menu-core`** | no | ~1,520 | Existing crate; gains the `save_flow_tick` stage machine its own `lib.rs:28-30` already claims | **+`er-save-suppress`** (26 fns, not 21) | uses existing | no | **Blocked on startup_hooks** |
 | 12 | **`er-d3d12-compositor`** | no | 128 *(not 928)* | Existing crate; gains only the deduped `resolve_present_addrs` + `dummy_wndproc` | none | no | no | **Disputed** -- see SS7 |
 
 ### Verifier overrides I applied
 
 | Claim | Proposer said | Verifier found | I sided with |
 |---|---|---|---|
-| Slice P1 (6 identity fns -> er-loading-portrait) | "cycle_risk: NONE, no new deps" | 4 of 6 read `OWN_STEPPER_SLOT_ZERO/NONE` (`er-title-flow/src/constants_moved.rs:773,770`); er-title-flow already deps er-loading-portrait (`Cargo.toml:25`) => **hard cycle** | **Verifier.** Verified myself: `slot_resolution.rs:428,465,467,482,505` use those consts; `:608,609` use two more er-title-flow-only offsets. **P1 rescoped to `char_fingerprint` + the 3 utf16 helpers only.** |
-| `game_main_window` -> er-game-base | "ZERO new crate deps, NO cycle risk at all, only outbound call is one log line" | Block reads/writes 4 er-telemetry statics => `er-game-base -> er-telemetry -> er-game-base` | **Verifier.** Verified myself: `input_block.rs:127,128,129,146,150,151,153,155,163,168,204` touch `SQ_REPRO_BEST_AREA/BEST_HWND/ER_HWND/IS_FOREGROUND`, all `pub(crate) use er_telemetry::counters::` at `:72,100,102,174`; `er-telemetry/Cargo.toml:14,22` deps er-game-base twice. **Move dropped from the plan.** |
-| er-d3d12-compositor absorbs ~800 lines of present mechanism | "already does the same job" | The mechanism reads the ER RVA `g_GxDrawContext` and stores 12 `PRESENT_FIND_*` oracles, violating that crate's own charter (`lib.rs:8-10`); deps would drag `eldenring` into `er-loading-bar-dll`, whose `lib.rs:3-8` exists to prove the opposite | **Verifier.** Target cut to the 128-line dedupe only. |
+| Slice P1 (6 identity fns -> er-loading-portrait-core) | "cycle_risk: NONE, no new deps" | 4 of 6 read `OWN_STEPPER_SLOT_ZERO/NONE` (`er-title-flow/src/constants_moved.rs:773,770`); er-title-flow already deps er-loading-portrait-core (`Cargo.toml:25`) => **hard cycle** | **Verifier.** Verified myself: `slot_resolution.rs:428,465,467,482,505` use those consts; `:608,609` use two more er-title-flow-only offsets. **P1 rescoped to `char_fingerprint` + the 3 utf16 helpers only.** |
+| `game_main_window` -> er-game-base | "ZERO new crate deps, NO cycle risk at all, only outbound call is one log line" | Block reads/writes 4 er-telemetry-core statics => `er-game-base -> er-telemetry-core -> er-game-base` | **Verifier.** Verified myself: `input_block.rs:127,128,129,146,150,151,153,155,163,168,204` touch `SQ_REPRO_BEST_AREA/BEST_HWND/ER_HWND/IS_FOREGROUND`, all `pub(crate) use er_telemetry_core::counters::` at `:72,100,102,174`; `er-telemetry-core/Cargo.toml:14,22` deps er-game-base twice. **Move dropped from the plan.** |
+| er-d3d12-compositor absorbs ~800 lines of present mechanism | "already does the same job" | The mechanism reads the ER RVA `g_GxDrawContext` and stores 12 `PRESENT_FIND_*` oracles, violating that crate's own charter (`lib.rs:8-10`); deps would drag `eldenring` into `er-loading-bar`, whose `lib.rs:3-8` exists to prove the opposite | **Verifier.** Target cut to the 128-line dedupe only. |
 | er-menu-trace blocked by a cycle needing an er-game-base const lift first | "slice #1, unblocks everything" | er-title-flow reaches those symbols via fn-pointer seams (`host.rs:74,83,84`), not Cargo deps -- **no cycle exists** unless you also delete those seams | **Verifier.** The const lift is de-prioritised; it is an optimisation, not a precondition. |
 | er-menu-trace = 2,870 lines | -- | Sums to ~3,500 from the proposer's own per-file allocation | **Verifier.** |
 | er-save-suppress = 21 fns | -- | 26 distinct | **Verifier.** |
@@ -262,8 +262,8 @@ the entire subtree.** `use super::*` is the actual coupling cost.
 
 | File (under `experiments/`) | Lines (`f54e4041`) | Mechanism | Destination | Splits? |
 |---|---|---|---|---|
-| `gpu_readback/boot_progress.rs` | 2603 | real `mod` (`gpu_readback.rs:66`), `use super::*` | er-boot-cover (~2,440) / er-loading-bar (~160) / **DELETE** (~454) | **yes, 4 ways** |
-| `lifecycle.rs` | 2374 | real `mod` (`mod.rs:110`), `use super::*:6` | er-quit-menu (1,485) / **STAY** (748) / **DELETE** (92) | **yes, 4 ways** |
+| `gpu_readback/boot_progress.rs` | 2603 | real `mod` (`gpu_readback.rs:66`), `use super::*` | er-boot-cover (~2,440) / er-loading-bar-core (~160) / **DELETE** (~454) | **yes, 4 ways** |
+| `lifecycle.rs` | 2374 | real `mod` (`mod.rs:110`), `use super::*:6` | er-quit-menu-core (1,485) / **STAY** (748) / **DELETE** (92) | **yes, 4 ways** |
 | `trace/menu_trace_hooks.rs` | 2064 | real `mod` (`trace.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (~1,046) / er-title-flow (~1,000) / **DELETE** (31) | **yes, 3 ways** |
 | `save_redirect/path_hooks.rs` | 1944 | real `mod` (`save_redirect.rs:7`), near-copy header + `use super::*:62` | er-save-redirect (~1,660) / **STAY** (~75) / **DELETE** (9) | **yes, 3 ways** |
 | `own_load/drive.rs` | 1703 | real `mod` (`own_load.rs:7`), explicit preamble + `use super::*` | er-load-drive (~1,040) / **STAY** (~662, rule-4 gated) | **yes** |
@@ -277,7 +277,7 @@ the entire subtree.** `use super::*` is the actual coupling cost.
 | `input_trace.rs` | 924 | real `mod` (`mod.rs:77`), `use super::*:21` | **STAY** (rule 4 + blocked on startup_hooks) | no |
 | `menu_diag/menu_observation.rs` | 855 | real `mod` (`menu_diag.rs:7`), pasted 45-line header + `use super::*:45` | er-menu-trace (629) / **DELETE** (226) | **yes** |
 | `own_stepper/load_steps.rs` | 780 | real `mod` (`own_stepper.rs:10`), `use super::*:1` **only** | er-load-drive (420) / **STAY** (388) / **DELETE** (36) | **yes, 3 ways** |
-| `continue_load/slot_resolution.rs` | 773 | real `mod` (`continue_load.rs:10`), `use super::*:1` **only** | er-load-drive (~408) / er-loading-portrait (~40, rescoped) / **STAY** (~320) | **yes -- see override** |
+| `continue_load/slot_resolution.rs` | 773 | real `mod` (`continue_load.rs:10`), `use super::*:1` **only** | er-load-drive (~408) / er-loading-portrait-core (~40, rescoped) / **STAY** (~320) | **yes -- see override** |
 | `gating/env_flags.rs` | 706 | real `mod` (`gating.rs:7`), `use super::*:45` | **er-gates** (720) / **DELETE** (7) | minimal |
 | `trace/native_result_map_hooks.rs` | 676 | real `mod` (`trace.rs:13`), `use super::*:1` **only** | er-menu-trace (677) / **DELETE** (25) | minimal |
 | `gpu_readback/gpu_draw_shared.rs` | 476 | real `mod` (`gpu_readback.rs:63`), `use super::*:1` | er-boot-cover (whole) | no |
@@ -288,7 +288,7 @@ the entire subtree.** `use super::*` is the actual coupling cost.
 | `mem.rs` | 206 | real `mod` (`mod.rs:86`), preamble + `use super::*:49` | er-game-base (36) / **er-hook** (109) / **STAY** (61, the er-game-base re-export shim) | **yes, 3 ways** |
 | `gating/runtime_modes.rs` | 141 | real `mod` (`gating.rs:10`), `use super::*:1` | **er-gates** (149) / **DELETE** (8) | minimal |
 | `mod.rs` | 116 | root of the tree (`lib.rs:60` `mod experiments;`) | **STAY** -- 20 `mod` + 2 `#[path]`, 21 globs, 1,414 items | no |
-| `mod/own_stepper_idx6_memory.rs` | 112 | `#[path]` `mod` (`mod.rs:117-119`), `use super::*:1` | er-load-drive (~102) / er-loading-portrait (10) | **yes** |
+| `mod/own_stepper_idx6_memory.rs` | 112 | `#[path]` `mod` (`mod.rs:117-119`), `use super::*:1` | er-load-drive (~102) / er-loading-portrait-core (10) | **yes** |
 | `gpu_readback.rs` | 70 | real `mod` (`mod.rs:58`) | **STAY** until subtree moves, then delete | no |
 | `gpu_readback/save_picker_overlay.rs` | 23 | real `mod` (`gpu_readback.rs:69`), fully qualified | **STAY** -- re-home as a sibling of `experiments/` | no |
 | `trace.rs` | 14 | real `mod` (`mod.rs:52`) | **DELETE** when children move | no |
@@ -299,7 +299,7 @@ the entire subtree.** `use super::*` is the actual coupling cost.
 | `gating.rs` | 11 | real `mod` (`mod.rs:89`) | **STAY**, rewritten to `pub(crate) use er_gates::*;` | no |
 | `continue_load.rs` | 11 | real `mod` (`mod.rs:98`) | **STAY** as re-export shim | no |
 | `title.rs` | 7 | real `mod` (`mod.rs:95`) -- `pub(crate) use er_title_flow::*;` | **STAY** -- removing it is a constants-cluster job | no |
-| `save_picker.rs` | 3 | real `mod` (`mod.rs:107`) -- `pub(crate) use er_save_picker::model::*;` | **STAY** | no |
+| `save_picker.rs` | 3 | real `mod` (`mod.rs:107`) -- `pub(crate) use er_save_picker_core::model::*;` | **STAY** | no |
 
 **Totals, restated at `f54e4041`:** the ~1,700-line DELETE column is **1,796 lines already gone**
 (SS0.2) with ~580 left in S4d/S4e/S4f. Of the 26,051 remaining, ~13,900 are targeted at crates and
@@ -363,7 +363,7 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 3. **`file_ops.rs` and `path_hooks.rs` are one indivisible unit** -- 12 symbols cross between them.
 4. **Anything touching `save_dest_commit.rs`, `save_flow_boxes.rs` or
    `system_quit_dialog_handlers.rs` waits for startup_hooks** (SS8).
-5. **er-gates needs 4 const moves first** or it cycles back into er-title-flow / er-loading-portrait.
+5. **er-gates needs 4 const moves first** or it cycles back into er-title-flow / er-loading-portrait-core.
 6. **The er-game-base const lift is NOT a precondition for er-menu-trace** -- verifier refuted that;
    it is an optimisation for the seam-deletion step only.
 
@@ -389,9 +389,9 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S11** | Split loaders.rs live/dead and cut own_stepper_idx10 | 4 | ~0 | CHK + FP + SZ | S4f |
 | **S12** | Move the shared dialog RVAs into er-game-base | 3 | ~+40 | CHK + RVA | -- |
 | **S13** | Move the gate layer into er-gates *(new crate)* | 6 | ~+950 | CHK | S1, S12 |
-| **S14-S17** | Delete the duplicated gate seams from er-title-flow / er-loading-portrait / er-quit-menu / er-save-picker (one crate per PR) | 2-3 ea | ~-60 ea | CHK | S13 |
+| **S14-S17** | Delete the duplicated gate seams from er-title-flow / er-loading-portrait-core / er-quit-menu-core / er-save-picker-core (one crate per PR) | 2-3 ea | ~-60 ea | CHK | S13 |
 | **S18** | Dedupe the present-address resolver into er-d3d12-compositor | 3 | -128 | CHK + FP | S3 |
-| **S19** | Move the bar geometry and raster helpers into er-loading-bar | 3 | ~-160 | CHK + `cargo test -p er-loading-bar` | S2 |
+| **S19** | Move the bar geometry and raster helpers into er-loading-bar-core | 3 | ~-160 | CHK + `cargo test -p er-loading-bar-core` | S2 |
 | **S20** | Split boot_progress.rs into three modules | 4 | ~0 | CHK + FP + SZ | S2, S19 |
 | **S21-S24** | Move the boot cover into er-boot-cover *(new crate, 4 slices)* | 3-5 ea | ~+600 ea | CHK + **runtime** | S20 |
 | **S25** | Convert native_result_map_hooks to explicit imports | 1 | ~+30 | CHK + FP | S4f |
@@ -401,10 +401,10 @@ Every slice is one PR sized like #180-#188 (2-8 files, ~100-350 net lines, one c
 | **S40** | Add the er_save_redirect::host seam | 3 | ~+90 | CHK | -- |
 | **S41-S47** | Move the save-redirect hooks into er-save-redirect (7 slices) | 2-4 ea | ~250 ea | CHK + **runtime** | S40 |
 | **S48+** | er-load-drive -- **gated on the SS7 decision** | -- | -- | -- | S10, S11 |
-| **S49+** | Save-flow -> er-quit-menu -- **gated on startup_hooks** | -- | -- | -- | SS8 |
+| **S49+** | Save-flow -> er-quit-menu-core -- **gated on startup_hooks** | -- | -- | -- | SS8 |
 
 **Why S1 before S2/S3/S4:** S1 is the only deletion slice with zero cross-cluster reach. S2 also
-touches `er-telemetry/src/counters.rs:1131-1141`; S3 touches `counters.rs:114`; S4 touches
+touches `er-telemetry-core/src/counters.rs:1131-1141`; S3 touches `counters.rs:114`; S4 touches
 `lib_parts/dll_entry_parts/task_registration.rs`, `lib_parts/runtime_helpers.rs`,
 `mod/product_core_own_stepper.rs` and one startup_hooks file. Landing S1 first proves the
 fingerprint workflow on the smallest possible blast radius.
@@ -440,9 +440,9 @@ sink is installed when they fire.**
 
 **Why S7 before S8 before S9:** `read_utf16_name_units` returns
 `([u16; PGD_NAME_LEN_U16], usize)`, and `PGD_NAME_LEN_U16` is derived in
-`er-loading-portrait/src/pgd_layout.rs:40` -- moving the function without the constant gives
-`er-game-base -> er-loading-portrait -> er-game-base`. S7 moves the constant under er-game-base's
-**existing** optional `game-types` feature (`er-game-base/Cargo.toml:19-25`), which er-telemetry and
+`er-loading-portrait-core/src/pgd_layout.rs:40` -- moving the function without the constant gives
+`er-game-base -> er-loading-portrait-core -> er-game-base`. S7 moves the constant under er-game-base's
+**existing** optional `game-types` feature (`er-game-base/Cargo.toml:19-25`), which er-telemetry-core and
 the product already enable, so the cycle never forms.
 
 ---
@@ -534,7 +534,7 @@ SCRATCH=${SCRATCH:-$(mktemp -d)}
 
 # 1. Build the BEFORE DLL and stash it.
 cargo xwin build --release --target x86_64-pc-windows-msvc
-cp -f target/x86_64-pc-windows-msvc/release/er_effects_rs.dll "$SCRATCH"/before.dll
+cp -f target/x86_64-pc-windows-msvc/release/er_quickload.dll "$SCRATCH"/before.dll
 
 # 2. Apply the 12 deletions.
 
@@ -544,7 +544,7 @@ cargo xwin build --release --target x86_64-pc-windows-msvc
 # 4. THE GATE. Exit 0 with .text identical => provably no behavior change, NO RUNTIME RUN REQUIRED.
 python3 scripts/dll-code-fingerprint.py \
   "$SCRATCH"/before.dll \
-  target/x86_64-pc-windows-msvc/release/er_effects_rs.dll
+  target/x86_64-pc-windows-msvc/release/er_quickload.dll
 
 # 5. Full quality gate.
 bash scripts/check.sh
@@ -579,17 +579,17 @@ Twelve items, each returning **exactly 1 comment-stripped code hit = its own def
 in SS5. The 218 headline never matched its own itemisation (116); the merged net was -118.
 
 ### S2 -- the in-world effect-selector HUD (454 lines) -- **LANDED #230**
-`gpu_readback/boot_progress.rs:2614-3055` + `er-telemetry/src/counters.rs:1131-1141`.
+`gpu_readback/boot_progress.rs:2614-3055` + `er-telemetry-core/src/counters.rs:1131-1141`.
 **Two independent proofs.** (a) `composite_effect_selector_on_swapchain` has exactly 1 code hit --
 its definition at `boot_progress.rs:2648`. (b) Even if called, the body is inert by construction:
 `composite_effect_selector_inner:2702` is `let text = String::new();` and `:2703` returns on
 `text.trim().is_empty()`. The live effect-selector HUD is a different implementation in a different
-crate (`er-net-effects-dll/src/present_overlay.rs:71`). No `oracle_effect_selector*` field exists, so
+crate (`er-net-effects/src/present_overlay.rs:71`). No `oracle_effect_selector*` field exists, so
 `check-oracle-writers.py` stays green. **This is the slice that removes the 3,200 hard-fail exposure**
 -- `boot_progress.rs` 3,055 -> 2,601.
 
 ### S3 -- the dxgi factory-export hook (67 lines) -- **LANDED #231**
-`present_overlay.rs:383-448` + `er-telemetry/src/counters.rs:114`.
+`present_overlay.rs:383-448` + `er-telemetry-core/src/counters.rs:114`.
 `install_dxgi_factory_export_hook` has 1 code hit (its definition at `:415`; the block including
 `FACTORY2_ORIG` and `Factory2Fn` spans 383-448). `factory2_hook` appears only at `:389` (def) and
 `:435` (inside the dead installer). Superseded by the GxDrawContext chain finder -- see the comment at
@@ -674,10 +674,10 @@ this code is not ready to leave the product yet.
 **Blocks:** S13-S17 (892 lines moved, 22 seam entries deleted).
 
 **For:** 21 distinct gating functions are already duplicated as fn-pointer seams across four crates
-(er-title-flow 15, er-loading-portrait 5, er-quit-menu 2 entries incl. 1 duplicate, er-save-picker's
-being a save_redirect symbol). No existing crate can host them: er-title-flow -> er-loading-portrait
+(er-title-flow 15, er-loading-portrait-core 5, er-quit-menu-core 2 entries incl. 1 duplicate, er-save-picker-core's
+being a save_redirect symbol). No existing crate can host them: er-title-flow -> er-loading-portrait-core
 already exists (`er-title-flow/Cargo.toml:25`), so gating-in-er-title-flow cycles; er-game-base is
-deliberately zero-external-dep and gating needs er-telemetry. The content is 892 lines of pure
+deliberately zero-external-dep and gating needs er-telemetry-core. The content is 892 lines of pure
 `fn() -> bool` with no hooks and no game calls -- trivially reviewable. Net seam delta: **+2, -22**.
 
 **Against:** 45 of the 82 gates are hard `false` and cannot be deleted from this cluster alone
@@ -741,9 +741,9 @@ declarations, not an `include!` shim, since PR #180. Three slices in this plan t
 file and must be coordinated:
 
 - **S4** deletes `profile_rows_system_quit_menu.rs:1680-1682` (3 lines).
-- The **save-flow -> er-quit-menu** move (~1,485 lines, `lifecycle.rs:101-1369` + tests `2121-2336`)
+- The **save-flow -> er-quit-menu-core** move (~1,485 lines, `lifecycle.rs:101-1369` + tests `2121-2336`)
   is hard-blocked: it calls 16 symbols in `startup_hooks/quit_menu/save_dest_commit.rs`,
-  `save_flow_boxes.rs` and `system_quit_dialog_handlers.rs`. `er-quit-menu/src/lib.rs:28-30` already
+  `save_flow_boxes.rs` and `system_quit_dialog_handlers.rs`. `er-quit-menu-core/src/lib.rs:28-30` already
   names `save_flow_tick` as planned contents, so the destination is agreed -- only the sequencing is
   open. It is the **last** slice of the quit-menu extraction, not the first.
 - **er-menu-trace** must expose `c30_writer_hook` (installed at
@@ -752,13 +752,13 @@ file and must be coordinated:
 ### Unresolved
 
 1. **`gpu_frame_timing.rs` (424 lines) -- cannot be classified.** It is 100% control-file gated
-   (`er-effects-gpu-frame-oracle.txt`) and its own doc records that the ECL piggyback device-removed
+   (`er-quickload-gpu-frame-oracle.txt`) and its own doc records that the ECL piggyback device-removed
    the game ~28s in on native, so rule 4 says STAY. But its counters **are** read to emit oracles at
    `telemetry/runtime_oracles/write_game_module_oracles.rs:233,235`, so deleting it would trip
    `check-oracle-writers.py` in reverse unless the oracle emission goes too. That is a call for
    whoever owns the framerate-parity goal.
 
-2. **`input_trace.rs` (925 lines) -- blocked, not decided.** Rule-4 gated (`ER_EFFECTS_INPUT_TRACE` or
+2. **`input_trace.rs` (925 lines) -- blocked, not decided.** Rule-4 gated (`ER_QUICKLOAD_INPUT_TRACE` or
    a marker file), *and* its 294-line semaphore reader depends on
    `startup_hooks/loading_cover/loading_cover_save_slot.rs`. Revisit after startup_hooks lands.
 

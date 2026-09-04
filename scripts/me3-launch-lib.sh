@@ -1,5 +1,10 @@
 # shellcheck shell=bash
-# Shared me3 launch helpers. me3 is the ONLY supported loader for er_effects_rs.dll:
+# er-artifact-redirect: library
+# This file RUNS the me3 command on a caller's behalf; it has no run of its own and no
+# artifact dir. The ER_QUICKLOAD_*_PATH redirects that keep a run's evidence out of the
+# single-slot game directory belong to each CALLER, which `scripts/er-artifact-redirect-audit.py`
+# audits individually. Do not add a redirect list here -- it would silently override theirs.
+# Shared me3 launch helpers. me3 is the ONLY supported loader for er_quickload.dll:
 # the LazyLoader dinput8 proxy + lazyLoad.ini chainload delivery was removed 2026-07-04
 # (branch feat/me3-launch-smoketest) after the me3 production smoke passed end-to-end
 # (run me3-product-smoke-20260704-110507: DLL attach, env propagation, flag files,
@@ -127,12 +132,12 @@ EOF
 }
 
 # me3_write_telemetry_only_profile PROFILE_PATH TELEMETRY_DLL_PATH
-# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry_dll.dll (the
-# read-side telemetry-only DLL from crates/er-telemetry-dll). Runs alone -- no
+# Writes a v1 ModProfile that loads ONLY the standalone er_telemetry.dll (the
+# read-side telemetry-only DLL from crates/er-telemetry). Runs alone -- no
 # product DLL, no hooks -- so it emits er-telemetry-standalone.json from RAM/PE
 # reads only. Build the DLL with:
-#   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry-dll
-# -> target/x86_64-pc-windows-msvc/release/er_telemetry_dll.dll
+#   cargo xwin build --release --target x86_64-pc-windows-msvc -p er-telemetry
+# -> target/x86_64-pc-windows-msvc/release/er_telemetry.dll
 me3_write_telemetry_only_profile() {
   local profile_path="$1" telemetry_dll="$2"
   cat > "$profile_path" <<EOF
@@ -148,7 +153,7 @@ EOF
 
 # me3_append_native PROFILE_PATH DLL_PATH
 # Appends one additional [[natives]] block to an existing profile. Used to add the
-# standalone er_telemetry_dll.dll as a 4th native alongside the product +
+# standalone er_telemetry.dll as a 4th native alongside the product +
 # reload-trace + input-harness DLLs (companion DLLs are enabled purely by presence
 # in the profile; product must be listed FIRST so its er_effects_union_register
 # export is mapped before companions resolve it).

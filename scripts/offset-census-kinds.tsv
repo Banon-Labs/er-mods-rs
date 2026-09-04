@@ -1,0 +1,124 @@
+# WHAT THIS TABLE IS FOR
+#
+# `scripts/audit-name-derived-offsets.py` counts hand-written offset constants and asks where
+# each one's value came from. Its headline number is only useful if it counts the RIGHT rows:
+# a census that lumps `DLL_PROCESS_ATTACH = 1` and a Windows `CONTEXT` register slot in with
+# `CS::CSSystemStep + 0x48` reports a number nobody can act on.
+#
+# So every row that is NOT an unprovenanced ELDEN RING object-field offset has to say so HERE,
+# with a reason, in a file a reviewer can read. Rows absent from this table are classified by
+# the name-shape rule in the audit script; this table overrides that rule in both directions --
+# it can pull a row OUT of the game bucket and it can force one IN that the name shape misses.
+#
+# The point of writing it down rather than widening a regex: a regex that quietly drops rows
+# makes the census smaller without making it truer, and nobody can tell afterwards which rows
+# went. Every exclusion below is one line someone can disagree with.
+#
+# FORMAT   name <TAB> kind <TAB> reason
+#
+# KINDS
+#   OS-ABI        A structure defined by Windows, the MSVC ABI, or a PE/COFF file -- not by
+#                 FromSoftware. It cannot be measured against the ELDEN RING images, and it does
+#                 not drift when the game patches. `--selftest` checks each of these against the
+#                 published layout, so they are VERIFIED rather than merely excused.
+#   MACHINE-CODE  A byte offset INSIDE an x86-64 instruction encoding or a patch site. Wrong
+#                 values here corrupt a write, but the witness is the instruction encoding, not
+#                 an object layout.
+#   OUR-OWN       An offset into a structure or buffer this workspace defines. There is no game
+#                 object to measure it against; the definition is the truth.
+#   FORMAT        An offset into a file this workspace parses (save container, `.gfx`, param
+#                 row, SPIR-V). A wrong value fails a parse or reads our own `Vec`; it does not
+#                 silently return a neighbouring field of a live game object.
+#   NOT-AN-OFFSET Not an offset at all -- an enum value, a count, a limit, a state code.
+#   GAME          An ELDEN RING layout constant the name-shape rule does not recognise. Forced
+#                 back into the counted population.
+#
+# Every name here must still match at least one live definition; `--selftest` fails if one
+# stops existing, so the table cannot rot into a list of ghosts.
+
+# ---- Windows x64 CONTEXT (winnt.h). P1-P6Home 0x00..0x28, ContextFlags 0x30, MxCsr 0x34, the
+# ---- six segment words 0x38..0x42, EFlags 0x44, Dr0-Dr3 0x48..0x60, Dr6 0x68, Dr7 0x70, then
+# ---- the integer file Rax 0x78, Rcx 0x80, Rdx 0x88, Rbx 0x90, Rsp 0x98, Rbp 0xa0, Rsi 0xa8,
+# ---- Rdi 0xb0, R8 0xb8 .. R15 0xf0, Rip 0xf8.
+CONTEXT_FLAGS_OFFSET	OS-ABI	CONTEXT.ContextFlags = 0x30
+CONTEXT_EFLAGS_OFFSET	OS-ABI	CONTEXT.EFlags = 0x44
+CONTEXT_DR0_OFFSET	OS-ABI	CONTEXT.Dr0 = 0x48
+CONTEXT_DR6_OFFSET	OS-ABI	CONTEXT.Dr6 = 0x68
+CONTEXT_DR7_OFFSET	OS-ABI	CONTEXT.Dr7 = 0x70
+CONTEXT_RAX_OFFSET	OS-ABI	CONTEXT.Rax = 0x78
+CONTEXT_RCX_OFFSET	OS-ABI	CONTEXT.Rcx = 0x80
+CONTEXT_RDX_OFFSET	OS-ABI	CONTEXT.Rdx = 0x88
+CONTEXT_RSP_OFFSET	OS-ABI	CONTEXT.Rsp = 0x98
+CONTEXT_R8_OFFSET	OS-ABI	CONTEXT.R8 = 0xb8
+CONTEXT_R9_OFFSET	OS-ABI	CONTEXT.R9 = 0xc0
+CONTEXT_RIP_OFFSET	OS-ABI	CONTEXT.Rip = 0xf8
+CTX_FLAGS_OFF	OS-ABI	CONTEXT.ContextFlags = 0x30
+CTX_RIP_OFF	OS-ABI	CONTEXT.Rip = 0xf8
+
+# ---- PE/COFF. e_lfanew 0x3c; from the PE signature: Machine +0x4, NumberOfSections +0x6,
+# ---- TimeDateStamp +0x8, SizeOfOptionalHeader +0x14, OptionalHeader +0x18. Section header:
+# ---- Name[8] 0x0, VirtualSize 0x8, VirtualAddress 0xc. DataDirectory sits at +96 in
+# ---- IMAGE_OPTIONAL_HEADER32 (it is +112 in the PE32+ form, which is why the name says PE32).
+PE_DOS_LFANEW_OFFSET	OS-ABI	IMAGE_DOS_HEADER.e_lfanew = 0x3c
+PE_E_LFANEW_OFFSET	OS-ABI	IMAGE_DOS_HEADER.e_lfanew = 0x3c
+DOS_HEADER_LFANEW_OFFSET	OS-ABI	IMAGE_DOS_HEADER.e_lfanew = 0x3c
+DOS_PE_OFFSET_FIELD	OS-ABI	IMAGE_DOS_HEADER.e_lfanew = 0x3c
+NT_HEADERS_TIMESTAMP_OFFSET	OS-ABI	IMAGE_FILE_HEADER.TimeDateStamp, from the PE signature = 8
+PE_FILE_NUM_SECTIONS_OFFSET	OS-ABI	IMAGE_FILE_HEADER.NumberOfSections, from the PE signature = 0x6
+PE_FILE_SIZE_OPT_HEADER_OFFSET	OS-ABI	IMAGE_FILE_HEADER.SizeOfOptionalHeader, from the PE signature = 0x14
+PE_OPT_HEADER_OFFSET	OS-ABI	IMAGE_OPTIONAL_HEADER, from the PE signature = 0x18
+OPTIONAL_HEADER_OFFSET	OS-ABI	IMAGE_OPTIONAL_HEADER, from the PE signature = 24
+COFF_OPTIONAL_HEADER_SIZE_FIELD	OS-ABI	IMAGE_FILE_HEADER.SizeOfOptionalHeader, from the PE signature = 20
+DATA_DIRECTORY_OFFSET_PE32	OS-ABI	IMAGE_OPTIONAL_HEADER32.DataDirectory = 96
+PE_SECTION_VSIZE_OFFSET	OS-ABI	IMAGE_SECTION_HEADER.Misc.VirtualSize = 0x8
+PE_SECTION_VADDR_OFFSET	OS-ABI	IMAGE_SECTION_HEADER.VirtualAddress = 0xc
+
+# ---- PEB / PEB_LDR_DATA / LDR_DATA_TABLE_ENTRY, x64.
+PEB_LDR_OFFSET	OS-ABI	PEB.Ldr = 0x18
+PEB_LDR_IN_MEMORY_ORDER_LIST_OFFSET	OS-ABI	PEB_LDR_DATA.InMemoryOrderModuleList = 0x20
+LDR_ENTRY_IN_MEMORY_ORDER_LINKS_OFFSET	OS-ABI	LDR_DATA_TABLE_ENTRY.InMemoryOrderLinks = 0x10
+LDR_ENTRY_DLL_BASE_OFFSET	OS-ABI	LDR_DATA_TABLE_ENTRY.DllBase = 0x30
+LDR_ENTRY_SIZE_OF_IMAGE_OFFSET	OS-ABI	LDR_DATA_TABLE_ENTRY.SizeOfImage = 0x40
+LDR_ENTRY_BASE_DLL_NAME_OFFSET	OS-ABI	LDR_DATA_TABLE_ENTRY.BaseDllName = 0x58
+
+# ---- MSVC ABI. These live inside the game's memory but the layout is the compiler's, not
+# ---- FromSoftware's, so a 1.16.2-vs-1.17 drift check has nothing to say about them.
+TYPE_DESCRIPTOR_NAME_OFFSET	OS-ABI	MSVC RTTI TypeDescriptor.name on x64 = 0x10
+STD_STRING_SIZE_OFFSET	OS-ABI	MSVC std::basic_string._Mysize on x64 = 0x10
+STD_STRING_CAPACITY_OFFSET	OS-ABI	MSVC std::basic_string._Myres on x64 = 0x18
+
+# ---- DEVMODEW (wingdi.h), the Unicode form: dmDeviceName[32] WCHAR 0x00..0x40, dmSpecVersion
+# ---- 0x40, dmDriverVersion 0x42, dmSize 0x44, dmDriverExtra 0x46, dmFields 0x48, the position/
+# ---- orientation union 0x4c..0x5c, dmColor..dmCollate 0x5c..0x66, dmFormName[32] WCHAR
+# ---- 0x66..0xa6, dmLogPixels 0xa6, dmBitsPerPel 0xa8, then the two below.
+DEVMODEW_PELS_WIDTH_OFFSET	OS-ABI	DEVMODEW.dmPelsWidth = 0xAC
+DEVMODEW_PELS_HEIGHT_OFFSET	OS-ABI	DEVMODEW.dmPelsHeight = 0xB0
+
+# ---- Input APIs.
+XINPUT_PACKET_OFFSET	OS-ABI	XINPUT_STATE.dwPacketNumber = 0
+XINPUT_GAMEPAD_OFFSET	OS-ABI	XINPUT_STATE.Gamepad = 4
+XINPUT_THUMB_LX_OFFSET_IN_GAMEPAD	OS-ABI	XINPUT_GAMEPAD.sThumbLX = 4
+XINPUT_THUMB_LY_OFFSET_IN_GAMEPAD	OS-ABI	XINPUT_GAMEPAD.sThumbLY = 6
+MOUSE_BUTTON0_OFFSET	OS-ABI	DIMOUSESTATE.rgbButtons = 12
+
+# ---- Byte offsets inside an instruction encoding, not inside an object.
+JMP_REL_OFF	MACHINE-CODE	rel32 operand of `jmp rel32` starts at byte 1
+JMP_NEXT_OFF	MACHINE-CODE	length of `jmp rel32`, the next-instruction anchor for its rel32
+ADDRCX8_REL_OFF	MACHINE-CODE	displacement byte index within the matched `add rcx,8` shape
+ADDRCX8_NEXT_OFF	MACHINE-CODE	length of the matched `add rcx,8` shape
+
+# ---- Offsets into structures this workspace defines. The definition IS the layout.
+ALREADY_CLOSED_OFFSET	OUR-OWN	slot in this crate's own hang-watchdog shared block
+CLOSE_GATE_OFFSET	OUR-OWN	slot in this crate's own hang-watchdog shared block
+ACTIVE_OFFSET	OUR-OWN	slot in this crate's own hang-watchdog shared block
+LERP_TARGET_OFFSET	OUR-OWN	slot in this crate's own hang-watchdog shared block
+ELAPSED_OFFSET	OUR-OWN	slot in this crate's own hang-watchdog shared block
+
+# ---- Parsed-file offsets living outside the file-format crates.
+DEC_OFFSET	NOT-AN-OFFSET	SPIR-V `Decoration::Offset` enum value 35, not a byte offset
+PGD_AT	FORMAT	byte offset of the PlayerGameData block inside a test save fixture
+
+# ---- Forced back IN: game layout the name-shape rule cannot see.
+PROFILE_OFFSCREEN_SIZE_TABLE_STRIDE	GAME	stride of a live game table; a wrong value reads a neighbouring row, exactly the silent class this census counts
+TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_754	GAME	game object field offset; `FIELD_754` is not shaped like `_OFFSET`
+TITLE_CUSTOM_COVER_PROFILE_RENDER_READY_FIELD_755	GAME	game object field offset; `FIELD_755` is not shaped like `_OFFSET`

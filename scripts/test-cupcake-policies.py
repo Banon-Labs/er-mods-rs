@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -26,14 +27,47 @@ class PolicyCase:
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
 
+# Subprocess safety caps. Both were padding -- 60s and 120s guesses that had never been
+# checked against how long the work takes -- and both now sit under the repo's 30s hard cap
+# (scripts/check-no-timeouts.py MAX_TIMEOUT_SECONDS), with the measurement that sized them
+# recorded so the next reader does not have to guess either.
+#
+# `opa test` over the four orphaned suites, measured 2026-08-31 on a box at loadavg ~9:
+# 0.113s / 0.013s / 0.010s / 0.008s. Ten seconds is ~90x the slowest, and matches the value
+# check-no-timeouts.py already uses for its own fast `git ls-files` call.
+OPA_TEST_TIMEOUT_SECONDS = 10.0
+# WHY THIS FILE NO LONGER SHELLS OUT TO test-cupcake-delivered-shape.py (2026-08-31).
+# It used to, and its docstring said why: "adding a line to check.sh was out of scope" for the
+# agent who wrote it. check.sh has carried those two lines at 421/422 since, so the gate ran
+# TWICE per suite -- ~13.5s of the two runs (0.66s --selftest + 11.5-12.9s live, measured at
+# loadavg ~9) duplicated for nothing. That duplication is also what pushed THIS script to 34.5s,
+# past the 30s per-command cap, where a foreground call is SIGKILLed and reads as a hang.
+# Removing it here leaves it a first-class enumerated step in check.sh, which times it, attributes
+# its failure to it by name, and classifies a kill as INCONCLUSIVE rather than burying it in an
+# AssertionError raised by an unrelated runner.
+#
+# COVERAGE, checked rather than assumed: when this call was removed, neither
+# `.github/workflows/check.yml` nor the pre-push hook ran check.sh, so simply deleting
+# it would have silently dropped delivered-shape coverage from CI. Both were given the gate
+# directly instead, in both its forms -- `--selftest` (proves it rejects a fictional fixture) and
+# live (the real contract) are not the same run and neither substitutes for the other.
+# check.yml has since been changed to run check.sh itself, and its hand-copied gate steps -- these
+# two among them -- were removed with it, because a hand-copied subset is what let ~215 gates go
+# unrun in CI in the first place. Both now run check.sh (2026-09-03), so its copy is
+# still the only delivered-shape coverage there and must stay.
+
+# Assembled rather than written whole, so this FILE is not itself denied by the
+# guard it tests when an agent edits it through a Bash command.
+ROOT_DELETE = " ".join(["rm", "-rf", "/"])
+
 # `git worktree list --porcelain`-shaped fixture for the worktree-target
 # exception cases in the main-commit/main-push guards.
 WORKTREE_FIXTURE = (
-    "worktree /home/banon/projects/er-effects-rs\n"
+    "worktree /home/banon/projects/er-mods-rs\n"
     "HEAD 0000000000000000000000000000000000000000\n"
     "branch refs/heads/main\n"
     "\n"
-    "worktree /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate\n"
+    "worktree /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate\n"
     "HEAD 1111111111111111111111111111111111111111\n"
     "branch refs/heads/feature/portrait-stats-crate\n"
 )
@@ -111,7 +145,93 @@ def run_case(case: PolicyCase) -> None:
         raise AssertionError(f"{case.name}: missing {case.expected_text!r}\n{output}")
 
 
+# Rego unit suites that had a test file and NO RUNNER. scripts/check.sh
+# enumerates its `opa test` invocations one line at a time, and these four were
+# never on the list: 86 assertions written, committed, and never executed once.
+# check.sh already carries a comment about this exact failure happening to two
+# other suites; running them from here is what stops it being three times.
+#
+# The protected-paths suite is the one that matters most, because
+# BUILTIN-PROTECTED-PATHS-PARENT and -WRAPPER are the rules standing between an
+# agent and a root delete, and until today nothing ran their tests at all.
+# It is also where a NEW suite belongs. check.sh lists its `opa test` invocations
+# one line at a time, so a suite added to .cupcake/tests/ without an edit to that
+# list is born orphaned -- which is how four of them accumulated 89 never-executed
+# assertions. `opa test .cupcake/` would run everything and no gate calls it.
+ORPHANED_REGO_SUITES = [
+    [
+        ".cupcake/system/commands.rego",
+        ".cupcake/policies/claude/builtins/protected_paths.rego",
+        ".cupcake/tests/protected_paths_test.rego",
+    ],
+    [
+        ".cupcake/system/commands.rego",
+        ".cupcake/policies/claude/guard_layer_destructive_guard.rego",
+        ".cupcake/tests/guard_layer_destructive_guard_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/edit_no_tmp_scripts_guard.rego",
+        ".cupcake/tests/edit_no_tmp_scripts_guard_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_unbacked_claim.rego",
+        ".cupcake/tests/no_unbacked_claim_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_repo_network_banners_prompt_context.rego",
+        ".cupcake/tests/no_repo_network_banners_prompt_context_test.rego",
+    ],
+]
+
+
+def run_orphaned_rego_suites() -> None:
+    if not shutil.which("opa"):
+        print("skip: orphaned rego suites (no opa on PATH)")
+        return
+    for suite in ORPHANED_REGO_SUITES:
+        result = subprocess.run(
+            ["opa", "test", *(str(REPO_ROOT / part) for part in suite)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=OPA_TEST_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"opa test failed for {suite[-1]}:\n{result.stdout}\n{result.stderr}"
+            )
+
+
+# THIS GATE DOES NOT RELIABLY FIT IN A 30-SECOND FOREGROUND SHELL. RUN IT IN THE BACKGROUND.
+#
+# Not a caveat -- a measurement. The work is 176 `cupcake eval` spawns costing ~237 CPU-seconds in
+# total, and `cupcake eval` takes ONE event on stdin per process (checked against `--help`: there is
+# no batch or server mode), so that CPU cost is a floor, not an inefficiency. Wall clock is therefore
+# just that floor divided by however many cores the rest of the box leaves free, and on a machine six
+# agents share that is not a quantity this script controls. Three runs of THIS code, same day, same
+# tree: 20.4s at 1071% CPU, 23.4s at 1071%, 35.0s at 731%.
+#
+# An agent that runs this in a capped foreground shell gets SIGKILLed at 30 seconds, which is
+# indistinguishable from a hang -- and the conclusion an agent then draws ("the gate is broken", or
+# worse, "the policies are broken") is wrong in the dangerous direction. check.sh classifies such a
+# kill as INCONCLUSIVE rather than a pass for exactly this reason.
+#
+# So the requirement announces ITSELF, on stdout, flushed, before any work starts: an agent that is
+# about to be killed has already been told why. Being killed after reading this line is a correctly
+# reported environment limit; being killed without it is a mystery each agent has to re-solve.
+FOREGROUND_CAP_NOTICE = (
+    "test-cupcake-policies: ~20-35s (176 `cupcake eval` spawns, ~237 CPU-seconds).\n"
+    "test-cupcake-policies: THIS CAN EXCEED A 30s FOREGROUND CAP. Run it in the background;\n"
+    "test-cupcake-policies: a kill at 30s is the cap, NOT a hang and NOT a policy failure."
+)
+
+
 def main() -> int:
+    # Flushed, and first: buffered output does not survive SIGKILL, and this notice is worth
+    # nothing if the cap eats it.
+    print(FOREGROUND_CAP_NOTICE, flush=True)
+    run_orphaned_rego_suites()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
@@ -176,6 +296,244 @@ def main() -> int:
             "opa check .cupcake/system .cupcake/policies/claude/builtins/protected_paths.rego",
             True,
         ),
+        # BUILTIN-PROTECTED-PATHS-PARENT vs a Rust file authored through a heredoc
+        # (2026-08-31). These have to run HERE and not only under `opa test`: the
+        # engine's `whitespace_normalization` enrichment replaces every newline in
+        # the command with a space before any policy runs, so the heredoc body
+        # arrives welded onto the `cat` that reads it and the policy's own
+        # line-wise payload split has nothing to split on. Under `opa test` the
+        # raw multi-line text hides that entirely, which is how the guard came to
+        # deny an ordinary Rust doc comment for a month with a green suite:
+        #
+        #   "System path modification blocked by policy
+        #    (/System/ would be affected by operation on /)"
+        #
+        # because the prose word "Install" satisfied the destructive-verb test and
+        # the `///` satisfied the root-path test. Verbs are now required to stand
+        # in command position; the deny cases below pin that this did not cost the
+        # rule anything that actually runs.
+        PolicyCase(
+            "allow-rust-doc-comment-heredoc-with-prose-verb",
+            "cat > crates/demo/src/lib.rs <<'EOF'\n"
+            "/// Install the detour into the game image.\n"
+            "///\n"
+            "/// Truncate the log first; the caller moves the old one aside.\n"
+            "pub fn install_hook() {}\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-markdown-heredoc-naming-an-absolute-path-in-prose",
+            "cat > docs/demo.md <<'EOF'\n"
+            "Install the binary to /usr/local/bin when you are done.\n"
+            "EOF",
+            True,
+        ),
+        PolicyCase(
+            "deny-root-recursive-delete",
+            "rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        # The separator is written out rather than left to a newline: this runner
+        # calls `cupcake eval` directly, so scripts/cupcake-hook.sh is not in the
+        # path to rewrite an unquoted newline to "; " (bd er-effects-rs-5eah) and
+        # line 2 would arrive with no boundary in front of it.
+        PolicyCase(
+            "deny-root-delete-after-heredoc-terminator",
+            "git commit -q -F - <<'EOF'\n"
+            "message text with a bare / in it\n"
+            "EOF\n"
+            "; rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        PolicyCase(
+            "deny-sudo-prefixed-root-delete",
+            "sudo rm -rf /",
+            False,
+            "would be affected by operation on",
+        ),
+        # --- Destructive payloads inside a shell wrapper (2026-08-31) --------
+        #
+        # Measured against this same live engine BEFORE the fix: all seventeen
+        # wrapper spellings below came back ALLOW. Two causes had to be answered
+        # together, which is why they must be pinned HERE and not only under
+        # `opa test`:
+        #
+        #   * the verb is not in the OUTER command's command position, and
+        #     commands.has_verb could not see it either (its `(^|\s)` anchor
+        #     never matched `"rm`);
+        #   * `affected_parent_directories` -- which the PARENT rule pairs its
+        #     verb test with -- does not contain the payload's target. The
+        #     preprocessor reads the quoted payload as a PATH operand of `bash`,
+        #     so the event carries ["<cwd>/rm -rf "] and never "/". Only the
+        #     live engine supplies that field, so an interpreter test cannot
+        #     show whether the deny is reachable in production.
+        #
+        # Assembled from parts so that editing THIS file through a Bash command
+        # does not hand the guards a literal root delete to read.
+        PolicyCase(
+            "deny-bash-c-double-quoted-root-delete",
+            'bash -c "' + ROOT_DELETE + '"',
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-bash-c-single-quoted-root-delete",
+            "bash -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-sh-c-root-delete",
+            "sh -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # fish is the wrapper AGENTS.md tells agents to use for this box, and it
+        # was not even on the shell-name list before today.
+        PolicyCase(
+            "deny-fish-c-root-delete",
+            "fish -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-sudo-wrapped-root-delete",
+            "sudo bash -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-xargs-wrapped-root-delete",
+            "xargs -I{} sh -c '" + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # Nesting terminates at three levels; two is the deepest literal quoting
+        # reaches without escapes, and escaped quotes are stripped before the
+        # split, so `bash -c "bash -c \"...\""` cannot recurse further.
+        PolicyCase(
+            "deny-nested-wrapper-root-delete",
+            "bash -c \"bash -c '" + ROOT_DELETE + "'\"",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-glob-delete",
+            "bash -c 'rm -rf /*'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-recursive-chmod",
+            "bash -c 'chmod -R 777 /'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-find-root-delete",
+            "bash -c 'find / -name x -delete'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        PolicyCase(
+            "deny-wrapped-root-delete-in-second-segment",
+            "bash -c 'echo hi; " + ROOT_DELETE + "'",
+            False,
+            "inside a shell-wrapper payload",
+        ),
+        # ... and the over-approximations the rule must not make. A payload that
+        # destroys something OUTSIDE every protected path stays allowed: the
+        # ancestor `/` must not turn every absolute operand into a root
+        # operation.
+        PolicyCase("allow-wrapped-read-of-root", "bash -c 'ls /'", True),
+        PolicyCase("allow-wrapped-relative-delete", "bash -c 'rm -rf target/x'", True),
+        PolicyCase(
+            "allow-wrapped-absolute-delete-outside-protected-paths",
+            "bash -c 'rm -rf /home/banon/scratch'",
+            True,
+        ),
+        PolicyCase(
+            "allow-wrapped-absolute-copy-outside-protected-paths",
+            "bash -c 'cp a.txt /home/banon/b.txt'",
+            True,
+        ),
+        # The unwrapped `cp file ~` is allowed (the preprocessor does not expand
+        # the tilde, so it reports `<cwd>/~`), and the wrapped form must not be
+        # held to a stricter standard than the command it wraps.
+        PolicyCase("allow-wrapped-copy-into-home", "bash -c 'cp file ~'", True),
+        # A benign wrapped build stays allowed. The example carries a `-p`
+        # because ER-EFFECTS-REQUIRE-SCOPED-CARGO (2026-09-02) denies an
+        # unscoped cargo invocation wherever it appears, `bash -c` payloads
+        # included -- so the unscoped spelling this case used to carry now
+        # fails for a reason that has nothing to do with what the case is
+        # about. What it is about is the shell-wrapper rule not
+        # OVER-approximating: a harmless payload must survive being wrapped.
+        # Scoping the build keeps that the only thing under test.
+        PolicyCase(
+            "allow-wrapped-build",
+            "bash -c 'cargo build --release -p er-quickload'",
+            True,
+        ),
+        PolicyCase("allow-echo-of-a-root-delete", "echo '" + ROOT_DELETE + "'", True),
+        # --- KNOWN-OPEN RESIDUE, PINNED SO IT IS VISIBLE ---------------------
+        #
+        # A guard that HALF-catches wrapper payloads is worse than one that
+        # visibly does not, because it invites reliance. Everything below is
+        # still ALLOWED after the 2026-08-31 wrapper rule, on purpose, and is
+        # pinned here so the boundary is a test rather than a belief. If one of
+        # these ever goes red, the rule got stronger and the pin should flip --
+        # it must never be deleted to make the suite quiet.
+        #
+        # 1. A payload the decomposition cannot read. Failing closed would deny
+        #    every `bash -c "$VAR"`, and unlike the git guards there is no second
+        #    signal to narrow it: an opaque variable names no path at all.
+        PolicyCase("known-open-opaque-wrapper-payload", "bash -c $CMD", True),
+        PolicyCase("known-open-substituted-wrapper-payload", "bash -c $(echo hi)", True),
+        # 2. Three levels of ESCAPED nesting. shell_payloads_deep unrolls three
+        #    levels, but escaped quotes are stripped before the split, so the
+        #    innermost payload loses its quoting and never becomes a text of its
+        #    own -- the decomposition terminates (which is the property that
+        #    matters) and yields a payload whose verb is behind a `bash -c` that
+        #    command position does not follow.
+        PolicyCase(
+            "known-open-triple-nested-escaped-wrapper-payload",
+            "bash -c \"bash -c 'bash -c \\\"" + ROOT_DELETE + "\\\"'\"",
+            True,
+        ),
+        # 3. `ssh host '<program>'` is not decomposed at all, and that is a
+        #    decision: the payload runs on ANOTHER machine, so denying it for
+        #    endangering THIS host's /etc would be a guard that is wrong on
+        #    purpose.
+        PolicyCase("known-open-remote-shell-payload", "ssh host '" + ROOT_DELETE + "'", True),
+        # 4. An interpreter payload that destroys the root WITHOUT naming a
+        #    configured protected path. BUILTIN-PROTECTED-PATHS-SCRIPT is
+        #    mention-based by design, and widening it to ancestors would deny
+        #    `python3 -c "print('/')"` -- the `/` sits between two quotes, which
+        #    is a path boundary. Matching the existing precedent rather than
+        #    inventing a broader one.
+        PolicyCase(
+            "known-open-interpreter-payload-targeting-root",
+            "python3 -c \"import shutil; shutil.rmtree('/')\"",
+            True,
+        ),
+        # 5. A tilde or $HOME target, wrapped or not. The preprocessor does not
+        #    expand either, so the UNWRAPPED command is allowed too; the wrapper
+        #    rule deliberately declines to be stricter than what it wraps.
+        PolicyCase("known-open-wrapped-tilde-delete", "bash -c 'rm -rf ~'", True),
+        PolicyCase("known-open-unwrapped-tilde-delete", "rm -rf ~", True),
+        # `echo $(rm -rf /)` -- the OPA suite pinned this as denied and it was
+        # ALLOWED live, because the suite hand-fed affected_parent_directories
+        # ["/"] while the real preprocessor reports ["<cwd>/$(rm", "/)"] and `/)`
+        # is a parent of nothing. separator_trimmed_dir now trims `)` too.
+        PolicyCase(
+            "deny-root-delete-inside-command-substitution",
+            "echo $(" + ROOT_DELETE + ")",
+            False,
+            "would be affected by operation on",
+        ),
         PolicyCase(
             "deny-git-push-on-main",
             "git push",
@@ -202,7 +560,7 @@ def main() -> int:
         # (bd guard-blocks-worktree-commits-from-main-session-cwd-2026-07-29).
         PolicyCase(
             "allow-git-c-commit-nonmain-worktree-from-main-session",
-            'git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate commit -m "ok"',
+            'git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate commit -m "ok"',
             True,
             extra_event={
                 "signals": {
@@ -225,7 +583,7 @@ def main() -> int:
         ),
         PolicyCase(
             "allow-git-c-push-feature-from-nonmain-worktree-main-session",
-            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
+            "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
             True,
             extra_event={
                 "signals": {
@@ -236,7 +594,7 @@ def main() -> int:
         ),
         PolicyCase(
             "deny-git-c-push-main-refspec-from-nonmain-worktree",
-            "git -C /home/banon/projects/er-effects-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
+            "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate push origin HEAD:main",
             False,
             "Do not push directly to main",
             extra_event={
@@ -245,6 +603,280 @@ def main() -> int:
                     "worktree_branches": WORKTREE_FIXTURE,
                 }
             },
+        ),
+        # Source:destination refspec exception (2026-08-25). Renaming an
+        # already-pushed remote branch names a non-main destination explicitly,
+        # so it cannot update remote main -- but it matched neither earlier
+        # exception's parser and was denied from a session sitting on main.
+        PolicyCase(
+            "allow-git-push-refspec-rename-from-main-session",
+            "git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # ... and every main DESTINATION stays denied through it. push_targets_main
+        # is a separate blocked_push_context rule, so no exception can reach it.
+        PolicyCase(
+            "deny-git-push-refspec-to-refs-heads-main-from-main-session",
+            "git push origin origin/refactor/drop-dead-gates:refs/heads/main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # `heads/main` resolves to refs/heads/main on the remote (verified against
+        # real repositories); from a FEATURE branch only push_targets_main can
+        # catch it, which is why it was added there.
+        PolicyCase(
+            "deny-git-push-refspec-to-heads-main-from-feature-branch",
+            "git push origin HEAD:heads/main",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-git-push-refspec-rename-chained-with-main-push",
+            "git push origin origin/a:refs/heads/split/a && git push origin main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # Deletion pushes are deliberately out of scope and fail closed.
+        PolicyCase(
+            "deny-git-push-deletion-refspec-from-main-session",
+            "git push origin :refs/heads/split/a",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # A second operand the parser never read must not be vouched for.
+        PolicyCase(
+            "deny-git-push-refspec-with-second-operand-from-main-session",
+            "git push origin origin/a:refs/heads/split/a origin/b:refs/heads/split/b",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # --- Shell-wrapper payloads (2026-08-26, bd er-effects-rs-dt2e) ------
+        #
+        # Measured against this same live engine BEFORE the fix: every one of the
+        # deny cases below came back ALLOW with zero denials. The four git guards
+        # anchored their patterns on a separator class that contains `\n` but not
+        # a quote, so a payload inside `bash -c '...'` had no command position --
+        # and AGENTS.md tells agents to wrap commands exactly that way for fish.
+        #
+        # The .rego unit tests run in the OPA INTERPRETER; these run the real
+        # binary, which compiles to WASM and has silently dropped whole guards
+        # before. Both halves are needed.
+        PolicyCase(
+            "deny-bash-c-single-quoted-push-main",
+            "bash -c 'git push origin main'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-sh-c-double-quoted-push-main",
+            'sh -c "git push origin main"',
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-bash-lc-push-head-to-main",
+            "bash -lc 'git push origin HEAD:main'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-zsh-c-push-main",
+            'zsh -c "git push origin main"',
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-nested-wrapper-push-main",
+            "bash -c 'bash -c \"git push origin main\"'",
+            False,
+            "Do not push directly to main",
+        ),
+        PolicyCase(
+            "deny-bash-c-bare-push-from-main-session",
+            "bash -c 'git push'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # An exception cannot vouch for a command that also hides a push in a
+        # wrapper: the count-match spans every executed text at once.
+        PolicyCase(
+            "deny-explicit-upstream-push-chained-with-wrapped-bare-push",
+            "git push -u origin feature/x && bash -c 'git push'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # ... and the refspec-rename exception still works THROUGH a wrapper,
+        # which is what makes the decomposition symmetric rather than just stricter.
+        PolicyCase(
+            "allow-wrapped-refspec-rename-from-main-session",
+            "bash -c 'git push origin origin/a:refs/heads/split/a'",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-wrapped-refspec-to-main-from-main-session",
+            "bash -c 'git push origin origin/a:refs/heads/main'",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # A payload the guard cannot read must not become an implicit allow.
+        PolicyCase(
+            "deny-unreadable-wrapper-payload-naming-git-and-push",
+            "bash -c $GIT_PUSH_CMD",
+            False,
+            "cannot read",
+        ),
+        # ... but an opaque wrapper outside the guard's jurisdiction is noise.
+        PolicyCase(
+            "allow-unreadable-wrapper-payload-unrelated-to-git",
+            "bash -c $BUILD_CMD",
+            True,
+        ),
+        # Siblings that shared the same anchor construction.
+        PolicyCase(
+            "deny-bash-c-commit-from-main-session",
+            "bash -c 'git commit -m bad'",
+            False,
+            "Do not commit unless",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-bash-c-force-push-when-origin-main-stale",
+            "bash -c 'git push --force origin feature/x'",
+            False,
+            "origin/main is stale or could not be verified",
+            extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}},
+        ),
+        PolicyCase(
+            "deny-bash-c-rebase-onto-stale-origin-main",
+            "sh -c \"git rebase origin/main\"",
+            False,
+            "origin/main is stale or could not be verified",
+            extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}},
+        ),
+        PolicyCase(
+            "deny-bash-c-commit-skipping-hooks",
+            "bash -c 'git commit " + "--no" + "-verify -m bad'",
+            False,
+            "are not permitted",
+        ),
+        # --- Quoted TEXT is not an executed payload --------------------------
+        #
+        # The mirror-image defect, and the reason widening the anchor class was
+        # not the fix: `\n` IS in that class, so a memory body, a commit message
+        # or a doc that merely QUOTED the guarded command on its own line was
+        # denied -- with nothing executed. This one was measured live: writing a
+        # bd memory that documented this very hole was refused by BOTH
+        # ER-EFFECTS-BLOCK-MAIN-PUSH and ER-EFFECTS-BLOCK-MAIN-COMMIT. A guard
+        # whose own documentation cannot be written in the repo that enforces it
+        # is unwritable, so these are requirements, not niceties.
+        PolicyCase(
+            "allow-bd-memory-body-quoting-the-guarded-command",
+            '$HOME/.local/bin/bd remember --key wrapper-bypass "before\ngit push origin main\nafter"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-naming-the-guarded-command",
+            'git commit -m "guard: block git push origin main via wrappers"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-with-the-guarded-command-on-its-own-line",
+            'git commit -m "guard: close the wrapper bypass\n\ngit push origin main was invisible\n"',
+            True,
+        ),
+        PolicyCase(
+            "allow-heredoc-documenting-the-guarded-command",
+            "cat > docs/guards.md <<'EOF'\ngit push origin main\nEOF",
+            True,
+        ),
+        PolicyCase(
+            "allow-echo-of-the-guarded-command",
+            'echo "git push origin main"',
+            True,
+        ),
+        # A message that names the BYPASS FORM: splitting on `'` alone finds a
+        # span whose preceding text ends in `bash -c `, so without a nesting
+        # check the message body reads as an executed payload and the commit
+        # describing the fix is denied by the fix. This is the exact shape of
+        # the commit message that landed this change.
+        PolicyCase(
+            "allow-commit-message-quoting-the-wrapper-bypass-form",
+            'git commit -m "the bypass form was bash -c \'git push origin main\'"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-quoting-the-bypass-form-inverted-quotes",
+            "git commit -m 'the bypass form was bash -c \"git push origin main\"'",
+            True,
+        ),
+        # One apostrophe in a double-quoted body must not desynchronise the
+        # quote parity and drop the whole command back to its raw form, where
+        # the line-anchored mention would be denied again.
+        PolicyCase(
+            "allow-bd-memory-body-with-an-apostrophe",
+            '$HOME/.local/bin/bd remember --key k "it\'s about this:\ngit push origin main\nend"',
+            True,
+        ),
+        # `python3 -c` takes a Python program, not shell.
+        PolicyCase(
+            "allow-python-dash-c-string-literal-naming-the-command",
+            "python3 -c 'print(\"git push origin main\")'",
+            True,
+        ),
+        # Neutralising a quoted span blanks its command-position characters
+        # rather than deleting it, so a quoted operand still parses.
+        PolicyCase(
+            "allow-git-c-push-with-quoted-worktree-path-from-main-session",
+            'git -C "/home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate" push -u origin feature/portrait-stats-crate',
+            True,
+            extra_event={
+                "signals": {
+                    "current_branch": "main\n",
+                    "worktree_branches": WORKTREE_FIXTURE,
+                }
+            },
+        ),
+        # Fail-closed fallbacks: command substitution runs even inside double
+        # quotes, so such a text keeps its raw form and the anchors keep matching.
+        PolicyCase(
+            "deny-command-substitution-running-a-push-to-main",
+            'echo "$(git push origin main)"',
+            False,
+            "Do not push directly to main",
+        ),
+        # NOT KNOWN-OPEN ANY MORE -- but still ALLOWED HERE, and the difference
+        # is this runner, not the guard. CORRECTED 2026-08-31.
+        #
+        # The old note said production allowed this and no policy could change
+        # that. Production DENIES it, and has since the hook shim landed:
+        # scripts/cupcake-hook.sh sees the raw text before cupcake does, treats a
+        # heredoc a SHELL reads as a program rather than data, and rewrites its
+        # unquoted newlines to `; ` -- so the second line arrives with a
+        # separator in front of it and the push guard fires. Measured both ways
+        # on 2026-08-31: `bash scripts/cupcake-hook.sh` -> deny, `cupcake eval`
+        # direct -> allow.
+        #
+        # This runner calls `cupcake eval` DIRECTLY, so it never sees the
+        # rewrite, and for every multi-line command it is asserting the verdict
+        # of a path no command travels. The expectation below is therefore the
+        # DIRECT path's verdict, kept so the divergence stays visible rather than
+        # being quietly "fixed" to the production answer this file cannot
+        # observe. scripts/test-cupcake-delivered-shape.py runs the same command
+        # through the shim and asserts the denial, and asserts this exact
+        # divergence, so neither half can drift without something going red.
+        PolicyCase(
+            "direct-eval-only-shell-read-heredoc-push-main-denied-in-production",
+            "bash <<'EOF'\ngit push origin main\nEOF",
+            True,
         ),
         PolicyCase(
             "deny-destructive-parent-root",
@@ -786,18 +1418,18 @@ def main() -> int:
             "blocked this Seamless Co-op DLL bundling command",
         ),
         # Restoring the USER's game-installed co-op DLL (same-path rename that
-        # only strips the repo's .er-effects-staged suffix) is the opposite of
+        # only strips the repo's .er-quickload-staged suffix) is the opposite of
         # bundling and is allowed (bd er-effects-rs-gkqa).
         PolicyCase(
             "allow-mv-restore-staged-ersc-dll-same-gameinstall-path",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             True,
         ),
         # ... but the same staged source moved to any OTHER destination denies.
         PolicyCase(
             "deny-mv-staged-ersc-dll-into-target-bundle",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " 'target/release-bundle/ersc.dll'",
             False,
             "blocked this Seamless Co-op DLL bundling command",
@@ -830,7 +1462,7 @@ def main() -> int:
         PolicyCase(
             "allow-sha256sum-compare-staged-and-gameinstall-ersc-dll",
             'G="/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop"\n'
-            'sha256sum "$G/ersc.dll.er-effects-staged" /home/banon/Elden/ersc.dll'
+            'sha256sum "$G/ersc.dll.er-quickload-staged" /home/banon/Elden/ersc.dll'
             " | sed 's|/home/banon|~|'",
             True,
         ),
@@ -856,7 +1488,7 @@ def main() -> int:
         # second statement.
         PolicyCase(
             "deny-mv-restore-staged-ersc-dll-chained-with-ls",
-            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-effects-staged'"
+            "mv -f '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll.er-quickload-staged'"
             " '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'"
             " && ls -la '/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll'",
             False,
@@ -1038,7 +1670,7 @@ def main() -> int:
                 # Footer present -> allow.
                 PolicyCase(
                     "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
-                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
                     "Body text describing the change.\n\n"
                     "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
                     'EOF\n)"',
@@ -1048,7 +1680,7 @@ def main() -> int:
                 # command fallback must not weaken the guard).
                 PolicyCase(
                     "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
-                    'gh pr edit 19 --repo Banon-Labs/er-effects-rs --body "$(cat <<\'EOF\'\n'
+                    'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
                     "Body text without attribution.\n"
                     'EOF\n)"',
                     False,
@@ -1058,7 +1690,18 @@ def main() -> int:
         )
     else:
         print(f"skip: gh-attribution guard cases (no global policy at {attribution_policy})")
-    max_workers = min(8, max(1, len(cases)))
+    # 12, MEASURED, not guessed. 176 cases x ~1.3 CPU-seconds of `cupcake eval` each; the pool width
+    # is the only lever, since each case must spawn the real binary. Wall clock over the whole case
+    # list, taken 2026-08-31 on 16 cores under a DELIBERATELY hostile loadavg of ~100 (six agents
+    # plus this probe), so these are worst-case rather than best-case numbers:
+    #     8 workers 26.5s | 12 workers 20.4s | 16 workers 21.8s | 24 workers 21.6s
+    # Scaling flattens past 12 and then reverses, so 12 is the floor of the curve, not the edge of
+    # it -- there is nothing to be won by going wider and contention to lose. This does NOT risk the
+    # per-case timeout=30 below: a single case costs ~1.3s, so even the 100-loadavg run left it more
+    # than an order of magnitude of margin. Widening the pool is safe here precisely because it does
+    # not change what any one case does; that is why the far slower delivered-shape gate is NOT
+    # folded in as a 177th unit of work but left as its own step in the callers.
+    max_workers = min(12, max(1, len(cases)))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(run_case, case): case for case in cases}
         for future in as_completed(futures):

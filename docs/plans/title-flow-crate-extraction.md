@@ -15,21 +15,21 @@ three calibrations, the stable-world proof) lives in `title_tick_cover.rs` -- a 
 - `product_autoload_gates.rs` (909), `profile_select_flow.rs` (815),
   `switch_slot_control.rs` (175), `native_title_job.rs` (66)
 
-## Boundary plan (er-loading-portrait / er-save-picker precedent)
+## Boundary plan (er-loading-portrait-core / er-save-picker-core precedent)
 
-1. **Already crate-shared, no work**: er-telemetry counters (~110 symbols), typed game access
+1. **Already crate-shared, no work**: er-telemetry-core counters (~110 symbols), typed game access
    (`eldenring`/`fromsoftware-shared`), fault-safe reads + base/rva (`er-game-base`), MinHook
    (`er-hook`).
-2. **Constants (~350 symbols from `er-effects-rs/src/constants/`)**: move the title/switch-owned
+2. **Constants (~350 symbols from `er-quickload/src/constants/`)**: move the title/switch-owned
    ones into this crate's `constants.rs`; symbols shared with remaining root code get re-export
    shims in the root so nothing else changes.
-3. **Host boundary (`host::install_host` fn-pointer pattern, exactly like er-loading-portrait)**:
+3. **Host boundary (`host::install_host` fn-pointer pattern, exactly like er-loading-portrait-core)**:
    callbacks INTO the DLL that cannot move yet -- `append_autoload_debug`, gating predicates,
    `boot_view_epoch_ms`, and the system-quit/startup_hooks calls (the tangle is bidirectional:
    those hooks also call into this cluster, which becomes plain `pub` exports).
 4. **Path rewrite**: `crate::constants::` / `crate::experiments::` / `crate::constants::...` inside
    the moved files become `crate::compat::` -- one flat prelude module mapping every symbol to its
-   new source (own constants, host fn, er-game-base, er-telemetry). Mechanical, compiler-verified.
+   new source (own constants, host fn, er-game-base, er-telemetry-core). Mechanical, compiler-verified.
 5. **Root side**: `experiments/mod.rs` re-exports `er_title_flow::*` under the old names so every
    external call site compiles unchanged.
 

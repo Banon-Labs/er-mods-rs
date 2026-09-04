@@ -77,7 +77,7 @@ reported, that is real evidence: the main loop was still running, and the proble
 
 ## Using it
 
-Load `er_crash_logging_dll.dll` as a `[[natives]]` entry **after** `ersc.dll`.
+Load `er_crash_logging.dll` as a `[[natives]]` entry **after** `ersc.dll`.
 
 Order matters: `SetUnhandledExceptionFilter` is last-writer-wins, so the crash logger has to install
 after Seamless's crashpad to end up on top -- and it chains whatever it displaced rather than

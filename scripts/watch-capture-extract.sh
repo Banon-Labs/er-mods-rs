@@ -3,7 +3,7 @@
 # for a Kitty tab. Shows the log, whether qrenderdoc is still replaying (CPU/MEM), and any
 # files written so far. Ctrl-C to stop watching (does not affect the extraction).
 LOG="${EXTRACT_LOG:-/tmp/er-extract.log}"
-OUT_ROOT="/home/banon/projects/er-effects-rs/target/capture"
+OUT_ROOT="/home/banon/projects/er-mods-rs/target/capture"
 pause_s() {
   python3 - "$1" <<'PY'
 import sys, threading

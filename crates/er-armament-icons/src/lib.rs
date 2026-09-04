@@ -1,4 +1,4 @@
-//! er-armament-icons-dll -- armament tile Ash-of-War badge (bd er-effects-rs-pe98).
+//! er-armament-icons -- armament tile Ash-of-War badge (bd er-effects-rs-pe98).
 //!
 //! GOAL: every non-empty highlightable armament/ranged/catalyst/shield tile, in every
 //! menu that renders the shared tile widget, gets the weapon's skill (Ash of War) icon
@@ -26,11 +26,21 @@
 
 use std::{
     fmt,
-    path::PathBuf,
     sync::atomic::{AtomicU64, AtomicUsize, Ordering},
 };
 
 use er_game_base::log::{append_line, game_directory_path};
+
+/// `base + rva`, resolved for the RUNNING build, or `None` when this build moved the function.
+///
+/// Every Scaleform call below used to transmute a hand-built `base + rva`, which on ELDEN RING 1.17
+/// calls the 1.16.2 address -- whatever now occupies it -- with nothing to refuse it. A MAPPED
+/// constant is no safer that way: the map knows the new address and `base + rva` never asks it.
+/// Refusing costs a badge; calling an arbitrary address costs the process.
+#[cfg(windows)]
+pub(crate) fn icons_fn(rva: usize, what: &'static str) -> Option<usize> {
+    er_game_base::mem::game_rva_named(rva as u32, what).ok()
+}
 
 /// Runtime GFX template edit (equip menu ArtsIcon/IconImage) -- windows-only.
 #[cfg(windows)]
@@ -234,9 +244,19 @@ fn diag_override(env_name: &str, file_name: &str) -> Option<String> {
 }
 
 pub(crate) fn log_message(args: fmt::Arguments<'_>) {
-    let path = game_directory_path()
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
-        .join(LOG_FILE_NAME);
+    // REDIRECTABLE, because the game-directory copy is SINGLE-SLOT and was being destroyed twice
+    // over. `er_game_base::log::begin_fresh_run` keeps exactly one previous generation, so two
+    // launches lose the run before last -- and `scripts/run-armament-icons-{live,smoke}.sh` each ran
+    // an `rm -f` of this file from the game directory BEFORE launching, which also drops the stale
+    // `.prev` (that removal is unconditional when the live file is absent). Two prior runs' evidence,
+    // neither of them the deleting run's, and several sessions launch concurrently here.
+    //
+    // The resolver is the shared one, so this artifact answers "where does this go" exactly like
+    // every other: the launcher's redirect, else beside `eldenring.exe`.
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_ARMAMENT_ICONS_PATH",
+        LOG_FILE_NAME,
+    );
     let seq = LOG_SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
     append_line(&path, format_args!("[{seq:06}] {args}"));
 }
@@ -255,6 +275,13 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // One sink for this DLL's hook + address lines. Without it a refused address is
+        // silent HERE, because every cdylib links its own copy of er-hook/er-game-base.
+        // A rust_panic in a cdylib loaded into the game is otherwise anonymous: the message goes to a
+        // stderr nobody reads, and what survives is a 0xe06d7363 record naming the MODULE and nothing
+        // else. Two boots were lost to one before this existed. See er_game_base::panic_report.
+        er_game_base::panic_report::report_panics_to("er-armament-icons", log_message);
+        er_hook::set_hook_logger(log_message);
         START.call_once(spawn_install_thread);
     }
     DLL_MAIN_SUCCESS
@@ -327,11 +354,14 @@ fn spawn_install_thread() {
             // Wait for the game's task manager the way the sibling DLLs do (yield, no sleep):
             // its readiness implies the game image and its statics are mapped, before the
             // tile-populate draw hook (whose draw path uses live game state).
-            loop {
-                match unsafe { CSTaskImp::instance() } {
-                    Ok(_) => break,
-                    Err(_) => std::thread::yield_now(),
-                }
+            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // starved the wineserver and hung a boot. A give-up means the draw hook is not
+            // installed, which is an inert overlay rather than a dead game.
+            if er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok()).is_none() {
+                log_message(format_args!(
+                    "install: CSTaskImp never appeared; tile-populate draw hook NOT installed"
+                ));
+                return;
             }
             install_tile_populate_hook(base);
             hud_badge::install(base);
@@ -439,7 +469,7 @@ unsafe extern "system" fn tile_populate_hook(tile: usize, gaitem: usize) -> usiz
 /// the weapon has the ash innately or applied, avoiding the per-instance gaitem gem chain.
 /// Returns 0 if no such gem / no icon (the caller falls back to SwordArtsParam.iconId).
 #[cfg(windows)]
-unsafe fn resolve_gem_icon_id(base: usize, arts_id: i32) -> u32 {
+unsafe fn resolve_gem_icon_id(_base: usize, arts_id: i32) -> u32 {
     #[repr(C)]
     struct GemLookupResult {
         param_id: u32,
@@ -454,7 +484,14 @@ unsafe fn resolve_gem_icon_id(base: usize, arts_id: i32) -> u32 {
     let Some(gem_id) = (arts_id as u32).checked_mul(100) else {
         return 0;
     };
-    let get_gem: GetGemFn = unsafe { std::mem::transmute(base + GET_EQUIP_PARAM_GEM_RVA) };
+    let get_gem: GetGemFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(GET_EQUIP_PARAM_GEM_RVA, "GET_EQUIP_PARAM_GEM_RVA") {
+                Some(address) => address,
+                None => return 0,
+            },
+        )
+    };
     let mut res = GemLookupResult {
         param_id: 0,
         _pad: 0,
@@ -491,7 +528,7 @@ type RectGetterFn = unsafe extern "system" fn(*const u8, *mut f32) -> *mut f32;
 /// is invisible because its container is zero-extent (approach-A/B discriminator).
 #[cfg(windows)]
 unsafe fn probe_child_rects(
-    base: usize,
+    _base: usize,
     tile: usize,
     name: &std::ffi::CStr,
 ) -> Option<([f32; 4], [f32; 4])> {
@@ -499,12 +536,24 @@ unsafe fn probe_child_rects(
     type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
     type ScaleformValueDtorFn = unsafe extern "system" fn(*mut u8);
 
-    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
-    let local_getter: RectGetterFn = unsafe { std::mem::transmute(base + PROXY_LOCAL_RECT_RVA) };
-    let global_getter: RectGetterFn = unsafe { std::mem::transmute(base + PROXY_GLOBAL_RECT_RVA) };
-    let value_dtor: ScaleformValueDtorFn =
-        unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(icons_fn(
+            ASSIGN_COMPONENT_WITH_NAME_RVA,
+            "ASSIGN_COMPONENT_WITH_NAME_RVA",
+        )?)
+    };
+    let is_bound: IsBoundFn =
+        unsafe { std::mem::transmute(icons_fn(PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA")?) };
+    let local_getter: RectGetterFn =
+        unsafe { std::mem::transmute(icons_fn(PROXY_LOCAL_RECT_RVA, "PROXY_LOCAL_RECT_RVA")?) };
+    let global_getter: RectGetterFn =
+        unsafe { std::mem::transmute(icons_fn(PROXY_GLOBAL_RECT_RVA, "PROXY_GLOBAL_RECT_RVA")?) };
+    let value_dtor: ScaleformValueDtorFn = unsafe {
+        std::mem::transmute(icons_fn(
+            SCALEFORM_VALUE_DTOR_RVA,
+            "SCALEFORM_VALUE_DTOR_RVA",
+        )?)
+    };
 
     let mut proxy = [0u8; PROXY_SIZE];
     unsafe { assign(tile, proxy.as_mut_ptr(), name.as_ptr().cast()) };
@@ -548,9 +597,31 @@ unsafe fn dump_scaleform_vtables(base: usize, tile: usize) {
     type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
     type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
     type DtorFn = unsafe extern "system" fn(*mut u8);
-    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
-    let dtor: DtorFn = unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(
+                ASSIGN_COMPONENT_WITH_NAME_RVA,
+                "ASSIGN_COMPONENT_WITH_NAME_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let is_bound: IsBoundFn = unsafe {
+        std::mem::transmute(match icons_fn(PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA") {
+            Some(address) => address,
+            None => return,
+        })
+    };
+    let dtor: DtorFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(SCALEFORM_VALUE_DTOR_RVA, "SCALEFORM_VALUE_DTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
 
     let mut proxy = [0u8; PROXY_SIZE];
     unsafe { assign(tile, proxy.as_mut_ptr(), c"AttributeIcon".as_ptr().cast()) };
@@ -622,8 +693,17 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         return;
     }
 
-    let resolver: ResolverFn =
-        unsafe { std::mem::transmute(base + MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA) };
+    let resolver: ResolverFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(
+                MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA,
+                "MENU_GAITEM_SWORD_ARTS_RESOLVER_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let arts_id = unsafe { resolver(gaitem) };
     if arts_id < 0 {
         BADGE_NOT_WEAPON.fetch_add(1, Ordering::SeqCst);
@@ -631,7 +711,14 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         return;
     }
 
-    let lookup: LookupFn = unsafe { std::mem::transmute(base + LOOKUP_SWORD_ARTS_PARAM_RVA) };
+    let lookup: LookupFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(LOOKUP_SWORD_ARTS_PARAM_RVA, "LOOKUP_SWORD_ARTS_PARAM_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let mut lookup_result = SwordArtsLookupResult {
         param_id: 0,
         _pad: 0,
@@ -676,7 +763,14 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
         // Mirror the tile's own item icon (guaranteed visible) into the badge -- locator for the
         // pixel oracle's rect discovery and a proof that the pixel path is visible.
         type IconIdFn = unsafe extern "system" fn(usize) -> u32;
-        let resolver: IconIdFn = unsafe { std::mem::transmute(base + MENU_GAITEM_ICON_ID_RVA) };
+        let resolver: IconIdFn = unsafe {
+            std::mem::transmute(
+                match icons_fn(MENU_GAITEM_ICON_ID_RVA, "MENU_GAITEM_ICON_ID_RVA") {
+                    Some(address) => address,
+                    None => return,
+                },
+            )
+        };
         unsafe { resolver(gaitem) }
     } else if forced != FORCE_ICON_NONE {
         forced
@@ -688,17 +782,56 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
     // raw fire count never captures a weapon tile -- sample on this instead.
     let attempt = BADGE_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
 
-    let build_icon_info: IconInfoBuilderFn =
-        unsafe { std::mem::transmute(base + ICON_INFO_BUILDER_RVA) };
+    let build_icon_info: IconInfoBuilderFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(ICON_INFO_BUILDER_RVA, "ICON_INFO_BUILDER_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
     let mut icon_info = [0u8; ICON_INFO_SIZE];
     unsafe { build_icon_info(icon_info.as_mut_ptr(), icon_id) };
 
-    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
-    let icon_setter: IconSetterFn = unsafe { std::mem::transmute(base + ICON_SETTER_RVA) };
-    let set_visible: SetVisibleFn = unsafe { std::mem::transmute(base + PROXY_SET_VISIBLE_RVA) };
-    let value_dtor: ScaleformValueDtorFn =
-        unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(
+                ASSIGN_COMPONENT_WITH_NAME_RVA,
+                "ASSIGN_COMPONENT_WITH_NAME_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let is_bound: IsBoundFn = unsafe {
+        std::mem::transmute(match icons_fn(PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA") {
+            Some(address) => address,
+            None => return,
+        })
+    };
+    let icon_setter: IconSetterFn = unsafe {
+        std::mem::transmute(match icons_fn(ICON_SETTER_RVA, "ICON_SETTER_RVA") {
+            Some(address) => address,
+            None => return,
+        })
+    };
+    let set_visible: SetVisibleFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let value_dtor: ScaleformValueDtorFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(SCALEFORM_VALUE_DTOR_RVA, "SCALEFORM_VALUE_DTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
 
     // Transient resolve, exactly the game's own pattern: construct into raw storage,
     // act, then run the CSScaleformValue dtor (the proxy holds a ref-counted GFx
@@ -892,17 +1025,45 @@ unsafe fn draw_arts_badge(tile: usize, gaitem: usize, fires: u64) {
 /// left visible by a previously drawn weapon would otherwise linger on an "equip to nothing"
 /// row. Best-effort and fault-safe: an unresolvable slot is simply left alone.
 #[cfg(windows)]
-unsafe fn hide_badge_slot(base: usize, tile: usize) {
+unsafe fn hide_badge_slot(_base: usize, tile: usize) {
     type AssignFn = unsafe extern "system" fn(usize, *mut u8, *const u8) -> *mut u8;
     type IsBoundFn = unsafe extern "system" fn(*const u8) -> bool;
     type SetVisibleFn = unsafe extern "system" fn(*mut u8, u8);
     type ScaleformValueDtorFn = unsafe extern "system" fn(*mut u8);
 
-    let assign: AssignFn = unsafe { std::mem::transmute(base + ASSIGN_COMPONENT_WITH_NAME_RVA) };
-    let is_bound: IsBoundFn = unsafe { std::mem::transmute(base + PROXY_IS_BOUND_RVA) };
-    let set_visible: SetVisibleFn = unsafe { std::mem::transmute(base + PROXY_SET_VISIBLE_RVA) };
-    let value_dtor: ScaleformValueDtorFn =
-        unsafe { std::mem::transmute(base + SCALEFORM_VALUE_DTOR_RVA) };
+    let assign: AssignFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(
+                ASSIGN_COMPONENT_WITH_NAME_RVA,
+                "ASSIGN_COMPONENT_WITH_NAME_RVA",
+            ) {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let is_bound: IsBoundFn = unsafe {
+        std::mem::transmute(match icons_fn(PROXY_IS_BOUND_RVA, "PROXY_IS_BOUND_RVA") {
+            Some(address) => address,
+            None => return,
+        })
+    };
+    let set_visible: SetVisibleFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(PROXY_SET_VISIBLE_RVA, "PROXY_SET_VISIBLE_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
+    let value_dtor: ScaleformValueDtorFn = unsafe {
+        std::mem::transmute(
+            match icons_fn(SCALEFORM_VALUE_DTOR_RVA, "SCALEFORM_VALUE_DTOR_RVA") {
+                Some(address) => address,
+                None => return,
+            },
+        )
+    };
 
     // Hide EVERY mount point, not just the first that binds: one hooked function populates
     // every menu's tiles, and which mount a given tile uses depends on its movie.

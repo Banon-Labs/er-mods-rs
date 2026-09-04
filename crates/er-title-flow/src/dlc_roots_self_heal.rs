@@ -50,7 +50,7 @@ pub unsafe fn dlc_root_entry_addr(base: usize) -> Option<usize> {
         }
         DLC_ROOT_ENTRY_ADDR.store(0, Ordering::SeqCst);
     }
-    let manager = unsafe { safe_read_usize(base + DL_FILE_DEVICE_MANAGER_SINGLETON_RVA) }
+    let manager = unsafe { safe_read_usize(er_game_base::mem::game_data_addr(base, DL_FILE_DEVICE_MANAGER_SINGLETON_RVA, "DL_FILE_DEVICE_MANAGER_SINGLETON_RVA")) }
         .filter(|&v| v > 0x10000)?;
     let roots = manager + DL_FILE_DEVICE_MANAGER_VIRTUAL_ROOTS_48_OFFSET;
     let start =
@@ -103,8 +103,11 @@ pub unsafe fn dlc_roots_self_heal_tick() {
         return;
     }
 
-    let csdlc = match unsafe { safe_read_usize(base + CSDLC_SINGLETON_RVA) } {
-        Some(p) if p > 0x10000 => p,
+    // Resolved for the running build. CSDLC moved 0x3d86bd8 -> 0x3d8ac58 on 1.17; the raw read
+    // would have succeeded against the 1.16.2 slot and handed a neighbouring global to the
+    // native roots refill below, which writes through it.
+    let csdlc = match er_game_base::mem::read_global_ptr(base, CSDLC_SINGLETON_RVA, "CSDLC_SINGLETON_RVA") {
+        p if p > 0x10000 => p,
         _ => return,
     };
     let orig = DLC_ROOTS_REFILL_ORIG.load(Ordering::SeqCst);

@@ -9,7 +9,7 @@
         "8765"
       ],
       "env": {
-        "GHIDRA_JP_DICT": "${HOME}/projects/er-effects-rs/scripts/ghidra/jp-en-dict.json"
+        "GHIDRA_JP_DICT": "${HOME}/projects/er-mods-rs/scripts/ghidra/jp-en-dict.json"
       },
       "directTools": true
     }

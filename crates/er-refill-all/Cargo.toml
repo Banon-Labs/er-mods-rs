@@ -1,0 +1,34 @@
+[package]
+name = "er-refill-all"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_refill_all"
+crate-type = ["cdylib"]
+
+# Standalone "mark every refillable item refill / no-refill" hotkey DLL. It owns no product state:
+# one hook on the shared MenuWindow update, which is also the gate -- the storage box is the only
+# menu with auto-refill options, so running inside its update is what confines the feature to it.
+#
+# Eligibility, stack limits and the storage -> inventory transfer are all delegated to the game's
+# own 1.16.2 code rather than reimplemented.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# Key names, the reload decision, and the chord type the keyboard fallback parses into.
+# Host-buildable, so the config and pad-chord parsers stay covered by `cargo test` on Linux.
+er-hotkey-config = { path = "../er-hotkey-config" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+er-hook = { path = "../er-hook" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Input_KeyboardAndMouse",
+] }
+
+[lints]
+workspace = true

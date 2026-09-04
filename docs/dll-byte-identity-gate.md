@@ -31,7 +31,7 @@ The known over-triggers are pinned as test cases rather than left to be rediscov
 ## What "byte-identical" had to be defined as
 
 Two clean builds of **identical source** are not byte-identical. Measured on
-`crates/er-crash-logging-dll` (`scripts/probe-dll-build-determinism.sh`):
+`crates/er-crash-logging` (`scripts/probe-dll-build-determinism.sh`):
 
 ```
 A vs B (identical source, two clean builds): 10 differing bytes
@@ -60,8 +60,8 @@ by section: .rdata 37786, .text 1321, .reloc 1218, .pdata 694, .data 9
 
 Cause: rustc embeds the crate-relative source path **and line number** of every panic
 site (`core::panic::Location`) and derives symbol hashes from module paths.
-`er_effects_rs.dll` currently carries 56 distinct project source paths in `.rdata`, e.g.
-`crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs`.
+`er_quickload.dll` currently carries 56 distinct project source paths in `.rdata`, e.g.
+`crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs`.
 Move a file and the string changes; move a function inside a file and the line numbers
 change; rename a module and the mangled hashes change. `--remap-path-prefix` does not
 help -- the embedded paths are already crate-relative.

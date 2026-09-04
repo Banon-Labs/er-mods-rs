@@ -8,7 +8,7 @@ Run: uv run --with capstone python3 scripts/scan-textid-imm.py
 import struct
 import sys
 
-BIN = "/home/banon/projects/er-effects-rs/eldenring-deobf.bin"
+BIN = "/home/banon/projects/er-mods-rs/eldenring-deobf.bin"
 IMAGE_BASE = 0x140000000
 
 # Privacy-specific (607200/607201/607202), EULA (607100/607102), buttons/footer,

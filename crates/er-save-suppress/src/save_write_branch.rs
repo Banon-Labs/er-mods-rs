@@ -74,14 +74,11 @@ const SAVE_WRITE_FAILED_RESULT: usize = 6;
 // push r15` -- seven whole one- and two-byte instructions before MinHook's 5-byte window
 // closes, and no relative branch. They diverge only at byte 12, where the frame pointer is
 // set up: the rebuild takes `lea rbp,[rsp-0x60]` and the patcher `lea rbp,[rsp-0xd0]`.
-const SAVE_WRITE_FULL_REBUILD_SIG: &[u8] = &[
-    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x6C, 0x24,
-    0xA0, 0x48, 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00,
-];
-const SAVE_WRITE_IN_PLACE_SIG: &[u8] = &[
-    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0xAC, 0x24,
-    0x30, 0xFF, 0xFF, 0xFF, 0x48, 0x81, 0xEC, 0xD0,
-];
+// Both signatures are ASSEMBLED from those named instructions by this crate's `build.rs`.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_save_write_branch_prologues.rs"
+));
 
 /// `FUN_1424142e0`'s real shape. The fifth argument lives at `[rsp+0x28]` on entry and at
 /// `[rsp+0x20]` of the frame we build to forward it, so an `extern "system"` five-argument
@@ -218,9 +215,10 @@ unsafe extern "system" fn save_write_in_place_hook(
 fn install_write_branch_observers() -> usize {
     let mut bound = 0_usize;
 
-    if let Some(address) = verify(
+    if let Some(address) = verify_for_hook(
         SAVE_WRITE_FULL_REBUILD_RVA,
         SAVE_WRITE_FULL_REBUILD_SIG,
+        SAVE_WRITE_FULL_REBUILD_SIG_MASK,
         "SaveWriteFullRebuild",
     ) {
         match unsafe {
@@ -239,9 +237,10 @@ fn install_write_branch_observers() -> usize {
         }
     }
 
-    if let Some(address) = verify(
+    if let Some(address) = verify_for_hook(
         SAVE_WRITE_IN_PLACE_RVA,
         SAVE_WRITE_IN_PLACE_SIG,
+        SAVE_WRITE_IN_PLACE_SIG_MASK,
         "SaveWriteInPlace",
     ) {
         match unsafe { MhHook::new(address as *mut c_void, save_write_in_place_hook as *mut c_void) }

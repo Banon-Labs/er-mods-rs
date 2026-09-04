@@ -1,4 +1,4 @@
-//! ERPX — a trivial little container for the raw RGBA8 portrait dumps the `er-effects` DLL writes
+//! ERPX — a trivial little container for the raw RGBA8 portrait dumps the `er-quickload` DLL writes
 //! while reverse-engineering the loading-screen portrait.
 //!
 //! Layout (little-endian): `b"ERPX"` magic, then `u32` width, `u32` height, then `width*height*4`

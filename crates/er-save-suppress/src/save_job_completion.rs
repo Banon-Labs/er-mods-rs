@@ -39,11 +39,12 @@
 /// for saves and for nothing else. Loads build a different job through `FUN_14240e420`.
 #[cfg(windows)]
 const SL_SAVE_JOB_BODY_RVA: usize = 0x240fd70;
-/// `mov rax,rsp; push rbp/rdi/r12/r14/r15; lea rbp,[rax-0x5f]; sub rsp,0xb0`.
-const SL_SAVE_JOB_BODY_SIG: &[u8] = &[
-    0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8D, 0x68, 0xA1, 0x48,
-    0x81, 0xEC, 0xB0, 0x00, 0x00, 0x00,
-];
+// `SL_SAVE_JOB_BODY_SIG`: `mov rax,rsp; push rbp/rdi/r12/r14/r15; lea rbp,[rax-0x5f];
+// sub rsp,0xb0`, assembled from those named instructions by this crate's `build.rs`.
+include!(concat!(
+    env!("OUT_DIR"),
+    "/generated_save_job_completion_prologues.rs"
+));
 /// `SLSession+0xa0` -- the refcounted `SLSessionResultInfo*` the base ctor allocates.
 #[cfg(windows)]
 const SL_JOB_RESULT_INFO_OFFSET: usize = 0xa0;
@@ -337,6 +338,7 @@ fn install_save_job_body_observer() -> bool {
     let bound = match verify(
         SL_SAVE_JOB_BODY_RVA,
         SL_SAVE_JOB_BODY_SIG,
+        SL_SAVE_JOB_BODY_SIG_MASK,
         "SLSaveSessionJobBody",
     ) {
         Some(address) => {

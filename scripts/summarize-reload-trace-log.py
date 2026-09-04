@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Summarize er-reload-trace-dll logs for same-character reload diagnosis."""
+"""Summarize er-reload-trace logs for same-character reload diagnosis."""
 
 from __future__ import annotations
 
@@ -14,9 +14,21 @@ from typing import TypedDict
 EVENT_RE = re.compile(
     r"^\[(?P<seq>\d+) \+(?P<tick>\d+)ms\] (?P<label>\S+)(?: (?P<phase>ENTER|LEAVE))?(?P<rest>.*)$"
 )
+# `path_len_df0` is a CHARACTER COUNT, so it parses as an integer and NOT as one of the
+# hex/pointer keys. It used to be spelled `df0=0x<hex>` and sat in the pointer alternation right
+# beside `gm` and `pgd`, which is how a `DLString<wchar_t>` length came to be read as an address
+# (`GameMan+0xdf0` is the length member of the `FD4FilePathBase` at `GameMan+0xdd0`; the two save
+# gates `FUN_140679180` and `FUN_14067b100` both test it `!= 0`).
+#
+# LEGACY_DF0_RE keeps the old spelling readable rather than letting it vanish. Dropping it would
+# make every pre-rename log summarize with the field simply ABSENT from `observed_field_values` --
+# "never observed" where the truth is "observed under the other name", which is the same
+# confident-false-negative this rename exists to remove.
 FIELD_RE = re.compile(
-    r"\b(?P<key>base|gm|df0|gdm|pgd|mounted_registry)=0x(?P<hex>[0-9a-fA-F]+)|\b(?P<ikey>b78|b80|ac0)=(?P<int>-?\d+|<unreadable>)|\bc30=(?P<c30>0x[0-9a-fA-F]+|<unreadable>)"
+    r"\b(?P<key>base|gm|gdm|pgd|mounted_registry)=0x(?P<hex>[0-9a-fA-F]+)|\b(?P<ikey>b78|b80|ac0|path_len_df0)=(?P<int>-?\d+|<unreadable>)|\bc30=(?P<c30>0x[0-9a-fA-F]+|<unreadable>)"
 )
+LEGACY_DF0_RE = re.compile(r"(?<![0-9a-zA-Z_])df0=0x(?P<hex>[0-9a-fA-F]+)")
+PATH_LEN_KEY = "path_len_df0"
 IMPORTANT_LABELS = (
     "menu_continue_wrapper_82bac0",
     "menu_new_or_load_wrapper_82ba80",
@@ -87,6 +99,12 @@ def parse_fields(rest: str) -> dict[str, str]:
             fields[match.group("ikey")] = match.group("int")
         else:
             fields["c30"] = match.group("c30")
+    # Pre-rename logs only. Normalised to decimal under the current key so a mixed corpus does not
+    # report the same field as two populations, one of them address-shaped.
+    if PATH_LEN_KEY not in fields:
+        legacy = LEGACY_DF0_RE.search(rest)
+        if legacy is not None:
+            fields[PATH_LEN_KEY] = str(int(legacy.group("hex"), 16))
     return fields
 
 
@@ -131,7 +149,7 @@ def summarize(events: list[Event]) -> Summary:
             slot["last_seq"] = max(slot["last_seq"], seq)
         fields = event.get("fields")
         if fields is not None:
-            for key in ("b78", "b80", "ac0", "c30", "df0", "pgd", "mounted_registry"):
+            for key in ("b78", "b80", "ac0", "c30", PATH_LEN_KEY, "pgd", "mounted_registry"):
                 value = fields.get(key)
                 if isinstance(value, str):
                     field_values[key].add(value)

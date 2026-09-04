@@ -6,24 +6,32 @@ publish = false
 
 [lib]
 name = "er_telemetry"
+crate-type = ["cdylib"]
 
-# er-telemetry is the telemetry subsystem lifted out of the product DLL. It
-# depends ONLY on er-game-base + upstream/sibling game libs, NEVER on product
-# (er-effects-rs) code. Product depends on THIS crate, not the reverse.
+# Thin standalone telemetry DLL: a DllMain shell that drives er-telemetry-core's
+# read-side oracles on a game-thread FrameBegin tick. Loads as its own me3
+# [[natives]] entry (telemetry-only profile, or as a 4th native alongside the
+# product DLL). All reusable logic lives in the er-telemetry-core LIB; a cdylib
+# cannot be depended on as a lib, which is why this is a separate shell.
+#
+# Owns standalone telemetry hooks; product DLL should not need diagnostic/logging hooks.
 [target.'cfg(windows)'.dependencies]
-er-game-base = { path = "../er-game-base", features = ["game-types"] }
+# For the BOUNDED singleton wait. This shell's unbounded `loop { yield_now() }` was one of the two
+# that saturated the wineserver and hung a boot on 2026-08-29 -- see er_game_base::wait.
+er-game-base = { path = "../er-game-base" }
+er-hook = { path = "../er-hook" }
+er-telemetry-core = { path = "../er-telemetry-core" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
-er-save-loader = { path = "../er-save-loader" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }
 
-[dependencies]
-# Host/tool-side (non-windows) still resolves the base crate (tier A only) so the
-# shared log/mem primitives + RVA table are available for offline unit work.
-er-game-base = { path = "../er-game-base" }
-
-# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy
-# lint set, denied. This crate is at zero violations on its shipping target
-# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc -p er-telemetry --all-targets`)
-# and on the host build, so the deny carries no `# DEBT:` allows.
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows.
 [lints]
 workspace = true

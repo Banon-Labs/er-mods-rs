@@ -24,7 +24,7 @@ changes the code inside DLLs whose own directories were never touched, so "the c
 edited" systematically under-reports. The walk is therefore over reverse dependencies.
 
 That same fan-out is why the conflict table exists: a wide closure will happily propose
-loading the product next to `er_loading_portrait_dll.dll`, which is documented in-tree as
+loading the product next to `er_loading_portrait.dll`, which is documented in-tree as
 a double-Present-hook corruption.
 
 WHY CONFLICTS ARE RESOLVED LOUDLY RATHER THAN REFUSED OUTRIGHT
@@ -176,7 +176,7 @@ def resolve_base(base_ref: str, fetch: bool) -> tuple[str, str]:
     return merge_base, head
 
 
-PRODUCT_PACKAGE = "er-effects-rs"
+PRODUCT_PACKAGE = "er-quickload"
 
 
 def find_conflicts(packages: set[str], table: dict) -> list[dict]:
@@ -199,17 +199,36 @@ def find_conflicts(packages: set[str], table: dict) -> list[dict]:
 def resolve_conflicts(
     selected: set[str], table: dict, pinned: set[str]
 ) -> tuple[set[str], list[dict], list[dict]]:
-    """Drop the non-product side of each conflict.
+    """Drop opt-in-only DLLs, then the non-product side of each conflict.
 
     Returns (kept, excluded, unresolvable). `pinned` names packages the caller asked for
-    explicitly: excluding one of those would silently override a direct request, so it is
-    reported as unresolvable instead.
+    explicitly: excluding one of those would silently override a direct request, so a pinned
+    conflict loser is reported as unresolvable instead, and a pinned opt-in-only DLL is simply
+    kept -- naming it with `--with` IS the opt-in.
     """
     kept = set(selected)
     excluded: list[dict] = []
     unresolvable: list[dict] = []
 
-    for conflict in find_conflicts(selected, table):
+    # OPT-IN-ONLY DLLs come out FIRST, before any conflict ranking. They are co-loadable --
+    # nothing about them corrupts a run -- but they CHANGE THE GAME the user sees, and a
+    # dependency-closure walk is not consent. A gameplay mod nobody asked for arriving because
+    # it happens to depend on a crate this branch touched is how a run stops being the run the
+    # user wanted. `--with` is the consent, and it is the ONLY way in.
+    for name in sorted(set(table.get("opt_in_only", {})) & kept):
+        if name in pinned:
+            continue
+        kept.discard(name)
+        excluded.append(
+            {
+                "package": name,
+                "kind": "opt-in-only",
+                "because": " ".join((table["opt_in_only"][name] or "").split()),
+                "evidence": "scripts/me3-dll-conflicts.toml [opt_in_only]",
+            }
+        )
+
+    for conflict in find_conflicts(kept, table):
         a, b = conflict["a"], conflict["b"]
         if PRODUCT_PACKAGE not in (a, b):
             unresolvable.append({**conflict, "why": "neither side is the product; nothing ranks them"})
@@ -234,8 +253,14 @@ def resolve_conflicts(
     return kept, excluded, unresolvable
 
 
-def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
+def compute(
+    base_ref: str,
+    fetch: bool,
+    pinned: set[str] | None = None,
+    dropped: set[str] | None = None,
+) -> dict:
     pinned = pinned or set()
+    dropped = dropped or set()
     merge_base, head = resolve_base(base_ref, fetch)
     changed = changed_paths(merge_base)
     seeds, outside = owning_packages(changed)
@@ -251,6 +276,26 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         raise ClosureError(
             f"--with names packages that are not ME3-loadable shells: {', '.join(sorted(unknown))}"
         )
+    unknown = dropped - shipped
+    if unknown:
+        raise ClosureError(
+            f"--without names packages that are not ME3-loadable shells: "
+            f"{', '.join(sorted(unknown))}"
+        )
+    # Asking for a DLL and refusing it in the same breath has no correct reading, and guessing
+    # one would silently do the opposite of half the request.
+    both = pinned & dropped
+    if both:
+        raise ClosureError(
+            f"named by BOTH --with and --without: {', '.join(sorted(both))}"
+        )
+    # Excluding the product leaves a profile with nothing to express conflicts against, and
+    # every companion chains onto its hook union. That is not a run worth staging.
+    if PRODUCT_PACKAGE in dropped:
+        raise ClosureError(
+            f"--without cannot drop {PRODUCT_PACKAGE}: it is the baseline every conflict is "
+            f"ranked against and the owner of the hook union the companions chain onto"
+        )
 
     candidates = set(affected & shipped) | pinned
     fallback = None
@@ -265,7 +310,33 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         table = tomllib.load(handle)
     kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
 
+    # `--without` is applied LAST, after conflict ranking, so an exclusion cannot be undone by a
+    # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
+    # the run block SAYS which DLL was withheld. A silent omission is how an A/B turns into two
+    # runs nobody can tell apart. Its use case is the param-patching class: any DLL that mutates
+    # a param row at runtime moves the Seamless lobby-key fingerprint and drops the player out
+    # of matchmaking, and the only way to prove which one is to re-run without it.
+    for name in sorted(dropped & kept):
+        kept.discard(name)
+        excluded.append(
+            {
+                "package": name,
+                "kind": "withheld",
+                "because": "excluded by --without on the command line",
+                "evidence": "caller request",
+            }
+        )
+
+    # PRODUCT FIRST, then the rest alphabetically. me3 loads natives in profile order, and the
+    # companions resolve the product's `er_effects_union_register` export to chain onto prologues it
+    # already owns (scripts/me3-launch-lib.sh says the same). A plain `sorted()` put
+    # `er-armament-icons` ahead of `er-quickload`, so the companion's install thread could run
+    # before the product image was even loaded -- it would then find no export, fall back to its own
+    # MinHook instance, and recreate the collision the [[shared]] entry exists to prevent. The
+    # companion still polls briefly, so this is belt-and-braces rather than the sole guarantee.
     selected = sorted(kept)
+    if PRODUCT_PACKAGE in kept:
+        selected = [PRODUCT_PACKAGE] + [p for p in selected if p != PRODUCT_PACKAGE]
     dirty = bool(git("status", "--porcelain").strip())
 
     return {
@@ -278,6 +349,7 @@ def compute(base_ref: str, fetch: bool, pinned: set[str] | None = None) -> dict:
         "seed_crates": sorted(seeds),
         "affected_crates": sorted(affected),
         "pinned": sorted(pinned),
+        "withheld": sorted(dropped),
         "packages": selected,
         "artifacts": [f"{artifact_of[p]}.dll" for p in selected],
         "excluded": [
@@ -421,8 +493,87 @@ def selftest() -> int:
     )
     shipped = {package for package, _ in shipped_pairs()}
     check(
-        affected_packages({"er-game-base"}, live) & shipped >= {"er-effects-rs"},
+        affected_packages({"er-game-base"}, live) & shipped >= {"er-quickload"},
         "a change to er-game-base reaches the product DLL",
+    )
+
+    # --- --without: an exclusion that is recorded, not silent ---------------------------
+    # These call compute() through its argument-validation path only (no git), so they prove the
+    # refusals without needing a repo state. The keep/record behaviour is proven on the same
+    # resolve_conflicts + drop sequence compute() runs.
+    live_shipped_pairs = shipped_pairs()
+    a_real_shell = next(
+        package for package, _ in live_shipped_pairs if package != PRODUCT_PACKAGE
+    )
+
+    def refuses(**kwargs) -> str:
+        try:
+            compute("origin/main", fetch=False, **kwargs)
+        except ClosureError as err:
+            return str(err)
+        return ""
+
+    check(
+        "not ME3-loadable shells" in refuses(dropped={"no-such-crate"}),
+        "--without refuses a package that is not a shipped shell",
+    )
+    check(
+        "BOTH --with and --without" in refuses(
+            pinned={a_real_shell}, dropped={a_real_shell}
+        ),
+        "naming one DLL with both --with and --without refuses instead of guessing",
+    )
+    check(
+        "cannot drop" in refuses(dropped={PRODUCT_PACKAGE}),
+        "--without refuses to drop the product DLL",
+    )
+
+    # And the drop itself: withheld comes out of `kept` and lands in `excluded` with a reason,
+    # so an A/B pair is distinguishable in the run block rather than being two identical-looking
+    # runs. This mirrors the sequence compute() applies after conflict ranking.
+    kept_ab, excluded_ab, _ = resolve_conflicts({PRODUCT_PACKAGE, a_real_shell}, {}, set())
+    for name in sorted({a_real_shell} & kept_ab):
+        kept_ab.discard(name)
+        excluded_ab.append({"package": name, "kind": "withheld", "because": "x", "evidence": "y"})
+    check(
+        a_real_shell not in kept_ab
+        and any(e["kind"] == "withheld" for e in excluded_ab)
+        and PRODUCT_PACKAGE in kept_ab,
+        "a withheld DLL leaves `kept` and is RECORDED in `excluded`, product untouched",
+    )
+
+    # --- opt-in-only: co-loadable, but consent is required ------------------------------
+    opt_table = {"opt_in_only": {"mush": "wears a costume nobody asked for"}}
+    kept, excluded, unresolvable = resolve_conflicts({PRODUCT_PACKAGE, "mush"}, opt_table, set())
+    check(
+        "mush" not in kept and not unresolvable,
+        "an opt-in-only DLL is dropped from a closure that merely reached it",
+    )
+    check(
+        [e["package"] for e in excluded] == ["mush"]
+        and excluded[0]["kind"] == "opt-in-only"
+        and "costume" in excluded[0]["because"],
+        "the dropped opt-in-only DLL is REPORTED with its player-facing reason, not silently lost",
+    )
+    kept_pinned, excluded_pinned, _ = resolve_conflicts(
+        {PRODUCT_PACKAGE, "mush"}, opt_table, {"mush"}
+    )
+    check(
+        "mush" in kept_pinned and not excluded_pinned,
+        "--with is the opt-in: a pinned opt-in-only DLL is kept",
+    )
+    # The real table, against the real closure: the mushroom mod must never arrive unasked.
+    with CONFLICTS_TOML.open("rb") as handle:
+        live = tomllib.load(handle)
+    check(
+        "mushroom-man-runtime" in live.get("opt_in_only", {}),
+        "mushroom-man-runtime is declared opt-in-only in the shipped table",
+    )
+    every = {package for package, _ in shipped_pairs()}
+    kept_all, _, _ = resolve_conflicts(every, live, set())
+    check(
+        "mushroom-man-runtime" not in kept_all,
+        "even a closure that selects EVERY shell does not load the mushroom mod",
     )
 
     print("selftest:", "PASS" if ok else "FAIL")
@@ -445,6 +596,15 @@ def main() -> int:
         metavar="PACKAGE",
         help="force-include a shell (repeatable); refuses rather than excluding it on conflict",
     )
+    parser.add_argument(
+        "--without",
+        dest="dropped",
+        action="append",
+        default=[],
+        metavar="PACKAGE",
+        help="force-EXCLUDE a shell (repeatable); applied after conflict ranking and reported "
+        "in the excluded list, so the run block says what was withheld",
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -453,7 +613,12 @@ def main() -> int:
         return selftest()
 
     try:
-        result = compute(args.base, fetch=not args.no_fetch, pinned=set(args.pinned))
+        result = compute(
+            args.base,
+            fetch=not args.no_fetch,
+            pinned=set(args.pinned),
+            dropped=set(args.dropped),
+        )
     except ClosureError as err:
         print(f"er-dll-closure: {err}", file=sys.stderr)
         return EXIT_ERROR

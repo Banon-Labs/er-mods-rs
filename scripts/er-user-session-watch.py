@@ -6,10 +6,10 @@ it is for no-auto-teardown user play sessions where the agent only needs to know
 when the game exits and to collect a semaphore timeline for post-run analysis.
 
 - Waits for eldenring.exe to appear (boot grace), then watches until it exits.
-- Every 2s stats the er-effects-* log files; records size/mtime changes as
+- Every 2s stats the er-quickload-* log files; records size/mtime changes as
   timestamped events so post-run analysis can correlate wall-clock time with
   log growth (e.g. "user was in the blank menu around HH:MM:SS").
-- Copies er-effects-telemetry.json to a numbered snapshot each time it changes,
+- Copies er-quickload-telemetry.json to a numbered snapshot each time it changes,
   building a semaphore timeline across the session.
 - Hard cap (default 3600s) so this background job can never go stale; if the
   cap fires while the game is still up, the caller restarts the watcher.
@@ -24,7 +24,45 @@ import shutil
 import sys
 import time
 
-GAME = "/home/banon/.local/share/Steam/steamapps/common/ELDEN RING/Game"
+# WHERE THE WATCHED FILES LIVE, AND WHY IT IS NO LONGER JUST THE GAME DIRECTORY.
+#
+# Launchers now redirect the DLL's per-run artifacts into the run's own directory
+# (`ER_QUICKLOAD_*_PATH`), because a game-directory artifact is SINGLE-SLOT: the DLL rotates
+# `<name>` to `<name>.prev` on its first write, so the next launch destroys the run before last.
+# A watcher pinned to the game directory therefore sees NOTHING for such a run and records a
+# session of flat, unchanging files -- which reads as "the DLL wrote nothing", not as "you are
+# watching the wrong directory".
+#
+# So: look in the run's directory first (`ER_RUN_ARTIFACT_DIR`, or `ER_QUICKLOAD_TELEMETRY_PATH`'s
+# own parent, which every launcher sets), and fall back to the game directory for a plain
+# `~/Elden/launch.sh` session that sets no redirects. `ER_GAME_DIR`/`ME3_STEAM_DIR` override the
+# fallback rather than the hard-coded home directory that used to sit here.
+_STEAM = os.environ.get("ME3_STEAM_DIR", os.path.join(os.path.expanduser("~"), ".local/share/Steam"))
+GAME = os.environ.get("ER_GAME_DIR", os.path.join(_STEAM, "steamapps/common/ELDEN RING/Game"))
+_REDIRECTED = os.environ.get("ER_RUN_ARTIFACT_DIR") or (
+    os.path.dirname(os.environ["ER_QUICKLOAD_TELEMETRY_PATH"])
+    if os.environ.get("ER_QUICKLOAD_TELEMETRY_PATH")
+    else None
+)
+# Both, in priority order, so a run whose environment did not survive the launch chain (and whose
+# DLL therefore fell back to the game directory) is still observed instead of reported as silent.
+SOURCE_DIRS = [d for d in (_REDIRECTED, GAME) if d]
+
+
+def resolve(name):
+    """This run's copy of `name`: the redirect if it exists, else the game-directory fallback.
+
+    Existence, not configuration, decides. The redirect is set from OUR side of the launch; whether
+    the DLL honoured it depends on the environment surviving launch.sh -> me3 -> the compat tool.
+    Returning a path that is not there would make a healthy run look silent.
+    """
+    for directory in SOURCE_DIRS:
+        candidate = os.path.join(directory, name)
+        if os.path.exists(candidate):
+            return candidate
+    return os.path.join(SOURCE_DIRS[0], name)
+
+
 OUT = sys.argv[1]
 CAP_SECONDS = int(sys.argv[2]) if len(sys.argv) > 2 else 3600
 # Teardown when oracle_optionsetting_real_blank_detected_count reaches this. 0 disables blank-teardown
@@ -33,13 +71,13 @@ BLANK_THRESHOLD = int(sys.argv[3]) if len(sys.argv) > 3 else 1
 BOOT_GRACE_SECONDS = 180
 
 FILES = [
-    "er-effects-telemetry.json",
-    "er-effects-autoload-debug.log",
-    "er-effects-continue-trace.log",
-    "er-effects-bootstrap.jsonl",
-    "er-effects-bootstrap-state.json",
-    "er-effects-crash-log.txt",
-    "er-effects-crash.log",
+    "er-quickload-telemetry.json",
+    "er-quickload-autoload-debug.log",
+    "er-quickload-continue-trace.log",
+    "er-quickload-bootstrap.jsonl",
+    "er-quickload-bootstrap-state.json",
+    "er-quickload-crash-log.txt",
+    "er-quickload-crash.log",
 ]
 
 
@@ -75,9 +113,9 @@ def teardown():
 
 def blank_detected_count():
     # RAM-read semaphore is the run-stopping oracle: the DLL's oracle_optionsetting_pane_blank_detected_count
-    # in er-effects-telemetry.json. Non-visual; fires the instant the blank Game Options pane reproduces.
+    # in er-quickload-telemetry.json. Non-visual; fires the instant the blank Game Options pane reproduces.
     try:
-        d = json.load(open(os.path.join(GAME, "er-effects-telemetry.json")))
+        d = json.load(open(resolve("er-quickload-telemetry.json")))
         # REAL signal: healthy pane seen THEN went hidden (cannot false-fire on boot/preload).
         return int(d.get("oracle_optionsetting_real_blank_detected_count", 0))
     except (OSError, ValueError, json.JSONDecodeError):
@@ -117,11 +155,14 @@ try:
     _libc = ctypes.CDLL("libc.so.6", use_errno=True)
     _inotify_fd = _libc.inotify_init1(0)
     if _inotify_fd >= 0:
-        _libc.inotify_add_watch(
-            _inotify_fd,
-            GAME.encode("utf-8"),
-            _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
-        )
+        # EVERY candidate directory, because the artifacts may be in either one and a watch on the
+        # wrong one blocks for the full slice while the interesting file is being written elsewhere.
+        for _directory in SOURCE_DIRS:
+            _libc.inotify_add_watch(
+                _inotify_fd,
+                _directory.encode("utf-8"),
+                _IN_MODIFY | _IN_CREATE | _IN_MOVED_TO | _IN_CLOSE_WRITE,
+            )
 except OSError:
     _inotify_fd = -1
 
@@ -164,7 +205,7 @@ while True:
     # RAM-semaphore run-stopping oracle: the instant the blank pane reproduces, capture + tear down.
     if seen_game and alive and BLANK_THRESHOLD >= 1 and blank_detected_count() >= BLANK_THRESHOLD:
         emit("blank_detected_semaphore", count=blank_detected_count())
-        p = os.path.join(GAME, "er-effects-telemetry.json")
+        p = resolve("er-quickload-telemetry.json")
         try:
             shutil.copyfile(p, os.path.join(OUT, "telemetry-blank-detected.json"))
         except OSError:
@@ -174,7 +215,7 @@ while True:
         emit("blank_detected_teardown")
         break
     for name in FILES:
-        p = os.path.join(GAME, name)
+        p = resolve(name)
         try:
             st = os.stat(p)
             cur = (st.st_size, st.st_mtime)
@@ -190,7 +231,7 @@ while True:
                     size=cur[0] if cur else None,
                     mtime=ts(cur[1]) if cur else None,
                 )
-            if name == "er-effects-telemetry.json" and cur and not first:
+            if name == "er-quickload-telemetry.json" and cur and not first:
                 snap_idx += 1
                 try:
                     shutil.copyfile(

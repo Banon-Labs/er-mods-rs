@@ -13,7 +13,7 @@
 //! the process that owns it; keeping an older run means copying the file aside
 //! yourself, not letting it accumulate.
 //!
-//! The concrete failure that set the rule: `er-invasion-warp-dll` opened its log
+//! The concrete failure that set the rule: `er-invasion-warp` opened its log
 //! with a plain `append(true)` on a fixed name next to the game executable. Twelve
 //! separate launches piled into one 565 KB file, so a count taken over it ("37
 //! confirms") read as ONE run doing something 37 times when it was really twelve
@@ -40,7 +40,7 @@ use std::sync::Mutex;
 ///
 /// The invariant is that `<name>.prev` holds the run IMMEDIATELY before the live file,
 /// or does not exist. Several harnesses delete the log before launching (`rm -f
-/// "$GAME_DIR"/er-effects-*.log`), which leaves nothing to rotate; the older `.prev` is
+/// "$GAME_DIR"/er-quickload-*.log`), which leaves nothing to rotate; the older `.prev` is
 /// dropped in that case rather than left sitting next to a fresh log looking one run
 /// old when it is three. Keeping a run means copying it somewhere of your own.
 pub const PREVIOUS_RUN_SUFFIX: &str = ".prev";
@@ -59,6 +59,41 @@ pub fn game_directory_path() -> Option<PathBuf> {
     std::env::current_exe()
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
+}
+
+/// Where this run's copy of `default_name` goes: the launcher's `env_var` redirect if it set
+/// one, otherwise `default_name` beside `eldenring.exe`.
+///
+/// # Why a redirect knob is not optional for an artifact
+///
+/// A game-directory artifact is SINGLE-SLOT. [`begin_fresh_run`] keeps exactly one previous
+/// generation, so two launches lose the run before last, and a harness that clears the live file
+/// pre-launch takes the `.prev` with it. Several sessions launch concurrently in this repo, which
+/// makes that the normal case rather than a race. The fix is to redirect the WRITER at launch into
+/// a directory unique to the run: two runs then never share a path, and a run that is killed
+/// mid-write still leaves everything it wrote where it wrote it — unlike a copy at teardown, which
+/// a crashed run never reaches and which by then could only preserve the copier's own output.
+///
+/// # Why the game-directory fallback stays
+///
+/// The env has to survive `launch.sh` -> me3 -> Proton, and if it does not the DLL must still write
+/// SOMEWHERE rather than silently write nowhere: a missing artifact reads as "the feature did not
+/// fire", which is the exact false negative this whole path exists to prevent. An empty value is
+/// treated as unset for the same reason — `PathBuf::from("")` opens nothing, so honouring it
+/// literally would turn a mis-quoted shell variable into a run that logs into the void.
+///
+/// The fallback is resolved against the GAME directory, never the CWD: me3 launch wrappers set the
+/// process CWD to arbitrary Windows directories, so a bare relative name scatters a run's evidence
+/// away from the rest of its artifacts.
+pub fn redirected_artifact_path(env_var: &str, default_name: &str) -> PathBuf {
+    std::env::var_os(env_var)
+        .map(PathBuf::from)
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| {
+            game_directory_path()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(default_name)
+        })
 }
 
 /// One-shot per (process, path): rotate the previous run's file aside and truncate,
@@ -117,11 +152,27 @@ pub fn begin_fresh_run(path: &Path) {
     if path.exists() {
         let _ = fs::rename(path, &previous);
     }
-    let _ = fs::OpenOptions::new()
+    if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .truncate(true)
-        .open(path);
+        .open(path)
+    {
+        // THE FIRST LINE OF EVERY LOG SAYS WHICH BINARY WROTE IT.
+        //
+        // Placed here, in the one-shot every sanctioned opener already routes through, because
+        // the alternative -- asking each DLL to log its own identity at boot -- is a rule that
+        // holds until someone adds the twentieth shell and forgets. `er-invasion-warp` is
+        // the worked example: its opening line was `loaded module_base=0x…`, and dating a
+        // tester's log on 2026-08-24 meant string-matching its format literals against the
+        // repo, which could only prove "not older than 2026-08-18" because no later commit
+        // happened to change a line it prints.
+        //
+        // Failure is ignored for the same reason every other write here ignores it: a
+        // read-only game directory must degrade to fewer lines, never to a panic on the game
+        // thread.
+        let _ = writeln!(file, "{}", crate::build_id::identity_line());
+    }
 }
 
 /// THE sanctioned way to open a log for append in this repo.
@@ -161,10 +212,13 @@ pub fn open_truncated_with_header(
     header: impl FnOnce(&mut fs::File),
 ) -> Option<fs::File> {
     begin_fresh_run(path);
+    // APPEND, not truncate. `begin_fresh_run` has already emptied the file and written the
+    // identity line into it; opening with `.truncate(true)` here would delete that line and
+    // leave exactly the logs that most need identifying -- the ones with a persistent handle
+    // and a banner -- as the only ones without it.
     let mut file = fs::OpenOptions::new()
         .create(true)
-        .write(true)
-        .truncate(true)
+        .append(true)
         .open(path)
         .ok()?;
     header(&mut file);
@@ -192,9 +246,21 @@ mod tests {
         append_line(&path, format_args!("second"));
 
         let body = fs::read_to_string(&path).expect("log written");
+        // The identity line is written by the truncating open, so the run's own first line is
+        // the SECOND line of the file. Asserted as a suffix rather than by index so a future
+        // header change cannot quietly turn this into a test of nothing.
+        assert!(
+            body.starts_with("build git="),
+            "a fresh log did not open with its identity: {body:?}"
+        );
+        assert!(
+            body.ends_with("first\nsecond\n"),
+            "stale run survived, or a line was lost: {body:?}"
+        );
         assert_eq!(
-            body, "first\nsecond\n",
-            "stale run survived, or a line was lost"
+            body.lines().count(),
+            3,
+            "expected identity + two lines: {body:?}"
         );
 
         let previous = fs::read_to_string(dir.join("one-run.log.prev")).expect("rotated aside");
@@ -219,14 +285,47 @@ mod tests {
 
         append_line(&path, format_args!("only line"));
 
-        assert_eq!(
-            fs::read_to_string(&path).expect("log written"),
-            "only line\n"
+        let body = fs::read_to_string(&path).expect("log written");
+        assert!(
+            body.starts_with("build git=") && body.ends_with("only line\n"),
+            "expected an identity line then the run's line: {body:?}"
         );
         assert!(
             !dir.join("cleared.log.prev").exists(),
             "a stale generation survived next to a fresh log"
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The launcher's redirect must WIN, or the artifact lands back in the single-slot game
+    /// directory and the next launch destroys it. This is the whole point of the knob.
+    #[test]
+    fn a_launcher_redirect_wins_over_the_game_directory_default() {
+        let key = format!("ER_QUICKLOAD_TEST_REDIRECT_{}", std::process::id());
+        let wanted = std::env::temp_dir().join("run-42").join("artifact.log");
+        // SAFETY: single-threaded within this test; the key is unique to this process and is
+        // read back only here.
+        unsafe { std::env::set_var(&key, &wanted) };
+        assert_eq!(redirected_artifact_path(&key, "artifact.log"), wanted);
+        unsafe { std::env::remove_var(&key) };
+    }
+
+    /// The env has to survive `launch.sh` -> me3 -> Proton. When it does not, the DLL must still
+    /// write somewhere: a missing artifact reads as "the feature never fired", which is a worse
+    /// failure than an artifact in the wrong directory.
+    #[test]
+    fn an_unset_or_empty_redirect_falls_back_to_the_game_directory() {
+        let key = format!("ER_QUICKLOAD_TEST_FALLBACK_{}", std::process::id());
+        // SAFETY: single-threaded within this test; the key is unique to this process.
+        unsafe { std::env::remove_var(&key) };
+        let expected = game_directory_path()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("artifact.log");
+        assert_eq!(redirected_artifact_path(&key, "artifact.log"), expected);
+
+        // An empty value is a mis-quoted shell variable, not a request to write into `""`.
+        unsafe { std::env::set_var(&key, "") };
+        assert_eq!(redirected_artifact_path(&key, "artifact.log"), expected);
+        unsafe { std::env::remove_var(&key) };
     }
 }

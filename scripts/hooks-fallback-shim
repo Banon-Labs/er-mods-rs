@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# THE HOOK GIT RUNS WHEN core.hooksPath IS GONE.
+#
+# scripts/install-git-hooks.sh installs this one file into $GIT_COMMON_DIR/hooks/ under every hook
+# name that scripts/hooks/ carries. It is never reached while core.hooksPath is correct -- git runs
+# scripts/hooks/<name> directly then. It exists for the state where that key is missing.
+#
+# WHY THAT STATE KEEPS HAPPENING. core.hooksPath is not a value this repo owns alone. beads (`bd`)
+# writes it too: the binary carries the literals `Git config set: core.hooksPath=.beads/hooks` and
+# `...=.beads-hooks`, `git config --unset core.hooksPath failed: %w (output: %s)`, and
+# `Warning: failed to reset core.hooksPath: %v`. `bd hooks install` / `bd hooks uninstall` /
+# `bd doctor` are the front doors to that code, `bd hooks list` in this repo already reports our
+# pre-commit and pre-push as "installed (version )" -- i.e. it is looking at them and does not
+# recognise them -- and every agent working here runs `bd` many times an hour. When the key goes
+# away git does not complain. It silently falls back to $GIT_COMMON_DIR/hooks, which is not
+# version-controlled and which nothing keeps in step with scripts/hooks/.
+#
+# WHAT WAS THERE BEFORE, AND WHAT IT COST. A 537-byte pre-push written on 2026-07-27, when the
+# main-push guard was the whole gate. It refused pushes to main and did nothing else: no
+# scripts/check-committed-compiles.sh, no gate suite. It then sat in .git/hooks for
+# five weeks while the real gate grew around it. On 2026-08-31 core.hooksPath was unset for about
+# an hour and a half, and a push reached origin through that stub. It happened to be green.
+# Nothing had checked, and nothing said so.
+#
+# SO THIS IS A FORWARDER, NOT A SECOND IMPLEMENTATION. Whichever way git resolves the hook, the
+# same scripts/hooks/<name> runs. Two consequences are deliberate:
+#   * it is LOUD. Reaching this file at all means the configured hook path is broken, and that is
+#     worth interrupting a push for even when the checks below then pass.
+#   * it FAILS CLOSED. If scripts/hooks/<name> cannot be found, the push is refused. A gate that
+#     cannot locate what it is supposed to run has not passed; it has failed to look. Falling
+#     through to a bare push here would rebuild the exact hole this file closes.
+set -uo pipefail
+
+hook_name=$(basename -- "$0")
+
+refuse() {
+	{
+		echo
+		echo "=============================================================================="
+		echo " ${hook_name}: REFUSED -- the version-controlled hook could not be found"
+		echo
+		printf ' %s\n' "$@"
+		echo
+		echo " git ran this fallback because core.hooksPath does not point at scripts/hooks."
+		echo " Repair:  bash scripts/install-git-hooks.sh"
+		echo "=============================================================================="
+		echo
+	} >&2
+	exit 1
+}
+
+# WHERE THE REAL HOOK LIVES. Two candidates, in this order, because the pushing checkout is not
+# always the main one: agents here run linked worktrees (.worktrees/*, .claude/worktrees/*) and
+# scripts/check-committed-compiles.sh keeps one pinned to arbitrary historical commits. The
+# current worktree's own copy is preferred (it is the tree being pushed); the main checkout is the
+# fallback, because a worktree pinned to an old commit may predate scripts/hooks entirely.
+top=$(git rev-parse --show-toplevel 2>/dev/null || true)
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+main_root=${common%/.git}
+
+target=""
+for candidate in "${top:-}/scripts/hooks/$hook_name" "${main_root:-}/scripts/hooks/$hook_name"; do
+	[[ "$candidate" == /* ]] || continue
+	[[ -f "$candidate" ]] || continue
+	# Never exec ourselves: if someone points core.hooksPath at the fallback directory, or copies
+	# this shim into scripts/hooks/, the obvious forward becomes an infinite loop.
+	[[ "$candidate" -ef "$0" ]] && continue
+	target="$candidate"
+	break
+done
+
+[[ -n "$target" ]] || refuse \
+	"looked for scripts/hooks/${hook_name} under:" \
+	"  worktree top-level : ${top:-<unknown: git rev-parse --show-toplevel failed>}" \
+	"  main checkout      : ${main_root:-<unknown: git rev-parse --git-common-dir failed>}" \
+	"neither exists, so there is nothing to run and nothing has been checked."
+
+configured=$(git config --get core.hooksPath 2>/dev/null || true)
+
+{
+	echo
+	echo "=============================================================================="
+	echo " ${hook_name}: RUNNING THROUGH THE .git/hooks FALLBACK, NOT scripts/hooks"
+	echo
+	echo "   core.hooksPath : ${configured:-<UNSET>}"
+	echo "   git ran        : $0"
+	echo "   forwarding to  : $target"
+	echo
+	echo " .git/hooks is not version-controlled. Something removed or redirected"
+	echo " core.hooksPath -- \`bd hooks install|uninstall\` and \`bd doctor\` all write that"
+	echo " key. The checks below are the real ones; this banner is the only warning that"
+	echo " the configured path is broken."
+} >&2
+
+# SELF-HEAL, ONLY WHEN THE KEY IS ABSENT. Restoring `scripts/hooks` is exactly what
+# scripts/install-git-hooks.sh does, and doing it here shrinks the exposure from "until somebody
+# runs the checker" to "until the next commit or push". It is deliberately NOT done when the key
+# is set to something else: that is another tool's deliberate choice, and silently overwriting it
+# would start a fight this hook cannot win (git would then run THAT tool's hook, not this file).
+# Non-fatal either way -- a failed repair must never decide whether the push is allowed.
+if [[ -z "$configured" && -d "${main_root:-/nonexistent}/scripts/hooks" ]]; then
+	if git config core.hooksPath scripts/hooks 2>/dev/null; then
+		echo "   repaired       : core.hooksPath -> scripts/hooks" >&2
+	else
+		echo "   repair FAILED  : run  bash scripts/install-git-hooks.sh" >&2
+	fi
+fi
+{
+	echo "=============================================================================="
+	echo
+} >&2
+
+# stdin matters: git feeds pre-push the refs being pushed and the real hook reads them.
+exec bash "$target" "$@"

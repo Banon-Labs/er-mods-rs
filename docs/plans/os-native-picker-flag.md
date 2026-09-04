@@ -26,7 +26,7 @@ Authored as a plan only. Not committed with the code commits it describes.
 | The game task runs **concurrently** with the menu/Scaleform pump. | `profile_rows_system_quit_menu.rs:1806-1807`; `title_tick_cover.rs:1399`; bd `er-effects-rs-8tq4` item 15 |
 | `kernel32!CreateFileW` is detoured in **every** save mode, the detour logs save-like paths and takes `save_dest_redirect_lock()`. Its doc records that its file I/O re-enters the detour on the same thread and a second lock acquisition deadlocks. | `file_ops.rs:331-390`; `path_hooks.rs:1567-1645`; `save_dest_commit.rs:600-660` |
 | The logger has a per-thread re-entrancy guard and never holds `LOG` across its own open. | `save_policy_logs.rs:545-660`; commit `a02a274d` |
-| `Win32_UI_Controls_Dialogs` is already an enabled `windows` feature. No `Cargo.toml` change needed. | `crates/er-effects-rs/Cargo.toml` |
+| `Win32_UI_Controls_Dialogs` is already an enabled `windows` feature. No `Cargo.toml` change needed. | `crates/er-quickload/Cargo.toml` |
 | A dead `GetOpenFileNameW` + `OFN_*` import block survives in `title_scaleform_msgbox.rs:34-38`; the crate builds with global `-Awarnings` so nothing flags it. | that file |
 | The gate compiles **and runs** the DLL crate's `#[cfg(test)]` tests on the Windows target under wine. This is the whole basis of the provable half of the test strategy. | `scripts/check-rust-build.sh:38-57` |
 | Recovered shape: plain blocking `GetOpenFileNameW`, `OFN_EXPLORER\|OFN_FILEMUSTEXIST\|OFN_PATHMUSTEXIST\|OFN_HIDEREADONLY\|OFN_NOCHANGEDIR\|OFN_DONTADDTORECENT`, **no `hwndOwner`**, no worker thread, and a comment stating the filter is display-only. Helpers `wide_z`, `system_quit_path_for_windows`, `system_quit_path_from_windows_picker`, `system_quit_windows_path_for_log` all still exist. | `git show ca846fa1`; `system_quit_dialog_handlers.rs:464-527` |
@@ -48,7 +48,7 @@ accessor matching the `*_enabled()` convention.
    first debug line of every session states the mode.
 4. `boilerplate_config` documents it in **both** branches (including `picker_block`, so a file
    created by `remember_preferred_save_picker_dir` still documents it).
-5. `scripts/build-user-release-package.py`'s `er-effects.toml.example` gains the same commented
+5. `scripts/build-user-release-package.py`'s `er-quickload.toml.example` gains the same commented
    line. `check-user-release-package.py` already runs in `check.sh`.
 
 **How it is cached:** for free. `RUNTIME_CONFIG` is a `OnceLock` set once in `DllMain`; nothing
@@ -64,13 +64,13 @@ pub(crate) fn os_native_save_picker_enabled() -> bool                   // = ...
 
 The split exists because `RUNTIME_CONFIG` is a process-global `OnceLock` a unit test cannot set. A
 config that failed to load yields `None` => `false` => the validated in-game default. **A broken
-`er-effects.toml` must never silently move the user to the unverified surface**, and that is tested.
+`er-quickload.toml` must never silently move the user to the unverified surface**, and that is tested.
 
 **Telemetry.** A latch, not a lazy read, so it is exported even in a session where no picker opens:
 `SAVE_PICKER_SURFACE` set once in `init_runtime_config` to 0 (in-game) or 1 (OS), exported as
 `oracle_save_picker_surface`.
 
-Companion counters (all new in `crates/er-telemetry/src/counters.rs`, exported in the existing
+Companion counters (all new in `crates/er-telemetry-core/src/counters.rs`, exported in the existing
 `oracle_save_picker_*` block):
 
 | Counter | Oracle | Meaning |
@@ -139,7 +139,7 @@ save" (contract 7).
 
 ## 3. The OS dialog itself
 
-New module `crates/er-effects-rs/src/experiments/startup_hooks/save_picker/save_picker_os_dialog.rs` (~300
+New module `crates/er-quickload/src/experiments/startup_hooks/save_picker/save_picker_os_dialog.rs` (~300
 lines). A new file, not an addition to `save_picker_menu.rs` (841 lines):
 `check-rust-file-sizes.py` warns above 900.
 
@@ -189,7 +189,7 @@ D3D12 present-overlay (`ErEffectsLoadingOverlay`) is the largest visible window,
 picked it, and that was "the root cause of 'no key opens the menu'".
 
 Promote the correct finder instead: `sq_repro_er_hwnd()` (`input_block.rs:137-161`) -- largest
-visible top-level window of this process, excluding classes containing `ErEffects`/`er-effects`,
+visible top-level window of this process, excluding classes containing `ErEffects`/`er-quickload`,
 with a one-shot log of class/title/rect. Rename to `game_main_window()`, make it `pub(crate)`, and
 have both callers use it. Store the result in `SAVE_PICKER_OS_OWNER_HWND` and include it in the
 dialog-opened log. A null result is not fatal -- pass `HWND(null)` and log `owner=none`, so a report
@@ -201,7 +201,7 @@ Contract 8, resolved per surface so both clauses hold and neither mode drifts, b
 calls the **same function** the in-game arm already calls:
 
 - **Load** => `save_picker_start_dir()` (`save_picker_menu.rs:65-84`): session preferred dir ->
-  `er-effects.toml` `preferred_save_picker_dir` -> active save's dir -> default save root, each
+  `er-quickload.toml` `preferred_save_picker_dir` -> active save's dir -> default save root, each
   `is_dir()`-checked, all Windows-form.
 - **Destination** => the loaded save's own folder and its own leaf. Extract the inline logic from
   `system_quit_open_save_dest_picker` (`save_picker_menu.rs:295-324`) into
@@ -617,7 +617,7 @@ and the row/intent logic. It cannot cover:
 - that the game recovers cleanly after a ~30 s blocked menu pump.
 
 Live-run acceptance (one windowed, non-fullscreen run, `os_native_save_picker = true`), from
-`er-effects-telemetry.json`:
+`er-quickload-telemetry.json`:
 
 | Oracle | Expected |
 |---|---|
@@ -662,9 +662,9 @@ Seven commits. Every one leaves `bash scripts/check.sh` green, and every one lea
 (in-game) path byte-identical** -- through C4 the OS code is unreachable, and from C5 it is
 reachable only with the key set.
 
-**C1 -- `config: name the picker surface in er-effects.toml`**
+**C1 -- `config: name the picker surface in er-quickload.toml`**
 `RuntimeConfig` field, parse arm + aliases, `os_native_save_picker_from` / `..._enabled`, the
-`init_runtime_config` log field, `boilerplate_config` (both branches), `er-effects.toml.example`,
+`init_runtime_config` log field, `boilerplate_config` (both branches), `er-quickload.toml.example`,
 `SAVE_PICKER_SURFACE` + `oracle_save_picker_surface`.
 *Green by:* the flag-plumbing unit tests. Nothing reads the accessor for a decision yet.
 
@@ -717,7 +717,7 @@ decides whether they are kept.
 
 - **No installer.** Nothing writes `os_native_save_picker` for the user. The key is read-only from
   the DLL's point of view (unlike `preferred_save_picker_dir`, which the DLL rewrites). A user opts
-  in by editing `er-effects.toml` next to `eldenring.exe`.
+  in by editing `er-quickload.toml` next to `eldenring.exe`.
 - **No title-screen / startup picker change.** The missing-save picker stays in-game in **both**
   modes; `52bab5e7`'s replacement is not reverted, and `complete_missing_save_selection_from_picker`
   / `save_picker_title_start_dir` / the overlay picker are untouched. `open_picker_for_intent` is

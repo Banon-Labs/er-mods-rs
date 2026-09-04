@@ -16,80 +16,721 @@
 # in [compatible] with a reason. Silence is not an answer: an unanalyzed DLL is exactly
 # the one that gets auto-included by a dependency-closure walk.
 #
+# There is a THIRD state, [[shared]]: two DLLs that both detour one prologue but have been made
+# safe by routing through a single MinHook instance (the hook union). A [[shared]] pair is
+# co-loadable -- `er-dll-closure.py` reads [[conflict]] only -- and each of its members is still
+# classified by [compatible]. It exists so `check-shared-hook-rvas.py` can tell a DECLARED,
+# mechanism-backed sharing apart from an accidental one, and so reverting either side to a bare
+# hook fails a gate instead of silently disabling a feature.
+#
 # `kind` is the failure mode, not a severity. All conflicts are blocking -- the point of
 # generating a profile is that you learn what is wrong BEFORE the run, not after.
 
+[[shared]]
+a = "er-quickload"
+b = "er-armament-icons"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+# The two detours on that prologue, aligned with `a` and `b`. These are what the gate PROVES: each
+# must be handed to a union registrar and must never appear in an `MhHook::new(...)` call, so a
+# revert to a private MinHook instance fails a check instead of silently disabling a feature.
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "file_open_hook"
+reason = """RESOLVED 2026-08-23, was a `hook-collision`. Both DLLs detour the SAME Scaleform \
+LoaderImpl file-open prologue (0x11ced80), and each links `er-hook` statically -- so each owned a \
+SEPARATE MinHook instance and whichever installed second overwrote the other's trampoline. \
+RUNTIME-MEASURED: in an 11-native profile the product reported file_open_observer_installed = true \
+and file_open_hits = 0 for a whole session, and EVERY GFx swap it owns went silently inert -- the \
+System>Quit tab rendered vanilla, plus the title strip, the 05_010 stats panel and both 02_990 \
+text-input movies. Loaded ALONE the same build reported 113 hits. Nothing crashed and nothing \
+logged an error, so the loader bug wore a feature bug's clothes for a full day.
+
+THE FIX, both sides, so install ORDER cannot decide it: the product registers its observer through \
+`er_hook::register_union_hook` instead of a bare `MhHook`, and the companion registers through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that single instance (falling back to its own union when the product is absent, so \
+a standalone armament-icons run is unchanged). Whoever registers first creates the dispatcher and \
+owns the real trampoline; the other CHAINS. Both handlers are now UNION-SHAPED -- four `usize` \
+args, calling their `orig` slot through the same signature, because that slot may hold the next \
+handler rather than the game trampoline.
+
+This pair is therefore CO-LOADABLE and `er-dll-closure.py` may emit both; it reads `[[conflict]]` \
+only. It is recorded here so `check-shared-hook-rvas.py` can prove the sharing is DECLARED rather \
+than accidental, and so a future edit that reverts either side to a bare hook is a gate failure \
+rather than another silent day."""
+evidence = "crates/er-armament-icons/src/gfx_equip_hook.rs (register_shared_hook); crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs (register_union_hook); crates/er-hook/src/lib.rs (register_shared_hook)"
+
+[[shared]]
+a = "er-quickload"
+b = "er-net-effects"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "dinput_kb_get_state_hook"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-enemynpc-effects"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "get_device_state_union"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-enemynpc-effects"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "get_device_state_union"
+reason = """All three DLLs read the keyboard where Elden Ring reads it: the DirectInput \
+device's `GetDeviceState`, resolved at runtime as vtable slot 9 on a probe device created from \
+`DirectInput8Create`. It is not a game RVA, so `check-shared-hook-rvas.py`'s address scan cannot \
+see the overlap -- these rows are how it is recorded at all. Every DirectInput device of a class \
+shares one vtable, so all three resolve the same address.
+
+Each DLL used to install that detour with its own `MhHook`, in its own statically linked MinHook \
+instance. That is the exact configuration measured on 2026-08-23 for the Scaleform file-open \
+prologue (see the first [[shared]] row): the second `MH_CreateHook` on one prologue leaves the \
+loser reporting installed and never running, with nothing crashing and nothing logged.
+
+RESOLVED 2026-08-24, all three sides at once so install order cannot decide it: er-quickload \
+registers through `er_hook::register_union_hook`, and both companions through \
+`er_hook::register_shared_hook`, which resolves the product's `er_effects_union_register` export \
+and chains into that one instance (falling back to its own union when the product is absent). \
+Both companions also moved the install off the FrameBegin tick onto their own thread, because \
+`register_shared_hook` polls for that export for up to a second."""
+evidence = """crates/er-quickload/src/input_blocker.rs:271 `register_union_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-net-effects/src/input_suppression.rs:488 `register_shared_hook(keyboard_addr, \
+dinput_kb_get_state_hook, &DINPUT_KB_GET_STATE_ORIG)`; \
+crates/er-enemynpc-effects/src/hotkey.rs:215 `register_shared_hook(get_state_address, \
+get_device_state_union, &GET_STATE_ORIG)`. All three resolve the slot the same way, through \
+`with_probe_device`/`probe_get_device_state_address` on `GUID_SysKeyboard`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
+[[shared]]
+a = "er-enemynpc-effects"
+b = "er-hotkey-conflicts"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "hook_get_device_state"
+reason = """A FOURTH shell on the DirectInput keyboard `GetDeviceState` slot -- and the only \
+one whose whole purpose is to report the class of bug a private MinHook instance on this prologue \
+causes. It observes and nothing else: the detour calls the rest of the chain, records that SOME \
+module read the keyboard, copies the returned buffer for a consumption check, and returns the \
+chain's value untouched. It never blanks a key, never writes the buffer and never injects.
+
+Registered through `er_hook::register_shared_hook_with_budget`, spelled out at the install site \
+rather than behind a helper so `check-shared-hook-rvas.py` can see the registrar beside the \
+handler and a revert to a private instance goes red instead of silently disabling one of the \
+three shells above.
+
+Note what it cannot do, which is why it does not make the other rows redundant: `GetDeviceState` \
+returns all 256 scancodes at once, so this DLL can say WHICH MODULES read the keyboard and never \
+WHICH KEY any of them is bound to. Its exact `(module, key)` findings come from the \
+argument-carrying user32 surfaces instead."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `register_shared_hook_with_budget(keyboard, \
+hook_get_device_state, &DINPUT_GET_STATE_ORIG, ...)`, resolved from the same probe device \
+(`probe_device_state_address` on `GUID_SysKeyboard`, vtable slot 9) as the three shells above."""
+
+[[shared]]
+a = "er-diag-harness"
+b = "er-reload-trace"
+target = "er_game_base::rva::DLC_ROOTS_JOB_RVA (0x836f30; 1.17 0x837f20)"
+mechanism = "hook-union"
+handler_a = "dlc_roots_job_trace_hook"
+handler_b = "hook_map_request_do"
+reason = """RESOLVED 2026-08-30, and it was a LIVE collision, not a latent one. Both shells detour \
+`FUN_140836f30` -- the `Do` body of the MenuFunctorJob that reaches the DLC virtual-root refill \
+(1.16.2 `ulonglong FUN_140836f30(longlong p1, ulonglong p2, undefined8 p3, undefined8 p4)`, 65 \
+bytes, one callee `FUN_14082e230`; BYTE-IDENTICAL at 1.17 `0x837f20` per \
+docs/recon/rva-map-1162-to-1170.verified.tsv). er-diag-harness traces it as the "job ran / job \
+never enqueued" fork for the reload softlock; er-reload-trace traces it as `map_request_do_836f30`.
+
+CO-LOADED, MEASURED FROM THE PROFILES THEMSELVES: `~/Elden/group-1170.me3` lists `er_quickload`, \
+`er_diag_harness`, `er_reload_trace` AND `er_armament_icons` together. So this was not a pair the \
+launcher merely might build -- it is a pair the user's own hand-written profile launches. (Note \
+that `er-dll-closure.py` would never GENERATE it: er-reload-trace conflicts with the product below, \
+and the product is in every closure. The hand-written profiles are outside that arbiter, which is \
+precisely why the address-level gate has to catch this rather than the closure ranking.)
+
+THE FAILURE IT WOULD HAVE PRODUCED. er-diag-harness installed this one with a bare `MhHook`, in \
+its own statically linked MinHook instance; er-reload-trace registers through \
+`er_hook::register_shared_hook`, which chains onto `er_quickload.dll`'s single instance. Two \
+instances, one prologue, and neither can see the other's `MH_CreateHook` -- so the second writes \
+its five-byte JMP over the first's, and the loser reports installed, never fires, and its counter \
+reads 0 forever. Indistinguishable from a feature that was never enabled; that is the measured \
+2026-08-23 Scaleform failure on a different address.
+
+THE FIX, on the er-diag-harness side, because it was the one holding the private instance: its job \
+trace moved to `er_hook::register_shared_hook` and its handler was reshaped to `er_hook::UnionFn`. \
+The signature was CHECKED before proposing the union rather than assumed -- `UnionFn` is \
+`extern "system" fn(usize, usize, usize, usize) -> usize` and er-hook documents it as "not for \
+float-arg or >4-stack-arg targets"; this target takes four INTEGER arguments and returns an \
+integer, so it fits with nothing to spare and no XMM argument is silently dropped.
+
+That reshape also fixed a real bug the collision was hiding. The handler used to be declared \
+`(this, arg2) -> usize` and forwarded `f(this, arg2)`, but the decompile shows `p4` (`r9`) is a \
+live argument passed straight through to `FUN_14082e230`. A two-argument `extern "system"` detour \
+only sets `rcx`/`rdx` before calling the trampoline, so whatever the handler body last left in \
+`r8`/`r9` was handed to the native on every call. All four are now forwarded verbatim.
+
+Standalone runs are unchanged: with no product DLL in the process `register_shared_hook` falls \
+back to this DLL's own union, so `~/Elden/sweep-er-diag-harness.me3` behaves as before."""
+evidence = """crates/er-diag-harness/src/dlc_roots_trace.rs `install_shared_dlc_roots_job_hook` \
+(`register_shared_hook(base + DLC_ROOTS_JOB_RVA, dlc_roots_job_trace_hook, &DLC_ROOTS_JOB_ORIG)`, \
+address handed over UNTRANSLATED so the registrar owns the single 1.16.2 -> 1.17 resolve); \
+crates/er-reload-trace/src/lib.rs `HookSpec { rva: 0x836f30, detour: hook_map_request_do }` \
+installed via `install_one` -> `register_shared_hook`/`register_union_hook`; \
+crates/er-hook/src/lib.rs `register_shared_hook`. Ghidra 1.16.2 MCP (:8765) \
+`getDecompiledCode 140836f30` for the four-integer-argument signature."""
+
 [[conflict]]
-a = "er-effects-rs"
-b = "er-save-disable-dll"
+a = "er-quickload"
+b = "er-save-disable"
 kind = "hook-collision"
 reason = """Both carry their own MinHook instance and detour the SAME prologues \
 (0x140e6fb50 / 0x140e6e430), so each overwrites the other's trampoline. \
 er_save_disable additionally suppresses every save write, so a run that loads it \
 cannot produce save-path evidence at all."""
-evidence = "crates/er-save-disable-dll/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
+evidence = "crates/er-save-disable/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
 
 [[conflict]]
-a = "er-effects-rs"
-b = "er-loading-portrait-dll"
+a = "er-quickload"
+b = "er-loading-portrait"
 kind = "present-compositor"
-reason = """Double D3D12 Present hook. The product already links er-loading-portrait, so \
+reason = """Double D3D12 Present hook. The product already links er-loading-portrait-core, so \
 the standalone shell installs a second compositor over the same swapchain. The shell's own \
-header states it must NEVER be loaded alongside er_effects_rs.dll."""
-evidence = "crates/er-loading-portrait-dll/src/lib.rs:11"
+header states it must NEVER be loaded alongside er_quickload.dll."""
+evidence = "crates/er-loading-portrait/src/lib.rs:11"
 
 [[conflict]]
-a = "er-effects-rs"
-b = "er-loading-bar-dll"
+a = "er-quickload"
+b = "er-loading-bar"
 kind = "present-compositor"
 reason = """Unconditionally installs a second Present compositor with a SYNTHETIC demo frame \
 provider, painting a fake loading bar over the product's real one. Same conflict class as the \
 portrait shell."""
-evidence = "crates/er-loading-bar-dll/src/lib.rs:102"
+evidence = "crates/er-loading-bar/src/lib.rs:102"
 
 [[conflict]]
-a = "er-effects-rs"
-b = "er-input-harness-dll"
+a = "er-quickload"
+b = "er-build-import"
+kind = "duplicate-owner"
+reason = """Both link `er-build-import-runtime`, and a statically linked crate's statics are \
+PER DLL: two copies of the phase machine, two fetch workers, two CSTaskImp FrameBegin tasks, all \
+mutating one character's inventory, equipment slots and PlayerGameData. The shell imports the \
+configured `build_url` unprompted at character load while the product's System>Quit "Load Build \
+from URL" row imports on demand, so the two interleave grants and stat writes with no shared \
+lock -- and the shell's import can land on a character the player never asked to rebuild. \
+Neither installs a detour, so this is not a hook collision: it is two owners of one mutation. \
+The product DLL is the one to keep; the shell exists for profiles that do not load it."""
+evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quickload/src/experiments/startup_hooks/quit_menu/build_url_row.rs"
+
+[[conflict]]
+a = "er-quickload"
+b = "er-input-harness"
 kind = "drives-input"
 reason = """DEFAULT-ON by mere presence: it writes the game's input memory every frame, so the \
 user is not driving the session. Not a corruption conflict -- a truth conflict. A run that loads \
 this cannot be described as user-driven, and its own header says to omit it from production \
 profiles."""
-evidence = "crates/er-input-harness-dll/src/lib.rs"
+evidence = "crates/er-input-harness/src/lib.rs"
 
 [[conflict]]
-a = "er-effects-rs"
-b = "er-reload-trace-dll"
+a = "er-quickload"
+b = "er-reload-trace"
 kind = "diagnostic-drive"
 reason = """Union-aware for hooks, but NOT passive: its rt5d diagnostic drive writes menuData+0x5d \
 after a stuck-load streak, so it can advance the very state machine under test. Acceptable only \
 when reload tracing IS the experiment, never in a run whose subject is something else."""
-evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace_dll entry)"
+evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace entry)"
 
 # ---------------------------------------------------------------------------
 # Shells with NO known conflict at all. A reason is mandatory: "no conflict" must be a
 # finding someone made, not a default that a new crate inherits by being forgotten.
 #
-# `er-effects-rs` is deliberately absent. It is the axis every conflict above is
+# `er-quickload` is deliberately absent. It is the axis every conflict above is
 # expressed against, so it is already classified by appearing in those pairs -- and
 # listing it here would assert it is conflict-free, which is the opposite of true.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# CO-LOADABLE, BUT NEVER AUTO-INCLUDED. These DLLs corrupt nothing -- they would each pass
+# [compatible] on the merits -- but they CHANGE WHAT THE PLAYER SEES, and a dependency-closure
+# walk is not consent. `er-dll-closure.py` drops them unless the caller names them with `--with`.
+#
+# The failure this exists to stop, 2026-08-23: mushroom-man-runtime was classified [compatible]
+# (true: it patches protector param rows, hooks nothing), so a branch that touched a crate it
+# transitively depends on pulled it into the closure, and `er-run-branch.py` launched the user's
+# game with a mushroom mod they had already removed by hand from their own profile. The run was
+# not the run they asked for, and the only remedy was killing the session.
+#
+# A reason is mandatory and must say WHAT THE PLAYER WOULD SEE, not what the code does -- the
+# whole point is that the code being harmless is not the question.
+# ---------------------------------------------------------------------------
+[opt_in_only]
+"mushroom-man-runtime" = """Replaces a protector's param rows so the character wears the mushroom \
+head -- a VISIBLE costume change on whatever character the run loads. Harmless to the process \
+and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
+wanted. Load it only when the mushroom IS the experiment: `--with mushroom-man-runtime`."""
+
+"er-death-persist" = """Patches SpEffectParam / SpEffectVfxParam rows (saveCategory 5 -> 3 on \
+19980/19981/19982, plus their cycle-chain and VFX flags) from a CSTaskImp task at boot. It hooks \
+NOTHING -- no MinHook instance, no union entry, no VirtualProtect -- and that is precisely why it \
+sat in [compatible] for so long: it cannot corrupt another DLL's trampolines, so every \
+prologue-based check called it safe. It still LOCKS THE PLAYER OUT OF SEAMLESS INVASIONS.
+
+MECHANISM. Seamless filters its lobby list on `lobby_key` with k_ELobbyComparisonEqual, and that \
+key is a SHA256 fingerprint of the PARAM TABLES (BuildLobbyKey @ ersc 0xABC20). It re-derives on \
+a jittered timer AFTER this DLL's boot task has run, so the PATCHED fingerprint is what gets \
+published and filtered on -- and nobody else in the world has it. A search against a pool of one \
+finds nobody.
+
+The RULE survives a Seamless update; the ADDRESS does not. `0xABC20` and the SHA256 values below \
+were measured against ersc.dll v1.9.9. Seamless Co-op v2.0.0 (2026-09-02) moved its entry points, \
+and a body search for BuildLobbyKey there returns two candidates plus a third whose prologue \
+matches -- ambiguous, so it is unverified rather than relocated. That does not weaken this \
+conflict: param-table divergence locking you out of matchmaking is Seamless's design, not an \
+artifact of one build. It only means nothing should ACT on the number without re-measuring \
+(scripts/locate-ersc-entry-points.py; scripts/ersc_identify.py reports the installed build). \
+Tracked in bd er-effects-rs-wqzf.
+
+MEASURED TWICE, byte-identical two days apart (2026-08-23 A/B; reconfirmed live 2026-08-25 on the \
+user's own save and the full 14-DLL pack):
+  with it     LOBBY KEY = 0044f570d958f07ace546a90fa62ba2044ef7c3a1f9864fb3cb336bf611965d3
+  without it  LOBBY KEY = 16ca67264987f56ca821525a2f65884cedc2546cf15ca3e69292c5c394c9d4ef
+With it dropped, the user invaded on the next attempt.
+
+WHY DEFAULT-OFF RATHER THAN A [[conflict]]: nothing crashes, nothing logs an error and no \
+prologue is contended, so there is no pair to rank. The failure is INVISIBLE and looks exactly \
+like "no hosts online" -- the worst possible way for a DLL to arrive uninvited on a \
+dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
+invade during that run: `--with er-death-persist`."""
+
+[[conflict]]
+a = "er-quickload"
+b = "er-invasion-warp"
+kind = "corrupt-callback-pointer"
+reason = """RUNTIME-MEASURED 2026-09-02, four reproductions and a bisect. Co-loading these two kills \
+the game at ~+29.9s every time, deterministically, on the same character (--seed 2073568449, Prophet \
+RL7): `exception code=0xc000001d (STATUS_ILLEGAL_INSTRUCTION) addr=0x140010043{game+0x10043}`. That \
+RIP is MID-INSTRUCTION -- the boundary is 0x140010041 `sub rdx, 6` (48 83 ea 06) inside the game's \
+SSE memcpy loop at 0x140010000, and decoding from +2 gives `ea ...`, a far JMP that does not exist \
+in long mode. So this is a wild control transfer landing two bytes into a hot leaf, not a Rust \
+panic: a panic=abort ud2 would fault at self+RVA, never at game+RVA.
+
+THE BISECT, so nobody has to redo it. Product alone: clean past 106s (reached ENTERING WORLD 11/11, \
+oracle_player_render_ready = true). Product + the 19 co-loadable shells: crash at +31.7s. First ten \
+of those nineteen: +29.7s. First five (armament-icons, better-refills, build-watermark, \
+crash-logging, death-persist): clean past 127s. Second five (diag-harness, enemynpc-effects, \
+hotkey-conflicts, invasion-path, invasion-warp): +29.7s. invasion-path ALONE with the product: clean \
+past 114s. invasion-warp ALONE with the product: +29.9s. One shell, and it is this one.
+
+WHAT IS ESTABLISHED, AND WHAT IS NOT. The bisect above is airtight; the MECHANISM is still \
+unidentified, and this paragraph has already been wrong once, so read it as a record of what has \
+been ruled OUT rather than as an explanation.
+
+MEASURED 2026-09-02, second pass, with `er_crash_logging.dll` in the profile (its watchdog and \
+register capture are why this is known at all -- the product's inline VEH gave only a bare caller \
+list whose deep frames were stale garbage): **`context_rcx == context_rip == 0x140010043`**. RCX \
+holding exactly the faulting address is the signature of a call THROUGH A POINTER -- something \
+stored 0x140010043 in a callback slot and the game called it. Full context: rax=0, rdx=0xd000004d, \
+r8=0x1000ffb18, r9=0x3d20588, rsp=0x10fbc8, rbp=0, thread 384, and NO `er_*.dll` frame anywhere on \
+the stack (`me3_mod_host.dll+0x3fa508` is on it, ours are not).
+
+RULED OUT, so nobody spends the afternoon again. (1) A shared hooked prologue: \
+`check-shared-hook-rvas.py` reports 36 shared targets across 27 shells, ALL DECLARED, and none \
+pairs the product with invasion-warp. (2) A trampoline collision of the er-armament-icons kind: \
+that corrupts CODE at a hooked prologue, whereas this calls a corrupt DATA pointer, and that \
+failure presented as SILENT INERTNESS rather than a hard fault. (3) A disagreement between the two \
+DLLs about a game address: intersecting their live `ADDRESS TRANSLATED` targets (209 product, 19 \
+warp) leaves exactly two shared values, both data -- `0x142ba7d70` \
+(SCALEFORM_MEMORY_FILE_VTABLE_RVA, same name both sides) and `0x143d6d988`, whose two names are a \
+DELIBERATE ALIAS (`constants_moved.rs:767` defines GAME_SAVE_SLOT_SINGLETON_RVA as \
+er_game_base::rva::GAME_MAN_SINGLETON_RVA), not a misidentification. (4) The Ghidra 1.17 caller \
+frames explain nothing yet: `eldenring+0x1f0d69e` is FUN_141f0d660, a 94-byte SetEvent/ResetEvent \
+helper that cannot plausibly reach memcpy, so the chain past the fault is untrustworthy and only \
+the registers are evidence.
+
+DO NOT DOWNGRADE THIS ROW TO [[shared]] on the strength of "it uses the union". The union is \
+necessary and not sufficient; armament-icons is co-loadable because a runtime measurement showed the \
+chaining works, and the measurement for this pair says the opposite. NEXT DIAGNOSTIC, before writing \
+any fix: the mechanism is still unidentified, so converting the ten sites to \
+`er_hook::register_shared_hook` is a GUESS at this point. Find what actually transfers control to \
+0x140010043 first -- the two runtime-invisible targets above are the places the RVA gate cannot \
+look. The A/B that scores any candidate fix is `scripts/er-run-branch.py --seed 2073568449 --with \
+er-quickload --with er-invasion-warp`, which must survive past 120s.
+
+CORRECTION 2026-09-03 -- THE BISECT PINNED A CO-FACTOR, NOT THE CAUSE. Every crashing run above \
+also carried `slot = 1` in the game-directory `er-quickload.toml`, and slot 1 DOES NOT EXIST in \
+the container the game actually reads: with Seamless loaded that is `ER0000.co2`, whose only \
+character is slot 0. `er-invasion-warp` was the variable the bisect MOVED, so it took the blame; \
+the invalid slot was constant across every arm and was never varied at all. Two runs of the SAME \
+pair, same DLLs, now survive: one with the new container-truth refusal arming the picker instead \
+of loading the impossible slot (clean past +88s), and one with `slot = 0` so no refusal is even \
+needed (clean past +79s, `holds_a_character=true`). Against six crashes at ~30-35s with slot 1, \
+that is a different explanation than this row was written for.
+
+THE ROW IS DELIBERATELY LEFT IN PLACE ANYWAY. Two clean runs do not outweigh six crashes hard \
+enough to start co-loading a pair on a user's machine, and only ONE of the two isolates the slot \
+(the other has the refusal firing, which changes the boot path). Demoting needs the `slot = 0` run \
+repeated -- ideally on the original `--seed 2073568449` character, so the A/B above is comparing \
+like with like -- after which this row should be REPLACED by a `[compatible]` entry rather than \
+softened into a vaguer warning.
+
+AND THE SEED ITSELF WAS INVALID -- found 2026-09-03 while trying to schedule exactly that repeat. \
+`--seed 2073568449` resolves to `save-files/50-Merchant-Unleveled/ER0000.sl2` SLOT 8, and that \
+container's `USER_DATA010.active_slot` bitmap holds exactly ONE character: slot 0, "Invader \
+Merchant" level 50. `scripts/er-pick-save.py` decided occupancy from "the body decodes to a name \
+and a level > 0", and deleting a character clears the bitmap while LEAVING the body, so it offered \
+ten slots where the game has one. So all four bisect runs above were invalid-slot launches too -- \
+the same boot path the six crashes share -- and this row has never once been measured against a \
+valid slot. The picker now reads the bitmap (its selftest pins both the deleted-slot case and the \
+unreadable-bitmap case), and the same seed now yields slot 0 "Invader Merchant".
+
+WHAT THAT DOES AND DOES NOT SETTLE. It removes the last evidence that this pair is dangerous with \
+a VALID slot: every crash on record now has an invalid slot in it. It does not prove the pair is \
+safe -- that still needs the repeat, which is now finally runnable because the seed picks a real \
+character. Until that run exists the row stays, because refusing a pair costs a feature and \
+co-loading a bad one costs a session.
+
+THE REPEAT RAN, AND IT FALSIFIES THE WHOLE CORRECTION ABOVE. 2026-09-03, same pair, VALID slot -- \
+`container truth for the configured slot -- slot=0 holds_a_character=true ... occupied=[0]` -- and \
+the game died at `+30436ms` with `exception code=0xc000001d ... addr=0x140010043{game+0x10043}`, \
+the same fault at the same ~30s. So the slot is EXONERATED and this pair is genuinely bad, exactly \
+as the row said before the correction was written.
+
+WHY THE CORRECTION LOOKED RIGHT, so the reasoning error is not repeated. Two runs survived past \
++79s and +88s and both were read as "valid slot, no crash". The second is worthless as evidence: \
+it had the refusal firing, which changes the boot path. The first genuinely had a valid slot -- and \
+the crash is not deterministic per-boot in the way six-for-six suggested, so ONE clean run proves \
+nothing. Two data points were treated as a refutation of six because they arrived after a plausible \
+mechanism had already been formed, which is the failure mode, not the sample size.
+
+WHAT SURVIVES FROM THE CORRECTION: the `er-pick-save.py` bitmap bug is real and independently \
+worth having fixed (`--seed 2073568449` was picking slot 8 of a container with one character), but \
+it does NOT explain this crash and must not be cited as a cause. The mechanism for `game+0x10043` \
+remains UNIDENTIFIED, and the row remains `unresolvable` on its original six-crash evidence."""
+evidence = """crates/er-invasion-warp/src/lib.rs:195 `map_gfx::install_world_map_gfx_hook(base)`; \
+crates/er-invasion-warp/src/lib.rs:197 (local_invasion_filter's SetMultiplayJoinData game detour, \
+crates/er-invasion-warp/src/local_invasion_filter.rs:175); crates/er-invasion-warp/src/lib.rs:235-236 \
+`lobby_publish::install_hunt_hook()` / `install_pool_filter_hook()` \
+(lobby_publish.rs:843, :884, :1027); crates/er-invasion-warp/src/announce.rs:380 \
+`er_hook::register_union_hook(address, update_hook, &ORIG_UPDATE)`. Runtime: \
+~/.cache/er-me3-runs/br-20260903-031513-d204/er-quickload-crash-log.txt (invasion-warp alone with \
+the product, +29882ms) vs br-20260903-031301-03a6 (invasion-path alone, clean past 114s) vs \
+br-20260903-030425-8a64 (product alone, clean past 106s)."""
+
 [compatible]
-"er-armament-icons" = "Own MinHook instance, but on TilePopulate -- a prologue the product does not hook."
-"er-better-refills-dll" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
-"er-crash-logging-dll" = "First-chance exception handler only. The product does not link er-crash-logging, so this is the sole crash logger in the process."
-"er-death-persist-dll" = """One-shot SpEffectParam / SpEffectVfxParam row patch driven from a \
-CSTaskImp task: it moves saveCategory 5 -> 3 on rows 19980/19981/19982 and sets flags on their \
-cycle-chain and VFX rows, once, then stops. It installs NO detours -- the crate contains no \
-MinHook instance, no er-hook union entry and no VirtualProtect, so it shares no prologue with any \
-other shell. Same class as mushroom-man-runtime: touches param rows, not hook prologues."""
-"er-inventory-sort-dll" = "Applies equipment-menu sort defaults once per process; installs no detour."
-"er-invasion-warp-dll" = "ORACLE 1 only -- reads the CSAutoInvadePoint table and installs no detours."
-"er-net-effects-dll" = "Keyboard-selected network SpEffects; independent hotkey path."
-"er-player-name-filter-dll" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-effects-rs no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
-"er-quit-menu-dll" = "System>Quit harness; its detours route through the er-hook union rather than a private MinHook."
-"er-save-picker-dll" = "Detects the product DLL and stays inert when it is present."
-"er-seamless-bugfixes-dll" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
+"er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
+shell exists to carry five detours the product USED TO install unconditionally, so every one of \
+its addresses is one the product has stopped claiming. `0x21bbf0` (the sole `MsbFileCap::msbResCap` \
+writer), `0xaf1800` (`CS::MoveMapListStep::STEP_LoadListWait`), and `0xe06490` / `0xe05fb0` / \
+`0x836f30` (the DLC virtual-root blank, refill and job body).
+
+FOUR OF THE FIVE HAVE ONE CLAIMANT. THE FIFTH DOES NOT, AND THIS ENTRY SAID OTHERWISE UNTIL \
+2026-08-30. The sentence that stood here -- "No other shell in this table names any of the five" -- \
+was FALSE of `0x836f30`: `er-reload-trace` detours the same prologue as \
+`HookSpec { name: "map_request_do_836f30", rva: 0x836f30, detour: hook_map_request_do, .. }`, a \
+BARE `rva:` field with no constant name at all. Nothing keyed on NAMES could contradict the claim, \
+because the two sides shared an address and no spelling; `check-shared-hook-rvas.py` only found it \
+once its collision key became the RESOLVED VALUE. The pair is now recorded as a [[shared]] row \
+above, and this sentence is kept as a warning rather than deleted: a "no other shell names this" \
+assertion is exactly the kind that a name-keyed scan cannot check and a reader cannot audit.
+
+It cannot corrupt a co-load in the ways the other rows describe. It installs no D3D12 Present or \
+compositor hook, drives no input, and reads no product static: every value in its log lines comes \
+from GAME memory through `er_game_base::filecap`. Its `0x21bbf0` / `0xaf1800` / `0xe06490` / \
+`0xe05fb0` detours call their own MinHook trampoline and return the native result verbatim; the \
+`0x836f30` job trace no longer owns a MinHook instance at all and chains through the union (see \
+the [[shared]] row). It links only `er-hook` and `er-game-base` (tier A), so it is not a second \
+owner of any feature crate's state machine -- deliberately, since that is the `duplicate-owner` \
+failure mode above.
+
+ONE SOFT COUPLING IS DOCUMENTED RATHER THAN CONFLICTING. `er-title-flow`'s DLC-root self-heal \
+prefers the refill trampoline over the refill's RVA so it does not re-enter our detour; Rust \
+statics are per-DLL, so with the trace here the product's copy stays 0 and the heal takes the \
+`game_rva` fallback it already carried. Product-only: the un-detoured native, identical behaviour. \
+Product + harness: the heal enters this detour, which samples the roots and forwards -- one extra \
+log line, no recursion, and the trace now also sees the heal's refill."""
+"er-armament-icons" = """Co-loadable with the product. Its TilePopulate, GFx-parse (AOB-scanned) \
+and FileOpener::OpenFile (vtable-resolved) detours are on prologues no other shell claims, so they \
+stay on its own MinHook instance. The ONE prologue it shares -- the Scaleform file-open wrapper -- \
+is registered through `er_hook::register_shared_hook`, which chains it into the product's single \
+union rather than installing a second instance; see the [[shared]] entry above for the measurement \
+that forced this."""
+"er-refill-all" = """Co-loadable with the product and with every other shell here. The two \
+prologues it detours are `CS::DepositoryDialog`'s own constructor and destructor -- it brackets that \
+one dialog's lifetime and acts only while the latch is open -- and no other shell in this table \
+claims either. Its own module header records WHY those two and not the obvious one: the first \
+version hooked `MenuWindow::Update`, the prologue every dialog in the game inherits, which MinHook \
+binds one detour to and which the product and `er-armament-icons` already proved is the exact way \
+to end up `installed = true, hits = 0`. It reads a pad/keyboard combination of its own, writes only \
+the storage box's refill-state vector through the game's own native, and hooks nothing on the \
+render or Scaleform paths."""
+
+"er-build-watermark" = """Co-loadable with everything, because it detours nothing at all. It \
+installs one hudhook/imgui DX12 overlay, reads the loaded-module list through GetProcAddress, and \
+draws text; it writes no game memory, claims no prologue and takes no input. The one thing that \
+could have conflicted -- a second imgui context on the game's swapchain, since er-net-effects \
+also runs a hudhook overlay -- is REAL, and a note here once claimed the \
+opposite. That note said a 2026-08-25 measurement showed both overlays rendering side by side; \
+the same day, the user's live session proved otherwise -- this shell logged `first render \
+display_width=3840 rows=14` while er-net-effects sat at hudhook_render_count = 0, its \
+interactive bar invisible since #336 and no error logged by anyone. Two Hudhook::apply() calls \
+in one process double-hook Present, and the second one loses silently. RESOLVED by \
+er_build_watermark_core's `overlay_host`: the first module to claim the named mutex \
+(Local\\er-quickload-build-watermark-owner) HOSTS the imgui context, every other overlay module \
+registers a draw callback through the `er_overlay_register_guest_v1` export and is dispatched \
+once per frame, and both DLLs pin the same hudhook so the `ui` pointer crossing the DLL boundary \
+is the type both were built against (OVERLAY_ABI_TAG refuses the pair if that stops being true). \
+Load order no longer decides who is visible."""
+"er-better-refills" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
+"er-enemynpc-effects" = """Co-loadable with the product. It detours exactly one address -- \
+the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \
+product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \
+rows above. Everything else it does is a read plus the game's own ApplySpEffect/RemoveSpEffectById \
+on a FrameBegin walk of WorldChrMan's ChrSets."""
+"er-npc-possess" = """Co-loadable with every other shell here. It claims exactly ONE prologue and \
+nothing else: `CS::CSFeManImp::UpdatePlayerComponents` (1.16.2 `0x140772a80`, 1.17 `0x140773900`), \
+the per-frame HUD vitals pass, detoured so the HP/FP/stamina bars read the possessed creature \
+instead of the body the player walked in as. No other shell in this suite hooks that function or \
+its caller. Everything else it does happens from one recurring `FrameBegin` task.
+
+THE ONE OTHER HOOK, and only once the player asks for something to be DRAWN: hudhook's DX12 \
+`Present`, through `er_build_watermark_core::overlay_host` -- the same host-or-guest arbitration \
+er-build-watermark, er-net-effects and er-invasion-path go through, so the process still has \
+exactly one `Present` hook whoever loaded first. Two things ask, and both are still lazy: opening \
+the in-game creature picker, and starting a possession (which puts the attack-set panel in the \
+corner -- `[hud] pages`, on by default). Pressing nothing and possessing nothing means installing \
+nothing. Both panels draw from `crate::overlay`, which owns the single join; the second trigger \
+exists because `[target] mode = \"lock_on\"` is the default and never opens the picker, so a \
+possession-only session would otherwise have no overlay to draw the panel on. `Present` is a \
+swapchain vtable slot rather than a game prologue, so it needs no [[shared]] row -- the overlay \
+host is the arbitration.
+
+WHAT IT DOES FROM THAT TASK, kept current as the layers land -- the sentence above is the \
+co-loadability claim and the ones here are what it rests on, so they are not the same claim twice. \
+It polls `GetAsyncKeyState` and `XInputGetState`; while something is possessed it WRITES game \
+memory (`ChrCtrl+0x3b0`, `WorldChrManDbg+0xb8`, `ChrExFollowCam+0x468`, and a handful of fields on \
+two `ChrIns`); and it RESOLVES THREE game function addresses, all through `game_rva_named` so an \
+unrecognised build goes quiet rather than jumping into whatever now occupies those bytes. Those \
+three are `PlayAnimationByBehaviorName` (the 2,252 dodges, which have no `W_Event%04d` name for the \
+field write to spell), `WorldChrManImp::SpawnDynamicChr` and `WorldChrManImp::RemoveChrIns` (the \
+`mode = "spawn"` creature, created and removed through the same entries `CSTalkDynamicChrCtrl` \
+uses). Resolving an address to CALL is not claiming a prologue: nothing is patched and no other \
+shell's detour is disturbed. Grabs added neither an address nor a detour -- a grab is an ordinary \
+attack whose `AtkParam_Npc.throwTypeId` is non-zero, and the game's own throw system does the \
+rest. Every write is made only while something is possessed and is undone by `possess::teardown` \
+on release, death, despawn and `DLL_PROCESS_DETACH`.
+
+THE ONE PARAM ROW, AND WHY IT IS NOT THE KIND OF PARAM EDIT THAT BREAKS SEAMLESS. The camera layer \
+patches ONE `LockCamParam` row IN MEMORY for the length of a single possession -- three floats -- \
+and writes the row's original bytes back on release. `regulation.bin` on disk is never opened, so \
+this is not the file-level regulation edit that makes Seamless refuse a session. The row is chosen \
+by `[camera].param_row` (1000 by default, one of the 73 rows the shipped regulation never \
+references) and is re-checked at every possession against the LIVE `NpcParam.lockCameraParamId` and \
+`RideParam.rideCamParamId` tables, so a player running a regulation mod that DOES use it gets a \
+refusal naming the row rather than a stolen camera. It is still a shared write: a second mod \
+patching the same row while a possession is in flight would fight it, which is exactly what the \
+setting exists to resolve.
+
+THAT PROLOGUE IS UNSHARED, AND CHECKED RATHER THAN ASSUMED. No other shell in `me3_shells` \
+detours `UpdatePlayerComponents` or its sole caller `CSFeManImp::Update` (1.16.2 `0x140771bd0`): a \
+scan of every crate for those four RVAs -- both builds, both functions -- returns only \
+er-npc-possess itself. The three shells that live nearest this neighbourhood do not touch it. \
+er-armament-icons READS a param offset it ground-truthed against this function's skill-icon \
+builder and hooks the GFx tile/file-open paths instead; er-player-name-filter hooks the name \
+PRODUCERS reached from `CSFeManImp::UpdateEnemyTags`, a sibling pass; er-save-suppress only \
+observes `CSFeManImp::Update` in prose. `audit-1170-hook-targets.py` OVERLAP is what keeps that \
+true against a future addition landing within 16 bytes.
+
+IT IS A BARE `MhHook` ON PURPOSE, AND MUST STAY ONE. The function's signature is \
+`void UpdatePlayerComponents(CSFeManImp*, float)` -- Ghidra's recovered signature, confirmed in \
+the prologue (`movaps xmm6,xmm1` feeding a `subss` against a delta-time accumulator) and at the \
+call site (`movaps xmm1,xmm6` before the call). `er_hook`'s `UnionFn` is four `usize`s and its own \
+docs say "Not for float-arg or >4-stack-arg targets", so routing this through the hook union would \
+let the compiler clobber `xmm1` before the trampoline ran and feed the HUD's timing accumulator \
+garbage. If a SECOND DLL ever wants this prologue, the fix is not to move this one into the union \
+-- it is to widen the union to a float-carrying signature first, and add a [[shared]] row here.
+
+THE OTHER THING THAT COULD HAVE CONFLICTED, AND WHY IT DOES NOT. Three shells already detour the \
+DirectInput keyboard `GetDeviceState` slot -- er-quickload, er-net-effects and \
+er-enemynpc-effects -- through the hook union, recorded in the [[shared]] rows above. A fourth \
+claimant is exactly the shape of the collision this table exists for, so this DLL deliberately \
+does not become one: it needs to OBSERVE a keypress, not SUPPRESS it, and polling from the game's \
+own frame task answers that without touching the prologue. `er-refill-all` reads its hotkey the \
+same way for the same reason.
+
+WHAT WOULD CHANGE THAT. A later layer of this mod may need to take an input away from the game \
+rather than merely see it -- driving a possessed character means the player's stick must stop \
+steering the Tarnished. That is a `GetDeviceState` claim, and when it lands it must go through \
+`er_hook::register_shared_hook` (never a bare `MhHook`, which is a second MinHook instance on a \
+prologue three DLLs already share) and gain a [[shared]] row here.
+
+HOTKEY DEFAULTS ARE NOT SHARED WITH ANOTHER SHELL. Keyboard F9 and pad LS+RS; er-refill-all ships \
+Select+Start with no keyboard default, er-enemynpc-effects ships ctrl+alt+c. All three are \
+re-bindable in their own TOML while the game runs, which is the whole reason er-hotkey-config \
+exists. The picker adds F10 plus the four arrow keys and ships every pad binding EMPTY, which is \
+the same no-suppression fact stated as a default: it can see those keys but cannot take them from \
+the game. Whether they collide is a judgement rather than a reading of Elden Ring's binding \
+table, which is why all five are rebindable while the game runs."""
+"er-net-effects" = """Keyboard-selected network SpEffects. Its DirectInput keyboard and mouse \
+`GetDeviceState` detours go through `er_hook::register_shared_hook` (see the [[shared]] rows \
+above); nothing else it installs is claimed by another shell."""
+"er-hotkey-conflicts" = """Co-loadable with everything, and the one shell that would be \
+self-refuting if it were not. It is a passive observer: it detours the input-read APIs \
+(`GetAsyncKeyState`, `GetKeyState`, `GetKeyboardState`, `RegisterHotKey`, `SetWindowsHookExA/W`, \
+`XInputGetState`, and the DirectInput device-state slot), and EVERY detour calls the rest of the \
+chain first and returns its value byte for byte. No input is swallowed, altered or injected; no \
+param row is patched (which breaks Seamless invasions); no game memory is written; and it never \
+`LoadLibrary`s a module that was not already in the process.
+
+The one prologue it shares -- the DirectInput `GetDeviceState` slot, claimed by three other shells \
+-- is registered through `er_hook::register_shared_hook_with_budget`, so the product's single \
+MinHook instance owns it and the handlers chain. See the `[[shared]]` rows above. The user32 and \
+XInput prologues it also takes are claimed by no other shell in this workspace, and they go \
+through the same registrar so a third-party DLL detouring one of them is chained rather than \
+trampled.
+
+It draws through `er_build_watermark_core`'s `overlay_host` as a GUEST ONLY and never calls \
+`Hudhook::apply()`, even when nothing else hosts: a one-line diagnostic is not worth owning the \
+swapchain, and a second `Present` hook silently disables the first. Loaded with no overlay host in \
+the profile it simply draws nothing, and says so in its log.
+
+The two things it READS are `K32EnumProcessModules` (to name the module a call came from) and the \
+game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to check a mod's key \
+against the player's configured bindings). Both are loads through the fault-safe reader."""
+"er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
+"er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
+"er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
+writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
+QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
+(FUN_140bddfe0 / FUN_140bdec90 / FUN_140bdf610, the same request ring CS::CSAiFunc uses) -- and \
+draws lines. It claims no prologue, patches no param (which is what breaks Seamless invasions), \
+injects no input and opens no socket. Like er-build-watermark it draws through \
+er_build_watermark_core's `overlay_host`, so it HOSTS the process's single imgui context only if \
+nothing else has claimed it and otherwise registers a guest callback through the \
+`er_overlay_register_guest_v1` export; either way there is exactly one Present hook in the \
+process. The one thing it shares with the game rather than merely reading is the AI world's path \
+request ring, which is mutex-guarded by the engine and is consumed by every NPC in the map -- one \
+in-flight request per target, drained on the frame it completes, is the same traffic a handful of \
+extra NPCs would make."""
+"er-player-name-filter" = "Hooks SessionManagerPlayerEntryBase::Copy only; er-quickload no longer carries this hook, and the standalone DLL byte-checks the 1.16.2 prologue before installing."
+"er-quit-menu" = """System>Quit harness. Its detours route through `er_hook::register_union_hook` \
+rather than a bare `MhHook`, and -- the part that actually matters -- none of its targets is claimed \
+by another shell, which `check-shared-hook-rvas.py` re-proves on every run. Note that the union alone \
+would NOT be enough if one were: `register_union_hook` unions handlers within ONE DLL, because its \
+statics and its MinHook instance are per-DLL. Crossing images takes `register_shared_hook`. \
+Since the Generate Build Link row moved into `er-quit-menu-core` this shell also LINKS \
+`er-build-import-runtime`, whose statics are per-DLL for the same reason -- but the harness calls \
+none of it and arms no row, so the second copy of the importer's phase machine never runs. If the \
+harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` \
+and with `er-quickload`, for exactly the reason the `er-quickload`/`er-build-import` pair \
+below already records."""
+"er-save-picker" = "Detects the product DLL and stays inert when it is present."
+"er-seamless-bugfixes" = """Own MinHook instance, but on SpecialEffect::HasSpecialEffectId \
 (0x4f9940) and SpecialEffect::Apply (0x4fa8e0) -- prologues no other DLL in this repo hooks \
 (searched repo-wide). It cannot use the er-hook union: that handler type carries four register \
 arguments only, and SpecialEffect::Apply passes four more on the stack. Instead it byte-checks each \
@@ -97,5 +738,4 @@ prologue immediately before hooking, so an entry another MinHook instance alread
 comparison and disarms with a log line rather than trampling a trampoline. Both detours are naked \
 stubs that tail-jump to the original for every non-null container, so a co-loaded run is \
 byte-for-byte vanilla unless the null case occurs."""
-"er-telemetry-dll" = "Read-only oracles on a FrameBegin task; installs no hooks."
-"mushroom-man-runtime" = "Protector param patch; touches param rows, not hook prologues."
+"er-telemetry" = "Read-only oracles on a FrameBegin task; installs no hooks."

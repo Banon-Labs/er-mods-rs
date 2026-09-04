@@ -10,7 +10,7 @@ usage() {
 Usage: scripts/stage-net-effects-release.sh [--output DIR] [--no-build]
 
 Stages the standalone keyboard-controlled network effects payload:
-  er_net_effects_dll.dll       standalone DLL, loaded by me3 as its own native
+  er_net_effects.dll       standalone DLL, loaded by me3 as its own native
   er-net-effects.me3           me3 ModProfile loading the game-installed Seamless Co-op DLL plus net-effects DLL
   er-net-effects.toml.example  per-feature configuration file
   .er-net-effects-hotkeys.json.example  keyboard-trigger configuration
@@ -27,7 +27,7 @@ eldenring.exe, then launch:
   me3 launch -g eldenring -p /path/to/er-net-effects.me3
 
 Environment:
-  ER_NET_EFFECTS_DLL  prebuilt er_net_effects_dll.dll path
+  ER_NET_EFFECTS_DLL  prebuilt er_net_effects.dll path
 EOF
 }
 
@@ -53,14 +53,14 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-net_effects_dll="${ER_NET_EFFECTS_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_net_effects_dll.dll}"
+net_effects_dll="${ER_NET_EFFECTS_DLL:-$repo_root/target/x86_64-pc-windows-msvc/release/er_net_effects.dll}"
 
 if [[ "$build" == "1" ]]; then
-	cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release -p er-net-effects-dll
+	cargo xwin build --manifest-path "$repo_root/Cargo.toml" --target x86_64-pc-windows-msvc --release -p er-net-effects
 fi
 
 if [[ ! -f "$net_effects_dll" ]]; then
-	echo "missing er_net_effects_dll.dll: $net_effects_dll" >&2
+	echo "missing er_net_effects.dll: $net_effects_dll" >&2
 	exit 1
 fi
 
@@ -69,7 +69,7 @@ tmp_dir="$out_dir.tmp"
 rm -rf "$tmp_dir"
 mkdir -p "$tmp_dir/er-net-effect-catalogs" "$tmp_dir/scripts" "$tmp_dir/data" "$tmp_dir/resources"
 
-cp -f "$net_effects_dll" "$tmp_dir/er_net_effects_dll.dll"
+cp -f "$net_effects_dll" "$tmp_dir/er_net_effects.dll"
 cp -f "$repo_root/scripts/install-er-net-effects-headless.py" "$tmp_dir/scripts/install-er-net-effects-headless.py"
 cp -f "$repo_root/scripts/generate-effect-master-catalog.py" "$tmp_dir/scripts/generate-effect-master-catalog.py"
 cp -f "$repo_root/scripts/generate-effect-discriminator-catalogs.py" "$tmp_dir/scripts/generate-effect-discriminator-catalogs.py"
@@ -90,12 +90,12 @@ game = "eldenring"
 path = 'C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll'
 
 [[natives]]
-path = 'er_net_effects_dll.dll'
+path = 'er_net_effects.dll'
 EOF
 cat >"$tmp_dir/er-net-effects.toml.example" <<'EOF'
 # Copy to er-net-effects.toml next to eldenring.exe.
-# This file belongs to er_net_effects_dll.dll and is intentionally separate from
-# er-effects-rs product/autoload configuration.
+# This file belongs to er_net_effects.dll and is intentionally separate from
+# er-quickload product/autoload configuration.
 network_sync = true
 # Start with the visible selector overlay shown. Press Alt+Numpad0,
 # Alt+0, or Alt+Insert to hide/show it while in-game.

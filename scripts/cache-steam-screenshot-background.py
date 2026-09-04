@@ -2,7 +2,7 @@
 """Developer-only helper for writing an explicit boot-background override cache.
 
 This script is NOT part of the production pipeline. The shipped product path is
-DLL-only: the DLL can read `er-effects.toml` for a local image override, or scan
+DLL-only: the DLL can read `er-quickload.toml` for a local image override, or scan
 local Steam screenshot cache directories itself. This helper exists only for
 manual/dev generation of the optional ERBGRA01 override file.
 """
@@ -29,7 +29,7 @@ DEFAULT_GAME_DIR_CANDIDATES = [
     Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game",
     Path("/mnt/c/SteamLibrary/steamapps/common/ELDEN RING/Game"),
 ]
-DEFAULT_CACHE_NAME = "er-effects-boot-background.rgba"
+DEFAULT_CACHE_NAME = "er-quickload-boot-background.rgba"
 DEFAULT_MAX_BYTES = 2_000_000
 DEFAULT_MAX_DIM = 1280
 
@@ -41,13 +41,13 @@ def ensure_pillow() -> None:
         return
     except ImportError:
         pass
-    if os.environ.get("ER_EFFECTS_CACHE_BG_NO_UV") == "1":
+    if os.environ.get("ER_QUICKLOAD_CACHE_BG_NO_UV") == "1":
         raise SystemExit("Pillow is required; install it or run via `uv run --with pillow ...`")
     uv = shutil_which("uv")
     if not uv:
         raise SystemExit("Pillow is required and `uv` was not found for ephemeral provisioning")
     env = os.environ.copy()
-    env["ER_EFFECTS_CACHE_BG_NO_UV"] = "1"
+    env["ER_QUICKLOAD_CACHE_BG_NO_UV"] = "1"
     os.execvpe(uv, [uv, "run", "--with", "pillow", "python3", *sys.argv], env)
 
 

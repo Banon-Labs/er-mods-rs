@@ -20,7 +20,7 @@ cd "$REPO" || exit 2
 TARGET_TRIPLE="${TARGET_TRIPLE:-x86_64-pc-windows-msvc}"
 OUT_DIR="${OUT_DIR:-$REPO/target/save-census}"
 DLL="$REPO/target/$TARGET_TRIPLE/release/er_save_disable.dll"
-HARNESS_DLL="$REPO/target/$TARGET_TRIPLE/release/er_input_harness_dll.dll"
+HARNESS_DLL="$REPO/target/$TARGET_TRIPLE/release/er_input_harness.dll"
 PROFILE="$OUT_DIR/save-census.me3"
 
 # WITH_INPUT_HARNESS=1 adds the self-drive harness so the run reaches save moments the
@@ -30,25 +30,40 @@ PROFILE="$OUT_DIR/save-census.me3"
 # The product DLL is still deliberately absent either way.
 WITH_INPUT_HARNESS="${WITH_INPUT_HARNESS:-0}"
 
-PACKAGES=(-p er-save-disable-dll)
-[[ "$WITH_INPUT_HARNESS" == "1" ]] && PACKAGES+=(-p er-input-harness-dll)
-
+PACKAGES=(er-save-disable)
+DLLS=("$DLL")
 if [[ "$WITH_INPUT_HARNESS" == "1" ]]; then
+	PACKAGES+=(er-input-harness)
+	DLLS+=("$HARNESS_DLL")
 	echo "== building save-disable + input-harness (release, $TARGET_TRIPLE) =="
 else
 	echo "== building save-disable (release, $TARGET_TRIPLE) =="
 fi
-if ! cargo xwin build --release "${PACKAGES[@]}" --target "$TARGET_TRIPLE"; then
+
+# Built through er-build-dlls.sh rather than a bare `cargo xwin build` because that wrapper
+# RECORDS PROVENANCE for what it just linked -- a content hash over each package's compiled
+# closure, taken while that tree was the one being compiled, which cannot be reconstructed
+# afterwards. Without it the verification below could never pass, and a gate that can never pass
+# is a gate people delete.
+if ! ER_BUILD_TARGET="$TARGET_TRIPLE" bash "$REPO/scripts/er-build-dlls.sh" "${PACKAGES[@]}"; then
 	echo "BUILD FAILED -- no profile written" >&2
 	exit 1
 fi
 
-if [[ ! -f "$DLL" ]]; then
-	echo "build reported success but $DLL is missing" >&2
-	exit 1
-fi
-if [[ "$WITH_INPUT_HARNESS" == "1" && ! -f "$HARNESS_DLL" ]]; then
-	echo "build reported success but $HARNESS_DLL is missing" >&2
+# REFUSE TO EMIT, rather than warn. This script's output is not a run, it is a FILE: the .me3
+# below names the DLL by absolute path and is handed to `me3 launch -p save-census.me3` later --
+# possibly much later, by someone who never saw this shell. A warning printed now is gone by
+# then, me3 itself checks nothing, and the census the profile produces would be attributed to
+# source that is not what was linked. So the failure has to be the absence of the profile, which
+# is the one signal that survives to the moment the profile would have been used -- and that
+# means removing the one a previous run left behind, or the refusal is invisible to anyone who
+# just runs the path this script has always printed.
+# shellcheck source=scripts/er-dll-freshness.sh
+# shellcheck disable=SC1091
+source "$REPO/scripts/er-dll-freshness.sh"
+if ! require_fresh_dlls "${DLLS[@]}"; then
+	echo "NO PROFILE WRITTEN -- it would have named a DLL that is not this source tree." >&2
+	rm -f "$PROFILE"
 	exit 1
 fi
 

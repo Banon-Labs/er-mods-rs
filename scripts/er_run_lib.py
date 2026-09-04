@@ -108,6 +108,19 @@ class DirectoryWatch:
         self.close()
 
 
+def game_dir() -> Path:
+    """The `ELDEN RING/Game` directory: where the game lives and where every loaded DLL logs.
+
+    One owner, because the path is machine-shaped: this repo now runs a NATIVE Linux Steam
+    install, the retired WSL2 layout put it under `C:\\SteamLibrary`, and a script carrying its
+    own copy of either silently resolves to nothing rather than erroring -- which reads as "the
+    file is missing" instead of "you looked in the wrong place". `ME3_STEAM_DIR` overrides it,
+    the same variable `~/Elden/launch.sh` derives from.
+    """
+    steam = Path(os.environ.get("ME3_STEAM_DIR", Path.home() / ".local/share/Steam"))
+    return steam / "steamapps/common/ELDEN RING/Game"
+
+
 def process_alive(pid: int) -> bool:
     """True if `pid` exists and is not a zombie. Reads /proc rather than shelling out.
 
@@ -238,7 +251,17 @@ class RunState:
         )
 
     def cleanup(self) -> list[str]:
-        """Remove everything this run staged. Returns what was actually removed."""
+        """Remove everything this run STAGED. Returns what was actually removed.
+
+        WHAT THE RUN WROTE IS NOT STAGED AND IS NEVER REMOVED. The same directory now holds the
+        run's evidence -- me3's output, and every DLL log/telemetry file redirected here at launch
+        so the next launch cannot overwrite it the way a game-directory log is overwritten. Only
+        the explicit `remove_paths` (profile, sidecar, closure/save inputs) and `run.json` go.
+
+        The `rmdir` below therefore removes the directory only in the one case where that is
+        correct: a run that produced nothing at all. It fails harmlessly on a directory holding
+        evidence, which is the normal outcome and the whole point.
+        """
         removed: list[str] = []
         for raw in self.remove_paths:
             path = Path(raw)
@@ -254,7 +277,7 @@ class RunState:
         except OSError:
             pass
         try:
-            self.directory.rmdir()
+            self.directory.rmdir()  # empty-only; a run with artifacts keeps its directory
         except OSError:
             pass
         return removed
@@ -363,6 +386,38 @@ def selftest() -> int:
             live.save()
             collect_dead_runs(root)
             check((root / "keep").exists(), "GC leaves a run whose process is still alive alone")
+
+            # THE EVIDENCE MUST SURVIVE CLEANUP. A run's artifacts are redirected INTO its state
+            # directory at launch (er-run-branch.py's ARTIFACT_ENV), so a cleanup that removed the
+            # directory would destroy exactly what the redirect exists to keep -- and would do it
+            # to a finished run, at the moment someone came back to read it.
+            evidence = RunState(
+                run_id="finished",
+                pid=999_999_998,
+                profile=str(root / "finished.me3"),
+                remove_paths=[str(root / "finished.me3")],
+            )
+            (root / "finished.me3").write_text("staged", encoding="utf-8")
+            evidence.save()
+            (evidence.directory / "er-quickload-continue-trace.log").write_text(
+                "RUN EVIDENCE\n", encoding="utf-8"
+            )
+            evidence.cleanup()
+            check(
+                not (root / "finished.me3").exists(),
+                "cleanup still removes what the run STAGED",
+            )
+            check(
+                not evidence.state_file.exists(),
+                "cleanup still removes run.json, so GC does not keep rediscovering the run",
+            )
+            check(
+                (evidence.directory / "er-quickload-continue-trace.log").read_text(
+                    encoding="utf-8"
+                )
+                == "RUN EVIDENCE\n",
+                "cleanup does NOT remove what the run WROTE -- the artifacts outlive the run",
+            )
         finally:
             RUN_STATE_ROOT = previous_root
 

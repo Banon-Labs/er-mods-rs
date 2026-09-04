@@ -8,7 +8,7 @@ export const meta = {
   ],
 }
 
-const REPO = '/home/banon/projects/er-effects-rs'
+const REPO = '/home/banon/projects/er-mods-rs'
 
 const HOUSE_RULES = `
 You are investigating the repo at ${REPO} (branch research/quit-menu-load-ui-parity). READ-ONLY.
@@ -55,7 +55,7 @@ Field geometry lives in crates/er-gfx/profile_05_010_layout.toml, which IS the s
   ErCharStats        x=-230  w=484  align=center  (renders "VIG 50 MND 10 END 50 STR 21 ...")
   ErStats            x=-324  w=587  align=left    (BLANK on character rows; used by browse rows)
 
-Known RE, recorded in crates/er-effects-rs/src/constants/stats_panel_text.rs:118-151 \u2014 READ THAT
+Known RE, recorded in crates/er-quickload/src/constants/stats_panel_text.rs:118-151 \u2014 READ THAT
 COMMENT BLOCK FIRST, it is dense and load-bearing:
   * StaticText_110502 is ENGINE-populated. The named-child binder hands every child name to the FMG
     static-text pass FUN_14074c540, which matches the "StaticText_" prefix from the table at
@@ -130,9 +130,9 @@ ${CONTEXT}
 YOUR LANE: how do we make the caption render "RL" instead of "Level"?
 
 Investigate, in order:
-1. Read crates/er-effects-rs/src/constants/stats_panel_text.rs around lines 100-200 in full.
+1. Read crates/er-quickload/src/constants/stats_panel_text.rs around lines 100-200 in full.
 2. Find every place the DLL already writes text into a ProfileSelect row field. Start from
-   crates/er-effects-rs/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs
+   crates/er-quickload/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs
    (it is large \u2014 find the SetText helpers, the row text pass, apply_row_slot_info_visibility around
    line 1240, and profile_editor_live_text_for_field around line 777). Establish EXACTLY which
    mechanism successfully writes ErStats / ErCharStats / DriveCell_* today, and whether that same
@@ -227,7 +227,7 @@ YOUR LANE: WHERE does "WL <n>" render, and does the geometry actually work?
    (b) Put "RL <lvl>  WL <wl>" all in ONE field (which one? the caption is engine-owned, the value
        field is int-formatted natively \u2014 both are constrained; ErStats is BLANK on character rows and
        is 587px wide at x=-324, so it is a genuine candidate. Check what hides/shows it:
-       RowSlotFieldVisibility in crates/er-loading-portrait/src/title_stats_text.rs, NATIVE vs
+       RowSlotFieldVisibility in crates/er-loading-portrait-core/src/title_stats_text.rs, NATIVE vs
        browse_row.)
    (c) Add a brand-new DefineEditText field to the row template via the existing GFX edit pipeline
        (crates/er-gfx/src/title_05_010.rs, examples/make_05_010_stats.rs,
@@ -238,7 +238,7 @@ YOUR LANE: WHERE does "WL <n>" render, and does the geometry actually work?
 4. CHECK THE OVERLAP TRAP: ErStats [x=-324 w=587] and ErCharStats [x=-230 w=484] overlap heavily,
    and the row clips are RECYCLED across list kinds, so a field one kind writes keeps its text when
    another kind reuses the clip unless every kind states its visibility. Read
-   RowSlotFieldVisibility (crates/er-loading-portrait/src/title_stats_text.rs) and
+   RowSlotFieldVisibility (crates/er-loading-portrait-core/src/title_stats_text.rs) and
    apply_row_slot_info_visibility (title_resources_stats_text.rs ~line 1240). Whatever surface you
    pick, state EXACTLY what its visibility must be for each row kind (native character row, browse
    file row, drive row) or it will leak across views. This leak is a bug the user has already hit

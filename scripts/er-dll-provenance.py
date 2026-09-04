@@ -9,7 +9,7 @@ build cache can carry either order. It answers "was something written recently",
 THIS binary produced from THAT source".
 
 Worse, the failure it needs to catch is silent. `cargo xwin build --release` honours
-`default-members = ["crates/er-effects-rs"]`, so it builds ONLY the product and exits 0 in a
+`default-members = ["crates/er-quickload"]`, so it builds ONLY the product and exits 0 in a
 fraction of a second having compiled none of the other shells -- indistinguishable from a
 successful incremental build. The stale DLL from last week stays exactly where it was, and a
 run against it produces evidence for code that no longer exists.
@@ -41,8 +41,8 @@ working tree. Editing the sibling and not rebuilding will NOT be caught. Those d
 listed in `external_deps` on every provenance record so the gap is visible where it matters.
 
 Usage:
-    python3 scripts/er-dll-provenance.py write  --package er-effects-rs --artifact <path.dll>
-    python3 scripts/er-dll-provenance.py verify --package er-effects-rs --artifact <path.dll>
+    python3 scripts/er-dll-provenance.py write  --package er-quickload --artifact <path.dll>
+    python3 scripts/er-dll-provenance.py verify --package er-quickload --artifact <path.dll>
     python3 scripts/er-dll-provenance.py --selftest
 
 Exit status: 0 verified, 1 error, 3 stale/mismatched (so callers can tell them apart).
@@ -258,11 +258,11 @@ def selftest() -> int:
         else:
             print(f"  ok   {label}")
 
-    members, external = forward_closure("er-effects-rs")
-    check("er-effects-rs" in members, "the package is in its own forward closure")
+    members, external = forward_closure("er-quickload")
+    check("er-quickload" in members, "the package is in its own forward closure")
     check("er-game-base" in members, "a real path dependency is in the closure")
     check(
-        "er-save-disable-dll" not in members,
+        "er-save-disable" not in members,
         "an unrelated sibling shell is NOT in the closure (forward, not reverse)",
     )
     check(
@@ -270,7 +270,7 @@ def selftest() -> int:
         f"out-of-repo path deps are reported as external ({', '.join(external) or 'none'})",
     )
 
-    small, _ = forward_closure("er-crash-logging-dll")
+    small, _ = forward_closure("er-crash-logging")
     check(len(small) < len(members), "a leaf shell has a smaller closure than the product")
 
     sha_a, count_a = source_sha(small)
@@ -281,7 +281,7 @@ def selftest() -> int:
     other_sha, _ = source_sha(members)
     check(other_sha != sha_a, "different closures hash differently")
 
-    artifact = REPO_ROOT / "target/x86_64-pc-windows-msvc/release/er_effects_rs.dll"
+    artifact = REPO_ROOT / "target/x86_64-pc-windows-msvc/release/er_quickload.dll"
     if artifact.is_file():
         digest = fingerprint_of(artifact)
         check(len(digest) == 16, f"a built DLL fingerprints to a 16-hex digest ({digest})")
@@ -298,14 +298,14 @@ def selftest() -> int:
             copy = Path(raw) / artifact.name
             shutil.copy2(artifact, copy)
 
-            code, failures = verify("er-effects-rs", copy)
+            code, failures = verify("er-quickload", copy)
             check(
                 code == EXIT_STALE and any("no provenance record" in f for f in failures),
                 "an artifact with no provenance record verifies as STALE, never as OK",
             )
 
-            write("er-effects-rs", copy)
-            code, failures = verify("er-effects-rs", copy)
+            write("er-quickload", copy)
+            code, failures = verify("er-quickload", copy)
             check(code == EXIT_OK and not failures, "the same artifact verifies fresh once recorded")
 
             record_path = provenance_path(copy)
@@ -314,7 +314,7 @@ def selftest() -> int:
             record_path.write_text(
                 json.dumps({**record, "source_sha": "0" * 64}), encoding="utf-8"
             )
-            code, failures = verify("er-effects-rs", copy)
+            code, failures = verify("er-quickload", copy)
             check(
                 code == EXIT_STALE and any("SOURCE MOVED" in f for f in failures),
                 "a source hash that no longer matches the tree is caught",
@@ -323,7 +323,7 @@ def selftest() -> int:
             record_path.write_text(
                 json.dumps({**record, "fingerprint": "dead" * 4}), encoding="utf-8"
             )
-            code, failures = verify("er-effects-rs", copy)
+            code, failures = verify("er-quickload", copy)
             check(
                 code == EXIT_STALE and any("ARTIFACT REPLACED" in f for f in failures),
                 "an artifact swapped since provenance was written is caught",
@@ -333,7 +333,7 @@ def selftest() -> int:
                 json.dumps({**record, "provenance_version": PROVENANCE_VERSION + 99}),
                 encoding="utf-8",
             )
-            code, failures = verify("er-effects-rs", copy)
+            code, failures = verify("er-quickload", copy)
             check(
                 code == EXIT_STALE and any("provenance format" in f for f in failures),
                 "a record written by a different provenance format is caught",

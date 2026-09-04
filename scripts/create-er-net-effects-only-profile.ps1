@@ -1,7 +1,7 @@
 param(
   [string]$ProfilesDir = "X:\Documents\me3 profiles",
   [string]$ProfileName = "er_net_effects_only.me3",
-  [string]$DllPath = "X:\Documents\me3 profiles\er_net_effects_dll.dll",
+  [string]$DllPath = "X:\Documents\me3 profiles\er_net_effects.dll",
   [string]$SeamlessCoopDllPath = "C:\SteamLibrary\steamapps\common\ELDEN RING\Game\SeamlessCoop\ersc.dll"
 )
 
@@ -35,13 +35,13 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $profileText = Get-Content -LiteralPath $profilePath -Raw
 $nativeCount = ([regex]::Matches($profileText, '^\s*\[\[natives\]\]', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
 $packageCount = ([regex]::Matches($profileText, '^\s*\[\[packages\]\]', [System.Text.RegularExpressions.RegexOptions]::Multiline)).Count
-$dllMentionCount = ([regex]::Matches($profileText, [regex]::Escape('er_net_effects_dll.dll'))).Count
+$dllMentionCount = ([regex]::Matches($profileText, [regex]::Escape('er_net_effects.dll'))).Count
 $erscMentionCount = ([regex]::Matches($profileText, [regex]::Escape('ersc.dll'))).Count
-if ($nativeCount -ne 2) { throw "expected exactly two native entries (ersc.dll + er_net_effects_dll.dll), got $nativeCount" }
+if ($nativeCount -ne 2) { throw "expected exactly two native entries (ersc.dll + er_net_effects.dll), got $nativeCount" }
 if ($packageCount -ne 0) { throw "expected zero package entries, got $packageCount" }
-if ($dllMentionCount -ne 1) { throw "expected exactly one er_net_effects_dll mention, got $dllMentionCount" }
+if ($dllMentionCount -ne 1) { throw "expected exactly one er_net_effects mention, got $dllMentionCount" }
 if ($erscMentionCount -ne 1) { throw "expected exactly one ersc.dll mention, got $erscMentionCount" }
-if ($profileText -match 'er_inventory_sort|er-cutscene-replacer|mushroom_man|er_effects_rs\.dll') {
+if ($profileText -match 'er_inventory_sort|er-cutscene-replacer|mushroom_man|er_quickload\.dll') {
   throw "isolated profile contains an unrelated native/package entry"
 }
 

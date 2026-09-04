@@ -55,8 +55,8 @@ pub struct SaveLoadRequest {
     pub method: SaveLoadMethod,
     pub require_title_bootstrap: bool,
     /// Arm the menu-free own-stepper path (idx10 patch) via the reliable autoload-file channel.
-    /// Equivalent to the `ER_EFFECTS_OWN_STEPPER` env / `er-effects-own-stepper.txt` trigger, but
-    /// configurable through `er-effects-autoload.txt` (read CWD-relative, the only channel that
+    /// Equivalent to the `ER_QUICKLOAD_OWN_STEPPER` env / `er-quickload-own-stepper.txt` trigger, but
+    /// configurable through `er-quickload-autoload.txt` (read CWD-relative, the only channel that
     /// reliably reaches the DLL under the Proton probe harness).
     pub own_stepper: bool,
     /// Arm the menu-free cold-char-mount save-IO load through the same reliable channel.
@@ -76,7 +76,7 @@ pub struct SaveLoadRequest {
     /// player block's (m28, area 0x1c) FD4FileCap(s) so the FD4 workers stream the block to residency.
     /// Reaches ONLY world-asset file-load streaming -- no save IO, cannot autosave. Off by default and
     /// double-gated (it ALSO requires `OWN_LOAD_CONTINUE_FIRED`), so it can never fire on a vanilla
-    /// native menu load. Env `ER_EFFECTS_OWN_DISPATCH=1` / `own_dispatch=1` in the autoload file.
+    /// native menu load. Env `ER_QUICKLOAD_OWN_DISPATCH=1` / `own_dispatch=1` in the autoload file.
     pub own_dispatch: bool,
     /// Arm the menu-free LoadGame-JOB install lever: instead of the guarded `continue_confirm`/
     /// `SetState5`, BUILD the native LoadGame `MenuJobWithContext<LoadJobContext>` (factory
@@ -85,14 +85,14 @@ pub struct SaveLoadRequest {
     /// self-builds, deserializes the save, and streams the world -- no `SetState5`, no save write.
     /// SAVE-SAFE (build + first-tick deser only READ the save). Off by default; double-gated -- it
     /// ALSO requires `OWN_LOAD_CONTINUE_FIRED`-style arming via `own_load`. Env
-    /// `ER_EFFECTS_OWN_LOAD_INSTALL_JOB=1` / `own_load_install_job=1` in the autoload file.
+    /// `ER_QUICKLOAD_OWN_LOAD_INSTALL_JOB=1` / `own_load_install_job=1` in the autoload file.
     pub own_load_install_job: bool,
     /// PATH B "own the load" PRIVATE-PUMP lever. When set (with `own_load`), the verify-only parse is
     /// followed by BUILD of the LoadGame `MenuJobWithContext` with REAL mss-derived ctx; the recurring
     /// game task then ticks its `Run` PRIVATELY every frame to completion (deser -> m28 stream) and, on
     /// `state==Success`, drives the title->ingame transition via the guarded `SetState5`. No
     /// owner+0x130 install, no MenuJobQueue, no CSMenuMan dialog -- the menu-free subsystem rebuild.
-    /// Off by default. Env `ER_EFFECTS_OWN_LOAD_PUMP=1` / `own_load_pump=1` in the autoload file.
+    /// Off by default. Env `ER_QUICKLOAD_OWN_LOAD_PUMP=1` / `own_load_pump=1` in the autoload file.
     pub own_load_pump: bool,
 }
 
@@ -549,18 +549,18 @@ fn parse_bool(value: &str) -> bool {
 
 /// The experimental-direct-menu-load gate as the DLL sees it (mirror of the DLL's
 /// `experimental_direct_menu_load_enabled` in `gating.rs`): armed by EITHER the
-/// `ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD` env var OR the
-/// `er-effects-experimental-direct-menu-load.txt` flag file next to the game exe.
+/// `ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD` env var OR the
+/// `er-quickload-experimental-direct-menu-load.txt` flag file next to the game exe.
 ///
 /// `from_env` previously consulted only the env var. A run that armed the gate via the FILE (the
-/// product/portrait smoke) but supplied the method via `ER_EFFECTS_AUTOLOAD_METHOD=direct_menu_load`
+/// product/portrait smoke) but supplied the method via `ER_QUICKLOAD_AUTOLOAD_METHOD=direct_menu_load`
 /// therefore had its `DirectMenuLoad` method silently downgraded to `SaveRequested` here -> the DLL's
 /// `arm_product_autoload_from_request` never set `PRODUCT_AUTOLOAD_ARMED` -> `product_core_autoload_tick`
 /// never ran -> only the slot-less accept-byte fallback advanced the menu, which starts a NEW GAME
 /// (a fresh Vagabond, not the configured save). Honoring the same file flag here keeps the host request
 /// and the DLL gate consistent so the env-method + file-flag combination arms the product path.
 fn experimental_direct_menu_load_gate_enabled() -> bool {
-    if std::env::var("ER_EFFECTS_EXPERIMENTAL_DIRECT_MENU_LOAD")
+    if std::env::var("ER_QUICKLOAD_EXPERIMENTAL_DIRECT_MENU_LOAD")
         .is_ok_and(|value| parse_bool(value.trim()))
     {
         return true;
@@ -569,7 +569,7 @@ fn experimental_direct_menu_load_gate_enabled() -> bool {
         .ok()
         .and_then(|path| path.parent().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("er-effects-experimental-direct-menu-load.txt")
+        .join("er-quickload-experimental-direct-menu-load.txt")
         .exists()
 }
 
@@ -599,48 +599,48 @@ impl SaveLoadRequest {
     pub fn from_env() -> Self {
         let mut request = Self::from_autoload_file();
 
-        if let Ok(save_extension) = std::env::var("ER_EFFECTS_AUTOLOAD_SAVE_EXT") {
+        if let Ok(save_extension) = std::env::var("ER_QUICKLOAD_AUTOLOAD_SAVE_EXT") {
             request.save_extension = Some(save_extension);
         }
-        if let Some(slot) = std::env::var("ER_EFFECTS_AUTOLOAD_SLOT")
+        if let Some(slot) = std::env::var("ER_QUICKLOAD_AUTOLOAD_SLOT")
             .ok()
             .and_then(|slot| slot.parse().ok())
         {
             request.slot = Some(slot);
         }
         let mut method_from_env = false;
-        if let Ok(method) = std::env::var("ER_EFFECTS_AUTOLOAD_METHOD") {
+        if let Ok(method) = std::env::var("ER_QUICKLOAD_AUTOLOAD_METHOD") {
             request.method = SaveLoadMethod::from_label(&method);
             method_from_env = true;
         }
         if let Ok(require_title_bootstrap) =
-            std::env::var("ER_EFFECTS_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP")
+            std::env::var("ER_QUICKLOAD_AUTOLOAD_REQUIRE_TITLE_BOOTSTRAP")
         {
             request.require_title_bootstrap = parse_bool(require_title_bootstrap.trim());
         }
-        if matches!(std::env::var("ER_EFFECTS_OWN_STEPPER").as_deref(), Ok("1")) {
+        if matches!(std::env::var("ER_QUICKLOAD_OWN_STEPPER").as_deref(), Ok("1")) {
             request.own_stepper = true;
         }
         if matches!(
-            std::env::var("ER_EFFECTS_COLD_CHAR_MOUNT").as_deref(),
+            std::env::var("ER_QUICKLOAD_COLD_CHAR_MOUNT").as_deref(),
             Ok("1")
         ) {
             request.cold_char_mount = true;
         }
-        if matches!(std::env::var("ER_EFFECTS_OWN_LOAD").as_deref(), Ok("1")) {
+        if matches!(std::env::var("ER_QUICKLOAD_OWN_LOAD").as_deref(), Ok("1")) {
             request.own_load = true;
         }
         if matches!(
-            std::env::var("ER_EFFECTS_OWN_LOAD_CONTINUE").as_deref(),
+            std::env::var("ER_QUICKLOAD_OWN_LOAD_CONTINUE").as_deref(),
             Ok("1")
         ) {
             request.own_load_continue = true;
         }
-        if matches!(std::env::var("ER_EFFECTS_OWN_DISPATCH").as_deref(), Ok("1")) {
+        if matches!(std::env::var("ER_QUICKLOAD_OWN_DISPATCH").as_deref(), Ok("1")) {
             request.own_dispatch = true;
         }
         if matches!(
-            std::env::var("ER_EFFECTS_OWN_LOAD_INSTALL_JOB").as_deref(),
+            std::env::var("ER_QUICKLOAD_OWN_LOAD_INSTALL_JOB").as_deref(),
             Ok("1")
         ) {
             request.own_load_install_job = true;
@@ -654,9 +654,9 @@ impl SaveLoadRequest {
 
     #[must_use]
     pub fn from_autoload_file() -> Self {
-        let path = std::env::var("ER_EFFECTS_AUTOLOAD_PATH")
+        let path = std::env::var("ER_QUICKLOAD_AUTOLOAD_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("er-effects-autoload.txt"));
+            .unwrap_or_else(|_| PathBuf::from("er-quickload-autoload.txt"));
         Self::from_autoload_file_at(path)
     }
 

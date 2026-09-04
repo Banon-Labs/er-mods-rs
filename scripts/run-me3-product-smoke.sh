@@ -4,10 +4,10 @@
 set -euo pipefail
 
 # me3 PRODUCTION SMOKETEST: launch Elden Ring through me3 (garyttierney's mod loader) with
-# er_effects_rs.dll delivered as an me3 [[natives]] profile entry -- NO LazyLoader involved --
+# er_quickload.dll delivered as an me3 [[natives]] profile entry -- NO LazyLoader involved --
 # and verify our settings stick:
 #   * env settings   (*_PATH) must propagate me3 -> compat tool -> game
-#   * flag files     (er-effects-autoload.txt etc., resolved from the exe dir) must be honored
+#   * flag files     (er-quickload-autoload.txt etc., resolved from the exe dir) must be honored
 #   * the DLL itself must attach + run its game task when loaded by the me3 mod host
 #
 # me3 launches Game/eldenring.exe directly via the Steam compat tool (waitforexitandrun verb);
@@ -30,14 +30,23 @@ source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 STEAM_COMPAT_DATA_PATH="${STEAM_COMPAT_DATA_PATH:-$HOME/.local/share/Steam/steamapps/compatdata/1245620}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/runtime-probe/me3-product-smoke-$(date +%Y%m%d-%H%M%S)}"
 PID_FILE="${PID_FILE:-$ARTIFACT_DIR/me3-launch.pid}"
-TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-effects-telemetry.json}"
+TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 BOOTSTRAP_PATH="${BOOTSTRAP_PATH:-$ARTIFACT_DIR/bootstrap.jsonl}"
 BOOTSTRAP_STATE_PATH="${BOOTSTRAP_STATE_PATH:-$ARTIFACT_DIR/bootstrap-state.json}"
-CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-effects-crash-log.txt}"
-AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-effects-autoload-debug.log}"
-AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-effects-autoload.txt}"
+CRASH_LOG_PATH="${CRASH_LOG_PATH:-$ARTIFACT_DIR/er-quickload-crash-log.txt}"
+AUTOLOAD_DEBUG_PATH="${AUTOLOAD_DEBUG_PATH:-$ARTIFACT_DIR/er-quickload-autoload-debug.log}"
+# EVERY per-run artifact belongs in ARTIFACT_DIR. Anything left in GAME_DIR is SINGLE-SLOT: the DLL
+# rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone, and a harness
+# that pre-deletes the log drops the surviving `.prev` with it. Measured 2026-08-31: two launches
+# destroyed a 5.4 MB continue trace nobody had read. Add a line here (and to the launch env below)
+# for any future log rather than copying it out at teardown -- a copy after the run cannot recover
+# a file this run clobbered at launch, and a crashed run never reaches the copy at all.
+TRACE_CONTINUE_PATH="${TRACE_CONTINUE_PATH:-$ARTIFACT_DIR/er-quickload-continue-trace.log}"
+INPUT_TRACE_PATH="${INPUT_TRACE_PATH:-$ARTIFACT_DIR/er-quickload-input-trace.jsonl}"
+BOOT_PROFILE_PATH="${BOOT_PROFILE_PATH:-$ARTIFACT_DIR/er-quickload-profile.jsonl}"
+AUTOLOAD_PATH="${AUTOLOAD_PATH:-$GAME_DIR/er-quickload-autoload.txt}"
 AUTOLOAD_REQUEST="${AUTOLOAD_REQUEST:-}"
-BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_effects_rs.dll}"
+BUILT_DLL="${BUILT_DLL:-$REPO_ROOT/target/x86_64-pc-windows-msvc/release/er_quickload.dll}"
 # Single source of truth for the runtime-probe wall-clock cap (seconds); fail safe to the 45s hard truth.
 RUNTIME_TIMEOUT_CAP_SECONDS="$(cat "$REPO_ROOT/.auto/runtime_timeout_cap_seconds" 2>/dev/null || echo 45)"
 RUNTIME_TIMEOUT_SECONDS="${RUNTIME_TIMEOUT_SECONDS:-$RUNTIME_TIMEOUT_CAP_SECONDS}"
@@ -45,13 +54,13 @@ RUNTIME_EXPECTED_MODE="${RUNTIME_EXPECTED_MODE:-vanilla}"
 DRY_RUN=0
 
 # DEPRECATED SAVE-SOURCE STAGING: this script's historical non-telemetry mode writes an
-# er-effects.toml save_file and stages an isolated gold save. That is no longer release/autoload
+# er-quickload.toml save_file and stages an isolated gold save. That is no longer release/autoload
 # validation; it is a save-redirect-internals probe only. Normal release validation must use the
 # user/product launcher path: ~/Elden/launch.sh.
-GOLD_SAVE="${ER_EFFECTS_GOLD_SAVE:-$REPO_ROOT/save-files/150-Banon/ER0000.sl2}"
+GOLD_SAVE="${ER_QUICKLOAD_GOLD_SAVE:-$REPO_ROOT/save-files/150-Banon/ER0000.sl2}"
 RUNTIME_TELEMETRY_ONLY="${RUNTIME_TELEMETRY_ONLY:-0}"
 GOLD_SAVE_MIN_BYTES="${GOLD_SAVE_MIN_BYTES:-1048576}"
-ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
+ALLOW_DEPRECATED_STAGED_SAVE_PROBE="${ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE:-0}"
 APPDATA_ER_ROOT="${APPDATA_ER_ROOT:-$STEAM_COMPAT_DATA_PATH/pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing}"
 
 # LazyLoader neutralization: stage the proxy + ini away for the me3 run, restore on teardown.
@@ -66,7 +75,7 @@ Usage: $0 [--dry-run] [--autoload-request PATH]
 Deprecated for release/autoload validation: this script's non-telemetry path stages a save_file
 and therefore does NOT match the user/product launcher. Use ~/Elden/launch.sh for release/autoload
 validation. This script remains only for telemetry or explicit save-redirect internals with
-ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
+ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1.
 EOF
 }
 
@@ -161,7 +170,7 @@ stage_autoload_request() {
   mkdir -p "$FLAG_BACKUP_DIR"
   if [[ -f "$AUTOLOAD_PATH" ]]; then
     AUTOLOAD_HAD_ORIGINAL=1
-    cp -f "$AUTOLOAD_PATH" "$FLAG_BACKUP_DIR/er-effects-autoload.txt"
+    cp -f "$AUTOLOAD_PATH" "$FLAG_BACKUP_DIR/er-quickload-autoload.txt"
   fi
   if [[ -n "$AUTOLOAD_REQUEST" ]]; then
     require_file "$AUTOLOAD_REQUEST"
@@ -176,7 +185,7 @@ stage_autoload_request() {
 restore_autoload_request() {
   [[ -n "$FLAG_BACKUP_DIR" ]] || return 0
   if [[ "$AUTOLOAD_HAD_ORIGINAL" == "1" ]]; then
-    cp -f "$FLAG_BACKUP_DIR/er-effects-autoload.txt" "$AUTOLOAD_PATH"
+    cp -f "$FLAG_BACKUP_DIR/er-quickload-autoload.txt" "$AUTOLOAD_PATH"
   else
     rm -f "$AUTOLOAD_PATH"
   fi
@@ -270,10 +279,10 @@ preflight() {
   fi
   [[ -f "$BUILT_DLL" ]] || fatal "built DLL not found: $BUILT_DLL -- run 'cargo xwin build --release --target x86_64-pc-windows-msvc' first"
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" && "$ALLOW_DEPRECATED_STAGED_SAVE_PROBE" != "1" ]]; then
-    fatal "deprecated staged-save/er-effects.toml save_file smoke is disabled for release/autoload validation; use ~/Elden/launch.sh. Set ER_EFFECTS_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
+    fatal "deprecated staged-save/er-quickload.toml save_file smoke is disabled for release/autoload validation; use ~/Elden/launch.sh. Set ER_QUICKLOAD_ALLOW_DEPRECATED_STAGED_SAVE_PROBE=1 only for save-redirect internals."
   fi
   if [[ "$RUNTIME_TELEMETRY_ONLY" != "1" ]]; then
-    [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE (set ER_EFFECTS_GOLD_SAVE or RUNTIME_TELEMETRY_ONLY=1)"
+    [[ -f "$GOLD_SAVE" ]] || fatal "gold save not found: $GOLD_SAVE (set ER_QUICKLOAD_GOLD_SAVE or RUNTIME_TELEMETRY_ONLY=1)"
     local gold_bytes
     gold_bytes=$(stat -c '%s' "$GOLD_SAVE" 2>/dev/null || echo 0)
     (( gold_bytes >= GOLD_SAVE_MIN_BYTES )) || fatal "gold save too small ($gold_bytes bytes < $GOLD_SAVE_MIN_BYTES): $GOLD_SAVE -- not a real save"
@@ -288,14 +297,17 @@ BOOTSTRAP_PATH=$(realpath -m "$BOOTSTRAP_PATH")
 BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
 CRASH_LOG_PATH=$(realpath -m "$CRASH_LOG_PATH")
 AUTOLOAD_DEBUG_PATH=$(realpath -m "$AUTOLOAD_DEBUG_PATH")
+TRACE_CONTINUE_PATH=$(realpath -m "$TRACE_CONTINUE_PATH")
+INPUT_TRACE_PATH=$(realpath -m "$INPUT_TRACE_PATH")
+BOOT_PROFILE_PATH=$(realpath -m "$BOOT_PROFILE_PATH")
 mkdir -p "$ARTIFACT_DIR"
 
 # me3 profile: the production-representative delivery -- a ModProfile with our DLL as a native.
 # The DLL is copied into the artifact dir so the profile references an immutable per-run payload
-# (and the inert GAME_DIR/er_effects_rs.dll chainload copy is never touched or loaded).
-SMOKE_DLL="$ARTIFACT_DIR/er_effects_rs.dll"
-PROFILE_FILE="$ARTIFACT_DIR/er-effects-me3-smoke.me3"
-RUNTIME_CONFIG_FILE="$ARTIFACT_DIR/er-effects.toml"
+# (and the inert GAME_DIR/er_quickload.dll chainload copy is never touched or loaded).
+SMOKE_DLL="$ARTIFACT_DIR/er_quickload.dll"
+PROFILE_FILE="$ARTIFACT_DIR/er-quickload-me3-smoke.me3"
+RUNTIME_CONFIG_FILE="$ARTIFACT_DIR/er-quickload.toml"
 
 if (( DRY_RUN )); then
   cat > "$ARTIFACT_DIR/dry-run-summary.json" <<EOF
@@ -318,19 +330,19 @@ stage_lazyloader_away
 stage_autoload_request
 
 # SAVE SOURCE: DEPRECATED staged-save internals path -- isolated writable copy of the gold save,
-# pointed at via er-effects.toml save_file; not a release/autoload validation path.
+# pointed at via er-quickload.toml save_file; not a release/autoload validation path.
 if [[ "$RUNTIME_TELEMETRY_ONLY" == "1" ]]; then
-  export ER_EFFECTS_TELEMETRY_ONLY=1
+  export ER_QUICKLOAD_TELEMETRY_ONLY=1
   echo "save-source: TELEMETRY-ONLY (no character load; default save dir not read)"
 else
-  ACTIVE_STEAMID="${ER_EFFECTS_ACTIVE_STEAMID:-76561197986456766}"
-  CONFIG_SLOT="${ER_EFFECTS_GOLD_SLOT:-0}"
+  ACTIVE_STEAMID="${ER_QUICKLOAD_ACTIVE_STEAMID:-76561197986456766}"
+  CONFIG_SLOT="${ER_QUICKLOAD_GOLD_SLOT:-0}"
   if [[ "$CONFIG_SLOT" == "-1" ]]; then
     CONFIG_SLOT=0
   fi
   if [[ "${RUNTIME_USE_LOOSE_SAVE_CONFIG:-0}" == "1" ]]; then
     LOOSE_SAVE_DIR="$ARTIFACT_DIR/loose-save"
-    STAGED_ROOT="$LOOSE_SAVE_DIR/er-effects-save-redirect-stage"
+    STAGED_ROOT="$LOOSE_SAVE_DIR/er-quickload-save-redirect-stage"
     CONFIG_SAVE="$LOOSE_SAVE_DIR/ER0000.sl2"
     mkdir -p "$LOOSE_SAVE_DIR"
     cp -f "$GOLD_SAVE" "$CONFIG_SAVE"
@@ -343,7 +355,7 @@ else
     mkdir -p "$STAGED_SAVE_DIR"
     cp -f "$GOLD_SAVE" "$CONFIG_SAVE"
     chmod u+w "$CONFIG_SAVE"
-    echo "save-source: staged gold save -> $CONFIG_SAVE (er-effects.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
+    echo "save-source: staged gold save -> $CONFIG_SAVE (er-quickload.toml next to DLL); slot=$CONFIG_SLOT; autosaves isolated from $GOLD_SAVE"
   fi
   python3 - "$RUNTIME_CONFIG_FILE" "$CONFIG_SAVE" "$CONFIG_SLOT" <<'PY'
 from pathlib import Path
@@ -353,7 +365,7 @@ config = Path(sys.argv[1])
 save = sys.argv[2]
 slot = int(sys.argv[3])
 config.write_text(
-    '# Required DLL-adjacent er-effects config. Env vars may override these values.\n'
+    '# Required DLL-adjacent er-quickload config. Env vars may override these values.\n'
     f'save_file = {json.dumps(save)}\n'
     f'slot = {slot}\n',
     encoding='utf-8',
@@ -361,7 +373,7 @@ config.write_text(
 PY
 
   DEFAULT_GRAPHICS_CONFIG="$APPDATA_ER_ROOT/GraphicsConfig.xml"
-  GRAPHICS_CONFIG_SOURCE="${ER_EFFECTS_GRAPHICS_CONFIG_SOURCE:-${ER_EFFECTS_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
+  GRAPHICS_CONFIG_SOURCE="${ER_QUICKLOAD_GRAPHICS_CONFIG_SOURCE:-${ER_QUICKLOAD_GOLD_GRAPHICS_CONFIG:-$DEFAULT_GRAPHICS_CONFIG}}"
   if [[ -f "$GRAPHICS_CONFIG_SOURCE" ]]; then
     STAGED_GRAPHICS_CONFIG="$STAGED_ROOT/eldenring/graphicsconfig.xml"
     mkdir -p "$STAGED_ROOT/eldenring"
@@ -384,15 +396,29 @@ fi
 
 # Launch through me3. The CLI stays alive as the launch owner (analog of the direct probe's Proton
 # parent); killing it + the exact eldenring.exe/me3-launcher.exe pids is the teardown. All
-# ER_EFFECTS_* env must survive me3 -> compat tool -> game; the verdict below PROVES whether it did.
+# ER_QUICKLOAD_* env must survive me3 -> compat tool -> game; the verdict below PROVES whether it did.
 (
   cd "$GAME_DIR"
-  ER_EFFECTS_TELEMETRY_PATH="$TELEMETRY_PATH" \
-  ER_EFFECTS_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
-  ER_EFFECTS_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
-  ER_EFFECTS_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
-  ER_EFFECTS_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
-  ER_EFFECTS_ACTIVE_STEAMID="$ACTIVE_STEAMID_ENV" \
+  ER_QUICKLOAD_TELEMETRY_PATH="$TELEMETRY_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_PATH="$BOOTSTRAP_PATH" \
+  ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
+  ER_QUICKLOAD_CRASH_LOG_PATH="$CRASH_LOG_PATH" \
+  ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$AUTOLOAD_DEBUG_PATH" \
+  ER_QUICKLOAD_TRACE_CONTINUE_PATH="$TRACE_CONTINUE_PATH" \
+  ER_QUICKLOAD_INPUT_TRACE_PATH="$INPUT_TRACE_PATH" \
+  ER_QUICKLOAD_PROFILE_PATH="$BOOT_PROFILE_PATH" \
+  ER_QUICKLOAD_ACTIVE_STEAMID="$ACTIVE_STEAMID_ENV" \
+  ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
+  ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
+  ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
+  ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
+  ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+  ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
+  ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
+  ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
   "$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$PROFILE_FILE" \
     > "$ARTIFACT_DIR/me3-launch.out" 2>&1 & echo $! > "$PID_FILE"
 )
@@ -420,7 +446,7 @@ collect_me3_logs
 #   dll_attach        bootstrap.jsonl has dllmain_attach -> me3 native load worked (proxy staged away,
 #                     so no other loader could have produced it)
 #   env_stick         the autoload debug log (whose very PATH comes from env) exists and records the
-#                     save-override decision -> ER_EFFECTS_* env propagated through me3
+#                     save-override decision -> ER_QUICKLOAD_* env propagated through me3
 #   game_task         the recurring game task registered -> DLL is live on CSTask, not just attached
 #   watcher_pass      .auto/runtime_probe.sh readiness watcher exit (world-stable target)
 #   crash_free        the crash log recorded no fault

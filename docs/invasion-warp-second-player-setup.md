@@ -1,4 +1,4 @@
-# Setting up `er_invasion_warp_dll.dll` for a two-player location test
+# Setting up `er_invasion_warp.dll` for a two-player location test
 
 Two roles. They need different things, and the host's side is the easy one.
 
@@ -8,7 +8,7 @@ Two roles. They need different things, and the host's side is the easy one.
 
 The DLL publishes your current map onto your Steam lobby every tick, and that path reads no
 config at all -- it is not gated on `enabled`, not gated on `hunt`, and it does not need the
-`er-invasion-warp.toml` file to exist. A config file will appear next to the DLL on first run;
+`er-invasion-warp-core.toml` file to exist. A config file will appear next to the DLL on first run;
 you can ignore it.
 
 If your loader is me3, add the DLL as a native alongside Seamless:
@@ -23,7 +23,7 @@ game = "eldenring"
 path = 'C:\path\to\SeamlessCoop\ersc.dll'
 
 [[natives]]
-path = 'C:\path\to\er_invasion_warp_dll.dll'
+path = 'C:\path\to\er_invasion_warp.dll'
 ```
 
 Any injector works -- it is an ordinary native DLL -- but it must load into the same process as
@@ -39,6 +39,13 @@ other no matter what this DLL does:
    (`BuildLobbyKey` @ RVA `0x0ABC20`). So any mod that edits `regulation.bin` makes you invisible
    to everyone who has not made the byte-identical edit. That is the single most common reason two
    people who "did everything right" never see each other.
+
+   The *rule* still holds on Seamless Co-op v2.0.0 -- both players needing identical params is the
+   mod's design, not an artifact of one build -- but the **address does not**. `0x0ABC20` was
+   measured against v1.9.9; in v2.0.0 the search finds three candidates and cannot pick one, so
+   treat the RVA as unverified and re-measure with `scripts/locate-ersc-entry-points.py` before
+   any tool acts on it. "Both players on the same Seamless VERSION" belongs on this list for the
+   same reason: the build identity is part of the fingerprint.
 2. **The same matchmaking bracket.** There is a `matchmaking_breakin_lobby_...` term carrying a
    value like `5_3` -- measured, both sides asked for and carried `5_3`. It tracks character
    level/weapon level. A wildly different character may never match.
@@ -57,7 +64,7 @@ A closed solo world reads `false` and no invader's query returns you.
 
 ### Checking it worked
 
-`er-invasion-warp-dll.log`, next to the game exe, should show:
+`er-invasion-warp.log`, next to the game exe, should show:
 
 ```
 lobby-publish: er_invasion_warp_map = m12_02_00_00 on lobby 0x186000016dfa0f7 (#1, read back)
@@ -69,7 +76,7 @@ line says which check failed and why -- no guessing required.
 ## If you are the INVADER -- invading someone at the place you are standing
 
 This is the path that is **proven working against real hosts** (2026-08-06). Edit
-`er-invasion-warp.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
+`er-invasion-warp-core.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
 
 ```toml
 [local_invasion]

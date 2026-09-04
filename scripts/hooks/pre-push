@@ -1,10 +1,53 @@
 #!/usr/bin/env bash
+# Runs at the one moment the damage can still be stopped: after the commits exist, before they
+# reach origin.
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-bash scripts/git-pre-push-block-main.sh "$@"
+# GIT FEEDS THE REFS BEING PUSHED ON STDIN, AND IT CAN ONLY BE READ ONCE. Both consumers below
+# need it: the main-push guard reads it to see which refs are involved (and must still see an
+# EMPTY stream as a valid case -- that is one of its own tests), and the compile gate reads it to
+# learn which commits are actually being pushed. So capture it here and replay a copy to each.
+# Before this, `git-pre-push-block-main.sh` drained stdin and anything after it got nothing.
+pushed=$(cat)
 
-printf 'pre-push: running scripts/ci-local-check.sh\n' >&2
-exec bash scripts/ci-local-check.sh
+# `%s\n`, NOT `%s`. `$(cat)` strips the trailing newline, and a `while read` loop drops a final
+# unterminated line -- so replaying with `printf '%s'` handed the main-push guard an empty read
+# on every single-ref push and it blocked nothing. Measured 2026-08-31; the guard now also
+# tolerates the unterminated shape, and both halves are covered by
+# scripts/test-git-pre-push-block-main.sh.
+printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
+
+# DOES THE STATE BEING PUSHED COMPILE? Not "does my working tree compile" -- see the header of
+# scripts/check-committed-compiles.sh for why those are different questions, and how two commits
+# reached origin on 2026-08-31 that answered yes to the second and no to the first.
+#
+# Field 2 of each stdin line is the LOCAL sha being pushed; an all-zero sha means the ref is being
+# DELETED, which has nothing to compile. The TIP of each pushed ref is checked, not every commit
+# in the range: both historical failures were pushed tips, and checking intermediates would
+# multiply the cost for a case that has not happened here.
+mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
+if [[ ${#pushed_shas[@]} -gt 0 ]]; then
+	printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
+		"${#pushed_shas[@]}" >&2
+	bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+fi
+
+# PARITY WITH CI, NOT A SUBSET OF IT (user directive 2026-09-03).
+#
+# This line used to run scripts/ci-local-check.sh, a hand-maintained 13-script list, while
+# scripts/check.sh -- the file CI's `check` job runs -- referenced 153. Nothing compared the two,
+# so a gate appended to check.sh became push-invisible the instant it was written, and the first
+# place it ever ran was a red CI job twelve minutes after the push. That is exactly how a
+# check-fnv1a-owner.py violation reached origin on PR #398: the hook ran, passed its 13 gates, and
+# let through a commit the full suite rejects in five minutes.
+#
+# The subset was justified as speed. It is not faster: it saves a few minutes per push and costs a
+# 12-minute CI round trip, a red PR and a second push whenever it is wrong -- and nothing measured
+# how often it was wrong. CI already solved this for itself (see .github/workflows/check.yml: it
+# runs check.sh precisely so its gate set is DERIVED rather than re-listed); the hook was the last
+# place still holding a copy of the list. Now there is no list to drift, because there is one file.
+printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
+exec bash scripts/check.sh

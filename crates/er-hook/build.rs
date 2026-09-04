@@ -4,8 +4,8 @@ use std::{
 };
 
 // Single cc-compile of the vendored MinHook C source, replacing the three near-identical build
-// scripts that previously lived in each game cdylib (er-effects-rs, er-reload-trace-dll,
-// er-input-harness-dll). Windows-target gated -- the C uses Win32 APIs, so a host `cargo check`
+// scripts that previously lived in each game cdylib (er-quickload, er-reload-trace,
+// er-input-harness). Windows-target gated -- the C uses Win32 APIs, so a host `cargo check`
 // (which still runs build scripts) must not try to compile it.
 fn main() {
     let root_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -33,7 +33,7 @@ fn main() {
         .compile("minhook");
 
     println!("cargo:rerun-if-env-changed=ER_MINHOOK_SRC_DIR");
-    println!("cargo:rerun-if-env-changed=ER_EFFECTS_MINHOOK_SRC_DIR");
+    println!("cargo:rerun-if-env-changed=ER_QUICKLOAD_MINHOOK_SRC_DIR");
     println!("cargo:rerun-if-changed={}", mh_src_dir.display());
 }
 
@@ -57,7 +57,7 @@ fn git_common_dir_parent(manifest_dir: &Path) -> Option<PathBuf> {
 }
 
 fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
-    for env_name in ["ER_MINHOOK_SRC_DIR", "ER_EFFECTS_MINHOOK_SRC_DIR"] {
+    for env_name in ["ER_MINHOOK_SRC_DIR", "ER_QUICKLOAD_MINHOOK_SRC_DIR"] {
         if let Ok(dir) = env::var(env_name) {
             let dir = PathBuf::from(dir);
             if dir.join("buffer.c").is_file() {
@@ -104,7 +104,7 @@ fn resolve_minhook_src_dir(manifest_dir: &Path) -> PathBuf {
     }
 
     panic!(
-        "unable to find vendor/minhook/src (checked {} and ancestor vendor dirs; set ER_MINHOOK_SRC_DIR or ER_EFFECTS_MINHOOK_SRC_DIR to the MinHook src directory)",
+        "unable to find vendor/minhook/src (checked {} and ancestor vendor dirs; set ER_MINHOOK_SRC_DIR or ER_QUICKLOAD_MINHOOK_SRC_DIR to the MinHook src directory)",
         repo_local.display()
     );
 }

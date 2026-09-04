@@ -59,11 +59,11 @@ connects to it as a REMOTE DEVICE. Launch with a gadget-bearing profile:
 RUN IT (frida is provisioned per-run by uv; nothing is installed system-wide):
 
     uv run --with frida python3 \
-        /home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py
+        /home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py
 
 SELFTEST (no game, no frida -- proves the verdict logic):
 
-    python3 /home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py --selftest
+    python3 /home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py --selftest
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ import threading
 
 GADGET = "127.0.0.1:27042"
 DEFAULT_OUT = (
-    "/tmp/claude-1000/-home-banon-projects-er-effects-rs/"
+    "/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
     "fdd5f467-bf36-402d-bbcd-6defe1f4d0b7/scratchpad/invasion-mechanism-trace.jsonl"
 )
 
@@ -461,7 +461,7 @@ const INFO_FIELDS = [
 ];
 
 // CSGameMan singleton pointer, and the two fields the engine PLACES from. Byte-verified in this
-// repo against their own named getters (crates/er-invasion-warp/src/seamless_invade_probe.rs):
+// repo against their own named getters (crates/er-invasion-warp-core/src/seamless_invade_probe.rs):
 //   +0xac8 destination BlockId          GetTargetMapId                0x140679630
 //   +0xaf0 npcInvadeTargetEntryPoint    GetNpcInvadeTargetEntryPoint  0x140679650
 // The whole placement block, field names straight from the 1.16.2 dump's GameMan structure. THREE
@@ -553,7 +553,7 @@ function hexBytes(ptr_, len) {
 // m{AA}_{BB}_{CC}_{DD} -- the engine's own debug spelling of a BlockId, whose bytes in memory are
 // [index, region, block, area] low-to-high. The index byte is BCD-packed for areas 50..88, which
 // is why it is decoded rather than printed raw: an overworld block with a two-digit index prints
-// wrong otherwise. Mirrors BlockKey in crates/er-invasion-warp/src/invasion_warp.rs.
+// wrong otherwise. Mirrors BlockKey in crates/er-invasion-warp-core/src/invasion_warp.rs.
 function blockName(raw) {
   if (raw === BLOCK_NONE) return 'none';
   const area = (raw >>> 24) & 0xff, block = (raw >>> 16) & 0xff;
@@ -811,7 +811,7 @@ def main() -> int:
         print(
             "ERROR: frida is not importable. uv provisions it per-run:\n"
             "  uv run --with frida python3 "
-            "/home/banon/projects/er-effects-rs/scripts/frida-invasion-mechanism-trace.py",
+            "/home/banon/projects/er-mods-rs/scripts/frida-invasion-mechanism-trace.py",
             file=sys.stderr,
         )
         return 7

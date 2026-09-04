@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fail the build when a telemetry counter is READ but never WRITTEN.
 
-WHY THIS GATE EXISTS. A counter in `er-telemetry` that is defined, re-exported and read once to
+WHY THIS GATE EXISTS. A counter in `er-telemetry-core` that is defined, re-exported and read once to
 emit an oracle -- but never written -- reports 0/false forever. Nothing downstream can tell that
 apart from "the feature ran and did nothing", so the oracle does not merely fail to inform, it
 actively misinforms. That is not hypothetical: on 2026-07-31 an agent cited
@@ -12,7 +12,8 @@ writers at all; a further 13 with the same shape were found by audit (er-effects
 A `bd` note cannot prevent the next one. This can.
 
 WHAT COUNTS AS A WRITE. Any of `.store` `.fetch_add` `.fetch_sub` `.fetch_max` `.fetch_min`
-`.fetch_or` `.fetch_and` `.swap` `.compare_exchange[_weak]`, matched across newlines because
+`.fetch_or` `.fetch_and` `.fetch_xor` `.fetch_nand` `.fetch_update` `.swap`
+`.compare_exchange[_weak]`, matched across newlines because
 rustfmt wraps them (`NAME\n    .fetch_add(1, ...)`), and optionally through an index (`NAME[i]`)
 for counter arrays.
 
@@ -41,7 +42,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Definitions are collected from EVERY crate file, not just er-telemetry/src/counters.rs. That file
+# Definitions are collected from EVERY crate file, not just er-telemetry-core/src/counters.rs. That file
 # holds ~1295 atomic statics but a further ~960 live in 84 other files (constants/autoload_state.rs,
 # constants/system_quit.rs, the sibling DLL crates, ...), and auditing only the central file would
 # give false assurance for more than a third of them.
@@ -49,8 +50,12 @@ DEF_RE = re.compile(
     r"(?:pub(?:\([a-z()]+\))?\s+)?static ([A-Z0-9_]+)\s*:\s*(?:Atomic\w+|\[\s*Atomic\w+)",
     re.MULTILINE,
 )
+# `fetch_xor` / `fetch_nand` / `fetch_update` were missing until 2026-08-24 and cost a false
+# positive: a boolean toggled with `ENABLED.fetch_xor(true, ..)` -- the idiomatic atomic flip --
+# was reported as read-but-never-written. Every atomic RMW is a write; the list is the whole set.
 WRITE_OPS = (
-    "store|fetch_add|fetch_sub|fetch_max|fetch_min|fetch_or|fetch_and|swap"
+    "store|fetch_add|fetch_sub|fetch_max|fetch_min|fetch_or|fetch_and|fetch_xor"
+    "|fetch_nand|fetch_update|swap"
     "|compare_exchange_weak|compare_exchange"
 )
 
@@ -67,12 +72,40 @@ def write_re(name: str) -> re.Pattern[str]:
 BY_REF_QUALIFIER = r"(?:(?:raw\s+(?:const|mut)\s+)?(?:(?:crate|self|super|[A-Za-z_]\w*)\s*::\s*)*)"
 
 
+# ...but only a REAL reference. Two shapes look like `&NAME` and write nothing, and both were
+# concealing live offenders from THIS gate until 2026-08-31:
+#   `&& NAME.load(..)`  -- the second `&` of a boolean AND, immediately followed by the counter.
+#                          TITLE_CUSTOM_COVER_RUN_CALLS hid here. It is the fifth AND-term of
+#                          `oracle_title_loaded_character_portrait_rendered`, so this gate's silence
+#                          is why an oracle that could never be true kept being emitted.
+#   `let _ = &NAME;`    -- a discard binding written only to silence an unused warning.
+#                          PROFILE_ALPHA0_CLEARS hid here while its clear was compiled off.
+# scripts/check-counter-writers.py carries the identical pair.
 def by_ref_re(name: str) -> re.Pattern[str]:
-    return re.compile(rf"&\s*{BY_REF_QUALIFIER}{re.escape(name)}\b")
+    return re.compile(rf"(?<!&)&\s*{BY_REF_QUALIFIER}{re.escape(name)}\b")
+
+
+def discard_ref_re(name: str) -> re.Pattern[str]:
+    """`let _ = &NAME;` / `let _: &T = &crate::path::NAME;` -- a no-op, never a write."""
+    return re.compile(rf"let\s+_\s*(?::[^=]{{0,80}})?=\s*&\s*{BY_REF_QUALIFIER}{re.escape(name)}\b")
 
 
 def read_re(name: str) -> re.Pattern[str]:
     return re.compile(rf"\b{re.escape(name)}\b\s*(?:\[[^\]]{{0,64}}\])?\s*\.\s*load\s*\(", re.S)
+
+
+# The same four rules with the identifier as a CAPTURE GROUP, so one scan of a file yields every
+# name it writes/reads. `audit()` uses these; the per-name forms above stay because they document
+# each rule in isolation and the selftest exercises the behaviour through `audit()` either way.
+_NAME = r"([A-Z][A-Z0-9_]{2,})"
+WRITE_ANY_RE = re.compile(
+    rf"\b{_NAME}\b\s*(?:\[[^\]]{{0,64}}\])?\s*\.\s*(?:{WRITE_OPS})\s*\(", re.S
+)
+READ_ANY_RE = re.compile(rf"\b{_NAME}\b\s*(?:\[[^\]]{{0,64}}\])?\s*\.\s*load\s*\(", re.S)
+BY_REF_ANY_RE = re.compile(rf"(?<!&)&\s*{BY_REF_QUALIFIER}{_NAME}\b")
+DISCARD_REF_ANY_RE = re.compile(
+    rf"let\s+_\s*(?::[^=]{{0,80}})?=\s*&\s*{BY_REF_QUALIFIER}{_NAME}\b"
+)
 
 
 def audit(sources: dict[str, str], counters_src: str = "") -> list[tuple[str, int]]:
@@ -80,18 +113,34 @@ def audit(sources: dict[str, str], counters_src: str = "") -> list[tuple[str, in
     names = set(DEF_RE.findall(counters_src))
     for text in sources.values():
         names.update(DEF_RE.findall(text))
+    # ONE PASS PER FILE, not one pass per (name, file). The rules are unchanged -- these are the
+    # same four patterns with the identifier left as a capture group instead of substituted in --
+    # but the loop is transposed, so the cost is ~900 file scans rather than 2,645 names x 900
+    # files. That took this gate from ~30s (with a `.load()`-heavy tree it had drifted past its
+    # documented ~22s, straight at the 30s per-command shell cap, where a kill reads as a TIMEOUT
+    # rather than as a verdict) to a few seconds. Every declared counter name is SCREAMING_SNAKE
+    # and at least three characters, which is exactly what these capture groups match -- verified
+    # against the whole declared set, 0 names outside the shape.
+    writes: dict[str, int] = {}
+    reads: dict[str, int] = {}
+    for text in sources.values():
+        for n in WRITE_ANY_RE.findall(text):
+            writes[n] = writes.get(n, 0) + 1
+        discarded: dict[str, int] = {}
+        if "let _" in text:
+            for n in DISCARD_REF_ANY_RE.findall(text):
+                discarded[n] = discarded.get(n, 0) + 1
+        for n in BY_REF_ANY_RE.findall(text):
+            if discarded.get(n):
+                discarded[n] -= 1
+                continue
+            writes[n] = writes.get(n, 0) + 1
+        for n in READ_ANY_RE.findall(text):
+            reads[n] = reads.get(n, 0) + 1
     offenders: list[tuple[str, int]] = []
     for name in sorted(names):
-        writes = 0
-        reads = 0
-        for text in sources.values():
-            if name not in text:
-                continue
-            writes += len(write_re(name).findall(text))
-            writes += len(by_ref_re(name).findall(text))
-            reads += len(read_re(name).findall(text))
-        if writes == 0 and reads > 0:
-            offenders.append((name, reads))
+        if writes.get(name, 0) == 0 and reads.get(name, 0) > 0:
+            offenders.append((name, reads[name]))
     return offenders
 
 
@@ -126,8 +175,11 @@ def selftest() -> int:
             "pub static WRITTEN_BY_REF: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_BY_REF_QUALIFIED: AtomicUsize = AtomicUsize::new(0);",
             "pub static WRITTEN_BY_RAW_REF: AtomicUsize = AtomicUsize::new(0);",
+            "pub static WRITTEN_BY_XOR: AtomicBool = AtomicBool::new(false);",
             "pub static WRITTEN_INDEXED: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];",
             "pub static DEAD_READ_ONCE: AtomicUsize = AtomicUsize::new(0);",
+            "pub static DEAD_BEHIND_LOGICAL_AND: AtomicUsize = AtomicUsize::new(0);",
+            "pub static DEAD_BEHIND_DISCARD: AtomicUsize = AtomicUsize::new(0);",
             "pub static NEVER_TOUCHED: AtomicUsize = AtomicUsize::new(0);",
         ]
     )
@@ -146,12 +198,20 @@ def selftest() -> int:
             # identical, static still written by the installer, gate reported it as dead.
             "register_union_hook(a, h, &crate::map_confirm::WRITTEN_BY_REF_QUALIFIED);\n"
             "let e = crate::map_confirm::WRITTEN_BY_REF_QUALIFIED.load(Ordering::SeqCst);\n"
+            # every atomic read-modify-write is a write, `fetch_xor` (a boolean toggle) included
+            "let was = WRITTEN_BY_XOR.fetch_xor(true, Ordering::SeqCst);\n"
+            "let g = WRITTEN_BY_XOR.load(Ordering::SeqCst);\n"
             "let p = &raw const WRITTEN_BY_RAW_REF;\n"
             "let f = WRITTEN_BY_RAW_REF.load(Ordering::SeqCst);\n"
             "WRITTEN_INDEXED[idx].fetch_add(1, Ordering::SeqCst);\n"
             "let d = WRITTEN_INDEXED[0].load(Ordering::SeqCst);\n"
             # the defect: read to emit an oracle, never written
             "push_json_usize(body, \"oracle_dead\", DEAD_READ_ONCE.load(Ordering::SeqCst));\n"
+            # `&&` is not a reference: the `&` of a boolean AND sits directly before the counter.
+            "let ok = a != 0\n    && DEAD_BEHIND_LOGICAL_AND.load(Ordering::SeqCst) == 1;\n"
+            # a discard binding is not a write, and the counter is still read to emit an oracle
+            "let _ = &DEAD_BEHIND_DISCARD;\n"
+            "push_json_usize(body, \"oracle_dead2\", DEAD_BEHIND_DISCARD.load(Ordering::SeqCst));\n"
         )
     }
     got = {n for n, _ in audit(sources, counters)}
@@ -162,12 +222,14 @@ def selftest() -> int:
         "WRITTEN_BY_REF",
         "WRITTEN_BY_REF_QUALIFIED",
         "WRITTEN_BY_RAW_REF",
+        "WRITTEN_BY_XOR",
         "WRITTEN_INDEXED",
     ):
         if name in got:
             failures.append(f"{name} was flagged but IS written")
-    if "DEAD_READ_ONCE" not in got:
-        failures.append("DEAD_READ_ONCE was NOT flagged but is read-only")
+    for name in ("DEAD_READ_ONCE", "DEAD_BEHIND_LOGICAL_AND", "DEAD_BEHIND_DISCARD"):
+        if name not in got:
+            failures.append(f"{name} was NOT flagged but is read-only")
     if "NEVER_TOUCHED" in got:
         failures.append("NEVER_TOUCHED was flagged; unread counters are out of scope")
     if failures:
@@ -175,8 +237,8 @@ def selftest() -> int:
             print(f"[check-oracle-writers] SELFTEST FAIL: {f}")
         return 1
     print(
-        "[check-oracle-writers] selftest ok (8 cases: inline, wrapped, by-ref, by-ref-qualified, "
-        "by-raw-ref, indexed, dead, unread)"
+        "[check-oracle-writers] selftest ok (11 cases: inline, wrapped, by-ref, by-ref-qualified, "
+        "by-raw-ref, xor, indexed, dead, dead-behind-&&, dead-behind-discard, unread)"
     )
     return 0
 

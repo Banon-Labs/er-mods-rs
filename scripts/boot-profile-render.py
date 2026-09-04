@@ -2,8 +2,8 @@
 """Render a boot-sequence profile from a runtime-probe artifact dir.
 
 Inputs (in the run dir):
-  * er-effects-autoload-debug.log  -- `[+<ms>ms] <tag>: ...` phase markers
-  * er-effects-profile.jsonl       -- per-sample, per-thread CPU counters (from the DLL profiler)
+  * er-quickload-autoload-debug.log  -- `[+<ms>ms] <tag>: ...` phase markers
+  * er-quickload-profile.jsonl       -- per-sample, per-thread CPU counters (from the DLL profiler)
   * readiness-result.json          -- optional; runtime_module_base fallback, launch timing
 
 Outputs (written into the run dir):
@@ -296,10 +296,10 @@ def main() -> int:
         print("usage: boot-profile-render.py <run_dir>", file=sys.stderr)
         return 2
     run_dir = Path(sys.argv[1])
-    log = parse_log(run_dir / "er-effects-autoload-debug.log")
-    header, samples = parse_profile(run_dir / "er-effects-profile.jsonl")
+    log = parse_log(run_dir / "er-quickload-autoload-debug.log")
+    header, samples = parse_profile(run_dir / "er-quickload-profile.jsonl")
     if not samples:
-        print(f"no profiler samples in {run_dir}/er-effects-profile.jsonl", file=sys.stderr)
+        print(f"no profiler samples in {run_dir}/er-quickload-profile.jsonl", file=sys.stderr)
     milestones = extract_milestones(log)
     ncpu = int(header.get("ncpu") or 1)
     end_ms = max(
