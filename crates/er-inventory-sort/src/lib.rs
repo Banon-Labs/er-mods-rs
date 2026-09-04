@@ -210,14 +210,6 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
     let mut already = 0usize;
     let mut skipped = 0usize;
     for (label, sort_type, configured_default) in configured_defaults {
-        let Some(target_value) = menu_sort_default_value(configured_default) else {
-            skipped += 1;
-            log_message(format_args!(
-                "defaults: preserve configured category={label} sort_type={sort_type}"
-            ));
-            continue;
-        };
-        let target_id = target_value & MENU_SORT_ID_MASK;
         let addr = menu_system_save_load
             + MENU_SORT_STATE_ARRAY_OFFSET
             + sort_type * MENU_SORT_STATE_ENTRY_SIZE;
@@ -228,26 +220,29 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
             return;
         };
         let current_u32 = current as u32;
-        let current_id = current_u32 & MENU_SORT_ID_MASK;
-        if current_id == target_id {
-            already += 1;
-            continue;
+        match decide_menu_sort_write(current_u32, configured_default) {
+            MenuSortWriteDecision::PreserveConfigured => {
+                skipped += 1;
+                log_message(format_args!(
+                    "defaults: preserve configured category={label} sort_type={sort_type}"
+                ));
+            }
+            MenuSortWriteDecision::AlreadyMatches => {
+                already += 1;
+            }
+            MenuSortWriteDecision::Write(target_value) => {
+                unsafe {
+                    // The same slot was just read successfully via ReadProcessMemory, and the native
+                    // sort-state array is writable session RAM owned by this process.
+                    (addr as *mut u32).write_volatile(target_value);
+                }
+                changed += 1;
+                log_message(format_args!(
+                    "defaults: write category={label} sort_type={sort_type} value=0x{current_u32:x} -> 0x{target_value:x} configured={}",
+                    configured_default.label()
+                ));
+            }
         }
-        if current_id != MENU_SORT_ITEM_TYPE_ID {
-            skipped += 1;
-            log_message(format_args!(
-                "defaults: preserve user/non-item category={label} sort_type={sort_type} value=0x{current_u32:x} configured={}",
-                configured_default.label()
-            ));
-            continue;
-        }
-
-        unsafe {
-            // The same slot was just read successfully via ReadProcessMemory, and the native
-            // sort-state array is writable session RAM owned by this process.
-            (addr as *mut u32).write_volatile(target_value);
-        }
-        changed += 1;
     }
 
     MENU_SORT_DEFAULTS_APPLIED_STATE.store(MENU_SORT_DEFAULTS_APPLIED, Ordering::SeqCst);
@@ -293,6 +288,28 @@ fn menu_sort_default_value(configured_default: MenuSortDefault) -> Option<u32> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MenuSortWriteDecision {
+    PreserveConfigured,
+    AlreadyMatches,
+    Write(u32),
+}
+
+fn decide_menu_sort_write(
+    current_u32: u32,
+    configured_default: MenuSortDefault,
+) -> MenuSortWriteDecision {
+    let Some(target_value) = menu_sort_default_value(configured_default) else {
+        return MenuSortWriteDecision::PreserveConfigured;
+    };
+    let target_id = target_value & MENU_SORT_ID_MASK;
+    let current_id = current_u32 & MENU_SORT_ID_MASK;
+    if current_id == target_id {
+        return MenuSortWriteDecision::AlreadyMatches;
+    }
+    MenuSortWriteDecision::Write(target_value)
+}
+
 fn load_runtime_config() -> Result<RuntimeConfig, String> {
     let config_dir = game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -321,7 +338,8 @@ fn load_runtime_config() -> Result<RuntimeConfig, String> {
 fn boilerplate_config() -> String {
     "\
 # er-inventory-sort runtime config (auto-created next to the game executable).
-# All keys are optional. Defaults set these equipment menus to Order of Acquisition once per process.
+# All keys are optional. Defaults force these equipment menus to Order of Acquisition once per process.
+# Use preserve to keep the game's current remembered choice for that category.
 # Values: order_of_acquisition, item_type, preserve.
 armaments = \"order_of_acquisition\"
 armor = \"order_of_acquisition\"
@@ -479,5 +497,20 @@ mod tests {
             Some(MENU_SORT_DIRECTION_FLAG | MENU_SORT_ORDER_OF_ACQUISITION_ID)
         );
         assert_eq!(menu_sort_default_value(MenuSortDefault::Preserve), None);
+    }
+
+    #[test]
+    fn configured_sort_overrides_existing_non_item_sort() {
+        let existing_weight_sort = 0x5142;
+
+        assert_eq!(
+            decide_menu_sort_write(
+                MENU_SORT_DIRECTION_FLAG | existing_weight_sort,
+                MenuSortDefault::OrderOfAcquisition
+            ),
+            MenuSortWriteDecision::Write(
+                MENU_SORT_DIRECTION_FLAG | MENU_SORT_ORDER_OF_ACQUISITION_ID
+            )
+        );
     }
 }

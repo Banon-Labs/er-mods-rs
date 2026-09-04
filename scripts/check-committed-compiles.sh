@@ -79,11 +79,27 @@ target="x86_64-pc-windows-msvc"
 worktree="${ER_COMMITTED_CHECK_WORKTREE:-$repo_root/.worktrees/committed-compiles}"
 target_dir="${ER_COMMITTED_CHECK_TARGET_DIR:-$repo_root/target/committed-compiles}"
 
+# Git hooks run with repository-local GIT_* variables exported for the caller checkout. If those
+# leak into `git -C "$worktree" checkout`, Git ignores the -C worktree and checks out the caller
+# instead. That is exactly how this gate stranded a push attempt at its historical red selftest
+# commit 11af0c60. Keep the path-derived repo_root above, then clear every local Git variable
+# before touching the scratch worktree.
+_git_local_env_seen=0
+while IFS= read -r _git_env_name; do
+	if [[ -n $_git_env_name && -v $_git_env_name ]]; then
+		_git_local_env_seen=1
+		unset "$_git_env_name"
+	fi
+done < <(git rev-parse --local-env-vars)
+unset _git_env_name
+
 selftest=0
+git_env_selftest_child=0
 revs=()
 for arg in "$@"; do
 	case "$arg" in
 		--selftest) selftest=1 ;;
+		--selftest-git-env-child) git_env_selftest_child=1 ;;
 		-*) echo "[committed-compiles] unknown flag: $arg" >&2; exit 2 ;;
 		*) revs+=("$arg") ;;
 	esac
@@ -218,6 +234,42 @@ synth_broken_rev() {
 	git -C "$repo_root" commit-tree "$tree" -p "$base" -m 'committed-compiles selftest: deliberately broken'
 }
 
+git_env_child_selftest() {
+	if [[ "$_git_local_env_seen" != 1 ]]; then
+		echo "[committed-compiles] SELFTEST FAIL: child saw no local Git env to clear" >&2
+		exit 1
+	fi
+	git -C "$repo_root" worktree remove --force "$worktree" >/dev/null 2>&1 || rm -rf -- "$worktree"
+	git -C "$repo_root" worktree add --detach --force "$worktree" HEAD >/dev/null
+	trap 'git -C "$repo_root" worktree remove --force "$worktree" >/dev/null 2>&1 || rm -rf -- "$worktree"' EXIT
+	local top expected
+	top=$(git -C "$worktree" rev-parse --show-toplevel)
+	expected=$(cd -- "$worktree" && pwd -P)
+	if [[ "$top" != "$expected" ]]; then
+		echo "[committed-compiles] SELFTEST FAIL: local Git env leaked into scratch worktree" >&2
+		echo "  got:      $top" >&2
+		echo "  expected: $expected" >&2
+		exit 1
+	fi
+	echo "[committed-compiles] selftest: local Git hook env does not leak into -C worktree"
+}
+
+run_git_env_selftest() {
+	local git_dir probe_worktree probe_target_dir
+	git_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-dir)
+	probe_worktree="$repo_root/.worktrees/committed-compiles-env-selftest-$$"
+	probe_target_dir="$repo_root/target/committed-compiles-env-selftest-$$"
+	GIT_DIR="$git_dir" GIT_WORK_TREE="$repo_root" \
+		ER_COMMITTED_CHECK_WORKTREE="$probe_worktree" \
+		ER_COMMITTED_CHECK_TARGET_DIR="$probe_target_dir" \
+		bash "$repo_root/scripts/check-committed-compiles.sh" --selftest-git-env-child
+}
+
+if [[ "$git_env_selftest_child" == 1 ]]; then
+	git_env_child_selftest
+	exit 0
+fi
+
 link_sibling
 
 # --- selftest ---------------------------------------------------------------------------------
@@ -230,6 +282,7 @@ link_sibling
 # wild. They stop being reachable after a squash-merge or in a shallow clone, so the synthetic
 # path above takes over rather than letting the selftest quietly pass on nothing.
 if [[ "$selftest" == 1 ]]; then
+	run_git_env_selftest
 	proved=0
 	for bad in 15b32ab0 11af0c60; do
 		git -C "$repo_root" rev-parse --verify --quiet "$bad^{commit}" >/dev/null || continue
