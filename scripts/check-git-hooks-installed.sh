@@ -117,6 +117,13 @@ hook_required_invocations() {
 			scripts/check-env-gate-comments.py \
 			'cargo fmt'
 		;;
+	commit-msg)
+		# The hook is four lines of forwarding, and this is the line that makes it a gate. Without
+		# it the file could be reduced to `exit 0` and every check above would stay green -- the
+		# 2026-07-27 fallback's story, which is why this map exists.
+		printf '%s\n' \
+			scripts/conventional-commit-subject.py
+		;;
 	esac
 }
 

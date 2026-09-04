@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# THE LOCAL HALF OF CONVENTIONAL COMMITS: refuse a subject before the commit exists.
+#
+# The SERVER half is the PR title -- see the header of scripts/conventional-commit-subject.py for
+# the measurement that says why a GitHub ruleset cannot do this job. That half gates what lands on
+# main; this half gates what lands on the branch, which matters because a merge commit drags every
+# branch commit into main's history, and Release Please reads all of them.
+#
+# One file decides, and it is not this one: scripts/conventional-commit-subject.py. A hook that
+# carried its own regex would be a second grammar to keep in step, which is the failure mode
+# scripts/hooks-fallback-shim's header describes in a different costume.
+#
+# git hands this hook the path to the message file, and a non-zero exit aborts the commit.
+# `git commit --no-verify` bypasses it (emergency only; agents must not use it) -- and the
+# conventional-commits workflow re-checks HEAD on main, so a bypass is visible rather than final.
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+exec python3 "$repo_root/scripts/conventional-commit-subject.py" --file "$1"
