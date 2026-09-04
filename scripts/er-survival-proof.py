@@ -168,6 +168,18 @@ def measured_fault_window() -> tuple[float | None, int]:
     return max(values), len(values)
 
 
+# WHAT COUNTS AS A FAILURE, AND WHAT IS JUST WINE BEING WINE. The crash logger writes a record for
+# every FIRST-CHANCE exception it sees, and a live ELDEN RING under Proton raises those constantly
+# while surviving them: one measured 10-minute run with the full mod set logged 23 x 0xc0000026
+# (STATUS_INVALID_UNWIND_TARGET) and one 0xc0000005 at `ersc.dll+0x258da` with `rcx=0`, all
+# `reason=veh-first-chance-exception`, and the process was still running with 127 threads
+# afterwards. Scoring on the raw record count called that a crash and tore down a healthy game.
+#
+# The distinction the logger already draws is the reason line: `unhandled-exception-fatal` is
+# written by the top-level filter and means the process died on it. That is the failure. The
+# first-chance count is kept and reported, because a RISE in it is diagnostic even though its
+# presence is not a verdict.
+FATAL_RECORD = re.compile(r"(?m)^reason=unhandled-exception-fatal$")
 RECORD_INDEX = re.compile(r"(?m)^record_index=")
 PANIC_LINE = re.compile(r"(?m)^.*PANIC in .*$")
 
@@ -337,12 +349,20 @@ def game_alive() -> bool:
     return "-> running" in (result.stdout + result.stderr)
 
 
+def first_chance_records(run_dir: Path) -> int:
+    """Every record the logger wrote, fatal or not. Diagnostic only, never a verdict."""
+    log = run_dir / CRASH_LOG_NAME
+    if not log.is_file():
+        return 0
+    return len(RECORD_INDEX.findall(log.read_text(encoding="utf-8", errors="replace")))
+
+
 def crash_evidence(run_dir: Path) -> tuple[int, list[str]]:
-    """(fault records written, panic lines seen) for this run -- the run-stopping oracle."""
+    """(FATAL fault records, panic lines seen) for this run -- the run-stopping oracle."""
     records = 0
     log = run_dir / CRASH_LOG_NAME
     if log.is_file():
-        records = len(RECORD_INDEX.findall(log.read_text(encoding="utf-8", errors="replace")))
+        records = len(FATAL_RECORD.findall(log.read_text(encoding="utf-8", errors="replace")))
     panics: list[str] = []
     warp_log = er_run_lib.game_dir() / "er-invasion-warp.log"
     if warp_log.is_file():
@@ -431,16 +451,6 @@ def drive(
     if not run_dir.is_dir():
         print(f"er-survival-proof: no such crash-log directory: {run_dir}")
         return 2
-    window = GAME_HYPR_CLASS if no_input else None
-    if window is None:
-        window = game_window_id()
-    if window is None:
-        print(
-            f"er-survival-proof: could not focus an ELDEN RING window of class "
-            f"{GAME_HYPR_CLASS!r} -- refusing to inject, because a uinput press goes to whatever "
-            f"IS focused, which would be someone else's application"
-        )
-        return 2
     game_dir = er_run_lib.game_dir()
     if await_player:
         started_waiting = time.monotonic()
@@ -470,6 +480,19 @@ def drive(
             f"er-survival-proof: character {character!r} is loaded after "
             f"{time.monotonic() - started_waiting:.1f}s -- starting the drive now"
         )
+
+    # FOCUS AFTER THE CHARACTER LOADS, NEVER BEFORE. The window does not exist yet at launch, so
+    # asking for it first refuses a run that was only a few seconds early -- measured 2026-09-04,
+    # a relaunch was aborted at t+0 with "could not focus an ELDEN RING window" while the game was
+    # still booting perfectly well.
+    window = GAME_HYPR_CLASS if no_input else game_window_id()
+    if window is None:
+        print(
+            f"er-survival-proof: could not focus an ELDEN RING window of class "
+            f"{GAME_HYPR_CLASS!r} -- refusing to inject, because a uinput press goes to whatever "
+            f"IS focused, which would be someone else's application"
+        )
+        return 2
 
     pid = game_pid()
     if pid is None:
@@ -502,7 +525,7 @@ def drive(
         """
         records, panics = crash_evidence(run_dir)
         if records:
-            return f"{records} fault record(s) in {CRASH_LOG_NAME}", records, panics
+            return f"{records} FATAL record(s) in {CRASH_LOG_NAME}", records, panics
         if panics:
             return f"a PANIC line in the warp log: {panics[0].strip()}", records, panics
         if hang_report_state() != hang_before:
@@ -618,7 +641,8 @@ def drive(
                 "seconds_driven": round(elapsed, 1),
                 "f9_presses": presses,
                 "failed_presses": failed_presses,
-                "fault_records": records,
+                "fatal_records": records,
+                "first_chance_records": first_chance_records(run_dir),
                 "panic_lines": len(panics),
                 "hang_report": hang_report_state() != hang_before,
                 "process_alive": alive,
@@ -656,7 +680,7 @@ def selftest() -> int:
 
     check(
         len(RECORD_INDEX.findall("reason=x\nrecord_index=0\nrecord_index=1\n")) == 2,
-        "the fault-record counter counts records, not bytes",
+        "the first-chance counter counts records, not bytes",
     )
     check(
         RECORD_INDEX.findall("build git=abc module=er_crash_logging.dll\n") == [],
@@ -692,6 +716,14 @@ def selftest() -> int:
     check(
         hang_report_state() == hang_report_state(),
         "the hang-report baseline is stable when nothing writes it",
+    )
+    check(
+        len(FATAL_RECORD.findall("reason=unhandled-exception-fatal\n")) == 1,
+        "a fatal record is recognised",
+    )
+    check(
+        FATAL_RECORD.findall("reason=veh-first-chance-exception\n") == [],
+        "a SURVIVED first-chance exception is NOT scored as a crash -- the failure this fixes",
     )
     check(
         er_run_lib.process_alive(0) is False,
