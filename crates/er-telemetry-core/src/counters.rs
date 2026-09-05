@@ -408,6 +408,27 @@ pub static SYSTEM_QUIT_STABLE_PROOF_EPOCH: AtomicUsize = AtomicUsize::new(usize:
 pub static SYSTEM_QUIT_RELOAD_FINALIZE_DONE_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static SWITCH_ORACLE_PLAYER_PRESENT: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MENU_JOB_PRESENT: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive ticks on which `SYSTEM_QUIT_QUICKLOAD_PHASE` has been stuck at
+/// `TITLE_OWNER_SEEN` while the world is demonstrably up.
+///
+/// THE LATCH THIS EXISTS TO BREAK (measured 2026-09-04, run br-20260904-181251-0586). The only
+/// path back to `PHASE_IDLE` is the post-finish stable-proof block, and it is gated on
+/// `phase >= AUTOLOAD_HANDOFF (4)`. A switch that reaches `TITLE_OWNER_SEEN (3)` and is then torn
+/// down never advances to 4, so it can never reach that reset: `active_switch` stays true for the
+/// rest of the process and the load-job Run guard never lifts. Observed effect -- `Load Character
+/// from File` becomes a silent no-op FOREVER: the row resolves, the picker opens, the ProfileSelect
+/// activation is ALLOWED, and then the log says `forwarding native (load-job Run remains guarded)`
+/// while two WHY-NOT lines spin for the rest of the session naming `active_switch=true(phase=3)`.
+/// Meanwhile SWITCH-ORACLE reported a perfectly healthy world: `player=true ig_d8=1 pstep=7/7`.
+///
+/// Phase 3 means "the title owner appeared, handing off to the product Continue autoload". With the
+/// player present and the InGameStep resting in-world, the title owner is long gone and that handoff
+/// has either completed or died -- either way the latch is stale, so this counts how long that
+/// contradiction has held rather than acting on a single frame.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Number of times the stale `TITLE_OWNER_SEEN` latch above was actually broken. Stays 0 on a
+/// healthy session; a non-zero value means a switch was torn down and the recovery caught it.
+pub static SWITCH_PHASE_TITLE_OWNER_SEEN_STALE_RESETS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_INIT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SWITCH_ORACLE_MMS_FINISH_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static MOVEMAPSTEP_STEP_MOVEMAP_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -1269,6 +1290,14 @@ pub static BOOT_VIEW_FPS_BAIL_RESUMES: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_OWN_MENU_LOAD_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LOADSCREEN_TABLE_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
+/// `BOOT_VIEW_DRAW_HITS` as it stood when the cover window was last ARMED.
+///
+/// `BOOT_VIEW_DRAW_HITS` is cumulative for the life of the process and `boot_view_reset_cover_window`
+/// deliberately does not clear it, so it cannot answer "has THIS cover epoch drawn anything". That
+/// question is what `title_visual_suppression_active` needs: a rearmed cover that never composites
+/// must not be allowed to force-hide the title. Subtracting this baseline turns the cumulative
+/// counter into the per-epoch answer without disturbing any existing reader of the total.
+pub static BOOT_VIEW_DRAW_HITS_ARM_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_LAST_PERMILLE: AtomicUsize = AtomicUsize::new(0);
 pub static BOOT_VIEW_DECISION_LOG_MS: AtomicU64 = AtomicU64::new(0);
 pub static BOOT_VIEW_MONO_EPOCH: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -1761,6 +1790,68 @@ pub fn cover_owns_current_loading_screen() -> bool {
     // A world load was requested after the cover last let go.
     SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst)
         != BOOT_VIEW_STOP_LOAD_WITNESS.load(Ordering::SeqCst)
+}
+
+/// Should the title's OWN visuals (`TitleBackViewParts` / `05_001_Title_Logo`, `PressStart`, the
+/// title text surfaces) still be forced hidden?
+///
+/// Every one of those force-hide detours exists for ONE reason: while the product cover owns the
+/// screen, the vanilla title underneath must not flash through. None of them has any purpose once
+/// the cover is not drawing -- and left latched they are strictly harmful, because suppressing the
+/// title with nothing composited over it renders a black screen with no affordance to leave it.
+///
+/// THE BUG THIS PREDICATE EXISTS TO CLOSE (2026-09-04, Load Character from File).
+///
+/// The release used to be spelled `BOOT_VIEW_RELEASE_READY_MS != 0` at one of the three sites and
+/// not spelled at all at the other two. But that latch is only set by the cover's confirm-gated
+/// SEMANTIC release. The cover has a second ending -- the composite-time cap
+/// (`BOOT_VIEW_STOP_REASON_FPS_BAIL`) and the absolute backstop -- which latches `BOOT_VIEW_STOPPED`
+/// and stamps `BOOT_VIEW_STOP_MS` while leaving `RELEASE_READY_MS` at 0 forever.
+///
+/// Measured on the black-screen run: `oracle_boot_view_stop_reason=2` at `stop_ms=2042119`,
+/// `release_ready_ms=0`, `release_held_for_confirm=285`, `boot_view_draw_after_stop=0`. The world
+/// was then torn down and the title rebuilt into a process still answering the game's
+/// `SetVisible(logo, 1)` with a 0: `title_logo_gfx_visibility=false`,
+/// `title_press_start_gfx_any_hidden=true`. Nothing drawing, no logo, no PRESS BUTTON.
+///
+/// So the condition is "the cover is still drawing", by EITHER ending. `BOOT_VIEW_STOPPED` is that
+/// latch and `boot_view_reset_cover_window` clears it on every rearm, so a later switch re-arms the
+/// suppression normally -- this widens WHEN the suppression lifts, never whether it can come back.
+pub fn title_visual_suppression_active() -> bool {
+    // The cover reached its semantic release and handed the screen over.
+    if BOOT_VIEW_RELEASE_READY_MS.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
+    // The cover is not compositing at all. Whatever ended it, there is no longer anything in front
+    // of the title for the suppression to protect.
+    if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
+    // AN ARMED COVER THAT NEVER DRAWS MUST NOT SUPPRESS (2026-09-04). The two latches above both
+    // describe a cover that RAN and then ended. Neither describes the third case, which is the one
+    // that hangs the game: a cover that was RE-ARMED and then never composited a single frame.
+    //
+    // `boot_view_reset_cover_window` clears BOOT_VIEW_STOPPED on every rearm -- deliberately, so a
+    // later switch gets its suppression back. But a switch rearms the cover at the title, and if
+    // that new epoch then stalls before drawing, both latches sit at 0 forever and this predicate
+    // answers "suppress" for the rest of the process with NOTHING in front of the title.
+    //
+    // MEASURED, run br-20260904-234301-412b: the cover stopped at stop_ms=31794 (reason 3), was
+    // rearmed by the switch, and stuck at milestone_idx=2 (TITLE READY) with epoch_live=0. The
+    // force-hide detours then fired 8,932 times through +185s -- and
+    // `oracle_title_logo_gfx_hide_last_requested_visible = 1` says the GAME was asking for the title
+    // to be VISIBLE while we answered by hiding it. PRESS BUTTON was among the hidden components, so
+    // the title could not be advanced by ANY accept signal, from the product, the harness, or a
+    // human. That is the stall that blocked every agent-driven route (bd er-effects-rs-tkfb).
+    //
+    // So: suppression requires a cover that has actually PUT PIXELS UP for the current epoch. Zero
+    // draws in this epoch means there is nothing to protect and the title must be left alone.
+    if BOOT_VIEW_DRAW_HITS.load(Ordering::SeqCst)
+        <= BOOT_VIEW_DRAW_HITS_ARM_BASELINE.load(Ordering::SeqCst)
+    {
+        return false;
+    }
+    true
 }
 pub static PORTRAIT_CROP_MINX: AtomicUsize = AtomicUsize::new(usize::MAX);
 pub static PORTRAIT_CROP_MINY: AtomicUsize = AtomicUsize::new(usize::MAX);

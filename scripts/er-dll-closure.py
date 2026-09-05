@@ -197,7 +197,7 @@ def find_conflicts(packages: set[str], table: dict) -> list[dict]:
 
 
 def resolve_conflicts(
-    selected: set[str], table: dict, pinned: set[str]
+    selected: set[str], table: dict, pinned: set[str], agent_driven: bool = False
 ) -> tuple[set[str], list[dict], list[dict]]:
     """Drop opt-in-only DLLs, then the non-product side of each conflict.
 
@@ -235,6 +235,32 @@ def resolve_conflicts(
             continue
         loser = b if a == PRODUCT_PACKAGE else a
         if loser in pinned:
+            # AGENT-DRIVEN OPT-IN. A `drives-input` conflict is not a corruption conflict -- the
+            # table calls it a TRUTH conflict, because a run that loads an input driver cannot be
+            # described as user-driven. That is the correct default and it stays the default. But
+            # AGENTS.md sanctions the other mode explicitly ("If a probe must drive menus
+            # automatically, treat it as an agent-owned runtime experiment with bounded telemetry
+            # and do not claim the user is in control"), and until now the tool had no way to SAY
+            # that -- so validating a fix that needs menu driving meant either bypassing this guard
+            # entirely or asking the user to press the buttons, which is itself a documented
+            # instruction-following failure. `--agent-driven` is the consent, and it only ever
+            # applies to a DLL the caller ALSO named with `--with`: it narrows a refusal into a
+            # stated non-claim, it never widens what gets loaded on its own.
+            if agent_driven and conflict["kind"] == "drives-input":
+                excluded.append(
+                    {
+                        "package": loser,
+                        "kind": "agent-driven",
+                        "because": (
+                            "LOADED ON PURPOSE under --agent-driven: this run is an agent-owned "
+                            "experiment, NOT user-driven. Its inputs are synthesized, so nothing "
+                            "it shows can be cited as evidence about what a user experiences."
+                        ),
+                        "evidence": conflict["evidence"],
+                        "loaded": True,
+                    }
+                )
+                continue
             unresolvable.append(
                 {**conflict, "why": f"{loser} was requested with --with but conflicts with the product"}
             )
@@ -258,6 +284,7 @@ def compute(
     fetch: bool,
     pinned: set[str] | None = None,
     dropped: set[str] | None = None,
+    agent_driven: bool = False,
 ) -> dict:
     pinned = pinned or set()
     dropped = dropped or set()
@@ -308,7 +335,7 @@ def compute(
 
     with CONFLICTS_TOML.open("rb") as handle:
         table = tomllib.load(handle)
-    kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned)
+    kept, excluded, unresolvable = resolve_conflicts(candidates, table, pinned, agent_driven)
 
     # `--without` is applied LAST, after conflict ranking, so an exclusion cannot be undone by a
     # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
@@ -605,6 +632,15 @@ def main() -> int:
         help="force-EXCLUDE a shell (repeatable); applied after conflict ranking and reported "
         "in the excluded list, so the run block says what was withheld",
     )
+    parser.add_argument(
+        "--agent-driven",
+        action="store_true",
+        help=(
+            "this run is an agent-owned experiment, not user-driven: accept a `drives-input` "
+            "conflict for a DLL also named with --with, and stamp the run as agent-driven so "
+            "nothing it produces is cited as user-experience evidence"
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -618,6 +654,7 @@ def main() -> int:
             fetch=not args.no_fetch,
             pinned=set(args.pinned),
             dropped=set(args.dropped),
+            agent_driven=args.agent_driven,
         )
     except ClosureError as err:
         print(f"er-dll-closure: {err}", file=sys.stderr)

@@ -470,6 +470,8 @@ def preflight(args) -> tuple[dict, dict | None]:
         closure_args += ["--with", package]
     for package in getattr(args, "dropped", []):
         closure_args += ["--without", package]
+    if getattr(args, "agent_driven", False):
+        closure_args.append("--agent-driven")
     code, out, err = run_script("er-dll-closure.py", *closure_args)
     if code == 2:
         raise RuntimeError(f"the changed DLLs cannot share one profile:\n{out or err}")
@@ -1268,6 +1270,15 @@ def main() -> int:
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
+    parser.add_argument(
+        "--agent-driven",
+        action="store_true",
+        help=(
+            "this run is an agent-owned experiment, NOT user-driven: allows a --with DLL that "
+            "drives the game's input to be loaded alongside the product. Nothing such a run "
+            "shows may be cited as evidence about what a user experiences."
+        ),
+    )
     parser.add_argument(
         "--without",
         dest="dropped",
