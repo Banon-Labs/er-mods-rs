@@ -55,6 +55,35 @@ pub const CSSCALEFORMVALUE_GET_DISPLAY_INFO_VTABLE_SLOT: usize = 0xd8;
 pub const GFX_VALUE_TEXT_OBJECT_OFFSET: usize = 0x88;
 pub const GFX_TEXT_OBJECT_KIND_VTABLE_SLOT: usize = 0x290;
 pub const GFX_TEXT_OBJECT_KIND_TEXT_FIELD: i32 = 4;
+
+/// Where a `GFx` text field keeps the document it renders, and how that document stores characters.
+///
+/// Read out of the length getter `FUN_1411874b0` and its caller, the `SetSelection` this module
+/// already calls: `SetSelection` clamps its indices against
+/// `FUN_1411874b0(*(*(field + 0xe0) + 0x10))`, and that function walks an array of paragraph
+/// pointers, summing each one's length and dropping a trailing `NUL` that is not part of the text.
+/// Each paragraph is `{ wchar_t* buffer; usize length; }`.
+///
+/// This is why the completion can read what the player has typed without a native call. The
+/// software keyboard's Scaleform backend is the live one on this machine, so the drawn, editable
+/// text is this document and nothing else -- `controller + 0x80` is a result mailbox written only
+/// at confirm, and a field left open for 36 seconds still reports the units it was opened with
+/// (bd `softwarekeyboard-two-backends-field-vs-result-mailbox-2026-08-23`). Reading the controller
+/// is what made the first completion build silently offer nothing on run br-20260912-214831-a541.
+pub const GFX_TEXT_FIELD_DOCUMENT_OFFSET: usize = 0xe0;
+pub const GFX_DOCUMENT_STORAGE_OFFSET: usize = 0x10;
+pub const GFX_STORAGE_PARAGRAPHS_OFFSET: usize = 0x18;
+pub const GFX_STORAGE_PARAGRAPH_COUNT_OFFSET: usize = 0x20;
+pub const GFX_PARAGRAPH_BUFFER_OFFSET: usize = 0x0;
+pub const GFX_PARAGRAPH_LENGTH_OFFSET: usize = 0x8;
+
+/// Paragraphs and code units a single read will walk before giving up.
+///
+/// The path field is one paragraph of at most `SOFTWARE_KEYBOARD_MAX_PATH_UNITS`; anything past
+/// these bounds means the pointer was not a text document, and the answer is to stop rather than
+/// to keep dereferencing.
+const GFX_MAX_PARAGRAPHS: usize = 8;
+const GFX_MAX_UNITS_PER_PARAGRAPH: usize = 4096;
 const GFX_VALUE_TYPE_UNDEFINED: usize = 0;
 const GFX_VALUE_TYPE_NULL: usize = 1;
 /// `SetSelection` clamps both indices to the live text length, so asking for the end is exact
@@ -722,12 +751,30 @@ pub unsafe fn with_text_input_02_990_field<T>(
     menu_window: usize,
     apply: impl FnOnce(usize) -> Result<T, String>,
 ) -> Result<T, String> {
+    let field_name = er_gfx::text_input_02_990::TEXT_FIELD_INSTANCE_NAME;
+    unsafe { with_text_input_02_990_named_field(base, menu_window, field_name, apply) }
+}
+
+/// As [`with_text_input_02_990_field`], for either child of the `TextInput` sprite.
+///
+/// The movie carries two: the live editable field, and the dimmed completion run one depth behind
+/// it. They are placements of the same character, so the same resolve reaches both and only the
+/// instance name differs.
+///
+/// # Safety
+///
+/// As [`with_text_input_02_990_field`].
+pub unsafe fn with_text_input_02_990_named_field<T>(
+    base: usize,
+    menu_window: usize,
+    field_name: &str,
+    apply: impl FnOnce(usize) -> Result<T, String>,
+) -> Result<T, String> {
     if menu_window == 0 || menu_window == NULL_POINTER {
         return Err("02_990 MenuWindow not live".to_owned());
     }
     let root_proxy = menu_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
     let sprite_name = er_gfx::text_input_02_990::TEXT_INPUT_SPRITE_NAME;
-    let field_name = er_gfx::text_input_02_990::TEXT_FIELD_INSTANCE_NAME;
     let Some((sprite_proxy, _sprite_slot)) =
         (unsafe { resolve_row_child_proxy(base, root_proxy, sprite_name) })
     else {
@@ -846,6 +893,115 @@ unsafe fn push_text_on_resolved_02_990_field(
         unsafe { std::mem::transmute(settext_addr) };
     unsafe { settext(component_slot, utf16.as_ptr() as usize) };
     Ok(())
+}
+
+/// Write the dimmed completion run behind the live field, or clear it when `utf16` is just a NUL.
+///
+/// No caret here: the run is never focused and never edited. It exists to be read and then either
+/// accepted -- which writes the same text into the real field through
+/// [`set_text_input_02_990_text`] -- or overtaken by more typing.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live. `utf16` must be NUL-terminated.
+pub unsafe fn set_text_input_02_990_ghost_text(
+    base: usize,
+    menu_window: usize,
+    utf16: &[u16],
+) -> Result<(), String> {
+    if utf16.last() != Some(&0) {
+        return Err("completion text is not NUL-terminated".to_owned());
+    }
+    let ghost_name = er_gfx::text_input_02_990::GHOST_FIELD_INSTANCE_NAME;
+    let apply = |field_proxy: usize| -> Result<(), String> {
+        unsafe { push_text_on_resolved_02_990_field(base, field_proxy, utf16) }
+    };
+    unsafe { with_text_input_02_990_named_field(base, menu_window, ghost_name, apply) }
+}
+
+/// Read what the open field currently shows, straight out of its own text document.
+///
+/// The characters the player has typed live nowhere else: see [`GFX_TEXT_FIELD_DOCUMENT_OFFSET`]
+/// for why the software keyboard's controller cannot answer this. Every dereference is fault-safe
+/// and bounded, so a pointer that is not a document yields `None` rather than a fault.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live.
+pub unsafe fn read_text_input_02_990_text(base: usize, menu_window: usize) -> Option<String> {
+    let apply = |field_proxy: usize| -> Result<String, String> {
+        let cs_value = field_proxy + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET;
+        unsafe { read_gfx_text_field_text(base, cs_value) }
+    };
+    unsafe { with_text_input_02_990_field(base, menu_window, apply) }.ok()
+}
+
+/// The document walk itself, on a resolved field's embedded value.
+///
+/// # Safety
+///
+/// `cs_value` must be the embedded value of a live, resolved field proxy.
+unsafe fn read_gfx_text_field_text(base: usize, cs_value: usize) -> Result<String, String> {
+    let handle = unsafe { safe_read_usize(cs_value + CSSCALEFORMVALUE_HANDLE_OFFSET) }.unwrap_or(0);
+    if handle == 0 || handle == NULL_POINTER {
+        return Err(format!("CSScaleformValue handle empty at 0x{cs_value:x}"));
+    }
+    let text_object =
+        unsafe { safe_read_usize(handle + GFX_VALUE_TEXT_OBJECT_OFFSET) }.unwrap_or(0);
+    if text_object == 0 || text_object == NULL_POINTER {
+        return Err(format!("GFx value at 0x{handle:x} has no text object"));
+    }
+    let text_vt = unsafe { safe_read_usize(text_object) }.unwrap_or(0);
+    if !vtable_in_game_image(text_vt, base) {
+        return Err(format!("text object vt invalid vt=0x{text_vt:x}"));
+    }
+    let document =
+        unsafe { safe_read_usize(text_object + GFX_TEXT_FIELD_DOCUMENT_OFFSET) }.unwrap_or(0);
+    if document == 0 || document == NULL_POINTER {
+        return Err("text field carries no document".to_owned());
+    }
+    let storage = unsafe { safe_read_usize(document + GFX_DOCUMENT_STORAGE_OFFSET) }.unwrap_or(0);
+    if storage == 0 || storage == NULL_POINTER {
+        return Err("document carries no text storage".to_owned());
+    }
+    let paragraphs =
+        unsafe { safe_read_usize(storage + GFX_STORAGE_PARAGRAPHS_OFFSET) }.unwrap_or(0);
+    let count = unsafe { safe_read_i32(storage + GFX_STORAGE_PARAGRAPH_COUNT_OFFSET) }
+        .unwrap_or(0)
+        .max(0) as usize;
+    if paragraphs == 0 || paragraphs == NULL_POINTER || count == 0 {
+        // An empty field is a real answer, not a failure.
+        return Ok(String::new());
+    }
+    let mut units: Vec<u16> = Vec::new();
+    for index in 0..count.min(GFX_MAX_PARAGRAPHS) {
+        let paragraph = unsafe { safe_read_usize(paragraphs + index * 8) }.unwrap_or(0);
+        if paragraph == 0 || paragraph == NULL_POINTER {
+            continue;
+        }
+        let buffer =
+            unsafe { safe_read_usize(paragraph + GFX_PARAGRAPH_BUFFER_OFFSET) }.unwrap_or(0);
+        let mut length =
+            unsafe { safe_read_usize(paragraph + GFX_PARAGRAPH_LENGTH_OFFSET) }.unwrap_or(0);
+        if buffer == 0 || buffer == NULL_POINTER || length == 0 {
+            continue;
+        }
+        if length > GFX_MAX_UNITS_PER_PARAGRAPH {
+            return Err(format!("paragraph {index} claims {length} units"));
+        }
+        // The length getter drops a trailing terminator the same way, so a path does not come back
+        // with a stray `NUL` that would fail every prefix comparison against it.
+        if unsafe { er_game_base::mem::safe_read_u16(buffer + (length - 1) * 2) } == Some(0) {
+            length -= 1;
+        }
+        for unit in 0..length {
+            match unsafe { er_game_base::mem::safe_read_u16(buffer + unit * 2) } {
+                Some(value) => units.push(value),
+                None => return Err(format!("paragraph {index} ended at unit {unit}")),
+            }
+        }
+    }
+    String::from_utf16(&units).map_err(|error| format!("field text is not valid UTF-16: {error}"))
 }
 
 /// Put the caret at the end of whatever the open field currently holds.

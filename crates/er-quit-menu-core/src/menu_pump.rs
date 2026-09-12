@@ -27,7 +27,7 @@ use crate::scaleform_proxy::{
 use crate::software_keyboard::{
     BUILD_URL_TEXT_INPUT_RESOURCE_NAME, TEXT_INPUT_RESOURCE_NAME,
     build_url_note_editor_window_state, save_picker_note_path_editor_window_state,
-    text_input_02_990_window_is_live,
+    save_picker_path_editor_completion_tick, text_input_02_990_window_is_live,
 };
 use crate::system_windows::{self, SystemWindowHooks};
 
@@ -346,6 +346,8 @@ unsafe extern "system" fn quit_menu_window_job_run_hook(
                 && let Ok(base) = game_module_base()
             {
                 unsafe { apply_path_editor_window_position(base, owner) };
+                // Inline completion, in the only context where the field's child proxies resolve.
+                unsafe { save_picker_path_editor_completion_tick(base, owner) };
             }
         }
     }

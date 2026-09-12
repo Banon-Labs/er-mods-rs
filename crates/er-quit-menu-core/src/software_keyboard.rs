@@ -732,6 +732,7 @@ fn path_editor_outcome() -> &'static Mutex<Option<PathEditorOutcome>> {
 /// the native ProfileSelect MenuWindow finalizer has run; retaining any of these values lets a later
 /// `Load Character from File` reuse a dead dialog/job from the prior menu generation.
 pub fn save_picker_reset_path_editor_state() {
+    reset_path_completion();
     SAVE_PICKER_PATH_EDITOR_PENDING_DIALOG.store(0, Ordering::SeqCst);
     SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.store(0, Ordering::SeqCst);
     SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.store(0, Ordering::SeqCst);
@@ -1357,6 +1358,183 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
     }
     if unsafe { save_picker_stage_row_records(model) } {
         SAVE_PICKER_REBUILD_PENDING_DIALOG.store(dialog, Ordering::SeqCst);
+    }
+}
+
+// ---- inline path completion --------------------------------------------------------------------
+
+/// The key that accepts the standing completion.
+///
+/// Right and not Tab, which was tried first and cannot work. On run br-20260912-215849-d5e7 the
+/// accept itself succeeded -- `SetText` landed and the field read `Z:\home` back on the next tick
+/// -- and then the native editor closed on that same Tab press, the close-edge released the job as
+/// cancelled, and the player watched the field revert to what it was opened with.
+/// `GetAsyncKeyState` reads a key without consuming it, so the Tab reached the game's own editor
+/// handling whatever this crate did with it; swallowing it would mean fighting Scaleform focus
+/// traversal at the key-handling layer. See bd `tab-closes-the-02990-software-keyboard-2026-09-12`.
+///
+/// Right costs nothing: it moves the caret one character and does nothing at the end of the text,
+/// which is where the caret sits while typing and where `set_text_input_02_990_text` leaves it.
+const VK_RIGHT: i32 = 0x27;
+
+/// Rising-edge latch for the accept keys, one bit each, so a held key accepts once.
+static PATH_COMPLETION_ACCEPT_DOWN: AtomicUsize = AtomicUsize::new(0);
+
+/// Latched once when the field's document cannot be read, so the refusal is logged and not spammed.
+static PATH_COMPLETION_UNREADABLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Fingerprint of the typed text the last offer was computed from, so the read is reported once
+/// per keystroke rather than once per frame.
+static PATH_COMPLETION_TYPED_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Hash of the completion currently drawn, so the field is written only when the offer changes.
+///
+/// `SetText` re-lays-out the text document, and doing that every frame while someone is typing is
+/// both wasteful and visible. Zero means nothing is drawn.
+static PATH_COMPLETION_DRAWN: AtomicUsize = AtomicUsize::new(0);
+
+/// A cheap change detector for the drawn completion. Not a security boundary: a collision draws
+/// the same text twice, which is invisible.
+fn completion_fingerprint(text: &str) -> usize {
+    let hash = er_game_base::fnv1a::fnv1a64(text.as_bytes());
+    // Never zero, because zero is the "nothing drawn" sentinel.
+    (hash as usize) | 1
+}
+
+fn nul_terminated_utf16(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Poll the accept keys and report a rising edge.
+///
+/// `GetAsyncKeyState` rather than a native menu-event edge: while the software keyboard owns the
+/// screen the game is routing characters, not menu navigation, and the picker's own edge latch is
+/// drained by the drive strip. This is a read of the keyboard the player is already typing on and
+/// injects nothing.
+fn path_completion_accept_pressed() -> Option<&'static str> {
+    const KEYS: [(i32, &str); 1] = [(VK_RIGHT, "right")];
+    let mut down = 0usize;
+    for (index, (code, _)) in KEYS.into_iter().enumerate() {
+        // Safety: a pure read of this thread's keyboard state; the call cannot fault.
+        let pressed =
+            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(code) < 0 };
+        if pressed {
+            down |= 1 << index;
+        }
+    }
+    let previous = PATH_COMPLETION_ACCEPT_DOWN.swap(down, Ordering::SeqCst);
+    KEYS.into_iter()
+        .enumerate()
+        .find(|(index, _)| {
+            let bit = 1 << index;
+            down & bit != 0 && previous & bit == 0
+        })
+        .map(|(_, (_, name))| name)
+}
+
+/// Forget any standing completion, so a reopened field does not inherit the last one.
+pub fn reset_path_completion() {
+    PATH_COMPLETION_ACCEPT_DOWN.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_TYPED_SEEN.store(0, Ordering::SeqCst);
+}
+
+/// Offer, draw and accept an inline completion for the open path editor.
+///
+/// Called once per 02_990 `MenuWindowJob::Run`, which is the only context where the field's proxies
+/// are valid. The shape is deliberately one-directional: read what the player typed out of the
+/// controller, ask the picker model's completion for an offer, draw it behind the live text, and
+/// write it into the live field only when an accept key goes down. Nothing is written to the field
+/// on a frame where the player did not press one.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, with `menu_window` the live window for that job.
+pub unsafe fn save_picker_path_editor_completion_tick(base: usize, menu_window: usize) {
+    if SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    // The field's own document, not the keyboard controller. The controller holds a result mailbox
+    // written at confirm, so reading it offered completions for the text the field started with
+    // and never for anything typed since -- which on run br-20260912-214831-a541 meant typing
+    // `Z:\h` produced no offer and no log line at all.
+    let Some(typed) =
+        (unsafe { crate::scaleform_proxy::read_text_input_02_990_text(base, menu_window) })
+    else {
+        if PATH_COMPLETION_UNREADABLE.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-picker-path: the field's text document could not be read, so no completion can be offered"
+            ));
+        }
+        return;
+    };
+    PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
+    let offer = er_save_picker_core::autocomplete::suggestion_for(&typed);
+    // One line per distinct typed text, so a run says what was read and what it produced even when
+    // the answer is "nothing". A silent tick was what made the first build's failure invisible.
+    let typed_print = completion_fingerprint(&typed);
+    if PATH_COMPLETION_TYPED_SEEN.swap(typed_print, Ordering::SeqCst) != typed_print {
+        append_autoload_debug(format_args!(
+            "save-picker-path: field reads '{typed}' -> {}",
+            offer
+                .as_deref()
+                .map_or_else(|| "no completion".to_owned(), |offer| format!("'{offer}'"))
+        ));
+    }
+
+    if let Some(offer) = offer.as_deref()
+        && let Some(key) = path_completion_accept_pressed()
+    {
+        let utf16 = nul_terminated_utf16(offer);
+        match unsafe {
+            crate::scaleform_proxy::set_text_input_02_990_text(base, menu_window, &utf16)
+        } {
+            Ok(detail) => {
+                // The live field now holds the whole offer, so the run behind it would be a
+                // duplicate drawn at half strength. Clear it and let the next keystroke re-offer.
+                let _ = unsafe {
+                    crate::scaleform_proxy::set_text_input_02_990_ghost_text(
+                        base,
+                        menu_window,
+                        &[0],
+                    )
+                };
+                PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+                append_autoload_debug(format_args!(
+                    "save-picker-path: accepted the completion with {key}: '{typed}' -> '{offer}' ({detail})"
+                ));
+            }
+            Err(error) => append_autoload_debug(format_args!(
+                "save-picker-path: {key} could not accept the completion '{offer}': {error}"
+            )),
+        }
+        return;
+    }
+
+    // Nothing to accept this frame: keep the drawn run in step with the offer.
+    let wanted = offer.as_deref().map_or(0, completion_fingerprint);
+    if PATH_COMPLETION_DRAWN.swap(wanted, Ordering::SeqCst) == wanted {
+        return;
+    }
+    let utf16 = nul_terminated_utf16(offer.as_deref().unwrap_or(""));
+    match unsafe {
+        crate::scaleform_proxy::set_text_input_02_990_ghost_text(base, menu_window, &utf16)
+    } {
+        Ok(()) => {
+            if let Some(offer) = offer.as_deref() {
+                append_autoload_debug(format_args!(
+                    "save-picker-path: offering '{offer}' behind the typed '{typed}'; right accepts it"
+                ));
+            }
+        }
+        Err(error) => {
+            // Put the detector back so the next tick retries rather than believing it drew this.
+            PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-path: the completion run did not take text: {error}"
+            ));
+        }
     }
 }
 
