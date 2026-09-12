@@ -204,6 +204,42 @@ pub(crate) static SAVE_PICKER_WHEEL_DELTA_ORIG: AtomicUsize = AtomicUsize::new(0
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::new(0);
 
+/// The direction of the last notch the hook below silenced, as a `SAVE_PICKER_NAV_WHEEL_*_MASK`,
+/// waiting for the edge-scroll pump to drain it.
+///
+/// A direction rather than a count, and deliberately: the accessor has two callers (the grid mouse
+/// handler `FUN_14073a5c0` and the scrollbar handler `FUN_140781460`), so one detent can be read
+/// twice in a frame. A bit set twice is still one step, which is the behaviour a player expects;
+/// a counter would scroll two rows for one notch whenever both callers ran.
+pub(crate) static SAVE_PICKER_NATIVE_WHEEL_EDGES: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the detour below is live, i.e. whether the latch above is a wheel source at all.
+///
+/// The pump asks before falling back to the host's own latch, so the two can never both act on one
+/// detent. They observe the same notch at different points -- the host reads `GetRawInputData`, this
+/// reads the game's per-frame menu event -- so they can land on different pump ticks, and combining
+/// them would scroll twice for one notch on exactly the ticks where they disagree.
+pub(crate) fn save_picker_native_wheel_latch_live() -> bool {
+    SAVE_PICKER_WHEEL_DELTA_ORIG.load(Ordering::SeqCst) != 0
+}
+
+/// Drain the latch. Returns the `SAVE_PICKER_NAV_WHEEL_*_MASK` bit, or 0 for no notch since the
+/// last drain.
+pub(crate) fn save_picker_take_native_wheel_edges() -> usize {
+    SAVE_PICKER_NATIVE_WHEEL_EDGES.swap(0, Ordering::SeqCst)
+}
+
+/// Drop an undrained notch, for the pump tick that finds the picker gone. Without this a detent
+/// spun as the browser closes is replayed into the listing the next time one opens.
+pub(crate) fn save_picker_clear_native_wheel_edges() {
+    SAVE_PICKER_NATIVE_WHEEL_EDGES.store(0, Ordering::SeqCst);
+}
+
+/// Wheel detents the edge-scroll pump actually acted on. The counterpart to
+/// `SAVE_PICKER_WHEEL_DELTA_SILENCED`: the two being far apart is the shape of a silenced wheel
+/// nobody owns, which is the defect run br-20260912-212001-9610 recorded.
+pub(crate) static SAVE_PICKER_WHEEL_EDGES_CONSUMED: AtomicUsize = AtomicUsize::new(0);
+
 /// The INTERLOCK: while the picker owns the screen, the game's own grid never sees a wheel notch.
 ///
 /// Two mechanisms can scroll this list for one detent -- the native grid handler and this pump --
@@ -221,8 +257,21 @@ pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::n
 /// false at a clamp, so the game was an unreliable owner even when it was the only one.
 ///
 /// Scoped to the picker's own screen, and it silences a read rather than dropping the user's input:
-/// our own wheel latch comes from `GetRawInputData` and is untouched, so the detent still reaches
-/// the picker. Every other menu keeps its native wheel exactly as designed.
+/// the direction is latched into `SAVE_PICKER_NATIVE_WHEEL_EDGES` on the way past, so the detent
+/// still reaches the picker. Every other menu keeps its native wheel exactly as designed.
+///
+/// # Why the latch is here and not only in the host
+///
+/// It used to be only in the host: the product reads `GetRawInputData` and answers
+/// `take_nav_edges_for`. A standalone shell installs no such reader -- `er-save-game-row` leaves
+/// every `SavePickerMenuHooks` field `None` -- so this detour silenced the game's wheel and handed
+/// the notch to nobody, which made the picker's wheel strictly worse than vanilla's. Run
+/// br-20260912-212001-9610 is 20 `silenced native wheel notch` lines with no step behind any of
+/// them and `scroll_offset=0/25` throughout. Latching here fixes that for every host at once,
+/// because this is the one place a notch is observed no matter who loaded the DLL.
+///
+/// `out[1]` carries the direction and `out[0]` is always 0 for a wheel: the accessor writes
+/// `(0, -1)` for menu event `0x2c` and `(0, 1)` for `0x2d`, and zeroes both when neither is set.
 pub(crate) unsafe extern "system" fn save_picker_wheel_delta_hook(
     msg: usize,
     out: *mut i32,
@@ -239,16 +288,29 @@ pub(crate) unsafe extern "system" fn save_picker_wheel_delta_hook(
     if !owned || out.is_null() {
         return ret;
     }
-    let had_notch = unsafe { out.read_unaligned() != 0 || out.add(1).read_unaligned() != 0 };
+    let row_delta = unsafe { out.add(1).read_unaligned() };
+    let had_notch = unsafe { out.read_unaligned() != 0 } || row_delta != 0;
     if had_notch {
         unsafe {
             out.write_unaligned(0);
             out.add(1).write_unaligned(0);
         }
+        // Latch the direction before the silence is announced, so a run whose log ends mid-frame
+        // still shows the notch was handed on rather than merely dropped.
+        //
+        // Only a row delta is a direction. The accessor writes `out[0] = 0` on every path, so a
+        // column-only notch is not a shape it produces, and latching one would invent a direction
+        // out of a value that carries none.
+        let edge = match row_delta.signum() {
+            1 => SAVE_PICKER_NAV_WHEEL_DOWN_MASK,
+            -1 => SAVE_PICKER_NAV_WHEEL_UP_MASK,
+            _ => 0,
+        };
+        SAVE_PICKER_NATIVE_WHEEL_EDGES.fetch_or(edge, Ordering::SeqCst);
         let n = SAVE_PICKER_WHEEL_DELTA_SILENCED.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 20 || n.is_multiple_of(50) {
             append_autoload_debug(format_args!(
-                "save-picker: silenced native wheel notch #{n} (the pump owns the wheel)"
+                "save-picker: silenced native wheel notch #{n} row_delta={row_delta} latched=0x{edge:x} (the pump owns the wheel)"
             ));
         }
     }

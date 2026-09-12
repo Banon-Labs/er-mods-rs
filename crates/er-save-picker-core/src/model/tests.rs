@@ -1692,3 +1692,83 @@ fn picker_status_clears_on_direct_page_drive_and_up_navigation() {
         "direct up navigation must not carry a stale rejection"
     );
 }
+
+/// The three numbers the native `ScrollBarV` is driven by have to agree with the window, or the
+/// thumb and the rows describe different listings.
+///
+/// `save_picker_menu_pump_native_scrollbar` sends `total = entry_count().max(entries_per_page())`
+/// and `position = scroll_offset()`. Both of the game's setters clamp the position into
+/// `[0, total - page]` (`FUN_14074dad0` / `FUN_14074db60`, page at `ScrollBarV + 0x1a8`), so the
+/// model can only express its own full range if `total - page == scroll_max`. That identity is what
+/// lets the pump write the page rather than leave whatever `ProfileSelect` built for a ten-row
+/// character list; with a stale page the clamp bites before the model's last offset and the thumb
+/// stops short of the bottom.
+///
+/// The four listings are the ones run br-20260912-212001-9610 actually browsed, with the entry
+/// counts and the three mounted drives it reported, so the numbers here are the numbers that run
+/// logged.
+#[test]
+fn the_scrollbar_range_the_pump_sends_covers_the_whole_window_travel() {
+    let drives = ["C:\\", "S:\\", "Z:\\"];
+    // dir, entries, expected page, expected scroll_max -- as logged by that run.
+    let listings: [(&str, usize, usize, usize); 4] = [
+        ("Z:\\", 15, 8, 7),
+        ("S:\\", 25, 8, 17),
+        ("Z:\\home\\banon", 32, 7, 25),
+        (
+            "C:\\users\\steamuser\\AppData\\Roaming\\EldenRing\\76561197986456766",
+            2,
+            7,
+            0,
+        ),
+    ];
+    for (dir, entries, page, scroll_max) in listings {
+        let model = with_drives(destination(dir, entries), &drives);
+        assert_eq!(
+            model.entries_per_page(),
+            page,
+            "{dir}: window capacity is ten rows minus the drive, [ new ] and parent rows"
+        );
+        assert_eq!(model.scroll_max(), scroll_max, "{dir}: last window offset");
+        let total = model.entry_count().max(model.entries_per_page());
+        assert_eq!(
+            total - page,
+            model.scroll_max(),
+            "{dir}: the control's clamp must land exactly on the model's last offset"
+        );
+    }
+}
+
+/// Scrolling to the far end reaches the last entry and stops there, in both directions.
+///
+/// The window arithmetic above is only half the contract: the other half is that walking the window
+/// one row at a time from either end terminates on the offset the scrollbar's clamp describes. A
+/// listing that ran one row past `scroll_max` would stage a window with a blank tail.
+#[test]
+fn walking_the_window_to_either_end_stops_on_the_last_offset() {
+    let drives = ["C:\\", "S:\\", "Z:\\"];
+    let mut model = with_drives(destination("Z:\\home\\banon", 32), &drives);
+    let scroll_max = model.scroll_max();
+    assert_eq!(scroll_max, 25);
+
+    let mut steps = 0;
+    while model.scroll_window_one(true) {
+        steps += 1;
+        assert!(
+            steps <= scroll_max,
+            "the window must not run past its last offset"
+        );
+    }
+    assert_eq!(steps, scroll_max, "every offset is reachable going down");
+    assert_eq!(model.scroll_offset(), scroll_max);
+    // The last window is full: no offset leaves the ten-row transport with a blank tail.
+    assert_eq!(model.visible_row_count(), PICKER_ROW_COUNT);
+
+    let mut back = 0;
+    while model.scroll_window_one(false) {
+        back += 1;
+        assert!(back <= scroll_max, "the window must not run past the top");
+    }
+    assert_eq!(back, scroll_max, "every offset is reachable going up");
+    assert_eq!(model.scroll_offset(), 0);
+}

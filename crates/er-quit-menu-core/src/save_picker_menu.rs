@@ -1242,6 +1242,14 @@ pub(crate) static SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR: AtomicUsize =
 pub(crate) const EDGE_SCROLL_NO_PREV_CURSOR: usize = usize::MAX;
 const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
 const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
+/// `ScrollBarV`'s three state fields, read out of the two setters this pump already calls.
+///
+/// `FUN_14074dad0(sb, total)` clamps `total` to at least 1, stores it at `+0x1a4`, and then clamps
+/// `+0x1a0` into `[0, total - *(sb + 0x1a8)]`; `FUN_14074db60(sb, pos)` clamps `pos` into that same
+/// range before storing it. So `+0x1a8` is the page size, and it -- not the total alone -- decides
+/// how far the thumb may travel and how large it draws.
+const SCROLLBAR_CONTROL_POSITION_OFFSET: usize = 0x1a0;
+const SCROLLBAR_CONTROL_PAGE_OFFSET: usize = 0x1a8;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
 static SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS: AtomicUsize = AtomicUsize::new(0);
 const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
@@ -2101,13 +2109,37 @@ pub unsafe fn save_picker_menu_pump_native_scrollbar() {
     let set_position: unsafe extern "system" fn(usize, i32) =
         unsafe { std::mem::transmute(set_position_addr) };
 
+    // Give the control the picker's page size before the total, because both setters clamp the
+    // position into `[0, total - page]` and the page is the half nobody was writing.
+    //
+    // `ProfileSelect` builds this scrollbar for a ten-row character list, so the page it was left
+    // holding describes those ten rows and not the picker's window, which is 10 minus the drive,
+    // `[ new ]` and parent rows -- 7 or 8 in every directory run br-20260912-212001-9610 visited.
+    // With a stale page the clamp is tighter than the model: a 32-entry listing scrolls to offset
+    // 25 while the control refuses anything past `32 - 10`, so the thumb stops three rows short of
+    // the bottom and then disagrees with the rows on screen. It never showed, because the offset
+    // this pump sends was 0 in every frame of every run until the wheel was given an owner.
+    //
+    // Read before write: the previous value is worth one log line, since nothing in this workspace
+    // has ever recorded what the movie leaves here.
+    let native_page = unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_PAGE_OFFSET) };
+    let model_page = page.min(i32::MAX as usize) as i32;
+    if native_page.is_some_and(|native| native != model_page) {
+        // A plain field store: the setters next to it are the ones that reach a Scaleform component
+        // through the proxy guarded above, and this field has no setter of its own. `set_total`
+        // below re-clamps and refreshes from it.
+        unsafe { *((scrollbar + SCROLLBAR_CONTROL_PAGE_OFFSET) as *mut i32) = model_page };
+    }
     unsafe { set_total(scrollbar, total.min(i32::MAX as usize) as i32) };
     unsafe { set_position(scrollbar, current.min(i32::MAX as usize) as i32) };
+    let applied_position = unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) };
 
     let packed = save_picker_scrollbar_packed_state(current, page, total);
     if SAVE_PICKER_SCROLLBAR_LAST_SYNC.swap(packed, Ordering::SeqCst) != packed {
+        // `applied` against `current` is the scoreable part: they diverge exactly when the control
+        // clamped the offset the model asked for, which is the thumb and the rows disagreeing.
         append_autoload_debug(format_args!(
-            "save-picker: native scrollbar sync current={current} page={page} total={total} scrollbar=0x{scrollbar:x}"
+            "save-picker: native scrollbar sync current={current} page={page} total={total} native_page_was={native_page:?} applied_position={applied_position:?} scrollbar=0x{scrollbar:x}"
         ));
     }
 }
@@ -2134,12 +2166,27 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     let wheel_up_mask = SAVE_PICKER_NAV_WHEEL_UP_MASK;
     let wheel_down_mask = SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
     let nav_edges = take_nav_edges_for(up_mask | down_mask | wheel_up_mask | wheel_down_mask);
-    let wheel_down = nav_edges & wheel_down_mask != 0;
-    let wheel_up = nav_edges & wheel_up_mask != 0;
+    // The wheel has one owner per tick, chosen by which sources exist rather than by timing.
+    //
+    // `save_picker_wheel_delta_hook` latches the game's own notch and works in every host; the
+    // host's `take_nav_edges_for` reads the raw input device and exists only where a product
+    // installed it. A standalone shell has only the first, which is the whole of the dead wheel in
+    // run br-20260912-212001-9610 -- 20 notches silenced, none delivered, `scroll_offset` pinned at
+    // 0 for all 50 selection moves. Preferring the native latch and consulting the host's only when
+    // the detour is absent keeps a product tick from acting on both reads of one detent, which is
+    // the double scroll the detour's own doc comment was written to end.
+    let wheel_edges = if save_picker_native_wheel_latch_live() {
+        save_picker_take_native_wheel_edges()
+    } else {
+        nav_edges & (wheel_up_mask | wheel_down_mask)
+    };
+    let wheel_down = wheel_edges & wheel_down_mask != 0;
+    let wheel_up = wheel_edges & wheel_up_mask != 0;
     let held = hooks().nav_held.map_or(0, |held| held());
     let dialog = save_picker_live_profile_dialog();
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
+        save_picker_clear_native_wheel_edges();
         return;
     }
     let Ok(_base) = game_module_base() else {
@@ -2317,13 +2364,36 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     let Some(model_row) = save_picker_model_row_from_native_cursor(press_row) else {
         return;
     };
-    let outcome = {
+    let (outcome, scroll_before) = {
         let mut guard = er_save_picker_core::model::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
             return;
         };
-        model.scroll_window_from_edge_press(model_row, down)
+        let before = (model.scroll_offset(), model.scroll_max());
+        (model.scroll_window_from_edge_press(model_row, down), before)
     };
+    // Scored from the log rather than from the screen: this is the one line that fires for a
+    // consumed wheel detent, and it carries the window offset the detent acted on. Two of them with
+    // the same `scroll` and a rising `model_row` is the selection walking the window; a rising
+    // `scroll` is the window itself sliding. A detent that reaches nothing prints no line at all,
+    // which is what every wheel notch in run br-20260912-212001-9610 did.
+    //
+    // Logged outside the lock, as every other line in this pump is: the sink is a file write on the
+    // menu thread, and the model has no reason to be held across it.
+    if wheel_only {
+        let n = SAVE_PICKER_WHEEL_EDGES_CONSUMED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 40 || n.is_multiple_of(25) {
+            let (offset, max) = scroll_before;
+            append_autoload_debug(format_args!(
+                "save-picker: wheel edge #{n} down={down} source={} cursor={cursor} model_row={model_row} scroll={offset}/{max} last_visible_row={last_visible_row}",
+                if save_picker_native_wheel_latch_live() {
+                    "native-notch"
+                } else {
+                    "host-latch"
+                }
+            ));
+        }
+    }
     let Some(outcome) = outcome else {
         // Away from an edge there is normally no window work and no cursor work: the native list
         // moves its own selection for a key, a pad direction and a wheel detent.
