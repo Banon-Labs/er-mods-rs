@@ -80,6 +80,7 @@
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs": 3,
  "er-quickload|VTABLE_WRITE|crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs": 1,
  "er-quit-menu-core|UPSTREAM_STATIC|crates/er-quit-menu-core/src/game_task.rs": 1,
+ "er-quit-menu-core|UPSTREAM_STATIC|crates/er-quit-menu-core/src/save_flow.rs": 1,
  "er-quit-menu-core|VTABLE_WRITE|crates/er-quit-menu-core/src/software_keyboard.rs": 1,
  "er-quit-rows|CACHED_ADDR|crates/er-quit-rows/src/crashlog/veh_exit_hooks.rs": 1,
  "er-quit-rows|CACHED_ADDR|crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/startup_modals_menu_cover.rs": 1,
