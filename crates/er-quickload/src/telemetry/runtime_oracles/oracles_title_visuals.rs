@@ -231,13 +231,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // PINNED: the env-driven memory-GFX loader that fed these two is deleted (it had been an
     // inert no-op since 2026-07-19), so both have always emitted 0.
     let title_scaleform_memory_gfx_bytes = 0usize;
-    let title_scaleform_memory_gfx_replacements =
-        TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
-    let title_scaleform_05_000_memory_gfx_replacements =
-        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
     let title_scaleform_memory_gfx_failures = 0usize;
-    let title_scaleform_memory_gfx_last_file =
-        TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
     let title_scaleform_resource_ctor_installed =
         TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0;
     let title_scaleform_resource_ctor_hits =
@@ -831,33 +825,8 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     );
     push_json_usize(
         body,
-        "oracle_title_scaleform_memory_gfx_replacements",
-        title_scaleform_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_memory_gfx_replaced",
-        title_scaleform_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replacements",
-        title_scaleform_05_000_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replaced",
-        title_scaleform_05_000_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
         "oracle_title_scaleform_memory_gfx_failures",
         title_scaleform_memory_gfx_failures,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_memory_gfx_last_file",
-        title_scaleform_memory_gfx_last_file,
     );
     push_json_bool(
         body,

@@ -418,13 +418,6 @@ pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
 pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
-pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
-/// 05_000_title-only slice of `TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS` (which aggregates both the
-/// 05_001 logo and 05_000 title slots): the product-strip proof oracle must show the stripped title
-/// movie was served on every title visit (cold boot + each System-Quit reload), unambiguously.
-pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS;
-pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
 
 /// Wwise post-event core (`AK::SoundEngine::PostEvent` shared numeric-id backend):
