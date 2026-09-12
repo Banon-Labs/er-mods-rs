@@ -47,6 +47,11 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // install_system_quit_menu_window_job_run_hook();
     #[cfg(feature = "quit-rows")]
     install_system_quit_window_list_push_hook();
+    // Compiled out unless this build replaces the row, so a default build carries no substitution
+    // to reach. The runtime predicate inside the hook stays as well -- a build that has the feature
+    // but never arms the row must still leave the text alone. The message-id recording this hook
+    // also does, which is what named `GRD` 110000 as the dialog behind the row, goes with it.
+    #[cfg(feature = "save-game-row")]
     install_system_quit_save_game_text_hook();
     // The three routing detours this used to install are part of the shared arm call below
     // (`er_quit_menu_core::row_cloner::arm`), on the `er-hook` union rather than a bare `MhHook`.
@@ -73,9 +78,39 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // standalone shell installs none of them and the picker still browses and picks.
     super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
+    // Save Game is a vanilla row, not a cloned one, so it does not belong to `quit-rows` -- and
+    // when that feature came off the defaults it went with it anyway, because the only call that
+    // registers its flow was the arm below. What the player then got was the label without the
+    // behaviour: the text hook still renamed the native first row to `Save Game`, the router found
+    // no flow and forwarded the press to the vanilla action, and pressing it saved and returned to
+    // the title (run br-20260912-185308-639d). Arming `RowSet::NONE` clones nothing and adds no
+    // row; it registers the action table and puts this module's row handlers on the `er-hook`
+    // union, which is what a standalone shell's forward reaches when it has no flow of its own.
+    #[cfg(all(feature = "save-game-row", not(feature = "quit-rows")))]
+    {
+        let armed = unsafe {
+            er_quit_menu_core::row_cloner::arm(
+                er_quit_menu_core::row_cloner::RowSet::NONE,
+                er_quit_menu_core::row_cloner::QuitRowActions {
+                    save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    save_game_request_save_only: Some(
+                        crate::experiments::system_quit_save_game_request_save_only,
+                    ),
+                    ..Default::default()
+                },
+            )
+        };
+        if let Err(error) = armed {
+            append_autoload_debug(format_args!(
+                "system-quit-save: arming the vanilla Save Game row failed: {error:?} -- the row keeps the game's own text and action"
+            ));
+        }
+    }
     // Everything below clones rows onto the Quit tab. With the feature off the tab keeps exactly
-    // what the game ships, and the installs above -- the telemetry, the vanilla Save Game hooks
-    // and the picker -- still run.
+    // what the game ships apart from the Save Game row armed just above, and the installs before
+    // it -- the telemetry, the vanilla Save Game hooks and the picker -- still run.
     #[cfg(feature = "quit-rows")]
     {
         if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst)

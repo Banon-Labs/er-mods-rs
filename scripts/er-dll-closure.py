@@ -341,12 +341,21 @@ def compute(
         raise ClosureError(
             f"named by BOTH --with and --without: {', '.join(sorted(both))}"
         )
-    # Excluding the product leaves a profile with nothing to express conflicts against, and
-    # every companion chains onto its hook union. That is not a run worth staging.
-    if PRODUCT_PACKAGE in dropped:
+    # Dropping the product used to be refused outright, on the grounds that every companion chains
+    # onto its hook union. `er-hook` says otherwise and always did: `HookRoute::LocalUnion` is
+    # documented as "this DLL's own union -- the product is absent, or this is the product", and
+    # `register_union_hook` installs the dispatcher for whichever DLL registers first. So a profile
+    # without the product is a real configuration, and refusing it is what kept a single-feature
+    # shell from ever being launched on its own (bd er-effects-rs-rhqv).
+    #
+    # What is still refused is dropping it and leaving nothing: a run has to load a DLL to be a run.
+    # The caller also loses the product's own `runtime-config: loaded` testimony, and the launcher
+    # already knows that -- `await_any_dll_log` is the weaker witness it falls back to, and it
+    # reports `confirmed-weak` rather than claiming a load it cannot see.
+    if PRODUCT_PACKAGE in dropped and not (pinned - dropped):
         raise ClosureError(
-            f"--without cannot drop {PRODUCT_PACKAGE}: it is the baseline every conflict is "
-            f"ranked against and the owner of the hook union the companions chain onto"
+            f"--without {PRODUCT_PACKAGE} leaves nothing to load: name the shell this run is "
+            f"for with --with, or keep the product"
         )
 
     with CONFLICTS_TOML.open("rb") as handle:
@@ -373,14 +382,17 @@ def compute(
         # waits for the product's own `runtime-config: loaded` line, so the run either hangs at
         # testimony or prints a block crediting the product for a load that was not its.
         #
-        # Unioning it in rather than refusing, because every companion chains onto the product's
-        # hook union and `--without er-quickload` is already refused outright above: a closure
-        # without it was never a thing the caller could legitimately ask for.
-        candidates.add(PRODUCT_PACKAGE)
+        # Unioning it in rather than refusing, unless the caller explicitly dropped it: a shell
+        # launched on its own is exactly the case `--without er-quickload` now expresses, and
+        # re-adding the product there would quietly do the opposite of what was asked.
+        if PRODUCT_PACKAGE not in dropped:
+            candidates.add(PRODUCT_PACKAGE)
         fallback = (
             f"{PRODUCT_PACKAGE} was not selected by the changed files or by --with, and was "
-            f"added: it owns the hook union the companions chain onto, and it is what the "
-            f"sidecar and the launcher's load testimony both name"
+            f"added: it is what the sidecar and the launcher's load testimony both name"
+            if PRODUCT_PACKAGE not in dropped
+            else f"{PRODUCT_PACKAGE} was dropped by --without; this run is the named shell alone, "
+            f"and the launcher falls back to its weaker any-DLL-wrote-something witness"
         )
 
     # The standing half of `--with`, read from `[always]`. It is unioned in after the two
@@ -393,18 +405,25 @@ def compute(
     added_by_default = sorted(always - candidates)
     candidates |= always
 
+    # `--without` is applied after `[always]` and before conflict ranking. After, so a default-on
+    # package cannot walk back in; before, because a conflict against a DLL the caller already
+    # removed is not a conflict this run has. It used to be applied last, and the cost was exact:
+    # `--with er-save-game-row --without er-quit-menu` reported the two shells as an unresolvable
+    # pair and staged nothing, having ranked a conflict between a package that was going to load
+    # and one that was not.
+    #
+    # Either way it is recorded in `excluded` with the same shape as a conflict drop, so the run
+    # block says which DLL was withheld. A silent omission is how an A/B turns into two runs nobody
+    # can tell apart. Its use case is the param-patching class: any DLL that mutates a param row at
+    # runtime moves the Seamless lobby-key fingerprint and drops the player out of matchmaking, and
+    # the only way to prove which one is to re-run without it.
+    withheld = sorted(dropped & candidates)
+    candidates -= dropped
+
     kept, excluded, unresolvable, accepted = resolve_conflicts(
         candidates, table, pinned, agent_driven
     )
-
-    # `--without` is applied last, after conflict ranking, so an exclusion cannot be undone by a
-    # later rule -- and it is recorded in `excluded` with the same shape as a conflict drop, so
-    # the run block says which DLL was withheld. A silent omission is how an A/B turns into two
-    # runs nobody can tell apart. Its use case is the param-patching class: any DLL that mutates
-    # a param row at runtime moves the Seamless lobby-key fingerprint and drops the player out
-    # of matchmaking, and the only way to prove which one is to re-run without it.
-    for name in sorted(dropped & kept):
-        kept.discard(name)
+    for name in withheld:
         excluded.append(
             {
                 "package": name,
@@ -622,9 +641,16 @@ def selftest() -> int:
         ),
         "naming one DLL with both --with and --without refuses instead of guessing",
     )
+    # Dropping the product is legal since 2026-09-12, and is how a single-feature shell gets
+    # launched on its own -- but only when something else was named to load. The two halves are
+    # checked separately so a regression on either one is legible.
     check(
-        "cannot drop" in refuses(dropped={PRODUCT_PACKAGE}),
-        "--without refuses to drop the product DLL",
+        "leaves nothing to load" in refuses(dropped={PRODUCT_PACKAGE}),
+        "--without the product alone refuses: a run has to load a DLL",
+    )
+    check(
+        not refuses(pinned={a_real_shell}, dropped={PRODUCT_PACKAGE}),
+        "--without the product is allowed once --with names the shell the run is for",
     )
 
     # And the drop itself: withheld comes out of `kept` and lands in `excluded` with a reason,

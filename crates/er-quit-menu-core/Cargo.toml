@@ -39,6 +39,13 @@ er-save-picker-core = { path = "../er-save-picker-core", default-features = fals
 ] }
 # BND4 slot walk + PlayerGameData reads for the ProfileSummary preview of a foreign save.
 er-save-loader = { path = "../er-save-loader" }
+# The one-shot save-write bypass the Save Game row arms so the user's own press reaches the disk
+# through the global suppression. It arrived with `save_flow.rs` on 2026-09-12: the crate that owns
+# the row's flow owns its bypass, and the alternative was 26 function pointers through the host seam
+# for what is one library call and twenty-five telemetry reads. Linking it does not switch
+# suppression on -- `er-save-suppress` installs nothing until a host asks it to -- so a shell that
+# carries only this row still writes exactly what the player asked for and nothing else.
+er-save-suppress = { path = "../er-save-suppress" }
 # The profile-renderer table this crate's ProfileSelect opener stands on: the 10-slot table
 # accessor, the renderer vtable, the native table builder and the shared `..._DIAG_ORIG` slot. The
 # window the opener submits renders character models, so the table's health is a precondition of

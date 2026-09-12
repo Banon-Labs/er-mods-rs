@@ -106,14 +106,21 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // rather than a row -- measured 2026-09-11, `0xc0000005` at `eldenring.exe+0x9ab874`.
     // The product installs the same body from its own private detour and must not call this.
     let character_rows = rows.load_character || rows.load_character_from_file;
-    let profile_table_guard = character_rows
+    // The Save Game row opens the same `05_010` window, by a different route: its destination
+    // browser is the load picker pointed at a folder to write into. So everything below that was
+    // written for "a character row is armed" is really for "this host puts a ProfileSelect on
+    // screen", and asking the narrower question left the Save Game row with an undressed picker
+    // under an un-hidden pause menu on run br-20260912-201454-d12a.
+    let opens_profile_select = character_rows || crate::row_cloner::save_game_flow_is_owned();
+    let profile_table_guard = opens_profile_select
         .then(|| unsafe { crate::profile_table_guard::install_profile_table_guard() });
     // One detour, two reasons to want it. The link field needs a menu pump to submit its keyboard
     // job; a character row needs the same post-run moment to hide the pause menu behind the picker
     // it just opened and to put it back when the picker closes. Neither is the product's hook --
     // this is the shell's own, chained onto the same address through the union.
     crate::menu_pump::set_character_rows_armed(character_rows);
-    let menu_pump = (build_rows || character_rows)
+    crate::menu_pump::set_save_game_row_armed(crate::row_cloner::save_game_flow_is_owned());
+    let menu_pump = (build_rows || opens_profile_select)
         .then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
     // The row-populate detour is what dresses a browse row: it hides the `Level` caption and the
     // bottom `PlayTime` that would otherwise read "Level 0" and "0:00:00" about a character that
@@ -125,7 +132,7 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // both run: `scripts/me3-dll-conflicts.toml` records the pair as duplicate owners and the
     // profile generator refuses to emit a profile carrying both, so one owner per process is a
     // property of the conflict table rather than an assumption made here.
-    if character_rows {
+    if opens_profile_select {
         crate::profile_row_chrome::install_profile_row_populate_hooks();
     }
     let arm = StandaloneArm {

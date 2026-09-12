@@ -23,8 +23,16 @@ default = ["autoload", "save-picker", "loading-cover", "portrait", "menu-trace"]
 # Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
 # The thing the crate is named after.
 autoload = []
-# The cloned System>Quit rows and the flows behind them.
-quit-rows = []
+# The cloned System>Quit rows and the flows behind them. It implies `save-game-row`, because a tab
+# carrying the cloned rows also carries the replaced Save Game row, and the row router reads one
+# action table for both.
+quit-rows = ["save-game-row"]
+# The Save Game row replacement, alone: the native first Quit row is renamed `Save Game`, its help
+# and confirm text follow, and the press opens the destination browser `er-quit-menu-core` draws for
+# Load Character from File instead of saving and returning to the title. Off by default, so a plain
+# build leaves that row exactly as the game ships it -- label and action together, which is the pair
+# that came apart on run br-20260912-185308-639d when the text moved without the flow.
+save-game-row = []
 # The in-game save-file browser the Load Character from File row opens.
 save-picker = []
 # The loading-screen cover and the title visuals.

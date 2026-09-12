@@ -3206,6 +3206,7 @@ dependencies = [
  "er-profile-summary-core",
  "er-save-loader",
  "er-save-picker-core",
+ "er-save-suppress",
  "er-telemetry-core",
  "er-title-flow",
  "fromsoftware-shared",
@@ -3279,6 +3280,14 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "er-save-suppress",
+]
+
+[[package]]
+name = "er-save-game-row"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-quit-menu-core",
 ]
 
 [[package]]

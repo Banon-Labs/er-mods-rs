@@ -304,7 +304,7 @@ pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
 }
-pub(crate) fn game_man_ptr_or_null() -> usize {
+pub fn game_man_ptr_or_null() -> usize {
     (host().game_man_ptr_or_null)()
 }
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {

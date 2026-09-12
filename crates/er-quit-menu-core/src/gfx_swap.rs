@@ -217,6 +217,46 @@ pub unsafe fn text_input_02_990_swap_to_build_url(base: usize, file: usize) -> b
     }
 }
 
+/// Inline the picker's own path field into `02_990_textinput` for the **current path** editor.
+///
+/// The path editor submits its own Scaleform cache key, `02_990_TextInput_PathEditor`, so that it
+/// can be derived separately from the link field: this derivation alpha-zeroes the movie's backing
+/// plate and both frame placements, because over ProfileSelect the picker's own `CurrentPath`
+/// button already supplies the frame.
+///
+/// A key with no file behind it is why the field came up blank. Scaleform caches by that string and
+/// there is no `02_990_TextInput_PathEditor` on disk, so the redirect to the canonical payload is
+/// not an optimisation -- without it the editor opens onto nothing, which is what the player saw on
+/// run br-20260912-204014-00a5: the current path read `Z:\` on the picker, and the field went empty
+/// the moment it was entered. The product redirected both keys from its own file-open observer; a
+/// shell installs none, so this crate has to redirect its own.
+///
+/// # Safety
+///
+/// See [`text_input_02_990_swap`].
+pub unsafe fn text_input_02_990_swap_to_path_editor(base: usize, file: usize) -> bool {
+    unsafe {
+        text_input_02_990_swap(
+            base,
+            file,
+            &Derivation {
+                cache: &PATH_EDITOR_02_990_EDITED,
+                serves: &PATH_EDITOR_02_990_SERVES,
+                failures: &PATH_EDITOR_02_990_FAILURES,
+                tag: "save-picker-path",
+                derive: |vanilla| {
+                    er_gfx::text_input_02_990::inline_current_path_editor(vanilla)
+                        .map_err(|error| error.to_string())
+                },
+            },
+        )
+    }
+}
+
+static PATH_EDITOR_02_990_EDITED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+static PATH_EDITOR_02_990_SERVES: AtomicUsize = AtomicUsize::new(0);
+static PATH_EDITOR_02_990_FAILURES: AtomicUsize = AtomicUsize::new(0);
+
 /// Six-cell `02_040_optionsetting` runtime edit for System>Quit. This mirrors the 05_000/05_010
 /// `MemoryFile` swap path, but deliberately has no env or file-backed diagnostic input: the product
 /// must not ship or depend on an external GFx. The derived movie is built from the game's own
@@ -302,7 +342,141 @@ pub unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> b
     true
 }
 
+/// `05_010_ProfileSelect` runtime edit: derive the stats-panel movie the picker's chrome stands on
+/// from the native `MemoryFile`'s own vanilla payload, cache it, and install it in place.
+///
+/// # Why a shell needs this at all
+///
+/// The row-populate detour dresses a browse row only when the row proxy has an `ErCharStats` child
+/// (`profile_row_chrome::row_is_stats_panel_template`), and that field exists only in this derived
+/// movie. A host that hooks the populate without serving the movie therefore dresses nothing: every
+/// row is scored foreign and left native, which run br-20260912-201935-ad27 recorded 13 times as
+/// `has no ErCharStats child -- not our ProfileSelect movie; left native` while the picker on screen
+/// rendered in the game's own vanilla presentation.
+///
+/// The product derives the same movie from its own file-open observer. Two derivers are not a race:
+/// `er_gfx::title_05_010::stats_panel` fail-closes on already-derived input, which is why the pair
+/// is a `duplicate-owner` row in `scripts/me3-dll-conflicts.toml`.
+///
+/// # Safety
+///
+/// As [`options_02_040_quit6_swap_to_edited`]: `file` is the loader's return value, and every read
+/// below goes through the fault-safe readers.
+pub unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
+    if file == 0 || file == NOT_A_POINTER {
+        return false;
+    }
+    let fail = |reason: core::fmt::Arguments<'_>| {
+        PROFILE_05_010_FAILURES.fetch_add(1, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: 05_010 stats-panel runtime edit FAIL-CLOSED (serving native vanilla): {reason}"
+        ));
+        false
+    };
+    if !unsafe { memory_file_vtable_matches(base, file) } {
+        return fail(format_args!(
+            "unexpected file vtable 0x{:x}",
+            unsafe { safe_read_usize(file) }.unwrap_or(0)
+        ));
+    }
+    let edited = match PROFILE_05_010_EDITED.get() {
+        Some(cached) => cached,
+        None => {
+            let data =
+                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
+            let len =
+                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
+            if data == 0 || data == NOT_A_POINTER || !(64..=0x0100_0000).contains(&len) {
+                return fail(format_args!(
+                    "implausible payload data=0x{data:x} len={len}"
+                ));
+            }
+            let len = len as usize;
+            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
+                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
+                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
+                && unsafe { safe_read_u8(data + len - 1) }.is_some();
+            if !magic_ok {
+                return fail(format_args!(
+                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
+                ));
+            }
+            // Safety: the length and the magic bytes were both read back through the fault-safe
+            // readers before this slice is formed.
+            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
+            let known = er_gfx::title_05_010::is_known_vanilla(vanilla);
+            match er_gfx::title_05_010::stats_panel(vanilla) {
+                Ok(out) => {
+                    let out_fnv = er_gfx::fnv1a64(&out);
+                    let validated = out.len() == er_gfx::title_05_010::EDITED_LEN
+                        && out_fnv == er_gfx::title_05_010::EDITED_FNV1A64;
+                    append_autoload_debug(format_args!(
+                        "system-quit-gfx: 05_010 stats-panel runtime edit derived in={len} out={} known_vanilla={known} validated={validated} out_fnv=0x{out_fnv:016x}",
+                        out.len()
+                    ));
+                    PROFILE_05_010_EDITED.get_or_init(|| out)
+                }
+                Err(err) => {
+                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
+                }
+            }
+        }
+    };
+    unsafe { install_payload(file, edited) };
+    PROFILE_05_010_SERVES.fetch_add(1, Ordering::SeqCst);
+    true
+}
+
+static PROFILE_05_010_EDITED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+static PROFILE_05_010_FAILURES: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_05_010_SERVES: AtomicUsize = AtomicUsize::new(0);
+
 // ---- serving the two movies from a standalone shell ------------------------------------------
+
+/// Which movies this host wants served.
+///
+/// The Quit grid is the one that must not be served unconditionally. Vanilla's tab has two cells
+/// and the six-cell derivation is for cloned rows; a host that clones none gets a widened grid with
+/// four empty cells (bd `slim-quickload-still-widened-the-quit-grid-2026-09-12`). The Save Game row
+/// replaces a row that already exists, so it needs the picker movie and not the grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GfxServeSet {
+    /// The six-cell `02_040_optionsetting` Quit grid. Only a host that clones rows into cells three
+    /// through six.
+    pub quit_grid: bool,
+    /// The link field's `02_990_textinput` movie, under its own cache key.
+    pub build_url_field: bool,
+    /// The picker's current-path editor, under `02_990_TextInput_PathEditor`. Belongs to whoever
+    /// opens the picker, not to whoever armed the link field: they are two derivations of one movie.
+    pub path_editor_field: bool,
+    /// The `05_010_ProfileSelect` stats-panel movie the picker chrome stands on.
+    pub profile_select: bool,
+}
+
+impl GfxServeSet {
+    /// Everything this module can derive -- what a full row set needs.
+    pub const ALL: Self = Self {
+        quit_grid: true,
+        build_url_field: true,
+        path_editor_field: true,
+        profile_select: true,
+    };
+    /// Only the picker movie: a host that replaces a vanilla row rather than cloning new ones.
+    pub const PROFILE_SELECT_ONLY: Self = Self {
+        quit_grid: false,
+        build_url_field: false,
+        // The path editor is part of the picker, so a picker-only host still needs it.
+        path_editor_field: true,
+        profile_select: true,
+    };
+}
+
+/// What the installed hook serves. Bits are added, never removed: two hosts in one process each
+/// need their own movies, and the hook is installed once.
+static SERVE_QUIT_GRID: AtomicUsize = AtomicUsize::new(0);
+static SERVE_BUILD_URL_FIELD: AtomicUsize = AtomicUsize::new(0);
+static SERVE_PATH_EDITOR_FIELD: AtomicUsize = AtomicUsize::new(0);
+static SERVE_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
 
 /// This module's slot in the `er-hook` union chain for the Scaleform file-open prologue.
 static FILE_OPEN_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -360,11 +534,20 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
         return 0;
     }
     let hit = FILE_OPEN_HITS.fetch_add(1, Ordering::SeqCst) + 1;
-    let is_options_02_040 = unsafe { bounded_ascii_contains(url, b"02_040_optionsetting") };
-    let is_build_url_02_990 = unsafe { bounded_ascii_contains(url, b"02_990_textinput_buildurl") };
+    let is_options_02_040 = SERVE_QUIT_GRID.load(Ordering::SeqCst) != 0
+        && unsafe { bounded_ascii_contains(url, b"02_040_optionsetting") };
+    let is_build_url_02_990 = SERVE_BUILD_URL_FIELD.load(Ordering::SeqCst) != 0
+        && unsafe { bounded_ascii_contains(url, b"02_990_textinput_buildurl") };
+    let is_path_editor_02_990 = SERVE_PATH_EDITOR_FIELD.load(Ordering::SeqCst) != 0
+        && unsafe { bounded_ascii_contains(url, b"02_990_textinput_patheditor") };
+    let is_profile_05_010 = SERVE_PROFILE_SELECT.load(Ordering::SeqCst) != 0
+        && unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
     // A custom cache key forces a fresh Scaleform load. Redirect only that key's file-open to the
     // canonical native movie; the game's shared 02_990 cache entry stays untouched.
-    let open_url = if is_build_url_02_990 {
+    // Both 02_990 keys name a file that does not exist: they are cache keys chosen so the two
+    // fields get separate derivations of one movie. The redirect is what gives either of them any
+    // bytes at all.
+    let open_url = if is_build_url_02_990 || is_path_editor_02_990 {
         TEXT_INPUT_02_990_CANONICAL_URL.as_ptr() as usize
     } else {
         url
@@ -374,24 +557,34 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     // with the game's narrower signature would leave its fourth register undefined.
     let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
     let native = unsafe { next(loader, open_url, flags_reg, 0) };
-    if !(is_options_02_040 || is_build_url_02_990) {
+    if !(is_options_02_040 || is_build_url_02_990 || is_path_editor_02_990 || is_profile_05_010) {
         return native;
     }
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return native;
     };
+    // The game asking for a 02_990 key is its own statement that a new field is being built, which
+    // is the signal that retires the previous field's window. Both keys carry it.
+    if is_build_url_02_990 || is_path_editor_02_990 {
+        crate::software_keyboard::build_url_note_movie_served();
+    }
     let served = if is_options_02_040 {
         unsafe { options_02_040_quit6_swap_to_edited(base, native) }
+    } else if is_profile_05_010 {
+        unsafe { profile_05_010_swap_to_edited(base, native) }
+    } else if is_path_editor_02_990 {
+        unsafe { text_input_02_990_swap_to_path_editor(base, native) }
     } else {
-        // The game asking for this movie is its own statement that a new link field is being
-        // built, which is the signal that retires the previous field's window.
-        crate::software_keyboard::build_url_note_movie_served();
         unsafe { text_input_02_990_swap_to_build_url(base, native) }
     };
     append_autoload_debug(format_args!(
         "system-quit-gfx: served {} movie #{hit} loader=0x{loader:x} ret=0x{native:x} redirected_to_canonical_02_990={is_build_url_02_990} memory_replacement={served}",
         if is_options_02_040 {
             "02_040_optionsetting"
+        } else if is_profile_05_010 {
+            "05_010_profileselect"
+        } else if is_path_editor_02_990 {
+            "02_990_textinput_patheditor"
         } else {
             "02_990_textinput_buildurl"
         }
@@ -411,6 +604,57 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
 ///
 /// Process attach or startup-hook context, before the title has loaded its movies.
 pub unsafe fn install_quit_menu_gfx_swap_hook() -> bool {
+    unsafe { install_gfx_swap_hook_for(GfxServeSet::ALL) }
+}
+
+/// The movies the hook will actually swap, named for the log.
+///
+/// Written from the latches rather than from the caller's set, because the set is additive across
+/// hosts: the line has to describe what this process now serves, not what the last caller asked
+/// for. It replaced a hard-coded "the six-cell Quit grid and the link field's movie", which went on
+/// claiming both after the serve set arrived -- run br-20260912-202348-248f printed exactly that
+/// while the host had asked for the picker movie alone.
+fn served_movie_list() -> String {
+    let mut names: Vec<&str> = Vec::new();
+    if SERVE_QUIT_GRID.load(Ordering::SeqCst) != 0 {
+        names.push("the six-cell Quit grid");
+    }
+    if SERVE_BUILD_URL_FIELD.load(Ordering::SeqCst) != 0 {
+        names.push("the link field's movie");
+    }
+    if SERVE_PATH_EDITOR_FIELD.load(Ordering::SeqCst) != 0 {
+        names.push("the path editor's movie");
+    }
+    if SERVE_PROFILE_SELECT.load(Ordering::SeqCst) != 0 {
+        names.push("the 05_010 picker movie");
+    }
+    if names.is_empty() {
+        return "nothing (no host asked for a movie)".to_owned();
+    }
+    names.join(" + ")
+}
+
+/// [`install_quit_menu_gfx_swap_hook`] for a host that needs only some of the movies.
+///
+/// The serve set is additive across callers: the hook is installed once, and a second host asking
+/// for a different movie turns that one on without turning the first host's off.
+///
+/// # Safety
+///
+/// As [`install_quit_menu_gfx_swap_hook`].
+pub unsafe fn install_gfx_swap_hook_for(serve: GfxServeSet) -> bool {
+    if serve.quit_grid {
+        SERVE_QUIT_GRID.store(1, Ordering::SeqCst);
+    }
+    if serve.build_url_field {
+        SERVE_BUILD_URL_FIELD.store(1, Ordering::SeqCst);
+    }
+    if serve.path_editor_field {
+        SERVE_PATH_EDITOR_FIELD.store(1, Ordering::SeqCst);
+    }
+    if serve.profile_select {
+        SERVE_PROFILE_SELECT.store(1, Ordering::SeqCst);
+    }
     if FILE_OPEN_INSTALLED
         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -430,7 +674,8 @@ pub unsafe fn install_quit_menu_gfx_swap_hook() -> bool {
     } {
         Ok(()) => {
             append_autoload_debug(format_args!(
-                "system-quit-gfx: registered the Scaleform file-open prologue 0x{addr:x} on the union; will serve the six-cell Quit grid and the link field's movie"
+                "system-quit-gfx: registered the Scaleform file-open prologue 0x{addr:x} on the union; serving {}",
+                served_movie_list()
             ));
             true
         }

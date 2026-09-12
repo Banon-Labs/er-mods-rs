@@ -1674,3 +1674,19 @@ pub const DELAY_DELETE_ENQUEUE_RVA: usize = 0xe77490;
 pub use er_telemetry_core::counters::PROFILE_SPARE_ORPHAN;
 /// Count of leaked spared renderers reclaimed via the native delete path (repeated-switch GX fix).
 pub use er_telemetry_core::counters::PROFILE_SPARE_ORPHANS_DELETED;
+
+/// Native MenuWindow close-finalize `FUN_1407ac980` (dump `0x1407ac980` -> live/deobf `0x7ac890`,
+/// content-unique). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
+/// invokes the window's own close vmethod (`window->vtable+0x60`). Calling it on the ProfileSelect
+/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ad1c0) reads a
+/// terminal result and `ExecuteMenuJob` (0x7a96f0) pops the job from the menu-job queue head. That
+/// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
+/// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
+/// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
+pub const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
+    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
+/// Native return-title semantic request used after System->ProfileSelect confirmation. This is
+/// `FUN_14067a490` in the Ghidra dump and maps to live/deobf `0x14067a3a0`; it sets the same
+/// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
+/// displaying another confirmation dialog.
+pub const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;

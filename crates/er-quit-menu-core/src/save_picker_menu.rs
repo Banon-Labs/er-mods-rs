@@ -49,10 +49,10 @@ use er_title_flow::{
 use crate::host::SaveDestOrigin;
 use crate::host::{
     append_autoload_debug, default_save_root, save_dest_set_target, save_dest_start_dir,
-    save_flow_box_clear, save_flow_box_recipe_available, save_picker_seamless_mode_after_settle,
-    system_quit_env_save_dir, system_quit_env_save_path, system_quit_ingest_picked_save,
-    system_quit_profile_summary_ptr, system_quit_save_swap_arm_original,
-    system_quit_save_swap_restore_profile_summary, system_quit_windows_path_for_log,
+    save_picker_seamless_mode_after_settle, system_quit_env_save_dir, system_quit_env_save_path,
+    system_quit_ingest_picked_save, system_quit_profile_summary_ptr,
+    system_quit_save_swap_arm_original, system_quit_save_swap_restore_profile_summary,
+    system_quit_windows_path_for_log,
 };
 use crate::os_dialog::{DestRoute, save_dest_route_picked_target};
 use crate::profile_load_dialog::{
@@ -60,6 +60,7 @@ use crate::profile_load_dialog::{
 };
 use crate::save_dest_commit_runtime::{save_dest_clear_target, save_dest_target};
 use crate::save_flow_boxes::{SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE};
+use crate::save_flow_boxes::{save_flow_box_clear, save_flow_box_recipe_available};
 use crate::software_keyboard::{
     save_picker_path_editor_active, save_picker_request_path_editor,
     save_picker_reset_path_editor_state,
@@ -393,16 +394,35 @@ pub unsafe fn save_picker_stage_row_records(
     unsafe { save_picker_arm_row_snapshot(summary) };
     let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
-    if let Ok(_base) = game_module_base() {
-        let refresh: unsafe extern "system" fn() = unsafe {
-            std::mem::transmute(
-                match gated_game_fn(PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA") {
-                    Some(address) => address,
-                    None => return false,
-                },
-            )
-        };
-        unsafe { refresh() };
+    if let Ok(base) = game_module_base() {
+        // `PROFILE_RENDERER_REFRESH_RVA` walks the profile model renderer table without checking
+        // it, so calling it on a null table reads `[null + 0x754]` and the process dies -- the
+        // access violation bd `er-effects-rs-p88u` measured three times at `eldenring.exe+0x9ab874`.
+        // `system_quit_open_profile_load_dialog_on` guards its own submit the same way; this call
+        // site had no guard, and run br-20260912-200740-d5e1 died here, between the line saying the
+        // pump had a staged request and any line saying the browser opened.
+        //
+        // Staging is not abandoned when the table cannot be made safe: the rows are already
+        // written, and the refresh only redraws them. Skipping it leaves the list stale for a frame
+        // rather than ending the session.
+        if unsafe { crate::profile_table_guard::ensure_profile_table_ready(base) } {
+            let refresh: unsafe extern "system" fn() = unsafe {
+                std::mem::transmute(
+                    match gated_game_fn(
+                        PROFILE_RENDERER_REFRESH_RVA,
+                        "PROFILE_RENDERER_REFRESH_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return false,
+                    },
+                )
+            };
+            unsafe { refresh() };
+        } else {
+            append_autoload_debug(format_args!(
+                "save-picker: staged the rows but skipped the renderer refresh -- the profile model renderer table could not be made safe to walk, and `PROFILE_RENDERER_REFRESH_RVA` would fault reading [null+0x754]"
+            ));
+        }
     }
     append_autoload_debug(format_args!(
         "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' scroll={}/{} entries={} drives={}",
@@ -561,6 +581,13 @@ pub unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) ->
         loaded_path,
     }) = save_dest_start_dir()
     else {
+        // Silent until 2026-09-12, and the silence is what cost run br-20260912-194412-7743: the
+        // standalone shell's press staged a browse request, this returned false on every pass with
+        // nothing written down, and the only evidence was the stage machine timing out 180 ticks
+        // later saying the browser "never opened" -- true, but not why.
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- the host answers no `save_dest_start_dir`, so there is no directory to browse and no loaded file to name the `[ new ]` row after"
+        ));
         return false;
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
@@ -575,6 +602,12 @@ pub unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) ->
         &loaded_path,
     );
     if !unsafe { save_picker_stage_row_records(&model) } {
+        // The other silent refusal on this path. Same reason for naming it: a host that supplies no
+        // row staging cannot show a list, and "never opened" does not say which half was missing.
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- the host answers no `save_picker_stage_row_records`, so the browse list has no rows for start_dir={}",
+            start_dir.display()
+        ));
         return false;
     }
     *er_save_picker_core::model::active_save_picker_lock() = Some(model);
@@ -2969,4 +3002,164 @@ pub fn save_picker_title_start_dir() -> PathBuf {
         }
     }
     PathBuf::from("Z:\\")
+}
+
+/// Everything the Save Game destination browser needs from the game's menu pump, per pass.
+///
+/// The press itself only stages a request: `save_game_start_flow` sets
+/// `SAVE_DEST_OPEN_PICKER_PENDING` and parks in the browse stage, because opening the browser
+/// records and submits a `MenuJob`, which is menu-pump work and not game-task work. Something has
+/// to run in the pump and discharge that request, and until 2026-09-12 the only caller lived inside
+/// the product's `quit-rows` module. With that feature off the press staged a request nobody
+/// consumed: run br-20260912-190345-54bb logged `row press #1 ... opening the destination list`
+/// and then, 3.6 seconds later, `destination browser never opened after 180 ticks -- ending the
+/// flow, the user's save did not happen`. The button looked like a no-op.
+///
+/// The chrome it drives already lived here, beside `Load Character from File`'s own browser, which
+/// is why this entry point belongs here too rather than in a host: any host with a menu pump can
+/// call it, and the Save Game row then behaves the same in every one of them.
+///
+/// What clears the latch is that a picker ran, not that one is up. Re-arming on a picker that came
+/// back empty re-asks a question the user just declined -- with the operating system surface that
+/// reopened the dialog about 57 ms after every cancel, forever (bd `er-effects-rs-rsxi`).
+///
+/// # Safety
+///
+/// Menu-pump context: a `MenuWindowJob::Run` pass, which is the submit context every step below
+/// requires.
+pub unsafe fn save_flow_menu_pump() {
+    if er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
+        let system_dialog = er_telemetry_core::counters::SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+        // Once, on the first pass that sees a staged request: the pump reached the open call with
+        // a dialog to open it over. Without it, a press that stages and then goes quiet cannot be
+        // told from a pump that stopped being called between the press and the next frame.
+        if SAVE_FLOW_PUMP_SAW_REQUEST.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: the menu pump has a staged open request; opening over System dialog=0x{system_dialog:x}"
+            ));
+        }
+        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
+            er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+        } else {
+            // The one path that legitimately re-arms: a submit the dialog's job queue deferred.
+            // Counted so a run can tell that apart from the reopen loop, which must stay at zero.
+            er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT
+                .fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    unsafe { crate::software_keyboard::save_picker_menu_pump_path_editor() };
+    unsafe { save_picker_menu_pump_drive_strip_mouse() };
+    unsafe { save_picker_menu_pump_native_scrollbar() };
+    unsafe { save_picker_menu_pump_edge_scroll() };
+    unsafe { save_picker_menu_pump_rebuild() };
+    if save_picker_resubmit_pending() {
+        let _ = unsafe { save_picker_menu_pump_resubmit() };
+    }
+}
+
+/// One-shot latch for the staged-request line in [`save_flow_menu_pump`].
+static SAVE_FLOW_PUMP_SAW_REQUEST: AtomicUsize = AtomicUsize::new(0);
+
+// ---- the picker's own row activation, for a host with no repro detour --------------------------
+
+/// `CS::ProfileLoadDialog`'s slot-activation entry, read from the crate that declares it.
+const PROFILE_LOAD_ACTIVATE_RVA: u32 = er_title_flow::PROFILE_LOAD_ACTIVATE_RVA as u32;
+
+static PICKER_ACTIVATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Route a slot activation on our own browser to the browse handler instead of the game's load.
+///
+/// While the live `05_010` window is this crate's directory browser, every slot activation is a
+/// browse action -- up, switch drive, enter a directory, page, pick a file -- and never a character
+/// load. Forwarding it runs vanilla's OK handler, which asks **Start with selected profile**: on run
+/// br-20260912-203044-5fbd clicking a folder row raised exactly that confirm, because the only
+/// interception in the tree lives in `er-quickload`'s `system_quit_ownership_repro.rs` and a shell
+/// installs none of it.
+///
+/// Only the picker branch is here. Everything else -- the character-load arm, its flow gates, the
+/// diagnostics -- stays in the product, and this handler forwards those calls untouched, so a
+/// process carrying both keeps the product's behaviour.
+///
+/// # Safety
+///
+/// Installed by `er-hook`; the game calls it on its menu thread with a live `ProfileLoadDialog`.
+unsafe extern "system" fn picker_profile_load_activate_hook(
+    dialog: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = PICKER_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // Safety: the union publishes either the game trampoline or the next handler in the chain.
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return unsafe { original(dialog, b, c, d) };
+    }
+    // Identity, not just the mode latch: `PROFILE_LOAD_DIALOG_VTABLE_RVA` moved on 1.17, and a
+    // stale address once made this comparison fail for every dialog, so every activation fell
+    // through to the native load with nothing in the log to say why.
+    let Ok(base) = game_module_base() else {
+        return unsafe { original(dialog, b, c, d) };
+    };
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    let expected = er_game_base::mem::game_data_addr(
+        base,
+        er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
+    if vt != expected {
+        return unsafe { original(dialog, b, c, d) };
+    }
+    let cursor = unsafe { safe_read_i32(dialog + er_title_flow::DIALOG_SLOT_CURSOR_B0C_OFFSET) }
+        .unwrap_or(-1);
+    unsafe { save_picker_handle_activation(dialog, cursor) }
+}
+
+/// Claim `ProfileLoadDialog`'s activation for the picker, for a host that has no repro detour.
+///
+/// Chained through the union, so the product's own detour on the same address keeps working beside
+/// it: whichever handler sees a picker-owned dialog first answers it, and every other activation is
+/// forwarded down the chain unchanged.
+pub fn install_picker_profile_load_activate_hook() -> bool {
+    if PICKER_ACTIVATE_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return true;
+    }
+    let Ok(addr) = er_game_base::mem::game_rva_for_hook(PROFILE_LOAD_ACTIVATE_RVA) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve the ProfileLoadDialog activation rva 0x{PROFILE_LOAD_ACTIVATE_RVA:x}; a row press will run the game's own load confirm instead of browsing"
+        ));
+        PICKER_ACTIVATE_INSTALLED.store(0, Ordering::SeqCst);
+        return false;
+    };
+    // Safety: the activation's ABI is the union's four-register shape, and `PICKER_ACTIVATE_ORIG`
+    // is the static the handler reads to call through.
+    match unsafe {
+        er_hook::register_union_hook(
+            addr,
+            picker_profile_load_activate_hook,
+            &PICKER_ACTIVATE_ORIG,
+        )
+    } {
+        Ok(()) => {
+            append_autoload_debug(format_args!(
+                "save-picker: registered ProfileLoadDialog activation 0x{addr:x} on the union; a row press on our browser browses instead of loading a character"
+            ));
+            true
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "save-picker: register_union_hook ProfileLoadDialog activation failed: {status:?}; a row press will run the game's own load confirm"
+            ));
+            PICKER_ACTIVATE_INSTALLED.store(0, Ordering::SeqCst);
+            false
+        }
+    }
 }

@@ -200,8 +200,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
         save_dest_start_dir: save_dest_start_dir_for_quit_menu,
         save_dest_set_target: crate::experiments::save_dest_set_target,
-        save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
-        save_flow_box_clear: crate::experiments::save_flow_box_clear,
         // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:

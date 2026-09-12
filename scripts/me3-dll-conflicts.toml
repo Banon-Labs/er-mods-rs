@@ -522,6 +522,11 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace entry)"
 # whole point is that the code being harmless is not the question.
 # ---------------------------------------------------------------------------
 [opt_in_only]
+"er-save-game-row" = """The Save Game row alone. It is never auto-included because every profile \
+that already carries a row-arming host has that row, and a second arm gives the first Quit row two \
+routers -- see its [[conflict]] pairs. Ask for it by name when the run is about that one row: \
+`--with er-save-game-row --without er-quit-menu`, or with `--without er-quickload` for the row on \
+its own in an otherwise vanilla game."""
 "er-quit-load-character" = """REDUNDANT since 2026-09-12, not dangerous on its own: every row it \
 arms is already armed by `er-quit-menu`, which now passes `RowSet::ALL`. Loading both puts a \
 second cloner in the process, and because each cdylib links its own `er-quit-menu-core` the two \
@@ -922,3 +927,29 @@ byte-for-byte vanilla unless the null case occurs."""
 # synthetic tables, so an empty table here is a table with no members rather than a
 # feature nobody checks any more.
 
+# Two hosts arming the Quit tab's row router is one router too many, whichever rows each carries.
+# `er-save-game-row` clones nothing -- it arms `RowSet::NONE` -- but it still registers an action
+# table and puts its handlers on the union, and `er-quit-menu-core`'s statics are per DLL, so the two
+# tables disagree about who owns the first row's press.
+[[conflict]]
+a = "er-save-game-row"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """Both arm `er_quit_menu_core::row_cloner`, and each cdylib links its own copy of the \
+row table and its own arm latch, so the native first Quit row has two routers and a press resolves \
+against whichever arm ran last."""
+evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-menu/src/lib.rs; bd two-row-shells-cannot-share-a-row-table-statics-are-per-dll-2026-09-12"
+
+[[conflict]]
+a = "er-save-game-row"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = "Same two-arm problem as the pair above: two row tables, one row."
+evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-load-character/src/lib.rs"
+
+[[conflict]]
+a = "er-save-game-row"
+b = "er-quit-rows"
+kind = "duplicate-owner"
+reason = "Same two-arm problem, and `er-quit-rows` is a whole second copy of the product besides."
+evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-rows/src/lib.rs"

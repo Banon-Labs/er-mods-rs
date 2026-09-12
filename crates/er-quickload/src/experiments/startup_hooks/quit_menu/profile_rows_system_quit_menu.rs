@@ -1135,30 +1135,12 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // the user just declined: with the OS surface that reopened comdlg32 ~57 ms after every Cancel,
     // forever, with no way out of the flow (bd `er-effects-rs-rsxi`). The tick's OpenTimeout could
     // not save it either, because each reopen blocks the whole frame, so the budget never accrued.
-    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
-        let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
-        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
-            SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
-        } else {
-            // The one path that legitimately re-arms. Counted so a run can prove which one it took:
-            // in OS mode this must stay 0, and any positive value is the reopen loop returning.
-            SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    // Menu-pump-owned save-picker maintenance: drive-cell input, native ScrollBarV sync,
-    // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
-    // navigation/pick close (same submit-context rule as the return-title chain below).
-    unsafe { save_picker_menu_pump_path_editor() };
+    // The browser open and the save-picker maintenance that used to sit here now run from
+    // `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, which the stepper calls on every
+    // build rather than only this one -- see that function for the run where the row went dead.
     // Menu-pump-owned build-url link field. Same context and same reason as the path editor above:
     // it builds and submits a native SoftwareKeyboardJob, which must not happen on the game task.
     unsafe { build_url_editor_menu_pump() };
-    unsafe { save_picker_menu_pump_drive_strip_mouse() };
-    unsafe { save_picker_menu_pump_native_scrollbar() };
-    unsafe { save_picker_menu_pump_edge_scroll() };
-    unsafe { save_picker_menu_pump_rebuild() };
-    if save_picker_resubmit_pending() {
-        let _ = unsafe { save_picker_menu_pump_resubmit() };
-    }
     // Menu-pump-owned return-title submit. This hook is the game's menu pump executing a
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
     // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that

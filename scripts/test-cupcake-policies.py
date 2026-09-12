@@ -182,6 +182,18 @@ ORPHANED_REGO_SUITES = [
         ".cupcake/tests/edit_no_tmp_scripts_guard_test.rego",
     ],
     [
+        ".cupcake/policies/claude/monitor_rate_limit.rego",
+        ".cupcake/tests/monitor_rate_limit_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/teardown_must_relaunch.rego",
+        ".cupcake/tests/teardown_must_relaunch_test.rego",
+    ],
+    [
+        ".cupcake/policies/claude/no_source_edit_during_live_run.rego",
+        ".cupcake/tests/no_source_edit_during_live_run_test.rego",
+    ],
+    [
         ".cupcake/policies/claude/no_unbacked_claim.rego",
         ".cupcake/tests/no_unbacked_claim_test.rego",
     ],

@@ -27,10 +27,6 @@ pub(crate) use er_loading_portrait_core::*;
 // parent and keep compiling unqualified. Both shims are gone: after the 2026-08-21 lint-parity
 // sweep pruned the dead imports, nothing resolves through them any more, and rustc 1.98 says so.
 // The named re-exports below are the ones that actually carry references.
-pub(crate) use er_quit_menu_core::save_dest_identity::*;
-pub(crate) use er_quit_menu_core::save_flow_boxes::{
-    SAVE_FLOW_BOX_OVERWRITE_FILE, SaveFlowDecision, save_flow_box_label,
-};
 pub(crate) use er_telemetry_core::counters::BOOT_SAVE_CONTAINER_MATCHES_RUNTIME;
 pub(crate) use er_telemetry_core::counters::CORRUPTED_SAVE_SEEN_COUNT;
 #[cfg(feature = "quit-rows")]
@@ -56,11 +52,9 @@ pub(crate) use er_telemetry_core::counters::PORTRAIT_FACE_IDENTITY_MISMATCHES;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_CANCEL_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_COMMIT_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_COMMIT_FAIL;
-pub(crate) use er_telemetry_core::counters::SAVE_DEST_COMMIT_PENDING;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_BAK_MUTATED;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_FILE_MUTATED;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_LIVE_OVERWRITE_COUNT;
-pub(crate) use er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_REDIRECT_ARMED;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_REDIRECT_HITS;
@@ -71,11 +65,8 @@ pub(crate) use er_telemetry_core::counters::SAVE_DEST_TARGET_NEW_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_TARGET_STRUCTURE_OK;
 pub(crate) use er_telemetry_core::counters::SAVE_DEST_TARGET_WRITTEN_OK;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_CANCEL_COUNT;
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_DEST_MODE;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OPEN_COUNT;
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_DIALOG_OPEN;
-pub(crate) use er_telemetry_core::counters::SAVE_PICKER_OS_TICKS_FROZEN;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_PICK_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_PICK_REJECT_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_REPOPULATE_COUNT;

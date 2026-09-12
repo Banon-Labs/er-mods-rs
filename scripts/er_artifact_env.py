@@ -88,6 +88,17 @@ ARTIFACT_ENV: dict[str, str] = {
     # standalone `er-build-import` shell and the product's `Load Build from URL` row drive, so the
     # file exists for runs that load either one.
     "ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH": "er-build-import.log",
+    # The two standalone quit-row shells. They had no knob until 2026-09-12, and it cost a
+    # diagnosis: on run br-20260912-183117-e19a `er_quit_menu.dll` faulted inside the System-window
+    # restore, and the line naming the window it died on -- `window=0x1dc3d080 vt=0x0 invalid` --
+    # was in the game-directory copy while the run's own directory held twenty-five files that said
+    # nothing about it. The crash log's module backtrace named the shell; only the shell's own log
+    # named the pointer.
+    "ER_QUICKLOAD_QUIT_MENU_LOG_PATH": "er-quit-menu.log",
+    "ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH": "er-quit-load-character.log",
+    # The Save Game row on its own, new on 2026-09-12. Same reason as its two siblings above: the
+    # line naming why a row did nothing is the line a second launch would otherwise rotate away.
+    "ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH": "er-save-game-row.log",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

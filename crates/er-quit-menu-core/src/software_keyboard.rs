@@ -78,7 +78,7 @@ fn verify_rva_for_hook(rva: u32, expected: &[u8], mask: &[u8], name: &str) -> Op
 /// The union rather than a bare `MhHook`: both of these addresses are also reachable by the product
 /// DLL, and two MinHook instances on one prologue overwrite each other's trampolines with nothing
 /// logged.
-fn mh_install_hook_once(
+pub(crate) fn mh_install_hook_once(
     flag: &AtomicUsize,
     not_installed: usize,
     installed_yes: usize,
@@ -650,7 +650,14 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
         if previous_window == 0 {
             // A fresh editor: re-arm the end-caret. This transition is the only per-open signal --
             // the window pointer itself gets recycled across opens.
+            //
+            // Two latches, because there are two implementations of the same idea: the host's, for a
+            // product whose `05_010` editor owns the caret, and this crate's own, which a shell uses
+            // because it has no such editor. Re-arming only the host's left a shell placing the
+            // caret on the first open and never again -- the second edit would have put every typed
+            // character in front of the path.
             reset_path_editor_caret_latch();
+            crate::scaleform_proxy::reset_path_editor_window_latches();
             let dialog = SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.load(Ordering::SeqCst);
             if dialog != 0
                 && SAVE_PICKER_REBUILD_PENDING_DIALOG
@@ -673,14 +680,48 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
             .compare_exchange(active, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        *path_editor_outcome()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
-        append_autoload_debug(format_args!(
-            "save-picker-path: 02_990 MenuWindow became terminal state={state} window=0x{window:x}; released job=0x{active:x} as cancelled before proxy teardown"
-        ));
+        release_path_editor_keyboard(
+            active,
+            format_args!(
+                "save-picker-path: 02_990 MenuWindow became terminal state={state} window=0x{window:x}; released job=0x{active:x} before proxy teardown"
+            ),
+        );
     }
     false
+}
+
+/// Release a path-editor keyboard whose latch has to be dropped while the job may still be running.
+///
+/// The latch and ownership are different things, and the build-url field has had this right since
+/// 2026-08-23 while the save path never did. The job carries the intentionally empty
+/// `std::function` this crate hands the engine, and the `0x81d220` / `0x81d3d0` detours are the only
+/// reason that is safe: they recognise the job and never let the native side invoke it. Clearing the
+/// active-job slot without recording the job here makes `keyboard_owner_of` stop recognising it, the
+/// detour forwards to the original, and the engine calls the empty `std::function` --
+/// `std::bad_function_call` thrown straight through the game's stack.
+///
+/// That killed run br-20260912-211042-2222 the instant a typed path was submitted: cancelling never
+/// invokes the callback, so backing out of the field worked all session and the first accept was
+/// fatal. The crash record names it exactly -- `exception_code=0xe06d7363`,
+/// `cpp_throw_type=std::bad_function_call`, thrown at `eldenring.exe+0x81e198` with the released job
+/// still in `r15`. It is the same failure recorded as `dll:a71aa552` on 2026-08-23.
+///
+/// `Cancelled` is deposited only when nothing is already waiting: an accept records its text from
+/// the terminal callback and its window goes terminal immediately afterwards, so overwriting here
+/// would turn every accepted path into a cancel.
+fn release_path_editor_keyboard(job: usize, reason: std::fmt::Arguments<'_>) {
+    if job == 0 {
+        return;
+    }
+    remember_released_keyboard_job(job, KeyboardPurpose::SavePath);
+    let mut slot = path_editor_outcome()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = Some(PathEditorOutcome::Cancelled);
+    }
+    drop(slot);
+    append_autoload_debug(reason);
 }
 
 fn path_editor_outcome() -> &'static Mutex<Option<PathEditorOutcome>> {
@@ -1263,6 +1304,21 @@ unsafe fn submit_software_keyboard(
     PathEditorSubmit::Submitted
 }
 
+/// Is `window` still a live `CS::MenuWindow`?
+///
+/// The same screen `menu_pump::live_menu_window` applies to an owning window: a live one's first
+/// qword is a vtable inside the game image, a freed or recycled one's is not. Fault-safe, because
+/// this runs every pump tick against a pointer the game may have freed a frame ago.
+fn path_editor_window_is_live(window: usize) -> bool {
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        // Cannot resolve the image, so cannot say it is dead. Answering "live" keeps ownership
+        // where it is rather than cancelling an editor the user is still typing into.
+        return true;
+    };
+    let vt = unsafe { er_game_base::mem::safe_read_usize(window) }.unwrap_or(0);
+    er_game_base::mem::vtable_in_game_image(vt, base)
+}
+
 fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
     let mut guard = er_save_picker_core::model::active_save_picker_lock();
     let Some(model) = guard.as_mut() else {
@@ -1329,15 +1385,45 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
                 .is_ok()
         {
             SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
-            *path_editor_outcome()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                Some(PathEditorOutcome::Cancelled);
-            append_autoload_debug(format_args!(
-                "save-picker-path: 02_990 MenuWindow stopped running for {} ProfileSelect ticks; released stale job=0x{active_before_watchdog:x} window=0x{editor_window:x} as cancelled before reading freed controller state",
-                now.saturating_sub(last)
-            ));
+            release_path_editor_keyboard(
+                active_before_watchdog,
+                format_args!(
+                    "save-picker-path: 02_990 MenuWindow stopped running for {} ProfileSelect ticks; released stale job=0x{active_before_watchdog:x} window=0x{editor_window:x} before reading freed controller state",
+                    now.saturating_sub(last)
+                ),
+            );
         }
+    }
+
+    // The editor's own window, asked directly rather than through a callback.
+    //
+    // Run br-20260912-205253-822d closed the field with Back and `cancel consumed` was never
+    // logged: neither the result-state observer below nor the stale-tick watchdog above released
+    // ownership, so `SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB` stayed set and the submit path's
+    // `if ACTIVE_JOB != 0 { return }` refused every later open -- the field could not be re-entered
+    // for the rest of the session.
+    //
+    // Which native callback reports a Back depends on which SoftwareKeyboard backend is live, and
+    // on this machine it is the Scaleform fallback rather than the platform one (bd
+    // `softwarekeyboard-two-backends-field-vs-result-mailbox-2026-08-23`). The window is not
+    // backend-specific: a live `MenuWindow`'s first qword is a game vtable and a torn-down one is
+    // not, so this asks the object instead of trusting a callback to fire.
+    let editor_window = SAVE_PICKER_PATH_EDITOR_WINDOW.load(Ordering::SeqCst);
+    let editor_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
+    if editor_job != 0
+        && editor_window != 0
+        && !path_editor_window_is_live(editor_window)
+        && SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB
+            .compare_exchange(editor_job, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        release_path_editor_keyboard(
+            editor_job,
+            format_args!(
+                "save-picker-path: the editor window 0x{editor_window:x} is gone while job=0x{editor_job:x} still held the latch; released it so the field can be opened again"
+            ),
+        );
     }
 
     let active_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
@@ -1347,12 +1433,12 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
             .compare_exchange(active_job, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        *path_editor_outcome()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
-        append_autoload_debug(format_args!(
-            "save-picker-path: observed native SoftwareKeyboard failed/cancelled state for job=0x{active_job:x}; released editor ownership"
-        ));
+        release_path_editor_keyboard(
+            active_job,
+            format_args!(
+                "save-picker-path: observed native SoftwareKeyboard failed/cancelled state for job=0x{active_job:x}; released the editor latch"
+            ),
+        );
     }
 
     let outcome = path_editor_outcome()

@@ -568,7 +568,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_job_run_hook(
         }
     }
     if SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED.load(Ordering::SeqCst) == 0 {
-        match game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+        match game_rva(er_title_flow::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
             Ok(close_addr) => {
                 let close_fn: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };

@@ -792,3 +792,29 @@ mod cstr_tests {
         );
     }
 }
+
+/// Whether the UTF-16 string at `ptr` is exactly `ascii`, terminator included.
+///
+/// A fault-safe read per unit, so an unmapped or misread pointer answers `false` rather than
+/// faulting. It stood in `quit_menu/system_quit_dialog_handlers.rs` and has nothing to do with
+/// the rows -- it reads memory, which is what this module is. Moved here from `er-quickload`
+/// on 2026-09-12 so the Save Game row's text detour can live outside the product.
+pub unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    if ptr == 0 || ptr == usize::MIN || ascii.is_empty() {
+        return false;
+    }
+    for (idx, want) in ascii.iter().copied().enumerate() {
+        let Some(unit) =
+            (unsafe { crate::mem::safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) })
+        else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    matches!(
+        unsafe { crate::mem::safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
+        Some(0)
+    )
+}

@@ -1030,6 +1030,86 @@ pub unsafe fn apply_build_url_editor_window_position(base: usize, menu_window: u
     unsafe { apply_build_url_caret_to_end(base, menu_window) };
 }
 
+/// Position the path editor's `02_990` window over the picker's own `CurrentPath` field.
+///
+/// Its derivation alpha-zeroes the movie's backing plate and both frame placements, because over
+/// ProfileSelect the picker's `CurrentPath` button already supplies the frame. That is correct only
+/// if something then puts the window where that button is: unpositioned, the field renders as a
+/// bare text run in the top-left corner of the screen. Reported twice now -- for the link field on
+/// 2026-08-23, when it was passed this derivation by mistake, and for the path editor itself on run
+/// br-20260912-204404-206d, when a shell served the derivation with nothing placing the window.
+///
+/// The placement boundary is the external `MenuWindow` `SceneObjProxy`, not the field: the native
+/// `SoftwareKeyboard` controller owns and rewrites its own child display object after GFx parsing.
+///
+/// The product reads a live layout from its `05_010` editor; a shell has no editor, so this takes
+/// the shipped schema, which is the same answer with nothing to override it.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, `menu_window` live.
+pub unsafe fn apply_path_editor_window_position(base: usize, menu_window: usize) {
+    if menu_window == 0 || menu_window == NULL_POINTER {
+        return;
+    }
+    let attempt = PATH_EDITOR_WINDOW_POSITION_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+    let (x, y) = er_gfx::text_input_02_990::path_editor_window_position();
+    let transform = er_gfx::profile_05_010_layout::TransformLayout {
+        x,
+        y,
+        scale_x: 1.0,
+        scale_y: 1.0,
+        opacity: 1.0,
+        editable: false,
+        source: "native 02_990 MenuWindow root positions the editor over CurrentPath".to_owned(),
+    };
+    let proxy = menu_window + OPTION_SETTING_ROOT_PROXY_OFFSET;
+    let (applied, unsupported, detail) =
+        unsafe { apply_transform_to_proxy(base, proxy, &transform, "02_990 path editor window") };
+    if attempt <= 8 || (unsupported > 0 && attempt.is_power_of_two()) {
+        append_autoload_debug(format_args!(
+            "save-picker-path: positioned 02_990 MenuWindow attempt={attempt} window=0x{menu_window:x} proxy=0x{proxy:x} target=({x:.1},{y:.1}) applied={applied} unsupported={unsupported} detail={detail}"
+        ));
+    }
+    unsafe { apply_path_editor_caret_to_end(base, menu_window) };
+}
+
+static PATH_EDITOR_WINDOW_POSITION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+static PATH_EDITOR_CARET_APPLIES: AtomicUsize = AtomicUsize::new(0);
+static PATH_EDITOR_CARET_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Put the caret at the end of the prefilled path, so typing appends rather than prepends.
+///
+/// # Safety
+///
+/// As [`apply_path_editor_window_position`].
+unsafe fn apply_path_editor_caret_to_end(base: usize, menu_window: usize) {
+    const APPLY_FRAMES: usize = 8;
+    if PATH_EDITOR_CARET_APPLIES.fetch_add(1, Ordering::SeqCst) >= APPLY_FRAMES {
+        return;
+    }
+    let outcome = unsafe { place_text_input_02_990_caret_at_end(base, menu_window) };
+    if PATH_EDITOR_CARET_RESOLVED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+    {
+        match outcome {
+            Ok(detail) => append_autoload_debug(format_args!(
+                "save-picker-path: caret moved to end of the prefilled path window=0x{menu_window:x} {detail}"
+            )),
+            Err(error) => append_autoload_debug(format_args!(
+                "save-picker-path: caret stays at the start window=0x{menu_window:x}; {error}"
+            )),
+        }
+    }
+}
+
+/// Re-arm the two latches above for a newly opened field.
+pub fn reset_path_editor_window_latches() {
+    PATH_EDITOR_CARET_APPLIES.store(0, Ordering::SeqCst);
+    PATH_EDITOR_CARET_RESOLVED.store(0, Ordering::SeqCst);
+}
+
 /// Put the caret at the end of the prefilled link when the field opens.
 ///
 /// # Safety

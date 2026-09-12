@@ -162,6 +162,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-quit-load-character:er_quit_load_character
 		er-reload-trace:er_reload_trace
 		er-save-disable:er_save_disable
+		er-save-game-row:er_save_game_row
 		er-save-picker:er_save_picker
 		er-seamless-bugfixes:er_seamless_bugfixes
 		er-telemetry:er_telemetry

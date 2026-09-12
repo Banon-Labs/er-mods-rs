@@ -18,6 +18,10 @@ members = [
   # side to move. Host-buildable and game-free: the key table, the parser and the reload
   # decision are all `cargo test`-able on Linux.
   "crates/er-hotkey-config",
+  # The Save Game row alone, with no cloned character rows behind it. Possible since the row's flow
+  # moved into `er-quit-menu-core` on 2026-09-12; before that the only build carrying all three of
+  # the row's halves was the whole product.
+  "crates/er-save-game-row",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",

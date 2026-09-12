@@ -1156,6 +1156,9 @@ pub const OWN_STEPPER_PHASE_S2_CONFIRM: usize = OwnStepperPhase::S2Confirm as us
 pub const PROFILE_LOAD_DIALOG_VTABLE_RVA: usize =
     ProfileLoadMenuRva::ProfileLoadDialogVtable as usize;
 
+/// `CS::ProfileLoadDialog`'s slot-activation entry, the single declaration every detour reads.
+pub const PROFILE_LOAD_ACTIVATE_RVA: usize = ProfileLoadMenuRva::ProfileLoadActivate as usize;
+
 pub const DIALOG_LOAD_ACTIVATE_VTSLOT_A0_OFFSET: usize =
     core::mem::offset_of!(ProfileLoadDialogVtableLayout, load_activate);
 
@@ -1961,6 +1964,18 @@ pub enum OwnStepperPhase {
 #[repr(usize)]
 pub enum ProfileLoadMenuRva {
     ProfileSlotActivate = 0x262250,
+    /// `CS::ProfileLoadDialog`'s slot-activation entry: the function a row press on a
+    /// `05_010_ProfileSelect` list reaches, which in vanilla ends in the "Start with selected
+    /// profile" confirm.
+    ///
+    /// Declared here because three modules detour it and each carried its own copy of the number:
+    /// `er-quickload` and `er-quit-rows` in their `constants/profile_render.rs`, and
+    /// `er-quit-menu-core`, which needs it so a standalone save-destination browser can answer its
+    /// own row presses. This crate already owns the other two constants that detour reads --
+    /// `PROFILE_LOAD_DIALOG_VTABLE_RVA` and `DIALOG_SLOT_CURSOR_B0C_OFFSET` -- and a dialog address
+    /// that moves while two of three copies are updated is the shape of
+    /// bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`.
+    ProfileLoadActivate = 0x9a4670,
     MenuItemUpdate = 0x007ad1c0,
     /// `vt[2]` (slot +0x10) of the `CS::MenuJobWithContext<LoadJobContext, lambda>` vtable
     /// below -- the load job's Run/Execute virtual, not a per-frame "selector tick".

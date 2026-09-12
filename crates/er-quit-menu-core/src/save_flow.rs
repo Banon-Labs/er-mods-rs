@@ -1,8 +1,6 @@
 //! Save Game destination, commit, and deadline state machine.
 
-use super::*;
-
-// === SAVE-FLOW state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
+// === save-flow state machine (save-game-flow WP1 + WP2 + WP3, 2026-07-28) ===
 // Drives the System->Quit "Save Game" row's destination pick and close-then-fire commit.
 // Stage map lives on `er_telemetry_core::counters::SAVE_FLOW_STAGE` (oracle_save_flow_stage):
 // 0 idle, 3 DEST_BROWSE, 4 OVERWRITE_CONFIRM, 5 CLOSING_ABORT, 6 CLOSING_COMMIT,
@@ -36,6 +34,75 @@ use super::*;
 // the only remaining way to overwrite your own save, so that identity check now carries
 // the whole "overwrite my current file" use case.
 
+use crate::host::append_autoload_debug;
+use crate::host::os_native_picker_active;
+use crate::save_dest_commit_runtime::SaveDestWriterState;
+use crate::save_dest_commit_runtime::save_dest_arm_live_overwrite;
+use crate::save_dest_commit_runtime::save_dest_clear_target;
+use crate::save_dest_commit_runtime::save_dest_commit_identity;
+use crate::save_dest_commit_runtime::save_dest_commit_window_armed;
+use crate::save_dest_commit_runtime::save_dest_live_save_path;
+use crate::save_dest_commit_runtime::save_dest_target;
+use crate::save_dest_identity::SaveDestIdentity;
+use crate::save_dest_identity::save_dest_normalize_path;
+use crate::save_flow_boxes::SAVE_FLOW_BOX_OVERWRITE_FILE;
+use crate::save_flow_boxes::SaveFlowDecision;
+use crate::save_flow_boxes::save_flow_box_clear;
+use crate::save_flow_boxes::save_flow_box_decision;
+use crate::save_flow_boxes::save_flow_box_label;
+use crate::save_flow_boxes::save_flow_box_set_host_dialog;
+use crate::save_game_row::system_quit_save_game_close_menus;
+use crate::save_game_row::system_quit_save_game_close_window;
+use crate::save_game_row::system_quit_save_game_request_save_forced;
+use crate::save_game_row::system_quit_save_request_retract;
+use er_game_base::mem::game_module_base;
+use er_game_base::mem::safe_read_i32;
+use er_game_base::mem::safe_read_u8;
+use er_game_base::mem::safe_read_usize;
+use er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
+use er_telemetry_core::counters::SAVE_DEST_CANCEL_COUNT;
+use er_telemetry_core::counters::SAVE_DEST_COMMIT_COUNT;
+use er_telemetry_core::counters::SAVE_DEST_COMMIT_FAIL;
+use er_telemetry_core::counters::SAVE_DEST_COMMIT_PENDING;
+use er_telemetry_core::counters::SAVE_DEST_CONFIRM_PENDING;
+use er_telemetry_core::counters::SAVE_DEST_DISARM_UNPROVEN;
+use er_telemetry_core::counters::SAVE_DEST_IDENTITY_UNKNOWN_ABORT;
+use er_telemetry_core::counters::SAVE_DEST_NO_WRITER_OBSERVER_ABORT;
+use er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING;
+use er_telemetry_core::counters::SAVE_DEST_SELF_REDIRECT_BLOCKED;
+use er_telemetry_core::counters::SAVE_FLOW_ABORT_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_B72_BEFORE_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_B73_BEFORE_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_BOX_BUILD_TIMEOUT_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_BOX_DIALOG;
+use er_telemetry_core::counters::SAVE_FLOW_BYPASS_ALLOWED_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_COMMIT_COMPLETE_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_COMMIT_JOB_START_TICK;
+use er_telemetry_core::counters::SAVE_FLOW_COMMIT_VERIFY_FAIL_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_COMMIT_WATCHDOG_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_COMPLETE_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_DEGRADED_UNOBSERVED_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_DIALOG;
+use er_telemetry_core::counters::SAVE_FLOW_DISPATCH_CALLS_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_DISPATCH_DECLINES_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_ENQUEUE_MISSING_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_FLAG_UNREAD;
+use er_telemetry_core::counters::SAVE_FLOW_GATE_LATCH_BLOCKED_COUNT;
+use er_telemetry_core::counters::SAVE_FLOW_REQUEST_RETRACTIONS;
+use er_telemetry_core::counters::SAVE_FLOW_RETRACT_DECLINED;
+use er_telemetry_core::counters::SAVE_FLOW_SAVE_JOB_COMPLETIONS_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_SAVE_JOB_STARTS_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_SERIALIZE_CALLS_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_SERIALIZE_FAILURES_AT_FIRE;
+use er_telemetry_core::counters::SAVE_FLOW_STAGE;
+use er_telemetry_core::counters::SAVE_FLOW_STAGE_TICKS;
+use er_telemetry_core::counters::SAVE_FLOW_SUBMIT_BOX_PENDING;
+use er_telemetry_core::counters::SAVE_FLOW_SUBMITS_SWALLOWED_AT_FIRE;
+use er_telemetry_core::counters::SAVE_PICKER_DEST_MODE;
+use er_telemetry_core::counters::SAVE_PICKER_OS_DIALOG_OPEN;
+use er_telemetry_core::counters::SAVE_PICKER_OS_TICKS_FROZEN;
+use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW;
 /// This stage's next tick count -- Frozen while a modal OS file dialog is up.
 ///
 /// Every save-flow deadline derives from `SAVE_FLOW_STAGE_TICKS`, which the game task increments
@@ -53,6 +120,84 @@ use super::*;
 ///
 /// Freezing is necessary but not SUFFICIENT: stage 3's "abandoned" branch has no tick bound at all,
 /// so it needs the separate liveness term in [`dest_browse_verdict`].
+use er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES;
+use er_title_flow::CS_MENU_MAN_DISABLE_SAVE_MENU_OFFSET;
+use er_title_flow::CS_MENU_MAN_SAVE_GATE_LATCH_290_OFFSET;
+use er_title_flow::CS_MENU_MAN_SAVE_GATE_LATCH_298_OFFSET;
+use er_title_flow::CS_MENU_MAN_SAVE_GATE_SUB_80_OFFSET;
+use er_title_flow::GAME_MAN_ARM_FLAG_B72_OFFSET;
+use er_title_flow::GAME_MAN_FLAG_B73_PROBE_OFFSET;
+use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_BC4_OFFSET;
+use er_title_flow::GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY;
+use er_title_flow::GAME_MAN_SAVE_STATE_B80_OFFSET;
+use er_title_flow::SAVE_BYPASS_WATCHDOG_TICKS;
+use er_title_flow::SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS;
+use er_title_flow::SAVE_DEST_TEARDOWN_UNPROVEN_EXTRA_TICKS;
+use er_title_flow::SAVE_FLOW_BOX_BUILD_TIMEOUT_TICKS;
+use er_title_flow::SAVE_FLOW_ENQUEUE_GRACE_TICKS;
+use er_title_flow::SAVE_FLOW_FIRE_GATE_TIMEOUT_TICKS;
+use er_title_flow::SAVE_FLOW_STAGE_CLOSING_ABORT;
+use er_title_flow::SAVE_FLOW_STAGE_CLOSING_COMMIT;
+use er_title_flow::SAVE_FLOW_STAGE_COMMIT_WAIT;
+use er_title_flow::SAVE_FLOW_STAGE_DEST_BROWSE;
+use er_title_flow::SAVE_FLOW_STAGE_FIRE_GATE_WAIT;
+use er_title_flow::SAVE_FLOW_STAGE_IDLE;
+use er_title_flow::SAVE_FLOW_STAGE_OVERWRITE_CONFIRM;
+use er_title_flow::host::game_man_ptr_or_null;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+
+/// The save-job body observer the destination-commit window reads through.
+///
+/// It used to be assembled in `er-quickload`'s facade and handed across, because this crate did not
+/// link `er-save-suppress`. It does now (see the Cargo.toml note), so the three counters are read
+/// where they are used rather than passed as pointers.
+const SAVE_JOB_OBSERVER: crate::save_dest_commit_runtime::SaveJobObserver =
+    crate::save_dest_commit_runtime::SaveJobObserver {
+        writer_idle: er_save_suppress::save_job_writer_idle,
+        starts: er_save_suppress::save_job_starts,
+        completions: er_save_suppress::save_job_completions,
+    };
+
+/// The commit-window calls, with the two inputs this crate answers for itself.
+///
+/// They were wrappers in `er-quickload` while the flow lived there: the observer came from
+/// `er-save-suppress`, which this crate now links, and the redirect directory comes through the
+/// host seam. Keeping the same names means the call sites below read as they always did.
+fn save_dest_arm_redirect(live_path: &std::path::Path, target_path: &std::path::Path) -> bool {
+    crate::save_dest_commit_runtime::save_dest_arm_redirect(
+        live_path,
+        target_path,
+        crate::host::save_redirect_native_source_dir(),
+    )
+}
+
+fn save_dest_writer_state(
+    completions_at_fire: u64,
+) -> crate::save_dest_commit_runtime::SaveDestWriterState {
+    crate::save_dest_commit_runtime::save_dest_writer_state(completions_at_fire, SAVE_JOB_OBSERVER)
+}
+
+fn save_dest_teardown_allowed(completions_at_fire: u64, context: &str) -> bool {
+    crate::save_dest_commit_runtime::save_dest_teardown_allowed(
+        completions_at_fire,
+        context,
+        SAVE_JOB_OBSERVER,
+    )
+}
+
+pub fn save_dest_reset(reason: &str) {
+    crate::save_dest_commit_runtime::save_dest_reset(reason, SAVE_JOB_OBSERVER)
+}
+
+fn save_dest_verify_and_disarm(
+    context: &str,
+) -> Option<crate::save_dest_commit_runtime::SaveDestVerdict> {
+    crate::save_dest_commit_runtime::save_dest_verify_and_disarm(context, SAVE_JOB_OBSERVER)
+}
+
 fn save_flow_next_stage_ticks(dialog_open: bool, counter: &AtomicUsize) -> usize {
     if dialog_open {
         SAVE_PICKER_OS_TICKS_FROZEN.fetch_add(1, Ordering::SeqCst);
@@ -155,7 +300,7 @@ fn save_flow_enter_stage(stage: usize, reason: &str) {
 /// Per-frame save-flow driver. Called from the game task immediately after
 /// `system_quit_save_game_deferred_close_tick`, so the frame the deferred IngameTop
 /// close drains is the same frame stage 6 observes "menus closed".
-pub(crate) unsafe fn save_flow_tick() {
+pub unsafe fn save_flow_tick() {
     let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
     if stage == SAVE_FLOW_STAGE_IDLE {
         // Deferred TEARDOWN sweep. A commit window is never taken out from under an executing
@@ -368,15 +513,15 @@ unsafe fn save_flow_dest_browse_tick(ticks: usize) {
                     SAVE_FLOW_ABORT_COUNT.fetch_add(1, Ordering::SeqCst);
                     save_flow_box_clear();
                     save_dest_reset("destination picker dismissed");
-                    #[cfg(feature = "quit-rows")]
                     if !os_surface
                         && SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0
                         && let Ok(base) = game_module_base()
                     {
                         unsafe {
-                            system_quit_restore_real_system_windows(
+                            crate::system_windows::restore_real_system_windows(
                                 base,
                                 "dest-picker-dismissed-return-to-source-menu",
+                                &crate::system_windows::SystemWindowHooks::NONE,
                             )
                         };
                     }
@@ -607,7 +752,7 @@ unsafe fn save_flow_fire_gate_tick(ticks: usize) {
     let gates_green =
         dsm == 0 && b80 == 0 && bc4 != GAME_MAN_RETURN_TITLE_JOB_PREDICATE_READY as i32;
     if gates_green {
-        // DESTINATION COMMIT (save-game-flow WP3). DECIDE FIRST, WRITE LAST (2026-07-29): the plan
+        // Destination commit (save-game-flow WP3). Decide first, write last (2026-07-29): the plan
         // below performs no I/O on the destination, so every refusal -- an unprovable identity, a
         // missing writer observer, a token already pending -- happens while the user's chosen file
         // is still untouched. The seed, which is the first byte this flow writes anywhere, is only
@@ -1383,7 +1528,7 @@ mod save_flow_deadline_tests {
     /// and `SAVE_FLOW_STAGE_TICKS` is frozen for the dialog's own lifetime, so only that gap counts.
     const REOPEN_GAP_TICKS: usize = 3;
 
-    /// THE REOPEN LOOP, REPRODUCED (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
+    /// The reopen loop, reproduced (bd `er-effects-rs-rsxi`, measured 2026-07-30 on
     /// `surface=save-as`: Opened -> `result=cancelled` -> opened again 57 ms later, over and over,
     /// each cancel logging "nothing staged" while the next pump re-asked).
     ///
@@ -1415,7 +1560,7 @@ mod save_flow_deadline_tests {
                     }
                 }
                 ticks += REOPEN_GAP_TICKS;
-                // SAVE-FLOW TICK: no dialog is up by now, nothing is committed or confirmed.
+                // Save-flow TICK: no dialog is up by now, nothing is committed or confirmed.
                 match dest_browse_verdict(false, false, false, false, false, armed, ticks) {
                     DestBrowseAction::WaitForUser => continue,
                     DestBrowseAction::Abandoned | DestBrowseAction::OpenTimeout => return shown,
@@ -1533,4 +1678,49 @@ mod save_flow_deadline_tests {
             );
         }
     }
+}
+
+/// Register the `FrameBegin` task that advances the Save Game flow's stage machine.
+///
+/// The press only latches a request; `save_flow_tick` is what opens the browser's window, watches
+/// the commit and times the flow out. The product drives it from its own recurring task, so this is
+/// for a host that has none: on run br-20260912-194149-11e9 the standalone shell parked in the
+/// browse stage forever and every later press read the stage as busy, because nothing ticked.
+///
+/// Latched once per process. A second registration would put two recurring tasks on one stage
+/// machine, which double-counts every tick budget it keeps.
+pub fn install_save_flow_game_task() -> bool {
+    static TASK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    if TASK_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return true;
+    }
+    use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
+    use eldenring::fd4::FD4TaskData;
+    use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+
+    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+    else {
+        append_autoload_debug(format_args!(
+            "save-flow: CSTaskImp never resolved; the Save Game row would latch a request nothing advances"
+        ));
+        TASK_INSTALLED.store(0, Ordering::SeqCst);
+        return false;
+    };
+    let handle = task.run_recurring(
+        move |_data: &FD4TaskData| {
+            // Safety: the game task thread, which is the context the stage machine requires; every
+            // step inside it returns immediately unless a press latched a request.
+            unsafe { save_flow_tick() };
+        },
+        CSTaskGroupIndex::FrameBegin,
+    );
+    // The handle cancels the task on drop, and the task must outlive the bootstrap thread.
+    std::mem::forget(handle);
+    append_autoload_debug(format_args!(
+        "save-flow: registered the FrameBegin task that advances the Save Game stage machine"
+    ));
+    true
 }

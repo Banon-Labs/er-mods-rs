@@ -268,6 +268,26 @@ fn row_actions() -> &'static QuitRowActions {
     ROW_ACTIONS.get().unwrap_or(&NONE)
 }
 
+/// Whether a host in this process owns what the Save Game row actually does.
+///
+/// The row's label, its line help and its confirm box are one promise -- `Save Game`, "Choose where
+/// to save", "Save and return to playing the game?" -- and the product substitutes all three onto
+/// the native first Quit row through `MsgRepository::GetAndFormat`. The promise holds only when a
+/// host also supplied `save_game_start_flow`, because without it [`system_quit_route_row_press`]
+/// forwards the press to the vanilla action, which saves and returns to the title screen.
+///
+/// The two halves disagreed on run br-20260912-185308-639d. `quit-rows` had come off the product's
+/// default features, so it no longer armed the row, but its text hook was still installed: the tab
+/// showed a button reading `Save Game`, the confirm asked whether to return to playing, and
+/// answering yes went to the title. The substitution asks this first so the text can never again
+/// describe a flow that is not there.
+///
+/// Statics are per DLL, so this answers for the module that calls it -- which is the module whose
+/// hook is about to rewrite the text, and therefore the one whose ownership is in question.
+pub fn save_game_flow_is_owned() -> bool {
+    row_actions().save_game_start_flow.is_some()
+}
+
 /// Forget the captured row table. Called when the Quit tab starts building a dialog so a rebuilt
 /// pane can never be resolved against another dialog's indices.
 pub fn system_quit_row_table_reset(dialog: usize) {

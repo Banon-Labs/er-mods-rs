@@ -43,7 +43,7 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_confirmed_hook(
         // game-task tick. See bd system-quit-load-profile-6runs-state-2026-07-01.
         let load_job_ctx = unsafe { safe_read_usize(dialog + 0x1cc8) }.unwrap_or(0);
         if dialog != 0 && dialog != TITLE_OWNER_SCAN_START_ADDRESS {
-            match game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+            match game_rva(er_title_flow::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
                 Ok(close_addr) => {
                     let close_fn: unsafe extern "system" fn(usize) =
                         unsafe { std::mem::transmute(close_addr) };

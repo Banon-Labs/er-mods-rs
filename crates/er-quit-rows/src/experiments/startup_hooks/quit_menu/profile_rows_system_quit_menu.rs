@@ -501,7 +501,7 @@ pub(crate) unsafe fn system_quit_submit_direct_return_title_chain(
     // safe to call from this menu-pump-owned path. Fire once. See bd
     // system-quit-loadjob-success-commits-phantom-load-2026-07-01.
     if SYSTEM_QUIT_QUICKLOAD_RETURN_TITLE_REQUEST_COUNT.load(Ordering::SeqCst) == 0 {
-        match game_rva(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) {
+        match game_rva(er_title_flow::SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) {
             Ok(req_addr) => {
                 let request_fn: unsafe extern "system" fn() =
                     unsafe { std::mem::transmute(req_addr) };

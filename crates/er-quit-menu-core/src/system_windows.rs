@@ -112,10 +112,19 @@ pub unsafe fn menu_window_set_visible_and_flags(
         ));
         return false;
     }
+    // The window arrives from a tracker stamped on an earlier frame, so by now it may have been
+    // freed -- and the next call is the game's own root-proxy constructor, which dereferences
+    // `window+0x188` with no validation of its own. A bare "is it heap-like" screen passes a freed
+    // block whose first qword happens to hold another heap pointer, and on run
+    // br-20260912-183117-e19a that is exactly what happened: the tracked `02_000_IngameTop`
+    // 0x1dc3d080 read vt=0 during the hide, was reused before the restore, and the ctor faulted
+    // reading 0x1dc3d208 (the window plus 0x188). A live MenuWindow's first qword is a vtable in
+    // the game image -- 0x142b00620 for IngameTop, 0x142b16b48 for OptionSetting, 0x142b25a78 for
+    // ProfileSelect, all measured on run br-20260912-034506-45db -- so that is the screen.
     let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
-    if window_vt < HEAP_LO {
+    if !er_game_base::mem::vtable_in_game_image(window_vt, base) {
         append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} invalid"
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} is not a game vtable, so this window is dead or was never one"
         ));
         return false;
     }

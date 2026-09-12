@@ -206,6 +206,7 @@ pub extern "system" fn er_quickload_loading_screen_data() -> usize {
 /// `flag` so only the first caller proceeds; (2) atomic single-target `MH_EnableHook` (no shared queue);
 /// (3) adopts `MH_ERROR_ALREADY_CREATED` and treats `MH_ERROR_ENABLED` as success. Rolls `flag` back to
 /// `not_installed` only on a real failure so a later tick retries. `addr` is the already-resolved target VA.
+#[allow(dead_code)] // The save-flow boxes that retried through it moved to `er-quit-menu-core`.
 pub(crate) fn mh_install_hook_once(
     flag: &AtomicUsize,
     not_installed: usize,

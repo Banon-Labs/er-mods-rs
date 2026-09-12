@@ -199,8 +199,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
         save_dest_start_dir: save_dest_start_dir_for_quit_menu,
         save_dest_set_target: crate::experiments::save_dest_set_target,
-        save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
-        save_flow_box_clear: crate::experiments::save_flow_box_clear,
+        // The two box seams that stood here are gone: their implementations moved into
+        // `er-quit-menu-core` with the flow, so the crate calls them directly. What replaced them is
+        // the pair the flow still cannot answer for itself -- the builder capture this DLL installs,
+        // and where this DLL redirects the game's save writer.
+        install_msgbox_builder_capture: crate::experiments::install_auto_accept_hook,
+        save_redirect_native_source_dir: crate::experiments::save_redirect_native_source_dir,
         // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:

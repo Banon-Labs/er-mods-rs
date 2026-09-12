@@ -54,6 +54,7 @@ pub use host::*;
 // S7 decision-core modules moved from the product DLL. Product callsites keep
 // stable shim names until the hooked surfaces move in S8.
 pub mod profile_rows;
+pub mod prologues;
 #[cfg(windows)]
 pub mod quit_dialog_layout;
 #[cfg(windows)]
@@ -62,7 +63,9 @@ pub mod row_text;
 pub mod rows;
 pub mod save_dest_commit;
 pub mod save_dest_identity;
+pub mod save_flow;
 pub mod save_flow_boxes;
+pub mod save_game_row;
 
 #[cfg(windows)]
 pub mod arm;
@@ -83,6 +86,7 @@ pub mod generate_build_link_row;
 pub mod gfx_swap;
 #[cfg(windows)]
 pub mod menu_pump;
+pub mod msg_text_ids;
 #[cfg(windows)]
 pub mod profile_load_dialog;
 /// Which fields of a `05_010_ProfileSelect` row are on screen, and whether the row is one of ours.

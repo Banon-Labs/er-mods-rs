@@ -5,8 +5,6 @@ use crate::*;
 use crate::{crashlog::*, telemetry::*};
 use eldenring::cs::PlayerIns;
 use er_telemetry_core::counters::PROFILE_STATS_PREVIEW_ROW_CURSOR;
-use er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING;
-use er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT;
 use er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE;
 use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_SWAP_POLL_TICK;
 use fromsoftware_shared::FromStatic;

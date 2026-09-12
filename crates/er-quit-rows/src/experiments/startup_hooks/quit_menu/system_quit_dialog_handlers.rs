@@ -287,7 +287,7 @@ pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &s
         ));
         return false;
     }
-    let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) else {
+    let Ok(close_addr) = game_rva(er_title_flow::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve native close rva 0x{SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA:x}; cannot close {label}=0x{window:x}"
         ));
@@ -577,7 +577,7 @@ pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
 /// rescues it -- unlike the GX transport band, whose 12 functions all move `+0x1e00` together and
 /// which is therefore anchored rather than refused.
 ///
-/// It is also the weakest-evidenced comparison in the tree. `SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA`
+/// It is also the weakest-evidenced comparison in the tree. `er_title_flow::SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA`
 /// (`0x67a3a0`) has exactly one direct caller in the whole 1.16.2 image, at `0x59d90e` inside
 /// `FUN_14059d8b0`, which is nowhere near this band; nothing records what the band was measured
 /// from. So the honest treatment is to decline on any build it was not measured on and say so,

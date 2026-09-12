@@ -457,6 +457,15 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
                 "pab-run-post: PAB detour (deterministic 0x7ad1c0 winner) drove system_quit_menu_window_run_post #{n}"
             ));
         }
+        // The Save Game row's destination browser, on every build. It used to be one block inside
+        // `run_post`, which is `quit-rows` only, so a build without the cloned rows staged a browser
+        // request that nothing consumed and the row read as a no-op (run br-20260912-190345-54bb).
+        // Save Game is a vanilla row and its browser is not one of the cloned rows, so its pump runs
+        // here, unconditionally, and `run_post` no longer carries a second copy.
+        #[cfg(feature = "save-game-row")]
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            er_quit_menu_core::save_picker_menu::save_flow_menu_pump()
+        }));
         #[cfg(feature = "quit-rows")]
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             crate::experiments::startup_hooks::system_quit_menu_window_run_post(step, ret)
