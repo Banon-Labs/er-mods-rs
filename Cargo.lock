@@ -3021,15 +3021,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-loading-bar"
-version = "0.1.0"
-dependencies = [
- "er-d3d12-compositor",
- "er-game-base",
- "er-loading-bar-core",
-]
-
-[[package]]
 name = "er-loading-bar-core"
 version = "0.1.0"
 

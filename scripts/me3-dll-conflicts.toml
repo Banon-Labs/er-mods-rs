@@ -305,15 +305,6 @@ the standalone shell installs a second compositor over the same swapchain. The s
 header states it must NEVER be loaded alongside er_quickload.dll."""
 evidence = "crates/er-loading-portrait/src/lib.rs:11"
 
-[[conflict]]
-a = "er-quickload"
-b = "er-loading-bar"
-kind = "present-compositor"
-reason = """Unconditionally installs a second Present compositor with a SYNTHETIC demo frame \
-provider, painting a fake loading bar over the product's real one. Same conflict class as the \
-portrait shell."""
-evidence = "crates/er-loading-bar/src/lib.rs:102"
-
 # RESOLVED 2026-09-12 by a build feature, not by a code fix, and this is where the pair used to
 # be declared a `duplicate-owner` conflict.
 #

@@ -1,7 +1,7 @@
 //! Standalone ME3-loadable loading-portrait DLL shell.
 //!
-//! This is deliberately separate from the product `er-quickload` DLL (same pattern as
-//! `er-loading-bar`): it proves the `er-loading-portrait-core` feature crate can be built
+//! This is deliberately separate from the product `er-quickload` DLL: it proves the
+//! `er-loading-portrait-core` feature crate can be built
 //! and loaded as its own native DLL without dragging product hooks, autoload, save
 //! picking, or product runtime state along. On attach it installs a standalone host seam
 //! (own log file, portrait gates on, everything else neutral), the crate's now-loading

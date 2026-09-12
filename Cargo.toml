@@ -81,7 +81,6 @@ members = [
   "crates/er-boot-background",
   "crates/er-loading-bar-core",
   "crates/er-d3d12-compositor",
-  "crates/er-loading-bar",
   "crates/er-loading-portrait-core",
   "crates/er-loading-portrait",
   # The loading cover's one-way release fade at the D3D12 level: its command objects, its root
