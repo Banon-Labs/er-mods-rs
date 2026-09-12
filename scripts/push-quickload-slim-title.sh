@@ -13,8 +13,15 @@
 # `main` is never named here. The two refs are literal.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# The base ref is a fast-forward of someone else's branch onto commits that fix its checks, so it
+# is pushed only while it is actually behind. Once the remote already has it, naming a bare commit
+# object again fails with "you must fully qualify the ref" -- git cannot infer a branch from a sha
+# for a ref that now exists.
 base_fix="${1:-b8ca9b8c}"
-git push -u origin \
-	"${base_fix}:feat/quit-menu-character-rows" \
-	fix/quickload-vanilla-title-after-boot
+remote_base="$(git rev-parse --verify --quiet "origin/feat/quit-menu-character-rows" || true)"
+refspecs=(fix/quickload-vanilla-title-after-boot)
+if [[ "$remote_base" != "$(git rev-parse --verify "$base_fix")" ]]; then
+	refspecs=("${base_fix}:refs/heads/feat/quit-menu-character-rows" "${refspecs[@]}")
+fi
+git push -u origin "${refspecs[@]}"
 echo "PUSH-SEQUENCE-DONE"
