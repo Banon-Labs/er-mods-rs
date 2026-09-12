@@ -139,10 +139,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         // `own_stepper_passive_enabled()`, only ever returned a literal `false`, so idx10 has
         // always forced the menu below. Branch and gate are both deleted, with the other
         // unreachable load-mechanism experiments (input probe, inject-nav, direct build).
-        let (bare, bare_tree) = if live_dialog_enabled() {
-            (None, None)
-        } else {
-            (
+        let (bare, bare_tree) = (
                 unsafe { diagnostic_menu_walk($owner, $base, "bare", true) },
                 unsafe {
                     diagnostic_job_tree_walk(
@@ -153,8 +150,7 @@ macro_rules! own_stepper_idx10_fallbacks {
                         true,
                     )
                 },
-            )
-        };
+        );
         // Stage 1c: build the full main menu by replicating the engine's own press path.
         // The parked press-any-button screen is the first state 10; the native press handler
         // 0x140b0b6b0 issues SetState($owner,2)=BeginLogo, after which the native pump advances
@@ -289,8 +285,7 @@ macro_rules! own_stepper_idx10_fallbacks {
         // The `!own_stepper_passive_enabled() && !input_probe_enabled() &&` terms that opened this
         // condition were both permanently `false`, so both negations were permanently `true`. Both
         // gates are deleted.
-        if !live_dialog_enabled()
-            && MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
+        if MENU_LOAD_GAME_ITEM.load(Ordering::SeqCst) == TITLE_OWNER_SCAN_START_ADDRESS
             && unsafe { title_scheduler_ready($owner, $base) }
         {
             // Walk the candidate roots; on the first functor->dialog_factory hit (= the Load-Game

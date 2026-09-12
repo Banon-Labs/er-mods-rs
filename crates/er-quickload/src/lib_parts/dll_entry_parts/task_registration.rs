@@ -330,10 +330,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             force_dismiss_startup_dialog();
                         }
                     }
-                    // Observe the natural flow past the modal: tap Confirm (game's own input).
-                    if auto_confirm_enabled() {
-                        auto_confirm_tap();
-                    }
                     if let Ok(base) = game_module_base() {
                         unsafe { profile_editor_necromancy_tick(base) };
                     }
@@ -417,50 +413,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     if own_stepper_enabled() || native_continue_enabled() || own_load_enabled() {
                         if let Ok(base) = game_module_base() {
                             unsafe { own_stepper_patch_once(base) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Read-only: log the native autoload-arm preconditions
-                    // (especially [slotmgr+0x8]) to decide the zero-input path.
-                    if arm_probe_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe { arm_precondition_probe(base, state.game_task_ticks) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Lever 2: zero-input title-accept via input-event injection
-                    // (staged probe -> fill -> inject) to bootstrap the front-end.
-                    if title_accept_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe {
-                                title_accept_tick(
-                                    base,
-                                    state.game_task_ticks,
-                                    title_accept_inject_enabled(),
-                                )
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Per-frame native arm: re-set the slot each frame + latch so
-                    // the save-mgr update can arm before the title resets the slot.
-                    if native_arm_loop_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe { native_arm_loop_tick(base, slot, state.game_task_ticks) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Recipe Option 1 (flagless): drive the genuine offline
-                    // continue (MoveMapList dispatcher + b73) to load the real slot.
-                    if continue_drive_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe { continue_drive_tick(base, slot, state.game_task_ticks) };
                         }
                         write_telemetry_throttled(&mut state, false);
                         return;

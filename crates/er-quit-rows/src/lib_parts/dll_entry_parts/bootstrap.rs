@@ -343,11 +343,13 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .call_once(|| er_boot_profiler::spawn_boot_profiler(append_autoload_debug));
     }
 
-    // Install the crash/exit logger first so it can observe an exit or access
-    // violation from any later subsystem. Opt-in; off by default.
-    if crash_logger_enabled() {
-        install_crash_logger();
-    }
+    // First, so it can observe an exit or access violation from any later subsystem. It has been
+    // unconditional since the day a self-enabling sentinel meant the first crash of a clean install
+    // went unlogged; the gate that said so was a `-> bool { true }` and is deleted. The handler
+    // writes a record and then leaves the exception for the game's own handlers
+    // (`VECTORED_FIRST_HANDLER` + `EXCEPTION_CONTINUE_SEARCH`), so installing it always changes no
+    // game behaviour -- `deliberate_fail_fast_enabled()` stays the separate explicit opt-in.
+    install_crash_logger();
 
     // Save-source enforcement / default FALLBACK.
     // Explicit ER_QUICKLOAD_SAVE_FILE / er-quickload.toml save_file sources install the scoped Win32

@@ -50,8 +50,6 @@ pub(crate) const PE_SECTION_SCAN_START: usize = 0;
 /// Current-process pseudo-handle (-1) for FlushInstructionCache, + whole-process flush size.
 pub(crate) const ER_CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 pub(crate) const FLUSH_WHOLE_PROCESS_SIZE: usize = 0;
-/// Zero fill for synthetic qword scratch buffers.
-pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
 /// default mode, deliberately crashes via a null write at 0x141eb9999). Hooking
 /// it captures the failing assertion's expr/message/file (its rcx/rdx/r8 are

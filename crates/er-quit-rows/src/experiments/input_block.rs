@@ -493,18 +493,6 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
     }
 }
 
-/// Stay-active gate (`ER_QUICKLOAD_STAY_ACTIVE=1` / `er-quickload-stay-active.txt`). When set, keep ER's
-/// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
-/// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
-/// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
-/// it. Touches only focus-input gating, never the sim/save/load.
-/// De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
-/// flag `[DLUID+0x88d]` while unfocused -- a diagnostic golden-capture convenience gated by
-/// env/marker. Env/marker feature gates are forbidden; retired (permanently off).
-pub(crate) fn stay_active_enabled() -> bool {
-    false
-}
-
 /// True only while the harness is actively injecting input this frame -- the can-move probe's on burst
 /// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
 /// (`sq_repro_actively_driving`). This is the only window in which the product may fabricate a device or

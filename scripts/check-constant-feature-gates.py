@@ -11,9 +11,9 @@ features...delete the feature!!!!! ... I never want to see it again".
 
 # What this refuses
 
-A function whose name ends in `_enabled` or `_armed` and whose whole body is the literal `true`
-or `false`. That shape says "this is a decision" while making no decision, and it is how a
-deleted feature keeps its call sites, its constants and its telemetry alive in the tree.
+A function whose name ends in `_enabled` and whose whole body is the literal `true` or `false`.
+That shape says "this is a decision" while making no decision, and it is how a deleted feature
+keeps its call sites, its constants and its telemetry alive in the tree.
 
 Two things it deliberately leaves alone, because they are different patterns wearing similar
 clothes:
@@ -24,7 +24,10 @@ clothes:
 * a `#[cfg]`-selected stub (`keyboard_edge` on a non-windows build). The constant is one arm of a
   real choice the compiler makes.
 
-Neither ends in `_enabled`/`_armed`, so the name rule separates them without an allowlist.
+`_armed` was in the rule for one revision and came out: `quit_rows_armed` is a documented
+`pub const fn` whose value is handed to three callers rather than used to guard anything, and its
+doc says why it has a home instead of being a literal at each install site. A named constant is
+not a dead branch. `_enabled` is the suffix this repo actually spells its feature gates with.
 
 # The ratchet
 
@@ -57,10 +60,14 @@ CONSTANT_BOOL_FN = re.compile(
 )
 
 # The names that claim to be a decision. A seam default is spelled `default_*` and is not one.
-GATE_SUFFIXES = ("_enabled", "_armed")
+GATE_SUFFIXES = ("_enabled",)
 
-# Non-vacuity floors: a scan that suddenly reads no files has broken, not passed.
+# Non-vacuity floors: a scan that suddenly reads no files has broken, not passed. The second floor
+# is what keeps the selftest honest now that the tracked population is zero -- the regex must still
+# match the constant-bool functions the name rule is what excludes (host-seam defaults, cfg stubs),
+# or "no gates found" would pass on a broken matcher.
 MIN_SOURCE_FILES = 400
+MIN_EXCLUDED_CONSTANT_FNS = 30
 
 
 def is_gate_name(name: str) -> bool:
@@ -149,7 +156,7 @@ def selftest() -> int:
 
     fixture = {
         "a.rs": "pub(crate) fn thing_enabled() -> bool {\n    false\n}\n",
-        "b.rs": "fn other_armed() -> bool { true }\n",
+        "b.rs": "fn other_enabled() -> bool { true }\n",
         "c.rs": "fn default_gate_off() -> bool {\n    false\n}\n",
         "d.rs": "fn keyboard_edge() -> bool {\n    false\n}\n",
         "e.rs": "fn real_enabled() -> bool {\n    !disabled() && ready()\n}\n",
@@ -165,7 +172,7 @@ def selftest() -> int:
         found = scan(tmp, sources=sorted(fixture))
 
     check("a bare `false` gate is caught", found.get("a.rs"), ["thing_enabled"])
-    check("an `_armed` gate on one line is caught", found.get("b.rs"), ["other_armed"])
+    check("a gate on one line is caught", found.get("b.rs"), ["other_enabled"])
     check("a host-seam default is not a gate", "c.rs" in found, False)
     check("a cfg stub is not a gate", "d.rs" in found, False)
     check("a gate with a real body is not caught", "e.rs" in found, False)
@@ -191,10 +198,24 @@ def selftest() -> int:
         len(sources) >= MIN_SOURCE_FILES,
         True,
     )
-    # And the rule must still separate the two populations in the live tree, or the name rule has
-    # stopped doing any work.
+    # The live tree is at zero, which is the goal -- so "the scan found something" cannot be the
+    # non-vacuity check any more. What still has to hold is that the regex matches real code and the
+    # name rule is what excludes it: run the same matcher over the tree with the suffix filter off
+    # and it must find the seam defaults and cfg stubs that are legitimately constant.
     live = scan()
-    check("the live tree has gates the baseline tracks", bool(live), True)
+    check("the live tree has no constant-valued gate left", live, {})
+    relaxed = 0
+    for rel in sources:
+        try:
+            with open(os.path.join(ROOT, rel), encoding="utf-8", errors="replace") as handle:
+                relaxed += len(CONSTANT_BOOL_FN.findall(handle.read()))
+        except OSError:
+            continue
+    check(
+        "...and the matcher still finds the constants the name rule excludes",
+        relaxed >= MIN_EXCLUDED_CONSTANT_FNS,
+        True,
+    )
 
     for failure in failures:
         print(f"check-constant-feature-gates selftest FAILED -- {failure}", file=sys.stderr)
@@ -202,7 +223,8 @@ def selftest() -> int:
         return 1
     print(
         f"check-constant-feature-gates selftest: OK (6 shape cases, 3 ratchet cases, "
-        f"{len(sources)} live sources, {sum(len(v) for v in live.values())} tracked gate(s))"
+        f"{len(sources)} live sources, {sum(len(v) for v in live.values())} tracked gate(s), "
+        f"{relaxed} constant-bool fn(s) correctly excluded by name)"
     )
     return 0
 

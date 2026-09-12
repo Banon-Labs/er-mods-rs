@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 43,444 |
+| all `experiments/**` | 80 | 43,189 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -143,13 +143,13 @@ somebody's in-flight edit.
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 885 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,719 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,295 | stale-RVA call-site closure |
-| `lifecycle/task_tick.rs` | 443 | dead-counter census |
-| `input_block.rs` | 1,652 | dead-counter census |
+| `lifecycle/task_tick.rs` | 410 | dead-counter census |
+| `input_block.rs` | 1,640 | dead-counter census |
 | `startup_hooks/diagnostics/system_quit_ownership_repro.rs` | 1,308 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,070 | stale-RVA call-site closure |
 | `own_stepper/bootstrap_drive.rs` | 997 | stale-RVA call-site closure |
-| `continue_load/slot_resolution.rs` | 969 | stale-RVA call-site closure |
-| `trace/menu_constructor_capture.rs` | 1,404 | stale-RVA call-site closure |
+| `continue_load/slot_resolution.rs` | 857 | stale-RVA call-site closure |
+| `trace/menu_constructor_capture.rs` | 1,402 | stale-RVA call-site closure |
 | `startup_hooks.rs` | 115 | dead-counter census |
 
 The rows sum to 477 against a net +476; one file elsewhere gave a line back.
@@ -246,28 +246,28 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `can_move_probe.rs` | 679 | product `STAY`: real-module conversion template | `STAY` |
 | `continue_load.rs` | 18 | product re-export facade | D5 |
 | `continue_load/product_continue.rs` | 834 | product continue/load policy | D5 |
-| `continue_load/slot_resolution.rs` | 969 | product slot-resolution policy | D5 and R14 |
+| `continue_load/slot_resolution.rs` | 857 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 487 | product gate policy | D1 |
-| `gating/runtime_modes.rs` | 114 | product runtime-mode policy | D1 |
+| `gating/runtime_modes.rs` | 60 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 30 | product GPU-readback facade | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,806 | loading-bar, boot-cover, and product adapter families | R4-R5 |
 | `gpu_readback/save_picker_overlay.rs` | 21 | product compatibility shim | R17 |
-| `input_block.rs` | 1,652 | product input ownership | `STAY` |
+| `input_block.rs` | 1,640 | product input ownership | `STAY` |
 | `input_trace.rs` | 934 | product diagnostic | D4 |
 | `lifecycle.rs` | 30 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 116 | product install ordering | `STAY` |
 | `lifecycle/save_flow.rs` | 1,536 | System>Quit save-flow implementation | R20 |
-| `lifecycle/task_tick.rs` | 443 | product recurring-task scheduling | `STAY` |
-| `lifecycle/title_visual_startup.rs` | 177 | product startup arming/order | R22 |
+| `lifecycle/task_tick.rs` | 410 | product recurring-task scheduling | `STAY` |
+| `lifecycle/title_visual_startup.rs` | 142 | product startup arming/order | R22 |
 | `mem.rs` | 67 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
 | `menu_diag/menu_observation.rs` | 779 | product menu observation | D4 |
 | `mod.rs` | 110 | experiments module root and compatibility exports | `STAY` |
 | `mod/own_stepper_idx6_memory.rs` | 9 | own-stepper memory family | D5 and R14 |
 | `mod/product_core_own_stepper.rs` | 555 | product core own-stepper | D5 |
-| `mod/product_core_own_stepper/fallback_drives.rs` | 674 | product fallback-drive diagnostic | D5 |
+| `mod/product_core_own_stepper/fallback_drives.rs` | 669 | product fallback-drive diagnostic | D5 |
 | `own_load.rs` | 12 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,719 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
@@ -276,7 +276,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/request_wait_guard.rs` | 270 | STEP_RequestWait session-end guard | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 997 | product bootstrap-drive policy | D5 |
-| `own_stepper/load_steps.rs` | 828 | product load-step policy | D5 |
+| `own_stepper/load_steps.rs` | 826 | product load-step policy | D5 |
 | `present_overlay.rs` | 1,048 | product present mechanism | R3 |
 | `save_picker.rs` | 3 | product save-picker compatibility shim | R17 |
 | `save_redirect.rs` | 9 | save-redirect facade | R32 |
@@ -320,7 +320,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/save_picker/save_picker_surface.rs` | 156 | picker surface routing adapter | R17-R18 |
 | `title.rs` | 5 | title facade | R22 |
 | `trace.rs` | 10 | trace facade | R6A-R6D and D4 |
-| `trace/menu_constructor_capture.rs` | 1,404 | menu constructor capture family | R6B and D4 |
+| `trace/menu_constructor_capture.rs` | 1,402 | menu constructor capture family | R6B and D4 |
 | `trace/menu_trace_hooks.rs` | 2,070 | title reload and menu trace families | R6C, R21, and D4 |
 | `trace/native_result_map_hooks.rs` | 826 | native result-map hook family | R6A and D4 |
 

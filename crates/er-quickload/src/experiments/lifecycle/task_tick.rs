@@ -407,37 +407,4 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     {
         unsafe { install_sw_breakpoints_once(base) };
     }
-    // Stay-ACTIVE: force ER's input-accept flag so a virtual gamepad keeps driving the
-    // menus while ER is UNFOCUSED (user can work elsewhere during a golden capture). ER
-    // clears [DLUID+0x88d] each frame when it isn't GetActiveWindow; re-set it to 1.
-    if stay_active_enabled()
-        && let Ok(base) = game_module_base()
-    {
-        // DLUID (input-device-manager) singleton VA 0x14485dc18.
-        const DLUID_SINGLETON_RVA: usize = RuntimeGlobalRva::DluidInputManager as usize;
-        #[repr(C)]
-        struct DluidInputManagerLayout {
-            unknown_000: [u8; 0x88d],
-            input_active: u8,
-        }
-        const DLUID_INPUT_ACTIVE_FLAG_OFFSET: usize =
-            core::mem::offset_of!(DluidInputManagerLayout, input_active);
-        const INPUT_ACTIVE: u8 = true as u8;
-        const NULL_DLUID: usize = NULL_MODULE_BASE;
-        let dluid = unsafe {
-            safe_read_usize(er_game_base::mem::game_data_addr(
-                base,
-                DLUID_SINGLETON_RVA,
-                "DLUID_SINGLETON_RVA",
-            ))
-        }
-        .unwrap_or(NULL_DLUID);
-        // Defensive: only write once the flag byte is confirmed readable (so a
-        // not-yet-initialized or bad singleton ptr can never fault the game thread).
-        if dluid != NULL_DLUID
-            && unsafe { safe_read_usize(dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) }.is_some()
-        {
-            unsafe { *((dluid + DLUID_INPUT_ACTIVE_FLAG_OFFSET) as *mut u8) = INPUT_ACTIVE };
-        }
-    }
 }

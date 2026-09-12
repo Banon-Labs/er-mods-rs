@@ -131,41 +131,6 @@ pub(crate) const INGAMEINIT_MAP_PARSER_RVA: usize = 0x71fd60;
 pub(crate) const DEFAULT_MAP_STRING_RVA: usize = 0x2b62c70;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const INGAMEINIT_SYNTHETIC_QWORDS: usize = 0x40;
-/// Genuine offline continue drive (recipe Option 1). The MoveMapList save-load
-/// dispatcher 0x140afb880 (clean entry; its Arxan-scrambled body cross-jumps to
-/// the offline-continue deserialize 0x14067b290 at 0x140afbc3e). With GameMan
-/// b73 set it selects current_slot_load 0x67b570 (begin), then drives the async
-/// task (GameMan+0xb80 1->2->3) and synchronously deserializes the real slot
-/// character, also building the world singletons. owner is rbx; owner+0x12c =
-/// slot. Done when GameMan+0x10 == 1. Never writes 0x143d856a0.
-pub(crate) const MOVEMAP_DISPATCHER_RVA: usize = 0xafb880;
-pub(crate) const GAME_MAN_B73_FLAG_OFFSET: usize = GAME_MAN_FLAG_B73_PROBE_OFFSET;
-pub(crate) const GAME_MAN_B73_FLAG_SET: u8 = true as u8;
-pub(crate) const GAME_MAN_REAL_LOAD_DONE_OFFSET: usize =
-    core::mem::offset_of!(GameMan, warp_requested);
-pub(crate) const GAME_MAN_REAL_LOAD_DONE_VALUE: i32 = true as i32;
-#[repr(C)]
-pub(crate) struct ContinueOwnerLayout {
-    pub(crate) storage: [usize; 0x40],
-}
-
-#[repr(C)]
-pub(crate) struct ContinueOwnerFields {
-    pub(crate) unknown_000: [u8; 0x12a],
-    pub(crate) flag_12a: u8,
-    pub(crate) unknown_12b: u8,
-    pub(crate) slot: i32,
-}
-
-pub(crate) const CONTINUE_OWNER_SLOT_OFFSET: usize =
-    core::mem::offset_of!(ContinueOwnerFields, slot);
-pub(crate) const CONTINUE_OWNER_FLAG_12A_OFFSET: usize =
-    core::mem::offset_of!(ContinueOwnerFields, flag_12a);
-pub(crate) const CONTINUE_OWNER_FLAG_12A_VALUE: u8 = false as u8;
-pub(crate) const CONTINUE_OWNER_QWORDS: usize =
-    core::mem::size_of::<ContinueOwnerLayout>() / core::mem::size_of::<usize>();
-pub(crate) const CONTINUE_DRIVE_MIN_TICK: u64 = 120;
-pub(crate) const CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS: u64 = u64::MIN;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const FORCE_PLAY_GAME_GM_PAIR_GATE_B28_OFFSET: usize = 0xb28;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
@@ -467,15 +432,6 @@ pub(crate) static INGAMESTEP_PUMP_LAST_NEXT: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(INGAMESTEP_PUMP_D8_UNOBSERVED);
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static INGAMESTEP_UNPIN_DONE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-pub(crate) static CONTINUE_OWNER_PTR: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub(crate) const CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET: u64 = 0;
-pub(crate) static CONTINUE_DRIVE_GM_FIRST_SEEN_TICK: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET);
-pub(crate) static CONTINUE_DRIVE_FIRST_ATTEMPT_LOGGED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-pub(crate) static CONTINUE_DRIVE_BEGUN: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 pub(crate) static ORIGINAL_EXIT_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) static ORIGINAL_TERMINATE_PROCESS: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
