@@ -1588,8 +1588,17 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
     // not, so this asks the object instead of trusting a callback to fire.
     let editor_window = SAVE_PICKER_PATH_EDITOR_WINDOW.load(Ordering::SeqCst);
     let editor_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
+    // An accept closes the window too, so window-gone is not by itself a cancel. The controller's
+    // own result code says which it was, and it is set before the terminal callback runs: on run
+    // br-20260912-220944-7f50 pressing Enter on `Z:\home` produced `cancel consumed; directory
+    // remains 'C:\users\...'` one line BEFORE `native editor accepted text="Z:\home"`, because
+    // this edge fired first, deposited `Cancelled`, and the pump drained the mailbox before the
+    // real outcome could reach it. The player pressed Enter on a valid path and went nowhere.
+    let native_accepted =
+        unsafe { software_keyboard_result_state(editor_job) } == Some(MENU_JOB_STATE_SUCCESS);
     if editor_job != 0
         && editor_window != 0
+        && !native_accepted
         && !path_editor_window_is_live(editor_window)
         && SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB
             .compare_exchange(editor_job, 0, Ordering::SeqCst, Ordering::SeqCst)

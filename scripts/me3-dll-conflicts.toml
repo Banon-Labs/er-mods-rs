@@ -524,6 +524,19 @@ second cloner in the process, and because each cdylib links its own `er-quit-men
 cannot share a row table -- see the [[conflict]] pair for the measured result (a six-cell grid \
 holding ten items and every press ambiguous). Kept as a shell for a profile that wants the two \
 character rows and nothing else: `--with er-quit-load-character`, without `er-quit-menu`."""
+"er-input-harness" = """Writes the game's input memory every frame by mere presence -- no env \
+var, no marker file, that is its contract. While it is loaded the player is not driving the \
+session, and the agent cannot tell its own writes from theirs, so any run used to observe a \
+user's input is invalid evidence.
+
+It already carries [[conflict]] pairs against `er-quickload` and `er-quit-rows`, and those were \
+not enough: a run that excludes both -- which every standalone-shell run does -- leaves nothing \
+to rank, so the dependency closure loaded it anyway. That is the same hole `er-loading-bar` came \
+through, and the same answer. Classifying it here is the fix, because a conflict pair can only \
+fire when the other side is present and this DLL is unwanted on its own.
+
+Load it only when the agent is driving the menus on purpose: `--with er-input-harness`."""
+
 "mushroom-man-runtime" = """Replaces a protector's param rows so the character wears the mushroom \
 head -- a VISIBLE costume change on whatever character the run loads. Harmless to the process \
 and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
