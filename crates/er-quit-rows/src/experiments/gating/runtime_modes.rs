@@ -47,26 +47,6 @@ pub(crate) fn title_anim_speedup_enabled() -> bool {
     title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
 }
 
-/// Default-on product 05_000_title asset strip (er-effects-rs-dl0, runtime-derived since
-/// er-effects-rs-h7x): at Scaleform file-open the hook reads the vanilla movie payload out of the
-/// native MemoryFile the game's own FileOpener returns and applies
-/// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
-/// to the formerly-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input -- so
-/// press any button / the Continue menu text / the copyright footer never build or animate. The
-/// per-element hide hooks stay installed as defense-in-depth, but the served movie carries no
-/// visual placements. End-to-end prior proof with the (identical) stripped movie live: runtime
-/// artifact `title-05-000-native-ui-stripped-recorded-latest` reached event T_controllable
-/// (+21.9s) with the PressStart proxy still bindable (dialog+0xb78 readiness gate satisfied).
-/// Gated like `native_continue_enabled` (no new opt-in gate; splash-skip de-gating precedent):
-/// off for no-autoload / telemetry-only runs, so a pure observe run never
-/// mutates visual resources. `ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX` remains the explicit override:
-/// a path replaces the default asset; `embedded:title-05-000-suppressed` arms the same runtime
-/// derivation; the literal `vanilla`/`off`/`0` forces the native on-disk movie while autoload
-/// stays on (handled in `load_title_scaleform_memory_gfx`).
-pub(crate) fn title_05_000_strip_default_enabled() -> bool {
-    !(autoload_disabled() || save_override_telemetry_only())
-}
-
 /// Passive, epilogue-neutral observer for native Scaleform menu-resource acquisition. This is
 /// intentionally separate from the title-cover/hide bundle: resource/memory-GFX proof needs the
 /// replaced `05_001_Title_Logo` visible, not hidden by TitleBackViewParts suppression hooks.

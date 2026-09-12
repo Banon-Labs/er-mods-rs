@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 80 | 43,633 |
+| all `experiments/**` | 80 | 43,444 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -140,7 +140,7 @@ somebody's in-flight edit.
 | `startup_hooks/save_picker/save_picker_menu.rs` | 81 | dead-counter census |
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,063 | dead-counter census |
 | `own_load/loaders/switch_reload.rs` | 772 | stale-RVA call-site closure |
-| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 909 | stale-RVA call-site closure |
+| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 885 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,719 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,295 | stale-RVA call-site closure |
 | `lifecycle/task_tick.rs` | 443 | dead-counter census |
@@ -249,7 +249,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `continue_load/slot_resolution.rs` | 969 | product slot-resolution policy | D5 and R14 |
 | `gating.rs` | 9 | product re-export facade | D1 |
 | `gating/env_flags.rs` | 487 | product gate policy | D1 |
-| `gating/runtime_modes.rs` | 152 | product runtime-mode policy | D1 |
+| `gating/runtime_modes.rs` | 114 | product runtime-mode policy | D1 |
 | `gpu_frame_timing.rs` | 425 | product diagnostic | `STAY` |
 | `gpu_readback.rs` | 30 | product GPU-readback facade | R4-R5 |
 | `gpu_readback/boot_progress.rs` | 2,806 | loading-bar, boot-cover, and product adapter families | R4-R5 |
@@ -288,11 +288,11 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/loading_cover_save_slot.rs` | 1,063 | save parsing, portrait, quit, telemetry, and product adapter families | R14-R18 |
 | `startup_hooks/loading_cover/mod.rs` | 79 | loading-cover module facade | R15-R16 |
 | `startup_hooks/loading_cover/portrait_equip_oracle.rs` | 10 | portrait oracle family | R16 |
-| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 1,092 | Scaleform resource and profile-table families | D2 and R24 |
+| `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 966 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,295 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,112 | Scaleform resource, title, and product families | R22 and R24 |
-| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 909 | title message-box and Scaleform families | R22 and R24 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,111 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 885 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_backdrop.rs` | 4 | product re-export facade: moved to `er_quit_menu_core::build_url_backdrop` with the link field it attests | R18 |
 | `startup_hooks/quit_menu/build_url_editor.rs` | 8 | System>Quit link field: submit, validate on accept, re-open on refusal | R18 |

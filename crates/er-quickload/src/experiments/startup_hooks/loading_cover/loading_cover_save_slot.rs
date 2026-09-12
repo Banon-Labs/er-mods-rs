@@ -541,7 +541,7 @@ pub(crate) unsafe fn kick_target_profile_slot(
         let inner = record + PROFILE_SUMMARY_FACE_DATA_OFFSET + FACE_DATA_BUFFER_OFFSET;
         let bytes =
             unsafe { core::slice::from_raw_parts(inner as *const u8, FACE_DATA_BUFFER_TOTAL_SIZE) };
-        let got = er_gfx::title_05_000::fnv1a64(bytes) as usize;
+        let got = er_gfx::fnv1a64(bytes) as usize;
         if got != expected_face {
             let n = PORTRAIT_FACE_IDENTITY_MISMATCHES.fetch_add(1, Ordering::SeqCst) + 1;
             append_autoload_debug(format_args!(

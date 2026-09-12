@@ -313,118 +313,6 @@ pub(crate) unsafe extern "system" fn title_menu_resource_acquire_observer_hook(
     ret
 }
 
-/// Product-default 05_000_title strip without embedded bytes (er-effects-rs-h7x). `file` is what
-/// the native FileOpener just returned for `data0:/menu/05_000_title.gfx`; per the rescap static
-/// RE (`FUN_140ce8320`, bd `native-memoryfile-wrapper-expects-gfx-rescap-2026-06-28`) that is a
-/// Scaleform MemoryFile whose data/len fields point at the vanilla movie payload owned by
-/// `GLOBAL_GfxRepository` (the file object never frees the payload -- the proven synthetic
-/// construct path already relied on that). Derive the stripped movie from that payload with
-/// `er_gfx::title_05_000::strip` (all-or-nothing content-addressed edits, output verified against
-/// the validated-asset fingerprint for the known vanilla input), cache it for the process
-/// lifetime, and swap the native file's data/len/cursor onto the cached buffer. Any failure
-/// leaves the native file untouched and returns it as-is: fail-closed to the vanilla title UI,
-/// never a crash, never a half-stripped movie.
-// Its call site in the file-open observer is commented out pending the delete pass.
-#[allow(dead_code)]
-pub(crate) unsafe fn title_05_000_swap_to_stripped(base: usize, file: usize) -> bool {
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if file == 0 || file == null || file == HOOK_ORIGINAL_UNSET {
-        return false;
-    }
-    let fail = |reason: core::fmt::Arguments<'_>| {
-        TITLE_05_000_RUNTIME_STRIP_FAILURES.fetch_add(1, Ordering::SeqCst);
-        append_autoload_debug(format_args!(
-            "title-resource-observer: 05_000 runtime strip FAIL-CLOSED (serving native vanilla): {reason}"
-        ));
-        false
-    };
-    let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    if vtable
-        != er_game_base::mem::game_data_addr(
-            base,
-            SCALEFORM_MEMORY_FILE_VTABLE_RVA,
-            "SCALEFORM_MEMORY_FILE_VTABLE_RVA",
-        )
-    {
-        return fail(format_args!(
-            "unexpected file vtable 0x{vtable:x} (want MemoryFile 0x{:x})",
-            er_game_base::mem::game_data_addr(
-                base,
-                SCALEFORM_MEMORY_FILE_VTABLE_RVA,
-                "SCALEFORM_MEMORY_FILE_VTABLE_RVA"
-            )
-        ));
-    }
-    let stripped = match TITLE_05_000_RUNTIME_STRIPPED.get() {
-        Some(cached) => cached,
-        None => {
-            let data =
-                unsafe { safe_read_usize(file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) }.unwrap_or(0);
-            let len =
-                unsafe { safe_read_i32(file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) }.unwrap_or(0);
-            if data == 0 || data == null || !(64..=0x0100_0000).contains(&len) {
-                return fail(format_args!(
-                    "implausible payload data=0x{data:x} len={len}"
-                ));
-            }
-            let len = len as usize;
-            // Probe both ends through the guarded reader before the bulk copy; the payload is one
-            // contiguous repository allocation, so readable ends imply a readable middle.
-            let magic_ok = unsafe { safe_read_u8(data) } == Some(b'G')
-                && unsafe { safe_read_u8(data + 1) } == Some(b'F')
-                && unsafe { safe_read_u8(data + 2) } == Some(b'X')
-                && unsafe { safe_read_u8(data + len - 1) }.is_some();
-            if !magic_ok {
-                return fail(format_args!(
-                    "payload at 0x{data:x} len={len} is unreadable or not GFX-magic"
-                ));
-            }
-            let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
-            TITLE_05_000_RUNTIME_STRIP_INPUT_LEN.store(len, Ordering::SeqCst);
-            let known = er_gfx::title_05_000::is_known_vanilla(vanilla);
-            TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS
-                .store(if known { 1 } else { 2 }, Ordering::SeqCst);
-            match er_gfx::title_05_000::strip(vanilla) {
-                Ok(out) => {
-                    TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.store(out.len(), Ordering::SeqCst);
-                    let validated = out.len() == er_gfx::title_05_000::STRIPPED_LEN
-                        && er_gfx::title_05_000::fnv1a64(&out)
-                            == er_gfx::title_05_000::STRIPPED_FNV1A64;
-                    TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED
-                        .store(if validated { 1 } else { 2 }, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        "title-resource-observer: 05_000 runtime strip derived in={len} out={} known_vanilla={known} out_fnv=0x{:016x}",
-                        out.len(),
-                        er_gfx::title_05_000::fnv1a64(&out)
-                    ));
-                    TITLE_05_000_RUNTIME_STRIPPED.get_or_init(|| out)
-                }
-                Err(err) => {
-                    return fail(format_args!("in={len} known_vanilla={known}: {err}"));
-                }
-            }
-        }
-    };
-    unsafe {
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_DATA_OFFSET) as *mut usize,
-            stripped.as_ptr() as usize,
-        );
-        core::ptr::write(
-            (file + SCALEFORM_MEMORY_FILE_LEN_OFFSET) as *mut u32,
-            stripped.len() as u32,
-        );
-        core::ptr::write((file + SCALEFORM_MEMORY_FILE_CURSOR_OFFSET) as *mut u32, 0);
-    }
-    TITLE_05_000_RUNTIME_STRIP_SERVES.fetch_add(1, Ordering::SeqCst);
-    // Keep the established product-strip oracles counting regardless of mechanism (the
-    // construct-from-embedded path incremented both of these).
-    TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
-    TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.fetch_add(1, Ordering::SeqCst);
-    TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.store(file, Ordering::SeqCst);
-    true
-}
-
 fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String> {
     let Some(editor_dir) = std::env::var_os("ER_PROFILE_05_010_EDITOR_DIR") else {
         return Ok(None);
@@ -449,14 +337,15 @@ fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String
             bytes.len()
         ));
     }
-    let fnv = er_gfx::title_05_000::fnv1a64(&bytes);
+    let fnv = er_gfx::fnv1a64(&bytes);
     let cache = PROFILE_05_010_EDITOR_GFX_CACHE.get_or_init(|| Mutex::new(Vec::new()));
     let mut cache = cache
         .lock()
         .map_err(|_| "profile editor hot GFX cache poisoned".to_owned())?;
-    if let Some(existing) = cache.iter().find(|existing| {
-        existing.len() == bytes.len() && er_gfx::title_05_000::fnv1a64(existing) == fnv
-    }) {
+    if let Some(existing) = cache
+        .iter()
+        .find(|existing| existing.len() == bytes.len() && er_gfx::fnv1a64(existing) == fnv)
+    {
         return Ok(Some((existing.as_ptr() as usize, existing.len(), fnv)));
     }
     append_autoload_debug(format_args!(
@@ -471,7 +360,6 @@ fn profile_05_010_editor_hot_gfx() -> Result<Option<(usize, usize, u64)>, String
     Ok(Some((cached.as_ptr() as usize, cached.len(), fnv)))
 }
 
-/// Stats-panel 05_010_ProfileSelect runtime edit (mirrors `title_05_000_swap_to_stripped`): derive
 /// the stats-panel movie (face box removed, `ErStats` field added, left column reflowed -- see
 /// `er_gfx::title_05_010`) from the native MemoryFile's own vanilla payload, cache it for the
 /// process lifetime, and swap the native file's data/len/cursor onto the cached buffer. In editor
@@ -566,14 +454,13 @@ pub(crate) unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> 
                 Ok(out) => {
                     PROFILE_05_010_RUNTIME_EDIT_OUTPUT_LEN.store(out.len(), Ordering::SeqCst);
                     let validated = out.len() == er_gfx::title_05_010::EDITED_LEN
-                        && er_gfx::title_05_000::fnv1a64(&out)
-                            == er_gfx::title_05_010::EDITED_FNV1A64;
+                        && er_gfx::fnv1a64(&out) == er_gfx::title_05_010::EDITED_FNV1A64;
                     PROFILE_05_010_RUNTIME_EDIT_OUTPUT_VALIDATED
                         .store(if validated { 1 } else { 2 }, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
                         "stats-panel: 05_010 runtime edit derived in={len} out={} known_vanilla={known} out_fnv=0x{:016x}",
                         out.len(),
-                        er_gfx::title_05_000::fnv1a64(&out)
+                        er_gfx::fnv1a64(&out)
                     ));
                     PROFILE_05_010_RUNTIME_EDITED.get_or_init(|| out)
                 }
@@ -657,7 +544,7 @@ unsafe fn text_input_02_990_swap(
                         "{tag}: derived 02_990 GFX in={} out={} fnv=0x{:016x}",
                         vanilla.len(),
                         edited.len(),
-                        er_gfx::title_05_000::fnv1a64(&edited)
+                        er_gfx::fnv1a64(&edited)
                     ));
                     derivation.cache.get_or_init(|| edited)
                 }
@@ -790,7 +677,7 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
             let known = er_gfx::options_02_040::is_known_vanilla_win(vanilla);
             match er_gfx::options_02_040::quit6(vanilla) {
                 Ok(out) => {
-                    let out_fnv = er_gfx::title_05_000::fnv1a64(&out);
+                    let out_fnv = er_gfx::fnv1a64(&out);
                     // `in_fnv` is logged because `known_vanilla` comes back false on this path and
                     // the pair is what would arm it. The fingerprint in `er_gfx` was taken from the
                     // unpacked file; the loader hands us a payload 9 bytes longer, so the length
@@ -798,7 +685,7 @@ pub(crate) unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usiz
                     // -- a changed movie would be edited blind and served. Pinning the runtime
                     // input's own length and fnv as a second accepted fingerprint closes that, and
                     // this line is where the number to pin comes from.
-                    let in_fnv = er_gfx::title_05_000::fnv1a64(vanilla);
+                    let in_fnv = er_gfx::fnv1a64(vanilla);
                     append_autoload_debug(format_args!(
                         "system-quit-gfx: 02_040 quit6 runtime edit derived in={len} in_fnv=0x{in_fnv:016x} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
                         out.len()
@@ -905,12 +792,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_file_open_observer_hook(
             // Their derive functions keep `#[allow(dead_code)]` so the code stays readable and
             // revivable until the delete pass.
             //
-            // 1. `05_000_title`, the stripped title screen. The title is not a Quit row surface.
-            // if is_title_05_000 && TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst) != 0 {
-            //     memory_replacement = unsafe { title_05_000_swap_to_stripped(base, native) };
-            // }
-            //
-            // 2. `02_990_TextInput_BuildUrl`, the link field. Its row left with `build-rows`, so
+            // `02_990_TextInput_BuildUrl`, the link field. Its row left with `build-rows`, so
             //    the game can no longer ask for this cache key at all.
             // if is_build_url_02_990 {
             //     memory_replacement = unsafe { text_input_02_990_swap_to_build_url(base, native) };

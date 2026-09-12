@@ -12,11 +12,6 @@ use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 
-/// Runtime-derived stripped 05_000_title movie (er-effects-rs-h7x): computed once at first
-/// title file-open from the native MemoryFile's vanilla payload, then reused for every later
-/// title visit. Lives for the process lifetime so the swapped-in data pointer stays valid for
-/// as long as any native file object references it.
-pub(crate) static TITLE_05_000_RUNTIME_STRIPPED: OnceLock<Vec<u8>> = OnceLock::new();
 /// Runtime-derived stats-panel 05_010_profileselect movie: computed once at first ProfileSelect
 /// file-open from the native MemoryFile's vanilla payload, then reused for every later open.
 /// Process-lifetime for the same data-pointer-validity reason as the 05_000 buffer above.
@@ -26,25 +21,6 @@ pub(crate) static PROFILE_05_010_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::n
 /// for later opens. This keeps the DLL self-contained: no shipped GFx, only in-memory edits
 /// against the game's own loaded bytes.
 pub(crate) static OPTIONS_02_040_QUIT6_RUNTIME_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
-
-/// Arm the product-default runtime 05_000_title strip. The old env-driven memory-GFX overrides
-/// (`load_memory_gfx_from_env` and the `TITLE_SCALEFORM_MEMORY_GFX` /
-/// `TITLE_SCALEFORM_05_000_MEMORY_GFX` slots it filled) were de-gated to inert no-ops in 2026-07-19
-/// and are now gone: the file-open hook derives the stripped 05_000_title from the native
-/// MemoryFile's own vanilla payload via er-gfx, so there is no embedded or on-disk movie left to
-/// load.
-pub(crate) fn load_title_scaleform_memory_gfx() {
-    if !title_05_000_strip_default_enabled() {
-        return;
-    }
-    TITLE_05_000_RUNTIME_STRIP_ARMED.store(1, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "title-resource-observer: product-default 05_000_title runtime strip armed ({} content-addressed edits, expect {} -> {} bytes on known vanilla)",
-        er_gfx::title_05_000::TITLE_05_000_STRIP_EDITS.len(),
-        er_gfx::title_05_000::VANILLA_LEN,
-        er_gfx::title_05_000::STRIPPED_LEN
-    ));
-}
 
 /// Diagnostic detour for the dialog builder 0x1409275b0 (4 register args rcx/rdx/r8/r9 -> dialog
 /// in rax). Calls the original, then (pre-world, capped) logs the built dialog's vtable/class +

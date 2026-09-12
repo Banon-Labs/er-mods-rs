@@ -23,7 +23,7 @@
 //! `cargo run -p er-gfx --example make_05_010_stats -- <vanilla> <edited>` then
 //! `python3 scripts/gfx_tag_diff.py <vanilla> <edited> --emit-rust TITLE_05_010_STATS_EDITS`.
 //!
-//! All-or-nothing exactly like [`crate::title_05_000`]: for the known vanilla
+//! All-or-nothing: for the known vanilla
 //! input the output is verified against the edited-asset fingerprint; for an
 //! unknown input (game update, another mod's asset) the edits either apply
 //! cleanly in full or the caller serves its input untouched.

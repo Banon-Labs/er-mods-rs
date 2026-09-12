@@ -1,0 +1,42 @@
+{
+  "note": "Constant-valued feature gates still in the tree. The ratchet is DOWN-ONLY: a file may not gain one, and a file that loses one must be recorded here in the same commit. Zero is the target -- each entry is a feature to delete, not to document.",
+  "total": 22,
+  "gates": {
+    "crates/er-quickload/src/crashlog/veh_exit_hooks.rs": [
+      "crash_logger_enabled"
+    ],
+    "crates/er-quickload/src/experiments/gating/runtime_modes.rs": [
+      "arm_probe_enabled",
+      "auto_confirm_enabled",
+      "continue_drive_enabled",
+      "live_dialog_enabled",
+      "native_arm_loop_enabled",
+      "title_accept_enabled",
+      "title_accept_inject_enabled",
+      "title_menu_resource_observer_enabled",
+      "title_resource_memory_gfx_enabled"
+    ],
+    "crates/er-quickload/src/experiments/input_block.rs": [
+      "stay_active_enabled"
+    ],
+    "crates/er-quit-rows/src/crashlog/veh_exit_hooks.rs": [
+      "crash_logger_enabled"
+    ],
+    "crates/er-quit-rows/src/experiments/gating/runtime_modes.rs": [
+      "arm_probe_enabled",
+      "auto_confirm_enabled",
+      "continue_drive_enabled",
+      "live_dialog_enabled",
+      "native_arm_loop_enabled",
+      "title_accept_enabled",
+      "title_accept_inject_enabled",
+      "title_menu_resource_observer_enabled"
+    ],
+    "crates/er-quit-rows/src/experiments/input_block.rs": [
+      "stay_active_enabled"
+    ],
+    "crates/er-quit-rows/src/menu_window_run_install.rs": [
+      "quit_rows_armed"
+    ]
+  }
+}

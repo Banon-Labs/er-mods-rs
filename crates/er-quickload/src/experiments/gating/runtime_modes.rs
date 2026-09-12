@@ -53,44 +53,6 @@ pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
     false
 }
 
-/// Default-on product 05_000_title asset strip (er-effects-rs-dl0, runtime-derived since
-/// er-effects-rs-h7x): at Scaleform file-open the hook reads the vanilla movie payload out of the
-/// native MemoryFile the game's own FileOpener returns and applies
-/// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
-/// to the formerly-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input -- so
-/// press any button / the Continue menu text / the copyright footer never build or animate. The
-/// per-element hide hooks stay installed as defense-in-depth, but the served movie carries no
-/// visual placements. End-to-end prior proof with the (identical) stripped movie live: runtime
-/// artifact `title-05-000-native-ui-stripped-recorded-latest` reached event T_controllable
-/// (+21.9s) with the PressStart proxy still bindable (dialog+0xb78 readiness gate satisfied).
-/// Gated like `native_continue_enabled` (no new opt-in gate; splash-skip de-gating precedent):
-/// off for no-autoload / telemetry-only runs, so a pure observe run never
-/// mutates visual resources. `ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX` remains the explicit override:
-/// a path replaces the default asset; `embedded:title-05-000-suppressed` arms the same runtime
-/// derivation; the literal `vanilla`/`off`/`0` forces the native on-disk movie while autoload
-/// stays on (handled in `load_title_scaleform_memory_gfx`).
-///
-/// Off by default since 2026-09-12, and the reason is that a movie is parsed once.
-///
-/// The engine opens `data0:/menu/05_000_title.gfx` exactly once per process and caches what it
-/// parsed. Measured on run br-20260912-054657-2484: one file-open at +12874ms, then
-/// `AcquireMenuResource '05_000_Title'` at +13370ms and again at +49056ms after the player chose
-/// System > Quit Game. So the strip is not "the boot title has no chrome" -- it is "no title in
-/// this process ever has chrome again", and the second one came up as a logo with no
-/// `PRESS ANY BUTTON` and no menu: no Continue, no Load Game, no Settings, and no way out but
-/// killing the game.
-///
-/// Conditioning the swap on the cover cannot fix that, because the only site that could refuse
-/// runs once, at boot, while the cover is legitimately up. The layer that re-evaluates per title
-/// is the per-element hide hooks this doc already calls defense-in-depth, and they are scoped by
-/// `title_visual_suppression_active()` -- they hid `PressStart`, `Info`, `ProgressInfo`,
-/// `Install_ProgressInfo` and the logo at +13371ms in that same run, and stand down once the
-/// cover stops. With the cover opaque in front of the title during boot there is nothing for the
-/// strip to protect that the cover is not already covering.
-pub(crate) fn title_05_000_strip_default_enabled() -> bool {
-    false
-}
-
 /// Default-on product masquerade cover Part A: suppress only the native `05_000_Title`
 /// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
 /// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement

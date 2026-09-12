@@ -2491,6 +2491,14 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
 python3 "$repo_root/scripts/check-feature-gates-bite.py"
 
+# ...and a runtime gate whose body is a literal is the same defect one layer down. On 2026-09-12
+# `title_05_000_strip_default_enabled` was a `-> bool { false }` under twenty-two lines of doc
+# explaining why it was off, keeping a movie strip, its cache, its swap function, eight counters
+# and eight oracle fields alive behind a branch that could never be taken. The feature was deleted;
+# this stops the population growing while the recorded ones are worked down.
+python3 "$repo_root/scripts/check-constant-feature-gates.py" --selftest
+python3 "$repo_root/scripts/check-constant-feature-gates.py"
+
 # ...and the configuration those gates describe has to keep compiling, or the counts above become
 # a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
 # save picker, the loading cover, the portraits and the menu trace, with no cloned rows.

@@ -720,7 +720,6 @@ pub static TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS: AtomicUsize = AtomicUsize::new(0
 pub static TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_CORE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_MUTED_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -731,19 +730,6 @@ pub static SOUND_POST_EVENT_FIRST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_PLAYING_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_SERVES: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_FAILURES: AtomicUsize = AtomicUsize::new(0);
-/// Title file-opens that were left vanilla because no cover was drawing over them.
-///
-/// The strip takes the title's own `PRESS ANY BUTTON` prompt and menu out of the movie, which is
-/// right while the boot cover is painted over it and wrong the moment it is not. A non-zero count
-/// is the evidence that a title after boot -- the one a player reaches through System > Quit Game
-/// -- kept the controls it needs to load, continue or reach settings.
-pub static TITLE_05_000_RUNTIME_STRIP_DECLINED: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_SERVES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_FAILURES: AtomicUsize = AtomicUsize::new(0);
