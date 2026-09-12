@@ -104,6 +104,9 @@ pub mod save_dest_commit_runtime;
 /// The in-game save-file picker rendered through `05_010_ProfileSelect`.
 #[cfg(windows)]
 pub mod save_picker_menu;
+/// Directional menu input read from the game's own `CS::MoveDir` resolver.
+#[cfg(windows)]
+pub mod save_picker_native_nav;
 /// The native `05_010` list's own input and geometry, rebased for a sliding ten-row window.
 #[cfg(windows)]
 pub mod save_picker_native_scroll_input;

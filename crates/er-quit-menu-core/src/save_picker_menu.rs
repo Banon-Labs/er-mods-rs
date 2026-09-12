@@ -112,6 +112,12 @@ pub struct SavePickerMenuHooks {
     /// `os_native_save_picker` is set, and owns the startup missing-save request outright.
     pub open_picker_for_intent: Option<unsafe fn(PickerOpenRequest) -> PickerOpenOutcome>,
     /// Install whatever passive device hooks the nav reader below needs.
+    ///
+    /// These last three are the one group with a working answer when they are absent:
+    /// [`crate::save_picker_native_nav`] reads the direction out of the engine instead, so a shell
+    /// gets left and right without owning a device layer. A host installs them to put its own
+    /// latch in charge -- the product's, which sits on its input blocker and can therefore report
+    /// a direction the engine is deliberately refusing.
     pub ensure_nav_input_hooks: Option<fn()>,
     /// Drain the requested nav edges, leaving the rest latched for their own consumer.
     pub take_nav_edges_for: Option<fn(usize) -> usize>,
@@ -166,9 +172,19 @@ const SAVE_PICKER_NAV_ALL_MASK: usize = SAVE_PICKER_NAV_LEFT_MASK
     | SAVE_PICKER_NAV_WHEEL_UP_MASK
     | SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
 
-/// Drain `mask` from the host's edge latch, or nothing when no host reads the device.
+/// Drain `mask` from the host's edge latch, or from the crate's own native reader when no host
+/// supplies one.
+///
+/// The fallback used to be `0`, which is how a shell ended up with a drive strip the mouse could
+/// click and the arrows could not reach: the three seam fields are filled only by the product, so
+/// in every standalone shell this answered nothing at all, forever, with no line in the log to say
+/// so. [`crate::save_picker_native_nav`] answers it by asking the engine which way the player
+/// pressed, so the seam is now an override rather than a requirement.
 fn take_nav_edges_for(mask: usize) -> usize {
-    hooks().take_nav_edges_for.map_or(0, |take| take(mask))
+    match hooks().take_nav_edges_for {
+        Some(take) => take(mask),
+        None => crate::save_picker_native_nav::take_nav_edges_for(mask),
+    }
 }
 
 /// `MenuEventId::MoveA`/`MoveB` as the raw ids the event bitmap is indexed by.
@@ -1819,8 +1835,9 @@ pub unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         let _ = take_nav_edges_for(SAVE_PICKER_NAV_ALL_MASK);
         return;
     }
-    if let Some(install) = hooks().ensure_nav_input_hooks {
-        install();
+    match hooks().ensure_nav_input_hooks {
+        Some(install) => install(),
+        None => crate::save_picker_native_nav::ensure_nav_reader(),
     }
     install_save_picker_set_cursor_hook();
     install_save_picker_wheel_delta_hook();
@@ -2182,7 +2199,9 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     };
     let wheel_down = wheel_edges & wheel_down_mask != 0;
     let wheel_up = wheel_edges & wheel_up_mask != 0;
-    let held = hooks().nav_held.map_or(0, |held| held());
+    let held = hooks()
+        .nav_held
+        .map_or_else(crate::save_picker_native_nav::nav_held, |held| held());
     let dialog = save_picker_live_profile_dialog();
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
