@@ -320,15 +320,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // the first autoload: the world loads and is playable, then ~2.2 s after world
                     // entry this evaluator raises `menuData+0x5e` and the session ends. Idempotent.
                     er_title_flow::install_movemap_advancer_probe();
-                    // Install the MessageBoxDialog builder hook for native telemetry. Product
-                    // autoload must not auto-accept: every pre/post-load message box is a hard
+                    // Install the MessageBoxDialog builder hook. It captures each built dialog
+                    // for the startup-modal blocking oracle and the save-flow confirm poll, and it
+                    // answers none of them: every pre/post-load message box is a hard
                     // investigation trigger whose semantic side effect must be skipped directly.
-                    // The legacy OK-handler dismiss path remains only for non-product probes.
+                    //
+                    // The `!product_autoload_enabled()` branch that used to sit here called
+                    // `force_dismiss_startup_dialog()`, which pressed the first button on every
+                    // dialog this hook captured while the player did not yet exist. It read as
+                    // "probes only", but the flag is armed by the boot autoload, so any build
+                    // compiled without one -- `--no-default-features --features
+                    // quit-rows,menu-trace`, measured in run br-20260913-154820-c63f -- answered
+                    // the player's own corrupted-save box for them. Both the call and the function
+                    // are deleted; see `startup_modals_menu_cover.rs` for the log lines and for why
+                    // the default build's behaviour is unchanged by that.
                     if online_disable_enabled() {
                         install_auto_accept_hook();
-                        if !product_autoload_enabled() {
-                            force_dismiss_startup_dialog();
-                        }
                     }
                     if let Ok(base) = game_module_base() {
                         unsafe { profile_editor_necromancy_tick(base) };
