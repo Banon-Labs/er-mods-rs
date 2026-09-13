@@ -28,11 +28,22 @@
 #                 compiles. A launch says the game starts: `scripts/er-run-branch.py` and
 #                 `~/Elden/launch.sh` are not in the allowlist either, because a process appearing
 #                 is not a behaviour being observed.
+#   never       -- arming a watch on one, which is the 2026-09-13 miss. A `Monitor`, a
+#                 `run_in_background` call, and a `tail -f`/`nohup`/`setsid` command all name the
+#                 artifact and have read none of it. That turn closed on "Fixed and relaunched as
+#                 07f2729b" with its last call a `Monitor` on `tail -F
+#                 er-quickload-autoload-debug.log` -- a log the process it had just started had not
+#                 written a line of -- and the filename inside the tool input read as evidence. The
+#                 same exclusion applies to the prose: "the monitor will tell me if `muted=true`
+#                 appears" is the promise of a measurement, not one.
 #
 # Ordering is half the rule. Evidence counts only from the first edit onward, because a log read
 # before the change describes the code that was there before it. Measured from the first such edit
 # rather than the last, so a turn that reads the log and then makes one more small edit still counts
-# as having looked -- the lenient reading of a rule whose false positive gags an honest report.
+# as having looked -- the lenient reading of a rule whose false positive gags an honest report. The
+# one place the anchor does move forward is a rebuild: a measurement taken before the artifact was
+# built again describes the previous artifact, and the claim is about the one that is loaded now.
+# A `cargo check` or a test run produces no artifact and moves nothing.
 #
 # The exemptions, each a case where the word is being used honestly
 #   hedged     -- the closing prose says somewhere that the change is unverified, untested, has not
@@ -66,10 +77,14 @@
 # classification from `scripts/cupcake_fix_claim.py`, so the guards cannot drift into disagreeing
 # about the same turn. Fail-open (empty output) on any error.
 #
-# Measured before it shipped, over the 2,936 real turn boundaries in
-# ~/.claude/projects/-home-banon-projects-er-mods-rs*/*.jsonl: 197 closing messages call something a
-# fix, and one of them halts -- a hook change reported as fixed and committed with no run behind it.
-# The four the exemptions cleared are in `scripts/test-fix-claim-classifier.py` as negatives.
+# Measured before it shipped, and re-measured 2026-09-13 after the widening, over the real closing
+# turns in ~/.claude/projects/-home-banon-projects-er-mods-rs*/*.jsonl. Now: 2,820 closing turns,
+# 299 of them call something a fix, three halt -- the hook change this rule shipped for, and two
+# from the session that prompted the widening. The first pass of that widening halted five, and the
+# two it should not have are pinned as negatives in `scripts/test-fix-claim-classifier.py`: a turn
+# that said "This build doesn't fix that case -- it makes it legible", and one that settled a
+# compile against a pinned upstream revision. Both corrections were made to the vocabulary rather
+# than to the conjunction, and re-measured rather than argued.
 set -uo pipefail
 CUPCAKE_SIGNAL_REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 export CUPCAKE_SIGNAL_REPO_ROOT

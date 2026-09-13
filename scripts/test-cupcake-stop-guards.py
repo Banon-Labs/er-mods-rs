@@ -411,6 +411,17 @@ CASES = [
         "no_diagnosis_without_fix turns on whether a file changed",
     ),
     Case(
+        "fix_claim_watcher_armed.jsonl",
+        "calling a change a fix without a run behind it",
+        "the 2026-09-13 escape, verbatim: three feature-gate predicates edited in "
+        "crates/er-quickload, cross-compiled, launched, and closed on 'Fixed and relaunched as "
+        "07f2729b' in the same message as the launch -- before the process had written a line. "
+        "Nothing halted. The signal had emitted evidence=1 because the turn's last call was a "
+        "Monitor armed on tail -F er-quickload-autoload-debug.log: a filename in a tool input, on "
+        "a log nobody had read. Arming a watch is not reading a measurement, and this fixture is "
+        "the whole reason that sentence is now in the classifier",
+    ),
+    Case(
         "fix_claim_with_evidence.jsonl",
         None,
         "the same sentence beside the log the run wrote -- must NOT halt, or reading the "

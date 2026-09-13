@@ -53,13 +53,17 @@
 #     behaves, and a launch says the game starts. None of the three is an observation of the change
 #     doing what the sentence claims, and all three were available to the turn that failed live.
 #
-#     Biased hard toward not firing, and measured rather than asserted. Over the 2,936 real turn
-#     boundaries in this project's transcripts, 197 closing messages call something a fix and this
-#     conjunction halts one of them -- a hook change reported as fixed and committed with no run
-#     behind it. The four the exemptions cleared are pinned as negatives in
-#     scripts/test-fix-claim-classifier.py, and two of them are what added `hostobject`: "Two gates
-#     broke on the way and I fixed them" and "The integration gate came back red and I've fixed all
-#     four failures" are honest reports of host work whose proof is the gate going green.
+#     Biased hard toward not firing, and measured rather than asserted. Re-measured 2026-09-13 over
+#     the 2,820 real closing turns in this project's transcripts: 299 closing messages call something
+#     a fix and this conjunction halts three of them -- the hook change this rule shipped for, and
+#     two from the session that prompted the widening. The audit is the point, not the number: the
+#     first pass of that widening halted five, and the two it should not have are now pinned as
+#     negatives in scripts/test-fix-claim-classifier.py. One closed on "This build doesn't fix that
+#     case -- it makes it legible", which is a turn naming what it did not fix; the other settled a
+#     compile against a pinned upstream revision, which a run cannot speak to. Two earlier negatives
+#     are what added `hostobject` at all: "Two gates broke on the way and I fixed them" and "The
+#     integration gate came back red and I've fixed all four failures" are honest reports of host
+#     work whose proof is the gate going green.
 #
 #     The defaults are asymmetric on purpose, which is where this rule parts company with its
 #     neighbours. They fail closed on every missing field, so a degraded signal still halts. Here
@@ -68,7 +72,35 @@
 #     three exemption fields keep the neighbours' fail-closed default, so a crafted line cannot buy
 #     silence by dropping one.
 #
+#     MISSED ONCE, 2026-09-13, and what moved. A turn edited three feature-gate predicates in
+#     crates/er-quickload, cross-compiled, launched the game, and closed in the same message as the
+#     launch -- before the process had written a line -- on "Fixed and relaunched as 07f2729b". No
+#     halt. The user: "Does the word 'fix' to you mean that its proven?" The measurement did land a
+#     minute later and happened to agree, which is what makes the habit dangerous rather than
+#     harmless: it is usually right and occasionally a lie, and the reader cannot tell which from the
+#     sentence.
+#
+#     The conjunction below was not the defect, and neither was the claim half: `fix_claim` read that
+#     sentence correctly. The facts line said `evidence=1`. The turn's last tool call was a `Monitor`
+#     armed on `tail -F er-quickload-autoload-debug.log`, the allowlist in scripts/cupcake_fix_claim.py
+#     matched the filename inside that tool input, and a subscription to a log nobody had read was
+#     counted as a measurement. Three things changed there, none of them here:
+#       * arming a watch is not reading one -- a `Monitor`, a `run_in_background` call, and a
+#         `tail -f`/`nohup`/`setsid` command are excluded before the allowlist is consulted, in the
+#         prose half as well as the tool half;
+#       * the evidence anchor moves forward past the last build, because a measurement taken before
+#         the artifact was rebuilt describes the previous artifact;
+#       * the claim vocabulary grew the three synonyms that same session used and no branch read --
+#         `solved`/`resolved`, "the fix is <mechanism>" (but not "the fix is to <do something>"),
+#         and an edit asserted to have produced an effect.
+#
 #     KNOWN GAP, stated so its silence is never mistaken for proof.
+#       * The hook sees tool_use blocks, never tool_results: the signal reads the assistant's own
+#         content stream, and a harness tool_result arrives on a "user" event that turn bucketing
+#         drops. So this rule can tell that a log was OPENED and can never tell that the read
+#         returned anything, or what it said. A read of an empty log passes. Closing that would mean
+#         teaching scripts/cupcake_turn_scan.py to carry results into the turn, which every
+#         neighbouring guard would then inherit.
 #       * A fix claimed about a change made in an EARLIER turn passes. `changed` is computed within
 #         the turn, so "that fixed it" the morning after an edit is invisible. Reaching across turns
 #         would need a notion of which edits are still unproven, which nothing here carries.
