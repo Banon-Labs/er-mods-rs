@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use er_game_base::mem::{game_module_base, game_rva_for_hook, safe_read_i32, safe_read_usize};
 
 use crate::build_url_editor::{build_url_editor_menu_pump, build_url_editor_window_run};
-use crate::host::append_autoload_debug;
+use crate::host::{append_autoload_debug, system_quit_save_swap_restore_profile_summary};
 use crate::scaleform_proxy::{
     apply_build_url_editor_window_position, apply_path_editor_window_position,
 };
@@ -89,7 +89,14 @@ fn save_game_row_owns_this_picker() -> bool {
 const INGAME_TOP_RESOURCE_NAME: &str = "02_000_IngameTop";
 const OPTION_SETTING_RESOURCE_NAME: &str = "02_040_OptionSetting";
 const OPTION_SETTING_TRIAL_RESOURCE_NAME: &str = "02_041_OptionSetting_Trial";
-const PROFILE_SELECT_RESOURCE_NAME: &str = "05_010_ProfileSelect";
+const PROFILE_SELECT_RESOURCE_NAME: &str =
+    crate::profile_select_movie_key::NATIVE_PROFILE_SELECT_RESOURCE_NAME;
+/// The same window opened under the picker's private Scaleform cache key. It is the identical
+/// `CS::ProfileSelect` dialog -- only the movie the loader was asked for differs -- so every
+/// per-frame decision below has to answer for it too, or a picker whose key was rebound would run
+/// with the System windows still drawn underneath it.
+const PICKER_PROFILE_SELECT_RESOURCE_NAME: &str =
+    crate::profile_select_movie_key::PICKER_PROFILE_SELECT_RESOURCE_NAME;
 /// `MenuWindowJob.owningWindow` for the System windows, which is a different field from the one the
 /// software-keyboard windows are read through.
 const MENU_WINDOW_JOB_WINDOW_130_OFFSET: usize = 0x130;
@@ -198,6 +205,13 @@ unsafe fn note_picker_window_closed() {
     er_telemetry_core::counters::SAVE_PICKER_DEST_MODE.store(0, Ordering::SeqCst);
     er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW.store(0, Ordering::SeqCst);
     *er_save_picker_core::model::active_save_picker_lock() = None;
+    // The picker drew its rows by writing them into the live `CS::ProfileSummary`, and this is the
+    // frame its window stopped existing -- so this is where the game's own character records go
+    // back. The `profile_select_window_run` restore does not cover it: that one fires on an
+    // owner-cleared `Run` tick, and a destination browser torn down this way never reaches one.
+    // Run br-20260913-021311-a481 staged five records, closed here, and had no restore line
+    // anywhere in its log; the save that followed wrote the browse labels into the container.
+    unsafe { system_quit_save_swap_restore_profile_summary("dest-picker-window-gone") };
     append_autoload_debug(format_args!(
         "save-dest-picker: the browser window 0x{window:x} is gone (back/escape); cleared the picker state and restoring the System windows it hid"
     ));
@@ -237,7 +251,7 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
             er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW
                 .store(owner, Ordering::SeqCst);
         }
-        PROFILE_SELECT_RESOURCE_NAME => {
+        PROFILE_SELECT_RESOURCE_NAME | PICKER_PROFILE_SELECT_RESOURCE_NAME => {
             er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW
                 .store(owner, Ordering::SeqCst);
             er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
@@ -246,6 +260,12 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
                 return;
             };
             if owner == 0 {
+                // The picker renders its browse rows by writing them into the live
+                // `CS::ProfileSummary`, so the window going away is the moment the game's own
+                // records have to come back. Nothing else in a shell is that moment: the open-path
+                // restores only cover re-entry, and a player who closes the picker and quits to the
+                // title otherwise reaches a `Load Game` list of folder names.
+                unsafe { system_quit_save_swap_restore_profile_summary("profile-owner-cleared") };
                 unsafe {
                     system_windows::restore_real_system_windows(
                         base,

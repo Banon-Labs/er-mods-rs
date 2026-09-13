@@ -6,7 +6,7 @@
 //! cloner and the router with no product DLL behind them, while the other four rows drive flows
 //! only a product has.
 //!
-//! # How the other four rows still work
+//! # How the rows this file does not own still work
 //!
 //! Through [`QuitRowActions`], a table of function pointers the arm call supplies. The product
 //! passes its real flows; a standalone shell passes none and arms only the rows it clones, so a
@@ -17,9 +17,14 @@
 //! [`RowSet`] decides, and it is what makes a shell-only profile legal. The grid the rows are cells
 //! of is six cells (`er_gfx::options_02_040::quit6`), the native pair occupy the first two, and each
 //! cloned row lands at the next free index. A shell arming only the two build rows puts them at
-//! indices 2 and 3; the product arming all four puts them at 2, 3, 4 and 5. Either way the row
-//! table records where each row actually landed, and identity is that index plus the live label --
-//! never a pointer, which the engine aliases across rows.
+//! indices 2 and 3; a shell arming only the cloned Save Game row puts it at index 2. Either way the
+//! row table records where each row actually landed, and identity is that index plus the live label
+//! -- never a pointer, which the engine aliases across rows.
+//!
+//! The six cells bound how many rows can be reached, not how many can be appended: the grid's own
+//! hit test walks `cols * rows` cells, so a seventh property row has no cell to be clicked in. Five
+//! cloned rows is therefore one more than the derivation seats, and a load arming all five needs a
+//! wider grid before its last row is reachable.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -45,9 +50,10 @@ use er_telemetry_core::counters::{
     SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT, SYSTEM_QUIT_RETURN_DESKTOP_ACTION_INSTALLED,
     SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1, SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1,
     SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1, SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1,
-    SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1, SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1,
-    SYSTEM_QUIT_ROW_TABLE_DIALOG, SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT,
-    SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG,
+    SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1, SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1,
+    SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1, SYSTEM_QUIT_ROW_TABLE_DIALOG,
+    SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT, SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG,
+    SYSTEM_QUIT_SAVE_GAME_AS_ACTION_LAST_OBJECT, SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT,
 };
 use er_title_flow::SYSTEM_QUIT_DUPLICATE_ORIG;
 use er_title_flow::{
@@ -75,8 +81,9 @@ use crate::row_text::{
     SYSTEM_QUIT_LOAD_BUILD_URL_LABEL_W, SYSTEM_QUIT_LOAD_PROFILE_HELP_W,
     SYSTEM_QUIT_LOAD_PROFILE_LABEL_W, SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_CO2_W,
     SYSTEM_QUIT_LOAD_SAVE_PROFILES_HELP_W, SYSTEM_QUIT_LOAD_SAVE_PROFILES_LABEL_W,
-    SYSTEM_QUIT_ROW_TEXT_CAPACITY, build_url_row_help_wide, generate_build_link_row_help_wide,
-    set_build_url_row_help, set_generate_build_link_row_help,
+    SYSTEM_QUIT_ROW_TEXT_CAPACITY, SYSTEM_QUIT_SAVE_GAME_HELP_W, SYSTEM_QUIT_SAVE_GAME_LABEL_W,
+    build_url_row_help_wide, generate_build_link_row_help_wide, set_build_url_row_help,
+    set_generate_build_link_row_help,
 };
 use crate::rows::{
     NativeRowAction, PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
@@ -147,6 +154,9 @@ pub struct RowSet {
     pub load_character_from_file: bool,
     pub load_build_from_url: bool,
     pub generate_build_link: bool,
+    /// The cloned `Save Game` row. A load that clones it leaves both vanilla rows exactly as
+    /// FromSoft ships them; a load that instead takes the native first row over leaves this false.
+    pub save_game_as: bool,
 }
 
 impl RowSet {
@@ -156,13 +166,21 @@ impl RowSet {
         load_character_from_file: false,
         load_build_from_url: false,
         generate_build_link: false,
+        save_game_as: false,
     };
-    /// Every cloned row. What the product arms.
+    /// Every cloned row a load that takes the native first Quit row over can add.
+    ///
+    /// `save_game_as` is false here on purpose, and not as an oversight: a load that supplies
+    /// `save_game_start_flow` already puts the `Save Game` words on the native first row, so
+    /// cloning the row as well would give the tab two rows reading `Save Game` behind one flow.
+    /// The two are one feature spelled two ways -- take the native row over, or add a row -- and
+    /// [`arm`] clears this field rather than let a host ask for both.
     pub const ALL: Self = Self {
         load_character: true,
         load_character_from_file: true,
         load_build_from_url: true,
         generate_build_link: true,
+        save_game_as: false,
     };
     /// The two rows that need no product behind them. What a standalone shell arms.
     pub const BUILD_ROWS_ONLY: Self = Self {
@@ -177,6 +195,7 @@ impl RowSet {
             QuitRow::LoadSaveProfiles => self.load_character_from_file,
             QuitRow::LoadBuildFromUrl => self.load_build_from_url,
             QuitRow::GenerateBuildLink => self.generate_build_link,
+            QuitRow::SaveGameAs => self.save_game_as,
             // The native pair are the game's own rows. Nothing clones them.
             QuitRow::SaveGame | QuitRow::ReturnToDesktop => false,
         }
@@ -195,8 +214,13 @@ pub struct QuitRowActions {
     pub open_profile_load_dialog: Option<unsafe fn(usize) -> bool>,
     /// Open the in-game save-container browser. Argument: the row's action object.
     pub open_save_picker_menu: Option<unsafe fn(usize) -> bool>,
-    /// Stage the Save Game destination list. Argument: the System dialog.
+    /// Stage the Save Game destination list from the native first row, which this load has taken
+    /// over. Argument: the System dialog.
     pub save_game_start_flow: Option<unsafe fn(usize) -> bool>,
+    /// Stage the same destination list from the cloned `Save Game` row, in a load that adds a row
+    /// rather than taking the native one over. Argument: the System dialog, as above -- the flow
+    /// behind the two rows is one flow, and only the row it is reached from differs.
+    pub save_game_as_start_flow: Option<unsafe fn(usize) -> bool>,
     /// Ask the game to persist the character without starting the confirm chain. Called on the
     /// irreversible quit, immediately before `ExitProcess(0)`.
     pub save_game_request_save_only: Option<unsafe fn()>,
@@ -216,13 +240,14 @@ const FOREIGN_DIALOG_FORWARD_LOG_LIMIT: usize = 8;
 static ROW_SET: AtomicUsize = AtomicUsize::new(0);
 static ROW_ACTIONS: std::sync::OnceLock<QuitRowActions> = std::sync::OnceLock::new();
 
-/// Bit positions of [`RowSet`] inside the published word. Four bits, so "armed" and "armed with no
-/// rows" stay distinguishable from the `ARMED` bit below.
+/// Bit positions of [`RowSet`] inside the published word. One bit per cloned row, so "armed" and
+/// "armed with no rows" stay distinguishable from the `ARMED` bit below.
 const ROW_BIT_LOAD_CHARACTER: usize = 1 << 0;
 const ROW_BIT_LOAD_FROM_FILE: usize = 1 << 1;
 const ROW_BIT_LOAD_BUILD_URL: usize = 1 << 2;
 const ROW_BIT_GENERATE_LINK: usize = 1 << 3;
-const ROW_BIT_ARMED: usize = 1 << 4;
+const ROW_BIT_SAVE_GAME_AS: usize = 1 << 4;
+const ROW_BIT_ARMED: usize = 1 << 5;
 
 fn publish_row_set(rows: RowSet) {
     let mut word = ROW_BIT_ARMED;
@@ -237,6 +262,9 @@ fn publish_row_set(rows: RowSet) {
     }
     if rows.generate_build_link {
         word |= ROW_BIT_GENERATE_LINK;
+    }
+    if rows.save_game_as {
+        word |= ROW_BIT_SAVE_GAME_AS;
     }
     ROW_SET.store(word, Ordering::SeqCst);
 }
@@ -253,6 +281,7 @@ fn row_set() -> RowSet {
         load_character_from_file: word & ROW_BIT_LOAD_FROM_FILE != 0,
         load_build_from_url: word & ROW_BIT_LOAD_BUILD_URL != 0,
         generate_build_link: word & ROW_BIT_GENERATE_LINK != 0,
+        save_game_as: word & ROW_BIT_SAVE_GAME_AS != 0,
     }
 }
 
@@ -261,6 +290,7 @@ fn row_actions() -> &'static QuitRowActions {
         open_profile_load_dialog: None,
         open_save_picker_menu: None,
         save_game_start_flow: None,
+        save_game_as_start_flow: None,
         save_game_request_save_only: None,
         row_table_reset: None,
         note_drive_strip_click_event: None,
@@ -309,6 +339,7 @@ pub fn system_quit_row_table_reset(dialog: usize) {
     SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1.store(0, Ordering::SeqCst);
     SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.store(0, Ordering::SeqCst);
+    SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1.store(0, Ordering::SeqCst);
     if let Some(reset) = row_actions().row_table_reset {
         reset(dialog);
     }
@@ -464,6 +495,39 @@ pub unsafe fn system_quit_route_button_action_or_forward(
             system_quit_log_build_export_press(hook_name, &press);
             append_autoload_debug(format_args!(
                 "system-quit-generate-link: action_alias=0x{action_obj:x} controller=0x{controller:x} cursor={cursor} {verdict_text}; suppressing the native Quit Game row action behind this thunk"
+            ));
+            0
+        }
+        // The destination browser on a cloned row, for a load that leaves both vanilla rows alone.
+        // The flow is the one the arm below runs; what differs is that there is no native action
+        // behind this thunk worth forwarding -- the row is ours, so an absent flow suppresses.
+        Some(QuitRow::SaveGameAs) => {
+            if dialog < 0x10000 {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: cloned Save Game row press IGNORED action_alias=0x{action_obj:x}; dialog=0x{dialog:x} is not heap-like"
+                ));
+                return 0;
+            }
+            // The same re-entry guard the native row carries: one commit at a time, and never
+            // while a profile switch owns the quit machinery, because both drive the same close
+            // sequence and the same GameMan save fields.
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+            if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE || stage != SAVE_FLOW_STAGE_IDLE {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: cloned Save Game row press IGNORED action_alias=0x{action_obj:x} quickload_phase={phase} save_flow_stage={stage}; a switch or save commit is already in flight"
+                ));
+                return 0;
+            }
+            SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
+            SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let started = match row_actions().save_game_as_start_flow {
+                Some(start) => unsafe { start(dialog) },
+                None => false,
+            };
+            append_autoload_debug(format_args!(
+                "system-quit-save: cloned Save Game row selected {hook_name} action_alias=0x{action_obj:x} controller=0x{controller:x} dialog=0x{dialog:x} cursor={cursor} {verdict_text}; staged the destination list started={started} stage={}; suppressed the native Quit Game row action behind this thunk",
+                SAVE_FLOW_STAGE.load(Ordering::SeqCst)
             ));
             0
         }
@@ -832,8 +896,47 @@ pub unsafe extern "system" fn property_new_button_controller_activate_hook(
             ));
             unsafe { ExitProcess(0) };
         }
-        // Save Game keeps flowing through its own native action thunk, which the action-route hook
-        // owns (that is where the confirm chain and its re-entry guards live).
+        // The cloned row cannot be forwarded, and that is a property of how it was built rather
+        // than a preference. Every cloned row is appended during the second native
+        // `AddCancelButton` call and therefore carries the second row's `action_fn` -- Return to
+        // Desktop's. Forwarding runs that activation, and the activation raises "Save the game and
+        // return to the desktop?" before it ever reaches the do-call the action-route hook is
+        // installed on, so the press is answered by the wrong question and the router never runs.
+        // Observed on run br-20260913-012517-d426: the confirm on screen, and not one routing line
+        // in the log. The flow starts here instead, and the native activation is suppressed the way
+        // it is for every other cloned row.
+        Some(QuitRow::SaveGameAs) => {
+            if dialog < 0x10000 {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: cloned Save Game row controller activation IGNORED controller=0x{controller:x}; dialog=0x{dialog:x} is not heap-like"
+                ));
+                return;
+            }
+            // The same re-entry guard the action thunk carries: one commit at a time, and never
+            // while a profile switch owns the quit machinery.
+            let phase = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst);
+            let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
+            if phase != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE || stage != SAVE_FLOW_STAGE_IDLE {
+                append_autoload_debug(format_args!(
+                    "system-quit-save: cloned Save Game row controller activation IGNORED controller=0x{controller:x} quickload_phase={phase} save_flow_stage={stage}; a switch or save commit is already in flight"
+                ));
+                return;
+            }
+            SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.store(0, Ordering::SeqCst);
+            SYSTEM_QUIT_SAVE_GAME_ACTION_COUNT.fetch_add(1, Ordering::SeqCst);
+            let started = match row_actions().save_game_as_start_flow {
+                Some(start) => unsafe { start(dialog) },
+                None => false,
+            };
+            append_autoload_debug(format_args!(
+                "system-quit-save: cloned Save Game row controller selected controller=0x{controller:x} action_alias=0x{action_alias:x} dialog=0x{dialog:x} {verdict_text} event_kind={event_kind}; staged the destination list started={started} stage={}; suppressing the native Return-to-Desktop activation this clone carries",
+                SAVE_FLOW_STAGE.load(Ordering::SeqCst)
+            ));
+        }
+        // The native first row keeps flowing through the action thunk this dispatch invokes, which
+        // the action-route hook owns -- that is where the flow and its re-entry guards live. That
+        // row is in place rather than cloned, so forwarding reaches the thunk it owns, and that
+        // thunk is hooked.
         Some(QuitRow::SaveGame) | None => {
             if verdict.resolved_row().is_none() {
                 append_autoload_debug(format_args!(
@@ -1090,6 +1193,17 @@ pub unsafe extern "system" fn system_quit_duplicate_add_cancel_button_hook(
                 action_slot: &SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
                 controller_slot: &SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT,
             },
+            ClonedRow {
+                row: QuitRow::SaveGameAs,
+                // The same bytes the `MsgRepository::GetAndFormat` substitution puts on the native
+                // first row in a load that takes that row over. Only one of the two is ever on the
+                // tab: the substitution asks `save_game_flow_is_owned` first, and that is false in
+                // exactly the load that clones this row.
+                label: &SYSTEM_QUIT_SAVE_GAME_LABEL_W,
+                help: SYSTEM_QUIT_SAVE_GAME_HELP_W.as_slice(),
+                action_slot: &SYSTEM_QUIT_SAVE_GAME_AS_ACTION_LAST_OBJECT,
+                controller_slot: &SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT,
+            },
         ];
 
         let mut any_row_added = false;
@@ -1235,6 +1349,16 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
         .is_err()
     {
         return Err(ArmError::AlreadyArmed);
+    }
+    // The cloned `Save Game` row and the native-first-row takeover are one feature spelled two
+    // ways, so a host that asked for both would build a tab with two rows reading `Save Game`.
+    // Clearing the clone leaves the takeover, which is the row that already carries the flow.
+    let mut rows = rows;
+    if rows.save_game_as && actions.save_game_start_flow.is_some() {
+        append_autoload_debug(format_args!(
+            "system-quit-dup: a host armed the cloned Save Game row and the native-row takeover together; dropping the clone so the tab carries one Save Game row"
+        ));
+        rows.save_game_as = false;
     }
     let _ = ROW_ACTIONS.set(actions);
     publish_row_set(rows);

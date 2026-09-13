@@ -449,17 +449,31 @@ pub struct GfxServeSet {
     /// The picker's current-path editor, under `02_990_TextInput_PathEditor`. Belongs to whoever
     /// opens the picker, not to whoever armed the link field: they are two derivations of one movie.
     pub path_editor_field: bool,
-    /// The `05_010_ProfileSelect` stats-panel movie the picker chrome stands on.
+    /// The `05_010_ProfileSelect` stats-panel movie the picker chrome stands on, served on the
+    /// game's own cache key -- so the title's **Load Game** gets the derived layout too. What a
+    /// host whose feature *is* the character-select screen wants.
     pub profile_select: bool,
+    /// The same movie, served only under
+    /// [`PICKER_PROFILE_SELECT_RESOURCE_NAME`](crate::profile_select_movie_key::PICKER_PROFILE_SELECT_RESOURCE_NAME).
+    /// A host that sets this leaves the game's own key vanilla, so its picker is re-laid out and
+    /// the title's Load Game is not. Needs
+    /// [`install_picker_profile_select_key`](crate::profile_select_movie_key::install_picker_profile_select_key)
+    /// to rebind the open, and the two are armed together or neither does anything.
+    pub profile_select_picker_key: bool,
 }
 
 impl GfxServeSet {
-    /// Everything this module can derive -- what a full row set needs.
+    /// Everything this module can derive, with the picker's movie on the game's own cache key.
+    ///
+    /// Reserved for a host whose feature *is* the character-select screen. Every other host wants
+    /// [`Self::ALL_PICKER_KEYED`]: the derived movie re-lays out ProfileSelect, and on that key it
+    /// re-lays out the title's **Load Game** as well.
     pub const ALL: Self = Self {
         quit_grid: true,
         build_url_field: true,
         path_editor_field: true,
         profile_select: true,
+        profile_select_picker_key: false,
     };
     /// Only the picker movie: a host that replaces a vanilla row rather than cloning new ones.
     pub const PROFILE_SELECT_ONLY: Self = Self {
@@ -468,6 +482,31 @@ impl GfxServeSet {
         // The path editor is part of the picker, so a picker-only host still needs it.
         path_editor_field: true,
         profile_select: true,
+        profile_select_picker_key: false,
+    };
+    /// Every movie a full row set needs, with the title's **Load Game** left as the game ships it.
+    ///
+    /// The same derivations as [`Self::ALL`]; only the key the picker's ProfileSelect is reached
+    /// through differs. What a shell wants: its browse rows are dressed and character select is
+    /// not compacted behind its back.
+    pub const ALL_PICKER_KEYED: Self = Self {
+        quit_grid: true,
+        build_url_field: true,
+        path_editor_field: true,
+        profile_select: false,
+        profile_select_picker_key: true,
+    };
+    /// The picker's movies, with the title's **Load Game** left exactly as the game ships it.
+    ///
+    /// The same derivation as [`Self::PROFILE_SELECT_ONLY`], reached through the picker's own
+    /// cache key instead of the game's. What a host wants when its picker browses save
+    /// destinations and has no business re-laying out character select.
+    pub const PICKER_KEYED: Self = Self {
+        quit_grid: false,
+        build_url_field: false,
+        path_editor_field: true,
+        profile_select: false,
+        profile_select_picker_key: true,
     };
 }
 
@@ -477,6 +516,51 @@ static SERVE_QUIT_GRID: AtomicUsize = AtomicUsize::new(0);
 static SERVE_BUILD_URL_FIELD: AtomicUsize = AtomicUsize::new(0);
 static SERVE_PATH_EDITOR_FIELD: AtomicUsize = AtomicUsize::new(0);
 static SERVE_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
+static SERVE_PROFILE_SELECT_PICKER_KEY: AtomicUsize = AtomicUsize::new(0);
+
+/// The url the game itself opens `05_010_profileselect.gfx` under, copied out of the one vanilla
+/// open so the picker's private cache key has somewhere real to be redirected.
+///
+/// Captured rather than written down. The key names no file, so its open has to be pointed at the
+/// canonical payload the way both 02_990 keys are -- and the game's own string is the only spelling
+/// guaranteed to be the one its loader accepts on this build.
+static CANONICAL_PROFILE_SELECT_URL: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Whether the canonical `05_010` url has been seen. Until it has, rebinding an open to the private
+/// key would name nothing at all, so
+/// [`crate::profile_select_movie_key`] declines the rebind and the picker shares the vanilla movie.
+pub fn profile_select_canonical_url_captured() -> bool {
+    CANONICAL_PROFILE_SELECT_URL.get().is_some()
+}
+
+/// Copy a NUL-terminated ASCII url out of the loader's own buffer, bounded.
+///
+/// # Safety
+///
+/// No precondition on the address: every read goes through the fault-safe reader.
+unsafe fn capture_canonical_profile_select_url(url: usize) {
+    if url == 0 || CANONICAL_PROFILE_SELECT_URL.get().is_some() {
+        return;
+    }
+    const MAX: usize = 512;
+    let mut bytes = Vec::with_capacity(64);
+    for offset in 0..MAX {
+        match unsafe { safe_read_u8(url + offset) } {
+            Some(0) | None => break,
+            Some(byte) => bytes.push(byte),
+        }
+    }
+    if bytes.is_empty() {
+        return;
+    }
+    bytes.push(0);
+    let text = String::from_utf8_lossy(&bytes[..bytes.len() - 1]).into_owned(); // UTF-8 Lossy: a log line naming a game path, never parsed back.
+    if CANONICAL_PROFILE_SELECT_URL.set(bytes).is_ok() {
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: canonical 05_010 url captured as '{text}'; the picker's private cache key can be redirected to it"
+        ));
+    }
+}
 
 /// This module's slot in the `er-hook` union chain for the Scaleform file-open prologue.
 static FILE_OPEN_ORIG: AtomicUsize = AtomicUsize::new(0);
@@ -540,8 +624,20 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
         && unsafe { bounded_ascii_contains(url, b"02_990_textinput_buildurl") };
     let is_path_editor_02_990 = SERVE_PATH_EDITOR_FIELD.load(Ordering::SeqCst) != 0
         && unsafe { bounded_ascii_contains(url, b"02_990_textinput_patheditor") };
-    let is_profile_05_010 = SERVE_PROFILE_SELECT.load(Ordering::SeqCst) != 0
-        && unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
+    // The private key contains the native key as a prefix, so the two are told apart on the string
+    // before either serve bit is consulted -- otherwise a host serving the game's own key would
+    // also claim the picker's.
+    let has_picker_key = unsafe { bounded_ascii_contains(url, b"05_010_profileselect_savepicker") };
+    let is_native_05_010 =
+        !has_picker_key && unsafe { bounded_ascii_contains(url, b"05_010_profileselect") };
+    if is_native_05_010 {
+        // Every host captures it, whether or not it serves this key: the capture is what lets a
+        // private key exist at all, and the one vanilla open is where the url can be read.
+        unsafe { capture_canonical_profile_select_url(url) };
+    }
+    let is_picker_05_010 =
+        has_picker_key && SERVE_PROFILE_SELECT_PICKER_KEY.load(Ordering::SeqCst) != 0;
+    let is_profile_05_010 = is_native_05_010 && SERVE_PROFILE_SELECT.load(Ordering::SeqCst) != 0;
     // A custom cache key forces a fresh Scaleform load. Redirect only that key's file-open to the
     // canonical native movie; the game's shared 02_990 cache entry stays untouched.
     // Both 02_990 keys name a file that does not exist: they are cache keys chosen so the two
@@ -549,6 +645,10 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     // bytes at all.
     let open_url = if is_build_url_02_990 || is_path_editor_02_990 {
         TEXT_INPUT_02_990_CANONICAL_URL.as_ptr() as usize
+    } else if is_picker_05_010 && let Some(canonical) = CANONICAL_PROFILE_SELECT_URL.get() {
+        // Same trade as the two 02_990 keys: the key is a cache miss on purpose and names no file,
+        // so the open is pointed at the payload the game itself loaded.
+        canonical.as_ptr() as usize
     } else {
         url
     };
@@ -557,7 +657,12 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     // with the game's narrower signature would leave its fourth register undefined.
     let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
     let native = unsafe { next(loader, open_url, flags_reg, 0) };
-    if !(is_options_02_040 || is_build_url_02_990 || is_path_editor_02_990 || is_profile_05_010) {
+    if !(is_options_02_040
+        || is_build_url_02_990
+        || is_path_editor_02_990
+        || is_profile_05_010
+        || is_picker_05_010)
+    {
         return native;
     }
     let Ok(base) = er_game_base::mem::game_module_base() else {
@@ -570,7 +675,7 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     }
     let served = if is_options_02_040 {
         unsafe { options_02_040_quit6_swap_to_edited(base, native) }
-    } else if is_profile_05_010 {
+    } else if is_profile_05_010 || is_picker_05_010 {
         unsafe { profile_05_010_swap_to_edited(base, native) }
     } else if is_path_editor_02_990 {
         unsafe { text_input_02_990_swap_to_path_editor(base, native) }
@@ -581,6 +686,8 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
         "system-quit-gfx: served {} movie #{hit} loader=0x{loader:x} ret=0x{native:x} redirected_to_canonical_02_990={is_build_url_02_990} memory_replacement={served}",
         if is_options_02_040 {
             "02_040_optionsetting"
+        } else if is_picker_05_010 {
+            "05_010_profileselect (the picker's own cache key)"
         } else if is_profile_05_010 {
             "05_010_profileselect"
         } else if is_path_editor_02_990 {
@@ -604,7 +711,7 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
 ///
 /// Process attach or startup-hook context, before the title has loaded its movies.
 pub unsafe fn install_quit_menu_gfx_swap_hook() -> bool {
-    unsafe { install_gfx_swap_hook_for(GfxServeSet::ALL) }
+    unsafe { install_gfx_swap_hook_for(GfxServeSet::ALL_PICKER_KEYED) }
 }
 
 /// The movies the hook will actually swap, named for the log.
@@ -627,6 +734,9 @@ fn served_movie_list() -> String {
     }
     if SERVE_PROFILE_SELECT.load(Ordering::SeqCst) != 0 {
         names.push("the 05_010 picker movie");
+    }
+    if SERVE_PROFILE_SELECT_PICKER_KEY.load(Ordering::SeqCst) != 0 {
+        names.push("the 05_010 picker movie under the picker's own cache key, leaving the title's Load Game vanilla");
     }
     if names.is_empty() {
         return "nothing (no host asked for a movie)".to_owned();
@@ -654,6 +764,9 @@ pub unsafe fn install_gfx_swap_hook_for(serve: GfxServeSet) -> bool {
     }
     if serve.profile_select {
         SERVE_PROFILE_SELECT.store(1, Ordering::SeqCst);
+    }
+    if serve.profile_select_picker_key {
+        SERVE_PROFILE_SELECT_PICKER_KEY.store(1, Ordering::SeqCst);
     }
     if FILE_OPEN_INSTALLED
         .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)

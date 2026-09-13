@@ -278,7 +278,13 @@ fn default_take_bypass(_reason: &'static str) -> bool {
 unsafe fn default_dialog_from_action(_action_obj: usize) -> usize {
     0
 }
-unsafe fn default_restore_profile_summary(_reason: &str) {}
+/// The core owns the picker's snapshot, so it owns putting it back. This used to do nothing, and a
+/// shell that staged browse rows into the live `CS::ProfileSummary` left them there for the rest of
+/// the process -- visible on the title's `Load Game` list. A product overrides this with its own
+/// ledger-aware restore; nothing else needs one.
+unsafe fn default_restore_profile_summary(reason: &str) {
+    unsafe { crate::row_staging::restore_row_records(reason) };
+}
 fn default_arm_original(_save_path: &str) -> bool {
     false
 }

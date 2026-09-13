@@ -81,6 +81,20 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // Quit tab is opened, and a swap registered after that shows a vanilla two-cell grid until the
     // panel is rebuilt.
     let gfx_served = unsafe { crate::gfx_swap::install_quit_menu_gfx_swap_hook() };
+    // The picker's ProfileSelect is served under a key of its own, so the derived movie -- which
+    // hides the face box and compacts five 156px rows into ten 52px ones -- dresses a browse list
+    // and leaves the title's Load Game the way the game ships it. Without this rebind the serve
+    // set above has nowhere to land and the picker falls back to the vanilla presentation.
+    // Before anything that can open the picker: a save can fire while it is open, and the records
+    // it borrowed must not be what that save writes.
+    let _ = unsafe { crate::row_staging::install_save_serialize_row_guard() };
+    let picker_key =
+        unsafe { crate::profile_select_movie_key::install_picker_profile_select_key() };
+    if !picker_key {
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: the picker's ProfileSelect cache key did not install; its browse rows will render in the game's own vanilla character presentation"
+        ));
+    }
     let rows_armed = match unsafe { crate::row_cloner::arm(rows, actions) } {
         Ok(()) => true,
         Err(ArmError::AlreadyArmed) => {

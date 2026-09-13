@@ -1,9 +1,24 @@
 //! Standalone ME3 shell for the **Save Game** row, and nothing else.
 //!
-//! Vanilla's first System>Quit row saves and returns you to the title screen. This DLL renames it
-//! to `Save Game`, replaces its line help and its confirm text, and routes the press into the
-//! destination browser `er-quit-menu-core` draws for **Load Character from File** -- so the player
-//! chooses where the save goes and then keeps playing.
+//! Vanilla's first System>Quit row saves and returns you to the title screen. This DLL puts a row
+//! reading `Save Game` on the tab that instead opens the destination browser `er-quit-menu-core`
+//! draws for **Load Character from File** -- so the player chooses where the save goes and then
+//! keeps playing.
+//!
+//! # Two shapes, one of them compiled
+//!
+//! By default the row is **added**: a third row is cloned onto the Quit tab and the two rows
+//! FromSoft ships are left exactly as they are, label and action both. The `hijack-quit-row`
+//! feature selects the other shape, which is what this crate did before: the native first row is
+//! relabelled `Save Game` through `MsgRepository::GetAndFormat` and its action is replaced, so the
+//! tab stays at two rows. Only the arm call differs -- the flow, the browser chrome and every other
+//! install below are the same in both -- and the first lines of the log name which one armed.
+//!
+//! The relabelling is not a second switch to keep in step: the substitution asks
+//! `er_quit_menu_core::row_cloner::save_game_flow_is_owned` first, which is true only while
+//! `save_game_start_flow` is supplied. The default shape supplies `save_game_as_start_flow`
+//! instead, so the native row keeps its own words and the two `Save Game` spellings can never be on
+//! screen at once.
 //!
 //! # Why the row needed a crate before it could have a shell
 //!
@@ -17,10 +32,10 @@
 //!
 //! # What this shell does not carry
 //!
-//! No cloned character rows (`RowSet::NONE` clones nothing), no autoload, no loading cover, no
-//! portraits. Every product-owned answer in the host seam stays at its neutral default, including
-//! the save-write bypass -- so a profile carrying only this row writes what the player asked for
-//! and nothing else.
+//! No character rows and no build rows -- the only row it can clone is its own -- no autoload, no
+//! loading cover, no portraits. Every product-owned answer in the host seam stays at its neutral
+//! default, including the save-write bypass -- so a profile carrying only this row writes what the
+//! player asked for and nothing else.
 
 // A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out.
@@ -78,15 +93,43 @@ fn install_standalone_host() {
     });
 }
 
-/// Arm the vanilla Save Game row: no clones, one flow.
+/// Add the row: one clone, both vanilla rows untouched.
 ///
-/// Runs on its own thread because the game-task registration waits for the game's task manager to
-/// exist, and waiting inside the loader lock deadlocks the process.
-#[cfg(windows)]
-fn arm_save_game_row() {
-    // Safety: a bootstrap thread, once per process (`START` gates the spawn), before the Quit tab
-    // has built a dialog.
-    let armed = unsafe {
+/// # Safety
+///
+/// The bootstrap thread, once per process, before the Quit tab has built a dialog.
+#[cfg(all(windows, not(feature = "hijack-quit-row")))]
+unsafe fn arm_rows() -> Result<(), er_quit_menu_core::row_cloner::ArmError> {
+    unsafe {
+        er_quit_menu_core::row_cloner::arm(
+            er_quit_menu_core::row_cloner::RowSet {
+                save_game_as: true,
+                ..er_quit_menu_core::row_cloner::RowSet::NONE
+            },
+            er_quit_menu_core::row_cloner::QuitRowActions {
+                // The cloned row's slot, which is also what keeps the native first row's label and
+                // action vanilla: the text substitution is gated on the other slot being supplied.
+                save_game_as_start_flow: Some(
+                    er_quit_menu_core::save_game_row::system_quit_save_game_start_flow,
+                ),
+                save_game_request_save_only: Some(
+                    er_quit_menu_core::save_game_row::system_quit_save_game_request_save_only,
+                ),
+                ..er_quit_menu_core::row_cloner::QuitRowActions::default()
+            },
+        )
+    }
+}
+
+/// Take the vanilla first row over: no clones, one flow. What this crate did before the row moved
+/// onto one of its own.
+///
+/// # Safety
+///
+/// The bootstrap thread, once per process, before the Quit tab has built a dialog.
+#[cfg(all(windows, feature = "hijack-quit-row"))]
+unsafe fn arm_rows() -> Result<(), er_quit_menu_core::row_cloner::ArmError> {
+    unsafe {
         er_quit_menu_core::row_cloner::arm(
             er_quit_menu_core::row_cloner::RowSet::NONE,
             er_quit_menu_core::row_cloner::QuitRowActions {
@@ -99,11 +142,47 @@ fn arm_save_game_row() {
                 ..er_quit_menu_core::row_cloner::QuitRowActions::default()
             },
         )
-    };
+    }
+}
+
+/// The Scaleform movies this shape needs.
+///
+/// The grid is the half that differs. Vanilla's Quit tab has two cells, and the derivation widens
+/// it to six; a cloned row lands in the third, so the added-row shape cannot be reached without it,
+/// while the take-over shape replaces a row that already exists and serving the grid there would
+/// widen a two-cell tab and leave four empty cells behind (bd
+/// `slim-quickload-still-widened-the-quit-grid-2026-09-12`). The three cells this shape leaves
+/// empty are not clickable either: the native hit test discards any cell whose item index is past
+/// the list's item count.
+#[cfg(all(windows, not(feature = "hijack-quit-row")))]
+const MOVIES: er_quit_menu_core::gfx_swap::GfxServeSet = er_quit_menu_core::gfx_swap::GfxServeSet {
+    quit_grid: true,
+    ..er_quit_menu_core::gfx_swap::GfxServeSet::PICKER_KEYED
+};
+#[cfg(all(windows, feature = "hijack-quit-row"))]
+const MOVIES: er_quit_menu_core::gfx_swap::GfxServeSet =
+    er_quit_menu_core::gfx_swap::GfxServeSet::PICKER_KEYED;
+
+/// What the armed shape is, in the log's own words. The first lines of a run have to say whether
+/// the tab has two rows or three, because every later line reads the same either way.
+#[cfg(all(windows, not(feature = "hijack-quit-row")))]
+const ARMED_SHAPE: &str = "armed the cloned Save Game row: three rows on the Quit tab, the two vanilla rows left with their own labels and their own actions, the destination browser behind the added row";
+#[cfg(all(windows, feature = "hijack-quit-row"))]
+const ARMED_SHAPE: &str =
+    "armed the vanilla Save Game row: no cloned rows, the destination browser behind the press";
+
+/// Arm the Save Game row, in whichever shape this build selected, and install everything the press
+/// behind it needs.
+///
+/// Runs on its own thread because the game-task registration waits for the game's task manager to
+/// exist, and waiting inside the loader lock deadlocks the process.
+#[cfg(windows)]
+fn arm_save_game_row() {
+    // Safety: a bootstrap thread, once per process (`START` gates the spawn), before the Quit tab
+    // has built a dialog.
+    let armed = unsafe { arm_rows() };
     match armed {
-        Ok(()) => standalone_log(format_args!(
-            "armed the vanilla Save Game row: no cloned rows, the destination browser behind the press"
-        )),
+        Ok(()) => standalone_log(format_args!("{ARMED_SHAPE}")),
         Err(error) => standalone_log(format_args!(
             "arming the Save Game row failed: {error:?} -- the row keeps the game's own text and action"
         )),
@@ -132,17 +211,27 @@ fn arm_save_game_row() {
     // movie dresses nothing: run br-20260912-201935-ad27 scored every row foreign 13 times over and
     // the picker rendered in the game's own vanilla presentation.
     //
-    // Only that movie. The six-cell Quit grid is for cells three through six, and this row replaces
-    // a vanilla row that already exists -- serving the grid here would widen a two-cell tab and
-    // leave four empty cells behind.
+    // Which movies go with it depends on the shape: see `MOVIES`.
     // Safety: the bootstrap thread, before the title has loaded its movies; the installer is latched.
-    if !unsafe {
-        er_quit_menu_core::gfx_swap::install_gfx_swap_hook_for(
-            er_quit_menu_core::gfx_swap::GfxServeSet::PROFILE_SELECT_ONLY,
-        )
-    } {
+    if !unsafe { er_quit_menu_core::gfx_swap::install_gfx_swap_hook_for(MOVIES) } {
         standalone_log(format_args!(
             "the 05_010 movie is not being served; the destination browser will render in the game's own vanilla character presentation"
+        ));
+    }
+    // ...and the rebind that keeps that derivation off the title's Load Game. The derived movie is
+    // a re-layout of character select -- face box hidden, ten 52px rows where vanilla has five --
+    // which is right for browsing destinations and wrong for choosing a character. The picker gets
+    // its own Scaleform cache key; every other opener keeps the game's own.
+    // Safety: the bootstrap thread, once per process, and the installer is itself latched.
+    // A save can fire while the picker is open -- one did, on run br-20260913-021311-a481, and it
+    // wrote the browse labels into the player's container. Every save goes through the serializer
+    // this guards, so it is the one restore that cannot be routed around.
+    // Safety: the bootstrap thread, once per process, and the installer is itself latched.
+    let _ = unsafe { er_quit_menu_core::row_staging::install_save_serialize_row_guard() };
+    if !unsafe { er_quit_menu_core::profile_select_movie_key::install_picker_profile_select_key() }
+    {
+        standalone_log(format_args!(
+            "the picker's ProfileSelect cache key did not install; the destination browser will share the title Load Game screen's movie and re-lay it out"
         ));
     }
     // And the renderer-table guard, for the same reason a character row installs it: the native

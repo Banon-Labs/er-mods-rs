@@ -67,7 +67,7 @@
 // out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row never quits and
 // never runs anything.
 
-/// The six rows of the patched System -> Quit dialog, in property-list order.
+/// The seven rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRow {
     /// Native first row, relabelled "Save Game" by the `MsgRepository::GetAndFormat` hook.
@@ -92,6 +92,15 @@ pub enum QuitRow {
     /// planner's servers: the `?i=` form carries the whole build in the URL, so no account is
     /// minted and no row is written into someone else's free hobby service.
     GenerateBuildLink,
+    /// Cloned row, labelled "Save Game": opens the save-destination browser, and the character is
+    /// written to the file the player picks.
+    ///
+    /// It reads the same words as the native first row's own flow, and that is deliberate -- it is
+    /// the row a player presses to save. The two spellings can never be on screen together: the
+    /// substitution that relabels the native first row is gated on
+    /// [`crate::row_cloner::save_game_flow_is_owned`], which is false in exactly the load that
+    /// clones this row, so that row keeps its vanilla label while this one carries the words.
+    SaveGameAs,
 }
 
 impl QuitRow {
@@ -104,6 +113,7 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => 4,
             QuitRow::LoadBuildFromUrl => 5,
             QuitRow::GenerateBuildLink => 6,
+            QuitRow::SaveGameAs => 7,
         }
     }
 
@@ -119,18 +129,20 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => "Load Character from File",
             QuitRow::LoadBuildFromUrl => "Load Build from URL",
             QuitRow::GenerateBuildLink => "Generate Build Link",
+            QuitRow::SaveGameAs => "Save Game",
         }
     }
 }
 
-/// The six rows of the patched Quit dialog, in the captured table's stable order.
-pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 6] = [
+/// The seven rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 7] = [
     QuitRow::SaveGame,
     QuitRow::ReturnToDesktop,
     QuitRow::LoadProfile,
     QuitRow::LoadSaveProfiles,
     QuitRow::LoadBuildFromUrl,
     QuitRow::GenerateBuildLink,
+    QuitRow::SaveGameAs,
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
@@ -163,6 +175,7 @@ pub struct QuitRowTable {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
 }
 
 impl QuitRowTable {
@@ -174,6 +187,7 @@ impl QuitRowTable {
             QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
             QuitRow::LoadBuildFromUrl => self.load_build_from_url_index,
             QuitRow::GenerateBuildLink => self.generate_build_link_index,
+            QuitRow::SaveGameAs => self.save_game_as_index,
         }
     }
 
@@ -344,6 +358,7 @@ pub struct QuitRowFacts {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
@@ -376,6 +391,7 @@ impl QuitRowFacts {
             load_save_profiles_index: table.load_save_profiles_index,
             load_build_from_url_index: table.load_build_from_url_index,
             generate_build_link_index: table.generate_build_link_index,
+            save_game_as_index: table.save_game_as_index,
             table_dialog,
             activation_dialog,
             cursor,
@@ -393,6 +409,7 @@ impl QuitRowFacts {
             load_save_profiles_index: self.load_save_profiles_index,
             load_build_from_url_index: self.load_build_from_url_index,
             generate_build_link_index: self.generate_build_link_index,
+            save_game_as_index: self.save_game_as_index,
         }
         .index(row)
     }
@@ -425,6 +442,7 @@ impl QuitRowFacts {
             self.load_save_profiles_index,
             self.load_build_from_url_index,
             self.generate_build_link_index,
+            self.save_game_as_index,
         ];
         if idx.iter().any(|index| *index >= self.row_count) {
             return false;
@@ -503,7 +521,7 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
 /// index, and what the label read live at the cursor actually is.
 pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{}] live_label={:?} input_kind={:?}",
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{} save_game_as=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
         facts.save_game_index,
         facts.return_desktop_index,
@@ -511,6 +529,7 @@ pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
         facts.load_save_profiles_index,
         facts.load_build_from_url_index,
         facts.generate_build_link_index,
+        facts.save_game_as_index,
         facts.cursor_row_label,
         facts.input_kind,
     )
@@ -588,6 +607,7 @@ pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
         Some(QuitRow::LoadProfile)
             | Some(QuitRow::LoadSaveProfiles)
             | Some(QuitRow::LoadBuildFromUrl)
+            | Some(QuitRow::SaveGameAs)
     )
 }
 
@@ -679,8 +699,8 @@ mod system_quit_row_identity_tests {
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
     /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
-    /// plus rows 4 and 5 (Load Build from URL, Generate Build Link), which the same cloner appends
-    /// in the same pass.
+    /// plus rows 4, 5 and 6 (Load Build from URL, Generate Build Link, the cloned Save Game), which
+    /// the same cloner appends in the same pass.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
@@ -689,6 +709,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
             table_dialog: 0x175842080,
             activation_dialog: 0x175842080,
             cursor: 1,
@@ -981,6 +1002,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
         };
         assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
         // Every row in the stable table order must round-trip through `index`, so a row added to

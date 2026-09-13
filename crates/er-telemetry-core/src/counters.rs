@@ -994,6 +994,14 @@ pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT: AtomicUsize = AtomicUsi
 /// Exports that failed after being accepted -- no character in the world, an unreadable catalog, or
 /// a shell-execute the OS refused.
 pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ---- the cloned Save Game row --------------------------------------------------------------
+// The destination browser on a row of its own, for a load that leaves both vanilla rows alone. Its
+// flow, its stages and its counters are the Save Game ones already declared above -- what is new
+// here is only where the row sits, because a cloned row has a cloned row's pointers.
+/// Recorded cloned action object and `PropertyNewButtonController` for the row. Telemetry only:
+/// the row identity is the list cursor, here as everywhere else on this tab.
+pub static SYSTEM_QUIT_SAVE_GAME_AS_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1020,6 +1028,7 @@ pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Resolutions that came from the dialog's own list cursor -- the only row identity, shared by mouse,
 /// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would

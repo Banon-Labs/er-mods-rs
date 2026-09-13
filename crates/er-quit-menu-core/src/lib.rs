@@ -92,6 +92,7 @@ pub mod profile_load_dialog;
 /// Which fields of a `05_010_ProfileSelect` row are on screen, and whether the row is one of ours.
 #[cfg(windows)]
 pub mod profile_row_chrome;
+pub mod profile_select_movie_key;
 #[cfg(windows)]
 pub mod profile_table_guard;
 #[cfg(windows)]

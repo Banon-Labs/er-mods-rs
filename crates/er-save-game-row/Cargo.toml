@@ -21,6 +21,12 @@ name = "er_save_game_row"
 # `cdylib` is the ME3-loadable artifact; `rlib` keeps the shell testable on the host.
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+# Take over the vanilla first Quit row instead of adding a row: relabels the native
+# "Quit Game" button to "Save Game" and replaces its action. The tab stays at two rows.
+hijack-quit-row = []
+
 [dependencies]
 er-quit-menu-core = { path = "../er-quit-menu-core" }
 # Tier A only: the fresh-per-process log writer, so this shell's log describes exactly one run.

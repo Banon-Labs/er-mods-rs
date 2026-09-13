@@ -96,6 +96,9 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                 open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
                 open_save_picker_menu: Some(open_save_picker_menu_for_row),
                 save_game_start_flow: Some(system_quit_save_game_start_flow),
+                // This load takes the native first row over rather than adding a row, so the
+                // cloned row's slot stays empty and the text substitution keeps its gate.
+                save_game_as_start_flow: None,
                 save_game_request_save_only: Some(system_quit_save_game_request_save_only),
                 // No product half: the moved reset already clears the row table, the link
                 // field and the export latch, which is everything this side used to do.
