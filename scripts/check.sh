@@ -46,7 +46,7 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check.sh
 
-# --- one suite, ten stages ---------------------------------------------------------------------
+# --- one suite, eleven stages ---------------------------------------------------------------------
 # `bash scripts/check.sh` still runs everything. That has to stay true: every agent instruction,
 # every git hook and every piece of documentation in this repo invokes this file by name and
 # expects the whole verdict. What is new is how it gets there -- it runs its own stages as child
@@ -518,7 +518,7 @@ shellcheck() {
 # The one shim the header above says does not exist, added when the suite grew stages. It still
 # does not carry _check_tool_skip: a missing cupcake is owned by the fail-fast guard below, whose
 # reason (later steps consume its output) is unchanged. What it does carry is the stage test, so
-# `cupcake validate` is another stage's business in the other nine.
+# `cupcake validate` is another stage's business in the other ten.
 cupcake() {
 	_check_step_cmd[${BASH_LINENO[0]}]="cupcake $*"
 	_check_stage_skip "${BASH_LINENO[0]}" && return 0

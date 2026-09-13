@@ -321,7 +321,8 @@ def stage_input_digest(stage: str) -> str:
 # What an INVOCATION of each tool looks like inside a gate script, as opposed to a mention of it.
 # The distinction earns its keep on `xwin`: the pinned Windows CRT and SDK are about a gigabyte and
 # several gates merely name the target triple in a comment. A bare-word scan marked seven of the
-# eleven stages as needing that download; requiring `cargo xwin` marks the two that run it.
+# eleven stages as needing that download; requiring an invocation marks six, and only
+# `cargo-build` spells `cargo xwin` in check.sh itself.
 INDIRECT_TOOL_USE = {
     "cargo": re.compile(r"\bcargo\s+(\+\S+\s+)?(xwin|build|check|test|fmt|clippy|metadata|tree)\b"),
     "xwin": re.compile(r"\bcargo\s+(\+\S+\s+)?xwin\b|--target[= ]x86_64-pc-windows-msvc"),

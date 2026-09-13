@@ -200,7 +200,7 @@ jobs:
   #
   # `scripts/check-stages.py --check` -- one of the steps of the suite itself -- refuses a check.sh
   # step that belongs to no stage or to two, so the list this job emits provably covers every one
-  # of the 283 steps.
+  # of the 292 steps.
   plan:
     runs-on: ubuntu-latest
     outputs:
@@ -301,9 +301,9 @@ jobs:
   #
   # max-parallel: 4 is the same number as ER_CHECK_JOBS' default in scripts/check.sh, because the
   # user asked for one default used in both places. Here it is not about cores -- each job gets its
-  # own runner -- but about the caches: seven of the eleven stages restore the ~1 GB xwin CRT/SDK
-  # and a rust-cache, and eleven simultaneous cold jobs would pull them eleven times. Raise it here
-  # and in scripts/check.sh together; they are one edit each.
+  # own runner -- but about the caches: six of the eleven stages restore the ~1 GB xwin CRT/SDK and
+  # eight restore a rust-cache, and eleven simultaneous cold jobs would pull them eleven times.
+  # Raise it here and in scripts/check.sh together; they are one edit each.
   stage:
     needs: [choose-runner, plan]
     runs-on: ${{ fromJSON(needs.choose-runner.outputs.runs_on_json) }}
@@ -479,7 +479,7 @@ jobs:
         # It was a dot-prefixed directory until running this workflow under `act` caught the cost:
         # `actions/upload-artifact@v4` globbed it, found nothing, and reported that as a yellow
         # `::warning::` on a step that still went GREEN -- so every stage would have uploaded an
-        # empty artifact and the report job would have called all 283 steps NO REPORT, with no red
+        # empty artifact and the report job would have called all 292 steps NO REPORT, with no red
         # step anywhere to say why. An isolated probe pinned the cause to the dot and nothing else:
         # in one job, `dotless-results/*.tsv` uploaded and `.dot-results/*.tsv` did not, same
         # directory, same step, same relative form. `@actions/glob` will not match a path segment
