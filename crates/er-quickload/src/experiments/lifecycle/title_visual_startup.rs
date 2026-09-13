@@ -25,6 +25,20 @@ pub(crate) fn install_title_visual_startup_hooks() {
                     // hook still runs the title-cover duties. Both are idempotent.
                     install_profile_row_populate_hook();
                     install_title_scene_obj_proxy_named_child_bind_hook();
+                    // Arming `PROFILE_05_010_RUNTIME_EDIT_ARMED` above decides that the edited movie
+                    // should be served; this observer is what serves it. Without it the flag is read
+                    // by nobody, the vanilla `05_010_profileselect.gfx` is handed to the menu, and
+                    // the face box the edit removes is still there with the `ErStats` field it adds
+                    // still absent.
+                    //
+                    // It used to be installed only under `title_native_menu_visual_suppression_enabled`,
+                    // which answers false with no boot autoload. Measured on run
+                    // br-20260913-154820-c63f, the quit-rows-only module: `stats-panel: registered
+                    // neutral bg` for all ten slots, and no `05_010 runtime edit derived` line
+                    // anywhere in the log -- the chrome armed and was never delivered. The call is
+                    // idempotent (three installed flags checked on entry), so the autoload path's
+                    // own `Once` below still costs nothing.
+                    install_title_menu_resource_acquire_observer_hook();
                 });
         });
     }

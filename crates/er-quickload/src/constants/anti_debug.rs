@@ -84,20 +84,27 @@ pub(crate) const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable
 pub(crate) const INITIAL_GAME_TASK_TICKS: u64 = 0;
 pub(crate) const GAME_TASK_TICK_INCREMENT: u64 = 1;
 pub(crate) const TASK_INSTANCE_WAIT_LOG_INTERVAL: u64 = 4096;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_MAX_CONFIRM_PULSES: u32 = 16;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DEFAULT_INTERVAL_TICKS: u64 = 30;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_LAST_PULSE_TICK: u64 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_HOOK_FRAMES: usize = 4;
 pub(crate) const SAFE_INPUT_KEY_UP_STATE: i16 = 0;
 pub(crate) const VK_RETURN_KEY: usize = 0x0d;
 pub(crate) const VK_SPACE_KEY: usize = 0x20;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYDOWN_LPARAM: isize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYUP_LPARAM: isize = 0xc0000001u32 as isize;
 pub(crate) const DIK_RETURN: usize = 0x1c;
 pub(crate) const DIK_SPACE: usize = 0x39;
 pub(crate) const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 pub(crate) const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 pub(crate) const HRESULT_SUCCESS_FLOOR: i32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // The TitleStep ctor (0x140b0b1c0) stores this derived vtable to owner+0
 // (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
@@ -220,17 +227,23 @@ pub(crate) const MENU_TASK_STATE_DELAY_OFFSET: usize =
     core::mem::offset_of!(MenuTaskStateLayout, delay_bits);
 pub(crate) const TASK_ENQUEUE_TRACE_LIMIT: usize = 256;
 pub(crate) const NO_SAFE_INPUT_CONFIRM_FRAMES: usize = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_FRAME_DECREMENT: usize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NO_CONFIRM_PULSES: u32 = 0;
 pub(crate) const SAFE_INPUT_FIRST_PULSE_INDEX: u32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NEXT_PULSE_OFFSET: u32 = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT: u32 = 5;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
 pub(crate) const WINDOW_PID_UNSET: u32 = 0;
 pub(crate) const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
 pub(crate) const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
 pub(crate) const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
 pub(crate) use er_title_flow::MENU_TRACE_UNSEEN_SEQ;
+#[cfg(feature = "autoload")]
 pub(crate) const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
 pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;

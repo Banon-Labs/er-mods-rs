@@ -2506,6 +2506,15 @@ cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
   --target x86_64-pc-windows-msvc --no-default-features \
   --features autoload,save-picker,loading-cover,portrait,menu-trace
 
+# ...and the other direction, which is the one an installer sells: the System>Quit rows with no
+# boot autoload behind them. It did not build until 2026-09-13 -- the safe-input confirm driver
+# compiled unconditionally and named six functions that live behind `menu-trace`, so the only
+# configurations that had ever been built were the ones carrying the autoload. `menu-trace` is
+# named here because it is not separable yet; see the feature's comment in the crate manifest.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+  --target x86_64-pc-windows-msvc --no-default-features \
+  --features quit-rows,menu-trace
+
 bash "$repo_root/scripts/check-rust-build.sh"
 
 # The launch-time freshness gate, shared by five launch scripts as `require_fresh_dlls`. Its

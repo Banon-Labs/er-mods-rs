@@ -206,7 +206,28 @@ unsafe extern "system" fn menu_window_job_build_hook(
     // Safety: the union publishes either the game trampoline or the next handler; both take these
     // four arguments.
     let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
-    unsafe { next(job_out, callback, info, context) }
+    let built = unsafe { next(job_out, callback, info, context) };
+    // Which job every ProfileSelect open produced, armed or not. The private cache key is proven to
+    // hand the picker its own file -- run br-20260913-151808-4457 logged the canonical open as file
+    // 0x1dbe3d80 and the picker's as a different object -- and the title's Load Game still came up
+    // wearing the picker's row geometry. A separate file is not a separate window, so this records
+    // the job each open built: two opens answering with one job is a single instance both surfaces
+    // share, and then every write the picker makes to it outlives the picker.
+    if info != 0 {
+        let filename =
+            unsafe { safe_read_usize(info + SCALEFORM_LOAD_INFO_FILENAME_OFFSET) }.unwrap_or(0);
+        let is_picker = unsafe { wide_equals_ascii(filename, PICKER_PROFILE_SELECT_RESOURCE_NAME) };
+        let is_native = unsafe { wide_equals_ascii(filename, NATIVE_PROFILE_SELECT_RESOURCE_NAME) };
+        if is_picker || is_native {
+            let job = unsafe { safe_read_usize(job_out) }.unwrap_or(0);
+            append_autoload_debug(format_args!(
+                "system-quit-gfx: ProfileSelect window built key={} job_out=0x{job_out:x} job=0x{job:x} ret=0x{built:x} armed={}",
+                if is_picker { "picker" } else { "canonical" },
+                PICKER_SUBMIT_DEPTH.load(Ordering::SeqCst)
+            ));
+        }
+    }
+    built
 }
 
 /// Detour the window-job constructor so this crate's picker opens ProfileSelect under its own key.

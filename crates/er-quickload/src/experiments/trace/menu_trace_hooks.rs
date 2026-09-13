@@ -75,6 +75,7 @@ use crate::{
 };
 use eldenring::cs::GameMan;
 
+#[cfg(feature = "autoload")]
 #[derive(Clone, Copy)]
 pub(crate) struct MenuTraceSnapshot {
     pub(crate) seq: usize,
@@ -85,6 +86,7 @@ pub(crate) struct MenuTraceSnapshot {
     pub(crate) payload_ptr: usize,
 }
 
+#[cfg(feature = "autoload")]
 impl MenuTraceSnapshot {
     pub(crate) fn advanced_from(self, previous: Self) -> bool {
         self.seq != previous.seq
@@ -116,6 +118,7 @@ impl MenuTraceSnapshot {
     }
 }
 
+#[cfg(feature = "autoload")]
 pub(crate) fn menu_trace_snapshot() -> MenuTraceSnapshot {
     MenuTraceSnapshot {
         seq: MENU_TRACE_LAST_SEQ.load(Ordering::SeqCst),
@@ -135,6 +138,7 @@ pub(crate) fn trace_rva_label(rva: usize) -> String {
     }
 }
 
+#[cfg(feature = "autoload")]
 pub(crate) fn append_confirm_probe(
     phase: &str,
     pulse_seq: usize,

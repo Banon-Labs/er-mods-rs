@@ -4,11 +4,18 @@ use crate::{config::*, constants::*, crashlog::*, experiments::*, ffi::*, hooks:
 // Constants/statics live in constants.rs; keep lib.rs focused on DLL entrypoints and task wiring.
 #[derive(Default)]
 pub(crate) struct SafeInputRuntime {
+    // Four of these are written and read only by the confirm driver in `hooks.rs`, so they follow
+    // it behind `autoload`. `confirm_count` and `pulses_sent` stay: the telemetry writer reports
+    // them whether or not a driver is compiled in.
+    #[cfg(feature = "autoload")]
     loaded: bool,
     confirm_count: u32,
     pulses_sent: u32,
+    #[cfg(feature = "autoload")]
     interval_ticks: u64,
+    #[cfg(feature = "autoload")]
     initial_delay_ticks: u64,
+    #[cfg(feature = "autoload")]
     last_pulse_tick: u64,
     hooks_requested: bool,
     last_status: Option<String>,

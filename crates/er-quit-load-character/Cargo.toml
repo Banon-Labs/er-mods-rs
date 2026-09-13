@@ -3,11 +3,16 @@
 # `er_quit_menu_core::arm::arm_standalone` with their own `RowSet`, so the row a shell does not
 # have a flow for is never cloned and can never be pressed.
 #
-# It ships ONE of the two character rows on purpose. **Load Character from File** is not armed:
-# its browse surface, its ingest and its save-swap ledger are all still in `er-quickload`
-# (`save_picker_menu.rs`, `save_swap_profile_table.rs`, `loading_cover_save_slot.rs`), and
-# `QuitMenuHost::system_quit_ingest_picked_save` defaults to refusing every pick -- so arming it
-# would put a row on the tab that opens a browser and then rejects whatever the player chooses.
+# It ships ONE row by default, the one it is named for. **Load Character from File** is a
+# non-default feature, `load-character-from-file`, because a profile composes rows and this shell
+# arming two of them made one of the two uncomposable: a build that wants Load Character and
+# nothing else could not have it. The row registry merges row sets across every loaded shell
+# (`er_quit_menu_core::row_registry`), so the from-file row belongs to whichever host declares it
+# rather than riding along with a neighbour.
+#
+# The comment this replaces said the row was unarmed because its browse surface lived in
+# `er-quickload`. That stopped being true on 2026-09-11 when the picker moved into
+# `er-quit-menu-core`, and the row has been armed unconditionally since.
 #
 # This crate contends with `er-quickload` and with `er-quit-menu` on the Quit tab: all three derive
 # the same six-cell `02_040_optionsetting` grid, and `er_gfx::options_02_040::quit6` fail-closes
@@ -18,6 +23,12 @@ name = "er-quit-load-character"
 version = "0.1.0"
 edition = "2024"
 publish = false
+
+[features]
+default = []
+# Adds the **Load Character from File** row: the browse picker in
+# `er_quit_menu_core::save_picker_menu`, handed to the same `05_010_ProfileSelect` window.
+load-character-from-file = []
 
 [lib]
 name = "er_quit_load_character"

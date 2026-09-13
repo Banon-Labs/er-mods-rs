@@ -427,6 +427,16 @@ pub unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     true
 }
 
+/// The file object the canonical `05_010_profileselect` open was answered with, and how many times
+/// the picker's private key was answered with that same object. See the compare at the open site.
+static PROFILE_05_010_CANONICAL_FILE: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_05_010_SHARED_OBJECT: AtomicUsize = AtomicUsize::new(0);
+
+/// How many picker-key opens came back as the title's own movie object.
+pub fn profile_05_010_shared_object_count() -> usize {
+    PROFILE_05_010_SHARED_OBJECT.load(Ordering::SeqCst)
+}
+
 static PROFILE_05_010_EDITED: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
 static PROFILE_05_010_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static PROFILE_05_010_SERVES: AtomicUsize = AtomicUsize::new(0);
@@ -657,6 +667,42 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     // with the game's narrower signature would leave its fourth register undefined.
     let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
     let native = unsafe { next(loader, open_url, flags_reg, 0) };
+    // Which file object each 05_010 key was handed, because the private key is only a per-surface
+    // gate if the loader answers it with a different object. The key's open is redirected back to
+    // the canonical url (the key names no file), so the loader is free to answer out of the cache
+    // entry the title's Load Game already holds -- and `install_payload` then rewrites the movie
+    // both surfaces draw. That is what the user photographed on run br-20260913-150909-6701: the
+    // picker's row geometry on the title's Load Game. A pointer compare is what tells a fresh load
+    // from a cache hit, and it costs one store on a path that runs a few times per boot.
+    if is_native_05_010 {
+        PROFILE_05_010_CANONICAL_FILE.store(native, Ordering::SeqCst);
+    }
+    // Every 05_010 open, both keys, with the object the loader answered with. The pointer compare
+    // below can only speak when the canonical open passed through this hook, and on run
+    // br-20260913-151533-5edf it never spoke -- which leaves two unseparated explanations, a fresh
+    // object or a canonical open this hook never saw. One line per open separates them.
+    if is_native_05_010 || has_picker_key {
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: 05_010 open #{hit} key={} serve_bits(native={} picker={}) -> file=0x{native:x} canonical_seen=0x{:x}",
+            if has_picker_key {
+                "picker"
+            } else {
+                "canonical"
+            },
+            SERVE_PROFILE_SELECT.load(Ordering::SeqCst),
+            SERVE_PROFILE_SELECT_PICKER_KEY.load(Ordering::SeqCst),
+            PROFILE_05_010_CANONICAL_FILE.load(Ordering::SeqCst),
+        ));
+    }
+    if is_picker_05_010 {
+        let canonical = PROFILE_05_010_CANONICAL_FILE.load(Ordering::SeqCst);
+        if canonical != 0 && canonical == native {
+            PROFILE_05_010_SHARED_OBJECT.fetch_add(1, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-gfx: 05_010 picker key was answered with the title's own movie object 0x{native:x} -- a cache hit, not a fresh load, so editing it re-lays out the title's Load Game as well. Serving vanilla for this open."
+            ));
+        }
+    }
     if !(is_options_02_040
         || is_build_url_02_990
         || is_path_editor_02_990
@@ -673,8 +719,14 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
     if is_build_url_02_990 || is_path_editor_02_990 {
         crate::software_keyboard::build_url_note_movie_served();
     }
+    let shared_with_title = is_picker_05_010
+        && PROFILE_05_010_CANONICAL_FILE.load(Ordering::SeqCst) == native
+        && native != 0;
     let served = if is_options_02_040 {
         unsafe { options_02_040_quit6_swap_to_edited(base, native) }
+    } else if shared_with_title {
+        // Fail closed rather than re-lay out a surface this host does not own.
+        false
     } else if is_profile_05_010 || is_picker_05_010 {
         unsafe { profile_05_010_swap_to_edited(base, native) }
     } else if is_path_editor_02_990 {

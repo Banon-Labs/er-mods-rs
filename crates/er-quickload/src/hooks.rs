@@ -2,7 +2,6 @@
 
 use std::{
     ffi::c_void,
-    fs,
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -10,24 +9,38 @@ use std::{
 use crate::mh::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook, UnionFn, register_union_hook};
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        Foundation::{HINSTANCE, HWND, LPARAM},
         System::{
             LibraryLoader::{GetModuleHandleA, GetProcAddress},
             Threading::GetCurrentProcessId,
         },
-        UI::WindowsAndMessaging::{
-            EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_KEYDOWN,
-            WM_KEYUP,
-        },
+        UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible},
     },
     core::{BOOL, PCSTR},
 };
+
+// Read only by the safe-input confirm driver below, which is the boot autoload's.
+#[cfg(feature = "autoload")]
+use std::fs;
+#[cfg(feature = "autoload")]
+use windows::Win32::Foundation::WPARAM;
+#[cfg(feature = "autoload")]
+use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP};
 
 #[allow(unused_imports)]
 use crate::*;
 #[allow(unused_imports)]
 use crate::{crashlog::*, experiments::*, ffi::*, telemetry::*};
 
+/// The boot autoload's confirm driver: it pulses the native confirm binding until the title chain
+/// has been walked, and it reads the menu trace to decide when the last pulse is allowed.
+///
+/// Behind `autoload` because it is only ever called from the boot task tick, beside
+/// `process_autoload_request`, and because a composition that carries only the System>Quit rows has
+/// no title chain to walk. Before this gate it compiled unconditionally and named three functions
+/// that live behind `menu-trace`, so `--no-default-features --features quit-rows` -- the quit-menu
+/// module on its own -- failed to build with six `E0425`s rather than producing a smaller DLL.
+#[cfg(feature = "autoload")]
 pub(crate) fn process_safe_input_request(state: &mut EffectsState) {
     if SAFE_INPUT_CONFIRM_FRAMES_REMAINING.load(Ordering::SeqCst) > NO_SAFE_INPUT_CONFIRM_FRAMES {
         SAFE_INPUT_CONFIRM_FRAMES_REMAINING
@@ -143,17 +156,22 @@ pub(crate) fn process_safe_input_request(state: &mut EffectsState) {
     }
 }
 
+#[cfg(feature = "autoload")]
 pub(crate) fn requires_post_map_final_confirm_gate(runtime: &SafeInputRuntime) -> bool {
     runtime.confirm_count >= SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT
         && runtime.pulses_sent + SAFE_INPUT_NEXT_PULSE_OFFSET == runtime.confirm_count
 }
 
+/// Its argument type lives behind `menu-trace`, which is why `autoload` now depends on that
+/// feature rather than this decision degrading to a constant when the trace is compiled out.
+#[cfg(feature = "autoload")]
 pub(crate) fn is_post_map_continuation_gate(snapshot: MenuTraceSnapshot) -> bool {
     snapshot.seq > MENU_TRACE_UNSEEN_SEQ
         && snapshot.hook_rva == TRACE_MENU_OTHER_LOAD_WRAPPER_RVA as usize
         && snapshot.state_qword == POST_MAP_CONTINUATION_STATE_QWORD
 }
 
+#[cfg(feature = "autoload")]
 pub(crate) fn load_safe_input_runtime(runtime: &mut SafeInputRuntime) {
     runtime.loaded = true;
     runtime.interval_ticks = SAFE_INPUT_DEFAULT_INTERVAL_TICKS;
@@ -261,6 +279,7 @@ pub(crate) fn note_simulated_presses(count: usize) {
     SIMULATED_INPUT_PRESSES_TOTAL.fetch_add(count, Ordering::SeqCst);
 }
 
+#[cfg(feature = "autoload")]
 pub(crate) fn emit_confirm_pulse_to_own_window() -> Result<(), String> {
     SAFE_INPUT_CONFIRM_FRAMES_REMAINING.store(SAFE_INPUT_CONFIRM_HOOK_FRAMES, Ordering::SeqCst);
     let hwnd = own_window().ok_or_else(|| "no visible process window for safe input".to_owned())?;

@@ -103,18 +103,21 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
     append_log(&log_dir(), args);
 }
 
-/// The two rows this shell arms. Spelled out rather than reached for as a named constant, because
+/// The rows this shell arms. Spelled out rather than reached for as a named constant, because
 /// the set and the action table below have to agree field for field: a row here with no flow beside
 /// it is a row that appears and does nothing.
 ///
 /// **Load Character from File** joined it once the picker moved into `er-quit-menu-core`
-/// (2026-09-11). Until then the browse surface, the row staging and the ingest were all
-/// `pub(crate)` inside `er-quickload`, so a shell could name the row and had nothing to open.
+/// (2026-09-11), and rode along unconditionally from then until 2026-09-13, which made the row this
+/// shell is named for impossible to have on its own: a profile asking for the two vanilla rows plus
+/// a Save Game row plus Load Character got a fifth row it had not asked for. It is now behind the
+/// `load-character-from-file` feature, off by default, and the row registry merges row sets across
+/// hosts so the row can be declared by whichever shell a profile wants it from.
 #[cfg(windows)]
 const CHARACTER_ROWS: er_quit_menu_core::row_cloner::RowSet =
     er_quit_menu_core::row_cloner::RowSet {
         load_character: true,
-        load_character_from_file: true,
+        load_character_from_file: cfg!(feature = "load-character-from-file"),
         ..er_quit_menu_core::row_cloner::RowSet::NONE
     };
 
@@ -127,7 +130,10 @@ fn row_actions() -> er_quit_menu_core::row_cloner::QuitRowActions {
         open_profile_load_dialog: Some(
             er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog,
         ),
-        open_save_picker_menu: Some(open_save_picker_for_row),
+        // Paired with the row above it: a flow with no row is dead code, and a row with no flow is
+        // a press that does nothing, so both sides read the same feature.
+        open_save_picker_menu: cfg!(feature = "load-character-from-file")
+            .then_some(open_save_picker_for_row as unsafe fn(usize) -> bool),
         ..er_quit_menu_core::row_cloner::QuitRowActions::default()
     }
 }

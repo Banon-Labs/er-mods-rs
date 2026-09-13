@@ -42,6 +42,11 @@ pub(crate) mod portrait_equip_oracle;
 pub(crate) mod profile_table_gfx_files;
 pub(crate) use profile_table_gfx_files::*;
 
+// The third `PlaceName` source, asked only when the save itself cannot name a body's map. Read
+// from the game's own param tables, so a character who is the only one in the container standing on
+// their map still gets a location.
+pub(crate) mod map_place_names;
+
 pub(crate) mod title_resources_stats_text;
 pub(crate) use title_resources_stats_text::*;
 

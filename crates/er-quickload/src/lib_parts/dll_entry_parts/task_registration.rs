@@ -417,6 +417,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
+                    #[cfg(feature = "autoload")]
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
                     write_telemetry_throttled(&mut state, false);

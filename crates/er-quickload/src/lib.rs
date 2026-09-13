@@ -1,6 +1,11 @@
 #[cfg(not(windows))]
 pub fn host_diagnostic_stub() {}
 
+// Deliberately outside the `#[cfg(windows)]` block below: the `05_010_ProfileSelect` chrome
+// decision is a pure predicate, and the gate it replaces removed a user-facing surface without
+// failing to build and without logging anything, so it earned a place a host test can reach.
+pub mod profile_select_chrome_gate;
+
 #[cfg(windows)]
 use std::{
     ffi::c_void,

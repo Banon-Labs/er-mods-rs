@@ -35,8 +35,14 @@ default = [
     "menu-trace",
 ]
 # Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
-# The thing the crate is named after.
-autoload = []
+# The thing the crate is named after, and since 2026-09-13 a feature that bites: the safe-input
+# confirm driver and the eight constants it reads compile only when it is on.
+#
+# It implies `menu-trace` because the driver's final confirm pulse is gated on state only the trace
+# hooks write -- `is_post_map_continuation_gate` compares the live snapshot's hook rva and state
+# qword, and with the hooks compiled out that snapshot never leaves its unseen value, so the last
+# pulse would never fire. The dependency is real, not an import accident.
+autoload = ["menu-trace"]
 # The cloned System>Quit rows and the flows behind them. It implies `save-game-row`, because a tab
 # carrying the cloned rows also carries the replaced Save Game row, and the row router reads one
 # action table for both.
@@ -53,7 +59,16 @@ save-picker = []
 loading-cover = []
 # The character portraits on the loading screen and the Quit panel.
 portrait = []
-# Menu construction and native-result tracing. Diagnostics: no product surface depends on it.
+# Menu construction and native-result tracing.
+#
+# It was called diagnostics-only when it was drawn, and that is not what it holds, so no
+# composition can currently leave it out. `experiments/trace/menu_trace_hooks.rs` also carries four
+# things tracing does not own: `b80_mount_trace_summary`, read by the crash log and by the
+# System>Quit repro guard, and the second-load stall fix -- `blockres_stalecap_fix_enabled`,
+# `map_mount_guard_flip_tick` and `run_ebl_mount_census`, all three named as host-seam fields the
+# boot bootstrap fills in unconditionally. Turning the feature off does not remove a diagnostic, it
+# fails the build with `E0425`. Moving those four into a module of their own is what would make it
+# separable; until then every checked composition names it, `quit-rows` included.
 menu-trace = []
 
 [dependencies]

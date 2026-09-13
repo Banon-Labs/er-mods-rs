@@ -257,6 +257,16 @@ pub(crate) fn autoload_disabled() -> bool {
     // clean-A/B step-4 test (armed + autoload-off + DRIVE_MODE=full -> reload via harness-Continue epoch1
     // like vanilla, isolating arming from the epoch1-path confound; bd
     // STEP4-4fps-AB-is-structurally-CONFOUNDED). This is a measurement override, not a product feature gate.
+    //
+    // The `autoload` cargo feature is the compile-time half of the same question, and the two
+    // halves have to agree: the confirm driver and the constants it reads are compiled out without
+    // it, so a build that left the feature off must not have anything ask for a boot load.
+    // Disarming `PRODUCT_AUTOLOAD_ARMED` alone was measured on the sibling shell to leave a
+    // character still loading -- through `pab_advance_enabled`, which sets the title accept byte
+    // and lets the game's own menu open and take the Continue row. Both readers derive from here.
+    if !cfg!(feature = "autoload") {
+        return true;
+    }
     std::path::Path::new("er-quickload-diag-no-autoload.txt").exists()
 }
 /// Product direction (2026-07-04): the ProfileSelect / Load-Game menu shows a **stats panel** instead
@@ -280,10 +290,15 @@ pub(crate) fn autoload_disabled() -> bool {
 /// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_QUICKLOAD_NO_AUTOLOAD`
 /// shape: env `ER_QUICKLOAD_NO_STATS_PANEL=1` or the GAME_DIR file `er-quickload-no-stats-panel.txt`.
 pub(crate) fn stats_panel_enabled() -> bool {
-    if autoload_disabled() || save_override_telemetry_only() {
-        return false;
-    }
-    true
+    // Two consumers, and neither can speak for the other: the boot autoload reaches
+    // `05_010_ProfileSelect` through the title's own `LOAD GAME`, the cloned System>Quit rows reach
+    // it from the Quit tab. This used to ask the autoload alone, which answered false for a build
+    // carrying only the rows and served them the vanilla movie.
+    crate::profile_select_chrome_gate::profile_select_chrome_required(
+        !autoload_disabled(),
+        cfg!(feature = "quit-rows"),
+        save_override_telemetry_only(),
+    )
 }
 // ENV-gate RATIONALE: ER_QUICKLOAD_NATIVE_CONTINUE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn native_continue_enabled() -> bool {
