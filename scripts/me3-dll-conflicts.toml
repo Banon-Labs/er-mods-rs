@@ -367,6 +367,30 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 
 [[conflict]]
 a = "er-quickload"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """Both call `er_quit_menu_core::row_cloner::arm` with `RowSet::ALL`, and every static in \
+that crate is per cdylib -- so co-loading gives the one Quit tab two cloners, two row tables and \
+two arm latches with nothing shared between them. Each cloner appends its own rows to the same \
+`PropertyEditDialog`, and each router then resolves a press against whichever table its own DLL \
+captured, which is the other one's dialog half the time.
+
+Measured in the full bundle, run br-20260913-022056-2259, with both loaded: pressing **Load \
+Character** opened **Load Character from File**; pressing `[..]` in the browser asked "Start with \
+selected profile?" instead of walking up a directory; and quitting to the title left the player at \
+a screen where no button did anything. Three symptoms, one collision. `er-quit-menu`'s own module \
+doc already describes this exact shape from the `er-quit-load-character` pairing -- a six-cell grid \
+carrying `item_count=10`, two tables disagreeing about which index is Return to Desktop, every \
+press resolving `row=AMBIGUOUS`.
+
+The pair was missing rather than judged absent: `er-quit-menu` is paired against \
+`er-build-import`, `er-quit-load-character` and `er-save-game-row`, so it looked classified, and \
+none of those three is present in a product run. With nothing to rank, the dependency closure \
+loaded both. The product is the one to keep; the shell exists for profiles that do not load it."""
+evidence = "crates/er-quit-menu/src/lib.rs:143; crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs:132; crates/er-quit-menu-core/src/row_cloner.rs; bd two-row-shells-cannot-share-a-row-table-statics-are-per-dll-2026-09-12; /home/banon/.cache/er-me3-runs/br-20260913-022056-2259"
+
+[[conflict]]
+a = "er-quickload"
 b = "er-quit-rows"
 kind = "duplicate-owner"
 reason = """`er-quit-rows` is a copy of `er-quickload`'s source being reduced to the System>Quit rows, so until that reduction finishes the two are duplicate owners of everything the product owns, not of one surface: the same row cloner arm, the same three routing prologues, the same row-populate and current-summary detours, the same save-redirect hooks, the same autoload phase machine and the same telemetry counters. Every static is per DLL, so co-loading gives each of those two independent copies with no shared lock.
