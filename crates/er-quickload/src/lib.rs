@@ -12,6 +12,12 @@ pub mod profile_select_chrome_gate;
 // type-checked by the cross-compile.
 pub mod orphan_title_window;
 
+// Deliberately outside the `#[cfg(windows)]` block below: what a boot autoload is allowed to hide
+// -- the logo splash, the online-mode getter, the pre-world sound -- is a pure decision, and all
+// three covers shipped in a build that could not autoload because each asked a question with no
+// term for the autoload in it.
+pub mod autoload_cover_gates;
+
 #[cfg(windows)]
 use std::{
     ffi::c_void,

@@ -48,7 +48,10 @@ pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
 
 // ENV-gate RATIONALE: ER_QUICKLOAD_SPLASH_SKIP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn splash_skip_enabled() -> bool {
-    !save_override_telemetry_only() || product_autoload_enabled() || own_load_enabled()
+    crate::autoload_cover_gates::splash_skip_required(
+        product_autoload_enabled(),
+        own_load_enabled(),
+    )
 }
 /// Force offline boot (no online login attempt -> no "Unable to start in online mode" modal),
 /// so the headless autoload reaches the real title/main-menu directly. Auto-on whenever the
@@ -56,5 +59,8 @@ pub(crate) fn splash_skip_enabled() -> bool {
 /// Gated (not always-on) so it never forces offline on a co-op/online launch that wants the
 /// getter live.
 pub(crate) fn online_disable_enabled() -> bool {
-    !save_override_telemetry_only() || own_stepper_enabled()
+    crate::autoload_cover_gates::online_disable_required(
+        product_autoload_enabled(),
+        own_stepper_enabled(),
+    )
 }

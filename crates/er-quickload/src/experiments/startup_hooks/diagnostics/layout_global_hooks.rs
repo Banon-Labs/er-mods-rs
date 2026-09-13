@@ -317,7 +317,12 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     } else {
         false
     };
-    let muted = !in_world_seen || quickload_active || !player_present;
+    let muted = crate::autoload_cover_gates::pre_world_audio_mute_required(
+        crate::product_autoload_enabled(),
+        quickload_active,
+        in_world_seen,
+        player_present,
+    );
     let ret = if muted {
         0
     } else {
