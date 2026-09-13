@@ -3197,6 +3197,7 @@ dependencies = [
  "er-profile-summary-core",
  "er-save-loader",
  "er-save-picker-core",
+ "er-save-redirect",
  "er-save-suppress",
  "er-telemetry-core",
  "er-title-flow",

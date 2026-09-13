@@ -67,6 +67,10 @@ er-gfx = { path = "../er-gfx" }
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The `CreateFileW` hook core the destination commit's write-open redirect is read through. The
+# crate owns the idempotency, MinHook init and trampoline storage; this crate supplies the detour.
+# Without it an armed redirect window has no reader and the native writer opens the loaded save.
+er-save-redirect = { path = "../er-save-redirect" }
 # Shared MinHook FFI + hook union. This crate contends with the product DLL on real game
 # addresses (0x920c90 AddCancelButton, 0x9a4670 ProfileLoad activate, 0x875590 the
 # ProfileSelect list builder, ...), so EVERY detour it installs must go through

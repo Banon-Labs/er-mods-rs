@@ -297,6 +297,31 @@ cannot produce save-path evidence at all."""
 evidence = "crates/er-save-disable/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
 
 [[conflict]]
+a = "er-save-game-row"
+b = "er-reload-trace"
+kind = "hook-collision"
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+HookSpec table, and each shell links `er-hook` statically, so whichever installs second finds a \
+`jmp` where the prologue should be. The Save Game row needs that observer to see the overwrite \
+confirm's result: without it `emit_observer_installed=0`, the confirm is never built, and picking \
+an existing destination dies on `overwrite-file-confirm BUILD TIMEOUT after 180 ticks` with \
+nothing written (run br-20260913-002757-9317). Same mechanism as the er-quit-rows pair above."""
+evidence = "crates/er-reload-trace/src/lib.rs (rva: 0x746e80); crates/er-quit-menu-core/src/save_flow_boxes.rs:916"
+
+[[conflict]]
+a = "er-save-game-row"
+b = "er-save-disable"
+kind = "hook-collision"
+reason = """Both install er-save-suppress's hook set from their own MinHook instance, and \
+whichever loads second finds every prologue already carrying a `jmp` and refuses it. Measured on \
+run br-20260912-235336-32f8: nine `prologue mismatch` lines whose observed bytes all open `e9`, \
+`save-job-body completion=NO`, and a browsed destination refused with "the SL save-job-body \
+observer is not installed" after the menus had already closed. The row press cannot write a save \
+in that state, which is also what er_save_disable exists to guarantee -- the two features are \
+opposites, not merely co-located."""
+evidence = "crates/er-save-disable/src/lib.rs:204; crates/er-quit-menu-core/src/save_flow.rs (install_save_flow_game_task)"
+
+[[conflict]]
 a = "er-quickload"
 b = "er-loading-portrait"
 kind = "present-compositor"

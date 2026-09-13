@@ -102,6 +102,12 @@ pub mod row_staging;
 #[cfg(windows)]
 pub mod save_dest_commit_runtime;
 /// The in-game save-file picker rendered through `05_010_ProfileSelect`.
+/// The `CreateFileW` detour a destination commit's redirect window is read through.
+#[cfg(windows)]
+pub mod save_dest_open_redirect;
+/// The picker's arrow keys, read out of the DirectInput buffer the game itself reads.
+#[cfg(windows)]
+pub mod save_picker_dinput_nav;
 #[cfg(windows)]
 pub mod save_picker_menu;
 /// Directional menu input read from the game's own `CS::MoveDir` resolver.

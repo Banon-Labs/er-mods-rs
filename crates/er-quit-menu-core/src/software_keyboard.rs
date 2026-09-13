@@ -1363,22 +1363,41 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
 
 // ---- inline path completion --------------------------------------------------------------------
 
-/// The key that accepts the standing completion.
+/// The keys that accept the standing completion.
 ///
-/// Right and not Tab, which was tried first and cannot work. On run br-20260912-215849-d5e7 the
-/// accept itself succeeded -- `SetText` landed and the field read `Z:\home` back on the next tick
-/// -- and then the native editor closed on that same Tab press, the close-edge released the job as
-/// cancelled, and the player watched the field revert to what it was opened with.
-/// `GetAsyncKeyState` reads a key without consuming it, so the Tab reached the game's own editor
-/// handling whatever this crate did with it; swallowing it would mean fighting Scaleform focus
-/// traversal at the key-handling layer. See bd `tab-closes-the-02990-software-keyboard-2026-09-12`.
+/// Tab is the one a hand reaches for, and Right is the one that survives untouched; both are
+/// bound, and the difference between them is what happens to the field afterwards.
 ///
 /// Right costs nothing: it moves the caret one character and does nothing at the end of the text,
-/// which is where the caret sits while typing and where `set_text_input_02_990_text` leaves it.
+/// which is where the caret sits while typing and where `set_text_input_02_990_text` leaves it. The
+/// field stays open and the player keeps typing.
+///
+/// Tab closes the field, and that is the game's doing, not this crate's. Run br-20260912-221445-595f
+/// proved it with nothing at all bound to Tab: `offering 'Z:\home'` is followed straight by `the
+/// editor window 0x1cbab8480 is gone` and a cancel, with no accept line anywhere between them.
+/// `GetAsyncKeyState` reads a key without consuming it, so the press reaches the game's editor
+/// handling whatever this crate does with it, and the handling is not in the movie either -- the
+/// only ActionScript in `02_990_textinput.gfx` is 525 bytes of symbol-class linkage with no event
+/// handler in it (bd `tab-closes-the-02990-software-keyboard-2026-09-12`).
+///
+/// So Tab is not fought, it is honoured: the completion is written, and when the close arrives it
+/// commits that text instead of discarding it. Tab completes and opens the folder; Right completes
+/// and leaves you in the field.
+const VK_TAB: i32 = 0x09;
 const VK_RIGHT: i32 = 0x27;
 
 /// Rising-edge latch for the accept keys, one bit each, so a held key accepts once.
 static PATH_COMPLETION_ACCEPT_DOWN: AtomicUsize = AtomicUsize::new(0);
+
+/// The completion the player accepted, and the text the field held when it was last read.
+///
+/// Tab's accept writes the completion and the game then closes the field. Without these two the
+/// close reads as a cancel and the completion is thrown away, which is what made Tab useless: the
+/// player pressed the obvious key, watched the right text appear, and landed nowhere. Holding both
+/// lets the close ask one precise question -- was the field showing exactly the completion that was
+/// accepted? -- and commit it when the answer is yes.
+static PATH_COMPLETION_ACCEPTED_TEXT: Mutex<Option<String>> = Mutex::new(None);
+static PATH_COMPLETION_FIELD_TEXT: Mutex<Option<String>> = Mutex::new(None);
 
 /// Latched once when the field's document cannot be read, so the refusal is logged and not spammed.
 static PATH_COMPLETION_UNREADABLE: AtomicUsize = AtomicUsize::new(0);
@@ -1412,7 +1431,7 @@ fn nul_terminated_utf16(text: &str) -> Vec<u16> {
 /// drained by the drive strip. This is a read of the keyboard the player is already typing on and
 /// injects nothing.
 fn path_completion_accept_pressed() -> Option<&'static str> {
-    const KEYS: [(i32, &str); 1] = [(VK_RIGHT, "right")];
+    const KEYS: [(i32, &str); 2] = [(VK_TAB, "tab"), (VK_RIGHT, "right")];
     let mut down = 0usize;
     for (index, (code, _)) in KEYS.into_iter().enumerate() {
         // Safety: a pure read of this thread's keyboard state; the call cannot fault.
@@ -1438,6 +1457,28 @@ pub fn reset_path_completion() {
     PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
     PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
     PATH_COMPLETION_TYPED_SEEN.store(0, Ordering::SeqCst);
+    *PATH_COMPLETION_ACCEPTED_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// The completion to commit if the field closes now, or `None` if the close is a plain cancel.
+///
+/// Yes only when the field was last seen holding exactly the text that was accepted. Typing after
+/// an accept changes the field, so the two stop matching and a later Back cancels as it should.
+fn path_completion_to_commit_on_close() -> Option<String> {
+    let accepted = PATH_COMPLETION_ACCEPTED_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    let field = PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    (field == accepted).then_some(accepted)
 }
 
 /// Offer, draw and accept an inline completion for the open path editor.
@@ -1470,6 +1511,9 @@ pub unsafe fn save_picker_path_editor_completion_tick(base: usize, menu_window: 
         return;
     };
     PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
+    *PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(typed.clone());
     let offer = er_save_picker_core::autocomplete::suggestion_for(&typed);
     // One line per distinct typed text, so a run says what was read and what it produced even when
     // the answer is "nothing". A silent tick was what made the first build's failure invisible.
@@ -1501,6 +1545,9 @@ pub unsafe fn save_picker_path_editor_completion_tick(base: usize, menu_window: 
                     )
                 };
                 PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+                *PATH_COMPLETION_ACCEPTED_TEXT
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(offer.to_owned());
                 append_autoload_debug(format_args!(
                     "save-picker-path: accepted the completion with {key}: '{typed}' -> '{offer}' ({detail})"
                 ));
@@ -1524,7 +1571,7 @@ pub unsafe fn save_picker_path_editor_completion_tick(base: usize, menu_window: 
         Ok(()) => {
             if let Some(offer) = offer.as_deref() {
                 append_autoload_debug(format_args!(
-                    "save-picker-path: offering '{offer}' behind the typed '{typed}'; right accepts it"
+                    "save-picker-path: offering '{offer}' behind the typed '{typed}'; tab or right accepts it"
                 ));
             }
         }
@@ -1605,12 +1652,28 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
             .is_ok()
     {
         SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
-        release_path_editor_keyboard(
-            editor_job,
-            format_args!(
-                "save-picker-path: the editor window 0x{editor_window:x} is gone while job=0x{editor_job:x} still held the latch; released it so the field can be opened again"
-            ),
-        );
+        // Tab's close lands here, and the completion it wrote is still the field's text. Committing
+        // that rather than cancelling is what makes Tab usable at all: the key closes the field no
+        // matter what this crate does, so the choice is between honouring the completion and
+        // throwing it away.
+        if let Some(completed) = path_completion_to_commit_on_close() {
+            remember_released_keyboard_job(editor_job, KeyboardPurpose::SavePath);
+            *path_editor_outcome()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                Some(PathEditorOutcome::Accepted(completed.clone()));
+            reset_path_completion();
+            append_autoload_debug(format_args!(
+                "save-picker-path: the editor window 0x{editor_window:x} closed while still showing the accepted completion '{completed}'; committing it instead of cancelling"
+            ));
+        } else {
+            release_path_editor_keyboard(
+                editor_job,
+                format_args!(
+                    "save-picker-path: the editor window 0x{editor_window:x} is gone while job=0x{editor_job:x} still held the latch; released it so the field can be opened again"
+                ),
+            );
+        }
     }
 
     let active_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);

@@ -40,10 +40,10 @@ use er_telemetry_core::counters::{
     SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT,
 };
 use er_title_flow::{
-    DIALOG_SLOT_CURSOR_B0C_OFFSET, HOOK_ORIGINAL_UNSET, MenuEventId,
-    PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA, PROFILE_SELECT_LIST_BUILDER_RVA,
-    SAVE_FLOW_STAGE_DEST_BROWSE, SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
-    SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET, TITLE_OWNER_SCAN_START_ADDRESS,
+    DIALOG_SLOT_CURSOR_B0C_OFFSET, HOOK_ORIGINAL_UNSET, PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA,
+    PROFILE_SELECT_LIST_BUILDER_RVA, SAVE_FLOW_STAGE_DEST_BROWSE,
+    SAVE_FLOW_STAGE_OVERWRITE_CONFIRM, SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET,
+    TITLE_OWNER_SCAN_START_ADDRESS,
 };
 
 use crate::host::SaveDestOrigin;
@@ -188,8 +188,6 @@ fn take_nav_edges_for(mask: usize) -> usize {
 }
 
 /// `MenuEventId::MoveA`/`MoveB` as the raw ids the event bitmap is indexed by.
-pub(crate) const MENU_EVENT_MOVE_A_00: usize = MenuEventId::MoveA as usize;
-pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
 
 /// The native ProfileSelect item-list builder's trampoline, claimed by the re-stage hook.
 static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -800,8 +798,16 @@ pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, sou
                 // 05_010 the same way), so it does not contend with the System dialog queue that owns
                 // the picker window job. Submitted inline here (menu thread); a not-ready queue leaves
                 // the pending latch for the next menu pump.
-                if let Some(bind) = hooks().save_flow_box_set_host_dialog {
-                    bind(dialog);
+                // Both of these are this crate's own functions. They used to be reached only
+                // through the optional host seam, which no shell fills, so the host dialog stayed
+                // bound to the System dialog whose queue owns the picker's window job -- and the
+                // submit then deferred on that queue for as long as the browser was open, which is
+                // forever. Run br-20260913-003649-a52f deferred the submit once against
+                // `queue=dialog+0x10` and then hit the 180-tick build timeout. The seam still
+                // overrides when a host installs one.
+                match hooks().save_flow_box_set_host_dialog {
+                    Some(bind) => bind(dialog),
+                    None => crate::save_flow_boxes::save_flow_box_set_host_dialog(dialog),
                 }
                 SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
                 if !save_flow_menu_enter_stage(
@@ -813,10 +819,13 @@ pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, sou
                     save_dest_clear_target("stale overwrite-confirm stage transition");
                     return;
                 }
-                if hooks()
-                    .save_flow_submit_box
-                    .is_some_and(|submit| submit(SAVE_FLOW_BOX_OVERWRITE_FILE))
-                {
+                let submitted = match hooks().save_flow_submit_box {
+                    Some(submit) => submit(SAVE_FLOW_BOX_OVERWRITE_FILE),
+                    None => {
+                        crate::save_flow_boxes::save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE)
+                    }
+                };
+                if submitted {
                     SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
                 }
             }
@@ -1267,6 +1276,9 @@ const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
 const SCROLLBAR_CONTROL_POSITION_OFFSET: usize = 0x1a0;
 const SCROLLBAR_CONTROL_PAGE_OFFSET: usize = 0x1a8;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The thumb position last drawn. The setter only redraws on a change, and the field it tests is
+/// zeroed straight after each draw, so the previous value has to be remembered here instead.
+static SAVE_PICKER_SCROLLBAR_LAST_POSITION: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS: AtomicUsize = AtomicUsize::new(0);
 const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
 const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
@@ -1439,6 +1451,47 @@ fn save_picker_rebuild_target_is_live(
         && list_vtable == expected_list_vtable
 }
 
+/// Times the selection chrome was put back after an in-place list rebuild.
+static SAVE_PICKER_CHROME_REASSERTS: AtomicUsize = AtomicUsize::new(0);
+/// Menu ticks still owed a chrome re-assert after a rebuild.
+///
+/// The rebuild tears the cells down and builds them again, and the row movies settle over the
+/// frames that follow, so a select issued inside the rebuild call can be applied to cells that are
+/// then replaced. Re-asserting on the next few ticks costs one select each and lands after the
+/// cells exist, whatever order scaleform settles them in.
+static SAVE_PICKER_CHROME_DIRTY_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// How many ticks one rebuild owes.
+const SAVE_PICKER_CHROME_DIRTY_TICK_COUNT: usize = 3;
+
+/// Put the selection chrome back on the row the grid settled on after an in-place rebuild.
+///
+/// The rebuild re-selects through the grid's own path -- `FUN_1409a4ed0` reads `+0xd4`, hands it to
+/// `FUN_1409a2cf0`, and that calls `FUN_140738d40` -> `FUN_14073bc10`, which is where the chrome
+/// lives: `FUN_14073bae0` assigns the cell's `Cursor` component and shows it. That select is also
+/// allowed to fail. The rebuild sets the item count from the staged records first, so a window
+/// holding empty slots refuses every index at or past the count; the rebuild then walks forward and
+/// backward looking for a row that will take it, and if none does, the list ends up with no visible
+/// selection at all while the rows underneath it are perfectly fine.
+///
+/// Re-asserting the settled cursor here is one select on the row the grid already chose, so it
+/// cannot fight a hover or move the selection, and it names the row in the log when the grid had to
+/// clamp or refused outright.
+unsafe fn save_picker_reassert_selection_chrome(dialog: usize, reason: &str) {
+    let list = dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET;
+    let cursor = unsafe { *((list + MENU_ITEM_LIST_CURSOR_FIELD_OFFSET) as *const i32) };
+    let Ok(row) = usize::try_from(cursor) else {
+        return;
+    };
+    let settled = unsafe { save_picker_select_native_row(dialog, row, reason) };
+    let n = SAVE_PICKER_CHROME_REASSERTS.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 20 || n.is_multiple_of(50) || settled != Some(cursor) {
+        let count = unsafe { *((list + GRID_CONTROL_ITEM_COUNT_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "save-picker: selection chrome re-asserted #{n} reason={reason} cursor={cursor} settled={settled:?} count={count}"
+        ));
+    }
+}
+
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         return false;
@@ -1462,6 +1515,8 @@ unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) ->
         append_autoload_debug(format_args!(
             "save-picker: menu-pump in-place list rebuild dialog=0x{dialog:x} reason={reason} via 0x{rebuild_addr:x}"
         ));
+        SAVE_PICKER_CHROME_DIRTY_TICKS.store(SAVE_PICKER_CHROME_DIRTY_TICK_COUNT, Ordering::SeqCst);
+        unsafe { save_picker_reassert_selection_chrome(dialog, reason) };
         true
     } else {
         SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
@@ -2148,8 +2203,32 @@ pub unsafe fn save_picker_menu_pump_native_scrollbar() {
         unsafe { *((scrollbar + SCROLLBAR_CONTROL_PAGE_OFFSET) as *mut i32) = model_page };
     }
     unsafe { set_total(scrollbar, total.min(i32::MAX as usize) as i32) };
-    unsafe { set_position(scrollbar, current.min(i32::MAX as usize) as i32) };
-    let applied_position = unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) };
+    // Draw the thumb, then give the grid its view origin back.
+    //
+    // `scrollbar + 0x1a0` and `grid + 0x348` are one field -- the control is embedded at
+    // `grid + 0x1a8` -- and the grid reads it as the view row base: which item sits in the top
+    // visible cell. The picker's ten staged records are the whole of that list, so the only base
+    // the grid can lay itself out at is 0; parking the model's scroll offset there told it the top
+    // rows had scrolled off, and the header row went with them. It did not come back on the way
+    // up because `FUN_14074db60` only redraws the thumb -- the cells are re-laid out by the grid's
+    // own scroll path, which nothing here calls.
+    //
+    // So the field carries the position exactly as long as the setter needs it: the previous
+    // position goes in first so `FUN_14074db60`'s change test passes and `FUN_14074dcc0` moves the
+    // thumb, and zero goes back in immediately afterwards. Both writes are to the raw field, which
+    // is the same thing the page store above does and for the same reason -- the setter owns the
+    // visual, and this owns the geometry the setter has no opinion about.
+    let wanted = current.min(i32::MAX as usize) as i32;
+    let previous = SAVE_PICKER_SCROLLBAR_LAST_POSITION.swap(current, Ordering::SeqCst);
+    let applied_position = if previous == current {
+        Some(wanted)
+    } else {
+        let previous = i32::try_from(previous).unwrap_or(0);
+        unsafe { *((scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) as *mut i32) = previous };
+        unsafe { set_position(scrollbar, wanted) };
+        unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) }
+    };
+    unsafe { *((scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) as *mut i32) = 0 };
 
     let packed = save_picker_scrollbar_packed_state(current, page, total);
     if SAVE_PICKER_SCROLLBAR_LAST_SYNC.swap(packed, Ordering::SeqCst) != packed {
@@ -2224,6 +2303,17 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     unsafe { save_picker_log_grid_geometry_once(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    // Pay off whatever the last rebuild owes. Selecting the row the grid is already on moves
+    // nothing and cannot fight a hover; it only re-applies the cell chrome onto cells that have
+    // finished being rebuilt.
+    if SAVE_PICKER_CHROME_DIRTY_TICKS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| {
+            owed.checked_sub(1)
+        })
+        .is_ok()
+    {
+        unsafe { save_picker_reassert_selection_chrome(dialog, "post-rebuild-tick") };
+    }
     // Remember where the selection was before this tick's key was read. The native list moves and
     // wraps its own cursor the moment it sees the press, so by the time this pump runs the sampled
     // row is already the wrap destination -- at the bottom row a down press reads back as the
@@ -2232,7 +2322,7 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
         Ordering::SeqCst,
     );
-    let (last_visible_row, first_content_row, at_scroll_top, at_scroll_bottom) = {
+    let (last_visible_row, first_content_row) = {
         let guard = er_save_picker_core::model::active_save_picker_lock();
         let Some(model) = guard.as_ref() else {
             return;
@@ -2240,44 +2330,20 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         (
             model.visible_row_count().saturating_sub(1),
             model.entry_row_base(),
-            model.scroll_offset() == 0,
-            model.scroll_offset() >= model.scroll_max(),
         )
     };
     let edge_down = nav_edges & down_mask != 0;
     let edge_up = nav_edges & up_mask != 0;
-    unsafe {
-        save_picker_learn_vertical_menu_event_ids(
-            edge_down || held & down_mask != 0,
-            edge_up || held & up_mask != 0,
-        )
-    };
-    // Suppress at a hard limit, every tick rather than only when an edge was latched. The listing
-    // has nothing further that way, so the native list must not move at all -- not move-and-be-
-    // corrected, which is the same pixels animating for a change that never happens. Checked from
-    // the cursor's current row so the very first press is caught, not just the repeats after it.
-    let blocked = if cursor >= 0 && usize::try_from(cursor).is_ok_and(|c| c >= last_visible_row) {
-        at_scroll_bottom.then_some(true)
-    } else if cursor == 0 {
-        at_scroll_top.then_some(false)
-    } else {
-        None
-    };
-    if let Some(blocked_down) = blocked
-        && unsafe { save_picker_clear_vertical_menu_event(blocked_down) }
-    {
-        let n = SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == 1 || n.is_multiple_of(50) {
-            append_autoload_debug(format_args!(
-                "save-picker: suppressed vertical menu event #{n} at listing limit down={blocked_down} cursor={cursor} last_visible_row={last_visible_row}"
-            ));
-        }
-        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
-            usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
-            Ordering::SeqCst,
-        );
-        return;
-    }
+    // A hard limit at the end of a listing used to be enforced by clearing a byte in
+    // `CSMenuManImp+0x90`, on the belief that it was a keystate bitmap. It is not: it records which
+    // menu windows are shown this frame, indexed by menu window id, and the writer that proves it is
+    // `CS::MenuWindowJob::Run` itself (`GLOBAL_CSMenuMan->field99_0x90[window->id] |= 1`). So every
+    // suppression told the game one of its menus had stopped being on screen -- once per tick for as
+    // long as a direction was held at the end of a listing, which is exactly when a player leans on
+    // the key. That is gone and nothing replaces it, including the two scroll-limit flags that fed
+    // it: the wrap detection below already turns the native list's own wrap into a window step,
+    // which is the right place for this and does not write to the engine at all. See bd
+    // `inputmgr-90-is-a-shown-menu-window-id-bitmap-not-keystate-2026-09-05`.
     // Native selection MOVE: the cursor changed with no latched input of ours behind it. Named for
     // what it measures rather than a guessed cause -- reading it as "the pointer" is how a wheel
     // detent's native step got mistaken for mouse movement, and a duplicate step shipped on top of
@@ -2451,32 +2517,24 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         return;
     };
     let pinned_row = outcome.pin_row();
-    // Hold the native selection on the row the press acted from. The list cursor is a plain field
-    // (`FUN_140739e20` is just `*(u32 *)(list + 0xd4)`), and the game's own GridControl mouse hit
-    // writes it directly, so a write is the native mechanism rather than a poke around one. Without
-    // this the selection leaves the edge after each press and the window stops advancing -- and at a
-    // hard limit the native list has already wrapped the cursor to the far end of the listing, so
-    // the same write is what keeps the selection from teleporting there.
+    // Hold the native selection on the row the press acted from. Without it the selection leaves
+    // the edge after each press and the window stops advancing -- and at a hard limit the native
+    // list has already wrapped the cursor to the far end of the listing, so this is also what keeps
+    // the selection from teleporting there.
+    //
+    // Through the list's own select (`save_picker_select_native_row`), never by writing `+0xd4`.
+    // The field write moved the index and left the highlight behind, which is the scroll that moves
+    // every row while the focus stays invisible -- the same defect the wheel step was fixed for on
+    // 2026-08-12, still live on this path until 2026-09-12. The select also stores the edge sample
+    // the next tick judges its press against, so the wrap destination this overrode cannot be read
+    // back as a row the selection occupied.
     //
     // A wheel step is exempt: it never moved the native cursor, so there is nothing to hold, and
-    // writing anyway drags the selection off whatever row the pointer is over -- the mouse and the
-    // wheel fighting each other for the same field, which reads as mouse row navigation being
-    // broken.
+    // selecting anyway drags the highlight off whatever row the pointer is over -- the mouse and
+    // the wheel fighting over one selection, which reads as mouse row navigation being broken.
     let native_pin = (!wheel_only)
-        .then(|| i32::try_from(pinned_row).ok())
-        .flatten()
-        .and_then(|row| row.checked_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET));
-    if let Some(native_pin) = native_pin {
-        unsafe {
-            *((dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + MENU_ITEM_LIST_CURSOR_FIELD_OFFSET)
-                as *mut i32) = native_pin;
-        }
-        // The sample stored at the top of this function is where the native list put the cursor,
-        // which is the wrap destination we just overrode. Held keys repeat on consecutive ticks, so
-        // leaving that stale value here would make the next press judge its edge from a row the
-        // selection never visibly occupied.
-        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(pinned_row, Ordering::SeqCst);
-    }
+        .then(|| unsafe { save_picker_select_native_row(dialog, pinned_row, "edge-scroll-pin") })
+        .flatten();
     if !outcome.scrolled() {
         append_autoload_debug(format_args!(
             "save-picker: edge-press held at listing limit down={down} press_row={press_row} model_row={model_row} wrap_target={cursor} pinned_native_row={native_pin:?}"
@@ -3135,6 +3193,22 @@ pub unsafe fn save_flow_menu_pump() {
             er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT
                 .fetch_add(1, Ordering::SeqCst);
         }
+    }
+    // Menu-pump-owned confirm-box submit. The game-task tick decides which box comes next and
+    // stages its id, because building and submitting a `MenuJob` is menu-pump work; this is the
+    // game's own menu pump executing a `MenuWindowJob`, which is that context. A failed submit
+    // leaves the latch set so the next pump retries -- the usual cause is the dialog's job queue
+    // still owning the previous box's job.
+    //
+    // It used to live in the product's own pump handler and nowhere else, so a standalone shell
+    // staged the overwrite confirm and nothing ever submitted it: run br-20260913-002757-9317 shows
+    // `overwrite-file-confirm BUILD TIMEOUT after 180 ticks (submit_pending=1)` on every attempt to
+    // overwrite an existing destination, with nothing written.
+    let pending_box = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
+    if pending_box != SAVE_FLOW_BOX_NONE
+        && unsafe { crate::save_flow_boxes::save_flow_submit_box(pending_box) }
+    {
+        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
     }
     unsafe { crate::software_keyboard::save_picker_menu_pump_path_editor() };
     unsafe { save_picker_menu_pump_drive_strip_mouse() };

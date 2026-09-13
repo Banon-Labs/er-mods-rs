@@ -108,18 +108,28 @@ struct MoveDir {
 /// menu input. Anything nonzero does, and the global gates still decide whether the frame counts.
 const MENU_INPUT_ACCEPTED: u8 = 1;
 
-/// The directions this reader answers for, and the reason it is not all four.
+/// The directions this reader answers for: all four.
 ///
-/// The defect is horizontal: the drive strip is the one control on the picker with no native hit
-/// target of its own, so left and right had nowhere to come from. Up and down already work -- the
-/// native list moves its own cursor for them, and
+/// Vertical was withheld at first, on the reasoning that
 /// [`save_picker_menu_pump_edge_scroll`](crate::save_picker_menu::save_picker_menu_pump_edge_scroll)
-/// is tuned around exactly that: it defers a press at an extreme row to the wrap the native list is
-/// about to make, ages that deferral out, and tells a wrap from a mouse sweep by whether the
-/// direction is still held. Handing it a second vertical source would change every one of those
-/// judgements at once, for a direction nobody reported broken. So the vertical answer is read -- it
-/// is in the log line below, as evidence for whoever wants it later -- and then withheld.
-const NATIVE_NAV_SUPPLIED_MASK: usize = SAVE_PICKER_NAV_LEFT_MASK | SAVE_PICKER_NAV_RIGHT_MASK;
+/// is tuned around the native list moving its own cursor -- it defers a press at an extreme row to
+/// the wrap the list is about to make, ages that deferral out, and tells a wrap from a mouse sweep
+/// by whether the direction is still held -- and that handing it a second vertical source would
+/// change all of those judgements at once.
+///
+/// That reasoning holds for the product and is backwards for a shell, where this reader is not a
+/// second source but the only one. Starved of vertical edges the handler never recognises the wrap,
+/// so the list does what the native `GridControl` does at its tenth item: it wraps to the top with
+/// the window standing still. Run br-20260912-224834-8fb6 shows `native selection move 9 -> 0
+/// scroll_offset=0/7` -- seven offsets left below and the cursor back at the first row -- alongside
+/// zero edge-scroll lines and not one vertical `move_dir` in the whole log.
+///
+/// The seam decides which source is live, so this widening reaches shells only: a product installs
+/// its own three hooks and those win, exactly as they did before this module existed.
+const NATIVE_NAV_SUPPLIED_MASK: usize = SAVE_PICKER_NAV_LEFT_MASK
+    | SAVE_PICKER_NAV_RIGHT_MASK
+    | SAVE_PICKER_NAV_UP_MASK
+    | SAVE_PICKER_NAV_DOWN_MASK;
 
 /// Directions asserted on the last sample, so an edge is a transition rather than a level.
 static NAV_HELD: AtomicUsize = AtomicUsize::new(0);
@@ -222,21 +232,41 @@ fn sample() {
     }
 }
 
-/// The seam's install step. There is nothing to install: this reader calls a game function and
-/// hooks nothing, which is the point of it. Kept as an entry point so the picker's pump has one
-/// place to reach whether the host supplies a device layer or not.
+/// The seam's install step: put the DirectInput keyboard reader in place, and sample the engine.
+///
+/// Both, in that order, every tick. The install is a latched no-op after the first success, and the
+/// sample keeps the fallback current for as long as the device reader has not proved itself.
 pub fn ensure_nav_reader() {
-    sample();
+    crate::save_picker_dinput_nav::ensure_dinput_nav_reader();
+    if !crate::save_picker_dinput_nav::dinput_nav_reader_live() {
+        sample();
+    }
 }
 
-/// Drain the requested directions from the edge latch, sampling first so the latch is current.
+/// Drain the requested directions from the edge latch.
+///
+/// From the keyboard's own device state once that reader is live, and from `CS::MoveDir` until
+/// then -- never from both. Two sources for one press is a double step by construction, and the
+/// two disagree about what a held key is, which is the whole reason the device reader exists.
 pub fn take_nav_edges_for(mask: usize) -> usize {
+    crate::save_picker_dinput_nav::ensure_dinput_nav_reader();
+    if crate::save_picker_dinput_nav::dinput_nav_reader_live() {
+        return crate::save_picker_dinput_nav::dinput_take_nav_edges_for(mask);
+    }
     sample();
     NAV_EDGES.fetch_and(!mask, Ordering::SeqCst) & mask
 }
 
-/// Directions asserted on the engine's most recent answer, consuming nothing.
+/// Directions asserted right now, consuming nothing.
+///
+/// The device read is a true hold: down on every tick the key is down. `CS::MoveDir` is the menu's
+/// resolved direction for the frame, so it pulses with the auto-repeat and reads as released
+/// between repeats -- which is why the pump's wrap rule, that only accepts a wrap while the
+/// direction is held, could almost never accept one in a shell that had only the fallback.
 pub fn nav_held() -> usize {
+    if crate::save_picker_dinput_nav::dinput_nav_reader_live() {
+        return crate::save_picker_dinput_nav::dinput_nav_held();
+    }
     NAV_HELD.load(Ordering::SeqCst) & NATIVE_NAV_SUPPLIED_MASK
 }
 

@@ -856,22 +856,37 @@ fn drive_strip_pages_to_keep_every_available_drive_directly_selectable() {
     );
 }
 
+/// The strip is a ring -- `[A:] [B:] [C:] [D:] [ current path ]` -- and both directions close it.
+///
+/// It used to close only one way: right off the last drive focused the path bar, and right again
+/// returned `false`, so the strip cycled endlessly leftward and stopped dead one press to the
+/// right. A player reported exactly that on run br-20260912-224118-0618.
 #[test]
-fn right_from_the_rightmost_drive_focuses_current_path_without_wrapping() {
+fn the_drive_strip_is_a_ring_in_both_directions() {
     let mut model = with_drives(
         model_with(PickerIntent::LoadSource, "D:\\saves", 0),
         &["A:\\", "B:\\", "C:\\", "D:\\"],
     );
     assert_eq!(model.drive_strip_focus(), Some(DriveStripFocus::Cell(3)));
 
+    // Right off the last drive is the path bar, not a wrap: the bar is the strip's last place.
     assert!(model.cycle_drive_from_drive_strip(true));
-
     assert_eq!(model.current_drive_root(), PathBuf::from("D:\\"));
     assert_eq!(
         model.drive_strip_focus(),
         Some(DriveStripFocus::CurrentPath)
     );
 
+    // Right again closes the ring onto the first drive.
+    assert!(model.cycle_drive_from_drive_strip(true));
+    assert_eq!(model.current_drive_root(), PathBuf::from("A:\\"));
+    assert_eq!(model.drive_strip_focus(), Some(DriveStripFocus::Cell(0)));
+
+    // And left off the first drive closes it the other way, onto the path bar's neighbour.
+    assert!(model.cycle_drive_from_drive_strip(false));
+    assert_eq!(model.current_drive_root(), PathBuf::from("D:\\"));
+
+    assert!(model.focus_current_path_from_drive_strip());
     assert!(model.cycle_drive_from_drive_strip(false));
     assert_eq!(model.current_drive_root(), PathBuf::from("D:\\"));
     assert_eq!(model.drive_strip_focus(), Some(DriveStripFocus::Cell(3)));

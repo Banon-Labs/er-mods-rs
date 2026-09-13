@@ -158,12 +158,11 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     if product_autoload_enabled() {
         snapshot_game_man_on_change();
     }
-    // Save Game row close-all: finishes the root menu close on a later game-task tick,
-    // after the active System submenu has consumed its native close result.
-    unsafe { system_quit_save_game_deferred_close_tick() };
-    // Save-flow state machine (WP1): after the deferred close, so the frame the close
-    // drains is the frame stage 6 -> 7 advances; fires the forced save request once the
-    // RAM gates are green and watches the bypassed commit to completion.
+    // Save-flow state machine (WP1): fires the forced save request once the RAM gates are
+    // green and watches the bypassed commit to completion. It drains the Save Game row's
+    // deferred close itself, as its first act, so the frame that close drains is still the
+    // frame stage 6 -> 7 advances -- the call used to be here, which left a shell that
+    // registers only `save_flow_tick` waiting on a counter nothing decremented.
     unsafe { save_flow_tick() };
     // Orphaned PICKER rows. The in-game save picker renders by writing its browse-row labels into
     // the live `CS::ProfileSummary`, destroying the game's own records; every exit is supposed to

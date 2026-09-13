@@ -1115,16 +1115,10 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             }
         }
     }
-    // Menu-pump-owned save-flow confirm box (save-game-flow WP2): the game-task tick decides
-    // which box comes next but must not build/submit a MenuJob, so it stages the box id here
-    // and this -- the game's own menu pump executing a MenuWindowJob, the same context the
-    // save-picker resubmit and the return-title chain use -- performs the submit. A failed
-    // submit keeps the pending latch set so the next pump retries (the common cause is the
-    // dialog's job queue still owning the previous box's job).
-    let pending_box = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
-    if pending_box != SAVE_FLOW_BOX_NONE && unsafe { save_flow_submit_box(pending_box) } {
-        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
-    }
+    // The save-flow confirm-box submit used to sit here. It now lives in
+    // `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, beside the picker maintenance
+    // that moved there for the same reason: that pump runs on every menu-window build rather than
+    // only this one, and a standalone shell reaches it while it never reaches this handler.
     // Menu-pump-owned destination browser open (save-game-flow WP3): Box2 "No" means "save
     // somewhere else", which the tick stages here because opening the picker stages records and
     // submits a MenuJob -- menu-pump work, not game-task work.

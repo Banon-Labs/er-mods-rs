@@ -1073,13 +1073,23 @@ impl SavePickerModel {
         changed
     }
 
+    /// Step one place along the drive strip, which is a ring: `[C:] [S:] [Z:] [ current path ]`.
+    ///
+    /// Both directions wrap, and until 2026-09-12 only one did. Going right off the last drive
+    /// focuses the path bar, and from there `forward` simply returned `false` -- so the strip
+    /// cycled endlessly to the left and dead-ended to the right, one press in. The asymmetry was
+    /// invisible in the telemetry that mattered: run br-20260912-224118-0618 read 11 right presses
+    /// and delivered 40 of them to this function, which reported `changed=false` for all but nine.
     pub fn cycle_drive_from_drive_strip(&mut self, forward: bool) -> bool {
         if self.drive_strip_path_focused {
-            if forward {
-                return false;
-            }
             self.drive_strip_path_focused = false;
-            let Some(root) = self.drives.last().cloned() else {
+            // Off the path bar and round: right lands on the first drive, left on the last.
+            let wrapped = if forward {
+                self.drives.first().cloned()
+            } else {
+                self.drives.last().cloned()
+            };
+            let Some(root) = wrapped else {
                 return false;
             };
             let _ = self.switch_to_drive_root(root);

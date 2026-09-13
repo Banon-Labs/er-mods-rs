@@ -297,10 +297,19 @@ fn save_flow_enter_stage(stage: usize, reason: &str) {
     ));
 }
 
-/// Per-frame save-flow driver. Called from the game task immediately after
-/// `system_quit_save_game_deferred_close_tick`, so the frame the deferred IngameTop
-/// close drains is the same frame stage 6 observes "menus closed".
+/// Per-frame save-flow driver.
+///
+/// It drains the deferred `IngameTop` close itself, as its first act, so the frame that close
+/// drains is the same frame stage 6 observes "menus closed". That used to be the caller's job, and
+/// only the product was doing it: a standalone shell registers this tick and nothing else, so
+/// `SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES` was set to 2 by the row press and never decremented,
+/// stage 6 waited on a counter with no writer, and a picked destination sat staged forever with
+/// nothing written. Measured on run br-20260912-234311-3ccb: `dest_commit -> staged
+/// CLOSING_COMMIT` with no `menus closed` line after it, and the next Return to Desktop refused
+/// because the flow was still in flight.
 pub unsafe fn save_flow_tick() {
+    // First, unconditionally: the counter it drains is what stage 6 below is waiting for.
+    unsafe { crate::save_game_row::system_quit_save_game_deferred_close_tick() };
     let stage = SAVE_FLOW_STAGE.load(Ordering::SeqCst);
     if stage == SAVE_FLOW_STAGE_IDLE {
         // Deferred TEARDOWN sweep. A commit window is never taken out from under an executing
@@ -661,6 +670,20 @@ fn save_flow_resolve_commit_plan() -> Result<SaveFlowCommitPlan, String> {
             })
         }
         SaveDestIdentity::Distinct => {
+            // Both halves of a redirect, checked before a byte is written. The observer half says
+            // when the native writer finished; this half says the write-open will be diverted at
+            // all. Only the first was ever checked, so a shell whose `CreateFileW` detour was
+            // absent armed a window nobody read, fired, and wrote the player's save into the
+            // loaded container -- caught afterwards by the verification and undone from the
+            // pre-fire snapshot (run br-20260913-000002-47f1), which is a repair, not a refusal.
+            if !crate::save_dest_open_redirect::save_dest_open_redirect_installed() {
+                SAVE_DEST_NO_WRITER_OBSERVER_ABORT.fetch_add(1, Ordering::SeqCst);
+                SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
+                return Err(format!(
+                    "destination '{}' needs the write-open redirect, but the `CreateFileW` detour that reads it is not installed, so the native writer would open the loaded save and write there instead",
+                    target.display()
+                ));
+            }
             if !er_save_suppress::save_job_observer_installed() {
                 SAVE_DEST_NO_WRITER_OBSERVER_ABORT.fetch_add(1, Ordering::SeqCst);
                 SAVE_DEST_COMMIT_FAIL.fetch_add(1, Ordering::SeqCst);
@@ -1449,6 +1472,9 @@ fn save_flow_degraded_commit_wait_tick(ticks: usize, completions_at_fire: u64) {
 #[cfg(test)]
 mod save_flow_deadline_tests {
     use super::*;
+    // `super::*` does not carry it, and the two same-named enums are not interchangeable:
+    // `request_discharged` -- the rule this test is about -- belongs to the picker-core one.
+    use er_save_picker_core::surface::PickerOpenOutcome;
 
     /// Every save-flow bound, referenced by its real constant so a future retune cannot silently
     /// invalidate the proof below. Two entries share `SAVE_DEST_PICKER_OPEN_TIMEOUT_TICKS` because
@@ -1700,6 +1726,36 @@ pub fn install_save_flow_game_task() -> bool {
     use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
     use eldenring::fd4::FD4TaskData;
     use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+
+    // The write-completion observer, bound here because the flow is what needs it.
+    //
+    // `save_flow_resolve_commit_plan` refuses a redirect outright unless the SL save-job-body
+    // observer is installed: the in-place writer opens the container once per dirty block, so a
+    // redirect window closed on a tick count would patch the rest of the save into the loaded
+    // file. Only `er-quickload` ever bound that observer, so in a shell every browsed destination
+    // was refused after the menus had already closed -- run br-20260912-235056-6136 aborted the
+    // fire with "destination '...' needs the write-open redirect, but the SL save-job-body
+    // observer is not installed".
+    //
+    // Observers only: nothing is suppressed and no save is intercepted. The flow then commits on
+    // its documented degraded fail-open path, where the native write happens for real and its
+    // completion is read from the job body's own return rather than from a token.
+    // The write-open detour the commit's redirect window is read through. Installed beside the
+    // observers so the two halves of a redirect -- divert this open, and the writer has finished --
+    // are never armed one without the other.
+    crate::save_dest_open_redirect::install_save_dest_open_redirect();
+    if !er_save_suppress::save_job_observer_installed() {
+        er_save_suppress::set_log_sink(append_autoload_debug);
+        let bound = er_save_suppress::install_observers_only();
+        append_autoload_debug(format_args!(
+            "save-flow: bound {bound} save-lane observers with suppression disarmed; save-job-body completion={}",
+            if er_save_suppress::save_job_observer_installed() {
+                "yes"
+            } else {
+                "NO -- a browsed destination will still be refused"
+            }
+        ));
+    }
 
     let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
     else {
