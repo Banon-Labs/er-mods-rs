@@ -48,7 +48,7 @@ use std::sync::OnceLock;
 /// byte and the two grid coordinates follow. The low byte is the map's index within its block and
 /// neither table carries it.
 #[must_use]
-pub(crate) fn map_key(saved_map: i32) -> (u8, u8, u8) {
+pub(crate) fn map_key(saved_map: i32) -> MapKey {
     let map = saved_map as u32;
     (
         ((map >> 24) & 0xff) as u8,
@@ -80,14 +80,20 @@ impl PlaceNameSource {
 /// map is a legitimate build result (the params were not ready) and is retried by the
 /// `PLACE_NAME_TABLE_BUILT` guard rather than latched, because a boot-time row build can precede
 /// `SoloParamRepository` being populated.
-static PLACE_NAME_TABLE: OnceLock<BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)>> = OnceLock::new();
+/// The map key both param tables carry: `area_no`, `grid_x_no`, `grid_z_no`.
+type MapKey = (u8, u8, u8);
+
+/// A resolved `PlaceName` id and which table it came from.
+type NamedPlace = (u32, PlaceNameSource);
+
+static PLACE_NAME_TABLE: OnceLock<BTreeMap<MapKey, NamedPlace>> = OnceLock::new();
 
 #[cfg(windows)]
-fn build_table() -> BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)> {
+fn build_table() -> BTreeMap<MapKey, NamedPlace> {
     use eldenring::cs::{BonfireWarpParam, SoloParamRepository, WorldMapPlaceNameParam};
     use fromsoftware_shared::FromStatic;
 
-    let mut out: BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)> = BTreeMap::new();
+    let mut out: BTreeMap<MapKey, NamedPlace> = BTreeMap::new();
     // Safety: `instance()` hands back a reference only when the singleton is populated, and every
     // row below is read, never written.
     let Ok(repo) = (unsafe { SoloParamRepository::instance() }) else {
@@ -118,7 +124,7 @@ fn build_table() -> BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)> {
 }
 
 #[cfg(not(windows))]
-fn build_table() -> BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)> {
+fn build_table() -> BTreeMap<MapKey, NamedPlace> {
     // Host builds exercise `map_key` and the tier order; there is no game to read params from.
     BTreeMap::new()
 }
@@ -128,7 +134,7 @@ fn build_table() -> BTreeMap<(u8, u8, u8), (u32, PlaceNameSource)> {
 ///
 /// The table is built on the first call that finds the params populated. An empty build is not
 /// cached, so a row built before `SoloParamRepository` is ready does not poison every later row.
-pub(crate) fn place_name_for_map(saved_map: i32) -> Option<(u32, PlaceNameSource)> {
+pub(crate) fn place_name_for_map(saved_map: i32) -> Option<NamedPlace> {
     if let Some(table) = PLACE_NAME_TABLE.get() {
         return table.get(&map_key(saved_map)).copied();
     }

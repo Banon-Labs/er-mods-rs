@@ -362,7 +362,7 @@ fn picker_detail_for_configured_save(slot: i32) -> ConfiguredSaveTruth {
     }
     match slots.iter().find(|info| info.slot as i32 == slot) {
         Some(found) => ConfiguredSaveTruth {
-            loadable: Some((path, found.slot as usize)),
+            loadable: Some((path, found.slot)),
             detail: format!(
                 "{name} slot {slot} holds {} at level {}, so the save itself is fine -- this mod failed to start the load.",
                 found.name, found.level
