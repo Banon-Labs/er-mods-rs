@@ -67,16 +67,26 @@ pub const fn online_disable_required(boot_autoload: bool, own_stepper: bool) -> 
 /// * `switch_active` -- a `System>Quit` switch is in flight, so the title is being passed through
 ///   on the way back to a world. True in every composition that has the cloned rows, which is why
 ///   it is its own term and not folded into the autoload;
-/// * `boot_autoload` -- this build boots straight into a world, so the pre-world title belongs to a
-///   walk the player never sees. Without it the pre-world terms mean "the title is the
-///   destination", and a destination is audible.
+/// * `boot_autoload && !world_reached` -- this build boots straight into a world and has not got
+///   there yet, so the title on screen belongs to a walk the player never sees.
+///
+/// `world_reached` is `IN_WORLD_REACHED`, a one-way latch stored on the first game-task tick that
+/// finds a local player and never cleared. Once it is set the boot autoload has delivered, and a
+/// title after that is somewhere the player went on purpose -- `Quit to title` from the pause menu,
+/// most often -- so it is a destination and destinations are audible.
+///
+/// The predicate used to read `!in_world || !player_present` under the autoload term, and that
+/// second half is what muted a title the player walked back to: `player_present` is a live check of
+/// the local player, so it goes false the moment the world is torn down, while the latch stays true.
+/// Reported on the 2026-09-13 autoload-only run -- the boot load was audible, `Quit to title` was
+/// not. There is nothing left for `player_present` to say here that the latch does not: the latch is
+/// stored on the first frame a player exists, so the gap it was covering closes at the same instant.
 pub const fn pre_world_audio_mute_required(
     boot_autoload: bool,
     switch_active: bool,
-    in_world: bool,
-    player_present: bool,
+    world_reached: bool,
 ) -> bool {
-    switch_active || (boot_autoload && (!in_world || !player_present))
+    switch_active || (boot_autoload && !world_reached)
 }
 
 #[cfg(test)]
@@ -87,7 +97,7 @@ mod autoload_cover_gates_tests {
     fn the_default_build_keeps_all_three_covers() {
         assert!(splash_skip_required(true, false));
         assert!(online_disable_required(true, false));
-        assert!(pre_world_audio_mute_required(true, false, false, false));
+        assert!(pre_world_audio_mute_required(true, false, false));
     }
 
     #[test]
@@ -102,18 +112,26 @@ mod autoload_cover_gates_tests {
         // `--no-default-features --features quit-rows,menu-trace`, logged
         // `sound-post-event: hit=1 muted=true ... quickload_phase=0` on a title that was the
         // destination, not a waypoint.
-        assert!(!pre_world_audio_mute_required(false, false, false, false));
+        assert!(!pre_world_audio_mute_required(false, false, false));
     }
 
     #[test]
     fn a_switch_through_the_title_is_silent_in_every_composition() {
-        assert!(pre_world_audio_mute_required(false, true, false, false));
-        assert!(pre_world_audio_mute_required(false, true, true, true));
+        assert!(pre_world_audio_mute_required(false, true, false));
+        assert!(pre_world_audio_mute_required(false, true, true));
     }
 
     #[test]
     fn a_world_with_its_player_in_it_is_audible() {
-        assert!(!pre_world_audio_mute_required(true, false, true, true));
+        assert!(!pre_world_audio_mute_required(true, false, true));
+    }
+
+    #[test]
+    fn a_title_the_player_walked_back_to_is_audible() {
+        // Reported on the 2026-09-13 autoload-only run: the boot load played its sound, then
+        // `Quit to title` landed on a silent title. The latch is still set there and no switch is
+        // running, so the only honest answer is "the player chose to be here".
+        assert!(!pre_world_audio_mute_required(true, false, true));
     }
 
     #[test]

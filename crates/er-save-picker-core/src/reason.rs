@@ -74,6 +74,11 @@ pub enum MissingSaveReason {
     /// A save the user picked in this very picker passed every validation it has and still did
     /// not load. The one reason that indicts the loader by construction.
     PickedSaveDidNotLoad = 9,
+    /// The game's own save IO refused the container: the full read was submitted, the game's
+    /// load poll answered an error instead of `3`, and `GameMan+0xb80` never reached resident.
+    /// The refusal is the game's, not this mod's, and the game raises a message box to say so --
+    /// one this mod suppresses pre-world, which is why the detail has to carry the status code.
+    FullReadRefusedByGame = 10,
 }
 
 /// Whether the reason is evidence about the save, or evidence about this mod.
@@ -105,6 +110,7 @@ impl MissingSaveReason {
             7 => Self::FullReadCommitAborted,
             8 => Self::FullReadWouldStartNewGame,
             9 => Self::PickedSaveDidNotLoad,
+            10 => Self::FullReadRefusedByGame,
             _ => Self::Unrecorded,
         }
     }
@@ -125,6 +131,7 @@ impl MissingSaveReason {
             Self::FullReadCommitAborted => "fullread-commit-abort-owner-null",
             Self::FullReadWouldStartNewGame => "fullread-commit-abort-new-game-flag",
             Self::PickedSaveDidNotLoad => "picked-save-did-not-load",
+            Self::FullReadRefusedByGame => "fullread-refused-by-game",
         }
     }
 
@@ -135,7 +142,8 @@ impl MissingSaveReason {
             | Self::SettledNoUsableSave
             | Self::RedirectedSaveOpenFailed
             | Self::ContinueSlotEmpty
-            | Self::FullReadWouldStartNewGame => MissingSaveFault::Save,
+            | Self::FullReadWouldStartNewGame
+            | Self::FullReadRefusedByGame => MissingSaveFault::Save,
             Self::Unrecorded
             | Self::BootNeverStartedTheLoad
             | Self::FullReadGuardFailed
@@ -181,20 +189,50 @@ impl MissingSaveReason {
                     }
                 },
             ),
+            Self::FullReadRefusedByGame => PickerStatusMessage::new(
+                "THE GAME REFUSED THAT SAVE",
+                match reason_detail() {
+                    Some(detail) => {
+                        format!("{detail} That is the game refusing the file, not this mod. Choose another.")
+                    }
+                    None => {
+                        "The game refused to read that save and did not say which error. Choose another."
+                            .to_owned()
+                    }
+                },
+            ),
             Self::FullReadGuardFailed | Self::FullReadCommitAborted => PickerStatusMessage::new(
                 "THE SAVE DID NOT LOAD",
-                "This mod read the save and no character came out. Choose another.",
+                match reason_detail() {
+                    Some(detail) => {
+                        format!("This mod read the save and no character came out. {detail} Choose another.")
+                    }
+                    None => "This mod read the save and no character came out. Choose another."
+                        .to_owned(),
+                },
             ),
-            Self::PickedSaveDidNotLoad => match picked_save_name() {
-                Some(name) => PickerStatusMessage::new(
-                    "THAT SAVE DID NOT LOAD",
-                    format!("{name} passed every check and still did not load. Choose another."),
-                ),
-                None => PickerStatusMessage::new(
-                    "THAT SAVE DID NOT LOAD",
-                    "The save you chose passed every check and still did not load.",
-                ),
-            },
+            // Never "passed every check and still did not load" on its own. That sentence told the
+            // player their save is fine and gave them nothing to act on, which is the worst of both:
+            // it accuses nothing and explains nothing, and the one fact that would help -- which step
+            // measured the failure -- was already in hand at the call site and thrown away. See
+            // `offer_missing_save_picker`, which logs `(measured as <tag>)` and then arms this reason;
+            // it now records that measurement as the detail first.
+            Self::PickedSaveDidNotLoad => {
+                let measured = reason_detail().unwrap_or_else(|| {
+                    "This mod did not record which step failed, which is a defect in the mod and not in your save."
+                        .to_owned()
+                });
+                match picked_save_name() {
+                    Some(name) => PickerStatusMessage::new(
+                        "THAT SAVE DID NOT LOAD",
+                        format!("{name} was read and accepted, then the load stopped. {measured} Choose another."),
+                    ),
+                    None => PickerStatusMessage::new(
+                        "THAT SAVE DID NOT LOAD",
+                        format!("The save you chose was read and accepted, then the load stopped. {measured}"),
+                    ),
+                }
+            }
         }
     }
 }
@@ -213,6 +251,24 @@ pub fn redirect_already_committed_banner() -> PickerStatusMessage {
     PickerStatusMessage::new(
         "SAVE CANNOT BE SWAPPED NOW",
         "This run is already committed to another save. Restart to load this one.",
+    )
+}
+
+/// The banner for a pick whose bytes never reached the private staged tree.
+///
+/// The game reads the staged copy, not the file the user chose, so a stage that copied nothing
+/// leaves the boot reading whatever was already there -- a different character, or an empty
+/// container that parks the loading bar. Before 2026-09-13 that released the gate anyway and the
+/// only thing on screen was a loading label that never advanced.
+///
+/// `detail` is the `io::Error` the copy actually failed with, so the banner names the step instead
+/// of the class.
+pub fn stage_copy_failed_banner(detail: &str) -> PickerStatusMessage {
+    PickerStatusMessage::new(
+        "COULD NOT OPEN THAT SAVE",
+        format!(
+            "{detail} The game reads a private copy of your save, and making that copy failed, so nothing was loaded. Choose another."
+        ),
     )
 }
 
@@ -297,6 +353,7 @@ mod tests {
             MissingSaveReason::FullReadCommitAborted,
             MissingSaveReason::FullReadWouldStartNewGame,
             MissingSaveReason::PickedSaveDidNotLoad,
+            MissingSaveReason::FullReadRefusedByGame,
         ] {
             assert_eq!(MissingSaveReason::from_code(reason.as_code()), reason);
         }
@@ -312,7 +369,7 @@ mod tests {
 
     #[test]
     fn every_reason_has_banner_copy() {
-        for code in 0..=9 {
+        for code in 0..=10 {
             let banner = MissingSaveReason::from_code(code).banner();
             assert!(!banner.headline().is_empty(), "code {code} has no headline");
             assert!(!banner.detail().is_empty(), "code {code} has no detail");
@@ -353,10 +410,13 @@ mod tests {
     #[test]
     fn every_user_facing_string_is_drawable_by_the_overlay_font() {
         record_reason_detail("ER0000.co2 slot 2 gave up after 138 ticks");
-        let mut messages: Vec<PickerStatusMessage> = (0..=9)
+        let mut messages: Vec<PickerStatusMessage> = (0..=10)
             .map(|code| MissingSaveReason::from_code(code).banner())
             .collect();
         messages.push(redirect_already_committed_banner());
+        messages.push(stage_copy_failed_banner(
+            "The file could not be read: Path not found. (os error 3).",
+        ));
         for rejection in [
             crate::model::PickRejection::NotAFile,
             crate::model::PickRejection::WrongExtension,

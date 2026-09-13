@@ -133,6 +133,35 @@ static SAVE_STATE_LOAD_POLL_CALLS: AtomicU64 = AtomicU64::new(0);
 /// branch once instead of once per frame. Answers above 31 fold onto a low bit; the poll's own
 /// range is 0..=9, so no real answer collides.
 static LOAD_POLL_ANSWERS_SEEN: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// Every distinct answer the load poll has given, low answer first.
+///
+/// The poll is `FUN_140679180`: `0` and an already-set error string both mean done, `1` means the
+/// read is still in flight, and everything else is an error that also forces `saveState` to `0`.
+/// The two this has produced in the wild come straight out of `FUN_140e6e080`, which it wraps:
+///
+/// | answer | what the game measured |
+/// |---|---|
+/// | 4 | the save IO object had no device attached -- every poll after a torn-down read answers this |
+/// | 5 | the device reported the container could not be read, and the game tore the read down |
+///
+/// A caller that has to tell the player why their save did not load needs these, so they are
+/// readable rather than only loggable.
+pub fn load_poll_answers_seen() -> Vec<u32> {
+    let seen = LOAD_POLL_ANSWERS_SEEN.load(Ordering::Relaxed);
+    (0..32).filter(|bit| seen & (1 << bit) != 0).collect()
+}
+
+/// Plain words for one load-poll answer, for a banner rather than a log.
+pub fn load_poll_answer_meaning(answer: u32) -> &'static str {
+    match answer {
+        0 => "the read finished",
+        1 => "the read was still running",
+        4 => "the game had already closed the save file",
+        5 => "the game could not read the save file",
+        _ => "the game reported an error reading the save",
+    }
+}
 static SAVE_STATE_SAVE_LANE_CALLS: AtomicU64 = AtomicU64::new(0);
 /// Abandoning writes observed. **This is the finding.** Non-zero means saving died in this run and
 /// the fields below say who did it.

@@ -745,6 +745,16 @@ pub(crate) fn offer_missing_save_picker(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<unrecorded>".to_owned())
     ));
+    // Carry the caller's measurement into the banner before the reason is replaced. Without this
+    // the player is told their save "passed every check and still did not load", which names no
+    // step and suggests nothing to do, while the step that actually failed sits one line above in a
+    // log they cannot see. `PickedSaveDidNotLoad` is still the reason armed -- the fact they need
+    // first is that the save they chose is the one that stopped -- but it now says what stopped.
+    er_save_picker_core::reason::record_reason_detail(format!(
+        "What failed: {} ({}).",
+        reason.banner().detail(),
+        reason.log_tag()
+    ));
     er_telemetry_core::counters::MISSING_SAVE_PICKER_REPICK_COUNT.fetch_add(1, Ordering::SeqCst);
     // Back to `Idle` so the arm's own compare-exchange is still the thing that opens the gate --
     // one writer, one primitive. Everything the arm resets is reset by the arm.
@@ -1541,6 +1551,29 @@ pub(crate) fn complete_missing_save_selection_from_picker(
     } else {
         let source = save_redirect_source_for_validated_file(validated.clone());
         let _ = activate_save_redirect_source(source, "title-picker-selection");
+        // A direct-file pick is only real once its bytes are in the private tree: the game opens
+        // the staged container, never the file the user chose. `SAVE_DIRECT_STAGE_DONE_STEAM_ID`
+        // is stored by `stage_save_source_into_root` and only on a complete copy, so a mismatch
+        // here means the copy failed and the boot would read whatever was already staged.
+        //
+        // Releasing the gate anyway is what put the player on `PREPARING SAVE 6/11` with no
+        // message at all (measured 2026-09-13 11:08): the stage read failed `Path not found`,
+        // logged `nothing was staged`, and the next line released the gate.
+        let staged_for = SAVE_DIRECT_STAGE_DONE_STEAM_ID.load(Ordering::SeqCst);
+        let active = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+        if SAVE_REDIRECT_MODE.load(Ordering::SeqCst) == SAVE_REDIRECT_MODE_DIRECT_FILE
+            && staged_for != active
+        {
+            let detail = er_save_picker_core::reason::reason_detail().unwrap_or_else(|| {
+                "This mod did not record which step failed, which is a defect in the mod and not in your save.".to_owned()
+            });
+            let message = er_save_picker_core::reason::stage_copy_failed_banner(&detail);
+            append_autoload_debug(format_args!(
+                "save-override: title picker could NOT commit '{}' -- staging did not complete (stage_done_steamid={staged_for} active_steamid={active}); the pick is refused rather than releasing the gate onto whatever is already staged",
+                validated.display()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
     }
     install_save_redirect_hooks();
     er_save_picker_core::reason::record_picked_save(&validated);
@@ -1765,6 +1798,20 @@ fn claim_stage_in_progress(steam_id: u64) -> bool {
 /// reach this: the boot stage, which runs once per Steam id, and the picker's re-pick, which runs
 /// over a root that was already staged and must therefore not be gated on the done-latch.
 fn stage_save_source_into_root(source: &Path, root: &Path, steam_id: u64) -> bool {
+    // Every path this function touches is one we computed, so none of them may go back through the
+    // redirect. Holding a `SaveDetourDepth` token for the whole body is that statement: the reads
+    // and writes below re-enter `CreateFileW` at depth 2 and are passed through with the caller's
+    // own arguments, which is the contract the token already documents.
+    //
+    // Staging reached here from inside the detour anyway, so the token changed nothing for the boot
+    // path -- and that is why the gap survived. The missing-save picker completes on the game-task
+    // thread, at depth 0, so its stage read was the first entry into the detour and got rewritten.
+    // Measured 2026-09-13 11:08 on a pick of a save that itself lived inside our stage tree:
+    // `REDIRECT #0 ... ok=false ret=0xffffffffffffffff` rewrote
+    // `<stage>\eldenring\<id>\ER0000.sl2` into that prefix three times over, the read failed
+    // `Path not found. (os error 3)`, nothing was staged, and the boot parked on
+    // `PREPARING SAVE 6/11` reading an empty container.
+    let _own_io = SaveDetourDepth::enter();
     // Stage the source under every container name (`STAGED_SAVE_CONTAINER_NAMES`), never under a
     // name derived from the source's own extension and never under one derived from the Seamless
     // mode. This code runs inside the `CreateFileW` detour at DllMain+~190ms, and me3 loads
@@ -1800,6 +1847,12 @@ fn stage_save_source_into_root(source: &Path, root: &Path, steam_id: u64) -> boo
     let bytes = match read_normalized_save_for_stage(source, steam_id) {
         Ok(bytes) => bytes,
         Err(err) => {
+            // The caller may be the picker, which has a screen to put this on. Record the measured
+            // error before returning false: a pick whose bytes never moved must name the step that
+            // failed, not park the player on a loading label.
+            er_save_picker_core::reason::record_reason_detail(format!(
+                "The file could not be read: {err}."
+            ));
             append_autoload_debug(format_args!(
                 "save-override: direct-file stage could NOT read the configured source '{}' for SteamID64 {steam_id}: {err} -- nothing was staged; the runtime will open whatever is already in the staged tree",
                 source.display()

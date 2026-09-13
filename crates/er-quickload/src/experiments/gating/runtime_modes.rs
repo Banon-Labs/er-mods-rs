@@ -40,6 +40,15 @@ pub(crate) fn title_anim_speedup_enabled() -> bool {
 /// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
 /// surface on this branch, not a vanilla/main object to suppress.
 pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
+    // Not gated on `loading-cover`, and the attempt is recorded here so it is not repeated. The
+    // name says masquerade and the doc above says visual, but the boot autoload's handoff runs
+    // through the surface this installs: with the cover compiled out of an `--features autoload`
+    // build, three consecutive runs (2026-09-13 10:33, 10:36, 10:39) sat at the title for their
+    // whole lives -- `c30=0xa010000 level=9 player=false`, `boot-view DECISION: own_menu=false
+    // loading_handoff=false world_handoff=false` -- while the 10:23 default build loaded on the
+    // same save. Splitting the load path out of the cover is real work, tracked separately; until
+    // then a build that autoloads gets the cover, because the alternative is a build that does not
+    // autoload at all.
     if autoload_disabled() {
         return false;
     }

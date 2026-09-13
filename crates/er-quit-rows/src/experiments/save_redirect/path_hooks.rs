@@ -745,6 +745,16 @@ pub(crate) fn offer_missing_save_picker(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "<unrecorded>".to_owned())
     ));
+    // Carry the caller's measurement into the banner before the reason is replaced. Without this
+    // the player is told their save "passed every check and still did not load", which names no
+    // step and suggests nothing to do, while the step that actually failed sits one line above in a
+    // log they cannot see. `PickedSaveDidNotLoad` is still the reason armed -- the fact they need
+    // first is that the save they chose is the one that stopped -- but it now says what stopped.
+    er_save_picker_core::reason::record_reason_detail(format!(
+        "What failed: {} ({}).",
+        reason.banner().detail(),
+        reason.log_tag()
+    ));
     er_telemetry_core::counters::MISSING_SAVE_PICKER_REPICK_COUNT.fetch_add(1, Ordering::SeqCst);
     // Back to `Idle` so the arm's own compare-exchange is still the thing that opens the gate --
     // one writer, one primitive. Everything the arm resets is reset by the arm.

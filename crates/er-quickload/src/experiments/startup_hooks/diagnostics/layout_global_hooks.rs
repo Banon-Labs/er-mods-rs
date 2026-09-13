@@ -76,6 +76,12 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
     // host with a save-swap ledger, a save flow and a live-layout editor behind it can perform; a
     // standalone shell installs none of them and the picker still browses and picks.
+    // Not gated on `save-picker`, and the attempt is recorded here so it is not repeated. The list
+    // builder does not merely add browse rows: it is the hook the `05_010_ProfileSelect` list is
+    // built through in every composition, so removing it emptied the title's character list. The
+    // player reported a Load Game list with no characters on the 2026-09-13 10:33 run and on every
+    // run after it, and the autoload never left the title in any of them -- `c30=0xa010000 level=9
+    // player=false` -- while 10:23 and 10:29 loaded the same save with these installed.
     super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
     // Save Game is a vanilla row, not a cloned one, so it does not belong to `quit-rows` -- and
@@ -321,7 +327,6 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
         crate::product_autoload_enabled(),
         quickload_active,
         in_world_seen,
-        player_present,
     );
     let ret = if muted {
         0

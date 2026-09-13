@@ -61,6 +61,13 @@ use std::{
 
 use crate::host::append_autoload_debug;
 
+/// Directory name of the private staged save tree this mod copies a chosen save into.
+///
+/// The single source of truth is `er_save_redirect::DIRECT_STAGE_ROOT_DIR_NAME`; this crate does
+/// not depend on that one (it would pull the Windows hooking graph into a host-testable picker),
+/// so the two spellings are pinned together by a test in the crate that links both.
+pub const PRIVATE_STAGE_DIR_NAME: &str = "er-quickload-save-redirect-stage";
+
 /// Rows per `05_010_ProfileSelect` window (native slot count).
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
@@ -1344,6 +1351,13 @@ impl SavePickerModel {
             };
             // Hide dot-prefixed (hidden) entries -- `.config`, `.snapshots`, `.local`, etc.
             if name.starts_with('.') {
+                continue;
+            }
+            // Hide the private staged tree. It sits directly inside the save folder the picker
+            // opens on, so it is the first directory a user browsing for a save walks into, and
+            // what they find there is a copy this mod made -- of a save they already have, under a
+            // name that tells them nothing about which one. Picking it is never what they meant.
+            if name == PRIVATE_STAGE_DIR_NAME {
                 continue;
             }
             // Detect the kind by STAT'ing the target (`Path::is_dir`/`is_file`), not the dirent

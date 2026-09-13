@@ -214,3 +214,21 @@ mod tests {
         assert!(!standalone_picker_start_dir().as_os_str().is_empty());
     }
 }
+
+#[cfg(test)]
+mod private_stage_dir_name_tests {
+    /// The picker hides the private staged tree by name, and it spells that name itself because
+    /// depending on `er-save-redirect` would pull the Windows hooking graph into a host-testable
+    /// crate. This shell links both on the host, so this is where the two spellings are pinned.
+    ///
+    /// If they drift, the picker offers the user a copy of their own save, under a directory name
+    /// that explains nothing about which save it is -- and a pick of it stages a copy of a copy.
+    /// That is the shape that parked a 2026-09-13 run on `PREPARING SAVE 6/11`.
+    #[test]
+    fn the_picker_hides_the_same_directory_the_stager_creates() {
+        assert_eq!(
+            er_save_picker_core::model::PRIVATE_STAGE_DIR_NAME,
+            er_save_redirect::DIRECT_STAGE_ROOT_DIR_NAME
+        );
+    }
+}

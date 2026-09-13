@@ -290,6 +290,14 @@ pub(crate) fn autoload_disabled() -> bool {
 /// override turns the stats panel off for A/B, mirroring `autoload_disabled()`'s `ER_QUICKLOAD_NO_AUTOLOAD`
 /// shape: env `ER_QUICKLOAD_NO_STATS_PANEL=1` or the GAME_DIR file `er-quickload-no-stats-panel.txt`.
 pub(crate) fn stats_panel_enabled() -> bool {
+    // Not gated on `portrait`, and the attempt is recorded here so it is not repeated. This reads
+    // like a cosmetic lever and is not one: the boot autoload's own path runs through the surface
+    // it arms. Gated out of an `--features autoload` build, four consecutive runs (2026-09-13
+    // 10:33, 10:36, 10:39, 10:43) never left the title -- `c30=0xa010000 level=9 player=false` --
+    // while 10:23 and 10:29, same save and same driver, loaded. The 10:43 run isolates it: the
+    // title cover was restored there and the load still did not happen, so this predicate is the
+    // one the autoload needs. Separating the chrome from the load path is real work, tracked
+    // separately; a build that autoloads gets it until then.
     // Two consumers, and neither can speak for the other: the boot autoload reaches
     // `05_010_ProfileSelect` through the title's own `LOAD GAME`, the cloned System>Quit rows reach
     // it from the Quit tab. This used to ask the autoload alone, which answered false for a build
