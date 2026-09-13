@@ -659,7 +659,7 @@ def configured_save_selection() -> tuple[Path | None, int]:
     This tool does not choose a save. The DLL and its toml own that, and the launcher's only
     remaining job is to say which character the configuration already selects. A `save_file` that
     is absent is the supported shape, not a gap: the DLL then takes its `DEFAULT-USER-SAVE` path
-    and the game reads AND WRITES its own APPDATA container, so what it saves survives the run.
+    and the game reads and writes its own APPDATA container, so what it saves survives the run.
     """
     path = game_dir() / "er-quickload.toml"
     save_file: Path | None = None
@@ -775,7 +775,7 @@ def launch(args) -> int:
         gen_args.append("--vanilla")
     if args.disable_arxan:
         gen_args.append("--disable-arxan")
-    # The decoded identity is REPORTED to the generator, not configured by it: `render_sidecar`
+    # The decoded identity is reported to the generator, not configured by it: `render_sidecar`
     # writes it as comments only. The sidecar must never carry `save_file` or `slot`, because the
     # game-directory toml owns both and a second channel fights it.
     save_json = closure_file.with_name("save.json")
