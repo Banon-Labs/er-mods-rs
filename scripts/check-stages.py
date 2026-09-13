@@ -55,6 +55,9 @@ Usage:
   python3 scripts/check-stages.py --lines <stage>  # check.sh line numbers in one stage
   python3 scripts/check-stages.py --skip-lines <stage>   # the complement: what --stage must skip
   python3 scripts/check-stages.py --inputs <stage>       # files whose hash keys that stage's cache
+  python3 scripts/check-stages.py --stages-for-paths a b # stages those paths can invalidate
+  python3 scripts/check-stages.py --stages-for-diff      # ...for the diff against origin/main
+  python3 scripts/check-stages.py --audit-inputs   # inputs a stage reads and does not declare
   python3 scripts/check-stages.py --steps-tsv      # `line<TAB>text` for every step, for tooling
   python3 scripts/check-stages.py --selftest       # positive controls for --check
 """
@@ -65,6 +68,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import sys
 import tempfile
@@ -116,23 +120,60 @@ STAGES: tuple[Stage, ...] = (
         "suite",
         "the gate system checking itself: accumulation semantics, the portability ledger, "
         "the timeout cap, the git hooks, the config guard",
-        ("scripts/check.sh", "scripts/hooks/*", "scripts/*.py", "docs/ci-gate-portability.tsv"),
+        (
+            "scripts/check.sh",
+            "scripts/hooks/*",
+            "scripts/hooks-fallback-shim",
+            "scripts/lib/*.sh",
+            "scripts/frida/*",
+            "scripts/*.py",
+            "scripts/*.sh",
+            "scripts/*.toml",
+            ".githooks/*",
+            ".github/workflows/*.yml",
+            "crates/**/*",
+            "data/*",
+            "docs/ci-gate-portability.tsv",
+            "docs/recon/**/*",
+        ),
     ),
     Stage(
         "lint",
         "formatting and text shape: cargo fmt, rustfmt, shellcheck, comment capitals, "
         "lossy utf-8, markdown, file sizes",
-        ("**/*.rs", "**/*.sh", "**/*.md", "rustfmt.toml", "scripts/*.py"),
+        (
+            "**/*.rs",
+            "**/*.sh",
+            "**/*.bash",
+            "**/*.py",
+            "**/*.md",
+            "rustfmt.toml",
+            ".cargo/config.toml",
+            "scripts/comment-caps-words.txt",
+            "scripts/comment-caps.baseline.json",
+        ),
     ),
     Stage(
         "policy",
         "the cupcake rulebook and its OPA suites, plus the prose signals they evaluate",
-        (".cupcake/**/*", "scripts/test-cupcake-*.py", "scripts/test-*-signal.py"),
+        (
+            ".cupcake/**/*",
+            ".auto/*",
+            ".claude/settings.json",
+            "crates/**/*.rs",
+            "crates/**/Cargo.toml",
+            "scripts/*.py",
+            "scripts/*.sh",
+            "scripts/check.sh",
+            "scripts/frida/*",
+            "scripts/hooks/*",
+            "scripts/lib/*.sh",
+        ),
     ),
     Stage(
         "docs",
         "ledgers, roadmaps and recon tables: the documents other gates read as truth",
-        ("docs/**/*", "AGENTS.md", "README.md", ".beads/*"),
+        ("docs/**/*", "AGENTS.md", "README.md", ".beads/*", "crates/**/*"),
     ),
     Stage(
         "moveset",
@@ -143,24 +184,50 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "source",
         "repo-wide source invariants that need neither a game image nor a compiler",
-        ("crates/**/*.rs", "build-support/**/*.rs", "scripts/*.py"),
+        (
+            "crates/**/*.rs",
+            "build-support/**/*.rs",
+            "scripts/*.py",
+            "scripts/*.txt",
+            "scripts/thread-suspension.baseline.json",
+        ),
     ),
     Stage(
         "product",
         "product and release contracts: me3 profiles, the single-DLL rule, shell coverage, "
         "the release workflow",
-        ("crates/**/*", "Cargo.toml", ".github/workflows/*.yml", "scripts/*.py"),
+        (
+            "crates/**/*",
+            "build-support/**/*",
+            "Cargo.toml",
+            "data/*",
+            ".github/workflows/*.yml",
+            "scripts/*.py",
+            "scripts/er-build-dlls.sh",
+            "scripts/quickload-feature-bite.baseline.json",
+        ),
     ),
     Stage(
         "runtime-tools",
         "the launcher, probe and telemetry tooling -- tested here, never run against the game",
-        ("scripts/*.py", "scripts/*.sh", ".auto/*"),
+        ("scripts/*.py", "scripts/*.sh", ".auto/*", "crates/**/*", "data/*"),
     ),
     Stage(
         "addresses",
         "the game image: RVAs, prologue bytes, struct offsets, the 1.16.2 to 1.17 map. "
         "Most of it cannot run on a runner and says so.",
-        ("crates/**/*.rs", "docs/recon/*", "build-support/**/*.rs", "scripts/*.py"),
+        (
+            "crates/**/*",
+            "docs/recon/**/*",
+            "build-support/**/*.rs",
+            "scripts/*.py",
+            "scripts/*.rs",
+            "scripts/*.toml",
+            "scripts/*.txt",
+            "scripts/*.tsv",
+            "scripts/check.sh",
+            "scripts/audit-1170-gate-bypass.baseline.json",
+        ),
     ),
     Stage(
         "cargo-test",
@@ -171,7 +238,16 @@ STAGES: tuple[Stage, ...] = (
         "cargo-build",
         "the cross-compiled product: does the committed state link, are the shells attested, "
         "are the DLLs byte-identical",
-        ("crates/**/*", "Cargo.toml", "Cargo.lock", "vendor/**/*", "build-support/**/*"),
+        (
+            "crates/**/*",
+            "Cargo.toml",
+            "Cargo.lock",
+            "vendor/**/*",
+            "build-support/**/*",
+            ".cargo/config.toml",
+            "scripts/er-build-dlls.sh",
+            "scripts/me3-dll-list.py",
+        ),
     ),
 )
 
@@ -293,6 +369,23 @@ def lines_outside(stage: str, check_sh: Path = CHECK_SH, ledger: Path = LEDGER) 
     return [s.line for s in staged_steps(check_sh, ledger) if s.stage != stage]
 
 
+def stage_inputs(stage: str) -> tuple[str, ...]:
+    """Every file pattern the named stage reads: its declared globs, plus its own gate scripts.
+
+    The gate scripts are derived rather than declared because they are already written down --
+    each is the command text of a step, and `staged_steps` says which stage that step is in.
+    Requiring the table to repeat them would be a second list to fall behind the first, and it
+    fell behind in exactly that way: `suite` runs `scripts/test-git-pre-push-block-main.sh` while
+    declaring only `scripts/*.py`, so a diff consisting of that one test claimed no stage reads it.
+
+    One set, two readers. `stage_input_digest` hashes it to key a cache; `stages_for_paths` matches
+    a changed path against it to pick a stage. A stage cached against one set of files and selected
+    against another would be the drift this file exists to refuse.
+    """
+    spec = next(s for s in STAGES if s.name == stage)
+    return tuple(sorted(set(spec.inputs) | stage_gate_scripts(stage)))
+
+
 def stage_input_digest(stage: str) -> str:
     """A content hash over everything the named stage reads, for an `actions/cache` key.
 
@@ -300,10 +393,9 @@ def stage_input_digest(stage: str) -> str:
     byte of content changed. Missing globs contribute nothing rather than raising: a checkout
     without `vendor/` is a real configuration, not an error.
     """
-    spec = next(s for s in STAGES if s.name == stage)
     digest = hashlib.sha256()
     seen: set[Path] = set()
-    for pattern in spec.inputs:
+    for pattern in stage_inputs(stage):
         for path in sorted(REPO.glob(pattern)):
             if path.is_dir() or not path.exists():
                 continue
@@ -316,6 +408,287 @@ def stage_input_digest(stage: str) -> str:
         digest.update(b"\0")
         digest.update(hashlib.sha256((REPO / rel).read_bytes()).digest())
     return digest.hexdigest()
+
+
+# --- which stages can a set of changed paths invalidate? --------------------------------------
+# The same `inputs` globs, read the other way round. A digest asks "what did these files hash to";
+# selection asks "is this changed path one of them". Both questions have to be answered from one
+# declaration or a stage could be cached against one set of files and selected against another --
+# which is the drift this whole file exists to refuse, wearing a different hat.
+
+
+def glob_to_regex(pattern: str) -> re.Pattern[str]:
+    """`Path.glob`'s matching, rewritten as a whole-path predicate.
+
+    `PurePath.full_match` and `glob.translate` both say this in one call and both arrived in
+    python 3.13. The runner this suite uses is `ubuntu-latest`, whose system python is 3.12 and
+    which the workflow does not replace, so the translation is spelled out instead.
+
+    `**` stands for zero or more whole components and carries its own trailing separator, so
+    `docs/**/*` matches `docs/a.md` as well as `docs/plans/a.md` -- the same as `Path.glob`. A
+    pattern ending in a bare `**` is not written in the table and would match nothing here.
+    """
+    parts = pattern.split("/")
+    out: list[str] = []
+    for index, part in enumerate(parts):
+        if part == "**":
+            out.append("(?:[^/]+/)*")
+            continue
+        out.append(_segment_regex(part))
+        if index != len(parts) - 1:
+            out.append("/")
+    return re.compile("(?s:" + "".join(out) + r")\Z")
+
+
+def _segment_regex(segment: str) -> str:
+    """One path component: `*` and `?` stop at a separator, `[...]` passes through."""
+    out: list[str] = []
+    index = 0
+    while index < len(segment):
+        char = segment[index]
+        if char == "*":
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        elif char == "[":
+            close = index + 1
+            if close < len(segment) and segment[close] in "!^":
+                close += 1
+            if close < len(segment) and segment[close] == "]":
+                close += 1
+            while close < len(segment) and segment[close] != "]":
+                close += 1
+            if close >= len(segment):
+                out.append(re.escape("["))
+            else:
+                body = segment[index + 1 : close]
+                out.append("[" + ("^" + body[1:] if body.startswith("!") else body) + "]")
+                index = close
+        else:
+            out.append(re.escape(char))
+        index += 1
+    return "".join(out)
+
+
+@dataclass(frozen=True)
+class Selection:
+    """Which stages a set of changed paths can invalidate, and why the others cannot."""
+
+    stages: tuple[str, ...]
+    reasons: dict[str, str]  # stage -> why it is in or out
+    unmatched: tuple[str, ...]  # changed paths no stage claims
+    select_all_reason: str | None
+
+
+def stages_for_paths(paths: list[str]) -> Selection:
+    """Every stage one of `paths` matches -- and every stage, whenever that is not provable.
+
+    Three things select the whole suite, and each of them is an answer to a question this
+    function cannot answer rather than a policy choice:
+
+      * an empty path list. A push with no diff against the base is a push to the base, where a
+        narrowed run would be the one run nothing else covers.
+      * `ER_SCOPE_ALL=1`, the override `scripts/er-change-scope.py` already reads.
+      * a changed path that matches no stage's globs. Nobody classified it, so nobody can say
+        which gate reads it; the answer to an unclassified input is all of them.
+    """
+    matchers = {name: [glob_to_regex(p) for p in stage_inputs(name)] for name in STAGE_NAMES}
+    hit: dict[str, set[str]] = {name: set() for name in STAGE_NAMES}
+    unmatched: list[str] = []
+    for path in paths:
+        claimed = False
+        for name, patterns in matchers.items():
+            if any(pattern.match(path) for pattern in patterns):
+                hit[name].add(path)
+                claimed = True
+        if not claimed:
+            unmatched.append(path)
+
+    select_all_reason: str | None = None
+    if os.environ.get("ER_SCOPE_ALL") == "1":
+        select_all_reason = "ER_SCOPE_ALL=1 in the environment"
+    elif not paths:
+        select_all_reason = "no changed path was given, so nothing is provably untouched"
+    elif unmatched:
+        select_all_reason = (
+            "no stage declares "
+            + ", ".join(sorted(unmatched)[:4])
+            + (f" (+{len(unmatched) - 4} more)" if len(unmatched) > 4 else "")
+            + " as an input, so which gate reads it is unknown"
+        )
+
+    reasons: dict[str, str] = {}
+    for name in STAGE_NAMES:
+        if select_all_reason is not None:
+            reasons[name] = "every stage is selected: " + select_all_reason
+        elif hit[name]:
+            sample = sorted(hit[name])[:3]
+            reasons[name] = f"reads {len(hit[name])} changed path(s): {', '.join(sample)}"
+        else:
+            spec = next(s for s in STAGES if s.name == name)
+            reasons[name] = (
+                "not selected for this push -- none of its inputs ("
+                + ", ".join(spec.inputs)
+                + ", plus its own gate scripts) match any changed path. It did not run, and that "
+                "is not a pass for it."
+            )
+    if select_all_reason is not None:
+        chosen = tuple(STAGE_NAMES)
+    else:
+        chosen = tuple(name for name in STAGE_NAMES if hit[name])
+    return Selection(chosen, reasons, tuple(sorted(unmatched)), select_all_reason)
+
+
+# --- are those globs honest about what the stage reads? ---------------------------------------
+# Selection is only as good as the `inputs` declaration, and a declaration nothing measures is the
+# hand-written list this file was created to abolish. Two readings of the tree keep it honest, and
+# both are derived rather than listed:
+#
+#   1. A stage runs gate scripts. Those scripts are files, and editing one changes what the stage
+#      does, so the stage's globs have to claim them. This caught a real hole: `suite` runs
+#      `scripts/test-git-pre-push-block-main.sh` while declaring only `scripts/*.py`, so a push
+#      whose whole diff was that test would have skipped the stage that runs it.
+#   2. A gate script names the paths it reads. `scripts/er-change-scope.py --selftest` already
+#      audits build scripts this way; the same literal scan over gate scripts says which repo
+#      paths a stage looks at, and the owning stage's globs have to claim those too.
+#
+# Both readings are over-inclusive on purpose. A path named in a comment, or in a fixture list
+# that happens to name a real file, widens a stage's inputs by one glob. Over-inclusion costs a
+# stage run; under-inclusion costs a gate nobody notices did not run.
+
+_LITERAL_PATH = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
+
+# The table's own globs, as strings. `check-stages.py` is itself a `suite` gate, so the scan below
+# reads `STAGES` and reports `crates/**/*`, `docs/**/*` and `.cupcake/**/*` as paths the `suite`
+# stage looks at. It does not: as a step, this file reads `check.sh` and the portability ledger and
+# nothing else, and those globs are a declaration about ten other stages. Honouring them would make
+# `suite` claim the whole repository and a rego-only push would run it for nothing.
+_DECLARED_GLOBS = frozenset(pattern for spec in STAGES for pattern in spec.inputs)
+
+
+def repo_top_level() -> frozenset[str]:
+    """The repository's own top-level directory names, so the scan below needs no list."""
+    skip = {".git", "target", "stage-results"}
+    return frozenset(p.name for p in REPO.iterdir() if p.is_dir() and p.name not in skip)
+
+
+def code_without_prose(text: str, suffix: str) -> str:
+    """`text` with comments and docstrings blanked, so a path named in prose is not read as a read.
+
+    `scripts/er-change-scope.py` already blanks the same spans for the same reason -- a comment is
+    not a build input -- and it is the same scanner, `scripts/check-comment-caps.py`, doing it. A
+    suffix that scanner has no dialect for comes back whole.
+    """
+    scanner = _load_comment_scanner()
+    dialect = scanner.SCANNED_SUFFIXES.get(suffix)
+    if dialect is None:
+        return text
+    prose = {line for line, _ in scanner.prose_spans(text, dialect)}
+    return "\n".join("" if n in prose else body for n, body in enumerate(text.splitlines(), 1))
+
+
+def _load_comment_scanner():
+    path = REPO / "scripts" / "check-comment-caps.py"
+    spec = importlib.util.spec_from_file_location("er_comment_caps_for_stages", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"check-stages: cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def named_repo_paths(source: str, top_level: frozenset[str]) -> set[str]:
+    """Repo-relative paths and globs a gate script names, keeping only the ones that resolve.
+
+    Resolving is what separates a read from a fixture: `crates/nope/src/does-not-exist.rs` and
+    `docs/x.md` are invented by selftests and name nothing, while `docs/recon/` and
+    `crates/er-hook/src/lib.rs` are files on disk. A glob is kept when it matches at least one
+    file, which is the same test `stage_input_digest` applies.
+    """
+    found: set[str] = set()
+    for match in _LITERAL_PATH.finditer(source):
+        raw = match.group(0).rstrip("/")
+        head = raw.split("/", 1)[0]
+        if head not in top_level or "/" not in raw or raw in _DECLARED_GLOBS:
+            continue
+        if any(char in raw for char in "*?["):
+            try:
+                if next(iter(REPO.glob(raw)), None) is not None:
+                    found.add(raw)
+            except (ValueError, OSError, IndexError):
+                continue
+            continue
+        target = REPO / raw
+        if target.is_file():
+            found.add(raw)
+        elif target.is_dir():
+            found.add(raw + "/**/*")
+    return found
+
+
+_STEP_CACHE: list[StagedStep] | None = None
+
+
+def stage_gate_scripts(stage: str, steps: list[StagedStep] | None = None) -> set[str]:
+    """`scripts/<name>` for every gate script this stage's steps invoke.
+
+    The step list is parsed once per process. `stage_inputs` asks for it once per stage and the
+    selection asks `stage_inputs` once per stage, so re-parsing `check.sh` and the ledger each
+    time would read both files a hundred times to get the same answer.
+    """
+    global _STEP_CACHE
+    if steps is None and _STEP_CACHE is None:
+        _STEP_CACHE = staged_steps()
+    rows = steps if steps is not None else _STEP_CACHE
+    assert rows is not None
+    return {
+        f"scripts/{s.key.split()[0]}"
+        for s in rows
+        if s.stage == stage and s.key and (REPO / "scripts" / s.key.split()[0]).is_file()
+    }
+
+
+def coverage_problems(stages: tuple[Stage, ...] = STAGES) -> list[str]:
+    """Every path a stage demonstrably reads that its own `inputs` globs do not claim."""
+    steps = staged_steps()
+    top_level = repo_top_level()
+    problems: list[str] = []
+    for spec in stages:
+        matchers = [glob_to_regex(p) for p in stage_inputs(spec.name)]
+
+        def claimed(path: str, matchers: list[re.Pattern[str]] = matchers) -> bool:
+            """Does this stage declare `path`, which may itself be a glob?
+
+            A glob is claimed when every file it names is claimed. Comparing the two patterns as
+            strings instead would report `crates/**/*.rs` as unclaimed against a declared
+            `crates/er-gfx/**/*`, and expanding both sides is the only comparison that is about
+            the files rather than about the spelling.
+            """
+            if not any(char in path for char in "*?["):
+                return any(m.match(path) for m in matchers)
+            for found in REPO.glob(path):
+                if found.is_dir():
+                    continue
+                rel = found.relative_to(REPO).as_posix()
+                if not any(m.match(rel) for m in matchers):
+                    return False
+            return True
+
+        owed: set[str] = set()
+        for script in sorted(stage_gate_scripts(spec.name, steps)):
+            if not claimed(script):
+                owed.add(script)
+            source = (REPO / script).read_text(encoding="utf-8", errors="replace")
+            source = code_without_prose(source, Path(script).suffix)
+            owed.update(p for p in named_repo_paths(source, top_level) if not claimed(p))
+        for path in sorted(owed):
+            problems.append(
+                f"stage {spec.name!r} reads {path!r} and does not declare it. Widen that stage's "
+                "`inputs` in scripts/check-stages.py, or the pre-push selection will skip the "
+                "stage on a push that changes it."
+            )
+    return problems
 
 
 # What an INVOCATION of each tool looks like inside a gate script, as opposed to a mention of it.
@@ -465,8 +838,225 @@ def selftest() -> int:
         failures += 1
         for step in unmatched:
             print(f"          line {step.line}: {step.text[:80]}")
+    failures += selection_selftest()
     print(f"check-stages selftest: {failures} failure(s)")
     return 1 if failures else 0
+
+
+# The synthetic stage table the selection cases run against. Synthetic on purpose: a case written
+# against the real table would pass or fail for whatever the table happens to say this week, and
+# the property under test is the matcher, not the repository.
+_FIXTURE_STAGES: tuple[Stage, ...] = (
+    Stage("paper", "documents", ("docs/**/*", "*.md")),
+    Stage("rules", "the rulebook", (".cupcake/**/*",)),
+    Stage("build", "the compiler", ("crates/**/*", "Cargo.toml")),
+)
+
+
+def selection_selftest() -> int:
+    """Positive controls for `stages_for_paths` and the glob matcher underneath it."""
+    failures = 0
+
+    def case(label: str, condition: bool, detail: str = "") -> None:
+        nonlocal failures
+        print(f"  {'ok  ' if condition else 'FAIL'}  {label}")
+        if not condition:
+            failures += 1
+            if detail:
+                print(f"          {detail}")
+
+    # --- the matcher, against `Path.glob`'s own answers --------------------------------------
+    matches = [
+        ("docs/**/*", "docs/a.md", True),
+        ("docs/**/*", "docs/plans/deep/a.md", True),
+        ("docs/**/*", "crates/a.rs", False),
+        ("**/*.rs", "a.rs", True),
+        ("**/*.rs", "crates/er-gfx/src/lib.rs", True),
+        ("**/*.rs", "crates/er-gfx/src/lib.py", False),
+        ("crates/**/*.rs", "crates/x/src/a.rs", True),
+        ("crates/**/*.rs", "docs/x/a.rs", False),
+        ("scripts/hooks/*", "scripts/hooks/pre-push", True),
+        ("scripts/hooks/*", "scripts/hooks/nested/pre-push", False),
+        ("scripts/*.py", "scripts/a.py", True),
+        ("scripts/*.py", "scripts/sub/a.py", False),
+        ("Cargo.toml", "Cargo.toml", True),
+        ("Cargo.toml", "crates/x/Cargo.toml", False),
+    ]
+    wrong = [
+        (pattern, path)
+        for pattern, path, want in matches
+        if bool(glob_to_regex(pattern).match(path)) is not want
+    ]
+    case(f"the glob matcher agrees with Path.glob on {len(matches)} shapes", not wrong, str(wrong))
+
+    # ...and it agrees with the real thing rather than with this file's idea of it: every file
+    # `Path.glob` returns for a declared pattern must match that pattern's regex.
+    disagreements = []
+    for spec in STAGES:
+        for pattern in spec.inputs:
+            regex = glob_to_regex(pattern)
+            for found in REPO.glob(pattern):
+                if found.is_dir():
+                    continue
+                rel = found.relative_to(REPO).as_posix()
+                if not regex.match(rel):
+                    disagreements.append((pattern, rel))
+    case(
+        "every file Path.glob returns for a declared input matches that input's regex",
+        not disagreements,
+        str(disagreements[:4]),
+    )
+
+    # --- selection over the synthetic table ---------------------------------------------------
+    real, globals()["STAGES"] = STAGES, _FIXTURE_STAGES
+    real_names, globals()["STAGE_NAMES"] = STAGE_NAMES, tuple(s.name for s in _FIXTURE_STAGES)
+    real_declared = globals()["_DECLARED_GLOBS"]
+    globals()["_DECLARED_GLOBS"] = frozenset(p for s in _FIXTURE_STAGES for p in s.inputs)
+    scope_all, os.environ["ER_SCOPE_ALL"] = os.environ.pop("ER_SCOPE_ALL", None), "0"
+    try:
+        docs_only = stages_for_paths(["docs/plans/a.md", "README.md"])
+        case(
+            "a documentation-only path list selects the document stage and not the compiler",
+            docs_only.stages == ("paper",),
+            str(docs_only.stages),
+        )
+        rules_only = stages_for_paths([".cupcake/policies/claude/a.rego"])
+        case(
+            "a .cupcake-only path list selects the rulebook stage alone",
+            rules_only.stages == ("rules",),
+            str(rules_only.stages),
+        )
+        empty = stages_for_paths([])
+        case(
+            "an empty path list selects every stage, and says why",
+            empty.stages == tuple(s.name for s in _FIXTURE_STAGES)
+            and "no changed path" in (empty.select_all_reason or ""),
+            str(empty.stages) + " " + str(empty.select_all_reason),
+        )
+        stray = stages_for_paths(["some/unclassified/thing.bin"])
+        case(
+            "a path no stage declares selects every stage rather than none",
+            stray.stages == tuple(s.name for s in _FIXTURE_STAGES)
+            and stray.unmatched == ("some/unclassified/thing.bin",),
+            str(stray.stages),
+        )
+        mixed = stages_for_paths(["docs/a.md", "crates/x/src/a.rs"])
+        case(
+            "a mixed list selects the union, not the intersection",
+            set(mixed.stages) == {"paper", "build"},
+            str(mixed.stages),
+        )
+        skipped = mixed.reasons["rules"]
+        case(
+            "an unselected stage says it did not run and that this is not a pass",
+            "not selected" in skipped and "not a pass" in skipped,
+            skipped,
+        )
+        os.environ["ER_SCOPE_ALL"] = "1"
+        forced = stages_for_paths(["docs/a.md"])
+        case(
+            "ER_SCOPE_ALL=1 selects every stage",
+            forced.stages == tuple(s.name for s in _FIXTURE_STAGES),
+            str(forced.stages),
+        )
+    finally:
+        globals()["STAGES"], globals()["STAGE_NAMES"] = real, real_names
+        globals()["_DECLARED_GLOBS"] = real_declared
+        os.environ.pop("ER_SCOPE_ALL", None)
+        if scope_all is not None:
+            os.environ["ER_SCOPE_ALL"] = scope_all
+
+    # --- and the real table declares what its own gates read ---------------------------------
+    problems = coverage_problems()
+    case(
+        "every path a stage's gates read is declared by that stage",
+        not problems,
+        "; ".join(problems[:3]),
+    )
+    return failures
+
+
+def changed_paths_for(base_ref: str, revs: list[str]) -> list[str]:
+    """The changed paths this selection is about, through `scripts/er-dll-closure.py`.
+
+    That module is where `resolve_base` and `changed_paths` live, and
+    `scripts/er-change-scope.py` imports them from it for the same reason: a second walk over
+    the same diff is the drift this repo keeps closing. `revs` asks about the commits being
+    pushed rather than the working tree, which is the question a pre-push hook has -- a dirty
+    tree is not what reaches origin.
+    """
+    path = REPO / "scripts" / "er-dll-closure.py"
+    spec = importlib.util.spec_from_file_location("er_dll_closure_for_stages", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    closure = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = closure
+    spec.loader.exec_module(closure)
+    # Never fetched. A stale base widens the diff, which selects more stages, which is the safe
+    # direction; a network round trip on every push is a cost nobody asked for.
+    merge_base, _ = closure.resolve_base(base_ref, False)
+    if not revs:
+        return closure.changed_paths(merge_base)
+    seen: set[str] = set()
+    for rev in revs:
+        rev_base = closure.git("merge-base", base_ref, rev).strip()
+        seen.update(
+            line.strip()
+            for line in closure.git("diff", "--name-only", rev_base, rev).splitlines()
+            if line.strip()
+        )
+    return sorted(seen)
+
+
+def _emit_selection(args) -> int:
+    """Selected stage names on stdout; the whole accounting, skips included, on stderr.
+
+    Exit is 0 whatever happens, and that is the fail-open contract rather than laziness: the
+    caller runs the names it is given, so the way to fail open is to name every stage. A
+    non-zero exit would abort a `set -e` hook instead, which selects nothing at all --
+    the one outcome worse than running everything.
+    """
+    paths: list[str]
+    failure: str | None = None
+    if args.stages_for_diff:
+        try:
+            paths = changed_paths_for(args.base, args.revs)
+        except Exception as err:  # noqa: BLE001 -- every failure has one answer: every stage
+            failure = f"cannot resolve the diff ({type(err).__name__}: {err})"
+            paths = []
+    elif args.stages_for_paths:
+        paths = [p.strip() for p in args.stages_for_paths if p.strip()]
+    else:
+        paths = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+
+    try:
+        selection = stages_for_paths(paths)
+    except Exception as err:  # noqa: BLE001
+        failure = failure or f"selection raised ({type(err).__name__}: {err})"
+        selection = Selection(tuple(STAGE_NAMES), {}, (), failure)
+
+    if failure:
+        print(f"check-stages: {failure}.", file=sys.stderr)
+        print("check-stages: failing open -- every stage is selected.", file=sys.stderr)
+        selection = Selection(
+            tuple(STAGE_NAMES),
+            {name: "every stage is selected: " + failure for name in STAGE_NAMES},
+            (),
+            failure,
+        )
+
+    print("\n".join(selection.stages))
+    print(
+        f"check-stages: {len(selection.stages)} of {len(STAGE_NAMES)} stage(s) selected from "
+        f"{len(paths)} changed path(s).",
+        file=sys.stderr,
+    )
+    if selection.select_all_reason:
+        print(f"check-stages: {selection.select_all_reason}", file=sys.stderr)
+    for name in STAGE_NAMES:
+        mark = "SELECTED    " if name in selection.stages else "not selected"
+        print(f"  {mark}  {name:<14} {selection.reasons.get(name, '')}", file=sys.stderr)
+    return 0
 
 
 def main() -> int:
@@ -510,6 +1100,33 @@ def main() -> int:
         help="the stage owning the step whose text starts with PREFIX, for callers that must "
         "name a stage without hard-coding one",
     )
+    ap.add_argument(
+        "--stages-for-paths",
+        nargs="*",
+        metavar="PATH",
+        help="the stages these repo-relative paths can invalidate, one name per line. With no "
+        "paths, they are read from stdin, one per line.",
+    )
+    ap.add_argument(
+        "--stages-for-diff",
+        action="store_true",
+        help="the same, over the diff against --base (or the commits named by --rev)",
+    )
+    ap.add_argument("--base", default="origin/main", help="the diff base for --stages-for-diff")
+    ap.add_argument(
+        "--rev",
+        dest="revs",
+        action="append",
+        default=[],
+        metavar="SHA",
+        help="diff this commit against the base instead of the working tree (repeatable), which "
+        "is the shape a pre-push hook needs: what reaches origin, not what is in the tree",
+    )
+    ap.add_argument(
+        "--audit-inputs",
+        action="store_true",
+        help="every path a stage's gates demonstrably read that its `inputs` do not declare",
+    )
     ap.add_argument("--steps-tsv", action="store_true", help="line<TAB>text for every step")
     ap.add_argument("--counts", action="store_true", help="how many steps per stage")
     ap.add_argument("--selftest", action="store_true", help="positive controls for --check")
@@ -523,6 +1140,16 @@ def main() -> int:
         for step in portability.parse_steps():
             print(f"{step.line}\t{step.text}")
         return 0
+
+    if args.audit_inputs:
+        problems = coverage_problems()
+        for problem in problems:
+            print(f"check-stages: {problem}")
+        print(f"check-stages: {len(problems)} undeclared stage input(s)")
+        return 1 if problems else 0
+
+    if args.stages_for_paths is not None or args.stages_for_diff:
+        return _emit_selection(args)
 
     if args.stages:
         print("\n".join(STAGE_NAMES))
