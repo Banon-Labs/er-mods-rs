@@ -17,7 +17,7 @@ children and calls this; in CI each stage is a job that uploads its file as an a
 different pieces of code, is two verdicts.
 
   python3 scripts/check-stage-report.py <dir>              # table + verdict, exit 1 if red
-  python3 scripts/check-stage-report.py <dir> --quiet       # roll-up only, no 278-row table
+  python3 scripts/check-stage-report.py <dir> --quiet       # roll-up only, no 292-row table
   python3 scripts/check-stage-report.py --selftest
 """
 

@@ -31,16 +31,16 @@ catch-all is how a step stops being classified without anyone deciding that.
 
 Where the assignment lives, and why it is not a second file. Every check.sh step that runs a repo
 gate script already has exactly one row in `docs/ci-gate-portability.tsv` -- measured, and held in
-bijection with the step list by `ci-gate-portability.py --check` (204 rows, 204 keyed steps, no
+bijection with the step list by `ci-gate-portability.py --check` (213 rows, 213 keyed steps, no
 duplicates, no orphans, as of this writing). Adding a parallel `docs/check-stages.tsv` would create
 a second key set that could disagree with the first, which is the disease rather than the cure. So
 the stage is a fifth column on the row that already exists: one row per gate, two measured facts
 about it, one bijection to keep honest.
 
-The other 74 steps invoke a tool rather than a repo script -- `cargo`, `shellcheck`, `rustfmt`,
+The other 79 steps invoke a tool rather than a repo script -- `cargo`, `shellcheck`, `rustfmt`,
 `opa`, `cupcake` -- and the portability ledger deliberately does not carry them, on the grounds
 that their only dependency is whether the tool is installed. Their stage is equally uniform, so it
-is a rule here rather than 74 rows that all say the same thing:
+is a rule here rather than 79 rows that all say the same thing:
 
     shellcheck / rustfmt / cargo fmt   -> lint
     opa / cupcake                      -> policy
@@ -176,7 +176,7 @@ STAGES: tuple[Stage, ...] = (
 
 STAGE_NAMES = tuple(s.name for s in STAGES)
 
-# The rule for the 74 toolchain steps, applied in order, first match wins. Deliberately tiny: if a
+# The rule for the 79 toolchain steps, applied in order, first match wins. Deliberately tiny: if a
 # new tool ever needs a fifth line here, that is a decision worth making explicitly rather than
 # absorbing into a default.
 TOOLCHAIN_RULES: tuple[tuple[re.Pattern[str], str], ...] = (

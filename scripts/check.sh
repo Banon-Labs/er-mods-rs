@@ -310,14 +310,14 @@ fi
 
 # --- which steps belong to a different stage ------------------------------------------------
 # The third source of non-execution, and the only one that is a deliberate partition rather than
-# an absent input. `--stage lint` runs lint's steps and leaves the other nine stages' steps alone.
+# an absent input. `--stage lint` runs lint's steps and leaves the other ten stages' steps alone.
 # They get their own state in the summary, `OTHER STAGE`, so a single stage's log can never be
 # read as a verdict on the suite -- the same contract `SKIPPED` has carried since 2026-08-31, for
 # the same reason: a step that did not execute must not look like one that agreed with the tree.
 #
-# No per-step banner is printed for these, unlike the two skip sources above. 253 banners in a
-# 25-step stage would bury the stage's own output, and the information is not per-step anyway:
-# what a reader needs is "this was stage lint, and the other 253 steps are other stages' work",
+# No per-step banner is printed for these, unlike the two skip sources above. 251 banners in a
+# 41-step stage would bury the stage's own output, and the information is not per-step anyway:
+# what a reader needs is "this was stage lint, and the other 251 steps are other stages' work",
 # which the summary header and one summary line say once.
 #
 # A tooling failure fails open -- the stage filter is dropped and the whole suite runs, which is
