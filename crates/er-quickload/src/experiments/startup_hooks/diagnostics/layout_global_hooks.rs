@@ -107,6 +107,22 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                 "system-quit-save: arming the vanilla Save Game row failed: {error:?} -- the row keeps the game's own text and action"
             ));
         }
+        // The pump the row's destination browser needs, and in this build nothing else provides
+        // one. `system_quit_menu_window_run_post` -- the product's own `MenuWindowJob::Run` work,
+        // and the only writer of the ProfileSelect window latch -- lives in the `quit-rows`
+        // directory, so with the cloned rows off the browser opened and nothing watched it. A
+        // backout cleared no latch, `dest_browse_verdict` kept reading `dest_mode` as a browser
+        // still on screen, and the flow never left `SAVE_FLOW_STAGE_DEST_BROWSE`: the second press
+        // logged `Save Game row press IGNORED ... already in flight` (run br-20260913-050924-8131,
+        // `+31111368ms`). The core pump is the same one the standalone shell uses; its
+        // `note_picker_window_closed` is what ends the browse. `set_save_game_row_armed` had no
+        // caller in the tree at all, so that block had never run in any host.
+        er_quit_menu_core::menu_pump::set_save_game_row_armed(true);
+        if !unsafe { er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook() } {
+            append_autoload_debug(format_args!(
+                "system-quit-save: no MenuWindowJob::Run pump -- the Save Game row's destination browser will open and never close the flow"
+            ));
+        }
     }
     // Everything below clones rows onto the Quit tab. With the feature off the tab keeps exactly
     // what the game ships apart from the Save Game row armed just above, and the installs before
@@ -134,6 +150,12 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
                     open_save_picker_menu: Some(open_save_picker_menu_for_row),
                     save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    // The cloned row's flow is the same flow: `arm` drops the clone when the native
+                    // takeover is supplied, so this only matters to a host that does not take the
+                    // native row over.
+                    save_game_as_start_flow: Some(
                         crate::experiments::system_quit_save_game_start_flow,
                     ),
                     save_game_request_save_only: Some(

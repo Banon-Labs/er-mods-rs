@@ -208,6 +208,10 @@ impl RowSet {
 /// matching [`RowSet`] entry is false in the same load, so the row is not on the tab to be pressed.
 /// The Save Game pair are separate because the Return-to-Desktop arm calls the save request without
 /// starting the flow.
+// `repr(C)` because a second DLL passes one of these through the `er_quit_rows_register` export.
+// Both sides link the same core, so the layout would match anyway; saying so makes the contract the
+// export documents an actual guarantee rather than an accident of one compiler run.
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct QuitRowActions {
     /// Open the in-game ProfileSelect character switch. Argument: the row's action object.
@@ -238,7 +242,114 @@ static SYSTEM_QUIT_FOREIGN_DIALOG_FORWARDS: AtomicUsize = AtomicUsize::new(0);
 const FOREIGN_DIALOG_FORWARD_LOG_LIMIT: usize = 8;
 
 static ROW_SET: AtomicUsize = AtomicUsize::new(0);
-static ROW_ACTIONS: std::sync::OnceLock<QuitRowActions> = std::sync::OnceLock::new();
+// One slot per flow, rather than one `OnceLock<QuitRowActions>`, because registration is no longer
+// a single event: a second DLL contributes the rows it carries through `er_quit_rows_register`, and
+// a `OnceLock` would drop everything after the first caller. First writer of each slot wins, so a
+// DLL cannot silently take a row another one already answers for.
+static ACTION_OPEN_PROFILE_LOAD_DIALOG: AtomicUsize = AtomicUsize::new(0);
+static ACTION_OPEN_SAVE_PICKER_MENU: AtomicUsize = AtomicUsize::new(0);
+static ACTION_SAVE_GAME_START_FLOW: AtomicUsize = AtomicUsize::new(0);
+static ACTION_SAVE_GAME_AS_START_FLOW: AtomicUsize = AtomicUsize::new(0);
+static ACTION_SAVE_GAME_REQUEST_SAVE_ONLY: AtomicUsize = AtomicUsize::new(0);
+static ACTION_ROW_TABLE_RESET: AtomicUsize = AtomicUsize::new(0);
+static ACTION_NOTE_DRIVE_STRIP_CLICK: AtomicUsize = AtomicUsize::new(0);
+
+/// Store `value` if the slot is still empty, and report whether this caller is the one that filled
+/// it. A `None` contributes nothing and is not a claim.
+fn merge_action<T>(slot: &AtomicUsize, value: Option<T>) -> bool {
+    let Some(value) = value else {
+        return false;
+    };
+    // Safety: every field of `QuitRowActions` is a function pointer, which is pointer sized.
+    let raw: usize = unsafe { std::mem::transmute_copy(&value) };
+    slot.compare_exchange(0, raw, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
+}
+
+fn read_action<T>(slot: &AtomicUsize) -> Option<T> {
+    let raw = slot.load(Ordering::SeqCst);
+    if raw == 0 {
+        return None;
+    }
+    // Safety: written by `merge_action` from a `T` of the same pointer-sized shape.
+    Some(unsafe { std::mem::transmute_copy(&raw) })
+}
+
+/// Fold one host's rows and flows into the process-wide table.
+///
+/// Called on the owning DLL: directly by [`arm`] for its own registration, and through the
+/// `er_quit_rows_register` export for every other DLL's.
+pub(crate) fn merge_registration(rows: RowSet, actions: QuitRowActions) {
+    // Each flow is reported by name, with what the merge did to it. A registration that logged only
+    // the `RowSet` is what left run br-20260913-141132-2d39 unreadable: the election was right, the
+    // four cloned rows bound, and the native first row still came back `Save Game=#0:Some(Foreign)`
+    // with nothing in either log to say whether `save_game_start_flow` had crossed the boundary.
+    let merged = [
+        (
+            "open_profile_load_dialog",
+            merge_action(
+                &ACTION_OPEN_PROFILE_LOAD_DIALOG,
+                actions.open_profile_load_dialog,
+            ),
+            actions.open_profile_load_dialog.is_some(),
+        ),
+        (
+            "open_save_picker_menu",
+            merge_action(&ACTION_OPEN_SAVE_PICKER_MENU, actions.open_save_picker_menu),
+            actions.open_save_picker_menu.is_some(),
+        ),
+        (
+            "save_game_start_flow",
+            merge_action(&ACTION_SAVE_GAME_START_FLOW, actions.save_game_start_flow),
+            actions.save_game_start_flow.is_some(),
+        ),
+        (
+            "save_game_as_start_flow",
+            merge_action(
+                &ACTION_SAVE_GAME_AS_START_FLOW,
+                actions.save_game_as_start_flow,
+            ),
+            actions.save_game_as_start_flow.is_some(),
+        ),
+        (
+            "save_game_request_save_only",
+            merge_action(
+                &ACTION_SAVE_GAME_REQUEST_SAVE_ONLY,
+                actions.save_game_request_save_only,
+            ),
+            actions.save_game_request_save_only.is_some(),
+        ),
+        (
+            "row_table_reset",
+            merge_action(&ACTION_ROW_TABLE_RESET, actions.row_table_reset),
+            actions.row_table_reset.is_some(),
+        ),
+        (
+            "note_drive_strip_click_event",
+            merge_action(
+                &ACTION_NOTE_DRIVE_STRIP_CLICK,
+                actions.note_drive_strip_click_event,
+            ),
+            actions.note_drive_strip_click_event.is_some(),
+        ),
+    ];
+    publish_row_set(rows);
+    let detail = merged
+        .iter()
+        .map(|(name, claimed, offered)| {
+            let state = match (offered, claimed) {
+                (true, true) => "claimed",
+                (true, false) => "offered-but-already-held",
+                (false, _) => "absent",
+            };
+            format!("{name}={state}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    append_autoload_debug(format_args!(
+        "system-quit-dup: row table merge rows={rows:?} [{detail}]"
+    ));
+}
 
 /// Bit positions of [`RowSet`] inside the published word. One bit per cloned row, so "armed" and
 /// "armed with no rows" stay distinguishable from the `ARMED` bit below.
@@ -266,7 +377,9 @@ fn publish_row_set(rows: RowSet) {
     if rows.save_game_as {
         word |= ROW_BIT_SAVE_GAME_AS;
     }
-    ROW_SET.store(word, Ordering::SeqCst);
+    // `fetch_or`, not `store`: a second DLL's rows are added to the tab, never substituted for the
+    // first one's. Clearing here is what let a later registration erase rows already on screen.
+    ROW_SET.fetch_or(word, Ordering::SeqCst);
 }
 
 /// The rows this load armed. `NONE` before [`arm`] runs, which is also what stops the cloner from
@@ -285,17 +398,17 @@ fn row_set() -> RowSet {
     }
 }
 
-fn row_actions() -> &'static QuitRowActions {
-    static NONE: QuitRowActions = QuitRowActions {
-        open_profile_load_dialog: None,
-        open_save_picker_menu: None,
-        save_game_start_flow: None,
-        save_game_as_start_flow: None,
-        save_game_request_save_only: None,
-        row_table_reset: None,
-        note_drive_strip_click_event: None,
-    };
-    ROW_ACTIONS.get().unwrap_or(&NONE)
+/// The flows the process has, from whichever DLLs contributed them.
+fn row_actions() -> QuitRowActions {
+    QuitRowActions {
+        open_profile_load_dialog: read_action(&ACTION_OPEN_PROFILE_LOAD_DIALOG),
+        open_save_picker_menu: read_action(&ACTION_OPEN_SAVE_PICKER_MENU),
+        save_game_start_flow: read_action(&ACTION_SAVE_GAME_START_FLOW),
+        save_game_as_start_flow: read_action(&ACTION_SAVE_GAME_AS_START_FLOW),
+        save_game_request_save_only: read_action(&ACTION_SAVE_GAME_REQUEST_SAVE_ONLY),
+        row_table_reset: read_action(&ACTION_ROW_TABLE_RESET),
+        note_drive_strip_click_event: read_action(&ACTION_NOTE_DRIVE_STRIP_CLICK),
+    }
 }
 
 /// Whether a host in this process owns what the Save Game row actually does.
@@ -1330,6 +1443,98 @@ pub enum ArmError {
 
 static ARM_ONCE: AtomicUsize = AtomicUsize::new(0);
 
+/// [`RowSet`] in the published bit form, so it can cross the registrar's C boundary as one word.
+fn row_set_bits(rows: RowSet) -> usize {
+    let mut word = ROW_BIT_ARMED;
+    if rows.load_character {
+        word |= ROW_BIT_LOAD_CHARACTER;
+    }
+    if rows.load_character_from_file {
+        word |= ROW_BIT_LOAD_FROM_FILE;
+    }
+    if rows.load_build_from_url {
+        word |= ROW_BIT_LOAD_BUILD_URL;
+    }
+    if rows.generate_build_link {
+        word |= ROW_BIT_GENERATE_LINK;
+    }
+    if rows.save_game_as {
+        word |= ROW_BIT_SAVE_GAME_AS;
+    }
+    word
+}
+
+/// [`row_set_bits`] inverted, for the receiving side of the registrar.
+fn row_set_from_bits(word: usize) -> RowSet {
+    RowSet {
+        load_character: word & ROW_BIT_LOAD_CHARACTER != 0,
+        load_character_from_file: word & ROW_BIT_LOAD_FROM_FILE != 0,
+        load_build_from_url: word & ROW_BIT_LOAD_BUILD_URL != 0,
+        generate_build_link: word & ROW_BIT_GENERATE_LINK != 0,
+        save_game_as: word & ROW_BIT_SAVE_GAME_AS != 0,
+    }
+}
+
+/// This DLL's own module base, for resolving its `er_quit_rows_register` export.
+///
+/// `GetModuleHandleExW` from an address inside this image, the same way `er-hook` finds its own
+/// base: a cdylib has no other way to name itself, and naming it by filename would defeat the point
+/// -- any DLL may own the rows.
+pub(crate) fn this_dll_module() -> usize {
+    use std::sync::OnceLock;
+    static BASE: OnceLock<usize> = OnceLock::new();
+    *BASE.get_or_init(|| {
+        #[cfg(windows)]
+        {
+            unsafe extern "system" {
+                fn GetModuleHandleExW(
+                    flags: u32,
+                    addr: *const std::ffi::c_void,
+                    module: *mut *mut std::ffi::c_void,
+                ) -> i32;
+            }
+            const FROM_ADDRESS: u32 = 0x4;
+            const UNCHANGED_REFCOUNT: u32 = 0x2;
+            let mut handle: *mut std::ffi::c_void = std::ptr::null_mut();
+            let anchor = this_dll_module as *const std::ffi::c_void;
+            if unsafe { GetModuleHandleExW(FROM_ADDRESS | UNCHANGED_REFCOUNT, anchor, &mut handle) }
+                != 0
+            {
+                handle as usize
+            } else {
+                0
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            0
+        }
+    })
+}
+
+/// The process-wide row registrar, published by whichever DLL armed first.
+///
+/// Exported so a second DLL can reach it by address through the shared mapping rather than by
+/// linking a second copy of this crate's statics. It merges and returns; it never installs, because
+/// the owner already did that when it armed.
+///
+/// # Safety
+///
+/// `actions` must point at a valid [`QuitRowActions`] for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn er_quit_rows_register(bits: usize, actions: *const QuitRowActions) -> u32 {
+    if actions.is_null() {
+        return 1;
+    }
+    let actions = unsafe { *actions };
+    let rows = row_set_from_bits(bits);
+    merge_registration(rows, actions);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: a second DLL registered rows={rows:?} into this process's row table"
+    ));
+    0
+}
+
 /// Install the row cloner and the row router, and publish which rows this load owns.
 ///
 /// The single entry point for both hosts: the product calls it with [`RowSet::ALL`] and its real
@@ -1350,6 +1555,32 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
     {
         return Err(ArmError::AlreadyArmed);
     }
+    // Whose table is this? Statics are per-cdylib, so a second DLL arming its own would give the
+    // tab two routers that disagree about which native index is which row -- see `row_registry`.
+    // A delegate hands its rows to the owner and installs nothing.
+    match crate::row_registry::elect() {
+        crate::row_registry::Election::Owner | crate::row_registry::Election::Alone => {}
+        crate::row_registry::Election::Delegate(register) => {
+            let bits = row_set_bits(rows);
+            let status = unsafe { register(bits, &raw const actions) };
+            // Also into this DLL's own table. Delegating hands the owner the rows and the flows, but
+            // a host keeps predicates of its own that ask its local table what it owns -- the
+            // product's `MsgRepository::GetAndFormat` hook asks whether it owns the native first
+            // row before substituting the `Save Game` label. With the local table left empty by the
+            // delegation, run br-20260913-141748-a381 gave the row our flow and the game's own text:
+            // it read `Quit Game` and behaved as Save Game.
+            merge_registration(rows, actions);
+            append_autoload_debug(format_args!(
+                "system-quit-dup: another DLL owns this process's Quit row table; registered rows={rows:?} through its er_quit_rows_register (status={status})"
+            ));
+            return if status == 0 {
+                Ok(())
+            } else {
+                ARM_ONCE.store(0, Ordering::SeqCst);
+                Err(ArmError::AlreadyArmed)
+            };
+        }
+    }
     // The cloned `Save Game` row and the native-first-row takeover are one feature spelled two
     // ways, so a host that asked for both would build a tab with two rows reading `Save Game`.
     // Clearing the clone leaves the takeover, which is the row that already carries the flow.
@@ -1360,8 +1591,7 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
         ));
         rows.save_game_as = false;
     }
-    let _ = ROW_ACTIONS.set(actions);
-    publish_row_set(rows);
+    merge_registration(rows, actions);
 
     // Unresolved on purpose: `register_union_hook5` owns the single 1.16.2 -> 1.17 resolve, so
     // there is no second translation for `scripts/check-double-resolved-hook-targets.py` to find.
@@ -1373,6 +1603,7 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
         // before this moved: the flag it gates on is only raised on success, and an address that
         // would not resolve on one attempt can resolve on the next once the image is fully mapped.
         ARM_ONCE.store(0, Ordering::SeqCst);
+        crate::row_registry::release();
         return Err(ArmError::ClonerUnresolved);
     };
     if let Err(status) = unsafe {
@@ -1386,6 +1617,7 @@ pub unsafe fn arm(rows: RowSet, actions: QuitRowActions) -> Result<(), ArmError>
             "system-quit-dup: register_union_hook5 AddCancelButton failed: {status:?} -- no rows will be cloned"
         ));
         ARM_ONCE.store(0, Ordering::SeqCst);
+        crate::row_registry::release();
         return Err(ArmError::ClonerRefused);
     }
     append_autoload_debug(format_args!(

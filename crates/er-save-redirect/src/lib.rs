@@ -251,6 +251,28 @@ impl SaveHookInstallState {
     }
 }
 
+/// Whether a core `CreateFileW` detour is live anywhere in this process.
+///
+/// A [`SaveHookInstallState`] answers "did this module install one", and there is more than one
+/// module that can: the product's save-redirect path hook and `er-quit-menu-core`'s own write-open
+/// detour both hook `kernel32!CreateFileW`, and both bodies ask
+/// `save_dest_commit_runtime::save_dest_redirect_for_open` whether an armed destination wants this
+/// open diverted. Only one of them can hold the detour -- MinHook keys by target address and
+/// refuses the second with `MH_ERROR_ALREADY_CREATED` -- so a per-module answer says "no" for
+/// whichever module lost, even though the window it needs is being read.
+///
+/// That false negative refused a real save. On run br-20260913-144813-963f the product installed
+/// the detour at +182ms, the user browsed to `ER0000.sl2` against a loaded `ER0000.co2`, confirmed
+/// the overwrite, and the commit aborted at the last stage with "the `CreateFileW` detour that
+/// reads it is not installed" -- asked of `er-quit-menu-core`'s state, which had never installed
+/// anything because `install_save_flow_game_task` is called only by the `er-save-game-row` shell.
+static CORE_CREATEFILEW_INSTALLED_IN_PROCESS: AtomicUsize = AtomicUsize::new(0);
+
+/// Read the process-wide answer; see [`CORE_CREATEFILEW_INSTALLED_IN_PROCESS`].
+pub fn core_createfilew_installed_in_process() -> bool {
+    CORE_CREATEFILEW_INSTALLED_IN_PROCESS.load(Ordering::SeqCst) != 0
+}
+
 /// Whether the redirect-mode save hook batch should install now.
 ///
 /// The native missing-save picker path deliberately keeps redirect hooks uninstalled until a picked
@@ -371,6 +393,7 @@ pub unsafe fn install_core_createfilew_hook(
         match unsafe { MH_ApplyQueued() } {
             MH_STATUS::MH_OK => {
                 state.mark_core_createfilew_installed();
+                CORE_CREATEFILEW_INSTALLED_IN_PROCESS.store(1, Ordering::SeqCst);
                 // The handle is deliberately let go here without ceremony: `MhHook` is three raw
                 // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
                 // address, so dropping the handle does not retire the save-redirect CreateFileW

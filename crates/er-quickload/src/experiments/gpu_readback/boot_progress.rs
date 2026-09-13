@@ -375,6 +375,16 @@ fn boot_view_load_confirmed_this_epoch() -> bool {
             &SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
             &BOOT_VIEW_FRESH_DESER_BASELINE,
         )
+        // The game's own announcement, added 2026-09-13. The four above are all Continue-confirm
+        // counters, so a load the game commits itself -- configured-save commit, native save-data
+        // read, its own LoadGame builder, then this transition -- asserted none of them. Measured
+        // on run br-20260913-044416-2748: the character reached the world at `+25463ms` while the
+        // label sat on `PREPARING SAVE 6/11` and the fill ran to 1000 permille from the world
+        // gauge underneath it.
+        || boot_view_epoch_delta(
+            &er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT,
+            &er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE,
+        )
 }
 
 /// True once `phase`'s semaphore has asserted for the current epoch. Every predicate is a pure
@@ -899,6 +909,16 @@ fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     true
 }
 
+/// Has a real load been asked for this epoch -- the gate that stops the world phases asserting from
+/// the boot-to-title loading screen, before anyone has chosen a character.
+///
+/// Every clause but the last is a Continue-confirm counter, and the autoload path commits none of
+/// them: it commits the configured save, reads the save data natively, and lets the game's own
+/// LoadGame builder run. So the last clause is the game's own announcement that it is leaving the
+/// title for the world, the same signal [`boot_view_load_confirmed_this_epoch`] takes. Measured on
+/// run br-20260913-044703-9d8c: the native gauge ran 0 -> 1000 permille between `+25654ms` and
+/// `+39942ms` while the label sat on `LOADING SAVE 7/11`, because all eight clauses below were
+/// false and the four world phases were unreachable.
 fn boot_view_load_flow_requested() -> bool {
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
         || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
@@ -908,6 +928,10 @@ fn boot_view_load_flow_requested() -> bool {
         || TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
         || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+        || boot_view_epoch_delta(
+            &er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT,
+            &er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE,
+        )
 }
 
 /// Clear the native CS::LoadingScreen counters so the next loading window is measured on its own.
@@ -1264,6 +1288,10 @@ fn boot_view_reset_epoch_state(kind: usize) {
     );
     BOOT_VIEW_FRESH_DESER_BASELINE.store(
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
+    er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE.store(
+        er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
 }
@@ -1842,7 +1870,12 @@ fn boot_view_phase_submilestone(
                         "NETWORK CHECK",
                     ),
                     (
-                        er_title_flow::POLICY_TOS_TITLE_WRAPPER_HITS.load(Ordering::SeqCst) == 0,
+                        // The dialog's liveness, not the count of asks. `WRAPPER_HITS` only ever
+                        // counts up, so gating on it left this substep permanently pending and the
+                        // parenthesised label frozen on `TERMS OF SERVICE 3/3` for the rest of the
+                        // boot -- a stuck label is exactly the defect this substep was added to
+                        // cure, so it must clear the moment the prompt is answered.
+                        !boot_view_tos_prompt_is_live(),
                         "TERMS OF SERVICE",
                     ),
                 ])

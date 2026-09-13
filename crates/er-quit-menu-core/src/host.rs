@@ -542,8 +542,8 @@ pub(crate) fn save_dest_set_target(path: PathBuf, source: &'static str) {
     (host().save_dest_set_target)(path, source)
 }
 #[allow(dead_code)]
-#[allow(dead_code)]
-#[allow(dead_code)]
+/// # Safety
+/// The model must stay alive across the call, and the host must be installed.
 pub(crate) unsafe fn save_picker_stage_row_records(
     model: &er_save_picker_core::SavePickerModel,
 ) -> bool {

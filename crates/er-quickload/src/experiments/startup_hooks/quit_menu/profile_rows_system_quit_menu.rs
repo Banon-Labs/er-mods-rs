@@ -899,6 +899,9 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// MinHook installs only one, so this hook's own install fails `MH_ERROR_ALREADY_CREATED` and none of this
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
+/// One-shot latch for the footer close below.
+static TITLE_INFORMATION_FOOTER_CLOSED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     let finalized_profile = system_windows::take_finalized_profile_select();
     if finalized_profile != 0
@@ -978,6 +981,36 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                     unsafe { build_url_editor_window_run(base, owner) };
                 }
             }
+        }
+    }
+    // The title's publisher/copyright footer, closed here rather than covered.
+    //
+    // `05_020_TitleInformation` is its own `CS::MenuWindowJob` (bd
+    // the-title-footer-is-its-own-menuwindowjob-not-part-of-05000-2026-09-11), and its name reaches
+    // the same `job+0x60` field the list below reads. The boot cover only hid it, so once the cover
+    // stopped the footer was still drawing over the world -- the user's report. An earlier attempt
+    // closed the window latched by `title_native_menu_visual_title_information_hook`; run
+    // br-20260913-142426-cc94 shows that latch is never written
+    // (`oracle_title_pab_information_visual_builds = 0`), so the wrapper detour is not on the path
+    // this build takes and the window has to be caught here instead.
+    if filename == "05_020_TitleInformation" {
+        let window = unsafe { safe_read_usize(job + 0x130) }.unwrap_or(0);
+        let stopped = er_telemetry_core::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst) != 0;
+        let already = TITLE_INFORMATION_FOOTER_CLOSED
+            .swap(usize::from(stopped && window >= 0x10000), Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-footer: MenuWindowJob::Run 05_020_TitleInformation window=0x{window:x} cover_stopped={stopped} already_closed={already}"
+        ));
+        if stopped && already == 0 && window >= 0x10000 {
+            let closed = unsafe {
+                er_quit_menu_core::save_game_row::system_quit_save_game_close_window(
+                    window,
+                    "pab_title_information_footer",
+                )
+            };
+            append_autoload_debug(format_args!(
+                "title-footer: cancel-close of the publisher/copyright footer returned {closed}"
+            ));
         }
     }
     if matches!(

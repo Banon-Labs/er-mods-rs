@@ -509,6 +509,15 @@ pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
         "PressStart"
             | "StaticSystemText_101000"
             | "PRESS BUTTON"
+            // The legal footer. The binder is handed a path relative to whichever proxy is asked,
+            // and `TitleTopDialog`'s initializer asks two different ones: it binds `Top` into
+            // dialog+0xa48 and then asks dialog+0xa48 for the bare `PressStart` (deobf-1.17.1
+            // 0x1409a9415), but asks the parent root for `Top/CopyrightText` (0x1409a98ac and
+            // 0x1409a991a, both `lea r8, [0x142b295a8]`). The bare `CopyrightText` below is the
+            // name as written in `05_000_title.gfx` and is what this list carried, so it never
+            // matched an argument: run br-20260913-143409-05ec hid `PressStart`, `Info`,
+            // `ProgressInfo` and `Install_ProgressInfo`, and left the footer on screen.
+            | "Top/CopyrightText"
             | "CopyrightText"
             | "ProgressInfo"
             | "Install_ProgressInfo"

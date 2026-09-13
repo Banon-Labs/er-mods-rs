@@ -14,12 +14,26 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# The rows come off the default set. A plain build is the autoload, the save picker the autoload
-# needs, the loading cover, the portraits and the menu trace -- the System>Quit tab keeps exactly
-# the rows the game ships. `quit-rows` is still written, still compiled by check.sh, and still
-# one word away: name it here, or pass --features quit-rows, and the three cloned rows and the
-# switch behind them come back.
-default = ["autoload", "save-picker", "loading-cover", "portrait", "menu-trace"]
+# The CLONED rows come off the default set. A plain build is the autoload, the save picker the
+# autoload needs, the loading cover, the portraits, the menu trace and the Save Game row -- the
+# System>Quit tab otherwise keeps exactly the rows the game ships. `quit-rows` is still written,
+# still compiled by check.sh, and still one word away: name it here, or pass --features quit-rows,
+# and the three cloned rows and the switch behind them come back.
+#
+# `save-game-row` is in the defaults because without it the redirect has no way back out. The DLL
+# stages a private copy of the configured save and the game writes only there, and the next boot
+# overwrites that copy with the source's bytes again (`stage_save_source_into_root`) -- so every
+# write the game made is discarded, which is what kept returning the Terms of Service prompt on
+# run after run. This row is the mechanism that writes the played state to a destination the
+# player chooses, and it has to be present for that to be possible at all.
+default = [
+    "autoload",
+    "save-picker",
+    "quit-rows",
+    "loading-cover",
+    "portrait",
+    "menu-trace",
+]
 # Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
 # The thing the crate is named after.
 autoload = []

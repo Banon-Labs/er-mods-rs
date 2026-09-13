@@ -144,7 +144,7 @@ unsafe extern "system" fn dinput_kb_get_state_hook(
     }
     let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
     let raw = unsafe { call(device, size, data, unused) };
-    let (hr, size, data) = (raw as i32, size as usize, data as *const u8);
+    let (hr, size, data) = (raw as i32, size, data as *const u8);
     if hr != 0 || data.is_null() || size <= DINPUT_KEYBOARD_BUFFER_FLOOR {
         return raw;
     }

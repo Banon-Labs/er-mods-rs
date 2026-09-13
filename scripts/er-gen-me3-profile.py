@@ -283,18 +283,23 @@ def render_sidecar(save: dict, run_id: str) -> str:
         # should never write the source -- but 45 of the 89 corpus saves are writable on disk,
         # so a file claiming "read-only" over a writable source would be a comforting lie in
         # the one artifact someone reads while diagnosing a corrupted save.
-        refuse_default_container_save_file(save["save_file"])
-        protection = (
-            "The source is WRITABLE on disk -- the DLL stages a private copy and should write "
-            "only there, but nothing at the filesystem level enforces that for this file."
-            if save.get("source_writable")
-            else "The source is read-only on disk; the DLL stages a private copy and writes only there."
+        # Reported, never configured (user directive 2026-09-12). The sidecar used to write
+        # `save_file` and `slot` here, and both were harmful. `save_file` made the DLL stage a
+        # private copy that the reaper deletes at exit, so every write the game made -- Terms of
+        # Service acceptance included -- was discarded and the prompt returned on the next boot
+        # with the source's mtime unchanged. `slot` was a second slot channel fighting the one in
+        # the game-directory toml. That toml is the single owner of both; this file only records
+        # which character it selects, so the artifact still names an identity.
+        note = (
+            "No save_file is configured, so the DLL takes its DEFAULT-USER-SAVE path: the game "
+            "reads and writes its own APPDATA container and a save made this run survives it."
+            if save.get("default_user_save")
+            else f"Configured in er-quickload.toml: {save['save_file']} slot {save['slot']}."
         )
         lines += [
-            f"# {save['name']}  RL{save['level']}  (decoded before launch, not guessed)",
-            *[f"# {line}" for line in wrap(protection, width=84)],
-            f"save_file = '{save['save_file']}'",
-            f"slot = {save['slot']}",
+            f"# {save['name']}  RL{save['level']}  slot {save['slot']}"
+            "  (decoded before launch, not guessed)",
+            *[f"# {line}" for line in wrap(note, width=84)],
         ]
     return "\n".join(lines) + "\n"
 
@@ -435,10 +440,18 @@ def selftest() -> int:
             return keys
 
         overlay = render_sidecar(save, "r-test")
-        check("save_file = '/corpus/ER0000.sl2'" in overlay, "the sidecar sets the save path")
         check(
-            assigned_keys(overlay) == {"save_file", "slot"},
-            f"the sidecar ASSIGNS only run keys, leaving user settings alone "
+            "/corpus/ER0000.sl2" in overlay and save["name"] in overlay,
+            "the sidecar RECORDS the decoded identity, so the artifact names a character",
+        )
+        # The inversion of the old assertion, and the reason it inverted (user directive
+        # 2026-09-12). A `save_file` here made the DLL stage a private copy that the next boot
+        # overwrote from the source, discarding every write the game made -- Terms of Service
+        # acceptance included. A `slot` here was a second slot channel fighting the game-directory
+        # toml. That toml owns both; this file may only describe what it chose.
+        check(
+            assigned_keys(overlay) == set(),
+            f"the sidecar ASSIGNS nothing -- the game-directory toml owns save_file and slot "
             f"(got {sorted(assigned_keys(overlay))})",
         )
 

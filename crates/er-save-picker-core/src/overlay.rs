@@ -1497,8 +1497,10 @@ fn path_edit_char_for_vk(vk: i32, shift: bool) -> Option<char> {
             })
         }
         0x30..=0x39 => {
-            let digit = (b'0' + (vk - 0x30) as u8) as char;
-            Some(if shift { digit } else { digit })
+            // Shift does not change a digit here: the shifted symbol row is not reachable from
+            // this table, and a path rarely needs one.
+            let _ = shift;
+            Some((b'0' + (vk - 0x30) as u8) as char)
         }
         VK_SPACE => Some(' '),
         VK_OEM_5 => Some('\\'),
@@ -1651,6 +1653,9 @@ fn picker_draw_selection_bar(
 /// their right is the same complete-path editor -- reached by walking right off the last drive
 /// (`cycle_drive_from_drive_strip`), typed into directly, completed with Tab, committed with
 /// Enter.
+// The canvas triple plus the row's own geometry and its model coordinates. Bundling `buf/w/h`
+// into a canvas type would have to move every drawing helper in this module at once.
+#[allow(clippy::too_many_arguments)]
 fn picker_draw_drive_row(
     buf: &mut [u8],
     w: usize,
@@ -1741,6 +1746,8 @@ fn picker_draw_drive_row(
 }
 
 /// One list row, with the selection bar behind it when it is the cursor.
+// Same canvas triple as `picker_draw_drive_row`, plus the label and the colour it is drawn in.
+#[allow(clippy::too_many_arguments)]
 fn picker_draw_row(
     buf: &mut [u8],
     w: usize,

@@ -170,6 +170,14 @@ pub fn install_save_dest_open_redirect() {
 
 /// Whether the detour is live. False means an armed redirect would be read by nobody, which is the
 /// leak this module exists to close.
+///
+/// The question is about the process, not about this module. `er-quickload`'s save-redirect path
+/// hook detours the same `kernel32!CreateFileW` and its body asks `save_dest_redirect_for_open` the
+/// same question, so when the product holds the detour an armed window is read and this must say
+/// so. Asking `INSTALL_STATE` alone said no, and the commit refused a save the redirect would have
+/// carried -- see `er_save_redirect::core_createfilew_installed_in_process`, which carries the
+/// measurement.
 pub fn save_dest_open_redirect_installed() -> bool {
     INSTALL_STATE.core_createfilew_installed()
+        || er_save_redirect::core_createfilew_installed_in_process()
 }

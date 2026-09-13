@@ -99,6 +99,7 @@ ARTIFACT_ENV: dict[str, str] = {
     # The Save Game row on its own, new on 2026-09-12. Same reason as its two siblings above: the
     # line naming why a row did nothing is the line a second launch would otherwise rotate away.
     "ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH": "er-save-game-row.log",
+    "ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH": "er-focus-input.log",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

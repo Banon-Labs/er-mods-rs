@@ -134,7 +134,7 @@ fn note_dead_owner(filename: &str, owner: usize) {
     const FIRST_FEW: usize = 8;
     const THEREAFTER: usize = 512;
     let seen = DEAD_OWNER_COUNT.fetch_add(1, Ordering::SeqCst);
-    if seen >= FIRST_FEW && seen % THEREAFTER != 0 {
+    if seen >= FIRST_FEW && !seen.is_multiple_of(THEREAFTER) {
         return;
     }
     append_autoload_debug(format_args!(

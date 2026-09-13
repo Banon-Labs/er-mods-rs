@@ -466,6 +466,10 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             er_quit_menu_core::save_picker_menu::save_flow_menu_pump()
         }));
+        // Still `quit-rows`: this body lives in the `quit-rows` directory, so it cannot be
+        // widened here. A `save-game-row` build gets the equivalent pump from
+        // `er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook`, armed beside the row
+        // in `layout_global_hooks`, which is the same pump the standalone shell uses.
         #[cfg(feature = "quit-rows")]
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             crate::experiments::startup_hooks::system_quit_menu_window_run_post(step, ret)

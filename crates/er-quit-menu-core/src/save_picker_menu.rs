@@ -187,8 +187,6 @@ fn take_nav_edges_for(mask: usize) -> usize {
     }
 }
 
-/// `MenuEventId::MoveA`/`MoveB` as the raw ids the event bitmap is indexed by.
-
 /// The native ProfileSelect item-list builder's trampoline, claimed by the re-stage hook.
 static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 

@@ -771,6 +771,11 @@ pub unsafe extern "system" fn title_setstate_trace_detour(
             ingamestep_request_code_name(ig_request_code)
         ));
     }));
+    // The load-commit semaphore every path shares, counted where the game announces it rather than
+    // where any one of our drives fires.
+    if state == crate::constants_moved::TITLE_STEP_PLAY_GAME {
+        er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
     let orig = TITLE_SETSTATE_TRACE_ORIG.load(Ordering::SeqCst);
     if orig == TITLE_OWNER_SCAN_START_ADDRESS || orig == 0 {
         return 0;

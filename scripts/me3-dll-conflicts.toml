@@ -960,21 +960,20 @@ byte-for-byte vanilla unless the null case occurs."""
 # `er-save-game-row` clones nothing -- it arms `RowSet::NONE` -- but it still registers an action
 # table and puts its handlers on the union, and `er-quit-menu-core`'s statics are per DLL, so the two
 # tables disagree about who owns the first row's press.
-[[conflict]]
-a = "er-save-game-row"
-b = "er-quit-menu"
-kind = "duplicate-owner"
-reason = """Both arm `er_quit_menu_core::row_cloner`, and each cdylib links its own copy of the \
-row table and its own arm latch, so the native first Quit row has two routers and a press resolves \
-against whichever arm ran last."""
-evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-menu/src/lib.rs; bd two-row-shells-cannot-share-a-row-table-statics-are-per-dll-2026-09-12"
-
-[[conflict]]
-a = "er-save-game-row"
-b = "er-quit-load-character"
-kind = "duplicate-owner"
-reason = "Same two-arm problem as the pair above: two row tables, one row."
-evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-load-character/src/lib.rs"
+# RESOLVED 2026-09-13 by `crates/er-quit-menu-core/src/row_registry.rs`, and this is where the
+# row shells used to be declared `duplicate-owner` against each other.
+#
+# WHAT IT SAID. Each cdylib links its own copy of `er-quit-menu-core`, so `ROW_SET`, `ROW_ACTIONS`
+# and `ARM_ONCE` were per DLL: two hosts arming the Quit tab built two row tables claiming the same
+# native indices, and a press resolved against whichever the routing detour reached. Run
+# br-20260913-135314-4804 is the measurement -- `Return to Desktop=#5:Some(Ours(GenerateBuildLink))`
+# in the product's table while `er_quit_menu.dll` carried the row that action belongs to.
+#
+# WHY IT IS NO LONGER TRUE. `arm` now elects one owner per process through a named shared mapping
+# and every later caller registers its rows and flows through the owner's `er_quit_rows_register`
+# export, which merges them into the one table. That is the same shape `er-hook` uses for detours,
+# except elected by arrival order rather than by DLL name -- rows have no designated product, since
+# a build may carry any subset of them or none.
 
 [[conflict]]
 a = "er-save-game-row"

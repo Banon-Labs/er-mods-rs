@@ -1313,6 +1313,16 @@ pub static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_LAST_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// Times the title step was set to `PlayGame` -- the game committing a save load.
+///
+/// The one signal every load path shares. The boot cover's `LoadingSave` phase used to assert only
+/// from the Continue-confirm counters, so a load the game itself commits (configured-save commit ->
+/// native save-data read -> its own LoadGame builder -> this transition) left the label frozen on
+/// `PREPARING SAVE` while the bar filled from the world gauge underneath it.
+pub static TITLE_SETSTATE_PLAY_GAME_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// This epoch's baseline for [`TITLE_SETSTATE_PLAY_GAME_COUNT`].
+pub static BOOT_VIEW_PLAY_GAME_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);

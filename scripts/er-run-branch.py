@@ -438,12 +438,13 @@ def running_block(context: dict) -> str:
             f"  save          {save['save_file']}",
             f"  container     .{save['container']}"
             + ("   SOURCE WRITABLE" if save.get("source_writable") else "   source read-only"),
-            # An explicit --save has no seed, and "--seed None" is not a command anyone can run.
-            # The rerun hint has to name whatever actually determined this character.
+            # No flag chose this character, so there is no flag to name. The toml did, and that
+            # is where anyone wanting a different one has to go.
             (
-                f"  seed          {save['seed']}   (rerun: --seed {save['seed']})"
-                if save.get("seed") is not None
-                else f"  chosen by     --save (rerun: --save '{save['save_file']}:{save['slot']}')"
+                "  chosen by     er-quickload.toml -- no save_file, so the game's own APPDATA "
+                "container,\n                which it also WRITES, so a save made this run survives it"
+                if save.get("default_user_save")
+                else f"  chosen by     er-quickload.toml  save_file + slot {save['slot']}"
             ),
         ]
     else:
@@ -649,59 +650,104 @@ def preflight(args) -> tuple[dict, dict | None]:
             + " ".join(closure["packages"])
         )
 
-    save = None
-    if args.save == "random":
-        pick_args = ["--json", "--container", "sl2" if args.vanilla else "both"]
-        if args.seed is not None:
-            pick_args += ["--seed", str(args.seed)]
-        code, out, err = run_script("er-pick-save.py", *pick_args)
-        if code != 0:
-            raise RuntimeError(f"no save could be picked: {err.strip() or out.strip()}")
-        save = json.loads(out)
+    return closure, resolve_configured_save()
+
+
+def configured_save_selection() -> tuple[Path | None, int]:
+    """`save_file` and `slot` as the game-directory `er-quickload.toml` states them.
+
+    This tool does not choose a save. The DLL and its toml own that, and the launcher's only
+    remaining job is to say which character the configuration already selects. A `save_file` that
+    is absent is the supported shape, not a gap: the DLL then takes its `DEFAULT-USER-SAVE` path
+    and the game reads AND WRITES its own APPDATA container, so what it saves survives the run.
+    """
+    path = game_dir() / "er-quickload.toml"
+    save_file: Path | None = None
+    slot = 0
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            body = line.split("#", 1)[0].strip()
+            key, sep, value = body.partition("=")
+            if not sep:
+                continue
+            key, value = key.strip(), value.strip().strip("'\"")
+            if key == "save_file" and value:
+                save_file = Path(value).expanduser()
+            elif key == "slot" and value:
+                try:
+                    slot = int(value)
+                except ValueError:
+                    pass
+    return save_file, slot
+
+
+def default_user_save_dir() -> Path:
+    """The APPDATA directory the game itself saves into, for the account with the newest write.
+
+    Env-overridable and derived from `$HOME`, matching `scripts/save-write-witness.py` -- nothing
+    here names one machine or one account.
+    """
+    explicit = os.environ.get("APPDATA_ER_ROOT")
+    if explicit:
+        root = Path(explicit)
     else:
-        save = decode_explicit_save(args.save)
+        compat = os.environ.get("STEAM_COMPAT_DATA_PATH") or str(
+            Path(os.environ.get("HOME", "~")).expanduser()
+            / ".local/share/Steam/steamapps/compatdata/1245620"
+        )
+        root = Path(compat) / "pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing"
+    accounts = [
+        child
+        for child in sorted(root.glob("*"))
+        if child.is_dir() and child.name.isdigit() and any(child.glob("ER0000.*"))
+    ]
+    if not accounts:
+        raise RuntimeError(
+            f"no Elden Ring save directory under {root} -- cannot report which character will "
+            "autoload, and AGENTS.md's Autoload Identity Launch Gate forbids launching without it"
+        )
+    return max(
+        accounts,
+        key=lambda child: max(item.stat().st_mtime for item in child.glob("ER0000.*")),
+    )
 
-    return closure, save
 
-
-def decode_explicit_save(spec: str) -> dict:
-    """Resolve `PATH[:SLOT]` into the same decoded shape a random pick produces.
+def resolve_configured_save() -> dict:
+    """Decode the character the configuration selects, without selecting one.
 
     The decode is not optional. AGENTS.md's Autoload Identity Launch Gate requires the character
-    and slot to be known from current save evidence before a launch that will autoload -- and
-    naming a file proves neither. A path whose named slot holds no character is refused here
-    rather than discovered on a loading screen.
+    and slot to be known from current save evidence before a launch that will autoload, and a
+    configured path proves neither. A slot that holds no character is refused here rather than
+    discovered on a loading screen.
     """
-    path, _, slot_text = spec.rpartition(":")
-    if not path:
-        path, slot_text = spec, ""
-    slot = None
-    if slot_text:
-        try:
-            slot = int(slot_text)
-        except ValueError as err:
-            raise RuntimeError(f"bad slot in --save {spec!r}: {err}") from err
+    save_file, slot = configured_save_selection()
+    default_user_save = save_file is None
+    search_dir = save_file.parent if save_file else default_user_save_dir()
 
-    source = Path(path).expanduser().resolve()
-    if not source.is_file():
-        raise RuntimeError(f"--save names a file that does not exist: {source}")
-
-    code, out, err = run_script(
-        "er-pick-save.py", "--json", "--all", "--root", str(source.parent)
-    )
+    code, out, err = run_script("er-pick-save.py", "--json", "--all", "--root", str(search_dir))
     if code != 0:
-        raise RuntimeError(f"could not decode {source}: {err.strip() or out.strip()}")
-    targets = [t for t in json.loads(out)["targets"] if Path(t["save_file"]) == source]
-    if slot is not None:
-        targets = [t for t in targets if t["slot"] == slot]
+        raise RuntimeError(f"could not decode saves under {search_dir}: {err.strip() or out.strip()}")
+    targets = json.loads(out)["targets"]
+    if save_file is not None:
+        source = save_file.resolve()
+        targets = [t for t in targets if Path(t["save_file"]) == source]
+    targets = [t for t in targets if t["slot"] == slot]
     if not targets:
-        where = f"{source} slot {slot}" if slot is not None else str(source)
+        where = f"{save_file} slot {slot}" if save_file else f"{search_dir} slot {slot}"
         raise RuntimeError(
-            f"no occupied character at {where}. Nothing will autoload, so this launch is refused."
+            f"no occupied character at {where}. Nothing will autoload, so this launch is refused. "
+            f"Choose another slot in {game_dir() / 'er-quickload.toml'}."
         )
     chosen = targets[0]
-    return {**chosen, "seed": None, "draws": 0, "eligible_files": 1,
-            "occupied_slots_in_file": len(targets), "corpus_root": str(source.parent)}
+    return {
+        **chosen,
+        "seed": None,
+        "draws": 0,
+        "eligible_files": 1,
+        "occupied_slots_in_file": len(targets),
+        "corpus_root": str(search_dir),
+        "default_user_save": default_user_save,
+    }
 
 
 def launch(args) -> int:
@@ -729,9 +775,12 @@ def launch(args) -> int:
         gen_args.append("--vanilla")
     if args.disable_arxan:
         gen_args.append("--disable-arxan")
-    save_file = closure_file.with_name("save.json")
-    save_file.write_text(json.dumps(save), encoding="utf-8")
-    gen_args += ["--save", str(save_file)]
+    # The decoded identity is REPORTED to the generator, not configured by it: `render_sidecar`
+    # writes it as comments only. The sidecar must never carry `save_file` or `slot`, because the
+    # game-directory toml owns both and a second channel fights it.
+    save_json = closure_file.with_name("save.json")
+    save_json.write_text(json.dumps(save), encoding="utf-8")
+    gen_args += ["--save", str(save_json)]
 
     code, out, err = run_script("er-gen-me3-profile.py", *gen_args)
     if code != 0:
@@ -742,7 +791,7 @@ def launch(args) -> int:
         run_id=run_id,
         pid=0,
         profile=staged["profile"],
-        remove_paths=staged["remove_paths"] + [str(closure_file), str(closure_file.with_name("save.json"))],
+        remove_paths=staged["remove_paths"] + [str(closure_file), str(save_json)],
         meta={"branch": args.branch, "evidence_class": staged["evidence_class"]},
     )
     state.save()
@@ -1126,7 +1175,12 @@ def selftest() -> int:
     )
     check("ELDEN RING IS RUNNING" in block, "the block announces the run")
     check("Bonky Bean" in block and "RL139" in block, "the block names the decoded character")
-    check("--seed 7" in block, "the block carries the seed to reproduce the pick")
+    # No flag chose this character, so the block must point at the thing that did. Anyone wanting
+    # a different one has to edit the toml, and the block is where they learn that.
+    check(
+        "er-quickload.toml" in block,
+        "the block names the toml as what chose this character, since no flag can",
+    )
     check("EXCLUDED er_loading_bar.dll" in block, "the block names excluded DLLs")
     check(
         "NOT claimed" in block and "world loaded" in block,
@@ -1487,19 +1541,6 @@ def selftest() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--save",
-        default="random",
-        metavar="random|PATH[:SLOT]",
-        help="random (default) or an explicit save path with an optional :SLOT. Either way the "
-        "save is DECODED and its character name, level and slot are reported before launch -- "
-        "naming a file is not the same as knowing which character is in it. `default` was REMOVED "
-        "on 2026-09-04 (user directive): it was the one mode that launched without decoding "
-        "anything, so the block printed a placeholder where AGENTS.md's Autoload Identity Launch "
-        "Gate requires a real identity, and nobody knew which character was loading until it "
-        "appeared on screen. Use `random` -- WHICH slot does not matter, but KNOWING it does.",
-    )
-    parser.add_argument("--seed", type=int, help="reproduce an exact save pick")
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
     parser.add_argument(

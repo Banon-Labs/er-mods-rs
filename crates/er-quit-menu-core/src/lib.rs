@@ -97,6 +97,7 @@ pub mod profile_select_movie_key;
 pub mod profile_table_guard;
 #[cfg(windows)]
 pub mod row_cloner;
+pub mod row_registry;
 /// The snapshot that restores the game's records after the picker borrows them for browse rows.
 #[cfg(windows)]
 pub mod row_staging;
