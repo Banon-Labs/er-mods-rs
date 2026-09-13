@@ -148,6 +148,37 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
+    // A save committed through the missing-save picker is loaded by the game, and this chain must
+    // not touch it.
+    //
+    // On 1.17.1 the commit is the whole loader: `complete_missing_save_selection_from_picker`
+    // releases the held save-data `ShowProgressJob`, that job re-reads the container, and the game
+    // calls its own LoadGame builder (bd `dead-boot-picker-is-the-only-loader-on-1171-2026-09-13`,
+    // which reached a live character with no Continue row and no `native-fullread` anywhere in the
+    // run). Submitting a second, hand-built full read into that is not a belt-and-braces: the two
+    // race, the game's save IO refuses ours, and refusing it runs `FUN_140e6f200`, which unloads
+    // the file cap and frees the request object the native job was still using. Every poll after
+    // that answers 4 -- "no save IO object" -- so our submit does not merely fail, it takes the
+    // native load down with it.
+    //
+    // Measured 2026-09-13 11:23 and 11:28, both on a picked save the picker had read a level-150
+    // character out of: submit at +18122 ms returned `b80=2`, the poll answered 5 then 4 inside
+    // 20 ms, `b80` was 0 by the first drain tick, and the boot sat on `PREPARING SAVE 6/11` with
+    // `c30=0xa010000` for the rest of the run.
+    //
+    // Same shape and same remedy as the `System->Quit` stand-down directly above: when a native
+    // owner is driving the load, this chain observes and does not steer.
+    let picker_committed =
+        er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_COUNT.load(Ordering::SeqCst) != 0;
+    if picker_committed {
+        if phase != FULLREAD_PHASE_DONE {
+            append_autoload_debug(format_args!(
+                "native-fullread: STAND-DOWN -- the missing-save picker committed a save and the released native save-data job owns this load (phase={phase})"
+            ));
+            FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
     // Already finished: keep observing (the golden oracle is written by the caller's telemetry once
     // the native pump streams the world).
     if phase == FULLREAD_PHASE_DONE {
