@@ -33,9 +33,10 @@ use er_game_base::mem::{game_rva, game_rva_for_hook, safe_read_i32, safe_read_us
 use er_game_base::stack::callstack_contains_game_rva;
 use er_telemetry_core::counters::{
     OPTIONSETTING_ACTIVELY_SHOWN, OPTIONSETTING_CURRENT_DIALOG, OPTIONSETTING_CURRENT_TAB,
-    PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED, SAVE_FLOW_STAGE, SAVE_PICKER_MODE_ACTIVE,
-    SYSTEM_QUIT_DUPLICATE_COUNT, SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER,
-    SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE, SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
+    PROFILE_SELECT_WINDOW_RUN_TICKS, PROPERTY_NEW_BUTTON_CONTROLLER_ACTIVATE_INSTALLED,
+    SAVE_FLOW_STAGE, SAVE_PICKER_MODE_ACTIVE, SYSTEM_QUIT_DUPLICATE_COUNT,
+    SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER, SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE,
+    SYSTEM_QUIT_GENERATE_BUILD_LINK_ACTION_LAST_OBJECT,
     SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT,
     SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_LAST_OBJECT,
     SYSTEM_QUIT_LOAD_BUILD_URL_CONTROLLER_LAST_OBJECT,
@@ -87,9 +88,9 @@ use crate::row_text::{
 };
 use crate::rows::{
     NativeRowAction, PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET,
-    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitRow, QuitRowVerdict, native_row_action,
-    quit_controller_of_action_alias as system_quit_controller_of_action_alias,
-    quit_row_verdict_text as system_quit_row_verdict_text,
+    QUIT_ROW_TABLE_ROWS as SYSTEM_QUIT_ROW_TABLE_ROWS, QuitExitFacts, QuitRow, QuitRowVerdict,
+    native_row_action, quit_controller_of_action_alias as system_quit_controller_of_action_alias,
+    quit_exit_block, quit_row_verdict_text as system_quit_row_verdict_text,
 };
 
 /// A trampoline slot that has never been written.
@@ -972,16 +973,32 @@ pub unsafe extern "system" fn property_new_button_controller_activate_hook(
             // dispatched again from ProfileSelect (observed: 12 activations carried it during one
             // switch), so without this gate a switch's activation would ExitProcess mid-switch. And
             // never exit mid save-flow, where a commit may be armed or in flight.
-            let switch_in_flight = SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
-                != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
-                || SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) != 0
-                || SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) != 0;
-            let save_flow_in_flight =
-                SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE;
-            if switch_in_flight || save_flow_in_flight {
+            //
+            // The decision itself is `rows::quit_exit_block`, which is pure and host-tested. One
+            // term there needs the extra fact captured below: `SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE`
+            // is a click-time latch whose only clear path is `reset_profile_select_state`, reached
+            // from a `MenuWindowJob::Run` owner -- so in a load that has no such owner it sets once
+            // and wedges this refusal on for the rest of the session. `PROFILE_SELECT_WINDOW_RUN_TICKS`
+            // is stamped by both owners and by nothing else, so it answers whether that latch has
+            // anybody to retract it.
+            let exit_facts = QuitExitFacts {
+                save_flow_active: SAVE_FLOW_STAGE.load(Ordering::SeqCst) != SAVE_FLOW_STAGE_IDLE,
+                switch_phase_active: SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst)
+                    != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE,
+                profile_select_window_live: SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+                    .load(Ordering::SeqCst)
+                    != 0,
+                profile_load_requested: SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst)
+                    != 0,
+                profile_select_window_observed: PROFILE_SELECT_WINDOW_RUN_TICKS
+                    .load(Ordering::SeqCst)
+                    != 0,
+            };
+            if let Some(block) = quit_exit_block(&exit_facts) {
                 SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT.fetch_add(1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "quit-to-desktop: REFUSING the instant quit at controller=0x{controller:x} -- switch_in_flight={switch_in_flight} save_flow_in_flight={save_flow_in_flight}; forwarding the native activation instead"
+                    "quit-to-desktop: REFUSING the instant quit at controller=0x{controller:x} -- blocked_by={} facts={exit_facts:?}; forwarding the native activation instead",
+                    block.label()
                 ));
                 unsafe {
                     system_quit_forward_button_controller_activation(
