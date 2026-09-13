@@ -503,6 +503,11 @@ pub fn save_flow_box_set_host_dialog(dialog: usize) {
 /// Returns false when the box could not be submitted. A false from a not-ready job queue is
 /// retryable (the caller keeps the pending latch and tries on the next menu pump); every other
 /// false is terminal and the caller must abort the flow.
+/// # Safety
+///
+/// Game thread only. `box_id` selects a pinned message-box descriptor; the submit walks the live
+/// `CS::MenuJob` queue through raw pointers and is only valid while that queue belongs to this
+/// thread.
 pub unsafe fn save_flow_submit_box(box_id: usize) -> bool {
     const HEAP_LO: usize = 0x10000;
     let label = save_flow_box_label(box_id);
@@ -690,6 +695,11 @@ pub struct SaveFlowBoxSnapshot {
 ///
 /// Returns `None` while the box is still up -- with no decision timeout, because there is no
 /// legitimate way to guess an answer the user has not given.
+/// # Safety
+///
+/// Game thread only. Reads the live dialog's result fields through raw pointers; the dialog is
+/// owned by the menu system and may be freed between frames, so the caller must poll from the
+/// same per-frame task that observed it.
 pub unsafe fn save_flow_box_decision(box_id: usize) -> Option<SaveFlowDecision> {
     const HEAP_LO: usize = 0x10000;
     let label = save_flow_box_label(box_id);
@@ -875,6 +885,10 @@ pub static SAVE_FLOW_BOX_SUBMIT_DEFERRED: AtomicUsize = AtomicUsize::new(SAVE_FL
 /// Nothing in the whole image writes `+0x127c` with an immediate, so which branch a given
 /// dialog takes cannot be settled statically -- observing the emit makes the answer
 /// deterministic either way instead of leaving half the presses unreadable.
+/// # Safety
+///
+/// A detour: called by the game on its own thread with its own arguments, never directly. `this`
+/// and `result` are the native call's registers and are only valid for the duration of the call.
 pub unsafe extern "system" fn menu_job_emit_result_hook(
     this: usize,
     result: usize,

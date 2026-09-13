@@ -59,6 +59,10 @@ use er_title_flow::{
     SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG,
 };
 use std::sync::atomic::Ordering;
+/// # Safety
+///
+/// A detour: the game calls it on its own thread with its own arguments, never call it directly.
+/// Every parameter is a native register whose lifetime ends with the call.
 pub unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     out: usize,
     getter: usize,
@@ -113,6 +117,10 @@ pub unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
 
 /// Native cancel-close of one menu window. `pub(crate)` because the save-flow tick closes the
 /// destination browser through the same primitive the deferred IngameTop close uses.
+/// # Safety
+///
+/// Game thread only. `window` must be a live `CS::MenuWindow` this flow owns; the close is a native
+/// call through its vtable and a stale pointer would dispatch into freed memory.
 pub unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
     if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
@@ -138,6 +146,10 @@ pub unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> 
     ));
     true
 }
+/// # Safety
+///
+/// Game thread only. Writes the live `GameMan` save-request fields, which the game's own save task
+/// reads and clears on the same thread.
 pub unsafe fn system_quit_save_game_request_save_only() {
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
         append_autoload_debug(format_args!(
@@ -172,6 +184,10 @@ pub unsafe fn system_quit_save_game_request_save_only() {
 /// always fires with `false`. The quit-to-desktop sites deliberately keep
 /// `system_quit_save_game_request_save_only` (true/true): under suppression those become
 /// intentional no-op saves -- the Save Game row is the only path that really writes.
+/// # Safety
+///
+/// Game thread only, and the same `GameMan` fields as the request above -- this variant also arms
+/// the one-shot suppression bypass, so it must not be called from a path the player did not press.
 pub unsafe fn system_quit_save_game_request_save_forced() {
     const FORCED_NOT_THROTTLED: u8 = false as u8;
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
@@ -200,6 +216,11 @@ pub unsafe fn system_quit_save_game_request_save_forced() {
 /// Fails closed through `save_flow_verify_rva`: an unresolvable address or a single drifted
 /// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
 /// the process.
+/// # Safety
+///
+/// Calls into the game image at `rva` after byte-checking the prologue against `expected`/`mask`.
+/// The check is what makes the call defensible on an unrecognised build; a caller that passes a
+/// pattern matching a different function still transfers control there.
 pub unsafe fn call_verified_retract(rva: u32, expected: &[u8], mask: &[u8], name: &str) -> bool {
     let Some(address) = save_flow_verify_rva(rva, expected, mask, name) else {
         return false;
@@ -213,6 +234,10 @@ pub unsafe fn call_verified_retract(rva: u32, expected: &[u8], mask: &[u8], name
 ///
 /// `b72` / `b73` select which flags to clear -- the caller decides ownership; this only
 /// performs it. Returns the pair of "actually cleared" results.
+/// # Safety
+///
+/// Game thread only. Calls the verified native retract entry points and reads back the `GameMan`
+/// request flags they clear.
 pub unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, bool) {
     let cleared_b72 = b72
         && unsafe {
@@ -251,6 +276,10 @@ pub unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, b
 /// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
 ///
 /// WP1/WP2 commit plan: overwrite the loaded save (WP3 adds a destination target).
+/// # Safety
+///
+/// Game thread only. `dialog` must be the live System dialog this flow started from; the close walks
+/// its window list through raw pointers.
 pub unsafe fn system_quit_save_game_close_menus(dialog: usize, source: &str, commit: bool) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
@@ -324,6 +353,10 @@ pub unsafe fn system_quit_save_game_close_menus(dialog: usize, source: &str, com
 /// costs only the overwrite confirm -- and an unconfirmable overwrite is refused at the pick
 /// (`save_dest_handle_picked_target`), never performed silently. A free destination name still
 /// commits, because it never needed a confirm in the first place.
+/// # Safety
+///
+/// Game thread only, from the row's own activation. `dialog` must be the live System dialog that
+/// owns the pressed row.
 pub unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
@@ -373,6 +406,10 @@ pub unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     true
 }
 
+/// # Safety
+///
+/// Game thread only, once per frame. It drains a frame counter and may close live menu windows, so
+/// off-thread it would race the menu system's own teardown.
 pub unsafe fn system_quit_save_game_deferred_close_tick() {
     let frames = SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.load(Ordering::SeqCst);
     if frames == 0 {
@@ -428,6 +465,9 @@ fn note_unsupported_build_comparison(what: &str) {
     }
 }
 
+/// # Safety
+///
+/// A detour: the game calls it, never call it directly.
 pub unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
     let legacy_confirm_caller = if er_game_base::game_build::is_supported_build() {

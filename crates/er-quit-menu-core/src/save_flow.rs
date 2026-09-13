@@ -307,6 +307,11 @@ fn save_flow_enter_stage(stage: usize, reason: &str) {
 /// nothing written. Measured on run br-20260912-234311-3ccb: `dest_commit -> staged
 /// CLOSING_COMMIT` with no `menus closed` line after it, and the next Return to Desktop refused
 /// because the flow was still in flight.
+/// # Safety
+///
+/// Game thread only, once per frame from the registered task. It reads live `CS` singletons and
+/// calls native menu entry points through raw pointers; off-thread it would race the game's own
+/// writers of the same fields.
 pub unsafe fn save_flow_tick() {
     // First, unconditionally: the counter it drains is what stage 6 below is waiting for.
     unsafe { crate::save_game_row::system_quit_save_game_deferred_close_tick() };
@@ -1469,6 +1474,81 @@ fn save_flow_degraded_commit_wait_tick(ticks: usize, completions_at_fire: u64) {
     );
 }
 
+/// Register the `FrameBegin` task that advances the Save Game flow's stage machine.
+///
+/// The press only latches a request; `save_flow_tick` is what opens the browser's window, watches
+/// the commit and times the flow out. The product drives it from its own recurring task, so this is
+/// for a host that has none: on run br-20260912-194149-11e9 the standalone shell parked in the
+/// browse stage forever and every later press read the stage as busy, because nothing ticked.
+///
+/// Latched once per process. A second registration would put two recurring tasks on one stage
+/// machine, which double-counts every tick budget it keeps.
+pub fn install_save_flow_game_task() -> bool {
+    static TASK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+    if TASK_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return true;
+    }
+    use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
+    use eldenring::fd4::FD4TaskData;
+    use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+
+    // The write-completion observer, bound here because the flow is what needs it.
+    //
+    // `save_flow_resolve_commit_plan` refuses a redirect outright unless the SL save-job-body
+    // observer is installed: the in-place writer opens the container once per dirty block, so a
+    // redirect window closed on a tick count would patch the rest of the save into the loaded
+    // file. Only `er-quickload` ever bound that observer, so in a shell every browsed destination
+    // was refused after the menus had already closed -- run br-20260912-235056-6136 aborted the
+    // fire with "destination '...' needs the write-open redirect, but the SL save-job-body
+    // observer is not installed".
+    //
+    // Observers only: nothing is suppressed and no save is intercepted. The flow then commits on
+    // its documented degraded fail-open path, where the native write happens for real and its
+    // completion is read from the job body's own return rather than from a token.
+    // The write-open detour the commit's redirect window is read through. Installed beside the
+    // observers so the two halves of a redirect -- divert this open, and the writer has finished --
+    // are never armed one without the other.
+    crate::save_dest_open_redirect::install_save_dest_open_redirect();
+    if !er_save_suppress::save_job_observer_installed() {
+        er_save_suppress::set_log_sink(append_autoload_debug);
+        let bound = er_save_suppress::install_observers_only();
+        append_autoload_debug(format_args!(
+            "save-flow: bound {bound} save-lane observers with suppression disarmed; save-job-body completion={}",
+            if er_save_suppress::save_job_observer_installed() {
+                "yes"
+            } else {
+                "NO -- a browsed destination will still be refused"
+            }
+        ));
+    }
+
+    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+    else {
+        append_autoload_debug(format_args!(
+            "save-flow: CSTaskImp never resolved; the Save Game row would latch a request nothing advances"
+        ));
+        TASK_INSTALLED.store(0, Ordering::SeqCst);
+        return false;
+    };
+    let handle = task.run_recurring(
+        move |_data: &FD4TaskData| {
+            // Safety: the game task thread, which is the context the stage machine requires; every
+            // step inside it returns immediately unless a press latched a request.
+            unsafe { save_flow_tick() };
+        },
+        CSTaskGroupIndex::FrameBegin,
+    );
+    // The handle cancels the task on drop, and the task must outlive the bootstrap thread.
+    std::mem::forget(handle);
+    append_autoload_debug(format_args!(
+        "save-flow: registered the FrameBegin task that advances the Save Game stage machine"
+    ));
+    true
+}
+
 #[cfg(test)]
 mod save_flow_deadline_tests {
     use super::*;
@@ -1704,79 +1784,4 @@ mod save_flow_deadline_tests {
             );
         }
     }
-}
-
-/// Register the `FrameBegin` task that advances the Save Game flow's stage machine.
-///
-/// The press only latches a request; `save_flow_tick` is what opens the browser's window, watches
-/// the commit and times the flow out. The product drives it from its own recurring task, so this is
-/// for a host that has none: on run br-20260912-194149-11e9 the standalone shell parked in the
-/// browse stage forever and every later press read the stage as busy, because nothing ticked.
-///
-/// Latched once per process. A second registration would put two recurring tasks on one stage
-/// machine, which double-counts every tick budget it keeps.
-pub fn install_save_flow_game_task() -> bool {
-    static TASK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
-    if TASK_INSTALLED
-        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return true;
-    }
-    use eldenring::cs::{CSTaskGroupIndex, CSTaskImp};
-    use eldenring::fd4::FD4TaskData;
-    use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
-
-    // The write-completion observer, bound here because the flow is what needs it.
-    //
-    // `save_flow_resolve_commit_plan` refuses a redirect outright unless the SL save-job-body
-    // observer is installed: the in-place writer opens the container once per dirty block, so a
-    // redirect window closed on a tick count would patch the rest of the save into the loaded
-    // file. Only `er-quickload` ever bound that observer, so in a shell every browsed destination
-    // was refused after the menus had already closed -- run br-20260912-235056-6136 aborted the
-    // fire with "destination '...' needs the write-open redirect, but the SL save-job-body
-    // observer is not installed".
-    //
-    // Observers only: nothing is suppressed and no save is intercepted. The flow then commits on
-    // its documented degraded fail-open path, where the native write happens for real and its
-    // completion is read from the job body's own return rather than from a token.
-    // The write-open detour the commit's redirect window is read through. Installed beside the
-    // observers so the two halves of a redirect -- divert this open, and the writer has finished --
-    // are never armed one without the other.
-    crate::save_dest_open_redirect::install_save_dest_open_redirect();
-    if !er_save_suppress::save_job_observer_installed() {
-        er_save_suppress::set_log_sink(append_autoload_debug);
-        let bound = er_save_suppress::install_observers_only();
-        append_autoload_debug(format_args!(
-            "save-flow: bound {bound} save-lane observers with suppression disarmed; save-job-body completion={}",
-            if er_save_suppress::save_job_observer_installed() {
-                "yes"
-            } else {
-                "NO -- a browsed destination will still be refused"
-            }
-        ));
-    }
-
-    let Some(task) = er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
-    else {
-        append_autoload_debug(format_args!(
-            "save-flow: CSTaskImp never resolved; the Save Game row would latch a request nothing advances"
-        ));
-        TASK_INSTALLED.store(0, Ordering::SeqCst);
-        return false;
-    };
-    let handle = task.run_recurring(
-        move |_data: &FD4TaskData| {
-            // Safety: the game task thread, which is the context the stage machine requires; every
-            // step inside it returns immediately unless a press latched a request.
-            unsafe { save_flow_tick() };
-        },
-        CSTaskGroupIndex::FrameBegin,
-    );
-    // The handle cancels the task on drop, and the task must outlive the bootstrap thread.
-    std::mem::forget(handle);
-    append_autoload_debug(format_args!(
-        "save-flow: registered the FrameBegin task that advances the Save Game stage machine"
-    ));
-    true
 }

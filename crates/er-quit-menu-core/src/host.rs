@@ -558,6 +558,21 @@ pub(crate) unsafe fn build_import_applied() {
     unsafe { (host().build_import_applied)() }
 }
 
+/// Ask the host to install the builder capture. Idempotent by contract.
+pub(crate) fn install_msgbox_builder_capture() {
+    (host().install_msgbox_builder_capture)()
+}
+
+/// A host that does not redirect the save writer.
+fn default_no_save_redirect() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Where the host redirects the game's save writer, if it does.
+pub(crate) fn save_redirect_native_source_dir() -> Option<std::path::PathBuf> {
+    (host().save_redirect_native_source_dir)()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,19 +601,4 @@ mod tests {
         }
         assert_eq!(game_main_window(), 0);
     }
-}
-
-/// Ask the host to install the builder capture. Idempotent by contract.
-pub(crate) fn install_msgbox_builder_capture() {
-    (host().install_msgbox_builder_capture)()
-}
-
-/// A host that does not redirect the save writer.
-fn default_no_save_redirect() -> Option<std::path::PathBuf> {
-    None
-}
-
-/// Where the host redirects the game's save writer, if it does.
-pub(crate) fn save_redirect_native_source_dir() -> Option<std::path::PathBuf> {
-    (host().save_redirect_native_source_dir)()
 }
