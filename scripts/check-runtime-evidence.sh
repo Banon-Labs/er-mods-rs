@@ -306,6 +306,12 @@ selftest() {
 		judge_in() { # judge_in <sha to push>
 			(
 				cd "$two" || exit 1
+				# The override is unset rather than inherited. A push made with
+				# `ER_ALLOW_UNPROVEN_PUSH=1` runs this suite through the pre-push hook, and the
+				# refusal case then answered 0 because the caller had already waived it -- a test
+				# whose verdict comes from the ambient environment is watching nothing. Measured
+				# 2026-09-13 on the push of this branch.
+				unset ER_ALLOW_UNPROVEN_PUSH
 				ER_ME3_RUN_ROOT="$tmp/nobuild" ER_GAME_DIR="$tmp/nogame" \
 					bash "$repo_root/scripts/check-runtime-evidence.sh" "$1"
 			)
