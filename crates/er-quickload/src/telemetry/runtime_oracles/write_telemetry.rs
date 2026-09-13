@@ -856,6 +856,34 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS.load(Ordering::SeqCst)
             as isize
     ));
+    // The z-order of the `05_010_ProfileSelect` surface both Load rows open, read from the game's
+    // own per-frame draw bit rather than from whether this DLL called its own hide. `_samples` is
+    // the honest gate: 0 means the menu pump never ran and nothing was measured, which is a
+    // different answer from "the ordering was fine" -- pair it with
+    // `oracle_system_quit_row_resolve_count`, because a run with row presses and zero samples is a
+    // picker that went on screen with no pump behind it (run br-20260913-155423-2fe7:
+    // 13 presses, `oracle_profile_select_window_run_ticks = 0`). With samples present, read them as:
+    //
+    //   `_occluded_frames` > 0 late in a run -- `02_040_OptionSetting` is still drawn over the
+    //       picker, which is the user-reported defect. A small count at the start is the frames
+    //       before the hide fires and is expected.
+    //   `_clear_frames` rising -- the picker is the frontmost of the two, which is the fixed state.
+    //
+    // `_first_occluded_flags` and `_last_flags` are the raw bytes; `-1` means that sample never
+    // happened. A hidden `02_040_OptionSetting` reads 0x1 and a drawn one 0x7. `_top_alive_frames`
+    // is `02_000_IngameTop` only, and is aliveness rather than visibility -- that window reports
+    // `menu_id = 0xffff`, so it has no flag byte and no draw bit to read.
+    body.push_str(&format!(
+        "  \"oracle_profile_select_z_samples\": {},\n  \"oracle_profile_select_z_occluded_frames\": {},\n  \"oracle_profile_select_z_clear_frames\": {},\n  \"oracle_profile_select_z_first_occluded_flags\": {},\n  \"oracle_profile_select_z_last_flags\": {},\n  \"oracle_profile_select_z_last_menu_id\": {},\n  \"oracle_profile_select_z_top_alive_frames\": {},\n",
+        er_telemetry_core::counters::PROFILE_SELECT_Z_SAMPLES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_OCCLUDED_FRAMES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_CLEAR_FRAMES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_LAST_FLAGS.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_LAST_MENU_ID.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_TOP_ALIVE_FRAMES.load(Ordering::SeqCst)
+    ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other
     // than 10 says the native visibility setter ignored the field, i.e. the text is still on screen.

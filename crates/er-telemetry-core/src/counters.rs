@@ -1195,6 +1195,39 @@ pub static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0
 pub static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_REAL_WINDOWS_HIDDEN: AtomicUsize = AtomicUsize::new(0);
+/// Z-order oracle for the `05_010_ProfileSelect` surface both Load rows open, sampled once per
+/// frame the picker window is running. Every field below is written by
+/// `er_quit_menu_core::system_windows::sample_profile_select_occlusion`.
+///
+/// # What is read, and why it answers the question
+///
+/// `CSMenuMan+0x90+menu_id` is the game's own per-menu flag byte, and bit
+/// `er_title_flow::OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT` (0x4) means that menu is drawn this
+/// frame. `02_040_OptionSetting` is the pane the player pressed the row on, so its draw bit still
+/// being set while the picker is up is the defect the user reported -- the picker is behind it.
+/// The hide clears that bit; run br-20260913-154443-65a2 recorded the transition as
+/// `flags=0x7->0x1` on the frame the picker came up.
+///
+/// # Sentinels
+///
+/// `_SAMPLES == 0` means nothing measured, which is not the same as "the ordering was fine".
+/// `_FIRST_OCCLUDED_FLAGS` and `_LAST_FLAGS` start at `usize::MAX` and are emitted as `-1`.
+pub static PROFILE_SELECT_Z_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// Frames where `02_040_OptionSetting` still carried its draw bit while the picker was running.
+pub static PROFILE_SELECT_Z_OCCLUDED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Frames where it did not, i.e. the picker was the frontmost of the two.
+pub static PROFILE_SELECT_Z_CLEAR_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// The flag byte on the first occluded frame; `usize::MAX` until one happens.
+pub static PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The flag byte on the most recent sample; `usize::MAX` until one happens.
+pub static PROFILE_SELECT_Z_LAST_FLAGS: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The `menu_id` the flag byte was read at, so a sample taken against the wrong window is visible
+/// rather than silently scored. `0x25` is `02_040_OptionSetting`.
+pub static PROFILE_SELECT_Z_LAST_MENU_ID: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Frames where the tracked `02_000_IngameTop` was still a live `MenuWindow`. Its `menu_id` reads
+/// `0xffff`, so it has no flag byte and no draw bit to read -- this is aliveness, not visibility,
+/// and is recorded separately rather than fused into the occlusion count.
+pub static PROFILE_SELECT_Z_TOP_ALIVE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
