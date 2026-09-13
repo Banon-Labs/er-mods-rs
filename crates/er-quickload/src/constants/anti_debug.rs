@@ -451,6 +451,16 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+/// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at
+/// `TitleStep+0xe0` that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
+///
+/// Zeroed in the `TitleStep` constructor, grown as the title builds its windows, decremented by
+/// `FUN_140733d70` inside the teardown. Read in a live world it is the whole defect as a number: a
+/// non-zero count while a real map is mounted means title windows are still being updated over it,
+/// which is what the drain in `own_load::loaders::load_drive` waits on before it lets a switch
+/// commit. Derived from `er-title-flow`'s `TitleOwnerLayout` rather than re-declared, so the two
+/// cannot disagree about where the count sits.
+pub(crate) use er_title_flow::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;

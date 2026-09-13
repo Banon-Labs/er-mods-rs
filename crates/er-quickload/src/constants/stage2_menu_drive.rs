@@ -78,6 +78,21 @@ pub(crate) const TITLE_COMMAND_LIST_ROW_STRIDE: usize = 0x210;
 /// receiver's own vtable slot +0x60. It is a close-with-Failed, not an item submit or accept
 /// (Success is 2; the sibling emits 4). Its caller is `CS::MenuWindowJob::Run`, not `::Update`.
 /// Renamed 2026-08-01 -- the old name and doc asserted three things the dump contradicts.
+///
+/// # Everything after the request is the engine's
+///
+/// This call is the whole of the orphan-title fix, so the chain it starts is written down where the
+/// address is named. `MenuWindow::Close` (`0x140746e80`, slot 12) latches `MenuWindow+0x3b0` so a
+/// second request is ignored, plays the fade, and schedules the write of the terminal result to
+/// `MenuWindow+0x1e8`. The next `CS::MenuWindowJob::Run` reads that, `MenuJobResult::ShouldContinue`
+/// (`0x1407a9200`, `CMP dword ptr [RCX],0x1; SETA AL`) answers true, and `FUN_1407ada40` deregisters
+/// the window from `CSMenuMan+0x90` / `+0xdc`, erases it from its owner list via `FUN_140733d70`,
+/// unrefs it and unloads its movie. `ExecuteMenuJob` (`0x1407a9600`) then nulls `TitleStep+0x130`.
+///
+/// So the request alone is half a teardown: the deregistration needs the window's job to be run
+/// again, and a `System>Quit` switch takes `CS::TitleStep` out of `STEP_MenuJobWait` before that can
+/// happen. `own_load::loaders::load_drive` holds the commit for the frames the engine needs, and
+/// `crate::orphan_title_window` decides which window may be asked at all.
 pub(crate) const MENU_WINDOW_CLOSE_WITH_FAILED_RVA: usize =
     er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA;
 /// Row-result field consumed by `MenuWindowJob::Update` to choose which native accept event branch

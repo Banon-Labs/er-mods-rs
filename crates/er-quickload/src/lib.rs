@@ -6,6 +6,12 @@ pub fn host_diagnostic_stub() {}
 // failing to build and without logging anything, so it earned a place a host test can reach.
 pub mod profile_select_chrome_gate;
 
+// Deliberately outside the `#[cfg(windows)]` block below: which menu window a `System>Quit` switch
+// left behind on the title, and why it is the only one this crate may ask to close, is a pure
+// decision whose tests run on the host -- where every other gate in this crate is only ever
+// type-checked by the cross-compile.
+pub mod orphan_title_window;
+
 #[cfg(windows)]
 use std::{
     ffi::c_void,
