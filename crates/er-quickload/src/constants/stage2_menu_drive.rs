@@ -36,10 +36,42 @@ pub(crate) const MENU_ITEM_CTX_10_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_context);
 pub(crate) const MENU_ITEM_DIALOG_RESULT_130_OFFSET: usize =
     core::mem::offset_of!(MenuWindowJobLayout, dialog_result);
-/// Main-title Continue row action `_Do_call` thunk. This is the `+0xa8` action on the
-/// first focused MenuWindowJob after native `TitleTopDialog::open_menu`; it builds the native
-/// row result consumed by the FD4 menu submit helper, not a save-load/direct-confirm shortcut.
+/// The `_Do_call` this file used to call the main-title Continue row action. It is not one, and
+/// nothing should be identified as Continue by matching it.
+///
+/// `0x140764b80` (1.16.2) is a nine-byte adjustor thunk onto `FUN_140763fc0`, which allocates
+/// `0xaa0` bytes and builds a `MenuWindow` from whatever scaleform resource name its caller passes.
+/// Its single data xref is the `_Func_impl` vtable at `0x142a9b9c8`, and the one builder that
+/// constructs that functor is `FUN_140764290`, which passes `L"01_900_Black"` -- the black fade
+/// screen. So every job this matches is a fade window, which is why the candidate counters read
+/// `idle_accept_hits = 18851, native_accept_hits = 0` on run br-20260913-033803-0fc0 and
+/// `998 / 0` on br-20260913-040611-5d26 after the command list was finally built with its rows.
+///
+/// The real Continue row is not a `MenuWindowJob` at all, so no accept predicate on one can ever
+/// promote it: see [`TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA`].
 pub(crate) const MENU_TITLE_CONTINUE_DOCALL_RVA: usize = 0x00764b80;
+
+/// `std::_Func_impl` vtable of the title command list's Continue row action (1.16.2 `0x142b268c8`).
+///
+/// This is the identity to match, and it is a row action rather than a job. `CS::TitleTopDialog`'s
+/// command-list builder `FUN_1409abc30` binds `01_070_CommandList` and appends each row with
+/// `FUN_1407447b0(list, label, functor, result)`, stride `0x210`; the Continue row's functor is a
+/// `std::function<DLReferencePointer<CS::MenuJob>(CS::CommandSelectDialog&)>` over
+/// `lambda_896b3fd315194e6315fb8170e6ebce3a`, whose `_Do_call` is `FUN_1409b0e50`. That reads
+/// `this+8` as the `TitleTopDialog**` and forwards through `FUN_1409a7750` ->  `FUN_1409a7f40` ->
+/// `FUN_1409a7000` (which passes `dialog+0x50`) -> `FUN_1409a9110` -> `FUN_1409ac760`, the action
+/// that reads `GetProfileSummary()` plus `GetMenuSystemSaveLoad()->saveSlot` and builds the load
+/// job through `FUN_140826510` -- the same builder this repo already hooks as `loadgame-builder`.
+///
+/// The row exists only when the summary is populated first, which is what
+/// `maybe_set_title_accept_byte` now guarantees; see the note there for the measurement.
+#[allow(dead_code)] // Decoded identity for the row-fire that replaces the docall match above.
+pub(crate) const TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA: usize = 0x02b268c8;
+
+/// Stride of one appended title command-list row, from the builder's own
+/// `(end - begin) / 0x210` row-index arithmetic in `FUN_1409abc30`.
+#[allow(dead_code)] // Decoded identity for the row-fire that replaces the docall match above.
+pub(crate) const TITLE_COMMAND_LIST_ROW_STRIDE: usize = 0x210;
 /// Native FD4 row submit helper used by `MenuWindowJob::Update` for one result-mode branch.
 /// It forwards event `3` to the row result's own vtable slot `+0x60`.
 /// `f(rcx = MenuWindow*)`: calls `MenuJobResult::SetResult(&r, Failed=3, 0)` then invokes the

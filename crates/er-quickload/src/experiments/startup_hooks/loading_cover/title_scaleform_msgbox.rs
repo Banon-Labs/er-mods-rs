@@ -61,11 +61,31 @@ pub(crate) unsafe fn policy_tos_record_fields(record: usize) -> (usize, usize, u
 /// build time (~+16.9s), so it does not depend on the early-DllMain Seamless false-negative. This is
 /// tied to existing autoload state (no new env/file gate); the env/file switch remains for diagnostics.
 pub(crate) fn policy_tos_suppress_enabled() -> bool {
-    // De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): the env/marker force-on override
-    // is removed (env/marker feature gates forbidden). Suppression is tied only to the genuine
-    // runtime condition -- product autoload armed and Seamless Co-op present -- exactly as the
-    // product path already used it.
-    product_autoload_enabled() && crate::telemetry::seamless_coop_loaded()
+    // Measured false on 2026-09-13, and the premise in the doc above is the part that was wrong.
+    //
+    // The condition was `product_autoload_enabled() && seamless_coop_loaded()`, which never asked
+    // the question the doc says it asks -- whether this profile has already accepted the Terms of
+    // Service. It had not. Three runs, same DLL, same build:
+    //
+    //   br-20260913-040611-5d26  .co2 slot 1 Hero rl150   acquired 06_000_TermOfService_BNE, build suppressed, stalled
+    //   br-20260913-041749-def1  .co2 slot 3 Vagabond rl9 acquired 06_000_TermOfService_BNE, build suppressed, stalled
+    //   br-20260913-041408-1e3a  .sl2 slot 3 Vagabond rl9 never requested it,                                 loaded
+    //
+    // So the stall was never about the character or the slot, and never about the container being
+    // damaged: it was about which container makes the game ask for the Terms of Service. The user
+    // then launched the same `.co2` with Seamless alone and none of this DLL, was shown the prompt,
+    // accepted it, and loaded the level 150 character immediately.
+    //
+    // Suppressing the build removes the prompt without answering it, so the title waits on a
+    // dialog that will never return. Forging an acceptance is not available either: the record
+    // fields this hook reads are message ids (200/201), and the function this repo calls the "ToS
+    // flag setter" (`0x1409b6b30`) is a language setter -- it writes the localisation code at
+    // `+0x29c0` and refreshes the scaleform text, which is also all the "status predicate"
+    // `0x1409b72b0` reads back. Neither is an acceptance flag.
+    //
+    // So the dialog is built. A prompt the player can answer is strictly better than a title that
+    // never moves, and the wrapper stays hooked so the oracles still record every build.
+    false
 }
 
 pub(crate) unsafe extern "system" fn policy_tos_title_ctor_wrapper_hook(

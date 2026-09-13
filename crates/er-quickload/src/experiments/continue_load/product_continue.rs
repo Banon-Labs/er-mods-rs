@@ -11,6 +11,9 @@ use super::*;
 
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS;
+use er_telemetry_core::counters::{
+    PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED, PRODUCT_CONTINUE_NO_PLAYER_TICKS,
+};
 
 /// Does the container the game will actually read hold a character in the configured slot?
 ///
@@ -305,6 +308,167 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     ));
     Some(diagnostic_mode)
 }
+/// Hand the user the save picker when the boot is provably dead rather than merely slow.
+///
+/// # Why a contradiction rather than a timeout
+///
+/// The four facts `read_boot_progress_facts` returns are read out of the running game: a local
+/// player, the `InGameStep` request code, the live `MenuJob` pointer and the loading-screen mode.
+/// If all four say nothing is happening, nothing is queued that could ever produce a character, so
+/// waiting longer cannot change the answer -- and the tick count is only a three-frame debounce
+/// against sampling a gap between two handoffs, never a duration.
+///
+/// A timeout was written here first and was wrong for the reason a timeout is always wrong on this
+/// path: it cannot tell a slow load from a dead one, so it either fires on a machine that was
+/// still working or hides a real gap behind minutes of waiting during development. A slow load
+/// keeps its loading screen up and its request pending the whole way through, which is exactly
+/// what this reads.
+///
+/// # Safety
+///
+/// Game task thread, the context `product_continue_autoload_tick` already requires.
+/// What is actually wrong with the save this boot gave up on, in a sentence the player can act on.
+///
+/// "Nothing was ever queued for it" describes our own loader and leaves the player with no move to
+/// make. The container on disk answers the question they are really asking -- is my save broken,
+/// or is this mod broken -- and it answers it in the only place that can: by opening the file and
+/// looking at its slots. Three outcomes, three different actions:
+///
+/// * unreadable, or no characters at all -- the file is the problem, pick another;
+/// * characters, but not in the slot this run asked for -- name the slots that do exist;
+/// * the requested slot holds a real character -- then the save is fine and this mod failed, which
+///   is worth saying plainly rather than implying the player's save is bad.
+///
+/// Reading 28 MB on the game task would be unacceptable on a live boot. This one is already dead
+/// by four independent measurements, and the picker it is about to raise reads the same file.
+fn picker_detail_for_configured_save(slot: i32) -> ConfiguredSaveTruth {
+    let Some(path) = crate::experiments::configured_or_default_save_file() else {
+        return ConfiguredSaveTruth::nothing_to_load(
+            "No save file is configured for this run.".to_owned(),
+        );
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let Ok(bytes) = std::fs::read(&path) else {
+        return ConfiguredSaveTruth::nothing_to_load(format!(
+            "{name} could not be read from disk."
+        ));
+    };
+    let slots = er_save_picker_core::slots::parse_save_character_slots(&bytes);
+    if slots.is_empty() {
+        return ConfiguredSaveTruth::nothing_to_load(format!("{name} holds no characters at all."));
+    }
+    match slots.iter().find(|info| info.slot as i32 == slot) {
+        Some(found) => ConfiguredSaveTruth {
+            loadable: Some((path, found.slot as usize)),
+            detail: format!(
+                "{name} slot {slot} holds {} at level {}, so the save itself is fine -- this mod failed to start the load.",
+                found.name, found.level
+            ),
+        },
+        None => {
+            let held: Vec<String> = slots
+                .iter()
+                .map(|info| format!("{} in slot {}", info.name, info.slot))
+                .collect();
+            ConfiguredSaveTruth::nothing_to_load(format!(
+                "{name} has no character in slot {slot}. It holds {}.",
+                held.join(", ")
+            ))
+        }
+    }
+}
+
+/// What the configured save actually holds in the slot this run asked for.
+///
+/// One read of the container answers two different questions, and before this only the second one
+/// was asked. `detail` is the sentence the picker shows when the user has to choose; `loadable` is
+/// the save and slot the mod can commit by itself when there is nothing to choose between --
+/// the configured character is right there and the user already named it.
+struct ConfiguredSaveTruth {
+    /// The configured container and the slot in it that holds a character, when one does.
+    loadable: Option<(std::path::PathBuf, usize)>,
+    /// Why the picker is being raised, in a sentence the player can act on.
+    detail: String,
+}
+
+impl ConfiguredSaveTruth {
+    fn nothing_to_load(detail: String) -> Self {
+        Self {
+            loadable: None,
+            detail,
+        }
+    }
+}
+
+unsafe fn product_continue_offer_picker_if_boot_is_dead(
+    base: usize,
+    owner: usize,
+    slot: i32,
+    tick: u64,
+) {
+    let offered = PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED.load(Ordering::SeqCst) != 0;
+    // Safety: game task thread, and `owner` is the title step this tick was handed.
+    let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    let facts =
+        unsafe { er_title_flow::boot_hold::read_boot_progress_facts(base, owner, player_present) };
+    let ticks = er_title_flow::boot_hold::dead_boot_next_ticks(
+        PRODUCT_CONTINUE_NO_PLAYER_TICKS.load(Ordering::SeqCst) as u64,
+        facts,
+    );
+    PRODUCT_CONTINUE_NO_PLAYER_TICKS.store(ticks as usize, Ordering::SeqCst);
+    if er_title_flow::boot_hold::no_player_action(ticks, offered)
+        != er_title_flow::boot_hold::NoPlayerAction::OfferPicker
+    {
+        return;
+    }
+    PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED.store(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "product-core-autoload: *** this boot is dead, not slow (slot={slot} tick={tick}) *** -- {facts:?} for {ticks} consecutive ticks: no player, no in-game step request, no menu job and no loading screen, so nothing is running and nothing is queued that could ever produce a character; arming the missing-save picker so the user can choose a save that loads"
+    ));
+    let truth = picker_detail_for_configured_save(slot);
+    er_save_picker_core::reason::record_reason_detail(truth.detail.clone());
+    let armed = crate::experiments::offer_missing_save_picker(
+        er_save_picker_core::reason::MissingSaveReason::BootNeverStartedTheLoad,
+    );
+    append_autoload_debug(format_args!(
+        "product-core-autoload: dead-boot picker arm requested for slot={slot} -> armed_by_this_call={armed}"
+    ));
+    // ...and then answer it ourselves, when the answer is not in doubt.
+    //
+    // The arm is what makes the boot's save-data job wait and re-read, so it has to happen; what
+    // does not have to happen is asking the user to pick the save they already configured. Every
+    // 1.17.1 boot measured on 2026-09-13 reached here -- both of the autoload's row
+    // identifications are unsatisfiable on this build -- and exactly one run went on to a live
+    // character: br-20260913-030551-d8d9, where a save was committed through this same completion.
+    // So the commit is the loader, and the picker is its fallback rather than its only path.
+    //
+    // A refusal leaves the picker up carrying its own reason, which is the case where the user
+    // genuinely does have to choose.
+    let Some((path, picked_slot)) = truth.loadable else {
+        return;
+    };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: the configured save holds a character in slot {picked_slot}, so committing it instead of asking -- '{}'",
+        path.display()
+    ));
+    let committed = er_save_picker_core::overlay::commit_missing_save_selection(
+        &path,
+        picked_slot,
+        "configured-save",
+    );
+    append_autoload_debug(format_args!(
+        "product-core-autoload: configured-save commit for slot={picked_slot} -> committed={committed}{}",
+        if committed {
+            ""
+        } else {
+            "; the picker stays up with the refusal on screen"
+        }
+    ));
+}
+
 pub(crate) unsafe fn product_continue_autoload_tick(
     owner: usize,
     base: usize,
@@ -320,6 +484,20 @@ pub(crate) unsafe fn product_continue_autoload_tick(
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
     let read_i32 = |off: usize| unsafe { safe_read_i32(gm + off) }.unwrap_or(GAME_MAN_C30_UNSET);
+
+    // Before any phase branch, because the case this covers reaches none of them. Every other
+    // hand-back in this file and in `slot_resolution` fires from a branch that decided "this save
+    // cannot be loaded" -- so a boot that never gets far enough to decide anything has no exit at
+    // all, and the player is left at a title that will never move. Measured on run
+    // br-20260913-023348-3b9d: `SWITCH-ORACLE #1980 slot=1 player=false`, `boot-view DECISION` with
+    // every handoff false, 388 title-logo hide calls, no further progress of any kind.
+    //
+    // The recourse is the one the other exits already use: `arm_missing_save_picker_after_boot`
+    // arms the game's own in-game picker and is one-shot by construction, so a per-frame tick
+    // cannot re-arm or spam it. Nothing is written into game state here -- the native picker owns
+    // the choice and the retry runs through the native full-read chain, exactly as it does when a
+    // configured save is missing.
+    unsafe { product_continue_offer_picker_if_boot_is_dead(base, owner, slot, tick) };
 
     if phase == FULLREAD_PHASE_DONE {
         return;
@@ -400,8 +578,8 @@ pub(crate) unsafe fn product_continue_autoload_tick(
                     append_autoload_debug(format_args!(
                         "product-core-autoload: *** GIVING UP on the Continue slot after {empty_ticks} consecutive empty-like ticks (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} tick={tick}) *** -- this save cannot be loaded; arming the missing-save picker so the user can choose one that can"
                     ));
-                    let armed = arm_missing_save_picker_after_boot(
-                        "product-continue-empty-profile-exhausted",
+                    let armed = offer_missing_save_picker(
+                        er_save_picker_core::reason::MissingSaveReason::ContinueSlotEmpty,
                     );
                     append_autoload_debug(format_args!(
                         "product-core-autoload: late picker arm requested for slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} -> armed_by_this_call={armed}"

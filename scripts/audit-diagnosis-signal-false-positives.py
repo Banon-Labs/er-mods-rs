@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Replay real past turns through the two newest arms of the diagnosis signal and count the halts.
 
-One signal, `.cupcake/signals/last_assistant_diagnosis_without_fix.sh`, feeds three rules. This
-audits the two added on 2026-09-09, either separately or together:
+One signal, `.cupcake/signals/last_assistant_diagnosis_without_fix.sh`, feeds four rules. This
+audits the three added since 2026-09-09, either separately or together:
 
   promissory (`ER-EFFECTS-NO-PROMISSORY-CLOSER`) refuses a turn that closes by announcing work in the
   present participle -- "Fixing both: bypass the union ..." -- while writing no file. The grammar it
@@ -20,6 +20,12 @@ audits the two added on 2026-09-09, either separately or together:
   to do, asked for an in-game input it drives itself, or told the user they need do nothing after a
   turn that did none. Its risk is the mirror image: the launch-handoff protocol this repo requires
   ends a turn on the user deliberately, and that must stay speakable.
+
+  deferral (`ER-EFFECTS-NO-DEFERRED-INVESTIGATION`) refuses a turn that names the agent's own next
+  investigative move instead of taking it -- "which is where I look next", "the next place to look
+  is ...", "the next step halves it to five". Its risk is that the same words describe a legitimate
+  plan: a bisect waiting on a live run, a step handed to the user with the log line that will prove
+  it, or a report of where work already done goes next.
 
 Unit tests prove the shapes the author thought of; this proves the shapes the author did not, by
 running the real signal over the session transcripts the agent has actually written.
@@ -186,10 +192,35 @@ def unread_verdict(parsed: dict[str, str]) -> tuple[str, str] | None:
     return ("halt", clause)
 
 
+def deferral_verdict(parsed: dict[str, str]) -> tuple[str, str] | None:
+    """Apply the deferred-investigation conjunction to a parsed facts line.
+
+    The closing prose named the agent's own next investigative move and the turn took none of it.
+    It is exempt when the turn wrote a file, when a blocker was stated, when the move needs an
+    observation only the user can make, and when it waits on evidence that does not exist yet --
+    which is the same fact that covers an in-game action handed over with its proving log line.
+    `asked` is not read here, for the reason the policy gives: five of the six closers this arm was
+    built from answered a question and then stopped.
+    """
+    clause = parsed.get("deferral", "")
+    if not clause:
+        return None
+    if parsed.get("edited", "0") != "0":
+        return ("exempt-edited", clause)
+    if parsed.get("blocked", "0") != "0":
+        return ("exempt-blocked", clause)
+    if parsed.get("userneed", "0") != "0":
+        return ("exempt-userneed", clause)
+    if parsed.get("future", "0") != "0":
+        return ("exempt-future", clause)
+    return ("halt", clause)
+
+
 ARMS = {
     "promissory": promissory_verdict,
     "unread": unread_verdict,
     "handback": handback_verdict,
+    "deferral": deferral_verdict,
 }
 
 

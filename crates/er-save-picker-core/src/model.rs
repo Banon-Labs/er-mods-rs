@@ -329,6 +329,17 @@ pub struct SavePickerModel {
     last_dir_per_drive: HashMap<PathBuf, PathBuf>,
     /// What this browsing session is for; locked at open time.
     intent: PickerIntent,
+    /// How many rows the surface drawing this model can show at once.
+    ///
+    /// `PICKER_ROW_COUNT` is a fact about the game's own window -- `05_010_ProfileSelect` has ten
+    /// profile slots and
+    /// cannot have eleven -- so it was the right constant while the native window was the only
+    /// surface. The DLL-drawn overlay has no such limit: it rasterises its own rows, and on a
+    /// 1080p frame it has room for roughly thirty. Holding both surfaces to ten made the overlay
+    /// page through a directory it could have shown at once. The view sets this per frame from
+    /// its own geometry (`set_row_capacity`), so what the cursor and the scroll window believe is
+    /// what the user can actually see.
+    row_capacity: usize,
 }
 
 /// Mounted drives that browse as folders: probe `A:\`..`Z:\` and keep the ones that are real
@@ -650,6 +661,7 @@ impl SavePickerModel {
             last_dir_per_drive: HashMap::new(),
             intent,
             drive_strip_path_focused: false,
+            row_capacity: PICKER_ROW_COUNT,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
@@ -754,9 +766,32 @@ impl SavePickerModel {
     /// does not consume row slots; the compact movie's ScrollBarV and edge-hover restaging own that
     /// affordance.
     fn entry_window_capacity(&self) -> usize {
-        PICKER_ROW_COUNT
+        self.row_capacity
             .saturating_sub(self.entry_row_base())
             .max(1)
+    }
+
+    /// Rows the surface drawing this model can show at once. Defaults to [`PICKER_ROW_COUNT`],
+    /// which is what the native window has and cannot exceed.
+    pub fn row_capacity(&self) -> usize {
+        self.row_capacity
+    }
+
+    /// Tell the model how many rows its view can draw, and re-clamp everything that depends on it.
+    ///
+    /// Called by the overlay every frame with a capacity derived from the frame height, so a
+    /// resolution change or a window resize cannot leave the cursor addressing a row that is no
+    /// longer on screen. A no-op when the capacity has not changed.
+    pub fn set_row_capacity(&mut self, rows: usize) {
+        let rows = rows.max(1);
+        if rows == self.row_capacity {
+            return;
+        }
+        self.row_capacity = rows;
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+        if !self.row_selectable(self.cursor) || self.cursor >= rows {
+            self.cursor = self.first_selectable_row();
+        }
     }
 
     fn max_scroll_offset(&self) -> usize {
@@ -1214,11 +1249,11 @@ impl SavePickerModel {
     ) -> Option<EdgePressOutcome> {
         let first_content_row = self
             .entry_row_base()
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let last_visible_row = self
             .visible_row_count()
             .saturating_sub(1)
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let (at_edge, edge_row) = if down {
             (cursor >= last_visible_row, last_visible_row)
         } else {
@@ -1380,7 +1415,7 @@ impl SavePickerModel {
 
     /// Meaning of `row` (0..PICKER_ROW_COUNT) in the current scroll window.
     pub fn row_meaning(&self, row: usize) -> PickerRow {
-        if row >= PICKER_ROW_COUNT {
+        if row >= self.row_capacity {
             return PickerRow::Empty;
         }
         if self.new_file_row() == Some(row) {
@@ -1662,9 +1697,9 @@ impl SavePickerModel {
         // on something actionable -- an entry -- rather than on `[..] up` or the drive cycler. Fall
         // back to any selectable row (a folder with nothing in it), else 0.
         let first_entry = self.entry_row_base();
-        (first_entry..PICKER_ROW_COUNT)
+        (first_entry..self.row_capacity)
             .find(|&r| self.row_selectable(r))
-            .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
+            .or_else(|| (0..self.row_capacity).find(|&r| self.row_selectable(r)))
             .unwrap_or(0)
     }
 
@@ -1675,7 +1710,7 @@ impl SavePickerModel {
     /// Move the highlight directly to a visible/selectable row. Used by mouse hit-testing surfaces
     /// that resolve a click to the row under the pointer before activating it.
     pub fn set_cursor(&mut self, row: usize) {
-        if row < PICKER_ROW_COUNT && self.row_selectable(row) {
+        if row < self.row_capacity && self.row_selectable(row) {
             self.cursor = row;
         }
     }
@@ -1683,7 +1718,7 @@ impl SavePickerModel {
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
-        let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
+        let selectable: Vec<usize> = (0..self.row_capacity)
             .filter(|&r| self.row_selectable(r))
             .collect();
         if selectable.len() < 2 {

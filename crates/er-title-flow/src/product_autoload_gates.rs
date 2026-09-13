@@ -595,6 +595,82 @@ pub unsafe fn maybe_auto_open_menu(base: usize) {
 /// Menu_IsEnableOnlineMode patches, so it should reach the main menu cleanly; the msgbox/policy oracles
 /// will catch any regression. One-shot via TITLE_ACCEPT_BYTE_GATE_FIRED, latched only after the gating
 /// passes so a not-yet-settled title does not consume the shot.
+/// Accept the title command list's default row once it is up, using the same decoded byte that
+/// opened the menu.
+///
+/// The menu-open write above is one press; this is the second. `CS::TitleTopDialog`'s command-list
+/// builder `FUN_1409abc30` appends Continue first when the `ProfileSummary` gate passes, so the
+/// list comes up with the cursor already on it, and the row's own action
+/// (`_Func_impl` vtable [`TITLE_COMMAND_LIST_CONTINUE_FUNCTOR_VTABLE_RVA`]) is the function that
+/// builds the load job through `FUN_140826510`. Delivering the accept is therefore the whole
+/// remaining step: the game selects, builds, chains and submits its own job, exactly as it does for
+/// a player pressing the button.
+///
+/// Why this could not be done before: until the summary was populated ahead of the open, the
+/// command list had no Continue row at all (run br-20260913-040031-43e2, `game_save_slot` `-1` for
+/// the entire boot), so an accept here would have landed on whatever row did exist. The gates below
+/// are the conditions that make the first row the intended one, and every one of them is a read of
+/// the game's own state:
+///
+///   * the menu-open one-shot has fired and the `a40` latch says the menu is genuinely open;
+///   * `GameMan+0xac0` carries a slot the summary has a record for -- the same pair
+///     `FUN_140875750` asks about before it will add the row;
+///   * no missing-save selection is pending, so the redirect this run will load through is live.
+///
+/// One-shot via [`TITLE_COMMAND_LIST_ACCEPT_FIRED`]: a per-frame repeat would keep accepting rows
+/// on whatever menu came next.
+pub unsafe fn maybe_accept_title_command_list(base: usize) {
+    if TITLE_COMMAND_LIST_ACCEPT_FIRED.load(Ordering::SeqCst) {
+        return;
+    }
+    if missing_save_selection_pending() || !TITLE_ACCEPT_BYTE_GATE_FIRED.load(Ordering::SeqCst) {
+        return;
+    }
+    let Some(owner_ptr) = (unsafe { title_owner(base) }) else {
+        return;
+    };
+    let dialog = unsafe { safe_read_usize(owner_ptr as usize + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }
+        .unwrap_or(0);
+    if dialog == 0
+        || unsafe { safe_read_usize(dialog) }.unwrap_or(0)
+            != er_game_base::mem::game_data_addr(
+                base,
+                TITLE_TOP_DIALOG_VTABLE_RVA,
+                "TITLE_TOP_DIALOG_VTABLE_RVA",
+            )
+    {
+        return;
+    }
+    let a40 = unsafe { safe_read_usize(dialog + TITLE_TOP_DIALOG_MENU_OPENED_A40_OFFSET) }
+        .map(|v| v & TITLE_TOP_DIALOG_LATCH_BYTE_MASK)
+        .unwrap_or(0);
+    if a40 == OWN_STEPPER_MENU_OPENED_NO {
+        return; // the list is not up yet -- keep the shot
+    }
+    // The row's own precondition, read the way the builder reads it. Accepting a list built without
+    // a Continue row would fire whatever came first instead.
+    if !direct_source_slot_summary_real() {
+        return;
+    }
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    if want_slot < OWN_STEPPER_SLOT_ZERO {
+        return;
+    }
+    if !TITLE_COMMAND_LIST_ACCEPT_FIRED.swap(true, Ordering::SeqCst) {
+        let stored = unsafe {
+            write_global_u8(
+                base,
+                TITLE_GLOBAL_ACCEPT_BYTE_RVA,
+                "TITLE_GLOBAL_ACCEPT_BYTE_RVA",
+                TITLE_PROCEED_GATE_SET_VALUE,
+            )
+        };
+        append_autoload_debug(format_args!(
+            "title-command-list-accept: delivered the native accept on the open title command list (dialog=0x{dialog:x} slot={want_slot} stored={stored}) -- the Continue row's own action builds and submits the load job"
+        ));
+    }
+}
+
 pub unsafe fn maybe_set_title_accept_byte(base: usize) {
     // Missing-save picker gate: do not arm the zero-input menu-open while the user still has not
     // chosen a save. This accept byte makes the native registrar build the Continue/Load/NewGame
@@ -715,6 +791,49 @@ pub unsafe fn maybe_set_title_accept_byte(base: usize) {
         unsafe { *((dialog + DIALOG_SLOT_CURSOR_B0C_OFFSET) as *mut i32) = TITLE_CURSOR_LOAD_GAME };
         append_autoload_debug(format_args!(
             "title-accept-byte: native-profile-capture set TitleTopDialog cursor [dialog+0xb0c] {before}->1 before native accept byte"
+        ));
+    }
+    // Fill the records the command list reads, before the command list is built.
+    //
+    // `CS::TitleTopDialog`'s command-list builder (1.16.2 `FUN_1409abc30`, the one that binds
+    // `01_070_CommandList`) adds the Continue row only inside
+    // `if (IsAnySavedCharacterPresent()) { if (FUN_140875750(GetMenuSystemSaveLoad()->saveSlot)) ... }`,
+    // and both predicates read `CS::GameDataMan::GetProfileSummary()`:
+    // `IsAnySavedCharacterPresent` walks slots 0..9 asking `FUN_140261cd0(summary, i)`, and
+    // `FUN_140875750` answers false for any negative slot and otherwise asks the same question of
+    // that one slot. A false answer does not build a disabled row -- it builds no row, so there is
+    // no node for anything downstream to find.
+    //
+    // Measured on run br-20260913-040031-43e2: this function set the byte at `+14594ms`, while the
+    // same run's stats text had been reporting the configured slot as `name="" level=0
+    // map=0xffffffff` since `+11308ms`, and the boot's own summary read did not fire until
+    // `+15409ms`. The command list was therefore built about eight hundred milliseconds before the
+    // game had any record to build it from, `game_save_slot` stayed at `-1` for the whole boot, and
+    // the title sat there until teardown.
+    //
+    // This is the "populate ProfileSummary before the open" half of the note at the top of this
+    // function, not the "wait for the game to populate it" half that deadlocked on 2026-07-07 --
+    // nothing is waited on and nothing is skipped. The records are rewritten from the container
+    // this run already staged, and the slot is handed to the game's own `set_save_slot`.
+    let summary_ready = refresh_direct_source_profile_summary() || direct_source_slot_summary_real();
+    let want_slot = OWN_STEPPER_SLOT.load(Ordering::SeqCst);
+    if summary_ready
+        && want_slot >= OWN_STEPPER_SLOT_ZERO
+        && let Some(address) = title_fn(
+            FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
+            "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
+        )
+    {
+        // The game's own setter, and only it. The arm flag, the load gate and `GameMan+0xb72` are
+        // the force-play-game path's business; all that is wanted here is the slot the command list
+        // is about to ask about.
+        let set_save_slot: unsafe extern "system" fn(i32) =
+            unsafe { std::mem::transmute(address) };
+        unsafe { set_save_slot(want_slot) };
+    }
+    if first_arm {
+        append_autoload_debug(format_args!(
+            "title-accept-byte: command-list inputs before the open -- summary_ready={summary_ready} slot={want_slot} (the native Continue row is built only when the ProfileSummary record for this slot exists)"
         ));
     }
     // The store that moved. This byte is the whole zero-input menu-open: the game's own

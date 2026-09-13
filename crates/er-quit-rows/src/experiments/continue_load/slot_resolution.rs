@@ -510,10 +510,12 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     /// One-shot by construction: `arm_missing_save_picker_after_boot` returns whether this call armed
     /// it, so a phase that is polled every frame cannot re-arm or spam. The refusal itself is logged by
     /// the caller; this only reports what recourse the user was given.
-    fn fullread_offer_save_picker(reason: &'static str) {
-        let armed = crate::experiments::arm_missing_save_picker_after_boot(reason);
+    fn fullread_offer_save_picker(reason: er_save_picker_core::reason::MissingSaveReason) {
+        let armed = crate::experiments::offer_missing_save_picker(reason);
         append_autoload_debug(format_args!(
-            "native-fullread: armed_by_this_call={armed} -- the full read refused to load a character (reason={reason}), so the missing-save picker is offered instead of leaving the title with no way forward"
+            "native-fullread: armed_by_this_call={armed} -- the full read refused to load a character (reason={} fault={:?}), so the missing-save picker is offered instead of leaving the title with no way forward",
+            reason.log_tag(),
+            reason.fault()
         ));
     }
 
@@ -592,7 +594,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             // the user hit: `GUARD FAIL ... -> DONE` at +16243ms and the run never moved again.
             // "This save cannot be loaded" is exactly the condition the missing-save picker exists
             // for, and the empty-profile path one screen earlier already answers it that way.
-            fullread_offer_save_picker("fullread-guard-fail");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadGuardFailed,
+            );
             return;
         }
         // Step 7 is hard-gated behind both the guard above and the commit sub-gate (default off):
@@ -617,7 +621,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
-            fullread_offer_save_picker("fullread-commit-abort-owner-null");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadCommitAborted,
+            );
             return;
         }
         let new_game_flag =
@@ -629,7 +635,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
-            fullread_offer_save_picker("fullread-commit-abort-new-game-flag");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadWouldStartNewGame,
+            );
             return;
         }
         let shim = &raw mut OWN_STEPPER_SHIM;

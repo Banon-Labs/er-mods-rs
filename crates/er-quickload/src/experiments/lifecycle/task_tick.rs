@@ -307,6 +307,8 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     {
         unsafe { install_pab_advance_hook(base) };
         unsafe { maybe_set_title_accept_byte(base) };
+        // The second press, on the list the first one opened.
+        unsafe { er_title_flow::maybe_accept_title_command_list(base) };
     }
     // Now-loading helper observer: attach only after the native title accept byte fired.
     // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed

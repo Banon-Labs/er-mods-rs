@@ -30,6 +30,7 @@ fn model_with(intent: PickerIntent, dir: &str, files: usize) -> SavePickerModel 
             .collect(),
         scroll_offset: 0,
         cursor: 0,
+        row_capacity: PICKER_ROW_COUNT,
         drive_strip_offset: 0,
         status_message: None,
         rejected_path_text: None,

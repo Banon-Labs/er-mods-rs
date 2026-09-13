@@ -782,19 +782,28 @@ pub unsafe fn install_gfx_swap_hook_for(serve: GfxServeSet) -> bool {
         FILE_OPEN_INSTALLED.store(0, Ordering::SeqCst);
         return false;
     };
+    // `register_shared_hook`, not `register_union_hook`, and the difference is the whole feature.
+    // The local form installs this dll's own MinHook instance on the prologue. `er-quickload`
+    // detours the same address for its title-resource observer, so with the product co-loaded the
+    // two instances raced and this one lost: run br-20260913-022901-f395 logged the registration
+    // and then not one `served` line, not even the canonical url capture, while the Quit tab came
+    // up `cols=2 rows=1 navigable_cells=2` against `item_count=6` -- four cloned rows in the list
+    // with no cell to be drawn or hit in. The shared form resolves `er_effects_union_register` out
+    // of the product and chains into the union it already owns, and falls back to the local one
+    // when the product is absent.
     match unsafe {
-        er_hook::register_union_hook(addr, quit_menu_scaleform_file_open_hook, &FILE_OPEN_ORIG)
+        er_hook::register_shared_hook(addr, quit_menu_scaleform_file_open_hook, &FILE_OPEN_ORIG)
     } {
-        Ok(()) => {
+        Ok(route) => {
             append_autoload_debug(format_args!(
-                "system-quit-gfx: registered the Scaleform file-open prologue 0x{addr:x} on the union; serving {}",
+                "system-quit-gfx: registered the Scaleform file-open prologue 0x{addr:x} on the {route:?} union; serving {}",
                 served_movie_list()
             ));
             true
         }
         Err(status) => {
             append_autoload_debug(format_args!(
-                "system-quit-gfx: register_union_hook Scaleform file-open failed: {status:?}; the Quit grid stays vanilla and no rows will be visible"
+                "system-quit-gfx: register_shared_hook Scaleform file-open failed: {status:?}; the Quit grid stays vanilla and no rows will be visible"
             ));
             FILE_OPEN_INSTALLED.store(0, Ordering::SeqCst);
             false

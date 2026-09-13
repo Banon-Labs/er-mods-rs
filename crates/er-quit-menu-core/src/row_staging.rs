@@ -223,9 +223,9 @@ pub unsafe fn install_save_serialize_row_guard() -> bool {
         return false;
     };
     match unsafe {
-        er_hook::register_union_hook(addr, save_serialize_row_guard_hook, &SERIALIZE_GUARD_ORIG)
+        er_hook::register_shared_hook(addr, save_serialize_row_guard_hook, &SERIALIZE_GUARD_ORIG)
     } {
-        Ok(()) => {
+        Ok(_route) => {
             crate::host::append_autoload_debug(format_args!(
                 "save-picker: registered the character serializer 0x{addr:x} on the union; the game's own records go back before any save reads them"
             ));
@@ -233,7 +233,7 @@ pub unsafe fn install_save_serialize_row_guard() -> bool {
         }
         Err(status) => {
             crate::host::append_autoload_debug(format_args!(
-                "save-picker: register_union_hook character serializer failed: {status:?}; a save taken while the picker is open can write browse rows into the container"
+                "save-picker: register_shared_hook character serializer failed: {status:?}; a save taken while the picker is open can write browse rows into the container"
             ));
             SERIALIZE_GUARD_INSTALLED.store(0, Ordering::SeqCst);
             false

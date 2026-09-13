@@ -232,8 +232,8 @@ pub unsafe fn install_picker_profile_select_key() -> bool {
         BUILD_INSTALLED.store(0, Ordering::SeqCst);
         return false;
     };
-    match unsafe { er_hook::register_union_hook(addr, menu_window_job_build_hook, &BUILD_ORIG) } {
-        Ok(()) => {
+    match unsafe { er_hook::register_shared_hook(addr, menu_window_job_build_hook, &BUILD_ORIG) } {
+        Ok(_route) => {
             append_autoload_debug(format_args!(
                 "system-quit-gfx: registered the MenuWindowJob constructor 0x{addr:x} on the union; the picker's ProfileSelect opens under '{PICKER_PROFILE_SELECT_RESOURCE_NAME}' and the title's Load Game keeps the game's own movie"
             ));
@@ -241,7 +241,7 @@ pub unsafe fn install_picker_profile_select_key() -> bool {
         }
         Err(status) => {
             append_autoload_debug(format_args!(
-                "system-quit-gfx: register_union_hook MenuWindowJob constructor failed: {status:?}; the picker will share the title's ProfileSelect movie"
+                "system-quit-gfx: register_shared_hook MenuWindowJob constructor failed: {status:?}; the picker will share the title's ProfileSelect movie"
             ));
             BUILD_INSTALLED.store(0, Ordering::SeqCst);
             false

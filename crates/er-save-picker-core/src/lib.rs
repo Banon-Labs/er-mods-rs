@@ -91,6 +91,7 @@ pub mod model;
 pub mod os_dialog;
 #[cfg(feature = "boot-flow")]
 pub mod overlay;
+pub mod reason;
 pub mod slots;
 pub mod surface;
 
@@ -101,6 +102,7 @@ pub use host::*;
 pub use model::*;
 #[cfg(feature = "os-dialog")]
 pub use os_dialog::*;
+pub use reason::*;
 pub use slots::*;
 pub use surface::*;
 

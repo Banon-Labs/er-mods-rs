@@ -918,6 +918,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         "  \"oracle_autoload_empty_slot_rejections\": {},\n",
         er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst)
     ));
+    // Why the picker is up, and whether anyone said. `_reason` is an
+    // `er_save_picker_core::reason::MissingSaveReason` code: eight arming sites used to be
+    // indistinguishable in telemetry, so a probe could see the picker armed and could not tell a
+    // boot with no save on disk from a boot whose load this mod never issued. `_unrecorded` is a
+    // defect count -- the picker replaced the title and no caller claimed it -- and `_repick`
+    // counts the times a save the user chose failed and the picker came back instead of leaving a
+    // dead title.
+    body.push_str(&format!(
+        "  \"oracle_missing_save_reason\": {},\n  \"oracle_missing_save_reason_arms\": {},\n  \"oracle_missing_save_reason_unrecorded\": {},\n  \"oracle_missing_save_repick_count\": {},\n",
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_ARM_REASON.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_ARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_UNRECORDED_ARMS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_REPICK_COUNT.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",
         SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst),

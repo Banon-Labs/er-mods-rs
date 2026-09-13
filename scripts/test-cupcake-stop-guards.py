@@ -430,6 +430,27 @@ CASES = [
         "crate that reaches a DLL was touched, so there is nothing a run could show either way",
     ),
     Case(
+        "deferred_investigation.jsonl",
+        "naming your own next investigative move instead of making it",
+        "the turn reads one file and closes on 'the next place to look is profile_table_guard's "
+        "rebuild of saveSlotsStates' -- one of six closers from a single 2026-09-12 session, none "
+        "of them caught. The promissory arm needs a work gerund, the unread arm needs a file "
+        "claimed to hold the answer, and no_described_next_step needs one of its own nouns followed "
+        "by a copula, which 'the next place to look is' does not give it",
+    ),
+    Case(
+        "deferred_investigation_edited.jsonl",
+        None,
+        "the same shape beside the Edit that changed the arming order -- must NOT halt, or saying "
+        "where the work goes next is punished identically to stopping in front of it",
+    ),
+    Case(
+        "deferred_investigation_blocked.jsonl",
+        None,
+        "the bisect that cannot take its next half until a live run reports, said in one line -- "
+        "must NOT halt, or the blocker sentence AGENTS.md asks for becomes unspeakable",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",

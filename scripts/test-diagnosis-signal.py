@@ -5,14 +5,17 @@ The signal scans the last completed assistant turn and emits one facts line:
 
   DIAGFACTS|diagnosis=..|fixed=0|1|asked=0|1|blocked=0|1|promise=..|edited=0|1
            |handback=..|handbackkind=a|b|c|userneed=0|1|didwork=0|1|extblocked=0|1|carried=0|1
+           |unread=..|consulted=0|1|future=0|1|deferral=..
 
-Three rules read it, and the conjunctions live in
+Four rules read it, and the conjunctions live in
 `.cupcake/policies/claude/no_diagnosis_without_fix.rego` where
 `.cupcake/tests/no_diagnosis_without_fix_test.rego` covers them:
-  * `ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX`  -- a defect named, no file changed;
-  * `ER-EFFECTS-NO-PROMISSORY-CLOSER`      -- a fix announced in the present participle, nothing
-                                              written;
-  * `ER-EFFECTS-NO-ZERO-INFORMATION-STOP`  -- a turn whose ideal next user reply is nothing.
+  * `ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX`   -- a defect named, no file changed;
+  * `ER-EFFECTS-NO-PROMISSORY-CLOSER`       -- a fix announced in the present participle, nothing
+                                               written;
+  * `ER-EFFECTS-NO-ZERO-INFORMATION-STOP`   -- a turn whose ideal next user reply is nothing;
+  * `ER-EFFECTS-NO-DEFERRED-INVESTIGATION`  -- the agent's own next investigative move named
+                                               instead of taken.
 
 This file covers the extraction, which is where the two 2026-09-09 rules do their hard work: both
 key on a grammar that ordinary reporting prose also uses. "Fixing both: bypass the union ..."
@@ -60,6 +63,35 @@ ZERO_INFORMATION = (
     "Nothing -- the ball is in my court. Rebuilding and relaunching now; the one thing I'll need "
     "from you afterwards is a single use of the item."
 )
+
+# The six closing sentences of 2026-09-12, verbatim, keyed by the pattern each one is the reason for.
+# The family: the closing prose names the agent's own next investigative move instead of taking it.
+DEFERRALS = {
+    "where-i-look-next": (
+        "The row the game clears under the profile table is the one that never comes back, which "
+        "is where I look next."
+    ),
+    "next-place-to-look": (
+        "The picker survives the rebuild and the row does not, and the next place to look is "
+        "`profile_table_guard`'s rebuild of `saveSlotsStates`."
+    ),
+    "that-is-the-next-step": (
+        "The clone runs before the table is armed, so that is the next step; the next thing I "
+        "check is the arming order."
+    ),
+    "finding-then-where-i-look-next": (
+        "The overlap that is real in a default build is the picker itself: the row it rebuilds "
+        "under the profile table, which is where I look next."
+    ),
+    "once-this-test-says": (
+        "Fifteen shells load in that profile and one of them owns the row; I will back out once "
+        "this test says which side the bug is on."
+    ),
+    "the-next-step-halves-it": (
+        "Ten shells are excluded and five remain; the next step halves it to five; if it is clean, "
+        "the culprit is in the excluded ten and I load those instead."
+    ),
+}
 
 
 def user(text: str) -> dict:
@@ -386,6 +418,85 @@ def main() -> int:
         ],
         handbackkind="a",
         didwork="1",
+    )
+
+    # --- the deferred-investigation closer --------------------------------------------------------
+
+    # The six closing sentences of 2026-09-12, verbatim. Each names the agent's own next
+    # investigative move and stops in front of it, and not one was caught before this arm: the
+    # promissory arm needs a work gerund, the unread arm needs a file claimed to hold the answer, and
+    # `last_assistant_described_next_step` needs one of its own nouns followed by a copula.
+    for name, sentence in DEFERRALS.items():
+        expect_facts(
+            f"deferral-{name}",
+            [user("the load row is still missing"), assistant_text(sentence)],
+            deferral=True,
+            edited="0",
+            blocked="0",
+            userneed="0",
+            future="0",
+        )
+
+    # The one-line blocker: a bisect that cannot take its next half until a live run reports.
+    expect_facts(
+        "deferral-blocked",
+        [user("the load row is still missing"),
+         assistant_text("Blocked: the bisect needs the new-character result from the live run "
+                        "before any file can be edited, so that is the next step.")],
+        deferral=True,
+        blocked="1",
+    )
+
+    # The same closing sentence in a turn that made the change is a report of where the work went.
+    expect_facts(
+        "deferral-with-an-edit",
+        [
+            user("the load row is still missing"),
+            assistant_tool("Edit", file_path="/repo/src/lib.rs", old_string="a", new_string="b"),
+            tool_result(),
+            assistant_text("The clone now runs after the table is armed, which is where I look "
+                           "next."),
+        ],
+        deferral=True,
+        edited="1",
+    )
+
+    # A concrete in-game action handed over with the log line that will prove it. The evidence does
+    # not exist until that action happens, so this deferral is a plan.
+    expect_facts(
+        "deferral-in-game-handoff",
+        [user("the load row is still missing"),
+         assistant_text("Use the Lynchpin once on this build; the next step is the line "
+                        "`re-invade: owner=` in er-quickload-autoload-debug.log, which proves the "
+                        "row survived.")],
+        deferral=True,
+        future="1",
+    )
+
+    # An observation with no memory-read oracle. The launch handoff has to stay speakable.
+    expect_facts(
+        "deferral-observation-is-exempt",
+        [user("the load row is still missing"),
+         assistant_text("The build is up on the same character; tell me what you see on the Quit "
+                        "tab, and that is the next step.")],
+        deferral=True,
+        userneed="1",
+    )
+
+    # A finding reported with the read already done names no next move.
+    expect_clean(
+        "deferral-report-is-not-a-deferral",
+        [user("the load row is still missing"),
+         assistant_text("The picker rebuild is the row the game clears; I read it and it is clean.")],
+    )
+
+    # The same words in the past tense report a step already taken. Measured out of the audit: the
+    # first draft halted on this sentence, verbatim.
+    expect_clean(
+        "deferral-past-tense-is-a-report",
+        [user("why did the push go through"),
+         assistant_text("Push was the next step in a script I had already run once, so the runtime "
+                        "precondition for these two commits never got evaluated.")],
     )
 
     # --- the shared floor -------------------------------------------------------------------------

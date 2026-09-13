@@ -437,16 +437,16 @@ pub unsafe fn install_quit_menu_window_run_hook() -> bool {
         RUN_INSTALLED.store(0, Ordering::SeqCst);
         return false;
     };
-    match unsafe { er_hook::register_union_hook(addr, quit_menu_window_job_run_hook, &RUN_ORIG) } {
-        Ok(()) => {
+    match unsafe { er_hook::register_shared_hook(addr, quit_menu_window_job_run_hook, &RUN_ORIG) } {
+        Ok(route) => {
             append_autoload_debug(format_args!(
-                "system-quit-build-url: registered MenuWindowJob::Run 0x{addr:x} on the union; the link field has a menu pump"
+                "system-quit-build-url: registered MenuWindowJob::Run 0x{addr:x} on the {route:?} union; the link field has a menu pump"
             ));
             true
         }
         Err(status) => {
             append_autoload_debug(format_args!(
-                "system-quit-build-url: register_union_hook MenuWindowJob::Run failed: {status:?}; the link field will open and then never be driven"
+                "system-quit-build-url: register_shared_hook MenuWindowJob::Run failed: {status:?}; the link field will open and then never be driven"
             ));
             RUN_INSTALLED.store(0, Ordering::SeqCst);
             false

@@ -1417,6 +1417,12 @@ pub static PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS: AtomicUsize = AtomicUsize::new(
 /// One-shot latch: the empty-profile window has already handed the choice back to the user, so the
 /// loud hand-back line is never repeated (the arm itself is idempotent regardless).
 pub static PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive autoload ticks on which every liveness fact read false. Reset by a single tick of
+/// any of them, so a boot that is merely slow never accumulates toward the offer.
+pub static PRODUCT_CONTINUE_NO_PLAYER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: a stalled boot has already been handed the save picker, so the loud line is
+/// never repeated (the arm itself is idempotent regardless).
+pub static PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);

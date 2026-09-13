@@ -201,6 +201,38 @@ pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
 
 /// TitleTopDialog row registry [dialog+0xa48] (the FD4 delegate registry the registrar populates).
 /// Used as the live-menu readiness signal: populated == the menu rows are registered + rendered.
+///
+/// # The layout did not drift on 1.17, and a census reading here can look as if it did
+///
+/// Measured 2026-09-12, because a live 1.17.1 run read `[dialog+0xa48] = 0x142a97af0`, which is
+/// `CS::SceneObjProxy::vftable` once carried back to 1.16.2 (`.rdata` in this region is a flat
+/// `+0x3080` between the builds) -- which reads exactly like a stale offset landing inside an
+/// embedded proxy. It is not one. The registrar itself was disassembled on both images: 1.16.2
+/// `0x1409b24e0` and its 1.17 counterpart `0x1409b3730` (mapped by
+/// `scripts/map-rvas-1162-to-1170.py`, delta `+0x1250`) are 522 instructions each and use the
+/// same three offsets -- `mov byte [rcx+0xa40],1`, `mov rcx,[r13+0xa38]`, `lea rdx,[r13+0xa48]`.
+/// So `+0xa48` is an in-place object whose first qword is its own vtable, not a pointer to a
+/// registry, and a vtable read there is the expected value rather than evidence of drift.
+///
+/// # It is a `CS::SceneObjProxy`, and this constant's name has always been wrong
+///
+/// The registrar passes `lea rdx,[r13+0xa48]` to `0x1407ab370`, whose 1.16.2 decompile declares
+/// its second parameter `SceneObjProxy *` and opens by calling
+/// `CS::SceneObjProxy::SceneObjProxy(&local, param_2)`. So the field is a scene proxy on both
+/// builds, the name "row registry" describes something that is not there, and any search for the
+/// menu's row nodes that starts here is starting in the wrong object.
+///
+/// The node ctor is the one to follow instead: `0x1409a6c70` on 1.16.2 (`0x1409a7e10` on 1.17) is
+/// the only writer of [`MEMBERFUNCJOB_VTABLE_RVA`] anywhere -- two data xrefs, both inside it --
+/// and the
+/// registrar calls it exactly twice, at `+0x1e6` and `+0x2e9` of its own body on both builds. Its
+/// 1.17 body stores `lea rax,[0x142b29650]`, which byte-proves the translated vtable this crate
+/// compares against is correct.
+///
+/// What is still unexplained on 1.17.1 is separate and lives at
+/// `scan_dialog_for_loadgame`: no object anywhere in the dialog's first 10 KB carries
+/// [`MEMBERFUNCJOB_VTABLE_RVA`], so the Load-Game node is never found and the autoload never
+/// queues a load. Do not spend another pass on these three offsets.
 pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
@@ -1652,6 +1684,14 @@ pub static TITLE_PROCEED_GATE_FIRED: std::sync::atomic::AtomicBool =
 
 /// One-shot latch for the global-accept-byte (0x144589bdc) zero-input title-advance lever.
 pub static TITLE_ACCEPT_BYTE_GATE_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// One-shot for the second decoded accept: the one delivered onto the open title command list.
+///
+/// Separate from [`TITLE_ACCEPT_BYTE_GATE_FIRED`] because they are different presses on different
+/// surfaces -- the first opens the menu, the second picks its first row -- and sharing one latch
+/// would mean the menu-open consumed the accept.
+pub static TITLE_COMMAND_LIST_ACCEPT_FIRED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 pub static NATIVE_AUTOLOAD_ARMED: std::sync::atomic::AtomicBool =

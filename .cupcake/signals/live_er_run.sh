@@ -5,7 +5,7 @@
 # that would tear that run down. The teardown is not hypothetical: the PostToolUse hook runs
 # `scripts/er-stale-run-sentinel.sh`, which kills a live run the moment an edited file feeds a DLL
 # that run loaded. That is the correct invariant -- the run's loaded code no longer matches the tree
-# -- but it fires AFTER the edit, so the first anyone knows of it is the game closing under them.
+# -- but it fires after the edit, so the first anyone knows of it is the game closing under them.
 #
 # Prints `LIVE` plus the profile lines when a run is up, and nothing otherwise.
 #

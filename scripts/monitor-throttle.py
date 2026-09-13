@@ -11,7 +11,7 @@ after the flood has already been delivered.
 This filter sits at the end of such a pipeline and emits at most one line per
 `--interval` seconds. Lines arriving inside a closed window are counted, not
 dropped silently: the next emitted line carries `[+N suppressed in the last Ms]`
-so nothing is lost about volume, and the LAST suppressed line is the one shown,
+so nothing is lost about volume, and the last suppressed line is the one shown,
 because for a progress stream the newest line is the informative one.
 
 The window is wall-clock and starts closed-open: the first line of a stream is

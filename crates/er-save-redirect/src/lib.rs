@@ -180,6 +180,33 @@ impl MissingSaveGate {
             )
             .is_ok()
     }
+
+    /// What a give-up site should do when it wants to hand the user the picker.
+    ///
+    /// "Arm the picker" has three correct answers depending on what the selection has already
+    /// done, and before this every caller reached for [`Self::try_arm`] and silently got the
+    /// wrong one in the third case. See [`MissingSaveOffer`].
+    pub fn offer(&self) -> MissingSaveOffer {
+        match self.state() {
+            MissingSaveState::Idle => MissingSaveOffer::Arm,
+            MissingSaveState::Pending => MissingSaveOffer::AlreadyUp,
+            MissingSaveState::Ready => MissingSaveOffer::RearmAfterFailedPick,
+        }
+    }
+}
+
+/// The three answers to "hand the user the picker", one per selection state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingSaveOffer {
+    /// Nobody has been asked yet. Arm, and the banner names the caller's own reason.
+    Arm,
+    /// A browse is in flight. Do nothing: restarting it would move the cursor out from under
+    /// whoever is using it.
+    AlreadyUp,
+    /// The user picked a save, the gate released, and the load failed anyway. Revoke that
+    /// selection and put the picker back up -- leaving it released is a title with no way
+    /// forward, which is the soft lock the late arm exists to remove, one selection later.
+    RearmAfterFailedPick,
 }
 
 impl Default for MissingSaveGate {
@@ -2042,6 +2069,19 @@ mod tests {
         assert!(gate.is_pending());
         gate.set(MissingSaveState::Ready);
         assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn a_released_selection_is_offered_a_re_arm_not_a_refusal() {
+        let gate = MissingSaveGate::new();
+        assert_eq!(gate.offer(), MissingSaveOffer::Arm);
+        gate.set(MissingSaveState::Pending);
+        assert_eq!(gate.offer(), MissingSaveOffer::AlreadyUp);
+        gate.set(MissingSaveState::Ready);
+        // The case that used to dead-end: the user picked, the pick did not load, and every
+        // give-up site called `try_arm` and was refused.
+        assert!(!gate.try_arm());
+        assert_eq!(gate.offer(), MissingSaveOffer::RearmAfterFailedPick);
     }
 
     #[test]
