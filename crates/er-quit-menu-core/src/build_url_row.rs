@@ -22,7 +22,7 @@
 //! seeds nothing here, but the boot importer uses it, and an accepted link is written back to it so
 //! the next session starts from the last build that worked.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use er_telemetry_core::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_ACTION_COUNT, SYSTEM_QUIT_LOAD_BUILD_URL_FAILED_COUNT,
@@ -30,9 +30,26 @@ use er_telemetry_core::counters::{
     SYSTEM_QUIT_LOAD_BUILD_URL_REQUEST_COUNT,
 };
 
-use crate::build_url_editor::request_build_url_editor;
+use crate::build_url_editor::{
+    build_url_editor_awaiting_submit, build_url_editor_pump_passes, request_build_url_editor,
+};
 use crate::host::{append_autoload_debug, build_import_applied};
 use crate::row_text::set_build_url_row_help;
+
+/// Frames a press may wait for its submit before the tick says so.
+///
+/// The submit is menu-pump work and normally lands on the pump's very next pass, a frame or two
+/// after the press. Three seconds at 60 fps is far past that and still prompt enough that the line
+/// is beside the press in the log rather than buried. The only thing this threshold trades away is
+/// how long a genuinely deferred submit stays quiet, and a deferral that outlives it is worth a
+/// line anyway.
+const AWAITING_SUBMIT_REPORT_TICKS: usize = 180;
+
+/// Consecutive `FrameBegin` ticks the current press has waited for its submit.
+static AWAITING_SUBMIT_TICKS: AtomicUsize = AtomicUsize::new(0);
+
+/// Ticks run at all, so the session baseline is emitted exactly once.
+static IMPORT_TICKS: AtomicUsize = AtomicUsize::new(0);
 
 /// What a row press did. Every variant is reported to the debug log and counted, because "the row
 /// did nothing" and "the row started an import" look identical on screen until the character
@@ -147,6 +164,56 @@ pub fn system_quit_log_build_import_press(site: &str, press: &BuildUrlPress) {
     ));
 }
 
+/// Say once, per session, that the row is armed and has not been pressed.
+///
+/// Without it "nobody pressed the row" and "the press went nowhere" are both a log with no
+/// build-url lines in it, and telling them apart means knowing what the reader did rather than what
+/// the DLL saw. One line at the first tick makes the unpressed case a positive statement: the row
+/// exists, the counters are all zero, and any later oracle line is a change from this one.
+fn report_session_baseline() {
+    if IMPORT_TICKS.fetch_add(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    crate::arm::append_build_row_oracle_line("build-url-session-start");
+}
+
+/// Say once, per press, that a queued link field is not being submitted.
+///
+/// This is the state that has no other witness. `request_build_url_editor` latches and returns
+/// true, the press logs `OPENING the link field` and the editor-open counter rises -- and if
+/// nothing ever calls `build_url_editor_menu_pump`, that is the last thing the session records. On
+/// screen it is identical to a row that does nothing at all, which is how run
+/// `br-20260913-155423-2fe7` reported the feature broken with every line in the log saying it had
+/// worked.
+///
+/// The pump-pass count is what makes the line a diagnosis instead of a complaint. Zero means the
+/// detour at `PAB_NODE_UPDATE_RVA` is not installed and waiting will not help; a non-zero count
+/// means the pump is alive and the submit itself is being refused, which is a different bug in a
+/// different place.
+fn report_awaiting_submit() {
+    if !build_url_editor_awaiting_submit() {
+        AWAITING_SUBMIT_TICKS.store(0, Ordering::SeqCst);
+        return;
+    }
+    let waited = AWAITING_SUBMIT_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if waited != AWAITING_SUBMIT_REPORT_TICKS {
+        return;
+    }
+    let passes = build_url_editor_pump_passes();
+    let cause = if passes == 0 {
+        "the menu pump has not run once this session, so the detour at `PAB_NODE_UPDATE_RVA` was \
+         never installed and no wait will submit this field"
+    } else {
+        "the menu pump is running, so the submit itself is being refused -- the usual cause is the \
+         dialog's job queue still owning the previous job"
+    };
+    append_autoload_debug(format_args!(
+        "system-quit-build-url: the link field has been queued for {waited} frames and NOT submitted \
+         -- menu pump passes={passes}; {cause}"
+    ));
+    crate::arm::append_build_row_oracle_line("build-url-awaiting-submit");
+}
+
 /// Report the runtime's last ASYNCHRONOUS failure, once, if there is one pending.
 ///
 /// A press returns `Ok` the instant the worker is spawned, so a 404, an unparseable payload or a
@@ -178,6 +245,12 @@ fn drain_build_import_failure() {
 ///
 /// Game task thread only -- the context every mutation inside the runtime requires.
 pub unsafe fn system_quit_build_import_tick() {
+    // This tick is the row's only per-frame driver that is independent of the menu pump, which is
+    // what makes it the one place able to report the pump missing. Both calls come first and
+    // neither touches the game: behind the import's early return, the watchdog would sit behind the
+    // very thing it watches.
+    report_session_baseline();
+    report_awaiting_submit();
     drain_build_import_failure();
     // Safety: the caller's contract (FrameBegin game task) carries through.
     let Some(report) = (unsafe { er_build_import_runtime::tick() }) else {

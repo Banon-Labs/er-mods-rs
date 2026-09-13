@@ -165,6 +165,34 @@ const MIRROR_LOG_LIMIT: usize = 4;
 /// as short as it can be while still outlasting focus.
 const CARET_APPLY_FRAMES: usize = 8;
 
+/// Passes of [`build_url_editor_menu_pump`] this session.
+///
+/// The one fact that separates "the submit keeps being deferred" from "nothing is driving the
+/// submit at all", and the two have nothing in common. A deferred submit is the dialog's job queue
+/// still owning the previous job, which clears itself within a frame or two. A pump that never runs
+/// means the detour at `PAB_NODE_UPDATE_RVA` was not installed, and no amount of waiting fixes it:
+/// the field stays queued for the rest of the session and the row looks inert.
+///
+/// It is never reset. A count that restarted per open could not answer the question it exists for,
+/// because zero would then mean either cause.
+static PUMP_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times the menu pump has run this session. See [`PUMP_PASSES`].
+#[must_use]
+pub fn build_url_editor_pump_passes() -> usize {
+    PUMP_PASSES.load(Ordering::SeqCst)
+}
+
+/// Is a press waiting for a submit that has not happened?
+///
+/// Distinct from [`build_url_editor_active`], which says yes for an open field too. This is the one
+/// state the player cannot see and no other counter records: the row was pressed, the field was
+/// latched, and the native keyboard is not up.
+#[must_use]
+pub fn build_url_editor_awaiting_submit() -> bool {
+    phase() == EditorPhase::Pending
+}
+
 fn phase() -> EditorPhase {
     match PHASE.load(Ordering::SeqCst) {
         1 => EditorPhase::Pending,
@@ -405,6 +433,7 @@ unsafe fn mirror_clipboard_into_field(base: usize, menu_window: usize, frame: us
 ///
 /// Menu-pump context only.
 pub unsafe fn build_url_editor_menu_pump() {
+    PUMP_PASSES.fetch_add(1, Ordering::SeqCst);
     // 0. A latch whose window stopped running is debris. The field's 02_990 MenuWindow is not
     //    reported terminal when it closes -- it simply stops being run -- so neither the 0x81d3d0
     //    cancel gate, the 0x81d220 terminal callback, nor the live->terminal release can see a

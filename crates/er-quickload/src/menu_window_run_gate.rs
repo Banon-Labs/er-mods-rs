@@ -10,6 +10,13 @@
 //! * the Save Game row's destination browser, `save_flow_menu_pump`. The press only stages a
 //!   request, because opening the browser records and submits a `MenuJob` and that is legal only
 //!   inside a menu-pump pass; something has to run in the pump and discharge it.
+//! * the Load Build from URL row's link field, `build_url_editor_menu_pump`, for the same reason
+//!   and through the same post-run frame. Its press latches the field `Pending` and a submit is a
+//!   `MenuJob` too, so the same missing detour left it queued forever. Measured on the same pair of
+//!   runs as the browser below: the module build logged
+//!   `system-quit-build-url: link field requested on dialog=0x31b84080` with
+//!   `system_quit_load_build_url_editor_open_count = 1` and every accepted / cancelled / refused /
+//!   imported counter still zero.
 //!
 //! Its install gate named only the first of the three. `task_tick` asked `pab_advance_enabled()`,
 //! which derives from `autoload_disabled()`, so a build carrying the rows and not the boot
