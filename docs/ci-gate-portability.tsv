@@ -47,7 +47,7 @@
 # The stage names are declared in `scripts/check-stages.py`, and `check-stages.py --check` (a step
 # of check.sh) refuses a row naming a stage that does not exist, a step in no stage, a step in two,
 # and a declared stage that holds no steps. Toolchain steps -- cargo/shellcheck/rustfmt/opa/cupcake
-# -- are still not ledgered, and their stage comes from four rules in that file for the same reason
+# -- are still not ledgered, and their stage comes from seven rules in that file for the same reason
 # their portability does not live here: the answer is uniform and identical rows could go stale.
 #
 # columns: bucket <TAB> deps <TAB> key <TAB> what it does when the input is absent <TAB> stage

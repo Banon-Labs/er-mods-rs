@@ -520,7 +520,7 @@ ER_CHECK_STAGES=lint,policy bash scripts/check.sh   # a deliberate subset (NOT a
 
 # A stage takes a SHARED lock and a whole-suite run an EXCLUSIVE one, so two stage runs coexist
 # and a whole-suite run excludes everything. The stage of every step comes from the fifth column
-# of docs/ci-gate-portability.tsv (gate steps) or from four rules in scripts/check-stages.py
+# of docs/ci-gate-portability.tsv (gate steps) or from seven rules in scripts/check-stages.py
 # (toolchain steps); `check-stages.py --check` is a step of the suite and refuses a step that
 # belongs to no stage or to two. .github/workflows/check.yml generates its matrix from the same
 # command, so a GitHub run page shows the same eleven names.

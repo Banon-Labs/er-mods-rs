@@ -44,6 +44,7 @@ is a rule here rather than 79 rows that all say the same thing:
 
     shellcheck / rustfmt / cargo fmt   -> lint
     opa / cupcake                      -> policy
+    cargo xwin                         -> cargo-build
     every other cargo invocation       -> cargo-test
 
 Usage:
@@ -176,15 +177,21 @@ STAGES: tuple[Stage, ...] = (
 
 STAGE_NAMES = tuple(s.name for s in STAGES)
 
-# The rule for the 79 toolchain steps, applied in order, first match wins. Deliberately tiny: if a
-# new tool ever needs a fifth line here, that is a decision worth making explicitly rather than
-# absorbing into a default.
+# The rule for the 79 toolchain steps, applied in order, first match wins. Deliberately tiny: a new
+# line here is a decision worth making explicitly rather than absorbing into a default.
+#
+# `cargo xwin` is named before the general `cargo` line because the two mean different things. A
+# cross-compile is not a host-runnable check, and the stage it lands in is the stage whose CI job
+# installs cargo-xwin and restores the gigabyte of Windows CRT and SDK behind it. Routed to
+# `cargo-test` instead, a `cargo xwin` step runs in a job that has neither and dies on `no such
+# subcommand`.
 TOOLCHAIN_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"^shellcheck\s"), "lint"),
     (re.compile(r"^rustfmt\s"), "lint"),
     (re.compile(r"^cargo\s+fmt\b"), "lint"),
     (re.compile(r"^(opa|cupcake)\s"), "policy"),
     (re.compile(r"^command -v cupcake\b"), "policy"),
+    (re.compile(r"^cargo\s+(\+\S+\s+)?xwin\b"), "cargo-build"),
     (re.compile(r"^cargo\s"), "cargo-test"),
 )
 
@@ -349,7 +356,10 @@ def stage_tools(stage: str) -> dict[str, bool]:
         head = step.text.split()[0]
         if head in tools:
             tools[head] = True
-        if "x86_64-pc-windows-msvc" in step.text:
+        # A step's own text, not just the gate scripts it invokes. The target triple catches the
+        # steps that name it; `cargo xwin` catches the ones that do not, because check.sh wraps a
+        # long invocation and the triple can sit on a continuation line this text never sees.
+        if "x86_64-pc-windows-msvc" in step.text or INDIRECT_TOOL_USE["xwin"].search(step.text):
             tools["xwin"] = True
         if step.key is None:
             continue
