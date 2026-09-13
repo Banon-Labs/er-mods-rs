@@ -53,6 +53,10 @@ mod ffi;
 mod hooks;
 #[cfg(windows)]
 mod input_blocker;
+// Not `#[cfg(windows)]`: a pure predicate with no game in it, so its tests run on the host with
+// `cargo test -p er-quickload --lib`. That is the whole reason it is a module of its own rather
+// than a line inside the game task.
+pub mod menu_window_run_gate;
 #[cfg(windows)]
 mod mh;
 #[cfg(windows)]

@@ -302,13 +302,25 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // the rows never built (continue-scan = 0 nodes, stage 3). Zero-input (decoded accept
     // flag, not a synthesized event). bd er-effects-rs-e9e + rowbuild-mechanism-incontext-
     // openmenu-2026-06-23.
-    if pab_advance_enabled()
-        && let Ok(base) = game_module_base()
+    //
+    // The install and the two presses are two different questions, and reading them as one is
+    // what left the Save Game row with no menu pump. The detour this installs is the product's
+    // only handler on 0x7ad1c0, and three consumers ride it -- see
+    // `crate::menu_window_run_gate`, which asks one term per consumer. The presses below belong
+    // to the boot autoload alone and stay behind its own term, so a build that carries the rows
+    // and not the autoload gets the pump without anything opening the title menu for it.
+    let boot_autoload = pab_advance_enabled();
+    if crate::menu_window_run_gate::menu_window_run_detour_required(
+        boot_autoload,
+        cfg!(feature = "quit-rows"),
+    ) && let Ok(base) = game_module_base()
     {
         unsafe { install_pab_advance_hook(base) };
-        unsafe { maybe_set_title_accept_byte(base) };
-        // The second press, on the list the first one opened.
-        unsafe { er_title_flow::maybe_accept_title_command_list(base) };
+        if boot_autoload {
+            unsafe { maybe_set_title_accept_byte(base) };
+            // The second press, on the list the first one opened.
+            unsafe { er_title_flow::maybe_accept_title_command_list(base) };
+        }
     }
     // Now-loading helper observer: attach only after the native title accept byte fired.
     // Attach-time detours on CSNowLoadingHelperImp exited before readiness; this delayed

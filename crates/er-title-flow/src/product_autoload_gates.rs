@@ -1310,7 +1310,12 @@ pub unsafe fn pab_advance_try(step: usize) {
     ));
 }
 /// Install the press-any-button node-update hook once (minhook, mirroring `install_title_update_hook`).
-/// Gated by `pab_advance_enabled` at the call site; the detour self-gates too (pass-through until armed).
+///
+/// The address is `PAB_NODE_UPDATE_RVA`, which is also `MENU_WINDOW_JOB_RUN_RVA`, so the detour
+/// this installs is the host's menu pump as well as its press-any-button advance. The host decides
+/// when it wants that pass -- `er-quickload` asks `menu_window_run_gate`, one term per consumer --
+/// and every consumer inside the detour self-gates, `pab_advance_try` included, which is what lets
+/// a host install it for the menu pump without advancing anyone past press-any-button.
 pub unsafe fn install_pab_advance_hook(base: usize) {
     if PAB_ADVANCE_HOOK_INSTALLED.swap(OWN_STEPPER_CALL_INC, Ordering::SeqCst)
         != TITLE_OWNER_SCAN_START_ADDRESS

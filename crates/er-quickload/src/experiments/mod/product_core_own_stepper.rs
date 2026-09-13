@@ -462,6 +462,11 @@ pub(crate) unsafe extern "system" fn pab_node_update_detour(
         // request that nothing consumed and the row read as a no-op (run br-20260912-190345-54bb).
         // Save Game is a vanilla row and its browser is not one of the cloned rows, so its pump runs
         // here, unconditionally, and `run_post` no longer carries a second copy.
+        //
+        // Reaching this line at all was the second half of the same defect: this detour used to be
+        // installed only when the boot autoload wanted it, so a `quit-rows` build without
+        // `autoload` ran no pump either (run br-20260913-154820-c63f). Its install gate is
+        // `crate::menu_window_run_gate` now, which counts the rows as their own consumer.
         #[cfg(feature = "save-game-row")]
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
             er_quit_menu_core::save_picker_menu::save_flow_menu_pump()
