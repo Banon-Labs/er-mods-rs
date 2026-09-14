@@ -19,6 +19,23 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLICY = REPO_ROOT / ".cupcake" / "policies" / "claude" / "bash_elden_ring_launch_guard.rego"
+# The rulebook's shared modules, and half of the compile unit assembled below.
+#
+# A `.rego` policy is not a compile unit by itself. The engine loads every module
+# under `.cupcake/system/` alongside the policies, so a policy may call a helper
+# defined there, and since 2026-09-14 this one does: `bash_elden_ring_launch_guard`
+# asks `commands.is_tool` which tool it is looking at, at 18 sites. Handing `opa
+# check` the policy file alone answers with 11 errors -- ten `rego_type_error:
+# undefined function`, then the compiler's own error limit. That is a red gate
+# describing a fault the deployed rulebook does not have, and it is what took
+# `stage / policy` red on the branch that introduced the helper while `opa test
+# .cupcake/` and `cupcake validate` were both green.
+#
+# The directory goes in whole rather than naming `commands.rego`, so the next
+# shared helper costs no edit here. Extra modules on the compile unit cannot hide
+# a fault in the policy: `opa check` still resolves every reference the policy
+# makes, and a name that no module defines is still an error.
+CUPCAKE_SYSTEM_DIR = REPO_ROOT / ".cupcake" / "system"
 AGENTS = REPO_ROOT / "AGENTS.md"
 SMOKE_DRIVER = REPO_ROOT / "scripts" / "er-smoke-driver.sh"
 RUNTIME_PROBE = REPO_ROOT / ".auto" / "runtime_probe.sh"
@@ -207,6 +224,22 @@ def artifact_contents_findings() -> list[Finding]:
     return findings
 
 
+def policy_compile_unit() -> list[str]:
+    """The arguments `opa check` needs to compile the policy the way the engine loads it.
+
+    The rulebook's shared modules first, then the policy file, matching the order
+    `scripts/check.sh` lists them for `opa test`. A missing `.cupcake/system/`
+    directory narrows the unit back to the policy alone rather than handing `opa`
+    a path that is not there: an unresolved helper then reports as an undefined
+    function, which is the direction a guard checker should fail in.
+    """
+    unit: list[str] = []
+    if CUPCAKE_SYSTEM_DIR.is_dir():
+        unit.append(str(CUPCAKE_SYSTEM_DIR))
+    unit.append(str(POLICY))
+    return unit
+
+
 def scan_contract() -> list[Finding]:
     findings: list[Finding] = []
     findings.extend(missing_file(POLICY, "missing-launch-guard-policy", "Add the Cupcake Rego policy that blocks Steam/AppID 1245620, start_protected_game.exe, and ersc.dll bundling."))
@@ -215,7 +248,7 @@ def scan_contract() -> list[Finding]:
         if shutil.which("opa") is None:
             findings.append(Finding(rel(POLICY), 0, "opa-missing", "opa not found", "Install/use opa so the Rego policy can be syntax-checked."))
         else:
-            run = subprocess.run(["opa", "check", str(POLICY)], cwd=REPO_ROOT, text=True, capture_output=True, timeout=30, check=False)
+            run = subprocess.run(["opa", "check", *policy_compile_unit()], cwd=REPO_ROOT, text=True, capture_output=True, timeout=30, check=False)
             if run.returncode != 0:
                 findings.append(Finding(rel(POLICY), 0, "launch-guard-policy-invalid-rego", (run.stderr or run.stdout).strip(), "Fix the Rego syntax before relying on the launch guard."))
 
