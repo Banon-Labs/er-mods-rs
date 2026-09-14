@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-# TODO: WIP capstone reinjection tooling -- structurally proven, NOT yet in-game validated.
+# TODO: WIP capstone reinjection tooling -- structurally proven, not yet in-game validated.
 #       (Comment marker is `#` not `//` because this is Python.) Known gaps before this can
 #       validate a reinjected function in the offline game -- see bd memories
 #       arxan-antitamper-neuter-for-reinjection-2026-07-01 and
 #       phase4-measurement-and-open-items-2026-07-01:
 #
-#   1. PAYLOAD IS RECOVERED CODE, NOT THE rev.ng-OPTIMIZED OBJECT. The optimized object
+#   1. Payload is recovered code, not the rev.ng-optimized object. The optimized object
 #      (bf.rf.rc.obj) carries undefined `_rsp` (rev.ng emulated-stack scratch) + one
 #      `revng_undefined__<reg>` helper per uninitialized-at-entry register, and the code
 #      actually calls/derefs them -- it's a *verification model*, not standalone machine
@@ -13,40 +13,47 @@
 #      Reinjecting the literal LLVM-optimized payload needs a residue-elimination step
 #      that does not exist yet.
 #
-#   2. A NAIVE STATIC .text PATCH TRIPS ARXAN ANTI-TAMPER. Arxan has ~1428 checksum/
+#   2. A naive static .text patch trips Arxan's anti-tamper. Arxan has ~1428 checksum/
 #      anti-tamper stubs that run pre-main; it can detect the changed bytes (crash) and/or
-#      re-decrypt/overwrite the region. So DO NOT launch a statically-patched exe expecting
-#      a clean result. CLEAN PATH: a DLL loaded pre-entry that calls
-#      dearxan::disabler::neuter_arxan() to disable Arxan, THEN applies the thunk redirect as
-#      an IN-MEMORY patch (VirtualProtect + write) -- not this on-disk section-append.
-#      Adapt /home/banon/projects/dearxan/test_dll (it already calls neuter_arxan) as the
+#      re-decrypt/overwrite the region. So do not launch a statically-patched exe expecting
+#      a clean result. The clean path is a DLL loaded pre-entry that calls
+#      dearxan::disabler::neuter_arxan() to disable Arxan, then applies the thunk redirect as
+#      an in-memory patch (VirtualProtect + write) -- not this on-disk section-append.
+#      Adapt the `test_dll` in a dearxan checkout (it already calls neuter_arxan) as the
 #      harness; add the memory patch in its post-neuter callback.
 #
-#   3. REAL GLOBALS ARE NOT RESOLVED. Only self-contained functions (data_syms=0, no
+#   3. Real globals are not resolved. Only self-contained functions (data_syms=0, no
 #      callees) are safe to inject as-is. A function reading a mutable game global would
 #      read a frozen local copy here -- wrong. Needs rip-relative refs pointing at the real
 #      game VAs (the bake pipeline's "globals resolution", not yet built).
 #
-#   4. PROVEN ONLY STRUCTURALLY: valid PE, thunk redirected (E9 rel32 -> injected section),
-#      injected bytes decode to the recovered function. NOT validated in-game. The single
-#      demo target is 0x140df2230 (self-contained, returns 0). e9tool (built at
-#      $CLAUDE_JOB_DIR/tmp/e9patch) is an alternative injector but its PE + arbitrary-code
+#   4. Proven structurally and no further: valid PE, thunk redirected (E9 rel32 -> injected section),
+#      injected bytes decode to the recovered function. Not validated in-game. The single
+#      demo target is 0x140df2230 (self-contained, returns 0). e9tool, from a local e9patch
+#      build, is an alternative injector but its PE + arbitrary-code
 #      injection path was not driven to completion; this hand-rolled section-append is the
 #      working static mechanism.
-"""Statically reinject a clean self-contained recovered function into a COPY of
+"""Statically reinject a clean self-contained recovered function into a copy of
 eldenring.exe: append a new PE section with the function's machine code, then
 redirect the function's thunk entry (its E9 rel32 jmp) to the injected code.
 Only touches the copy. Verifies the output PE structurally."""
 import struct, subprocess, os
 
 FUNC_VA = 0x140df2230
-OBJ = "/home/banon/er-llvm-spike/inj_140df2230/bf_rf.obj"          # clean recovered code
-SRC = "/home/banon/er-llvm-spike/er_copy.exe"                      # a COPY of eldenring.exe
-DST = "/home/banon/er-llvm-spike/er_reinjected.exe"
+# Same scratch tree `scripts/bake-function.py` bakes into, resolved per user rather than written
+# out, and overridable for a tree kept somewhere else.
+WORK = os.environ.get("ER_LLVM_SPIKE_DIR") or os.path.expanduser("~/er-llvm-spike")
+OBJ = os.path.join(WORK, f"inj_{FUNC_VA:x}", "bf_rf.obj")   # clean recovered code
+SRC = os.path.join(WORK, "er_copy.exe")                     # a copy of eldenring.exe
+DST = os.path.join(WORK, "er_reinjected.exe")
 
 # 1) extract the function's raw machine code (.text of the clean reference object)
-code = "/home/banon/er-llvm-spike/inj_code.bin"
-subprocess.run(["llvm-objcopy", "--dump-section", f".text={code}", OBJ, "/dev/null"], check=True)
+code = os.path.join(WORK, "inj_code.bin")
+# `llvm-objcopy --dump-section` reads one object file and writes one section; it is sub-second
+# work, so the repo-wide 30s ceiling for a non-game subprocess is a hang detector here, not a
+# budget (`scripts/check-no-timeouts.py`).
+subprocess.run(["llvm-objcopy", "--dump-section", f".text={code}", OBJ, "/dev/null"],
+               check=True, timeout=30)
 payload = open(code, "rb").read()
 print(f"payload = {len(payload)} bytes: {payload.hex()}")
 
@@ -96,7 +103,7 @@ print(f"redirected thunk -> injected code at 0x{new_func_va:x} (rel32={new_rel:#
 
 # 4) write new section header
 struct.pack_into("<8sIIII", d, hdr_end, b".erinj", len(payload), new_va, raw_sz, new_roff)
-struct.pack_into("<IIHHI", d, hdr_end+24, 0, 0, 0, 0, 0x60000020)  # CODE|EXECUTE|READ
+struct.pack_into("<IIHHI", d, hdr_end+24, 0, 0, 0, 0, 0x60000020)  # `CNT_CODE|MEM_EXECUTE|MEM_READ`
 struct.pack_into("<H", d, coff+2, nsec+1)                          # NumberOfSections++
 struct.pack_into("<I", d, opt+56, align(new_va + len(payload), sect_align))  # SizeOfImage
 

@@ -9,19 +9,19 @@ recovering the real linearized instruction stream automatically.
 
 Method: map the deobf image at 0x140000000, give the function a scratch stack with a
 sentinel return address, run it under Unicorn, and record the executed instruction
-stream. Direct calls into game .text are recorded and SKIPPED (we resolve THIS
+stream. Direct calls into game .text are recorded and skipped (we resolve this
 function, not its callees); Arxan-internal calls/jumps/ret-gadgets are executed so
 their dispatch is concretized. Unmapped reads are backed by zero pages on demand.
 Output flags each resolved indirect dispatch (`==> DISPATCH`) — the payoff over
 static analysis — plus real call targets and where control returns.
 
 This is a concrete single-path trace (whatever the scratch register state selects at
-data-dependent branches), not a full CFG recovery. Data-INDEPENDENT Arxan dispatch
+data-dependent branches), not a full CFG recovery. Data-independent Arxan dispatch
 (the common case) resolves regardless; genuinely VM-interpreted stubs will spin in an
 interpreter loop and hit the loop guard — that is the signal they need real
 devirtualization.
 
-USAGE
+Usage
   scripts/deobf-emulate.py 0x140110820          # resolve one function's real flow
   scripts/deobf-emulate.py --budget 400 0x...   # allow more executed instructions
   scripts/deobf-emulate.py --arxan 0x...        # also print the [arxan] scaffolding insns
@@ -60,9 +60,12 @@ def in_game(v): return GAME[0] <= v < GAME[1]
 
 def find_deobf():
     here = os.path.dirname(os.path.abspath(__file__))
+    # `ER_DEOBF` first, then the image at the repo root. The third entry used to be an
+    # absolute path into `~/projects/er-effects-rs`, this repo's name before it was renamed to
+    # er-mods-rs: a directory that no longer exists on any machine, so it resolved to nothing and
+    # read as "the image is missing" rather than "that fallback is dead".
     for p in (os.environ.get("ER_DEOBF"),
-              os.path.join(os.path.dirname(here), "eldenring-deobf.bin"),
-              "/home/banon/projects/er-effects-rs/eldenring-deobf.bin"):
+              os.path.join(os.path.dirname(here), "eldenring-deobf.bin")):
         if p and os.path.exists(p):
             return p
     sys.exit("eldenring-deobf.bin not found (set ER_DEOBF=/path)")
@@ -137,12 +140,12 @@ def main():
         if m == "int3":               # unreachable after a noreturn call, or padding
             trace.append((address, "int3", "; end (noreturn/padding)", in_arx(address)))
             uc.emu_stop(); return
-        # indirect dispatch detection: control arrived here NOT by fall-through and
-        # NOT via a direct branch we could read statically
+        # indirect dispatch detection: control arrived here not by fall-through and
+        # not via a direct branch we could read statically
         if prev["end"] is not None and address != prev["end"] and not prev["was_direct_branch"]:
             dispatches.append((prev["addr"], address))
         trace.append((address, m, o, in_arx(address)))
-        # skip direct calls into game .text (resolve THIS fn, not callees)
+        # skip direct calls into game .text (resolve this fn, not callees)
         if m == "call" and o.startswith("0x") and in_game(int(o, 16)):
             calls.append(int(o, 16))
             uc.reg_write(UC_X86_REG_RAX, 0)

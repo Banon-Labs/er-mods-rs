@@ -44,10 +44,10 @@ JCC = {"je", "jne", "jz", "jnz", "ja", "jae", "jb", "jbe", "jg", "jge", "jl", "j
 
 
 def capture_frame(va, img):
-    """Emulate a function's Arxan entry+return trampolines to recover the REAL frame
+    """Emulate a function's Arxan entry+return trampolines to recover the real frame
     that recovery drops (the prologue/epilogue live in Arxan .text, not game .text).
     Returns {frame_size, saved (ordered callee-saved pushes), ok}. ok requires a clean
-    return AND prologue-saved == epilogue-restored (symmetry) -- otherwise the frame is
+    return and prologue-saved == epilogue-restored (symmetry) -- otherwise the frame is
     untrustworthy and the caller should flag rather than synthesize a wrong prologue."""
     from unicorn import (Uc, UC_ARCH_X86, UC_MODE_64, UC_PROT_ALL, UC_HOOK_CODE, UcError,
                          UC_HOOK_MEM_READ_UNMAPPED, UC_HOOK_MEM_WRITE_UNMAPPED, UC_HOOK_MEM_FETCH_UNMAPPED)
@@ -83,7 +83,7 @@ def capture_frame(va, img):
                     and md.reg_name(src.reg) in CALLEE_SAVED):
                 st["saves"].append(md.reg_name(src.reg))
         if gm:
-            st["restores"] = []                      # keep only the FINAL return trampoline's restores
+            st["restores"] = []                      # keep only the final return trampoline's restores
             if st["phase"] == "body":
                 st["phase"] = "epilogue"
         if st["phase"] == "epilogue" and DR.in_arx(address) and m == "mov" and len(ins.operands) == 2:
@@ -110,7 +110,7 @@ def capture_frame(va, img):
     frame = (rsp0 - st["rsp_body"]) if st["rsp_body"] is not None else None
     # The prologue's saves are NOISY: the Arxan entry trampoline juggles callee-saved regs
     # as scratch for its security-cookie/dispatch, so st["saves"] over-counts with dups.
-    # The RETURN trampoline's restores are clean (one pop per saved reg, LIFO), so derive
+    # The return trampoline's restores are clean (one pop per saved reg, LIFO), so derive
     # the authoritative saved set from the epilogue -- push order = reverse of pop order.
     restored = st["restores"]
     saved = list(reversed(restored))
@@ -134,14 +134,14 @@ def reassemble(va, paths=200, budget=1500):
     ARX = [(0x1429a3000, 0x1429af000), (0x144c0e000, 0x145e01800)]
     is_arx = lambda v: any(lo <= v < hi for lo, hi in ARX)
 
-    # recovered control-flow edges (deobf-recover already emulated THROUGH the Arxan
+    # recovered control-flow edges (deobf-recover already emulated through the Arxan
     # dispatch, so the real successor of an Arxan-directed branch is recorded here).
     succ = {}
     for a, b in r.edges:
         succ.setdefault(a, []).append(b)
 
     # first pass: collect in-function branch targets (so every jump has a label) and
-    # COLLAPSE Arxan-directed control-flow gadgets. An unconditional `jmp <arxan>` whose
+    # collapse Arxan-directed control-flow gadgets. An unconditional `jmp <arxan>` whose
     # recovery resolved to a single real (non-Arxan, in-function) successor is rewritten
     # to that successor -- the gadget is already de-flattened in r.edges. Conditional
     # branches / calls into Arxan aren't yet unambiguously edge-resolvable (a cond branch
@@ -220,7 +220,7 @@ def reassemble(va, paths=200, budget=1500):
     for start, seq in ordered:
         for addr in seq:
             if addr == start or addr in branch_targets:
-                lines.append(f"loc_{addr:x}:")     # label every block start AND branch target
+                lines.append(f"loc_{addr:x}:")     # label every block start and branch target
             ins = next(md.disasm(img[addr - BASE:addr - BASE + 16], addr), None)
             if ins is None:
                 return None, f"undecodable instruction at {hex(addr)}"
@@ -233,7 +233,7 @@ def reassemble(va, paths=200, budget=1500):
                     lines.pop(); lines.append("    ret"); continue
                 gadgets.append(hex(addr))
             # gadget detection: lea rsp,[rsp±N] and its pop/push encodings are valid x86 that
-            # clang/rev.ng handle -- don't flag them. Only an UNRESOLVED indirect jmp/call
+            # clang/rev.ng handle -- don't flag them. Only an unresolved indirect jmp/call
             # through the stack is a real blocker (a resolved ret-gadget is collapsed above).
             if m == "jmp" and "[rsp" in o and addr not in stack_ret:
                 gadgets.append(hex(addr))
@@ -289,11 +289,41 @@ RB = "/revng/root/lib64/llvm/llvm/bin"
 WINEPREFIX = os.path.join(WORK, "wineprefix")
 
 
+# Every individual wait is capped at 30s, the repo-wide ceiling for a non-game agent op
+# (`scripts/check-no-timeouts.py` enforces it). The steps this drives are genuinely longer than
+# that -- a `revng artifact` run inside docker, a cold clang/llc/lld-link -- so the wait is
+# repeated rather than lengthened, the same shape `scripts/repin-ersc-prologues.py` uses for a
+# cold cross-compile. The readiness signal is the process exiting; the poll cap is only the safety
+# net around each wait, and `budget` bounds the total so a wedged toolchain is killed rather than
+# waited on. Raising the per-wait cap instead would be defeating the ceiling, not honouring it.
+POLL_SECONDS = 30
+
+
+def run_bounded(cmd, budget, shell=False, env=None, text=True):
+    """`subprocess.run`, but the total wait is `budget` seconds taken in POLL_SECONDS slices.
+
+    Raises `subprocess.TimeoutExpired` once the budget is spent, after killing the child, so
+    callers handle a wedged step exactly as they handled a `subprocess.run(timeout=...)` one.
+    """
+    proc = subprocess.Popen(cmd, shell=shell, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=text, env=env)
+    rounds = max(1, -(-int(budget) // POLL_SECONDS))
+    for _ in range(rounds):
+        try:
+            out, err = proc.communicate(timeout=POLL_SECONDS)
+        except subprocess.TimeoutExpired:
+            continue
+        return subprocess.CompletedProcess(proc.args, proc.returncode, out, err)
+    proc.kill()
+    proc.communicate()
+    raise subprocess.TimeoutExpired(proc.args, rounds * POLL_SECONDS)
+
+
 def sh(cmd, timeout=120, env=None):
     e = dict(os.environ)
     if env:
         e.update(env)
-    return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout, env=e)
+    return run_bounded(cmd, timeout, shell=True, env=e)
 
 
 def dock(inner, timeout=180):
@@ -310,14 +340,21 @@ def clang_c(src, obj):
     return sh(f'clang --target=x86_64-pc-windows-msvc -ffreestanding -O2 -c "{src}" -o "{obj}" {inc}')
 
 
+# Total budget for one harness run under wine, spent in POLL_SECONDS slices. A first run in a
+# cold prefix pays for wineboot; after `ensure_quiet_wineprefix` has disabled the crash dialog a
+# crashing harness returns in well under one slice, so this bound is reached only by a genuinely
+# wedged run -- which is a failed comparison, reported as `None`, not a longer wait.
+WINE_BUDGET_SECONDS = 90
+
+
 def wine_exit(exe):
     # run wine directly and read the real process exit code (wine propagates the
-    # Windows exit code; Unix returncode is it & 0xff). NB: an earlier version used
-    # `bash -c "...; echo EX=$?"` which the OUTER shell expanded before wine ran ->
-    # always 0 -> vacuous ref==recompiled. Do NOT reintroduce that.
+    # Windows exit code; Unix returncode is it & 0xff). nb: an earlier version used
+    # `bash -c "...; echo EX=$?"` which the outer shell expanded before wine ran ->
+    # always 0 -> vacuous ref==recompiled. Do not reintroduce that.
     try:
-        r = subprocess.run(["wine", exe], capture_output=True, timeout=90,
-                           env={**os.environ, "WINEPREFIX": WINEPREFIX, "WINEDEBUG": "-all"})
+        r = run_bounded(["wine", exe], WINE_BUDGET_SECONDS, text=False,
+                        env={**os.environ, "WINEPREFIX": WINEPREFIX, "WINEDEBUG": "-all"})
         return r.returncode & 0xff
     except subprocess.TimeoutExpired:
         return None
@@ -328,8 +365,8 @@ _WINE_QUIETED = False
 
 def ensure_quiet_wineprefix():
     """Disable Wine's crash dialog (winedbg --auto) in the bake prefix, once per process.
-    A crashing bf_ref/bf_recomp otherwise launches an interactive winedbg that BLOCKS the
-    process until dismissed -> a GUI popup the user must clear AND a 90s wine_exit timeout
+    A crashing bf_ref/bf_recomp otherwise launches an interactive winedbg that blocks the
+    process until dismissed -> a GUI popup the user must clear and a 90s wine_exit timeout
     (the so-called "run-ref hangs"). With ShowCrashDialog=0 a crash returns a fast,
     deterministic exit code instead. This is environment hygiene, not verification logic --
     it does not touch wine_exit or the ref==recompiled comparison."""
@@ -358,11 +395,11 @@ def bake(va, paths, budget, ninputs=200000, real_callees=False):
     p = lambda n: os.path.join(WORK, n)
     open(p("bf_rf.s"), "w").write(asm)
 
-    # Callees. In real_callees mode, wire each DIRECT callee as its own recovered code
+    # Callees. In real_callees mode, wire each direct callee as its own recovered code
     # (separate object -- reassemble emits local data symbols, so they don't collide),
-    # linked into BOTH ref and recomp; fall back to a return-0 stub if the callee doesn't
+    # linked into both ref and recomp; fall back to a return-0 stub if the callee doesn't
     # reassemble. Their own callees are stubbed (depth-1). Real callees make the caller's
-    # verification reinjection-faithful and let input-dependence flow through them (PRIMARY).
+    # verification reinjection-faithful and let input-dependence flow through them (primary).
     # Default (stub) mode is unchanged: every callee returns 0.
     real_objs, wired = [], []
     stub_set = set(meta["callees"])
@@ -386,7 +423,7 @@ def bake(va, paths, budget, ninputs=200000, real_callees=False):
     open(p("bf_callees.c"), "w").write("\n".join(cst) + "\n")
 
     # differential harness: fold recovered_func(i) over scalar inputs; low 7 bits carry
-    # the fold, high bit flags whether the output actually VARIED (guards vacuous tests).
+    # the fold, high bit flags whether the output actually varied (guards vacuous tests).
     # minimal harness (matches the proven probe pattern: few constant-arg calls).
     harn = ("__declspec(dllimport) void __stdcall ExitProcess(unsigned int);\n"
             "extern unsigned long long recovered_func(unsigned long long);\n"
