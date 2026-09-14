@@ -1237,6 +1237,11 @@ opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policie
 opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_commit.rego" "$repo_root/.cupcake/tests/git_block_main_commit_test.rego"
+# A push detached with `setsid`/`nohup`/`&` is severed from the harness: nothing reports its exit,
+# so the result is only found by reading a log by hand. On 2026-09-14 one was not read for 29
+# minutes after it had already failed. The sanctioned shape runs the push in the foreground of a
+# Monitor via scripts/er-push-watched.sh, where the monitor process is the push.
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_detached_push.rego" "$repo_root/.cupcake/tests/git_block_detached_push_test.rego"
 # The shared executed-text decomposition every git guard now reads (bd
 # er-effects-rs-dt2e). It is the one place that decides what counts as executed
 # rather than quoted, so a regression here silently re-opens four guards at once.
