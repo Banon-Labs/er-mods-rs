@@ -443,11 +443,6 @@ pub static MSGBOX_LAST_ARG_RCX: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_
 pub static MSGBOX_LAST_ARG_RDX: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static MSGBOX_LAST_ARG_R8: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub static MSGBOX_LAST_ARG_R9: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-pub use er_telemetry_core::counters::DISMISS_WRITE_LOG;
-/// The dialog pointer OnDecide was last fired on, so we press OK exactly once per dialog instead
-/// of every frame (re-dispatching every frame keeps the dialog stuck "deciding" and it never
-/// closes). A newly-built dialog has a different pointer, so it gets its own single OK.
-pub static LAST_ONDECIDE_DIALOG: AtomicUsize = AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// CS::MessageBoxDialog OnDecide/finalize (sub-object vtable slot 13) -- the genuine OK handler:
 /// reads the chosen-button index [dialog+0x25e0] (builder-defaulted to OK) and dispatches it,
 /// driving the dialog to emit "stop" to its parent MenuWindowJob (which then tears it down).

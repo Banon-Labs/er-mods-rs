@@ -496,7 +496,6 @@ pub static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE: AtomicUsize = AtomicUsize::n
 pub static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER: AtomicUsize = AtomicUsize::new(0);
 pub static C30_WRITER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static C30_WRITER_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
 pub static ANTI_ANTIDEBUG_APPLIED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
