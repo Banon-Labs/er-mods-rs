@@ -135,6 +135,10 @@ STAGES: tuple[Stage, ...] = (
             "data/*",
             "docs/ci-gate-portability.tsv",
             "docs/recon/**/*",
+            # Named by a suite gate in code, and found by `--audit-inputs` rather than by reading:
+            # the vendored MinHook source is checked out by the workflow, so it resolves on a runner
+            # and in any tree that has cloned it, and a change under it must select this stage.
+            "vendor/minhook/**/*",
         ),
     ),
     Stage(
