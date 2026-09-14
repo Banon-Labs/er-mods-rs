@@ -1015,6 +1015,11 @@ bash "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 # judged the pushing checkout instead, and a branch deletion was blocked by the unrelated branch
 # the agent happened to have out. See the header of scripts/test-pre-push-deletion-only.sh.
 bash "$repo_root/scripts/test-pre-push-deletion-only.sh"
+# ...and that the push helper refuses a local ref carrying no commit main does not already have,
+# before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
+# branch that had never moved was pushed over PR #448 and took two commits off it. See the header
+# of scripts/test-er-push-watched-ref-carries-work.sh.
+bash "$repo_root/scripts/test-er-push-watched-ref-carries-work.sh"
 # The build gates must yield to the person at the keyboard, and three of the four levers that
 # make that true are invisible from the process that sets them. See the header of
 # scripts/test-cpu-courtesy.sh.
@@ -2008,6 +2013,8 @@ shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 shellcheck "$repo_root/scripts/test-pre-push-deletion-only.sh"
+shellcheck "$repo_root/scripts/er-push-watched.sh"
+shellcheck "$repo_root/scripts/test-er-push-watched-ref-carries-work.sh"
 shellcheck "$repo_root/scripts/pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/test-pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/probe-dll-build-determinism.sh"
