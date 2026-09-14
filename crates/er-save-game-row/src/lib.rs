@@ -263,6 +263,13 @@ fn arm_save_game_row() {
 #[unsafe(no_mangle)]
 pub unsafe extern "system" fn DllMain(_module: usize, reason: u32, _reserved: usize) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, and an abort does not dispatch to a
+        // vectored handler -- so `er_crash_logging` writes no record and the process just
+        // vanishes. This hook is what turns that silence into a file:line. It is per-DLL: every
+        // cdylib links its own `er-game-base`, so another shell installing it does nothing here.
+        // Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-save-game-row", standalone_log);
         START.call_once(|| {
             install_standalone_host();
             standalone_log(format_args!("attached"));
