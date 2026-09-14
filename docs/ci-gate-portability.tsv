@@ -65,6 +65,7 @@ portable	-	ci-gate-portability.py --check	reads check.sh and the ledger beside i
 portable	-	check-stages.py --selftest	synthetic check.sh + synthetic ledger; needs nothing	suite
 portable	-	check-stages.py --check	reads check.sh and the stage column of the ledger beside it	suite
 portable	-	check-stage-report.py --selftest	synthetic stage result files in a temp directory; needs nothing	suite
+portable	-	monitor-throttle.py --selftest	four checks over synthetic line bursts in memory; no game image, no network	suite
 portable	-	check-no-timeouts.py	source/AST/text analysis only	suite
 portable	-	check-no-committed-build-artifacts.py --selftest	source/AST/text analysis only	suite
 portable	-	check-no-committed-build-artifacts.py	source/AST/text analysis only	suite

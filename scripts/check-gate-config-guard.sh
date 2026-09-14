@@ -63,6 +63,13 @@ gate_config_report() {
 	echo "  LINKED WORKTREE, its hooks inherit GIT_DIR and 'git -C <fixture>' does not override it," >&2
 	echo "  so fixture-only work lands on the shared config. Confirm with:" >&2
 	echo "      bash scripts/measure-git-hook-env.sh" >&2
+	# Which stage did it. Every `--stage` child runs this same guard over the same shared config,
+	# so the culprit stage has already printed this block into its own log -- the parent's copy
+	# only repeats it. Without this line the reader has the class of cause and no way to the
+	# culprit, which on 2026-09-14 cost two confident and wrong accusations of innocent gates.
+	echo "  WHICH stage did it: the same block is in that stage's own log, because every --stage" >&2
+	echo "  child runs this guard too. Look there first:" >&2
+	echo "      grep -l 'CHANGED the repository configuration' /run/user/1000/er-mods-rs-check-stages/*.log" >&2
 	echo "  Fix the offending script with: unset \$(git rev-parse --local-env-vars)" >&2
 	echo "  Repair this checkout with: git config core.bare false && bash scripts/install-git-hooks.sh" >&2
 	return 1
