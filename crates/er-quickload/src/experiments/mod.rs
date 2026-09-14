@@ -11,11 +11,11 @@ use std::{
     time::Instant,
 };
 
-// `crate::input_blocker::InputBlocker` was imported here for the INJECT-NAV branch's
+// `crate::input_blocker::InputBlocker` was imported here for the inject-NAV branch's
 // `set_injected_key` stamp in product_core_own_stepper/fallback_drives.rs. That branch was
 // unreachable -- its `inject_nav_enabled()` gate could only return `false` -- and was deleted with
 // the other abandoned load-mechanism experiments, taking the last use of the type in this module
-// with it. The gate itself is gone too (2026-08-26), along with the rest of INJECT-NAV.
+// with it. The gate itself is gone too (2026-08-26), along with the rest of inject-NAV.
 use eldenring::{
     cs::{GameMan, PlayerIns},
     fd4::FD4TaskData,
@@ -41,7 +41,11 @@ use crate::{crashlog::*, ffi::*, hooks::*, telemetry::*};
 mod save_redirect;
 pub(crate) use save_redirect::*;
 
+// Diagnostics, and the first subsystem behind a feature (2026-09-11). Two external references in
+// 4,300 lines, so it is the cheapest proof that this crate can be compiled as a subset at all.
+#[cfg(feature = "menu-trace")]
 mod trace;
+#[cfg(feature = "menu-trace")]
 pub(crate) use trace::*;
 
 mod startup_hooks;
@@ -63,7 +67,7 @@ pub(crate) use gpu_frame_timing::*;
 pub(crate) use er_loading_portrait_core::{NATIVE_OVERLAY_SHOW, install_native_overlay};
 
 pub(crate) mod can_move_probe;
-mod input_block;
+pub(crate) mod input_block;
 pub(crate) use input_block::*;
 
 mod input_trace;

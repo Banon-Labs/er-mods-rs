@@ -11,6 +11,9 @@ use super::*;
 
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED;
 pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS;
+use er_telemetry_core::counters::{
+    PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED, PRODUCT_CONTINUE_NO_PLAYER_TICKS,
+};
 
 /// Does the container the game will actually read hold a character in the configured slot?
 ///
@@ -20,7 +23,7 @@ pub(crate) use er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS
 /// resolved, and the caching.
 ///
 /// CACHED, and it has to be: the caller is a per-frame boot path and the container is ~29 MB, so an
-/// uncached read here would be a 29 MB read per frame ON THE GAME THREAD -- the same shape as the
+/// uncached read here would be a 29 MB read per frame on the game thread -- the same shape as the
 /// per-call log open that already cost framerate once. The answer cannot change during a boot
 /// (the file is whatever the game opened; the slot comes from a `OnceLock`), and `None` is cached
 /// too so an unreadable container is not retried sixty times a second.
@@ -38,6 +41,32 @@ fn configured_slot_holds_a_character(slot: i32) -> Option<bool> {
     })
 }
 
+/// The configured slot's fingerprint, having first repaired a `CS::ProfileSummary` the game's own
+/// boot read left empty.
+///
+/// The game deserializes that table exactly once per boot. Measured run 2026-09-05 20:58:51: the
+/// wait step polled four times, got the "completed, result code 0" answer instead of the `3` that
+/// fills, advanced without calling `GetProfileSummary`, and all ten records stayed zeroed for the
+/// rest of the boot -- while the container the runtime had open held all ten characters and our own
+/// decoder read every one of them. Waiting out `EMPTY_PROFILE_ESCALATE_TICKS` cannot recover that:
+/// there is no second native read to wait for.
+///
+/// So when the container on disk says this slot holds a character and the live record still says it
+/// does not, rebuild the records from that container -- the same writer, throttle and drift watch
+/// the picked path already ships. Both guards matter: `profile_real` skips this entirely on a boot
+/// whose native read worked, and `Some(true)` from the container means a genuinely vacant slot still
+/// takes the old escalate-to-picker path rather than being rewritten from nothing.
+unsafe fn fingerprint_slot_repairing_an_empty_summary(slot: i32) -> (bool, i32, u32, usize) {
+    let live = unsafe { profile_slot_fingerprint(slot) };
+    if live.0 || configured_slot_holds_a_character(slot) != Some(true) {
+        return live;
+    }
+    if !refresh_boot_default_profile_summary() {
+        return live;
+    }
+    unsafe { profile_slot_fingerprint(slot) }
+}
+
 pub(crate) unsafe fn product_continue_action_ready(
     ready: &ProductCoreAutoloadReady,
     base: usize,
@@ -53,7 +82,7 @@ pub(crate) unsafe fn product_continue_action_ready(
     }
     let dialog_vt = unsafe { safe_read_usize(ready.title_dialog) }.unwrap_or(null);
     // `null` is `usize::MIN` = 0, and so is a refused `game_data_addr`: without the screen an
-    // unreadable dialog and an unmapped RVA agree at zero and this reports READY at a title with
+    // unreadable dialog and an unmapped RVA agree at zero and this reports ready at a title with
     // no dialog at all.
     let want_dialog_vt = er_game_base::mem::game_data_addr(
         base,
@@ -63,13 +92,13 @@ pub(crate) unsafe fn product_continue_action_ready(
     want_dialog_vt != null && dialog_vt == want_dialog_vt
 }
 /// `CS::MenuItem`'s constant-false accept predicate: a 3-byte `xor eax,eax; ret` leaf a row carries
-/// at `+0xf8` while it is NOT accept-ready.
+/// at `+0xf8` while it is not accept-ready.
 ///
-/// MAPPED 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
-/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less LEAF, invisible to
-/// the whole-image function-table alignment, and NOTHING CALLS IT: its address is only ever taken,
+/// Mapped 2026-08-30 as `0x7add70 -> 0x7aebf0`, after being the one constant here with no 1.17
+/// row -- and the reason it was missing is worth keeping. It is a `.pdata`-less leaf, invisible to
+/// the whole-image function-table alignment, and nothing calls IT: its address is only ever taken,
 /// so the caller-vote tools were blind to it too until they learned to count `lea`s. The evidence
-/// is a unanimous 1-of-1 -- each image contains exactly ONE rip-relative reference to its address,
+/// is a unanimous 1-of-1 -- each image contains exactly one rip-relative reference to its address,
 /// both at byte offset +0xa5 inside `0x7acf80 -> 0x7ade00` (`IDENTICAL-WHOLE`, 151 insns, `.pdata`
 /// 0x232 in both), both spelled `48 8d 05 44 0d 00 00`.
 ///
@@ -77,7 +106,7 @@ pub(crate) unsafe fn product_continue_action_ready(
 /// and MinHook's own rules refuse the site, so `er-game-base` admits the row to the CALL/READ map
 /// and never to the detour one. That is exactly the shape this site needs -- it only compares.
 /// The verdict exists because the two used to be one decision: `IDENTICAL-SHORT` refused the hook
-/// AND withdrew the address from comparing, and this constant was what paid for it.
+/// and withdrew the address from comparing, and this constant was what paid for it.
 const MENU_ITEM_ACCEPT_IDLE_RVA: usize = 0x007add70;
 
 /// `CS::MenuItem`'s real accept predicate: the row is selectable. `0x7ad810 -> 0x7ae690`.
@@ -158,8 +187,8 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     }
     let functor_vt = unsafe { safe_read_usize(functor) }?;
     let do_call = unsafe { safe_read_usize(functor_vt + DOCALL_VTABLE_SLOT_10) }?;
-    // RESOLVED, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
-    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and EVERY native Continue
+    // Resolved, and never satisfied by zero. `MenuTitleContinue::_Do_call` moved on 1.17
+    // (0x764b80 -> 0x7659d0), so the raw comparison could not match and every native Continue
     // MenuWindowJob was rejected here -- the autoload's own path to the Continue row, refused on a
     // stale address rather than on anything about the item, and silently.
     let expected_do_call = er_game_base::mem::game_data_addr(
@@ -176,7 +205,7 @@ pub(crate) unsafe fn product_continue_item_action(base: usize) -> Option<NativeC
     const MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET: usize = 0xf8;
     let accept_predicate = unsafe { safe_read_usize(item + MENU_ITEM_ACCEPT_PREDICATE_F8_OFFSET) }?;
     record_continue_candidate(item, accept_predicate, base);
-    // The idle predicate is a REJECTION, and the native-accept check below rejects the same items
+    // The idle predicate is a rejection, and the native-accept check below rejects the same items
     // for the same reason, so a refusal here costs the precise log line and not the decision.
     if accept_predicate_is_idle(base, accept_predicate) {
         append_autoload_debug(format_args!(
@@ -279,6 +308,167 @@ pub(crate) unsafe fn submit_native_continue_item_action(
     ));
     Some(diagnostic_mode)
 }
+/// Hand the user the save picker when the boot is provably dead rather than merely slow.
+///
+/// # Why a contradiction rather than a timeout
+///
+/// The four facts `read_boot_progress_facts` returns are read out of the running game: a local
+/// player, the `InGameStep` request code, the live `MenuJob` pointer and the loading-screen mode.
+/// If all four say nothing is happening, nothing is queued that could ever produce a character, so
+/// waiting longer cannot change the answer -- and the tick count is only a three-frame debounce
+/// against sampling a gap between two handoffs, never a duration.
+///
+/// A timeout was written here first and was wrong for the reason a timeout is always wrong on this
+/// path: it cannot tell a slow load from a dead one, so it either fires on a machine that was
+/// still working or hides a real gap behind minutes of waiting during development. A slow load
+/// keeps its loading screen up and its request pending the whole way through, which is exactly
+/// what this reads.
+///
+/// # Safety
+///
+/// Game task thread, the context `product_continue_autoload_tick` already requires.
+/// What is actually wrong with the save this boot gave up on, in a sentence the player can act on.
+///
+/// "Nothing was ever queued for it" describes our own loader and leaves the player with no move to
+/// make. The container on disk answers the question they are really asking -- is my save broken,
+/// or is this mod broken -- and it answers it in the only place that can: by opening the file and
+/// looking at its slots. Three outcomes, three different actions:
+///
+/// * unreadable, or no characters at all -- the file is the problem, pick another;
+/// * characters, but not in the slot this run asked for -- name the slots that do exist;
+/// * the requested slot holds a real character -- then the save is fine and this mod failed, which
+///   is worth saying plainly rather than implying the player's save is bad.
+///
+/// Reading 28 MB on the game task would be unacceptable on a live boot. This one is already dead
+/// by four independent measurements, and the picker it is about to raise reads the same file.
+fn picker_detail_for_configured_save(slot: i32) -> ConfiguredSaveTruth {
+    let Some(path) = crate::experiments::configured_or_default_save_file() else {
+        return ConfiguredSaveTruth::nothing_to_load(
+            "No save file is configured for this run.".to_owned(),
+        );
+    };
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    let Ok(bytes) = std::fs::read(&path) else {
+        return ConfiguredSaveTruth::nothing_to_load(format!(
+            "{name} could not be read from disk."
+        ));
+    };
+    let slots = er_save_picker_core::slots::parse_save_character_slots(&bytes);
+    if slots.is_empty() {
+        return ConfiguredSaveTruth::nothing_to_load(format!("{name} holds no characters at all."));
+    }
+    match slots.iter().find(|info| info.slot as i32 == slot) {
+        Some(found) => ConfiguredSaveTruth {
+            loadable: Some((path, found.slot)),
+            detail: format!(
+                "{name} slot {slot} holds {} at level {}, so the save itself is fine -- this mod failed to start the load.",
+                found.name, found.level
+            ),
+        },
+        None => {
+            let held: Vec<String> = slots
+                .iter()
+                .map(|info| format!("{} in slot {}", info.name, info.slot))
+                .collect();
+            ConfiguredSaveTruth::nothing_to_load(format!(
+                "{name} has no character in slot {slot}. It holds {}.",
+                held.join(", ")
+            ))
+        }
+    }
+}
+
+/// What the configured save actually holds in the slot this run asked for.
+///
+/// One read of the container answers two different questions, and before this only the second one
+/// was asked. `detail` is the sentence the picker shows when the user has to choose; `loadable` is
+/// the save and slot the mod can commit by itself when there is nothing to choose between --
+/// the configured character is right there and the user already named it.
+struct ConfiguredSaveTruth {
+    /// The configured container and the slot in it that holds a character, when one does.
+    loadable: Option<(std::path::PathBuf, usize)>,
+    /// Why the picker is being raised, in a sentence the player can act on.
+    detail: String,
+}
+
+impl ConfiguredSaveTruth {
+    fn nothing_to_load(detail: String) -> Self {
+        Self {
+            loadable: None,
+            detail,
+        }
+    }
+}
+
+unsafe fn product_continue_offer_picker_if_boot_is_dead(
+    base: usize,
+    owner: usize,
+    slot: i32,
+    tick: u64,
+) {
+    let offered = PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED.load(Ordering::SeqCst) != 0;
+    // Safety: game task thread, and `owner` is the title step this tick was handed.
+    let player_present = unsafe { PlayerIns::local_player_mut() }.is_ok();
+    let facts =
+        unsafe { er_title_flow::boot_hold::read_boot_progress_facts(base, owner, player_present) };
+    let ticks = er_title_flow::boot_hold::dead_boot_next_ticks(
+        PRODUCT_CONTINUE_NO_PLAYER_TICKS.load(Ordering::SeqCst) as u64,
+        facts,
+    );
+    PRODUCT_CONTINUE_NO_PLAYER_TICKS.store(ticks as usize, Ordering::SeqCst);
+    if er_title_flow::boot_hold::no_player_action(ticks, offered)
+        != er_title_flow::boot_hold::NoPlayerAction::OfferPicker
+    {
+        return;
+    }
+    PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED.store(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "product-core-autoload: *** this boot is dead, not slow (slot={slot} tick={tick}) *** -- {facts:?} for {ticks} consecutive ticks: no player, no in-game step request, no menu job and no loading screen, so nothing is running and nothing is queued that could ever produce a character; arming the missing-save picker so the user can choose a save that loads"
+    ));
+    let truth = picker_detail_for_configured_save(slot);
+    er_save_picker_core::reason::record_reason_detail(truth.detail.clone());
+    let armed = crate::experiments::offer_missing_save_picker(
+        er_save_picker_core::reason::MissingSaveReason::BootNeverStartedTheLoad,
+    );
+    append_autoload_debug(format_args!(
+        "product-core-autoload: dead-boot picker arm requested for slot={slot} -> armed_by_this_call={armed}"
+    ));
+    // ...and then answer it ourselves, when the answer is not in doubt.
+    //
+    // The arm is what makes the boot's save-data job wait and re-read, so it has to happen; what
+    // does not have to happen is asking the user to pick the save they already configured. Every
+    // 1.17.1 boot measured on 2026-09-13 reached here -- both of the autoload's row
+    // identifications are unsatisfiable on this build -- and exactly one run went on to a live
+    // character: br-20260913-030551-d8d9, where a save was committed through this same completion.
+    // So the commit is the loader, and the picker is its fallback rather than its only path.
+    //
+    // A refusal leaves the picker up carrying its own reason, which is the case where the user
+    // genuinely does have to choose.
+    let Some((path, picked_slot)) = truth.loadable else {
+        return;
+    };
+    append_autoload_debug(format_args!(
+        "product-core-autoload: the configured save holds a character in slot {picked_slot}, so committing it instead of asking -- '{}'",
+        path.display()
+    ));
+    let committed = er_save_picker_core::overlay::commit_missing_save_selection(
+        &path,
+        picked_slot,
+        "configured-save",
+    );
+    append_autoload_debug(format_args!(
+        "product-core-autoload: configured-save commit for slot={picked_slot} -> committed={committed}{}",
+        if committed {
+            ""
+        } else {
+            "; the picker stays up with the refusal on screen"
+        }
+    ));
+}
+
 pub(crate) unsafe fn product_continue_autoload_tick(
     owner: usize,
     base: usize,
@@ -295,19 +485,33 @@ pub(crate) unsafe fn product_continue_autoload_tick(
     let phase = FULLREAD_PHASE.load(Ordering::SeqCst);
     let read_i32 = |off: usize| unsafe { safe_read_i32(gm + off) }.unwrap_or(GAME_MAN_C30_UNSET);
 
+    // Before any phase branch, because the case this covers reaches none of them. Every other
+    // hand-back in this file and in `slot_resolution` fires from a branch that decided "this save
+    // cannot be loaded" -- so a boot that never gets far enough to decide anything has no exit at
+    // all, and the player is left at a title that will never move. Measured on run
+    // br-20260913-023348-3b9d: `SWITCH-ORACLE #1980 slot=1 player=false`, `boot-view DECISION` with
+    // every handoff false, 388 title-logo hide calls, no further progress of any kind.
+    //
+    // The recourse is the one the other exits already use: `arm_missing_save_picker_after_boot`
+    // arms the game's own in-game picker and is one-shot by construction, so a per-frame tick
+    // cannot re-arm or spam it. Nothing is written into game state here -- the native picker owns
+    // the choice and the retry runs through the native full-read chain, exactly as it does when a
+    // configured save is missing.
+    unsafe { product_continue_offer_picker_if_boot_is_dead(base, owner, slot, tick) };
+
     if phase == FULLREAD_PHASE_DONE {
         return;
     }
 
     if phase == FULLREAD_PHASE_SUBMIT {
-        // SWITCH-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
-        // autoload), the return-title chain we submitted is still tearing down the OLD world. Firing
+        // Switch-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
+        // autoload), the return-title chain we submitted is still tearing down the old world. Firing
         // the Continue-load now sets GameMan saveState/b80=2 and DoSaveStuff deserializes the picked
-        // slot INTO the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
+        // slot into the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
         // until the old world is actually gone (local player absent), so the load runs at a clean
         // title exactly like the boot autoload does. The boot path has no System-Quit phase, and at a
         // fresh title there is no local player, so this gate passes immediately there.
-        // See bd system-quit-load-profile-trigger-RESOLVED.
+        // See bd system-quit-load-profile-trigger-resolved.
         if SYSTEM_QUIT_QUICKLOAD_PHASE.load(Ordering::SeqCst) != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE
             && unsafe { PlayerIns::local_player_mut() }.is_ok()
         {
@@ -337,17 +541,17 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         let (profile_real, profile_map, profile_level, profile_name_len) =
-            unsafe { profile_slot_fingerprint(slot) };
-        // CONSECUTIVE, and reset by a single real read. A boot whose ProfileSummary is still
+            unsafe { fingerprint_slot_repairing_an_empty_summary(slot) };
+        // Consecutive, and reset by a single real read. A boot whose ProfileSummary is still
         // filling can reach this check before the save-data job has parsed it, so the count has to
-        // measure an UNBROKEN run of empty-like reads -- not how long the autoload has been alive.
+        // measure an unbroken run of empty-like reads -- not how long the autoload has been alive.
         let empty_ticks = PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst) as u64;
         let empty_ticks =
             er_title_flow::boot_hold::empty_profile_next_ticks(empty_ticks, profile_real);
         PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.store(empty_ticks as usize, Ordering::SeqCst);
         if !profile_real {
             let escalated = PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED.load(Ordering::SeqCst) != null;
-            // ASK THE CONTAINER BEFORE SPENDING THE PATIENCE. The 1800-tick wait exists to tell a
+            // Ask the container before spending the patience. The 1800-tick wait exists to tell a
             // ProfileSummary that is still filling apart from a slot that is genuinely vacant, and
             // it is the right answer for the first case. For the second the container on disk knows
             // already, so waiting is pure loss -- see `configured_slot_holds_a_character` for the
@@ -363,7 +567,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             };
             match action {
                 er_title_flow::boot_hold::EmptyProfileAction::Escalate => {
-                    // THE DEAD END ENDS HERE. Waiting longer cannot help: this branch has
+                    // The dead end ends here. Waiting longer cannot help: this branch has
                     // republished the identical fingerprint every tick for the whole threshold
                     // window, so the profile is not filling, it is absent. Reject our own selection
                     // and hand the choice to the user -- the picker's pick supersedes it, and the
@@ -374,8 +578,8 @@ pub(crate) unsafe fn product_continue_autoload_tick(
                     append_autoload_debug(format_args!(
                         "product-core-autoload: *** GIVING UP on the Continue slot after {empty_ticks} consecutive empty-like ticks (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} tick={tick}) *** -- this save cannot be loaded; arming the missing-save picker so the user can choose one that can"
                     ));
-                    let armed = arm_missing_save_picker_after_boot(
-                        "product-continue-empty-profile-exhausted",
+                    let armed = offer_missing_save_picker(
+                        er_save_picker_core::reason::MissingSaveReason::ContinueSlotEmpty,
                     );
                     append_autoload_debug(format_args!(
                         "product-core-autoload: late picker arm requested for slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} -> armed_by_this_call={armed}"
@@ -392,11 +596,51 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         let Some(action) = (unsafe { product_continue_item_action(base) }) else {
-            if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
-                append_autoload_debug(format_args!(
-                    "product-core-autoload: waiting for native Continue MenuWindowJob result after open-menu dialog=0x{:x} slot={slot} -- no direct_load/direct_build/input fallback",
-                    ready.title_dialog
-                ));
+            // The continue latch is UNSATISFIABLE at the title, so this is not a wait -- it is the
+            // path. `MENU_CONTINUE_ITEM` latches only on a MenuWindowJob whose docall matches
+            // `MENU_TITLE_CONTINUE_DOCALL_RVA` and whose accept predicate is
+            // `MENU_ITEM_ACCEPT_NATIVE_RVA`, and the 1.16.2 curated dump names both:
+            //   * 0x140764b80 is an adjustor thunk (`ADD RCX,8 ; JMP 0x140763fc0`) onto a function
+            //     that allocates 0xaa0 and constructs **CS::BackScreen** (a CS::FullScreenMenu)
+            //     with a "Fade" proxy -- the black fade screen, built by the `L"01_900_Black"`
+            //     factory 0x140764290 whose only code xref is CSMenuManImp::Update;
+            //   * 0x1407ad810 is `GLOBAL_CSMenuMan != 0 && !FUN_140765f20(GLOBAL_CSMenuMan)` -- a
+            //     global "menu manager not busy" check, stored by the generic MenuWindowJob ctors,
+            //     so it says nothing about Continue.
+            // Measured 2026-09-05 21:32: 416/416 candidate observations idle,
+            // `native_accept_hits = 0`, `accept_changes = 0`, and the autoload parked forever.
+            //
+            // `title_menu_action_ready` is the identification that is grounded: TitleTopDialog
+            // vtable, the [dialog+0xa48] registry, a MenuMemberFuncJob vtable, and a member_fn that
+            // resolves through at most six thunk hops to the live Load-Game dialog factory. Firing
+            // its node through the native run 0x1409aaba0 is the game's own path -- no forged
+            // context, no input, no direct deserialize.
+            let owner = {
+                let latched = TITLE_OWNER_PTR.load(Ordering::SeqCst);
+                if latched != null {
+                    latched
+                } else {
+                    TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst)
+                }
+            };
+            let node = if owner == null {
+                None
+            } else {
+                unsafe { er_title_flow::title_menu_action_ready(owner, base) }
+            };
+            match node {
+                Some(node) => {
+                    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
+                    unsafe { fire_product_title_load_action(node, base, tick, slot) };
+                }
+                None => {
+                    if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
+                        append_autoload_debug(format_args!(
+                            "product-core-autoload: waiting for the semantic Load-Game MenuMemberFuncJob node (owner=0x{owner:x} dialog=0x{:x} slot={slot}) -- TitleTopDialog/registry/node/member_fn not all validated yet; the Continue MenuWindowJob latch is unsatisfiable and is no longer waited on",
+                            ready.title_dialog
+                        ));
+                    }
+                }
             }
             return;
         };
@@ -596,13 +840,13 @@ pub(crate) unsafe fn fire_product_title_load_action(
     OWN_STEPPER_SELECTOR_STEP.store(null, Ordering::SeqCst);
     OWN_STEPPER_SELECTOR_CTX.store(null, Ordering::SeqCst);
     reset_phase_timer(&OWN_STEPPER_S2_PHASE_STARTED_MS);
-    // CHECK THE RESOLUTION BEFORE IT BECOMES A FUNCTION POINTER. `game_data_addr` answers 0 when
+    // Check the resolution before it becomes a function pointer. `game_data_addr` answers 0 when
     // the running build has no verified mapping for the RVA, and `mem.rs` says of it in as many
-    // words: "NEVER use this for a call target. Zero is a safe address to fail a read at and a
+    // words: "never use this for a call target. Zero is a safe address to fail a read at and a
     // fatal one to jump to." This transmuted the result straight into a fn pointer and called it.
     //
-    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) IS mapped for 1.17
-    // (-> 0x9abd40), so the address that arrives here is the right one. It is the CONTRACT that was
+    // It is not a live crash today -- MENU_MEMBER_FUNC_JOB_RUN_RVA (0x9aaba0) is mapped for 1.17
+    // (-> 0x9abd40), so the address that arrives here is the right one. It is the contract that was
     // broken: nothing at this site established that, and the day the row leaves the map this jumps
     // to address 0.
     let run_addr = er_game_base::mem::game_data_addr(
@@ -631,21 +875,21 @@ pub(crate) unsafe fn fire_product_title_load_action(
         "product-core-autoload: native TitleTopDialog Load-Game run returned; waiting for ProfileLoadDialog factory hook capture"
     ));
 }
-// The DETERMINISTIC MENU INPUT PROBE driver (`menu_input_probe`) stood here: a per-frame
+// The DETERMINISTIC menu input probe driver (`menu_input_probe`) stood here: a per-frame
 // Down->Confirm schedule injected at the native keystate bitmap, used as a measurement oracle
 // for whether the d180 leaf-Update ticks on highlight alone. Its only caller was the
 // `input_probe_enabled()` branch in product_core_own_stepper/fallback_drives.rs, and that gate
 // has returned a literal `false` since it was written, so the probe never ran. Deleted with the
 // branch rather than left as an orphan that reads like a live input path.
-/// OBSERVE-ONLY NATIVE-LOAD tick (native_load_enabled(), gated OFF by default). Runs each frame
-/// INSTEAD of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
-/// so the NATIVE title machine advances untouched (the user drives past press-any-button + modals).
-/// KEEP vs the normal own_stepper: it does NOT SetState(owner,2/3), does NOT clear the beginlogo
-/// gate, does NOT self-fire the registrar 0x1409b24e0, does NOT run direct_build / cold_char_mount.
+/// Observe-only native-load tick (native_load_enabled(), gated off by default). Runs each frame
+/// instead of the own_stepper forcing logic, then the caller pass-throughs to OWN_STEPPER_ORIG_IDX10
+/// so the native title machine advances untouched (the user drives past press-any-button + modals).
+/// Keep vs the normal own_stepper: it does not SetState(owner,2/3), does not clear the beginlogo
+/// gate, does not self-fire the registrar 0x1409b24e0, does not run direct_build / cold_char_mount.
 /// It ONLY: (1) read-only checks whether the live TitleTopDialog menu/action is rendered and
 /// semantically validated (TitleTopDialog vtable, [dialog+0xa48] registry, Load-Game
-/// MenuMemberFuncJob node/action chain); (2) ONE-SHOT: fires that native run
-/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the LIVE registered
+/// MenuMemberFuncJob node/action chain); (2) one-SHOT: fires that native run
+/// MENU_MEMBER_FUNC_JOB_RUN_RVA (0x1409aaba0, rcx=node) -- which builds the live registered
 /// ProfileLoadDialog the native pump drives. After firing it observes (the caller keeps writing the
 /// golden oracle as the native pump hopefully loads the char). Pure read-only until the single fire.
 #[allow(dead_code)] // Retained: Staged-save slot seeder for the deprecated staged-save probe path; the RE it encodes (ProfileSummary slot layout, FaceData::CopyFromBuffer, ChrAsm copy) is the reason it stays.

@@ -19,14 +19,14 @@ pub mod filecap;
 pub mod fnv1a;
 /// Tier A: which ELDEN RING this DLL is loaded into, read from the running image's own
 /// version resource. Every game address here is a 1.16.2 RVA, and 1.17 moved code, so the
-/// question "is this the build these addresses came from" has to be answerable BEFORE a
+/// question "is this the build these addresses came from" has to be answerable before a
 /// detour goes in -- see the module docs for the crash that motivated it.
 pub mod game_build;
 /// Tier A: does this process have a real, sized, top-level window yet? An overlay that installs
 /// its Present hook before the answer is yes can be handed a dead HWND and abort -- see the
 /// module for the two runs that died that way and the third that did not.
 pub mod game_window;
-/// Tier A: one blocking HTTPS GET over WinHTTP. Lives here rather than in the importer that
+/// Tier A: one blocking HTTPS get over WinHTTP. Lives here rather than in the importer that
 /// first needed it because a second caller appeared -- the build watermark's release lookup --
 /// and a hand-declared WinHTTP ABI is exactly the kind of thing this crate exists to hold once.
 #[cfg(windows)]
@@ -46,10 +46,15 @@ pub mod profile_summary;
 pub mod prologue;
 pub mod reentry;
 /// Run-length suppression for log lines that repeat verbatim -- see the module docs for the
-/// measurement that motivated it (8,639 identical `combined_load_67b940` ENTER lines carrying
+/// measurement that motivated it (8,639 identical `combined_load_67b940` enter lines carrying
 /// seven distinct facts, 5.43 MB in one 8m39s run).
 pub mod repeat;
 pub mod rva;
+/// Tier A: the two return-address stack readers, which answer "which native call site am I in"
+/// and "who called me" against the game image. They moved here because one of them had a second
+/// definition reached through a `LoadingCoverHost` function pointer -- a seam entry for a pure
+/// function -- and because the System>Quit row cloner needs the other one outside the product.
+pub mod stack;
 /// Tier A: bounded, wineserver-friendly polling for a game singleton. The unbounded
 /// `loop { yield_now() }` every shell used instead deadlocked a whole boot -- see the module.
 pub mod wait;

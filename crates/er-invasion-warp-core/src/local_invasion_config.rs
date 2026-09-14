@@ -9,7 +9,7 @@
 //! a thread and a handle owned by a DLL that can be unloaded, and it fires on events we do not care
 //! about. Polling is not a compromise here; it is the cheaper correct thing.
 //!
-//! It polls the file's TEXT (`er_hotkey_config::HotFile`), not its mtime, which is what it used to
+//! It polls the file's text (`er_hotkey_config::HotFile`), not its mtime, which is what it used to
 //! do. mtime has one-second resolution on several filesystems -- including the kind a Wine prefix
 //! sits on -- so two saves inside one second lost the second one, which reads as the edit not
 //! working. And a `touch`, a re-save with no changes, or this DLL's own write-back of a mark all
@@ -21,7 +21,7 @@
 //!
 //! This crate is `no-std`-adjacent in spirit and is compiled into a DLL that already avoids
 //! pulling weight it does not need. The schema is a handful of scalars and one string array, so it
-//! is parsed directly. The parser is deliberately STRICT about unknown keys and bad values --
+//! is parsed directly. The parser is deliberately strict about unknown keys and bad values --
 //! reporting them rather than ignoring them -- because a typo in a filter that cancels other
 //! players' matches should be visible, not silently inert.
 //!
@@ -91,6 +91,47 @@ hunt = false
 # within a minute. Silence after the first means "still being sent to the same wrong place".
 reject_notice = false
 
+# Draw invasion pins on the world map.
+#
+# On by default -- the pins are the feature. Turning it off withholds the WorldMapViewModel
+# constructor observer and the world-map GFx hook, and nothing else: the local-invasion filter,
+# the warp keys and the lobby pool all still run. That makes the map path isolable on its own,
+# which is what a crash that follows opening the map needs in order to be attributed.
+map_pins = true
+
+# Install the three Steam-matchmaking detours (location publishing, hunt mode, pool filter).
+#
+# On by default -- those features need them. These are the only detours this DLL installs at
+# addresses it did not derive statically: each comes from a live ISteamMatchmaking vtable slot read
+# at runtime. Turning it off withholds all three and nothing else.
+steam_hooks = true
+
+# Install the two read-only observers on Seamless Co-op's own code (the menu `show` function and
+# the lobby-key builder).
+#
+# On by default -- the `show` observer is how this DLL learns the Seamless menu object's address,
+# and the lobby-key observer reports the one string that decides whether two Seamless players can
+# see each other at all. Turning it off withholds those two and nothing else: the local-invasion
+# filter still judges matches and the warp keys still work.
+#
+# OFF BY DEFAULT since 2026-09-04, because arming them kills the game in about 25 seconds. With
+# them off the same configuration ran 251s and 110s with zero fault records; with them on and
+# nothing else changed it died at 24.9s, with no input given at all. The mechanism is still
+# unidentified, so this is a mitigation and not a fix -- turning it on is opting into a crash.
+ersc_observers = false
+
+# Which half of that pair to install, when ersc_observers is on. Both on by default, so the master
+# switch alone behaves exactly as before. They exist because the master proved the PAIR is what
+# crashes and these name which one: turn the master on and exactly one of these off.
+ersc_show_observer = true
+ersc_lobby_key_observer = true
+
+# The third one, and the only one that sees the option-menu object when you invade with an ITEM --
+# `show` runs only when Seamless's own menu is built, and the item path never builds it. Without
+# this the filter judges matches correctly and then cannot cancel them, which is what run
+# br-20260908-230004-d163 did 13 times in a row.
+ersc_invade_observer = true
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -155,6 +196,11 @@ allowed_blocks = []
 mark_key = "Insert"
 unmark_key = "Delete"
 
+# The switch for `enabled` above, by NAME, from the same list. Pressing it flips the setting
+# and saves the file, so the state survives a restart and the file always says what you are
+# actually playing in. The banner tells you which way it went.
+enable_toggle_key = "F3"
+
 # The three invasion-point keys, by NAME, from the same list above.
 #
 # CHANGE THESE IF ANOTHER MOD FIGHTS YOU FOR THEM. They were hard-coded to F7/F8/F9, which is a
@@ -190,7 +236,7 @@ pub struct ConfigIssue {
 
 /// Parse result: the config plus everything questionable about it.
 ///
-/// Issues do NOT prevent a config from being returned. A single bad line should not disable a
+/// Issues do not prevent a config from being returned. A single bad line should not disable a
 /// filter the user asked for, but it must be visible -- so the good keys apply and the bad ones
 /// are reported.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -203,7 +249,7 @@ pub struct ParsedConfig {
 
 /// Parse `er-invasion-warp-core.toml` text.
 ///
-/// Accepts the schema at top level OR inside a `[local_invasion]` section, so the same function
+/// Accepts the schema at top level or inside a `[local_invasion]` section, so the same function
 /// serves the standalone file and the embedded-in-a-shared-TOML case. Sections other than
 /// `[local_invasion]` are skipped entirely rather than misread -- when this schema lives in a
 /// shared file, another crate's `[section]` keys are none of our business, and warning about them
@@ -217,7 +263,7 @@ pub fn parse_local_invasion_config(text: &str) -> ParsedConfig {
 ///
 /// Surfaced as an issue rather than silently accepted: a player who mistypes their key otherwise
 /// presses it, gets nothing, and has no way to tell that apart from the feature being broken. And
-/// `fallback` rather than the built-in default because on a RELOAD the value already in force is
+/// `fallback` rather than the built-in default because on a reload the value already in force is
 /// the one that was working -- resetting a typo to F7 would move a key the player had deliberately
 /// moved away from F7, which is the collision this option exists to escape.
 fn key_setting(
@@ -242,7 +288,7 @@ fn key_setting(
     }
 }
 
-/// Parse, keeping `fallback`'s KEY BINDINGS for any key line that does not parse.
+/// Parse, keeping `fallback`'s key BINDINGS for any key line that does not parse.
 ///
 /// Every other setting still falls back to its own built-in default when absent or malformed,
 /// which is the behaviour this file has always had. Key bindings are the exception because they
@@ -295,6 +341,50 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("dll_users_only must be true or false, got {value:?}"),
                 }),
             },
+            "steam_hooks" => match parse_bool(value) {
+                Some(v) => config.steam_hooks = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("steam_hooks must be true or false, got {value:?}"),
+                }),
+            },
+            "map_pins" => match parse_bool(value) {
+                Some(v) => config.map_pins = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("map_pins must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_observers" => match parse_bool(value) {
+                Some(v) => config.ersc_observers = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_observers must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_invade_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_invade_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_invade_observer must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_show_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_show_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("ersc_show_observer must be true or false, got {value:?}"),
+                }),
+            },
+            "ersc_lobby_key_observer" => match parse_bool(value) {
+                Some(v) => config.ersc_lobby_key_observer = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!(
+                        "ersc_lobby_key_observer must be true or false, got {value:?}"
+                    ),
+                }),
+            },
             "reject_notice" => match parse_bool(value) {
                 Some(v) => config.reject_notice = v,
                 None => issues.push(ConfigIssue {
@@ -336,6 +426,15 @@ pub fn parse_local_invasion_config_with_fallback(
                     "unmark_key",
                     value,
                     fallback.unmark_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
+            "enable_toggle_key" => {
+                config.enable_toggle_key = key_setting(
+                    "enable_toggle_key",
+                    value,
+                    fallback.enable_toggle_key,
                     line_no,
                     &mut issues,
                 );
@@ -510,13 +609,43 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
         match key {
             "enabled" => out.push_str(&format!("enabled = {}\n", config.enabled)),
             "hunt" => out.push_str(&format!("hunt = {}\n", config.hunt)),
-            // THESE TWO WERE MISSING, AND THE DEFAULT ARM BELOW COPIES THE SHIPPED FILE'S LINE
-            // VERBATIM -- so every write silently reset them to `false`, on disk AND in memory
+            // These two were missing, and the default arm below copies the shipped file'S line
+            // verbatim -- so every write silently reset them to `false`, on disk and in memory
             // (`save` adopts the re-parsed round-trip). Marking a location with Insert was enough
             // to switch the player's own banner off and drop them out of the DLL-users pool, with
             // nothing said. Any key the writer does not name is a key the writer destroys.
             "reject_notice" => {
                 out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
+            }
+            "map_pins" => {
+                out.push_str(&format!("map_pins = {}\n", config.map_pins));
+            }
+            "steam_hooks" => {
+                out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
+            }
+            "ersc_observers" => {
+                out.push_str(&format!("ersc_observers = {}\n", config.ersc_observers));
+            }
+            "ersc_show_observer" => {
+                out.push_str(&format!(
+                    "ersc_show_observer = {}\n",
+                    config.ersc_show_observer
+                ));
+            }
+            // Named here for the reason two keys above it were not: an unnamed key is copied from
+            // the shipped template verbatim on every save, so leaving it out would silently reset
+            // it to the template's value whenever the player marks a location.
+            "ersc_invade_observer" => {
+                out.push_str(&format!(
+                    "ersc_invade_observer = {}\n",
+                    config.ersc_invade_observer
+                ));
+            }
+            "ersc_lobby_key_observer" => {
+                out.push_str(&format!(
+                    "ersc_lobby_key_observer = {}\n",
+                    config.ersc_lobby_key_observer
+                ));
             }
             "dll_users_only" => {
                 out.push_str(&format!("dll_users_only = {}\n", config.dll_users_only));
@@ -540,6 +669,10 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "unmark_key" => out.push_str(&format!(
                 "unmark_key = \"{}\"\n",
                 crate::keybind::key_name(config.unmark_key)
+            )),
+            "enable_toggle_key" => out.push_str(&format!(
+                "enable_toggle_key = \"{}\"\n",
+                crate::keybind::key_name(config.enable_toggle_key)
             )),
             "warp_nearest_key" => out.push_str(&format!(
                 "warp_nearest_key = \"{}\"\n",
@@ -591,12 +724,12 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
 
 /// Tracks the config file so edits during play take effect on the next match.
 ///
-/// # Why the file's TEXT and not its mtime
+/// # Why the file's text and not its mtime
 ///
 /// This used to hold the last modification time. Two things went wrong with that, and the second
 /// is the one that matters here:
 ///
-/// * mtime has ONE-SECOND resolution on several filesystems, including the kind a Wine prefix
+/// * mtime has one-second resolution on several filesystems, including the kind a Wine prefix
 ///   tends to sit on. Two saves inside one second and the second one is invisible -- which reads
 ///   as "changing the key did nothing", indistinguishable from a broken feature.
 /// * `touch`, a re-save with no edits, and this DLL's own write-back of a mark all move mtime
@@ -662,7 +795,7 @@ impl HotConfig {
     /// that emits something the parser drops would lose the user's mark while the key press looked
     /// like it worked. A `false` return means exactly that happened and is worth logging loudly.
     ///
-    /// The watcher ADOPTS the text we just wrote, so our own write is not re-reported as somebody
+    /// The watcher adopts the text we just wrote, so our own write is not re-reported as somebody
     /// editing the file -- which would otherwise reset the key edge detectors on every mark press.
     pub fn save(
         &mut self,
@@ -694,10 +827,10 @@ impl HotConfig {
         self.file.as_mut().expect("the watcher was just created")
     }
 
-    /// Re-read the file if its TEXT changed since the last look.
+    /// Re-read the file if its text changed since the last look.
     ///
     /// Returns `Some` only on an actual change. A missing file reverts to defaults -- which means
-    /// the filter switches OFF, because `enabled` defaults to false. Deleting the config is
+    /// the filter switches off, because `enabled` defaults to false. Deleting the config is
     /// therefore a safe way to stop filtering mid-session, and it fails in the direction that
     /// stops cancelling other people's matches.
     ///
@@ -764,7 +897,7 @@ mod tests {
 
     #[test]
     fn every_boolean_survives_the_writer_including_the_two_it_used_to_eat() {
-        // THE BUG THIS PINS. `reject_notice` and `dll_users_only` had no arm in the writer, so the
+        // The bug this pins. `reject_notice` and `dll_users_only` had no arm in the writer, so the
         // default arm copied the shipped file's `= false` over them. Pressing Insert to mark a
         // location therefore switched the player's banner off and dropped them out of the DLL-users
         // pool, on disk and in memory, silently. The old round-trip test could not see it because
@@ -793,7 +926,7 @@ mod tests {
 
     #[test]
     fn the_writer_names_every_key_the_shipped_file_declares() {
-        // Structural, so the NEXT field added cannot repeat this. Any assignment in the shipped
+        // Structural, so the next field added cannot repeat this. Any assignment in the shipped
         // default file that the writer does not match on is a setting the writer overwrites with
         // the shipped literal the moment anything calls it.
         let source = include_str!("local_invasion_config.rs");
@@ -832,7 +965,7 @@ mod tests {
 
     #[test]
     fn a_marked_block_survives_a_save_and_reload_cycle() {
-        // PROCESS-SCOPED, like every other temp path in this file. It was a FIXED shared name
+        // Process-SCOPED, like every other temp path in this file. It was a fixed shared name
         // until 2026-08-31, and two copies of this binary running at once -- routine here: the
         // host `cargo test` and the wine `cargo xwin test` run the same tests, and several agents
         // run check.sh concurrently -- collided on the one path. Reproduced by running eight
@@ -840,18 +973,18 @@ mod tests {
         // `Os { code: 2, kind: NotFound }` (a sibling unlinking the file mid-`File::create`) and
         // one at the `reload_if_changed` assertion (a sibling's write read, correctly, as a
         // foreign edit). Neither is a product defect: nothing but this DLL writes the real
-        // config, and a genuinely foreign edit SHOULD be reported. It was test cross-talk.
+        // config, and a genuinely foreign edit should be reported. It was test cross-talk.
         let dir = std::env::temp_dir().join(format!(
             "er-invasion-warp-config-save-test-{}",
             std::process::id()
         ));
-        // EXPECTED, not discarded. Swallowing this error is what turned "the directory could not
+        // Expected, not discarded. Swallowing this error is what turned "the directory could not
         // be created" into a bare `NotFound` at the write eight lines down, which reads as a bug
         // in `save`.
         std::fs::create_dir_all(&dir).expect("create the test's own temp directory");
         let path = dir.join("er-invasion-warp.toml");
         let _ = std::fs::remove_file(&path);
-        // Interval 0 so the poll below actually READS. With the shipped ~1s throttle it would
+        // Interval 0 so the poll below actually reads. With the shipped ~1s throttle it would
         // return None without looking, and this test would pass without proving anything.
         let mut hot = HotConfig::with_poll_interval_ms(0);
         let mut config = LocalInvasionConfig {
@@ -871,7 +1004,7 @@ mod tests {
         let _ = std::fs::remove_dir(&dir);
     }
 
-    /// Every temp path this file's tests use must be PROCESS-SCOPED.
+    /// Every temp path this file's tests use must be process-SCOPED.
     ///
     /// Structural, because the fix to a shared path is invisible from a green run: the collision
     /// only shows when two copies of the binary happen to overlap, so a reintroduced fixed name
@@ -907,6 +1040,47 @@ mod tests {
         );
     }
 
+    /// The switch key survives a write, and the switch itself survives being written by a mark.
+    ///
+    /// Both halves are the same hazard the `reject_notice` / `map_pins` comment in the writer
+    /// records: a key the writer does not name is a key the writer destroys, and every in-game
+    /// keypress rewrites this file. A dropped `enable_toggle_key` would silently return the
+    /// player to F3 after they rebound it; a dropped `enabled` would switch the filter back on
+    /// the first time they marked a location.
+    #[test]
+    fn the_toggle_key_and_the_switch_both_survive_a_write_and_reparse() {
+        let config = LocalInvasionConfig {
+            enabled: false,
+            enable_toggle_key: crate::keybind::parse_key("KP_Plus").expect("KP_Plus is a key"),
+            ..Default::default()
+        };
+        let rendered = render_local_invasion_config(&config);
+        assert!(
+            rendered.contains("enable_toggle_key = \"KP_Plus\""),
+            "{rendered}"
+        );
+        assert!(rendered.contains("enabled = false"), "{rendered}");
+        let parsed = parse_local_invasion_config(&rendered);
+        assert!(parsed.issues.is_empty(), "{:?}", parsed.issues);
+        assert_eq!(parsed.config.enable_toggle_key, config.enable_toggle_key);
+        assert!(!parsed.config.enabled);
+    }
+
+    /// The shipped default is F3, and the shipped file says so -- a default the template does not
+    /// carry is a key the writer never emits, so the setting would be undiscoverable.
+    #[test]
+    fn the_shipped_config_names_the_toggle_key_and_it_is_f3() {
+        assert_eq!(
+            LocalInvasionConfig::default().enable_toggle_key,
+            crate::keybind::VK_F3
+        );
+        assert!(
+            DEFAULT_CONFIG_TOML.contains("enable_toggle_key = \"F3\""),
+            "the shipped template must carry the key, or render_local_invasion_config never \
+             writes it"
+        );
+    }
+
     /// A 60% keyboard names a key it has; that must survive the writer, since the in-game keys
     /// rewrite this file and would otherwise erase the player's choice on the first mark.
     #[test]
@@ -927,7 +1101,7 @@ mod tests {
         assert_eq!(parsed.config.unmark_key, config.unmark_key);
     }
 
-    /// A typo must be REPORTED and must leave the previous key in force -- never silently swallowed
+    /// A typo must be reported and must leave the previous key in force -- never silently swallowed
     /// and never a crash.
     #[test]
     fn an_unknown_key_name_is_reported_and_leaves_the_default_in_force() {
@@ -1066,7 +1240,7 @@ mod tests {
         );
 
         // Edit it the way a user would, mid-session. No mtime games: the watcher compares the
-        // file's TEXT, so an edit inside one mtime tick is seen like any other.
+        // file's text, so an edit inside one mtime tick is seen like any other.
         std::fs::write(&path, "enabled = true\nmode = \"area\"\n").unwrap();
         let second = hot
             .reload_if_changed(&path)
@@ -1075,7 +1249,7 @@ mod tests {
         assert_eq!(second.config.mode, LocalInvasionMode::PreferExactThenArea);
         assert!(hot.current().enabled);
 
-        // Deleting the file must switch the filter OFF, not leave the last config latched.
+        // Deleting the file must switch the filter off, not leave the last config latched.
         std::fs::remove_file(&path).unwrap();
         let third = hot
             .reload_if_changed(&path)
@@ -1094,7 +1268,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// TWO edits inside one mtime tick, both of which must land.
+    /// Two edits inside one mtime tick, both of which must land.
     ///
     /// This is the case the old mtime watcher got wrong. Several filesystems -- including the kind
     /// a Wine prefix sits on -- stamp mtime to a whole second, so a player who saves their config
@@ -1127,7 +1301,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// THE FALLBACK RULE. A typo on a RELOAD keeps the key that was working -- not the shipped
+    /// The FALLBACK rule. A typo on a reload keeps the key that was working -- not the shipped
     /// default, and not nothing.
     ///
     /// Falling back to F7 would be actively wrong: F7 is the binding a colliding mod had already

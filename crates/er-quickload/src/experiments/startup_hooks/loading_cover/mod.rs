@@ -5,7 +5,9 @@ use crate::*;
 use crate::{crashlog::*, telemetry::*};
 use eldenring::cs::PlayerIns;
 use er_quit_menu_core::save_flow_boxes::{SAVE_FLOW_BOX_NONE, save_flow_box_label};
+#[cfg(feature = "quit-rows")]
 use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_FAILURES;
+#[cfg(feature = "quit-rows")]
 use er_telemetry_core::counters::OPTIONS_02_040_QUIT6_RUNTIME_SERVES;
 use fromsoftware_shared::FromStatic;
 use std::{
@@ -17,6 +19,12 @@ use std::{
     },
     time::UNIX_EPOCH,
 };
+
+pub(crate) mod profile_render_drive;
+pub(crate) use profile_render_drive::*;
+
+pub(crate) mod title_visual_hooks;
+pub(crate) use title_visual_hooks::*;
 
 pub(crate) mod title_scaleform_msgbox;
 pub(crate) use title_scaleform_msgbox::*;
@@ -47,7 +55,7 @@ pub(crate) use window_reconfig_observer::install_window_reconfig_observer_hooks;
 ///
 /// The portrait seam (`PortraitHost`) is installed from `DllMain`. This one cannot be: adding
 /// fields to that struct literal would edit `lib_parts/dll_entry_parts/bootstrap.rs`, which is the
-/// spine several parallel crate extractions hang off. Instead EVERY facade entry point into the
+/// spine several parallel crate extractions hang off. Instead every facade entry point into the
 /// moved loading-cover code calls this first, so the seam is always installed before any moved
 /// code can read through it -- the moved modules are unreachable from the root by any other path.
 ///
@@ -58,7 +66,6 @@ pub(crate) fn ensure_loading_cover_host() {
     INSTALLED.call_once(|| {
         er_loading_portrait_core::install_loading_cover_host(
             er_loading_portrait_core::LoadingCoverHost {
-                trace_first_game_caller_rva: crate::crashlog::trace_first_game_caller_rva,
                 resolve_module_proc: crate::hooks::safe_input_proc,
                 game_main_window: crate::hooks::own_window,
                 create_absolute_hook: crate::hooks::create_absolute_hook,

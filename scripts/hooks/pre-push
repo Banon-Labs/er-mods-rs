@@ -6,6 +6,32 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
+#
+# Measured with scripts/measure-git-hook-env.sh on git 2.55.0. From the MAIN checkout a pre-push
+# hook sees only GIT_EDITOR/GIT_EXEC_PATH/GIT_PREFIX. From a LINKED WORKTREE it also sees GIT_DIR
+# -- and GIT_DIR wins over cwd, so a gate that builds a throwaway repository and configures it
+# with `git -C <fixture> config ...` silently edits THIS repository instead of the fixture.
+#
+# That is not hypothetical. A push from .worktrees/teardown-outcome on 2026-09-06 came back with
+# scripts/check-gate-config-guard.sh reporting the suite had rewritten the config it was checking:
+#     core.hooksPath  scripts/hooks -> /home/banon/projects/er-mods-rs/scripts/hooks
+# an absolute path computed for a fixture, landing on the shared checkout that every other
+# worktree and every other agent reads. The guard caught it and refused the push, which is the
+# system working -- but the damage was already written, and the same shape had corrupted this
+# key once before in the same session.
+#
+# Scrubbed HERE rather than in each gate, because "every script that might build a git fixture
+# remembers to unset these" is not a property anything enforces, and the gates are ~250 and
+# growing. `git rev-parse --local-env-vars` is git's own list of the variables that pin a
+# command to a specific repository; with them gone, every `git` below resolves from cwd, which
+# the `cd` above has already set to the worktree being pushed. repo_root is captured first, so
+# the scrub cannot change which tree this hook is about.
+#
+# Deliberately unquoted: the output is a space-separated list of NAMES and must word-split.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars)
+
 # GIT FEEDS THE REFS BEING PUSHED ON STDIN, AND IT CAN ONLY BE READ ONCE. Both consumers below
 # need it: the main-push guard reads it to see which refs are involved (and must still see an
 # EMPTY stream as a valid case -- that is one of its own tests), and the compile gate reads it to
@@ -30,9 +56,44 @@ printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
 # multiply the cost for a case that has not happened here.
 mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
 if [[ ${#pushed_shas[@]} -gt 0 ]]; then
-	printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
-		"${#pushed_shas[@]}" >&2
-	bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+	# ...BUT ONLY IF THESE COMMITS CAN CHANGE WHAT CARGO COMPILES (user directive 2026-09-06).
+	#
+	# The complaint that produced this is concrete and was measured: a commit touching one shell
+	# script compiled the whole workspace for ~14 minutes before the push, to prove nothing
+	# whatever about the change. `cargo` is not the gate here; the COMMIT is, and a commit that
+	# adds no Rust, no manifest, no build input has no compile question to answer.
+	#
+	# scripts/er-change-scope.py decides, from the same reverse-dependency walk
+	# scripts/er-dll-closure.py performs, over the PUSHED TIPS rather than the working tree --
+	# `--rev` per tip, because what reaches origin is what this gate is about, and a dirty tree
+	# is not that.
+	#
+	# THE SKIP IS LOUD AND IT IS NOT A PASS. It prints what it did not do and why, in the same
+	# vocabulary scripts/check.sh uses for its own skips. And it FAILS OPEN: exit 1 from the
+	# scope tool (a git failure, an unresolvable base, anything it cannot answer) runs the gate,
+	# and so does any diff touching a build input outside a single crate. Only a clean exit 3 --
+	# "provably nothing that reaches cargo changed" -- skips it.
+	scope_argv=()
+	for sha in "${pushed_shas[@]}"; do scope_argv+=(--rev "$sha"); done
+	# `|| scope_rc=$?` -- NOT a bare call. This script runs under `set -e`, and exit 3 is this
+	# tool's SUCCESS signal ("provably no cargo work"), so a bare invocation aborts the whole
+	# hook the instant the skip is warranted. Measured 2026-09-06: the push died with one line
+	# ("failed to push some refs"), no hook output at all, and the branch never reached origin
+	# -- a skip path that killed the push it was written to make cheap.
+	scope_rc=0
+	python3 scripts/er-change-scope.py --rust-touched "${scope_argv[@]}" || scope_rc=$?
+	if [[ $scope_rc -eq 3 ]]; then
+		printf 'pre-push: check-committed-compiles.sh NOT SELECTED for this push -- no pushed\n' >&2
+		printf '          commit touches anything cargo compiles. It did NOT run; that is not a\n' >&2
+		printf '          pass for it, and scripts/check.sh below reports the same for its own\n' >&2
+		printf '          cargo steps. Force everything with ER_SCOPE_ALL=1 git push.\n' >&2
+		printf '%s\n' "$(python3 scripts/er-change-scope.py "${scope_argv[@]}" | head -6)" >&2
+	else
+		[[ $scope_rc -ne 0 ]] && printf 'pre-push: scope undecidable -- running the compile gate anyway\n' >&2
+		printf 'pre-push: running scripts/check-committed-compiles.sh on %d pushed tip(s)\n' \
+			"${#pushed_shas[@]}" >&2
+		bash scripts/check-committed-compiles.sh "${pushed_shas[@]}"
+	fi
 fi
 
 # PARITY WITH CI, NOT A SUBSET OF IT (user directive 2026-09-03).
@@ -49,5 +110,145 @@ fi
 # how often it was wrong. CI already solved this for itself (see .github/workflows/check.yml: it
 # runs check.sh precisely so its gate set is DERIVED rather than re-listed); the hook was the last
 # place still holding a copy of the list. Now there is no list to drift, because there is one file.
-printf 'pre-push: running scripts/check.sh (the same suite CI runs)\n' >&2
+#
+# SELECTION DID NOT REINTRODUCE A SUBSET (2026-09-06). The list is still gone: check.sh is still
+# the one file, and the gates it does not run on a given push are chosen by the SAME derived
+# computation CI uses, recomputed from the diff every time, with no second inventory anywhere to
+# fall behind. What changed is only that a cargo step the diff cannot have broken is reported
+# SKIPPED -- "NOT SELECTED FOR THIS DIFF" -- instead of being run. SKIPPED is not `passed` in
+# check.sh's summary and never has been, so a narrowed run says out loud what it did not cover.
+# A PUSH OF GAME CODE IS A CLAIM THAT THE CODE RUNS. This refuses the claim when nothing has run it.
+#
+# 2026-09-09: two commits were authored and a push attempted for both -- an F3 key that had never
+# been pressed in the game, and a stall-watchdog fix whose code had never executed, because the DLL
+# in the running process had been built two commits earlier. The user stopped the push by hand and
+# asked for enforcement. AGENTS.md already carried the rule as prose ("commit after a runtime
+# validation run COMPLETES, and only if the changes are worth keeping"); prose did not stop it.
+#
+# WHY IT LIVES HERE AND NOT IN .cupcake. A cupcake policy was written first, with 17 passing OPA
+# tests, and it was INERT: driven through `cupcake eval` it produced zero decisions, and a literal
+# probe in the same file fired until the rule referenced `input.signals` at all -- including
+# `current_branch`, a signal the sibling main-push guard reads successfully. The cause is somewhere
+# inside cupcake's optimised WASM lowering and is not visible from outside it. A guard that cannot
+# be shown to fire is not a guard, so the enforcement is here, in bash, where one command proves it:
+#
+#     bash scripts/check-runtime-evidence.sh --selftest
+#
+# The check reads the tip's DLL logs for `build git=<sha>`, not file timestamps. The first draft of
+# the signal compared mtimes and answered "evidence present" on a log written by a build two commits
+# old that happened to still be running -- newer file, older code. Reading a clock and calling it
+# provenance is the mistake being guarded, made inside the guard.
+if ! bash scripts/check-runtime-evidence.sh "${pushed_shas[@]:-}"; then
+	exit 1
+fi
+
+# AN AGENT WORKTREE CANNOT RUN check.sh, SO IT MUST NOT BE ASKED TO.
+#
+# Two guards landed a day apart and neither was compared to the other, which between them made the
+# mandatory Session Completion push impossible from any `.claude/worktrees/agent-*` checkout
+# (bd er-effects-rs-7jzv):
+#
+#   8f16e831, 2026-09-02 -- scripts/check.sh refuses in an agent worktree, because three subagents
+#     once spent 2003s and 1330s sleep-polling their own full-suite runs.
+#   acca1383, 2026-09-03 -- this hook ends in an unconditional `exec bash scripts/check.sh`,
+#     because the hand-maintained 13-gate subset had drifted from check.sh's 153.
+#
+# Both reasons are good. Their product was an exit 2 the agent could only escape with
+# ER_CHECK_FORCE=1, which buys back the exact half-hour tax the first guard exists to prevent.
+#
+# So the suite is skipped HERE, not forced. It is not a hole: an agent is briefed to run the
+# scoped gates its edit touches, the runtime-evidence check above has already run, and the
+# whole-workspace verdict belongs to the orchestrator, once, in the main checkout at integration.
+# The branch is not reachable by anyone else until that merge, so nothing ships unchecked.
+if [[ "$repo_root" == */.claude/worktrees/agent-* ]]; then
+	printf 'pre-push: agent worktree -- skipping scripts/check.sh (it refuses here by design).\n' >&2
+	printf '  The whole-workspace verdict is the orchestrator'"'"'s, run once in the main checkout.\n' >&2
+	printf '  Run the gates your edit touches: cargo test -p <crate>, scripts/<gate>.py.\n' >&2
+	exit 0
+fi
+
+# STAGES DID NOT REINTRODUCE A SUBSET EITHER (2026-09-11). check.sh now partitions its steps into
+# eleven named stages and runs them as children, so this line still gets every step -- the stage a
+# step belongs to comes from the same scripts/check-stages.py table CI's matrix is generated from,
+# and check-stages.py --check (a step of the suite) refuses a step that belongs to no stage. What
+# the push gains is the same thing CI gains: a red lint stage says so in seconds instead of after
+# the cross-compile. ER_CHECK_JOBS=1 serialises it.
+#
+# AND SELECTING STAGES DID NOT REINTRODUCE ONE EITHER (2026-09-13). The stages this push runs are
+# now chosen from the diff. What is skipped is a whole STAGE that the diff cannot have invalidated;
+# the step list is untouched, and the selection is COMPUTED from the same table, at push time, with
+# no second inventory to fall behind:
+#
+#   * every stage already declares the files it reads, as repo-relative globs, beside the stage
+#     itself -- that declaration is what keys the stage's CI cache, so it was load-bearing before
+#     this line read it. `check-stages.py --stages-for-diff` matches the changed paths against
+#     those globs plus the stage's own gate scripts, and prints the stages that match.
+#   * add a stage, edit a glob, move a step between stages, and the selection follows. There is
+#     nothing here to edit a second time.
+#   * `check-stages.py --audit-inputs`, a case of the --selftest that is itself a step of the
+#     suite, reads every gate script a stage runs and fails when the stage does not declare a path
+#     that script opens. That is what stops the globs quietly under-claiming, which is the only way
+#     this selection could hide a gate. It found one before it was wired: `suite` runs
+#     scripts/test-git-pre-push-block-main.sh while declaring only `scripts/*.py`, so a diff
+#     consisting of that one test claimed no stage reads it.
+#
+# WHY IT IS WORTH DOING, measured on the last full pre-push run of a 9-file diff. Per-stage wall
+# clock: moveset 717s, addresses 619s, policy 413s, runtime-tools 222s, source 91s, lint 41s,
+# suite 23s, product 22s, cargo-build 4s, docs 2s, cargo-test 2s. The stages already run in
+# parallel, so a push waits for the SLOWEST SELECTED stage, not for the sum -- and `moveset`,
+# the critical path at twelve minutes, is invalidated by three globs that that diff did not touch.
+# It ran anyway. A documentation-only branch now waits on `lint` at 41s instead of on `moveset`.
+#
+# IT FAILS OPEN AND SAYS SO. An unresolvable diff base, a selector that raises, a changed path no
+# stage declares, or ER_SCOPE_ALL=1 all print every stage name, so the narrowed run becomes the
+# whole suite. The selector exits 0 in every one of those cases on purpose -- a non-zero exit under
+# `set -e` would abort this hook and run nothing at all, which is the one outcome worse than
+# running everything.
+#
+# AND IT SAYS WHAT IT DID NOT COVER, twice. The selector's stderr names every stage it left out and
+# the globs that missed, in the vocabulary the check-committed-compiles.sh skip above already uses;
+# then check.sh gives every step of an unselected stage the state SKIPPED with the same
+# "NOT SELECTED FOR THIS DIFF" reason, and its combined summary counts those separately from
+# `passed` and says in as many words that this run does not cover them.
+#
+# THE LOCKING IS UNCHANGED, AND PUSHES STAY SERIALISED. This still calls check.sh bare, so the run
+# takes the same exclusive lock it always did. Letting two pushes overlap was considered and
+# dropped: the stages already run in parallel inside one run, so a second concurrent push would
+# contend for the same cores while still waiting on its own slowest stage -- and two gate runs at
+# once share one .git/config, which a run on 2026-09-13 was observed to clobber.
+#
+# Which commits it asks about: the pushed tips, the same `--rev` shape the compile gate above uses
+# and for the same reason. A ref being deleted contributes no tip, and with no tip at all the
+# selector falls back to the working tree against origin/main, which is the closest thing to a
+# question a deletion-only push has.
+stage_argv=()
+for sha in "${pushed_shas[@]:-}"; do
+	[[ -n $sha ]] && stage_argv+=(--rev "$sha")
+done
+
+# Run once, not twice: the names go to stdout and the accounting to stderr, so stderr is caught in
+# a file and replayed rather than asking the same git question a second time. `|| true` because a
+# selector that somehow exits non-zero must still leave this hook running the whole suite below,
+# not abort the push under `set -e`.
+stage_report=$(mktemp)
+mapfile -t scope_stages < <(python3 scripts/check-stages.py --stages-for-diff \
+	"${stage_argv[@]}" 2>"$stage_report" || true)
+cat "$stage_report" >&2
+rm -f "$stage_report"
+mapfile -t all_stages < <(python3 scripts/check-stages.py --stages 2>/dev/null || true)
+
+if [[ ${#scope_stages[@]} -eq 0 || ${#scope_stages[@]} -eq ${#all_stages[@]} ]]; then
+	if [[ ${#scope_stages[@]} -eq 0 ]]; then
+		printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
+	fi
+	printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+	exec bash scripts/check.sh
+fi
+
+printf -v scope_csv '%s,' "${scope_stages[@]}"
+export ER_CHECK_STAGES="${scope_csv%,}"
+printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
+	"${#scope_stages[@]}" "${#all_stages[@]}" "$ER_CHECK_STAGES" >&2
+printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
+printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
 exec bash scripts/check.sh

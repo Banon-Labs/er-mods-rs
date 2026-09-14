@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Vanilla-reload FPS comparison (2026-07-22, bd USER-chose-vanilla-reload-comparison).
-# Loads ONLY the telemetry-only DLL (er_telemetry -- no product hooks, no reload driver, no
-# autopilot), launches offline ER LIVE for the USER to drive, and polls er-telemetry-standalone.json to
-# a timeseries. The USER drives: title -> Continue (loads angrE = the BOOT-equivalent load), play +
-# walk forward, then System -> Quit to Title -> Continue (the RELOAD), play + walk forward ~3s. We then
+# Vanilla-reload FPS comparison (2026-07-22, bd user-chose-vanilla-reload-comparison).
+# Loads only the telemetry-only DLL (er_telemetry -- no product hooks, no reload driver, no
+# autopilot), launches offline ER live for the user to drive, and polls er-telemetry-standalone.json to
+# a timeseries. The user drives: title -> Continue (loads angrE = the boot-equivalent load), play +
+# walk forward, then System -> Quit to Title -> Continue (the reload), play + walk forward ~3s. We then
 # compare the game frame time (flip task_delta) between the boot-continue and the reload -- to isolate
-# whether OUR reload path (own_load_switch_reload_fire) causes the ~20fps game-side slowdown or it is
+# whether our reload path (own_load_switch_reload_fire) causes the ~20fps game-side slowdown or it is
 # inherent to game reloads in this WSLg/Proton env. No agent input/autopilot: the user owns the input.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,13 +36,13 @@ source "$REPO_ROOT/scripts/steam-running.sh"
 steam_running || fail "Steam is not running. Start Steam (interactive login) first."
 # Fail closed if an ER is already running -- a second launch on top double-loads the DLLs and
 # contaminates the run (observed 2026-07-22). tasklist.exe not resolving just yields no match (safe);
-# do NOT guard on `command -v` (it failed in the script PATH and silently skipped this check).
+# do not guard on `command -v` (it failed in the script path and silently skipped this check).
 if tasklist.exe 2>/dev/null | grep -qiE 'eldenring\.exe|start_protected_game\.exe'; then
 	fail "An Elden Ring process is already running. Tear it down (taskkill.exe /F /IM eldenring.exe) before launching."
 fi
-# FRESHNESS, NOT EXISTENCE. The profile below points me3 straight at target/.../release, so
+# Freshness, not existence. The profile below points me3 straight at target/.../release, so
 # "it exists" was never a statement about which code loads. This run's whole output is a frame-time
-# COMPARISON against a product run, and a comparison drawn between two different builds of the
+# comparison against a product run, and a comparison drawn between two different builds of the
 # telemetry DLL measures the build, not the reload path. Refuse rather than launch.
 # shellcheck source=scripts/er-dll-freshness.sh
 # shellcheck disable=SC1091
@@ -85,12 +85,15 @@ echo "==   harness drives: title->Continue (BOOT) then System->Quit->Continue (R
 echo "==   artifacts -> $ARTIFACT_DIR"
 echo "======================================================================"
 
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
 # and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
 # this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
 env \
 	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_LOG_PATH="$ARTIFACT_DIR/er-invasion-warp.log" \
+	ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH="$ARTIFACT_DIR/er-invasion-warp-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_RUN_PATH="$ARTIFACT_DIR/er-invasion-warp-run.json" \
 	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
 	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
 	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
@@ -109,6 +112,15 @@ env \
 	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
 	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
 	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$ARTIFACT_DIR/er-crash-log.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ARTIFACT_DIR/er-crash-latest.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
+	ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
+	ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$ARTIFACT_DIR/er-quit-load-character.log" \
+	ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
+	ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$ARTIFACT_DIR/er-save-game-row.log" \
+	ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
 	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 ME3_PID=$!
 echo "== ER launching (me3 pid $ME3_PID). The telemetry-only DLL APPENDS a timeseries to:"

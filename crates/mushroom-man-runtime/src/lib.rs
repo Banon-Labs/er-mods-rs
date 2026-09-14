@@ -35,6 +35,22 @@ const ARM_MODEL_CATEGORY: u8 = 1;
 const LEG_MODEL_CATEGORY: u8 = 6;
 const CLEARED_SEX_VARIANT_HIDE_MASK: u8 = 0;
 
+/// The two binders that are the mushroom body, relative to the folder this DLL is loaded from.
+///
+/// The DLL is only half the mod: it zeroes every head/body/arm/leg `equipModelId`, which makes the
+/// game fall back to the default naked slot models -- and those are vanilla unless an ME3
+/// `[[packages]]` mod folder replaces them. Loaded without that package, the patch therefore
+/// removes armour and puts nothing in its place. So the payload's presence is the gate.
+///
+/// Beside the DLL is where both real layouts put it, which is why this can be a plain file probe:
+/// `scripts/install_mushroom_man.py` installs `<mod>/mushroom_man.dll` with `parts/` and
+/// `facegen/` as siblings and points `[[natives]]` at that copy, and the authoring path
+/// (`scripts/build_mushroom_blender_edit.sh`) copies the freshly built DLL into the staged mod
+/// dir before writing its profile. A DLL loaded straight out of `target/.../release/` has no
+/// package with it, and inert is the correct answer there.
+const MODEL_PAYLOAD_PROBES: &[&str] =
+    &["parts/fc_m_0000.partsbnd.dcx", "facegen/facegen.fgbnd.dcx"];
+
 static START_PATCH_TASK: AtomicBool = AtomicBool::new(false);
 static PATCH_APPLIED: AtomicBool = AtomicBool::new(false);
 
@@ -50,6 +66,11 @@ pub unsafe extern "system" fn DllMain(
     if reason != DLL_PROCESS_ATTACH {
         return DLL_MAIN_SUCCESS;
     }
+    // First, before anything that can panic. A panic in a cdylib crosses an
+    // `extern "system"` boundary and becomes an abort, which does not dispatch to a
+    // vectored handler -- so no crash record is written at all and the process simply
+    // vanishes. Enforced by `scripts/check-panic-reporter-installed.py`.
+    er_game_base::panic_report::report_panics_to("mushroom-man-runtime", panic_log_sink);
 
     if START_PATCH_TASK
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -62,9 +83,18 @@ pub unsafe extern "system" fn DllMain(
 }
 
 fn spawn_param_patch_task() {
+    let Some(model_dir) = staged_model_dir() else {
+        write_runtime_log(
+            "no mushroom model staged beside this DLL: leaving EquipParamProtector alone so armour \
+             renders normally. Load this DLL from inside the mushroom-man mod folder (parts/ and \
+             facegen/ as siblings) with that folder as an ME3 [[packages]] entry to enable it.",
+        );
+        return;
+    };
+    write_runtime_log(&format!("mushroom model staged at {model_dir}"));
     write_runtime_log("patch task started");
     let mut attempts = NO_PATCH_ATTEMPTS;
-    // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and hung a
+    // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and hung a
     // whole boot -- see er_game_base::wait. The attempt counter and its throttled log are kept;
     // what changed is that the wait backs off in user space and ends.
     let cs_task = er_game_base::wait::poll_until(|| match unsafe { CSTaskImp::instance() } {
@@ -105,6 +135,18 @@ fn spawn_param_patch_task() {
         },
         CSTaskGroupIndex::FrameBegin,
     );
+}
+
+/// The folder this DLL was loaded from, but only when the model payload is actually in it.
+///
+/// `None` means the armour patch must not run -- see `MODEL_PAYLOAD_PROBES`.
+fn staged_model_dir() -> Option<String> {
+    let (_module, module_path) = er_game_base::build_id::own_module_path()?;
+    let directory = PathBuf::from(module_path).parent()?.to_path_buf();
+    MODEL_PAYLOAD_PROBES
+        .iter()
+        .all(|relative| directory.join(relative).is_file())
+        .then(|| directory.display().to_string())
 }
 
 fn try_patch_loaded_protectors() -> Option<PatchReport> {
@@ -290,6 +332,15 @@ fn clear_visual_hide_masks(row: &mut EQUIP_PARAM_PROTECTOR_ST) {
     row.set_invisible_flag_sex_ver93(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver94(CLEARED_SEX_VARIANT_HIDE_MASK);
     row.set_invisible_flag_sex_ver95(CLEARED_SEX_VARIANT_HIDE_MASK);
+}
+
+/// `report_panics_to`'s sink, which takes `fmt::Arguments` where this crate logs `&str`.
+///
+/// Small and duplicated per shell on purpose: the hook is installed per DLL because every cdylib
+/// statically links its own `er-game-base`, so there is no shared place this could live and still
+/// be the thing that runs in this module.
+fn panic_log_sink(args: core::fmt::Arguments<'_>) {
+    write_runtime_log(&args.to_string());
 }
 
 fn write_runtime_log(message: &str) {

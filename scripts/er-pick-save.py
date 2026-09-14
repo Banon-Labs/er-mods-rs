@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pick a random valid (save file, slot) and DECODE IT BEFORE ANYONE LAUNCHES ANYTHING.
+"""Pick a random valid (save file, slot) and decode it before anyone launches anything.
 
 "Random" here never means "blind". The Autoload Identity Launch Gate in AGENTS.md is
 explicit: a launch expected to autoload must not happen until the exact character identity
@@ -7,25 +7,25 @@ and slot are known from current save evidence. So this script's contract is deco
 report -- it returns the character's name, level and slot, and a caller that cannot print
 those has no business launching.
 
-VALIDITY IS THE PRODUCT'S OWN DEFINITION, NOT A GUESS
+Validity is the product'S own definition, not a guess
 -----------------------------------------------------
   * File size must equal `EXPECTED_SAVE_FILE_BYTES`, read live from
     `crates/er-save-redirect/src/lib.rs` rather than copied here -- `validate_save_file_path`
     rejects anything else at runtime, so a picker using a different number would hand back
     saves the DLL refuses.
-  * A slot counts as occupied when the decoded name is not empty-like AND level > 0, decoded
+  * A slot counts as occupied when the decoded name is not empty-like and level > 0, decoded
     with `save-slot-oracle.py` (the evidence-bound decoder), never inferred from filenames.
 
-WHY IT PICKS A FILE FIRST, THEN A SLOT
+Why it picks a file first, then a slot
 --------------------------------------
 Decoding all ten slots of one save costs ~0.4s, so sweeping the whole corpus up front is
 ~35s -- past the 30s cap every shell op here lives under. Drawing a file and decoding only
 its slots costs one tenth of a second, and a file with no occupied slot simply triggers a
-redraw. The distribution is therefore uniform over save FILES rather than over characters;
+redraw. The distribution is therefore uniform over save files rather than over characters;
 that is a deliberate trade for staying inside the cap, and `--all` exists when a full
 inventory is actually wanted.
 
-CORPUS ROOT
+Corpus root
 -----------
 `--root`, else `$ER_SAVE_CORPUS_ROOT`, else `<repo>/save-files`. The older enumerator in this
 directory still defaults to a `/mnt/a/...` WSL path that does not exist on this machine, so
@@ -86,8 +86,47 @@ def oracle():
     return module
 
 
+def main_checkout_root() -> Path | None:
+    """The main working tree, when this file is running out of a linked git worktree.
+
+    The corpus is untracked, so a worktree made with `git worktree add` starts without it, and
+    every launcher that draws a save then refuses with "no save corpus found" -- a missing
+    directory reported as a missing corpus, which reads like the saves are gone rather than like
+    the checkout is new. In a linked worktree `.git` is a file holding `gitdir: <main>/.git/
+    worktrees/<name>`, and that directory's `commondir` points back at the main `.git`, whose
+    parent is the checkout the corpus lives in. Returns `None` in the main checkout itself, where
+    `.git` is a directory and the plain `<repo>/save-files` candidate already applies.
+    """
+    marker = REPO_ROOT / ".git"
+    if not marker.is_file():
+        return None
+    try:
+        pointer = marker.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    prefix = "gitdir:"
+    if not pointer.startswith(prefix):
+        return None
+    gitdir = Path(pointer[len(prefix) :].strip()).expanduser()
+    if not gitdir.is_absolute():
+        gitdir = (REPO_ROOT / gitdir).resolve()
+    try:
+        common = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
+    except OSError:
+        return None
+    if not common.is_absolute():
+        common = (gitdir / common).resolve()
+    return common.parent
+
+
 def resolve_root(cli_root: str | None) -> Path:
-    for candidate in (cli_root, os.environ.get("ER_SAVE_CORPUS_ROOT"), REPO_ROOT / "save-files"):
+    sibling = main_checkout_root()
+    for candidate in (
+        cli_root,
+        os.environ.get("ER_SAVE_CORPUS_ROOT"),
+        REPO_ROOT / "save-files",
+        sibling / "save-files" if sibling else None,
+    ):
         if not candidate:
             continue
         path = Path(candidate).expanduser()
@@ -95,7 +134,9 @@ def resolve_root(cli_root: str | None) -> Path:
             return path
     raise RuntimeError(
         "no save corpus found; pass --root or set ER_SAVE_CORPUS_ROOT to a directory of "
-        "ER0000.sl2 / ER0000.co2 files"
+        f"ER0000.sl2 / ER0000.co2 files (looked in {REPO_ROOT / 'save-files'}"
+        + (f" and {main_checkout_root() / 'save-files'}" if main_checkout_root() else "")
+        + ")"
     )
 
 
@@ -120,14 +161,14 @@ def eligible_saves(root: Path, container: str, expected_bytes: int) -> list[Path
 def occupied_slots(module, path: Path) -> list[dict]:
     """Decode every slot of one save; return the occupied ones with their identity.
 
-    OCCUPANCY IS THE `USER_DATA010.active_slot` BITMAP, not "the body decodes".
+    Occupancy is the `USER_DATA010.active_slot` BITMAP, not "the body decodes".
 
     Deleting a character clears that bitmap and leaves the `USER_DATA00N` body in place, so a
     deleted slot still decodes to a plausible name, level, runes and stats. Testing the body alone
     therefore offers slots the game will not load, and this tool's whole contract is that the
-    character is KNOWN before anything launches (AGENTS.md's Autoload Identity Launch Gate).
+    character is known before anything launches (AGENTS.md's Autoload Identity Launch Gate).
 
-    MEASURED 2026-09-03: `save-files/50-Merchant-Unleveled/ER0000.sl2` decoded as TEN occupied
+    Measured 2026-09-03: `save-files/50-Merchant-Unleveled/ER0000.sl2` decoded as ten occupied
     slots here while its bitmap holds exactly one, "Invader Merchant" level 50 in slot 0. The
     APPDATA container decoded as ten against a bitmap of four. Worse, `--seed 2073568449` -- the
     seed the `er-quickload` x `er-invasion-warp` conflict bisect ran four times -- picks slot 8 of
@@ -164,6 +205,13 @@ def occupied_slots(module, path: Path) -> list[dict]:
                 "level": level,
                 "runes": fields.get("runes"),
                 "stats": fields.get("stats_named"),
+                # Carried because it is half of what Seamless matches on. Its
+                # `matchmaking_breakin_lobby_ykssr_199_6` filter is a `<level>_<weapon>` pair, so a
+                # character reinforced far above its rune level searches a pool almost nobody is in
+                # -- and that is invisible in a block that prints only the rune level. Measured
+                # 2026-09-08 on the corpus: RL9 reads +0, RL90 +12, RL100 +20, while the character
+                # getting no invasions read +25 at RL9.
+                "matchmaking_weapon_level": fields.get("matchmaking_weapon_level"),
             }
         )
     return results
@@ -252,10 +300,10 @@ def selftest() -> int:
     expected = expected_save_bytes()
     check(expected == 0x1BA03D0, f"the product's size invariant is read live ({expected})")
 
-    # THE REGRESSION THIS TOOL SHIPPED WITH, pinned so it cannot come back.
+    # The regression this tool shipped with, pinned so it cannot come back.
     #
     # Occupancy used to mean "the body decodes to a name and a level > 0". Deleting a character
-    # clears the `USER_DATA010.active_slot` bitmap and LEAVES the body, so every deleted slot was
+    # clears the `USER_DATA010.active_slot` bitmap and leaves the body, so every deleted slot was
     # offered as a launch target. `--seed 2073568449` picked slot 8 of a container holding one
     # character, and the four-run conflict bisect that ran on that seed was therefore four
     # invalid-slot launches blamed on a DLL.

@@ -5,7 +5,7 @@
 //!
 //! Two threads, split by what they are allowed to touch:
 //!
-//! * a **fetch worker** does the blocking HTTPS GET and parses the payload. It touches no game
+//! * a **fetch worker** does the blocking HTTPS get and parses the payload. It touches no game
 //!   state at all, which is why it may block.
 //! * a **game-thread step**, [`tick`], does everything else. Building the catalog reads the param
 //!   tables and the message repository; granting mutates the inventory and the `CSGaitemImp`
@@ -37,13 +37,16 @@ pub mod catalog;
 pub mod character;
 pub mod chr_name;
 pub mod equip_native;
+pub mod evict;
 pub mod export;
 pub mod export_doc;
+pub mod face;
 pub mod gaitem;
 pub mod gem_mount;
 pub mod grant;
 pub mod native;
 pub mod read_character;
+pub mod reorder;
 pub mod storage;
 pub mod upload;
 
@@ -54,7 +57,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use er_build_import_core::equip::{
     CHR_ASM_SLOT_QUICK_BASE, Capacity, EquipLedger, PositionKind, PositionResult, equip_plan,
 };
-use er_build_import_core::{API_HOST, BuildDoc, build_path, model, plan::plan};
+use er_build_import_core::{API_HOST, BuildDoc, build_path, class, model, plan::plan, stats};
 
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
@@ -68,7 +71,7 @@ pub const CONFIG_FILE_NAME: &str = "er-quickload.toml";
 /// Identifies this client to the API owner, who runs the service for free.
 pub(crate) const USER_AGENT: &str = "er-mods-rs build-import (+github.com/Banon-Labs)";
 
-/// Log file name, written next to the game executable.
+/// Log file name, used as the game-directory default when no launcher redirect is set.
 const LOG_NAME: &str = "er-build-import.log";
 
 // ------------------------------------------------------------------ state
@@ -107,6 +110,63 @@ impl Phase {
 }
 
 static PHASE: AtomicUsize = AtomicUsize::new(Phase::Idle as usize);
+/// Non-zero while the pending request came from `er-quickload.toml` rather than from a player
+/// pressing a row. Only the unprompted kind is subject to the new-character refusal below.
+static REQUEST_IS_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
+/// `GameDataMan::play_time` sampled the first frame a player was in the world, or `UNSAMPLED`.
+static FIRST_PRESENT_PLAY_TIME: AtomicUsize = AtomicUsize::new(UNSAMPLED_PLAY_TIME);
+
+/// No reading has been taken yet. A real `play_time` is seconds and never reaches this.
+const UNSAMPLED_PLAY_TIME: usize = usize::MAX;
+
+/// Below this many seconds on the first frame in the world, the character was made just now.
+///
+/// The reading is taken at first presence, not at import time, so a player who stands in the
+/// Chapel of Anticipation while the fetch runs is still recognised as new. A character loaded from
+/// a save arrives with its accumulated seconds, which are past this within the first minute of the
+/// very first session that ever saved it.
+const NEW_CHARACTER_PLAY_TIME_SECONDS: usize = 60;
+
+/// `GameDataMan::play_time` right now, or `None` when the singleton is not up.
+fn live_play_time_seconds() -> Option<u32> {
+    use eldenring::cs::GameDataMan;
+    use fromsoftware_shared::FromStatic;
+
+    // Safety: read through the upstream singleton accessor, which answers `Err` before the
+    // singleton exists; this is the same access the character reader makes.
+    let game_data_man = unsafe { GameDataMan::instance() }.ok()?;
+    Some(game_data_man.play_time)
+}
+
+/// Whether the character in the world right now is one the player just created.
+///
+/// # Why the configured import asks at all
+///
+/// Nothing else in [`tick`] distinguishes one character from another: its preconditions are the
+/// phase, the params and `player_present`, so the build lands on whichever character reaches the
+/// world first. For a player that is the difference between a harness and a disaster -- a
+/// character created seconds earlier in the Chapel of Anticipation came out wearing another
+/// character's armour at that character's level with its stats and inventory, bisected to this
+/// crate on 2026-09-13 over 22 loaded DLLs.
+///
+/// A player who presses `Load Build from URL` is asking for the rebuild and is never refused; this
+/// applies only to the import nobody asked for.
+fn character_was_just_created() -> bool {
+    let sampled = FIRST_PRESENT_PLAY_TIME.load(Ordering::SeqCst);
+    let seconds = if sampled == UNSAMPLED_PLAY_TIME {
+        let Some(seconds) = live_play_time_seconds() else {
+            // No reading means no evidence that this character is safe to rewrite, and the
+            // refusal is the recoverable half of that pair.
+            return true;
+        };
+        let seconds = seconds as usize;
+        FIRST_PRESENT_PLAY_TIME.store(seconds, Ordering::SeqCst);
+        seconds
+    } else {
+        sampled
+    };
+    seconds < NEW_CHARACTER_PLAY_TIME_SECONDS
+}
 
 /// The parsed build, handed from the fetch worker to the game task.
 static DOC: Mutex<Option<BuildDoc>> = Mutex::new(None);
@@ -140,10 +200,50 @@ pub struct Report {
     pub name: Option<String>,
     /// Names the catalog could not resolve to an item id.
     pub unresolved: usize,
+    /// Items re-acquired into the build's order, out of those the character already held.
+    ///
+    /// Not part of [`Report::summary`]: a player reads that line to find out whether they got
+    /// their build, and the inventory sort order is not what they mean by that. It is in the
+    /// report so the log line and the telemetry have one source.
+    pub reordered: (usize, usize),
+    /// Equipment positions the build leaves empty that are empty afterwards, out of those it
+    /// leaves empty.
+    pub vacated: (usize, usize),
+    /// Consumables destroyed to free a pot group the storage box would not take.
+    ///
+    /// The grant pass's own irreversible rung, and separate from [`Report::destroyed_gear`] on
+    /// purpose: one is a stack shrinking so the build's own pots fit, the other is a weapon
+    /// ceasing to exist. Folding them into one number would let the second hide inside the first.
+    pub discarded: u32,
+    /// Armaments, armour and talismans destroyed because the storage box would not take them.
+    ///
+    /// The count the player is owed before anything else this report says. Every one of these is
+    /// named individually and uncapped in the log.
+    pub destroyed_gear: u32,
+    /// Armaments, armour and talismans the build does not name that went to the storage box.
+    pub evicted: u32,
+    /// Gear the build does not name that is still on the character when the import is over.
+    ///
+    /// Read back out of the inventory rather than inferred from what the sweep attempted, and in
+    /// the summary because it is the thing the player counts. A run that deposits eighty-eight
+    /// entries and leaves five behind is a run that did not do what it says.
+    pub left_behind: usize,
+    /// Equipment positions holding something the build did not put there, on a final independent
+    /// read of every position the plan has an opinion about.
+    ///
+    /// Separate from [`Report::equipped`], which is the equip pass scoring its own writes at the
+    /// moment it made them. This is measured last and covers the positions the build leaves empty
+    /// as well as the ones it fills, so an item in the wrong place has a number rather than
+    /// needing somebody to notice it on screen.
+    pub misplaced: usize,
+    /// Whether the character now wears the build's appearance -- read back out of
+    /// `PlayerGameData`, not inferred from the call having returned. False covers every other
+    /// case, including a build that carries no appearance at all.
+    pub face: bool,
 }
 
 impl Report {
-    /// Whether the import ATTEMPTED nothing at all -- not whether it succeeded.
+    /// Whether the import attempted nothing at all -- not whether it succeeded.
     ///
     /// The distinction is the whole point. `0/5 items` is a failure the counters already show.
     /// `0/0 items, 0/0 gear, 0/0 spells` is not a poor result, it is the absence of a result: the
@@ -161,7 +261,7 @@ impl Report {
     /// One line for a menu help field or a log: what a player wants to know is whether it worked.
     pub fn summary(&self) -> String {
         format!(
-            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}",
+            "{}/{} items, {}/{} gear, {}/{} spells, RL{}{}{}{}{}",
             self.granted.0,
             self.granted.1,
             self.equipped.0,
@@ -174,13 +274,31 @@ impl Report {
             } else {
                 format!(", {} attributes WRONG", self.attributes_wrong)
             },
-            // Only when the import CHANGED it. A character that already had the build's name is
+            // Before anything else, because it is the only thing here that cannot be undone. A
+            // player reading this line has to learn what they lost before they learn what they
+            // gained; silent at zero, which is the ordinary case.
+            if self.destroyed_gear == 0 {
+                String::new()
+            } else {
+                format!(", {} piece(s) of gear DESTROYED", self.destroyed_gear)
+            },
+            // The two failures a player sees and the counters could not previously name: gear the
+            // import did not take off them, and gear it put somewhere they did not ask for. Both
+            // are silent when zero, so a clean import reads exactly as it did before.
+            match (self.left_behind, self.misplaced) {
+                (0, 0) => String::new(),
+                (left, 0) => format!(", {left} item(s) LEFT BEHIND"),
+                (0, wrong) => format!(", {wrong} position(s) MISPLACED"),
+                (left, wrong) =>
+                    format!(", {left} item(s) LEFT BEHIND and {wrong} position(s) MISPLACED"),
+            },
+            // Only when the import changed it. A character that already had the build's name is
             // not a result, and printing it every time would read as a rename that did not happen.
             match self.name.as_deref() {
                 Some(name) => format!(", named {name:?}"),
                 None => String::new(),
             }
-        )
+        ) + if self.face { ", face" } else { "" }
     }
 }
 
@@ -189,7 +307,7 @@ pub fn phase() -> Phase {
     Phase::from_code(PHASE.load(Ordering::SeqCst))
 }
 
-/// TAKE the reason the last request failed, clearing it.
+/// Take the reason the last request failed, clearing it.
 ///
 /// Taking rather than peeking, because the failure is ASYNCHRONOUS -- the fetch worker fails long
 /// after [`request`] returned `Ok` -- so the only way a caller learns about it is by polling. A
@@ -219,7 +337,7 @@ pub fn configured_build_url() -> Option<String> {
     er_build_import_core::build_url_from_config(&contents).map(str::to_owned)
 }
 
-/// Whether the game-directory `er-quickload.toml` asks the STANDALONE shell to export one build link
+/// Whether the game-directory `er-quickload.toml` asks the standalone shell to export one build link
 /// at character load. Never consulted by the product DLL -- see
 /// [`er_build_import_core::EXPORT_ON_LOAD_KEY`].
 pub fn configured_export_on_load() -> bool {
@@ -304,7 +422,14 @@ pub fn request_configured() -> Result<bool, RequestError> {
         ));
         return Ok(false);
     };
-    request(&url).map(|()| true)
+    let outcome = request(&url).map(|()| true);
+    if outcome.is_ok() {
+        // Marks this pending request as the unprompted kind, which is the only kind
+        // `character_was_just_created` refuses. Set after the claim so a losing race cannot
+        // relabel a request a player made.
+        REQUEST_IS_CONFIGURED.store(1, Ordering::SeqCst);
+    }
+    outcome
 }
 
 /// The fetch proper. Runs on the worker thread; touches no game state.
@@ -343,74 +468,74 @@ fn fetch_inner(share_id: &str) {
         doc.items.tools.slots.len()
     ));
 
-    // THE EIGHT ATTRIBUTES ARE THE BUILD. The payload's `rl` is not: nothing downstream reads it,
-    // every stat this importer applies comes from the attributes themselves, and for every
-    // starting class the eight sum to level + 79 -- so the level is DERIVED here rather than
-    // trusted, and a planner that disagrees with its own numbers is reported, not obeyed.
-    //
-    // This used to be a hard refusal, and it rejected a real build over one point: a payload
-    // carrying `rl: 150` beside attributes summing to 228 (= level 149) failed with "internally
-    // inconsistent" and imported nothing at all. The observation was correct and the response was
-    // not -- the gear, spells, talismans and the attributes were all perfectly well-formed.
-    const ATTRIBUTE_KEYS: [&str; 8] = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"];
-    /// Every starting class satisfies `stat_sum - level == 79`; it is a property of the game, not
-    /// of any one class, so the level follows from the attributes alone.
-    const CLASS_INVARIANT: i64 = 79;
-    /// All eight attributes at 99.
-    const MAX_LEVEL: i64 = 8 * 99 - CLASS_INVARIANT;
+    // The eight attributes are the build, and the level is derived from them rather than trusted.
+    // The whole derivation -- the class floor under the attributes, the sum, the `- 79`, and the
+    // overwrite of the payload's `rl` -- lives in `er_build_import_core::stats`, which is
+    // host-testable; this crate is not, so nothing provable by `cargo test` belongs in it. Read
+    // that module for why each of those steps exists. What is left here is the reporting.
+    let normalised = match stats::normalise(&mut doc) {
+        Ok(normalised) => normalised,
+        Err(err) => return set_error(err.to_string()),
+    };
 
-    // A MISSING attribute is the failure that actually matters, and it used to be invisible:
-    // `filter_map` skipped absent keys, so a payload short one attribute summed low, derived a
-    // lower level, and imported a character quietly missing points nobody would notice.
-    let mut attrs: i64 = 0;
-    for key in ATTRIBUTE_KEYS {
-        match doc.stats.get(key) {
-            Some(value) => attrs += value,
-            None => {
-                return set_error(format!(
-                    "the payload has no `{key}` attribute; refusing to import a build whose \
-                     stats cannot be read in full"
+    // The floor (user-reported 2026-09-06). A starting class's base attributes are its minimum:
+    // no ordinary play session produces a Vagabond with strength below 14. A payload carrying one
+    // summed two points short, derived level 148 instead of the 150 it claimed, and stamped a
+    // character whose stat block contradicts its own class. `ApplyMainPlayerStats` does no
+    // clamping of its own (see `er_build_import_core::stats` for the decompiled evidence), so
+    // nothing downstream would have caught it. Naming what was raised matters more than most
+    // lines here, because the alternative is a character silently two levels off the build the
+    // player asked for.
+    match &normalised.floor {
+        stats::Floor::Class { name, archetype } if normalised.raised.is_empty() => {
+            log_line(&format!(
+                "[build-import] floor: {name} (archetype {archetype}, CharaInitParam {}) -- every \
+                 attribute is at or above its class base",
+                class::chara_init_param_row(*archetype)
+            ));
+        }
+        stats::Floor::Class { name, archetype } => {
+            log_line(&format!(
+                "[build-import] floor: {name} (archetype {archetype}, CharaInitParam {}) -- {} \
+                 attribute(s) BELOW the class base, raised to it. The build is not legal as \
+                 written and the level it claims already counts these points.",
+                class::chara_init_param_row(*archetype),
+                normalised.raised.len()
+            ));
+            for raised in &normalised.raised {
+                log_line(&format!(
+                    "[build-import]   RAISED {}: {} -> {} (class base)",
+                    raised.key, raised.was, raised.now
                 ));
             }
         }
+        stats::Floor::Unnamed => log_line(
+            "[build-import] floor: the build names no class, so there is no base to raise to. \
+             The attributes stand as the payload gave them -- no default class is invented.",
+        ),
+        stats::Floor::Unrecognised(name) => log_line(&format!(
+            "[build-import] floor: the build names {name:?}, which is not a class this build \
+             knows -- most likely the game grew one. No base to raise to, so the attributes \
+             stand as the payload gave them."
+        )),
     }
-    let level = attrs - CLASS_INVARIANT;
-    if !(1..=MAX_LEVEL).contains(&level) {
-        return set_error(format!(
-            "attributes sum to {attrs}, which is level {level} -- outside 1..={MAX_LEVEL}, so \
-             the stat block is not a real character"
-        ));
-    }
-    match doc.stats.get("rl").copied() {
-        Some(claimed) if claimed != level => log_line(&format!(
-            "[build-import] level: attributes sum to {attrs}, so RL {level}. The payload CLAIMS \
-             RL {claimed}, which disagrees with its own stat block by {}. Importing the \
+
+    match normalised.claimed {
+        Some(claimed) if claimed != normalised.level => log_line(&format!(
+            "[build-import] level: attributes sum to {}, so RL {}. The payload CLAIMS RL \
+             {claimed}, which disagrees with its own stat block by {}. Importing the \
              attributes, which are what actually get applied.",
-            (claimed - level).abs()
+            normalised.total,
+            normalised.level,
+            (claimed - normalised.level).abs()
         )),
         _ => log_line(&format!(
-            "[build-import] level: {attrs} - {CLASS_INVARIANT} = {level}, matches the payload"
+            "[build-import] level: {} - {} = {}, matches the payload",
+            normalised.total,
+            stats::CLASS_INVARIANT,
+            normalised.level
         )),
     }
-    // AND THE CLAIM IS OVERWRITTEN, not merely reported (2026-09-01). The sentence above --
-    // "importing the attributes, which are what actually get applied" -- was not true of the
-    // LEVEL: `character::apply_stats` fills `stats[STAT_LEVEL]` from `want("rl")`, i.e. from
-    // exactly the number this block had just found untrustworthy, and then read-back-checks
-    // `PGD_LEVEL` against it. So a planner link claiming `rl: 150` beside attributes summing to
-    // 226 stamped a character with `level == 150` and a stat block implying 147.
-    //
-    // That is not cosmetic. `er_save_loader::stats` locates a save slot's serialized
-    // `PlayerGameData` by the identity `level == sum(attrs) - 79`, so a character minted with a
-    // contradictory level was one the mod's OWN save reader could no longer find: on the live
-    // default container it decoded 9 of 10 slots, and the Load Character row for the missing one
-    // rendered a name with an empty attribute line and no `WL` (user-reported 2026-09-01). The
-    // reader now has a structural fallback, but the importer must not be the thing producing
-    // such characters in the first place.
-    //
-    // Normalising here rather than in `apply_stats` keeps ONE derivation: everything downstream
-    // -- the applier, the read-back check, the report -- reads a `doc` whose `rl` and attributes
-    // agree, and no second copy of `- 79` can drift from this one.
-    doc.stats.insert("rl".to_owned(), level);
 
     match DOC.lock() {
         Ok(mut slot) => {
@@ -424,7 +549,7 @@ fn fetch_inner(share_id: &str) {
 
 // ------------------------------------------------------------------ game thread
 
-/// One frame of the importer. Does nothing until a build is [`Phase::Ready`] AND the game can take
+/// One frame of the importer. Does nothing until a build is [`Phase::Ready`] and the game can take
 /// it, then runs the whole import once and returns the report.
 ///
 /// # Safety
@@ -442,14 +567,27 @@ pub unsafe fn tick() -> Option<Report> {
     if !unsafe { grant::player_present() } {
         return None;
     }
+    if REQUEST_IS_CONFIGURED.load(Ordering::SeqCst) != 0 && character_was_just_created() {
+        REQUEST_IS_CONFIGURED.store(0, Ordering::SeqCst);
+        let _ = DOC.lock().map(|mut slot| slot.take());
+        set_error(format!(
+            "REFUSED: the character in the world has under {NEW_CHARACTER_PLAY_TIME_SECONDS}s of \
+             play time, so it was created just now rather than loaded. A `{BUILD_URL_KEY}` in \
+             {CONFIG_FILE_NAME} rebuilds whichever character reaches the world first, and \
+             rewriting a character the player is still making is never what that was for. Load an \
+             existing character to import into it, or press `Load Build from URL` on this one."
+        ));
+        return None;
+    }
     let doc = DOC.lock().ok().and_then(|mut slot| slot.take())?;
+    REQUEST_IS_CONFIGURED.store(0, Ordering::SeqCst);
     // Claim the run before doing it: a panic must not leave the task retrying every frame.
     PHASE.store(Phase::Importing as usize, Ordering::SeqCst);
 
     // Safety: the caller's contract (game task thread) carries through.
     let report = unsafe { import_now(&doc) };
     match report {
-        // NOTHING WAS ATTEMPTED. Reported as a FAILURE, with the names, rather than as a
+        // Nothing was attempted. Reported as a failure, with the names, rather than as a
         // completed import of nothing. See `Report::attempted_nothing`.
         Some(report) if report.attempted_nothing() => {
             let inert = native::inert();
@@ -506,7 +644,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
          {} ashes have no gem that draws an icon (their badge renders the `ICON` placeholder)",
         stats.named, stats.unnamed, stats.spell_rows, stats.iconless_ashes
     ));
-    // BOTH NUMBERS ARE INERTNESS DETECTORS. A zero on either is the goods param table failing to
+    // Both numbers are INERTNESS detectors. A zero on either is the goods param table failing to
     // read, and each failure is invisible in its own outcome: no pot group could be freed, and
     // every consumable in the build silently becomes one copy. Neither looks like a fault
     // afterwards, so they are counted here rather than inferred later.
@@ -515,17 +653,17 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
          -- a consumable is granted that many, capped at 99, and reconciled rather than added",
         stats.pot_capped_rows, stats.max_held_rows
     ));
-    // AMMUNITION IS A SUBTRACTION FROM THE ARMAMENT CATALOG, so this number is a denominator for
+    // Ammunition is a SUBTRACTION from the armament catalog, so this number is a denominator for
     // both kinds and a zero is not merely "no arrows". A zero means the weapon table did not
     // classify, `Kind::Ammo` is empty and every arrow is still filed under `Kind::Weapon` -- so a
-    // build's ammo comes back UNRESOLVED while the same name sits one catalog over. The installed
+    // build's ammo comes back unresolved while the same name sits one catalog over. The installed
     // 1.17 table has 73 such rows.
     log_line(&format!(
         "[build-import] catalog: {} EquipParamWeapon rows are ammunition (weaponCategory 13/14) \
          -- granted at their own EquipParamWeapon.maxArrowQuantity, not at maxNum",
         stats.ammo_rows
     ));
-    // THE OFFSET ALARM. Two independent fields classify the same rows; they agree on every build
+    // The offset alarm. Two independent fields classify the same rows; they agree on every build
     // measured. A non-zero here says one of the two is being read out of the wrong place, which
     // is the one defect in the catalog that produces no fault and no refusal.
     if stats.ammo_classification_disagreements > 0 {
@@ -539,7 +677,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         ));
     }
 
-    // NAMES THAT RESOLVE TO MORE THAN ONE ROW. Reported at build time rather than discovered
+    // Names that resolve to more than one row. Reported at build time rather than discovered
     // later as a duplicated item: an id that cannot be told apart from its siblings by name is
     // exactly the shape that granted a second Flask of Wondrous Physick.
     let collisions = catalog.collisions();
@@ -551,7 +689,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
              counts all of them, so holding any one counts as holding the item",
             collisions.len()
         ));
-        // NO CAP. The first cut printed 24 of 101, sorted by (kind, name) -- which put a wall of
+        // No cap. The first cut printed 24 of 101, sorted by (kind, name) -- which put a wall of
         // `[error]`-named placeholder rows first and cut off everything real, including the one
         // item under investigation. A truncated report is worse than none: it was read as
         // "this item does not collide" and nearly retracted a correct diagnosis.
@@ -623,6 +761,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // Safety: game thread, character loaded (checked by the caller), verified RVAs.
     let outcome = unsafe { grant::grant_all(module_base, &planned.grants) };
     report.granted = (outcome.confirmed, outcome.attempted);
+    report.discarded = outcome.discarded_to_free_pots;
     log_line(&format!(
         "[build-import] GRANTED: {}/{} confirmed AT THE REQUESTED QUANTITY ({} short, {} missing \
          entirely, {} already held and left alone)",
@@ -632,7 +771,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         outcome.missing.len(),
         outcome.already_held
     ));
-    // THE STORAGE BOX, AND WHY A NUMBER HERE IS NOT A COMPLAINT. Items pulled back were the
+    // The storage box, and why a number here is not a complaint. Items pulled back were the
     // player's own copies, moved instead of duplicated; items deposited were pot-group members
     // the build did not ask for, moved to raise the group's ceiling. Both are reversible by the
     // player at any grace. A run where the box was unreachable says so, because zero-and-unable
@@ -649,7 +788,20 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             outcome.pulled_from_storage, outcome.deposited_to_storage
         ));
     }
-    // SHORT IS NOT MISSING, AND IT IS THE ONE THE OLD REPORT COULD NOT SAY. Printed before the
+    // On its own line, never folded into the storage counts, and printed whenever it is non-zero
+    // even though the per-item lines already said it. A deposit and a discard both read as "the
+    // item left your pockets" and only one of them can be walked back, so the irreversible one
+    // gets its own headline or it hides inside the harmless one.
+    if outcome.discarded_to_free_pots > 0 {
+        log_line(&format!(
+            "[build-import] DISCARDED: {} consumable(s) were DESTROYED, not stored. The storage \
+             box refused them -- it was already at their maxRepositoryNum -- and their pot group \
+             was what stopped the build's own pots from being carried. Nothing else this import \
+             did is irreversible; this is",
+            outcome.discarded_to_free_pots
+        ));
+    }
+    // Short is not missing, and it is the one the old report could not say. Printed before the
     // missing list because it is the failure a reader will otherwise not know happened.
     for short in outcome.short.iter().take(12) {
         log_line(&format!(
@@ -673,7 +825,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         log_line(&format!("[build-import]   MISSING item id 0x{id:08X}"));
     }
 
-    // ARMAMENTS, READ BACK OFF THE INSTANCE THAT WAS JUST MINTED.
+    // ARMAMENTS, read back off the instance that was just MINTED.
     //
     // Quantity cannot see an ash or an upgrade level: both live on the gaitem, not in the item
     // id, so "71/71 present" was true and meaningless while every weapon came out bare. Each
@@ -690,8 +842,12 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         .filter(|arm| arm.wanted_gem.is_some() && arm.has_ash())
         .count();
     log_line(&format!(
-        "[build-import] ARMAMENTS (read back off the minted gaitem): {ashes_mounted}/{wanted_ashes}          ashes mounted, {} armaments granted",
-        outcome.armaments.len()
+        "[build-import] ARMAMENTS (read back off the gaitem): {ashes_mounted}/{wanted_ashes} ashes \
+         mounted, {} armaments the build names -- {} minted, {} already in the pockets and \
+         adopted rather than duplicated",
+        outcome.armaments.len(),
+        outcome.armaments.len() - outcome.armaments_adopted,
+        outcome.armaments_adopted
     ));
     for arm in &outcome.armaments {
         log_line(&format!(
@@ -714,7 +870,131 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         ));
     }
 
-    // WHAT EACH ARMAMENT SLOT SHOULD BE HOLDING, computed BEFORE the equip rather than after it,
+    // Between the grant and the equip, the two passes that make a RE-import mean what it says.
+    //
+    // Both answer the same complaint, from opposite ends: a build imported onto a character that
+    // already owns most of it used to change almost nothing the player could see. The grant
+    // correctly left held items alone, the equip correctly wrote only the positions the build
+    // fills, and the result was the previous build's gear still worn beside the new build's, in
+    // the previous build's inventory order.
+    //
+    // Both run before the equip, and `apply_build_order` runs first. It has to take items off to
+    // move them -- a worn entry is named by `EquipGameData.equipmentItemIdxList` and must not be
+    // removed from under that -- and it does not put them back, so the equip is what dresses the
+    // character afterwards. Running the vacate second costs nothing and means the positions the
+    // build wants bare are cleared after everything that could have disturbed them.
+    if let Some(egd) = unsafe { grant::equip_game_data() } {
+        // Safety: game thread, character in the world (the caller proved it), grants applied.
+        let reordered = unsafe { reorder::apply_build_order(module_base, egd, &planned.grants) };
+        log_line(&format!("[build-import] {}", reordered.summary()));
+        for (label, why) in reordered.declined.iter().take(12) {
+            log_line(&format!("[build-import]   NOT REORDERED {label:?}: {why}"));
+        }
+        // An item that went into the box and did not come back is the one failure in this pass
+        // that costs the player something, so it is never folded into a count.
+        for (label, deposited, retrieved) in &reordered.stranded {
+            log_line(&format!(
+                "[build-import]   STRANDED {label:?}: {deposited} went into the storage box and                  {retrieved} came back. The rest is in the box and can be collected at any grace"
+            ));
+        }
+        report.reordered = (reordered.restamped, reordered.attempted);
+
+        let vacancies = equips.vacancies();
+        // Safety: as above; the vacate pass reads every position back rather than counting calls.
+        let vacated = unsafe { equip_native::vacate_all(module_base, egd, &vacancies) };
+        log_line(&format!("[build-import] {}", vacated.summary()));
+        for (kind, slot, holding) in vacated.still_occupied.iter().take(12) {
+            log_line(&format!(
+                "[build-import]   STILL WORN {} (slot {slot}): the build leaves this position                  empty and it holds {holding}",
+                kind.label()
+            ));
+        }
+        for (kind, slot) in vacated.unproven.iter().take(12) {
+            log_line(&format!(
+                "[build-import]   VACANCY UNPROVEN {} (slot {slot}): nothing on this build can                  read the position back, so whether it is empty is unknown",
+                kind.label()
+            ));
+        }
+        report.vacated = (vacated.cleared + vacated.already_empty, vacated.attempted);
+
+        // Last of the three, and before the equip rather than after it. Every deposit shifts the
+        // inventory indices the equip resolves, so the equip has to be the final word; and gear
+        // the previous build wore in a position the new build also names is still on the
+        // character here, because the vacate above clears only the positions the build wants
+        // bare. The pass takes those off itself before depositing them.
+        //
+        // An allowance, not a list of ids. The build asks for a count of each thing -- one
+        // Serpent Crest Shield, five Crimson Seed Talismans -- and a set of ids cannot say five,
+        // so every copy of a named id survived and the sweep left 168 entries alone for a build
+        // with 24 gear positions. `er_build_import_core::sweep::Allowance` spends one item of the
+        // build's count per copy and sweeps the rest, and it takes `outcome.armaments` as well as
+        // the plan because the copies this import minted are named by gaitem handle: an ash lives
+        // on the instance, so the item id cannot tell the new shield from the old one it replaces.
+        // The classification itself is host-tested against the invariant over generated
+        // inventories, so the runtime half below is the part that moves things and says what it
+        // failed to move.
+        let allowance = evict::allowance_for(&planned.grants, &outcome.armaments);
+        // Safety: game thread, character in the world, and the vacate above has run.
+        let evicted = unsafe { evict::unlisted_gear(module_base, egd, &allowance) };
+        log_line(&format!("[build-import] {}", evicted.summary()));
+        // First, and one line each however many there are. This is the list the complaint is
+        // about -- gear the build does not name that is still on the character -- and it is the
+        // one thing in this report that must never be capped, sampled, or folded into a count.
+        for (item, why) in &evicted.left_behind_names {
+            log_line(&format!("[build-import]   LEFT BEHIND {item}: {why}"));
+        }
+        // The other direction, and the one that costs the player something: the sweep deposited or
+        // destroyed the copy this import had just made, because the natives that move an entry
+        // resolve it by item id and two copies of one id are not distinguishable to them.
+        for item in &evicted.pinned_lost_names {
+            log_line(&format!(
+                "[build-import]   EVICTED THE BUILD'S OWN {item}: this import made or adopted this \
+                 exact copy and it is no longer in the inventory"
+            ));
+        }
+        if evicted.reconciles() {
+            log_line(
+                "[build-import] EVICT RECONCILED: the character holds no gear the build does not \
+                 ask for",
+            );
+        }
+        // The reversible half of "your gear is not where you left it", named one by one so the
+        // player knows what to go and pick up. Listed before the destroyed items because it is
+        // the outcome they would rather read.
+        for (item, quantity) in &evicted.dropped {
+            log_line(&format!(
+                "[build-import]   DROPPED {item} x{quantity}: the storage box would not take it, \
+                 so it is on the ground where the character is standing, whole -- same upgrade \
+                 level, same Ash of War"
+            ));
+        }
+        // Named one by one and never folded into the summary's count, because this is the second
+        // irreversible thing the importer does and the player is owed the list.
+        for (item, quantity, ash) in &evicted.discarded {
+            log_line(&format!(
+                "[build-import]   DESTROYED {item} x{quantity}: the storage box would not take it \
+                 and already holds two or more of the same item. {}",
+                if *ash {
+                    "Its Ash of War was taken off first and is back in the inventory"
+                } else {
+                    "It had no Ash of War to recover"
+                }
+            ));
+        }
+        for (item, why) in &evicted.refused {
+            log_line(&format!("[build-import]   NOT EVICTED {item}: {why}"));
+        }
+        // The other half of "why is this still on my character": the build asked for it. Without
+        // this line a kept item and a stuck item look identical from the outside.
+        for item in &evicted.kept_names {
+            log_line(&format!("[build-import]   KEPT {item}"));
+        }
+        report.evicted = evicted.deposited_items;
+        report.left_behind = evicted.left_behind;
+        report.destroyed_gear = evicted.discarded_items;
+    }
+
+    // What each armament slot should be holding, computed before the equip rather than after it,
     // because it is now needed twice: it tells the equip which minted copy belongs in which hand
     // (an ash lives on the instance, so the item id alone cannot say), and it is what the
     // post-import read-back adjudicates the worn armament against. One table, both jobs -- the
@@ -724,7 +1004,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     // Equip only what was actually granted: equipping an item the inventory does not hold cannot
     // work, and the outcome distinguishes those from real equip failures.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
-        // OPEN THE LEDGER OVER THE PLAN, BEFORE ANYTHING IS WRITTEN. Every score below is
+        // Open the ledger over the plan, before anything is written. Every score below is
         // measured against this, so a family of positions the pass never reaches cannot leave
         // the denominator on its way out -- which is how a run that equipped ten of twelve
         // planned positions printed "10/10 verified".
@@ -738,7 +1018,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         let worn =
             unsafe { equip_native::equip_all(module_base, egd, &mut ledger, &mut instances) };
 
-        // HOW EACH POSITION WAS RESOLVED, not just whether it was. An index found from the minted
+        // How each position was resolved, not just whether it was. An index found from the minted
         // handle names one specific instance; an index found from the item id names whichever
         // copy the inventory filed lowest, which for several armaments differing only by ash is
         // an arbitrary one of them. A line that does not say which question was asked cannot be
@@ -765,12 +1045,12 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                  this position may hold a copy carrying another ash"
             ));
         }
-        // A SUBSTITUTION, NAMED. The build asked for one row and the character owns another row
+        // A substitution, named. The build asked for one row and the character owns another row
         // of the same item because they have upgraded it, so the position is filled with an id
         // the build never mentions. That is the right answer and it still has to be said out
         // loud: an unannounced id swap is indistinguishable in a log from equipping the wrong
         // thing, and the alternative -- what this replaced -- was reporting the item as
-        // NOT-IN-INVENTORY while it sat in the player's pouch.
+        // not-in-inventory while it sat in the player's pouch.
         for (kind, slot, wanted, held) in worn.by_upgrade_variant.iter().take(12) {
             log_line(&format!(
                 "[build-import]   UPGRADED ROW {} slot {slot}: the build names 0x{wanted:08X}, \
@@ -779,8 +1059,8 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 kind.label()
             ));
         }
-        // ONE ENTRY, ONE SLOT -- refused collisions, named. A collision is not a near-miss: the
-        // equip that was refused would have STRIPPED the slot it collided with, so the log has to
+        // One entry, one slot -- refused collisions, named. A collision is not a near-miss: the
+        // equip that was refused would have stripped the slot it collided with, so the log has to
         // say which slot kept the item and which position went without.
         if worn.index_collisions.is_empty() {
             log_line(
@@ -801,7 +1081,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             }
         }
 
-        // AFTER EVERYTHING. Each per-position read-back ran before the positions following it, so
+        // After everything. Each per-position read-back ran before the positions following it, so
         // it can only prove its own write landed. This is the sweep that proves it survived.
         if worn.stripped_after_verifying.is_empty() {
             log_line(
@@ -822,7 +1102,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         }
         // The right armament, a different upgrade level. Counted as placed -- which armament is
         // in which hand is what the equip decides, and the level is the grant's, reported on its
-        // own ARMAMENT line -- but never silent, because "+25 imported as +0" is a complaint a
+        // own armament line -- but never silent, because "+25 imported as +0" is a complaint a
         // reader must be able to answer from this file.
         for (slot, expected, actual) in worn.level_differences.iter().take(12) {
             log_line(&format!(
@@ -856,11 +1136,11 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             ));
         }
 
-        // THE ONE READ-BACK THAT ANSWERS THE PLAYER'S QUESTION.
+        // The one read-back that answers the player'S question.
         //
         // Grants and equips can both be green while the character holds a bare weapon: the grant
-        // proves an instance exists, the equip proves a slot holds that ITEM ID, and neither can
-        // see which INSTANCE the slot took. A build routinely carries several copies of one
+        // proves an instance exists, the equip proves a slot holds that item ID, and neither can
+        // see which instance the slot took. A build routinely carries several copies of one
         // armament differing only by ash, so the id is not a unique name for a weapon. This walks
         // the worn armament itself -- slot -> gaitem handle -> instance -> equipped gem -> arts
         // row -- and says what is actually in the player's hands.
@@ -888,10 +1168,10 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                     )
                 }
             });
-            // WHICH ARMAMENT THE PLAN PUT HERE, so the two ways of being wrong can be told apart
-            // BY THE LOG rather than by a reader cross-referencing two sections of it. A slot
+            // Which armament the plan put here, so the two ways of being wrong can be told apart
+            // by the log rather than by a reader cross-referencing two sections of it. A slot
             // holding a different item id holds another armament entirely; a slot holding the
-            // RIGHT id with the wrong arts row holds a different COPY of the right armament,
+            // right id with the wrong arts row holds a different copy of the right armament,
             // which is the exact failure the gaitem-handle threading exists to prevent and the
             // only one an id-keyed equip could ever produce.
             let planned_item = er_build_import_core::equip::armament_planner_index(want.slot)
@@ -905,7 +1185,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 }
                 (_, None) if worn_arm.is_none() => "EMPTY -- no armament is worn in this slot",
                 (_, None) => "NOT MOUNTED -- the worn armament reports no sword-arts row",
-                // Compared WITHOUT the upgrade level, which lives in the id's last two digits:
+                // Compared without the upgrade level, which lives in the id's last two digits:
                 // the plan names an armament, the level is a separate dimension of it, and a
                 // worn +25 would otherwise read as a different weapon from the +25 that was
                 // placed here.
@@ -920,7 +1200,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 // so a gem mounted on such a weapon is stored and then ignored.
                 _ => "WRONG COPY OR NO GEM SLOT -- the right armament, carrying the wrong ash",
             };
-            // THE UPGRADE LEVEL, READ OFF THE WORN INSTANCE. Printed here because it is the
+            // The upgrade level, read off the worn instance. Printed here because it is the
             // number the player is looking at when they say a build imported at +0, and because
             // `GetReinforcement` is not it: that field read 25 for a whole session of +0 weapons.
             let worn_item = worn_arm.map_or_else(
@@ -955,7 +1235,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         for id in worn.not_in_inventory.iter().take(12) {
             log_line(&format!("[build-import]   NOT-IN-INVENTORY 0x{id:08X}"));
         }
-        // WHAT IS THERE INSTEAD. `NOT-IN-INVENTORY` names the row the build wanted and nothing
+        // What is there instead. `NOT-IN-INVENTORY` names the row the build wanted and nothing
         // else, and for the two flasks it was wrong in the same way in every run there is a log
         // of: the character owned the item, at an upgrade level whose row is a different id. The
         // one fact that diagnoses it is the id the position is holding, and this is that id.
@@ -984,7 +1264,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         let filled = unsafe { equip_native::fill_physick(module_base, egd, &equips.physick) };
         let after = unsafe { equip_native::read_physick(module_base, egd) };
         report.physick = (filled.unwrap_or(0), wanted_tears.len());
-        // UNREADABLE is not EMPTY. `-1` is the flask's own "this slot holds nothing", so a
+        // UNREADABLE is not empty. `-1` is the flask's own "this slot holds nothing", so a
         // refusal rendered as `-1` would tell the reader the tears were not written when in fact
         // they were written and could not be read back.
         let render = |flask: Option<[i32; 2]>| match flask {
@@ -1048,7 +1328,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             ));
         }
 
-        // THE ONE LINE. It reconciles against the plan, names every position that did not end up
+        // The one line. It reconciles against the plan, names every position that did not end up
         // holding the build's item, and is the last word on this pass -- so a partial import
         // cannot be read as a complete one no matter which family of positions went missing.
         let counts = ledger.counts();
@@ -1057,8 +1337,8 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             "[build-import] EQUIP LEDGER: {}",
             ledger.headline()
         ));
-        // THE SUBTRACTION NOBODY DID. Every number needed to catch the last defect was already
-        // in this file -- `25 planned`, `5 failed`, `3 position(s) NO LONGER hold what was
+        // The SUBTRACTION nobody did. Every number needed to catch the last defect was already
+        // in this file -- `25 planned`, `5 failed`, `3 position(s) no longer hold what was
         // written` -- in three separate lines, and no line differenced them, so a pass that
         // dropped a fifth of its work read as a pass that mostly worked. This one reconciles or
         // names its own casualties, and it is derived from the same ledger as the headline so
@@ -1070,9 +1350,61 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         for failure in ledger.failures() {
             log_line(&format!("[build-import]   NOT EQUIPPED: {failure}"));
         }
+
+        // Measured last, over both halves, and from the plan rather than from either pass's own
+        // record of what it attempted.
+        //
+        // Every number above this line is a pass scoring itself. The ledger reads each position
+        // back at the instant it writes it, so it cannot see a later write that displaced an
+        // earlier one; the vacate pass runs before the equip, so its read-backs predate everything
+        // that could have refilled a position it cleared. Neither of them is the last word, and
+        // "one imported item landed in the wrong place" is a complaint neither can answer.
+        //
+        // Safety: game thread, character in the world, `egd` live -- the same preconditions every
+        // pass in this block runs under.
+        let placement = unsafe {
+            equip_native::audit_placement(
+                module_base,
+                egd,
+                &equips.positions(),
+                &equips.vacancies(),
+            )
+        };
+        log_line(&format!("[build-import] {}", placement.summary()));
+        for (kind, slot, expected, actual) in &placement.misplaced {
+            log_line(&format!(
+                "[build-import]   MISPLACED {} (slot {slot}): the build asks for {expected} and \
+                 the position holds {actual}",
+                kind.label()
+            ));
+        }
+        for (kind, slot) in &placement.unreadable {
+            log_line(&format!(
+                "[build-import]   PLACEMENT UNPROVEN {} (slot {slot}): nothing on this build can \
+                 read the position back, so whether it holds the build's item is unknown",
+                kind.label()
+            ));
+        }
+        // Named rather than counted, and named as a disagreement rather than as a wrong weapon.
+        // The ash read-back below walks `ChrAsm`, which lags the equipment entries by some number
+        // of frames, and on 2026-09-11 it called three correctly equipped armaments wrong.
+        for (slot, mirror, equipment) in &placement.mirror_disagreements {
+            log_line(&format!(
+                "[build-import]   MIRROR LAG slot {slot}: `ChrAsm` still reports {mirror} while \
+                 the equipment entries report {equipment}. The equipment entries are what the \
+                 equip wrote, so an ash read-back for this slot is reading a stale weapon"
+            ));
+        }
+        report.misplaced = placement.misplaced.len() + placement.unreadable.len();
+        if placement.reconciles() {
+            log_line(
+                "[build-import] PLACEMENT RECONCILED: every position the build has an opinion \
+                 about holds what it asks for",
+            );
+        }
     }
 
-    // Class BEFORE stats: the level-up menu derives its per-attribute floors from the archetype's
+    // Class before stats: the level-up menu derives its per-attribute floors from the archetype's
     // CharaInitParam row, so setting the class first means anything that re-reads those floors
     // already sees the right class.
     if let Some(pgd) = unsafe { character::player_game_data() } {
@@ -1087,14 +1419,14 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
             None => log_line("[build-import] CLASS: build names none, left alone"),
         }
 
-        // NAME, before the stats. Not for correctness -- nothing here depends on the order -- but
+        // Name, before the stats. Not for correctness -- nothing here depends on the order -- but
         // because `ApplyMainPlayerStats` recomputes and re-renders a pile of derived state, and a
         // rename that lands first is visible on the very next frame the stats pass causes rather
         // than one frame later.
         //
         // This is the only rename Elden Ring has: `CS::PlayerGameData::CopyChrName` is the sole
         // writer of the name, and the game exposes no UI that calls it after character creation.
-        // What it does NOT do is write the save -- the ProfileSummary record and the `.sl2` copy
+        // What it does not do is write the save -- the ProfileSummary record and the `.sl2` copy
         // both come from `PlayerGameData` at the next save the game performs, which under the
         // product DLL means the System>Quit "Save Game" row and nothing else.
         //
@@ -1102,6 +1434,27 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         let named = unsafe { chr_name::adopt_build_name(module_base, pgd, &doc.name) };
         report.name = named.adopted().map(str::to_owned);
         log_line(&format!("[build-import] NAME: {}", named.label()));
+
+        // The appearance, beside the name because they are the same kind of thing: both are
+        // identity rather than loadout, both live in `PlayerGameData`, and both are written
+        // through the one native the game provides for them.
+        //
+        // Unlike the name, this one is visible without a reload. The model instance holds a
+        // pointer to `PlayerGameData::faceData`, and the per-frame check in
+        // `CS::PlayerIns::PrePhysicsSafe1` re-applies the face whenever the generation stamp the
+        // native bumps no longer matches the one it cached -- see `face`'s module header for the
+        // chain, and for the one part of the payload expected to wait for the next load.
+        //
+        // Safety: game thread, character in the world (gated by the caller), `pgd` read above.
+        let face = unsafe {
+            face::adopt_build_face(
+                module_base,
+                pgd,
+                doc.appearance().ok().map(|found| &found.sliders),
+            )
+        };
+        report.face = face.adopted();
+        log_line(&format!("[build-import] APPEARANCE: {}", face.label()));
 
         // Safety: game thread, character in the world (gated by the caller).
         match unsafe { character::apply_stats(module_base, pgd, doc) } {
@@ -1133,7 +1486,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     }
 
     // Spells last: ApplyMainPlayerStats recomputes the memory-slot count from Mind, so asking the
-    // game for capacity before the stats are applied would use the OLD number.
+    // game for capacity before the stats are applied would use the old number.
     if let Some(egd) = unsafe { grant::equip_game_data() } {
         // Safety: game thread, character loaded.
         match unsafe { character::memorise_spells(module_base, egd, &equips.spells) } {
@@ -1196,11 +1549,35 @@ fn module_base() -> usize {
 /// the whole report in a `String` and flushed at the end, so a worker that died left nothing at all
 /// and looked exactly like a DLL that never loaded.
 ///
-/// Routed through `er_game_base::log` so the file describes ONE run: the shared helper rotates the
+/// Routed through `er_game_base::log` so the file describes one run: the shared helper rotates the
 /// previous run's log aside on first write instead of letting runs pile up in one file.
 pub fn log_line(line: &str) {
-    let path = er_game_base::log::game_directory_path()
-        .map(|dir| dir.join(LOG_NAME))
-        .unwrap_or_else(|| PathBuf::from(LOG_NAME));
-    er_game_base::log::append_line(&path, format_args!("{line}"));
+    er_game_base::log::append_line(&log_path(), format_args!("{line}"));
+}
+
+/// Where this run's import report lands: the artifact directory the launcher named, else beside the
+/// game executable.
+///
+/// This crate wrote straight into the game directory until 2026-09-10, so a run directory under
+/// `~/.cache/er-me3-runs/` held zero build-import lines and the only copy of the report sat in the
+/// single slot every later launch competes for. `er_game_base::log::begin_fresh_run` rotates
+/// `<name>` to `<name>.prev` and truncates on the first write of each process, so two more imports
+/// destroy the report anyone is still asking about. Measured on run `br-20260911-005533-858a`: the
+/// investigation had to read the game-directory copy, which had survived only because nothing had
+/// rotated it yet.
+///
+/// Public because the standalone shell's panic hook writes into the same file and must follow the
+/// same redirect. A hook that resolved the game-directory name itself would put the crash report
+/// somewhere other than the run whose log explains it.
+///
+/// The default with no env var set is unchanged, which is the whole contract of
+/// `redirected_artifact_path`: a redirect that does not survive `launch.sh` -> me3 -> Proton must
+/// still leave the report beside `eldenring.exe` rather than write it nowhere.
+pub fn log_path() -> PathBuf {
+    // The knob is spelled inline rather than through a `const`:
+    // `scripts/er-artifact-redirect-audit.py` discovers every launcher knob by reading the Rust for
+    // this exact call shape with a string literal, so a name hidden behind a constant is a knob the
+    // audit cannot see -- and an invisible knob is how this file went unredirected in the first
+    // place.
+    er_game_base::log::redirected_artifact_path("ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH", LOG_NAME)
 }

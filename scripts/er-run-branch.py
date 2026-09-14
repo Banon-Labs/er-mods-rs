@@ -3,36 +3,36 @@
 
 Pipeline, in order, each step refusing rather than guessing:
 
-  1. GARBAGE-COLLECT dead runs. Cleanup is guaranteed by this step, not by the reaper.
-  2. STEAM PREFLIGHT via scripts/steam-running.sh. With Steam down the game still boots, but
+  1. Garbage-collect dead runs. Cleanup is guaranteed by this step, not by the reaper.
+  2. Steam PREFLIGHT via scripts/steam-running.sh. With Steam down the game still boots, but
      into a different environment (wineprefix, save dir, account id), so the logs land
      elsewhere and the run is not representative.
-  3. CLOSURE -- scripts/er-dll-closure.py. Refuses on a conflict it cannot rank.
-  4. PROVENANCE -- scripts/er-dll-provenance.py per selected DLL. A DLL with no provenance,
-     or whose recorded source hash no longer matches this tree, is STALE and stops the run.
+  3. Closure -- scripts/er-dll-closure.py. Refuses on a conflict it cannot rank.
+  4. Provenance -- scripts/er-dll-provenance.py per selected DLL. A DLL with no provenance,
+     or whose recorded source hash no longer matches this tree, is stale and stops the run.
      Nothing here builds: this tool's contract is that the DLL is already fresh, and if it is
      not, it says so loudly.
-  5. SAVE -- scripts/er-pick-save.py. Random, but DECODED FIRST: the character's name, level
+  5. Save -- scripts/er-pick-save.py. Random, but DECODED FIRST: the character's name, level
      and slot are known and printed before anything launches (AGENTS.md's Autoload Identity
      Launch Gate). `--seed` reproduces a pick exactly.
-  6. STAGE -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-quickload.toml
+  6. Stage -- a temp .me3 plus a DLL-adjacent sidecar toml. The game-directory er-quickload.toml
      is never written.
-  7. LAUNCH -- ~/Elden/launch.sh with ME3_PROFILE, detached into its own session, and with every
-     DLL artifact REDIRECTED into this run's own directory (ARTIFACT_ENV). A game-directory log is
+  7. Launch -- ~/Elden/launch.sh with ME3_PROFILE, detached into its own session, and with every
+     DLL artifact redirected into this run's own directory (ARTIFACT_ENV). A game-directory log is
      single-slot; two launches and the run before last is gone.
-  8. TESTIMONY -- the block is printed only after the DLL says, in its own debug log, that it
-     loaded and read THIS run's sidecar. Otherwise a FAILED block is printed and the run is
+  8. Testimony -- the block is printed only after the DLL says, in its own debug log, that it
+     loaded and read this run's sidecar. Otherwise a failed block is printed and the run is
      cleaned up.
   9. REAP -- a detached reaper removes the staged files when the game exits. It removes what the
-     run STAGED, never what the run WROTE: the artifact directory survives.
+     run staged, never what the run WROTE: the artifact directory survives.
 
-WHY THE BLOCK WAITS FOR THE DLL RATHER THAN THE WINDOW
+Why the block waits for the DLL rather than the window
 ------------------------------------------------------
 "The process started" is a weak claim -- me3 spawns through Proton and a crashing game is
 briefly alive. "The window is up" is a strong claim but minutes away, well past the shell
 budget. The DLL's own `runtime-config: loaded ... sidecar=...` line lands at DllMain, within
-seconds, and proves three things at once: the process is up, OUR DLL is in it, and it read
-OUR config. So the block cannot be printed for a run that did not really happen -- which
+seconds, and proves three things at once: the process is up, our DLL is in it, and it read
+our config. So the block cannot be printed for a run that did not really happen -- which
 matters because a copy-pasted block is a promise to whoever reads it.
 
 The block deliberately claims nothing about the window, the world, or readiness. `--status`
@@ -41,7 +41,6 @@ re-checks those later, honestly, once they exist.
 Usage:
     python3 scripts/er-run-branch.py                      # random save, ersc loaded
     python3 scripts/er-run-branch.py --seed 4242          # reproduce a pick
-    python3 scripts/er-run-branch.py --save default       # the active Steam user's own save
     python3 scripts/er-run-branch.py --vanilla            # no ersc; .sl2 saves only
     python3 scripts/er-run-branch.py --monitor DP-1       # move the ER window when it appears
     python3 scripts/er-run-branch.py --dry-run            # stage and report, launch nothing
@@ -76,8 +75,8 @@ AUTOLOAD_LOG_NAME = "er-quickload-autoload-debug.log"
 # that writes it: this used to be DEVNULL, which cost a diagnosis.
 LAUNCHER_LOG_NAME = "me3-launcher.log"
 
-# EVERY PER-RUN ARTIFACT GOES INTO THIS RUN'S OWN DIRECTORY, keyed by the run id this tool already
-# mints. A game-directory artifact is SINGLE-SLOT, not a log that accumulates: `er_game_base::log::
+# Every per-run artifact goes into this run'S own directory, keyed by the run id this tool already
+# mints. A game-directory artifact is single-slot, not a log that accumulates: `er_game_base::log::
 # begin_fresh_run` renames `<name>` to `<name>.prev` and truncates on the DLL's first write, one
 # generation only. Two launches and the run before last is gone -- and several sessions launch
 # concurrently here, so that is the normal case, not a race. Measured 2026-08-31: an 11:09 launch
@@ -85,15 +84,15 @@ LAUNCHER_LOG_NAME = "me3-launcher.log"
 # nobody had read.
 #
 # Copying the files out at teardown does not fix that, which is why this is a redirect: by teardown
-# THIS run has already clobbered the previous one's file, and a run that crashes or is killed never
+# this run has already clobbered the previous one's file, and a run that crashes or is killed never
 # reaches a teardown step at all -- exactly the run whose evidence matters most.
 #
 # The table itself lives in `scripts/er_artifact_env.py`, shared with every other Python launcher,
-# because the original bug WAS a table with one line missing. Add a new artifact there, once;
+# because the original bug was a table with one line missing. Add a new artifact there, once;
 # `scripts/er-artifact-redirect-audit.py` fails when a knob the DLLs honour is missing from it, and
 # this tool's own selftest asserts `ARTIFACT_ENV` covers every knob the audit finds in the Rust.
 
-# `AUTOLOAD_LOG_NAME` above belongs to THIS DLL and no other. The sidecar-testimony contract is only
+# `AUTOLOAD_LOG_NAME` above belongs to this DLL and no other. The sidecar-testimony contract is only
 # available when it is loaded, because it is the only shell that reads the sidecar at all.
 PRODUCT_DLL_NAME = "er_quickload.dll"
 
@@ -101,18 +100,60 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_NO_TESTIMONY = 4
 
-# Each wait is one bounded slice, re-armed until a wall-clock DEADLINE, so no single call
+# Each wait is one bounded slice, re-armed until a wall-clock deadline, so no single call
 # approaches the 30s shell ceiling.
 #
-# The budget is wall-clock and NOT a count of slices. A slice ends on any inotify event in the
+# The budget is wall-clock and not a count of slices. A slice ends on any inotify event in the
 # game directory, and during boot that directory sees dozens of writes a second (every co-loaded
 # DLL has its own log). Counting slices therefore burned a nominal 24-second budget in
 # milliseconds and reported a perfectly healthy run as "silent" -- measured on a live launch
 # where the DLL logged its config 9 seconds in, well inside the window that was supposed to be
 # open.
 TESTIMONY_SLICE_SECONDS = 4.0
-TESTIMONY_BUDGET_SECONDS = 25.0
+# 90s, not 25s -- and the reason is not what an earlier version of this comment claimed.
+#
+# That version said "measured: a cold Proton start took 62 seconds from launch.sh to the first DLL
+# log line". No such measurement was ever taken. What existed were two runs that printed
+# `ELDEN RING DID NOT START` after waiting 25s while the game went on to boot normally, and a
+# 25-second timeout bounds the start from below -- it says ">25s" and nothing whatsoever about 62.
+# A number invented to justify a change was written down as evidence, which is worse than leaving
+# the constant unexplained.
+#
+# Measured 2026-09-04, properly, over 11 runs: launch -> DLL attach is 3.3-4.1s, median 3.7s (the
+# run id is the launch time and the crash-logging breadcrumb's mtime is the attach). So the boot is
+# an order of magnitude faster than the retracted figure, and 25s was not too short for attach.
+# What the two condemned runs actually hit was the witness looking in the wrong place: they loaded
+# only shells that write `.txt`, and the glob was `*.log` (see `testimony_candidates`). The budget
+# stays generous anyway because a slow first-run shader compile is real and a false
+# `DID NOT START` is expensive, but it is a margin, not a measurement of the typical case.
+# This budget is the wait for the first sign of life, not a runtime cap -- the run's own idle/stall
+# backstop is `.auto/runtime_timeout_cap_seconds` (300s) and is untouched by this. It is also not a
+# subprocess timeout, so it is outside `scripts/check-no-timeouts.py`'s 30s ceiling; `SUBPROCESS_TIMEOUT`
+# below is the one that ceiling governs and it stays where it is. A launch waited on for this long
+# must be run in the background by the caller, since an agent shell is capped at 30s.
+TESTIMONY_BUDGET_SECONDS = 90.0
 SUBPROCESS_TIMEOUT = 28
+
+
+# The cdylib that actually presses buttons. `--harness-drive` selects a phase table inside it, so
+# the flag is meaningless when this package is not in the closure.
+HARNESS_PACKAGE = "er-input-harness"
+
+
+def harness_drive_refusal(harness_drive: str | None, packages: list[str]) -> str | None:
+    """Why this run cannot drive input, or `None` when it can.
+
+    Split out from the launch path so it is testable without a closure, a build or a game.
+    """
+    if not harness_drive or HARNESS_PACKAGE in packages:
+        return None
+    return (
+        f"--harness-drive {harness_drive} was requested, but {HARNESS_PACKAGE} is not in this\n"
+        "run's profile, so nothing would drive the input and the run would look passive.\n"
+        "\nRelaunch with the harness pinned and the drive declared:\n"
+        f"  python3 scripts/er-run-branch.py --agent-driven --with {HARNESS_PACKAGE} "
+        f"--harness-drive {harness_drive}"
+    )
 
 
 def game_dir() -> Path:
@@ -188,9 +229,9 @@ class LogTail:
         except OSError:
             return ""
         # Two distinct rotations to survive, and missing the second one cost a live run:
-        #  * REPLACED -- new inode, so read the whole new file;
-        #  * TRUNCATED IN PLACE -- same inode, size drops below our offset. Seeking to the old
-        #    offset then lands past EOF and reads NOTHING, so the DLL's startup lines are
+        #  * replaced -- new inode, so read the whole new file;
+        #  * truncated in place -- same inode, size drops below our offset. Seeking to the old
+        #    offset then lands past EOF and reads nothing, so the DLL's startup lines are
         #    invisible and the run is reported "silent" while it is in fact running perfectly.
         rotated = stat.st_ino != self.inode or stat.st_size < self.offset
         start = 0 if rotated else self.offset
@@ -200,11 +241,11 @@ class LogTail:
                 data = handle.read()
         except OSError:
             return ""
-        # A LINE IS EVIDENCE ONLY ONCE IT IS TERMINATED, and this cost a live run. The DLL's
+        # A line is evidence only once it is terminated, and this cost a live run. The DLL's
         # `runtime-config: loaded` line is ~540 bytes and is not written atomically, so a read
-        # landing mid-write returns a PREFIX -- "runtime-config: loaded '<game toml>'" with the
+        # landing mid-write returns a prefix -- "runtime-config: loaded '<game toml>'" with the
         # `sidecar=` field still unwritten. The caller cannot tell that from a DLL that genuinely
-        # named no sidecar, so it declared a perfectly good run "the DLL IGNORED this run's
+        # named no sidecar, so it declared a perfectly good run "the DLL ignored this run's
         # overlay" and told the reader not to cite it. Hand back only whole lines; the fragment
         # arrives complete on the next poll, milliseconds later.
         end = data.rfind(b"\n")
@@ -213,65 +254,21 @@ class LogTail:
         return data[: end + 1].decode("utf-8", errors="replace")
 
 
-class WatchSet:
-    """Watch several directories at once, so a caller can tail logs that do not share a parent."""
-
-    def __init__(self, directories) -> None:
-        seen: list[Path] = []
-        for directory in directories:
-            if directory not in seen:
-                seen.append(directory)
-        self.watches = [er_run_lib.DirectoryWatch(directory) for directory in seen]
-
-    @property
-    def available(self) -> bool:
-        return any(watch.available for watch in self.watches)
-
-    def wait(self, timeout: float) -> bool:
-        """Return on the FIRST event from any watched directory, or on the timeout.
-
-        One `select` over every inotify fd, not a loop of per-directory waits: waiting on each in
-        turn would spend the whole budget on the first quiet directory and never look at the second.
-        """
-        import select
-
-        fds = [watch.fd for watch in self.watches if watch.fd >= 0]
-        if not fds:
-            return False
-        try:
-            ready, _, _ = select.select(fds, [], [], max(0.0, timeout))
-        except OSError:
-            return False
-        for fd in ready:
-            try:
-                os.read(fd, 65536)
-            except OSError:
-                pass
-        return bool(ready)
-
-    def close(self) -> None:
-        for watch in self.watches:
-            watch.close()
-
-    def __enter__(self) -> "WatchSet":
-        return self
-
-    def __exit__(self, *_exc) -> None:
-        self.close()
+WatchSet = er_run_lib.WatchSet
 
 
 def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> dict:
-    """Block until the DLL states it loaded THIS run's sidecar. Event-driven, never a sleep.
+    """Block until the DLL states it loaded this run's sidecar. Event-driven, never a sleep.
 
     Returns a verdict dict with `status`:
-      confirmed      -- the DLL named OUR sidecar; this run is what it says it is.
+      confirmed      -- the DLL named our sidecar; this run is what it says it is.
       wrong-sidecar  -- the DLL loaded and logged, but named a different sidecar (or none).
-                        Completely different from silence: the game IS running our DLL, it just
-                        ignored the overlay, so the character on screen is NOT the one picked.
+                        Completely different from silence: the game is running our DLL, it just
+                        ignored the overlay, so the character on screen is not the one picked.
                         Conflating the two sends you hunting a launch failure that did not happen.
       silent         -- no `runtime-config: loaded` line at all within the window.
 
-    SEVERAL TAILS, ON PURPOSE. This run redirects the autoload debug log into its own artifact
+    Several tails, on purpose. This run redirects the autoload debug log into its own artifact
     directory (see ARTIFACT_ENV), so that is where the testimony should land. But the redirect rides
     an environment variable through `launch.sh` -> me3 -> the Proton compat tool -> the game, and if
     any link drops it the DLL falls back to the game directory and logs there instead. Watching only
@@ -321,31 +318,60 @@ def await_testimony(tails: list[LogTail], sidecar: Path, launcher_pid: int) -> d
                 watch.wait(slice_seconds)
 
 
-def await_any_dll_log(game_dir_path: Path, launcher_pid: int, started_at: float) -> dict:
+def testimony_candidates(game_dir_path: Path):
+    """Every file a shell might write to prove it is alive -- `.log` and `.txt`.
+
+    `.log` alone was a false negative with teeth: `er_crash_logging.dll` writes only `.txt`
+    (`er-crash-log.txt`, `er-crash-latest.txt`, `er-crash-modules.txt`), so a DLL set whose only
+    logging shell was the crash logger could run for minutes, catch a fatal exception, write a full
+    record -- and still be reported as `ELDEN RING DID NOT START`. The suffix a shell picks is not a
+    contract anywhere; it is whatever its author typed.
+    """
+    for suffix in ("*.log", "*.txt"):
+        yield from game_dir_path.glob(suffix)
+
+
+def await_any_dll_log(watch_dirs, launcher_pid: int, started_at: float) -> dict:
     """Weaker witness, for a run whose DLL set does not include the product shell.
 
-    WHY THIS EXISTS. The sidecar line proves three things at once -- process up, our DLL in it,
+    Why this exists. The sidecar line proves three things at once -- process up, our DLL in it,
     our config read -- but only `er_quickload.dll` writes it, because it is the only shell that
     reads the sidecar. Once the launcher/watchdog/guard work merged to main, the closure started
-    selecting DLL sets that legitimately EXCLUDE that shell, and the gate went on waiting for a
+    selecting DLL sets that legitimately exclude that shell, and the gate went on waiting for a
     witness the run never loaded. It then condemned a perfectly healthy game: run
     br-20260817-184836-d6a7 printed `ELDEN RING DID NOT START` while `eldenring.exe` was up and
     the invasion DLL was heartbeating into its own log.
 
     So when the strong witness is unavailable, ask a weaker question honestly rather than a
-    strong one wrongly: has ANY log next to the executable gained bytes since we launched? That
-    proves the process is up and one of our shells is running in it. It does NOT prove which
+    strong one wrongly: has any log next to the executable gained bytes since we launched? That
+    proves the process is up and one of our shells is running in it. It does not prove which
     sidecar was read, and the caller must not claim that it does.
 
     Matching is by mtime rather than by a DLL-name -> log-name table on purpose: those names do
     not follow a convention (`er_net_effects.dll` writes `er-net-effects.log`,
     `er_invasion_warp.dll` writes `er-invasion-warp.log`), so a table would be a second
     source of truth that silently rots every time a shell is added.
+
+    Several directories, not one, and the reason is this tool's own success. Every artifact knob
+    it sets moves a DLL's log out of the game directory and into the run directory -- which is the
+    point -- so watching only the game directory means the better this redirect gets, the blinder
+    this witness becomes. It went fully blind on 2026-09-04, the day `er_crash_logging` gained its
+    knobs: a run whose only shell was the crash logger wrote all four of its files into the run
+    directory, the game directory never changed, and this reported `ELDEN RING DID NOT START` for
+    a game that was up and busy. Watch both, and let whichever one speaks be the witness.
     """
+    if isinstance(watch_dirs, Path):
+        watch_dirs = [watch_dirs]
+    watch_dirs = [directory for directory in watch_dirs if directory is not None]
     deadline = time.monotonic() + TESTIMONY_BUDGET_SECONDS
-    with er_run_lib.DirectoryWatch(game_dir_path) as watch:
+    with WatchSet(watch_dirs) as watch:
         while True:
-            for log in sorted(game_dir_path.glob("*.log")):
+            candidates = sorted(
+                candidate
+                for directory in watch_dirs
+                for candidate in testimony_candidates(directory)
+            )
+            for log in candidates:
                 try:
                     if log.stat().st_mtime > started_at:
                         return {"status": "confirmed-weak", "log": log.name,
@@ -385,23 +411,50 @@ def running_block(context: dict) -> str:
         lines.append(f"    {'ersc.dll (game install)':34} referenced, not bundled")
     for entry in context.get("excluded", []):
         lines.append(f"    EXCLUDED {entry['artifact']:25} {entry['kind']} -- not tested in this run")
+    # The mirror of the line above. A shell the diff never reached is in this process because
+    # `scripts/me3-dll-conflicts.toml [always]` says it is on by default, and a reader deciding
+    # what this run proved needs to know which half of the profile the branch actually selected.
+    for package in context.get("added_by_default", []):
+        lines.append(f"    DEFAULT-ON {package:23} not selected by this branch's changes")
+    # A run that loads the input harness is one the player is not driving. The closure only lets
+    # that through when --agent-driven declared it (kind `drives-input`), and the declaration is
+    # worthless if the artifact does not carry it: AGENTS.md forbids claiming the user is in
+    # control of a self-driving probe, and this block is what someone reads later to decide what
+    # the run proved.
+    for entry in context.get("accepted_conflicts", []):
+        lines.append(
+            f"    AGENT-DRIVEN {entry['package']:22} {entry['kind']} -- the PLAYER IS NOT IN CONTROL"
+        )
     lines.append("")
     if save:
         lines += [
-            f"  character     {save['name']}  RL{save['level']}  slot {save['slot']}",
+            f"  character     {save['name']}  RL{save['level']}"
+            + (
+                f"  weapon +{save['matchmaking_weapon_level']}"
+                if save.get("matchmaking_weapon_level") is not None
+                else "  weapon +?"
+            )
+            + f"  slot {save['slot']}",
             f"  save          {save['save_file']}",
             f"  container     .{save['container']}"
             + ("   SOURCE WRITABLE" if save.get("source_writable") else "   source read-only"),
-            # An explicit --save has no seed, and "--seed None" is not a command anyone can run.
-            # The rerun hint has to name whatever actually determined this character.
+            # No flag chose this character, so there is no flag to name. The toml did, and that
+            # is where anyone wanting a different one has to go.
             (
-                f"  seed          {save['seed']}   (rerun: --seed {save['seed']})"
-                if save.get("seed") is not None
-                else f"  chosen by     --save (rerun: --save '{save['save_file']}:{save['slot']}')"
+                "  chosen by     er-quickload.toml -- no save_file, so the game's own APPDATA "
+                "container,\n                which it also WRITES, so a save made this run survives it"
+                if save.get("default_user_save")
+                else f"  chosen by     er-quickload.toml  save_file + slot {save['slot']}"
             ),
         ]
     else:
-        lines.append("  character     <active Steam user's default save>")
+        # UNREACHABLE by construction: every save path is decoded now (see `--save`). Kept as a
+        # refusal rather than deleted, because the thing this block used to print --
+        # "<active Steam user's default save>" -- was a PLACEHOLDER standing where the Autoload
+        # Identity Launch Gate requires a real name and slot, and it read like a value.
+        raise RuntimeError(
+            "launch block has no decoded character -- refusing to print an identity placeholder"
+        )
     lines += [
         "",
         f"  profile       {context['profile']}",
@@ -427,8 +480,8 @@ def running_block(context: dict) -> str:
         ),
         f"                re-check later: scripts/er-run-branch.py --status {context['run_id']}",
         f"  me3 log       {context.get('launcher_log', '(not captured)')}",
-        # The artifact dir OUTLIVES the run on purpose. Cleanup removes the files this run STAGED
-        # (profile, sidecar, run.json); it does not touch what the run WROTE, and the directory
+        # The artifact dir OUTLIVES the run on purpose. Cleanup removes the files this run staged
+        # (profile, sidecar, run.json); it does not touch what the run wrote, and the directory
         # survives because it is not empty. That is what makes the run before last still readable.
         f"  artifacts     {context.get('artifact_dir', '(none)')}",
         f"                {len(ARTIFACT_ENV)} DLL log/telemetry paths redirected here, so the next",
@@ -455,8 +508,96 @@ def failed_block(run_id: str, reason: str, detail: list[str]) -> str:
     return "\n".join(lines)
 
 
+def stale_launchers() -> list[tuple[int, str]]:
+    """Live `me3 launch` processes, as `(pid, profile)`.
+
+    A launcher OUTLIVES the game it started. Measured 2026-09-09: three launches in a row failed
+    with `no DLL testimony`, each after the full 90-second budget, because a previous run's `me3`
+    was still alive holding the Wine prefix -- and `er-teardown.py --status` said `no eldenring.exe`
+    and `clean-exit`, which reads as nothing running. So the condition is invisible to the game
+    check and has to be asked for separately.
+
+    Reads `/proc` directly rather than shelling out to a process-name tool, which this workspace
+    forbids for reasons recorded in the Steam-detection guard.
+    """
+    found: list[tuple[int, str]] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue  # exited between listing and reading; not our business
+        args_text = [part.decode(errors="replace") for part in argv if part]
+        if len(args_text) < 2 or Path(args_text[0]).name != "me3":
+            continue
+        if "launch" not in args_text:
+            continue
+        profile = "<unnamed>"
+        for flag in ("-p", "--profile"):
+            if flag in args_text:
+                index = args_text.index(flag)
+                if index + 1 < len(args_text):
+                    profile = args_text[index + 1]
+        found.append((int(entry.name), profile))
+    return found
+
+
+def game_pid() -> int | None:
+    """The live `eldenring.exe`, or `None`.
+
+    Asked so the stale-launcher refusal can describe what is actually there. The refusal used to
+    assert that the game had already exited, because that is the case the check was written for --
+    but a launcher is also alive during a perfectly healthy run, and then the sentence told the
+    reader the opposite of the truth and invited them to tear down a session someone was playing.
+    Observed 2026-09-09 against pid 1574375, up and burning cpu, while the message said it was gone.
+
+    Same `/proc` walk as `stale_launchers`, and for the same reason: this workspace forbids
+    process-name tools.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            comm = (entry / "comm").read_text().strip()
+        except OSError:
+            continue
+        if comm == "eldenring.exe":
+            return int(entry.name)
+    return None
+
+
+def stale_launcher_state() -> str:
+    """What the live launcher currently has under it, said as observed rather than assumed."""
+    pid = game_pid()
+    if pid is None:
+        return (
+            "Its game has already exited, so `er-teardown.py --status` reports `no eldenring.exe` "
+            "and looks clean."
+        )
+    return (
+        f"A game is still running under it: eldenring.exe pid {pid}. This is a live session, not "
+        "a leftover -- clearing it ends whatever is on screen right now. If that session is "
+        "someone's, leave it alone; the launch you are attempting would have taken it down."
+    )
+
+
 def preflight(args) -> tuple[dict, dict | None]:
     """Closure + provenance + save pick. Raises RuntimeError with a loud message on any refusal."""
+    # Before anything expensive: a launcher from an earlier run still holds the prefix, and the
+    # only symptom downstream is ninety seconds of silence followed by the wrong diagnosis.
+    if not getattr(args, "allow_stale_launcher", False):
+        held = stale_launchers()
+        if held:
+            raise RuntimeError(
+                "REFUSING TO LAUNCH -- a previous run's me3 launcher is still alive and holding "
+                "the Wine prefix:\n"
+                + "\n".join(f"  pid {pid}  profile {profile}" for pid, profile in held)
+                + "\n\n"
+                + stale_launcher_state()
+                + "\nClear it first:  python3 scripts/er-teardown.py --reason stale-launcher"
+            )
+
     if not args.skip_steam_check and not steam_running():
         raise RuntimeError(
             "Steam is not running. Start it (it needs an interactive login), or pass "
@@ -470,12 +611,28 @@ def preflight(args) -> tuple[dict, dict | None]:
         closure_args += ["--with", package]
     for package in getattr(args, "dropped", []):
         closure_args += ["--without", package]
+    if getattr(args, "agent_driven", False):
+        closure_args.append("--agent-driven")
     code, out, err = run_script("er-dll-closure.py", *closure_args)
     if code == 2:
         raise RuntimeError(f"the changed DLLs cannot share one profile:\n{out or err}")
     if code != 0:
         raise RuntimeError(f"closure failed: {err.strip() or out.strip()}")
     closure = json.loads(out)
+
+    # `--harness-drive` without the harness in the profile is a run that drives nothing, and it
+    # says so nowhere. Measured on br-20260911-163835-032f: the mode was accepted, both marker
+    # files were written, and the block then listed `EXCLUDED er_input_harness.dll drives-input`
+    # -- so the phases never ran and the log is indistinguishable from a passive run that happened
+    # to load the same DLLs. The declaration and the artifact are separate things (see the marker
+    # comment below), and only the artifact can actually press a button.
+    #
+    # Refused rather than implied. `--agent-driven` is a claim about who is at the keyboard and
+    # AGENTS.md requires it to be deliberate, so this names the invocation instead of assembling
+    # one on the caller's behalf.
+    refusal = harness_drive_refusal(getattr(args, "harness_drive", None), closure["packages"])
+    if refusal:
+        raise RuntimeError(refusal)
 
     stale: list[str] = []
     for package, artifact in zip(closure["packages"], closure["artifacts"]):
@@ -493,59 +650,104 @@ def preflight(args) -> tuple[dict, dict | None]:
             + " ".join(closure["packages"])
         )
 
-    save = None
-    if args.save == "random":
-        pick_args = ["--json", "--container", "sl2" if args.vanilla else "both"]
-        if args.seed is not None:
-            pick_args += ["--seed", str(args.seed)]
-        code, out, err = run_script("er-pick-save.py", *pick_args)
-        if code != 0:
-            raise RuntimeError(f"no save could be picked: {err.strip() or out.strip()}")
-        save = json.loads(out)
-    elif args.save != "default":
-        save = decode_explicit_save(args.save)
-
-    return closure, save
+    return closure, resolve_configured_save()
 
 
-def decode_explicit_save(spec: str) -> dict:
-    """Resolve `PATH[:SLOT]` into the same decoded shape a random pick produces.
+def configured_save_selection() -> tuple[Path | None, int]:
+    """`save_file` and `slot` as the game-directory `er-quickload.toml` states them.
 
-    The decode is NOT optional. AGENTS.md's Autoload Identity Launch Gate requires the character
-    and slot to be known from current save evidence before a launch that will autoload -- and
-    naming a file proves neither. A path whose named slot holds no character is refused here
-    rather than discovered on a loading screen.
+    This tool does not choose a save. The DLL and its toml own that, and the launcher's only
+    remaining job is to say which character the configuration already selects. A `save_file` that
+    is absent is the supported shape, not a gap: the DLL then takes its `DEFAULT-USER-SAVE` path
+    and the game reads and writes its own APPDATA container, so what it saves survives the run.
     """
-    path, _, slot_text = spec.rpartition(":")
-    if not path:
-        path, slot_text = spec, ""
-    slot = None
-    if slot_text:
-        try:
-            slot = int(slot_text)
-        except ValueError as err:
-            raise RuntimeError(f"bad slot in --save {spec!r}: {err}") from err
+    path = game_dir() / "er-quickload.toml"
+    save_file: Path | None = None
+    slot = 0
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            body = line.split("#", 1)[0].strip()
+            key, sep, value = body.partition("=")
+            if not sep:
+                continue
+            key, value = key.strip(), value.strip().strip("'\"")
+            if key == "save_file" and value:
+                save_file = Path(value).expanduser()
+            elif key == "slot" and value:
+                try:
+                    slot = int(value)
+                except ValueError:
+                    pass
+    return save_file, slot
 
-    source = Path(path).expanduser().resolve()
-    if not source.is_file():
-        raise RuntimeError(f"--save names a file that does not exist: {source}")
 
-    code, out, err = run_script(
-        "er-pick-save.py", "--json", "--all", "--root", str(source.parent)
-    )
-    if code != 0:
-        raise RuntimeError(f"could not decode {source}: {err.strip() or out.strip()}")
-    targets = [t for t in json.loads(out)["targets"] if Path(t["save_file"]) == source]
-    if slot is not None:
-        targets = [t for t in targets if t["slot"] == slot]
-    if not targets:
-        where = f"{source} slot {slot}" if slot is not None else str(source)
+def default_user_save_dir() -> Path:
+    """The APPDATA directory the game itself saves into, for the account with the newest write.
+
+    Env-overridable and derived from `$HOME`, matching `scripts/save-write-witness.py` -- nothing
+    here names one machine or one account.
+    """
+    explicit = os.environ.get("APPDATA_ER_ROOT")
+    if explicit:
+        root = Path(explicit)
+    else:
+        compat = os.environ.get("STEAM_COMPAT_DATA_PATH") or str(
+            Path(os.environ.get("HOME", "~")).expanduser()
+            / ".local/share/Steam/steamapps/compatdata/1245620"
+        )
+        root = Path(compat) / "pfx/drive_c/users/steamuser/AppData/Roaming/EldenRing"
+    accounts = [
+        child
+        for child in sorted(root.glob("*"))
+        if child.is_dir() and child.name.isdigit() and any(child.glob("ER0000.*"))
+    ]
+    if not accounts:
         raise RuntimeError(
-            f"no occupied character at {where}. Nothing will autoload, so this launch is refused."
+            f"no Elden Ring save directory under {root} -- cannot report which character will "
+            "autoload, and AGENTS.md's Autoload Identity Launch Gate forbids launching without it"
+        )
+    return max(
+        accounts,
+        key=lambda child: max(item.stat().st_mtime for item in child.glob("ER0000.*")),
+    )
+
+
+def resolve_configured_save() -> dict:
+    """Decode the character the configuration selects, without selecting one.
+
+    The decode is not optional. AGENTS.md's Autoload Identity Launch Gate requires the character
+    and slot to be known from current save evidence before a launch that will autoload, and a
+    configured path proves neither. A slot that holds no character is refused here rather than
+    discovered on a loading screen.
+    """
+    save_file, slot = configured_save_selection()
+    default_user_save = save_file is None
+    search_dir = save_file.parent if save_file else default_user_save_dir()
+
+    code, out, err = run_script("er-pick-save.py", "--json", "--all", "--root", str(search_dir))
+    if code != 0:
+        raise RuntimeError(f"could not decode saves under {search_dir}: {err.strip() or out.strip()}")
+    targets = json.loads(out)["targets"]
+    if save_file is not None:
+        source = save_file.resolve()
+        targets = [t for t in targets if Path(t["save_file"]) == source]
+    targets = [t for t in targets if t["slot"] == slot]
+    if not targets:
+        where = f"{save_file} slot {slot}" if save_file else f"{search_dir} slot {slot}"
+        raise RuntimeError(
+            f"no occupied character at {where}. Nothing will autoload, so this launch is refused. "
+            f"Choose another slot in {game_dir() / 'er-quickload.toml'}."
         )
     chosen = targets[0]
-    return {**chosen, "seed": None, "draws": 0, "eligible_files": 1,
-            "occupied_slots_in_file": len(targets), "corpus_root": str(source.parent)}
+    return {
+        **chosen,
+        "seed": None,
+        "draws": 0,
+        "eligible_files": 1,
+        "occupied_slots_in_file": len(targets),
+        "corpus_root": str(search_dir),
+        "default_user_save": default_user_save,
+    }
 
 
 def launch(args) -> int:
@@ -571,12 +773,14 @@ def launch(args) -> int:
     gen_args[1] = str(closure_file)
     if args.vanilla:
         gen_args.append("--vanilla")
-    if args.save == "default":
-        gen_args.append("--save-default")
-    else:
-        save_file = closure_file.with_name("save.json")
-        save_file.write_text(json.dumps(save), encoding="utf-8")
-        gen_args += ["--save", str(save_file)]
+    if args.disable_arxan:
+        gen_args.append("--disable-arxan")
+    # The decoded identity is reported to the generator, not configured by it: `render_sidecar`
+    # writes it as comments only. The sidecar must never carry `save_file` or `slot`, because the
+    # game-directory toml owns both and a second channel fights it.
+    save_json = closure_file.with_name("save.json")
+    save_json.write_text(json.dumps(save), encoding="utf-8")
+    gen_args += ["--save", str(save_json)]
 
     code, out, err = run_script("er-gen-me3-profile.py", *gen_args)
     if code != 0:
@@ -587,7 +791,7 @@ def launch(args) -> int:
         run_id=run_id,
         pid=0,
         profile=staged["profile"],
-        remove_paths=staged["remove_paths"] + [str(closure_file), str(closure_file.with_name("save.json"))],
+        remove_paths=staged["remove_paths"] + [str(closure_file), str(save_json)],
         meta={"branch": args.branch, "evidence_class": staged["evidence_class"]},
     )
     state.save()
@@ -602,11 +806,39 @@ def launch(args) -> int:
     # closure.json and me3-launcher.log, now also the destination for every DLL artifact.
     artifact_dir = er_run_lib.RUN_STATE_ROOT / run_id
     artifact_dir.mkdir(parents=True, exist_ok=True)
+    harness_drive = getattr(args, "harness_drive", None)
+    if harness_drive:
+        # Both markers are required and neither is sufficient. `er-harness-drive-mode.txt` picks the
+        # phase table; `er-harness-force-drive.txt` is what stops `resolve_mode()` from returning
+        # Passive because the product DLL is present. They resolve beside the DLL's log (me3 launches
+        # the game with an arbitrary CWD, so a bare relative path silently answers false), which is
+        # this directory.
+        (artifact_dir / "er-harness-drive-mode.txt").write_text(harness_drive, encoding="utf-8")
+        (artifact_dir / "er-harness-force-drive.txt").write_text("1", encoding="utf-8")
     artifact_env = {env: str(artifact_dir / name) for env, name in ARTIFACT_ENV.items()}
     # Named once, for the watchers. `scripts/er-user-session-watch.py` and the other observers used
     # to look in the game directory unconditionally; with the redirect in place that directory holds
     # nothing for this run, and a watcher that finds nothing reports a healthy session as silent.
     artifact_env["ER_RUN_ARTIFACT_DIR"] = str(artifact_dir)
+
+    # The markers must be named, not just written. `redirected_artifact_path` falls back to the game
+    # directory when its env var is unset, so markers dropped in this run's directory are invisible
+    # unless the variable points at them -- measured on br-20260905-040013-1038, where both files were
+    # present in the artifact directory and the harness still logged `drive: mode='passive' phases=0`.
+    # These two are deliberately not in ARTIFACT_ENV: that set is the DLL's output redirect and its
+    # selftest asserts an exact match against what the DLLs honour, while these are inputs.
+    if harness_drive:
+        artifact_env["ER_HARNESS_DRIVE_MODE_PATH"] = str(
+            artifact_dir / "er-harness-drive-mode.txt"
+        )
+        artifact_env["ER_HARNESS_FORCE_DRIVE_PATH"] = str(
+            artifact_dir / "er-harness-force-drive.txt"
+        )
+        # The live command file (crates/er-input-harness/src/repl.rs). Same reason as the two above,
+        # and it bites harder here: the whole point of the command loop is to interrogate a session
+        # that is already up, so a command written into this run's directory that the harness reads
+        # from the game directory instead is a question that silently never gets asked.
+        artifact_env["ER_HARNESS_CMD_PATH"] = str(artifact_dir / "er-harness-cmd.txt")
 
     # Both candidate homes for the DLL's testimony -- the redirect, and the game directory it falls
     # back to if the environment does not survive the launch chain. See `await_testimony`.
@@ -619,7 +851,7 @@ def launch(args) -> int:
     started = datetime.now(timezone.utc).isoformat(timespec="seconds")
     # Monotonic-free on purpose: compared against file mtimes, which are wall clock.
     launched_at = time.time()
-    # KEEP me3's OUTPUT. It used to go to DEVNULL, and on 2026-08-29 that was the difference
+    # Keep me3's output. It used to go to DEVNULL, and on 2026-08-29 that was the difference
     # between diagnosing a run and guessing at it: the game exited ~2.2s in with no coredump, no
     # OOM, no fatal record and no exit-hook stamp -- meaning nothing faulted and something asked
     # the process to stop. The only witness to that is me3's own stdout/stderr, and it was being
@@ -629,7 +861,7 @@ def launch(args) -> int:
     launcher_log.parent.mkdir(parents=True, exist_ok=True)
     launcher_out = launcher_log.open("wb")
     process = subprocess.Popen(
-        # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by DEFAULT
+        # `-o`: offline/solo, no Seamless. launch.sh now includes ersc.dll by default
         # (2026-08-24); this probe predates that and wants the plain quicksave profile
         # with ER_QUICKLOAD_SAVE_MODE_HINT=vanilla, so it asks for it explicitly.
         ["bash", str(LAUNCHER), "-o"],
@@ -652,7 +884,9 @@ def launch(args) -> int:
     if loads_product_dll:
         testimony = await_testimony(tails, Path(staged["sidecar"]), process.pid)
     else:
-        testimony = await_any_dll_log(game_dir(), process.pid, launched_at)
+        testimony = await_any_dll_log(
+            [artifact_dir, game_dir()], process.pid, launched_at
+        )
     if testimony["status"] not in ("confirmed", "confirmed-weak"):
         alive = er_run_lib.process_alive(process.pid)
         if testimony["status"] == "wrong-sidecar":
@@ -678,7 +912,7 @@ def launch(args) -> int:
                     f"be written in"
                 ),
             ] + (
-                # Name BOTH watched paths. The DLL writes to the redirect when the environment
+                # Name both watched paths. The DLL writes to the redirect when the environment
                 # survives the launch chain and to the game directory when it does not, and a
                 # failure report that names one of them leaves the reader guessing which.
                 [f"  {path}" for path in log_paths]
@@ -687,7 +921,7 @@ def launch(args) -> int:
             )
 
         # Only tear down staged files if nothing is using them. A game still booting will read
-        # the sidecar AFTER this point, and deleting it mid-boot both breaks that run and
+        # the sidecar after this point, and deleting it mid-boot both breaks that run and
         # destroys the evidence needed to explain the failure. When the process is alive the
         # reaper takes ownership and cleans up on exit, exactly as for a confirmed run.
         if alive:
@@ -723,6 +957,8 @@ def launch(args) -> int:
                 ],
                 "ersc": staged["ersc"],
                 "excluded": closure.get("excluded", []),
+                "added_by_default": closure.get("added_by_default", []),
+                "accepted_conflicts": closure.get("accepted_conflicts", []),
                 "save": save,
                 "profile": staged["profile"],
                 "sidecar": staged["sidecar"],
@@ -758,7 +994,7 @@ def _spawn_reaper(run_id: str, monitor: str | None) -> None:
 def status(run_id: str) -> int:
     state = er_run_lib.RunState.load(er_run_lib.RUN_STATE_ROOT / run_id / "run.json")
     if state is None:
-        # `run.json` is removed by cleanup; the ARTIFACTS are not. Reporting "no such run" over a
+        # `run.json` is removed by cleanup; the artifacts are not. Reporting "no such run" over a
         # directory full of a finished run's evidence would hide exactly what the redirect exists to
         # keep -- and a finished run is the normal case when someone comes back to read it.
         finished = er_run_lib.RUN_STATE_ROOT / run_id
@@ -799,7 +1035,7 @@ def status(run_id: str) -> int:
                 "profile": state.profile,
                 "meta": state.meta,
                 "artifact_dir": str(artifact_dir),
-                # Names AND sizes: "the file exists" and "the file has anything in it" are different
+                # Names and sizes: "the file exists" and "the file has anything in it" are different
                 # claims, and a zero-byte log is the signature of a redirect that reached the DLL
                 # while the run died before writing.
                 "artifacts": [{"name": name, "bytes": size} for name, size in artifacts],
@@ -841,6 +1077,23 @@ def selftest() -> int:
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
 
+    # The silent no-op this refusal closes, measured on br-20260911-163835-032f: the mode was
+    # accepted, the marker files were written, and the harness was excluded by the closure, so the
+    # phases never ran and the block read like a passive run.
+    check(
+        harness_drive_refusal(None, []) is None,
+        "a run that asked for no drive is never refused",
+    )
+    check(
+        harness_drive_refusal("buildimport", [HARNESS_PACKAGE, "er-quickload"]) is None,
+        "a drive with the harness in the profile is allowed",
+    )
+    refusal = harness_drive_refusal("buildimport", ["er-quickload"])
+    check(
+        refusal is not None and HARNESS_PACKAGE in refusal and "--agent-driven" in refusal,
+        "a drive without the harness is refused, and the refusal names the invocation to use",
+    )
+
     import tempfile
 
     with tempfile.TemporaryDirectory() as raw:
@@ -860,7 +1113,7 @@ def selftest() -> int:
             "after a log rotation the tail reads the new file from the start",
         )
 
-        # The rotation that actually bit: TRUNCATION IN PLACE. Same inode, size back to ~0, so
+        # The rotation that actually bit: TRUNCATION in place. Same inode, size back to ~0, so
         # the recorded offset now sits past EOF. Seeking there reads nothing and the run gets
         # reported "silent" while the DLL is logging normally.
         big = Path(raw) / "trunc.log"
@@ -874,7 +1127,7 @@ def selftest() -> int:
             "an IN-PLACE truncation is detected and re-read from byte 0, not silently skipped",
         )
 
-        # A read landing mid-write must yield NOTHING rather than a prefix that parses as a
+        # A read landing mid-write must yield nothing rather than a prefix that parses as a
         # complete record with its later fields missing.
         partial = Path(raw) / "partial.log"
         partial.write_text("", encoding="utf-8")
@@ -922,7 +1175,12 @@ def selftest() -> int:
     )
     check("ELDEN RING IS RUNNING" in block, "the block announces the run")
     check("Bonky Bean" in block and "RL139" in block, "the block names the decoded character")
-    check("--seed 7" in block, "the block carries the seed to reproduce the pick")
+    # No flag chose this character, so the block must point at the thing that did. Anyone wanting
+    # a different one has to edit the toml, and the block is where they learn that.
+    check(
+        "er-quickload.toml" in block,
+        "the block names the toml as what chose this character, since no flag can",
+    )
     check("EXCLUDED er_loading_bar.dll" in block, "the block names excluded DLLs")
     check(
         "NOT claimed" in block and "world loaded" in block,
@@ -932,10 +1190,23 @@ def selftest() -> int:
 
     failure = failed_block("r2", "no DLL testimony", ["pid 9 exited"])
     check("DID NOT START" in failure, "the failure block cannot be mistaken for success")
+
+    # The stale-launcher reader, against this process rather than a fixture: it must find the
+    # live `me3 launch` processes and nothing else, and it must survive a pid that exits
+    # mid-scan. Asserting the shape rather than a count, because whether a launcher happens to
+    # be up while the selftest runs is not this function's business.
+    for pid, profile in stale_launchers():
+        check(isinstance(pid, int) and pid > 0, f"a launcher pid must be a pid: {pid!r}")
+        check(isinstance(profile, str) and profile, f"a profile must be named: {profile!r}")
+        check(er_run_lib.process_alive(pid), f"a reported launcher must be alive: {pid}")
+    check(
+        "me3" not in {Path(sys.argv[0]).name},
+        "the reader must not be able to match the selftest's own process",
+    )
     check("ELDEN RING IS RUNNING" not in failure, "the failure block never contains the running banner")
 
     # The distinction the first live run exposed: a DLL that loaded and ignored the overlay is
-    # NOT the same failure as a DLL that never spoke, and treating them alike sends you hunting
+    # not the same failure as a DLL that never spoke, and treating them alike sends you hunting
     # a launch failure that did not happen.
     with tempfile.TemporaryDirectory() as raw:
         log = Path(raw) / "auto.log"
@@ -966,7 +1237,7 @@ def selftest() -> int:
         verdict2 = await_testimony([tail2], Path("/t/er_quickload.toml"), os.getpid())
         check(verdict2["status"] == "confirmed", "a matching sidecar line confirms the run")
 
-        # THE REDIRECT'S OWN FAILURE MODE. The artifacts now go to this run's directory via
+        # The redirect'S own failure mode. The artifacts now go to this run's directory via
         # ER_QUICKLOAD_*_PATH, which has to survive launch.sh -> me3 -> the compat tool -> the game.
         # If any link drops the environment the DLL falls back to the game directory, and a gate
         # watching only the redirected path would call a healthy run silent. Both are watched, and
@@ -993,15 +1264,15 @@ def selftest() -> int:
                 f"testimony written to the {which} path confirms, and the verdict names that path",
             )
 
-        # THE FALSE NEGATIVE THAT CONDEMNED A RUNNING GAME, br-20260817-184836-d6a7. Once the
+        # The false negative that condemned a running game, br-20260817-184836-d6a7. Once the
         # launcher/watchdog/guard commits merged to main, the closure legitimately stopped
         # selecting er_quickload.dll -- the only shell that writes a `runtime-config: loaded`
-        # line. The gate kept waiting for it and printed ELDEN RING DID NOT START while
+        # line. The gate kept waiting for it and printed ELDEN RING did not start while
         # eldenring.exe was up and the invasion DLL was heartbeating into its own log.
         weak_dir = Path(raw) / "weakwitness"
         weak_dir.mkdir()
         launched = time.time()
-        # A log that predates the launch must NOT count: it is last run's evidence.
+        # A log that predates the launch must not count: it is last run's evidence.
         stale = weak_dir / "er-invasion-warp.log"
         stale.write_text("from a previous run\n", encoding="utf-8")
         os.utime(stale, (launched - 600, launched - 600))
@@ -1032,7 +1303,15 @@ def selftest() -> int:
                 "run_id": "r-weak", "pid": 1, "started": "now", "branch": "b",
                 "head": "a" * 40, "merge_base": "b" * 40, "base_ref": "origin/main",
                 "dirty": False, "dlls": [("er_invasion_warp.dll", "c" * 64)],
-                "ersc": None, "excluded": [], "save": None, "profile": "/p.me3",
+                "ersc": None, "excluded": [],
+                # A decoded save is now mandatory in every block (`--save default`, the one mode
+                # that had none, was removed 2026-09-04). This case is about the witness being
+                # weak, not the identity being unknown, so it carries a real decoded character.
+                "save": {
+                    "name": "Selftest", "level": 1, "slot": 0, "container": "sl2",
+                    "save_file": "/corpus/ER0000.sl2", "seed": 1, "source_writable": False,
+                },
+                "profile": "/p.me3",
                 "sidecar": "/s.toml", "evidence_class": "x",
                 "testimony": "er-net-effects.log written after launch", "witness": "weak",
             }
@@ -1042,7 +1321,7 @@ def selftest() -> int:
             "the weak-witness block says outright that the sidecar was not verified",
         )
 
-        # THE FALSE NEGATIVE THIS COSTS A RUN OVER, observed live on br-20260816-183410-949e:
+        # The false negative this costs a run over, observed live on br-20260816-183410-949e:
         # the real loaded line is ~540 bytes and does not land in one write. Reading the first
         # write yields `runtime-config: loaded '<game toml>'` with no `sidecar=` yet, which is
         # indistinguishable from a DLL that named no sidecar -- so the launcher condemned a run
@@ -1085,8 +1364,8 @@ def selftest() -> int:
             f"(got {verdict_split['status']})",
         )
 
-    # THE REGRESSION THAT COST A LIVE RUN. The game directory is written to constantly during
-    # boot, so every inotify slice returns instantly. When the budget was a COUNT of slices it
+    # The regression that cost a live run. The game directory is written to constantly during
+    # boot, so every inotify slice returns instantly. When the budget was a count of slices it
     # was consumed in milliseconds and a healthy run was declared silent. The budget must be
     # wall-clock: a directory churning with events must not shorten it.
     with tempfile.TemporaryDirectory() as raw:
@@ -1126,7 +1405,7 @@ def selftest() -> int:
             f"(waited {elapsed:.2f}s of 2.0s)",
         )
 
-    # THE ARTIFACT REDIRECT, checked against the audit's view of what the DLLs actually honour.
+    # The artifact redirect, checked against the audit's view of what the DLLs actually honour.
     # Two lists that must agree, so neither can rot alone: the audit reads the knobs out of the Rust
     # sources, and this is the launcher that has to set them. A knob added to the DLLs and not here
     # means that artifact silently goes back to the single-slot game directory.
@@ -1136,7 +1415,7 @@ def selftest() -> int:
         "er_artifact_redirect_audit", SCRIPTS / "er-artifact-redirect-audit.py"
     )
     audit_module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE execution: `@dataclass` resolves its own module out of `sys.modules` while
+    # Registered before execution: `@dataclass` resolves its own module out of `sys.modules` while
     # the class body runs, and an unregistered module makes that lookup return None.
     sys.modules[spec.name] = audit_module
     spec.loader.exec_module(audit_module)
@@ -1156,7 +1435,7 @@ def selftest() -> int:
         "no two knobs are pointed at the same filename, which would have them overwrite each other",
     )
 
-    # TWO CONSECUTIVE RUNS, END TO END, with no game: the real ARTIFACT_ENV, the real per-run
+    # Two consecutive runs, end to end, with no game: the real ARTIFACT_ENV, the real per-run
     # directory, the real `RunState.cleanup`, and a stand-in writer that reproduces the DLL's
     # rotation (`er_game_base::log::begin_fresh_run`: drop `<name>.prev`, rename, truncate).
     # The claim under test is the only one that matters -- after run 2, run 1 is still readable.
@@ -1214,7 +1493,7 @@ def selftest() -> int:
                 "run 1's file was never rotated, because run 2 never wrote to its path",
             )
 
-            # THE SAME TWO RUNS WITHOUT THE REDIRECT -- the bug, reproduced, so the check above is
+            # The same two runs without the redirect -- the bug, reproduced, so the check above is
             # measuring the fix rather than an accident of the fixture.
             shared = {env: str(game_dir_stub / name) for env, name in ARTIFACT_ENV.items()}
             fake_dll_write(shared, "RUN-1 EVIDENCE")
@@ -1232,7 +1511,13 @@ def selftest() -> int:
         {
             "run_id": "r3", "pid": 1, "started": "now", "branch": "b", "head": "a" * 40,
             "merge_base": "b" * 40, "base_ref": "origin/main", "dirty": False,
-            "dlls": [("er_quickload.dll", "c" * 64)], "ersc": None, "excluded": [], "save": None,
+            "dlls": [("er_quickload.dll", "c" * 64)], "ersc": None, "excluded": [],
+            # Every block carries a decoded character now; `--save default`, the one mode that
+            # produced a block without one, was removed 2026-09-04.
+            "save": {
+                "name": "Selftest", "level": 1, "slot": 0, "container": "sl2",
+                "save_file": "/corpus/ER0000.sl2", "seed": 1, "source_writable": False,
+            },
             "profile": "/p.me3", "sidecar": "/s.toml", "evidence_class": "x",
             "testimony": "runtime-config: loaded ...",
             "artifact_dir": "/cache/er-me3-runs/r3",
@@ -1256,17 +1541,48 @@ def selftest() -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--save",
-        default="random",
-        metavar="random|default|PATH[:SLOT]",
-        help="random (default), default (the active Steam user's own container), or an explicit "
-        "save path with an optional :SLOT. An explicit save is still DECODED and reported before "
-        "launch -- naming a file is not the same as knowing which character is in it.",
-    )
-    parser.add_argument("--seed", type=int, help="reproduce an exact save pick")
     parser.add_argument("--vanilla", action="store_true", help="omit ersc.dll; draw .sl2 saves only")
     parser.add_argument("--monitor", help="Hyprland monitor to move the ER window to when it appears")
+    parser.add_argument(
+        "--harness-drive",
+        metavar="MODE",
+        choices=(
+            "boot",
+            "reload",
+            "reload2",
+            "full",
+            "menureload",
+            "menuchain",
+            "probe",
+            "equip",
+            "inv",
+            "buildimport",
+        ),
+        help=(
+            "arm er-input-harness to drive the MENU with real key events instead of standing down. "
+            "The harness resolves Passive whenever the product DLL is loaded, which is every run here, "
+            "so its whole menu drive -- OpenPauseMenu, NavToOptionSetting, TabToQuit -- has been dead "
+            "code in every launch (`drive: mode='passive' phases=0`). This writes the two markers that "
+            "override that, into the run's artifact directory where the DLL resolves them beside its "
+            "log. Use it whenever a run has to reproduce something through the menu: a switch armed by "
+            "a load armed without the menu proves nothing about a menu bug -- and since 2026-09-05 "
+            "there is no such arm left, so loads 2..N happen HERE or not at all. `menureload` "
+            "drives one; `menuchain` drives three, which is what a load-3 defect needs. "
+            "`buildimport` presses the third cloned row -- Load Build from URL -- and then holds "
+            "until the carried inventory's acquisition counter stops moving, which is the import "
+            "having finished; it needs a `build_url` in the game-directory er-quickload.toml, "
+            "because the row reads the link from there and does nothing without one."
+        ),
+    )
+    parser.add_argument(
+        "--agent-driven",
+        action="store_true",
+        help="declare that the AGENT drives this run's input, which lets a --with-pinned "
+        "er-input-harness through the drives-input conflict. The run block then says outright "
+        "that the player was not in control, so no such run can be mistaken for a user-driven "
+        "one. Required by AGENTS.md's 2026-07-22 order that the agent drive every input; without "
+        "it the closure refuses the harness, which is the correct default.",
+    )
     parser.add_argument("--with", dest="pinned", action="append", default=[], metavar="PACKAGE")
     parser.add_argument(
         "--without",
@@ -1279,8 +1595,21 @@ def main() -> int:
         "for two identical runs. Needed for the param-patching class: any DLL that mutates a "
         "param row moves the Seamless lobby key and silently drops you out of matchmaking.",
     )
+    parser.add_argument(
+        "--disable-arxan",
+        action="store_true",
+        help="ask me3 to disable Arxan anti-tamper. DIAGNOSTIC A/B ONLY: me3 logs "
+        "`arxan detected: true` and leaves it ARMED by default, so an ordinary run here carries "
+        "live anti-tamper. Turning it off changes what the game IS, so a run with this flag is "
+        "never product proof -- it answers one question: does the fault survive without Arxan?",
+    )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")
+    parser.add_argument(
+        "--allow-stale-launcher",
+        action="store_true",
+        help="launch even though another me3 launcher is alive (it will probably fail)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="stage everything, launch nothing")
     parser.add_argument("--status", metavar="RUN_ID")
     parser.add_argument("--selftest", action="store_true")

@@ -7,7 +7,6 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     {
         return;
     }
-    load_title_scaleform_memory_gfx();
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
@@ -17,12 +16,12 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             return;
         }
     }
-    // THREE ADDRESSES, THREE INDEPENDENT OBSERVERS (2026-08-30). These were three `let Ok(..) else
-    // { log; return; }` bindings ahead of all three installs, so ONE unmapped RVA on 1.17 refused
+    // Three addresses, three independent observers (2026-08-30). These were three `let Ok(..) else
+    // { log; return; }` bindings ahead of all three installs, so one unmapped RVA on 1.17 refused
     // the other two before either was attempted -- and the Scaleform file-open row is the one this
-    // DLL SHARES with er-armament-icons through the hook union, so losing it silently breaks a
+    // DLL shares with er-armament-icons through the hook union, so losing it silently breaks a
     // second DLL too. Each row is now resolved into an `Option` and skipped alone; the three
-    // outcomes stay distinguishable (REFUSED = no map row, FAILED = MinHook said no).
+    // outcomes stay distinguishable (refused = no map row, failed = MinHook said no).
     // bd `one-refused-hook-must-not-abort-the-installer-2026-08-30`.
     let resolve = |rva: u32, label: &str| -> Option<usize> {
         match game_rva(rva) {
@@ -44,22 +43,22 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
         TITLE_SCALEFORM_RESOURCE_CTOR_RVA as u32,
         "Scaleform resource-ctor",
     );
-    // PER-HOOK OUTCOMES, NOT ONE SHARED FLAG (bd er-effects-rs-55y6, 2026-08-31).
+    // Per-hook outcomes, not one shared flag (bd er-effects-rs-55y6, 2026-08-31).
     //
     // These three observers are INDEPENDENT: AcquireMenuResource drives the loading bar's
-    // ACQUIRING ASSETS phase, the Scaleform file-open counter drives OPENING / BUILDING MENU UI,
+    // acquiring assets phase, the Scaleform file-open counter drives opening / building menu UI,
     // and the resource-ctor observer drives neither. Until now they shared one `ok` that all three
     // failure arms cleared, in front of an `if !ok { return; }` that stood between the queue and
-    // `MH_ApplyQueued` -- so ONE refused address left the others created, queued, and never
+    // `MH_ApplyQueued` -- so one refused address left the others created, queued, and never
     // enabled. That is the exact shape that froze the visible bar at `LOADING SAVE 7/11` and left
     // the cover over live gameplay when the five loading-screen observers shared a flag
     // (`er-loading-portrait-core/src/dlstring_lookat_math.rs`, since rewritten to per-hook latches).
     //
-    // It was worse here than there. The file-open hook goes through the UNION, which the comment
-    // below says is DELIBERATELY OUTSIDE this batch -- and its failure still cleared the flag that
+    // It was worse here than there. The file-open hook goes through the union, which the comment
+    // below says is deliberately outside this batch -- and its failure still cleared the flag that
     // gated the batch's apply, so a hook that was never in the batch could kill it.
     //
-    // Each hook now carries its own answer, the apply runs whenever ANY hook queued, and each
+    // Each hook now carries its own answer, the apply runs whenever any hook queued, and each
     // `*_INSTALLED` latch is set only for the hook that actually queued -- the old code set both
     // MinHook latches on `MH_OK` regardless of which one got there, which would have reported a
     // refused observer as installed and blocked its retry.
@@ -93,13 +92,13 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             }
         }
     }
-    // THE ONE PROLOGUE THIS DLL SHARES WITH ANOTHER ME3 NATIVE (2026-08-23). `er-armament-icons`
+    // The one prologue this DLL shares with another ME3 native (2026-08-23). `er-armament-icons`
     // detours this same Scaleform file-open wrapper, and the bare `MhHook` that used to be here is
     // exactly what let whichever DLL installed second overwrite the other's trampoline: measured,
     // the product reported `file_open_observer_installed = true` with `file_open_hits = 0` for an
     // entire session while every GFx swap it owns rendered vanilla, and nothing crashed or logged.
     // Registering through the union makes install order irrelevant -- the first registrant creates
-    // the dispatcher and owns the real trampoline, every later one CHAINS -- and the companion
+    // the dispatcher and owns the real trampoline, every later one chains -- and the companion
     // reaches this same union from its own image through the `er_effects_union_register` export.
     // The union enables its hook immediately rather than through MinHook's queue, so this
     // deliberately sits outside the `MH_ApplyQueued` batch the other two observers share.
@@ -150,8 +149,8 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             }
         }
     }
-    // Nothing reached MinHook's pending set, so there is nothing to apply. This is NOT the old
-    // aggregate abort: it fires only when EVERY batched hook is out, never because one is.
+    // Nothing reached MinHook's pending set, so there is nothing to apply. This is not the old
+    // aggregate abort: it fires only when every batched hook is out, never because one is.
     if !(acquire_queued || resource_ctor_queued) {
         return;
     }
@@ -163,7 +162,7 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
             if acquire_queued {
                 TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.store(1, Ordering::SeqCst);
             }
-            // file-open is NOT set here: the union already enabled and flagged it above.
+            // file-open is not set here: the union already enabled and flagged it above.
             if resource_ctor_queued {
                 TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.store(1, Ordering::SeqCst);
             }
@@ -197,12 +196,12 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
     if unsafe { bounded_ascii_contains(target_ptr, b"systex") } {
         TITLE_SCALEFORM_BIND_OBSERVER_SYSTEX_HITS.fetch_add(1, Ordering::SeqCst);
     }
-    // STATS-PANEL NEUTRAL-BG REDIRECT (2026-07-04). In stats-panel product mode, redirect each visible
-    // per-slot face bind `menu_dummyprofileface_NN -> systex_menu_profileMM` TARGET to our registered
-    // neutral-bg key `STATS_PANEL_SYSTEX_KEYS[MM]`. The dummy-face shapes ARE the visible per-row boxes
+    // Stats-panel neutral-BG redirect (2026-07-04). In stats-panel product mode, redirect each visible
+    // per-slot face bind `menu_dummyprofileface_NN -> systex_menu_profileMM` target to our registered
+    // neutral-bg key `STATS_PANEL_SYSTEX_KEYS[MM]`. The dummy-face shapes are the visible per-row boxes
     // (05_010 RE 2026-07-04), so the Scaleform-repo miss on our unique key bridges to our GPU texture
     // and paints the neutral background in the box -- with the character render blanked, there is no
-    // portrait to draw. Fires on EVERY matching bind (the list re-binds as it scrolls/recycles); the
+    // portrait to draw. Fires on every matching bind (the list re-binds as it scrolls/recycles); the
     // in-place DLString rewrite is idempotent. Gated per slot on the registered bit so we never point at
     // an unregistered key. This SUPERSEDES the yoinked slot-0 FL_40135 rewrite (which was based on the
     // now-corrected belief that the dummy faces were not visible).
@@ -223,7 +222,7 @@ pub(crate) unsafe extern "system" fn title_scaleform_bind_observer_hook(owner: u
         rewritten_visible_profile_surface = true;
         let prev = STATS_PANEL_BIND_REDIRECT_MASK.fetch_or(1 << slot, Ordering::SeqCst);
         let n = STATS_PANEL_BIND_REDIRECTS.fetch_add(1, Ordering::SeqCst) + 1;
-        // Log the FIRST redirect of each slot (prev bit was clear) so we get exactly 10
+        // Log the first redirect of each slot (prev bit was clear) so we get exactly 10
         // lines, not one per bind.
         if prev & (1 << slot) == 0 {
             append_autoload_debug(format_args!(
@@ -486,7 +485,7 @@ pub(crate) unsafe extern "system" fn title_native_menu_visual_window_fadein_hook
 /// garbage.
 const MAX_SCENE_OBJ_NAME_LEN: usize = 255;
 
-/// Read a Scaleform scene-object name that the GAME handed us, without trusting the pointer.
+/// Read a Scaleform scene-object name that the game handed us, without trusting the pointer.
 ///
 /// Every `name_ptr` in this file arrives as a detour argument, so it is foreign in exactly the
 /// sense that killed two testers' games on 2026-08-23 (bd `er-effects-rs-uuly`): `CStr::from_ptr`
@@ -510,6 +509,15 @@ pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
         "PressStart"
             | "StaticSystemText_101000"
             | "PRESS BUTTON"
+            // The legal footer. The binder is handed a path relative to whichever proxy is asked,
+            // and `TitleTopDialog`'s initializer asks two different ones: it binds `Top` into
+            // dialog+0xa48 and then asks dialog+0xa48 for the bare `PressStart` (deobf-1.17.1
+            // 0x1409a9415), but asks the parent root for `Top/CopyrightText` (0x1409a98ac and
+            // 0x1409a991a, both `lea r8, [0x142b295a8]`). The bare `CopyrightText` below is the
+            // name as written in `05_000_title.gfx` and is what this list carried, so it never
+            // matched an argument: run br-20260913-143409-05ec hid `PressStart`, `Info`,
+            // `ProgressInfo` and `Install_ProgressInfo`, and left the footer on screen.
+            | "Top/CopyrightText"
             | "CopyrightText"
             | "ProgressInfo"
             | "Install_ProgressInfo"
@@ -621,10 +629,18 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
         TITLE_PRESS_START_BIND_LAST_CONTEXT.store(context, Ordering::SeqCst);
         TITLE_PRESS_START_GFX_VALUE.store(value, Ordering::SeqCst);
         record_title_text_gfx_value(value);
-        if let Some(set_visible_addr) = crate::experiments::gated_game_fn(
-            TITLE_PRESS_START_SET_VISIBLE_RVA,
-            "TITLE_PRESS_START_SET_VISIBLE_RVA",
-        ) {
+        // Only while the cover is actually drawing (2026-09-04). This bind-time hide had no release
+        // gate whatsoever, so once the cover stopped it kept blanking `PressStart` on every title
+        // rebuild for the rest of the process -- the half of the black screen that removes the
+        // user's way out of it (`oracle_title_press_start_bind_any_hidden=true` with the cover
+        // stopped and drawing nothing). The value/telemetry stores above stay unconditional; only
+        // the forced hide is scoped. See `title_visual_suppression_active` for the measurement.
+        if er_telemetry_core::counters::title_visual_suppression_active()
+            && let Some(set_visible_addr) = crate::experiments::gated_game_fn(
+                TITLE_PRESS_START_SET_VISIBLE_RVA,
+                "TITLE_PRESS_START_SET_VISIBLE_RVA",
+            )
+        {
             let set_visible: unsafe extern "system" fn(usize, u8) =
                 unsafe { std::mem::transmute(set_visible_addr) };
             unsafe { set_visible(out_proxy, 0) };
@@ -645,7 +661,7 @@ pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook
 }
 
 pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
-    // ONE CLAIM, not a check-then-act read of the success latch -- two install threads own this
+    // One claim, not a check-then-act read of the success latch -- two install threads own this
     // (see `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED` for the measured race).
     if TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_CLAIMED.swap(1, Ordering::SeqCst) != 0 {
         return;
@@ -674,6 +690,13 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
         Ok(hook) => {
             TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG
                 .store(hook.trampoline() as usize, Ordering::SeqCst);
+            // Publish it across the crate boundary too: `er-quit-menu-core`'s proxy resolves run
+            // this same binder, and calling the detour instead of the trampoline re-enters this
+            // hook. A shell with no product behind it leaves the slot at zero and calls the game
+            // function directly, which is correct there because nothing detoured it.
+            er_quit_menu_core::scaleform_proxy::set_named_child_bind_trampoline(
+                hook.trampoline() as usize
+            );
             if let Err(status) = unsafe { hook.queue_enable() } {
                 append_autoload_debug(format_args!(
                     "title-cover-part-a: queue_enable named-child bind failed: {status:?}"
@@ -700,7 +723,7 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
 }
 
 /// The eight attributes of the character in save `slot`, or `None` when the slot is empty or the save
-/// is unreadable. This is the PER-SLOT source (bd er-effects-rs-l90): the attributes exist in no live
+/// is unreadable. This is the per-slot source (bd er-effects-rs-l90): the attributes exist in no live
 /// struct at ProfileSelect time, so they are read straight from the on-disk `.sl2` (see
 /// [`ensure_profile_slot_stats_cached`]).
 pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUNT]> {
@@ -716,11 +739,11 @@ pub(crate) fn profile_slot_attributes(slot: i32) -> Option<[i32; STATS_ATTR_COUN
         .map(|s| s.attributes)
 }
 
-/// The Rune Level of the character in save `slot`, from the SAME cached `.sl2` parse the attributes
+/// The Rune Level of the character in save `slot`, from the same cached `.sl2` parse the attributes
 /// come from.
 ///
 /// The native `Level` field reads the row model's own level word (`rowModel + 0x88`), which is why
-/// the unmerged row could show a per-slot level without us sourcing one. The MERGED header is a
+/// the unmerged row could show a per-slot level without us sourcing one. The merged header is a
 /// string we compose, so it needs the value in our own hands -- and taking it from the save keeps
 /// the header's level and its attribute line describing the same decode of the same slot, rather
 /// than pairing a native number with our attributes.
@@ -803,10 +826,10 @@ pub(crate) fn build_loaded_char_name() -> Option<String> {
         .filter(|s| !s.trim().is_empty())
 }
 
-/// The LOADED character's Rune Level, read off live `PlayerGameData` -- the same object
+/// The loaded character's Rune Level, read off live `PlayerGameData` -- the same object
 /// [`build_loaded_char_name`] takes the name from.
 ///
-/// The title Load Game row describes the CURRENT character (`FUN_140951220` builds a transient
+/// The title Load Game row describes the current character (`FUN_140951220` builds a transient
 /// current-player `MenuSaveDataSummary` for it), which is not necessarily save slot 0. Taking the
 /// name from live PGD and the level from `profile_slot_level(0)` would render one character's name
 /// beside another's level for anyone whose loaded character is not in slot 0 -- a confident wrong
@@ -817,7 +840,7 @@ pub(crate) fn build_loaded_char_level() -> Option<i32> {
     unsafe { safe_read_i32(pgd + er_loading_portrait_core::pgd_layout::PGD_LEVEL_68_OFFSET) }
 }
 
-/// The LOADED character's highest weapon upgrade level, off the same live `PlayerGameData` the name
+/// The loaded character's highest weapon upgrade level, off the same live `PlayerGameData` the name
 /// and level come from. Sourced together with them so the row cannot mix characters.
 pub(crate) fn build_loaded_char_weapon_level() -> Option<u8> {
     let pgd = loaded_player_game_data_ptr()?;
@@ -896,7 +919,7 @@ fn profile_editor_live_layout() -> Option<er_gfx::profile_05_010_layout::Profile
     Some(command.layout)
 }
 
-/// Cap a live-edited `font_height` at whatever the field's BAKED box can actually render.
+/// Cap a live-edited `font_height` at whatever the field's baked box can actually render.
 ///
 /// `font_height` hot-reloads instantly (it is just the `<font size>` on the text we push), but
 /// `clip_height` does not exist on the live path at all -- the box comes from the movie, and the
@@ -987,11 +1010,11 @@ fn scaleform_html_size_existing_font_tags(body: &str, size: i32) -> String {
     out
 }
 
-/// The STORED effective max vitals `[hp, fp, stamina]` of the character in save `slot`, or
+/// The stored effective max vitals `[hp, fp, stamina]` of the character in save `slot`, or
 /// `None` when the slot is empty or the save is unreadable. Same `.sl2` source/cache as
 /// [`profile_slot_attributes`]; the values are the save's serialized `MaxHealth`/`MaxFP`/
 /// `MaxSP` (== runtime `current_max_hp/fp/stamina`, effective incl. talisman/buff mods),
-/// read -- never derived -- so the boot loading screen can render the SAME five-line stats
+/// read -- never derived -- so the boot loading screen can render the same five-line stats
 /// panel as subsequent live loads (bd er-effects-rs-qic7).
 pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
@@ -1006,7 +1029,7 @@ pub(crate) fn profile_slot_vitals(slot: i32) -> Option<[u32; 3]> {
     ])
 }
 
-/// Fallback attributes read live from `GameDataMan -> PlayerGameData` -- the CURRENTLY-LOADED
+/// Fallback attributes read live from `GameDataMan -> PlayerGameData` -- the currently-loaded
 /// character. Used only when the per-slot `.sl2` read fails entirely, so the row still shows real
 /// (if not per-slot) values rather than nothing. Returns `None` when no character is loaded.
 pub(crate) fn build_loaded_char_attributes() -> Option<[i32; STATS_ATTR_COUNT]> {
@@ -1125,7 +1148,7 @@ pub(crate) fn profile_slot_saved_map(slot: i32) -> Option<i32> {
 }
 
 /// Per-slot `PlaceName` id resolved from the save itself -- the slot's own record when it describes
-/// that slot's body, else the id the save pairs with that body's map in a record that IS consistent
+/// that slot's body, else the id the save pairs with that body's map in a record that is consistent
 /// (`er_save_loader::profile_summary::slot_place_name_ids`).
 pub(crate) static PROFILE_SLOT_PLACE_NAME_CACHE: std::sync::Mutex<Option<[Option<u32>; 10]>> =
     std::sync::Mutex::new(None);
@@ -1135,11 +1158,35 @@ pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
         return None;
     }
-    let guard = PROFILE_SLOT_PLACE_NAME_CACHE.lock().ok()?;
-    guard.as_ref()?.get(slot as usize).copied().flatten()
+    let from_save = PROFILE_SLOT_PLACE_NAME_CACHE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref()?.get(slot as usize).copied().flatten());
+    if from_save.is_some() {
+        return from_save;
+    }
+    // Third tier, and the only one that does not depend on this container holding a second
+    // character. `er_save_loader::profile_summary::slot_place_name_ids` answers from the slot's own
+    // record, then from a sibling record that covers the same map; a character alone on their map
+    // exhausts both and the row renders blank. Measured on run br-20260913-155423-2fe7: four rows
+    // borrowed id 14000 from each other on body map 0x0e000000 and the fifth, on 0x15010000, had no
+    // donor. The game's own param tables key on that map and name it, so ask them.
+    let map = profile_slot_saved_map(slot)?;
+    let (id, source) = er_profile_summary_core::map_place_names::place_name_for_map(map)?;
+    let hits = PROFILE_ROW_PARAM_PLACE_NAME_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits <= 10 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "stats-text: slot {slot} Location sourced from {} -- this save names no record covering body map 0x{map:08x}, and that table pairs it with PlaceName {id} (hits={hits})",
+            source.label()
+        ));
+    }
+    Some(id)
 }
 
-/// Point slot `slot`'s LIVE `ProfileSummary` record at `place_name_id` for the duration of one native
+/// Rows whose `Location` came from the game's param tables because the save could not name the map.
+static PROFILE_ROW_PARAM_PLACE_NAME_HITS: AtomicUsize = AtomicUsize::new(0);
+
+/// Point slot `slot`'s live `ProfileSummary` record at `place_name_id` for the duration of one native
 /// row populate, returning the id it displaced.
 ///
 /// The row's `Location` string is built by the game from this one `u32` (`FUN_1408752c0` loads
@@ -1169,7 +1216,7 @@ pub(crate) unsafe fn stage_profile_record_place_name(slot: i32, place_name_id: u
     Some(displaced)
 }
 
-/// Hook of the ProfileSelect row-model BUILDER `FUN_1408752c0(rowModel, slot)`.
+/// Hook of the ProfileSelect row-model builder `FUN_1408752c0(rowModel, slot)`.
 ///
 /// This is where a slot's `ProfileSummary` record becomes a row: the builder reads `record[0x34]`
 /// and the field filler turns it into the row model's `Location` string. So a slot whose record was
@@ -1229,17 +1276,17 @@ pub(crate) unsafe fn restore_profile_record_place_name(slot: i32, displaced: u32
     unsafe { core::ptr::write_volatile(field as *mut u32, displaced) };
 }
 
-/// Does the LIVE `ProfileSummary` record for `slot` describe the character whose body sits in that
+/// Does the live `ProfileSummary` record for `slot` describe the character whose body sits in that
 /// slot of the save we parsed?
 ///
 /// The row's `Location` is formatted from that record's `PlaceName` id and from nothing else. In a
 /// save the game wrote, the record and the body were written together and always agree; in a save
-/// ASSEMBLED by a manager that copies `USER_DATA00N` bodies between files, `USER_DATA010` is left
+/// assembled by a manager that copies `USER_DATA00N` bodies between files, `USER_DATA010` is left
 /// behind and the record describes whoever used to hold the slot. `save-files/100-Lilbro` is that
 /// case, and it is why six Load Game rows read "Midra's Manse" for characters saved in the Academy
 /// (user-reported 2026-08-07).
 ///
-/// The comparison is against the LIVE record rather than the file's, and that is load-bearing: the
+/// The comparison is against the live record rather than the file's, and that is load-bearing: the
 /// game rewrites a slot's record whenever it saves that character, so after a switch-and-quit the
 /// loaded slot's record is correct while the file's copy is still the stale one. Reading the file
 /// would blank the one row that had just become right.
@@ -1253,7 +1300,7 @@ pub(crate) unsafe fn profile_slot_location_is_this_characters(slot: i32) -> bool
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
         return true;
     }
-    // A previewed record whose place name could not be sourced still holds the TEMPLATE character's,
+    // A previewed record whose place name could not be sourced still holds the template character's,
     // and its map was written from the body -- so it passes the comparison below while being exactly
     // the case that comparison is for. The preview says so directly instead.
     if PROFILE_PREVIEW_PLACE_NAME_UNSOURCED.load(Ordering::SeqCst) & (1usize << slot as usize) != 0
@@ -1315,7 +1362,7 @@ pub(crate) unsafe fn ensure_profile_slot_stats_cached(base: usize) -> bool {
 
 /// Fill both per-slot caches from `sl2`, replacing whatever they held.
 ///
-/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker ALREADY HAS the
+/// Split out of [`ensure_profile_slot_stats_cached`] because the save-file picker already has the
 /// bytes of the save it is previewing: reloading from them costs a parse instead of another ~26 MB
 /// read, and it makes the caches describe the save whose slots are on screen.
 pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> usize {
@@ -1375,10 +1422,11 @@ pub(crate) fn load_profile_slot_caches_from_bytes(sl2: &[u8], source: &str) -> u
     decoded
 }
 
+#[cfg(feature = "quit-rows")]
 /// Drop both per-slot caches so the next row populate re-reads the save that is actually active.
 ///
-/// THE CACHES USED TO BE A PROCESS-LIFETIME LATCH. `ensure_profile_slot_stats_cached` returned early
-/// whenever they held anything, and nothing in the workspace ever put `None` back -- so the FIRST
+/// The CACHES used to be a process-lifetime latch. `ensure_profile_slot_stats_cached` returned early
+/// whenever they held anything, and nothing in the workspace ever put `None` back -- so the first
 /// save read in a session described every ProfileSelect row for the rest of that session. Pick a
 /// different save file and the rows mixed two characters: `Location` and the level come off the
 /// game's own row model and followed the new save, while the name and the whole attribute line came
@@ -1410,227 +1458,11 @@ pub(crate) fn invalidate_profile_slot_caches(reason: &str) {
     }
 }
 
-/// Push `utf16` onto the row's `ErStats` field with the game's own machinery, exactly as the native
-/// row-populate does per field: resolve the named child (`assignComponentWithName` -- via the installed
-/// hook's trampoline when available so the resolve is not double-instrumented), SetText through the
-/// null-guarded wrapper `FUN_14074a0f0` (checks the field dataType; returns 0 when the child did not
-/// resolve to an editable text field, e.g. when the 05_010 GFX edit was not served), then release the
-/// resolved value with `CSScaleformValue::~CSScaleformValue` on the proxy's EMBEDDED value (+0x28),
-/// mirroring the native `~CSScaleformValue(&SStack_70.scaleformValue)`. Returns whether SetText
-/// accepted.
-///
-/// er-effects-rs-7e7 hardening: the SetText wrapper's first act is `rcx = *(proxy+0x8); call
-/// *0x8(*rcx)` -- an UNVALIDATED virtual dispatch on the linked component object. On the first
-/// in-world ProfileSelect open the component linked for our injected `ErStats` field was a stale
-/// menu-arena object with a garbage heap vtable, and that dispatch jumped into `.rdata` (hard
-/// crash). Validate component -> vtable -> slot target are all game-image-plausible before letting
-/// the wrapper dispatch; otherwise skip fail-closed with full diagnostics.
-/// GFx value type of the child `name` on `row_proxy`, or `None` when the resolve itself could not be
-/// run. `Some(0)` means the resolve RAN and found nothing -- see [`gfx_value_type_is_resolved`].
-///
-/// Callers get the type rather than a bool because the type is the only honest answer: the resolve
-/// always hands back a constructed out proxy whose component slot points at itself, so a movie
-/// without the child is indistinguishable from one with it on every other observable.
-unsafe fn row_child_gfx_value_type(base: usize, row_proxy: usize, name: &str) -> Option<usize> {
-    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    if row_proxy == 0 || row_proxy == null {
-        return None;
-    }
-    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
-        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => er_game_base::mem::game_data_addr(
-            base,
-            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ),
-    };
-    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(assign) };
-    let dtor: unsafe extern "system" fn(usize) = unsafe {
-        std::mem::transmute(crate::experiments::gated_game_fn(
-            CSSCALEFORMVALUE_DTOR_RVA,
-            "CSSCALEFORMVALUE_DTOR_RVA",
-        )?)
-    };
-    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let out = unsafe {
-        assign(
-            row_proxy,
-            proxy_buf.as_mut_ptr() as usize,
-            name.as_ptr() as usize,
-        )
-    };
-    if out == 0 || out == null {
-        return None;
-    }
-    let datatype = unsafe {
-        safe_read_i32(
-            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
-        )
-    }
-    .map(|raw| (raw as u32 & 0x8f) as usize);
-    // Release exactly what the resolve constructed, exactly as the native populate does per field.
-    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
-    datatype
-}
-
-/// Is this summary row one of OUR edited `05_010_ProfileSelect` rows?
-///
-/// `CS::MenuSaveDataSummary`'s populate (vtable slot 1, `0x8757e0`) is a SHARED template: every
-/// surface that renders a character summary reaches it, including the game's own System>Quit
-/// `GameEnd` panel in `02_040_OptionSetting`, which owns its own `PlayerName` / `Level` /
-/// `StaticText_110502` / `Location` / `PlayTime` fields with its own geometry. Applying this mod's
-/// row presentation to whatever proxy arrives therefore edits the game's menu as well as ours --
-/// observed as the Quit Game panel losing its level caption, level and play time, since those hides
-/// DO land while the merged-header SetText silently does not.
-///
-/// The probe is `ErCharStats`, a field this mod adds to the ProfileSelect row template and that
-/// exists in no vanilla movie, so the test is self-identifying: no address, no dialog identity, and
-/// nothing to re-derive when the game updates. A row that fails it is handed back untouched.
-pub(crate) unsafe fn row_is_stats_panel_template(base: usize, row_proxy: usize) -> bool {
-    let ours =
-        unsafe { row_child_gfx_value_type(base, row_proxy, PROFILE_ROW_CHAR_STATS_FIELD_NAME) }
-            .is_some_and(gfx_value_type_is_resolved);
-    if ours {
-        PROFILE_OWN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst);
-    } else {
-        let n = PROFILE_FOREIGN_SUMMARY_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 || n.is_power_of_two() {
-            append_autoload_debug(format_args!(
-                "stats-text: summary row=0x{row_proxy:x} has no ErCharStats child -- not our ProfileSelect movie; left native (foreign_rows={n})"
-            ));
-        }
-    }
-    ours
-}
-
-pub(crate) unsafe fn push_stats_text_on_row(
-    base: usize,
-    row_proxy: usize,
-    name: &str,
-    utf16: &[u16],
-) -> bool {
-    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
-        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => er_game_base::mem::game_data_addr(
-            base,
-            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ),
-    };
-    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(assign) };
-    let settext: unsafe extern "system" fn(usize, usize) = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(PROFILE_SETTEXT_RVA, "PROFILE_SETTEXT_RVA") {
-                Some(address) => address,
-                None => return false,
-            },
-        )
-    };
-    let dtor: unsafe extern "system" fn(usize) = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(
-                CSSCALEFORMVALUE_DTOR_RVA,
-                "CSSCALEFORMVALUE_DTOR_RVA",
-            ) {
-                Some(address) => address,
-                None => return false,
-            },
-        )
-    };
-    // The binder fully constructs the out proxy without reading it (RE: assignComponentWithName
-    // ctor-or-resolve paths both initialize before use); a zeroed buffer mirrors the native
-    // uninitialized 0x70-byte stack slot with headroom. The name is a plain string (the binder
-    // treats it as a printf format; `ErStats` carries no '%').
-    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let out = unsafe {
-        assign(
-            row_proxy,
-            proxy_buf.as_mut_ptr() as usize,
-            name.as_ptr() as usize,
-        )
-    };
-    if out == 0 || out == null {
-        return false;
-    }
-    let component_slot = out + SCENE_OBJ_PROXY_COMPONENT_SLOT_OFFSET;
-    let comp = unsafe { safe_read_usize(component_slot) }.unwrap_or(0);
-    let comp_vt = if comp != 0 && comp != null {
-        unsafe { safe_read_usize(comp) }.unwrap_or(0)
-    } else {
-        0
-    };
-    let slot_fn = if comp_vt != 0 {
-        unsafe { safe_read_usize(comp_vt + COMPONENT_GET_VALUE_VTABLE_SLOT_OFFSET) }.unwrap_or(0)
-    } else {
-        0
-    };
-    // DID THE NAME ACTUALLY RESOLVE? The component-pointer checks below cannot answer that: on a
-    // miss the named-child ctor leaves the out proxy's component slot pointing at ITSELF, so `comp`
-    // is non-null and `comp_vt` is the game's own `CS::SceneObjProxy` vtable -- game-image-live by
-    // every test here. Only the GFx value TYPE separates a hit from a miss, and without this check
-    // every push reported success on every movie: 109,035 "successful" `ErCharStats` writes were
-    // logged against the System>Quit panel, which has no such field, while the visibility hides that
-    // travelled with them landed for real. Telemetry that cannot be wrong about this is the point.
-    let resolved = unsafe {
-        safe_read_i32(
-            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
-        )
-    }
-    .map(|raw| (raw as u32 & 0x8f) as usize)
-    .is_some_and(gfx_value_type_is_resolved);
-    if !resolved {
-        let n = PROFILE_STATS_PUSH_MISSING_FIELD.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 || n.is_power_of_two() {
-            append_autoload_debug(format_args!(
-                "stats-text: push REFUSED -- movie has no child '{}' on row=0x{row_proxy:x} (missing_field={n})",
-                name.trim_end_matches('\0')
-            ));
-        }
-        unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
-        return false;
-    }
-    // `dispatch_target_is_purecall`: a destructed component keeps a vtable full of `_purecall`,
-    // which lives in the game image and so passes `vtable_in_game_image`. Calling it is a
-    // write-to-NULL abort, not a soft failure.
-    let component_live = comp_vt != 0
-        && vtable_in_game_image(comp_vt, base)
-        && vtable_in_game_image(slot_fn, base)
-        && !dispatch_target_is_purecall(slot_fn, base);
-    let accepted = if component_live {
-        // The wrapper copies the UTF-16 into a DLString synchronously. In live editor mode,
-        // font/align hot-reload rides this same safe SetText path by wrapping the text in
-        // Scaleform HTML; field width remains a movie-definition/bounds edit.
-        let live_text = profile_editor_live_text_for_field(name, utf16);
-        unsafe { settext(component_slot, live_text.as_ref().as_ptr() as usize) };
-        crate::experiments::startup_hooks::remember_profile_editor_field_target(
-            name,
-            comp,
-            utf16,
-            "last-row-settext",
-        );
-        true
-    } else {
-        let skips = PROFILE_STATS_PUSH_STALE_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
-        PROFILE_STATS_PUSH_STALE_LAST_COMP.store(comp, Ordering::SeqCst);
-        PROFILE_STATS_PUSH_STALE_LAST_VT.store(comp_vt, Ordering::SeqCst);
-        if skips <= 8 {
-            append_autoload_debug(format_args!(
-                "stats-text: ErStats push SKIPPED fail-closed (er-effects-rs-7e7 guard): resolved component NOT live -- comp=0x{comp:x} vt=0x{comp_vt:x} slot_fn=0x{slot_fn:x} row=0x{row_proxy:x} (skips={skips})"
-            ));
-        }
-        false
-    };
-    // Destroy the proxy's EMBEDDED CSScaleformValue exactly like the native populate. The old code
-    // ran the dtor on +0x8 (the component slot) -- corrupting the link node and mis-releasing
-    // proxy+0x20 -- a second latent 7e7-class UAF even when SetText succeeded.
-    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
-    accepted
-}
+// The Scaleform text writer that stood here moved to
+// `er_quit_menu_core::scaleform_proxy::push_stats_text_on_row` with the row chrome that drives it.
+// Its two live-editor steps -- the font/align HTML wrap and the field-target cache -- became a
+// `RowTextHooks` seam this crate installs, so a shell with no editor writes the text it was handed.
+pub(crate) use er_quit_menu_core::scaleform_proxy::push_stats_text_on_row;
 
 /// Push text onto a field proxy that the native named-child binder has already resolved. The caller
 /// must not destroy the proxy here; the native binder caller still owns that lifetime.
@@ -1702,299 +1534,31 @@ pub(crate) unsafe fn push_stats_text_on_resolved_field(
     }
 }
 
-/// Show or hide ONE native row field with the game's own machinery: resolve the named child
-/// (`assignComponentWithName`, through the installed hook's trampoline so the resolve is not
-/// double-instrumented), call the SceneObjProxy visibility wrapper `FUN_140733340`, then release the
-/// resolved value with `~CSScaleformValue` on the proxy's EMBEDDED value (+0x28) exactly as the
-/// native populate does per field. Returns whether the wrapper was called.
-///
-/// Why visibility and not text for the level fields: their contents come from writers that cannot
-/// emit nothing (an FMG static pass and a `"%d"` format -- see the field-name constants), while a
-/// re-resolve after the populate is impossible (it destroys the row proxy's embedded value).
-/// Visibility is also the only lever that RESTORES exactly -- `visible = true` needs no knowledge of
-/// the text, so a row clip reused by a save-file row (or by a vanilla view) comes back unchanged.
-///
-/// Fail-closed in every direction: the wrapper itself does nothing unless the resolved value is a
-/// display object, and we skip the call unless the out proxy carries the game's own
-/// `CS::SceneObjProxy` vtable (the wrapper's first act is an unvalidated
-/// `(*proxy->vfptr->GetScaleformValue2)(proxy)` dispatch -- the er-effects-rs-7e7 class of hazard).
-pub(crate) unsafe fn set_row_field_visible(
-    base: usize,
-    row_proxy: usize,
-    name: &str,
-    visible: bool,
-) -> bool {
-    debug_assert!(name.ends_with('\0'), "field name must be NUL-terminated");
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    let assign = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
-        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => er_game_base::mem::game_data_addr(
-            base,
-            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ),
-    };
-    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(assign) };
-    let set_visible: unsafe extern "system" fn(usize, u8) = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(
-                TITLE_PRESS_START_SET_VISIBLE_RVA,
-                "TITLE_PRESS_START_SET_VISIBLE_RVA",
-            ) {
-                Some(address) => address,
-                None => return false,
-            },
-        )
-    };
-    let dtor: unsafe extern "system" fn(usize) = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(
-                CSSCALEFORMVALUE_DTOR_RVA,
-                "CSSCALEFORMVALUE_DTOR_RVA",
-            ) {
-                Some(address) => address,
-                None => return false,
-            },
-        )
-    };
-    let mut proxy_buf = [0u8; SCENE_OBJ_PROXY_STACK_BYTES];
-    let out = unsafe {
-        assign(
-            row_proxy,
-            proxy_buf.as_mut_ptr() as usize,
-            name.as_ptr() as usize,
-        )
-    };
-    if out == 0 || out == null {
-        PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst);
-        return false;
-    }
-    let proxy_vt = unsafe { safe_read_usize(out) }.unwrap_or(0);
-    // The resolved value the wrapper will act on, so its GFx type is observable as telemetry: the
-    // named-child ctor writes the child straight into the proxy's embedded CSScaleformValue and
-    // links no foreign component, so this is the value `GetScaleformValue2` returns.
-    let datatype = unsafe {
-        safe_read_i32(
-            out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET + CSSCALEFORMVALUE_DATATYPE_20_OFFSET,
-        )
-    }
-    .map(|raw| (raw as u32 & 0x8f) as usize);
-    if let Some(datatype) = datatype {
-        PROFILE_ROW_SLOT_INFO_LAST_DATATYPE.store(datatype, Ordering::SeqCst);
-        if datatype != GFX_VALUE_TYPE_DISPLAY_OBJECT {
-            let n = PROFILE_ROW_SLOT_INFO_NON_DISPLAY.fetch_add(1, Ordering::SeqCst) + 1;
-            if n <= 4 {
-                append_autoload_debug(format_args!(
-                    "save-picker: row field {} resolved GFx type {datatype} (not display object {GFX_VALUE_TYPE_DISPLAY_OBJECT}) -- native visibility setter will ignore it (n={n})",
-                    name.trim_end_matches('\0')
-                ));
-            }
-        }
-    }
-    let vtable_ok = proxy_vt
-        == er_game_base::mem::game_data_addr(
-            base,
-            SCENE_OBJ_PROXY_VTABLE_RVA,
-            "SCENE_OBJ_PROXY_VTABLE_RVA",
-        );
-    if vtable_ok {
-        unsafe { set_visible(out, u8::from(visible)) };
-    } else {
-        let n = PROFILE_ROW_SLOT_INFO_VIS_SKIPS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n <= 4 {
-            append_autoload_debug(format_args!(
-                "save-picker: row field {} visibility SKIPPED fail-closed -- out proxy 0x{out:x} vtable 0x{proxy_vt:x} is not CS::SceneObjProxy 0x{:x} (n={n})",
-                name.trim_end_matches('\0'),
-                er_game_base::mem::game_data_addr(
-                    base,
-                    SCENE_OBJ_PROXY_VTABLE_RVA,
-                    "SCENE_OBJ_PROXY_VTABLE_RVA"
-                )
-            ));
-        }
-    }
-    unsafe { dtor(out + SCENE_OBJ_PROXY_EMBEDDED_VALUE_OFFSET) };
-    vtable_ok
-}
+// The row chrome that stood here moved to `er_quit_menu_core::profile_row_chrome` on 2026-09-11,
+// so the System>Quit Load Character from File row can dress its browse surface with no product DLL
+// behind it. The Scaleform primitives underneath it -- resolving a named child's GFx type, and
+// driving the native visibility setter over one -- moved to that crate's `scaleform_proxy`, beside
+// the resolve/destroy pair they were a second spelling of. This crate keeps every call site it had.
+pub(crate) use er_quit_menu_core::profile_row_chrome::{
+    RowSlotFieldVisibility, apply_row_slot_info_visibility, row_is_stats_panel_template,
+};
 
-/// Which of a row's per-slot info fields should be on screen. Pure row-visibility decision ownership
-/// lives in `er-loading-portrait-core`; this compatibility name keeps the startup-hook callsite stable.
-pub(crate) use er_loading_portrait_core::RowSlotFieldVisibility;
-
-/// Apply a row's field visibility through the game's own wrapper.
-///
-/// Both directions matter equally. Hiding is the point; SHOWING is what makes hiding safe, because
-/// the seven native row clips are REUSED -- a clip that showed `[ up .. ]` renders a save file two
-/// scrolls later, and the same movie can outlive the picker window -- so every row states the full
-/// answer for all three fields rather than only touching the ones it wants gone.
-/// Apply `want` to every row field and return `(hidden, shown)` -- the number of fields the setter
-/// ACTUALLY changed, not the number we asked it to.
-///
-/// The counts are returned rather than swallowed because `set_row_field_visible` fails soft: per
-/// `GFX_VALUE_TYPE_DISPLAY_OBJECT`, the native setter returns without doing anything unless the
-/// resolved value is a display object, so a hide can silently no-op. A caller that logs "I called
-/// the hide" is therefore reporting intent, not effect, and will claim success while the screen
-/// still shows the field. That exact false positive was reported as working twice before the user's
-/// own eyes settled it (2026-08-07). Callers must log the returned counts.
-#[must_use]
-pub(crate) unsafe fn apply_row_slot_info_visibility(
-    base: usize,
-    row_proxy: usize,
-    want: RowSlotFieldVisibility,
-) -> (usize, usize) {
-    // EVERY field any row kind writes must appear here. The four native ones were stated and the
-    // injected fields were not, so the unstated ones inherited the previous kind's content on a
-    // recycled clip: the attribute line bled onto browse rows, then the drive labels bled onto
-    // character rows. Each drive button frame is paired with its text bit here for the same reason:
-    // hiding only the label would leave an empty clickable-looking button behind.
-    let fields = [
-        (PROFILE_ROW_LEVEL_CAPTION_FIELD_NAME, want.level),
-        (PROFILE_ROW_LEVEL_VALUE_FIELD_NAME, want.level),
-        (PROFILE_ROW_LOCATION_FIELD_NAME, want.location),
-        (PROFILE_ROW_PLAYTIME_FIELD_NAME, want.play_time),
-        (PROFILE_ROW_ER_STATS_FIELD_NAME, want.er_stats),
-        (PROFILE_ROW_CHAR_STATS_FIELD_NAME, want.char_stats),
-        (PROFILE_ROW_BACKING_FIELD_NAME, want.backing),
-        (PROFILE_ROW_CURRENT_PATH_FIELD_NAME, want.current_path),
-        (PROFILE_ROW_CURRENT_PATH_BUTTON_NAME, want.current_path),
-    ];
-    let (mut hidden, mut shown) = (0usize, 0usize);
-    for (name, visible) in fields {
-        if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
-            if visible {
-                shown += 1;
-            } else {
-                hidden += 1;
-            }
-        }
-    }
-    for (index, visible) in want.drive_cells.into_iter().enumerate() {
-        for name in [
-            PROFILE_ROW_DRIVE_BUTTON_FIELD_NAMES[index],
-            PROFILE_ROW_DRIVE_CELL_FIELD_NAMES[index],
-        ] {
-            if unsafe { set_row_field_visible(base, row_proxy, name, visible) } {
-                if visible {
-                    shown += 1;
-                } else {
-                    hidden += 1;
-                }
-            }
-        }
-    }
-    if hidden > 0 {
-        let rows = PROFILE_ROW_SLOT_INFO_HIDDEN_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
-        if rows <= 4 || rows.is_power_of_two() {
-            append_autoload_debug(format_args!(
-                "save-picker: hid {hidden} row field(s) on row=0x{row_proxy:x} (level={} location={} play_time={} er_stats={} char_stats={} backing={} current_path={} visible_drive_cells={} rows={rows})",
-                want.level,
-                want.location,
-                want.play_time,
-                want.er_stats,
-                want.char_stats,
-                want.backing,
-                want.current_path,
-                want.drive_cells.iter().filter(|visible| **visible).count()
-            ));
-        }
-    }
-    if shown > 0 {
-        PROFILE_ROW_SLOT_INFO_SHOWN_ROWS.fetch_add(1, Ordering::SeqCst);
-    }
-    (hidden, shown)
-}
-
-/// Point the row model's `PlayTime` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// This is the write path for the last-saved line, and it is the NATIVE one: the populate reads
-/// `rawString` first and SetTexts whatever it finds, so the row's own draw writes our text. That
-/// matters more than convenience. A row clip is recycled across different files, so text pushed
-/// out-of-band could survive onto a row it does not describe; here there is nothing to survive --
-/// the text is read once, during the populate of the row it belongs to, from a pointer that exists
-/// only across that call. A row that stages nothing gets the native string, not a stale one.
-///
-/// `None` when the field is unreadable, in which case nothing is written and the row keeps the
-/// game's own playtime.
-unsafe fn stage_row_model_menu_string(
-    row_model: usize,
-    offset: usize,
-    text: *const u16,
-) -> Option<usize> {
-    let field = row_model + offset;
-    let displaced = unsafe { safe_read_usize(field) }?;
-    unsafe { (field as *mut usize).write_volatile(text as usize) };
-    Some(displaced)
-}
-
-unsafe fn restore_row_model_menu_string(row_model: usize, offset: usize, displaced: usize) {
-    let field = row_model + offset;
-    unsafe { (field as *mut usize).write_volatile(displaced) };
-}
-
-/// Point the row model's `PlayerName` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// This is the product path for replacing the title/current-row character name: native row populate
-/// reads this field and writes the visible `PlayerName` object itself. Post-populate SetText is still
-/// useful for editor diagnostics, but it is not a reliable ownership path for the renderer.
-pub(crate) unsafe fn stage_row_model_player_name(
-    row_model: usize,
-    text: *const u16,
-) -> Option<usize> {
-    unsafe {
-        stage_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
-            text,
-        )
-    }
-}
-
-/// Put back whatever [`stage_row_model_player_name`] displaced.
-pub(crate) unsafe fn restore_row_model_player_name(row_model: usize, displaced: usize) {
-    unsafe {
-        restore_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_PLAYER_NAME_MENUSTRING_50_OFFSET,
-            displaced,
-        )
-    };
-}
-
-/// Point the row model's `Location` `CS::MenuString` at `text` and return the pointer it displaced,
-/// so the caller can put it back the moment the native populate returns.
-///
-/// Browse save-file rows use this for the last-saved timestamp because `Location` is the top-right
-/// field, on the same visual line as `PlayerName`; `PlayTime` remains hidden for those rows.
-pub(crate) unsafe fn stage_row_model_location(row_model: usize, text: *const u16) -> Option<usize> {
-    unsafe {
-        stage_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
-            text,
-        )
-    }
-}
-
-/// Put back whatever [`stage_row_model_location`] displaced.
-pub(crate) unsafe fn restore_row_model_location(row_model: usize, displaced: usize) {
-    unsafe {
-        restore_row_model_menu_string(
-            row_model,
-            PROFILE_ROW_MODEL_LOCATION_MENUSTRING_90_OFFSET,
-            displaced,
-        )
-    };
-}
+// The six staging primitives that stood here moved to `er_loading_portrait_core::profile_row_model`
+// on 2026-09-11, so the System>Quit save picker can stage a browse row's last-saved time with no
+// product DLL behind it. Both features write the same two fields of the same row model in the same
+// chained populate call, and one declaration of "put back what you displaced" is what keeps their
+// unwinds from disagreeing.
+pub(crate) use er_loading_portrait_core::profile_row_model::{
+    restore_row_model_location, restore_row_model_player_name, stage_row_model_location,
+    stage_row_model_player_name,
+};
 
 /// Hook of the ProfileSelect row-populate template `FUN_1408758d0(rowModel, rowProxy, ...)`. Runs once
-/// per visible list row with a PER-SLOT row model, so it can push the CORRECT slot's attributes (unlike
-/// the per-field named-child binder, which has no slot). The push happens BEFORE the original runs: the
+/// per visible list row with a per-slot row model, so it can push the correct slot's attributes (unlike
+/// the per-field named-child binder, which has no slot). The push happens before the original runs: the
 /// original resolves the native fields and then destroys the row proxy's embedded `CSScaleformValue` at
 /// its end, so a post-call resolve of `ErStats` would operate on a released value. Our push resolves a
-/// SEPARATE child proxy (`ErStats`) and releases only that child's value, leaving the native fields and
+/// separate child proxy (`ErStats`) and releases only that child's value, leaving the native fields and
 /// the row proxy untouched for the original. bd er-effects-rs-l90.
 unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
     let base = game_module_base().ok()?;
@@ -2010,14 +1574,14 @@ unsafe fn title_load_row_stats_text() -> Option<Vec<u16>> {
 }
 
 thread_local! {
-    /// Non-zero while this thread is inside the CURRENT-PLAYER summary builder
+    /// Non-zero while this thread is inside the current-player summary builder
     /// (`PROFILE_CURRENT_ROW_POPULATE_RVA`), which calls the per-slot row populate we also hook.
     ///
     /// This exists because the slot index cannot answer "whose character is this row". The builder
     /// composes its transient summary as `FUN_1408759e0(summary, 0, &name, pgd->level)` -- slot
-    /// index 0 with the LIVE player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
+    /// index 0 with the live player's level -- so the per-slot hook sees `rowModel + 0x8 == 0` for
     /// both that row and save slot 0's real row. Guessing "0 means the live character" put the
-    /// loaded character's NAME on save slot 0's row, level, attributes and location: with slot 3 of
+    /// loaded character's name on save slot 0's row, level, attributes and location: with slot 3 of
     /// `100-Lilbro` loaded, the Load Game list read "Vagabond, RL 100 WL 20" -- Vagabond is the RL 9
     /// character that was loaded, everything else on the row is angrE's (user-reported 2026-08-07).
     /// Being inside the builder is the fact itself rather than a proxy for it, and it is per-thread
@@ -2025,7 +1589,7 @@ thread_local! {
     static IN_CURRENT_PLAYER_ROW_BUILD: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Is the row being populated right now the transient CURRENT-PLAYER summary rather than a save slot?
+/// Is the row being populated right now the transient current-player summary rather than a save slot?
 fn building_current_player_row() -> bool {
     IN_CURRENT_PLAYER_ROW_BUILD
         .try_with(|depth| depth.get() != 0)
@@ -2042,7 +1606,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         return;
     }
     let f: unsafe extern "system" fn(usize, usize) = unsafe { std::mem::transmute(orig) };
-    // Marked across the original because the per-slot row populate runs INSIDE it (the builder ends
+    // Marked across the original because the per-slot row populate runs inside it (the builder ends
     // `SceneObjProxy(&local_188, param_2); FUN_1408757e0(local_128, pSVar3);`), and that nested call
     // is the one that has to know this row is the live character's.
     let _ = IN_CURRENT_PLAYER_ROW_BUILD.try_with(|depth| depth.set(depth.get() + 1));
@@ -2054,7 +1618,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     let Ok(base) = game_module_base() else {
         return;
     };
-    // THE GAME'S OWN SUMMARY PANELS ARE NOT OURS TO DRAW. This hook is on the CURRENT-PLAYER summary
+    // The game'S own summary panels are not ours to draw. This hook is on the current-player summary
     // builder, which the System>Quit `GameEnd` panel uses as much as the ProfileSelect current row --
     // and that panel is where the user watched the level caption, level and play time disappear.
     if !unsafe { row_is_stats_panel_template(base, row_proxy) } {
@@ -2064,15 +1628,20 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         return;
     };
     let cache_loaded = unsafe { ensure_profile_slot_stats_cached(base) };
-    // Name AND level from ONE character. This row is the CURRENT player, so live PGD is the truth;
-    // slot 0 is only a fallback for when there is no live PGD yet, and then BOTH values come from
+    // Name and level from one character. This row is the current player, so live PGD is the truth;
+    // slot 0 is only a fallback for when there is no live PGD yet, and then both values come from
     // slot 0. Mixing the two sources renders one character's name beside another's level.
-    // WHOSE CHARACTER IS THIS ROW? Normally the live one -- this hook builds the current-player
-    // summary. But while a foreign save is previewed, the rows describe THAT save, and stamping the
+    // Whose character is this row? Normally the live one -- this hook builds the current-player
+    // summary. But while a foreign save is previewed, the rows describe that save, and stamping the
     // loaded character's identity here puts their name (and level, and weapon level) on somebody
     // else's row. Slot 0 of the previewed save is the honest answer then, which is what the cache
     // now holds.
+    #[cfg(feature = "quit-rows")]
     let foreign_preview = crate::experiments::startup_hooks::system_quit_foreign_preview_active();
+    // Without the rows nothing can put a foreign save on screen, so the loaded character's own
+    // identity is always the honest answer here.
+    #[cfg(not(feature = "quit-rows"))]
+    let foreign_preview = false;
     let identity = match build_loaded_char_name() {
         Some(name) if !foreign_preview => Some((
             name,
@@ -2084,7 +1653,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
         _ => None,
     };
     if let Some((name, level, weapon_level)) = identity {
-        // MERGED ROW HEADER -- the SECOND populate path. This hook, not the row-model one, is what
+        // Merged row header -- the second populate path. This hook, not the row-model one, is what
         // draws the title Load Game / current ProfileSelect row (proved by telemetry: the row-model
         // path logged zero PlayerName stagings while this one logged thousands). Both paths have to
         // compose the same header or the screen the user is actually looking at keeps the old
@@ -2166,7 +1735,7 @@ pub(crate) unsafe extern "system" fn profile_current_row_populate_hook(
     };
 }
 
-/// Rows the PER-ROW path composed a merged header for. Local to the log throttle; the product
+/// Rows the per-row path composed a merged header for. Local to the log throttle; the product
 /// oracle is the `hidden`/`shown` pair on the line itself, not this count.
 static PROFILE_ROW_MERGED_HEADER_ROWS: AtomicUsize = AtomicUsize::new(0);
 static PROFILE_DRIVE_NATIVE_CURSOR_APPLIES: AtomicUsize = AtomicUsize::new(0);
@@ -2214,12 +1783,12 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let picker_row = (0..crate::experiments::save_picker::PICKER_ROW_COUNT as i32)
                 .contains(&slot)
                 .then_some(slot as usize);
-            // PER-SLOT INFO FIELDS ON A BROWSE ROW. A browse row is a file or a navigation entry,
+            // Per-slot info fields on a browse row. A browse row is a file or a navigation entry,
             // never a profile slot, so the record behind it is staged and its numbers are zeros: the
             // native fields render "Level 0" and "0:00:00" about a character that does not exist. So
             // while the picker owns a row, the Level caption/value and bottom PlayTime are always
             // hidden -- there is no browse row they could be true of -- and the top-right Location
-            // slot is repurposed: a save-FILE row shows when that file was last written on the same
+            // slot is repurposed: a save-file row shows when that file was last written on the same
             // visual line as the filename, while every row with no such time hides the field instead
             // of showing a fabricated date.
             //
@@ -2228,15 +1797,15 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             // does not run at all, so the vanilla path stays untouched.
             let slot_info = picker_row.and_then(save_picker_row_slot_info);
             drive_strip_focus = slot_info.as_ref().and_then(|info| info.drive_strip_focus);
-            // MERGED ROW HEADER (user request 2026-08-06/07): the name, `RL <level>` and (once
-            // sourced) `WL <max weapon level>` render as ONE string in `PlayerName` instead of
-            // three separately-placed fields. Composed HERE, before the visibility statement,
+            // Merged row header (user request 2026-08-06/07): the name, `RL <level>` and (once
+            // sourced) `WL <max weapon level>` render as one string in `PlayerName` instead of
+            // three separately-placed fields. Composed here, before the visibility statement,
             // because the statement has to say whether the separate `Level` caption and value
             // survive -- and they must survive on any row we could not compose a header for, or
             // that row loses its level entirely. Character rows only: a browse/drive row has no
             // character to describe, and `slot_info` being `Some` is exactly "the picker owns
             // this row".
-            // GATE ON `slot_info`, NOT ON `picker_row`. `picker_row` only says the slot index falls
+            // Gate on `slot_info`, not on `picker_row`. `picker_row` only says the slot index falls
             // in 0..10, which is true of every ordinary character row -- gating on it disabled the
             // merge on exactly the rows it exists for, and the screen showed the old three-element
             // layout while the telemetry claimed success. `slot_info` is the real "the picker owns
@@ -2244,7 +1813,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
             let merged_header = if slot_info.is_none() && stats_panel_enabled() {
                 // Latched; the first caller pays the .sl2 read and the rest hit the cache.
                 unsafe { ensure_profile_slot_stats_cached(base) };
-                // WHOSE NAME BELONGS ON THIS ROW. The live character's only on the transient
+                // Whose name belongs on this row. The live character's only on the transient
                 // current-player row, which `building_current_player_row` identifies by the call
                 // stack it is on. It used to be identified by `slot == 0`, which is also every save
                 // slot 0 row: with another slot's character loaded, that put the loaded name on save
@@ -2258,8 +1827,8 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     let mut values = ProfileRowHeaderValues::from_name(name);
                     // The row model's level word is the one the native `Level` field formats
                     // (`rowModel + 0x88`), taken from that slot's ProfileSummary record. On the
-                    // transient current-player row it is the LIVE character's level and is the only
-                    // source; on a save slot it is the RECORD's, which describes the record's
+                    // transient current-player row it is the live character's level and is the only
+                    // source; on a save slot it is the record's, which describes the record's
                     // character -- not necessarily the body that will load. So a save slot takes its
                     // level from the same decode of the same body the name and the attribute line
                     // came from, and falls back to the record only when the body did not decode.
@@ -2333,7 +1902,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                 let rows = PROFILE_ROW_FOREIGN_LOCATION_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
                 if rows <= 10 || rows.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}) and no consistent record in this save covers that map, so there is no place name to show (rows={rows})",
+                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}); neither a consistent record in this save nor the game's own WORLD_MAP_PLACE_NAME_PARAM_ST / BONFIRE_WARP_PARAM_ST names that map, so there is no place name to show (rows={rows})",
                         profile_slot_saved_map(slot).unwrap_or(0)
                     ));
                 }
@@ -2377,7 +1946,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                     }
                 }
             }
-            // BROWSE PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
+            // Browse PICKER ROWS: one visual baseline. `PlayerName` carries the filename or row
             // title, `ErStats` carries file details/navigation copy, `Location` carries timestamps,
             // and only the drive row exposes its actual cells through separate `DriveCell_*` row
             // children. Blank every synthetic drive child on every picker-owned row as content
@@ -2447,7 +2016,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                         build_loaded_char_attributes()
                     }
                 });
-                // The merged header describes the row's IDENTITY, not its attributes, so it is
+                // The merged header describes the row's identity, not its attributes, so it is
                 // staged whether or not the attribute line decoded. Staging it inside the `attrs`
                 // block (where the bare name used to live) would leave a row whose `Level` caption
                 // is hidden by `NATIVE_MERGED` with no merged label to replace it -- a row that

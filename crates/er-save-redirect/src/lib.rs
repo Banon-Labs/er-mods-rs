@@ -18,6 +18,11 @@ use std::{
 
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
+/// The "a redirected save open failed, ask the player" one-shot. Its own file because `lib.rs`
+/// is at the crate's hard size limit.
+mod failed_redirect_picker;
+pub use failed_redirect_picker::FailedRedirectPicker;
+
 /// Exact byte length of Elden Ring PC `ER0000.sl2` / Seamless `.co2` save containers.
 ///
 /// These files use a fixed BND4 layout: ten `USER_DATA00N` character slots, `USER_DATA010`, and
@@ -156,7 +161,7 @@ impl MissingSaveGate {
 
     /// Arm the picker from `Idle`, and only from `Idle`.
     ///
-    /// This is the LATE arm's primitive. `set` is a plain store, which is right for the boot path
+    /// This is the late arm's primitive. `set` is a plain store, which is right for the boot path
     /// (one caller, before any other thread can be looking) and wrong for every later one: the
     /// autoload tick, the Present hook and the picker's own threads all read this gate, so a
     /// re-arm that lands on a `Pending` selection would restart a browse the user is halfway
@@ -175,6 +180,33 @@ impl MissingSaveGate {
             )
             .is_ok()
     }
+
+    /// What a give-up site should do when it wants to hand the user the picker.
+    ///
+    /// "Arm the picker" has three correct answers depending on what the selection has already
+    /// done, and before this every caller reached for [`Self::try_arm`] and silently got the
+    /// wrong one in the third case. See [`MissingSaveOffer`].
+    pub fn offer(&self) -> MissingSaveOffer {
+        match self.state() {
+            MissingSaveState::Idle => MissingSaveOffer::Arm,
+            MissingSaveState::Pending => MissingSaveOffer::AlreadyUp,
+            MissingSaveState::Ready => MissingSaveOffer::RearmAfterFailedPick,
+        }
+    }
+}
+
+/// The three answers to "hand the user the picker", one per selection state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingSaveOffer {
+    /// Nobody has been asked yet. Arm, and the banner names the caller's own reason.
+    Arm,
+    /// A browse is in flight. Do nothing: restarting it would move the cursor out from under
+    /// whoever is using it.
+    AlreadyUp,
+    /// The user picked a save, the gate released, and the load failed anyway. Revoke that
+    /// selection and put the picker back up -- leaving it released is a title with no way
+    /// forward, which is the soft lock the late arm exists to remove, one selection later.
+    RearmAfterFailedPick,
 }
 
 impl Default for MissingSaveGate {
@@ -217,6 +249,28 @@ impl SaveHookInstallState {
     pub fn core_createfilew_installed(&self) -> bool {
         self.core_createfilew_installed.load(Ordering::SeqCst) != 0
     }
+}
+
+/// Whether a core `CreateFileW` detour is live anywhere in this process.
+///
+/// A [`SaveHookInstallState`] answers "did this module install one", and there is more than one
+/// module that can: the product's save-redirect path hook and `er-quit-menu-core`'s own write-open
+/// detour both hook `kernel32!CreateFileW`, and both bodies ask
+/// `save_dest_commit_runtime::save_dest_redirect_for_open` whether an armed destination wants this
+/// open diverted. Only one of them can hold the detour -- MinHook keys by target address and
+/// refuses the second with `MH_ERROR_ALREADY_CREATED` -- so a per-module answer says "no" for
+/// whichever module lost, even though the window it needs is being read.
+///
+/// That false negative refused a real save. On run br-20260913-144813-963f the product installed
+/// the detour at +182ms, the user browsed to `ER0000.sl2` against a loaded `ER0000.co2`, confirmed
+/// the overwrite, and the commit aborted at the last stage with "the `CreateFileW` detour that
+/// reads it is not installed" -- asked of `er-quit-menu-core`'s state, which had never installed
+/// anything because `install_save_flow_game_task` is called only by the `er-save-game-row` shell.
+static CORE_CREATEFILEW_INSTALLED_IN_PROCESS: AtomicUsize = AtomicUsize::new(0);
+
+/// Read the process-wide answer; see [`CORE_CREATEFILEW_INSTALLED_IN_PROCESS`].
+pub fn core_createfilew_installed_in_process() -> bool {
+    CORE_CREATEFILEW_INSTALLED_IN_PROCESS.load(Ordering::SeqCst) != 0
 }
 
 /// Whether the redirect-mode save hook batch should install now.
@@ -339,14 +393,15 @@ pub unsafe fn install_core_createfilew_hook(
         match unsafe { MH_ApplyQueued() } {
             MH_STATUS::MH_OK => {
                 state.mark_core_createfilew_installed();
-                // The detour must outlive this scope for the process lifetime; the `forget` states
-                // that even though `MhHook` is currently plain pointers, so a future `Drop` that
-                // unhooks cannot silently retire the save-redirect CreateFileW hook.
-                #[allow(
-                    clippy::forget_non_drop,
-                    reason = "intent marker: the installed detour must never be released"
-                )]
-                std::mem::forget(hook);
+                CORE_CREATEFILEW_INSTALLED_IN_PROCESS.store(1, Ordering::SeqCst);
+                // The handle is deliberately let go here without ceremony: `MhHook` is three raw
+                // pointers with no `Drop`, and MinHook owns the installed detour keyed by target
+                // address, so dropping the handle does not retire the save-redirect CreateFileW
+                // hook. The `std::mem::forget` and its `clippy::forget_non_drop` waiver that used
+                // to sit here claimed to protect against a future `Drop` that unhooks, but every
+                // other install site in this workspace already hands its handle to a by-value sink
+                // or lets it fall out of scope, so the waiver bought an inconsistency rather than
+                // a guarantee.
                 log(format!(
                     "save-override: core INSTALLED CreateFileW(0x{create_addr:x}) -- pass-through until a redirect dir or a save destination is armed"
                 ));
@@ -930,7 +985,7 @@ pub fn plan_create_file_open(
 pub enum SaveSourceRejection {
     /// The path is genuinely absent, or names something that is not a file.
     MissingOrNotFile,
-    /// The path could not be examined at all, and NOT because it is absent: a dropped or stale
+    /// The path could not be examined at all, and not because it is absent: a dropped or stale
     /// network mount, an unmounted drive, a permission denial, a device-level IO error.
     ///
     /// `raw_os_error` is what the stat actually failed with -- under Wine, the Win32 code Wine
@@ -993,7 +1048,7 @@ impl SaveSourceRejection {
                 "SAVE NOT FOUND",
                 "The selected path is missing or is not a file.".to_owned(),
             ),
-            // Distinct from SAVE NOT FOUND on purpose: "missing" tells the user to fix the path,
+            // Distinct from save not found on purpose: "missing" tells the user to fix the path,
             // and for a disconnected network drive or an unmounted disk the path is the one thing
             // that is not wrong.
             Self::Inaccessible { raw_os_error } => (
@@ -1090,7 +1145,7 @@ impl SaveSourcePlan {
 /// Validate a candidate picked/configured save. This is stronger than size-only: it also proves the
 /// file is a structurally readable BND4 container.
 pub fn validate_save_file_path(path: PathBuf) -> Result<PathBuf, SaveSourceRejection> {
-    // NOT `map_err(|_| MissingOrNotFile)`. Only `NotFound` means the file is absent; every other
+    // Not `map_err(|_| MissingOrNotFile)`. Only `NotFound` means the file is absent; every other
     // stat failure means the path could not be examined, which is a different fact with a
     // different fix. See `SaveSourceRejection`.
     let meta = std::fs::metadata(&path).map_err(|err| {
@@ -1332,6 +1387,39 @@ pub fn wide_find_ci_ascii(hay: &[u16], needle: &[u16]) -> Option<usize> {
     })
 }
 
+/// True if `hay` begins with `prefix` as a whole path prefix (ASCII, case-insensitive).
+///
+/// Unlike the other helpers here, both sides are lowercased, because the caller compares against a
+/// live redirect root rather than a literal, and that root carries whatever case the configured
+/// path had.
+///
+/// The match is required to end on a path boundary so a sibling directory cannot be mistaken for
+/// the root: with the root `...\\stage`, the path `...\\stage-old\\ER0000.co2` is not inside it,
+/// and treating it as inside would stop redirecting a real save.
+pub fn wide_starts_with_ci_ascii(hay: &[u16], prefix: &[u16]) -> bool {
+    const BACKSLASH: u16 = b'\\' as u16;
+    const SLASH: u16 = b'/' as u16;
+    // A root recorded with a trailing separator and one without must behave the same.
+    let prefix = match prefix.last() {
+        Some(&last) if last == BACKSLASH || last == SLASH => &prefix[..prefix.len() - 1],
+        _ => prefix,
+    };
+    if prefix.is_empty() || prefix.len() > hay.len() {
+        return false;
+    }
+    if !prefix
+        .iter()
+        .enumerate()
+        .all(|(i, &p)| wide_ascii_lower(hay[i]) == wide_ascii_lower(p))
+    {
+        return false;
+    }
+    match hay.get(prefix.len()) {
+        None => true,
+        Some(&next) => next == BACKSLASH || next == SLASH,
+    }
+}
+
 /// True if `hay` ends with `suffix` (ASCII, case-insensitive). `suffix` must be ASCII lowercase.
 pub fn wide_ends_with_ci_ascii(hay: &[u16], suffix: &[u16]) -> bool {
     if suffix.len() > hay.len() {
@@ -1386,7 +1474,7 @@ pub fn steam_id64_from_wide_save_path(path: &[u16]) -> Option<u64> {
     None
 }
 
-fn is_primary_save_file_path(path: &[u16]) -> bool {
+pub fn is_primary_save_file_path(path: &[u16]) -> bool {
     const SL2D: &[u16] = &[b'.' as u16, b's' as u16, b'l' as u16, b'2' as u16];
     const CO2D: &[u16] = &[b'.' as u16, b'c' as u16, b'o' as u16, b'2' as u16];
     wide_ends_with_ci_ascii(path, SL2D) || wide_ends_with_ci_ascii(path, CO2D)
@@ -1466,10 +1554,23 @@ pub fn classify_save_like_path(path: &[u16]) -> SavePathKind {
 /// Redirect a Windows/Wine wide path rooted under `%APPDATA%\\Roaming\\EldenRing` to a staged
 /// save root. Returns a NUL-terminated wide path.
 ///
-/// The `Roaming` anchor prevents already-redirected staged paths from being redirected again. The
-/// `EldenRing` suffix is lowercased because the staged tree is created on a case-sensitive Linux
-/// filesystem as lowercase `eldenring/<steamid>/er0000.*`.
+/// The `Roaming` anchor was relied on to stop an already-redirected path being redirected a
+/// second time, and that holds only while the stage root lives outside `Roaming`. It does not
+/// when the configured `save_file` is the live default container, because the stage root is then
+/// built inside `Roaming\\EldenRing\\<steamid>` and this function takes the first `EldenRing`
+/// component -- so the whole stage prefix gets appended to itself, onto a path nothing creates.
+/// Every open of the staged copy then returns `INVALID_HANDLE_VALUE` and the boot waits on a save
+/// it can never read (measured 2026-09-09; see `docs/recon/boot-stall-1171-2026-09-09/`).
+///
+/// So the destination is excluded explicitly: a path that already begins with the redirect root
+/// is the output of an earlier call and passes through untouched.
+///
+/// The `EldenRing` suffix is lowercased because the staged tree is created on a case-sensitive
+/// Linux filesystem as lowercase `eldenring/<steamid>/er0000.*`.
 pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> Option<Vec<u16>> {
+    if wide_starts_with_ci_ascii(path, root_wide) {
+        return None;
+    }
     const ELDENRING: &[u16] = &[
         b'e' as u16,
         b'l' as u16,
@@ -1597,7 +1698,7 @@ pub fn plan_validated_save_source(path: PathBuf, writeback_allowed: bool) -> Sav
     }
 }
 
-/// Directory name of the private staged save tree a DIRECT-FILE source is copied into.
+/// Directory name of the private staged save tree a direct-file source is copied into.
 ///
 /// The staleness sweep only ever deletes inside a directory carrying this component, so the
 /// constant is the containment proof as much as it is the path builder.
@@ -1611,7 +1712,7 @@ pub fn direct_stage_case_dirs(root: &Path) -> [PathBuf; 2] {
 /// component appears somewhere in it).
 ///
 /// Staging deletes stale containers, and a delete is only ever safe inside our own tree: the
-/// configured source itself lives one level ABOVE the stage root and is read-only by contract.
+/// configured source itself lives one level above the stage root and is read-only by contract.
 pub fn is_inside_direct_stage_root(dir: &Path) -> bool {
     dir.components().any(|comp| {
         // UTF-8 Lossy: path component classification only; invalid host bytes cannot spell the
@@ -1620,200 +1721,14 @@ pub fn is_inside_direct_stage_root(dir: &Path) -> bool {
     })
 }
 
-/// The vanilla save container. Elden Ring itself writes only this one.
-pub const VANILLA_SAVE_CONTAINER_NAME: &str = "ER0000.sl2";
-/// The extension ERSC ships with in `ersc_settings.ini`. It is a DEFAULT, never an invariant --
-/// see [`parse_ersc_save_file_extension`].
-pub const DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION: &str = "co2";
-/// ERSC's own documented ceiling for `save_file_extension` ("limit = 120").
-pub const MAX_SAVE_FILE_EXTENSION_LEN: usize = 120;
-
-/// The Seamless save-container extension ERSC is CONFIGURED with, from its `ersc_settings.ini`.
-///
-/// `.co2` is only the shipped default. `ersc_settings.ini` says, in its own words: "Your save file
-/// extension (in the vanilla game this is .sl2). Use any alphanumeric characters (limit = 120)" --
-/// so the value REPLACES `sl2` and a user may set it to anything. Every hard-coded `.co2` in a save
-/// path is therefore a latent version of the same bug this module exists to fix: the staged copy
-/// carrying a name the runtime never asks for.
-///
-/// Returns None when the key is absent, outside `[SAVE]`, empty, over-long, or not plain ASCII
-/// alphanumeric -- the last of which also keeps a config value from steering the staged filename
-/// out of its directory.
-pub fn parse_ersc_save_file_extension(ini: &str) -> Option<&str> {
-    let mut in_save_section = false;
-    for line in ini.lines() {
-        let line = line.split(';').next().unwrap_or("").trim();
-        if line.starts_with('[') {
-            in_save_section = line.eq_ignore_ascii_case("[SAVE]");
-            continue;
-        }
-        if !in_save_section {
-            continue;
-        }
-        let Some((key, value)) = line.split_once('=') else {
-            continue;
-        };
-        if !key.trim().eq_ignore_ascii_case("save_file_extension") {
-            continue;
-        }
-        let value = value.trim();
-        let usable = (1..=MAX_SAVE_FILE_EXTENSION_LEN).contains(&value.len())
-            && value.bytes().all(|b| b.is_ascii_alphanumeric());
-        return usable.then_some(value);
-    }
-    None
-}
-
-/// The save container for one extension: `ER0000.<ext>`.
-pub fn save_container_name_for_extension(extension: &str) -> String {
-    format!("ER0000.{extension}")
-}
-
-/// Container names the active runtime will LOAD, in priority order.
-///
-/// The mode lock is ASYMMETRIC: Seamless takes both containers preferring the co-op one, vanilla
-/// takes only `.sl2` so an offline launch can never advance co-op progress. `seamless_name` is the
-/// co-op container ERSC is configured with, NOT a fixed `ER0000.co2`.
-pub fn active_save_container_names_for(seamless: bool, seamless_name: &str) -> Vec<String> {
-    if seamless && !seamless_name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME) {
-        vec![
-            seamless_name.to_owned(),
-            VANILLA_SAVE_CONTAINER_NAME.to_owned(),
-        ]
-    } else {
-        vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
-    }
-}
-
-/// Container names the boot DEFAULT-save check may accept, in priority order.
-///
-/// **This is deliberately NARROWER than [`active_save_container_names_for`], and the difference is
-/// the whole point.** That list answers "which containers might hold this run's save", and its
-/// `.sl2` fallback under Seamless is correct wherever a redirect will normalise the name: a save
-/// the user PICKS is staged under every container name
-/// ([`staged_save_container_names_for`]), so picking a vanilla `.sl2` on a Seamless launch works
-/// and must keep working (bd `er-effects-rs-h6sh` -- refusing it there softlocked the loading
-/// screen on 2026-08-02).
-///
-/// The boot default-save check is the one place where that fallback is WRONG, because it accepts a
-/// container **with no redirect at all**. Whatever it accepts, the runtime then opens the container
-/// IT wants by name -- and under Seamless that is ERSC's container, not `.sl2`. So accepting a
-/// `.sl2` there validates a file the runtime will never read.
-///
-/// MEASURED, run br-20260826-190532-55e2 (this is the bug this function exists to remove):
-///
-/// ```text
-/// [+59ms]  save-override: Seamless save container resolved to 'ER0000.co2'
-/// [+84ms]  save-override: default save '...\ER0000.co2' has ZERO readable character slots
-///                         (native empty container); treating as no save
-/// [+98ms]  save-override: DEFAULT-USER-SAVE -- ... default save '...\ER0000.sl2' with no redirect
-/// ```
-///
-/// The live `.co2` was 28967888 bytes of ALL ZEROS (0% nonzero, valid BND4 header, no character
-/// names); the `.sl2` beside it was 19% nonzero with all ten characters. The check rejected the
-/// container the runtime opens, fell back to one it does not, and reported "there is a save" --
-/// so `missing_save_selection_pending()` stayed false, the boot save-data `ShowProgressJob` was
-/// never held (`show-progress: HOLD ...` = 0 occurrences, `PASS-THROUGH` = 6 from +14131ms), and
-/// the title built its whole menu against an empty `ProfileSummary`. Everything after that -- the
-/// disabled Continue row, the null `MENU_CONTINUE_ITEM`, the 65 s softlock -- was downstream of
-/// this one line. See bd `seamless-boot-accepts-sl2-while-game-opens-blank-co2-2026-08-26`.
-///
-/// Returning "no usable save" instead is not a degradation: it arms the missing-save picker AT
-/// BOOT, which is the originally designed path and the one where every downstream stage works by
-/// construction.
-///
-/// Vanilla is unchanged -- it only ever had `.sl2` -- so this narrows Seamless alone.
-pub fn default_save_container_names_for(seamless: bool, seamless_name: &str) -> Vec<String> {
-    vec![active_save_container_name_for(seamless, seamless_name)]
-}
-
-/// Does the container the boot default-save check ACCEPTED match the one the runtime will OPEN?
-///
-/// The telemetry form of the invariant [`default_save_container_names_for`] enforces, exposed as
-/// `oracle_boot_save_container_matches_runtime` so a mismatch is visible in RAM instead of costing
-/// another run. `None` (no default save accepted) is not a mismatch: nothing was accepted, so
-/// nothing disagrees -- that run arms the picker, which is the correct answer.
-#[must_use]
-pub fn boot_save_container_matches_runtime(accepted: Option<&str>, runtime_name: &str) -> bool {
-    accepted.is_none_or(|name| name.eq_ignore_ascii_case(runtime_name))
-}
-
-/// The container name the active runtime WRITES to -- the preferred load candidate.
-pub fn active_save_container_name_for(seamless: bool, seamless_name: &str) -> String {
-    if seamless {
-        seamless_name.to_owned()
-    } else {
-        VANILLA_SAVE_CONTAINER_NAME.to_owned()
-    }
-}
-
-/// Every container name a staging pass writes from the configured source.
-///
-/// BOTH the vanilla container and ERSC's configured one, always -- the staged name is derived
-/// neither from the SOURCE file's extension nor from the Seamless mode. Measured 2026-08-11:
-/// staging runs inside the `CreateFileW` detour at DllMain+191ms, and me3 loads `ersc.dll` after
-/// that, so the ERSC module latch still reads `seamless=false` there (`save-picker mode from ERSC
-/// module latch seamless=false reason=active-default-save-file-name`) while the same run's
-/// telemetry later reports `seamless_coop_loaded=true`. Naming the staged copy from that unsettled
-/// latch put a Seamless run's save at `ER0000.sl2` while `own_load::drive` and the native writer
-/// asked for the co-op container, and the two never met -- a silent soft lock at the boot cover.
-///
-/// Writing both names removes the time-of-check race outright: whichever container the runtime
-/// resolves to once the mode HAS settled, it holds the configured source. Restamping the name is
-/// byte-safe -- every flavor is the same 28 MB BND4 container.
-pub fn staged_save_container_names_for(seamless_name: &str) -> Vec<String> {
-    let mut names = vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()];
-    if !seamless_name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME) {
-        names.push(seamless_name.to_owned());
-    }
-    names
-}
-
-/// True when `file_name` is one of the containers this staging pass rewrites.
-pub fn is_staged_save_container_name(file_name: &str, staged_names: &[&str]) -> bool {
-    staged_names
-        .iter()
-        .any(|name| name.eq_ignore_ascii_case(file_name))
-}
-
-/// What happens to a file already sitting in a staged `<root>/<case>/<steamid>/` directory when a
-/// new staging pass runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StagedEntryFate {
-    /// A container this pass rewrites from the configured source, so its old bytes cannot survive.
-    Rewritten,
-    /// A save artifact left over from an EARLIER run that this pass does not rewrite: a `.bak`
-    /// companion, a half-finished restore temp, a container under some other spelling. It does not
-    /// correspond to the configured source and the game must never find it.
-    StaleRemove,
-    /// Not a save artifact (`GraphicsConfig.xml`, stray logs). Left alone.
-    Keep,
-}
-
-/// Classify one existing staged directory entry against the containers this pass rewrites.
-///
-/// Nothing here consults mtimes. A staged file is current because THIS run wrote it from the
-/// configured source, and stale otherwise -- the 2026-08-11 soft lock served a `.co2` written
-/// 33 minutes earlier from a different source, and every timestamp involved looked plausible.
-pub fn staged_entry_fate(file_name: &str, staged_names: &[&str]) -> StagedEntryFate {
-    if is_staged_save_container_name(file_name, staged_names) {
-        return StagedEntryFate::Rewritten;
-    }
-    let lower = file_name.to_ascii_lowercase();
-    let save_artifact = lower.contains("er0000")
-        || lower.ends_with(".sl2")
-        || lower.ends_with(".co2")
-        || lower.ends_with(".bak");
-    if save_artifact {
-        StagedEntryFate::StaleRemove
-    } else {
-        StagedEntryFate::Keep
-    }
-}
+/// Which save-container file names are in play for a given build: the vanilla `ER0000.sl2`, the
+/// Seamless container under its configured extension, and the staged copies of both.
+pub mod container_names;
+pub use container_names::*;
 
 /// Drop paths that resolve to the same directory, keeping first-seen order.
 ///
-/// The staged tree is created under both `eldenring` and `EldenRing` because a case-SENSITIVE host
+/// The staged tree is created under both `eldenring` and `EldenRing` because a case-sensitive host
 /// filesystem needs both spellings. Under Wine those two resolve to one directory, so writing a
 /// 28 MB container once per spelling doubles the DllMain staging cost for nothing. `identity` is
 /// the caller's resolver (`fs::canonicalize` in product); a path it cannot resolve keeps its own
@@ -1841,9 +1756,9 @@ pub struct DirectStageFileStatus {
     pub bytes: Option<u64>,
 }
 
-/// Does the staged tree hold a container the runtime will actually LOAD?
+/// Does the staged tree hold a container the runtime will actually load?
 ///
-/// `load_names` is the ACTIVE MODE's candidate list (`active_save_container_names`), never
+/// `load_names` is the active mode's candidate list (`active_save_container_names`), never
 /// anything derived from the source file's extension. Probing by source extension is what made
 /// this oracle lie on 2026-08-11: it reported `direct_stage_file_exists=true` for a `.co2` source
 /// while the run's staged copy had been written as `ER0000.sl2`, so the one telemetry field that
@@ -1955,18 +1870,18 @@ mod tests {
         out
     }
 
-    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
-    /// The pid is what makes these tests independent of each other's RUNS. `std::env::temp_dir()`
+    /// The pid is what makes these tests independent of each other's runs. `std::env::temp_dir()`
     /// is one directory shared by every process on the machine -- and under this repo's wine
     /// runner `%TEMP%` resolves to the host `/tmp`, so a windows-target test binary lands in the
-    /// same place a host one does. A name keyed only by `tag` was therefore the SAME directory in
+    /// same place a host one does. A name keyed only by `tag` was therefore the same directory in
     /// two test binaries at once, which is the ordinary case here: two agents running
     /// `scripts/check.sh` concurrently, the gate run twice over, or a second checkout. Each run's
     /// `remove_dir_all` on entry then deleted the other's files mid-test.
     ///
     /// Measured before the pid was added, with eight concurrent copies of this crate's test
-    /// binary: SEVEN of the eight went red, and every one of the failures accused the code under
+    /// binary: Seven of the eight went red, and every one of the failures accused the code under
     /// test of something it had not done -- `validate_save_source` answering
     /// `WrongSize { len: 0 }` for a container another process had truncated to nothing,
     /// `MissingOrNotFile` for one it had already deleted, and `scratch dir must be creatable:
@@ -1991,6 +1906,19 @@ mod tests {
         assert!(gate.is_pending());
         gate.set(MissingSaveState::Ready);
         assert_eq!(gate.state(), MissingSaveState::Ready);
+    }
+
+    #[test]
+    fn a_released_selection_is_offered_a_re_arm_not_a_refusal() {
+        let gate = MissingSaveGate::new();
+        assert_eq!(gate.offer(), MissingSaveOffer::Arm);
+        gate.set(MissingSaveState::Pending);
+        assert_eq!(gate.offer(), MissingSaveOffer::AlreadyUp);
+        gate.set(MissingSaveState::Ready);
+        // The case that used to dead-end: the user picked, the pick did not load, and every
+        // give-up site called `try_arm` and was refused.
+        assert!(!gate.try_arm());
+        assert_eq!(gate.offer(), MissingSaveOffer::RearmAfterFailedPick);
     }
 
     #[test]
@@ -2317,6 +2245,97 @@ mod tests {
 
     fn wide_path(path: &str) -> Vec<u16> {
         path.encode_utf16().collect()
+    }
+
+    /// The staged copy must not be redirected into itself when the stage root lives inside the
+    /// save root.
+    ///
+    /// Captured from the live stall of 2026-09-09, where `save_file` named the active default
+    /// container, so the stage root was created inside `Roaming\EldenRing\<steamid>`. Every open
+    /// of the staged copy matched the redirect again and resolved to a path nothing creates:
+    /// 33,241 such opens, none successful, `saveState` never leaving 0.
+    #[test]
+    fn staged_path_under_the_save_root_is_not_redirected_a_second_time() {
+        let root = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage",
+        );
+        let staged = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage\eldenring\76561197986456766\ER0000.co2",
+        );
+        assert_eq!(
+            redirect_wide_roaming_eldenring_path(&staged, &root),
+            None,
+            "the staged copy is the redirect DESTINATION and must pass through untouched"
+        );
+
+        // The source it was staged from still redirects, or the feature would be dead.
+        let source = wide_path(r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\ER0000.co2");
+        let redirected = redirect_wide_roaming_eldenring_path(&source, &root)
+            .expect("the real default save still redirects into the stage root");
+        let text = String::from_utf16_lossy(&redirected[..redirected.len() - 1]);
+        assert_eq!(
+            text.matches("er-quickload-save-redirect-stage").count(),
+            1,
+            "exactly one stage segment; a second one is the self-redirect bug: {text}"
+        );
+
+        // The live run redirected a bare directory open of the stage root itself, trailing
+        // separator and all (`save-override: REDIRECT #2`, 2026-09-09), and that is the open that
+        // produced the doubled path in the log.
+        let stage_dir_open = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage\",
+        );
+        assert_eq!(
+            redirect_wide_roaming_eldenring_path(&stage_dir_open, &root),
+            None,
+            "a directory open of the stage root is already the destination"
+        );
+
+        // The save directory one level above it must still redirect -- that open succeeded live
+        // (`REDIRECT #3`, ok=true) and the feature depends on it.
+        let save_dir = wide_path(r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\");
+        assert!(
+            redirect_wide_roaming_eldenring_path(&save_dir, &root).is_some(),
+            "the save directory itself still redirects into the stage root"
+        );
+
+        // A sibling whose name merely starts with the root is not inside it.
+        let sibling = wide_path(
+            r"Z:\home\u\AppData\Roaming\EldenRing\76561197986456766\er-quickload-save-redirect-stage-old\ER0000.co2",
+        );
+        assert!(
+            redirect_wide_roaming_eldenring_path(&sibling, &root).is_some(),
+            "a sibling directory is not the redirect destination"
+        );
+    }
+
+    /// The picker arms once and only for a primary container.
+    #[test]
+    fn failed_redirect_picker_arms_once_and_only_for_the_primary_container() {
+        let picker = FailedRedirectPicker::new();
+        let primary =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.co2");
+        let backup =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2.bak");
+        let config = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
+
+        // A healthy run fails exactly this open, and must not be interrupted by a picker.
+        assert!(!picker.should_arm(true, &config));
+        // A missing backup is ordinary on a first boot.
+        assert!(!picker.should_arm(true, &backup));
+        // An open that succeeded says nothing.
+        assert!(!picker.should_arm(false, &primary));
+        assert!(!picker.armed());
+
+        assert!(
+            picker.should_arm(true, &primary),
+            "the first real failure arms"
+        );
+        assert!(picker.armed());
+        // The detour runs millions of times; every later call must be silent.
+        for _ in 0..10_000 {
+            assert!(!picker.should_arm(true, &primary));
+        }
     }
 
     #[test]
@@ -2696,258 +2715,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// The Seamless container comes from ERSC's OWN config, not from a hard-coded `.co2`.
-    #[test]
-    fn reads_the_seamless_container_extension_out_of_ersc_settings() {
-        // Verbatim shape of the shipped `ersc_settings.ini`, comment and all.
-        let shipped = "[PASSWORD]\n\ncooppassword =seamless\n\n[SAVE]\n\n;Your save file extension (in the vanilla game this is .sl2). Use any alphanumeric characters (limit = 120)\nsave_file_extension = co2\n\n[LANGUAGE]\n\nmod_language_override =\n";
-        assert_eq!(parse_ersc_save_file_extension(shipped), Some("co2"));
-        assert_eq!(
-            save_container_name_for_extension(parse_ersc_save_file_extension(shipped).unwrap()),
-            "ER0000.co2"
-        );
-
-        // A user-chosen extension must flow through -- the case a hard-coded `.co2` breaks.
-        assert_eq!(
-            parse_ersc_save_file_extension("[SAVE]\nsave_file_extension = coop2\n"),
-            Some("coop2")
-        );
-        // The key only counts inside `[SAVE]`.
-        assert_eq!(
-            parse_ersc_save_file_extension("[GAMEPLAY]\nsave_file_extension = nope\n"),
-            None
-        );
-        // Absent, blank, commented out, or over-long -> no usable value.
-        assert_eq!(parse_ersc_save_file_extension("[SAVE]\n"), None);
-        assert_eq!(
-            parse_ersc_save_file_extension("[SAVE]\nsave_file_extension =\n"),
-            None
-        );
-        assert_eq!(
-            parse_ersc_save_file_extension("[SAVE]\n;save_file_extension = co2\n"),
-            None
-        );
-        assert_eq!(
-            parse_ersc_save_file_extension(&format!(
-                "[SAVE]\nsave_file_extension = {}\n",
-                "a".repeat(MAX_SAVE_FILE_EXTENSION_LEN + 1)
-            )),
-            None
-        );
-        // A filename is built from this, so anything that could leave the directory is refused.
-        for hostile in ["../../evil", "co2/x", r"co2\x", "co 2", "co.2"] {
-            assert_eq!(
-                parse_ersc_save_file_extension(&format!(
-                    "[SAVE]\nsave_file_extension = {hostile}\n"
-                )),
-                None,
-                "a non-alphanumeric extension must not reach a staged filename: {hostile}"
-            );
-        }
-    }
-
-    /// The boot default-save check accepts ONLY the container the runtime opens.
-    ///
-    /// Regression for run br-20260826-190532-55e2: under Seamless the check accepted `ER0000.sl2`
-    /// after the configured `ER0000.co2` read as characterless, and reported DEFAULT-USER-SAVE
-    /// "with no redirect" -- validating a file ersc.dll never opens. Everything downstream (the
-    /// save-check hold never engaging, the menu building against an empty ProfileSummary, the
-    /// disabled Continue row, the softlock) followed from that.
-    #[test]
-    fn boot_default_save_check_accepts_only_the_container_the_runtime_opens() {
-        for extension in [DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION, "coop2"] {
-            let seamless_name = save_container_name_for_extension(extension);
-
-            // Seamless: exactly one candidate, and it is ERSC's container. No `.sl2` fallback --
-            // that is the fallback that made the boot answer unfalsifiable.
-            assert_eq!(
-                default_save_container_names_for(true, &seamless_name),
-                vec![seamless_name.clone()],
-                "seamless boot check must not fall back past ERSC's container (ext={extension})"
-            );
-            assert!(
-                !default_save_container_names_for(true, &seamless_name)
-                    .iter()
-                    .any(|name| name.eq_ignore_ascii_case(VANILLA_SAVE_CONTAINER_NAME)),
-                "the `.sl2` fallback is the bug (ext={extension})"
-            );
-
-            // Vanilla is untouched: it only ever had `.sl2`.
-            assert_eq!(
-                default_save_container_names_for(false, &seamless_name),
-                vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
-            );
-
-            // Whatever the boot check accepts IS what the runtime writes/opens, both modes.
-            for seamless in [false, true] {
-                let accepted = default_save_container_names_for(seamless, &seamless_name);
-                let runtime = active_save_container_name_for(seamless, &seamless_name);
-                assert_eq!(accepted, vec![runtime.clone()]);
-                assert!(boot_save_container_matches_runtime(
-                    Some(&accepted[0]),
-                    &runtime
-                ));
-            }
-        }
-
-        // An ERSC configured with `sl2` IS the vanilla container -- one name, no duplicate.
-        assert_eq!(
-            default_save_container_names_for(true, VANILLA_SAVE_CONTAINER_NAME),
-            vec![VANILLA_SAVE_CONTAINER_NAME.to_owned()]
-        );
-
-        // The PICKED-save path keeps its `.sl2` fallback: staging rewrites the name, so a picked
-        // vanilla container on a Seamless launch still loads (bd er-effects-rs-h6sh).
-        assert_eq!(
-            active_save_container_names_for(true, "ER0000.co2"),
-            vec!["ER0000.co2", "ER0000.sl2"]
-        );
-    }
-
-    /// The exact 2026-08-26 mismatch, as the oracle now reports it.
-    #[test]
-    fn boot_container_mismatch_is_visible_to_telemetry() {
-        // What the run did: accepted `.sl2` while the runtime opened `.co2`.
-        assert!(!boot_save_container_matches_runtime(
-            Some("ER0000.sl2"),
-            "ER0000.co2"
-        ));
-        // What it must do now: accept the runtime's own container, or accept nothing and arm the
-        // picker. Neither is a mismatch.
-        assert!(boot_save_container_matches_runtime(
-            Some("ER0000.co2"),
-            "ER0000.co2"
-        ));
-        assert!(boot_save_container_matches_runtime(None, "ER0000.co2"));
-        // Wine paths are case-insensitive; the oracle must not fire on case alone.
-        assert!(boot_save_container_matches_runtime(
-            Some("er0000.CO2"),
-            "ER0000.co2"
-        ));
-        // A vanilla launch accepting `.sl2` is correct, not a mismatch.
-        assert!(boot_save_container_matches_runtime(
-            Some("ER0000.sl2"),
-            "ER0000.sl2"
-        ));
-    }
-
-    /// THE naming rule. Whatever container the runtime resolves to once the Seamless mode has
-    /// settled, staging must already have written the configured source under that name -- for the
-    /// DEFAULT co-op extension and for a custom one, and never varying with the SOURCE file's
-    /// extension (the shape the 2026-08-11 soft lock was misdiagnosed as).
-    #[test]
-    fn staged_container_names_cover_every_mode_for_any_configured_extension() {
-        for extension in [DEFAULT_SEAMLESS_SAVE_FILE_EXTENSION, "coop2", "sl2"] {
-            let seamless_name = save_container_name_for_extension(extension);
-            let staged = staged_save_container_names_for(&seamless_name);
-            let staged_refs: Vec<&str> = staged.iter().map(String::as_str).collect();
-            for seamless in [false, true] {
-                assert!(
-                    is_staged_save_container_name(
-                        &active_save_container_name_for(seamless, &seamless_name),
-                        &staged_refs
-                    ),
-                    "staging must write the container the runtime writes (ext={extension} seamless={seamless})"
-                );
-                for name in active_save_container_names_for(seamless, &seamless_name) {
-                    assert!(
-                        is_staged_save_container_name(&name, &staged_refs),
-                        "staging must write every container the runtime may load: {name} (ext={extension})"
-                    );
-                }
-            }
-            // Vanilla is locked to `.sl2` whatever ERSC is configured with.
-            assert_eq!(
-                active_save_container_names_for(false, &seamless_name),
-                vec!["ER0000.sl2"]
-            );
-        }
-
-        // `.co2` is a default, not an invariant: a custom extension names a different container.
-        assert_eq!(
-            active_save_container_names_for(true, "ER0000.coop2"),
-            vec!["ER0000.coop2", "ER0000.sl2"]
-        );
-        assert_eq!(
-            staged_save_container_names_for("ER0000.coop2"),
-            vec!["ER0000.sl2", "ER0000.coop2"]
-        );
-        // An ERSC configured with `sl2` IS the vanilla container -- one name, never duplicated.
-        assert_eq!(
-            staged_save_container_names_for("ER0000.sl2"),
-            vec!["ER0000.sl2"]
-        );
-        assert_eq!(
-            active_save_container_names_for(true, "ER0000.sl2"),
-            vec!["ER0000.sl2"]
-        );
-
-        let default_staged = staged_save_container_names_for("ER0000.co2");
-        let default_refs: Vec<&str> = default_staged.iter().map(String::as_str).collect();
-        assert!(is_staged_save_container_name("er0000.CO2", &default_refs));
-        assert!(!is_staged_save_container_name(
-            "ER0000.sl2.bak",
-            &default_refs
-        ));
-        assert!(!is_staged_save_container_name("ER0001.sl2", &default_refs));
-        // The staged set never depends on the SOURCE file's extension: it is the same set whether
-        // the configured save was picked as a `.sl2`, a `.co2`, or anything else.
-        assert_eq!(default_staged, vec!["ER0000.sl2", "ER0000.co2"]);
-    }
-
-    /// THE staleness check. A container from an earlier run that this pass does not rewrite is
-    /// removed, so it can never be served in place of the configured source.
-    #[test]
-    fn staged_entry_fate_removes_leftovers_and_keeps_non_save_files() {
-        let staged = ["ER0000.sl2", "ER0000.co2"];
-        assert_eq!(
-            staged_entry_fate("ER0000.sl2", &staged),
-            StagedEntryFate::Rewritten
-        );
-        assert_eq!(
-            staged_entry_fate("er0000.co2", &staged),
-            StagedEntryFate::Rewritten
-        );
-
-        // The 2026-08-11 leftovers: a `.bak` companion and a restore temp from earlier sessions.
-        assert_eq!(
-            staged_entry_fate("ER0000.co2.bak", &staged),
-            StagedEntryFate::StaleRemove
-        );
-        assert_eq!(
-            staged_entry_fate("ER0000.sl2.bak", &staged),
-            StagedEntryFate::StaleRemove
-        );
-        assert_eq!(
-            staged_entry_fate("er0000.sl2.er-save-dest-restore.tmp", &staged),
-            StagedEntryFate::StaleRemove
-        );
-        assert_eq!(
-            staged_entry_fate("ER0001.sl2", &staged),
-            StagedEntryFate::StaleRemove
-        );
-
-        // A container left by a PREVIOUS ERSC extension is exactly what must not survive...
-        assert_eq!(
-            staged_entry_fate("ER0000.coop2", &staged),
-            StagedEntryFate::StaleRemove
-        );
-        // ...and it is kept once ERSC is configured that way.
-        assert_eq!(
-            staged_entry_fate("ER0000.coop2", &["ER0000.sl2", "ER0000.coop2"]),
-            StagedEntryFate::Rewritten
-        );
-
-        assert_eq!(
-            staged_entry_fate("GraphicsConfig.xml", &staged),
-            StagedEntryFate::Keep
-        );
-        assert_eq!(
-            staged_entry_fate("er-quickload-autoload-debug.log", &staged),
-            StagedEntryFate::Keep
-        );
-    }
-
     #[test]
     fn stage_deletes_are_confined_to_the_private_stage_tree() {
         assert!(is_inside_direct_stage_root(Path::new(
@@ -3002,7 +2769,7 @@ mod tests {
         assert!(save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
         // Restoring write permission on the throwaway temp file this test created, so the
-        // `remove_file` below succeeds. Deliberately NOT narrowed to owner-write: the value under
+        // `remove_file` below succeeds. Deliberately not narrowed to owner-write: the value under
         // test is `save_file_is_readonly`, and the repo rule that the live game-owned save must stay
         // writable makes "clear the readonly bit" the exact semantics to exercise here.
         #[allow(

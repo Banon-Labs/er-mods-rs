@@ -35,7 +35,7 @@ pub mod gating {
     };
 }
 pub mod own_load {
-    pub(crate) use crate::host::{own_load_switch_reload_fire, reset_switch_reload_latches};
+    pub(crate) use crate::host::own_load_switch_reload_fire;
 }
 pub mod trace {
     pub(crate) use crate::host::{
@@ -54,7 +54,7 @@ unsafe extern "system" {
     pub fn DeleteMenu(hmenu: *mut std::ffi::c_void, uposition: u32, uflags: u32) -> i32;
     pub fn ShowWindow(hwnd: *mut std::ffi::c_void, ncmdshow: i32) -> i32;
     pub fn UpdateWindow(hwnd: *mut std::ffi::c_void) -> i32;
-    /// Fault-tolerant read: returns FALSE on unmapped/freed memory instead of
+    /// Fault-tolerant read: returns false on unmapped/freed memory instead of
     /// raising an access violation.
     pub fn ReadProcessMemory(
         process: isize,

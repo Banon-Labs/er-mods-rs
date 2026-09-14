@@ -9,10 +9,12 @@ er-armament-icons	0	0
 er-better-refills	0	0
 er-build-import	0	0
 er-build-watermark	0	0
+er-convenient-deaths	0	0
 er-crash-logging	0	0
 er-death-persist	0	0
 er-diag-harness	0	0
 er-enemynpc-effects	0	0
+er-focus-input	0	0
 er-hotkey-conflicts	0	0
 er-input-harness	0	0
 er-invasion-path	0	0
@@ -24,10 +26,13 @@ er-net-effects	0	0
 er-npc-possess	0	0
 er-player-name-filter	0	0
 er-quickload	0	0
+er-quit-load-character	0	0
 er-quit-menu	0	0
+er-quit-rows	0	0
 er-refill-all	0	0
 er-reload-trace	0	0
 er-save-disable	0	0
+er-save-game-row	0	0
 er-save-picker	0	0
 er-seamless-bugfixes	0	0
 er-telemetry	0	0

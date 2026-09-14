@@ -1,6 +1,12 @@
 [workspace]
 members = [
   "crates/er-quickload",
+  # A copy of `er-quickload` being reduced down to the System>Quit rows and nothing else
+  # (2026-09-11, user directive). The previous attempt built the same shell UP from shared crates
+  # and reached something that ran every moved code path and still looked and behaved nothing like
+  # the product on screen -- so this one starts at parity by construction and loses only what is
+  # deleted. The two must never load together; `scripts/me3-dll-conflicts.toml` records the pair.
+  "crates/er-quit-rows",
   # Offline answer to the exact question the DLL now asks before it will wait on a Continue slot:
   # which character slots does this save container actually hold? Same parser
   # (`er_save_loader::bnd4::active_character_slots`), so a runtime refusal can be predicted and
@@ -12,6 +18,10 @@ members = [
   # side to move. Host-buildable and game-free: the key table, the parser and the reload
   # decision are all `cargo test`-able on Linux.
   "crates/er-hotkey-config",
+  # The Save Game row alone, with no cloned character rows behind it. Possible since the row's flow
+  # moved into `er-quit-menu-core` on 2026-09-12; before that the only build carrying all three of
+  # the row's halves was the whole product.
+  "crates/er-save-game-row",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",
@@ -22,6 +32,12 @@ members = [
   "crates/er-crash-logging",
   "crates/er-reload-trace",
   "crates/er-input-harness",
+  # Removes ELDEN RING's requirement that its window be FOCUSED to accept input, so an
+  # agent-driven runtime run does not have to steal the user's focus to be valid. Installs no
+  # detour: the whole intervention is one byte store into the global behind
+  # `Game.Debug.IsEnableControlOnDisactiveWindow`, which `CS::CSPadStep::STEP_Update` re-reads
+  # every frame. Separate `[[natives]]` entry, enabled by presence.
+  "crates/er-focus-input",
   # The agent trace detours the SHIPPING DLL used to install unconditionally: the sole
   # `msbResCap` writer, `STEP_LoadListWait`, and the three DLC virtual-root entry points. All
   # observe-and-forward, none feeding an `oracle_*` field, so every player carried five detours
@@ -46,6 +62,10 @@ members = [
   # depends on the reverse engineering the later layers need.
   "crates/er-npc-possess",
   "crates/er-player-name-filter",
+  # While you are invading, fellow invaders stop being lock-on targets. One detour on the
+  # lock-on system's point-owner resolver, which answers "no character owns this point" for
+  # another invader -- its own value for a point with nobody behind it. Standalone shell with
+  # no product dependency; writes no game memory and touches no other targeting rule.
   "crates/er-save-disable",
   "crates/er-save-suppress",
   "crates/mushroom-man-runtime",
@@ -61,7 +81,6 @@ members = [
   "crates/er-boot-background",
   "crates/er-loading-bar-core",
   "crates/er-d3d12-compositor",
-  "crates/er-loading-bar",
   "crates/er-loading-portrait-core",
   "crates/er-loading-portrait",
   # The loading cover's one-way release fade at the D3D12 level: its command objects, its root
@@ -82,6 +101,11 @@ members = [
   # the loading-screen portrait). Was four files of the er-quickload shim, one verb each.
   "crates/er-profile-summary-core",
   "crates/er-quit-menu",
+  # Standalone ME3 shell for the System>Quit **Load Character** row: the same derived Quit grid and
+  # the same row cloner as `er-quit-menu`, armed with a different `RowSet`. It ships one of the two
+  # character rows; **Load Character from File** stays with the product until its browse surface,
+  # its ingest and the save-swap ledger leave `er-quickload`.
+  "crates/er-quit-load-character",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
   # split as er-loading-portrait-core / er-loading-portrait.
@@ -103,6 +127,11 @@ members = [
   # Crash guards for faults only Seamless Co-op's networking mode reaches. Standalone shell with
   # no product dependency: every guard is a null-container intercept on a vanilla function.
   "crates/er-seamless-bugfixes",
+  # Three death conveniences, each one rewritten byte of the game's own code: keep your
+  # runes, keep an active rune arc, and end the YOU DIED fade at once. Ported from
+  # er-convenient-deaths, whose own offsets are dead on every build here. Each patch is off
+  # until a DLL-adjacent config key asks for it, because the three are separate decisions.
+  "crates/er-convenient-deaths",
   # Import a build from an er-build-planner share link: pure host-side data
   # transformation (planner JSON -> item grants), no game or network deps.
   "crates/er-build-import-core",

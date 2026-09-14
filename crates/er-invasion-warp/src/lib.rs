@@ -1,31 +1,31 @@
 //! Standalone ME3-loadable shell for the world-map invasion-spawn warp feature.
 //!
 //! Loading this DLL through a me3 `[[natives]]` entry is what turns the feature on: the
-//! shell installs a standalone host seam whose gate answers YES, so profile inclusion IS the
+//! shell installs a standalone host seam whose gate answers yes, so profile inclusion is the
 //! toggle and no env var or marker file is involved.
 //!
-//! # What it does today: ORACLE 1 only
+//! # What it does today: Oracle 1 only
 //!
-//! It registers ONE recurring game task (`CSTaskImp` / `FrameBegin`, the same registration
+//! It registers one recurring game task (`CSTaskImp` / `FrameBegin`, the same registration
 //! `er-telemetry` uses) which drives `er_invasion_warp_core::sampler`: a fail-closed read of the
 //! live `CSAutoInvadePoint` coordinate table, re-taken until the totals settle, published as
 //! `oracle_invasion_warp_catalog_targets` / `_blocks` / `_areas` into
 //! `er-invasion-warp-telemetry.json` and this DLL's log next to the executable.
 //!
-//! It still installs NO detours, patches nothing, and writes nothing into the engine. Oracles
+//! It still installs no detours, patches nothing, and writes nothing into the engine. Oracles
 //! 2-5 (list rows, selected id, requested warp, final position) need the world-map interception
 //! that is still only a design (docs/plans/world-map-invasion-warp.md), so they remain names.
 //! Nothing here can start, fake or spoof invasion/multiplayer/session state -- the feature
 //! reads one coordinate table.
 //!
-//! Unlike `er-loading-portrait` this DLL is safe to load ALONGSIDE `er_quickload.dll`:
+//! Unlike `er-loading-portrait` this DLL is safe to load alongside `er_quickload.dll`:
 //! it owns no Present detour and no MinHook instance. That stays true only while it installs
 //! nothing; the first detour it adds must go through the `er-hook` union.
 
 // A cdylib whose every consumer is `DllMain` and the game hooks/tasks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd out, so
 // `dead_code`/`unused_imports` there report the cfg, not real debt (measured 2026-08-21: 119 on
-// the host, 0 on the shipping target). The SHIPPING target (x86_64-pc-windows-msvc) carries the
+// the host, 0 on the shipping target). The shipping target (x86_64-pc-windows-msvc) carries the
 // full deny with no allows. `check.sh` host-runs this crate's tests, which is why the host build
 // has to stay clean at all.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -34,6 +34,7 @@ pub mod announce;
 pub mod drive;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
+pub mod lynchpin_use;
 #[cfg(windows)]
 pub mod map_confirm;
 pub mod map_gfx;
@@ -51,17 +52,32 @@ use std::path::{Path, PathBuf};
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 const LOG_FILE_NAME: &str = "er-invasion-warp.log";
-/// Rewritten (not appended) on every publish, so the file always holds the CURRENT oracle
+/// Rewritten (not appended) on every publish, so the file always holds the current oracle
 /// values rather than a history a reader has to scroll to the end of.
 const TELEMETRY_FILE_NAME: &str = "er-invasion-warp-telemetry.json";
-/// The WARP document, kept separate from the catalog one on purpose: both are rewritten in
+/// The warp document, kept separate from the catalog one on purpose: both are rewritten in
 /// place, so sharing a filename would let whichever wrote last erase the other's evidence.
 const WARP_TELEMETRY_FILE_NAME: &str = "er-invasion-warp-run.json";
 
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
 
-/// Where the standalone log lands: next to the executable, falling back to the CWD.
+/// Where this DLL's files land: this run's artifact directory when the launcher named one,
+/// otherwise next to the game executable. Recorded here because the three writers below each name
+/// their own knob, and this is the reason all three have one.
+///
+/// The redirect is the same knob every other DLL in this workspace honours -- the launcher fills
+/// `ARTIFACT_ENV` in `scripts/er_artifact_env.py`, and `er-run-branch.py`'s selftest asserts that
+/// set covers every variable the Rust reads, so a file added here without an entry there is caught
+/// rather than quietly left behind.
+///
+/// It is here because of a run that cost an hour. On 2026-09-08 the game died on the first rejected
+/// match, and the line naming the cause -- a Rust abort raised out of an ERSC action -- was the last
+/// line of this log, in the game directory. The run's own artifact directory held eleven files and
+/// none of them said it, so the crash read as a process that simply vanished. A log that is not
+/// beside the evidence is a log nobody reads.
+/// Where the standalone log lands when nothing redirects it: next to the executable, falling back
+/// to the CWD. Kept for the telemetry sinks below, which name their own files.
 fn log_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -76,8 +92,12 @@ fn log_dir() -> PathBuf {
 /// `append(true)`, so twelve separate launches accumulated into one 565 KB file and a count
 /// taken over it read as one run doing something twelve times over.
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    let _ = dir;
     er_game_base::log::append_line(
-        &dir.join(LOG_FILE_NAME),
+        &er_game_base::log::redirected_artifact_path(
+            "ER_QUICKLOAD_INVASION_WARP_LOG_PATH",
+            LOG_FILE_NAME,
+        ),
         format_args!("er-invasion-warp: {args}"),
     );
 }
@@ -90,14 +110,20 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
 /// oracle document. Failure is silent by design -- a read-only game directory must degrade to
 /// "log lines only", never to a panic on the game thread.
 fn standalone_publish_oracle_json(body: &str) {
-    let path = log_dir().join(TELEMETRY_FILE_NAME);
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH",
+        TELEMETRY_FILE_NAME,
+    );
     let _ = std::fs::write(path, body.as_bytes());
 }
 
 /// Warp telemetry sink: the per-warp oracle document, in its own file so it never overwrites
 /// the catalog's.
 fn standalone_publish_warp_json(body: &str) {
-    let path = log_dir().join(WARP_TELEMETRY_FILE_NAME);
+    let path = er_game_base::log::redirected_artifact_path(
+        "ER_QUICKLOAD_INVASION_WARP_RUN_PATH",
+        WARP_TELEMETRY_FILE_NAME,
+    );
     let _ = std::fs::write(path, body.as_bytes());
 }
 
@@ -108,7 +134,7 @@ fn gate_on() -> bool {
 }
 
 /// Install the standalone host seam: log sink -> this DLL's own log file, telemetry sink ->
-/// this DLL's own JSON document, feature gate ON.
+/// this DLL's own JSON document, feature gate on.
 fn install_standalone_host() -> bool {
     er_invasion_warp_core::install_host(er_invasion_warp_core::InvasionWarpHost {
         append_autoload_debug: standalone_log,
@@ -134,7 +160,7 @@ fn spawn_catalog_task() {
     let _ = std::thread::Builder::new()
         .name("er-invasion-warp".to_owned())
         .spawn(|| {
-            // BOUNDED (2026-08-29): the unbounded form of this loop starved the wineserver and
+            // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and
             // hung a boot. er_game_base::wait backs off in user space and gives up.
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
@@ -164,9 +190,9 @@ fn spawn_catalog_task() {
                     // SAFETY: game task thread with the world up; every read inside is fault-closed
                     // and each map is read at most once per session.
                     unsafe { crate::map_hooks::harvest_resident_msb_points(frame) };
-                    // What destination a SEAMLESS invasion picked. Seamless does not use the
+                    // What destination a seamless invasion picked. Seamless does not use the
                     // .aip/MSB InvasionPoint tables at all, and the code that chooses a target
-                    // is inside the part of ersc.dll Themida encrypted -- but the ANSWER lands
+                    // is inside the part of ersc.dll Themida encrypted -- but the answer lands
                     // in CSGameMan where anything can read it. Passive: no hook on ersc's path,
                     // so it cannot perturb the thing it is measuring.
                     //
@@ -185,13 +211,25 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
-                    unsafe { crate::map_hooks::install_map_observers() };
+                    // `map_pins = false` withholds both map hooks -- see the key's docs on
+                    // `LocalInvasionConfig`. Read per tick rather than latched at attach because
+                    // the config is hot-reloaded; the installers are idempotent, so flipping the
+                    // key on mid-session arms them and flipping it off simply stops re-arming
+                    // (a hook already installed stays installed, which the log makes visible).
+                    let config_snapshot = crate::local_invasion_filter::current_config_snapshot();
+                    let map_pins = config_snapshot
+                        .as_ref()
+                        .map(|config| config.map_pins)
+                        .unwrap_or(true);
+                    if map_pins {
+                        unsafe { crate::map_hooks::install_map_observers() };
+                    }
                     // SAFETY: same game-task context; also idempotent. This one arms as early
                     // as the task runs on purpose: it swaps the world-map movie as Scaleform
                     // parses it, so arming after that parse means the red pin icon simply never
                     // appears. The pins read the outcome rather than assuming it, so a late or
                     // failed arm costs the red icon and never leaves a pin iconless.
-                    if let Ok(base) = er_game_base::mem::game_module_base() {
+                    if map_pins && let Ok(base) = er_game_base::mem::game_module_base() {
                         unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
                     }
                     // The local invasion filter: installs its single game-side detour (idempotent),
@@ -207,9 +245,17 @@ fn spawn_catalog_task() {
                             crate::drive::game_has_focus(),
                         );
                     }
+                    // The Challenger's Lynchpin: a shorter use animation, the start-a-search popup
+                    // skipped, and any requested use held for the frames the engine needs to see
+                    // it. Every part is idempotent and fails closed, so a tick before the world
+                    // exists costs nothing.
+                    //
+                    // SAFETY: same game-task context; every read is fault-closed and the one
+                    // detour is installed on a byte-verified prologue.
+                    unsafe { crate::lynchpin_use::tick() };
                     // Advertise this host's current map on its own Steam lobby, so an invader can
-                    // ASK for a location instead of sampling and rejecting. Gated internally on the
-                    // block having CHANGED, so a host standing still costs one string compare.
+                    // ask for a location instead of sampling and rejecting. Gated internally on the
+                    // block having changed, so a host standing still costs one string compare.
                     //
                     // Republishing is the whole point: Seamless writes its advertisement once at
                     // CreateLobby and never again (measured -- 7 SetLobbyData calls at creation,
@@ -228,12 +274,20 @@ fn spawn_catalog_task() {
                     // until it lands rather than being installed once at attach and failing
                     // silently. It changes nothing unless `hunt = true` is in the config.
                     // Learn which lobby Seamless advertises on, by watching it declare one.
-                    // Must be installed before publishing can do anything: publish now REFUSES
+                    // Must be installed before publishing can do anything: publish now refuses
                     // until this observer has seen the declaration, rather than guessing from a
                     // struct offset that pointed at the wrong lobby in every run.
-                    crate::lobby_publish::install_advertisement_observer();
-                    crate::lobby_publish::install_hunt_hook();
-                    crate::lobby_publish::install_pool_filter_hook();
+                    // `steam_hooks = false` withholds all three -- see the key's docs. Read from
+                    // the same snapshot as `map_pins` so one config read serves both gates.
+                    if config_snapshot
+                        .as_ref()
+                        .map(|config| config.steam_hooks)
+                        .unwrap_or(true)
+                    {
+                        crate::lobby_publish::install_advertisement_observer();
+                        crate::lobby_publish::install_hunt_hook();
+                        crate::lobby_publish::install_pool_filter_hook();
+                    }
                     // Lift both halves of location matchmaking out of the log and into the oracle
                     // document, because their failures are the ones that look like success from
                     // outside: a host that advertised nothing still runs fine, and a hunt hook that
@@ -243,24 +297,33 @@ fn spawn_catalog_task() {
                         er_invasion_warp_core::oracles::publish_lobby_oracles(publishes, refusals);
                         let (hooked, filters) = crate::lobby_publish::hunt_tally();
                         er_invasion_warp_core::oracles::publish_hunt_oracles(hooked, filters);
-                        // Writing the counters is not the same as PUBLISHING them: the telemetry
+                        // Writing the counters is not the same as publishing them: the telemetry
                         // document is otherwise only written by the catalog sampler, which stops
                         // once the totals latch -- seconds into a run, and long before anyone
                         // hunts. Without this the file freezes at zero while the counters climb.
                         // Gated on a change, so a steady run costs four comparisons and no I/O.
+                        // The banner's own counters, for the same reason: `announce::show` logs
+                        // its first notice and nothing after, so a run with one banner and a run
+                        // with a hundred read identically. `drawn` is the one that matters -- a
+                        // notice can be placed and render nothing.
+                        let (shown, refused) = crate::announce::tally();
+                        let (drawn, empty) = crate::announce::measurement_tally();
+                        er_invasion_warp_core::oracles::publish_notice_oracles(
+                            shown, refused, drawn, empty,
+                        );
                         er_invasion_warp_core::oracles::republish_if_location_matchmaking_changed();
                     }
                     // Re-colour pins that already exist. Gated internally on the user's lists
                     // actually having changed, so the steady-state cost is one atomic compare.
                     //
-                    // SAFETY: same game-task context. Walks the ONE live ViewModel's span -- read
+                    // SAFETY: same game-task context. Walks the one live ViewModel's span -- read
                     // from the engine's own `CSPopupMenu+0x250` slot and required to match the one
                     // the injection recorded -- and writes only to rows that still point into this
                     // DLL's leaked param slab, so a span whose ViewModel was destroyed is refused.
                     unsafe {
                         crate::map_live_pins::restyle_live_pins();
                     }
-                    // Make blocks harvested SINCE this world entry visible, by retargeting rows the
+                    // Make blocks harvested since this world entry visible, by retargeting rows the
                     // constructor already reserved. Refuses unless the engine's own slots agree it
                     // is safe: the ViewModel read live from `CSPopupMenu+0x250`, no dialog attached,
                     // and the row list still beginning where our span was recorded.
@@ -292,14 +355,36 @@ pub unsafe extern "system" fn DllMain(
     if reason == DLL_PROCESS_ATTACH {
         let module_base = module as usize;
         START.call_once(|| {
-            // ONE sink for both refusal channels, installed before anything resolves an address.
+            // One sink for both refusal channels, installed before anything resolves an address.
             //
             // Every cdylib statically links its own copy of `er-hook` and `er-game-base`, so an
-            // uninstalled sink is silent PER DLL -- and this DLL had none. `HOOK REFUSED` and
+            // uninstalled sink is silent per DLL -- and this DLL had none. `HOOK REFUSED` and
             // `ADDRESS REFUSED` lines, the two things that say a 1.16.2 address did not survive
             // 1.17, were being written to nowhere while the map surface simply failed to appear.
             // `set_hook_logger` installs the address-resolution sink too.
             er_hook::set_hook_logger(standalone_log);
+            // Beside the hook sink, and for the same reason one level worse. A panic in this
+            // cdylib crosses an `extern "system"` boundary and becomes an abort, which does not
+            // dispatch to a vectored handler -- so `er_crash_logging` writes no record, no
+            // `-latest`, no module list, and the process simply vanishes. Measured 2026-09-04:
+            // the F9 cross-area warp killed the game repeatedly and every run's crash log held
+            // only its build header, while this same DLL's illegal-instruction fault produced
+            // full records every time. The difference was not severity, it was that one raised an
+            // exception and the other aborted. Enforced by
+            // `scripts/check-panic-reporter-installed.py`.
+            er_game_base::panic_report::report_panics_to("er-invasion-warp", standalone_log);
+            // Say so in the log, because "no PANIC line" has two very different meanings and the
+            // record cannot distinguish them on its own: either nothing panicked, or the hook was
+            // never armed and a panic died silently anyway. Measured 2026-09-04: three runs ended
+            // with the process gone, no exception record, and no panic line, and there was no way
+            // to tell which of those two it was. This line makes the absence of a PANIC line
+            // evidence rather than a gap.
+            standalone_log(format_args!(
+                "panic reporter ARMED for er_invasion_warp -- from here, a Rust panic in this DLL \
+                 writes its message and file:line above before the process aborts. If this DLL \
+                 dies with no PANIC line after this point, it did not panic."
+            ));
+
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),
@@ -318,6 +403,58 @@ pub unsafe extern "system" fn DllMain(
 #[unsafe(no_mangle)]
 pub extern "C" fn er_invasion_warp_host_stub() -> i32 {
     DLL_MAIN_SUCCESS
+}
+
+/// Ask this DLL to start a Seamless search on its own game thread, the next tick.
+///
+/// # Why a request and not a call
+///
+/// `ersc+0x25850` locks the session's `std::mutex` at `session+0x100` before it writes anything,
+/// and calling it from a thread the game does not own blocks there indefinitely. Measured
+/// 2026-09-08: a Frida RPC thread called the invade action with a valid menu object and a session
+/// reading idle, and never returned -- while the game itself stayed healthy at 709 CPU ticks per
+/// three seconds, so it was that one call that parked, not the process.
+///
+/// So this sets the flag the filter's own game task already drains through
+/// `drive_pending_reinvade`, which runs where a player's press would run and takes the same
+/// preconditions ERSC takes: idle session, unpoisoned guard, an owner to pass as `rcx`.
+///
+/// Returns 1 when the request was armed, 0 when there is no menu object to drive yet -- arming
+/// without one would be a request the game task can only ever decline.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_request_invade() -> i32 {
+    i32::from(local_invasion_filter::request_invade())
+}
+
+/// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring
+/// `ersc.dll` itself.
+///
+/// # Why an export rather than the hook next door
+///
+/// The hook works and is the right shape; installing it is what breaks. Measured three times on
+/// 2026-09-08, with `ersc_invade_observer = true` and nothing else changed: the game raises
+/// `STATUS_ILLEGAL_INSTRUCTION` at `eldenring.exe+0x10043` at `ms_since_install` 29288, 29299 and
+/// again on the third run -- deterministic to eleven milliseconds, so a schedule and not a race.
+/// The same configuration with the observer off produced zero exception records at all. The fault
+/// address decodes mid-instruction: the game's SSE block copy has `sub rdx, 6` at 0x140010041, and
+/// 0x140010043 is two bytes into it, where `ea` has no 64-bit encoding. `rdx` held 0xd000004d and
+/// `rdi` held 0xb8, so the copy was entered with garbage arguments.
+///
+/// A Frida `Interceptor` on that exact address ran a whole invasion session the same day with no
+/// fault, so observing the function is safe and MinHook's way of installing there is not. This
+/// export is the seam that keeps the observation and drops the detour: whoever can hook `ersc`
+/// safely passes the pointer in, and this DLL does the judging, the cancelling and the banner.
+///
+/// Returns 1 when the pointer was adopted, 0 when it did not lead to a session-shaped object.
+/// Rejecting is the important half: a wrong pointer here would make the filter cancel invasions
+/// against a stranger's state.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_adopt_menu_object(menu_object: usize) -> i32 {
+    i32::from(local_invasion_filter::menu_object::adopt_menu_object(
+        menu_object,
+    ))
 }
 
 #[cfg(test)]
@@ -349,14 +486,14 @@ mod tests {
         }
     }
 
-    /// Scratch directory for one test, keyed by PROCESS as well as by `tag`.
+    /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
-    /// `std::env::temp_dir()` is ONE directory shared by every process on the machine, so a name
-    /// keyed only by `tag` is the same directory -- and here the same FILE, since the leaf is the
+    /// `std::env::temp_dir()` is one directory shared by every process on the machine, so a name
+    /// keyed only by `tag` is the same directory -- and here the same file, since the leaf is the
     /// fixed artifact name this DLL writes -- in two test binaries at once. Two at once is the
     /// ordinary case in this repo: two agents running `scripts/check.sh` concurrently, the gate
     /// run twice over, or a second checkout. The test below writes a long document, overwrites it
-    /// with a short one and requires the short one to have TRUNCATED the long one; a second
+    /// with a short one and requires the short one to have truncated the long one; a second
     /// process writing its own long document into that same path between this one's rewrite and
     /// its read-back makes the truncation look as though it never happened.
     ///

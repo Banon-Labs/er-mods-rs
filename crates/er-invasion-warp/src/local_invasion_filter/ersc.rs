@@ -3,70 +3,60 @@
 //!
 //! # Why this is a table rather than four constants
 //!
-//! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and v2.0.0
-//! (2026-09-02) moved every address this module pins AND the fields those addresses operate on.
+//! `ersc.dll` is third-party. The user installs it and updates it whenever they like, and the last
+//! update moved every address this module pins and the fields those addresses operate on.
 //! A single constant set can only ever be right about one build, and the build it is right about
 //! changes without warning -- so the addresses live in an [`Abi`] record that
 //! [`super::resolve_ersc_abi`] selects by fingerprint, refusing anything it cannot identify.
 //!
 //! **[`SUPPORTED`] holds exactly one entry, and that is a product decision: this mod drives the
-//! LATEST Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
-//! next build is a new entry measured the way this one was. v1.9.9, which this module did drive
-//! until 2026-09-02, is kept in [`RETIRED`] as a fingerprint and nothing else.
+//! latest Seamless Co-op only.** The table is not vestigial -- Seamless will update again, and the
+//! next build replaces this entry, measured the way this one was. A build that is no longer the
+//! latest leaves nothing behind: no second entry, no fingerprint, no pinned addresses. The
+//! refusal does not need to name which stale build it found, only that it is not the supported
+//! one.
 //!
-//! Nobody loses a co-op session to that decision: v2.0.0 changed the lobby-key salt, so v1.9.9 and
-//! v2.0.0 clients are already invisible to each other whatever this mod does.
+//! # How each address here was identified
 //!
-//! # What v2.0.0 moved, and how each address was identified
+//! A byte match was not accepted as an identification for any of these. Every one is reproducible
+//! with `scripts/ersc-disas.py` against the installed DLL, read in place.
 //!
-//! A byte match was not accepted as an identification for any of these. The measurements are
-//! reproducible with `scripts/ersc-disas.py` against the two DLLs, read in place.
+//! | | RVA | what identifies it |
+//! |---|---|---|
+//! | `show` | `0x241a0` | unique masked-body match; `.pdata` index 301; function size `0xa0a` |
+//! | invade action | `0x25850` | `.pdata` index 319, on a shift that holds unbroken over 78 consecutive functions; the only action of its shape writing `0xe`, at `0x25886`, out of 4903 functions |
+//! | cancel action | `0x258d0` | unique masked-body match, and `.pdata` index 320 on that same shift, and size `0x64` |
+//! | `BuildLobbyKey` | `0xad6e0` | `.pdata` index 1782, size `0x2d1`; loads the SHA-256 IV and a 32-byte `.rdata` salt `0x23` bytes apart; its two callers sit in one function that calls it twice `0xaf` apart; its opening decodes to `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
 //!
-//! | | v1.9.9 | v2.0.0 | what identifies the v2.0.0 address |
-//! |---|---|---|---|
-//! | `show` | `0x22d30` | `0x241a0` | unique masked-body match; `.pdata` index 296 -> 301; function SIZE identical (`0xa0a`) |
-//! | invade action | `0x243e0` | `0x25850` | `.pdata` index 314 -> 319 at the same `+5` shift that holds unbroken over 78 consecutive functions; the only action of its shape writing `0xe`, the `+1` counterpart of `0xd` |
-//! | cancel action | `0x24460` | `0x258d0` | unique masked-body match, AND `.pdata` index 315 -> 320 at that same `+5`, AND size identical (`0x64`) |
-//! | `BuildLobbyKey` | `0xabc20` | `0xad590` | loads the SHA-256 IV and a 32-byte `.rdata` salt at the same internal spacing (`0x23` bytes apart); its two callers sit in ONE function that is byte-size-identical across the builds (`0xf18`) and calls it twice `0xaf` apart, exactly as v1.9.9's does; and its opening decodes instruction-for-instruction against v1.9.9's, including `movzx edx,[rcx+CTX]; shr edx,2; and edx,1` |
+//! Two lessons from that measurement are worth keeping, because they are about method and will
+//! apply again the next time Seamless ships:
 //!
-//! The two failures the previous measurement hit are both explained, which is what turns them
-//! from "the function is gone" into "the function is right here":
+//! * **A masked body signature can miss a function that has not moved.** The compiler inverted the
+//!   invade action's idle guard -- `cmp [rdi+STATE],IDLE; je <continue>` became
+//!   `cmp [rdi+STATE],IDLE; jne <return>` -- and `je`/`jne` differ in the OPCODE byte, which a
+//!   masked search keeps. One byte at offset 21 defeated every signature length on the ladder.
+//! * **A unique prologue hit is a code shape, not a function.** `BuildLobbyKey`'s 19-byte prologue
+//!   matched exactly one address and it was the wrong one: `0x1a6d0` merely happens to frame
+//!   `0x148` too, and sits at `.pdata` index 193 -- 1589 entries from the real function.
+//!   Big-frame MSVC functions in one source file look alike from the top; the resolution has to
+//!   come from reading, not from picking.
 //!
-//! * **The invade action matched no body signature at any length.** The compiler INVERTED its
-//!   idle guard -- `cmp [rdi+0x110],0; je <continue>` became `cmp [rdi+0x150],1; jne <return>` --
-//!   and `je` and `jne` differ in the OPCODE byte, which a masked search keeps. The divergence is
-//!   at offset 21, inside even the shortest signature on the ladder.
-//! * **`BuildLobbyKey`'s 19-byte prologue matched exactly one v2.0.0 address, and it was the
-//!   wrong function.** `0x1a6d0` merely happens to frame `0x148` too. It sits at `.pdata` index
-//!   193, some 1568 entries from where `BuildLobbyKey`'s neighbourhood is -- so a unique prologue
-//!   hit really is a code SHAPE and nothing more.
+//! # The session ABI moves as one block
 //!
-//! And the two candidates its masked BODY search returned instead are worth naming, because one of
-//! them is not a coincidence at all: `0xab5f0` is `BuildLobbyKey`'s own CALLER -- the lobby
-//! search-and-publish function, `0xaa2f0` in v1.9.9, the same `0xf18` bytes in both builds. A body
-//! signature taken from the top of a big-frame MSVC function matches the top of another big-frame
-//! MSVC function in the same source file; that it landed one level up the call graph rather than
-//! somewhere random is exactly why "two candidates" had to be resolved by reading, not by picking.
+//! The mutex sub-object, the guard and the state field keep their relative spacing
+//! (`guard = mutex+0x4c`, `state = mutex+0x50`), so they move together. That is one finding with
+//! three consequences rather than three separate measurements, and it is the shape to re-check
+//! first when the fields move again.
 //!
-//! # The session ABI moved as one block
+//! # The state enum renumbers wholesale, so leaving a code alone is the dangerous option
 //!
-//! The mutex sub-object, the guard and the state field all shifted by exactly `+0x40` and kept
-//! their relative spacing (`guard = mutex+0x4c`, `state = mutex+0x50`). That is one finding with
-//! three consequences rather than three separate measurements.
+//! Scanning every `mov dword [reg+STATE], imm32` in the real code finds seven distinct values.
+//! When Seamless last shifted them, all seven moved by a uniform `+1` and a new state was inserted
+//! at the bottom -- including the "idle" sentinel the guarded actions compare against. A state code
+//! carried across a build unchanged is therefore not the conservative choice: it is how a progress
+//! marker silently becomes a fast-fail state.
 //!
-//! # `0xd` was not replaced -- the whole enum was renumbered `+1`
-//!
-//! "No v2.0.0 action writes `0xd`" was correct and led to the wrong conclusion. Scanning every
-//! `mov dword [reg+STATE], imm32` in each build's real code finds SEVEN distinct values whose
-//! site counts match one-for-one under a uniform `+1`: `0x1`x1, `0x3`x1, `0x6`x1, `0x9`x1,
-//! `0xd`x1, `0x22`x7, `0x23`x1 become `0x2`, `0x4`, `0x7`, `0xa`, `0xe`, `0x23`x7, `0x24`. The
-//! "idle" sentinel the guarded actions compare against moved `0` -> `1` in the same shift. So
-//! `0xd` became `0xe`, and a new state was inserted at the bottom of the enum.
-//!
-//! That renumber makes leaving a state code alone the DANGEROUS option, not the safe one:
-//! v1.9.9's `0x12` progress marker is, under the shift, a fast-fail state in v2.0.0.
-
-// Every `*_PROLOGUE` below is assembled from NAMED `iced-x86` instructions by this crate's
+// Every `*_PROLOGUE` below is assembled from named `iced-x86` instructions by this crate's
 // `build.rs`, which additionally checks each one against a real copy of the build it claims to
 // describe -- located by the Seamless version string inside the file rather than by which
 // directory it sits in. Hand-typing them is what the generator exists to prevent: one wrong
@@ -74,11 +64,11 @@
 // loaded".
 include!(concat!(env!("OUT_DIR"), "/generated_ersc_prologues.rs"));
 
-/// Everything that differs between two Seamless builds, in one record.
+/// Everything a Seamless build's ABI consists of, in one record.
 ///
-/// Splitting it up is what made the previous breakage silent-adjacent: a correct v2.0.0
-/// ADDRESS used with v1.9.9 field offsets would read and write the wrong fields of a live
-/// multiplayer session, and this module's failure mode is cancelling other players'
+/// Splitting it up is what made the previous breakage silent-adjacent: a correct new address
+/// used with the previous build's field offsets would read and write the wrong fields of a
+/// live multiplayer session, and this module's failure mode is cancelling other players'
 /// invasions. Address, layout and codes travel together or not at all.
 pub struct Abi {
     /// Human-readable build name, for the log line that says which one was recognised.
@@ -90,23 +80,25 @@ pub struct Abi {
     pub invade_action_rva: usize,
     /// The "Cancel search" option action. Reads `rcx` only.
     pub cancel_action_rva: usize,
+    /// `OPTIONSELECT_LEAVEWORLD`'s action -- see [`V201_LEAVE_WORLD_ACTION_RVA`].
+    pub leave_world_action_rva: usize,
     /// `BuildLobbyKey(ctx, std::string* out)` -- produces the `lobby_key` string.
     ///
     /// # Why this one matters more than it looks
     ///
-    /// Seamless finds worlds with a Steam lobby-list query carrying exactly TWO match terms:
+    /// Seamless finds worlds with a Steam lobby-list query carrying exactly two match terms:
     /// `lobby_type == "yknx3_seamless_master_lobby"` and `lobby_key == <this string>`, the
     /// latter with `k_ELobbyComparisonEqual`. An exhaustive decode of the XOR-obfuscated
     /// string idiom across every plaintext function in `ersc.dll` finds only those two keys in
     /// the whole module -- no map, block, region, coordinate or radius anywhere. So two
-    /// players who derive DIFFERENT `lobby_key` values are simply invisible to each other, no
+    /// players who derive different `lobby_key` values are simply invisible to each other, no
     /// matter how well their levels, weapon levels or locations line up.
     ///
     /// The value is [`LOBBY_KEY_HEX_LEN`] lowercase hex characters -- a SHA-256 digest, from
-    /// an IV this function loads out of `.rdata` together with a 32-byte salt. **v2.0.0
-    /// rotated that salt** (`gcEz!NaR-*y7?kSPXJ8Ll7wVtspRo?EZ` -> `n7iAOMaYxNItSTYeAIIFB2+AlM8GQoXs`),
-    /// which by itself makes v1.9.9 and v2.0.0 clients invisible to each other -- worth
-    /// knowing before anyone reads a key mismatch as a bug in this module.
+    /// an IV this function loads out of `.rdata` together with a 32-byte salt. **Seamless
+    /// rotates that salt on release** -- measured 2026-09-06, no two of the last three builds
+    /// share one -- which by itself makes clients of different builds invisible to each other,
+    /// worth knowing before anyone reads a key mismatch as a bug in this module.
     ///
     /// The moment it re-derives is jittered, so a comparison between two machines must use the
     /// key that was live when the offers arrived, not merely the first one printed. Observed,
@@ -114,53 +106,93 @@ pub struct Abi {
     /// client matches, which is not ours to do.
     pub build_lobby_key_rva: usize,
     pub show_prologue: &'static [u8],
-    /// Also the version DISCRIMINATOR -- see [`SUPPORTED`].
+    /// Also the one-shot version DISCRIMINATOR -- see [`SUPPORTED`].
     pub invade_prologue: &'static [u8],
+    /// Also the recurring fingerprint `super::resolve_session` re-proves on every use. That job
+    /// belongs to whichever entry point nothing patches, and since 2026-09-08 the cancel action
+    /// is the only one left: `show` and `invade` both carry observers of ours, and a fingerprint
+    /// taken on a detoured prologue measures our own patch. We are cancel's only caller, so
+    /// there is nothing to observe there and no reason it will ever be hooked.
     pub cancel_prologue: &'static [u8],
+    /// Prologue for [`Abi::leave_world_action_rva`].
+    pub leave_world_prologue: &'static [u8],
     pub build_lobby_key_prologue: &'static [u8],
     /// Session state, the field every option action writes.
     pub session_state_offset: usize,
-    /// Guard field. [`SESSION_GUARD_POISON`] is the value every action refuses to proceed
-    /// past -- they take a fatal-error branch instead -- so the filter refuses too.
+    /// The dword at `session+0x14c`, which every option action compares against
+    /// [`SESSION_GUARD_POISON`] before it proceeds.
+    ///
+    /// It is not a Seamless field. The `std::mutex` each action locks first occupies
+    /// `session+0x100..0x150`, so this offset is `mutex+0x4c` -- MSVC's `_Count`, the recursion
+    /// counter -- and the comparison is `_Verify_ownership_levels`, the overflow check the STL
+    /// inlines into `_Mutex_base::lock()`. Read out of `_Mtx_unlock` at `ersc+0xf9830`, which
+    /// decrements this dword and, at zero, writes `-1` to `+0x48` and releases the lock word.
+    ///
+    /// The consequence is that the guard this module was built around never fires: on a
+    /// non-recursive mutex `_Count` only ever goes `0 -> 1`, so it cannot reach `INT_MAX`. The
+    /// fields worth checking on this object are the mutex's own, which
+    /// `local_invasion_filter::lock_report` reads and refuses on.
     pub session_guard_offset: usize,
     /// Idle: the state a cancelled search settles back to, and the state `invade` requires.
     pub state_idle: u32,
     /// The state the "Invade world" action writes -- the one and only site in the whole
-    /// unpacked `.text` that puts this value in the field, in either build.
+    /// unpacked `.text` that puts this value in the field.
     pub state_searching: u32,
     /// The state "Cancel search" writes.
     ///
-    /// NOT usable as a "the user cancelled" signal, which is what it was briefly used for: the
-    /// static scan found SEVEN sites writing this value and only one is the Cancel action, so
-    /// every internal abort looked like a user cancel. (Still seven in v2.0.0, at the
-    /// renumbered value.) It survives as a label for the trace.
+    /// Not usable as a "the user cancelled" signal, which is what it was briefly used for: the
+    /// static scan found seven sites writing this value and only one is the Cancel action, so
+    /// every internal abort looked like a user cancel -- and it was still seven sites after the
+    /// last renumber. It survives as a label for the trace.
     pub state_cancelling: u32,
     /// The first state past the fast-fail path, our own progress marker for the restart
     /// backoff. See `note_attempt_progress`, its only reader, for what it gates.
     ///
-    /// v1.9.9's `0x12` was measured at runtime; v2.0.0's is that value carried through the
-    /// proven enum-wide `+1`, and is the one number in this table that is INFERRED rather than
-    /// read out of an instruction. Leaving it alone would have been worse than shifting it:
-    /// under the renumber, v1.9.9's `0x12` is a fast-fail state in v2.0.0, so an unshifted
-    /// marker would clear the backoff penalty on exactly the attempts that earned it.
+    /// The one number in this table that is inferred rather than read out of an instruction: it
+    /// was measured at runtime on the preceding build and carried across the proven enum-wide
+    /// `+1`. Leaving it unshifted would have been worse than moving it -- under that renumber the
+    /// stale value lands on a fast-fail state, so the marker would clear the backoff penalty on
+    /// exactly the attempts that earned it.
     pub state_offer_received: u32,
+    /// Being in an invasion -- the state the session settles into once the join completes, and
+    /// the one `identifies_a_session` must keep accepting for a pointer it already holds.
+    ///
+    /// Post-renumber and therefore free of the stale-constant risk the rest of this table carries:
+    /// `0x16` never existed under v1.9.9 numbering. The proof is dated rather than argued -- the
+    /// enum-wide `+1` landed in `fd554f9d` on 2026-09-02, `git log -S'0x16'` puts this value's
+    /// first appearance in `local_invasion_filter.rs` on 2026-09-08, and the two comments that
+    /// assert it transcribe live runs `br-20260910-003946-b9b0` and `br-20260910-042516-3b5d`
+    /// against v2.0.1.
+    ///
+    /// The real limit is a different one, and it is not about the number: every reading of this
+    /// state in this repo is INVADER-side, because `capture_osm` fires on the invader's own item
+    /// use. A host being invaded has no oracle at all, and this field does not give them one.
+    pub state_in_world: u32,
 }
 
 /// Every Seamless build this module knows how to drive: the latest one.
 ///
-/// [`super::resolve_ersc_abi`] requires EXACTLY ONE of these to match the loaded module and
+/// [`super::resolve_ersc_abi`] requires exactly one of these to match the loaded module and
 /// refuses otherwise -- zero matches means a build this repo has not measured, and two would mean
 /// the discriminator does not discriminate. With a single entry the "two matched" arm cannot fire;
 /// it stays because the entry after the next Seamless update has to earn its place, and a pin too
 /// weak to tell itself from its predecessor must fail loudly rather than silently win a race.
 ///
-/// The discriminator is the INVADE action rather than `show` for two independent reasons.
-/// `show` was byte-identical between v1.9.9 and v2.0.0 -- the same code at a different address, so
-/// it could not tell them apart at all. And this module HOOKS `show`, so once the detour is
+/// The discriminator is the invade action rather than `show` for two independent reasons.
+/// `show` survived the last update byte-identical at a different address, so it could not tell
+/// one build from the other at all. And this module hooks `show`, so once the detour is
 /// installed those bytes are our own; a fingerprint taken there measures our patch and concludes
 /// Seamless is a stranger, which is a bug this module has already had once.
+///
+/// Since 2026-09-08 this module hooks the invade action as well, which puts the discriminator on
+/// bytes that also get overwritten. What keeps it working is ordering plus the latch:
+/// `super::resolve_ersc_abi` caches its answer on the first success, and
+/// `super::install_invade_observer` calls it before it writes anything, so the fingerprint is
+/// always taken against Seamless's own prologue. Anything that installs that detour without
+/// resolving the build first breaks the discriminator, silently, in the direction of "Seamless is
+/// not loaded".
 pub const SUPPORTED: &[Abi] = &[Abi {
-    // NOT a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
+    // Not a literal. The runtime armed against v2.0.1 on 2026-09-02 while this field still read
     // "v2.0.0", so the log line announced the wrong Seamless build beside correctly re-pinned
     // addresses -- the exact second-copy-of-the-version-number that AGENTS.md forbids, and the
     // most misleading possible place for it, since this string is what a reader trusts to say
@@ -169,10 +201,12 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     show_rva: V201_SHOW_RVA,
     invade_action_rva: V201_INVADE_ACTION_RVA,
     cancel_action_rva: V201_CANCEL_ACTION_RVA,
+    leave_world_action_rva: V201_LEAVE_WORLD_ACTION_RVA,
     build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
     show_prologue: V201_SHOW_PROLOGUE,
     invade_prologue: V201_INVADE_PROLOGUE,
     cancel_prologue: V201_CANCEL_PROLOGUE,
+    leave_world_prologue: V201_LEAVE_WORLD_PROLOGUE,
     build_lobby_key_prologue: V201_BUILD_LOBBY_KEY_PROLOGUE,
     session_state_offset: V201_SESSION_STATE_OFFSET,
     session_guard_offset: V201_SESSION_GUARD_OFFSET,
@@ -180,60 +214,37 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     state_searching: 0x0e,
     state_cancelling: 0x23,
     state_offer_received: 0x13,
+    state_in_world: 0x16,
 }];
 
-// The addresses and field offsets are NAMED CONSTANTS rather than literals inside the table
+// The addresses and field offsets are named constants rather than literals inside the table
 // above, and that is not a style choice: `scripts/check-expression-constants.py` derives its
 // gated population from `const` declarations whose name carries `RVA`, and a value written as
 // a bare struct-literal field is invisible to it. Inlining these once already dropped six
-// names out of that population, which the coverage floor caught. They keep the version prefix
-// because two builds are described here and an unprefixed `SHOW_RVA` could only be one of
-// them.
+// names out of that population, which the coverage floor caught. They keep the version prefix so
+// that a re-pin lands as a new set of names beside the old ones for exactly one commit, rather
+// than as an in-place edit of numbers nobody diffed.
 
-/// A build this module once drove and no longer will.
-///
-/// Kept for ONE purpose: so that a user who has not updated Seamless is told exactly that,
-/// instead of being told their `ersc.dll` is unrecognised. The distinction is the whole value --
-/// "update Seamless Co-op" is an instruction someone can act on, "unrecognised build" reads as a
-/// bug in this mod and gets reported as one. Nothing in here is ever used to drive anything: a
-/// retired build carries only the fingerprint that identifies it.
-pub struct Retired {
-    /// Printed to the log verbatim.
-    pub version: &'static str,
-    /// Where [`Self::invade_prologue`] is expected, relative to the module base.
-    pub invade_action_rva: usize,
-    /// The same discriminator [`Abi::invade_prologue`] is, and measured the same way -- it occurs
-    /// exactly once in v1.9.9 and nowhere at all in v2.0.0, so recognising a retired build cannot
-    /// misfire on a supported one.
-    pub invade_prologue: &'static [u8],
-}
-
-/// Builds that are recognised only to be refused by name. See [`Retired`].
-///
-/// v1.9.9 is here rather than in [`SUPPORTED`] by product decision, not by measurement: this mod
-/// supports the latest Seamless Co-op only. The measurement happens to agree that the split costs
-/// nothing to a co-op player -- v2.0.0 changed the lobby-key salt, so v1.9.9 and v2.0.0 clients
-/// cannot see each other's sessions regardless of what this mod does.
-pub const RETIRED: &[Retired] = &[Retired {
-    version: "Seamless Co-op v1.9.9",
-    invade_action_rva: V199_INVADE_ACTION_RVA,
-    invade_prologue: V199_INVADE_PROLOGUE,
-}];
-
-/// Seamless v1.9.9, measured 2026-08-05. Only the invade action survives the retirement of that
-/// build: it is what [`RETIRED`] recognises it BY, and nothing here drives it any more.
-pub const V199_INVADE_ACTION_RVA: usize = 0x2_43e0;
-
-/// Seamless v2.0.0, measured 2026-09-02. See this module's docs for what identifies each one.
+/// Seamless v2.0.1, the supported build. See this module's docs for what identifies each one.
 pub const V201_SHOW_RVA: usize = 0x2_41a0;
 pub const V201_INVADE_ACTION_RVA: usize = 0x2_5850;
 pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
+/// `OPTIONSELECT_LEAVEWORLD` -- menu 3's only row, and the escape Seamless leaves open in states
+/// where its Cancel row is withdrawn.
+///
+/// Its hide predicate is `ersc+0x26ac0`, `hide = (state == 1)`, so the row is drawn in every state
+/// but idle -- including `0x16`, where the Cancel row's predicate at `ersc+0x26b40` hides it and a
+/// player is otherwise stranded. The action is `0x64` bytes and does the same thing cancel does:
+/// take the session mutex at `session+0x100`, check the recursion count, write `0x23` to
+/// `session+0x150`, unlock. Driving it is therefore driving a row the player could have clicked,
+/// which is the invariant the cancel-row refusal exists to protect.
+pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
 pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
 pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
 
 /// `LOBBY_KEY_HEX_LEN` lowercase hex characters: a SHA-256 digest, so 32 bytes rendered as 64
-/// characters. Unchanged across the update -- both builds load the same SHA-256 IV.
+/// characters. The digest width, so it survives an update; the SHA-256 IV has not moved.
 pub const LOBBY_KEY_HEX_LEN: usize = 64;
 /// MSVC `std::string`: `{ union { char buf[16]; char* ptr; }; size_t size; size_t capacity; }`.
 /// A capacity of 16 or more means the bytes are on the heap and the first field is a pointer --
@@ -242,11 +253,14 @@ pub const STD_STRING_SIZE_OFFSET: usize = 0x10;
 pub const STD_STRING_CAPACITY_OFFSET: usize = 0x18;
 pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 
-/// `OSM+0x58` is the session object. UNCHANGED in v2.0.0: all five of its option actions
-/// still open `mov rdi,[rcx+0x58]`, and `show`'s body is byte-identical, so nothing about the
-/// OSM layout moved.
+/// `OSM+0x58` is the session object, and it has survived every update so far: every option action
+/// that touches the session still opens `mov rdi,[rcx+0x58]`.
 ///
-/// A `.data` singleton holding OSM would have let this module hook NOTHING in Seamless. One
+/// "All five option actions" is what this line used to say. `ersc+0x2a1e0` registers about twenty
+/// actions across eleven menu groups; five of them use the mutex-and-guard idiom, and those five
+/// are the ones this module drives or recognises.
+///
+/// A `.data` singleton holding OSM would have let this module hook nothing in Seamless. One
 /// was looked for and not found: the only `.data` global that is loaded and then dereferenced
 /// at `+0x58` is `ersc+0x21b228`, and it is read at 121 sites, written by a pair of adjacent
 /// CRT-shaped setters, and non-zero in the file -- a locale/allocator global that the search
@@ -254,13 +268,109 @@ pub const STD_STRING_HEAP_CAPACITY: usize = 0x10;
 /// strings (`seamless buddy system`, source paths), so there is no constructor to trace back
 /// to a singleton either. Recorded here so the next reader does not repeat the hunt.
 pub const NEXT_OBJECT_OFFSET: usize = 0x58;
-/// OSM carries the ASCII tag `seamless` here. Measured live 2026-08-04 in v1.9.9, reported as
+/// OSM carries the ASCII tag `seamless` here. Measured live 2026-08-04, reported as
 /// a diagnostic and believed by nothing -- see `show_observer` for the day it was a gate.
 pub const OSM_TAG_OFFSET: usize = 0x68;
 pub const OSM_TAG: &[u8] = b"seamless";
-/// The value the guard field holds when the session is unusable. Unchanged in v2.0.0; every
-/// option action in both builds still compares against it.
+
+/// `OSM+0x50` -- Seamless's own message repository, the `{id -> text}` maps its locale file fills.
+///
+/// Read out of `ersc+0x25a50`, the plaintext function that announces `YKNX3_INFORMTOGGLEPVP`:
+/// `mov rcx,[rsi+0x50]; mov edx,<id>; lea r8,[rsp+0x40]; call 0x180025020`, with `rsi` holding
+/// OSM. `ersc+0x25020` is the formatter, `(repository, id, args)`, and it returns null for an id
+/// the maps do not hold -- `ersc+0x250d8` is a plain `xor edi,edi; ret`. Its caller tests the
+/// result at `ersc+0x25ac6` and jumps past the display call, so declining to format a message is
+/// Seamless's own way of not showing one.
+pub const MOD_MESSAGE_REPOSITORY_OFFSET: usize = 0x50;
+/// `OSM+0x88` -- the function pointer Seamless calls to put one of its own messages on screen.
+///
+/// Called as `(0, 0, MenuString*, 0)` at `ersc+0x25b15`. The `MenuString` is a stack local whose
+/// `+0x00` is the formatted wide text, `+0x08` the allocator fetched through
+/// [`MENU_STRING_ALLOCATOR_SEAM_OFFSET`], `+0x10` a sixteen-byte inline buffer, `+0x20` a length
+/// of zero and `+0x28` a capacity of seven -- the same shape the game's own
+/// `GetGR_System_Message` fills in and hands to `showPopupMenu`.
+///
+/// Whose function it is cannot be read out of the file. Seamless stores no absolute game address
+/// in its image and resolves these seams by pattern scan at init, which is exactly why the
+/// siblings at `+0xa8`, `+0xb0` and `+0xb8` had to be read from a live game -- see `menu_seams`,
+/// which now reads this one too.
+pub const MESSAGE_DISPLAY_SEAM_OFFSET: usize = 0x88;
+/// `OSM+0xc0` -- a no-argument getter called immediately before the display, whose result goes in
+/// the `MenuString`'s allocator field. An allocator getter, then, not a menu function.
+pub const MENU_STRING_ALLOCATOR_SEAM_OFFSET: usize = 0xc0;
+/// `YKNX3_BREAKINFAILED`: the notice a search that found nothing ends on, which the player reads
+/// as "Failed to invade session:" followed by "No sessions found".
+///
+/// Decoded from Seamless's own registration table at `ersc+0x47400..0x49b00`, which builds one
+/// `{u32 id, std::string key}` record per locale key. The record at `ersc+0x48b82` carries this
+/// id, and the key beside it is the nineteen bytes at `ersc+0x1e1fe6`, `YKNX3_BREAKINFAILED`. The
+/// substituted reason is the literal at `ersc+0x1e13e0`.
+///
+/// The wording is not in the module at all -- it comes from `SeamlessCoop/locale/english.json`,
+/// which the player owns and may edit -- so this id is the only stable handle on the message, and
+/// matching its text would be matching a file that is not ours.
+pub const YKNX3_BREAKIN_FAILED_MESSAGE_ID: u32 = 0x6fff_43d9;
+/// The value the guard field holds when the session is unusable -- or so this constant claimed
+/// until 2026-09-08. It is `INT_MAX`, and the comparison against it is MSVC's own
+/// `_Verify_ownership_levels`: see [`Abi::session_guard_offset`] for what the field actually is.
+///
+/// Kept because the actions do compare against it, and mirroring a callee's own bail condition is
+/// worth one read. It is not a safety net: reaching it needs 2^31 nested locks, so on a healthy
+/// session this never fires, and its never firing is not evidence that anything works. What the
+/// check actually catches is a session pointer that does not read -- see `session_guard_refuses`,
+/// which reports the two conditions separately rather than as one `bool`.
 pub const SESSION_GUARD_POISON: u32 = 0x7fff_ffff;
 /// The highest plausible session state, used to reject a pointer that is not a session at all.
-/// Comfortably above the largest code either build writes (`0x24`).
+/// Comfortably above the largest code the build writes (`0x24`).
 pub const SESSION_STATE_MAX: u32 = 0xff;
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        SESSION_GUARD_POISON, V201_CANCEL_PROLOGUE, V201_SESSION_GUARD_OFFSET,
+        V201_SESSION_STATE_OFFSET,
+    };
+
+    /// Find `pattern` in `haystack` and answer the little-endian dword at `at` past its start.
+    fn dword_after(haystack: &[u8], pattern: &[u8], at: usize) -> Option<u32> {
+        haystack
+            .windows(pattern.len())
+            .position(|w| w == pattern)
+            .map(|index| {
+                let start = index + at;
+                u32::from_le_bytes([
+                    haystack[start],
+                    haystack[start + 1],
+                    haystack[start + 2],
+                    haystack[start + 3],
+                ])
+            })
+    }
+
+    /// The two offsets this module drives Seamless through are the ones the cancel action's own
+    /// pinned bytes address, and the sentinel is the one it compares.
+    ///
+    /// # Why this is a test and not a comment
+    ///
+    /// `V201_SESSION_GUARD_OFFSET`, `V201_SESSION_STATE_OFFSET` and `SESSION_GUARD_POISON` are
+    /// three numbers typed by hand beside a pin generated from the shipped `ersc.dll`. Nothing
+    /// connected them: a re-pin at the next Seamless build regenerates the bytes and leaves the
+    /// three constants describing the previous one, and the failure is silent -- an action driven
+    /// against the wrong field writes a state nobody reads.
+    ///
+    /// The pin carries `cmp dword [rdi+<guard>], 0x7fffffff` as `81 bf <off32> ff ff ff 7f` and
+    /// `mov dword [rdi+<state>], 0x23` as `c7 87 <off32> 23 00 00 00`, so both are recoverable
+    /// from the bytes themselves.
+    #[test]
+    fn the_guard_and_state_offsets_are_the_ones_the_cancel_action_addresses() {
+        let compare = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 2)
+            .expect("the pin carries the guard comparison");
+        assert_eq!(compare as usize, V201_SESSION_GUARD_OFFSET);
+        let sentinel = dword_after(V201_CANCEL_PROLOGUE, &[0x81, 0xbf], 6)
+            .expect("the pin carries the sentinel");
+        assert_eq!(sentinel, SESSION_GUARD_POISON);
+        let write = dword_after(V201_CANCEL_PROLOGUE, &[0xc7, 0x87], 2)
+            .expect("the pin carries the state write");
+        assert_eq!(write as usize, V201_SESSION_STATE_OFFSET);
+    }
+}

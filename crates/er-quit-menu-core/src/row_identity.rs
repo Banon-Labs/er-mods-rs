@@ -1,12 +1,12 @@
-//! POSITIVE row identity for the System>Quit dialog, read live from game memory.
+//! Positive row identity for the System>Quit dialog, read live from game memory.
 //!
 //! The pure decision core (`QuitRow`, `QuitRowFacts`, `resolve_quit_row`, and the gate on the
 //! irreversible `ExitProcess(0)`) already lived in [`crate::rows`]; this is the memory-capture and
 //! telemetry half that feeds it, moved out of
 //! `experiments/startup_hooks/quit_menu/system_quit_row_identity.rs`.
 //!
-//! Two reads stay on the product side and arrive as values: the dialog's slot CURSOR and its slot
-//! BOUND, whose offsets are `er_title_flow`'s (`DIALOG_SLOT_CURSOR_B0C_OFFSET` /
+//! Two reads stay on the product side and arrive as values: the dialog's slot cursor and its slot
+//! bound, whose offsets are `er_title_flow`'s (`DIALOG_SLOT_CURSOR_B0C_OFFSET` /
 //! `DIALOG_SLOT_BOUND_B08_OFFSET`, derived from that crate's `ProfileLoadDialogLayout`). Taking a
 //! dependency on the whole title-flow crate for two struct offsets would be a far heavier edge
 //! than handing over the two integers the caller has already read.
@@ -26,12 +26,13 @@ use er_telemetry_core::counters::{
     SYSTEM_QUIT_QUIT_REFUSED_AMBIGUOUS_ROW_COUNT, SYSTEM_QUIT_ROW_AMBIGUOUS_COUNT,
     SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1, SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1,
     SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1, SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1,
-    SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1, SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1,
-    SYSTEM_QUIT_ROW_LAST_AMBIGUITY, SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND,
-    SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1, SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR,
-    SYSTEM_QUIT_ROW_LAST_INPUT_KIND, SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW,
-    SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT, SYSTEM_QUIT_ROW_RESOLVE_COUNT,
-    SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT, SYSTEM_QUIT_ROW_TABLE_DIALOG,
+    SYSTEM_QUIT_ROW_INDEX_RETURN_DESKTOP_PLUS1, SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1,
+    SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_PLUS1, SYSTEM_QUIT_ROW_LAST_AMBIGUITY,
+    SYSTEM_QUIT_ROW_LAST_CURSOR_LABEL_KIND, SYSTEM_QUIT_ROW_LAST_CURSOR_PLUS1,
+    SYSTEM_QUIT_ROW_LAST_DISCRIMINATOR, SYSTEM_QUIT_ROW_LAST_INPUT_KIND,
+    SYSTEM_QUIT_ROW_LAST_RESOLVED_ROW, SYSTEM_QUIT_ROW_REFUSED_DISAGREEMENT_COUNT,
+    SYSTEM_QUIT_ROW_RESOLVE_COUNT, SYSTEM_QUIT_ROW_RESOLVED_BY_CURSOR_ROW_COUNT,
+    SYSTEM_QUIT_ROW_TABLE_DIALOG, SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT,
 };
 
 use crate::host::append_autoload_debug;
@@ -75,6 +76,9 @@ pub fn system_quit_row_table_record_index(row: QuitRow, index: usize) {
         QuitRow::GenerateBuildLink => {
             SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.store(plus1, Ordering::SeqCst)
         }
+        QuitRow::SaveGameAs => {
+            SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1.store(plus1, Ordering::SeqCst)
+        }
     }
 }
 
@@ -94,6 +98,7 @@ pub fn system_quit_row_table_index(row: QuitRow) -> i32 {
         QuitRow::GenerateBuildLink => {
             SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1.load(Ordering::SeqCst)
         }
+        QuitRow::SaveGameAs => SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1.load(Ordering::SeqCst),
     };
     quit_row_index_from_plus1(plus1)
 }
@@ -119,10 +124,13 @@ pub fn system_quit_row_controller(row: QuitRow) -> usize {
         QuitRow::GenerateBuildLink => {
             SYSTEM_QUIT_GENERATE_BUILD_LINK_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
         }
+        QuitRow::SaveGameAs => {
+            SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT.load(Ordering::SeqCst)
+        }
     }
 }
 
-/// Is this dispatched controller one of the patched Quit tab's rows? A pure SCOPE test: the
+/// Is this dispatched controller one of the patched Quit tab's rows? A pure scope test: the
 /// activation hook shares its `_Func_impl` thunk vtable and `Activate` slot with other dialogs, so it
 /// must forward foreign controllers untouched.
 ///
@@ -136,9 +144,30 @@ pub fn system_quit_controller_is_a_quit_row(controller: usize) -> bool {
             .any(|row| system_quit_row_controller(row) == controller)
 }
 
+/// Which of the two rows that read `Save Game` sits at `index`.
+///
+/// The words belong to a flow, not to a row: the same
+/// [`SYSTEM_QUIT_SAVE_GAME_LABEL_W`](crate::row_text::SYSTEM_QUIT_SAVE_GAME_LABEL_W) bytes are what
+/// the `MsgRepository::GetAndFormat` substitution puts on the native first row in a load that takes
+/// that row over, and what the cloned [`QuitRow::SaveGameAs`] row carries in a load that adds a row
+/// instead. So the label pointer names a flow and the captured index names the row, and only
+/// together do they name both.
+///
+/// This is the one place on this tab where the live label defers to the captured table, and it is
+/// bounded to these two rows: an index the table has not given to the cloned row answers
+/// [`QuitRow::SaveGame`] exactly as before, which then has to agree with the table in
+/// `cursor_candidate` or the activation is refused.
+fn save_game_label_row(index: i32) -> QuitRow {
+    if index >= 0 && system_quit_row_table_index(QuitRow::SaveGameAs) == index {
+        QuitRow::SaveGameAs
+    } else {
+        QuitRow::SaveGame
+    }
+}
+
 /// Read the label of one property row, live from the dialog. `EditProperty.label`
 /// (`row + 0x8`) is a `CS::MenuHelpLabelComponent` whose first field is the `MenuString`'s raw
-/// UTF-16 pointer, so the three cloned rows match this DLL's own static arrays by POINTER, and
+/// UTF-16 pointer, so the three cloned rows match this DLL's own static arrays by pointer, and
 /// every row also matches by text.
 ///
 /// # Safety
@@ -177,20 +206,20 @@ pub unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Option<Quit
         return Some(QuitRowLabel::Ours(QuitRow::LoadProfile));
     }
     if label_ptr == SYSTEM_QUIT_SAVE_GAME_LABEL_W.as_ptr() as usize {
-        return Some(QuitRowLabel::Ours(QuitRow::SaveGame));
+        return Some(QuitRowLabel::Ours(save_game_label_row(index)));
     }
     // Confirm the pointer is a readable UTF-16 string before classifying it as foreign, so an
     // unmapped/garbage pointer reports `None` (ambiguous) rather than "native label".
     unsafe { safe_read_u16(label_ptr) }?;
-    // LONGEST LABEL FIRST, AND SINCE 2026-07-31 THAT IS LOAD-BEARING RATHER THAN TIDY.
-    // "Load Character from File" STARTS WITH "Load Character", so a prefix test in the other order
+    // Longest label first, and since 2026-07-31 that is load-bearing rather than TIDY.
+    // "Load Character from File" starts with "Load Character", so a prefix test in the other order
     // classifies the file-browse row as the character row -- and this function's answer decides
     // which row a click ran. The old pair ("Load Save Profiles" / "Load Profile") did not overlap,
     // so the ordering was free then and is not now. Any future label must be checked against this.
     //
     // "Load Build from URL" shares only the word "Load" with the other two, and "Generate Build
     // Link" shares no leading word with anything -- so neither is part of that prefix chain. They
-    // are still tested inside this longest-first list rather than beside it, so a FIFTH label can be
+    // are still tested inside this longest-first list rather than beside it, so a fifth label can be
     // inserted by length alone without re-deriving the rule.
     if wide_ptr_starts_with_ascii(label_ptr, b"Load Character from File") {
         return Some(QuitRowLabel::Ours(QuitRow::LoadSaveProfiles));
@@ -205,7 +234,7 @@ pub unsafe fn system_quit_row_label_at(dialog: usize, index: i32) -> Option<Quit
         return Some(QuitRowLabel::Ours(QuitRow::LoadBuildFromUrl));
     }
     if wide_ptr_starts_with_ascii(label_ptr, b"Save Game") {
-        return Some(QuitRowLabel::Ours(QuitRow::SaveGame));
+        return Some(QuitRowLabel::Ours(save_game_label_row(index)));
     }
     Some(QuitRowLabel::Foreign)
 }
@@ -285,7 +314,7 @@ pub fn system_quit_row_record_resolution(facts: &QuitRowFacts, verdict: QuitRowV
     }
 }
 
-/// The single gate for the irreversible instant `ExitProcess(0)`. Returns `true` only on POSITIVE
+/// The single gate for the irreversible instant `ExitProcess(0)`. Returns `true` only on positive
 /// evidence that the activated row is the Return-to-Desktop row; every refusal is counted so a run
 /// shows the gate working instead of merely not crashing. Takes an already-resolved verdict so one
 /// activation produces exactly one resolution in the oracles.
@@ -329,6 +358,7 @@ pub unsafe fn system_quit_resolve_row_now(
         load_save_profiles_index: system_quit_row_table_index(QuitRow::LoadSaveProfiles),
         load_build_from_url_index: system_quit_row_table_index(QuitRow::LoadBuildFromUrl),
         generate_build_link_index: system_quit_row_table_index(QuitRow::GenerateBuildLink),
+        save_game_as_index: system_quit_row_table_index(QuitRow::SaveGameAs),
     };
     let facts = QuitRowFacts::from_table(
         table,

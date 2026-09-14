@@ -1,6 +1,6 @@
 # Thin standalone ME3-loadable shell for the er-loading-portrait-core feature crate
 # (portrait crate split): own DllMain, VEH crash logger, own log file, individually
-# shippable. Modeled on er-loading-bar.
+# shippable.
 #
 # WARNING: NEVER load er_loading_portrait.dll alongside er_quickload.dll in one
 # me3 profile. Both install a D3D12 Present detour and their own MinHook instance;

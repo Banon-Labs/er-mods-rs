@@ -5,10 +5,79 @@ edition = "2024"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+# `rlib` beside the DLL so a feature-selected subset of this crate can be linked into a smaller
+# shell. `er-quickload` is a bespoke bundle: it began as "autoload my character at boot" and
+# accumulated the quit rows, the save picker, the loading cover, the portrait and the tracing. The
+# installer this repo is heading for hands a user the features they chose, which means one
+# implementation compiled several ways -- not one fork per shell, which would put two copies of the
+# row cloner and the hook union in one workspace.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# The CLONED rows come off the default set. A plain build is the autoload, the save picker the
+# autoload needs, the loading cover, the portraits, the menu trace and the Save Game row -- the
+# System>Quit tab otherwise keeps exactly the rows the game ships. `quit-rows` is still written,
+# still compiled by check.sh, and still one word away: name it here, or pass --features quit-rows,
+# and the three cloned rows and the switch behind them come back.
+#
+# `save-game-row` is in the defaults because without it the redirect has no way back out. The DLL
+# stages a private copy of the configured save and the game writes only there, and the next boot
+# overwrites that copy with the source's bytes again (`stage_save_source_into_root`) -- so every
+# write the game made is discarded, which is what kept returning the Terms of Service prompt on
+# run after run. This row is the mechanism that writes the played state to a destination the
+# player chooses, and it has to be present for that to be possible at all.
+default = [
+    "autoload",
+    "save-picker",
+    "quit-rows",
+    "loading-cover",
+    "portrait",
+    "menu-trace",
+]
+# Reach a clean title and deserialise a slot: the own-stepper, the Continue driver, the fullread.
+# The thing the crate is named after, and since 2026-09-13 a feature that bites: the safe-input
+# confirm driver and the eight constants it reads compile only when it is on.
+#
+# It implies `menu-trace` because the driver's final confirm pulse is gated on state only the trace
+# hooks write -- `is_post_map_continuation_gate` compares the live snapshot's hook rva and state
+# qword, and with the hooks compiled out that snapshot never leaves its unseen value, so the last
+# pulse would never fire. The dependency is real, not an import accident.
+autoload = ["menu-trace"]
+# The cloned System>Quit rows and the flows behind them. It implies `save-game-row`, because a tab
+# carrying the cloned rows also carries the replaced Save Game row, and the row router reads one
+# action table for both.
+quit-rows = ["save-game-row"]
+# The Save Game row replacement, alone: the native first Quit row is renamed `Save Game`, its help
+# and confirm text follow, and the press opens the destination browser `er-quit-menu-core` draws for
+# Load Character from File instead of saving and returning to the title. Off by default, so a plain
+# build leaves that row exactly as the game ships it -- label and action together, which is the pair
+# that came apart on run br-20260912-185308-639d when the text moved without the flow.
+save-game-row = []
+# The in-game save-file browser the Load Character from File row opens.
+save-picker = []
+# The loading-screen cover and the title visuals.
+loading-cover = []
+# The character portraits on the loading screen and the Quit panel.
+portrait = []
+# Menu construction and native-result tracing.
+#
+# It was called diagnostics-only when it was drawn, and that is not what it holds, so no
+# composition can currently leave it out. `experiments/trace/menu_trace_hooks.rs` also carries four
+# things tracing does not own: `b80_mount_trace_summary`, read by the crash log and by the
+# System>Quit repro guard, and the second-load stall fix -- `blockres_stalecap_fix_enabled`,
+# `map_mount_guard_flip_tick` and `run_ebl_mount_census`, all three named as host-seam fields the
+# boot bootstrap fills in unconditionally. Turning the feature off does not remove a diagnostic, it
+# fails the build with `E0425`. Moving those four into a module of their own is what would make it
+# separable; until then every checked composition names it, `quit-rows` included.
+menu-trace = []
 
 [dependencies]
 # Shared cross-platform telemetry counters used by host checks and the Windows DLL.
+# The crash record's own format, read back. `crashlog/veh_exit_hooks.rs` decides whether the
+# newest `er-crash-latest.txt` describes THIS run, and the field spellings it needs -- `fatal=`,
+# `record_index=`, `utc=` -- belong to the crate that writes them. Depending on the writer for the
+# parse keeps one owner of the format and puts the decision somewhere the host can test it.
+er-crash-logging-core = { path = "../er-crash-logging-core" }
 er-telemetry-core = { path = "../er-telemetry-core" }
 er-title-flow = { path = "../er-title-flow" }
 

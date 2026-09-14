@@ -50,8 +50,6 @@ pub(crate) const PE_SECTION_SCAN_START: usize = 0;
 /// Current-process pseudo-handle (-1) for FlushInstructionCache, + whole-process flush size.
 pub(crate) const ER_CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 pub(crate) const FLUSH_WHOLE_PROCESS_SIZE: usize = 0;
-/// Zero fill for synthetic qword scratch buffers.
-pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
 /// default mode, deliberately crashes via a null write at 0x141eb9999). Hooking
 /// it captures the failing assertion's expr/message/file (its rcx/rdx/r8 are
@@ -70,7 +68,7 @@ pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_INSTANCE_READY: &str = "game_task_ins
 pub(crate) const BOOTSTRAP_EVENT_GAME_TASK_RECURRING_REGISTERED: &str =
     "game_task_recurring_registered";
 pub(crate) const BOOTSTRAP_EVENT_TELEMETRY_WRITE: &str = "telemetry_write";
-/// Boot missing-save picker CANCEL -> quit. Recorded here, and not only in the telemetry JSON,
+/// Boot missing-save picker cancel -> quit. Recorded here, and not only in the telemetry JSON,
 /// because this channel is append-only, lock-free and reachable from any thread: it is the one
 /// record that survives a game task frozen while holding the state mutex, which is exactly the
 /// condition under which the cancel path runs.
@@ -86,20 +84,27 @@ pub(crate) const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable
 pub(crate) const INITIAL_GAME_TASK_TICKS: u64 = 0;
 pub(crate) const GAME_TASK_TICK_INCREMENT: u64 = 1;
 pub(crate) const TASK_INSTANCE_WAIT_LOG_INTERVAL: u64 = 4096;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_MAX_CONFIRM_PULSES: u32 = 16;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DEFAULT_INTERVAL_TICKS: u64 = 30;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_LAST_PULSE_TICK: u64 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_HOOK_FRAMES: usize = 4;
 pub(crate) const SAFE_INPUT_KEY_UP_STATE: i16 = 0;
 pub(crate) const VK_RETURN_KEY: usize = 0x0d;
 pub(crate) const VK_SPACE_KEY: usize = 0x20;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYDOWN_LPARAM: isize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYUP_LPARAM: isize = 0xc0000001u32 as isize;
 pub(crate) const DIK_RETURN: usize = 0x1c;
 pub(crate) const DIK_SPACE: usize = 0x39;
 pub(crate) const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 pub(crate) const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 pub(crate) const HRESULT_SUCCESS_FLOOR: i32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // The TitleStep ctor (0x140b0b1c0) stores this derived vtable to owner+0
 // (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
@@ -120,6 +125,7 @@ pub(crate) use er_title_flow::TITLE_OWNER_STATE_OFFSET;
 pub(crate) use er_title_flow::TITLE_OWNER_STATE_COMMITTED_OFFSET;
 pub(crate) use er_title_flow::TraceSampleLimit;
 
+#[cfg(feature = "quit-rows")]
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_COUNTDOWN_READY;
 pub(crate) use er_title_flow::MenuTraceRva;
 
@@ -139,9 +145,9 @@ pub(crate) const TRACE_UNKNOWN_TABLE_RVA: u32 = 0;
 /// of the body; it is a diagnostic attribution window, not a product gate.
 pub(crate) const RESULT_ACTION_BUILDER_TRACE_SIZE: usize = 0x360;
 
-/// The result-action-builder attribution band as RVAs on the RUNNING build.
+/// The result-action-builder attribution band as RVAs on the running build.
 ///
-/// The band's endpoints are both offsets from ONE function entry, and that entry is in the address
+/// The band's endpoints are both offsets from one function entry, and that entry is in the address
 /// map, so unlike a free-floating `.text` window this one translates exactly.
 pub(crate) fn result_action_builder_trace_band() -> Option<std::ops::Range<usize>> {
     er_game_base::game_build::resolve_call_site_band(
@@ -155,14 +161,14 @@ pub(crate) fn result_action_builder_trace_band() -> Option<std::ops::Range<usize
 /// The function containing the disabled-`Continue` idle-insert call site, `FUN_140764290`
 /// (`.pdata` extent `0x764290..0x7643bc`).
 ///
-/// # 1.17 is `0x7650e0`, but the MAP does not carry it yet
+/// # 1.17 is `0x7650e0`, but the map does not carry it yet
 ///
 /// `0x76432c` was a bare return address compared against a live stack frame -- unmappable by
-/// construction, and dead in silence on any build that moved. Declaring the containing FUNCTION
+/// construction, and dead in silence on any build that moved. Declaring the containing function
 /// puts it in front of `scripts/select-needed-1170-rows.py`, which is the only way it can ever
 /// acquire a 1.17 pair.
 ///
-/// The whole-image `.pdata` signature map does NOT pair `0x764290`, and the reason is visible in
+/// The whole-image `.pdata` signature map does not pair `0x764290`, and the reason is visible in
 /// the neighbourhood: `0x764290`, `0x7643c0` and `0x7644f0` are three consecutive `0x12c`-byte
 /// functions with the same shape -- template instantiations the masked-signature matcher cannot
 /// tell apart, so it declines all three rather than guess.
@@ -187,7 +193,7 @@ pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_START_OFFSET: isize = 0x20;
 /// End of that window: the function's own end (`0x7643bc`), rounded to the next entry.
 pub(crate) const MENU_CONTINUE_IDLE_INSERT_BAND_END_OFFSET: isize = 0x130;
 
-/// The exact idle-insert call site as an RVA on the RUNNING build, or `None` when unmapped.
+/// The exact idle-insert call site as an RVA on the running build, or `None` when unmapped.
 pub(crate) fn menu_continue_idle_insert_call_site() -> Option<usize> {
     er_game_base::game_build::resolve_call_site_rva(
         MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA,
@@ -196,7 +202,7 @@ pub(crate) fn menu_continue_idle_insert_call_site() -> Option<usize> {
     )
 }
 
-/// The looser idle-insert caller window as RVAs on the RUNNING build, or `None` when unmapped.
+/// The looser idle-insert caller window as RVAs on the running build, or `None` when unmapped.
 pub(crate) fn menu_continue_idle_insert_caller_band() -> Option<std::ops::Range<usize>> {
     er_game_base::game_build::resolve_call_site_band(
         MENU_CONTINUE_IDLE_INSERT_CALLER_FN_RVA,
@@ -221,17 +227,23 @@ pub(crate) const MENU_TASK_STATE_DELAY_OFFSET: usize =
     core::mem::offset_of!(MenuTaskStateLayout, delay_bits);
 pub(crate) const TASK_ENQUEUE_TRACE_LIMIT: usize = 256;
 pub(crate) const NO_SAFE_INPUT_CONFIRM_FRAMES: usize = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_FRAME_DECREMENT: usize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NO_CONFIRM_PULSES: u32 = 0;
 pub(crate) const SAFE_INPUT_FIRST_PULSE_INDEX: u32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NEXT_PULSE_OFFSET: u32 = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT: u32 = 5;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
 pub(crate) const WINDOW_PID_UNSET: u32 = 0;
 pub(crate) const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
 pub(crate) const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
 pub(crate) const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
 pub(crate) use er_title_flow::MENU_TRACE_UNSEEN_SEQ;
+#[cfg(feature = "autoload")]
 pub(crate) const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
 pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
@@ -241,20 +253,20 @@ pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
 // ── Title-animation speedup lever (pab_dismiss -> menu_open) ─────────────────────────────────
 // The title/menu transition is a Scaleform/GFx animation advanced by the FD4 frame-delta f32 the
 // STEP_MenuJobWait tick (0x140b0d400) reads from its task_data+0x08 and forwards to
-// CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count CHECKED
-// (current==total), NOT time-gated, so SCALING this delta makes the animation reach its end frame
+// CS::TitleTopDialog::update. FadeIn->Loop / TextFadeOut completion is frame-count checked
+// (current==total), not time-gated, so scaling this delta makes the animation reach its end frame
 // in fewer wall-clock frames -- every downstream predicate (Scaleform tick, completion compare,
 // (flags&0x8f)>1 settle gate) is satisfied naturally; nothing is bypassed and the load does not
 // desync. bd autoload-menu-speed-lever-framedelta-2026-06-22.
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.
 pub(crate) const TITLE_ANIM_SPEEDUP_MAX: f32 = 16.0;
-/// DEFAULT-ON for real autoload runs (no opt-in). Any value > 1.0 ARMS the FadeIn skip; the magnitude
+/// Default-on for real autoload runs (no opt-in). Any value > 1.0 arms the FadeIn skip; the magnitude
 /// no longer scales anything (the dt-scale and frame-burst levers were both runtime-falsified -- bd
 /// title-anim-framedelta-lever-FALSIFIED-runtime-2026-06-24 + pab-to-menuopen-real-breakdown-build-not-
 /// anim-2026-06-24 -- the FadeIn is wall-clock/present-bound, so we skip it at the completion predicate
 /// instead). Kept as an f32 toggle so the existing env/file override (set to 1.0 = off) still works.
 pub(crate) const TITLE_ANIM_SPEEDUP_DEFAULT: f32 = 4.0;
-/// PART-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
+/// Part-A title-cover masquerade: `STEP_BeginTitle`'s only native visual side effect is wrapper
 /// 0x14081f9f0 building the `05_000_Title` MenuWindowJob through factory 0x1407acb00. Suppressing
 /// this wrapper hides the native press-any-button/title Scaleform while leaving TitleStep state,
 /// FixOrderJobSequence, native Continue/save-load state, and STEP_PlayGame untouched. It must never
@@ -264,11 +276,11 @@ pub(crate) const TITLE_NATIVE_MENU_VISUAL_TITLE_INFORMATION_RVA: usize = 0x81f8d
 /// The factory is `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA`, and is spelled as that constant rather than
 /// as a second literal.
 ///
-/// THIS WAS 0x7acbf0 UNTIL 2026-08-30, WHICH IS MID-INSTRUCTION. `0xf0` into `FUN_1407acb00` lands
+/// This was 0x7acbf0 until 2026-08-30, which is mid-instruction. `0xf0` into `FUN_1407acb00` lands
 /// on the third byte of the `mov %rbx,0x38(%rsp)` at 0x1407acbee -- not a function entry, not an
 /// instruction boundary, not an address anything may call or patch. The comment that used to sit
 /// here named the cause in passing: "Ghidra dump addresses are +0xf0". They are not. The 1.16.2
-/// dump, `eldenring-deobf.bin` and live memory all share one address space and the shift is ZERO
+/// dump, `eldenring-deobf.bin` and live memory all share one address space and the shift is zero
 /// (AGENTS.md, "SUPERSEDED FOR 1.16.2"), so subtracting a shift that does not exist moved a
 /// correct address 0xf0 bytes into the middle of its own function.
 ///
@@ -333,7 +345,7 @@ pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET: usize =
 ///
 /// # Why it stopped being the single RVA `0x744e02`
 ///
-/// It is a RETURN ADDRESS compared against a live stack frame. A return address is mid-function,
+/// It is a return address compared against a live stack frame. A return address is mid-function,
 /// so it can never be in the 1.16.2 -> 1.17 map (keyed on `.pdata` function starts), and on 1.17
 /// the comparison in `title_gfx_value_set_visible_hook` simply never matched: no hook refused, no
 /// address resolved, nothing logged, and the title FadeIn suppression was dead in silence.
@@ -344,7 +356,7 @@ pub(crate) const TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RUN_CALL_OFFSET: usize =
 /// (`0x733340 -> 0x734190`).
 pub(crate) const TITLE_GFX_VISIBLE_TITLE_FADEIN_CALL_OFFSET: usize = 0x32;
 
-/// The GFx-SetVisible call site inside the title FadeIn helper, as an RVA on the RUNNING build.
+/// The GFx-SetVisible call site inside the title FadeIn helper, as an RVA on the running build.
 pub(crate) fn title_gfx_visible_title_fadein_caller_rva() -> Option<usize> {
     er_game_base::game_build::resolve_call_site_rva(
         TITLE_NATIVE_MENU_VISUAL_WINDOW_FADEIN_RVA,
@@ -353,7 +365,7 @@ pub(crate) fn title_gfx_visible_title_fadein_caller_rva() -> Option<usize> {
     )
 }
 
-/// The FadeIn-helper call site inside `MenuWindowJob::Run`, as an RVA on the RUNNING build.
+/// The FadeIn-helper call site inside `MenuWindowJob::Run`, as an RVA on the running build.
 pub(crate) fn title_native_menu_visual_window_fadein_run_caller_rva() -> Option<usize> {
     er_game_base::game_build::resolve_call_site_rva(
         MENU_WINDOW_JOB_RUN_RVA,
@@ -366,24 +378,26 @@ pub(crate) fn title_native_menu_visual_window_fadein_run_caller_rva() -> Option<
 /// underlying Scaleform object identity is still unknown.
 pub(crate) const TITLE_05_000_FADEIN_FLASH_VISIBLE_ORDINAL: usize = 2;
 pub(crate) const CS_MENU_MAN_GLOBAL_RVA: usize = er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
-/// OptionSetting tab-select VISIBILITY pass `FUN_14093b850` (deobf 0x93b760):
+/// OptionSetting tab-select visibility pass `FUN_14093b850` (deobf 0x93b760):
 /// `fn(CompositeOptionSettingDialog* composite, int tabIndex, u8* r8, u8* r9)`. It sets the current
 /// pane (`composite+0xb8 = cache[tabIndex]`, building via the switch dispatch only if the cache slot is
 /// null), then iterates the 10 cached pane dialogs at `composite+0x68` and calls `SetVisible(dialog+0x1200,
-/// current==dialog)` on each -- showing ONLY the active tab's pane, hiding the rest. This is the game's
+/// current==dialog)` on each -- showing only the active tab's pane, hiding the rest. This is the game's
 /// own per-tab visibility application. Re-invoking it on restore re-shows the active OptionSetting pane
 /// that our hide/restore left with DisplayInfo.Visible=0 (the blank Game Options pane).
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const OPTIONSETTING_TAB_SELECT_VISIBILITY_RVA: usize = 0x93b760;
-/// OptionSettingTopDialog (menu_id 0x25) -> embedded CS::CompositeOptionSettingDialog.
-pub(crate) const OPTIONSETTING_COMPOSITE_OFFSET: usize = 0x1768;
-/// Composite -> current pane dialog ptr (`+0xb8`) and the 10-entry per-tab pane-dialog cache (`+0x68`).
-pub(crate) const OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET: usize = 0xb8;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET: usize = 0x68;
-pub(crate) const OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT: usize = 10;
-/// OptionSetting/OptionSetting_Trial window menu_id (indexes CSMenuMan flag byte; gates the pane-reapply).
-pub(crate) const OPTIONSETTING_MENU_ID: u16 = 0x25;
-pub(crate) const TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK: u8 = 0x3;
+// The OptionSetting composite layout now lives in `er-title-flow`, so the standalone quit-menu
+// shells can read the same offsets the product does rather than keeping a second copy.
+// The three composite offsets below are walked only by the rows' OptionSetting pane
+// hide/restore; the visible-flags mask is read by the title-visual suppression, which ships
+// either way. One import for each lifetime rather than a gate inside a brace group.
+#[cfg(feature = "quit-rows")]
+pub(crate) use er_title_flow::{
+    OPTIONSETTING_COMPOSITE_CURRENT_PANE_OFFSET, OPTIONSETTING_COMPOSITE_OFFSET,
+    OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT,
+};
+pub(crate) use er_title_flow::TITLE_NATIVE_MENU_VISUAL_VISIBLE_FLAGS_MASK;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_NOT_INSTALLED: usize = 0;
 pub(crate) const TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_INSTALLED_YES: usize = 1;
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_SUPPRESS_ORIG: AtomicUsize =
@@ -400,18 +414,18 @@ pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_FLAGS_AFTER: AtomicUsize 
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_NATIVE_MENU_VISUAL_RENDER_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
-/// PART-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
+/// Part-B custom cover target: `05_010_ProfileSelect` is an existing Scaleform surface with
 /// `MENU_DummyProfileFace_01..10` symbols that the profile renderer maps to
 /// `SYSTEX_Menu_Profile00..09` (via CSMenuProfModelRend / active-screen render targets). The wrapper
 /// below is the deobf/live address for the native `05_010_ProfileSelect` MenuWindowJob builder
-/// (NOT a shift: 0x14081f7e0 and 0x14081f6f0 are two DIFFERENT functions. 1.16.2 shift is 0; 0x14081f7e0 (size 235) builds L"05_000_Title", 0x14081f6f0 (size 239) builds L"05_010_ProfileSelect". The old parenthetical came from dump-deobf-shift.py against the 1.16.1 dump and would send you to the Title-movie builder. Corrected 2026-08-01.). We use it as the initial custom cover surface
+/// (not a shift: 0x14081f7e0 and 0x14081f6f0 are two different functions. 1.16.2 shift is 0; 0x14081f7e0 (size 235) builds L"05_000_Title", 0x14081f6f0 (size 239) builds L"05_010_ProfileSelect". The old parenthetical came from dump-deobf-shift.py against the 1.16.1 dump and would send you to the Title-movie builder. Corrected 2026-08-01.). We use it as the initial custom cover surface
 /// instead of trying to remap `05_001_Title_Logo`, which has no dummy-profile symbol.
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_WRAPPER_RVA: usize = PROFILE_SELECT_WRAPPER_RVA as usize;
 pub(crate) const TITLE_CUSTOM_COVER_PROFILE_SELECT_NAME: &str = "05_010_ProfileSelect";
 /// Native full-screen black Scaleform/MenuWindowJob surface. Ghidra dump 0x140793c10 ->
 /// deobf/live 0x140793b20 (content-unique) builds `01_900_Black` with the same
 /// MenuWindow/SceneProxy host ABI as the title wrappers. This is the first diagnostic carrier for
-/// proving an engine-owned custom surface can stay above PRESS ANY BUTTON / Continue.
+/// proving an engine-owned custom surface can stay above press any button / Continue.
 pub(crate) const TITLE_CUSTOM_COVER_BLACK_WRAPPER_RVA: usize = 0x793b20;
 pub(crate) const TITLE_CUSTOM_COVER_BLACK_NAME: &str = "01_900_Black";
 pub(crate) const TITLE_CUSTOM_COVER_DUMMY_PROFILE_SYMBOL: &str = "MENU_DummyProfileFace_01";
@@ -437,6 +451,16 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+/// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at
+/// `TitleStep+0xe0` that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
+///
+/// Zeroed in the `TitleStep` constructor, grown as the title builds its windows, decremented by
+/// `FUN_140733d70` inside the teardown. Read in a live world it is the whole defect as a number: a
+/// non-zero count while a real map is mounted means title windows are still being updated over it,
+/// which is what the drain in `own_load::loaders::load_drive` waits on before it lets a switch
+/// commit. Derived from `er-title-flow`'s `TitleOwnerLayout` rather than re-declared, so the two
+/// cannot disagree about where the count sits.
+pub(crate) use er_title_flow::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;
@@ -485,8 +509,8 @@ pub(crate) static RENDER_LOADING_LAYER_LAST_CSSCALEFORM: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_LAST_SLOTS_MASK;
 pub(crate) use er_telemetry_core::counters::RENDER_LOADING_LAYER_VISIBLE_SLOTS_MASK;
-/// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover PLATE the game draws during a map load to
-/// HIDE the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
+/// `CS::CSFakeLoadingScreenImp` -- the full-screen fade/cover plate the game draws during a map load to
+/// hide the world teardown/rebuild behind the now-loading UI. RE'd from its ctor (deobf 0x140bbeee0,
 /// vtable 0x142b803b8) which is called from `CSDrawStep`, so this object lives in the render pipeline, not
 /// the menu system. `visible` (+0x8) is the byte the draw step checks to decide whether to draw the cover;
 /// the ctor inits it to 0 and the map-load system raises it while a load is in flight. Clearing it exposes
@@ -506,7 +530,7 @@ pub(crate) const FAKE_LOADING_SCREEN_VISIBLE_OFFSET: usize =
 
 const _: () = assert!(core::mem::offset_of!(CSFakeLoadingScreenImp, visible) == 0x8);
 /// Now-loading background portrait forge. The pseudorandom loading-screen background is
-/// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), PRODUCED for symbol `MENU_Load_%05d` by
+/// `helper->replaceTexInfo` (a CSScaleformReplaceTexInfo*), produced for symbol `MENU_Load_%05d` by
 /// `GetOrCreateReplaceTexInfo`, whose symbol-bind step is `FUN_140d69880` (dump 0x140d69880 -> deobf
 /// 0x140d697d0, shift -0xb0). We full-replace that bind for `MENU_Load_*`: build an er-tpf TPF named
 /// exactly the requested symbol, turn it into a TpfResCap container via the game's in-memory
@@ -523,10 +547,8 @@ pub(crate) const LOADING_BG_REPLACE_BIND_RVA: usize = 0xd697d0;
 /// from MainHeap/, loadTask=0) -> this`; only inits the FD4FileCap base and zeroes `+0x90`.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const TPF_FILE_CAP_CTOR_RVA: usize = 0x225f60;
-/// Game heap allocator wrapper (dump 0x141eb9ec0 -> deobf 0x141eb9ed0). `fn(size /rcx/, align /rdx/,
-/// allocator_obj /r8/) -> *mut u8`; allocator_obj is the dereferenced DLAllocator* (== the repo's
-/// `runtime_heap_allocator` for MainHeap).
-pub(crate) const GAME_HEAP_ALLOC_RVA: usize = 0x1eb9ed0;
+// `GAME_HEAP_ALLOC_RVA` moved to `er_game_base::rva` with the software keyboard, its only caller,
+// which now lives in `er-quit-menu-core` so a standalone quit-menu shell can open the link field.
 /// `DLString<wchar_t>::substr` (dump 0x140116c90 -> deobf 0x140116c70). `fn(dest /rcx/, src /rdx/,
 /// start /r8 = 0/, count /r9 = usize::MAX = to-end/) -> dest`; copies the symbol into the rti symbol.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
@@ -593,4 +615,4 @@ pub(crate) const TITLE_PROFILE_VISIBLE_SURFACE_SYMBOL: &str = "MENU_FL_40135_Pro
 // The four counters that were meant to record that rewrite -- _BIND_REWRITES, _BIND_LAST_OWNER,
 // _BIND_LAST_PAIR, _BIND_LAST_SYMBOL_PTR -- were removed 2026-08-31. The rewrite above was never
 // implemented, so none of them had a write site and the five oracles they fed reported absence
-// forever. The SYMBOL constant is kept: title_resources_stats_text.rs genuinely uses it.
+// forever. The symbol constant is kept: title_resources_stats_text.rs genuinely uses it.

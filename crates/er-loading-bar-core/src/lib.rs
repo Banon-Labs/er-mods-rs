@@ -44,7 +44,7 @@ pub const PHASE_PERMILLE: [usize; PHASE_COUNT] =
 /// Identity of a single loading phase, independent of which epoch's sequence contains it.
 ///
 /// A load "epoch" is one arm-to-teardown lifetime of the bar. The phases a process boot walks
-/// through are NOT the phases a later character reload walks through: a reload cannot start the
+/// through are not the phases a later character reload walks through: a reload cannot start the
 /// engine, construct GameMan, or acquire the title's Scaleform resources a second time. Naming the
 /// phase (rather than indexing a single global table) is what lets each epoch publish a sequence
 /// containing only the phases that can actually occur in it, so the visible `N/M` denominator is
@@ -105,7 +105,7 @@ impl LoadPhase {
 
 /// One epoch's ordered phase sequence plus that sequence's own fill targets.
 ///
-/// The permille targets belong to the SET, not to the phase: the same phase occupies a different
+/// The permille targets belong to the set, not to the phase: the same phase occupies a different
 /// slice of 0..1000 depending on how many phases share the bar with it in that epoch.
 pub struct PhaseSet {
     phases: &'static [LoadPhase],
@@ -139,7 +139,7 @@ impl PhaseSet {
         self.permille[idx.min(self.main_total())]
     }
 
-    /// Fill target of the NEXT phase, i.e. the ceiling the active phase fills toward.
+    /// Fill target of the next phase, i.e. the ceiling the active phase fills toward.
     /// The final phase fills toward a full bar.
     pub fn next_permille(&self, idx: usize) -> usize {
         let i = idx.min(self.main_total());
@@ -215,7 +215,7 @@ pub static RELOAD_PHASE_SET: PhaseSet = PhaseSet {
 /// ~0.8s (~4% of the load) while the world tail owns the remaining ~21s. An even spread therefore put
 /// 45% of the bar behind the first second and left the long streaming stretch crawling through the top
 /// half -- technically monotonic, but not paced. These targets track the measured wall-clock split:
-/// BUILDING WORLD ~3%, STREAMING ~22%, FINALIZING ~48%, ENTERING WORLD ~91%.
+/// Building world ~3%, streaming ~22%, FINALIZING ~48%, entering world ~91%.
 pub const RELOAD_PHASE_PERMILLE: [usize; 9] = [15, 25, 35, 45, 55, 70, 240, 480, 900];
 
 /// A single phase/subphase label suitable for the visible shape
@@ -283,6 +283,23 @@ pub fn phase_permille(idx: usize) -> usize {
     PHASE_PERMILLE[idx.min(PHASE_COUNT.saturating_sub(1))]
 }
 
+/// Text scale at the reference height, and the height it is the reference for.
+///
+/// The boot bar picked this pair and the picker then picked its own, so the two surfaces drawn on
+/// the same frame disagreed about how big a line of text is -- the user compared them on screen
+/// and the picker's rows were half again the height of the bar's label under them. One rule now,
+/// called by both.
+const TEXT_BASE_SCALE: usize = 2;
+const TEXT_REFERENCE_H: usize = 1080;
+const TEXT_MIN_SCALE: usize = 1;
+const TEXT_MAX_SCALE: usize = 4;
+
+/// Body text scale for a frame `frame_h` pixels tall: scale 2 at 1080p, rounded, clamped to 1..4.
+pub fn boot_text_scale(frame_h: usize) -> usize {
+    ((frame_h * TEXT_BASE_SCALE + TEXT_REFERENCE_H / 2) / TEXT_REFERENCE_H)
+        .clamp(TEXT_MIN_SCALE, TEXT_MAX_SCALE)
+}
+
 /// True when every glyph in `text` is represented by the embedded 5x7 font.
 pub fn is_supported_text(text: &str) -> bool {
     text.chars()
@@ -347,6 +364,56 @@ pub fn glyph_5x7(c: char) -> [u8; GLYPH_H] {
         '8' => [0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e],
         '9' => [0x0e, 0x11, 0x11, 0x0f, 0x01, 0x02, 0x0c],
         '%' => [0x19, 0x19, 0x02, 0x04, 0x08, 0x13, 0x13],
+        // Lowercase, added 2026-09-12. Until then this font was uppercase-only and the fallback
+        // arm below is silent, so every lowercase letter the overlay drew came out as a space.
+        // The user read one of these banners off the screen as `T         . C       .` -- that is
+        // "This mod never issued the load. Choose a save to try again." with 44 of its 57
+        // characters deleted by the renderer. Anything the picker draws is affected, character
+        // names and paths included, so this is not a copy problem to be worked around by writing
+        // in capitals.
+        'a' => [0x00, 0x00, 0x0e, 0x01, 0x0f, 0x11, 0x0f],
+        'b' => [0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x1e],
+        'c' => [0x00, 0x00, 0x0e, 0x10, 0x10, 0x11, 0x0e],
+        'd' => [0x01, 0x01, 0x0f, 0x11, 0x11, 0x11, 0x0f],
+        'e' => [0x00, 0x00, 0x0e, 0x11, 0x1f, 0x10, 0x0e],
+        'f' => [0x06, 0x08, 0x1c, 0x08, 0x08, 0x08, 0x08],
+        'g' => [0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01, 0x0e],
+        'h' => [0x10, 0x10, 0x1e, 0x11, 0x11, 0x11, 0x11],
+        'i' => [0x04, 0x00, 0x0c, 0x04, 0x04, 0x04, 0x0e],
+        'j' => [0x02, 0x00, 0x06, 0x02, 0x02, 0x12, 0x0c],
+        'k' => [0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12],
+        'l' => [0x0c, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0e],
+        'm' => [0x00, 0x00, 0x1a, 0x15, 0x15, 0x15, 0x15],
+        'n' => [0x00, 0x00, 0x1e, 0x11, 0x11, 0x11, 0x11],
+        'o' => [0x00, 0x00, 0x0e, 0x11, 0x11, 0x11, 0x0e],
+        'p' => [0x00, 0x1e, 0x11, 0x11, 0x1e, 0x10, 0x10],
+        'q' => [0x00, 0x0f, 0x11, 0x11, 0x0f, 0x01, 0x01],
+        'r' => [0x00, 0x00, 0x16, 0x19, 0x10, 0x10, 0x10],
+        's' => [0x00, 0x00, 0x0f, 0x10, 0x0e, 0x01, 0x1e],
+        't' => [0x08, 0x08, 0x1c, 0x08, 0x08, 0x09, 0x06],
+        'u' => [0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0d],
+        'v' => [0x00, 0x00, 0x11, 0x11, 0x11, 0x0a, 0x04],
+        'w' => [0x00, 0x00, 0x11, 0x11, 0x15, 0x15, 0x0a],
+        'x' => [0x00, 0x00, 0x11, 0x0a, 0x04, 0x0a, 0x11],
+        'y' => [0x00, 0x11, 0x11, 0x11, 0x0f, 0x01, 0x0e],
+        'z' => [0x00, 0x00, 0x1f, 0x02, 0x04, 0x08, 0x1f],
+        // Punctuation a save path or a sentence actually contains.
+        ',' => [0x00, 0x00, 0x00, 0x00, 0x0c, 0x04, 0x08],
+        '\'' => [0x04, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00],
+        '"' => [0x0a, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ';' => [0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x04, 0x08],
+        '+' => [0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00],
+        '=' => [0x00, 0x00, 0x1f, 0x00, 0x1f, 0x00, 0x00],
+        '&' => [0x0c, 0x12, 0x14, 0x08, 0x15, 0x12, 0x0d],
+        '#' => [0x0a, 0x1f, 0x0a, 0x0a, 0x1f, 0x0a, 0x00],
+        '@' => [0x0e, 0x11, 0x17, 0x15, 0x17, 0x10, 0x0e],
+        '~' => [0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00],
+        '*' => [0x00, 0x0a, 0x04, 0x1f, 0x04, 0x0a, 0x00],
+        '$' => [0x04, 0x0f, 0x14, 0x0e, 0x05, 0x1e, 0x04],
+        '<' => [0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02],
+        '{' => [0x06, 0x08, 0x08, 0x10, 0x08, 0x08, 0x06],
+        '}' => [0x0c, 0x02, 0x02, 0x01, 0x02, 0x02, 0x0c],
+        '|' => [0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04],
         ' ' => [0; GLYPH_H],
         _ => [0; GLYPH_H],
     }

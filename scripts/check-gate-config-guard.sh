@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# THE GATE MUST NOT DAMAGE THE THING IT GATES, AND ON 2026-08-31 IT DID -- TWICE.
+# The gate must not damage the thing it gates, and on 2026-08-31 it did -- Twice.
 #
 # Route, end to end (bd hooks-selftest-under-git-hook-blanks-the-live-config-2026-08-31): a push
-# FROM A LINKED WORKTREE runs the gate suite from its pre-push hook, and git exports GIT_DIR to a
+# from a linked WORKTREE runs the gate suite from its pre-push hook, and git exports GIT_DIR to a
 # linked worktree's hooks -- measured on git 2.55 by scripts/measure-git-hook-env.sh, which also
-# measures that a MAIN checkout's hooks get no GIT_DIR at all, which is why this looked unreachable
-# for a day. `git -C <fixture>` does NOT override GIT_DIR, so every fixture command in a downstream
-# gate lands on the SHARED config instead: `git init` saw a git dir not named `.git`, wrote
+# measures that a main checkout's hooks get no GIT_DIR at all, which is why this looked unreachable
+# for a day. `git -C <fixture>` does not override GIT_DIR, so every fixture command in a downstream
+# gate lands on the shared config instead: `git init` saw a git dir not named `.git`, wrote
 # core.bare = true, and every later `git status` in the main checkout died with "fatal: this
 # operation must be run in a work tree"; `git config --unset core.hooksPath` disarmed the hooks for
 # ninety minutes and a push reached origin ungated.
@@ -15,8 +15,8 @@
 # that was caught. This closes the CLASS: any gate, today's or tomorrow's, that builds a git
 # fixture without scrubbing gets caught here instead of in the next person's checkout.
 #
-# WHY A SOURCED FILE RATHER THAN LINES INSIDE check.sh: scripts/test-check-config-guard.sh drives
-# this logic against fixture repositories, and it must drive the REAL text, not a copy that can
+# Why a sourced file rather than lines inside check.sh: scripts/test-check-config-guard.sh drives
+# this logic against fixture repositories, and it must drive the real text, not a copy that can
 # drift. A file both of them read is the only shape where that is structurally true. It used to be
 # the opening trap of scripts/ci-local-check.sh, which was deleted on 2026-09-03 when the pre-push
 # hook moved to parity with CI (both now run scripts/check.sh).
@@ -63,6 +63,13 @@ gate_config_report() {
 	echo "  LINKED WORKTREE, its hooks inherit GIT_DIR and 'git -C <fixture>' does not override it," >&2
 	echo "  so fixture-only work lands on the shared config. Confirm with:" >&2
 	echo "      bash scripts/measure-git-hook-env.sh" >&2
+	# Which stage did it. Every `--stage` child runs this same guard over the same shared config,
+	# so the culprit stage has already printed this block into its own log -- the parent's copy
+	# only repeats it. Without this line the reader has the class of cause and no way to the
+	# culprit, which on 2026-09-14 cost two confident and wrong accusations of innocent gates.
+	echo "  WHICH stage did it: the same block is in that stage's own log, because every --stage" >&2
+	echo "  child runs this guard too. Look there first:" >&2
+	echo "      grep -l 'CHANGED the repository configuration' /run/user/1000/er-mods-rs-check-stages/*.log" >&2
 	echo "  Fix the offending script with: unset \$(git rev-parse --local-env-vars)" >&2
 	echo "  Repair this checkout with: git config core.bare false && bash scripts/install-git-hooks.sh" >&2
 	return 1

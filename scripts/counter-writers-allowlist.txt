@@ -97,14 +97,6 @@ SYSTEM_QUIT_MENU_WINDOW_JOB_RUN_ORIG
 #          er_input_harness.dll, which is a declared conflict with er_quickload (bd
 #          claims76-structurally-unsettleable-2026-08-31). Unreachable is not the same as
 #          deleted, so these need a look at the state machine before WIRE-or-DELETE.
-SQ_REPRO_BOX_NAV_BASELINE
-SQ_REPRO_BOX_NAV_BUTTON
-SQ_REPRO_BOX_NAV_CANDIDATE
-SQ_REPRO_INITIAL_FOREGROUND_LOGGED
-SQ_REPRO_OPEN_KEY_VK
-SQ_REPRO_TAB_RETURN_DWELL_START
-SQ_REPRO_TAB_RETURN_MAX_TAB
-SQ_REPRO_TAB_RETURN_PHASE
 
 # DELETE -- recorded as removed behaviour or a duplicate of a live counter.
 #          RAWINPUT_BLOCKED_UNFOCUSED_EVENTS [R]: input_block.rs:806-816 records that the
@@ -173,3 +165,11 @@ SYSTEM_QUIT_TOP_HIDE_COUNT
 SYSTEM_QUIT_TOP_RESTORE_COUNT
 TFC_DRAIN_DIALOG
 TITLE_TEXT_GFX_VALUES
+
+# WIRE-INVISIBLE -- both are er-hook TEST arrays, written inside the five-argument dispatcher's
+#          own handler as `cell.store(value, ..)` over `.iter().zip([a, b, c, d, e])`. The write
+#          never names the static, which is the one shape the shared write rule cannot see, so
+#          these are false negatives rather than dead counters: deleting either would delete the
+#          assertion that `union_dispatch5` forwards all five arguments.
+GAME_SAW
+SEEN

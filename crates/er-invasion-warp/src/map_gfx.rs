@@ -18,12 +18,12 @@
 //! `er-armament-icons`'s `gfx_equip_hook` uses; the constants below are duplicated from it
 //! rather than shared because the two DLLs ship independently, and each notes the other.
 //!
-//! # Identification is by CONTENT, not by name
+//! # Identification is by content, not by name
 //!
 //! The parse path has no URL, only bytes. The movie is recognised by its GFX magic, its own
 //! declared length, and an FNV fingerprint of the whole file. That is deliberately strict: it
-//! recognises the VANILLA world-map movie and nothing else, so a player running another menu
-//! mod that replaces `02_120_worldmap.gfx` gets THEIR movie untouched. They lose the red icon
+//! recognises the vanilla world-map movie and nothing else, so a player running another menu
+//! mod that replaces `02_120_worldmap.gfx` gets their movie untouched. They lose the red icon
 //! (the pins fall back to a vanilla frame -- see
 //! [`er_invasion_warp_core::param_row::invasion_pin_icon_id`]) and keep their mod, which is the right
 //! way round.
@@ -51,8 +51,44 @@ const MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 /// GFx tag-parse entry `(loadProcess /*rcx*/, File* /*rdx*/) -> bool`, located by a unique
 /// 30-byte position-independent prologue (verified unique in the 1.16.2 image). There is no
 /// stable RVA recorded for it, which is why this is an AOB rather than a seam constant.
+///
+/// Kept as documentation of the whole function opening. It is not what the scan matches; see
+/// [`PARSE_SIG_AFTER_PATCH`].
 const PARSE_SIG: &str =
     "40 53 48 83 EC 40 48 8B 41 18 48 8B D9 C6 44 24 30 01 48 83 C1 50 4C 8B 50 20 4C 8B 58 48";
+
+/// [`PARSE_SIG`] with its first five bytes dropped, which is what the scan actually matches.
+///
+/// Derived rather than written out a second time: two hand-kept copies of the same bytes is one
+/// edit away from a scan that no longer describes the function above it.
+///
+/// # Why the full prologue could not be found in a live game
+///
+/// `er-armament-icons` detours this exact function -- byte-identical `PARSE_SIG`, same reasoning,
+/// arrived at independently -- and it loads first, because me3 walks the natives in name order and
+/// `er_armament_icons.dll` sorts before `er_invasion_warp.dll`. A five-byte detour replaces
+/// `40 53 48 83 EC` with `E9 <rel32>`, so by the time this scan runs the prologue it is looking for
+/// no longer exists. Read live on 2026-09-10 at `0x1411d1010`:
+/// `e9 bf ff dd fe 40 48 8b 41 18 ...` against a static `40 53 48 83 ec 40 48 8b 41 18 ...` --
+/// bytes 5 onward identical, bytes 0..5 replaced. The scan found zero matches, this module
+/// switched itself off, and the announcement banner stayed left-aligned for exactly that reason.
+///
+/// Bytes 5..30 are the part a five-byte detour cannot reach, and they are unique in both images
+/// (`0x1411cf1a5` in 1.16.2, `0x1411d1015` in 1.17.1), so subtracting 5 recovers the entry whether
+/// or not anyone got here first. Chaining is sound rather than merely convenient: MinHook relocates
+/// a leading `E9` into its trampoline, so the second detour calls the first, which calls the
+/// original -- both mods see every parse.
+fn parse_sig_after_patch() -> String {
+    PARSE_SIG
+        .split_whitespace()
+        .skip(PARSE_SIG_PATCH_BYTES)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// How many bytes of the prologue a detour overwrites, and therefore how far back the entry is
+/// from a [`PARSE_SIG_AFTER_PATCH`] match.
+const PARSE_SIG_PATCH_BYTES: usize = 5;
 
 /// Vanilla `02_120_worldmap.gfx`, fingerprinted rather than vendored: this repo does not commit
 /// game-derived bytes. Verified identical across two independent extractions of this build.
@@ -61,7 +97,7 @@ const WORLD_MAP_VANILLA_FNV1A64: u64 = 0xed66_8483_91a2_d273;
 
 /// Vanilla `01_080_emergencynotice.gfx` -- the announcement banner, fingerprinted the same way.
 ///
-/// This is the surface the rejection notice is written to. Its one text field ships LEFT-aligned
+/// This is the surface the rejection notice is written to. Its one text field ships left-aligned
 /// inside a box ~1726 px wide, so a short line sat against the far edge; the edit centres it. Kept
 /// in step with `er-gfx`'s own corpus test, which asserts the identical pair.
 const NOTICE_VANILLA_LEN: usize = 3_205;
@@ -99,10 +135,10 @@ static DERIVE_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether the red pin frame is actually in front of the game.
 ///
-/// This is what decides the pins' icon id, and it is deliberately an OBSERVED fact rather than a
+/// This is what decides the pins' icon id, and it is deliberately an observed fact rather than a
 /// build-time constant: if the swap never happened -- another mod owns the movie, the hook did
 /// not arm, the derive failed -- then pointing the pins at the red frame would point them at an
-/// EMPTY frame and they would render no icon at all. Reading the outcome keeps the failure mode
+/// empty frame and they would render no icon at all. Reading the outcome keeps the failure mode
 /// "pins look like a vanilla icon" instead of "pins are invisible".
 #[must_use]
 pub fn red_pin_frame_installed() -> bool {
@@ -136,13 +172,20 @@ fn parse_sig(sig: &str) -> Option<(Vec<u8>, Vec<bool>)> {
     (!bytes.is_empty()).then_some((bytes, mask))
 }
 
-/// Find `sig` in `text`, requiring it to occur EXACTLY once.
+/// Every address in `text` matching `sig`, in order.
 ///
-/// Uniqueness is the point: a signature that matches twice does not identify a function, and
-/// hooking the wrong one of two candidates patches a prologue we never verified.
-fn scan_unique(text: &[u8], text_start: usize, sig: &str) -> Option<usize> {
-    let (bytes, mask) = parse_sig(sig)?;
-    let mut found = None;
+/// The caller requires exactly one -- a signature that matches twice does not identify a function,
+/// and hooking the wrong one of two candidates patches a prologue nothing verified. Returning the
+/// list rather than an `Option` is so a refusal can say which failure it was. The one-line
+/// "absent or not unique" this used to log covers two opposite diagnoses -- a signature that moved
+/// and a signature that now matches twice -- and on 1.17.1 it turned the announcement banner's
+/// centring off with no way to tell which had happened, while the same 30 bytes occur exactly once
+/// in `eldenring-deobf-1.17.1.bin` and exactly once in the shipped `eldenring.exe`.
+fn scan_matches(text: &[u8], text_start: usize, sig: &str) -> Vec<usize> {
+    let Some((bytes, mask)) = parse_sig(sig) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
     for (offset, window) in text.windows(bytes.len()).enumerate() {
         if window
             .iter()
@@ -150,10 +193,12 @@ fn scan_unique(text: &[u8], text_start: usize, sig: &str) -> Option<usize> {
             .zip(&mask)
             .all(|((have, want), keep)| !*keep || have == want)
         {
-            if found.is_some() {
-                return None; // not unique
+            found.push(text_start + offset);
+            // A prologue that occurs more than a handful of times is not an identification, and
+            // the addresses are only being collected to be logged.
+            if found.len() >= 8 {
+                break;
             }
-            found = Some(text_start + offset);
         }
     }
     found
@@ -169,7 +214,7 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
         return;
     }
     let vtable = unsafe { safe_read_usize(file) }.unwrap_or(0);
-    // RESOLVED, and never satisfied by zero -- same defect and same fix as the identical guard in
+    // Resolved, and never satisfied by zero -- same defect and same fix as the identical guard in
     // `er-armament-icons::gfx_equip_hook`. The `MemoryFile` vtable moved 0x2ba4c80 -> 0x2ba7d70 on
     // 1.17, so this comparison could not match and the map-movie swap stopped happening silently;
     // and `game_data_addr` answers 0 on a refusal, which `unwrap_or(0)` above would have matched.
@@ -193,7 +238,7 @@ unsafe fn maybe_swap_world_map(base: usize, file: usize) {
     {
         return;
     }
-    // The File's +0x20 is the ALLOCATION size, which the loader rounds up; the movie's own
+    // The File's +0x20 is the allocation size, which the loader rounds up; the movie's own
     // declared length (u32 at +4) is the content length. Gating on the allocation size instead
     // is how this pattern previously matched nothing at all.
     let declared = {
@@ -377,20 +422,46 @@ pub unsafe fn install_world_map_gfx_hook(base: usize) -> usize {
         ));
         return 0;
     }
-    let Some(address) = scan_unique(&text, start, PARSE_SIG) else {
+    let matches: Vec<usize> = scan_matches(&text, start, &parse_sig_after_patch())
+        .into_iter()
+        .map(|address| address - PARSE_SIG_PATCH_BYTES)
+        .collect();
+    let [address] = matches[..] else {
+        let where_they_are: Vec<String> = matches
+            .iter()
+            .map(|address| format!("{address:#x} (rva {:#x})", address - start))
+            .collect();
         crate::standalone_log(format_args!(
-            "map-gfx: DISABLED -- the GFx parse signature is absent or not unique in this \
-             build's .text; refusing to guess which function to hook"
+            "map-gfx: DISABLED -- the GFx parse prologue matched {} time(s) in the live .text \
+             (start={start:#x} len={len}), and only exactly one identifies a function: [{}]. \
+             These 25 bytes sit past anything a five-byte detour overwrites and occur exactly \
+             once in the de-Arxan'd image, so zero here means the function moved rather than that \
+             another mod got here first.",
+            matches.len(),
+            where_they_are.join(", ")
         ));
         return 0;
     };
-    // `scan_unique` found this address by matching `PARSE_SIG` inside the RUNNING image's `.text`,
+    // Whether someone else got here first, said out loud. A chained detour is correct but it is
+    // also the difference between "this mod owns the parse" and "this mod is second in a queue",
+    // and a reader chasing a movie that did not get swapped needs to know which.
+    let opening = text
+        .get(address - start..address - start + PARSE_SIG_PATCH_BYTES)
+        .unwrap_or(&[]);
+    if opening.first() == Some(&0xe9) {
+        crate::standalone_log(format_args!(
+            "map-gfx: {address:#x} is ALREADY detoured by another module (opening reads \
+             {opening:02x?}); chaining onto it. er-armament-icons hooks this same function and \
+             loads first, so this is the ordinary case, not a fault."
+        ));
+    }
+    // `scan_matches` found this address by matching the patched-prologue tail inside the running image's `.text`,
     // so it is already a 1.17 address. `register_union_hook` would translate it against a table
     // keyed by 1.16.2 RVAs -- a table that structurally cannot contain a runtime-derived address --
-    // and answer REFUSED, which is what was turning this hook off on 1.17 for an address the scan
+    // and answer refused, which is what was turning this hook off on 1.17 for an address the scan
     // had got right. A ledger row would be worse than the refusal: the address would be translated
     // a second time and land mid-function. The runtime-derived entry point skips the version
-    // TRANSLATION and keeps the validation -- `detour_site::write_site_is_sound` asks the running
+    // translation and keeps the validation -- `detour_site::write_site_is_sound` asks the running
     // image's own `.pdata` whether this is a function entry with room for MinHook's five bytes.
     match unsafe {
         er_hook::register_union_hook_runtime_derived(
@@ -429,18 +500,63 @@ mod tests {
         assert_eq!(WORLD_MAP_VANILLA_FNV1A64, 0xed66_8483_91a2_d273);
     }
 
+    /// The tail the scan matches is the prologue minus exactly the bytes a detour overwrites.
+    ///
+    /// Written as a test rather than trusted to the derivation, because the derivation is what
+    /// would silently drift if `PARSE_SIG` were ever re-spelled with a wildcard in the first five
+    /// tokens -- and a tail that starts one byte early recovers an entry that is one byte wrong.
+    #[test]
+    fn the_scanned_tail_is_the_prologue_past_what_a_detour_overwrites() {
+        let whole: Vec<&str> = PARSE_SIG.split_whitespace().collect();
+        let tail = parse_sig_after_patch();
+        let tail_tokens: Vec<&str> = tail.split_whitespace().collect();
+        assert_eq!(whole.len() - tail_tokens.len(), PARSE_SIG_PATCH_BYTES);
+        assert_eq!(tail_tokens, whole[PARSE_SIG_PATCH_BYTES..]);
+        assert!(
+            !tail_tokens.iter().any(|token| token.contains('?')),
+            "a wildcard in the tail would widen a scan that has to identify one function"
+        );
+    }
+
+    /// A detoured opening is still found, and still resolves to the same entry.
+    ///
+    /// This is the live case measured on 2026-09-10: `er-armament-icons` had already written
+    /// `E9 <rel32>` over the first five bytes, and the old whole-prologue scan matched nothing.
+    #[test]
+    fn a_five_byte_detour_over_the_opening_does_not_hide_the_function() {
+        let mut text = vec![0x90_u8; 0x40];
+        let whole: Vec<u8> = PARSE_SIG
+            .split_whitespace()
+            .map(|token| u8::from_str_radix(token, 16).expect("the signature is plain hex"))
+            .collect();
+        text.extend_from_slice(&whole);
+        text.extend_from_slice(&[0x90; 0x10]);
+        let entry = 0x1000 + 0x40;
+        assert_eq!(
+            scan_matches(&text, 0x1000, &parse_sig_after_patch()),
+            vec![entry + PARSE_SIG_PATCH_BYTES],
+            "pristine"
+        );
+        text[0x40..0x45].copy_from_slice(&[0xe9, 0xbf, 0xff, 0xdd, 0xfe]);
+        assert_eq!(
+            scan_matches(&text, 0x1000, &parse_sig_after_patch()),
+            vec![entry + PARSE_SIG_PATCH_BYTES],
+            "detoured -- the same match, and entry is that minus the patch width"
+        );
+    }
+
     #[test]
     fn a_signature_that_is_not_unique_resolves_to_nothing() {
         let text = [0x90_u8, 0x91, 0x90, 0x91];
-        assert_eq!(scan_unique(&text, 0x1000, "90 91"), None, "two matches");
-        assert_eq!(scan_unique(&text, 0x1000, "90 91 90"), Some(0x1000));
-        assert_eq!(scan_unique(&text, 0x1000, "AB CD"), None, "no match");
+        assert_eq!(scan_matches(&text, 0x1000, "90 91").len(), 2, "two matches");
+        assert_eq!(scan_matches(&text, 0x1000, "90 91 90"), vec![0x1000]);
+        assert!(scan_matches(&text, 0x1000, "AB CD").is_empty(), "no match");
     }
 
     #[test]
     fn wildcards_are_honoured() {
         let text = [0x40_u8, 0x53, 0x48];
-        assert_eq!(scan_unique(&text, 0, "40 ?? 48"), Some(0));
+        assert_eq!(scan_matches(&text, 0, "40 ?? 48"), vec![0]);
     }
 
     #[test]

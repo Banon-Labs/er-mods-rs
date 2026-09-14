@@ -1,21 +1,19 @@
 // ============================================================================================
-// IN-PROCESS MENU INPUT DRIVER (verified RE 2026-06-17). The main menu (built by SetState(2)=
+// in-process menu input driver (verified RE 2026-06-17). The main menu (built by SetState(2)=
 // BeginLogo) reads input from the keystate bitmap inputmgr+0x90+eventId (edge-triggered &1).
-// Confirm=0x3d, vertical-move=0x0/0x45. The Load-Game item d180 is INPUT-GATED -- it only ticks
-// (and so is captured by the leaf/iterator hooks) once the cursor is navigated ONTO it. Main-menu
-// order: Continue(0), Load Game=d180(1), so ONE Down from the default reaches Load Game. We inject
-// Down taps in-process (NO host input, NO window focus) until d180 is captured, then STAGE 2
+// Confirm=0x3d, vertical-move=0x0/0x45. The Load-Game item d180 is input-gated -- it only ticks
+// (and so is captured by the leaf/iterator hooks) once the cursor is navigated onto it. Main-menu
+// order: Continue(0), Load Game=d180(1), so one Down from the default reaches Load Game. We inject
+// Down taps in-process (no host input, no window focus) until d180 is captured, then stage 2
 // invokes its functor directly -- so we never Confirm a wrong item (no New-Game/save-write risk).
 // ============================================================================================
-pub(crate) use er_title_flow::INPUTMGR_BITMAP_90_OFFSET;
-pub(crate) use er_title_flow::MENU_EVENT_PRESSED_BIT;
-pub(crate) use er_title_flow::MenuEventId;
-
-pub(crate) use er_title_flow::MENU_EVENT_CONFIRM_3D;
-pub(crate) const MENU_EVENT_MOVE_A_00: usize = MenuEventId::MoveA as usize;
-pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
+// The three names this block describes -- `INPUTMGR_BITMAP_90_OFFSET`, `MENU_EVENT_PRESSED_BIT`
+// and `MENU_EVENT_CONFIRM_3D` -- were re-exported here by name until 2026-09-13. Their last reader
+// in this crate was the trailing `let _ = (...)` of `force_dismiss_startup_dialog()`, which is
+// deleted, and `constants.rs` already carries `pub(crate) use er_title_flow::*;` in the same
+// module, so any feature build that drives menu input again resolves them through that glob.
 /// Menu list cursor (highlighted index) and item count, on the list object (cursor getter
-/// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to LOG the live cursor (diagnostic) while injecting.
+/// 0x140739e20 = `mov eax,[rcx+0xd4]`). Used to log the live cursor (diagnostic) while injecting.
 #[repr(C)]
 #[allow(dead_code)] // Retained RE layout: decoded struct shape, nothing constructs it today.
 pub(crate) struct MenuListLayout {
@@ -28,7 +26,7 @@ pub(crate) struct MenuListLayout {
 pub(crate) const MENU_LIST_CURSOR_D4_OFFSET: usize = core::mem::offset_of!(MenuListLayout, cursor);
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const MENU_LIST_COUNT_D0_OFFSET: usize = core::mem::offset_of!(MenuListLayout, count);
-/// Down-tap cadence: assert the move bit for SET frames (edge), then GAP idle frames (so the menu
+/// Down-tap cadence: assert the move bit for set frames (edge), then gap idle frames (so the menu
 /// sees a clean single edge + auto-repeat is avoided), one cursor step per cycle.
 #[repr(u64)]
 #[allow(dead_code)] // Retained RE layout: decoded value vocabulary, no live use today.

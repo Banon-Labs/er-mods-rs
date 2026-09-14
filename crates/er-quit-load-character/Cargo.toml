@@ -1,0 +1,50 @@
+# Standalone ME3 shell for the System>Quit **Load Character** row, with no product DLL in the
+# profile. Sibling of `er-quit-menu`, which ships the two build rows the same way: both call
+# `er_quit_menu_core::arm::arm_standalone` with their own `RowSet`, so the row a shell does not
+# have a flow for is never cloned and can never be pressed.
+#
+# It ships ONE row by default, the one it is named for. **Load Character from File** is a
+# non-default feature, `load-character-from-file`, because a profile composes rows and this shell
+# arming two of them made one of the two uncomposable: a build that wants Load Character and
+# nothing else could not have it. The row registry merges row sets across every loaded shell
+# (`er_quit_menu_core::row_registry`), so the from-file row belongs to whichever host declares it
+# rather than riding along with a neighbour.
+#
+# The comment this replaces said the row was unarmed because its browse surface lived in
+# `er-quickload`. That stopped being true on 2026-09-11 when the picker moved into
+# `er-quit-menu-core`, and the row has been armed unconditionally since.
+#
+# This crate contends with `er-quickload` and with `er-quit-menu` on the Quit tab: all three derive
+# the same six-cell `02_040_optionsetting` grid, and `er_gfx::options_02_040::quit6` fail-closes
+# when handed already-derived bytes. `scripts/me3-dll-conflicts.toml` records both pairs as
+# duplicate owners, so a profile carrying two of them is refused rather than half-working.
+[package]
+name = "er-quit-load-character"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+# Adds the **Load Character from File** row: the browse picker in
+# `er_quit_menu_core::save_picker_menu`, handed to the same `05_010_ProfileSelect` window.
+load-character-from-file = []
+
+[lib]
+name = "er_quit_load_character"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the tiny DLL shell testable on the
+# host without pulling game deps into the test graph.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+er-quit-menu-core = { path = "../er-quit-menu-core" }
+# Tier A only (zero external deps, host-buildable): the fresh-per-process log writer, so this
+# shell's log describes exactly one run instead of accumulating across launches.
+er-game-base = { path = "../er-game-base" }
+
+# Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
+# set, denied. Zero violations on the shipping target
+# (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host
+# build, so the deny carries no `# DEBT:` allows.
+[lints]
+workspace = true

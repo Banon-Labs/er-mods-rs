@@ -1,0 +1,5 @@
+{
+  "note": "Constant-valued feature gates still in the tree. The ratchet is DOWN-ONLY: a file may not gain one, and a file that loses one must be recorded here in the same commit. Zero is the target -- each entry is a feature to delete, not to document.",
+  "total": 0,
+  "gates": {}
+}

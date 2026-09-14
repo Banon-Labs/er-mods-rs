@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# VANILLA USER-DRIVEN load1 baseline (bd vanilla-userdrive-trace-only-baseline-load1-safety-2026-07-20).
-# me3 OFFLINE with ONLY er_reload_trace.dll (log-only, standalone MinHook -- NO product DLL, NO
-# autoload/quickload/system-quit, NO input harness/autodrive, NO save redirect). The game boots pure
-# vanilla; the USER drives to angrE via the normal Load Game menu using their real APPDATA save. The
-# trace DLL logs the native load-path sequence + a RAM snapshot to er-reload-trace.log. NO monitor / NO
-# teardown -- the game stays LIVE for the user; collect the log afterward.
+# Vanilla user-driven load1 baseline (bd vanilla-userdrive-trace-only-baseline-load1-safety-2026-07-20).
+# me3 offline with only er_reload_trace.dll (log-only, standalone MinHook -- No product DLL, no
+# autoload/quickload/system-quit, no input harness/autodrive, no save redirect). The game boots pure
+# vanilla; the user drives to angrE via the normal Load Game menu using their real APPDATA save. The
+# trace DLL logs the native load-path sequence + a RAM snapshot to er-reload-trace.log. No monitor / no
+# teardown -- the game stays live for the user; collect the log afterward.
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -37,7 +37,7 @@ ME3="${ME3:-/mnt/c/Users/$USER/AppData/Local/garyttierney/me3/bin/me3.exe}"
 mkdir -p "$ARTIFACT_DIR"
 win_path() { python3 -c "import sys;p=sys.argv[1];print((p[5].upper()+':\\\\'+p[7:].replace('/','\\\\')) if p.startswith('/mnt/') and len(p)>6 and p[6]=='/' else p)" "$1"; }
 
-# --- stage ONLY the trace DLL + a single-native me3 profile ---
+# --- stage only the trace DLL + a single-native me3 profile ---
 TRACE_GAMEDIR="$GAME_DIR/er_reload_trace.dll"
 cp -f "$TRACE_DLL" "$TRACE_GAMEDIR"
 PROFILE="$ARTIFACT_DIR/vanilla-trace.me3"
@@ -51,7 +51,7 @@ PROFILE="$ARTIFACT_DIR/vanilla-trace.me3"
 	echo "path = '$(win_path "$TRACE_GAMEDIR")'"
 } >"$PROFILE"
 
-# --- PURE VANILLA: back up + remove any product save-redirect TOML so nothing redirects the save ---
+# --- Pure VANILLA: back up + remove any product save-redirect TOML so nothing redirects the save ---
 if [[ -f "$GAME_DIR/er-quickload.toml" ]]; then
 	cp -f "$GAME_DIR/er-quickload.toml" "$ARTIFACT_DIR/er-quickload.toml.bak"
 	rm -f "$GAME_DIR/er-quickload.toml"
@@ -73,12 +73,15 @@ echo "==   (or if anything crashes / a message box appears)."
 echo "==   trace log -> $ARTIFACT_DIR/er-reload-trace.log   (artifacts: $ARTIFACT_DIR)"
 echo "======================================================================"
 
-# EVERY per-run artifact goes into THIS run's directory. A GAME_DIR artifact is SINGLE-SLOT: the DLL
+# Every per-run artifact goes into this run's directory. A GAME_DIR artifact is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so two launches lose the run before last,
 # and several sessions launch concurrently here. A copy after the run cannot fix that -- by then
 # this run has clobbered the previous one's file -- and a crashed run never reaches the copy.
 nohup env \
 	ER_QUICKLOAD_TELEMETRY_PATH="$ARTIFACT_DIR/er-quickload-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_LOG_PATH="$ARTIFACT_DIR/er-invasion-warp.log" \
+	ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH="$ARTIFACT_DIR/er-invasion-warp-telemetry.json" \
+	ER_QUICKLOAD_INVASION_WARP_RUN_PATH="$ARTIFACT_DIR/er-invasion-warp-run.json" \
 	ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$ARTIFACT_DIR/er-quickload-autoload-debug.log" \
 	ER_QUICKLOAD_CRASH_LOG_PATH="$ARTIFACT_DIR/er-quickload-crash-log.txt" \
 	ER_QUICKLOAD_TRACE_CONTINUE_PATH="$ARTIFACT_DIR/er-quickload-continue-trace.log" \
@@ -97,6 +100,15 @@ nohup env \
 	ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
 	ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \
 	ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$ARTIFACT_DIR/er-loading-portrait-crash-log.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$ARTIFACT_DIR/er-crash-log.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ARTIFACT_DIR/er-crash-latest.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
+	ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
+	ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
+	ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$ARTIFACT_DIR/er-quit-load-character.log" \
+	ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
+	ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$ARTIFACT_DIR/er-save-game-row.log" \
+	ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
 	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 echo "me3 pid $! ; launch log: $ARTIFACT_DIR/me3-launch.log"
 echo "ARTIFACT_DIR=$ARTIFACT_DIR"

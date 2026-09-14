@@ -1,10 +1,10 @@
-// POSITIVE row identity for the five-row System -> Quit dialog.
+// Positive row identity for the five-row System -> Quit dialog.
 //
 // # Why the previous identity was wrong
 //
 // The Quit-tab routing keyed every decision on an "action object" pointer read from
 // `controller + PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_OBJECT_OFFSET` (`+0xa8`). That pointer is
-// **not an object of its own** -- it is a fixed-offset ALIAS of the controller:
+// **not an object of its own** -- it is a fixed-offset alias of the controller:
 //
 // `CS::PropertyNewButtonController` is a 0x300-byte heap object (`HeapAlloc(0x300, 8, ...)` in the
 // 1.16.2 dump's `FUN_14086a950`) whose constructor `FUN_14086a2a0` copy-constructs the caller's
@@ -17,7 +17,7 @@
 //
 // Therefore `action_obj == captured_action` is exactly `controller == captured_controller` wearing
 // a disguise, and it carries no row information whatsoever. Worse, the visible buttons are
-// dispatched through only TWO controllers: in the measured run only the two NATIVE row controllers
+// dispatched through only two controllers: in the measured run only the two native row controllers
 // ever reached `PropertyNewButtonController::Activate` (0x23517880 with index 0, 0x23517580 with
 // index 1, twice per frame), and the two cloned rows' controllers never appeared at all. So a click
 // on the fourth visible button ("Load Character from File") arrives carrying the second native row's
@@ -26,12 +26,12 @@
 //
 // # The identity used instead
 //
-// Each `EditProperty` row carries its own LABEL, and the label is reachable live from the dialog:
+// Each `EditProperty` row carries its own label, and the label is reachable live from the dialog:
 // `PropertyEditDialog.properties.items` starts at `dialog + 0x1268`, rows are `0x88` apart, and
 // `EditProperty.label` at `+0x8` is a `CS::MenuHelpLabelComponent` whose first field is the
-// `MenuString`'s RAW UTF-16 pointer (`CS::MenuString::MenuString` stores the pointer it is given).
+// `MenuString`'s raw UTF-16 pointer (`CS::MenuString::MenuString` stores the pointer it is given).
 // The cloned rows are built from this DLL's own process-lifetime label arrays, so they match by
-// exact POINTER equality; every row also matches by text. That is measured, not assumed: a run of
+// exact pointer equality; every row also matches by text. That is measured, not assumed: a run of
 // the four-row build reported `oracle_optionsetting_active_row_count = 4` with
 // `oracle_optionsetting_active_row_quit_label_mask = 15`, i.e. all four rows' labels were readable
 // and each matched one of the four known Quit labels, on the very dialog (`0x175842080`) the fatal
@@ -39,7 +39,7 @@
 // row 1 Return to Desktop, row 2 Load Character, row 3 Load Character from File -- and the fifth
 // row, Load Build from URL, is appended after them by the same cloner in the same pass.
 //
-// Which row was ACTIVATED comes from ONE source for all three input kinds: the dialog's own list
+// Which row was activated comes from one source for all three input kinds: the dialog's own list
 // cursor, `dialog + 0xb0c` -- field `+0xd4` of the `CS::GridControl` embedded at `dialog + 0xa38`
 // (`FUN_140739e20` returns it; the widget's item count is `+0xd0 == dialog + 0xb08`).
 //
@@ -47,27 +47,27 @@
 //
 // `GridControl::Update` (vtable `+0x10`, 1.16.2 `FUN_1407392f0`) is the single writer of that field:
 //
-//   * MOUSE -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
+//   * mouse -- `GridControl::HandleMouse` (`FUN_14073a5c0`) ends by asking, when the cursor is live
 //     (`FUN_140758050`: `CSMenuManImp::disableMouseCursor == false`) and the mouse is the active
 //     pointer (`FUN_1407588a0`: `CSMouseMan + 0x30`) and no drag/wheel/direction input is in flight,
-//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid CELL
+//     `FUN_140736c90(this, FUN_140757af0(pad))`. That hit-tests each of the `cols * rows` grid cell
 //     proxies via `FUN_14074b0d0`, converts the hit cell's `(row, col)` into an item index, and calls
 //     `FUN_14073bc10(this, index)` -- which writes `+0xd4`. Hover moves the native cursor.
-//   * PAD / KEYBOARD -- the direction branches of the same `Update` (`FUN_14073b0c0` /
+//   * PAD / keyboard -- the direction branches of the same `Update` (`FUN_14073b0c0` /
 //     `FUN_14073b4d0` / `FUN_14073a250`) land on the same `FUN_14073bc10`, and `Update` then diffs
 //     `+0xd4` against its pre-update value to fire the selection-changed callbacks.
 //
 // There is no separate focus field. So once the two rows this DLL adds are real grid cells, the
 // cursor identifies the row for mouse, keyboard and pad alike -- see `er_gfx::options_02_040` for the
 // movie-side half (the added cells are named `Item_1_0`/`Item_1_1`/`Item_2_0`/`Item_2_1` so the grid
-// measures a FULL 2x3, which is what makes them hit-testable AND puts the vertical axis in play).
+// measures a full 2x3, which is what makes them hit-testable and puts the vertical axis in play).
 //
-// The cursor's two halves are cross-checked and must agree: the captured build-time row TABLE
-// (index -> row) and the LIVE label read at that index. A mismatch, an unreadable label, an
-// out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row NEVER quits and
+// The cursor's two halves are cross-checked and must agree: the captured build-time row table
+// (index -> row) and the live label read at that index. A mismatch, an unreadable label, an
+// out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row never quits and
 // never runs anything.
 
-/// The six rows of the patched System -> Quit dialog, in property-list order.
+/// The seven rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRow {
     /// Native first row, relabelled "Save Game" by the `MsgRepository::GetAndFormat` hook.
@@ -83,15 +83,24 @@ pub enum QuitRow {
     /// Cloned row, labelled "Load Build from URL": runs the `er-build-planner` build importer
     /// against a share link, on the character already in the world. Unlike the two rows above it
     /// neither returns to the title nor touches the save container -- it grants, equips and
-    /// re-stats the LIVE character in place.
+    /// re-stats the live character in place.
     LoadBuildFromUrl,
-    /// Cloned row, labelled "Generate Build Link": the EXACT INVERSE of the row above. It reads the
+    /// Cloned row, labelled "Generate Build Link": the exact inverse of the row above. It reads the
     /// character already in the world -- equipped loadout, memorised spells, stats -- encodes it
     /// into a self-contained `er-build-planner` `?i=` share link, puts that link on the clipboard
     /// and opens it in the player's browser. It writes nothing to the character and nothing to the
     /// planner's servers: the `?i=` form carries the whole build in the URL, so no account is
     /// minted and no row is written into someone else's free hobby service.
     GenerateBuildLink,
+    /// Cloned row, labelled "Save Game": opens the save-destination browser, and the character is
+    /// written to the file the player picks.
+    ///
+    /// It reads the same words as the native first row's own flow, and that is deliberate -- it is
+    /// the row a player presses to save. The two spellings can never be on screen together: the
+    /// substitution that relabels the native first row is gated on
+    /// [`crate::row_cloner::save_game_flow_is_owned`], which is false in exactly the load that
+    /// clones this row, so that row keeps its vanilla label while this one carries the words.
+    SaveGameAs,
 }
 
 impl QuitRow {
@@ -104,13 +113,14 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => 4,
             QuitRow::LoadBuildFromUrl => 5,
             QuitRow::GenerateBuildLink => 6,
+            QuitRow::SaveGameAs => 7,
         }
     }
 
-    /// The row's VISIBLE label. The variant names still say "profile" because that is the native
+    /// The row's visible label. The variant names still say "profile" because that is the native
     /// vocabulary these rows are built from (`ProfileSummary`, `05_010_ProfileSelect`,
     /// `SaveRequest_Profile`) and renaming them would rename half the save-flow surface; the words
-    /// a USER reads live here, and only here.
+    /// a user reads live here, and only here.
     pub fn label(self) -> &'static str {
         match self {
             QuitRow::SaveGame => "Save Game",
@@ -119,22 +129,24 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => "Load Character from File",
             QuitRow::LoadBuildFromUrl => "Load Build from URL",
             QuitRow::GenerateBuildLink => "Generate Build Link",
+            QuitRow::SaveGameAs => "Save Game",
         }
     }
 }
 
-/// The six rows of the patched Quit dialog, in the captured table's stable order.
-pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 6] = [
+/// The seven rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 7] = [
     QuitRow::SaveGame,
     QuitRow::ReturnToDesktop,
     QuitRow::LoadProfile,
     QuitRow::LoadSaveProfiles,
     QuitRow::LoadBuildFromUrl,
     QuitRow::GenerateBuildLink,
+    QuitRow::SaveGameAs,
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
-/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the SAME value the
+/// `*(controller + 0xa8) == controller + 0x70` for a small callable, so this is the same value the
 /// old `*_ACTION_LAST_OBJECT` latches held -- named for what it is.
 pub const PROPERTY_NEW_BUTTON_CONTROLLER_ACTION_STORAGE_OFFSET: usize = 0x70;
 
@@ -163,6 +175,7 @@ pub struct QuitRowTable {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
 }
 
 impl QuitRowTable {
@@ -174,6 +187,7 @@ impl QuitRowTable {
             QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
             QuitRow::LoadBuildFromUrl => self.load_build_from_url_index,
             QuitRow::GenerateBuildLink => self.generate_build_link_index,
+            QuitRow::SaveGameAs => self.save_game_as_index,
         }
     }
 
@@ -192,14 +206,14 @@ pub enum QuitRowLabel {
     Foreign,
 }
 
-/// How the activation arrived, as classified by the game's OWN predicates on the dispatched event
+/// How the activation arrived, as classified by the game's own predicates on the dispatched event
 /// (`FUN_140758a10` = pad/keyboard confirm, `FUN_140758a70` = mouse click; both are the tests
 /// `PropertyNewButtonController`'s should-invoke predicate `FUN_140974b00` itself runs).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitInputKind {
-    /// A confirm press from EITHER a pad button OR the keyboard: `FUN_140758a10` is one predicate
-    /// covering both, so there is deliberately no separate keyboard variant. Do NOT add one, and do
-    /// NOT test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
+    /// A confirm press from either a pad button or the keyboard: `FUN_140758a10` is one predicate
+    /// covering both, so there is deliberately no separate keyboard variant. Do not add one, and do
+    /// not test a key code here -- confirm is user-rebindable (`E` by default), and asking the game's
     /// own predicate is exactly what makes a rebind work without this DLL knowing any key codes.
     Confirm,
     MouseClick,
@@ -219,7 +233,7 @@ impl QuitInputKind {
     }
 }
 
-/// Which evidence resolved the row. Exactly ONE variant on purpose: the dialog's own list cursor is
+/// Which evidence resolved the row. Exactly one variant on purpose: the dialog's own list cursor is
 /// the single row identity for mouse, keyboard and pad, so every resolution reports the same
 /// discriminator regardless of input kind (`oracle_system_quit_row_last_discriminator == 1`).
 /// Adding a second variant means a second identity source was reintroduced -- which is the defect
@@ -245,7 +259,7 @@ impl QuitRowDiscriminator {
     }
 }
 
-/// Why the row could not be identified. Every one of these refuses the quit AND runs nothing.
+/// Why the row could not be identified. Every one of these refuses the quit and runs nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRowAmbiguity {
     /// One or more of the row indices was never captured, or two captured the same index.
@@ -261,7 +275,7 @@ pub enum QuitRowAmbiguity {
     /// The cursor row's label pointer could not be read at all.
     CursorRowLabelUnreadable,
     /// The cursor row's label is foreign but the cursor matches neither captured native row index --
-    /// again the table and the live label DISAGREE about what sits at that index.
+    /// again the table and the live label disagree about what sits at that index.
     CursorRowUnclaimed,
 }
 
@@ -291,7 +305,7 @@ impl QuitRowAmbiguity {
         }
     }
 
-    /// `true` when the refusal is the two halves of the cursor identity CONTRADICTING each other --
+    /// `true` when the refusal is the two halves of the cursor identity contradicting each other --
     /// the captured build-time row table versus the label read live at that index. This is the
     /// refusal-on-disagreement backstop; the other reasons are simply absence of evidence.
     pub fn is_disagreement(self) -> bool {
@@ -319,7 +333,7 @@ impl QuitRowVerdict {
         }
     }
 
-    /// `true` only for a POSITIVELY identified Return-to-Desktop row. Everything else -- including
+    /// `true` only for a positively identified Return-to-Desktop row. Everything else -- including
     /// every ambiguity -- is false, so the irreversible instant `ExitProcess(0)` can never run on
     /// absence of evidence.
     pub fn authorizes_quit(self) -> bool {
@@ -344,10 +358,11 @@ pub struct QuitRowFacts {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
-    /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. THE row
+    /// Live list cursor `dialog + 0xb0c` (`GridControl + 0xd4`); `-1` when unreadable. The row
     /// identity: the native grid writes it from mouse hover, keyboard and pad alike.
     pub cursor: i32,
     /// Number of rows in the table (always `QUIT_ROW_TABLE_ROWS.len()` once complete); the cursor
@@ -355,7 +370,7 @@ pub struct QuitRowFacts {
     pub row_count: i32,
     /// Label read live at the cursor row; `None` when the pointer was unreadable.
     pub cursor_row_label: Option<QuitRowLabel>,
-    /// How the game classified the dispatched event. RECORDED, never branched on -- it is the
+    /// How the game classified the dispatched event. Recorded, never branched on -- it is the
     /// evidence that one discriminator serves every input kind, not an input to the decision.
     pub input_kind: QuitInputKind,
 }
@@ -376,6 +391,7 @@ impl QuitRowFacts {
             load_save_profiles_index: table.load_save_profiles_index,
             load_build_from_url_index: table.load_build_from_url_index,
             generate_build_link_index: table.generate_build_link_index,
+            save_game_as_index: table.save_game_as_index,
             table_dialog,
             activation_dialog,
             cursor,
@@ -393,11 +409,32 @@ impl QuitRowFacts {
             load_save_profiles_index: self.load_save_profiles_index,
             load_build_from_url_index: self.load_build_from_url_index,
             generate_build_link_index: self.generate_build_link_index,
+            save_game_as_index: self.save_game_as_index,
         }
         .index(row)
     }
 
+    /// Whether the captured table can identify a row at all.
+    ///
+    /// A `-1` is "this row was never captured", and for a cloned row that is a legitimate state,
+    /// not a broken table: a shell arming only the two build rows never clones Load Character or
+    /// Load Character from File, so their indices stay `-1` for the life of the dialog. This
+    /// predicate used to require all six to be present, which made every activation in such a
+    /// profile `RowTableIncomplete` -- the refusal forwards the native activation, so both build
+    /// rows ran Save Game and Return to Desktop instead. Measured on the shell-only profile,
+    /// 2026-09-10: `row=AMBIGUOUS reason=row-table-incomplete` on every press.
+    ///
+    /// What has to hold is narrower, and it is what the guard was always for. The two native rows
+    /// are on the tab whether or not anything is cloned, so they must be captured. Every captured
+    /// row must be in range and must claim an index no other row claims -- absent rows are skipped
+    /// rather than compared, since several `-1`s are not a collision. An absent row can then never
+    /// be the cursor's answer: `cursor_candidate` matches `index_of(row) == cursor` against a
+    /// non-negative cursor, and `-1` matches nothing.
     fn table_complete_and_distinct(&self) -> bool {
+        let in_range = |index: i32| index >= 0 && index < self.row_count;
+        if !in_range(self.save_game_index) || !in_range(self.return_desktop_index) {
+            return false;
+        }
         let idx = [
             self.save_game_index,
             self.return_desktop_index,
@@ -405,11 +442,15 @@ impl QuitRowFacts {
             self.load_save_profiles_index,
             self.load_build_from_url_index,
             self.generate_build_link_index,
+            self.save_game_as_index,
         ];
-        if idx.iter().any(|i| *i < 0 || *i >= self.row_count) {
+        if idx.iter().any(|index| *index >= self.row_count) {
             return false;
         }
         for (a, first) in idx.iter().enumerate() {
+            if *first < 0 {
+                continue;
+            }
             for second in idx.iter().skip(a + 1) {
                 if first == second {
                     return false;
@@ -420,7 +461,7 @@ impl QuitRowFacts {
     }
 
     /// The row the list cursor is sitting on. Both halves of the identity must agree: the captured
-    /// build-time row TABLE (index -> row) and the LABEL read live at that index.
+    /// build-time row table (index -> row) and the label read live at that index.
     fn cursor_candidate(&self) -> Result<QuitRow, QuitRowAmbiguity> {
         if self.cursor < 0 || self.cursor >= self.row_count {
             return Err(QuitRowAmbiguity::CursorOutOfRange);
@@ -449,7 +490,7 @@ impl QuitRowFacts {
     }
 }
 
-/// Resolve which System -> Quit row an activation belongs to, from the ONE identity the native grid
+/// Resolve which System -> Quit row an activation belongs to, from the one identity the native grid
 /// maintains for every input kind: its list cursor.
 ///
 /// There is deliberately no per-input-kind branch, no screen-geometry rectangle and no controller /
@@ -480,7 +521,7 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
 /// index, and what the label read live at the cursor actually is.
 pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{}] live_label={:?} input_kind={:?}",
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{} save_game_as=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
         facts.save_game_index,
         facts.return_desktop_index,
@@ -488,6 +529,7 @@ pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
         facts.load_save_profiles_index,
         facts.load_build_from_url_index,
         facts.generate_build_link_index,
+        facts.save_game_as_index,
         facts.cursor_row_label,
         facts.input_kind,
     )
@@ -503,6 +545,60 @@ pub fn quit_row_verdict_text(verdict: QuitRowVerdict) -> String {
     }
 }
 
+/// What a press on one of the two native Quit rows should do in this load.
+///
+/// The two native rows are on the tab whether or not anything is cloned, and unlike a cloned row
+/// they cannot be left out of a [`crate::row_cloner::RowSet`] -- the game put them there. So a load
+/// that does not own a native row's flow has to decide what happens to a press it is not equipped
+/// to handle, and only one of the three answers is correct for each case.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeRowAction {
+    /// This load supplies the row's flow; run it and suppress the game's own action.
+    RunFlow,
+    /// This load does not supply the flow, and the press is positively this row's own thunk.
+    /// Forward it, so the row keeps exactly the behaviour vanilla gave it.
+    ForwardNative,
+    /// This load does not supply the flow and cannot prove whose thunk the press is carrying.
+    /// Run nothing.
+    Suppress,
+}
+
+/// Decide what a native Quit row's press does, from the four facts that bear on it.
+///
+/// The rule this encodes: **a load that does not implement a native row must leave that row
+/// alone.** Suppressing it instead produces a row that does nothing -- measured 2026-09-11 on a
+/// standalone shell, where the tab's first row read "Quit Game" and was inert because the router
+/// swallowed the native action and had no Save Game flow to put in its place. For Return to Desktop
+/// the same gap is worse than inert: the product's instant `ExitProcess(0)` is only safe because it
+/// persists the character first, so a load with no save request that took that path would terminate
+/// on unsaved progress.
+///
+/// Forwarding is gated on both halves of the row's identity, never on the cursor alone.
+/// `dispatching_controller` must be the controller captured for this row when the tab was built,
+/// because the visible buttons dispatch through only two controllers -- a press can arrive carrying
+/// the *other* native row's thunk, and the action behind that one is the irreversible Return to
+/// Desktop. Without that agreement, or without a trampoline to forward through, the answer is
+/// [`NativeRowAction::Suppress`]: a row that does nothing is a nuisance, and a row that quits the
+/// process when the player did not ask it to is not shippable.
+#[must_use]
+pub fn native_row_action(
+    load_supplies_flow: bool,
+    trampoline_available: bool,
+    captured_controller: usize,
+    dispatching_controller: usize,
+) -> NativeRowAction {
+    if load_supplies_flow {
+        return NativeRowAction::RunFlow;
+    }
+    if trampoline_available
+        && captured_controller != 0
+        && dispatching_controller == captured_controller
+    {
+        return NativeRowAction::ForwardNative;
+    }
+    NativeRowAction::Suppress
+}
+
 /// `true` when a resolved non-quit row arrived at an instant-quit gate. Root telemetry records this
 /// separately from plain ambiguity because it catches action-alias false-positive regressions.
 pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
@@ -511,7 +607,106 @@ pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
         Some(QuitRow::LoadProfile)
             | Some(QuitRow::LoadSaveProfiles)
             | Some(QuitRow::LoadBuildFromUrl)
+            | Some(QuitRow::SaveGameAs)
     )
+}
+
+/// Why a positively identified Return-to-Desktop press was not allowed to reach `ExitProcess(0)`.
+///
+/// Every variant names a state the process is genuinely in right now, never a leftover marker --
+/// see [`quit_exit_block`] for why that distinction is the whole point of this type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitExitBlock {
+    /// A save commit is armed or running. A process exit here tears the write in half.
+    SaveFlow,
+    /// The character-switch phase machine is mid-switch.
+    SwitchPhase,
+    /// `05_010_ProfileSelect` is on screen this frame, so the activation may be one the picker
+    /// re-dispatched through the native return-desktop controller rather than a press on the tab.
+    PickerWindowLive,
+    /// A `Load Character` press has asked for the picker and the window latch has not caught up
+    /// yet. Blocks only while something in this process is watching those windows.
+    ProfileLoadRequested,
+}
+
+impl QuitExitBlock {
+    pub fn label(self) -> &'static str {
+        match self {
+            QuitExitBlock::SaveFlow => "save-flow-in-flight",
+            QuitExitBlock::SwitchPhase => "switch-phase-active",
+            QuitExitBlock::PickerWindowLive => "profile-select-window-live",
+            QuitExitBlock::ProfileLoadRequested => "profile-load-requested",
+        }
+    }
+}
+
+/// The live process state that bears on whether the instant quit may run.
+///
+/// Each field is one term with one genuine consumer, captured from its counter at the moment of the
+/// press. No memory reads happen in here, which is what makes the decision unit-testable on the
+/// host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuitExitFacts {
+    /// `SAVE_FLOW_STAGE != SAVE_FLOW_STAGE_IDLE`.
+    pub save_flow_active: bool,
+    /// `SYSTEM_QUIT_QUICKLOAD_PHASE != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE`.
+    pub switch_phase_active: bool,
+    /// `SYSTEM_QUIT_PROFILE_SELECT_WINDOW != 0` -- written per frame by whichever
+    /// `MenuWindowJob::Run` owner this load has, and zeroed again when that window finalizes.
+    pub profile_select_window_live: bool,
+    /// `SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE != 0` -- set synchronously at the `Load Character`
+    /// click, cleared only by `system_windows::reset_profile_select_state`.
+    pub profile_load_requested: bool,
+    /// `PROFILE_SELECT_WINDOW_RUN_TICKS != 0` -- whether any `05_010_ProfileSelect` window has ever
+    /// run a frame under an owner in this process. The two owners that stamp this counter are the
+    /// only code that ever clears `profile_load_requested`, so this answers "does that request have
+    /// anybody to end it".
+    pub profile_select_window_observed: bool,
+}
+
+/// Whether a positively identified Return-to-Desktop press may run the irreversible
+/// `ExitProcess(0)`, and if not, which live state stopped it.
+///
+/// This sits behind [`resolve_quit_row`], never in front of it: by the time it is asked, the row
+/// table, the activation dialog, the list cursor and the live label at that cursor have already
+/// agreed that this is the game's own Return-to-Desktop row. So it does not ask "which row is
+/// this"; it asks "is the process in a state where quitting now would damage something".
+///
+/// # Why `profile_load_requested` needs a second term
+///
+/// The other three facts are live: each is written by machinery that is running, and each returns
+/// to its resting value on its own. `profile_load_requested` does not -- it is a latch set at the
+/// click, and the only code that clears it is `reset_profile_select_state`, reached from a
+/// `MenuWindowJob::Run` owner. A load with no such owner sets it once and never clears it, and the
+/// latch then reads as "a switch is in flight" for the rest of the session.
+///
+/// Measured on run `br-20260913-155423-2fe7`, a `quit-rows` module build carrying no
+/// `MenuWindowJob::Run` owner: `Load Character` at `+97s` set the latch, the player backed out, and
+/// the `Return to Desktop` press at `+239s` was refused with `switch_in_flight=true` while the
+/// quickload phase read 0 and `oracle_profile_select_window_run_ticks` read 0. The refusal forwarded
+/// the native activation, whose confirm box the product's own message-box suppression then ate under
+/// that same latch (`msgbox-skip ... scope=switch-active`), so the row was dead in both directions.
+/// The full product build of the same tree took the identical path with `run_ticks = 59` and refused
+/// nothing.
+///
+/// So the latch blocks only while `profile_select_window_observed` says somebody is watching those
+/// windows and will end the request. With an owner the guard is exactly what it was; without one it
+/// cannot wedge, because a request nothing can retract is not evidence of anything.
+#[must_use]
+pub fn quit_exit_block(facts: &QuitExitFacts) -> Option<QuitExitBlock> {
+    if facts.save_flow_active {
+        return Some(QuitExitBlock::SaveFlow);
+    }
+    if facts.switch_phase_active {
+        return Some(QuitExitBlock::SwitchPhase);
+    }
+    if facts.profile_select_window_live {
+        return Some(QuitExitBlock::PickerWindowLive);
+    }
+    if facts.profile_load_requested && facts.profile_select_window_observed {
+        return Some(QuitExitBlock::ProfileLoadRequested);
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -520,10 +715,90 @@ pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
 mod system_quit_row_identity_tests {
     use super::*;
 
+    /// The product owns both native flows, so nothing about its two rows changes -- whatever the
+    /// controllers happen to be.
+    #[test]
+    fn a_load_that_owns_the_flow_always_runs_it() {
+        assert_eq!(
+            native_row_action(true, true, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::RunFlow
+        );
+        // Not even a controller disagreement diverts it: the product suppressed and ran its flow
+        // before this decision existed, and that behaviour is deliberately untouched.
+        assert_eq!(
+            native_row_action(true, false, 0, 0x1a025f00),
+            NativeRowAction::RunFlow
+        );
+    }
+
+    /// The standalone-shell case this exists for: no flow, but the press is provably this row's
+    /// own thunk, so the row behaves exactly as vanilla built it.
+    #[test]
+    fn a_load_without_the_flow_forwards_the_rows_own_thunk() {
+        assert_eq!(
+            native_row_action(false, true, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::ForwardNative
+        );
+    }
+
+    /// The press arrived carrying the other native row's controller. Forwarding here runs whatever
+    /// action sits behind that thunk, and for the second row that is `ExitProcess(0)`.
+    #[test]
+    fn a_press_carrying_another_rows_controller_is_never_forwarded() {
+        assert_eq!(
+            native_row_action(false, true, 0x1a026d00, 0x1a025f00),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// Nothing was captured for this row, so there is no identity to agree with.
+    #[test]
+    fn an_uncaptured_row_is_never_forwarded() {
+        assert_eq!(
+            native_row_action(false, true, 0, 0x1a026d00),
+            NativeRowAction::Suppress
+        );
+        // ... and a zero dispatching controller must not match a zero captured one.
+        assert_eq!(
+            native_row_action(false, true, 0, 0),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// No trampoline to forward through. The union slot is unset, so there is nothing to call.
+    #[test]
+    fn without_a_trampoline_there_is_nothing_to_forward_to() {
+        assert_eq!(
+            native_row_action(false, false, 0x1a026d00, 0x1a026d00),
+            NativeRowAction::Suppress
+        );
+    }
+
+    /// Exhaustive over the decision's whole input shape: forwarding is reachable from exactly one
+    /// combination, so no future edit can widen it without failing this.
+    #[test]
+    fn forwarding_requires_every_one_of_its_three_conditions() {
+        let mut forwarding = Vec::new();
+        for flow in [false, true] {
+            for trampoline in [false, true] {
+                for captured in [0usize, 0x1a026d00] {
+                    for dispatching in [0usize, 0x1a026d00, 0x1a025f00] {
+                        if native_row_action(flow, trampoline, captured, dispatching)
+                            == NativeRowAction::ForwardNative
+                        {
+                            forwarding.push((flow, trampoline, captured, dispatching));
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(forwarding, vec![(false, true, 0x1a026d00, 0x1a026d00)]);
+    }
+
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
     /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
-    /// plus rows 4 and 5 (Load Build from URL, Generate Build Link), which the same cloner appends
-    /// in the same pass.
+    /// plus rows 4, 5 and 6 (Load Build from URL, Generate Build Link, the cloned Save Game), which
+    /// the same cloner appends in the same pass.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
@@ -532,6 +807,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
             table_dialog: 0x175842080,
             activation_dialog: 0x175842080,
             cursor: 1,
@@ -554,7 +830,7 @@ mod system_quit_row_identity_tests {
         assert!(verdict.authorizes_quit());
     }
 
-    /// The acceptance property: the SAME cursor resolves the SAME row with the SAME discriminator no
+    /// The acceptance property: the same cursor resolves the same row with the same discriminator no
     /// matter which input kind the game classified the event as. Nothing branches on input kind, so a
     /// mouse click on the row under the pointer and a pad confirm on the focused row are one path.
     #[test]
@@ -651,14 +927,7 @@ mod system_quit_row_identity_tests {
     }
 
     #[test]
-    fn an_incomplete_or_colliding_row_table_never_quits() {
-        let mut f = facts();
-        f.load_save_profiles_index = -1;
-        assert_eq!(
-            resolve_quit_row(&f),
-            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
-        );
-
+    fn a_colliding_or_out_of_range_row_table_never_quits() {
         let mut f = facts();
         f.load_profile_index = 1;
         assert_eq!(
@@ -671,6 +940,52 @@ mod system_quit_row_identity_tests {
         assert_eq!(
             resolve_quit_row(&f),
             QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
+        );
+
+        // A native row that was never captured is still a broken table: both are on the tab
+        // whatever is cloned, so a `-1` there means the capture itself failed.
+        for absent in [0, 1] {
+            let mut f = facts();
+            if absent == 0 {
+                f.save_game_index = -1;
+            } else {
+                f.return_desktop_index = -1;
+            }
+            assert_eq!(
+                resolve_quit_row(&f),
+                QuitRowVerdict::Ambiguous(QuitRowAmbiguity::RowTableIncomplete)
+            );
+        }
+    }
+
+    /// A cloned row that was never cloned is absent, not broken.
+    ///
+    /// This is the shell case: `er_quit_menu.dll` arming `RowSet::BUILD_ROWS_ONLY` never clones
+    /// Load Character or Load Character from File, so those two indices stay `-1` for the life of
+    /// the dialog. Requiring all six made every activation in that profile `RowTableIncomplete`,
+    /// and the refusal forwards the native activation -- so both build rows ran Save Game and
+    /// Return to Desktop. Measured on the shell-only profile 2026-09-10.
+    #[test]
+    fn an_uncloned_row_does_not_refuse_the_rows_that_were_cloned() {
+        let mut f = facts();
+        f.load_profile_index = -1;
+        f.load_save_profiles_index = -1;
+        assert_eq!(
+            resolve_quit_row(&f),
+            QuitRowVerdict::Resolved {
+                row: QuitRow::ReturnToDesktop,
+                by: QuitRowDiscriminator::CursorRow,
+            }
+        );
+
+        // And the absent row can never be answered, because `-1` matches no cursor.
+        let mut f = facts();
+        f.load_profile_index = -1;
+        f.cursor = 2;
+        f.cursor_row_label = Some(QuitRowLabel::Ours(QuitRow::LoadProfile));
+        assert_eq!(
+            resolve_quit_row(&f),
+            QuitRowVerdict::Ambiguous(QuitRowAmbiguity::CursorRowLabelMismatch)
         );
     }
 
@@ -766,7 +1081,7 @@ mod system_quit_row_identity_tests {
             }
         }
         // A resolved verdict must be distinguishable from an ambiguous one in the oracle, and there
-        // is exactly ONE discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
+        // is exactly one discriminator: `oracle_system_quit_row_last_discriminator` reads 1 for every
         // resolution, whatever the input kind.
         assert_eq!(QuitRowDiscriminator::CursorRow.code(), 1);
     }
@@ -785,6 +1100,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
         };
         assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
         // Every row in the stable table order must round-trip through `index`, so a row added to
@@ -836,5 +1152,138 @@ mod system_quit_row_identity_tests {
             row: QuitRow::ReturnToDesktop,
             by: QuitRowDiscriminator::CursorRow,
         }));
+    }
+
+    /// A quiet in-world Quit tab: nothing is loading, nothing is saving, no picker is up. The
+    /// player pressed the game's own Return to Desktop and it has to quit.
+    fn idle_exit_facts() -> QuitExitFacts {
+        QuitExitFacts {
+            save_flow_active: false,
+            switch_phase_active: false,
+            profile_select_window_live: false,
+            profile_load_requested: false,
+            profile_select_window_observed: false,
+        }
+    }
+
+    #[test]
+    fn an_idle_process_lets_the_real_row_quit() {
+        assert_eq!(quit_exit_block(&idle_exit_facts()), None);
+    }
+
+    /// The reported defect, as its facts. Run `br-20260913-155423-2fe7`: a `quit-rows` module build
+    /// with no `MenuWindowJob::Run` owner, so `run_ticks` stayed 0 and the click-time latch set at
+    /// `+97s` was still 1 when `Return to Desktop` was pressed at `+239s` -- with the quickload
+    /// phase idle and no picker window on screen. Before the second term this refused the quit.
+    #[test]
+    fn a_latch_with_no_owner_to_clear_it_never_blocks_the_quit() {
+        let facts = QuitExitFacts {
+            profile_load_requested: true,
+            profile_select_window_observed: false,
+            ..idle_exit_facts()
+        };
+        assert_eq!(quit_exit_block(&facts), None);
+    }
+
+    /// The same latch in a load that does own a `MenuWindowJob::Run`. The request will be retracted
+    /// when the picker finalizes, so until then it is real evidence and the guard stands.
+    #[test]
+    fn a_latch_with_an_owner_still_blocks_the_quit() {
+        let facts = QuitExitFacts {
+            profile_load_requested: true,
+            profile_select_window_observed: true,
+            ..idle_exit_facts()
+        };
+        assert_eq!(
+            quit_exit_block(&facts),
+            Some(QuitExitBlock::ProfileLoadRequested)
+        );
+    }
+
+    /// The three live terms are untouched by the fix: each blocks on its own, with no owner needed
+    /// and no help from the others.
+    #[test]
+    fn every_live_term_blocks_the_quit_by_itself() {
+        for (facts, expected) in [
+            (
+                QuitExitFacts {
+                    save_flow_active: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::SaveFlow,
+            ),
+            (
+                QuitExitFacts {
+                    switch_phase_active: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::SwitchPhase,
+            ),
+            (
+                QuitExitFacts {
+                    profile_select_window_live: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::PickerWindowLive,
+            ),
+        ] {
+            assert_eq!(quit_exit_block(&facts), Some(expected));
+        }
+    }
+
+    /// Exhaustive over the whole input shape, so no future edit can widen the exit without failing
+    /// this. Quitting is reachable from exactly three of the thirty-two states: every live term has
+    /// to be at rest, which fixes three of the five booleans, and of the four combinations the
+    /// other two make, only `requested && observed` -- a latch with an owner -- still blocks.
+    #[test]
+    fn quitting_requires_every_live_term_at_rest() {
+        let mut quits = Vec::new();
+        for save_flow_active in [false, true] {
+            for switch_phase_active in [false, true] {
+                for profile_select_window_live in [false, true] {
+                    for profile_load_requested in [false, true] {
+                        for profile_select_window_observed in [false, true] {
+                            let facts = QuitExitFacts {
+                                save_flow_active,
+                                switch_phase_active,
+                                profile_select_window_live,
+                                profile_load_requested,
+                                profile_select_window_observed,
+                            };
+                            if quit_exit_block(&facts).is_none() {
+                                quits.push(facts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(quits.len(), 3);
+        for facts in &quits {
+            assert!(!facts.save_flow_active);
+            assert!(!facts.switch_phase_active);
+            assert!(!facts.profile_select_window_live);
+            // The only latched state that reaches the exit is the one nothing can retract.
+            assert!(!(facts.profile_load_requested && facts.profile_select_window_observed));
+        }
+    }
+
+    /// The block is reported, not merely counted, so a refusal in the log names which term did it
+    /// instead of a single boolean that three states can produce.
+    #[test]
+    fn every_block_has_a_distinct_label() {
+        let labels: Vec<&str> = [
+            QuitExitBlock::SaveFlow,
+            QuitExitBlock::SwitchPhase,
+            QuitExitBlock::PickerWindowLive,
+            QuitExitBlock::ProfileLoadRequested,
+        ]
+        .into_iter()
+        .map(QuitExitBlock::label)
+        .collect();
+        let mut sorted = labels.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), labels.len());
     }
 }

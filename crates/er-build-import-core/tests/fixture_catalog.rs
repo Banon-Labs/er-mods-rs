@@ -7,11 +7,11 @@
 //! `max_stored` is `EquipParamGoods.maxNum`, read out of the installed regulation, which is what
 //! [`er_build_import_core::catalog::Entry::max_stored`] is defined to hold and what the runtime
 //! catalog puts there. For every tool, tear and great rune here the planner's own database agrees
-//! with the game exactly. Its SPELL rows do not -- it records `maxRepositoryNum` (600) where the
+//! with the game exactly. Its spell rows do not -- it records `maxRepositoryNum` (600) where the
 //! game's `maxNum` is 99 -- so those nine carry the game's number rather than the planner's, to
 //! keep this table a faithful stand-in for the one built from a live session.
 //!
-//! [`Kind::Ammo`] rows are the exception to the FIELD, not to the rule: an arrow is an
+//! [`Kind::Ammo`] rows are the exception to the field, not to the rule: an arrow is an
 //! `EquipParamWeapon` row and has no `maxNum`, so their `max_stored` is
 //! `EquipParamWeapon.maxArrowQuantity` -- the field the engine's own `::GetMaxItemQuantity` reads
 //! for `weaponCategory` 13 and 14. Same source, same regulation, different table.
@@ -21,6 +21,20 @@ use er_build_import_core::catalog::{Entry, Kind, MapCatalog};
 /// Build the fixture catalog.
 pub fn catalog() -> MapCatalog {
     let mut c = MapCatalog::new();
+    // `No Skill` is an Ash of War like any other -- `EquipParamGem` row 10, `SwordArtsParam` row
+    // 0 -- and the one a build uses to take a weapon's innate skill away. It is in this fixture
+    // because the planner payload asks for it four times, and because leaving it out is what let
+    // the plan quietly treat it as "mount nothing" for as long as it did.
+    c.insert(
+        Kind::AshOfWar,
+        "No Skill",
+        Entry {
+            full_item_id: 0x8000_000A,
+            max_stored: None,
+            somber: false,
+            pot_group: None,
+        },
+    );
     c.insert(
         Kind::AshOfWar,
         "Bloodhound's Step",
@@ -141,7 +155,7 @@ pub fn catalog() -> MapCatalog {
             pot_group: None,
         },
     );
-    // AMMUNITION, read out of the installed 1.17 `regulation.bin` by
+    // Ammunition, read out of the installed 1.17 `regulation.bin` by
     // `scripts/regulation-ammo-census.py`: item id is the bare `EquipParamWeapon` row (category
     // nibble 0, same as an armament) and `max_stored` is that row's `maxArrowQuantity`.
     c.insert(

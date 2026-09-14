@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ -f "$HOME/.cargo/env" ]]; then
-  # Non-interactive agent shells may not have Cargo on PATH.
+  # Non-interactive agent shells may not have Cargo on path.
   # shellcheck disable=SC1091
   . "$HOME/.cargo/env"
 fi
@@ -14,15 +14,15 @@ SCREENSHOT_HELPER="${SCREENSHOT_HELPER:-/home/banon/projects/scripts/hypr-window
 # shellcheck source=scripts/me3-launch-lib.sh
 source "$REPO_ROOT/scripts/me3-launch-lib.sh"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$REPO_ROOT/target/smoke/driver-$(date +%Y%m%d-%H%M%S)}"
-# EVERY per-run artifact is redirected into ARTIFACT_DIR. These four used to default into GAME_DIR,
-# which is SINGLE-SLOT: the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is
+# Every per-run artifact is redirected into ARTIFACT_DIR. These four used to default into GAME_DIR,
+# which is single-SLOT: the DLL rotates `<name>` to `<name>.prev` on its first write, so run N-2 is
 # already gone -- and the `rm -f` this script ran before launching finished the job, deleting the
-# PREVIOUS run's telemetry, autoload log and continue trace outright. Measured 2026-08-31: two
+# previous run's telemetry, autoload log and continue trace outright. Measured 2026-08-31: two
 # launches destroyed a 5.4 MB continue trace nobody had read. Copying them out at teardown (see
 # `copy_runtime_logs`) never fixed that: by then this run had already clobbered the last one's
 # files, and a crashed or killed run never reaches the copy at all.
 #
-# COMMAND_PATH / AUTOLOAD_PATH stay in GAME_DIR deliberately -- they are INPUT channels this driver
+# COMMAND_PATH / AUTOLOAD_PATH stay in GAME_DIR deliberately -- they are input channels this driver
 # writes and the DLL reads, not evidence.
 TELEMETRY_PATH="${TELEMETRY_PATH:-$ARTIFACT_DIR/er-quickload-telemetry.json}"
 COMMAND_PATH="${COMMAND_PATH:-$GAME_DIR/er-quickload-command.txt}"
@@ -212,7 +212,7 @@ copy_runtime_logs() {
   # The DLL now writes these straight into ARTIFACT_DIR (see the redirect block at the top), so this
   # is no longer how the evidence is preserved -- it is a FALLBACK for the case where the env did not
   # reach the game through me3/Proton and the DLL fell back to GAME_DIR. Copying a GAME_DIR file here
-  # can only ever recover THIS run's output, never the previous run's; that is why the fix is the
+  # can only ever recover this run's output, never the previous run's; that is why the fix is the
   # redirect and not this function.
   [[ -d "$ARTIFACT_DIR" ]] || return 0
   cp -f "$(telemetry_source_path)" "$ARTIFACT_DIR/telemetry.json" 2>/dev/null || true
@@ -329,11 +329,11 @@ drive() {
   BOOTSTRAP_STATE_PATH=$(realpath -m "$BOOTSTRAP_STATE_PATH")
   BOOT_PROFILE_PATH=$(realpath -m "$BOOT_PROFILE_PATH")
   mkdir -p "$ARTIFACT_DIR"
-  # THE GAME_DIR ENTRIES ARE GONE FROM THIS LINE ON PURPOSE. They used to read
+  # The GAME_DIR entries are gone from this line on purpose. They used to read
   #   rm -f ... "$GAME_DIR/er-quickload-telemetry.json" \
   #             "$GAME_DIR/er-quickload-autoload-debug.log" \
   #             "$GAME_DIR/er-quickload-continue-trace.log"
-  # which deleted ANOTHER run's evidence -- this driver has no claim on those files, and several
+  # which deleted another run's evidence -- this driver has no claim on those files, and several
   # sessions launch concurrently in this repo. Everything this run writes now lands in a fresh
   # per-run ARTIFACT_DIR, so there is nothing of ours in GAME_DIR left to clear.
   rm -f "$COMMAND_PATH" "$AUTOLOAD_PATH"
@@ -378,12 +378,24 @@ drive() {
         ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$BOOTSTRAP_STATE_PATH" \
         ER_QUICKLOAD_PROFILE_PATH="$BOOT_PROFILE_PATH" \
         ER_QUICKLOAD_RELOAD_TRACE_PATH="$ARTIFACT_DIR/er-reload-trace.log" \
+        ER_QUICKLOAD_INVASION_WARP_LOG_PATH="$ARTIFACT_DIR/er-invasion-warp.log" \
+        ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH="$ARTIFACT_DIR/er-invasion-warp-telemetry.json" \
+        ER_QUICKLOAD_INVASION_WARP_RUN_PATH="$ARTIFACT_DIR/er-invasion-warp-run.json" \
         ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$ARTIFACT_DIR/er-input-harness.log" \
         ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$ARTIFACT_DIR/er-input-harness-phases.jsonl" \
         ER_QUICKLOAD_DIAG_HARNESS_PATH="$ARTIFACT_DIR/er-diag-harness.log" \
         ER_QUICKLOAD_TIMESERIES_PATH="$ARTIFACT_DIR/er-telemetry-timeseries.jsonl" \
         ER_QUICKLOAD_CPU_PROFILE_PATH="$ARTIFACT_DIR/er-cpu-profile.txt" \
+        ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$ARTIFACT_DIR/er-crash-log.txt" \
+        ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$ARTIFACT_DIR/er-crash-latest.txt" \
+        ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
+        ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
+        ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
+        ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$ARTIFACT_DIR/er-quit-load-character.log" \
+        ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
+        ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$ARTIFACT_DIR/er-save-game-row.log" \
         ER_QUICKLOAD_ARMAMENT_ICONS_PATH="$ARTIFACT_DIR/er-armament-icons.log" \
+        ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
         ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$ARTIFACT_DIR/er-save-disable.log" \
         ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$ARTIFACT_DIR/er-save-disable-telemetry.json" \
         ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$ARTIFACT_DIR/er-loading-portrait.log" \

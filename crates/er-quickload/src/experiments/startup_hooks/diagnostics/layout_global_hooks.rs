@@ -13,7 +13,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     ));
     install_scaleform_handler_lifecycle_guard();
     // Return-to-title crash fix (er-effects-rs-j74t): the ~MenuWindowJob finalize runs its whole
-    // owningMenuWindow block on a DOOMED title window during return-to-title, dereferencing wild
+    // owningMenuWindow block on a doomed title window during return-to-title, dereferencing wild
     // memory (crashes rva 0x7ada87 and 0x7adb28). At the destructor we reproduce the finalize's
     // vfptr[3] call and, if the window is freed/reused or its event index is out of range, null
     // owningMenuWindow so the finalize skips the block entirely.
@@ -21,7 +21,7 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // The dtor guard covers only the finalize's 0x7ac720 caller; the switch crash arrives via
     // MenuWindowJob::Run. Hook the finalize itself so every caller is covered.
     install_menu_window_job_finalize_guard();
-    // THE THREE TRACES THAT USED TO BE INSTALLED HERE ARE GONE (2026-08-25). `install_msb_parse_trace`,
+    // The three traces that used to be installed here are gone (2026-08-25). `install_msb_parse_trace`,
     // `install_loadlist_wait_trace` and `install_dlc_roots_trace` sat on these three lines with no
     // gate above them, so a shipped profile detoured the sole `msbResCap` writer (once per MSB, every
     // boot), `STEP_LoadListWait` (every frame) and the three DLC virtual-root entry points -- five
@@ -37,96 +37,171 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // overflow corrupts the render -- c2794d9): never alters queue behavior, only names which
     // producer's submissions grow per switch so the 0x1aeaf05 overflow can be fixed at its source.
     install_gx_cmd_queue_telemetry();
-    // DISABLED 2026-07-15: this detour targets 0x7ad1c0, the SAME RVA as the default-on PAB detour
-    // (PAB_NODE_UPDATE_RVA == MENU_WINDOW_JOB_RUN_RVA). MinHook binds only ONE detour per address, and on
+    // Disabled 2026-07-15: this detour targets 0x7ad1c0, the same RVA as the default-on PAB detour
+    // (PAB_NODE_UPDATE_RVA == MENU_WINDOW_JOB_RUN_RVA). MinHook binds only one detour per address, and on
     // native Windows the inline/early PAB install always wins, so this background-thread install fails
     // ALREADY_CREATED and its post-original work never ran (ghosting + non-interactive ProfileSelect). Its
     // post-original body (system_quit_menu_window_run_post) is now called directly from the guaranteed
     // winner, pab_node_update_detour, so this contender is removed to keep PAB the deterministic sole owner
     // (otherwise a rare System->Quit win would starve pab_advance_try, the autoload driver). See that detour.
     // install_system_quit_menu_window_job_run_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_window_list_push_hook();
+    // Compiled out unless this build replaces the row, so a default build carries no substitution
+    // to reach. The runtime predicate inside the hook stays as well -- a build that has the feature
+    // but never arms the row must still leave the text alone. The message-id recording this hook
+    // also does, which is what named `GRD` 110000 as the dialog behind the row, goes with it.
+    #[cfg(feature = "save-game-row")]
     install_system_quit_save_game_text_hook();
-    install_system_quit_noop_action_hook();
+    // The three routing detours this used to install are part of the shared arm call below
+    // (`er_quit_menu_core::row_cloner::arm`), on the `er-hook` union rather than a bare `MhHook`.
     install_system_quit_save_game_confirm_hook();
     // Save-flow confirm boxes: observe `CS::MenuJob::EmitResult` so the user's Yes/No on a
     // Save Game confirm is read from the game's own `MenuJobResult` instead of guessed from
     // dialog fields (the 2026-07-28 defect where a fresh box resolved itself to No).
     install_menu_job_emit_result_hook();
+    // The three ProfileSelect routing detours exist to carry a cloned row's press into the
+    // switch. Without the rows there is no press to carry.
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_activate_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_confirmed_hook();
+    #[cfg(feature = "quit-rows")]
     install_system_quit_profile_load_job_run_hook();
     // Save-picker browse-row integrity (er-effects-rs-xlqh): re-stage the picker's browse rows at
     // the entry of the native ProfileSelect list builder, so an in-world game save that rewrote the
     // active slot's ProfileSummary record (MarkProfileIndexAsUsed + FUN_140262270 stomping the
-    // LOADED character's name over a staged row) can never leak a stray character-name row into the
+    // loaded character's name over a staged row) can never leak a stray character-name row into the
     // browse list.
+    // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
+    // host with a save-swap ledger, a save flow and a live-layout editor behind it can perform; a
+    // standalone shell installs none of them and the picker still browses and picks.
+    // Not gated on `save-picker`, and the attempt is recorded here so it is not repeated. The list
+    // builder does not merely add browse rows: it is the hook the `05_010_ProfileSelect` list is
+    // built through in every composition, so removing it emptied the title's character list. The
+    // player reported a Load Game list with no characters on the 2026-09-13 10:33 run and on every
+    // run after it, and the autoload never left the title in any of them -- `c30=0xa010000 level=9
+    // player=false` -- while 10:23 and 10:29 loaded the same save with these installed.
+    super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
-    if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst) != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+    // Save Game is a vanilla row, not a cloned one, so it does not belong to `quit-rows` -- and
+    // when that feature came off the defaults it went with it anyway, because the only call that
+    // registers its flow was the arm below. What the player then got was the label without the
+    // behaviour: the text hook still renamed the native first row to `Save Game`, the router found
+    // no flow and forwarded the press to the vanilla action, and pressing it saved and returned to
+    // the title (run br-20260912-185308-639d). Arming `RowSet::NONE` clones nothing and adds no
+    // row; it registers the action table and puts this module's row handlers on the `er-hook`
+    // union, which is what a standalone shell's forward reaches when it has no flow of its own.
+    #[cfg(all(feature = "save-game-row", not(feature = "quit-rows")))]
     {
-        return;
-    }
-    match unsafe { MH_Initialize() } {
-        MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        status => {
+        let armed = unsafe {
+            er_quit_menu_core::row_cloner::arm(
+                er_quit_menu_core::row_cloner::RowSet::NONE,
+                er_quit_menu_core::row_cloner::QuitRowActions {
+                    save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    save_game_request_save_only: Some(
+                        crate::experiments::system_quit_save_game_request_save_only,
+                    ),
+                    ..Default::default()
+                },
+            )
+        };
+        if let Err(error) = armed {
             append_autoload_debug(format_args!(
-                "system-quit-dup: MH_Initialize failed: {status:?}"
+                "system-quit-save: arming the vanilla Save Game row failed: {error:?} -- the row keeps the game's own text and action"
             ));
+        }
+        // The pump the row's destination browser needs, and in this build nothing else provides
+        // one. `system_quit_menu_window_run_post` -- the product's own `MenuWindowJob::Run` work,
+        // and the only writer of the ProfileSelect window latch -- lives in the `quit-rows`
+        // directory, so with the cloned rows off the browser opened and nothing watched it. A
+        // backout cleared no latch, `dest_browse_verdict` kept reading `dest_mode` as a browser
+        // still on screen, and the flow never left `SAVE_FLOW_STAGE_DEST_BROWSE`: the second press
+        // logged `Save Game row press IGNORED ... already in flight` (run br-20260913-050924-8131,
+        // `+31111368ms`). The core pump is the same one the standalone shell uses; its
+        // `note_picker_window_closed` is what ends the browse. `set_save_game_row_armed` had no
+        // caller in the tree at all, so that block had never run in any host.
+        er_quit_menu_core::menu_pump::set_save_game_row_armed(true);
+        if !unsafe { er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook() } {
+            append_autoload_debug(format_args!(
+                "system-quit-save: no MenuWindowJob::Run pump -- the Save Game row's destination browser will open and never close the flow"
+            ));
+        }
+    }
+    // Everything below clones rows onto the Quit tab. With the feature off the tab keeps exactly
+    // what the game ships apart from the Save Game row armed just above, and the installs before
+    // it -- the telemetry, the vanilla Save Game hooks and the picker -- still run.
+    #[cfg(feature = "quit-rows")]
+    {
+        if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst)
+            != SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED
+        {
             return;
         }
-    }
-    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA) else {
-        append_autoload_debug(format_args!(
-            "system-quit-dup: failed to resolve AddCancelButton rva 0x{SYSTEM_QUIT_DUPLICATE_ADD_CANCEL_BUTTON_RVA:x}"
-        ));
-        return;
-    };
-    match unsafe {
-        MhHook::new(
-            addr as *mut c_void,
-            system_quit_duplicate_add_cancel_button_hook as *mut c_void,
-        )
-    } {
-        Ok(hook) => {
-            SYSTEM_QUIT_DUPLICATE_ORIG.store(hook.trampoline() as usize, Ordering::SeqCst);
-            if let Err(status) = unsafe { hook.queue_enable() } {
-                append_autoload_debug(format_args!(
-                    "system-quit-dup: queue_enable AddCancelButton failed: {status:?}"
-                ));
-                return;
-            }
-            match unsafe { MH_ApplyQueued() } {
-                MH_STATUS::MH_OK => {
-                    crate::mh::leak_installed_hook(hook);
-                    SYSTEM_QUIT_DUPLICATE_INSTALLED
-                        .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst);
-                    append_autoload_debug(format_args!(
-                        // Print the return address this build will actually compare against, not
-                        // the 1.16.2 constant. The old line printed 0x958a20 on every build --
-                        // including the ones where nothing was ever going to match it, which made
-                        // the log read like the feature was armed when it was inert.
-                        "system-quit-dup: hooked AddCancelButton 0x{addr:x}; will clone the Quit Game row as Load Character / Load Character from File / Load Build from URL at caller rva {}",
-                        match er_title_flow::system_quit_row_return_rvas() {
-                            Some((first, second)) =>
-                                format!("0x{first:x} (second row 0x{second:x})"),
-                            None => "UNRESOLVED on this build -- no rows will be cloned".to_owned(),
-                        }
-                    ));
-                }
-                status => append_autoload_debug(format_args!(
-                    "system-quit-dup: MH_ApplyQueued failed: {status:?}"
-                )),
-            }
+        // One arm call, shared with the standalone `er-quit-menu` shell (2026-09-11). The cloner, the
+        // row router and the three routing detours all moved to `er_quit_menu_core::row_cloner`, so the
+        // product and a shell install the same code rather than two implementations of it -- which is
+        // what makes the shell's path testable by running the product. Every detour goes through the
+        // `er-hook` union: `AddCancelButton` takes five arguments, and until `er_hook::UnionFn5`
+        // existed this prologue was the one row-building hook holding MinHook's single slot by itself.
+        //
+        // The product arms every row and supplies the four flows this crate does not own. A shell arms
+        // `RowSet::BUILD_ROWS_ONLY` and supplies none, so a row whose flow it lacks is never on the tab.
+        let armed = unsafe {
+            er_quit_menu_core::row_cloner::arm(
+                er_quit_menu_core::row_cloner::RowSet::ALL,
+                er_quit_menu_core::row_cloner::QuitRowActions {
+                    open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
+                    open_save_picker_menu: Some(open_save_picker_menu_for_row),
+                    save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    // The cloned row's flow is the same flow: `arm` drops the clone when the native
+                    // takeover is supplied, so this only matters to a host that does not take the
+                    // native row over.
+                    save_game_as_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    save_game_request_save_only: Some(
+                        crate::experiments::system_quit_save_game_request_save_only,
+                    ),
+                    // No product half: the moved reset already clears the row table, the link
+                    // field and the export latch, which is everything this side used to do.
+                    row_table_reset: None,
+                    note_drive_strip_click_event: Some(save_picker_note_drive_strip_click_event),
+                },
+            )
+        };
+        match armed {
+            Ok(()) => SYSTEM_QUIT_DUPLICATE_INSTALLED
+                .store(SYSTEM_QUIT_DUPLICATE_INSTALLED_YES, Ordering::SeqCst),
+            // The flag is only raised on success, so a failure leaves it at
+            // `SYSTEM_QUIT_DUPLICATE_NOT_INSTALLED` and a later call retries.
+            Err(error) => append_autoload_debug(format_args!(
+                "system-quit-dup: arming the Quit rows failed: {error:?} -- no rows will be cloned"
+            )),
         }
-        Err(status) => append_autoload_debug(format_args!(
-            "system-quit-dup: MhHook::new AddCancelButton failed: {status:?}"
-        )),
     }
+}
+
+#[cfg(feature = "quit-rows")]
+/// The row router's save-picker arm, adapted to the action table's shape.
+///
+/// # Safety
+///
+/// Menu thread, with the row's action object.
+unsafe fn open_save_picker_menu_for_row(action_obj: usize) -> bool {
+    matches!(
+        unsafe { system_quit_open_save_picker_menu(action_obj) },
+        er_save_picker_core::PickerOpenOutcome::Opened
+    )
 }
 
 /// Install the MenuWindow-latch hook once (MinHook on the SceneObjProxy ctor 0x14074a700),
 /// matching the auto-accept builder-hook precedent exactly (MhHook::new + queue_enable +
-/// MH_ApplyQueued). Must run at process attach BEFORE the title builds during boot so the ctor's
+/// MH_ApplyQueued). Must run at process attach before the title builds during boot so the ctor's
 /// rdx (the validated host MenuWindow*) is latched. Idempotent + harmless (latch + passthrough).
 pub(crate) fn install_menu_window_latch_hook() {
     if MENU_WINDOW_LATCH_INSTALLED.load(Ordering::SeqCst) != MENU_WINDOW_LATCH_NOT_INSTALLED {
@@ -248,7 +323,11 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     } else {
         false
     };
-    let muted = !in_world_seen || quickload_active || !player_present;
+    let muted = crate::autoload_cover_gates::pre_world_audio_mute_required(
+        crate::product_autoload_enabled(),
+        quickload_active,
+        in_world_seen,
+    );
     let ret = if muted {
         0
     } else {

@@ -1,0 +1,69 @@
+name: conventional-commits
+
+# THE PR TITLE IS THE COMMIT SUBJECT NOW. The repo's `merge_commit_title` was flipped from
+# MERGE_MESSAGE to PR_TITLE on 2026-09-03, so the merge button no longer writes
+# `Merge pull request #N from ...` -- it writes the pull request's title, with ` (#N)` appended.
+# That makes the title the last editable moment before a subject is permanent on main, which is
+# exactly where a required status check can stand.
+#
+# A GITHUB RULESET CANNOT DO THIS. Measured on this repo, 2026-09-03: a ruleset with an active
+# `commit_message_pattern` rule let both `POST /merges` (subject `Merge pull request #999 from ...`)
+# and a violating `PUT /contents` through. GitHub does not apply metadata rules to commits it
+# creates server-side, which is every commit the merge button makes. The full measurement is in the
+# header of scripts/conventional-commit-subject.py.
+#
+# DELIBERATELY NOT A JOB IN check.yml. That workflow clones a pinned sibling of fromsoftware-rs and
+# cross-compiles; making the message gate wait on it would mean a typo in a title costs a full
+# build, and -- worse -- a red build would hide the title verdict. This runs on ubuntu-latest in
+# seconds and depends on nothing but python3.
+on:
+  pull_request:
+    # `edited` is the one that is easy to leave out and the one that matters: a title fixed after
+    # the check went red must re-run, or the required check stays red on a now-valid title and the
+    # only way forward is a pointless empty push.
+    types: [opened, edited, reopened, synchronize]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # THE PREVENTIVE HALF. Make this a required status check on main (Rules -> require status checks
+  # to pass -> `pr-title`) and the merge button stays disabled until the title is a valid subject.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the gate checks itself first
+        run: python3 scripts/conventional-commit-subject.py --selftest
+      - name: is the PR title a Conventional Commits subject
+        # THE TITLE ARRIVES AS AN ENVIRONMENT VARIABLE, NOT AS `${{ ... }}` INSIDE THE SCRIPT.
+        # A PR title is attacker-controlled text; interpolating it into the shell line would let a
+        # title containing `$(...)` run on the runner. env: is expanded by the runner, not by bash.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python3 scripts/conventional-commit-subject.py --subject "$PR_TITLE"
+
+  # THE DETECTIVE HALF. Nothing on GitHub's side can stop a human from editing the merge dialog's
+  # textarea before confirming, so the only remaining check is after the fact: what actually landed.
+  # Red here means main carries a subject Release Please will not count -- which is not fixable by
+  # rewriting main (Block force pushes, correctly), so the repair is a follow-up commit and the
+  # value of this job is that somebody LEARNS it happened.
+  main-subject:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: the gate checks itself first
+        run: python3 scripts/conventional-commit-subject.py --selftest
+      - name: what subject actually landed on main
+        # Only HEAD. The commits a merge brings in were the commit-msg hook's job, and history
+        # before this gate existed is 385 subjects that predate the convention -- checking a range
+        # would make this job permanently red for reasons no future commit can fix.
+        run: python3 scripts/conventional-commit-subject.py --subject "$(git log -1 --pretty=%s)"

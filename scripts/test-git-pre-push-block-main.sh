@@ -49,11 +49,22 @@ expect_block "empty stdin from local main" ""
 expect_block "main to main" $'refs/heads/main 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222\n'
 expect_block "main to feature" $'refs/heads/main 1111111111111111111111111111111111111111 refs/heads/feature/main-copy 2222222222222222222222222222222222222222\n'
 
+# The false positive this guard shipped with, and the reason these three cases above were not
+# enough: they only ever pushed main from main, so the unconditional "current checkout is local
+# main" refusal at the top of the guard was never distinguished from the ref-list checks below it.
+# Publishing a feature branch from the primary checkout is the ordinary way work leaves this repo --
+# agents commit in a linked worktree and push from the main tree -- and git names that branch on
+# both sides of the ref list. The guard refused it anyway and reported `refs/heads/main` as the
+# local ref, a ref git had not sent. Measured 2026-09-13.
+expect_allow "feature to feature FROM a main checkout" $'refs/heads/fix/some-branch 1111111111111111111111111111111111111111 refs/heads/fix/some-branch 2222222222222222222222222222222222222222\n'
+expect_allow "feature to feature from a main checkout, unterminated final line" 'refs/heads/fix/some-branch 1111111111111111111111111111111111111111 refs/heads/fix/some-branch 2222222222222222222222222222222222222222'
+expect_block "explicit main destination FROM a main checkout" $'refs/heads/fix/some-branch 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222\n'
+
 "${git_clean[@]}" -C "$repo" checkout -q -b feature/pre-push-guard
 expect_allow "feature to feature" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222\n'
 expect_block "feature to remote main" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222\n'
 
-# THE SHAPE THAT ACTUALLY REACHED THE GUARD, AND THAT EVERY CASE ABOVE MISSES. Each `$'...\n'`
+# The shape that actually reached the guard, and that every case above misses. Each `$'...\n'`
 # literal above ends in a newline, so `read` always saw a terminated line and the loop always ran.
 # scripts/hooks/pre-push sent something else: it captures git's stdin with `pushed=$(cat)` (which
 # strips the trailing newline) and replayed it. `read` returns non-zero at EOF-without-delimiter,
@@ -63,7 +74,7 @@ expect_block "feature to remote main" $'refs/heads/feature/pre-push-guard 111111
 expect_block "feature to remote main, UNTERMINATED final line" 'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222'
 expect_allow "feature to feature, UNTERMINATED final line" 'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222'
 
-# And the multi-line form, where only the LAST row is the dangerous one: the earlier rows are
+# And the multi-line form, where only the last row is the dangerous one: the earlier rows are
 # terminated and would be read even by the broken loop, so this fails only if the fix is absent.
 expect_block "trailing main row after a terminated feature row" $'refs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/feature/pre-push-guard 2222222222222222222222222222222222222222\nrefs/heads/feature/pre-push-guard 1111111111111111111111111111111111111111 refs/heads/main 2222222222222222222222222222222222222222'
 

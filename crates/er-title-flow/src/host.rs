@@ -4,7 +4,7 @@
 //! resolution, logging, hook installers, the own-stepper drivers) directly out of the
 //! er-quickload flat namespace. Those calls now go through function pointers installed
 //! once at DLL attach via [`install_host`] (the er-loading-portrait-core `PortraitHost`
-//! precedent). Crate-internal wrapper fns keep the EXACT original names/signatures, so
+//! precedent). Crate-internal wrapper fns keep the exact original names/signatures, so
 //! the moved code compiles unchanged. Until a host installs, every seam answers a
 //! neutral default (logging is a no-op, all gates are off, lookups report "nothing"),
 //! so the crate is inert rather than wrong.
@@ -34,8 +34,6 @@ pub struct TitleFlowHost {
     pub append_crash_log: fn(std::fmt::Arguments<'_>),
     /// Structured timeline event sink (the product's `timeline_event`).
     pub timeline_event: fn(&str, u64, std::fmt::Arguments<'_>),
-    /// Directory of the game executable (log/artifact root); `None` when unresolvable.
-    pub game_directory_path: fn() -> Option<PathBuf>,
     /// The `CS::GameDataMan` singleton pointer, or 0.
     pub game_data_man_ptr_or_null: fn() -> usize,
     /// The `CS::GameMan` singleton pointer, or 0.
@@ -73,10 +71,12 @@ pub struct TitleFlowHost {
     /// native Continue row has something real to load. Idempotent and self-throttling: safe to
     /// call every autoload tick. Returns true once the summary describes the picked container.
     pub refresh_direct_source_profile_summary: fn() -> bool,
-    /// Does the slot the direct-file source will load fingerprint as a REAL character in the live
+    /// Does the slot the direct-file source will load fingerprint as a real character in the live
     /// `CS::ProfileSummary` (level >= 1 + non-empty name)? This is `profile_slot_fingerprint`, not
     /// `saveSlotsStates` -- the occupancy flag says nothing about the record's contents.
     pub direct_source_slot_summary_real: fn() -> bool,
+    /// The same fingerprint without the direct-source gate, for the default boot save.
+    pub boot_slot_summary_real: fn() -> bool,
     // --- hook/patch helpers ----------------------------------------------------------
     /// MinHook create+queue wrapper (the product's `create_continue_trace_hook`).
     pub create_continue_trace_hook:
@@ -98,7 +98,6 @@ pub struct TitleFlowHost {
     pub own_stepper_enter_s2_phase: fn(usize),
     pub own_stepper_stage2: unsafe fn(usize, usize, usize, i32, u64, usize),
     pub own_load_switch_reload_fire: unsafe fn(usize, usize, usize, i32, u64) -> bool,
-    pub reset_switch_reload_latches: fn(),
     // --- map-mount / blockres trace helpers ------------------------------------------
     pub blockres_stalecap_fix_enabled: fn() -> bool,
     pub map_mount_guard_flip_tick: fn(bool, i32, i64),
@@ -108,18 +107,49 @@ pub struct TitleFlowHost {
     pub now_loading_active: unsafe fn(usize) -> bool,
     pub force_profile_render_tick: unsafe fn(usize, i32),
     pub system_quit_save_swap_recommit_after_return_title_save: fn(),
-    pub portrait_retarget_and_rearm_for_switch: unsafe fn(i32, &str),
-    // --- detours whose ADDRESSES the moved hook installers take ----------------------
+    // --- detours whose addresses the moved hook installers take ----------------------
     pub title_update_detour: unsafe extern "system" fn(usize, f32, usize),
     pub pab_node_update_detour: unsafe extern "system" fn(usize, usize, usize, usize) -> usize,
 }
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
 fn default_timeline_event(_name: &str, _frame: u64, _fields: std::fmt::Arguments<'_>) {}
-fn default_game_directory_path() -> Option<PathBuf> {
-    None
-}
 fn default_ptr_or_null() -> usize {
+    0
+}
+
+/// The `GameMan` singleton, resolved from the game image rather than from a host.
+///
+/// This default used to be `default_ptr_or_null`, and a seam that answers 0 for a pointer the
+/// game certainly has is indistinguishable from "the game is not up". The save flow's fire gate
+/// requires `GameMan+0xb80 == 0` and `GameMan+0xbc4 != 3`; with a null pointer both reads fall
+/// back to their unreadable sentinel, the gate can never go green, and a picked destination times
+/// out after 600 ticks having written nothing. Measured on run br-20260912-234715-e7fd:
+/// `FIRE-GATE TIMEOUT ... (disableSaveMenu=0 b80=-1 bc4=-1)`, where the two `-1`s are that
+/// sentinel and the product-only host was the only thing that had ever filled this field.
+///
+/// The singleton is a static in the game image, so no host state is involved in finding it and
+/// there is no reason for a shell to answer worse than the product does.
+#[cfg(windows)]
+fn default_game_man_ptr_or_null() -> usize {
+    use fromsoftware_shared::FromStatic;
+    eldenring::cs::GameMan::instance_ptr().map_or(0, |ptr| ptr as usize)
+}
+
+#[cfg(not(windows))]
+fn default_game_man_ptr_or_null() -> usize {
+    0
+}
+
+/// The `GameDataMan` singleton, resolved the same way and for the same reason.
+#[cfg(windows)]
+fn default_game_data_man_ptr_or_null() -> usize {
+    use fromsoftware_shared::FromStatic;
+    eldenring::cs::GameDataMan::instance_ptr().map_or(0, |ptr| ptr as usize)
+}
+
+#[cfg(not(windows))]
+fn default_game_data_man_ptr_or_null() -> usize {
     0
 }
 fn default_name(_v: i32) -> &'static str {
@@ -205,7 +235,6 @@ unsafe fn default_base_bool(_base: usize) -> bool {
     false
 }
 unsafe fn default_force_profile_render_tick(_base: usize, _slot: i32) {}
-unsafe fn default_portrait_retarget_and_rearm_for_switch(_selected_slot: i32, _source: &str) {}
 unsafe extern "system" fn default_title_update_detour(_dialog: usize, _delta: f32, _input: usize) {}
 unsafe extern "system" fn default_pab_node_update_detour(
     _step: usize,
@@ -223,9 +252,8 @@ impl TitleFlowHost {
             append_autoload_debug: default_log,
             append_crash_log: default_log,
             timeline_event: default_timeline_event,
-            game_directory_path: default_game_directory_path,
-            game_data_man_ptr_or_null: default_ptr_or_null,
-            game_man_ptr_or_null: default_ptr_or_null,
+            game_data_man_ptr_or_null: default_game_data_man_ptr_or_null,
+            game_man_ptr_or_null: default_game_man_ptr_or_null,
             runtime_heap_allocator_ptr_or_null: default_ptr_or_null,
             ingamestep_request_code_name: default_name,
             movemapstep_step_name: default_name,
@@ -250,6 +278,7 @@ impl TitleFlowHost {
             save_override_telemetry_only: default_gate_off,
             refresh_direct_source_profile_summary: default_gate_off,
             direct_source_slot_summary_real: default_gate_off,
+            boot_slot_summary_real: default_gate_off,
             create_continue_trace_hook: default_create_continue_trace_hook,
             install_auto_accept_hook: default_unit,
             decode_thunk_hop: default_decode_thunk_hop,
@@ -264,7 +293,6 @@ impl TitleFlowHost {
             own_stepper_enter_s2_phase: default_own_stepper_enter_s2_phase,
             own_stepper_stage2: default_own_stepper_stage2,
             own_load_switch_reload_fire: default_own_load_switch_reload_fire,
-            reset_switch_reload_latches: default_unit,
             blockres_stalecap_fix_enabled: default_gate_off,
             map_mount_guard_flip_tick: default_map_mount_guard_flip_tick,
             run_ebl_mount_census: default_unit_str,
@@ -272,7 +300,6 @@ impl TitleFlowHost {
             now_loading_active: default_base_bool,
             force_profile_render_tick: default_force_profile_render_tick,
             system_quit_save_swap_recommit_after_return_title_save: default_unit,
-            portrait_retarget_and_rearm_for_switch: default_portrait_retarget_and_rearm_for_switch,
             title_update_detour: default_title_update_detour,
             pab_node_update_detour: default_pab_node_update_detour,
         }
@@ -288,7 +315,7 @@ impl Default for TitleFlowHost {
 static DEFAULT_HOST: TitleFlowHost = TitleFlowHost::defaults();
 static HOST: OnceLock<TitleFlowHost> = OnceLock::new();
 
-/// Install the host seam ONCE, at DLL attach, BEFORE any hook install or task spawn can
+/// Install the host seam once, at DLL attach, before any hook install or task spawn can
 /// run moved code. Returns false (and changes nothing) if a host was already installed.
 pub fn install_host(host: TitleFlowHost) -> bool {
     HOST.set(host).is_ok()
@@ -298,7 +325,7 @@ fn host() -> &'static TitleFlowHost {
     HOST.get().unwrap_or(&DEFAULT_HOST)
 }
 
-// --- crate-internal wrappers bearing the EXACT original product names/signatures ------
+// --- crate-internal wrappers bearing the exact original product names/signatures ------
 
 pub(crate) fn append_autoload_debug(args: std::fmt::Arguments<'_>) {
     (host().append_autoload_debug)(args)
@@ -309,13 +336,10 @@ pub(crate) fn append_crash_log(args: std::fmt::Arguments<'_>) {
 pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments<'_>) {
     (host().timeline_event)(name, frame, fields)
 }
-pub(crate) fn game_directory_path() -> Option<PathBuf> {
-    (host().game_directory_path)()
-}
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
 }
-pub(crate) fn game_man_ptr_or_null() -> usize {
+pub fn game_man_ptr_or_null() -> usize {
     (host().game_man_ptr_or_null)()
 }
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
@@ -325,7 +349,7 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 // autoload/title-flow slice moved their definitions into this crate
 // (`constants_return_title.rs`), so `title_load_step_hooks.rs` / `title_tick_cover.rs` now call
 // the real i32 -> &str tables directly and the wrappers that used to stand here were dead code.
-// The two `TitleFlowHost` FIELDS are deliberately still declared and still installed: the root
+// The two `TitleFlowHost` fields are deliberately still declared and still installed: the root
 // crate's `lib_parts/dll_entry_parts/bootstrap.rs` sets them by name, and this branch does not
 // edit that file. They point at the very functions above (via the root's `constants` re-export
 // shim), so nothing changed behaviourally -- the field is simply no longer read.
@@ -383,9 +407,6 @@ pub(crate) unsafe fn own_load_switch_reload_fire(
 ) -> bool {
     unsafe { (host().own_load_switch_reload_fire)(base, gm, owner, picked, n) }
 }
-pub(crate) fn reset_switch_reload_latches() {
-    (host().reset_switch_reload_latches)()
-}
 pub(crate) fn blockres_stalecap_fix_enabled() -> bool {
     (host().blockres_stalecap_fix_enabled)()
 }
@@ -412,6 +433,9 @@ pub(crate) fn refresh_direct_source_profile_summary() -> bool {
 }
 pub(crate) fn direct_source_slot_summary_real() -> bool {
     (host().direct_source_slot_summary_real)()
+}
+pub(crate) fn boot_slot_summary_real() -> bool {
+    (host().boot_slot_summary_real)()
 }
 pub(crate) unsafe fn create_continue_trace_hook(
     _hooks: &mut Vec<MhHook>,
@@ -496,9 +520,6 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
 }
 pub(crate) fn system_quit_save_swap_recommit_after_return_title_save() {
     (host().system_quit_save_swap_recommit_after_return_title_save)()
-}
-pub(crate) unsafe fn portrait_retarget_and_rearm_for_switch(selected_slot: i32, source: &str) {
-    unsafe { (host().portrait_retarget_and_rearm_for_switch)(selected_slot, source) }
 }
 /// Address-taken detour shim: forwards to the product detour installed via the host.
 pub(crate) unsafe extern "system" fn title_update_detour(dialog: usize, delta: f32, input: usize) {

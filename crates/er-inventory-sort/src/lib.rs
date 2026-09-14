@@ -5,10 +5,10 @@
 //! name, own config file, own log file, and no dependency on save/autoload/render
 //! product crates.
 
-// HOST-BUILD HYGIENE. This crate is a windows `cdylib`: on a non-windows host every item
+// Host-build hygiene. This crate is a windows `cdylib`: on a non-windows host every item
 // whose only consumer is `DllMain` or a hook reads as dead, and `[workspace.lints.rust]
 // warnings = "deny"` promotes that to a hard compile ERROR -- so `cargo test -p er-inventory-sort`
-// failed outright, and its unit tests had therefore never executed in ANY gate. Same fix,
+// failed outright, and its unit tests had therefore never executed in any gate. Same fix,
 // same reason, as er-save-suppress / er-seamless-bugfixes / er-armament-icons. The shipping
 // target is unaffected: this allow does not exist there.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
@@ -117,8 +117,16 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
+        // vectored handler -- so `er_crash_logging` writes no record at all and the process
+        // just vanishes. This hook is what turns that silence into a file:line. The hook is
+        // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
+        // does nothing here. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-inventory-sort", log_message);
+
         // This DLL installs no detours (it registers a FrameBegin tick), so it has no er-hook
-        // dependency -- but it still resolves game addresses, and a refusal is silent HERE unless
+        // dependency -- but it still resolves game addresses, and a refusal is silent here unless
         // the sink is installed, because every cdylib links its own copy of er-game-base.
         er_game_base::game_build::set_address_logger(log_message);
         START.call_once(spawn_inventory_sort_task);
@@ -154,7 +162,7 @@ fn spawn_inventory_sort_task() {
             };
             use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
 
-            // BOUNDED (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
+            // Bounded (2026-08-29): see er_game_base::wait -- the unbounded form of this loop
             // starved the wineserver and hung a boot.
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
@@ -210,14 +218,6 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
     let mut already = 0usize;
     let mut skipped = 0usize;
     for (label, sort_type, configured_default) in configured_defaults {
-        let Some(target_value) = menu_sort_default_value(configured_default) else {
-            skipped += 1;
-            log_message(format_args!(
-                "defaults: preserve configured category={label} sort_type={sort_type}"
-            ));
-            continue;
-        };
-        let target_id = target_value & MENU_SORT_ID_MASK;
         let addr = menu_system_save_load
             + MENU_SORT_STATE_ARRAY_OFFSET
             + sort_type * MENU_SORT_STATE_ENTRY_SIZE;
@@ -228,26 +228,29 @@ fn apply_default_menu_sort_preferences_once(config: &RuntimeConfig) {
             return;
         };
         let current_u32 = current as u32;
-        let current_id = current_u32 & MENU_SORT_ID_MASK;
-        if current_id == target_id {
-            already += 1;
-            continue;
+        match decide_menu_sort_write(current_u32, configured_default) {
+            MenuSortWriteDecision::PreserveConfigured => {
+                skipped += 1;
+                log_message(format_args!(
+                    "defaults: preserve configured category={label} sort_type={sort_type}"
+                ));
+            }
+            MenuSortWriteDecision::AlreadyMatches => {
+                already += 1;
+            }
+            MenuSortWriteDecision::Write(target_value) => {
+                unsafe {
+                    // The same slot was just read successfully via ReadProcessMemory, and the native
+                    // sort-state array is writable session RAM owned by this process.
+                    (addr as *mut u32).write_volatile(target_value);
+                }
+                changed += 1;
+                log_message(format_args!(
+                    "defaults: write category={label} sort_type={sort_type} value=0x{current_u32:x} -> 0x{target_value:x} configured={}",
+                    configured_default.label()
+                ));
+            }
         }
-        if current_id != MENU_SORT_ITEM_TYPE_ID {
-            skipped += 1;
-            log_message(format_args!(
-                "defaults: preserve user/non-item category={label} sort_type={sort_type} value=0x{current_u32:x} configured={}",
-                configured_default.label()
-            ));
-            continue;
-        }
-
-        unsafe {
-            // The same slot was just read successfully via ReadProcessMemory, and the native
-            // sort-state array is writable session RAM owned by this process.
-            (addr as *mut u32).write_volatile(target_value);
-        }
-        changed += 1;
     }
 
     MENU_SORT_DEFAULTS_APPLIED_STATE.store(MENU_SORT_DEFAULTS_APPLIED, Ordering::SeqCst);
@@ -293,6 +296,28 @@ fn menu_sort_default_value(configured_default: MenuSortDefault) -> Option<u32> {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MenuSortWriteDecision {
+    PreserveConfigured,
+    AlreadyMatches,
+    Write(u32),
+}
+
+fn decide_menu_sort_write(
+    current_u32: u32,
+    configured_default: MenuSortDefault,
+) -> MenuSortWriteDecision {
+    let Some(target_value) = menu_sort_default_value(configured_default) else {
+        return MenuSortWriteDecision::PreserveConfigured;
+    };
+    let target_id = target_value & MENU_SORT_ID_MASK;
+    let current_id = current_u32 & MENU_SORT_ID_MASK;
+    if current_id == target_id {
+        return MenuSortWriteDecision::AlreadyMatches;
+    }
+    MenuSortWriteDecision::Write(target_value)
+}
+
 fn load_runtime_config() -> Result<RuntimeConfig, String> {
     let config_dir = game_directory_path()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
@@ -321,7 +346,8 @@ fn load_runtime_config() -> Result<RuntimeConfig, String> {
 fn boilerplate_config() -> String {
     "\
 # er-inventory-sort runtime config (auto-created next to the game executable).
-# All keys are optional. Defaults set these equipment menus to Order of Acquisition once per process.
+# All keys are optional. Defaults force these equipment menus to Order of Acquisition once per process.
+# Use preserve to keep the game's current remembered choice for that category.
 # Values: order_of_acquisition, item_type, preserve.
 armaments = \"order_of_acquisition\"
 armor = \"order_of_acquisition\"
@@ -479,5 +505,20 @@ mod tests {
             Some(MENU_SORT_DIRECTION_FLAG | MENU_SORT_ORDER_OF_ACQUISITION_ID)
         );
         assert_eq!(menu_sort_default_value(MenuSortDefault::Preserve), None);
+    }
+
+    #[test]
+    fn configured_sort_overrides_existing_non_item_sort() {
+        let existing_weight_sort = 0x5142;
+
+        assert_eq!(
+            decide_menu_sort_write(
+                MENU_SORT_DIRECTION_FLAG | existing_weight_sort,
+                MenuSortDefault::OrderOfAcquisition
+            ),
+            MenuSortWriteDecision::Write(
+                MENU_SORT_DIRECTION_FLAG | MENU_SORT_ORDER_OF_ACQUISITION_ID
+            )
+        );
     }
 }

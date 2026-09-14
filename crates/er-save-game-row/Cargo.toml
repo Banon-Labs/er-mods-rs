@@ -1,0 +1,36 @@
+# The Save Game row on its own: an ME3-loadable DLL that replaces the native first System>Quit row
+# with one that opens a destination browser instead of saving and returning to the title, and does
+# nothing else. No cloned character rows, no autoload, no loading cover.
+#
+# It exists because the row's three halves used to live in three places -- the label in a detour
+# `er-quickload` installed, the router in `er-quit-menu-core`, the flow in `er-quickload`'s own
+# module tree -- so the only build that had all three was the whole product. On 2026-09-12 the flow
+# moved to `er-quit-menu-core` beside the chrome it drives, which is what makes this shell possible
+# and what lets any other host bundle the same row by linking one crate.
+#
+# Every detour goes through the `er-hook` union rather than a bare `MhHook::new`, because a profile
+# may also carry a host that hooks the same addresses.
+[package]
+name = "er-save-game-row"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_save_game_row"
+# `cdylib` is the ME3-loadable artifact; `rlib` keeps the shell testable on the host.
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+# Take over the vanilla first Quit row instead of adding a row: relabels the native
+# "Quit Game" button to "Save Game" and replaces its action. The tab stays at two rows.
+hijack-quit-row = []
+
+[dependencies]
+er-quit-menu-core = { path = "../er-quit-menu-core" }
+# Tier A only: the fresh-per-process log writer, so this shell's log describes exactly one run.
+er-game-base = { path = "../er-game-base" }
+
+[lints]
+workspace = true

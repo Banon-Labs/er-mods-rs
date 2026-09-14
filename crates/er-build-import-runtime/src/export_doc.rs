@@ -4,7 +4,7 @@
 //! speaks in `ChrAsmSlot`s and param ids, and `er-build-export` speaks in planner JSON. This module
 //! is the only place that knows both, so a change to either side breaks exactly one file.
 //!
-//! # Everything read is EQUIPPED, so everything emitted is equipped
+//! # Everything read is equipped, so everything emitted is equipped
 //!
 //! The read is scoped to the loadout, so every armament, armour piece and talisman in a
 //! [`CharacterRead`] came out of an equipment slot. Each therefore gets both `equipIndex` and
@@ -12,7 +12,7 @@
 //! `equipSet` describes an item equipped in no set at all.
 //!
 //! Spells are the exception, and not by omission: the planner gives memorised spells no
-//! `equipIndex` at all, only `order`. Their list position IS the memorisation order, which is
+//! `equipIndex` at all, only `order`. Their list position is the memorisation order, which is
 //! exactly how the importer reads them back.
 //!
 //! # Four shapes, not one, and three of them are not slot lists
@@ -24,11 +24,11 @@
 //! |---|---|---|
 //! | armaments, armour, talismans | `inventory` / `protectors.<part>` / `talismans` | `equipIndex` **and** `equipSet` |
 //! | spells | `spells.slots` | `order` alone; there is no equip position |
-//! | quickbar and pouch | `items.tools.slots` -- ONE list for both | `equipIndex`, `0..10` quickbar and `10..16` pouch, and **no** `equipSet` |
-//! | ammunition | `items.ammo` | not a list at all: the KEY is the position and the value is a bare name |
+//! | quickbar and pouch | `items.tools.slots` -- One list for both | `equipIndex`, `0..10` quickbar and `10..16` pouch, and **no** `equipSet` |
+//! | ammunition | `items.ammo` | not a list at all: the key is the position and the value is a bare name |
 //!
 //! The last two rows are the ones that were missing entirely until 2026-08-31. `items.tools` was
-//! never assigned, which is one omission costing TWO categories, and `items.ammo` was never
+//! never assigned, which is one omission costing two categories, and `items.ammo` was never
 //! assigned either -- so a generated link carried the physick (the one thing under `items` that
 //! *was* written) and nothing else, which is exactly what the player reported.
 
@@ -37,21 +37,22 @@ use er_build_export::model::{CRYSTAL_TEAR_SLOTS, Slot, SlotList, Stats};
 use er_build_import_core::equip::{POUCH_SLOTS, PROTECTOR_PARTS, QUICKBAR_SLOTS};
 use er_build_import_core::model::AMMO_POSITION_KEYS;
 use er_build_import_core::plan::{MAX_SOMBER_LEVEL, regular_level_for_somber};
+use er_build_import_core::sliders::{self, BodyType, SlidersDoc};
 
 use crate::read_character::{CharacterRead, ReadSlot};
 
-/// The equip index the planner writes for ARMOUR.
+/// The equip index the planner writes for armour.
 ///
 /// One, not zero, and not the body part: the planner's own writer is
 /// `setSlotEquipIndex('protectors', slot, 1)` -- membership only, since which part a piece is worn
 /// on comes from which of the four lists it sits in. Most of the site reads armour back with
 /// `equipIndex != null`, which zero satisfies, but its build-code exporter looks for
-/// `equipIndex === 1` exactly and finds NOTHING when the value is zero.
+/// `equipIndex === 1` exactly and finds nothing when the value is zero.
 const PROTECTOR_EQUIP_INDEX: u32 = 1;
 
 /// One item, as a planner slot: name, position in its list, and everything the read knew about it.
 ///
-/// The equip index is what separates a WORN item from a carried one, and it is the read's answer
+/// The equip index is what separates a worn item from a carried one, and it is the read's answer
 /// rather than the list position -- the two are different numbers, and conflating them is what
 /// would put a backup weapon in the main hand.
 fn planner_slot(item: &ReadSlot, order: usize) -> Slot {
@@ -65,7 +66,7 @@ fn planner_slot(item: &ReadSlot, order: usize) -> Slot {
     if let Some(art) = item.weapon_art.as_deref() {
         slot = slot.with_weapon_art(art);
     }
-    // EVERY armament states its own level. `weaponUpgrade` is one number for the whole character
+    // Every armament states its own level. `weaponUpgrade` is one number for the whole character
     // (the game's own `matching_weapon_level`), so leaving the per-slot key off showed a backup
     // weapon at the main weapon's level -- and the level is not an inference here: it is read
     // straight off the id of the instance in the slot.
@@ -80,7 +81,7 @@ fn planner_slot(item: &ReadSlot, order: usize) -> Slot {
 const STAT_LEVEL: &str = "rl";
 const STAT_VIGOR: &str = "vig";
 const STAT_MIND: &str = "mnd";
-/// The planner calls ENDURANCE `vit`. Verified, not inferred -- and the single most dangerous key
+/// The planner calls endurance `vit`. Verified, not inferred -- and the single most dangerous key
 /// here, because reading it as Vitality produces a build that is wrong in a way that looks right.
 const STAT_ENDURANCE: &str = "vit";
 const STAT_STRENGTH: &str = "str";
@@ -117,7 +118,7 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         ..BuildExportDoc::default()
     };
 
-    // `weaponUpgrade` is MEASURED off the armaments, not taken from the character.
+    // `weaponUpgrade` is measured off the armaments, not taken from the character.
     //
     // `PlayerGameData::matching_weapon_level` looks like the right field and is not: it read 25 on
     // a character whose every armament is +17 or +7 (nothing it owned was +25), which put a "+25"
@@ -158,7 +159,7 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         .map(|(order, item)| planner_slot(item, order))
         .collect();
 
-    // Armour, one list per body part, carrying everything the character HOLDS for that part with
+    // Armour, one list per body part, carrying everything the character holds for that part with
     // the worn piece marked. Ordered by part rather than by the order the inventory listed them,
     // because the planner keeps four separate lists and an item's list is what says which part it
     // is for.
@@ -191,7 +192,7 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         }
     }
 
-    // Spells carry ORDER only: the planner gives a memorised spell no equip index, and its position
+    // Spells carry order only: the planner gives a memorised spell no equip index, and its position
     // in this list is the memorisation slot.
     doc.spells.slots = read
         .spells
@@ -200,12 +201,12 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         .map(|(order, item)| Slot::carried(&item.name, order as i64))
         .collect();
 
-    // AMMUNITION IS NOT A SLOT LIST, and its key IS its equip position. The keys and the ORDER
+    // Ammunition is not a slot list, and its key is its equip position. The keys and the order
     // both come out of the shared table so this cannot interleave differently from the read: the
     // engine runs `Arrow1, Bolt1, Arrow2, Bolt2` while the planner's UI groups the two kinds, and
     // a bolt written under an arrow key is a valid document describing a different character.
     //
-    // `set` REFUSES a key that is not one of the four, and a refusal is reported rather than
+    // `set` refuses a key that is not one of the four, and a refusal is reported rather than
     // dropped -- there is no read-back on this side, and an unknown key would ride all the way to
     // the website and simply never be looked at.
     for (key, name) in AMMO_POSITION_KEYS.iter().zip(read.ammo.iter()) {
@@ -219,9 +220,9 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
         }
     }
 
-    // THE QUICKBAR AND THE POUCH ARE ONE PLANNER LIST, and this is the write whose absence was
+    // The QUICKBAR and the pouch are one planner list, and this is the write whose absence was
     // the defect: `items.tools` was never assigned at all, so both categories left the game
-    // empty while the physick -- the only other thing under `items` that WAS assigned -- came
+    // empty while the physick -- the only other thing under `items` that was assigned -- came
     // through, which is precisely what the player saw.
     //
     // There is no `items.quickbar` and no `items.pouch` anywhere in the document. The planner
@@ -229,7 +230,7 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
     // pouch positions are simply the quickbar positions plus `QUICKBAR_SLOTS`.
     //
     // `order` is a running index over what is actually written, not the equip position: the
-    // planner's `getAt` finds a row BY `order`, so the values have to be distinct, and holes for
+    // planner's `getAt` finds a row by `order`, so the values have to be distinct, and holes for
     // the unassigned positions would leave several rows sharing whatever `getAt` returned.
     let quickbar = read.quickbar.iter().take(QUICKBAR_SLOTS).enumerate();
     let pouch = read
@@ -259,25 +260,44 @@ pub fn document_from(read: &CharacterRead) -> BuildExportDoc {
     doc.items.flasks.total = read.flask_crimson + read.flask_cerulean;
 
     doc.great_rune = read.great_rune.clone();
-    // The appearance, as an uppercase hex AOB. Hex rather than base64 because it is what a player
-    // pastes into a save editor or a Cheat Engine table, which is the only tool that can do
-    // anything with it today -- the planner has no appearance at all.
-    doc.face_data = read.face_data.as_deref().map(hex_upper);
+    // The appearance, decoded into the planner's own slider object rather than shipped as a blob.
+    //
+    // A malformed buffer writes no key at all. That is the same decision the read side already
+    // made -- `read_face_data` returns `None` rather than 288 bytes of unrelated heap -- and it
+    // matters more here, because a `sliders` key the Cosmetics tab renders is a face somebody will
+    // look at. Better a build with no appearance than a build with a wrong one.
+    doc.sliders = read
+        .face_data
+        .as_deref()
+        .and_then(|buffer| sliders::decode_face_buffer(buffer).ok())
+        .map(|set| SlidersDoc::new(body_type_for(read.gender), set));
     doc
 }
 
-/// Bytes as one uppercase hex string, no separators -- an AOB the way every tool that eats one
-/// spells it.
-fn hex_upper(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push_str(HEX_DIGITS[usize::from(byte >> 4)]);
-        out.push_str(HEX_DIGITS[usize::from(byte & 0x0F)]);
+/// `PlayerGameData::gender` as the planner's two bodies.
+///
+/// # The direction of this mapping is inferred, not measured
+///
+/// What is established: the field holds 0 or 1 and nothing else -- both this repo's save readers
+/// and `scripts/save-slot-oracle.py` gate on `gender <= 1` -- and the planner has exactly two
+/// bodies. What is not established anywhere in this repo or in `fromsoftware-rs` is which value
+/// is which. [`GENDER_BODY_B`] is 1 on two pieces of outside convention that agree: ER's own
+/// character creator labels the bodies "Type A" and "Type B" where A is the masculine one, and
+/// `EquipParamProtector::equipModelGender` uses 0 for male and 1 for female.
+///
+/// It is written as an inference rather than measured because the whole cost of being wrong is a
+/// preview rendered on the other body on a website. Nothing about the character, the save, or the
+/// 264 bytes of sliders depends on it -- the planner's own AOB importer does not even read it,
+/// which is why it has to be set here at all. A single live export of a character whose body is
+/// known settles it; see the note in the agent report that shipped this.
+fn body_type_for(gender: u8) -> BodyType {
+    if gender == GENDER_BODY_B {
+        BodyType::B
+    } else {
+        BodyType::A
     }
-    out
 }
 
-/// Uppercase hex digits, indexed by nibble.
-const HEX_DIGITS: [&str; 16] = [
-    "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F",
-];
+/// The `PlayerGameData::gender` value taken to be the planner's body B. See [`body_type_for`] --
+/// this is an inference, and the one number to change if a live export disagrees.
+const GENDER_BODY_B: u8 = 1;

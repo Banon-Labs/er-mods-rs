@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# er-artifact-redirect: this script GENERATES the two user-facing launchers below, and their
+# er-artifact-redirect: this script generates the two user-facing launchers below, and their
 # redirect lines are the ones a user's run actually uses. The `me3 launch` commands live inside
 # the heredocs that write them, which the audit's shape detector treats as data rather than a
 # command (correctly -- see stage-autoload-release.sh, whose usage() text is not a launch). This
@@ -121,19 +121,30 @@ save_file = $SaveToml
 slot = $Slot
 "@ | Set-Content -Encoding UTF8 -Path $ConfigPath
 
-# EVERY per-run artifact goes to $LogDir. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# Every per-run artifact goes to $LogDir. Anything left beside the game exe is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
 # (and to the bash launcher below) for any future log rather than copying it out afterwards.
 # ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.
 $env:ER_QUICKLOAD_TELEMETRY_PATH = Join-Path $LogDir "er-quickload-telemetry.json"
 $env:ER_QUICKLOAD_BOOTSTRAP_PATH = Join-Path $LogDir "bootstrap.jsonl"
 $env:ER_QUICKLOAD_BOOTSTRAP_STATE_PATH = Join-Path $LogDir "bootstrap-state.json"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_INVASION_WARP_LOG_PATH = Join-Path $LogDir "er-invasion-warp.log"
+$env:ER_QUICKLOAD_INVASION_WARP_TELEMETRY_PATH = Join-Path $LogDir "er-invasion-warp-telemetry.json"
+$env:ER_QUICKLOAD_INVASION_WARP_RUN_PATH = Join-Path $LogDir "er-invasion-warp-run.json"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 $env:ER_QUICKLOAD_CRASH_LOG = "1"
 $env:ER_QUICKLOAD_CRASH_LOG_PATH = Join-Path $LogDir "er-quickload-crash-log.txt"
 $env:ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH = Join-Path $LogDir "er-quickload-autoload-debug.log"
 $env:ER_QUICKLOAD_TRACE_CONTINUE_PATH = Join-Path $LogDir "er-quickload-continue-trace.log"
 $env:ER_QUICKLOAD_INPUT_TRACE_PATH = Join-Path $LogDir "er-quickload-input-trace.jsonl"
 $env:ER_QUICKLOAD_PROFILE_PATH = Join-Path $LogDir "er-quickload-profile.jsonl"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 # The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
 # launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
 # loads only the product, so adding a companion native later does not silently start leaking.
@@ -148,6 +159,10 @@ $env:ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH = Join-Path $LogDir "er-save-disable.log
 $env:ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH = Join-Path $LogDir "er-save-disable-telemetry.json"
 $env:ER_QUICKLOAD_LOADING_PORTRAIT_PATH = Join-Path $LogDir "er-loading-portrait.log"
 $env:ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH = Join-Path $LogDir "er-loading-portrait-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH = Join-Path $LogDir "er-crash-log.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH = Join-Path $LogDir "er-crash-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH = Join-Path $LogDir "er-crash-breadcrumb-latest.txt"
+$env:ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH = Join-Path $LogDir "er-crash-modules.txt"
 
 $Args = @()
 if ($SteamDir -ne "") { $Args += @("--steam-dir", $SteamDir) }
@@ -220,19 +235,35 @@ config.write_text(
 )
 PY
 
-# EVERY per-run artifact goes to $LOG_DIR. Anything left beside the game exe is SINGLE-SLOT: the DLL
+# Every per-run artifact goes to $LOG_DIR. Anything left beside the game exe is single-SLOT: the DLL
 # rotates `<name>` to `<name>.prev` on its first write, so run N-2 is already gone. Add a line here
 # (and to the PowerShell launcher above) for any future log rather than copying it out afterwards.
 # ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH also relocates the portrait-capture-slot*.bin dumps.
 export ER_QUICKLOAD_TELEMETRY_PATH="$LOG_DIR/er-quickload-telemetry.json"
 export ER_QUICKLOAD_BOOTSTRAP_PATH="$LOG_DIR/bootstrap.jsonl"
 export ER_QUICKLOAD_BOOTSTRAP_STATE_PATH="$LOG_DIR/bootstrap-state.json"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
 export ER_QUICKLOAD_CRASH_LOG=1
 export ER_QUICKLOAD_CRASH_LOG_PATH="$LOG_DIR/er-quickload-crash-log.txt"
 export ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$LOG_DIR/er-quickload-autoload-debug.log"
 export ER_QUICKLOAD_TRACE_CONTINUE_PATH="$LOG_DIR/er-quickload-continue-trace.log"
 export ER_QUICKLOAD_INPUT_TRACE_PATH="$LOG_DIR/er-quickload-input-trace.jsonl"
 export ER_QUICKLOAD_PROFILE_PATH="$LOG_DIR/er-quickload-profile.jsonl"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
 # The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
 # launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
 # loads only the product, so adding a companion native later does not silently start leaking.
@@ -247,6 +278,15 @@ export ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$LOG_DIR/er-save-disable.log"
 export ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$LOG_DIR/er-save-disable-telemetry.json"
 export ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$LOG_DIR/er-loading-portrait.log"
 export ER_QUICKLOAD_LOADING_PORTRAIT_CRASH_LOG_PATH="$LOG_DIR/er-loading-portrait-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
+export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
+export ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$LOG_DIR/er-build-import.log"
 
 args=()
 if [[ -n "$STEAM_DIR" ]]; then

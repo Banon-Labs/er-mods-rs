@@ -1,8 +1,8 @@
 // Title-screen visual oracles: message-box / EULA-policy / server-status state, the native title
-// visual and logo suppression, the title menu resource + Scaleform acquisition counters, PRESS
-// START binding, the profile summary, and the custom title cover jobs.
+// visual and logo suppression, the title menu resource + Scaleform acquisition counters, press
+// start binding, the profile summary, and the custom title cover jobs.
 //
-// This is the largest single subsystem and it does NOT split further, which is a property of the
+// This is the largest single subsystem and it does not split further, which is a property of the
 // source rather than a decision: its ~200 locals feed two enormous `format!` emissions, so any cut
 // inside it would have to thread most of those locals through a signature. The one value that does
 // escape -- `title_custom_cover_profile_source_ready` -- is returned, because the native-profile
@@ -151,11 +151,11 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // embedded object at TitleTopDialog+0xaa8, separate from the preserved `05_000_Title`
     // MenuWindowJob. A real portrait cover depends on post-SL2 profile_summary readiness and the
     // SYSTEX_Menu_Profile render pipeline, so expose both in RAM telemetry before any mutation.
-    // STALE-DIALOG UAF GUARD (er-effects-rs-3pc, ROOT fix 2026-07-03). `title_logo_gfx_current_frame`
-    // CALLS a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
-    // the title screen; once we have loaded into a world that stored dialog is FREED (and, on every
+    // Stale-dialog UAF guard (er-effects-rs-3pc, root fix 2026-07-03). `title_logo_gfx_current_frame`
+    // calls a virtual on the title dialog's BackViewParts GFX handle. The title logo only exists at
+    // the title screen; once we have loaded into a world that stored dialog is freed (and, on every
     // character switch, freed+rebuilt). A freed object keeps its vtable, and worse, its reused
-    // vtable+8 slot can point at a VALID-BUT-WRONG game function (observed: the factory FUN_1411d10f0),
+    // vtable+8 slot can point at a valid-but-wrong game function (observed: the factory FUN_1411d10f0),
     // so the earlier `vtable_in_game_image` check passes and the call still derefs freed memory ->
     // access violation deep in the game (crash write_oracle_telemetry -> game+0x11d10f3). You cannot
     // safely virtual-call a maybe-freed object. So skip this GFX walk entirely once in-world: the
@@ -231,13 +231,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // PINNED: the env-driven memory-GFX loader that fed these two is deleted (it had been an
     // inert no-op since 2026-07-19), so both have always emitted 0.
     let title_scaleform_memory_gfx_bytes = 0usize;
-    let title_scaleform_memory_gfx_replacements =
-        TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
-    let title_scaleform_05_000_memory_gfx_replacements =
-        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
     let title_scaleform_memory_gfx_failures = 0usize;
-    let title_scaleform_memory_gfx_last_file =
-        TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
     let title_scaleform_resource_ctor_installed =
         TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0;
     let title_scaleform_resource_ctor_hits =
@@ -281,15 +275,15 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         TITLE_PRESS_START_BIND_LAST_CONTEXT.load(Ordering::SeqCst);
     let title_press_start_bind_hide_calls =
         TITLE_PRESS_START_BIND_HIDE_CALLS.load(Ordering::SeqCst);
-    // REMOVED (2026-07-31): the `oracle_title_overlay_cover_*` family and
-    // `oracle_title_profile_cover_bound_to_logo_surface`. All six backing counters had ZERO
+    // Removed (2026-07-31): the `oracle_title_overlay_cover_*` family and
+    // `oracle_title_profile_cover_bound_to_logo_surface`. All six backing counters had zero
     // writers anywhere in the tree and the bound-to-logo-surface value was a hard-coded
     // `false` -- they were placeholders for the unbuilt custom title render surface
-    // (er-effects-rs-trp). Emitting them made an ABSENT feature look like a FAILING one: a
+    // (er-effects-rs-trp). Emitting them made an absent feature look like a failing one: a
     // reader could not tell "the title cover rendered nothing" from "nothing was ever wired to
     // count", and that is exactly how they misread -- an agent cited render_calls=0 as proof
     // the title cover painted no pixels during a loading-screen gap. When trp lands its real
-    // surface, add these back WITH writers at the actual render site.
+    // surface, add these back with writers at the actual render site.
     let title_logo_profile_summary = {
         let game_data_man = crate::game_data_man_ptr_or_null();
         if game_data_man != NULL_PTR {
@@ -314,19 +308,19 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     }
     .is_some();
     let title_profile_face_bind_hits = TITLE_PROFILE_FACE_BIND_HITS.load(Ordering::SeqCst);
-    // PINNED TO THEIR SHIPPED VALUES (bd er-effects-rs-57fw). The only writer of
+    // Pinned to their shipped values (bd er-effects-rs-57fw). The only writer of
     // TITLE_PROFILE_FACE_TRANSFORM_APPLIED / TITLE_PROFILE_FACE_OTHER_HIDDEN was
     // title_custom_cover_menu_window_run_hook, whose only address-taker
     // (install_title_custom_cover_run_hook) had no callers -- so rustc never codegen'd either and
     // both counters read 0 in every build that has ever shipped. Emitting the same literals keeps
     // this JSON byte-identical while the counters go away. Consequence, tracked separately:
-    // `title_loaded_character_portrait_rendered` below is STRUCTURALLY false, not merely unobserved.
+    // `title_loaded_character_portrait_rendered` below is structurally false, not merely unobserved.
     let title_profile_face_transform_applied = false;
     let title_profile_face_other_hidden = 0usize;
     let title_profile_face_last_proxy = TITLE_PROFILE_FACE_LAST_PROXY.load(Ordering::SeqCst);
     let title_profile_face_last_value = TITLE_PROFILE_FACE_LAST_VALUE.load(Ordering::SeqCst);
-    // `title_loaded_character_portrait_rendered` and the two oracles derived from it were REMOVED
-    // 2026-08-31. They were not merely unobserved -- they could not be true: of the five AND-terms,
+    // `title_loaded_character_portrait_rendered` and the two oracles derived from it were removed
+    // 2026-08-31. They were not merely unobserved -- they could not be true: of the five and-terms,
     // `title_profile_face_transform_applied` and `title_profile_face_other_hidden` are pinned `false`
     // and `0` just above (their writer was never codegen'd), and the fifth read
     // TITLE_CUSTOM_COVER_RUN_CALLS, which had no write site anywhere in the tree. A permanent `false`
@@ -345,13 +339,13 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         TITLE_SCALEFORM_BIND_OBSERVER_LAST_SYMBOL_PTR.load(Ordering::SeqCst);
     let title_scaleform_bind_observer_last_target_ptr =
         TITLE_SCALEFORM_BIND_OBSERVER_LAST_TARGET_PTR.load(Ordering::SeqCst);
-    // The six `oracle_title_portrait_visible_surface_*` keys were REMOVED 2026-08-31. Nothing in the
-    // tree ever rewrote the profile visible-surface bind: only the SYMBOL constant was ever used
+    // The six `oracle_title_portrait_visible_surface_*` keys were removed 2026-08-31. Nothing in the
+    // tree ever rewrote the profile visible-surface bind: only the symbol constant was ever used
     // (title_resources_stats_text.rs), and all four counters behind `_bind_rewrites`, `_bound`,
     // `_bind_last_owner`, `_bind_last_pair` and `_bind_last_symbol_ptr` had no write site. They were
     // long-standing entries on scripts/oracle-writers-allowlist.txt; `_bind_rewrites` in particular
     // was copied into the loading-screen-portrait event JSON by scripts/er-readiness-watch.py, so a
-    // permanent 0 sat beside the screenshot a human reads. Re-add them WITH the rewrite that fills
+    // permanent 0 sat beside the screenshot a human reads. Re-add them with the rewrite that fills
     // them if the bind is ever implemented.
     let now_loading_helper_hooks_installed =
         NOW_LOADING_HELPER_HOOKS_INSTALLED.load(Ordering::SeqCst);
@@ -420,7 +414,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         TITLE_CUSTOM_COVER_BLACK_LAST_JOB.load(Ordering::SeqCst);
     let title_custom_cover_black_last_caller_rva =
         TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA.load(Ordering::SeqCst);
-    // The whole `title_custom_cover_run_*` family was REMOVED 2026-08-31. Its sole writer
+    // The whole `title_custom_cover_run_*` family was removed 2026-08-31. Its sole writer
     // (title_custom_cover_menu_window_run_hook) was never codegen'd -- its only address-taker had no
     // callers -- so `_last_native_job`/`_last_cover_job`/`_last_cover_window`/`_last_ret` were already
     // pinned literals and `_calls` was a counter nothing wrote. Six JSON keys that could only ever
@@ -435,7 +429,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         TITLE_PAB_INFORMATION_VISUAL_LAST_CALLER_RVA.load(Ordering::SeqCst);
     // The first branch here used to prefer `title_custom_cover_run_last_cover_window`, one of the
     // pinned-literal `title_custom_cover_run_*` values removed 2026-08-31. It was pinned `0usize`,
-    // which IS `NULL_PTR`, so the branch could never be taken -- a dead preference that read like a
+    // which is `NULL_PTR`, so the branch could never be taken -- a dead preference that read like a
     // live one.
     let title_custom_cover_black_cover_window = if title_custom_cover_black_last_job != NULL_PTR
         && title_custom_cover_black_last_job != TITLE_OWNER_SCAN_START_ADDRESS
@@ -456,8 +450,8 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         title_pab_information_visual_current_draw_bit_set,
     ) = title_menu_window_id_flags(base, title_pab_information_visual_last_window);
     // `title_custom_cover_black_exclusive_visible` removed 2026-08-31 with the run-calls counter it
-    // AND-ed against: that term was permanently 0, so this could never be true either.
-    // Latched peak-load proof. `oracle_load_correctness_seen > 0` proves a REAL character
+    // and-ed against: that term was permanently 0, so this could never be true either.
+    // Latched peak-load proof. `oracle_load_correctness_seen > 0` proves a real character
     // reached the world this run, latched so a quit-to-title (which resets the live
     // oracle_char_* fields) cannot erase it.
     let loaded_peak_seen = LOADED_PEAK_SEEN_COUNT.load(Ordering::SeqCst);
@@ -472,12 +466,12 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         "  \"oracle_load_correctness_seen\": {loaded_peak_seen},\n  \"oracle_loaded_peak_level\": {loaded_peak_level},\n  \"oracle_loaded_peak_c30\": \"0x{loaded_peak_c30:x}\",\n  \"oracle_loaded_peak_name\": \"{}\",\n  \"oracle_loaded_peak_name_len\": {loaded_peak_name_len},\n",
         json_escape(&loaded_peak_name)
     ));
-    // RELOAD-SCOPED MessageBoxDialog oracle. `oracle_msgbox_total_builds` is a PROCESS-lifetime
+    // Reload-SCOPED MessageBoxDialog oracle. `oracle_msgbox_total_builds` is a process-lifetime
     // total, so "0 before the reload, 1 after" and "1 at boot, 0 across the reload" read the same
     // at teardown. AGENTS.md's bar -- "Product proof requires zero MessageBoxDialog builds" -- is
-    // about the CHARACTER LOAD, so score the DELTA since the System->Quit->Load-Character switch
+    // about the character load, so score the delta since the System->Quit->Load-Character switch
     // armed. `-1` on both fields means no switch has armed in this process, which is "not proven",
-    // NOT "proven zero"; the pass condition for a reload is
+    // not "proven zero"; the pass condition for a reload is
     // `oracle_msgbox_builds_since_switch_arm == 0`.
     let msgbox_arm_baseline =
         er_telemetry_core::counters::MSGBOX_BUILDS_AT_SWITCH_ARM.load(Ordering::SeqCst);
@@ -491,6 +485,53 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     };
     body.push_str(&format!(
         "  \"oracle_msgbox_switch_arm_baseline\": {msgbox_arm_baseline_json},\n  \"oracle_msgbox_builds_since_switch_arm\": {msgbox_builds_since_arm},\n"
+    ));
+    // World-LOST: the second-load teardown as a gated number. Non-zero means a genuinely loaded
+    // world reverted to the title map during this run -- the black screen. Published so a checker
+    // can fail on it; a counter read by nobody is decoration, not a semaphore.
+    body.push_str(&format!(
+        "  \"oracle_world_lost_to_title\": {},\n  \"oracle_switch_return_title_request_retired\": {},\n",
+        er_telemetry_core::counters::WORLD_LOST_TO_TITLE_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT.load(Ordering::SeqCst)
+    ));
+    // The title left standing over a loaded world, as three numbers instead of a screenshot.
+    //
+    // `run_ticks_in_world` is the defect: menu-pump ticks in which `05_000_Title`,
+    // `05_001_Title_Logo` or `05_020_TitleInformation` ran its `MenuWindowJob` while `GameMan+0xc30`
+    // named a real map and a switch had committed. A switch that ends with this at 0 put no title
+    // surface over the character. `close_requests` is what this crate did about it; a non-zero
+    // `run_ticks_in_world` with 0 requests means the gate refused (wrong build, no window, budget
+    // spent) rather than the defect being absent. `menu_window_count` is the game's own tally at
+    // `TitleStep+0x128` -- the vector `STEP_MenuJobWait` pumps -- and `-1` means no title owner was
+    // resolvable this run, which is "not proven", not "proven zero".
+    //
+    // Sampled from the owner the title tick already latched, not from a fresh scan: resolving the
+    // title owner walks committed memory when its cache is cold, and a telemetry write must not pay
+    // for that.
+    let latched_title_owner =
+        er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.load(Ordering::SeqCst);
+    if latched_title_owner != NULL_PTR
+        && let Some(count) = unsafe {
+            crate::experiments::safe_read_i32(
+                latched_title_owner + crate::constants::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET,
+            )
+        }
+        && count >= 0
+    {
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT
+            .store(count as usize, Ordering::SeqCst);
+    }
+    let title_menu_window_count =
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT.load(Ordering::SeqCst);
+    let title_menu_window_count_json = if title_menu_window_count == usize::MAX {
+        -1i64
+    } else {
+        title_menu_window_count as i64
+    };
+    body.push_str(&format!(
+        "  \"oracle_title_surface_run_ticks_in_world\": {},\n  \"oracle_orphan_title_window_close_requests\": {},\n  \"oracle_title_owner_menu_window_count\": {title_menu_window_count_json},\n",
+        er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD.load(Ordering::SeqCst),
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
@@ -823,68 +864,8 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     );
     push_json_usize(
         body,
-        "oracle_title_scaleform_memory_gfx_replacements",
-        title_scaleform_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_memory_gfx_replaced",
-        title_scaleform_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replacements",
-        title_scaleform_05_000_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replaced",
-        title_scaleform_05_000_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_armed",
-        TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_serves",
-        TITLE_05_000_RUNTIME_STRIP_SERVES.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_failures",
-        TITLE_05_000_RUNTIME_STRIP_FAILURES.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_input_len",
-        TITLE_05_000_RUNTIME_STRIP_INPUT_LEN.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_output_len",
-        TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_input_class",
-        TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_output_validated",
-        TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
         "oracle_title_scaleform_memory_gfx_failures",
         title_scaleform_memory_gfx_failures,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_memory_gfx_last_file",
-        title_scaleform_memory_gfx_last_file,
     );
     push_json_bool(
         body,

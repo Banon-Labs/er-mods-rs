@@ -4,23 +4,23 @@
 //! missing-save picker and the System>Quit "Load Character from File" picker). Both menus render
 //! through the native `05_010_ProfileSelect` 10-row window, so this model maps a browsable
 //! directory listing onto a sliding native row window. The UI layers own all native staging (ProfileSummary preview
-//! records, window submit/close); this module owns what the rows MEAN.
+//! records, window submit/close); this module owns what the rows mean.
 //!
 //! Extension filtering follows the active runtime flavor: vanilla offers `.sl2`; Seamless offers
 //! both `.co2` and vanilla `.sl2` sources so users can import/load a vanilla save while ERSC owns
 //! the session.
 //!
 //! The same model serves two INTENTS (save-game-flow WP3). [`PickerIntent::LoadSource`] browses for
-//! a save to LOAD (the shipping behavior). [`PickerIntent::SaveDestination`] browses for a folder to
-//! SAVE INTO: a pinned `[ new ]` row writes the loaded save's own filename into the browsed folder,
+//! a save to load (the shipping behavior). [`PickerIntent::SaveDestination`] browses for a folder to
+//! save INTO: a pinned `[ new ]` row writes the loaded save's own filename into the browsed folder,
 //! and occupancy filtering is dropped -- an overwrite target needs no active character slot, and
 //! hiding a slotless existing file would let `[ new ]` clobber it silently.
 //!
-//! ## The row layout is DENSE, and every index is derived
+//! ## The row layout is dense, and every index is derived
 //!
 //! The visible rows are a contiguous prefix of the window's 10 slots, in this order:
 //!
-//! 1. `DRIVES [C:]`   -- ALWAYS FIRST when more than one drive is mounted;
+//! 1. `DRIVES [C:]`   -- Always first when more than one drive is mounted;
 //! 2. `[ new ]`       -- destination intent only, directly below the drive row when it exists;
 //! 3. `[..] <parent>` -- only when the current directory has a parent (absent at a drive root);
 //! 4. the current scroll window's directory / save-file entries.
@@ -28,7 +28,7 @@
 //! Overflow is represented by the native `05_010` scrollbar affordance plus edge-hover restaging,
 //! not by consuming two row slots with `[ SCROLL ^ ]` / `[ SCROLL v ]` pseudo-entries.
 //!
-//! `[ new ]` SITS ABOVE THE PARENT ROW, which is the one place the two intents' layouts differ,
+//! `[ new ]` sits above the parent row, which is the one place the two intents' layouts differ,
 //! and it is deliberate. Since the Save Game row press opens this browser with no question in front
 //! of it (2026-07-31), [`SavePickerModel::first_selectable_row`] explicitly starts destination
 //! browsing on `[ new ]` even when the always-first drive row occupies row 0. The safe default is
@@ -38,15 +38,15 @@
 //! the single place the fixed-row count is decided, and every entry query derives from it. That
 //! matters for two reasons.
 //!
-//! First, ROW ALIGNMENT. A row's label and its per-row character text must never describe
+//! First, row alignment. A row's label and its per-row character text must never describe
 //! different entries; a hard-coded `row - 1` was only correct in load-source intent and made every
 //! destination row render the character info of the file one entry further down. Both now resolve
 //! through [`SavePickerModel::row_meaning`], and [`SavePickerModel::row_file_characters`] proves
 //! the entry it read is the same file the label named before returning it.
 //!
-//! Second, BLANK ROWS. The native list builder (`FUN_140875590`, 1.16.2) appends a row only for
+//! Second, blank rows. The native list builder (`FUN_140875590`, 1.16.2) appends a row only for
 //! slots whose `ProfileSummary::saveSlotsStates[slot]` byte is set, and it appends them in slot
-//! order -- so occupying a contiguous PREFIX keeps `slot index == visible list index == model row`
+//! order -- so occupying a contiguous prefix keeps `slot index == visible list index == model row`
 //! (the row-populate hook reads the slot back from `rowModel+0x8`, which is that slot index). Rows
 //! at or beyond [`SavePickerModel::visible_row_count`] are staged UNOCCUPIED, so the builder omits
 //! them entirely: a short listing shows nothing at all below the last entry instead of placeholder
@@ -61,6 +61,13 @@ use std::{
 
 use crate::host::append_autoload_debug;
 
+/// Directory name of the private staged save tree this mod copies a chosen save into.
+///
+/// The single source of truth is `er_save_redirect::DIRECT_STAGE_ROOT_DIR_NAME`; this crate does
+/// not depend on that one (it would pull the Windows hooking graph into a host-testable picker),
+/// so the two spellings are pinned together by a test in the crate that links both.
+pub const PRIVATE_STAGE_DIR_NAME: &str = "er-quickload-save-redirect-stage";
+
 /// Rows per `05_010_ProfileSelect` window (native slot count).
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
@@ -73,9 +80,9 @@ pub const PICKER_ROW_NAME_UTF16_MAX: usize = 16;
 pub const DRIVE_STRIP_MAX_CELLS: usize = 7;
 /// Label of the destination-intent `[ new ]` row (7 UTF-16 units, inside the name budget).
 pub const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
-/// Marker prefixed to the stats line of the row that IS the save currently loaded.
+/// Marker prefixed to the stats line of the row that is the save currently loaded.
 ///
-/// It goes on the row's `ErStats` TOP line, not in the row NAME, and that is a capacity fact
+/// It goes on the row's `ErStats` top line, not in the row name, and that is a capacity fact
 /// rather than a preference: the name field holds 16 UTF-16 units, `ER0000.sl2` already spends 10,
 /// and a 9-unit marker would push the filename out of its own row. The stats line is 630px wide at
 /// the 19px `MenuFont_01` the browse rows render in; `scripts/gfx_text_width.py` measures
@@ -83,16 +90,16 @@ pub const PICKER_NEW_FILE_LABEL: &str = "[ new ]";
 /// single-line no-wordwrap field, so an overflow would clip -- this one does not come close.
 pub const PICKER_CURRENT_SAVE_MARKER: &str = "[CURRENT]";
 
-/// What the browsing session is FOR. Fixed at construction; it selects the row layout, the
+/// What the browsing session is for. Fixed at construction; it selects the row layout, the
 /// occupancy filter, and what activating a row means.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum PickerIntent {
-    /// Browse for a save container to LOAD (startup missing-save picker, System>Quit load picker).
+    /// Browse for a save container to load (startup missing-save picker, System>Quit load picker).
     #[default]
     LoadSource,
-    /// Browse for a folder to SAVE INTO. `loaded_file_name` is the leaf the `[ new ]` row writes
+    /// Browse for a folder to save into. `loaded_file_name` is the leaf the `[ new ]` row writes
     /// (always the loaded save's own filename, so the destination keeps its save flavor);
-    /// `loaded_path` is the save currently loaded, used ONLY to mark its row `[CURRENT]`.
+    /// `loaded_path` is the save currently loaded, used only to mark its row `[CURRENT]`.
     SaveDestination {
         loaded_file_name: String,
         loaded_path: PathBuf,
@@ -108,7 +115,7 @@ pub enum PickerEntry {
         name: String,
         path: PathBuf,
         modified: Option<SystemTime>,
-        /// The container's active loadable characters (slot/name/level), parsed ONCE at
+        /// The container's active loadable characters (slot/name/level), parsed once at
         /// listing-build time from the same bytes the active-slot filter reads. Never empty --
         /// files with no loadable character are hidden from the listing.
         chars: Vec<crate::slots::SaveSlotInfo>,
@@ -129,7 +136,7 @@ impl PickerEntry {
     }
 }
 
-/// What a row in the CURRENT native scroll window means. Produced by [`SavePickerModel::row_meaning`]; the UI
+/// What a row in the current native scroll window means. Produced by [`SavePickerModel::row_meaning`]; the UI
 /// layer stages row text from this and routes slot activation through it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PickerRow {
@@ -158,11 +165,11 @@ pub enum PickerRow {
     Empty,
 }
 
-/// Whether a row of this kind has a LAST-SAVED time to show where the native row shows a playtime.
+/// Whether a row of this kind has a last-saved time to show where the native row shows a playtime.
 ///
 /// Only a [`PickerRow::File`] row is backed by a file on disk, so only it has a modification time.
 /// Everything else is navigation or intent. (The native `Level` caption and value are a different
-/// story: NO browse row is a profile slot, so a level is meaningless on every one of them and they
+/// story: No browse row is a profile slot, so a level is meaningless on every one of them and they
 /// are hidden across the board -- there is nothing row-kind-dependent left to decide.) The match is
 /// exhaustive on purpose: a new row kind must state which side it is on.
 pub fn picker_row_has_last_saved_time(row: &PickerRow) -> bool {
@@ -195,7 +202,7 @@ const SECONDS_PER_DAY: i64 = 86_400;
 
 /// Split `secs` (seconds since the Unix epoch) into civil date-time fields.
 ///
-/// PURE, and the zone shift is the caller's business: add the UTC offset first and this same
+/// Pure, and the zone shift is the caller's business: add the UTC offset first and this same
 /// function yields local time, which is what makes the local rendering testable without a machine
 /// timezone. Days-to-civil is Hinnant's era-based algorithm (proleptic Gregorian, exact well past
 /// any timestamp a filesystem can hold). `None` before the epoch -- a save file dated before 1970 is
@@ -228,10 +235,10 @@ pub fn civil_from_unix_seconds(secs: i64) -> Option<CivilDateTime> {
 /// The text a save-file row shows where the native row shows a playtime: when that file was last
 /// written, `YYYY-MM-DD HH:MM`, in the local zone `utc_offset_seconds` describes.
 ///
-/// PURE -- the OS supplies only the offset -- so the rendering is testable across a DST boundary by
+/// Pure -- the OS supplies only the offset -- so the rendering is testable across a DST boundary by
 /// passing the two offsets that boundary switches between.
 ///
-/// NO "Last saved: " PREFIX, and that is measured rather than assumed: in the 05_010 row template
+/// No "Last saved: " prefix, and that is measured rather than assumed: in the 05_010 row template
 /// the `PlayTime` field is 200px wide (bounds -40..3960 twips) at a 24px `MenuFont_01`, and
 /// `scripts/gfx_text_width.py` sums that font's own advance table to 268.0px for
 /// `Last saved: 2026-07-29 08:03` against 163.1px for the bare timestamp. The field is
@@ -324,11 +331,22 @@ pub struct SavePickerModel {
     /// cycler row; the overlay picker also cycles them with left/right.
     drives: Vec<PathBuf>,
     /// Where the browser was standing on each drive, keyed by that drive's root. Written when a
-    /// drive is cycled AWAY from and read when it is cycled back to, so switching drives resumes
+    /// drive is cycled away from and read when it is cycled back to, so switching drives resumes
     /// the folder you were in instead of dumping you at the drive root every time.
     last_dir_per_drive: HashMap<PathBuf, PathBuf>,
     /// What this browsing session is for; locked at open time.
     intent: PickerIntent,
+    /// How many rows the surface drawing this model can show at once.
+    ///
+    /// `PICKER_ROW_COUNT` is a fact about the game's own window -- `05_010_ProfileSelect` has ten
+    /// profile slots and
+    /// cannot have eleven -- so it was the right constant while the native window was the only
+    /// surface. The DLL-drawn overlay has no such limit: it rasterises its own rows, and on a
+    /// 1080p frame it has room for roughly thirty. Holding both surfaces to ten made the overlay
+    /// page through a directory it could have shown at once. The view sets this per frame from
+    /// its own geometry (`set_row_capacity`), so what the cursor and the scroll window believe is
+    /// what the user can actually see.
+    row_capacity: usize,
 }
 
 /// Mounted drives that browse as folders: probe `A:\`..`Z:\` and keep the ones that are real
@@ -520,7 +538,7 @@ impl PickRejection {
     }
 }
 
-/// True when `path`'s extension is one the active runtime flavor accepts. THE extension filter --
+/// True when `path`'s extension is one the active runtime flavor accepts. The extension filter --
 /// the in-game listing, the OS dialog's post-return check and the ingest pipeline all call this,
 /// so a cross-flavor container cannot be accepted by one surface and refused by another.
 pub fn save_picker_extension_accepted(path: &Path, extensions: &[&str]) -> bool {
@@ -533,11 +551,11 @@ pub fn save_picker_extension_accepted(path: &Path, extensions: &[&str]) -> bool 
         })
 }
 
-/// THE picker's notion of "this path is offerable", parameterised by intent. There is deliberately
+/// The picker's notion of "this path is offerable", parameterised by intent. There is deliberately
 /// only one: the in-game listing predicate and the OS dialog's post-return check are this same
 /// function, so a container one surface hides cannot be a container the other loads.
 ///
-/// On success the container's active characters come back, so the caller pays ONE read.
+/// On success the container's active characters come back, so the caller pays one read.
 ///
 /// **`LoadSource`** -- file, extension, BND4, and at least one LOADABLE character slot
 /// (`USER_DATA010.active_slot` occupancy + PlayerGameData locate + `level >= 1`, the same
@@ -546,7 +564,7 @@ pub fn save_picker_extension_accepted(path: &Path, extensions: &[&str]) -> bool 
 /// fingerprint would reject anyway -- are rejected, which for the in-game listing means "not
 /// listed" and for the OS dialog means "reopen".
 ///
-/// **`SaveDestination`** -- extension plus an existing parent directory, and NOT the slot parse.
+/// **`SaveDestination`** -- extension plus an existing parent directory, and not the slot parse.
 /// Three reasons, each load-bearing: `[ new ]` and Save-As both name a file that does not exist
 /// yet; an overwrite target needs no active character slot; and hiding a slotless or unreadable
 /// existing file would let `[ new ]` silently clobber it. A destination whose bytes do parse still
@@ -606,7 +624,7 @@ impl SavePickerModel {
         Self::open_with_intent(dir, extensions, PickerIntent::LoadSource)
     }
 
-    /// Build a save-DESTINATION browser rooted at `dir` (save-game-flow WP3). `loaded_file_name` is
+    /// Build a save-destination browser rooted at `dir` (save-game-flow WP3). `loaded_file_name` is
     /// the leaf the `[ new ]` row writes into the browsed folder; `loaded_path` is the save
     /// currently loaded, so its row can be marked [`PICKER_CURRENT_SAVE_MARKER`].
     pub fn open_destination(
@@ -650,19 +668,20 @@ impl SavePickerModel {
             last_dir_per_drive: HashMap::new(),
             intent,
             drive_strip_path_focused: false,
+            row_capacity: PICKER_ROW_COUNT,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
         model
     }
 
-    /// True when this browser is choosing a save DESTINATION rather than a load source.
+    /// True when this browser is choosing a save destination rather than a load source.
     pub fn is_destination(&self) -> bool {
         matches!(self.intent, PickerIntent::SaveDestination { .. })
     }
 
     // ---------------------------------------------------------------------------------------
-    // ROW LAYOUT. `entry_row_base` is the single decision point; every other index derives from
+    // Row layout. `entry_row_base` is the single decision point; every other index derives from
     // it, so a layout change cannot desynchronize labels, character text and activation routing.
     // ---------------------------------------------------------------------------------------
 
@@ -677,7 +696,7 @@ impl SavePickerModel {
         !self.drives.is_empty()
     }
 
-    /// Rows above the entries that are pure NAVIGATION -- never an entry, never a pick target:
+    /// Rows above the entries that are pure navigation -- never an entry, never a pick target:
     /// the always-first drive row and the later parent row. The initial cursor skips these when a
     /// real entry exists so a fresh listing lands on something actionable.
     fn nav_row_count(&self) -> usize {
@@ -754,9 +773,32 @@ impl SavePickerModel {
     /// does not consume row slots; the compact movie's ScrollBarV and edge-hover restaging own that
     /// affordance.
     fn entry_window_capacity(&self) -> usize {
-        PICKER_ROW_COUNT
+        self.row_capacity
             .saturating_sub(self.entry_row_base())
             .max(1)
+    }
+
+    /// Rows the surface drawing this model can show at once. Defaults to [`PICKER_ROW_COUNT`],
+    /// which is what the native window has and cannot exceed.
+    pub fn row_capacity(&self) -> usize {
+        self.row_capacity
+    }
+
+    /// Tell the model how many rows its view can draw, and re-clamp everything that depends on it.
+    ///
+    /// Called by the overlay every frame with a capacity derived from the frame height, so a
+    /// resolution change or a window resize cannot leave the cursor addressing a row that is no
+    /// longer on screen. A no-op when the capacity has not changed.
+    pub fn set_row_capacity(&mut self, rows: usize) {
+        let rows = rows.max(1);
+        if rows == self.row_capacity {
+            return;
+        }
+        self.row_capacity = rows;
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+        if !self.row_selectable(self.cursor) || self.cursor >= rows {
+            self.cursor = self.first_selectable_row();
+        }
     }
 
     fn max_scroll_offset(&self) -> usize {
@@ -773,8 +815,8 @@ impl SavePickerModel {
     /// Destination target for the `[ new ]` row: the loaded save's own filename in the browsed
     /// directory. `None` outside destination intent.
     ///
-    /// "New" NAMES THE INTENT, NOT A GUARANTEE. In the folder the destination browser opens in,
-    /// this leaf IS the loaded save, so activating the row there resolves to an existing file and
+    /// "New" names the intent, not a guarantee. In the folder the destination browser opens in,
+    /// this leaf is the loaded save, so activating the row there resolves to an existing file and
     /// takes the overwrite confirm like any other pick (`save_dest_route_picked_target`). Browse
     /// anywhere else and the same row is a genuinely new file. That is why the row cannot be given
     /// a "skip the confirm" shortcut: what it means depends entirely on where you are standing.
@@ -799,11 +841,11 @@ impl SavePickerModel {
     /// True when `row` is the save file that is currently loaded -- the row the browse list marks
     /// [`PICKER_CURRENT_SAVE_MARKER`].
     ///
-    /// A CASE-INSENSITIVE PATH COMPARE, AND ONLY THAT. Windows paths are case-insensitive, so
+    /// A case-insensitive path compare, and only that. Windows paths are case-insensitive, so
     /// `ER0000.sl2` and `er0000.SL2` are one file and a case-sensitive compare would leave the
-    /// user's own save unmarked. It can still MISS -- a different mount, a link, a `..` segment --
+    /// user's own save unmarked. It can still miss -- a different mount, a link, a `..` segment --
     /// and missing is harmless here: an unmarked row is a row the user reads the filename of. It
-    /// must never be promoted into a decision, because the decision "this destination IS the
+    /// must never be promoted into a decision, because the decision "this destination is the
     /// loaded save" is made at commit time from volume serial + file index, which is exact.
     pub fn row_is_loaded_save(&self, row: usize) -> bool {
         let (PickerRow::File(path), Some(loaded)) =
@@ -880,7 +922,7 @@ impl SavePickerModel {
 
     fn clamp_drive_strip_offset(&mut self) {
         // Every nonzero page spends one cell on `[<]`; the last page therefore shows at most
-        // MAX-1 real drives. Clamping against `len-MAX` made the final drive unreachable whenever
+        // max-1 real drives. Clamping against `len-MAX` made the final drive unreachable whenever
         // one extra page was needed (8 drives in a 7-cell strip snapped offset 2 back to 1).
         let last_page_real_capacity = DRIVE_STRIP_MAX_CELLS.saturating_sub(1).max(1);
         let max_offset = self.drives.len().saturating_sub(last_page_real_capacity);
@@ -1037,7 +1079,7 @@ impl SavePickerModel {
         true
     }
 
-    /// Switch to the previous/next mounted drive (wrapping), RESUMING the folder last browsed on
+    /// Switch to the previous/next mounted drive (wrapping), resuming the folder last browsed on
     /// that drive. No-op with fewer than two drives.
     ///
     /// The folder being left is remembered against its own drive root first, so cycling away and
@@ -1073,13 +1115,23 @@ impl SavePickerModel {
         changed
     }
 
+    /// Step one place along the drive strip, which is a ring: `[C:] [S:] [Z:] [ current path ]`.
+    ///
+    /// Both directions wrap, and until 2026-09-12 only one did. Going right off the last drive
+    /// focuses the path bar, and from there `forward` simply returned `false` -- so the strip
+    /// cycled endlessly to the left and dead-ended to the right, one press in. The asymmetry was
+    /// invisible in the telemetry that mattered: run br-20260912-224118-0618 read 11 right presses
+    /// and delivered 40 of them to this function, which reported `changed=false` for all but nine.
     pub fn cycle_drive_from_drive_strip(&mut self, forward: bool) -> bool {
         if self.drive_strip_path_focused {
-            if forward {
-                return false;
-            }
             self.drive_strip_path_focused = false;
-            let Some(root) = self.drives.last().cloned() else {
+            // Off the path bar and round: right lands on the first drive, left on the last.
+            let wrapped = if forward {
+                self.drives.first().cloned()
+            } else {
+                self.drives.last().cloned()
+            };
+            let Some(root) = wrapped else {
                 return false;
             };
             let _ = self.switch_to_drive_root(root);
@@ -1184,18 +1236,18 @@ impl SavePickerModel {
 
     /// Scroll the ten-row native window by one row for an explicit UP/DOWN press taken at an edge.
     ///
-    /// `cursor` is the row the selection occupied BEFORE the press. The native list moves (and
+    /// `cursor` is the row the selection occupied before the press. The native list moves (and
     /// wraps) its own cursor as soon as the key is read, so the value sampled after the press is
-    /// already somewhere else -- at the bottom row a DOWN press lands the selection back on the
+    /// already somewhere else -- at the bottom row a down press lands the selection back on the
     /// drives row, which is what the player sees as "it wrapped instead of scrolling".
     ///
     /// Scrolls if and only if the window can actually move that way, which is exactly the condition
-    /// the scrollbar draws: more rows below for DOWN, more above for UP. When the list is already at
+    /// the scrollbar draws: more rows below for down, more above for up. When the list is already at
     /// that hard limit the press still reports a row to pin, so the caller can hold the selection
     /// where it was instead of letting the native list wrap around to the far end. Returns `None`
     /// only for a press that is not at an edge at all, where ordinary row movement is correct.
     ///
-    /// Replaced a dwell timer (2026-08-12) that slid the window whenever the cursor merely SAT on
+    /// Replaced a dwell timer (2026-08-12) that slid the window whenever the cursor merely sat on
     /// an edge row, moving the list under a player who was only resting there.
     pub fn scroll_window_from_edge_press(
         &mut self,
@@ -1204,11 +1256,11 @@ impl SavePickerModel {
     ) -> Option<EdgePressOutcome> {
         let first_content_row = self
             .entry_row_base()
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let last_visible_row = self
             .visible_row_count()
             .saturating_sub(1)
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let (at_edge, edge_row) = if down {
             (cursor >= last_visible_row, last_visible_row)
         } else {
@@ -1222,9 +1274,9 @@ impl SavePickerModel {
         if self.scroll_window_one(down) {
             return Some(EdgePressOutcome::Scrolled { pin_row: edge_row });
         }
-        // No window left to move. DOWN off the last row and UP off row 0 are where the native list
+        // No window left to move. Down off the last row and up off row 0 are where the native list
         // wraps to the opposite end of the listing, which reads as the selection teleporting; hold
-        // the press row instead. An UP press that merely runs out of ENTRIES is not at the top of
+        // the press row instead. An up press that merely runs out of entries is not at the top of
         // the list -- the drive and parent rows sit above it -- so leave that to normal movement.
         let hard_limit = if down { true } else { cursor == 0 };
         hard_limit.then_some(EdgePressOutcome::HeldAtLimit { pin_row: cursor })
@@ -1273,7 +1325,7 @@ impl SavePickerModel {
         self.entries.clear();
         self.scroll_offset = 0;
         // Owned copies so the per-entry predicate borrows nothing from `self` while the listing is
-        // being built. `save_picker_accepts` is the SAME function the OS dialog's post-return check
+        // being built. `save_picker_accepts` is the same function the OS dialog's post-return check
         // calls, which is what keeps the two surfaces from disagreeing about what a save is.
         let intent = self.intent.clone();
         let filters = self.extensions.clone();
@@ -1299,6 +1351,13 @@ impl SavePickerModel {
             };
             // Hide dot-prefixed (hidden) entries -- `.config`, `.snapshots`, `.local`, etc.
             if name.starts_with('.') {
+                continue;
+            }
+            // Hide the private staged tree. It sits directly inside the save folder the picker
+            // opens on, so it is the first directory a user browsing for a save walks into, and
+            // what they find there is a copy this mod made -- of a save they already have, under a
+            // name that tells them nothing about which one. Picking it is never what they meant.
+            if name == PRIVATE_STAGE_DIR_NAME {
                 continue;
             }
             // Detect the kind by STAT'ing the target (`Path::is_dir`/`is_file`), not the dirent
@@ -1370,7 +1429,7 @@ impl SavePickerModel {
 
     /// Meaning of `row` (0..PICKER_ROW_COUNT) in the current scroll window.
     pub fn row_meaning(&self, row: usize) -> PickerRow {
-        if row >= PICKER_ROW_COUNT {
+        if row >= self.row_capacity {
             return PickerRow::Empty;
         }
         if self.new_file_row() == Some(row) {
@@ -1405,10 +1464,10 @@ impl SavePickerModel {
     /// window (the file's active loadable characters, parsed once at listing build). `None` for every
     /// non-file row (up, drive cycler, `[ new ]`, directory, placeholder).
     ///
-    /// Derived from the SAME `row_meaning` the label comes from, then cross-checked: the entry read
+    /// Derived from the same `row_meaning` the label comes from, then cross-checked: the entry read
     /// at the scroll-window index must be the very file the label named. One decision point plus a proof,
     /// so the stats text and the row label cannot describe different entries -- and if they ever
-    /// disagree the row renders BLANK rather than a neighbour's character.
+    /// disagree the row renders blank rather than a neighbour's character.
     pub fn row_file_characters(&self, row: usize) -> Option<&[crate::slots::SaveSlotInfo]> {
         let PickerRow::File(labelled) = self.row_meaning(row) else {
             return None;
@@ -1510,7 +1569,7 @@ impl SavePickerModel {
     }
 
     /// Display label for `row`, truncated to the ProfileSummary name budget (16 UTF-16 units).
-    /// Directory rows carry a `/` suffix; control rows use bracketed labels. Every VISIBLE row's
+    /// Directory rows carry a `/` suffix; control rows use bracketed labels. Every visible row's
     /// label is guaranteed non-empty so staged records pass the empty-slot activation guard.
     pub fn row_label_utf16(&self, row: usize) -> Vec<u16> {
         let label = match self.row_meaning(row) {
@@ -1638,7 +1697,7 @@ impl SavePickerModel {
     }
 
     fn first_selectable_row(&self) -> usize {
-        // A DESTINATION BROWSE STARTS ON `[ new ]`, in every folder, always. The reviewer's whole
+        // A destination browse starts on `[ new ]`, in every folder, always. The reviewer's whole
         // complaint about the old flow was that its default answer was the destructive one, so the
         // one row this cursor may rest on by default is the row that creates rather than replaces
         // -- and when the browsed folder happens to be the loaded save's own, the overwrite confirm
@@ -1648,13 +1707,13 @@ impl SavePickerModel {
         {
             return new_row;
         }
-        // LOAD BROWSE: prefer the first row AFTER the pure-navigation rows so a fresh listing lands
+        // Load BROWSE: prefer the first row after the pure-navigation rows so a fresh listing lands
         // on something actionable -- an entry -- rather than on `[..] up` or the drive cycler. Fall
         // back to any selectable row (a folder with nothing in it), else 0.
         let first_entry = self.entry_row_base();
-        (first_entry..PICKER_ROW_COUNT)
+        (first_entry..self.row_capacity)
             .find(|&r| self.row_selectable(r))
-            .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
+            .or_else(|| (0..self.row_capacity).find(|&r| self.row_selectable(r)))
             .unwrap_or(0)
     }
 
@@ -1665,7 +1724,7 @@ impl SavePickerModel {
     /// Move the highlight directly to a visible/selectable row. Used by mouse hit-testing surfaces
     /// that resolve a click to the row under the pointer before activating it.
     pub fn set_cursor(&mut self, row: usize) {
-        if row < PICKER_ROW_COUNT && self.row_selectable(row) {
+        if row < self.row_capacity && self.row_selectable(row) {
             self.cursor = row;
         }
     }
@@ -1673,7 +1732,7 @@ impl SavePickerModel {
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
-        let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
+        let selectable: Vec<usize> = (0..self.row_capacity)
             .filter(|&r| self.row_selectable(r))
             .collect();
         if selectable.len() < 2 {

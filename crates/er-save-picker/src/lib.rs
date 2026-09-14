@@ -15,7 +15,7 @@
 
 // A cdylib whose every consumer is `DllMain` and the hooks it installs, all of them
 // `#[cfg(windows)]`. On a host build the shell is compiled with its only callers cfg'd
-// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The SHIPPING
+// out, so `dead_code`/`unused_imports` there report the cfg, not real debt. The shipping
 // target (x86_64-pc-windows-msvc) carries the full deny with no allows.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
@@ -149,6 +149,14 @@ pub unsafe extern "system" fn DllMain(
     _reserved: *mut core::ffi::c_void,
 ) -> i32 {
     if reason == DLL_PROCESS_ATTACH {
+        // First, before anything that can panic. A panic in a cdylib crosses an
+        // `extern "system"` boundary and becomes an abort, which does not dispatch to a
+        // vectored handler -- so `er_crash_logging` writes no record at all and the process
+        // just vanishes. This hook is what turns that silence into a file:line. The hook is
+        // per-DLL: every cdylib links its own `er-game-base`, so another shell installing it
+        // does nothing here. Enforced by `scripts/check-panic-reporter-installed.py`.
+        er_game_base::panic_report::report_panics_to("er-save-picker", standalone_log);
+
         let module_base = module as usize;
         START.call_once(|| {
             if product_dll_present() {
@@ -204,5 +212,23 @@ mod tests {
     #[test]
     fn standalone_start_dir_is_non_empty() {
         assert!(!standalone_picker_start_dir().as_os_str().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod private_stage_dir_name_tests {
+    /// The picker hides the private staged tree by name, and it spells that name itself because
+    /// depending on `er-save-redirect` would pull the Windows hooking graph into a host-testable
+    /// crate. This shell links both on the host, so this is where the two spellings are pinned.
+    ///
+    /// If they drift, the picker offers the user a copy of their own save, under a directory name
+    /// that explains nothing about which save it is -- and a pick of it stages a copy of a copy.
+    /// That is the shape that parked a 2026-09-13 run on `PREPARING SAVE 6/11`.
+    #[test]
+    fn the_picker_hides_the_same_directory_the_stager_creates() {
+        assert_eq!(
+            er_save_picker_core::model::PRIVATE_STAGE_DIR_NAME,
+            er_save_redirect::DIRECT_STAGE_ROOT_DIR_NAME
+        );
     }
 }

@@ -2,24 +2,24 @@ use crate::prelude::*;
 
 // Character-portrait compositor for the native-Windows isolated overlay.
 //
-// The portrait PIPELINE (build + engine idle-animation render + our safe readback) publishes the rendered,
+// The portrait pipeline (build + engine idle-animation render + our safe readback) publishes the rendered,
 // alpha-keyed character head into LOADING_BG_PORTRAIT_RGBA -- proven live on native (run35: 224 clean
-// readbacks, 203 publishes, motion_metric_max=4482 == a MOVING head, zero AVs). On Wine that buffer is
+// readbacks, 203 publishes, motion_metric_max=4482 == a moving head, zero AVs). On Wine that buffer is
 // displayed by the in-swapchain Present composite; on native the composite is suppressed (it crashes the
-// game device), so nothing drew it. THIS is the missing display half: a pure-CPU alpha-scale-blit of that
-// already-captured buffer onto the isolated overlay's own backbuffer -- ZERO game-device work (mirrors
+// game device), so nothing drew it. This is the missing display half: a pure-CPU alpha-scale-blit of that
+// already-captured buffer onto the isolated overlay's own backbuffer -- Zero game-device work (mirrors
 // overlay_save_picker_onto / overlay_stats_onto). Included into gpu_readback.rs, so LOADING_BG_PORTRAIT_RGBA
 // and the boot helpers are in-namespace.
 
 /// Cumulative count of overlay frames where the portrait actually blended onto the backbuffer (telemetry
 /// `oracle_portrait_onto_draw_hits`). RAM proof the captured head reached the isolated overlay; distinct
-/// from the readback/publish counters (which prove the head was CAPTURED, not displayed).
+/// from the readback/publish counters (which prove the head was captured, not displayed).
 pub use er_telemetry_core::counters::PORTRAIT_ONTO_DRAW_HITS;
 
-/// PER-WINDOW twin of [`PORTRAIT_ONTO_DRAW_HITS`], incremented at the SAME site so the two can never
+/// Per-window twin of [`PORTRAIT_ONTO_DRAW_HITS`], incremented at the same site so the two can never
 /// disagree about what "displayed" means.
 ///
-/// THE DEAD COUNTER (run br-20260831-160354-2513). This static had NO writer anywhere in the
+/// The dead counter (run br-20260831-160354-2513). This static had no writer anywhere in the
 /// workspace -- only a `.load()` in `portrait_worker` and a `.swap(0)` in the window reset -- so it
 /// read 0 unconditionally, and three separate outputs reported that 0 as fact:
 ///   1. `present-overlay: loading-portrait window reset ... displayed {display} frames`, which said
@@ -27,7 +27,7 @@ pub use er_telemetry_core::counters::PORTRAIT_ONTO_DRAW_HITS;
 ///   2. `oracle_portrait_display_frames_last_window`, 0 in every telemetry snapshot ever archived
 ///      under `save-files/` -- the corroboration that this was structural, not a one-run fluke;
 ///   3. `first_keyed=` (and `oracle_portrait_first_keyed_display_last_window`), which
-///      `portrait_worker` stamps FROM this counter, so every window claimed its first keyed publish
+///      `portrait_worker` stamps from this counter, so every window claimed its first keyed publish
 ///      landed on display frame 0 -- i.e. instantly -- while `oracle_portrait_confirm_to_publish_ms`
 ///      measured 3609 ms for the same window.
 ///
@@ -41,7 +41,7 @@ pub use er_telemetry_core::counters::PROFILE_DISPLAY_FRAMES_WINDOW;
 /// a low value confirms most of the source is margin (why scaling the padded square did not enlarge the head).
 pub use er_telemetry_core::counters::PORTRAIT_ALPHA_COVER_PCT;
 
-/// How many seeding frames actually MOVED one of the four bounds below -- i.e. how many visible size
+/// How many seeding frames actually moved one of the four bounds below -- i.e. how many visible size
 /// steps the head took while the envelope settled. Its companion `PORTRAIT_CROP_SEED_FRAMES` counts the
 /// folds; this counts the ones that changed anything. The per-event detail (which bound, by how much,
 /// resulting `crop_h`) goes to the autoload debug log as the `portrait-crop[..]` lines below.
@@ -49,9 +49,9 @@ pub use er_telemetry_core::counters::PORTRAIT_CROP_GROWTH_EVENTS;
 pub use er_telemetry_core::counters::PORTRAIT_CROP_MAXX;
 pub use er_telemetry_core::counters::PORTRAIT_CROP_MAXY;
 /// Stable crop envelope: the union of the head's alpha bounding box over the first `PORTRAIT_CROP_SEED_N`
-/// frames, then FROZEN. Re-cropping to a fresh per-frame bounding box made the rect chase the swaying head,
+/// frames, then frozen. Re-cropping to a fresh per-frame bounding box made the rect chase the swaying head,
 /// which showed as horizontal jitter and cancelled the real idle animation. Freezing the envelope lets the
-/// head's actual sway play WITHIN a fixed rect. Single render thread, so plain atomics need no ordering care.
+/// head's actual sway play within a fixed rect. Single render thread, so plain atomics need no ordering care.
 pub use er_telemetry_core::counters::PORTRAIT_CROP_MINX;
 pub use er_telemetry_core::counters::PORTRAIT_CROP_MINY;
 pub use er_telemetry_core::counters::PORTRAIT_CROP_SEED_FRAMES;
@@ -68,17 +68,17 @@ const PORTRAIT_CROP_SEED_N: usize = 40;
 /// save picker is not owning the screen (the picker has no character context). Cheap -- just the lock +
 /// presence check -- so it is safe to poll every frame from boot_view_render_frame to drive full_frame.
 ///
-/// DELIBERATELY DOES NOT TEST THE MASK, and this is not the gate (2026-08-21). The authoritative
+/// Deliberately does not test the mask, and this is not the gate (2026-08-21). The authoritative
 /// unmasked-frame refusal is inside `portrait_onto`, for two reasons.
 ///
 /// First, cost: answering "is this buffer masked" needs a walk of the alpha channel. `portrait_onto`
-/// ALREADY walks it -- it has to, to find the head's bounding box -- so the gate rides that existing
+/// already walks it -- it has to, to find the head's bounding box -- so the gate rides that existing
 /// pass for free, whereas this function is polled at least twice per frame (`boot_view_render_frame`
 /// and the Present path both call it to decide `full_frame`) and is documented as a lock plus a
 /// presence check. Putting the walk here would add two full alpha scans per frame to buy nothing.
 ///
 /// Second, and the reason it would be wrong even if it were free: this predicate decides the overlay's
-/// GEOMETRY, not its content. A true answer forces the full-screen canvas instead of the tight progress
+/// geometry, not its content. A true answer forces the full-screen canvas instead of the tight progress
 /// strip. If it flipped with the mask, the overlay would start as a strip, then jump to full-screen the
 /// instant the first keyed frame landed -- a visible layout snap in the middle of the loading screen,
 /// caused by the fix rather than by the defect. Reporting "a portrait is published, lay out for it" and
@@ -118,10 +118,10 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         return false;
     }
     // The head occupies only a central region of the square source; the rest is transparent padding. Find
-    // the alpha bounding box (strided scan, alpha > 8) so we scale the HEAD to the target rect instead of the
+    // the alpha bounding box (strided scan, alpha > 8) so we scale the head to the target rect instead of the
     // padded square -- otherwise a bigger box just enlarges empty margin and the head looks unchanged.
     //
-    // The SAME pass also counts how much of the frame is transparent, which is the mask-gate evidence
+    // The same pass also counts how much of the frame is transparent, which is the mask-gate evidence
     // below. It is folded in here rather than measured separately because the loop already reads every
     // sampled texel's alpha byte: the count costs an add, a second pass would cost another ~264k reads
     // per frame on a 1542x1542 source. Counting on the strided sample rather than every texel is fine --
@@ -164,18 +164,18 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     if !any || maxx < minx || maxy < miny {
         return false;
     }
-    // THE MASK GATE (user 2026-08-21: "do not render the portrait until we mask out the background").
+    // The mask gate (user 2026-08-21: "do not render the portrait until we mask out the background").
     //
-    // This is the authoritative refusal for BOTH display hosts, and it sits here -- ahead of the crop
+    // This is the authoritative refusal for both display hosts, and it sits here -- ahead of the crop
     // fold and the blit -- because it has to stop two distinct kinds of damage, and only this position
     // stops the second one.
     //
     //   1. The frame itself. An unmasked buffer is alpha-255 everywhere, so the alpha-over blit below
-    //      copies the character's entire SCENE BACKGROUND onto the loading screen. That is the visible
+    //      copies the character's entire scene background onto the loading screen. That is the visible
     //      defect: the first composited portrait frame showed the render including its backdrop.
     //   2. The crop envelope, which outlives the frame. The `PORTRAIT_CROP_*` union is seeded from the
-    //      first PORTRAIT_CROP_SEED_N frames and then FROZEN forever. An unmasked frame's bounding box
-    //      is the WHOLE square, so folding even one in pins the envelope at maximum and every later
+    //      first PORTRAIT_CROP_SEED_N frames and then frozen forever. An unmasked frame's bounding box
+    //      is the whole square, so folding even one in pins the envelope at maximum and every later
     //      masked head is scaled down inside that oversized rect for the rest of the loading screen.
     //      A live run measured `oracle_portrait_alpha_cover_pct = 99` against a
     //      `oracle_depth_key_bg_pct` of 76 -- those cannot both describe a keyed frame. Returning
@@ -183,10 +183,10 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     //
     // The predicate is the bridge's, so it is the same floor the capture side publishes against; see
     // `portrait_mask_share_ok` for why it is a binary "was anything cut at all" and never a quality
-    // score, and why it is judged per-BUFFER rather than from the per-window PROFILE_HAVE_KEYED_FRAME
+    // score, and why it is judged per-buffer rather than from the per-window PROFILE_HAVE_KEYED_FRAME
     // flag (which re-arms wrong on switch loads).
     //
-    // Consequence, accepted deliberately: until a masked frame exists, NOTHING draws. The overlay's own
+    // Consequence, accepted deliberately: until a masked frame exists, nothing draws. The overlay's own
     // canvas -- background, progress bar, phase label, stats -- is rasterized before and after this call
     // and is untouched by the refusal; the loading screen simply has no head on it yet. The worker
     // publishes a keyed frame moments later and it appears then, which is the requested behaviour.
@@ -194,22 +194,22 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         PORTRAIT_DRAW_REFUSED_UNMASKED.fetch_add(1, Ordering::SeqCst);
         return false;
     }
-    // Fold this frame's extent into the crop envelope during the seed window, then read the FROZEN envelope
+    // Fold this frame's extent into the crop envelope during the seed window, then read the frozen envelope
     // (the sway union). After seeding, the crop rect never moves, so the head animates inside a fixed rect
     // instead of the rect jittering to track it.
     //
-    // COUNT ONLY THE FRAMES ACTUALLY FOLDED IN. This was a plain `fetch_add` on every call, which made
+    // Count only the frames actually folded in. This was a plain `fetch_add` on every call, which made
     // `PORTRAIT_CROP_SEED_FRAMES` count composited frames rather than seeding ones: a live run reported 324
     // against a seed window of 40, so the counter could not say whether the envelope was still moving --
     // the single thing its name promises. Saturating at the window makes `== PORTRAIT_CROP_SEED_N` mean
-    // FROZEN. `fetch_update` rather than a load/compare/store so the clamp is one indivisible step; this is
+    // frozen. `fetch_update` rather than a load/compare/store so the clamp is one indivisible step; this is
     // the render thread alone, but a counter whose whole point is to be trusted should not need that caveat.
     let seeded = PORTRAIT_CROP_SEED_FRAMES
         .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
             (n < PORTRAIT_CROP_SEED_N).then_some(n + 1)
         })
         .unwrap_or_else(|frozen| frozen);
-    // The PREVIOUS bound values come back from the fold itself (`fetch_min`/`fetch_max` return the prior
+    // The previous bound values come back from the fold itself (`fetch_min`/`fetch_max` return the prior
     // value), so detecting growth costs four comparisons on numbers already in hand -- no extra loads, no
     // second pass, nothing on the frames that do not grow. That is what keeps this affordable on the render
     // path: the diagnostic below runs at most PORTRAIT_CROP_SEED_N times per loading window, and in practice
@@ -241,25 +241,23 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     PORTRAIT_ALPHA_COVER_PCT.store(cover_pct, Ordering::SeqCst);
     // Target rect: the cropped head fills ~80% of screen height (aspect from the crop, not the square),
     // horizontally centered and bottom-anchored to the true screen bottom so the render clips exactly at the
-    // monitor edge. The bar is drawn AFTER this (see boot_view_rasterize), so the bar sits in front.
-    let dst_h = (h * 80 / 100).max(1);
-    let dst_w = (dst_h * crop_w / crop_h).max(1);
-    let x0 = w.saturating_sub(dst_w) / 2;
-    let y0 = h.saturating_sub(dst_h);
-    // THE SETTLE, WRITTEN DOWN (2026-08-22). The user sees the portrait "make micro adjustments for a few
+    // monitor edge. The bar is drawn after this (see boot_view_rasterize), so the bar sits in front.
+    let (src_x, src_y, src_w, src_h) = (0usize, 0usize, sw, sh);
+    let (dst_w, dst_h, x0, y0) = portrait_cover_rect(w, h, src_w, src_h);
+    // The settle, written down (2026-08-22). The user sees the portrait "make micro adjustments for a few
     // frames before settling on a camera position". It is not the camera: it is this envelope growing. The
-    // blit above scales by `dst_h / crop_h` in BOTH axes (`dst_w = dst_h * crop_w / crop_h`, so `crop_w`
+    // blit above scales by `dst_h / crop_h` in both axes (`dst_w = dst_h * crop_w / crop_h`, so `crop_w`
     // cancels out of the scale entirely), which means every frame that pushes a bound outward makes the head
-    // one step SMALLER on screen, and the last such frame is where it appears to settle.
+    // one step smaller on screen, and the last such frame is where it appears to settle.
     //
     // Nothing outside the DLL can measure that. The seed window is PORTRAIT_CROP_SEED_N frames -- under a
     // second at 60fps -- and the oracles are a point-in-time latch in a JSON file with no history, so an
     // external sampler aliases the whole event and finds only the final rect once the window has closed.
-    // Two runs of the SAME character settled at crop_h 1108 and 979 (a ~13% difference in apparent head
+    // Two runs of the same character settled at crop_h 1108 and 979 (a ~13% difference in apparent head
     // size) with nothing on record to say which frames moved which bound, or why.
     //
     // These lines are that record, and they are cheap for the same reason they are useful: `grew` is Some
-    // only on a frame that actually moved a bound during seeding, so a steady envelope logs NOTHING, and the
+    // only on a frame that actually moved a bound during seeding, so a steady envelope logs nothing, and the
     // ceiling is PORTRAIT_CROP_SEED_N lines per loading window. Both hosts reach it (product boot view and
     // the standalone compositor) because both blit through this function.
     if let Some((pminx, pminy, pmaxx, pmaxy)) = grew {
@@ -267,17 +265,17 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         let scale = dst_h as f64 / crop_h as f64;
         if seeded == 0 {
             // First fold: the previous bounds are the per-window reset sentinels (usize::MAX / 0), an
-            // ABSENCE rather than a rect, so this event prints where the envelope started instead of a
+            // absence rather than a rect, so this event prints where the envelope started instead of a
             // delta against a number that never described anything.
             append_autoload_debug(format_args!(
                 "portrait-crop[s{seeded}/{PORTRAIT_CROP_SEED_N}]: seed#{events} box=({cminx},{cminy})-({cmaxx},{cmaxy}) crop={crop_w}x{crop_h} crop_h={crop_h} cover={cover_pct}% dst={dst_w}x{dst_h} scale={scale:.4} src={sw}x{sh}"
             ));
         } else {
             // Signed deltas: a MIN bound falling is the envelope growing (dminy < 0 == the top of the head
-            // rose), a MAX bound rising is the same. Both are printed for all four bounds so a past window
+            // rose), a max bound rising is the same. Both are printed for all four bounds so a past window
             // can be reconstructed line by line, and `moved=` names the bound(s) responsible -- `miny` alone
             // is the shape both observed runs took, because `maxy` saturates at the frame bottom (the last
-            // STRIDE-sampled row) on the very first frame and can never move again.
+            // stride-sampled row) on the very first frame and can never move again.
             let prev_h = (pmaxy + 1).saturating_sub(pminy).max(1);
             let d = |prev: usize, now: usize| now as isize - prev as isize;
             let named = |moved: bool, name: &'static str| if moved { name } else { "" };
@@ -296,7 +294,7 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
             ));
         }
     }
-    // THE FREEZE. One line, and the only one that makes a window diagnosable after the fact: it fires on the
+    // The freeze. One line, and the only one that makes a window diagnosable after the fact: it fires on the
     // frame that exhausts the seed budget, after which the rect -- and so the apparent size of the head for
     // the whole rest of the loading screen -- can no longer change. `seeded + 1 == PORTRAIT_CROP_SEED_N` is
     // reachable only through the folding branch above (the counter saturates), so it fires exactly once per
@@ -311,17 +309,23 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
         ));
     }
     for dy in 0..dst_h {
-        let ty = y0 + dy;
+        let Some(ty) = y0.checked_add_unsigned(dy).filter(|ty| *ty >= 0) else {
+            continue;
+        };
+        let ty = ty as usize;
         if ty >= h {
             break;
         }
-        let sy = (cminy + dy * crop_h / dst_h).min(sh - 1);
+        let sy = (src_y + dy * src_h / dst_h).min(sh - 1);
         for dx in 0..dst_w {
-            let tx = x0 + dx;
+            let Some(tx) = x0.checked_add_unsigned(dx).filter(|tx| *tx >= 0) else {
+                continue;
+            };
+            let tx = tx as usize;
             if tx >= w {
                 break;
             }
-            let sx = (cminx + dx * crop_w / dst_w).min(sw - 1);
+            let sx = (src_x + dx * src_w / dst_w).min(sw - 1);
             let si = (sy * sw + sx) * 4;
             let a = spx[si + 3] as u32;
             if a == 0 {
@@ -343,11 +347,104 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     true
 }
 
+/// Destination rect for the render, scaled to cover the viewport and centred: `(w, h, x0, y0)`.
+///
+/// # Why cover, and why the whole render rather than the head's crop box
+///
+/// The render is now the same shape as the display (`profile_offscreen_size_target`), so the usual
+/// case here is an exact fit: `dst == (w, h)` at the origin, every edge of the render on the
+/// matching edge of the screen. A silhouette that still runs off the side runs off the screen's own
+/// edge, which reads as a character continuing past the frame rather than as a slice -- so there is
+/// nothing left for an edge-anchor to hide, and the composite can simply be centred.
+///
+/// It scales the entire render, not the head's alpha bounding box. Scaling the box was what made
+/// apparent size character-dependent: the box grows to whatever the silhouette reaches, so a
+/// two-hander held overhead rendered visibly smaller than the character beside them in the next
+/// load, and the box's own growth during the seed window was the "micro adjustments before it
+/// settles" the user reported. Against the full render the scale is fixed by the display alone, and
+/// the orbit camera is already identical for all ten slots (bd
+/// `portrait-orbit-camera-already-standard-param-row-20-all-slots-2026-08-22`), so every character
+/// is framed the same.
+///
+/// Cover rather than contain handles the case the aspects disagree -- the player moved the game to
+/// another monitor, or resized it, after the size row was patched. Contain would letterbox, which
+/// puts black bars on a loading screen; cover crops the overflowing axis instead, which is why the
+/// origin is signed.
+#[must_use]
+pub fn portrait_cover_rect(
+    screen_w: usize,
+    screen_h: usize,
+    src_w: usize,
+    src_h: usize,
+) -> (usize, usize, isize, isize) {
+    if src_w == 0 || src_h == 0 {
+        return (screen_w, screen_h, 0, 0);
+    }
+    // Scale by whichever axis needs the larger factor, so neither ends up short of the viewport.
+    // Compared as a cross-multiplication to keep it in integers: no rounding to argue about, and no
+    // float in a per-frame path.
+    let (dst_w, dst_h) = if src_w * screen_h >= src_h * screen_w {
+        // Wider than the screen: match heights and let the width overflow.
+        ((screen_h * src_w / src_h).max(1), screen_h)
+    } else {
+        (screen_w, (screen_w * src_h / src_w).max(1))
+    };
+    let x0 = (screen_w as isize - dst_w as isize) / 2;
+    let y0 = (screen_h as isize - dst_h as isize) / 2;
+    (dst_w, dst_h, x0, y0)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_render_shaped_like_the_screen_fills_it_exactly() {
+        // The ordinary case once the size row follows the display: every edge of the render lands on
+        // the matching edge of the screen, so nothing is cropped and nothing is anchored.
+        for (w, h) in [(3840usize, 2160usize), (2560, 1440), (1920, 1080)] {
+            let (dst_w, dst_h, x0, y0) = super::portrait_cover_rect(w, h, w, h);
+            assert_eq!((dst_w, dst_h, x0, y0), (w, h, 0, 0), "{w}x{h}");
+        }
+    }
+
+    #[test]
+    fn a_mismatched_render_covers_and_centres_rather_than_letterboxing() {
+        // The player moved the game to another monitor after the row was patched, so a square render
+        // meets a 16:9 screen. Black bars on a loading screen are worse than a crop, so the square is
+        // scaled until it covers the width and the overflow hangs off the top and bottom evenly.
+        let (dst_w, dst_h, x0, y0) = super::portrait_cover_rect(3840, 2160, 1542, 1542);
+        assert_eq!(dst_w, 3840, "the wide axis is filled exactly");
+        assert_eq!(
+            dst_h, 3840,
+            "the square keeps its shape, so the height overflows"
+        );
+        assert_eq!(x0, 0);
+        assert_eq!(
+            y0,
+            (2160 - 3840) / 2,
+            "the overflow is split between top and bottom"
+        );
+        assert!(y0 < 0);
+    }
+
+    #[test]
+    fn a_square_render_on_a_square_screen_is_untouched() {
+        assert_eq!(
+            super::portrait_cover_rect(1000, 1000, 1542, 1542),
+            (1000, 1000, 0, 0)
+        );
+    }
+
+    #[test]
+    fn a_zero_sized_render_yields_the_viewport_rather_than_dividing_by_it() {
+        assert_eq!(
+            super::portrait_cover_rect(1920, 1080, 0, 0),
+            (1920, 1080, 0, 0)
+        );
+    }
     use super::*;
 
-    /// Serializes the tests that drive `portrait_onto`. They share the process-global frame bridge AND the
+    /// Serializes the tests that drive `portrait_onto`. They share the process-global frame bridge and the
     /// process-global crop envelope, and cargo runs tests in one binary on many threads, so without this
     /// they would interleave folds into the same envelope and each would read the other's counter moves.
     /// Poison is recovered rather than propagated: a panic in one test must fail that test, not convert
@@ -380,7 +477,7 @@ mod tests {
         (sw as u32, sh as u32, px)
     }
 
-    /// The same 8x8 head with a TALLER opaque region: only column x=0 is cut, so the strided scan
+    /// The same 8x8 head with a taller opaque region: only column x=0 is cut, so the strided scan
     /// (`STRIDE = 3`, samples at 0/3/6) sees an opaque texel at y=0 and reports `miny = 0` instead of 3.
     /// That is the exact motion the user's "micro adjustments" are made of -- the top of the head rising --
     /// and it is what a growth line has to describe.
@@ -423,7 +520,7 @@ mod tests {
     ///
     /// The unmasked half asserts more than "returned false": it asserts the destination buffer was
     /// not touched and the crop seed counter did not move. Those are the two damage paths -- the
-    /// frame drawn with its background, and the FROZEN crop envelope permanently widened by an
+    /// frame drawn with its background, and the frozen crop envelope permanently widened by an
     /// opaque frame's full-square bounding box -- and a gate that returned false after folding the
     /// envelope would still have caused the second one while looking correct from the outside.
     #[test]
@@ -499,6 +596,23 @@ mod tests {
     /// Feeding one UNCHANGING source more times than the window is long is the exact shape of that bug --
     /// the old code kept counting past 40, and it also had no way to distinguish the one frame that
     /// established the envelope from the many that folded in and changed nothing.
+    /// One size for every character. The cut-source branch used to return the full screen height,
+    /// so the same screen framed a two-hander at 1.40x and their neighbour at 1.12x. Both numbers
+    /// are measured (`dst=1259x2160` on the live run vs the 88%-of-2160 this now returns).
+    ///
+    /// One framing for every character, bottom-anchored, whole crop drawn. A pan-up lift and
+    /// fades on the cut edges were tried and reverted: a fade reads as a fade, and neither was
+    /// asked for. What was actually wanted -- more of the legs -- is unreachable from the blit:
+    /// the crop envelope already spans 1540 of the offscreen render's 1542 rows, so every pixel
+    /// the RT holds is on screen. More body needs a different offscreen camera.
+    ///
+    /// A side cut is anchored to that display edge; an uncut portrait still centres. Numbers are the
+    /// measured ones: a right-cut crop composited to 2792 wide on a 3840 display sat 524px short.
+    ///
+    /// A rect wider than the display saturates to 0 in every case rather than wrapping.
+    ///
+    /// Never zero, at any screen size -- the blit divides by it.
+    ///
     #[test]
     fn crop_seed_counter_saturates_and_growth_counts_only_real_moves() {
         let _serial = PORTRAIT_GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
@@ -523,7 +637,7 @@ mod tests {
             1,
             "an unchanging source moves the envelope exactly once, on the frame that establishes it"
         );
-        // THE DENSITY REQUIREMENT, ASSERTED. 45 composited frames, 44 of which folded in without moving a
+        // The density requirement, asserted. 45 composited frames, 44 of which folded in without moving a
         // bound, must produce exactly two lines: the one that established the envelope and the one that
         // froze it. A per-frame log here would be 45 lines of noise on the render path.
         let log = take_crop_log();
@@ -543,7 +657,7 @@ mod tests {
             log[1]
         );
 
-        // A REAL GROWTH, in a fresh window: the taller source raises the top of the head, which is the
+        // A real growth, in a fresh window: the taller source raises the top of the head, which is the
         // one bound that actually moves in the observed runs. The line must name it and quantify the
         // size step, because `crop_h` alone decides how large the head renders.
         reset_crop_envelope();
@@ -588,7 +702,7 @@ mod tests {
     }
 
     /// The bridge's admission rule on its own, including the degenerate inputs a caller can reach:
-    /// an empty buffer is an ABSENT measurement, not a masked frame, and must not admit anything.
+    /// an empty buffer is an absent measurement, not a masked frame, and must not admit anything.
     #[test]
     fn mask_predicate_is_binary_and_fails_closed() {
         assert!(!portrait_frame_is_masked(&red_source(false).2));

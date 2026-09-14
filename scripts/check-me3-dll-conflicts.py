@@ -7,7 +7,7 @@ goes stale is not by being wrong -- it is by a new cdylib crate appearing and no
 classifying it. The closure walk in `er-dll-closure.py` would then happily include that new
 DLL next to the product with no idea whether the two can share a process.
 
-So this gate asserts five things:
+So this gate asserts six things:
 
 1. **Coverage.** Every package in the `me3_shells` array (the single source of truth for
    "which cdylibs does this workspace ship", parsed via `me3-dll-list.py`) is classified --
@@ -20,11 +20,16 @@ So this gate asserts five things:
 4. **No double classification.** A package in a `[[conflict]]` pair must not also claim to
    be `[compatible]`, which would let the closure walk read whichever it liked.
 5. **`[[shared]]` rows are checkable.** A `[[shared]]` pair is the one thing that licenses two
-   DLLs to detour ONE prologue and still share a profile, so it must carry the `target`, the
-   `mechanism`, and BOTH handler symbols -- those are what `check-shared-hook-rvas.py` uses to
+   DLLs to detour one prologue and still share a profile, so it must carry the `target`, the
+   `mechanism`, and both handler symbols -- those are what `check-shared-hook-rvas.py` uses to
    prove each detour reaches a union registrar and never an `MhHook::new`. A pair may not be
    declared shared and conflicting at once: the closure walk reads `[[conflict]]` only, and would
    co-load a pair it had been told to keep apart.
+6. **`[always]` is earned, not asserted.** A package the closure loads into every run has to
+   have been found to conflict with nothing at all, so it must also be listed in `[compatible]`
+   -- a `[[conflict]]` pair would otherwise become a permanent condition of every launch instead
+   of an occasional one. Being in `[always]` and `[opt_in_only]` at once is refused outright:
+   those are the two opposite answers to the same consent question.
 
 Usage:
     python3 scripts/check-me3-dll-conflicts.py
@@ -50,14 +55,14 @@ VALID_KINDS = {
     "present-compositor",
     "drives-input",
     "diagnostic-drive",
-    # Two DLLs statically linking the SAME feature crate. A linked crate's statics are per-DLL, so
+    # Two DLLs statically linking the same feature crate. A linked crate's statics are per-DLL, so
     # each gets its own copy of that feature's state machine, its own worker threads and its own
     # game tasks -- all driving one piece of game state with no shared lock. Nothing is detoured,
     # so it looks harmless to every other check here; the damage is two owners of one mutation.
     "duplicate-owner",
-    # A function-pointer slot the game later CALLS holds a value that is not a function entry.
-    # Distinct from `hook-collision`, which corrupts CODE at a hooked prologue and presents as
-    # silent inertness: this corrupts DATA and presents as a hard fault at a fixed address, with
+    # A function-pointer slot the game later calls holds a value that is not a function entry.
+    # Distinct from `hook-collision`, which corrupts code at a hooked prologue and presents as
+    # silent inertness: this corrupts data and presents as a hard fault at a fixed address, with
     # `rcx == rip` at the fault because the call went through the pointer. Added 2026-09-02 for
     # er-quickload X er-invasion-warp rather than mislabel it `hook-collision`, which is what it
     # was first recorded as and what the register capture then falsified. Use this kind when the
@@ -70,8 +75,8 @@ VALID_KINDS = {
 # spelled out rather than left free-text so a future "we looked at it and it seemed fine" cannot be
 # written into the field that licenses two DLLs to hook one prologue.
 VALID_MECHANISMS = {
-    # Both handlers register through ONE MinHook instance -- the product's union, reached from a
-    # companion image through the `er_effects_union_register` export -- and CHAIN.
+    # Both handlers register through one MinHook instance -- the product's union, reached from a
+    # companion image through the `er_effects_union_register` export -- and chain.
     "hook-union",
 }
 
@@ -98,6 +103,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
     conflicts = table.get("conflict", [])
     compatible = table.get("compatible", {})
     opt_in_only = table.get("opt_in_only", {})
+    always = table.get("always", {})
 
     conflicted: set[str] = set()
     for index, entry in enumerate(conflicts):
@@ -126,7 +132,7 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             )
         conflicted.update(name for name in (a, b) if name)
 
-    # [[shared]]: two DLLs that DO detour one prologue but were made co-loadable by routing both
+    # [[shared]]: two DLLs that do detour one prologue but were made co-loadable by routing both
     # handlers through a single MinHook instance (the hook union). It is a third answer alongside
     # conflict/compatible, and the loosest one, so its fields are mandatory: without `target` and
     # the two handler symbols, `check-shared-hook-rvas.py` cannot prove the mechanism and the row
@@ -203,6 +209,33 @@ def audit(table: dict, packages: list[str]) -> list[str]:
             f"load it freely, [opt_in_only] forbids that without --with; pick one"
         )
 
+    # [always] is a load policy, not a compatibility finding, so it does not classify anything --
+    # it says a package the table has already cleared is loaded whether or not the diff reached it.
+    # `er-dll-closure.py` unions these into every closure, so a mistake here is present in every
+    # launch rather than in the runs that happen to touch one crate.
+    for name, reason in always.items():
+        if name not in shipped:
+            failures.append(
+                f"[always]: {name!r} is not a shipped cdylib (renamed or removed?)"
+            )
+            continue
+        if not str(reason).strip():
+            failures.append(
+                f"[always]: {name!r} has an empty reason -- say who asked for it on by default "
+                f"and when. Default-on is a decision someone made, not a property of the code."
+            )
+        if name in opt_in_only:
+            failures.append(
+                f"{name!r} is in [always] AND [opt_in_only] -- one loads it into every run, the "
+                f"other refuses to load it without --with; pick one"
+            )
+        if name not in compatible:
+            failures.append(
+                f"[always]: {name!r} is loaded into every run but is not listed [compatible]. "
+                f"Only a package found to conflict with nothing at all can be unconditional: a "
+                f"[[conflict]] pair would become a permanent condition of every launch."
+            )
+
     unclassified = shipped - conflicted - set(compatible) - set(opt_in_only)
     for name in sorted(unclassified):
         failures.append(
@@ -238,7 +271,7 @@ def selftest() -> int:
         entry.update(overrides)
         return entry
 
-    # `prod` is classified by appearing in the conflict pair, so it must NOT also be
+    # `prod` is classified by appearing in the conflict pair, so it must not also be
     # listed compatible -- exactly the shape the real table uses.
     sound = {"conflict": [pair("prod", "bad")], "compatible": {"safe": "installs no detour"}}
     check(audit(sound, packages) == [], "a sound table produces no failures")
@@ -375,6 +408,54 @@ def selftest() -> int:
         "a package in BOTH [compatible] and [opt_in_only] is caught",
     )
 
+    # --- [always], the load policy laid over those classifications -----------------------
+    always_sound = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "installs no detour"},
+        "always": {"safe": "on by user directive 2026-01-01"},
+    }
+    check(audit(always_sound, packages) == [], "a [compatible] package may be [always]")
+
+    always_empty = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "installs no detour"},
+        "always": {"safe": "  "},
+    }
+    check(
+        any("[always]" in f and "empty reason" in f for f in audit(always_empty, packages)),
+        "an [always] entry with no reason is caught",
+    )
+
+    always_unknown = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "always": {"ghost": "renamed away"},
+    }
+    check(
+        any("[always]" in f and "'ghost'" in f for f in audit(always_unknown, packages)),
+        "an [always] entry naming a package that no longer ships is caught",
+    )
+
+    always_and_opt_in = {
+        "conflict": [pair("prod", "bad")],
+        "opt_in_only": {"safe": "never load me unasked"},
+        "always": {"safe": "load me every time"},
+    }
+    check(
+        any("[always] AND [opt_in_only]" in f for f in audit(always_and_opt_in, packages)),
+        "a package in BOTH [always] and [opt_in_only] is caught",
+    )
+
+    always_conflicting = {
+        "conflict": [pair("prod", "bad")],
+        "compatible": {"safe": "y"},
+        "always": {"bad": "on by default anyway"},
+    }
+    check(
+        any("not listed [compatible]" in f for f in audit(always_conflicting, packages)),
+        "a package that conflicts with the product cannot be [always]",
+    )
+
     print("selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 1
 
@@ -407,6 +488,7 @@ def main() -> int:
         f"{shared_count} shared-address pair{'' if shared_count == 1 else 's'}, "
         f"{len(table.get('compatible', {}))} compatible entries, "
         f"{len(table.get('opt_in_only', {}))} opt-in-only entries, "
+        f"{len(table.get('always', {}))} loaded into every run, "
         f"{len(shipped_packages())} shipped shells all classified"
     )
     return 0

@@ -34,15 +34,33 @@ For task startup in this repo, read relevant `bd` memories (`$HOME/.local/bin/bd
 
 ## Elden Ring Runtime Probe Hygiene
 
-**Do NOT `frida.attach()` the running Elden Ring. It KILLS the game.** On this Wine/Proton target the
-attach injects a bootstrapper that segfaults *inside* `eldenring.exe` -- it reports `frida.NotSupportedError:
-bootstrapper crashed with signal 11` and the process dies instantly (the DLL debug log stops mid-line with no
-shutdown sequence; only `wineserver`/`winedevice.exe` survive). Measured 2026-08-12, destroying a live session
-that was being held open for inspection. For a **read-only** question about live memory ("what is this pointer
-now", "which field is the caret") use `scripts/er-live-fields.py`, which reads `/proc/<pid>/mem` -- no injection,
-no thread suspension, nothing runs in the target. To learn **which code writes** a field, use the
-`linux-x86-debug` toolkit's `tracebreakpoint` (winedbg --gdb attach) described below, never Frida. See bd
-`frida-attach-kills-wine-eldenring-use-proc-mem-2026-08-12`.
+**Frida is the first tool to reach for on this target, and it works -- through a Wine-side server,
+never a plain `frida.attach()`.** Proven live 2026-09-08: a non-local invasion was detected and
+cancelled through Frida, which `er_invasion_warp.dll` has never once managed. Prototype and
+investigate here before writing DLL code, because a hook answers in seconds what a memory scan
+cannot answer at all.
+
+- **Bring it up with `python3 scripts/er-frida-up.py`.** It runs the Windows `frida-server.exe`
+  INSIDE the game's pressure-vessel container via `nsenter`, which is the whole trick. Measured
+  namespaces: game `mnt:[4026533261]` / `user:[4026533260]` against the host's `mnt:[4026531832]` /
+  `user:[4026531837]`, while `pid:` and `net:` are SHARED -- so entering needs no privilege and the
+  port is reachable from the host afterwards. A server started BESIDE the container talks to a
+  different wineserver: it accepts the TCP connection and then never answers `enumerate_processes`,
+  so a watcher sits silent instead of failing. An open port is not proof of a working server, and
+  `--force` replaces one that has gone stale.
+- **Attach once and hot-reload the agent file:** `uv run --with frida python3
+  scripts/er-frida-watch.py --agent scripts/frida/<agent>.js`. Editing the `.js` reloads it in
+  place. That is Frida's intended workflow and it is also the safer one here -- every attach/detach
+  cycle installs and reverts trampolines under running game threads.
+- **A plain `frida.attach()` still fails**: `NotSupportedError: bootstrapper crashed with signal 11`
+  on Frida 17.17.0, because it injects a Linux bootstrapper into a Windows process. The game
+  SURVIVES the attempt -- the older claim that it kills the session instantly was overstated -- but
+  a crashed bootstrapper can leave the process damaged, so there is no reason to do it.
+  `scripts/er-frida-attach-probe.py` re-measures this in 30 seconds rather than asking anyone to
+  trust the paragraph.
+- **For a read-only question with no game running**, `/proc/<pid>/mem` via
+  `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
+- **Watch the event stream with the `Monitor` tool** rather than asking the user what happened.
 
 When using Frida (only where it is already proven to work) or the injected DLL to scrape runtime Elden Ring
 data, keep the session explicitly in runtime-probing mode while the game remains live. If more live probing is needed, state that explicitly instead of silently pivoting to unrelated work.
@@ -117,8 +135,6 @@ When the USER reports or provides a loading-screen-portrait screenshot/image tha
 
 Legal/EULA/privacy popup detection must not rely on OCR as the only oracle. Prefer packed-asset/native evidence (`msg/engus/menu.msgbnd.dcx` -> `ToS_win64.fmg` text IDs, in-process dialog/state telemetry, or stronger static/runtime hooks); OCR may only be supplemental after exact target-window validation.
 
-Every `CS::MessageBoxDialog` before or immediately after character load is a hard crash/investigation trigger. Do not keep, display, auto-accept, or treat message boxes as acceptable product behavior. The existing MessageBoxDialog OK-handler/auto-accept path is deprecated old fake-input-era behavior: it may be used only as historical/probe reference, not as product proof. The box itself has no product value; identify the native side effect/gate it would perform, decide whether that side effect is irrelevant/offline-only or required, and skip/satisfy the semantic side effect directly without UI/input. Product proof requires zero MessageBoxDialog builds.
-
 For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input timing. Prefer a deterministic fast helper/driver for inputs and captures, and use observable completion or structured failure signals for evidence. Every agent-run shell/runtime operation must also be time-bounded, but by the regime that fits it: non-game ops (scripts, Ghidra, builds, any subprocess) are hard-capped at 30s (`scripts/check-no-timeouts.py`, `MAX_TIMEOUT_SECONDS`) so mistakes fail fast; the GAME runtime portion is bounded by the semaphore-progress model whose idle/stall backstop is the canonical runtime-probe cap. In both cases the time bound is a safety backstop, NOT the primary synchronization mechanism -- the primary teardown signal is an in-memory RAM oracle (tear down a small delay after the last semaphore the specific test cares about). The cap is a single source of truth in `.auto/runtime_timeout_cap_seconds`. **To see the timeout cap, look here: `.auto/runtime_timeout_cap_seconds` (read it directly with `cat`, or call `scripts/runtime_timeout_cap.py`) -- do not duplicate the number elsewhere; it drifts.** That reader is the only place the value is interpreted; its fail-safe fallback (missing/unreadable file) and its absolute clamp are both pinned to the same value in `scripts/runtime_timeout_cap.py`, so the file remains the lone hard truth and no other value can leak in. The value is read through `scripts/runtime_timeout_cap.py` and the bash probes and passed through to `er-readiness-watch.py --max-runtime-seconds`. `run_experiment` timeouts may include build/setup/cleanup overhead, but runtime success is not credible after `runtime_probe_seconds` exceeds that cap and must be scored/treated as failure. Do not use sleeps as synchronization.
 
 Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates.
@@ -129,7 +145,7 @@ Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runti
 
 For Pi `run_experiment` in this repo, the cap is the same single hard truth as everything else: `timeout_seconds` and `checks_timeout_seconds` for the GAME runtime portion must be no greater than the value in `.auto/runtime_timeout_cap_seconds` (currently 300s / 5 min; original user directive 2026-07-17). That value is NOT a wall-clock target -- it is the GAME idle/stall backstop of a **semaphore-progress teardown model**: a live run should tear down a small delay after the last in-memory RAM oracle the specific test cares about (so most runs finish far under the backstop), and the 300s only bounds a run that makes no semaphore progress. This is distinct from, and much larger than, the non-game timeout: every non-game/agent-shell op is separately hard-capped at 30s by `scripts/check-no-timeouts.py` (`MAX_TIMEOUT_SECONDS`), so a mistaken/unbounded Ghidra query still fails fast in seconds, never after minutes. See bd `runtime-teardown-semaphore-progress-watchdog-2026-07-17`. Do not call `run_experiment` with a larger tool timeout. RESOLVED 2026-08-31 (this was the "drift to clean up" this paragraph used to flag): `.auto/run_experiment_policy.rego` never existed, so `scripts/check-run-experiment-contract.py` could only ever print `missing run_experiment policy` and exit 1, and nothing invoked it. The checker has been DELETED rather than revived, for two reasons. It hard-coded `MAX_TIMEOUT_SECONDS = 45` and required the literal `max_timeout_seconds := 45` in the policy it validated -- a second, contradictory copy of the cap, which is exactly the duplication `.auto/runtime_timeout_cap_seconds` is the single source of truth to prevent. And `run_experiment` is a Pi harness tool: no runner in this repo calls it, so the policy would have gated nothing. The live runtime policy is `.auto/runtime_experiment_policy.rego`, validated by `scripts/check-runtime-probe-contract.py --audit`, which check.sh does run and which reads the cap from the canonical file. If `run_experiment` is ever reintroduced, gate it there instead of resurrecting a parallel cap.
 
-Standing user order (2026-07-19, LOOSENED 2026-07-20): during loading-bar runtime probes, if the loading bar stops making observable progress, treat a sufficiently long flat window as a stall semaphore and tear the run down promptly with a failed/incomplete verdict and preserved artifacts. The flat-window threshold was raised from 10s to 60s (`LOADING_PROGRESS_STALL_SECONDS` in `scripts/capture-samechar-3x.py`; boot timeout 110s->300s) because the early asset-load bootup window can legitimately crawl (bar increases, labels/numerator advance slowly) rather than truly hang, and a 10s flat window tore down on that legitimate slow progress. The real fix is to TUNE the early boot semaphores so they do not tear down too early during the asset-load bootup window (single-core-contention is a NOTHINGBURGER -- see bd `LOBOTOMIZE-single-core-contention-is-a-nothingburger-tune-early-semaphores-2026-07-22`; do NOT invoke core starvation as a cause). Distinguish a real hang (the `oracle_system_step_label` / loading substep FROZEN) from slow progress (label still advancing); tear down only on a genuinely frozen substep. The 300s cap remains a final idle/stall backstop.
+Standing user order (2026-07-19, LOOSENED 2026-07-20): during loading-bar runtime probes, if the loading bar stops making observable progress, treat a sufficiently long flat window as a stall semaphore and tear the run down promptly with a failed/incomplete verdict and preserved artifacts. The flat-window threshold was raised from 10s to 60s (`LOADING_PROGRESS_STALL_SECONDS`, then in `scripts/capture-samechar-3x.py` -- deleted 2026-09-05 with the menu-free switch driver, so the threshold now has no implementation and a new watcher must reintroduce one; boot timeout 110s->300s) because the early asset-load bootup window can legitimately crawl (bar increases, labels/numerator advance slowly) rather than truly hang, and a 10s flat window tore down on that legitimate slow progress. The real fix is to TUNE the early boot semaphores so they do not tear down too early during the asset-load bootup window (single-core-contention is a NOTHINGBURGER -- see bd `LOBOTOMIZE-single-core-contention-is-a-nothingburger-tune-early-semaphores-2026-07-22`; do NOT invoke core starvation as a cause). Distinguish a real hang (the `oracle_system_step_label` / loading substep FROZEN) from slow progress (label still advancing); tear down only on a genuinely frozen substep. The 300s cap remains a final idle/stall backstop.
 
 Standing user order (2026-07-19): the loading-bar progress oracle and user-visible loading-bar label must use the shape `<text label> N/M (<sub milestone label> X/Y)` for every loading-screen phase. The main `N/M` is the current visible/semantic loading phase sequence. The parenthesized subprogression belongs to that active main phase and must use labels that correspond to substeps of that phase. If a phase has known granular RAM/native substeps, expose them as distinct labels in the parentheses as they are reached; if a phase has no known substep granularity, codify that ignorance with a single explicit parenthesized step for that phase (for example `<phase-specific label> 1/1`) rather than borrowing unrelated labels. Sub-milestone labels must be phase-relevant: do not show a label whose prerequisite semantics cannot apply in the current main phase (for example `PLAYER PRESENT` is not a relevant substep during boot/resource acquisition before the player can exist, and a label like `Some label 1/Y (PLAYER PRESENT 1/N)` is invalid). Do not use one generic repeated label such as `HANDOFF` or `WAIT ...` for every phase or every substep. Prefer concrete field/owner labels such as `INGAMESTEP+0xD8 REQUEST`, `MOVEMAPSTEP+0x244 DONE`, or another real RAM/native semaphore only inside phases where that field/owner is actually the current phase's loading/handoff gate. Keep the machine-readable loading-progress signature aligned with the visible main/subprogression steps, and do not treat a visible phase's nominal final frame as total completion if its phase-relevant parenthesized substeps remain.
 
@@ -180,15 +196,15 @@ Persistent user directive (2026-07-17): when a tool, script, helper, or document
 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
 
-- **A 1.17 GHIDRA DUMP NOW EXISTS AND IS SERVED ON `localhost:8767` (2026-08-30).** This supersedes every "there is no Ghidra project for 1.17, read the flat image directly" instruction anywhere in this file, in `bd`, or in an agent brief. Bring it up with `bash scripts/ghidra/mcp-up-1170.sh` (project `$HOME/ghidra_maporch/proj1170`, program `ermaporch1170`, imported from `/home/banon/pc_eldenring_runtime.1.17.0.exe.gzf` via `scripts/ghidra/import-runtime-gzf.sh`). **1.16.2 stays up on :8765 at the same time** -- that is the point, because "where did this function go" is a two-image question. Do **not** use :8766; it is an unrelated live `DarkSoulsII.exe` daemon and taking it collides with a user session. **The 1.17 shift is ZERO**, measured: `getFunctionByAddress("14074a970")` returns a function whose entry *is* `14074a970`, the address byte-proven out of `eldenring-deobf-1.17.bin`. So dump VA == deobf VA == runtime VA on 1.17, and an address the 1.17 MCP hands you needs no translation at all. **BUT IT HAS NO NAMES**: the 1.17 dump carries zero curated symbols (`searchFunctionsByName` totalCount, 1.16.2 vs 1.17 -- Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0). Everything is `FUN_<addr>`. **Names, types and RTTI live only on 1.16.2 and must still be carried across by pairing** -- the 1.17 dump gives you STRUCTURE, not semantics. That structure is still the prize, because unlike `.pdata` it is not blind to leaves: `.pdata` declares nothing for 5.55 MB of `.text` across 146,715 holes, while Ghidra's analysis finds 366,673 functions in 1.17 against 367,183 in 1.16.2 -- so both call graphs are now available and pairing can use call-graph topology instead of byte signatures.
-- **THE INSTALLED GAME IS 1.17 SINCE 2026-08-27; THE 1.16.2 DUMP IS STILL THE ONLY *NAMED* ONE.** Read `docs/er-1.17-migration.md` before trusting any address in this file. `eldenring.exe` is now PE FileVersion **2.7.0.0** (me3 logs `Attaching to ELDEN RING(tm) 1.17.0.0 Worldwide`), so every RVA below, every `bd` memory that carries one, and every symbol the MCP returns describes the PREVIOUS build. `er-hook` refuses to install a game-image detour on an unrecognised build rather than corrupt it, so a stale address now shows up as a `HOOK REFUSED` log line instead of a crash. A **1.17 de-Arxan'd image exists** at `eldenring-deobf-1.17.bin` (generated by `scripts/dearxan-deobfuscate.rs`, verified byte-identical to live memory at three known sites); `eldenring-deobf.bin` is still 1.16.2 on purpose, because the prologue-generating build scripts and their gates are ground-truthed against it. To carry a 1.16.2 address forward, use `scripts/map-rvas-1162-to-1170.py` (masks displacements and immediates, so it survives the struct-offset drift that defeats `dump-deobf-shift.py`) and then READ the 1.17 function before hooking it.
+- **A 1.17 GHIDRA DUMP NOW EXISTS AND IS SERVED ON `localhost:8767` (2026-08-30).** This supersedes every "there is no Ghidra project for 1.17, read the flat image directly" instruction anywhere in this file, in `bd`, or in an agent brief. Bring it up with `bash scripts/ghidra/mcp-up-1170.sh` (project `$HOME/ghidra_maporch/proj1170`, program `ermaporch1170`, imported from `/home/banon/pc_eldenring_runtime.1.17.0.exe.gzf` via `scripts/ghidra/import-runtime-gzf.sh`). **1.16.2 stays up on :8765 at the same time** -- that is the point, because "where did this function go" is a two-image question. Do **not** use :8766; it is an unrelated live `DarkSoulsII.exe` daemon and taking it collides with a user session. **The 1.17 shift is ZERO**, measured: `getFunctionByAddress("14074a970")` returns a function whose entry *is* `14074a970`, the address byte-proven out of `eldenring-deobf-1.17.bin`. So dump VA == deobf VA on 1.17.0 -- but **that dump is 1.17.0 and the installed game is 1.17.1**, so an address :8767 hands you is a RUNTIME address only below rva `0xafefe9`; at or above it the running game has that function `0x70` higher. Put it through `scripts/map-rvas-1170-to-1171.py` before using it against the live process. **BUT IT HAS NO NAMES**: the 1.17 dump carries zero curated symbols (`searchFunctionsByName` totalCount, 1.16.2 vs 1.17 -- Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0). Everything is `FUN_<addr>`. **Names, types and RTTI live only on 1.16.2 and must still be carried across by pairing** -- the 1.17 dump gives you STRUCTURE, not semantics. That structure is still the prize, because unlike `.pdata` it is not blind to leaves: `.pdata` declares nothing for 5.55 MB of `.text` across 146,715 holes, while Ghidra's analysis finds 366,673 functions in 1.17 against 367,183 in 1.16.2 -- so both call graphs are now available and pairing can use call-graph topology instead of byte signatures.
+- **THE INSTALLED GAME IS 1.17.1 SINCE 2026-09-08; THE 1.16.2 DUMP IS STILL THE ONLY *NAMED* ONE.** Read `docs/er-1.17-migration.md` before trusting any address in this file. `eldenring.exe` is PE FileVersion **2.7.1.0**. The step from 2.7.0.0 is ONE CONSTANT and needs no signature hunt: one function at rva `0xafeea0` grew by `0x70`, so **every function entry at or above `0xafefe9` moved `+0x70` and everything below it did not move at all** -- read exhaustively out of both de-Arxan'd images' `.pdata`, all 174,389 entries above the boundary, none left over. Nothing outside the primary `.text` moved: the section table is identical, so `.rdata` vtables and `.data` globals keep their addresses, and the shift MUST be bounded to `.text` or it moves all of them. Carry an address with `scripts/map-rvas-1170-to-1171.py` (`--selftest` re-derives the model), and see `eldenring-deobf-1.17.1.bin`. So every RVA below, every `bd` memory that carries one, and every symbol the MCP returns describes the PREVIOUS build. `er-hook` refuses to install a game-image detour on an unrecognised build rather than corrupt it, so a stale address now shows up as a `HOOK REFUSED` log line instead of a crash. A **de-Arxan'd image exists for each 1.17 build**: `eldenring-deobf-1.17.bin` is 1.17.0 and `eldenring-deobf-1.17.1.bin` is the INSTALLED 1.17.1 (both generated by `scripts/dearxan-deobfuscate.rs`; the 1.17.0 one was verified byte-identical to live memory at three known sites, and 1.17.1 decrypted 1347 regions from 1597 stubs, the same shape, so no new obfuscation technique); `eldenring-deobf.bin` is still 1.16.2 on purpose, because the prologue-generating build scripts and their gates are ground-truthed against it. To carry a 1.16.2 address forward, use `scripts/map-rvas-1162-to-1170.py` (masks displacements and immediates, so it survives the struct-offset drift that defeats `dump-deobf-shift.py`) and then READ the 1.17 function before hooking it.
 - **THE NAMED DUMP IS 1.16.2, AND ITS `.gzf` NO LONGER EXISTS ON THIS MACHINE.** The named dump MUST be 1.16.2, NOT 1.16.1 (a 1.16.1 dump gives drifted addresses that crash-hook -- see bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`). It survives ONLY as the already-imported project `ermaporch1162` @ `$HOME/ghidra_maporch/proj1162`, served on :8765. **Do not go looking for `pc_eldenring_runtime.1.16.2.exe.gzf`** -- this line used to name it at `/mnt/c/Users/choza/...`, a WSL2 path that does not exist here: there is no `/mnt/c` at all, and `/mnt/win-c` is an empty unmounted point, so a search there returns nothing and reads as "the dump is missing" rather than "you looked on a machine that is gone". Verified 2026-08-31: the only `.gzf` files under `$HOME` are `pc_eldenring_runtime.1.16.1.exe.gzf` (1.5 GB, in `projects/reverse/ghidra-projects/`) and `pc_eldenring_runtime.1.17.0.exe.gzf` (4.1 GB). Losing `proj1162` loses the only named ELDEN RING image this workspace has; it cannot be re-imported from anything local. It **requires Ghidra 12.1.2** (x86 language V4.7+ -- 12.1 fails, bd `1162-gzf-needs-ghidra-1212-not-121-2026-07-20`). The 12.1.2 install lives at `$HOME/tools/ghidra_12.1.2_PUBLIC`; the previously-documented `/mnt/d/ghidra/ghidra_12.1.2_PUBLIC` **no longer exists** (`/mnt/d` is unmounted), so set `GHIDRA_INSTALL_DIR` or rely on `scripts/ghidra/mcp-up-1162.sh`, which resolves env-first then falls back through `$HOME/tools` -> `/mnt/d` -> `/opt`.
 - **The MCP daemon on `localhost:8765` serves 1.16.2.** Bring it up / validate with `bash scripts/ghidra/mcp-up-1162.sh` (pins 12.1.2 + `ermaporch1162`). Query lock-free with `python3 scripts/ghidra/mcp_query.py <method>` -- daemon methods are **camelCase**: `getContext`, `getDecompiledCode`, `decompileFunctionByName`, `disassembleFunction`, `getFunctionByAddress`, `getXrefsTo/From`, `searchFunctionsByName`, `getStructure`, ... (NOT snake_case `get_program_info`). The Pi `ghidra` MCP bridge forwards to :8765, so its tools also serve 1.16.2. To switch the daemon: `scripts/ghidra/mcp-ghidra-daemon.sh stop` (frees :8765) then `mcp-up-1162.sh`.
 - **SUPERSEDED FOR 1.16.2 (2026-07-28) -- THE SHIFT IS ZERO; DO NOT RUN `dump-deobf-shift.py`.** For the 1.16.2 dump now served by the MCP, the dump VA, the `eldenring-deobf.bin` VA, and the **live runtime** VA are all **identical** (image base `0x140000000`, shift `0`). Byte-verified independently on 30+ functions spanning `0x14025xxxx`-`0x14266xxxx`, plus a live capture: a runtime stack walk out of the game's save-write path resolved all 8 frames through the 1.16.2 MCP `getFunctionByAddress` onto clean functions (`TryWrite`, `WriteBytes`, `ThreadFunction(DLThread*)`, ...) with no adjustment. Practical consequences, in order of how badly each bites:
   1. **`scripts/dump-deobf-shift.py` is now actively WRONG and will crash-hook you.** Its DUMP side (`dump-exec.bin`) is still the 1.16.1 image, so it maps 1.16.1-dump -> 1.16.2-deobf and invents a nonzero shift where none exists. Measured failures: it reported `0x142413860 -> 0x142413870` (+0x10) and flagged `0x142410830` as a "+0x10 estimate"; **both land mid-instruction**. Trust a byte check, never this tool. `dump-exec.bin` **cannot be regenerated** -- the 1.16.2 `.gzf` it would come from does not exist on this machine (see the named-dump bullet above), so the fix is deletion, not repair. Tracked in bd `er-effects-rs-q9jd`.
   2. **An address observed at RUNTIME needs no translation at all.** A stack-capture return address, a hook callback's caller, a pointer read out of live memory -- feed it straight to the 1.16.2 MCP (`getFunctionByAddress` / `getDecompiledCode`). Putting it through the shift tooling corrupts a correct address.
   3. The piecewise `-0x20`/`-0xf0`/`+0x10` staircase described below was real, but it was an artifact of the **old 1.16.1 dump vs the 1.16.2 deobf**. Concrete confirmation: bd `fe-autosave-icon-boot-overlay-mechanism-2026-07-08` records `CSFeManImp::Update` as 1.16.1-dump `0x140771cc0` -> deobf `0x140771bd0` (shift `-0xf0`); in the **1.16.2** dump that function's entry simply *is* `0x140771bd0`.
-  4. Still byte-check anything you will CALL or PATCH -- `scripts/find-deobf-bytes.py '<hex, ?? wildcards>'` prints matching VAs in one command. It defaults to `eldenring-deobf.bin`, which is **1.16.2 and not the installed game**; point it at the build you will actually run against with `ER_DEOBF_BIN=eldenring-deobf-1.17.bin`. The check is cheap and confirms shift-0 rather than discovering a shift. (The script takes bare patterns only -- `--help` raises a `ValueError` rather than printing usage.) To prove a specific dump VA is the same code as that VA in the flat image, there is an executable check rather than an argument: `python3 scripts/check-dump-deobf-identity.py 0x<va>` compares the daemon's disassembly against the image's, folding aliased spellings; `--selftest` passes as of 2026-08-31. It defaults to :8765 + `eldenring-deobf.bin`, so pass `--port 8767 --image eldenring-deobf-1.17.bin` for the installed build.
+  4. Still byte-check anything you will CALL or PATCH -- `scripts/find-deobf-bytes.py '<hex, ?? wildcards>'` prints matching VAs in one command. It defaults to `eldenring-deobf.bin`, which is **1.16.2 and not the installed game**; point it at the build you will actually run against with `ER_DEOBF_BIN=eldenring-deobf-1.17.1.bin` (1.17.0 is `eldenring-deobf-1.17.bin`). The check is cheap and confirms shift-0 rather than discovering a shift. (The script takes bare patterns only -- `--help` raises a `ValueError` rather than printing usage.) To prove a specific dump VA is the same code as that VA in the flat image, there is an executable check rather than an argument: `python3 scripts/check-dump-deobf-identity.py 0x<va>` compares the daemon's disassembly against the image's, folding aliased spellings; `--selftest` passes as of 2026-08-31. It defaults to :8765 + `eldenring-deobf.bin`, so pass `--port 8767 --image eldenring-deobf-1.17.bin` for the installed build.
   - **`.rdata` IS shift-0 too (corrected 2026-08-01).** The previous note here claimed string literals sat at deobf = dump `+0xE00`. That is wrong, and it is falsified by its own cited example: `u"%s/EldenRing/%s/"` occurs exactly once in `eldenring-deobf.bin`, at file offset `0x2bda858` -> VA `0x142bda858`, which is the address the old note called the DUMP address. Reading its claimed deobf address `0x142bdb658` yields pointers, not the string. Independently confirmed on four more literals, each landing exactly at `offset == RVA`: `0x2a8f9e8` `"Loop"`, `0x2a8fa00` `"Grayout"`, `0x2a90508` `"FadeOut"`, `0x2b264f0` `"TextFadeOut"`. The `+0xE00` was manufactured by applying a PE section raw-pointer mapping to a file that does not need one -- `eldenring-deobf.bin` is a FLAT image, so **file offset == RVA for every section**, and `VA = 0x140000000 + file_offset` everywhere. Anyone who followed the old note when resolving a string or vtable operand read `0xE00` bytes off target, which is hook-adjacent rather than cosmetic.
 - **DELETED 2026-08-31: the piecewise-shift narrative and its tool.** Two bullets used to sit here. One described the dump/deobf shift as a piecewise `-0x20`/`-0xf0`/`+0x10` staircase; the other told you to ground-truth every CALL/PATCH address with `scripts/dump-deobf-shift.py`. Both were TRUE against the **1.16.1** dump and became traps the moment the MCP started serving 1.16.2: the shift is now ZERO (see the bullet above), and the tool still reads the 1.16.1 `dump-exec.bin`, so it manufactures a nonzero shift out of a zero one. They are deleted rather than annotated because a correction sitting under a still-present instruction gets read as ambiguity, and the wrong half is the one that costs a boot. The single useful residue is already item 4 above: byte-check anything you will CALL or PATCH against the image you will run against.
 - The standalone `.gzf` is separate from the shared `From Software.rep` project, which is often open in the user's Ghidra GUI (locked). NEVER open `.rep` headless; import the `.gzf` into a throwaway temp project instead. This is also why the dump is "user-approved single program," not the forbidden whole-repo scan.
@@ -271,7 +287,36 @@ cp -rf source dest          # NOT: cp -r source dest
 ### Rules
 
 - Use `$HOME/.local/bin/bd` for ALL task tracking -- do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
+- Run `$HOME/.local/bin/bd prime` for the memory search index, the newest memories, and the top of the ready queue. It does NOT carry a command reference or the session-close protocol -- those are in this file (`## Quick Reference`, `## Never End A Turn The User Would Answer With Nothing (user directive 2026-09-09)
+
+Before ending a turn, ask what the ideal user reply is. If the honest answer is **nothing** -- they
+would have to say "ok, go on" -- the turn must not end. Ending there costs the user a round trip
+that carries zero information, and it is the single most common way this repo's work stalls.
+
+The shapes that mean you stopped too early, all of them observed:
+
+- Telling the user their input is not needed: "nothing", "the ball is in my court", "no action
+  needed from you".
+- Announcing your own next action instead of taking it: "Rebuilding and relaunching now", "next
+  I'll ...", "let me now ...". If you know the command, run it.
+- Offering work you are already authorised to do: "say the word and I'll ...", "want me to ...".
+  The standing orders in this file already say yes; asking again is the round trip.
+- A diagnosis with no edit. The finding is not the deliverable.
+
+A turn MAY legitimately end on the user, and these are the only cases:
+
+- A real external blocker: a credential, an interactive login, a purchase, a decision only they own.
+- A question only they can answer: a preference, a subjective judgement.
+- An in-game **observation** you have no oracle for ("did the popup appear?"). Asking them to
+  perform an in-game **input** is never legitimate -- see the 2026-07-22 standing order; the agent
+  drives every input itself.
+- The finished thing is delivered and you are reporting it.
+
+This is enforced, not advisory: the Stop hook halts a turn whose closing message matches the first
+list without matching the second. When it fires, do not rewrite the sentence to slip past it --
+take the next action instead, then report what happened.
+
+## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
 ## RTK / Code Search Caveat
@@ -439,7 +484,48 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 ```bash
 # Full quality gate: lossy-UTF8 lint, cargo fmt --all -- --check,
 # and a windows-target cargo check (cross-compiled from Linux via cargo-xwin).
+#
+# ORCHESTRATOR-ONLY, IN THE MAIN TREE. check.sh fails closed inside an agent
+# worktree -- `repo_root == */.claude/worktrees/agent-*` exits 2 with
+# "REFUSED -- this is an agent worktree" before the summary trap installs -- and
+# it refuses a second concurrent run anywhere. So do NOT write `bash
+# scripts/check.sh` into a subagent brief when that agent has worktree
+# isolation: the instruction is unrunnable, and an agent that reaches for the
+# ER_CHECK_FORCE=1 override burns the ~30 minutes of sleep-polling the guard
+# exists to prevent (bd subagent-full-check-sh-sleep-poll-is-the-hour-long-tax-2026-09-02,
+# bd never-tell-a-worktree-subagent-to-run-check-sh-2026-09-10).
+#
+# Give a worktree subagent the SCOPED list instead, naming its crates and the
+# gates its edit actually touches:
+#   cargo test -p <crate>
+#   cargo fmt -p <crate> -- --check
+#   python3 scripts/check-comment-caps.py <files it touched>
+#   python3 scripts/check-no-lossy-utf8.py
+#   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
+#   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
+# The whole-workspace verdict is the orchestrator's, run once at integration.
 bash scripts/check.sh
+
+# ...which is now ELEVEN STAGES fanned out as child processes, not one long process. The step
+# list is unchanged and still lives in check.sh alone; what changed is that each step belongs to
+# a named stage, so a failure lands somewhere named and the fast stages answer first. Measured on
+# this tree: `lint` is 14s and `policy` 104s, against 887s for the whole suite run one step at
+# a time. The fan-out at four jobs does the same work in 614s, and the number that really moved
+# is time-to-first-failure: a formatting mistake is red in 14s instead of after 121s of
+# unrelated gates.
+bash scripts/check.sh --list-stages         # the stages, and how many steps each holds
+bash scripts/check.sh --stage lint          # one stage, in this process, no children
+bash scripts/check.sh --jobs 1              # every stage, one at a time
+ER_CHECK_STAGES=lint,policy bash scripts/check.sh   # a deliberate subset (NOT a push shortcut)
+
+# A stage takes a SHARED lock and a whole-suite run an EXCLUSIVE one, so two stage runs coexist
+# and a whole-suite run excludes everything. The stage of every step comes from the fifth column
+# of docs/ci-gate-portability.tsv (gate steps) or from seven rules in scripts/check-stages.py
+# (toolchain steps); `check-stages.py --check` is a step of the suite and refuses a step that
+# belongs to no stage or to two. .github/workflows/check.yml generates its matrix from the same
+# command, so a GitHub run page shows the same eleven names.
+#
+# Same suite under act, in containers: bash scripts/act-check.sh --stage lint
 
 # Host-buildable workspace members (no game dependencies):
 cargo test -p er-soulsformats -p er-param-inspect
@@ -484,6 +570,48 @@ no such record, so those scripts will refuse it -- correctly, since nothing prov
 ## Conventions & Patterns
 
 - Prefer named `const`/`static` declarations for reverse-engineered RVAs, offsets, and structure sizes when that improves reviewability; use `scripts/audit-fromsoft-candidates.py` for inventory/triage instead of a blanket magic-number lint.
+- **Capitals in a comment name something; they never add emphasis** (user directive 2026-09-07,
+  `scripts/check-comment-caps.py`). Write a word in capitals only when the thing is spelled that
+  way: a `const`/`static`, an env var, an acronym (`DLL`, `RVA`, `ABI`), an x86 register or
+  mnemonic, a file or section name, an upstream symbol such as `FUN_140679180`. Never to raise
+  your voice -- `this is NOT the same pointer`, `the ONLY writer`, `MEASURED 2026-08-30` are all
+  banned, and so is a whole shouted sentence used as a heading. Emphasis-caps are not a style
+  preference: these comments carry the reverse engineering, and when a third of the words shout,
+  the shouting marks nothing. Put the load-bearing fact in the first sentence instead, or make it
+  a `#` heading in a module doc comment. The rule covers every line of prose in the source --
+  `//`, `///`, `//!`, `/* */`, `#`, and Python docstrings, which are documentation the moment
+  anyone reads them and were carrying 6,886 shouted words of their own.
+  - The escape hatch is backticks, and it is also better writing: the gate does not read inside
+    `` ` ` `` or inside a double-quoted span, so the x86 `NOT`, a `"NOT RUN"` status string and a
+    constant that happens to be an English word are all fine, spelled as the quotations they are.
+    Tokens attached to identifier or path characters (`SAVE_OWNS`, `AGENTS.md`, `crate::THE_ONE`)
+    are names already and are never read.
+  - **The tree is swept and the gate holds it there.** `--fix` took all 38,682 out of 1,025 files
+    on 2026-09-07 (21,947 lines rewritten, nothing outside comments and docstrings touched), and
+    `scripts/comment-caps.baseline.json` now records exactly one category of survivor: **139
+    words in 37 files that another gate reads as contract text**. `check-windows-proof-render.py`
+    asserts the literal `SEPARATE top-level window` is in `native_overlay.rs`;
+    `check-autoload-happy-path.py` asserts `do NOT call TitleTopDialog::open_menu from this
+    game-task` is in `product_core_autoload_tick`. Downcasing those disarmed both gates, and
+    backticks cannot rescue them because the assertion is a substring match. So they are recorded
+    in the baseline: deliberate, in the diff, reviewable. Everything else must be at zero -- a
+    file with no entry may not have a single shouted word, and a file that drops below its number
+    must record that too, so nothing reads as owing more than it does. Re-sweep with
+    `scripts/check-comment-caps.py --fix <path>` and then read the diff: `--fix` lowercases, and
+    a shouted word is occasionally load-bearing and wants a rewritten sentence, a pair of
+    backticks, or a baseline entry instead.
+  - Two enforcement points, deliberately unequal. `scripts/check-comment-caps.py` in `check.sh` is
+    the authority: the full English list, every comment and docstring, the exemptions.
+    `.cupcake/policies/claude/edit_no_comment_caps_guard.rego` refuses the Write/Edit itself, while
+    the author still has the sentence in hand, using a short list of English function words that
+    are never acronyms here and stopping at the first backtick or double quote on a line. It
+    under-reports on purpose: a miss costs a red gate later, a false positive costs an edit nobody
+    can make.
+  - The banned words are ordinary English, listed in `scripts/comment-caps-words.txt` and
+    regenerated by `scripts/gen-comment-caps-words.py` (needs `uv run --with wordfreq`). An
+    allowlist of technical vocabulary was rejected on purpose: registers, mnemonics, param names,
+    FromSoft types and `FUN_<addr>` symbols are an open set that grows every session, so an
+    allowlist would reject new correct writing every week. English is the closed set.
 - **No lossy UTF-8**: `String::from_utf8_lossy` is banned unless the line (or the line above) carries a `// UTF-8 Lossy:` justification (`scripts/check-no-lossy-utf8.py`).
 - Game-thread state is shared with the render loop via `Arc<Mutex<EffectsState>>`; lock with `state_or_return` (recovers from poisoning) and never hold the lock across game calls longer than needed.
 - The overlay defaults network sync **off**; `apply_speffect(id, dont_sync)` takes an inverted flag -- keep the inversion contained in `EffectCallKind::apply`.

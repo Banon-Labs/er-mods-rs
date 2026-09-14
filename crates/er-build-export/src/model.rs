@@ -17,6 +17,7 @@
 //! The defaults below are transcribed from the live bundle's
 //! `static makeDefault(e=0,t=!1)`, not invented.
 
+use er_build_import_core::sliders::SlidersDoc;
 use serde::Serialize;
 
 /// Planner schema version stamped into every document this crate writes.
@@ -46,15 +47,15 @@ pub const DEFAULT_SET_NAME: &str = "Default";
 ///
 /// The planner's own `QUICKBAR`, read out of the live bundle
 /// (`e[e.QUICKBAR = 10] = "QUICKBAR", e[e.POUCH = 16] = "POUCH"`). It is a fact about the
-/// DOCUMENT, which is why it is declared here rather than borrowed from the importer: the game
+/// document, which is why it is declared here rather than borrowed from the importer: the game
 /// side has its own count -- the length of `ChrAsmEquipEntries::quickItem1..10` -- and the two
 /// being equal is a claim worth testing rather than an identity worth assuming. See
 /// `tests/round_trip.rs`, which asserts they agree.
 pub const QUICKBAR_POSITIONS: usize = 10;
 
-/// Tool `equipIndex` values from [`QUICKBAR_POSITIONS`] up to this are POUCH positions.
+/// Tool `equipIndex` values from [`QUICKBAR_POSITIONS`] up to this are pouch positions.
 ///
-/// The planner's `POUCH`, and it is a TOTAL rather than a count: its equip view builds
+/// The planner's `POUCH`, and it is a total rather than a count: its equip view builds
 /// `times(POUCH)` entries and slices at `QUICKBAR`, so the pouch itself holds
 /// `POUCH_POSITIONS_TOTAL - QUICKBAR_POSITIONS` = 6.
 pub const POUCH_POSITIONS_TOTAL: usize = 16;
@@ -102,20 +103,21 @@ pub struct BuildExportDoc {
     /// which is why it is skipped rather than written when unset.
     #[serde(rename = "greatRune", skip_serializing_if = "Option::is_none")]
     pub great_rune: Option<String>,
-    /// The character's APPEARANCE, as an uppercase hex AOB of the game's own `FaceDataBuffer`.
+    /// The character's appearance, as the planner's Cosmetics tab carries it.
     ///
-    /// **Ours, not the planner's.** No key of `makeDefault()` carries an appearance and nothing in
-    /// the planner reads one: a build there is stats and gear. It is written at the top level
-    /// anyway because the `?i=` payload is the only place a shared build can carry it, and because
-    /// the planner's merge (`K_`) copies unknown keys through or ignores them -- it never fails on
-    /// one. So the site shows the build it always showed, and a reader that knows about this key
-    /// (this repository's own decoder, or a player pasting the AOB into a save editor) gets the
-    /// face back with it.
+    /// **Not a key of `makeDefault()`**, which is why it is skipped rather than written when
+    /// unset -- the same treatment [`BuildExportDoc::great_rune`] gets, and for the same reason.
+    /// The planner's own Cosmetics store creates it on demand and reads `character.sliders`
+    /// straight off the merged object.
     ///
-    /// The value is the whole buffer, magic first, so it is self-describing and matches what every
-    /// appearance tool exchanges byte for byte. Absent rather than `null` when unknown.
-    #[serde(rename = "faceData", skip_serializing_if = "Option::is_none")]
-    pub face_data: Option<String>,
+    /// This replaced an invented `faceData` key that carried the game's whole 288-byte
+    /// `FaceDataBuffer` as hex. That key was ours alone and nothing on the site read it, so a
+    /// build of ours opened there showed "No cosmetics data" while carrying the entire
+    /// appearance. The planner has read appearances since v2.19 (2024-03-01) under this key, in
+    /// its own layout; `er_build_import_core::sliders` is that layout and documents the
+    /// alignment between the two.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sliders: Option<SlidersDoc>,
     /// Schema version; see [`PLANNER_VERSION`].
     pub version: String,
     /// Cloud account that stored the build, or `null` for a local one.
@@ -156,7 +158,7 @@ impl Default for BuildExportDoc {
             items: Items::default(),
             character_class: None,
             great_rune: None,
-            face_data: None,
+            sliders: None,
             version: PLANNER_VERSION.to_string(),
             author: None,
             weapon_upgrade: DEFAULT_WEAPON_UPGRADE,
@@ -349,7 +351,7 @@ impl Slot {
         self
     }
 
-    /// Mark this slot equipped at `index` and claim NO named set -- the shape a TOOL has.
+    /// Mark this slot equipped at `index` and claim no named set -- the shape a tool has.
     ///
     /// Not a laxer [`Slot::equipped_at`]: it is the planner's own distinction. `setSlotEquipIndex`
     /// assigns `equipIndex` unconditionally and only touches `equipSet` `if (category)`, and the
@@ -406,17 +408,17 @@ pub struct Protectors {
 /// Consumables, ammunition, physick tears and flask allocation.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Items {
-    /// Arrows and bolts, keyed by EQUIP POSITION. See [`Ammo`].
+    /// Arrows and bolts, keyed by equip position. See [`Ammo`].
     pub ammo: Ammo,
     /// Consumable and crafting items -- **and the quickbar and the pouch**, neither of which has
     /// a key of its own anywhere in the document.
     ///
-    /// The planner keeps ONE list here and addresses both assignable surfaces out of it through
+    /// The planner keeps one list here and addresses both assignable surfaces out of it through
     /// `equipIndex`: `0..10` is a quickbar position, `10..16` a pouch one. Its `ToolEquipSlots`
     /// view is literally `times(POUCH).map(() => null)` folded over `items.tools.slots` by
     /// `equipIndex`, then `slice(0, QUICKBAR)` for the quickbar and `slice(QUICKBAR, POUCH)` for
     /// the pouch, with `QUICKBAR = 10` and `POUCH = 16`. So a document that leaves this list
-    /// empty ships a character whose quickbar and pouch are BOTH empty -- one omission, two
+    /// empty ships a character whose quickbar and pouch are both empty -- one omission, two
     /// missing categories, which is exactly what "only the physick came through" was.
     ///
     /// A row here carries `equipIndex` and no `equipSet`: the planner's `setSlotEquipIndex`
@@ -442,9 +444,9 @@ impl Default for Items {
     }
 }
 
-/// The four ammunition positions, each holding an item NAME.
+/// The four ammunition positions, each holding an item name.
 ///
-/// # The one category that is not a slot list, and the one whose key IS the position
+/// # The one category that is not a slot list, and the one whose key is the position
 ///
 /// Every other category is `{slots: [...]}` of [`Slot`] objects. Ammo is a flat object keyed by
 /// equip position whose value is the bare name string --
@@ -455,7 +457,7 @@ impl Default for Items {
 /// `delete items.ammo[slot]` followed by deleting the whole object once nothing is left.
 ///
 /// That last detail is why every field is skipped rather than written as `null`: an unequipped
-/// position on the planner's own documents is an ABSENT KEY, and `{}` -- what this serialises to
+/// position on the planner's own documents is an absent key, and `{}` -- what this serialises to
 /// when the character carries no ammunition -- is exactly `makeDefault`'s value.
 ///
 /// # There was an older shape and it is not a variant to support
@@ -612,9 +614,9 @@ pub struct Author {
     pub name: String,
 }
 
-/// What a finished document actually CARRIES, per category.
+/// What a finished document actually carries, per category.
 ///
-/// # Counted off the DOCUMENT, never off whatever produced it
+/// # Counted off the document, never off whatever produced it
 ///
 /// This is the whole point of the type, and it lives beside the document rather than beside the
 /// game-side reader for exactly that reason. The thing that was read and the thing that gets
@@ -645,7 +647,7 @@ pub struct WrittenCategories {
     /// Whether the document names an equipped great rune.
     pub great_rune: bool,
     /// Whether it carries the character's appearance.
-    pub face_data: bool,
+    pub sliders: bool,
 }
 
 impl BuildExportDoc {
@@ -685,7 +687,7 @@ impl BuildExportDoc {
             ammo: self.items.ammo.filled(),
             physick: self.items.crystal_tears.iter().flatten().count(),
             great_rune: self.great_rune.is_some(),
-            face_data: self.face_data.is_some(),
+            sliders: self.sliders.is_some(),
         }
     }
 }
@@ -753,16 +755,69 @@ mod tests {
     }
 
     #[test]
-    fn face_data_is_absent_by_default_and_present_once_set() {
-        // Absent, not null: the planner has no such key, so writing `null` would put a field on
-        // the document that neither side reads.
-        assert!(!as_object(&BuildExportDoc::default()).contains_key("faceData"));
+    fn sliders_are_absent_by_default_and_shaped_like_the_planners_own_once_set() {
+        // Absent, not null: `makeDefault()` does not write this key, and the planner's Cosmetics
+        // store tests for its presence before reading it.
+        assert!(!as_object(&BuildExportDoc::default()).contains_key("sliders"));
 
+        let mut set = er_build_import_core::sliders::SliderMap::new();
+        set.insert("age".to_owned(), serde_json::Value::from(3));
         let doc = BuildExportDoc {
-            face_data: Some("46414345".to_string()),
+            sliders: Some(SlidersDoc::new(
+                er_build_import_core::sliders::BodyType::B,
+                set,
+            )),
             ..BuildExportDoc::default()
         };
-        assert_eq!(as_object(&doc)["faceData"], "46414345");
+        let written = &as_object(&doc)["sliders"];
+        // `makeDefaultSliders()`'s own five keys, in its own spellings.
+        for key in ["id", "bodyType", "name", "images", "sliders"] {
+            assert!(written.get(key).is_some(), "{key} should be written");
+        }
+        assert_eq!(written["bodyType"], "B");
+        assert_eq!(written["sliders"]["age"], 3);
+        // One image, with the geometry the planner seeds -- `zoom` is 1 and not 0.
+        assert_eq!(written["images"][0]["url"], "");
+        assert_eq!(written["images"][0]["geometry"]["zoom"], 1.0);
+    }
+
+    /// The key count is load-bearing, not decoration, and the direction of the rule is the
+    /// opposite of what it looks like.
+    ///
+    /// `importState` merges with `K_(this.character, incoming)`, whose first line is
+    /// `Object.keys(live).length > Object.keys(incoming).length ? Object.keys(live) :
+    /// Object.keys(incoming)`. It walks one list, not the union. So a key that exists only on the
+    /// **incoming** document -- which is what `sliders` is, for a character whose Cosmetics tab
+    /// has never been opened -- is visited only when the incoming list is the one chosen, i.e.
+    /// while `len(live) <= len(incoming)`. Carrying *more* keys is what protects the key, not
+    /// fewer.
+    ///
+    /// `makeDefault()` writes 21 and this crate may add `greatRune` and `sliders`, so a fully
+    /// populated document is 23. The live object ratchets past that on its own:
+    /// `populateComputedValues` adds `computed` on every save (22), and `greatRune`, `pve` and
+    /// `activeEffects` each add one more as the player uses those features. A live character at
+    /// 24 or more that does not already carry `sliders` will drop ours.
+    ///
+    /// This test pins the number so the arithmetic stays checkable; it cannot fix the asymmetry,
+    /// which is an interop decision about whether to emit `computed`/`activeEffects` purely to
+    /// raise the count.
+    #[test]
+    fn a_fully_populated_document_stays_within_the_planners_key_count() {
+        let mut set = er_build_import_core::sliders::SliderMap::new();
+        set.insert("age".to_owned(), serde_json::Value::from(1));
+        let doc = BuildExportDoc {
+            great_rune: Some("Great Rune of the Unborn".to_string()),
+            sliders: Some(SlidersDoc::new(
+                er_build_import_core::sliders::BodyType::A,
+                set,
+            )),
+            ..BuildExportDoc::default()
+        };
+        assert_eq!(as_object(&doc).len(), MAKE_DEFAULT_KEYS.len() + 2);
+        assert_eq!(
+            as_object(&BuildExportDoc::default()).len(),
+            MAKE_DEFAULT_KEYS.len()
+        );
     }
 
     #[test]
@@ -877,7 +932,7 @@ mod tests {
         let mut ammo = Ammo::default();
         assert!(ammo.set("arrow1", "Bone Arrow"));
         assert!(ammo.set("bolt2", "Ballista Bolt"));
-        // A key the planner does not know is REFUSED rather than written: it would survive the
+        // A key the planner does not know is refused rather than written: it would survive the
         // whole pipeline and simply never be read.
         assert!(!ammo.set("arrow3", "Great Arrow"));
         assert!(!ammo.set("slots", "Great Arrow"));
@@ -889,7 +944,7 @@ mod tests {
             },
             ..BuildExportDoc::default()
         };
-        // Bare strings, and ONLY the filled positions -- an empty one is an absent key.
+        // Bare strings, and only the filled positions -- an empty one is an absent key.
         assert_eq!(
             as_object(&doc)["items"]["ammo"],
             serde_json::json!({"arrow1": "Bone Arrow", "bolt2": "Ballista Bolt"})
@@ -971,7 +1026,7 @@ mod tests {
 
     #[test]
     fn the_counts_come_from_the_document_and_not_from_its_construction() {
-        // A document whose tool list was never assigned reports ZERO, which is the line the defect
+        // A document whose tool list was never assigned reports zero, which is the line the defect
         // would have shown had anything been counting.
         let doc = BuildExportDoc {
             items: Items {
