@@ -1204,6 +1204,21 @@ fn identifies_a_session(abi: &ersc::Abi, session: usize, discovering: bool) -> b
                 || state == abi.state_searching
                 || state == abi.state_cancelling
                 || state == abi.state_offer_received
+                // Being in an invasion, and accepted only when re-checking -- the same asymmetry the
+                // two rules above draw, for the same reason. Widening the accepted set during a
+                // scan enlarges a haystack that has already produced six false positives; widening
+                // it for a pointer that was identified properly and has merely moved on costs
+                // nothing and fixes the thing below.
+                //
+                // Without this, `resolve_session` starts failing the moment a join completes, and
+                // the failure is silent and load-bearing: no session means no
+                // `invasion_attempt_in_flight`, which means `invasion_warp_policy()` stops
+                // answering `MarkersOnly`, which means `request_invasion_warp` no longer refuses
+                // (`warp.rs:462-464`) and the map pin and F7/F8/F9 all become live again -- in the
+                // middle of an invasion. The user signed off on the opposite behaviour once
+                // already, in as many words: "unable to warp while invading, which is great"
+                // (2026-08-12). So this restores a behaviour that was agreed, not a new policy.
+                || (!discovering && state == abi.state_in_world)
         })
         // The `_Mtx_internal_imp_t` at `session+0x100`. Four small integers at known offsets is a
         // weak signature over a million candidates and it has now false-positived live four times;

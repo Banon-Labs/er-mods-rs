@@ -154,6 +154,20 @@ pub struct Abi {
     /// stale value lands on a fast-fail state, so the marker would clear the backoff penalty on
     /// exactly the attempts that earned it.
     pub state_offer_received: u32,
+    /// Being in an invasion -- the state the session settles into once the join completes, and
+    /// the one `identifies_a_session` must keep accepting for a pointer it already holds.
+    ///
+    /// Post-renumber and therefore free of the stale-constant risk the rest of this table carries:
+    /// `0x16` never existed under v1.9.9 numbering. The proof is dated rather than argued -- the
+    /// enum-wide `+1` landed in `fd554f9d` on 2026-09-02, `git log -S'0x16'` puts this value's
+    /// first appearance in `local_invasion_filter.rs` on 2026-09-08, and the two comments that
+    /// assert it transcribe live runs `br-20260910-003946-b9b0` and `br-20260910-042516-3b5d`
+    /// against v2.0.1.
+    ///
+    /// The real limit is a different one, and it is not about the number: every reading of this
+    /// state in this repo is INVADER-side, because `capture_osm` fires on the invader's own item
+    /// use. A host being invaded has no oracle at all, and this field does not give them one.
+    pub state_in_world: u32,
 }
 
 /// Every Seamless build this module knows how to drive: the latest one.
@@ -200,6 +214,7 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     state_searching: 0x0e,
     state_cancelling: 0x23,
     state_offer_received: 0x13,
+    state_in_world: 0x16,
 }];
 
 // The addresses and field offsets are named constants rather than literals inside the table
