@@ -5,6 +5,43 @@ package cupcake.system.commands
 
 import rego.v1
 
+# ---------------------------------------------------------------------------
+# Tool identity (2026-09-14)
+#
+# The harness picks the capitalisation of `tool_name`, and harnesses disagree:
+# Claude Code sends `Bash`, other callers send `bash`. A rule that compares the
+# raw string therefore guards exactly one spelling and lets the other walk
+# past. Measured through the live engine on 2026-09-14: `git push origin main`
+# came back deny under `Bash` and `{}` -- a plain allow -- under `bash`, from a
+# rulebook whose whole purpose is to refuse that command. A guard that fails
+# open is the worst shape in this rulebook, because it stays silent while
+# protecting nothing.
+#
+# So tool identity is asked once, here, and every policy asks it through these
+# three. `lower` and `==` only, no regex: a regex inside a cupcake rule can trap
+# the wasm runtime, and a trapped evaluation returns an empty decision set,
+# which silences every policy at once -- the same failure class this helper
+# exists to close (bd
+# a-regex-in-a-rego-rule-can-crash-opa-wasm-and-silence-every-policy-2026-09-14).
+#
+# Routing is the other half of the same question and cannot live here: the
+# engine matches each policy's `required_tools` metadata case-sensitively, and a
+# policy that does not route also does not get its `required_signals` gathered
+# (measured -- five signals under `Bash`, "No signals required" under `bash`).
+# So every policy lists both spellings in its own routing block as well.
+tool_name(event) := lower(object.get(event, "tool_name", ""))
+
+# True when the event's tool is `wanted`, whatever case either is written in.
+is_tool(event, wanted) if {
+	tool_name(event) == lower(wanted)
+}
+
+# The same test against a set or array of acceptable tool names.
+is_any_tool(event, wanted) if {
+	some candidate in wanted
+	tool_name(event) == lower(candidate)
+}
+
 # Check if command contains a specific verb with proper word boundary anchoring
 # This prevents bypass via extra whitespace: "git  commit" or "  git commit"
 has_verb(command, verb) if {

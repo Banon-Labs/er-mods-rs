@@ -7,7 +7,7 @@
 #   id: ER-EFFECTS-BLOCK-DETACHED-PUSH
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.git_block_detached_push
 
 import rego.v1
@@ -41,7 +41,7 @@ import data.cupcake.system.commands
 # refuses the detachment, which is visible, and names the shape that works.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	some text in executed_texts
 	lowered := lower(text)
 	is_git_push(lowered)

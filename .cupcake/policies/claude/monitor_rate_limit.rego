@@ -21,10 +21,12 @@
 #     append a throttle to. Wrap it in a bash command through the throttle.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Monitor"]
+#     required_tools: ["Monitor", "monitor"]
 package cupcake.policies.claude.monitor_rate_limit
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 command := object.get(input.tool_input, "command", "")
 
@@ -61,7 +63,7 @@ block_reason_ws := "🧁 Cupcake blocked a `ws:` Monitor. A pushed frame stream 
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Monitor"
+	commands.is_tool(input, "Monitor")
 	websocket_monitor
 
 	decision := {
@@ -73,7 +75,7 @@ deny contains decision if {
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Monitor"
+	commands.is_tool(input, "Monitor")
 	not websocket_monitor
 	not throttled
 

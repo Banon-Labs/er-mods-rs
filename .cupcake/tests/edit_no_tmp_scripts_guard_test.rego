@@ -1,7 +1,8 @@
 # OPA unit tests for edit_no_tmp_scripts_guard.
 #
 # Run with:
-#   opa test .cupcake/policies/claude/edit_no_tmp_scripts_guard.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/edit_no_tmp_scripts_guard.rego \
 #            .cupcake/tests/edit_no_tmp_scripts_guard_test.rego
 package cupcake.policies.claude.edit_no_tmp_scripts_guard_test
 

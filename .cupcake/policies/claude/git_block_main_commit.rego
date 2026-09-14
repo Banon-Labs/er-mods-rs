@@ -7,7 +7,7 @@
 #   id: ER-EFFECTS-BLOCK-MAIN-COMMIT
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 #     required_signals: ["current_branch", "worktree_branches"]
 package cupcake.policies.claude.git_block_main_commit
 
@@ -40,7 +40,7 @@ import data.cupcake.system.commands
 # text. See the header of .cupcake/system/commands.rego.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	any_executed_commit
 	blocked_branch_context
 	not commits_target_only_nonmain_worktrees
@@ -57,7 +57,7 @@ deny contains decision if {
 # and a blind spot must not read as an allow.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	opaque_commit_payload
 	blocked_branch_context
 

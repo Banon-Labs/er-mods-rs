@@ -49,7 +49,7 @@
 #     idle_hold.rego does) and declare `required_signals: ["goal_active"]` in the routing block below.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["AskUserQuestion"]
+#     required_tools: ["AskUserQuestion", "askuserquestion"]
 package cupcake.policies.claude.block_askuserquestion
 
 import rego.v1

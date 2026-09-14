@@ -68,6 +68,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--cwd",
         help="the `cwd` field of the event, which signals measure from (default: repo root)",
     )
+    parser.add_argument(
+        "--tool-name",
+        default="Bash",
+        help=(
+            "the `tool_name` field of the event. Harnesses do not agree on the "
+            "spelling -- Claude Code sends `Bash`, other callers send `bash` -- "
+            "and a policy that compares the raw string only guards the spelling "
+            "it names, so this flag is how the other spelling gets measured."
+        ),
+    )
+    parser.add_argument(
+        "--policy-dir",
+        help=(
+            "evaluate against another `.cupcake` tree instead of this checkout's. "
+            "A guard change is only shown to have changed anything by running the "
+            "same command against the tree from before it, which "
+            "`git archive HEAD .cupcake | tar -x -C <dir>` produces without "
+            "disarming the live rulebook while the measurement runs."
+        ),
+    )
     parser.add_argument("--log-level", default="error", help="engine log level")
     args = parser.parse_args(argv[1:])
     if (args.command is None) == (args.command_file is None):
@@ -86,7 +106,7 @@ def main(argv: list[str]) -> int:
         "transcript_path": "/tmp/cupcake-check-command.jsonl",
         "cwd": args.cwd or str(REPO_ROOT),
         "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
+        "tool_name": args.tool_name,
         "tool_input": {"command": command, "timeout": 30000},
         "signals": {"current_branch": "feature/cupcake-check-command\n"},
     }
@@ -94,8 +114,11 @@ def main(argv: list[str]) -> int:
     for pair in args.env:
         name, _, value = pair.partition("=")
         env[name] = value
+    argv_engine = ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", args.log_level]
+    if args.policy_dir:
+        argv_engine += ["--policy-dir", args.policy_dir]
     result = subprocess.run(
-        ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", args.log_level],
+        argv_engine,
         cwd=REPO_ROOT,
         input=json.dumps(event),
         text=True,
@@ -105,7 +128,7 @@ def main(argv: list[str]) -> int:
         env=env,
     )
     verdict = "DENY" if result.returncode != 0 else "ALLOW"
-    print(f"{verdict}  {command!r}")
+    print(f"{verdict}  tool_name={args.tool_name!r}  {command!r}")
     output = (result.stdout + result.stderr).strip()
     if output:
         print(output)

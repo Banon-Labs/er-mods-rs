@@ -12,10 +12,11 @@ package cupcake.policies.bash_elden_ring_launch_guard
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 command := object.get(input.tool_input, "command", "")
 code := object.get(input.tool_input, "code", "")
-tool_name := object.get(input, "tool_name", "")
-lower_tool_name := lower(tool_name)
+lower_tool_name := commands.tool_name(input)
 
 # Include non-command tool fields so context-mode/run_experiment/batch payloads
 # are policy-covered too. `sprintf` keeps arrays/objects searchable enough for
@@ -84,7 +85,7 @@ deny contains decision if {
 }
 
 guarded_executable_tool if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 }
 
 guarded_executable_tool if {
@@ -96,11 +97,11 @@ guarded_executable_tool if {
 }
 
 guarded_executable_tool if {
-	tool_name == "run_experiment"
+	commands.is_tool(input, "run_experiment")
 }
 
 guarded_executable_tool if {
-	tool_name == "tracebreakpoint"
+	commands.is_tool(input, "tracebreakpoint")
 }
 
 steam_app_launch_detected if {
@@ -440,7 +441,7 @@ ersc_naming_statement_tokens contains tokens if {
 # ---------------------------------------------------------------------------
 
 ersc_bd_text_mention_only if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, proc_scan_norm_command)
 
 	# NO SHELL CONTROL OUTSIDE QUOTES. Without this line the header above is false of the code
@@ -457,7 +458,7 @@ ersc_bd_text_mention_only if {
 }
 
 ersc_reference_archive_copy_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	quote_parts := split(ersc_restore_quote_normalized, "'")
@@ -470,7 +471,7 @@ ersc_reference_archive_copy_command if {
 }
 
 ersc_user_restore_rename_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	quote_parts := split(ersc_restore_quote_normalized, "'")
@@ -516,7 +517,7 @@ ersc_restore_quote_normalized := replace(proc_scan_norm_command, `"`, "'")
 # ---------------------------------------------------------------------------
 
 ersc_interpreter_gameinstall_scan_only if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not regex.match(`[;|&()<>\n\r]`, scrubbed_command)
@@ -587,7 +588,7 @@ ersc_scan_repo_destination_marker if {
 # ---------------------------------------------------------------------------
 
 ersc_live_module_name_only if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not regex.match(`[;|&()<>\n\r]`, scrubbed_command)
@@ -682,7 +683,7 @@ scrubbed_command := concat(" ", [launch_single_parts[idx] |
 # ---------------------------------------------------------------------------
 
 bd_text_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	regex.match(`^[[:space:]]*["']?((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd["']?[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
 	not regex.match(`[;|&()<>\x60\n\r]`, scrubbed_command)
 	not contains(command, "$(")
@@ -702,7 +703,7 @@ marker_scan_text := lower(scrubbed_command) if {
 # fallback checks deny a `gh ... --body-file` command merely because the PR body
 # mentions a forbidden executable by name while documenting policy behavior.
 gh_text_body_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	regex.match(`(?is)(^|[[:space:];|&()])gh[[:space:]]+(pr[[:space:]]+(create|comment)|issue[[:space:]]+comment)([[:space:]]|.|\n)*--body-file([[:space:]]|=)`, command)
 }
 
@@ -737,7 +738,7 @@ marker_scan_text := lower(scrubbed_command) if {
 # Anything chained or indirected falls through to the raw-text scan, and the
 # direct scrubbed_command regex rules above are unaffected either way.
 git_commit_text_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(command, "<<")
@@ -746,7 +747,7 @@ git_commit_text_command if {
 }
 
 git_commit_text_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "`")
 	count(split(command, "$(")) == 2
 	count(proc_scan_heredoc_parts) == 2
@@ -771,7 +772,7 @@ git_commit_text_command if {
 # along), no command substitution or backtick anywhere, and no dangerous unquoted
 # token. `git` only reads stdin here -- it never executes the message.
 git_commit_text_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	count(proc_scan_heredoc_parts) == 2
@@ -868,7 +869,7 @@ start_protected_process_detection_only if {
 }
 
 proc_scan_detection_or_teardown_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	proc_scan_python_shape
 	contains(lower(command), "/proc/")
 	not contains(command, "$(")
@@ -1147,7 +1148,7 @@ proc_scan_exec_marker if {
 # ---------------------------------------------------------------------------
 
 launcher_named_only_as_nested_string_literal if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(lower(other_text), "start_protected_game.exe")
@@ -1277,7 +1278,7 @@ launcher_named_only_as_data if {
 }
 
 launcher_data_command_shape if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(command, "<<")
@@ -1437,7 +1438,7 @@ launcher_inert_heads := {
 # ---------------------------------------------------------------------------
 
 launcher_heredoc_program_data if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	launcher_heredoc_program_shape
 	launcher_mention_total > 0
 	not contains(detection_unquoted_command, "start_protected_game.exe")
@@ -1481,7 +1482,7 @@ launcher_dynamic_dispatch_marker if {
 # exactly one direct subprocess.run call must be the pgrep call, and any other
 # process-execution or launch-shaped marker keeps the exemption off.
 pgrep_subprocess_detection_command if {
-	tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	pgrep_subprocess_python_shape
 	not contains(command, "$(")
 	not contains(command, "`")

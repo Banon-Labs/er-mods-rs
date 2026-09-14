@@ -1,6 +1,7 @@
 # OPA unit tests for gh_pr_title_conventional.
 # Run with:
-#   opa test .cupcake/policies/claude/gh_pr_title_conventional.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/gh_pr_title_conventional.rego \
 #     .cupcake/tests/gh_pr_title_conventional_test.rego
 package cupcake.policies.claude.gh_pr_title_conventional_test
 

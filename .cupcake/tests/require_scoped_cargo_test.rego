@@ -2,7 +2,8 @@
 #
 # Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
 # and .cupcake/system/ only). Run with:
-#   opa test .cupcake/policies/claude/require_scoped_cargo.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/require_scoped_cargo.rego \
 #            .cupcake/tests/require_scoped_cargo_test.rego
 # End-to-end engine coverage lives in scripts/test-cupcake-policies.py.
 package cupcake.policies.claude.require_scoped_cargo_test

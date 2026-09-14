@@ -7,10 +7,12 @@
 #   id: ER-EFFECTS-NO-TMP-SCRIPTS-GUARD
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash", "write", "edit", "multiedit", "notebookedit", "bash"]
 package cupcake.policies.claude.edit_no_tmp_scripts_guard
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # Source/script extensions that should live in the repo (reviewable, version-controlled,
 # reusable across sessions) -- never authored into the volatile /tmp tree. DATA artifacts
@@ -24,7 +26,7 @@ script_exts := {
 tool_input := object.get(input, "tool_input", {})
 file_path := object.get(tool_input, "file_path", object.get(tool_input, "path", ""))
 command := object.get(tool_input, "command", "")
-lower_tool_name := lower(object.get(input, "tool_name", ""))
+lower_tool_name := commands.tool_name(input)
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"

@@ -1,7 +1,8 @@
 # OPA unit tests for edit_no_comment_caps_guard.
 #
 # Run with:
-#   opa test .cupcake/policies/claude/edit_no_comment_caps_guard.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/edit_no_comment_caps_guard.rego \
 #            .cupcake/tests/edit_no_comment_caps_guard_test.rego
 #
 # The negative cases are the load-bearing half. This guard refuses an edit, so a false positive

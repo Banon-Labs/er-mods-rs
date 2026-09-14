@@ -7,15 +7,17 @@
 #   id: BUILTIN-GIT-CHECK
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.builtins.git_pre_check
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 # Check git operations and run validation before allowing
 halt contains decision if {
     input.hook_event_name == "PreToolUse"
-    input.tool_name == "Bash"
+    commands.is_tool(input, "Bash")
     
     # Check if this is a git operation that needs validation
     command := lower(input.params.command)

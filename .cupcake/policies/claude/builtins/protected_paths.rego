@@ -7,7 +7,7 @@
 #   id: BUILTIN-PROTECTED-PATHS
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"]
+#     required_tools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash", "edit", "write", "multiedit", "notebookedit", "bash"]
 package cupcake.policies.builtins.protected_paths
 
 import data.cupcake.system.commands
@@ -21,7 +21,7 @@ halt contains decision if {
 
 	# Check for SINGLE-file writing tools only
 	single_file_tools := {"Edit", "Write", "NotebookEdit"}
-	input.tool_name in single_file_tools
+	commands.is_any_tool(input, single_file_tools)
 
 	# Get the file path from tool input
 	# TOB-4 fix: Use canonical path (always provided by Rust preprocessing)
@@ -45,7 +45,7 @@ halt contains decision if {
 # MultiEdit has an array of edits, each with their own resolved_file_path
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "MultiEdit"
+	commands.is_tool(input, "MultiEdit")
 
 	# Check each edit in the edits array
 	some edit in input.tool_input.edits
@@ -68,7 +68,7 @@ halt contains decision if {
 # Block ALL Bash commands that reference protected paths UNLESS whitelisted
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	# Get the command
 	command := input.tool_input.command
@@ -95,7 +95,7 @@ halt contains decision if {
 # The `affected_parent_directories` field is populated by Rust preprocessing for destructive commands
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	# Get affected parent directories from preprocessing.
 	# This is populated for commands like rm -rf, chmod -R, etc.  Treat it as
@@ -177,7 +177,7 @@ halt contains decision if {
 # the raw text) that could narrow it -- an opaque variable names nothing at all.
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	some payload in commands.shell_payloads_deep(input.tool_input.command)
 	some segment in shell_command_segments(lower(payload))
@@ -200,7 +200,7 @@ halt contains decision if {
 # This catches attacks like: python -c 'pathlib.Path("../my-favorite-file.txt").delete()'
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	command := input.tool_input.command
 	lower_cmd := lower(command)

@@ -2,7 +2,8 @@
 #
 # Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
 # and .cupcake/system/ only). Run with:
-#   opa test .cupcake/policies/claude/block_manual_pgrep.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/block_manual_pgrep.rego \
 #            .cupcake/tests/block_manual_pgrep_test.rego
 # End-to-end engine coverage lives in scripts/test-cupcake-policies.py.
 package cupcake.policies.claude.block_manual_pgrep_test
@@ -22,6 +23,37 @@ rule_ids(denials) := {d.rule_id | some d in denials}
 denied(cmd) if {
 	denials := guard.deny with input as bash_event(cmd)
 	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
+}
+
+# --- (0) Either spelling of the tool name is the same tool -------------------
+#
+# Harnesses disagree: Claude Code sends `Bash`, other callers send `bash`. Until
+# 2026-09-14 this guard compared the raw string, so the lowercase spelling was
+# not guarded at all -- measured live, `pgrep -x steam` denied under `Bash` and
+# was plainly allowed under `bash`.
+named_tool_event(cmd, tool) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": tool,
+	"tool_input": {"command": cmd, "timeout": 30000, "description": "test case"},
+}
+
+denied_under(cmd, tool) if {
+	denials := guard.deny with input as named_tool_event(cmd, tool)
+	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
+}
+
+test_deny_pgrep_under_the_lowercase_tool_name if {
+	denied_under("pgrep -x steam", "bash")
+}
+
+test_deny_pgrep_under_the_claude_code_tool_name if {
+	denied_under("pgrep -x steam", "Bash")
+}
+
+# Folding the case must not fold two tools together: authoring a file whose
+# content quotes the token does not run it.
+test_allow_pgrep_text_under_a_file_authoring_tool_name if {
+	not denied_under("pgrep -x steam", "Write")
 }
 
 # --- (a) Bare / shell-token pgrep is DENIED, no escape hatch -----------------

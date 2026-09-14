@@ -2,7 +2,8 @@
 #
 # Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
 # and .cupcake/system/ only). Run with:
-#   opa test .cupcake/policies/claude/monitor_rate_limit.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/monitor_rate_limit.rego \
 #            .cupcake/tests/monitor_rate_limit_test.rego
 # End-to-end engine coverage lives in scripts/test-cupcake-policies.py.
 package cupcake.policies.claude.monitor_rate_limit_test

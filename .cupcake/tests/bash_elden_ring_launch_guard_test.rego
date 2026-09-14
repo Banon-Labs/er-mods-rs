@@ -2,7 +2,8 @@
 #
 # Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
 # and .cupcake/system/ only). Run with:
-#   opa test .cupcake/policies/claude/bash_elden_ring_launch_guard.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/bash_elden_ring_launch_guard.rego \
 #            .cupcake/tests/bash_elden_ring_launch_guard_test.rego
 # End-to-end engine coverage lives in scripts/test-cupcake-policies.py.
 package cupcake.policies.bash_elden_ring_launch_guard_test

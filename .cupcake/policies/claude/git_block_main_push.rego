@@ -7,7 +7,7 @@
 #   id: ER-EFFECTS-BLOCK-MAIN-PUSH
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 #     required_signals: ["current_branch", "worktree_branches"]
 package cupcake.policies.claude.git_block_main_push
 
@@ -68,7 +68,7 @@ import data.cupcake.system.commands
 # unrecognised push anywhere -- inside a wrapper included -- still denies.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	any_executed_push
 	blocked_push_context
 
@@ -87,7 +87,7 @@ deny contains decision if {
 # reach and is documented as such rather than pretended away.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	opaque_push_payload
 
 	decision := {

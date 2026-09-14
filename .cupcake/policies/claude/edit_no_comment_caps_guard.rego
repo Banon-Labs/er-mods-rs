@@ -7,10 +7,12 @@
 #   id: ER-EFFECTS-COMMENT-CAPS-GUARD
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit", "multiedit", "notebookedit"]
 package cupcake.policies.claude.edit_no_comment_caps_guard
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # WHY A GUARD WHEN `scripts/check-comment-caps.py` ALREADY GATES THIS.
 #
@@ -42,7 +44,7 @@ tool_input := object.get(input, "tool_input", {})
 
 file_path := object.get(tool_input, "file_path", object.get(tool_input, "path", ""))
 
-lower_tool_name := lower(object.get(input, "tool_name", ""))
+lower_tool_name := commands.tool_name(input)
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"

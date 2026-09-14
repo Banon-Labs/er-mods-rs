@@ -21,10 +21,12 @@
 #     becomes a restarted game rather than no game.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.teardown_must_relaunch
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 command := object.get(input.tool_input, "command", "")
 
@@ -160,7 +162,7 @@ block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `script
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	runs_teardown
 	not status_only
 	not teardown_alone
@@ -175,7 +177,7 @@ deny contains decision if {
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	runs_teardown
 	not status_only
 	relaunches

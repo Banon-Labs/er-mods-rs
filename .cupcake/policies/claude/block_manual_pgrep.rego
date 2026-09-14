@@ -23,10 +23,12 @@
 #     See bd steam-detection-wsl-false-negative-2026-07-18.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.block_manual_pgrep
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 command := object.get(input.tool_input, "command", "")
 
@@ -93,7 +95,7 @@ pgrep_quoted_text_mention_only if {
 }
 
 bd_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, command)
 	not regex.match(`[;|&()<>\x60\n\r]`, pgrep_unquoted_command)
 	not contains(command, "$(")
@@ -166,7 +168,7 @@ pgrep_unquoted_command := concat(" ", [pgrep_single_parts[idx] |
 # ---------------------------------------------------------------------------
 
 git_commit_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(command, "<<")
@@ -174,7 +176,7 @@ git_commit_text_command if {
 }
 
 git_commit_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "`")
 	count(split(command, "$(")) == 2
 	count(pgrep_heredoc_parts) == 2
@@ -185,7 +187,7 @@ git_commit_text_command if {
 }
 
 git_commit_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	count(pgrep_heredoc_parts) == 2
@@ -261,7 +263,7 @@ block_reason := "🧁 Cupcake blocked a manual pgrep. On this WSL2 + native-Wind
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	manual_pgrep_detected
 
 	decision := {

@@ -19,6 +19,56 @@ bash_event(cmd, affected_dirs) := {
 
 rule_ids(denials) := {d.rule_id | some d in denials}
 
+# --- either spelling of the tool name is the same tool ------------------------
+#
+# Harnesses disagree: Claude Code sends `Bash`, other callers send `bash`, and a
+# builtin that compares the raw string guards only the spelling it names. Until
+# 2026-09-14 this one did: measured live, `touch /etc/...` halted under `Bash`
+# and was plainly allowed under `bash`. The single-file branch has the same
+# exposure for `Edit`/`Write`/`NotebookEdit`.
+named_tool_event(tool, cmd) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": tool,
+	"tool_input": {"command": cmd, "timeout": 30000, "description": "test case"},
+	"affected_parent_directories": [],
+	"builtin_config": {"protected_paths": {"message": "This path is read-only and cannot be modified", "paths": ["/System/", "/etc/", "~/.ssh/"]}},
+}
+
+named_write_event(tool, path) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": tool,
+	"tool_input": {"file_path": path},
+	"resolved_file_path": path,
+	"builtin_config": {"protected_paths": {"message": "This path is read-only and cannot be modified", "paths": ["/System/", "/etc/", "~/.ssh/"]}},
+}
+
+test_halt_protected_path_write_under_the_lowercase_tool_name if {
+	denials := protected.halt with input as named_tool_event("bash", "touch /etc/cupcake-probe-marker")
+	"BUILTIN-PROTECTED-PATHS" in rule_ids(denials)
+}
+
+test_halt_protected_path_write_under_the_claude_code_tool_name if {
+	denials := protected.halt with input as named_tool_event("Bash", "touch /etc/cupcake-probe-marker")
+	"BUILTIN-PROTECTED-PATHS" in rule_ids(denials)
+}
+
+test_halt_single_file_write_under_the_lowercase_tool_name if {
+	denials := protected.halt with input as named_write_event("write", "/etc/hosts")
+	"BUILTIN-PROTECTED-PATHS" in rule_ids(denials)
+}
+
+test_halt_single_file_write_under_the_claude_code_tool_name if {
+	denials := protected.halt with input as named_write_event("Write", "/etc/hosts")
+	"BUILTIN-PROTECTED-PATHS" in rule_ids(denials)
+}
+
+# Folding the case must not fold two tools together: an unprotected path stays
+# writable under either spelling.
+test_allow_unprotected_single_file_write_under_the_lowercase_tool_name if {
+	denials := protected.halt with input as named_write_event("write", "/home/dev/repo/src/lib.rs")
+	count(denials) == 0
+}
+
 test_allow_mktemp_bd_comment_file_when_preprocessor_overapproximates_root if {
 	cmd := concat("\n", [
 		"tmp=$(mktemp)",

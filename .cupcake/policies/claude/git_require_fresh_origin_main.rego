@@ -6,7 +6,7 @@
 #   id: ER-EFFECTS-REQUIRE-FRESH-ORIGIN-MAIN
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 #     required_signals: ["origin_main_oids"]
 package cupcake.policies.claude.git_require_fresh_origin_main
 
@@ -26,7 +26,7 @@ import data.cupcake.system.commands
 # .cupcake/system/commands.rego.
 deny contains decision if {
     input.hook_event_name == "PreToolUse"
-    input.tool_name == "Bash"
+    commands.is_tool(input, "Bash")
     some text in commands.executed_texts(input.tool_input.command)
     guarded(lower(text))
     not fresh
@@ -37,7 +37,7 @@ deny contains decision if {
 # jurisdiction: a command naming git and either force or rebase.
 deny contains decision if {
     input.hook_event_name == "PreToolUse"
-    input.tool_name == "Bash"
+    commands.is_tool(input, "Bash")
     commands.unparsed_shell_payload(input.tool_input.command)
     lowered := lower(input.tool_input.command)
     contains(lowered, "git")

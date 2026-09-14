@@ -1,6 +1,7 @@
 # OPA unit tests for block_compositor_input_injection.
 # Run with:
-#   opa test .cupcake/policies/claude/block_compositor_input_injection.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/block_compositor_input_injection.rego \
 #     .cupcake/tests/block_compositor_input_injection_test.rego
 #
 # The policy is also proven to fire in production, which `opa test` cannot show: on 2026-09-09 it

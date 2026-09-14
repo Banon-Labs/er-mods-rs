@@ -36,7 +36,7 @@
 #     log file the build wrote, or its provenance record.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.no_grep_for_build_errors
 
 import rego.v1

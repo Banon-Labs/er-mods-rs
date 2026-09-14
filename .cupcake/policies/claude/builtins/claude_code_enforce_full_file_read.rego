@@ -7,16 +7,18 @@
 #   id: BUILTIN-ENFORCE-FULL-READ
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Read"]
+#     required_tools: ["Read", "read"]
 package cupcake.policies.builtins.claude_code_enforce_full_file_read
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # Deny partial reads of files (MVP: enforce for all files)
 deny contains decision if {
     # Only apply to Read tool
     input.hook_event_name == "PreToolUse"
-    input.tool_name == "Read"
+    commands.is_tool(input, "Read")
     
     # Check if offset or limit parameters are present
     has_partial_read_params

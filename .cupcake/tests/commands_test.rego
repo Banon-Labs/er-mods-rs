@@ -454,3 +454,47 @@ test_quoted_separator_does_not_split_under_the_contract if {
 	some text in commands.executed_texts(`rm -rf "a;b"`)
 	commands.shell_statements(text) == {`rm -rf "a b"`}
 }
+
+# --- tool identity, folded to one spelling ------------------------------------
+#
+# The hole these close, measured through the live engine on 2026-09-14: the
+# push-to-main command assembled above came back deny under tool_name `Bash` and
+# a plain allow under `bash`, because every rule compared the raw string. Routing
+# carries the same fault and is answered in each policy's own `required_tools`
+# metadata; this is the rule-body half of it.
+
+test_tool_name_is_folded if {
+	commands.tool_name({"tool_name": "Bash"}) == "bash"
+}
+
+test_tool_name_of_an_event_that_carries_none if {
+	commands.tool_name({}) == ""
+}
+
+test_is_tool_accepts_the_claude_code_spelling if {
+	commands.is_tool({"tool_name": "Bash"}, "Bash")
+}
+
+test_is_tool_accepts_the_other_harness_spelling if {
+	commands.is_tool({"tool_name": "bash"}, "Bash")
+}
+
+test_is_tool_folds_the_wanted_name_too if {
+	commands.is_tool({"tool_name": "BASH"}, "bash")
+}
+
+test_is_tool_still_separates_different_tools if {
+	not commands.is_tool({"tool_name": "Write"}, "Bash")
+}
+
+test_is_tool_on_an_event_that_carries_no_tool_name if {
+	not commands.is_tool({}, "Bash")
+}
+
+test_is_any_tool_matches_a_member_in_either_case if {
+	commands.is_any_tool({"tool_name": "write"}, {"Edit", "Write", "NotebookEdit"})
+}
+
+test_is_any_tool_rejects_a_non_member if {
+	not commands.is_any_tool({"tool_name": "bash"}, {"Edit", "Write", "NotebookEdit"})
+}

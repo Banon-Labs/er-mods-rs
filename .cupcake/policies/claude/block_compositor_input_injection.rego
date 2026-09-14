@@ -13,10 +13,12 @@
 #     target window is allowed; read-only xdotool queries are untouched.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.block_compositor_input_injection
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # The defect is UNTARGETED input, not input.
 #
@@ -139,7 +141,7 @@ block_reason := concat("", [
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	injection_detected
 
 	decision := {

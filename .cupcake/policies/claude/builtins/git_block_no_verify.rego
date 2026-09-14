@@ -7,7 +7,7 @@
 #   id: BUILTIN-GIT-BLOCK-NO-VERIFY
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.builtins.git_block_no_verify
 
 import rego.v1
@@ -32,7 +32,7 @@ no_verify_scan_texts := commands.executed_texts(input.tool_input.command) | {inp
 # Block git commands that bypass verification hooks
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	# Every text this command actually executes, plus the raw command itself
 	some text in no_verify_scan_texts
@@ -84,7 +84,7 @@ contains_git_no_verify(cmd) if {
 # Also block attempts to disable hooks via config
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	some text in no_verify_scan_texts
 	command := lower(text)
@@ -221,7 +221,7 @@ hook_scan_statements := {statement |
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	some statement in hook_scan_statements
 	hook_removal_statement(statement)

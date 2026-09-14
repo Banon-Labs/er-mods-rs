@@ -98,13 +98,33 @@ def put(path, text):
     with tempfile.NamedTemporaryFile('w', dir=path.parent, delete=False) as f:
         f.write(text); temp = f.name
     os.replace(temp, path)
+# The texts above are a snapshot of what this guard looked like the day it was written, and the
+# installed guard has moved on since: it reads commands.executed_texts so a `bash -c` payload cannot
+# hide a force-push, it fails closed on a payload it cannot read, and (2026-09-14) it asks
+# commands.is_tool for the tool name so the `bash` spelling is guarded alongside `Bash`. Writing the
+# snapshot over a file that already carries those would take the guard backwards without saying so,
+# which is the direction that costs something. So a destination that differs from what this script
+# would write stops the run before anything is written, and the operator decides.
+def drifted(files):
+    return [path for path, text in files.items() if path.exists() and path.read_text() != text]
 def run(cmd): subprocess.run(cmd, cwd=ROOT, check=True, timeout=30)
 def main():
     p = argparse.ArgumentParser(); p.add_argument('--check', action='store_true'); p.add_argument('--apply', action='store_true'); a = p.parse_args()
     if a.check == a.apply: raise SystemExit('choose exactly one of --check or --apply')
     files = target()
+    stale = drifted(files)
     if a.check:
-        print('ready; no files written'); print('\n'.join(str(x.relative_to(ROOT)) for x in files)); return
+        print('ready; no files written'); print('\n'.join(str(x.relative_to(ROOT)) for x in files))
+        if stale:
+            print('would REFUSE: these have moved on from the text below, and --apply would take them backwards:')
+            print('\n'.join(f'  {x.relative_to(ROOT)}' for x in stale))
+        return
+    if stale:
+        raise SystemExit(
+            'refusing to install: the following already differ from what this script writes, so '
+            'applying it would revert them. Reconcile them by hand first.\n'
+            + '\n'.join(f'  {x.relative_to(ROOT)}' for x in stale)
+        )
     if not (sys.stdin.isatty() and sys.stdout.isatty()): raise SystemExit('--apply requires a human interactive TTY')
     print('This installs the stale-origin/main guard and runs its tests.')
     if input(f'Type exactly {CONFIRM!r}: ') != CONFIRM: raise SystemExit('confirmation mismatch; no files written')

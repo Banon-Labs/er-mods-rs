@@ -12,10 +12,12 @@
 #     check suite; nothing local said so until the red X arrived.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.gh_pr_title_conventional
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # A commit subject is gated locally by a hook; the PR title was not gated anywhere.
 #
@@ -69,7 +71,7 @@ offending_title := t if {
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	gh_pr_title_command
 	subject := offending_title
 

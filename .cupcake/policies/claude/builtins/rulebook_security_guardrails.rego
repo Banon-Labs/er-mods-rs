@@ -7,7 +7,7 @@
 #   id: BUILTIN-RULEBOOK-SECURITY
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "Bash", "Task", "WebFetch"]
+#     required_tools: ["Edit", "Write", "MultiEdit", "NotebookEdit", "Read", "Grep", "Glob", "Bash", "Task", "WebFetch", "edit", "write", "multiedit", "notebookedit", "read", "grep", "glob", "bash", "task", "webfetch"]
 package cupcake.policies.builtins.rulebook_security_guardrails
 
 import rego.v1
@@ -26,7 +26,7 @@ halt contains decision if {
 		"WebFetch", # Could use file:// URLs
 		"Task", # Could spawn agent to bypass
 	]
-	input.tool_name in file_operation_tools
+	commands.is_any_tool(input, file_operation_tools)
 
 	# Check if any parameter contains a protected path (case-insensitive)
 	# TOB-4 fix: Prefer canonical path (input.resolved_file_path) when available,
@@ -50,7 +50,7 @@ halt contains decision if {
 # Total lockdown - NO whitelist (unlike protected_paths builtin)
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	# Check if command references any protected path
 	# Bash tool uses tool_input.command, not params.command
@@ -74,7 +74,7 @@ halt contains decision if {
 # Block symlink creation involving any protected path (TOB-EQTY-LAB-CUPCAKE-4)
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	command := lower(input.tool_input.command)
 
@@ -215,7 +215,7 @@ get_file_path_from_tool_input := path if {
 get_file_path_with_preprocessing_fallback := path if {
 	# For Glob only, use raw pattern since it can't be canonicalized (e.g., "**/*.rs")
 	# Grep's 'path' field CAN be canonicalized, so it goes through TOB-4 defense
-	input.tool_name == "Glob"
+	commands.is_tool(input, "Glob")
 	path := get_file_path_from_tool_input
 } else := input.resolved_file_path if {
 	# For other tools (including Grep), use canonical path from Rust preprocessing (TOB-4 defense)

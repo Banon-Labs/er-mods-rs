@@ -46,10 +46,12 @@
 #     a single non-chained bd command, or a git commit message.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 package cupcake.policies.claude.require_scoped_cargo
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 command := object.get(input.tool_input, "command", "")
 
@@ -138,7 +140,7 @@ text_mention_only if {
 }
 
 bd_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, norm_command)
 	not regex.match(`[;|&()<>\x60]`, unquoted_command)
 	not contains(command, "$(")
@@ -146,7 +148,7 @@ bd_text_command if {
 }
 
 git_commit_text_command if {
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	not contains(command, "$(")
 	not contains(command, "`")
 	not contains(command, "<<")
@@ -161,7 +163,7 @@ block_reason := "🧁 Cupcake blocked an UNSCOPED cargo invocation. Name the cra
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	unscoped_cargo
 	not text_mention_only
 

@@ -7,7 +7,7 @@
 #   id: ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 #     required_signals: ["runtime_evidence_for_head", "runtime_evidence_note"]
 package cupcake.policies.claude.git_require_runtime_evidence
 
@@ -68,7 +68,7 @@ import data.cupcake.system.commands
 #     badly is a fact worth pushing with; a run that never executed it is not evidence of anything.
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 	any_executed_push
 	evidence_verdict == "MISSING"
 

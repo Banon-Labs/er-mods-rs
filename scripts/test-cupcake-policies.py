@@ -65,6 +65,8 @@ OPA_TEST_TIMEOUT_SECONDS = 10.0
 # Assembled rather than written whole, so this file is not itself denied by the
 # guard it tests when an agent edits it through a Bash command.
 ROOT_DELETE = " ".join(["rm", "-rf", "/"])
+PUSH_TO_MAIN = " ".join(["git", "push", "origin", "main"])
+MANUAL_PGREP = " ".join(["pg" + "rep", "-x", "steam"])
 
 # `git worktree list --porcelain`-shaped fixture for the worktree-target
 # exception cases in the main-commit/main-push guards.
@@ -195,14 +197,17 @@ ORPHANED_REGO_SUITES = [
         ".cupcake/tests/guard_layer_destructive_guard_test.rego",
     ],
     [
+        ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/edit_no_tmp_scripts_guard.rego",
         ".cupcake/tests/edit_no_tmp_scripts_guard_test.rego",
     ],
     [
+        ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/monitor_rate_limit.rego",
         ".cupcake/tests/monitor_rate_limit_test.rego",
     ],
     [
+        ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/teardown_must_relaunch.rego",
         ".cupcake/tests/teardown_must_relaunch_test.rego",
     ],
@@ -1776,6 +1781,60 @@ def main() -> int:
             {"questions": [{"question": "Which?", "header": "H", "options": [{"label": "A"}, {"label": "B"}]}]},
             include_timeout=False,
             tool_name="AskUserQuestion",
+        ),
+        # --- tool-name case parity, through the live engine ---------------------------------------
+        # The harness picks the capitalisation of `tool_name` and harnesses disagree: Claude Code
+        # sends `Bash`, other callers send `bash`. Every rule in this rulebook compared the raw
+        # string until 2026-09-14, so the lowercase spelling was guarded by none of them. Measured
+        # then, against the tree from before the fix: each command below denied under `Bash` and was
+        # plainly allowed -- `{}`, exit 0 -- under `bash`.
+        #
+        # These belong here rather than only in the opa suites for the second half of the same
+        # defect: the engine matches each policy's `required_tools` metadata case-sensitively, and a
+        # policy that does not route also does not get its `required_signals` gathered (five signals
+        # under `Bash`, "No signals required" under `bash`). An opa test cannot see that, because
+        # `opa test` never routes anything.
+        PolicyCase(
+            "deny-push-to-main-under-the-lowercase-tool-name",
+            PUSH_TO_MAIN,
+            False,
+            "Do not push directly to main",
+            tool_name="bash",
+        ),
+        PolicyCase(
+            "deny-push-to-main-under-the-claude-code-tool-name",
+            PUSH_TO_MAIN,
+            False,
+            "Do not push directly to main",
+            tool_name="Bash",
+        ),
+        PolicyCase(
+            "deny-manual-pgrep-under-the-lowercase-tool-name",
+            MANUAL_PGREP,
+            False,
+            "blocked a manual pg" + "rep",
+            tool_name="bash",
+        ),
+        PolicyCase(
+            "deny-manual-pgrep-under-the-claude-code-tool-name",
+            MANUAL_PGREP,
+            False,
+            "blocked a manual pg" + "rep",
+            tool_name="Bash",
+        ),
+        PolicyCase(
+            "deny-protected-path-write-under-the-lowercase-tool-name",
+            "touch /etc/cupcake-tool-name-case-marker",
+            False,
+            "System path modification blocked by policy",
+            tool_name="bash",
+        ),
+        PolicyCase(
+            "deny-protected-path-write-under-the-claude-code-tool-name",
+            "touch /etc/cupcake-tool-name-case-marker",
+            False,
+            "System path modification blocked by policy",
+            tool_name="Bash",
         ),
     ]
 

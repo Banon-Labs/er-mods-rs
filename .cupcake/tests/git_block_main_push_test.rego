@@ -32,6 +32,35 @@ bash_event_no_branch_signal(cmd) := {
 
 rule_ids(denials) := {d.rule_id | some d in denials}
 
+# The same event under a caller's own spelling of `tool_name`. Harnesses disagree
+# -- Claude Code sends `Bash`, other callers send `bash` -- and until 2026-09-14
+# this guard compared the raw string, so the lowercase spelling walked past it:
+# measured through the live engine, deny under `Bash` and a plain allow under
+# `bash`, from the guard whose whole job is to refuse that command.
+named_tool_event(cmd, branch, tool) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": tool,
+	"tool_input": {"command": cmd, "timeout": 30000},
+	"signals": {"current_branch": branch},
+}
+
+test_deny_push_to_main_under_the_lowercase_tool_name if {
+	denials := guard.deny with input as named_tool_event("git push origin main", "feature/no-main-push", "bash")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_push_to_main_under_the_claude_code_tool_name if {
+	denials := guard.deny with input as named_tool_event("git push origin main", "feature/no-main-push", "Bash")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# Folding the case must not fold two tools together: a file-authoring event that
+# merely quotes the command is not a push.
+test_allow_push_text_under_a_file_authoring_tool_name if {
+	denials := guard.deny with input as named_tool_event("git push origin main", "feature/no-main-push", "Write")
+	count(denials) == 0
+}
+
 test_deny_bare_git_push_on_main if {
 	denials := guard.deny with input as bash_event("git push", "main\n")
 	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)

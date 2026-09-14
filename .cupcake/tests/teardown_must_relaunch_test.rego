@@ -2,7 +2,8 @@
 #
 # Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
 # and .cupcake/system/ only). Run with:
-#   opa test .cupcake/policies/claude/teardown_must_relaunch.rego \
+#   opa test .cupcake/system/commands.rego \
+#            .cupcake/policies/claude/teardown_must_relaunch.rego \
 #            .cupcake/tests/teardown_must_relaunch_test.rego
 # End-to-end engine coverage lives in scripts/test-cupcake-policies.py.
 package cupcake.policies.claude.teardown_must_relaunch_test

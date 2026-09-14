@@ -7,7 +7,7 @@
 #   id: CLAUDE-GUARD-LAYER-DESTRUCTIVE
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Bash"]
+#     required_tools: ["Bash", "bash"]
 
 # WHY THIS EXISTS, AND WHY IT IS NOT A LOCKDOWN (2026-08-31).
 #
@@ -78,7 +78,7 @@ destructive_verbs := {"rm", "rmdir", "shred", "truncate", "mv"}
 
 halt contains decision if {
 	input.hook_event_name == "PreToolUse"
-	input.tool_name == "Bash"
+	commands.is_tool(input, "Bash")
 
 	# EVERY text this command executes, not just the outer one: `bash -c "rm -rf
 	# .cupcake"` puts the verb inside a quoted operand where no `(^|\s)` anchor

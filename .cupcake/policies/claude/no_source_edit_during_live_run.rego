@@ -22,7 +22,7 @@
 #     Editing while nothing is running is untouched.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit", "multiedit", "notebookedit"]
 #     required_signals: ["live_er_run"]
 package cupcake.policies.claude.no_source_edit_during_live_run
 
