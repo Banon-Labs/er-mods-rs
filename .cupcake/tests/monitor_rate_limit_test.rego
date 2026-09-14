@@ -72,6 +72,31 @@ test_deny_lookalike_script if {
 	denied(monitor_event("tail -f a.log | python3 scripts/monitor-throttle-fake.py 10"))
 }
 
+# --- the self-throttling push helper is ALLOWED ---------------------------------
+
+# scripts/er-push-watched.sh re-executes itself through the committed throttle and
+# refuses to run when that file is missing, so the documented one-path form emits a
+# throttled stream. Refusing it cost a push on 2026-09-14.
+test_allow_er_push_watched_bare if {
+	not denied(monitor_event("bash /home/banon/projects/er-mods-rs/scripts/er-push-watched.sh branch branch origin"))
+}
+
+# Queued behind another agent's gate run: the wait loop is in front, the script is
+# still the last stage.
+test_allow_er_push_watched_behind_a_wait_loop if {
+	not denied(monitor_event("until flock -n -x /run/user/1000/er-mods-rs-check-sh.lock -c true; do sleep 20; done; bash /abs/scripts/er-push-watched.sh b b origin"))
+}
+
+# Belt and braces: the redundant second throttle is still accepted.
+test_allow_er_push_watched_with_redundant_throttle if {
+	not denied(monitor_event("bash /abs/scripts/er-push-watched.sh b b origin | python3 /abs/scripts/monitor-throttle.py 15"))
+}
+
+# ...but piping its output into something else is a stream this rule has not seen.
+test_deny_er_push_watched_piped_elsewhere if {
+	denied(monitor_event("bash /abs/scripts/er-push-watched.sh b b origin | grep --line-buffered stage"))
+}
+
 # --- throttled streams are ALLOWED ------------------------------------------
 
 test_allow_throttled_tail_grep if {
