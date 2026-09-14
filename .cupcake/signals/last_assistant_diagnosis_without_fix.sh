@@ -114,7 +114,17 @@ DIAGNOSIS_RE = re.compile(
     r"|\bthat\s+is\s+(?:a|the)\s+(?:defect|bug|problem|cause)\b"
     r"|\bwhy\s+it\s+(?:fails|failed|breaks|broke|is\s+broken)\b"
     r"|\bworth\s+(?:chasing|fixing)\b"
-    r"|\bneeds?\s+(?:a\s+)?fix(?:ing)?\b",
+    r"|\bneeds?\s+(?:a\s+)?fix(?:ing)?\b"
+    # Counting the fixes and then doing none of them. Verbatim, 2026-09-14: "Two fixes this
+    # demands, neither of which is a note" -- a turn that named both and stopped. It reached none
+    # of the alternatives above: `needs a fix` wants the noun singular and the verb before it,
+    # and this spelling puts the count first and the verb last.
+    #
+    # Both alternatives carry the verb on purpose. A bare `(?:two|three)\s+fixes` was tried first
+    # and matched "I made two fixes and pushed them" -- a past-tense report of finished work, the
+    # opposite shape. The demand verb is what separates naming work from having done it.
+    r"|\bfixe?s?\s+(?:this|that|it)\s+(?:demands?|requires?|needs?|calls\s+for)\b"
+    r"|\bthis\s+(?:demands?|requires?)\s+(?:a|another|two|three|four|\d+)\b",
     re.IGNORECASE,
 )
 
