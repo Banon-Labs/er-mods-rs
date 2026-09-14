@@ -48,16 +48,50 @@ fi
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)" || exit 0
 
 command -v git >/dev/null 2>&1 || exit 0
-git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
-head_sha="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
+# The same repository the verdict is about. A sentence naming the tip of one checkout under a
+# refusal to push a different one is worse than no sentence: it sends the reader to the wrong log,
+# which is the failure the 2026-09-11 note rewrite above was already about. See the header of
+# `.cupcake/signals/runtime_evidence_for_head.sh` for the measurement, and
+# `scripts/cupcake_push_target_repo.py` for how the checkout is resolved.
+event=""
+if [ ! -t 0 ]; then
+  event="$(cat)"
+fi
+
+target_dir=""
+if printf '%s' "$event" | grep -q 'push'; then
+  push_repo="$(printf '%s' "$event" |
+    python3 "$repo_root/scripts/cupcake_push_target_repo.py" 2>/dev/null)"
+  case "$push_repo" in
+  UNKNOWN)
+    printf 'the push targets a checkout this signal could not measure'
+    exit 0
+    ;;
+  "REPO "*)
+    target_dir="${push_repo#REPO }"
+    ;;
+  esac
+fi
+
+git_at() {
+  if [ -n "$target_dir" ]; then
+    git -C "$target_dir" "$@"
+  else
+    git "$@"
+  fi
+}
+
+git_at rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+head_sha="$(git_at rev-parse --short HEAD 2>/dev/null)" || exit 0
 
 # Which commits are about to go out. `origin/main` is the merge base for every branch in this repo;
 # when it is unknown, fall back to the tip alone rather than guessing a range.
-if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
-  changed="$(git diff --name-only refs/remotes/origin/main...HEAD 2>/dev/null)"
+if git_at rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
+  changed="$(git_at diff --name-only refs/remotes/origin/main...HEAD 2>/dev/null)"
 else
-  changed="$(git show --name-only --format= HEAD 2>/dev/null)"
+  changed="$(git_at show --name-only --format= HEAD 2>/dev/null)"
 fi
 
 # Only code that ends up inside the game can be proven by a run. A push that moves docs, scripts or
@@ -70,8 +104,25 @@ fi
 
 # One `note` line always comes back, whatever the verdict: it is the sentence, and the caller
 # already has the verdict from the sibling signal.
-printf '%s\n' "$changed" |
+#
+# Held in a variable and printed under an explicit `exit 0`, because the exit code decides whether
+# the sentence survives at all. `er-runtime-evidence.py` exits 1 when no log names the tip, and
+# `pipefail` carries that out of the pipeline as this script's own status -- so on the one verdict
+# that uses the note, cupcake stored
+#
+#     {"error": "", "exit_code": 1, "output": "...the newest log...", "success": false}
+#
+# instead of the string. The policy compares `trim_space(input.signals.runtime_evidence_note)`,
+# which is undefined for an object, so the refusal fell back to its default and told the reader
+# "no measurement was available" while the measurement sat inside the discarded object. Measured
+# 2026-09-13 in the debug capture of a live refusal. What holds it now is an exit code, so the
+# regression is caught as one: `run_runtime_evidence_signal_checks` in
+# `scripts/test-cupcake-policies.py` runs both signals and fails on any non-zero status, whatever
+# they answer.
+note="$(printf '%s\n' "$changed" |
   python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null |
   sed -n 's/^note //p' |
   head -1 |
-  tr -d '\n'
+  tr -d '\n')"
+printf '%s' "$note"
+exit 0

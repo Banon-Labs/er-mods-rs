@@ -44,6 +44,14 @@ import data.cupcake.system.commands
 # evening, and the standing repo rule is that a correction which must survive the turn belongs in
 # executable enforcement rather than in a note.
 #
+# Which repository the verdict is about is decided by the signal as well, and it is not always the
+# one the session is working in. A `cd <other worktree> && git push` moves the push, and until
+# 2026-09-13 the signal measured the session's own tip anyway: it refused a push that changed no
+# crate, and it would have passed a push that changed thirty. The signal reads the pending command
+# out of the event cupcake pipes to it and resolves the checkout through
+# `scripts/cupcake_push_target_repo.py`; when that cannot be resolved the verdict is `UNKNOWN`,
+# which lands on the rule below that a guard who cannot see must not invent a verdict.
+#
 # What counts as evidence is decided by the signal, not here, and it is deliberately narrow: a DLL
 # log whose own first line says `build git=<sha>` for the tip commit, with no `+dirty`. The first
 # draft of that signal compared file mtimes instead and answered OK on a log written by a build two

@@ -35,6 +35,17 @@
 # both -- a run launched through `~/Elden/launch.sh` writes only into the second, and reading only
 # the first refused a push on 2026-09-11 that a live run had proven. Its header carries the rest.
 #
+# Which repository is being pushed is decided by `scripts/cupcake_push_target_repo.py`, and it is
+# not always the one this process starts in. Measured 2026-09-13: a session working in the main
+# checkout ran `cd <another worktree> && git push ...`, and every git read below answered about the
+# main checkout -- tip `0f309fd6` -- while the commit going out was `6271ceb5` in that other
+# worktree, whose diff against `origin/main` touches no crate at all. The push was refused on a
+# measurement of a repository it was not about. The same mix-up runs the other way and is worse:
+# a push of unproven game code from one working tree passes whenever the directory this process
+# happens to sit in has evidence of its own, which is the exact push this guard exists to stop.
+# Cupcake pipes the whole pending event to every signal on stdin, so the command is readable here
+# and the git reads can move to the checkout it names.
+#
 # What decides the answer is the sha in the log, never a timestamp. The first version compared
 # mtimes and answered `OK` on a log written by a build two commits old that happened to still be
 # running -- newer file, older code -- which is the exact failure being guarded, made inside the
@@ -56,18 +67,59 @@ fi
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)" || exit 0
 
 command -v git >/dev/null 2>&1 || exit 0
-git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
-head_sha="$(git rev-parse --short HEAD 2>/dev/null)" || exit 0
-head_epoch="$(git log -1 --format=%ct HEAD 2>/dev/null)" || exit 0
+# The pending event, when there is one. Guarded on a pipe: run by hand from a terminal this script
+# has a keyboard on stdin, and reading that would hang instead of answering.
+event=""
+if [ ! -t 0 ]; then
+  event="$(cat)"
+fi
+
+# Which working tree the push in that command would run in. The resolver is skipped unless the
+# event mentions a push at all, which is nearly every Bash call, and that keeps the warm path free
+# of a second python start. The test is sound in the direction that matters: the policy's own
+# pattern requires the literal word, so an event without it cannot be a push there either.
+target_dir=""
+if printf '%s' "$event" | grep -q 'push'; then
+  push_repo="$(printf '%s' "$event" |
+    python3 "$repo_root/scripts/cupcake_push_target_repo.py" 2>/dev/null)"
+  case "$push_repo" in
+  UNKNOWN)
+    # A redirect is present and could not be resolved to a working tree of this repository.
+    # Falling back to this process's own directory is how the wrong repository came to be judged
+    # in the first place, and `UNKNOWN` is the answer this signal already has for a question it
+    # cannot see: it never denies, and the pre-push hook still measures the push exactly.
+    printf 'UNKNOWN'
+    exit 0
+    ;;
+  "REPO "*)
+    target_dir="${push_repo#REPO }"
+    ;;
+  esac
+fi
+
+# Every git read that decides the verdict, aimed at the checkout being pushed. With no redirect in
+# the command this is `git` exactly as before.
+git_at() {
+  if [ -n "$target_dir" ]; then
+    git -C "$target_dir" "$@"
+  else
+    git "$@"
+  fi
+}
+
+git_at rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+head_sha="$(git_at rev-parse --short HEAD 2>/dev/null)" || exit 0
+head_epoch="$(git_at log -1 --format=%ct HEAD 2>/dev/null)" || exit 0
 [ -n "$head_epoch" ] || exit 0
 
 # Which commits are about to go out. `origin/main` is the merge base for every branch in this repo;
 # when it is unknown, fall back to the tip alone rather than guessing a range.
-if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
-  changed="$(git diff --name-only refs/remotes/origin/main...HEAD 2>/dev/null)"
+if git_at rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
+  changed="$(git_at diff --name-only refs/remotes/origin/main...HEAD 2>/dev/null)"
 else
-  changed="$(git show --name-only --format= HEAD 2>/dev/null)"
+  changed="$(git_at show --name-only --format= HEAD 2>/dev/null)"
 fi
 
 # Only code that ends up inside the game can be proven by a run. A push that moves docs, scripts or
@@ -128,6 +180,13 @@ esac
 # The candidate lines go in as an argument rather than on stdin: the heredoc below is itself the
 # program, so a pipe into it would be swallowed (shellcheck SC2259) and every carry-forward would
 # quietly find no candidates at all.
+#
+# No `-C` down here, and that is not an oversight. Everything below is driven by the two shas, and
+# `cupcake_push_target_repo.py` only ever names a working tree of this same repository -- one
+# object store, shared by every working tree of it -- so `git diff <built>..<tip>` reads the same
+# commits from either directory. The reads that could not be answered from here are the ones that
+# depend on which tree is checked out (`HEAD`, and the diff against `origin/main`), and those are
+# the ones that moved.
 python3 - "$head_sha" "$repo_root" "$evidence" <<'PY'
 import os
 import pathlib

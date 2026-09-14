@@ -30,11 +30,42 @@ bash_event(cmd, evidence) := {
 	"signals": {"runtime_evidence_for_head": evidence, "runtime_evidence_note": NOTE},
 }
 
+# A signal that exits non-zero does not reach a policy as its output. Cupcake replaces the string
+# with a record of the failure -- measured 2026-09-13 in the debug capture of a live refusal:
+#
+#     {"error": "", "exit_code": 1, "output": "...", "success": false}
+#
+# This helper builds that shape so the fail-open can be asserted rather than assumed. It used to
+# be a second copy of `bash_event` under a name promising the object, so the one test that called
+# it proved nothing the first helper had not already proved.
 bash_event_object_signal(cmd, evidence) := {
 	"hook_event_name": "PreToolUse",
 	"tool_name": "Bash",
 	"tool_input": {"command": cmd, "timeout": 30000},
-	"signals": {"runtime_evidence_for_head": evidence, "runtime_evidence_note": NOTE},
+	"signals": {
+		"runtime_evidence_for_head": {
+			"error": "",
+			"exit_code": 1,
+			"output": evidence,
+			"success": false,
+		},
+		"runtime_evidence_note": NOTE,
+	},
+}
+
+bash_event_object_note(cmd, evidence) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {"command": cmd, "timeout": 30000},
+	"signals": {
+		"runtime_evidence_for_head": evidence,
+		"runtime_evidence_note": {
+			"error": "",
+			"exit_code": 1,
+			"output": NOTE,
+			"success": false,
+		},
+	},
 }
 
 bash_event_no_signal(cmd) := {
@@ -53,9 +84,60 @@ test_deny_push_when_the_running_build_is_not_the_tip if {
 	RULE in rule_ids(denials)
 }
 
-test_deny_still_fires_through_the_second_event_helper if {
-	denials := guard.deny with input as bash_event_object_signal("git push", MISSING)
+# --- the command names a different checkout than the caller's ------------------
+#
+# The verdict describes THE REPOSITORY BEING PUSHED, not the directory the signal process started
+# in, and `scripts/cupcake_push_target_repo.py` is what makes that true. The distinction was not
+# free: on 2026-09-13 a session working in the main checkout ran `cd <other worktree> && git push`
+# and this rule refused it over the main checkout's tip, a commit the push did not contain. The
+# same mix-up is what let a push of unproven game code through whenever the session's own directory
+# happened to have evidence.
+#
+# So a redirected push is not a special case here, and that is the point: once the signal measures
+# the right repository, `MISSING` means the same thing whatever directory the command names.
+
+test_deny_a_push_redirected_to_a_checkout_with_no_evidence if {
+	denials := guard.deny with input as bash_event("cd /other/worktree && git push -u origin HEAD", MISSING)
 	RULE in rule_ids(denials)
+}
+
+test_deny_a_git_c_push_at_a_checkout_with_no_evidence if {
+	denials := guard.deny with input as bash_event("git -C /other/worktree push origin main", MISSING)
+	RULE in rule_ids(denials)
+}
+
+# The answer the resolver gives when a redirect is present and it cannot say what the redirect
+# means -- a subshell, a heredoc, quoting that will not lex, a directory that is not a working tree
+# of this repository, or two pushes aimed at two checkouts. Measuring the caller's own directory
+# instead is precisely how the wrong repository came to be judged, so the signal says `UNKNOWN` and
+# this rule stands down. The pre-push hook still measures that push exactly, from the directory git
+# hands it.
+test_allow_a_redirected_push_the_signal_could_not_resolve if {
+	denials := guard.deny with input as bash_event("(cd /other/worktree && git push)", UNKNOWN)
+	not RULE in rule_ids(denials)
+}
+
+# --- a signal that failed is not a verdict ------------------------------------
+
+# Cupcake hands a failed signal to the policy as a record of the failure rather than as its output.
+# For the verdict that has to mean no denial: an object is not the word `MISSING`, the comparison
+# is undefined, and the default `UNKNOWN` takes over. A guard that cannot see must not invent one.
+test_allow_when_the_verdict_signal_failed if {
+	denials := guard.deny with input as bash_event_object_signal("git push", MISSING)
+	not RULE in rule_ids(denials)
+}
+
+# For the prose the fail-open is different: the verdict still stands, and the refusal loses only
+# its sentence. That is worth denying on -- but it is also worth noticing, because it happened.
+# `.cupcake/signals/runtime_evidence_note.sh` used to exit 1 whenever no log named the tip, which
+# is the one verdict that reads the note, so a live refusal on 2026-09-13 said "no measurement was
+# available" while the measurement sat inside the discarded object. The signal now exits 0; this
+# keeps the fallback honest if anything else ever fails there.
+test_deny_without_the_sentence_when_the_note_signal_failed if {
+	denials := guard.deny with input as bash_event_object_note("git push", MISSING)
+	RULE in rule_ids(denials)
+	some d in denials
+	contains(d.reason, "no measurement was available")
 }
 
 # The note must reach the user intact: "no evidence" without "and here is what ran instead" is not

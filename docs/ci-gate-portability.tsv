@@ -130,6 +130,7 @@ portable	-	test-stall-on-friction-signal.py	source/AST/text analysis only	policy
 portable	-	test-wall-of-text-signal.py	source/AST/text analysis only	policy
 portable	-	test-cupcake-delivered-shape.py --selftest	source/AST/text analysis only	policy
 portable	-	test-cupcake-delivered-shape.py	source/AST/text analysis only	policy
+portable	-	cupcake_push_target_repo.py --selftest	builds a linked working tree and a stranger repository in a temp dir; no game image, no network	policy
 portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subprocess; no game image, no regulation.bin	product
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint

@@ -31,6 +31,17 @@
 #   * a tree it cannot measure. No run root, no git, no readable log -- it says so and allows,
 #     because a check that cannot see must not invent a verdict.
 #
+# Which repository it measures, checked rather than assumed (2026-09-13). The cupcake signals that
+# answer the same question got this wrong: they ran `git rev-parse HEAD` in whatever directory the
+# signal process started in, which is the session's, so `cd <another worktree> && git push` was
+# judged on the session's tip. This copy is not exposed to that, and the reason is in the hook
+# rather than here: `scripts/hooks/pre-push` takes `git rev-parse --show-toplevel`, cds to it, and
+# unsets `git rev-parse --local-env-vars` before calling anything, so every `git` below resolves
+# from the working tree being pushed. The relative `python3 scripts/er-change-scope.py` resolves
+# from that same directory, which is why it is relative and must stay so even though `$repo_root`
+# is at hand: with `core.hooksPath` pointing at the main checkout, `$repo_root` is the main
+# checkout while the push may come from any working tree.
+#
 # The override is `ER_ALLOW_UNPROVEN_PUSH=1`, and it prints what is being waived.
 set -uo pipefail
 

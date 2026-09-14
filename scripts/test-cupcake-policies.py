@@ -23,6 +23,12 @@ class PolicyCase:
     extra_event: dict[str, object] | None = None
     include_timeout: bool = True
     tool_name: str = "Bash"
+    # Environment for the engine and every signal it runs. The runtime-evidence signals answer
+    # from a live measurement of this checkout, so a case about a particular verdict pins it
+    # through the overrides those signals provide, the way the branch guards use
+    # `CUPCAKE_CURRENT_BRANCH_OVERRIDE`. Frozen dataclasses cannot hold a dict as a default, so
+    # it arrives as pairs.
+    extra_env: tuple[tuple[str, str], ...] = ()
 
 
 DEFAULT_BASH_TIMEOUT_MS = 30000
@@ -125,6 +131,8 @@ def run_case(case: PolicyCase) -> None:
     else:
         env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = "a" * 40 + " " + "a" * 40
 
+    env.update(dict(case.extra_env))
+
     result = subprocess.run(
         ["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
         cwd=REPO_ROOT,
@@ -184,6 +192,77 @@ ORPHANED_REGO_SUITES = [
 ]
 
 
+# The two signals behind `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE`, checked as signals rather than
+# through a verdict, because both ways they can go wrong are invisible from a policy test.
+#
+# A signal that exits non-zero does not reach the policy as its output at all: cupcake replaces the
+# string with `{"error": ..., "exit_code": 1, "output": ..., "success": false}`, and every
+# comparison the policy makes against a word is then undefined. The note signal did exactly this
+# for its whole life -- `er-runtime-evidence.py` exits 1 when no log names the tip, `pipefail`
+# carried that out as the script's status, and that is the one verdict that reads the note -- so a
+# live refusal on 2026-09-13 said "no measurement was available" while the measurement sat inside
+# the discarded object.
+#
+# And the verdict has to be about the repository the command pushes. The same day, a session in
+# the main checkout ran `cd <another worktree> && git push` and was refused over the main
+# checkout's tip, a commit the push did not contain; the same mix-up passes a push of unproven
+# game code whenever the session's own directory happens to have evidence. The cases below use a
+# target that cannot exist, so they assert the wiring without depending on what has been built or
+# launched on this machine.
+RUNTIME_EVIDENCE_SIGNALS = (
+    ".cupcake/signals/runtime_evidence_for_head.sh",
+    ".cupcake/signals/runtime_evidence_note.sh",
+)
+
+SIGNAL_TIMEOUT_SECONDS = 25.0
+
+
+def _signal_event(command: str) -> str:
+    return json.dumps(
+        {
+            "session_id": "cupcake-signal-contract",
+            "transcript_path": "/tmp/cupcake-signal-contract.jsonl",
+            "cwd": str(REPO_ROOT),
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": command, "timeout": DEFAULT_BASH_TIMEOUT_MS},
+        }
+    )
+
+
+def _run_signal(script: str, command: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["bash", str(REPO_ROOT / script)],
+        cwd=REPO_ROOT,
+        input=_signal_event(command),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=SIGNAL_TIMEOUT_SECONDS,
+    )
+
+
+def run_runtime_evidence_signal_checks() -> None:
+    absent = "/nonexistent-checkout-cupcake-signal-contract"
+    for script in RUNTIME_EVIDENCE_SIGNALS:
+        for command in ("cargo fmt --check", f"cd {absent} && git push -u origin HEAD"):
+            result = _run_signal(script, command)
+            if result.returncode != 0:
+                raise AssertionError(
+                    f"{script} exited {result.returncode} on {command!r}. A signal that exits "
+                    "non-zero is replaced by a failure record, and every word the policy "
+                    f"compares against goes undefined.\n{result.stdout}\n{result.stderr}"
+                )
+
+    verdict = _run_signal(RUNTIME_EVIDENCE_SIGNALS[0], f"cd {absent} && git push -u origin HEAD")
+    if verdict.stdout.strip() != "UNKNOWN":
+        raise AssertionError(
+            "a push redirected at a directory that is not a working tree of this repository must "
+            f"answer UNKNOWN, not a verdict about the caller's own checkout; got "
+            f"{verdict.stdout.strip()!r}"
+        )
+
+
 def run_orphaned_rego_suites() -> None:
     if not shutil.which("opa"):
         print("skip: orphaned rego suites (no opa on PATH)")
@@ -232,6 +311,7 @@ def main() -> int:
     # nothing if the cap eats it.
     print(FOREGROUND_CAP_NOTICE, flush=True)
     run_orphaned_rego_suites()
+    run_runtime_evidence_signal_checks()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
         PolicyCase(
@@ -1677,6 +1757,51 @@ def main() -> int:
     cases.extend([
         PolicyCase("allow-git-add-launcher-name", "git add scripts/run-vanilla-reload-agentdriven.sh", True),
         PolicyCase("allow-shellcheck-launcher-name", "shellcheck scripts/run-camera-smoke.sh", True),
+    ])
+
+    # --- `ER-EFFECTS-REQUIRE-RUNTIME-EVIDENCE`, through the live engine -----------------------------
+    # The verdict is pinned through the signal's own override, the way the branch guards pin
+    # `current_branch`, so these say nothing about what has been built or launched on this machine.
+    # What they assert is the wiring: that the word denies, that the sentence survives the trip into
+    # the refusal, and that a redirected push is judged on the same word rather than on a special
+    # case of its own. The signal-side half -- which repository that word is about -- is asserted in
+    # run_runtime_evidence_signal_checks() above and in
+    # `python3 scripts/cupcake_push_target_repo.py --selftest`.
+    evidence_note = "the newest log er-quickload-autoload-debug.log (er_quickload.dll) was built from 5dd9b032, not 92d621cd"
+    missing_env = (
+        ("CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE", "MISSING"),
+        ("CUPCAKE_RUNTIME_EVIDENCE_NOTE_OVERRIDE", evidence_note),
+    )
+    cases.extend([
+        PolicyCase(
+            "deny-push-of-game-code-that-has-never-run",
+            "git push -u origin feat/x",
+            False,
+            evidence_note,
+            extra_env=missing_env,
+        ),
+        # The false negative this guard was blind to until 2026-09-13: the push runs somewhere else,
+        # and the verdict is about that somewhere else.
+        PolicyCase(
+            "deny-push-redirected-to-a-checkout-with-no-evidence",
+            "cd /other/worktree && git push -u origin HEAD",
+            False,
+            evidence_note,
+            extra_env=missing_env,
+        ),
+        # `UNKNOWN` is not `MISSING`, and a redirect the signal cannot resolve produces it.
+        PolicyCase(
+            "allow-push-whose-target-the-signal-could-not-resolve",
+            "(cd /other/worktree && git push)",
+            True,
+            extra_env=(("CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE", "UNKNOWN"),),
+        ),
+        PolicyCase(
+            "allow-push-when-no-crate-changed-in-the-pushed-checkout",
+            "cd /other/worktree && git push -u origin HEAD",
+            True,
+            extra_env=(("CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE", "NOTRUNTIME"),),
+        ),
     ])
 
     # The GitHub attribution guard is machine-global (XDG config, Banon-Labs/cupcake-config), not
