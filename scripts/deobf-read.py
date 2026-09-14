@@ -18,7 +18,7 @@ It is a READABILITY aid for static RE, not a proven re-lift: conditional branche
 are shown in place (only the fall-through is followed), so treat multi-branch
 output as a trace of one path plus annotated branch targets.
 
-USAGE
+Usage
   scripts/deobf-read.py 0x140110820            # linearize a function (auto-resolves thunk)
   scripts/deobf-read.py --raw 0x140110820      # raw disasm of the thunk region (for contrast)
   scripts/deobf-read.py --budget 200 0x...     # follow more instructions
@@ -44,9 +44,12 @@ GAME = (0x140001000, 0x1429a3000)
 
 def find_deobf():
     here = os.path.dirname(os.path.abspath(__file__))
+    # `ER_DEOBF` first, then the image at the repo root. The third entry used to be an
+    # absolute path into `~/projects/er-effects-rs`, this repo's name before it was renamed to
+    # er-mods-rs: a directory that no longer exists on any machine, so it resolved to nothing and
+    # read as "the image is missing" rather than "that fallback is dead".
     for p in (os.environ.get("ER_DEOBF"),
-              os.path.join(os.path.dirname(here), "eldenring-deobf.bin"),
-              "/home/banon/projects/er-effects-rs/eldenring-deobf.bin"):
+              os.path.join(os.path.dirname(here), "eldenring-deobf.bin")):
         if p and os.path.exists(p):
             return p
     sys.exit("eldenring-deobf.bin not found (set ER_DEOBF=/path)")

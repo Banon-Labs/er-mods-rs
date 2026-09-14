@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Recover a whole Arxan-obfuscated function's CFG by multi-path emulation.
 
-scripts/deobf-emulate.py resolves ONE executed path. This drives full-function
+scripts/deobf-emulate.py resolves one executed path. This drives full-function
 recovery: it explores every path with generational search -- run under Unicorn
 forcing a schedule of real-branch directions; each real conditional branch beyond
 the schedule spawns a child schedule with that branch flipped. Unicorn resolves the
@@ -11,7 +11,7 @@ control-flow graph over game-.text instructions (Arxan scaffolding folded to edg
 Output: recovered basic blocks (linearized real instructions) with their successors,
 plus the real call targets -- a readable reconstruction of the deobfuscated function.
 
-Approximate by construction: branch directions are FORCED (flags ignored), so a path
+Approximate by construction: branch directions are forced (flags ignored), so a path
 may reach a state the real inputs never would; such paths derail and are dropped, but
 their blocks up to the derail are still recovered. Genuine VM stubs saturate the path
 budget without converging. Bounds: --paths (default 400), per-path 1500 insns.
@@ -51,9 +51,12 @@ def in_game(v): return GAME[0] <= v < GAME[1]
 
 def find_deobf():
     here = os.path.dirname(os.path.abspath(__file__))
+    # `ER_DEOBF` first, then the image at the repo root. The third entry used to be an
+    # absolute path into `~/projects/er-effects-rs`, this repo's name before it was renamed to
+    # er-mods-rs: a directory that no longer exists on any machine, so it resolved to nothing and
+    # read as "the image is missing" rather than "that fallback is dead".
     for p in (os.environ.get("ER_DEOBF"),
-              os.path.join(os.path.dirname(here), "eldenring-deobf.bin"),
-              "/home/banon/projects/er-effects-rs/eldenring-deobf.bin"):
+              os.path.join(os.path.dirname(here), "eldenring-deobf.bin")):
         if p and os.path.exists(p):
             return p
     sys.exit("eldenring-deobf.bin not found (set ER_DEOBF=/path)")
@@ -135,10 +138,10 @@ class Recover:
         uc.hook_add(UC_HOOK_CODE, hc)
         uc.hook_add(UC_HOOK_MEM_READ_UNMAPPED | UC_HOOK_MEM_WRITE_UNMAPPED | UC_HOOK_MEM_FETCH_UNMAPPED, hu)
         try:
-            # until must NOT be SENT: emu_start stops *before* executing `until`, so
-            # until=SENT pre-empted the `if address == SENT` code hook and the "ret"
+            # until must not be `SENT`: emu_start stops *before* executing `until`, so
+            # until=`SENT` pre-empted the `if address == SENT` code hook and the "ret"
             # terminal was never recorded (returns went unmarked). Stop one page past
-            # the sentinel so the hook fires on RIP==SENT and records terminals[prev]="ret".
+            # the sentinel so the hook fires on `RIP == SENT` and records terminals[prev]="ret".
             uc.emu_start(entry, SENT + 0x1000, count=budget)
         except UcError:
             if st["prev"] is not None and st["prev"] not in self.terminals:

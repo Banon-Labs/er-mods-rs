@@ -5,16 +5,16 @@ Drives scripts/bake-function.py `bake()` over a deterministic stratified sample
 of the Arxan thunk corpus (scripts/arxan-thunks.tsv) and reports the metric the
 /goal autoresearch loop maximizes:
 
-  PRIMARY   = # functions BAKED (ref==recompiled) AND non-vacuous
-              (input_dependent OR proven-constant-with-real-callees)
-  SECONDARY = # functions BAKED at all (incl. stub-only constant passes)
+  `primary`   = # functions baked (ref==recompiled) and non-vacuous
+                (`input_dependent` or proven-constant-with-real-callees)
+  `secondary` = # functions baked at all (incl. stub-only constant passes)
 
 Also emits a per-kind breakdown and a failure-stage/reason histogram -- that
-histogram is the DIRECTION signal (it says which collapse/bounding/callee work
+histogram is the direction signal (it says which collapse/bounding/callee work
 would unlock the most functions next). Writes incremental JSONL + a summary JSON,
 and (with --baseline) flags any regression (a VA that passed before and not now).
 
-This scorer ONLY orchestrates bake(); it never touches the locked differential
+This scorer only orchestrates bake(); it never touches the locked differential
 verifier (wine_exit / the ref==recompiled comparison) inside bake-function.py.
 
 Each function runs in an isolated work dir (bf.WORK) so a prior function's stale
@@ -140,9 +140,9 @@ def main():
             print(f"[{i:>4}/{len(sample)}] {tag} {res['va']} {res['kind']:<11} "
                   f"{res['bucket']:<34} {res['seconds']}s", flush=True)
 
-    # PRIMARY (reinjection-ready): verified + input-dependent + ALL callees wired real
-    # (not stubs). Without --real-callees, all_callees_real is False, so PRIMARY is 0 by
-    # construction -- a stub pass never counts as PRIMARY.
+    # `primary` (reinjection-ready): verified + input-dependent + every callee wired real
+    # (not stubs). Without --real-callees, all_callees_real is False, so `primary` is 0 by
+    # construction -- a stub pass never counts as `primary`.
     def is_primary(r):
         return r["ok"] and r["input_dependent"] and r["all_callees_real"]
     primary = sum(1 for r in results if is_primary(r))
@@ -162,7 +162,7 @@ def main():
                "results": results}
 
     # A "regression" must be DETERMINISTIC: was baked, now fails at a deterministic
-    # stage (reassemble/compile/assemble/lift/...). run-ref failures are NOT counted --
+    # stage (reassemble/compile/assemble/lift/...). run-ref failures are not counted --
     # they are flaky (the scalar harness feeds pointer-taking functions garbage, so the
     # reference exe crashes/hangs non-deterministically and flaps across the 90s wine cap;
     # observed: 140420240 took 110s->pass in baseline, 90s->timeout in the next run, same
