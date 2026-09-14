@@ -38,21 +38,52 @@ gate_config_key() {
 		git --git-dir="$GATE_CONFIG_COMMON_DIR" config --get "$1" || true
 }
 
+# The hooks directory a configured value names, so that `scripts/hooks` and
+# `<root>/scripts/hooks` compare equal.
+#
+# beads rewrites this key from the first spelling to the second -- its changelog carries `FIX:
+# Worktree hooks use absolute core.hooksPath (GH#2414)` and its binary carries
+# `main.configureSharedHooksPath` -- and every agent here runs `bd` many times an hour. Compared as
+# strings, that rewrite reads as damage: measured twice on 2026-09-14, it turned a push red after
+# 344 seconds and again after 148, both times with every gate of the stage already passed. It is
+# not damage. It is the same directory spelled the other way, and the spelling is a separate
+# question that scripts/check-git-hooks-installed.sh owns and repairs.
+#
+# What still goes red: an unset key (empty here, and the ninety-minute ungated window of
+# 2026-08-31), and a redirect at another directory such as `.beads/hooks` or `.githooks`, which
+# resolves somewhere else and compares unequal.
+gate_config_hookdir() {
+	local value=$1
+	[[ -n "$value" ]] || return 0
+	[[ "$value" == /* ]] || value="${GATE_CONFIG_ROOT:-.}/$value"
+	# `-m` so a path whose last component does not exist still resolves, rather than printing
+	# nothing and making two different directories compare equal as the empty string.
+	realpath -m -- "$value" 2>/dev/null || printf '%s' "$value"
+}
+
 gate_config_snapshot() {
 	local root=${1:-.}
+	GATE_CONFIG_ROOT=$(cd -- "$root" && pwd)
 	GATE_CONFIG_COMMON_DIR=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
 	GATE_CONFIG_BARE_BEFORE=$(gate_config_key core.bare)
 	GATE_CONFIG_HOOKSPATH_BEFORE=$(gate_config_key core.hooksPath)
+	GATE_CONFIG_HOOKDIR_BEFORE=$(gate_config_hookdir "$GATE_CONFIG_HOOKSPATH_BEFORE")
 }
 
 # 0 = the config is unchanged. 1 = it moved, and the report naming both keys has been printed.
 gate_config_report() {
-	local bare_after hookspath_after
+	local bare_after hookspath_after hookdir_after
 	[[ -n "${GATE_CONFIG_COMMON_DIR:-}" ]] || return 0
 	bare_after=$(gate_config_key core.bare)
 	hookspath_after=$(gate_config_key core.hooksPath)
+	hookdir_after=$(gate_config_hookdir "$hookspath_after")
 	if [[ "$GATE_CONFIG_BARE_BEFORE" == "$bare_after" &&
-		"$GATE_CONFIG_HOOKSPATH_BEFORE" == "$hookspath_after" ]]; then
+		"$GATE_CONFIG_HOOKDIR_BEFORE" == "$hookdir_after" ]]; then
+		# Same directory, and possibly not the same spelling. Say so when the text moved, because
+		# a re-spelling that nothing reports reads afterwards as a checkout that was never touched.
+		[[ "$GATE_CONFIG_HOOKSPATH_BEFORE" == "$hookspath_after" ]] ||
+			printf 'note: core.hooksPath was re-spelled %s -> %s during this run; same directory (%s), so not a config change. beads writes the absolute form.\n' \
+				"$GATE_CONFIG_HOOKSPATH_BEFORE" "$hookspath_after" "$hookdir_after" >&2
 		return 0
 	fi
 	echo "FAIL: this gate suite CHANGED the repository configuration it was checking." >&2
