@@ -51,6 +51,17 @@ import data.cupcake.system.commands
 # separate blocked_push_context rule and still denies `main`, `HEAD:main`,
 # `heads/main` and `feature:refs/heads/main` regardless of any exception.
 #
+# Deletion exception (2026-09-14): deleting a remote branch had no sanctioned
+# form either, and a repo-wide stale-branch sweep needs one. Both spellings were
+# fail-closed -- `git push origin --delete foo` puts an option where the refspec
+# parser wants a remote, and `git push origin :refs/heads/foo` has the empty
+# source side that parser rejects -- so the measured result was a sweep denied
+# with "Do not push directly to main." while deleting nothing named main.
+# `pushes_target_only_deletions` below is the parser that comment asked for. It
+# reads `--delete`'s operands as destinations rather than as `<src>:<dst>` pairs,
+# and it is written in tokens rather than in a pattern: see the note above it for
+# why a regex here is a hazard to every policy in the rulebook, not just this one.
+#
 # Shell-wrapper decomposition (2026-08-26, bd er-effects-rs-dt2e): every pattern
 # below used to run against the raw command string, which asks about lexical
 # position rather than about what runs. `bash -c 'git push origin main'` produced
@@ -119,6 +130,7 @@ blocked_push_context if {
 	not pushes_target_only_nonmain_worktrees
 	not pushes_target_only_explicit_nonmain_branches
 	not pushes_target_only_explicit_nonmain_refspecs
+	not pushes_target_only_deletions
 }
 
 blocked_push_context if {
@@ -126,6 +138,7 @@ blocked_push_context if {
 	not pushes_target_only_nonmain_worktrees
 	not pushes_target_only_explicit_nonmain_branches
 	not pushes_target_only_explicit_nonmain_refspecs
+	not pushes_target_only_deletions
 }
 
 blocked_push_context if {
@@ -281,13 +294,15 @@ explicit_nonmain_destination(token) if {
 # whole command falls back to denied. That is the intent: an option changes what
 # the refspec MEANS, and none of them have a parser or regression coverage yet.
 #
-# DELETION PUSHES ARE DELIBERATELY OUT OF SCOPE, both spellings. `git push origin
-# --delete foo` never matches (the option sits in the remote slot), and
+# Deletion pushes still do not reach this rule, and still should not: `git push
+# origin --delete foo` puts an option in the remote slot, and
 # `git push origin :refs/heads/foo` is rejected below because its source side is
-# empty. Deleting a non-main branch is safe, but the two forms need their own
-# parser -- one that reads `--delete`'s operands as destinations rather than as a
-# refspec -- and a wrong parser here deletes a branch nobody asked to delete. They
-# stay fail-closed until someone writes that parser with its own tests.
+# empty. They are no longer fail-closed, though -- they are read by
+# `pushes_target_only_deletions` at the end of this file, which treats a deletion
+# operand as a destination rather than as half of a `<src>:<dst>` pair. Keeping
+# the two parsers apart is the point: a rename refspec and a deletion refspec mean
+# different things, and one parser that tried to be both is how a sweep deletes a
+# branch nobody asked it to delete.
 #
 # The trailing group anchors the refspec as the LAST token of the invocation, so
 # a second operand (`git push origin a:b c:d`) does not match and the command
@@ -324,11 +339,205 @@ refspec_nonmain_destination(token) if {
 	source := parts[0]
 	destination := parts[1]
 
-	# Both sides must be present: `src:` and `:dst` (the deletion form) are not
-	# what this parser was written for.
+	# Both sides must be present. `src:` is nothing this repo has a use for, and
+	# `:dst` is the deletion form, which `pushes_target_only_deletions` below reads
+	# instead -- an empty source means something different from a rename and is
+	# parsed by the rule that knows that.
 	source != ""
 	destination != ""
 	not startswith(source, "-")
 	not startswith(destination, "-")
 	not regex.match(refspec_main_destination_pattern, destination)
 }
+
+# --- Deletion exception (2026-09-14) -----------------------------------------
+#
+# Written in tokens -- `split`, `trim`, `startswith`, `contains` -- and adding not
+# one new pattern, which is a safety requirement here rather than a style
+# preference. See bd
+# `a-regex-in-a-rego-rule-can-crash-opa-wasm-and-silence-every-policy-2026-09-14`:
+# a regex added to a cupcake rule trapped the wasm runtime with `out of bounds
+# memory access` inside OPA's compiled-regex cache, and a crashed evaluation
+# returns `{}`, so every policy in the rulebook goes quiet at once -- this guard
+# and the Elden Ring launch guard included. A green `opa test` says nothing about
+# that, because the Go runtime links RE2 natively and never faults. The counting
+# side reuses `general_pushes`, whose pattern was already compiled, so this
+# exception adds zero regexes to the rulebook.
+#
+# The two spellings it reads, and nothing else:
+#
+#     git push <remote> --delete <ref> [<ref>...]      (and -d, and the option
+#     git push --delete <remote> <ref> [<ref>...]       before the remote)
+#     git push <remote> :<ref> [:<ref>...]             (empty source side)
+#
+# `git push` always takes its first non-option operand as the repository, so
+# every operand after that one is a destination this command would delete. That
+# is the whole difference from the refspec parser above, and the reason this is a
+# separate rule: read `--delete foo` as a `<src>:<dst>` pair and `foo` looks like
+# a source, which is exactly backwards.
+#
+# Everything not in that shape denies, deliberately: a global option
+# (`git -C <path> push --delete`), any option other than `--delete`/`-d`
+# (`--force` included), a deletion with no ref to delete, a colon on a `--delete`
+# operand, a remote that looks like a URL, and a command mixing a deletion with
+# any other push. A false deny costs one blocked command; a false allow costs a
+# branch.
+
+# Every push invocation this parser can see, as a segment of an executed text.
+# `commands.shell_segments` cuts on `;`, `&&`, `||`, `&`, newlines and pipes, and
+# its input contract is satisfied because `executed_texts` has already blanked the
+# separators inside quoted spans.
+push_segments := [segment |
+	some text in executed_texts
+	some segment in commands.shell_segments(text)
+	segment_is_push(segment)
+]
+
+# Every push in the command must be a deletion whose every destination is
+# provably not main. The count-match against `general_pushes` is what makes the
+# missing cases fail closed rather than pass unread: a push this token parser does
+# not recognise -- a global-option form, a subshell, a wrapper payload it cannot
+# segment -- is still counted by the pattern, the two counts disagree, and the
+# exception does not apply. `push_targets_main` is a separate blocked_push_context
+# rule with no exception guard on it, so an explicit main destination stays denied
+# even where this rule holds.
+pushes_target_only_deletions if {
+	count(general_pushes) > 0
+	count(push_segments) == count(general_pushes)
+	every segment in push_segments {
+		segment_deletes_only_nonmain_refs(segment)
+	}
+}
+
+segment_deletes_only_nonmain_refs(segment) if {
+	delete_option_form_ok(segment)
+}
+
+segment_deletes_only_nonmain_refs(segment) if {
+	empty_source_refspec_form_ok(segment)
+}
+
+# `git push <remote> --delete <ref>...`, with the option free to sit on either
+# side of the remote because git accepts it in both places. Exactly one delete
+# option, no other options at all, and at least two operands left over so there is
+# a remote and something to delete -- `git push --delete origin` deletes nothing
+# and is refused rather than guessed at.
+delete_option_form_ok(segment) if {
+	operands := push_operands(segment)
+	count([word | some word in operands; delete_option(word)]) == 1
+	rest := [word | some word in operands; not delete_option(word)]
+	count(rest) >= 2
+	every word in rest {
+		not option_word(word)
+	}
+	not contains(bare(rest[0]), ":")
+	every word in array.slice(rest, 1, count(rest)) {
+		deletion_destination_ok(word)
+	}
+}
+
+# `git push <remote> :<ref>`, the spelling that predates `--delete`. An operand
+# whose source side is empty deletes its destination; an operand with no colon at
+# all is an ordinary push and is not this rule's business, so it fails here and
+# the command falls back to denied.
+empty_source_refspec_form_ok(segment) if {
+	operands := push_operands(segment)
+	count([word | some word in operands; delete_option(word)]) == 0
+	count(operands) >= 2
+	every word in operands {
+		not option_word(word)
+	}
+	not contains(bare(operands[0]), ":")
+	every word in array.slice(operands, 1, count(operands)) {
+		empty_source_destination_ok(word)
+	}
+}
+
+empty_source_destination_ok(token) if {
+	spec := bare(token)
+	startswith(spec, ":")
+	parts := split(spec, ":")
+	count(parts) == 2
+	deletion_destination_ok(parts[1])
+}
+
+# Which destinations a deletion may name. The main test is wider than git's own
+# resolution on purpose, the same way `refspec_nonmain_destination` above is: any
+# path component spelled `main` refuses, so `main`, `refs/heads/main`,
+# `heads/main` and `refs/heads/split/main` all fall back to the deny rather than
+# being adjudicated. `head` is refused for the same reason -- a remote's `HEAD`
+# symref usually resolves to main, so deleting it is a main-adjacent operation
+# wearing another name.
+#
+# Refused before that: an empty destination, an option, a `+` force prefix, a
+# second colon, and the refspec pattern characters. The wildcard is the one that
+# would really cost something, since a remote pattern is expanded against refs
+# this guard cannot enumerate, and an expansion it cannot see is one it cannot
+# prove excludes main.
+deletion_destination_ok(token) if {
+	destination := bare(token)
+	destination != ""
+	not startswith(destination, "-")
+	not startswith(destination, "+")
+	every character in [":", "*", "?", "[", "\\", "^", "~"] {
+		not contains(destination, character)
+	}
+	every component in split(lower(destination), "/") {
+		component != ""
+		component != "main"
+		component != "head"
+		component != "@"
+	}
+}
+
+# --- Token helpers ------------------------------------------------------------
+
+# A quoted operand keeps its quotes through `executed_texts`, which neutralises a
+# span's separators without removing its delimiters, so every token is compared
+# with them stripped.
+bare(token) := trim(token, "\"'")
+
+delete_option(word) if {
+	bare(word) in {"--delete", "-d"}
+}
+
+option_word(word) if {
+	startswith(bare(word), "-")
+}
+
+# A segment counts as a push only in the shape the anchored `general_pushes`
+# pattern also recognises: `git push` at the head of the segment, optionally
+# behind `command`. Reading it more loosely would count the wrapper text of
+# `bash -c '<payload>'` as a second push on top of the payload's own and break the
+# count-match; reading it more tightly would let an unrecognised push go
+# uncounted, which is the direction that opens a hole rather than closing one.
+segment_is_push(segment) if {
+	words := push_words(segment)
+	words[0] == "git"
+	words[1] == "push"
+}
+
+push_operands(segment) := array.slice(words, 2, count(words)) if {
+	words := push_words(segment)
+	words[0] == "git"
+	words[1] == "push"
+}
+
+push_words(segment) := words if {
+	words := segment_words(segment)
+	words[0] != "command"
+}
+
+push_words(segment) := array.slice(words, 1, count(words)) if {
+	words := segment_words(segment)
+	words[0] == "command"
+}
+
+segment_words(segment) := [word |
+	some word in split(spaced_segment(segment), " ")
+	word != ""
+]
+
+# Parentheses become spaces so a subshell reads as the command inside it, and
+# tabs so a tab-separated operand is still its own word.
+spaced_segment(segment) := replace(replace(replace(replace(segment, "\t", " "), "\r", " "), "(", " "), ")", " ")
