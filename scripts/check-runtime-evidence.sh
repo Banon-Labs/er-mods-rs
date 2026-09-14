@@ -281,6 +281,49 @@ selftest() {
 		printf '  skip  deletion (a throwaway repository could not be created)\n'
 	fi
 
+	# The gate judges the sha being pushed, never the one checked out. Two branches in a
+	# throwaway repository: `HEAD` sits on one that changes a crate, and the other changes only a
+	# script. Pushing the script-only branch from that checkout was refused for the crate it does
+	# not contain, because the old `main` read `HEAD` and dropped its arguments.
+	local two="$tmp/two-branches"
+	mkdir -p "$two/crates/er-thing" "$two/scripts"
+	(
+		cd "$two" || exit 1
+		git init -q -b base . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'fn main() {}\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "the base" --no-verify
+		git checkout -q -b scripts-only
+		printf 'echo hi\n' >scripts/thing.sh
+		git add -A && git commit -qm "a script only" --no-verify
+		git checkout -q base
+		printf 'fn main() { todo!() }\n' >crates/er-thing/lib.rs
+		git add -A && git commit -qm "game code" --no-verify
+	) >/dev/null 2>&1
+	if git -C "$two" rev-parse --verify --quiet scripts-only >/dev/null 2>&1; then
+		judge_in() { # judge_in <sha to push>
+			(
+				cd "$two" || exit 1
+				# The override is unset rather than inherited. A push made with
+				# `ER_ALLOW_UNPROVEN_PUSH=1` runs this suite through the pre-push hook, and the
+				# refusal case then answered 0 because the caller had already waived it -- a test
+				# whose verdict comes from the ambient environment is watching nothing. Measured
+				# 2026-09-13 on the push of this branch.
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$tmp/nobuild" ER_GAME_DIR="$tmp/nogame" \
+					bash "$repo_root/scripts/check-runtime-evidence.sh" "$1"
+			)
+		}
+		expect 0 "a pushed sha touching no crate is allowed from a checkout whose HEAD does" \
+			judge_in "$(git -C "$two" rev-parse scripts-only)"
+		expect 1 "a pushed sha that does change a crate is still refused" \
+			judge_in "$(git -C "$two" rev-parse base)"
+	else
+		printf '  skip  pushed-sha judging (a throwaway repository could not be created)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -290,17 +333,18 @@ selftest() {
 	return 1
 }
 
-main() {
-	if [ "${1:-}" = "--selftest" ]; then
-		selftest
-		return $?
-	fi
-
-	command -v git >/dev/null 2>&1 || return 0
-	git rev-parse --git-dir >/dev/null 2>&1 || return 0
-
-	local tip
-	tip="$(git rev-parse --short HEAD 2>/dev/null)" || return 0
+# judge_tip <tip sha> -> 0 allow the push, 1 refuse it.
+#
+# The sha is the one being pushed, which is not always the one checked out. `scripts/hooks/pre-push`
+# reads git's stdin for the local sha of every pushed ref and passes them here; before 2026-09-13
+# this function ignored its arguments and read `git rev-parse HEAD` instead, so the gate judged
+# whatever the pushing worktree happened to have checked out. Measured that day: pushing
+# `fix/cupcake-watch-is-not-a-run`, a single commit touching only `scripts/` and `.cupcake/`, was
+# refused for unproven code under `crates/` belonging to the unrelated branch in the worktree. A
+# gate that answers about the wrong commit is worse than no gate -- it refuses proven pushes and
+# would pass unproven ones pushed from a clean checkout.
+judge_tip() {
+	local tip="$1"
 	[ -n "$tip" ] || return 0
 
 	# Only code that ends up inside the game can be proven by a run.
@@ -313,9 +357,9 @@ main() {
 	# override, which is meant for an unproven change rather than an unprovable one.
 	local changed
 	if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
-		changed="$(git diff --name-only --diff-filter=d refs/remotes/origin/main...HEAD 2>/dev/null)"
+		changed="$(git diff --name-only --diff-filter=d "refs/remotes/origin/main...$tip" 2>/dev/null)"
 	else
-		changed="$(git show --name-only --diff-filter=d --format= HEAD 2>/dev/null)"
+		changed="$(git show --name-only --diff-filter=d --format= "$tip" 2>/dev/null)"
 	fi
 	if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
 		return 0
@@ -389,6 +433,37 @@ main() {
 		printf '\n'
 	} >&2
 	return 1
+}
+
+# Every pushed tip is judged, and one refusal refuses the push -- git offers no way to send some
+# refs and hold others back. With no argument the checked-out tip is judged instead, which is what
+# a direct invocation from a shell means.
+main() {
+	if [ "${1:-}" = "--selftest" ]; then
+		selftest
+		return $?
+	fi
+
+	command -v git >/dev/null 2>&1 || return 0
+	git rev-parse --git-dir >/dev/null 2>&1 || return 0
+
+	local tips=() sha short
+	for sha in "$@"; do
+		[ -n "$sha" ] || continue
+		short="$(git rev-parse --short "$sha" 2>/dev/null)" || continue
+		tips+=("$short")
+	done
+	if [ "${#tips[@]}" -eq 0 ]; then
+		short="$(git rev-parse --short HEAD 2>/dev/null)" || return 0
+		[ -n "$short" ] || return 0
+		tips+=("$short")
+	fi
+
+	local rc=0
+	for short in "${tips[@]}"; do
+		judge_tip "$short" || rc=1
+	done
+	return "$rc"
 }
 
 main "$@"
