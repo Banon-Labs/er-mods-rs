@@ -190,7 +190,7 @@ jobs:
 
       - run: echo "runner choice -- ${{ steps.pick.outputs.reason }}"
 
-  # WHICH STAGES EXIST, ASKED RATHER THAN TYPED.
+  # WHICH STAGES EXIST, ASKED RATHER THAN TYPED -- AND WHICH OF THEM THIS DIFF CAN INVALIDATE.
   #
   # The matrix below is generated here instead of being written into this file, and that is the
   # whole reason this job exists. `.github/workflows/check.yml` used to name nine gates by hand
@@ -200,27 +200,113 @@ jobs:
   #
   # `scripts/check-stages.py --check` -- one of the steps of the suite itself -- refuses a check.sh
   # step that belongs to no stage or to two, so the list this job emits provably covers every one
-  # of the 292 steps.
+  # of the 297 steps.
+  #
+  # SCOPING, added after #439 did the same for the pre-push hook. A pull request that adds a rego
+  # policy does not need a Windows cross-compile, and running one costs a runner minute that buys
+  # no information. `--stages-for-diff` matches the pull request's own changed paths against each
+  # stage's declared `inputs` and names only the stages those paths can reach; measured against
+  # #438 (two rego files, a cupcake signal, the ledger, three shell scripts) that is 6 of 11,
+  # dropping `cargo-build`, `cargo-test`, `product`, `source` and `moveset`.
+  #
+  # Scoping applies to `pull_request` only. A push to `main` and a manual dispatch both run every
+  # stage, because main's verdict is the one every branch is measured against and a scoped verdict
+  # is not that.
+  #
+  # The dropped stages do not simply vanish. `scripts/check-stage-report.py` calls a stage that
+  # produced no file `NO REPORT`, which is red -- correctly, since a crashed stage and an absent
+  # one look identical from outside. So this job writes each dropped stage's result file itself,
+  # every step marked `SKIPPED` with the reason recorded, and uploads it under the same
+  # `stage-result-*` name the stage jobs use. The combined verdict then reads "... SKIPPED (input
+  # absent, or not selected for this diff) ... have NO verdict from this run. Do not read it as
+  # covering them", which is the true statement. `report` stays green and stays honest.
   plan:
     runs-on: ubuntu-latest
     outputs:
       stages: ${{ steps.plan.outputs.stages }}
       selected: ${{ steps.plan.outputs.selected }}
+      dropped: ${{ steps.plan.outputs.dropped }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The diff is taken against the merge base, so the history has to reach it. A default
+          # single-commit checkout cannot, and the scoping would fail on the missing base rather
+          # than quietly scope to nothing.
+          fetch-depth: 0
       - id: plan
         env:
           # Through env, not `${{ }}` inside `run:` -- a workflow input is attacker-influenced in
-          # the general case and interpolation into a shell is the standard injection shape.
+          # the general case and interpolation into a shell is the standard injection shape. The
+          # two pull-request shas are empty on every other event, and that is what selects a full
+          # run there.
           REQUESTED: ${{ inputs.stages }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           # `--only ""` means all of them, so the workflow input passes straight through with no
           # branch here, and an unknown stage name is refused by the tool rather than silently
           # narrowing the matrix to a set nobody asked for.
           echo "stages=$(python3 scripts/check-stages.py --matrix)" >> "$GITHUB_OUTPUT"
-          echo "selected=$(python3 scripts/check-stages.py --matrix --only "$REQUESTED")" \
-            >> "$GITHUB_OUTPUT"
+
+          SCOPE=""
+          if [ -n "${PR_BASE:-}" ] && [ -n "${PR_HEAD:-}" ]; then
+            # stdout is one stage name per line; the table explaining every verdict goes to stderr,
+            # where it lands in this job's log for a reader asking why a stage was left out.
+            SCOPE=$(python3 scripts/check-stages.py --stages-for-diff \
+              --base "$PR_BASE" --rev "$PR_HEAD" | paste -sd, -)
+            echo "diff-scoped to: ${SCOPE:-<none>}"
+          fi
+          export SCOPE
+
+          # Both filters are honoured -- a manual `stages:` input narrows, and on a pull request
+          # the diff narrows as well -- and their intersection is what runs. Order comes from the
+          # stage list, so the run page reads the same way every time.
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json, os, subprocess
+
+          order = subprocess.run(
+              ["python3", "scripts/check-stages.py", "--stages"],
+              capture_output=True, text=True, check=True,
+          ).stdout.split()
+
+          keep = set(order)
+          for csv in (os.environ.get("REQUESTED", ""), os.environ.get("SCOPE", "")):
+              names = {w for w in csv.replace(",", " ").split() if w}
+              # An empty filter is "no opinion", not "nothing" -- that is how a push event and an
+              # omitted workflow input both mean every stage.
+              if names:
+                  keep &= names
+
+          selected = [s for s in order if s in keep]
+          print("selected=" + json.dumps(selected))
+          print("dropped=" + " ".join(s for s in order if s not in keep))
+          PY
+          echo "selected: $(python3 scripts/check-stages.py --matrix --only "${SCOPE:-$REQUESTED}")"
+
+      # Every dropped stage still owes the combined verdict a file, or `report` calls it NO REPORT
+      # and goes red. SKIPPED is the honest state: `check-stage-report.py` counts it apart from
+      # `passed` and says in as many words that those steps carry no verdict from this run.
+      - name: Write a SKIPPED result for every stage this diff cannot invalidate
+        if: steps.plan.outputs.dropped != ''
+        env:
+          DROPPED: ${{ steps.plan.outputs.dropped }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/stage-results"
+          for stage in $DROPPED; do
+            python3 scripts/check-stages.py --result-stub "$stage" --state SKIPPED \
+              --reason "not selected for this diff -- none of its declared inputs changed" \
+              > "$GITHUB_WORKSPACE/stage-results/$stage.tsv"
+          done
+          ls -l "$GITHUB_WORKSPACE/stage-results"
+      - name: Upload the skipped stages' results
+        if: steps.plan.outputs.dropped != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage-result-not-selected
+          path: stage-results/*.tsv
+
       - run: |
           {
             echo '## Stages'
