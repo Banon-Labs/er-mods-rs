@@ -40,6 +40,12 @@ static RECENT_MSG_TEXT_ID_CURSOR: AtomicUsize = AtomicUsize::new(0);
 /// # Safety
 ///
 /// `abbrev` is the pointer the game passed; it is read fault-safe and may be null or garbage.
+///
+/// Game target only: the fault-safe reader it dereferences `abbrev` through lives in
+/// `er-game-base`, which this crate links on `cfg(windows)`. The ring buffer and
+/// [`recent_msg_text_ids`] below are pure and stay on both targets, so the formatting this
+/// module exists for is still host-testable.
+#[cfg(windows)]
 pub unsafe fn note_msg_text_id(text_id: i32, abbrev: usize) {
     if text_id < 1 {
         return;

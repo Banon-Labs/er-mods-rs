@@ -282,9 +282,15 @@ unsafe fn default_dialog_from_action(_action_obj: usize) -> usize {
 /// shell that staged browse rows into the live `CS::ProfileSummary` left them there for the rest of
 /// the process -- visible on the title's `Load Game` list. A product overrides this with its own
 /// ledger-aware restore; nothing else needs one.
+#[cfg(windows)]
 unsafe fn default_restore_profile_summary(reason: &str) {
     unsafe { crate::row_staging::restore_row_records(reason) };
 }
+
+/// There are no staged records to put back on a host build: `row_staging` is `#[cfg(windows)]`
+/// because staging writes the game's own `CS::ProfileSummary` table.
+#[cfg(not(windows))]
+unsafe fn default_restore_profile_summary(_reason: &str) {}
 fn default_arm_original(_save_path: &str) -> bool {
     false
 }
@@ -305,6 +311,7 @@ unsafe fn default_ingest_save(_selected_path: &str) -> bool {
 /// Returning `None` here is what left the standalone **Save Game** row opening nothing in run
 /// br-20260912-194412-7743: the flow reached stage 3, found no directory to browse, and timed out
 /// 180 ticks later without writing the player's save.
+#[cfg(windows)]
 fn default_save_dest_origin() -> Option<SaveDestOrigin> {
     let save_path = match system_quit_env_save_path() {
         Ok(path) => path,
@@ -358,10 +365,46 @@ fn default_save_dest_origin() -> Option<SaveDestOrigin> {
         loaded_path,
     })
 }
+/// A host build has no game save directory to browse, and the Wine path translation the windows
+/// arm above runs every candidate through lives in the `#[cfg(windows)]` `save_picker_menu`.
+/// `None` is what the seam already means by "no destination": the picker opens nothing.
+#[cfg(not(windows))]
+fn default_save_dest_origin() -> Option<SaveDestOrigin> {
+    None
+}
 fn default_reset_caret_latch() {}
 unsafe fn default_import_applied() {}
 fn default_windows_path_for_log(path: &str) -> String {
     path.to_owned()
+}
+
+// The three seams below are wired straight to a `#[cfg(windows)]` module on the game target.
+// Each needs a host stand-in for the same reason the neutral defaults above exist: an un-hosted
+// crate must never authorise a real save, and on a host build there is no game to authorise it
+// against. They are the crate's own no-ops, not a weaker version of the real thing.
+#[cfg(windows)]
+use crate::save_dest_commit_runtime::save_dest_set_target as default_save_dest_set_target;
+#[cfg(windows)]
+use crate::save_flow_boxes::install_save_flow_msgbox_builder_capture as default_install_msgbox_builder_capture;
+#[cfg(windows)]
+use crate::save_picker_menu::save_picker_stage_row_records as default_save_picker_stage_row_records;
+
+/// There is no `CS::MessageBoxDialog` builder to detour off the game target.
+#[cfg(not(windows))]
+fn default_install_msgbox_builder_capture() {}
+
+/// No `CreateFileW` detour reads the destination window on a host build, so arming one would
+/// record a target nothing can act on.
+#[cfg(not(windows))]
+fn default_save_dest_set_target(_path: PathBuf, _reason: &'static str) {}
+
+/// Staging writes the game's own `CS::ProfileSummary` records; `false` is the seam's existing
+/// answer for "the rows were not staged".
+#[cfg(not(windows))]
+unsafe fn default_save_picker_stage_row_records(
+    _model: &er_save_picker_core::SavePickerModel,
+) -> bool {
+    false
 }
 
 impl QuitMenuHost {
@@ -373,8 +416,7 @@ impl QuitMenuHost {
             append_autoload_debug: default_log,
             append_crash_log: default_log,
             save_redirect_native_source_dir: default_no_save_redirect,
-            install_msgbox_builder_capture:
-                crate::save_flow_boxes::install_save_flow_msgbox_builder_capture,
+            install_msgbox_builder_capture: default_install_msgbox_builder_capture,
             default_save_root: default_no_root,
             save_picker_seamless_mode_after_settle: default_seamless,
             system_quit_env_save_path: default_no_save_path,
@@ -400,8 +442,8 @@ impl QuitMenuHost {
             save_picker_start_dir: default_no_pathbuf,
             system_quit_ingest_picked_save: default_ingest_save,
             save_dest_start_dir: default_save_dest_origin,
-            save_dest_set_target: crate::save_dest_commit_runtime::save_dest_set_target,
-            save_picker_stage_row_records: crate::save_picker_menu::save_picker_stage_row_records,
+            save_dest_set_target: default_save_dest_set_target,
+            save_picker_stage_row_records: default_save_picker_stage_row_records,
             reset_path_editor_caret_latch: default_reset_caret_latch,
             build_import_applied: default_import_applied,
         }
@@ -559,6 +601,9 @@ pub(crate) unsafe fn build_import_applied() {
 }
 
 /// Ask the host to install the builder capture. Idempotent by contract.
+///
+/// Its only caller is the save flow, which is `#[cfg(windows)]`.
+#[cfg(windows)]
 pub(crate) fn install_msgbox_builder_capture() {
     (host().install_msgbox_builder_capture)()
 }
@@ -569,6 +614,9 @@ fn default_no_save_redirect() -> Option<std::path::PathBuf> {
 }
 
 /// Where the host redirects the game's save writer, if it does.
+///
+/// Its only caller is the destination commit, which is `#[cfg(windows)]`.
+#[cfg(windows)]
 pub(crate) fn save_redirect_native_source_dir() -> Option<std::path::PathBuf> {
     (host().save_redirect_native_source_dir)()
 }

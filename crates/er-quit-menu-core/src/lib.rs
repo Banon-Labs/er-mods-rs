@@ -61,10 +61,20 @@ pub mod quit_dialog_layout;
 pub mod row_identity;
 pub mod row_text;
 pub mod rows;
+// The Save Game row's flow, its message boxes, its destination identity/commit, and the row
+// itself. Every one of them detours the game or reads its RAM (`er_game_base`, `er_hook`,
+// `er_title_flow`, the `save_dest_commit_runtime` sibling), so they build on the game target
+// only -- the same gate their windows-only siblings above and below carry. They lost it moving
+// out of the shim's already-windows-only module tree, where nothing had to say so.
+#[cfg(windows)]
 pub mod save_dest_commit;
+#[cfg(windows)]
 pub mod save_dest_identity;
+#[cfg(windows)]
 pub mod save_flow;
+#[cfg(windows)]
 pub mod save_flow_boxes;
+#[cfg(windows)]
 pub mod save_game_row;
 
 #[cfg(windows)]
@@ -92,11 +102,16 @@ pub mod profile_load_dialog;
 /// Which fields of a `05_010_ProfileSelect` row are on screen, and whether the row is one of ours.
 #[cfg(windows)]
 pub mod profile_row_chrome;
+// Reads the live `CSScaleformLoadInfo` through `er_game_base::mem` and detours the
+// MenuWindowJob constructor: game target only.
+#[cfg(windows)]
 pub mod profile_select_movie_key;
 #[cfg(windows)]
 pub mod profile_table_guard;
 #[cfg(windows)]
 pub mod row_cloner;
+// Registers rows against `er_title_flow`'s menu-surface constants: game target only.
+#[cfg(windows)]
 pub mod row_registry;
 /// The snapshot that restores the game's records after the picker borrows them for browse rows.
 #[cfg(windows)]
@@ -135,6 +150,10 @@ pub mod os_dialog;
 pub use os_dialog::*;
 
 pub use rows::*;
+// The three modules these re-export are `#[cfg(windows)]` above, so their glob is too.
+#[cfg(windows)]
 pub use save_dest_commit::*;
+#[cfg(windows)]
 pub use save_dest_identity::*;
+#[cfg(windows)]
 pub use save_flow_boxes::*;
