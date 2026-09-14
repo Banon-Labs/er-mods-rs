@@ -1172,7 +1172,7 @@ pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
     // borrowed id 14000 from each other on body map 0x0e000000 and the fifth, on 0x15010000, had no
     // donor. The game's own param tables key on that map and name it, so ask them.
     let map = profile_slot_saved_map(slot)?;
-    let (id, source) = super::map_place_names::place_name_for_map(map)?;
+    let (id, source) = er_profile_summary_core::map_place_names::place_name_for_map(map)?;
     let hits = PROFILE_ROW_PARAM_PLACE_NAME_HITS.fetch_add(1, Ordering::SeqCst) + 1;
     if hits <= 10 || hits.is_power_of_two() {
         append_autoload_debug(format_args!(

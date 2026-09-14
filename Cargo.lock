@@ -3122,6 +3122,7 @@ dependencies = [
  "er-loading-portrait-core",
  "er-save-loader",
  "er-telemetry-core",
+ "fromsoftware-shared",
 ]
 
 [[package]]

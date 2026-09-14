@@ -39,6 +39,9 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 # The typed `CS::ChrAsm` member offsets a record's +0x1a8 equipment block is assembled from.
 # ONE-WAY: er-loading-portrait-core knows nothing about this crate.
 er-loading-portrait-core = { path = "../er-loading-portrait-core" }
+# `FromStatic`, the trait `SoloParamRepository::instance()` is reached through when
+# `map_place_names` reads the two `PlaceName` tables.
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint set,
 # denied. Zero violations on the shipping target, so the deny carries no `# DEBT:` allows.

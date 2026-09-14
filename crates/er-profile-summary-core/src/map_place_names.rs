@@ -48,7 +48,7 @@ use std::sync::OnceLock;
 /// byte and the two grid coordinates follow. The low byte is the map's index within its block and
 /// neither table carries it.
 #[must_use]
-pub(crate) fn map_key(saved_map: i32) -> MapKey {
+pub fn map_key(saved_map: i32) -> MapKey {
     let map = saved_map as u32;
     (
         ((map >> 24) & 0xff) as u8,
@@ -59,13 +59,13 @@ pub(crate) fn map_key(saved_map: i32) -> MapKey {
 
 /// Which table answered, for the log line and for the counter below.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum PlaceNameSource {
+pub enum PlaceNameSource {
     WorldMap,
     BonfireWarp,
 }
 
 impl PlaceNameSource {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::WorldMap => "WORLD_MAP_PLACE_NAME_PARAM_ST",
             Self::BonfireWarp => "BONFIRE_WARP_PARAM_ST",
@@ -134,7 +134,7 @@ fn build_table() -> BTreeMap<MapKey, NamedPlace> {
 ///
 /// The table is built on the first call that finds the params populated. An empty build is not
 /// cached, so a row built before `SoloParamRepository` is ready does not poison every later row.
-pub(crate) fn place_name_for_map(saved_map: i32) -> Option<NamedPlace> {
+pub fn place_name_for_map(saved_map: i32) -> Option<NamedPlace> {
     if let Some(table) = PLACE_NAME_TABLE.get() {
         return table.get(&map_key(saved_map)).copied();
     }
