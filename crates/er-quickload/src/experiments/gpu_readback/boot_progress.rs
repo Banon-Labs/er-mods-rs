@@ -313,10 +313,8 @@ static BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
 // (The game's real loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
-pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
-const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
-const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
-const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
+// The scale rule itself moved to `er_loading_bar_core::boot_text_scale`, which the save picker's
+// overlay also calls, so the two surfaces drawn on one frame cannot size their text differently.
 pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar_core::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
 #[allow(dead_code)] // Retained: Glyph metric pair with the live BOOT_VIEW_GLYPH_H; kept so the two are read together.
@@ -333,10 +331,9 @@ fn boot_view_strip_height(text_scale: usize) -> usize {
 }
 
 fn boot_view_text_scale(backbuffer_h: u32) -> usize {
-    let scaled = (backbuffer_h as usize * BOOT_VIEW_TEXT_BASE_SCALE
-        + (BOOT_VIEW_TEXT_REFERENCE_H as usize / 2))
-        / BOOT_VIEW_TEXT_REFERENCE_H as usize;
-    scaled.clamp(BOOT_VIEW_TEXT_MIN_SCALE, BOOT_VIEW_TEXT_MAX_SCALE)
+    // One rule, shared with the save picker's overlay, so two surfaces on the same frame cannot
+    // disagree about how tall a line of text is.
+    er_loading_bar_core::boot_text_scale(backbuffer_h as usize)
 }
 /// Strip width = backbuffer width * NUM/DEN (clamped to a sane minimum).
 const BOOT_VIEW_STRIP_W_NUM: u32 = 19;
@@ -377,6 +374,16 @@ fn boot_view_load_confirmed_this_epoch() -> bool {
         || boot_view_epoch_delta(
             &SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT,
             &BOOT_VIEW_FRESH_DESER_BASELINE,
+        )
+        // The game's own announcement, added 2026-09-13. The four above are all Continue-confirm
+        // counters, so a load the game commits itself -- configured-save commit, native save-data
+        // read, its own LoadGame builder, then this transition -- asserted none of them. Measured
+        // on run br-20260913-044416-2748: the character reached the world at `+25463ms` while the
+        // label sat on `PREPARING SAVE 6/11` and the fill ran to 1000 permille from the world
+        // gauge underneath it.
+        || boot_view_epoch_delta(
+            &er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT,
+            &er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE,
         )
 }
 
@@ -902,6 +909,16 @@ fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     true
 }
 
+/// Has a real load been asked for this epoch -- the gate that stops the world phases asserting from
+/// the boot-to-title loading screen, before anyone has chosen a character.
+///
+/// Every clause but the last is a Continue-confirm counter, and the autoload path commits none of
+/// them: it commits the configured save, reads the save data natively, and lets the game's own
+/// LoadGame builder run. So the last clause is the game's own announcement that it is leaving the
+/// title for the world, the same signal [`boot_view_load_confirmed_this_epoch`] takes. Measured on
+/// run br-20260913-044703-9d8c: the native gauge ran 0 -> 1000 permille between `+25654ms` and
+/// `+39942ms` while the label sat on `LOADING SAVE 7/11`, because all eight clauses below were
+/// false and the four world phases were unreachable.
 fn boot_view_load_flow_requested() -> bool {
     BOOT_VIEW_OWN_MENU_LOAD_ACTIVE.load(Ordering::SeqCst) != 0
         || SYSTEM_QUIT_CONTINUE_CONFIRM_ALLOW_COUNT.load(Ordering::SeqCst) != 0
@@ -911,6 +928,10 @@ fn boot_view_load_flow_requested() -> bool {
         || TFC_FORCED_CONTINUE_HANDOFF_MS.load(Ordering::SeqCst) != 0
         || SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst) != 0
         || LOADING_BG_PORTRAIT_SPARED_RENDERER.load(Ordering::SeqCst) != 0
+        || boot_view_epoch_delta(
+            &er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT,
+            &er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE,
+        )
 }
 
 /// Clear the native CS::LoadingScreen counters so the next loading window is measured on its own.
@@ -1269,6 +1290,10 @@ fn boot_view_reset_epoch_state(kind: usize) {
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst),
         Ordering::SeqCst,
     );
+    er_telemetry_core::counters::BOOT_VIEW_PLAY_GAME_BASELINE.store(
+        er_telemetry_core::counters::TITLE_SETSTATE_PLAY_GAME_COUNT.load(Ordering::SeqCst),
+        Ordering::SeqCst,
+    );
 }
 
 /// The boot epoch's user-started load begins mid-sequence, not at a new epoch: the same walk that
@@ -1486,6 +1511,26 @@ fn boot_view_progress() -> (usize, usize) {
         .fetch_max(pm, Ordering::SeqCst)
         .max(pm);
     (idx, shown)
+}
+
+/// Is a Terms of Service prompt on screen right now?
+///
+/// Read from the dialog the game built, not from a counter of how many it has asked for: the ToS
+/// ctor hook latches the object and its vtable, so the object still carrying that vtable is the
+/// prompt still being alive. When it is torn down the slot no longer reads back as its own vtable
+/// and this answers false on the next frame -- which is what lets the cover return the instant the
+/// player accepts rather than at the end of the load.
+///
+/// `safe_read_usize` tolerates the read landing on freed memory, which is exactly the case this has
+/// to survive.
+fn boot_view_tos_prompt_is_live() -> bool {
+    let this = er_title_flow::POLICY_TOS_TITLE_LAST_THIS.load(Ordering::SeqCst);
+    let vtable = er_title_flow::POLICY_TOS_TITLE_LAST_VTABLE.load(Ordering::SeqCst);
+    if this == 0 || this == TITLE_OWNER_SCAN_START_ADDRESS || vtable == 0 {
+        return false;
+    }
+    let live = unsafe { crate::experiments::safe_read_usize(this) };
+    live == Some(vtable)
 }
 
 fn boot_view_label_hash(text: &str) -> usize {
@@ -1802,6 +1847,19 @@ fn boot_view_phase_submilestone(
             if BOOT_VIEW_EPOCH_KIND.load(Ordering::SeqCst) == BOOT_VIEW_EPOCH_KIND_RELOAD {
                 boot_view_single_submilestone("AUTOLOAD HANDOFF")
             } else {
+                // The Terms of Service is a substep of this phase, and leaving it out is what let
+                // the bar print `PREPARING SAVE 6/11 (COMPLETE 2/2)` and hold there forever.
+                //
+                // Measured on run br-20260913-041749-def1: both substeps below had latched, the
+                // bar said `COMPLETE 2/2` at `+14411ms`, and the game asked for
+                // `06_000_TermOfService_BNE` at `+15520ms` -- so the label claimed the phase was
+                // finished one second before its real blocker even appeared, and then never
+                // changed again. A held bar is supposed to mean held work, which it did; what it
+                // could not say was which work, and the answer was a prompt nobody could see.
+                //
+                // `POLICY_TOS_TITLE_WRAPPER_HITS` counts the game asking. It is the ask, not the
+                // answer, so the substep clears when the title moves on to `LoadingSave` -- which
+                // is exactly the shape the other substeps here have.
                 boot_view_first_pending_substep(&[
                     (
                         PRODUCT_CORE_LAST_MENU_OPENED_LATCH.load(Ordering::SeqCst) != 0,
@@ -1810,6 +1868,15 @@ fn boot_view_phase_submilestone(
                     (
                         NETWORK_CHECK_SHORTCIRCUIT_COUNT.load(Ordering::SeqCst) != 0,
                         "NETWORK CHECK",
+                    ),
+                    (
+                        // The dialog's liveness, not the count of asks. `WRAPPER_HITS` only ever
+                        // counts up, so gating on it left this substep permanently pending and the
+                        // parenthesised label frozen on `TERMS OF SERVICE 3/3` for the rest of the
+                        // boot -- a stuck label is exactly the defect this substep was added to
+                        // cure, so it must clear the moment the prompt is answered.
+                        !boot_view_tos_prompt_is_live(),
+                        "TERMS OF SERVICE",
                     ),
                 ])
             }
@@ -2328,6 +2395,26 @@ unsafe fn composite_boot_progress_inner(
 ) -> bool {
     if BOOT_VIEW_STOPPED.load(Ordering::SeqCst) != 0 && !boot_view_try_fps_bail_resume_on_publish()
     {
+        return false;
+    }
+    // Stand aside while the game is asking for the Terms of Service.
+    //
+    // The prompt is a native dialog on the title, and this cover paints opaque black over the whole
+    // strip until the world handoff -- so on run br-20260913-042753-9767 the bar correctly read
+    // `PREPARING SAVE 6/11 (TERMS OF SERVICE 3/3)` and the dialog it was naming was invisible
+    // underneath it. A prompt the player cannot see is no better than the suppressed build it
+    // replaced.
+    //
+    // This yields rather than stops: `BOOT_VIEW_STOPPED` is untouched, so the cover comes back on
+    // the very next frame after the prompt is answered, and the window's own release path still
+    // owns the ending.
+    //
+    // The condition is the dialog's own liveness, not the fact that it was asked for. Gating on
+    // the ask alone (`POLICY_TOS_TITLE_WRAPPER_HITS != 0`) would hold the cover off from the first
+    // prompt until the world arrived, which is the whole rest of the load -- and the Terms of
+    // Service is answered in two parts, so the cover has to survive the gap between them and
+    // return the moment the last one closes.
+    if boot_view_tos_prompt_is_live() {
         return false;
     }
     // HANDOFF: first start stops when the loading window / published keyed head / world takes over.

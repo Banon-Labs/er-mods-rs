@@ -117,6 +117,41 @@ fn default_timeline_event(_name: &str, _frame: u64, _fields: std::fmt::Arguments
 fn default_ptr_or_null() -> usize {
     0
 }
+
+/// The `GameMan` singleton, resolved from the game image rather than from a host.
+///
+/// This default used to be `default_ptr_or_null`, and a seam that answers 0 for a pointer the
+/// game certainly has is indistinguishable from "the game is not up". The save flow's fire gate
+/// requires `GameMan+0xb80 == 0` and `GameMan+0xbc4 != 3`; with a null pointer both reads fall
+/// back to their unreadable sentinel, the gate can never go green, and a picked destination times
+/// out after 600 ticks having written nothing. Measured on run br-20260912-234715-e7fd:
+/// `FIRE-GATE TIMEOUT ... (disableSaveMenu=0 b80=-1 bc4=-1)`, where the two `-1`s are that
+/// sentinel and the product-only host was the only thing that had ever filled this field.
+///
+/// The singleton is a static in the game image, so no host state is involved in finding it and
+/// there is no reason for a shell to answer worse than the product does.
+#[cfg(windows)]
+fn default_game_man_ptr_or_null() -> usize {
+    use fromsoftware_shared::FromStatic;
+    eldenring::cs::GameMan::instance_ptr().map_or(0, |ptr| ptr as usize)
+}
+
+#[cfg(not(windows))]
+fn default_game_man_ptr_or_null() -> usize {
+    0
+}
+
+/// The `GameDataMan` singleton, resolved the same way and for the same reason.
+#[cfg(windows)]
+fn default_game_data_man_ptr_or_null() -> usize {
+    use fromsoftware_shared::FromStatic;
+    eldenring::cs::GameDataMan::instance_ptr().map_or(0, |ptr| ptr as usize)
+}
+
+#[cfg(not(windows))]
+fn default_game_data_man_ptr_or_null() -> usize {
+    0
+}
 fn default_name(_v: i32) -> &'static str {
     ""
 }
@@ -217,8 +252,8 @@ impl TitleFlowHost {
             append_autoload_debug: default_log,
             append_crash_log: default_log,
             timeline_event: default_timeline_event,
-            game_data_man_ptr_or_null: default_ptr_or_null,
-            game_man_ptr_or_null: default_ptr_or_null,
+            game_data_man_ptr_or_null: default_game_data_man_ptr_or_null,
+            game_man_ptr_or_null: default_game_man_ptr_or_null,
             runtime_heap_allocator_ptr_or_null: default_ptr_or_null,
             ingamestep_request_code_name: default_name,
             movemapstep_step_name: default_name,
@@ -304,7 +339,7 @@ pub(crate) fn timeline_event(name: &str, frame: u64, fields: std::fmt::Arguments
 pub(crate) fn game_data_man_ptr_or_null() -> usize {
     (host().game_data_man_ptr_or_null)()
 }
-pub(crate) fn game_man_ptr_or_null() -> usize {
+pub fn game_man_ptr_or_null() -> usize {
     (host().game_man_ptr_or_null)()
 }
 pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {

@@ -117,6 +117,54 @@
 #     itself), end-anchored the participle spelling of `b`, cut its first-person spelling to the
 #     build/launch/run family, and added the offer exemption for a destructive or user-visible action
 #     and for a genuine fork. See scripts/audit-diagnosis-signal-false-positives.py.
+#
+#     ER-EFFECTS-NO-DEFERRED-INVESTIGATION (added 2026-09-12) is the fourth rule here, and it is the
+#     first arm keyed on a future tense. The shape: the closing prose names the agent's own next
+#     investigative move instead of taking it. Six closers from one session, verbatim, and not one of
+#     them was caught by anything in this package:
+#
+#       "... which is where I look next."
+#       "... and the next place to look is `profile_table_guard`'s rebuild of `saveSlotsStates`."
+#       "... that is the next step / the next thing I check is ..."
+#       "The overlap that is real in a default build is the picker itself: ... which is where I look
+#        next."
+#       "... I will back out once this test says which side the bug is on."
+#       "... the next step halves it to five; if it is clean, the culprit is in the excluded ten and
+#        I load those instead."
+#
+#     It is the same failure the first rule refuses -- a finding delivered where a change was owed --
+#     one tense later, so the diagnosis noun the first rule needs is absent and the sentence names a
+#     move rather than a defect. The promissory arm wants a work gerund heading the sentence and
+#     these are ordinary indicative clauses; the unread arm wants the prose to claim a file already
+#     holds the answer. ER-EFFECTS-NO-DESCRIBED-NEXT-STEP is the nearest neighbour and misses on both
+#     halves at once: its noun list wants a copula directly after ("the next step is"), which none of
+#     "the next place to look is", "the next thing I check is" or "the next step halves it" gives it,
+#     and its handoff exemption is cleared by a single question mark anywhere in the message.
+#
+#     Its facts:
+#       deferral -- the closing sentence that names the next investigative move. The patterns live in
+#                   the signal as a named list, one entry per shape, so a regression names the shape
+#                   it broke.
+#       edited   -- a write anywhere in the turn, read for the same reason the promissory arm reads
+#                   it: a closer is the last thing in the turn, so `fixed` is always 0 for one.
+#       blocked  -- the one-line blocker, as everywhere else.
+#       userneed -- an observation only the user can make. The launch handoff has to stay speakable.
+#       future   -- the move needs evidence that does not exist yet, or the user was handed a
+#                   concrete in-game action. Both are legitimate deferrals, and both already live in
+#                   this fact; the signal now computes it for the whole closing message rather than
+#                   only inside the unread branch, which leaves that arm's behaviour unchanged.
+#     `asked` is deliberately not an exemption, for the same reason it is not one on the promissory
+#     arm: five of the six closers above answered a question correctly and then stopped in front of
+#     the next tool call, so inheriting it would exempt the whole family.
+#
+#     Measured, not guessed: replayed over 913 real turn boundaries it halts 5 times (0.55%, the same
+#     band as its neighbours -- promissory 0.32%, handback 0.79%). Four are instances of the defect,
+#     three of them the verbatim closers above. Reading the fifth deleted a shape: "Push was the next
+#     step in a script I had already run once" reports a step already taken, so the past tense is now
+#     suppressed in the signal. One survivor is declared rather than exempted -- "the flow behind them
+#     is the next step, not this one" scopes a turn out of work rather than deferring an
+#     investigation, and every exemption that would cover it would cover the family too.
+#     See scripts/audit-diagnosis-signal-false-positives.py --rule=deferral.
 #   routing:
 #     required_events: ["Stop"]
 #     required_signals: ["last_assistant_diagnosis_without_fix"]
@@ -170,6 +218,18 @@ halt contains decision if {
 	}
 }
 
+# Enforcement: block turn-end when the closing statement named the agent's own next investigative
+# move and the turn took none of it.
+halt contains decision if {
+	input.hook_event_name == "Stop"
+	some clause in [deferred]
+	decision := {
+		"rule_id": "ER-EFFECTS-NO-DEFERRED-INVESTIGATION",
+		"reason": deferral_reason_for(clause),
+		"severity": "HIGH",
+	}
+}
+
 reason_for(clause) := msg if {
 	msg := concat("", [
 		"You ended the turn naming a defect ('",
@@ -199,6 +259,14 @@ handback_reason_for(clause) := msg if {
 		"You ended the turn with nothing for the user to reply: '",
 		clause,
 		"'. That costs them a round trip and carries no information -- they read it, learn nothing they can act on, and have to tell you to carry on with work you had already chosen. Take the action now, in this turn: run the build, run the launch, make the edit, start the subagent. Do not offer to do work you are already authorised to do, and do not announce your own next step as a closing line. End on the user only when their reply would carry something you cannot get yourself: an observation with no memory-read oracle ('tell me what you saw'), a subjective or external-only decision, or a genuine blocker you name in one line. Asking them to press a key or use an item is not one of those -- you drive every in-game input yourself.",
+	])
+}
+
+deferral_reason_for(clause) := msg if {
+	msg := concat("", [
+		"You ended the turn naming your own next investigative move instead of making it: '",
+		clause,
+		"'. The read, the bisect step, the file you said you would look at next is one tool call away, and you stopped in front of it -- the user learns only that you know where to look, and has to spend a reply telling you to look. Take that step now, in this turn, and close the question with what it found. Defer only when the move needs something that does not exist yet (a run that has to happen first, or an in-game action whose proving log line you name), when it needs an observation only the user can make, or when something blocks it -- and then say what, in one line.",
 	])
 }
 
@@ -236,6 +304,15 @@ unread := clause if {
 	future == "0"
 	userneed == "0"
 	blocked == "0"
+}
+
+deferred := clause if {
+	clause := field("deferral")
+	clause != ""
+	edited == "0"
+	blocked == "0"
+	userneed == "0"
+	future == "0"
 }
 
 handback := clause if {

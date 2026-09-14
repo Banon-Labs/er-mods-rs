@@ -208,6 +208,10 @@ cmd_start() {
 			ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$artifact/er-crash-latest.txt" \
 			ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$artifact/er-crash-breadcrumb-latest.txt" \
 			ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$artifact/er-crash-modules.txt" \
+			ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$artifact/er-focus-input.log" \
+			ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$artifact/er-quit-load-character.log" \
+			ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$artifact/er-quit-menu.log" \
+			ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$artifact/er-save-game-row.log" \
 			ER_QUICKLOAD_SAVE_DISABLE_LOG_PATH="$artifact/$DLL_LOG_NAME" \
 			ER_QUICKLOAD_SAVE_DISABLE_TELEMETRY_PATH="$artifact/$TELEMETRY_NAME" \
 			ER_QUICKLOAD_LOADING_PORTRAIT_PATH="$artifact/er-loading-portrait.log" \
@@ -216,6 +220,10 @@ cmd_start() {
 			ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$artifact/er-crash-latest.txt" \
 			ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$artifact/er-crash-breadcrumb-latest.txt" \
 			ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$artifact/er-crash-modules.txt" \
+			ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$artifact/er-focus-input.log" \
+			ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$artifact/er-quit-load-character.log" \
+			ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$artifact/er-quit-menu.log" \
+			ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$artifact/er-save-game-row.log" \
 			ER_QUICKLOAD_INPUT_HARNESS_LOG_PATH="$artifact/$HARNESS_LOG_NAME" \
 			ER_QUICKLOAD_INPUT_HARNESS_PHASES_PATH="$artifact/$HARNESS_PHASES_NAME" \
 			ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$artifact/er-build-import.log" \

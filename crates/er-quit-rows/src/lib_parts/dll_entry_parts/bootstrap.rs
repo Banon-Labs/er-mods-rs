@@ -200,8 +200,6 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         system_quit_ingest_picked_save: crate::experiments::system_quit_ingest_picked_save,
         save_dest_start_dir: save_dest_start_dir_for_quit_menu,
         save_dest_set_target: crate::experiments::save_dest_set_target,
-        save_flow_box_recipe_available: crate::experiments::save_flow_box_recipe_available,
-        save_flow_box_clear: crate::experiments::save_flow_box_clear,
         // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:
@@ -343,11 +341,13 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
             .call_once(|| er_boot_profiler::spawn_boot_profiler(append_autoload_debug));
     }
 
-    // Install the crash/exit logger first so it can observe an exit or access
-    // violation from any later subsystem. Opt-in; off by default.
-    if crash_logger_enabled() {
-        install_crash_logger();
-    }
+    // First, so it can observe an exit or access violation from any later subsystem. It has been
+    // unconditional since the day a self-enabling sentinel meant the first crash of a clean install
+    // went unlogged; the gate that said so was a `-> bool { true }` and is deleted. The handler
+    // writes a record and then leaves the exception for the game's own handlers
+    // (`VECTORED_FIRST_HANDLER` + `EXCEPTION_CONTINUE_SEARCH`), so installing it always changes no
+    // game behaviour -- `deliberate_fail_fast_enabled()` stays the separate explicit opt-in.
+    install_crash_logger();
 
     // Save-source enforcement / default FALLBACK.
     // Explicit ER_QUICKLOAD_SAVE_FILE / er-quickload.toml save_file sources install the scoped Win32

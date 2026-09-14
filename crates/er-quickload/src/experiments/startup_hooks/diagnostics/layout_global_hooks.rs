@@ -47,6 +47,11 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // install_system_quit_menu_window_job_run_hook();
     #[cfg(feature = "quit-rows")]
     install_system_quit_window_list_push_hook();
+    // Compiled out unless this build replaces the row, so a default build carries no substitution
+    // to reach. The runtime predicate inside the hook stays as well -- a build that has the feature
+    // but never arms the row must still leave the text alone. The message-id recording this hook
+    // also does, which is what named `GRD` 110000 as the dialog behind the row, goes with it.
+    #[cfg(feature = "save-game-row")]
     install_system_quit_save_game_text_hook();
     // The three routing detours this used to install are part of the shared arm call below
     // (`er_quit_menu_core::row_cloner::arm`), on the `er-hook` union rather than a bare `MhHook`.
@@ -71,11 +76,63 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
     // The picker itself lives in `er-quit-menu-core` since 2026-09-11. These are the steps only a
     // host with a save-swap ledger, a save flow and a live-layout editor behind it can perform; a
     // standalone shell installs none of them and the picker still browses and picks.
+    // Not gated on `save-picker`, and the attempt is recorded here so it is not repeated. The list
+    // builder does not merely add browse rows: it is the hook the `05_010_ProfileSelect` list is
+    // built through in every composition, so removing it emptied the title's character list. The
+    // player reported a Load Game list with no characters on the 2026-09-13 10:33 run and on every
+    // run after it, and the autoload never left the title in any of them -- `c30=0xa010000 level=9
+    // player=false` -- while 10:23 and 10:29 loaded the same save with these installed.
     super::super::save_picker::save_picker_menu::install_product_save_picker_hooks();
     install_save_picker_list_builder_hook();
+    // Save Game is a vanilla row, not a cloned one, so it does not belong to `quit-rows` -- and
+    // when that feature came off the defaults it went with it anyway, because the only call that
+    // registers its flow was the arm below. What the player then got was the label without the
+    // behaviour: the text hook still renamed the native first row to `Save Game`, the router found
+    // no flow and forwarded the press to the vanilla action, and pressing it saved and returned to
+    // the title (run br-20260912-185308-639d). Arming `RowSet::NONE` clones nothing and adds no
+    // row; it registers the action table and puts this module's row handlers on the `er-hook`
+    // union, which is what a standalone shell's forward reaches when it has no flow of its own.
+    #[cfg(all(feature = "save-game-row", not(feature = "quit-rows")))]
+    {
+        let armed = unsafe {
+            er_quit_menu_core::row_cloner::arm(
+                er_quit_menu_core::row_cloner::RowSet::NONE,
+                er_quit_menu_core::row_cloner::QuitRowActions {
+                    save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    save_game_request_save_only: Some(
+                        crate::experiments::system_quit_save_game_request_save_only,
+                    ),
+                    ..Default::default()
+                },
+            )
+        };
+        if let Err(error) = armed {
+            append_autoload_debug(format_args!(
+                "system-quit-save: arming the vanilla Save Game row failed: {error:?} -- the row keeps the game's own text and action"
+            ));
+        }
+        // The pump the row's destination browser needs, and in this build nothing else provides
+        // one. `system_quit_menu_window_run_post` -- the product's own `MenuWindowJob::Run` work,
+        // and the only writer of the ProfileSelect window latch -- lives in the `quit-rows`
+        // directory, so with the cloned rows off the browser opened and nothing watched it. A
+        // backout cleared no latch, `dest_browse_verdict` kept reading `dest_mode` as a browser
+        // still on screen, and the flow never left `SAVE_FLOW_STAGE_DEST_BROWSE`: the second press
+        // logged `Save Game row press IGNORED ... already in flight` (run br-20260913-050924-8131,
+        // `+31111368ms`). The core pump is the same one the standalone shell uses; its
+        // `note_picker_window_closed` is what ends the browse. `set_save_game_row_armed` had no
+        // caller in the tree at all, so that block had never run in any host.
+        er_quit_menu_core::menu_pump::set_save_game_row_armed(true);
+        if !unsafe { er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook() } {
+            append_autoload_debug(format_args!(
+                "system-quit-save: no MenuWindowJob::Run pump -- the Save Game row's destination browser will open and never close the flow"
+            ));
+        }
+    }
     // Everything below clones rows onto the Quit tab. With the feature off the tab keeps exactly
-    // what the game ships, and the installs above -- the telemetry, the vanilla Save Game hooks
-    // and the picker -- still run.
+    // what the game ships apart from the Save Game row armed just above, and the installs before
+    // it -- the telemetry, the vanilla Save Game hooks and the picker -- still run.
     #[cfg(feature = "quit-rows")]
     {
         if SYSTEM_QUIT_DUPLICATE_INSTALLED.load(Ordering::SeqCst)
@@ -99,6 +156,12 @@ pub(crate) fn install_system_quit_duplicate_button_hook() {
                     open_profile_load_dialog: Some(system_quit_open_profile_load_dialog),
                     open_save_picker_menu: Some(open_save_picker_menu_for_row),
                     save_game_start_flow: Some(
+                        crate::experiments::system_quit_save_game_start_flow,
+                    ),
+                    // The cloned row's flow is the same flow: `arm` drops the clone when the native
+                    // takeover is supplied, so this only matters to a host that does not take the
+                    // native row over.
+                    save_game_as_start_flow: Some(
                         crate::experiments::system_quit_save_game_start_flow,
                     ),
                     save_game_request_save_only: Some(
@@ -260,7 +323,11 @@ pub(crate) unsafe extern "system" fn sound_post_event_core_hook(
     } else {
         false
     };
-    let muted = !in_world_seen || quickload_active || !player_present;
+    let muted = crate::autoload_cover_gates::pre_world_audio_mute_required(
+        crate::product_autoload_enabled(),
+        quickload_active,
+        in_world_seen,
+    );
     let ret = if muted {
         0
     } else {

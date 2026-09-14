@@ -220,7 +220,7 @@ def load_allowlist(root: Path) -> Allowlist:
 # check.sh (it costs a windows cross-compile and a wine run).
 #
 #   crate                     mechanism                                measured 2026-08-31
-#   er-quickload              `#[cfg(windows)] mod` in lib.rs           host 0   / win 91
+#   er-quickload              `#[cfg(windows)] mod` in lib.rs           host 26  / win 39
 #   er-quit-menu-core         mixed tree, 30 windows-only              host 43  / win 73
 #   er-invasion-path          file-level `#![cfg(windows)]`            host 73  / win 90
 #   er-invasion-warp          `#[cfg(not(windows))]` on one test       host 115
@@ -235,8 +235,23 @@ LIVE_PROPERTIES: list[tuple[str, str, str]] = [
     # is invisible to the host -- so the floor is set well under the current count rather than
     # re-pinned to it, because a bound that tracks the census has to be edited by whoever shrinks
     # the crate, which is the "bump the number" habit these properties were written to avoid.
-    ("er-quickload", "lib.host_runnable == 0 and lib.windows_only > 10",
-     "`#[cfg(windows)] mod` in lib.rs hides every test from the host"),
+    # `host_runnable == 0` was the second half of this until 2026-09-14, and by then it described
+    # a crate that no longer existed. Four modules are now declared above the `#[cfg(windows)]`
+    # block on purpose -- profile_select_chrome_gate, orphan_title_window, autoload_cover_gates
+    # and menu_window_run_gate -- each carrying a "Deliberately outside" comment saying why: they
+    # are pure composition predicates with no game in them, so their 26 tests run on the host
+    # under the `-p er-quickload --lib` line in check.sh. That is the extraction roadmap working,
+    # not a gate slipping, and pinning `== 0` would have made host-testable logic a gate failure.
+    #
+    # The replacement is a relation rather than a floor, for the reason the header gives: a bound
+    # that tracks the census has to be edited by whoever changes the crate, which is the "bump the
+    # number" habit these properties exist to avoid. `windows_only > host_runnable` says the thing
+    # that is still true and still worth proving -- per-`mod` gating hides the BULK of this
+    # crate's tests from a host run -- and a blinded windows matcher destroys it just as
+    # thoroughly as it destroyed `== 0`, because blinding moves every windows-only test onto the
+    # host side and flips the inequality.
+    ("er-quickload", "lib.windows_only > 10 and lib.windows_only > lib.host_runnable",
+     "`#[cfg(windows)] mod` in lib.rs hides most of the crate's tests from the host"),
     ("er-quit-menu-core", "lib.host_runnable > 20 and lib.windows_only > 20",
      "a mixed tree: some tests host-visible, some windows-only"),
     ("er-invasion-path", "lib.windows_only > 10",

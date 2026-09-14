@@ -40,19 +40,19 @@ use er_telemetry_core::counters::{
     SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT,
 };
 use er_title_flow::{
-    DIALOG_SLOT_CURSOR_B0C_OFFSET, HOOK_ORIGINAL_UNSET, MenuEventId,
-    PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA, PROFILE_SELECT_LIST_BUILDER_RVA,
-    SAVE_FLOW_STAGE_DEST_BROWSE, SAVE_FLOW_STAGE_OVERWRITE_CONFIRM,
-    SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET, TITLE_OWNER_SCAN_START_ADDRESS,
+    DIALOG_SLOT_CURSOR_B0C_OFFSET, HOOK_ORIGINAL_UNSET, PROFILE_LOAD_DIALOG_LIST_REBUILD_RVA,
+    PROFILE_SELECT_LIST_BUILDER_RVA, SAVE_FLOW_STAGE_DEST_BROWSE,
+    SAVE_FLOW_STAGE_OVERWRITE_CONFIRM, SYSTEM_QUIT_ACTION_OBJECT_DIALOG_08_OFFSET,
+    TITLE_OWNER_SCAN_START_ADDRESS,
 };
 
 use crate::host::SaveDestOrigin;
 use crate::host::{
     append_autoload_debug, default_save_root, save_dest_set_target, save_dest_start_dir,
-    save_flow_box_clear, save_flow_box_recipe_available, save_picker_seamless_mode_after_settle,
-    system_quit_env_save_dir, system_quit_env_save_path, system_quit_ingest_picked_save,
-    system_quit_profile_summary_ptr, system_quit_save_swap_arm_original,
-    system_quit_save_swap_restore_profile_summary, system_quit_windows_path_for_log,
+    save_picker_seamless_mode_after_settle, system_quit_env_save_dir, system_quit_env_save_path,
+    system_quit_ingest_picked_save, system_quit_profile_summary_ptr,
+    system_quit_save_swap_arm_original, system_quit_save_swap_restore_profile_summary,
+    system_quit_windows_path_for_log,
 };
 use crate::os_dialog::{DestRoute, save_dest_route_picked_target};
 use crate::profile_load_dialog::{
@@ -60,6 +60,7 @@ use crate::profile_load_dialog::{
 };
 use crate::save_dest_commit_runtime::{save_dest_clear_target, save_dest_target};
 use crate::save_flow_boxes::{SAVE_FLOW_BOX_NONE, SAVE_FLOW_BOX_OVERWRITE_FILE};
+use crate::save_flow_boxes::{save_flow_box_clear, save_flow_box_recipe_available};
 use crate::software_keyboard::{
     save_picker_path_editor_active, save_picker_request_path_editor,
     save_picker_reset_path_editor_state,
@@ -111,6 +112,12 @@ pub struct SavePickerMenuHooks {
     /// `os_native_save_picker` is set, and owns the startup missing-save request outright.
     pub open_picker_for_intent: Option<unsafe fn(PickerOpenRequest) -> PickerOpenOutcome>,
     /// Install whatever passive device hooks the nav reader below needs.
+    ///
+    /// These last three are the one group with a working answer when they are absent:
+    /// [`crate::save_picker_native_nav`] reads the direction out of the engine instead, so a shell
+    /// gets left and right without owning a device layer. A host installs them to put its own
+    /// latch in charge -- the product's, which sits on its input blocker and can therefore report
+    /// a direction the engine is deliberately refusing.
     pub ensure_nav_input_hooks: Option<fn()>,
     /// Drain the requested nav edges, leaving the rest latched for their own consumer.
     pub take_nav_edges_for: Option<fn(usize) -> usize>,
@@ -165,14 +172,20 @@ const SAVE_PICKER_NAV_ALL_MASK: usize = SAVE_PICKER_NAV_LEFT_MASK
     | SAVE_PICKER_NAV_WHEEL_UP_MASK
     | SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
 
-/// Drain `mask` from the host's edge latch, or nothing when no host reads the device.
+/// Drain `mask` from the host's edge latch, or from the crate's own native reader when no host
+/// supplies one.
+///
+/// The fallback used to be `0`, which is how a shell ended up with a drive strip the mouse could
+/// click and the arrows could not reach: the three seam fields are filled only by the product, so
+/// in every standalone shell this answered nothing at all, forever, with no line in the log to say
+/// so. [`crate::save_picker_native_nav`] answers it by asking the engine which way the player
+/// pressed, so the seam is now an override rather than a requirement.
 fn take_nav_edges_for(mask: usize) -> usize {
-    hooks().take_nav_edges_for.map_or(0, |take| take(mask))
+    match hooks().take_nav_edges_for {
+        Some(take) => take(mask),
+        None => crate::save_picker_native_nav::take_nav_edges_for(mask),
+    }
 }
-
-/// `MenuEventId::MoveA`/`MoveB` as the raw ids the event bitmap is indexed by.
-pub(crate) const MENU_EVENT_MOVE_A_00: usize = MenuEventId::MoveA as usize;
-pub(crate) const MENU_EVENT_MOVE_B_45: usize = MenuEventId::MoveB as usize;
 
 /// The native ProfileSelect item-list builder's trampoline, claimed by the re-stage hook.
 static SAVE_PICKER_LIST_BUILDER_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
@@ -393,16 +406,35 @@ pub unsafe fn save_picker_stage_row_records(
     unsafe { save_picker_arm_row_snapshot(summary) };
     let staged = unsafe { save_picker_write_row_records(model, summary) };
     SAVE_PICKER_STAGED_ROW_COUNT.store(staged, Ordering::SeqCst);
-    if let Ok(_base) = game_module_base() {
-        let refresh: unsafe extern "system" fn() = unsafe {
-            std::mem::transmute(
-                match gated_game_fn(PROFILE_RENDERER_REFRESH_RVA, "PROFILE_RENDERER_REFRESH_RVA") {
-                    Some(address) => address,
-                    None => return false,
-                },
-            )
-        };
-        unsafe { refresh() };
+    if let Ok(base) = game_module_base() {
+        // `PROFILE_RENDERER_REFRESH_RVA` walks the profile model renderer table without checking
+        // it, so calling it on a null table reads `[null + 0x754]` and the process dies -- the
+        // access violation bd `er-effects-rs-p88u` measured three times at `eldenring.exe+0x9ab874`.
+        // `system_quit_open_profile_load_dialog_on` guards its own submit the same way; this call
+        // site had no guard, and run br-20260912-200740-d5e1 died here, between the line saying the
+        // pump had a staged request and any line saying the browser opened.
+        //
+        // Staging is not abandoned when the table cannot be made safe: the rows are already
+        // written, and the refresh only redraws them. Skipping it leaves the list stale for a frame
+        // rather than ending the session.
+        if unsafe { crate::profile_table_guard::ensure_profile_table_ready(base) } {
+            let refresh: unsafe extern "system" fn() = unsafe {
+                std::mem::transmute(
+                    match gated_game_fn(
+                        PROFILE_RENDERER_REFRESH_RVA,
+                        "PROFILE_RENDERER_REFRESH_RVA",
+                    ) {
+                        Some(address) => address,
+                        None => return false,
+                    },
+                )
+            };
+            unsafe { refresh() };
+        } else {
+            append_autoload_debug(format_args!(
+                "save-picker: staged the rows but skipped the renderer refresh -- the profile model renderer table could not be made safe to walk, and `PROFILE_RENDERER_REFRESH_RVA` would fault reading [null+0x754]"
+            ));
+        }
     }
     append_autoload_debug(format_args!(
         "save-picker: staged {staged} occupied row records ({} slots left unoccupied) dir='{}' scroll={}/{} entries={} drives={}",
@@ -561,6 +593,13 @@ pub unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) ->
         loaded_path,
     }) = save_dest_start_dir()
     else {
+        // Silent until 2026-09-12, and the silence is what cost run br-20260912-194412-7743: the
+        // standalone shell's press staged a browse request, this returned false on every pass with
+        // nothing written down, and the only evidence was the stage machine timing out 180 ticks
+        // later saying the browser "never opened" -- true, but not why.
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- the host answers no `save_dest_start_dir`, so there is no directory to browse and no loaded file to name the `[ new ]` row after"
+        ));
         return false;
     };
     unsafe { system_quit_save_swap_restore_profile_summary("save-dest-picker-open") };
@@ -575,6 +614,12 @@ pub unsafe fn system_quit_open_save_dest_picker_in_game(system_dialog: usize) ->
         &loaded_path,
     );
     if !unsafe { save_picker_stage_row_records(&model) } {
+        // The other silent refusal on this path. Same reason for naming it: a host that supplies no
+        // row staging cannot show a list, and "never opened" does not say which half was missing.
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- the host answers no `save_picker_stage_row_records`, so the browse list has no rows for start_dir={}",
+            start_dir.display()
+        ));
         return false;
     }
     *er_save_picker_core::model::active_save_picker_lock() = Some(model);
@@ -751,8 +796,16 @@ pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, sou
                 // 05_010 the same way), so it does not contend with the System dialog queue that owns
                 // the picker window job. Submitted inline here (menu thread); a not-ready queue leaves
                 // the pending latch for the next menu pump.
-                if let Some(bind) = hooks().save_flow_box_set_host_dialog {
-                    bind(dialog);
+                // Both of these are this crate's own functions. They used to be reached only
+                // through the optional host seam, which no shell fills, so the host dialog stayed
+                // bound to the System dialog whose queue owns the picker's window job -- and the
+                // submit then deferred on that queue for as long as the browser was open, which is
+                // forever. Run br-20260913-003649-a52f deferred the submit once against
+                // `queue=dialog+0x10` and then hit the 180-tick build timeout. The seam still
+                // overrides when a host installs one.
+                match hooks().save_flow_box_set_host_dialog {
+                    Some(bind) => bind(dialog),
+                    None => crate::save_flow_boxes::save_flow_box_set_host_dialog(dialog),
                 }
                 SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_OVERWRITE_FILE, Ordering::SeqCst);
                 if !save_flow_menu_enter_stage(
@@ -764,10 +817,13 @@ pub unsafe fn save_dest_handle_picked_target(dialog: usize, target: PathBuf, sou
                     save_dest_clear_target("stale overwrite-confirm stage transition");
                     return;
                 }
-                if hooks()
-                    .save_flow_submit_box
-                    .is_some_and(|submit| submit(SAVE_FLOW_BOX_OVERWRITE_FILE))
-                {
+                let submitted = match hooks().save_flow_submit_box {
+                    Some(submit) => submit(SAVE_FLOW_BOX_OVERWRITE_FILE),
+                    None => {
+                        crate::save_flow_boxes::save_flow_submit_box(SAVE_FLOW_BOX_OVERWRITE_FILE)
+                    }
+                };
+                if submitted {
                     SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
                 }
             }
@@ -1209,7 +1265,18 @@ pub(crate) static SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR: AtomicUsize =
 pub(crate) const EDGE_SCROLL_NO_PREV_CURSOR: usize = usize::MAX;
 const SCROLLBAR_CONTROL_SET_TOTAL_RVA: u32 = 0x74dad0;
 const SCROLLBAR_CONTROL_SET_POSITION_RVA: u32 = 0x74db60;
+/// `ScrollBarV`'s three state fields, read out of the two setters this pump already calls.
+///
+/// `FUN_14074dad0(sb, total)` clamps `total` to at least 1, stores it at `+0x1a4`, and then clamps
+/// `+0x1a0` into `[0, total - *(sb + 0x1a8)]`; `FUN_14074db60(sb, pos)` clamps `pos` into that same
+/// range before storing it. So `+0x1a8` is the page size, and it -- not the total alone -- decides
+/// how far the thumb may travel and how large it draws.
+const SCROLLBAR_CONTROL_POSITION_OFFSET: usize = 0x1a0;
+const SCROLLBAR_CONTROL_PAGE_OFFSET: usize = 0x1a8;
 static SAVE_PICKER_SCROLLBAR_LAST_SYNC: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The thumb position last drawn. The setter only redraws on a change, and the field it tests is
+/// zeroed straight after each draw, so the previous value has to be remembered here instead.
+static SAVE_PICKER_SCROLLBAR_LAST_POSITION: AtomicUsize = AtomicUsize::new(0);
 static SAVE_PICKER_SCROLLBAR_DEAD_PROXY_SKIPS: AtomicUsize = AtomicUsize::new(0);
 const MENU_VIEWER_EVENT_POINT_RVA: usize = 0x757af0;
 const PROFILE_SELECT_MOVIE_WIDTH_PX: f32 = 1920.0;
@@ -1382,6 +1449,47 @@ fn save_picker_rebuild_target_is_live(
         && list_vtable == expected_list_vtable
 }
 
+/// Times the selection chrome was put back after an in-place list rebuild.
+static SAVE_PICKER_CHROME_REASSERTS: AtomicUsize = AtomicUsize::new(0);
+/// Menu ticks still owed a chrome re-assert after a rebuild.
+///
+/// The rebuild tears the cells down and builds them again, and the row movies settle over the
+/// frames that follow, so a select issued inside the rebuild call can be applied to cells that are
+/// then replaced. Re-asserting on the next few ticks costs one select each and lands after the
+/// cells exist, whatever order scaleform settles them in.
+static SAVE_PICKER_CHROME_DIRTY_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// How many ticks one rebuild owes.
+const SAVE_PICKER_CHROME_DIRTY_TICK_COUNT: usize = 3;
+
+/// Put the selection chrome back on the row the grid settled on after an in-place rebuild.
+///
+/// The rebuild re-selects through the grid's own path -- `FUN_1409a4ed0` reads `+0xd4`, hands it to
+/// `FUN_1409a2cf0`, and that calls `FUN_140738d40` -> `FUN_14073bc10`, which is where the chrome
+/// lives: `FUN_14073bae0` assigns the cell's `Cursor` component and shows it. That select is also
+/// allowed to fail. The rebuild sets the item count from the staged records first, so a window
+/// holding empty slots refuses every index at or past the count; the rebuild then walks forward and
+/// backward looking for a row that will take it, and if none does, the list ends up with no visible
+/// selection at all while the rows underneath it are perfectly fine.
+///
+/// Re-asserting the settled cursor here is one select on the row the grid already chose, so it
+/// cannot fight a hover or move the selection, and it names the row in the log when the grid had to
+/// clamp or refused outright.
+unsafe fn save_picker_reassert_selection_chrome(dialog: usize, reason: &str) {
+    let list = dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET;
+    let cursor = unsafe { *((list + MENU_ITEM_LIST_CURSOR_FIELD_OFFSET) as *const i32) };
+    let Ok(row) = usize::try_from(cursor) else {
+        return;
+    };
+    let settled = unsafe { save_picker_select_native_row(dialog, row, reason) };
+    let n = SAVE_PICKER_CHROME_REASSERTS.fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 20 || n.is_multiple_of(50) || settled != Some(cursor) {
+        let count = unsafe { *((list + GRID_CONTROL_ITEM_COUNT_OFFSET) as *const i32) };
+        append_autoload_debug(format_args!(
+            "save-picker: selection chrome re-asserted #{n} reason={reason} cursor={cursor} settled={settled:?} count={count}"
+        ));
+    }
+}
+
 unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) -> bool {
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         return false;
@@ -1405,6 +1513,8 @@ unsafe fn save_picker_rebuild_profile_dialog_now(dialog: usize, reason: &str) ->
         append_autoload_debug(format_args!(
             "save-picker: menu-pump in-place list rebuild dialog=0x{dialog:x} reason={reason} via 0x{rebuild_addr:x}"
         ));
+        SAVE_PICKER_CHROME_DIRTY_TICKS.store(SAVE_PICKER_CHROME_DIRTY_TICK_COUNT, Ordering::SeqCst);
+        unsafe { save_picker_reassert_selection_chrome(dialog, reason) };
         true
     } else {
         SAVE_PICKER_REOPEN_PENDING.store(1, Ordering::SeqCst);
@@ -1778,8 +1888,9 @@ pub unsafe fn save_picker_menu_pump_drive_strip_mouse() {
         let _ = take_nav_edges_for(SAVE_PICKER_NAV_ALL_MASK);
         return;
     }
-    if let Some(install) = hooks().ensure_nav_input_hooks {
-        install();
+    match hooks().ensure_nav_input_hooks {
+        Some(install) => install(),
+        None => crate::save_picker_native_nav::ensure_nav_reader(),
     }
     install_save_picker_set_cursor_hook();
     install_save_picker_wheel_delta_hook();
@@ -2068,13 +2179,61 @@ pub unsafe fn save_picker_menu_pump_native_scrollbar() {
     let set_position: unsafe extern "system" fn(usize, i32) =
         unsafe { std::mem::transmute(set_position_addr) };
 
+    // Give the control the picker's page size before the total, because both setters clamp the
+    // position into `[0, total - page]` and the page is the half nobody was writing.
+    //
+    // `ProfileSelect` builds this scrollbar for a ten-row character list, so the page it was left
+    // holding describes those ten rows and not the picker's window, which is 10 minus the drive,
+    // `[ new ]` and parent rows -- 7 or 8 in every directory run br-20260912-212001-9610 visited.
+    // With a stale page the clamp is tighter than the model: a 32-entry listing scrolls to offset
+    // 25 while the control refuses anything past `32 - 10`, so the thumb stops three rows short of
+    // the bottom and then disagrees with the rows on screen. It never showed, because the offset
+    // this pump sends was 0 in every frame of every run until the wheel was given an owner.
+    //
+    // Read before write: the previous value is worth one log line, since nothing in this workspace
+    // has ever recorded what the movie leaves here.
+    let native_page = unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_PAGE_OFFSET) };
+    let model_page = page.min(i32::MAX as usize) as i32;
+    if native_page.is_some_and(|native| native != model_page) {
+        // A plain field store: the setters next to it are the ones that reach a Scaleform component
+        // through the proxy guarded above, and this field has no setter of its own. `set_total`
+        // below re-clamps and refreshes from it.
+        unsafe { *((scrollbar + SCROLLBAR_CONTROL_PAGE_OFFSET) as *mut i32) = model_page };
+    }
     unsafe { set_total(scrollbar, total.min(i32::MAX as usize) as i32) };
-    unsafe { set_position(scrollbar, current.min(i32::MAX as usize) as i32) };
+    // Draw the thumb, then give the grid its view origin back.
+    //
+    // `scrollbar + 0x1a0` and `grid + 0x348` are one field -- the control is embedded at
+    // `grid + 0x1a8` -- and the grid reads it as the view row base: which item sits in the top
+    // visible cell. The picker's ten staged records are the whole of that list, so the only base
+    // the grid can lay itself out at is 0; parking the model's scroll offset there told it the top
+    // rows had scrolled off, and the header row went with them. It did not come back on the way
+    // up because `FUN_14074db60` only redraws the thumb -- the cells are re-laid out by the grid's
+    // own scroll path, which nothing here calls.
+    //
+    // So the field carries the position exactly as long as the setter needs it: the previous
+    // position goes in first so `FUN_14074db60`'s change test passes and `FUN_14074dcc0` moves the
+    // thumb, and zero goes back in immediately afterwards. Both writes are to the raw field, which
+    // is the same thing the page store above does and for the same reason -- the setter owns the
+    // visual, and this owns the geometry the setter has no opinion about.
+    let wanted = current.min(i32::MAX as usize) as i32;
+    let previous = SAVE_PICKER_SCROLLBAR_LAST_POSITION.swap(current, Ordering::SeqCst);
+    let applied_position = if previous == current {
+        Some(wanted)
+    } else {
+        let previous = i32::try_from(previous).unwrap_or(0);
+        unsafe { *((scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) as *mut i32) = previous };
+        unsafe { set_position(scrollbar, wanted) };
+        unsafe { safe_read_i32(scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) }
+    };
+    unsafe { *((scrollbar + SCROLLBAR_CONTROL_POSITION_OFFSET) as *mut i32) = 0 };
 
     let packed = save_picker_scrollbar_packed_state(current, page, total);
     if SAVE_PICKER_SCROLLBAR_LAST_SYNC.swap(packed, Ordering::SeqCst) != packed {
+        // `applied` against `current` is the scoreable part: they diverge exactly when the control
+        // clamped the offset the model asked for, which is the thumb and the rows disagreeing.
         append_autoload_debug(format_args!(
-            "save-picker: native scrollbar sync current={current} page={page} total={total} scrollbar=0x{scrollbar:x}"
+            "save-picker: native scrollbar sync current={current} page={page} total={total} native_page_was={native_page:?} applied_position={applied_position:?} scrollbar=0x{scrollbar:x}"
         ));
     }
 }
@@ -2101,12 +2260,29 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     let wheel_up_mask = SAVE_PICKER_NAV_WHEEL_UP_MASK;
     let wheel_down_mask = SAVE_PICKER_NAV_WHEEL_DOWN_MASK;
     let nav_edges = take_nav_edges_for(up_mask | down_mask | wheel_up_mask | wheel_down_mask);
-    let wheel_down = nav_edges & wheel_down_mask != 0;
-    let wheel_up = nav_edges & wheel_up_mask != 0;
-    let held = hooks().nav_held.map_or(0, |held| held());
+    // The wheel has one owner per tick, chosen by which sources exist rather than by timing.
+    //
+    // `save_picker_wheel_delta_hook` latches the game's own notch and works in every host; the
+    // host's `take_nav_edges_for` reads the raw input device and exists only where a product
+    // installed it. A standalone shell has only the first, which is the whole of the dead wheel in
+    // run br-20260912-212001-9610 -- 20 notches silenced, none delivered, `scroll_offset` pinned at
+    // 0 for all 50 selection moves. Preferring the native latch and consulting the host's only when
+    // the detour is absent keeps a product tick from acting on both reads of one detent, which is
+    // the double scroll the detour's own doc comment was written to end.
+    let wheel_edges = if save_picker_native_wheel_latch_live() {
+        save_picker_take_native_wheel_edges()
+    } else {
+        nav_edges & (wheel_up_mask | wheel_down_mask)
+    };
+    let wheel_down = wheel_edges & wheel_down_mask != 0;
+    let wheel_up = wheel_edges & wheel_up_mask != 0;
+    let held = hooks()
+        .nav_held
+        .map_or_else(crate::save_picker_native_nav::nav_held, |held| held());
     let dialog = save_picker_live_profile_dialog();
     if dialog == 0 || SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
         SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(EDGE_SCROLL_NO_PREV_CURSOR, Ordering::SeqCst);
+        save_picker_clear_native_wheel_edges();
         return;
     }
     let Ok(_base) = game_module_base() else {
@@ -2125,6 +2301,17 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     };
     let cursor = unsafe { cursor_getter(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
     unsafe { save_picker_log_grid_geometry_once(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET) };
+    // Pay off whatever the last rebuild owes. Selecting the row the grid is already on moves
+    // nothing and cannot fight a hover; it only re-applies the cell chrome onto cells that have
+    // finished being rebuilt.
+    if SAVE_PICKER_CHROME_DIRTY_TICKS
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| {
+            owed.checked_sub(1)
+        })
+        .is_ok()
+    {
+        unsafe { save_picker_reassert_selection_chrome(dialog, "post-rebuild-tick") };
+    }
     // Remember where the selection was before this tick's key was read. The native list moves and
     // wraps its own cursor the moment it sees the press, so by the time this pump runs the sampled
     // row is already the wrap destination -- at the bottom row a down press reads back as the
@@ -2133,7 +2320,7 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
         Ordering::SeqCst,
     );
-    let (last_visible_row, first_content_row, at_scroll_top, at_scroll_bottom) = {
+    let (last_visible_row, first_content_row) = {
         let guard = er_save_picker_core::model::active_save_picker_lock();
         let Some(model) = guard.as_ref() else {
             return;
@@ -2141,44 +2328,20 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         (
             model.visible_row_count().saturating_sub(1),
             model.entry_row_base(),
-            model.scroll_offset() == 0,
-            model.scroll_offset() >= model.scroll_max(),
         )
     };
     let edge_down = nav_edges & down_mask != 0;
     let edge_up = nav_edges & up_mask != 0;
-    unsafe {
-        save_picker_learn_vertical_menu_event_ids(
-            edge_down || held & down_mask != 0,
-            edge_up || held & up_mask != 0,
-        )
-    };
-    // Suppress at a hard limit, every tick rather than only when an edge was latched. The listing
-    // has nothing further that way, so the native list must not move at all -- not move-and-be-
-    // corrected, which is the same pixels animating for a change that never happens. Checked from
-    // the cursor's current row so the very first press is caught, not just the repeats after it.
-    let blocked = if cursor >= 0 && usize::try_from(cursor).is_ok_and(|c| c >= last_visible_row) {
-        at_scroll_bottom.then_some(true)
-    } else if cursor == 0 {
-        at_scroll_top.then_some(false)
-    } else {
-        None
-    };
-    if let Some(blocked_down) = blocked
-        && unsafe { save_picker_clear_vertical_menu_event(blocked_down) }
-    {
-        let n = SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS.fetch_add(1, Ordering::SeqCst) + 1;
-        if n == 1 || n.is_multiple_of(50) {
-            append_autoload_debug(format_args!(
-                "save-picker: suppressed vertical menu event #{n} at listing limit down={blocked_down} cursor={cursor} last_visible_row={last_visible_row}"
-            ));
-        }
-        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
-            usize::try_from(cursor).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
-            Ordering::SeqCst,
-        );
-        return;
-    }
+    // A hard limit at the end of a listing used to be enforced by clearing a byte in
+    // `CSMenuManImp+0x90`, on the belief that it was a keystate bitmap. It is not: it records which
+    // menu windows are shown this frame, indexed by menu window id, and the writer that proves it is
+    // `CS::MenuWindowJob::Run` itself (`GLOBAL_CSMenuMan->field99_0x90[window->id] |= 1`). So every
+    // suppression told the game one of its menus had stopped being on screen -- once per tick for as
+    // long as a direction was held at the end of a listing, which is exactly when a player leans on
+    // the key. That is gone and nothing replaces it, including the two scroll-limit flags that fed
+    // it: the wrap detection below already turns the native list's own wrap into a window step,
+    // which is the right place for this and does not write to the engine at all. See bd
+    // `inputmgr-90-is-a-shown-menu-window-id-bitmap-not-keystate-2026-09-05`.
     // Native selection MOVE: the cursor changed with no latched input of ours behind it. Named for
     // what it measures rather than a guessed cause -- reading it as "the pointer" is how a wheel
     // detent's native step got mistaken for mouse movement, and a duplicate step shipped on top of
@@ -2284,13 +2447,36 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     let Some(model_row) = save_picker_model_row_from_native_cursor(press_row) else {
         return;
     };
-    let outcome = {
+    let (outcome, scroll_before) = {
         let mut guard = er_save_picker_core::model::active_save_picker_lock();
         let Some(model) = guard.as_mut() else {
             return;
         };
-        model.scroll_window_from_edge_press(model_row, down)
+        let before = (model.scroll_offset(), model.scroll_max());
+        (model.scroll_window_from_edge_press(model_row, down), before)
     };
+    // Scored from the log rather than from the screen: this is the one line that fires for a
+    // consumed wheel detent, and it carries the window offset the detent acted on. Two of them with
+    // the same `scroll` and a rising `model_row` is the selection walking the window; a rising
+    // `scroll` is the window itself sliding. A detent that reaches nothing prints no line at all,
+    // which is what every wheel notch in run br-20260912-212001-9610 did.
+    //
+    // Logged outside the lock, as every other line in this pump is: the sink is a file write on the
+    // menu thread, and the model has no reason to be held across it.
+    if wheel_only {
+        let n = SAVE_PICKER_WHEEL_EDGES_CONSUMED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 40 || n.is_multiple_of(25) {
+            let (offset, max) = scroll_before;
+            append_autoload_debug(format_args!(
+                "save-picker: wheel edge #{n} down={down} source={} cursor={cursor} model_row={model_row} scroll={offset}/{max} last_visible_row={last_visible_row}",
+                if save_picker_native_wheel_latch_live() {
+                    "native-notch"
+                } else {
+                    "host-latch"
+                }
+            ));
+        }
+    }
     let Some(outcome) = outcome else {
         // Away from an edge there is normally no window work and no cursor work: the native list
         // moves its own selection for a key, a pad direction and a wheel detent.
@@ -2329,32 +2515,24 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
         return;
     };
     let pinned_row = outcome.pin_row();
-    // Hold the native selection on the row the press acted from. The list cursor is a plain field
-    // (`FUN_140739e20` is just `*(u32 *)(list + 0xd4)`), and the game's own GridControl mouse hit
-    // writes it directly, so a write is the native mechanism rather than a poke around one. Without
-    // this the selection leaves the edge after each press and the window stops advancing -- and at a
-    // hard limit the native list has already wrapped the cursor to the far end of the listing, so
-    // the same write is what keeps the selection from teleporting there.
+    // Hold the native selection on the row the press acted from. Without it the selection leaves
+    // the edge after each press and the window stops advancing -- and at a hard limit the native
+    // list has already wrapped the cursor to the far end of the listing, so this is also what keeps
+    // the selection from teleporting there.
+    //
+    // Through the list's own select (`save_picker_select_native_row`), never by writing `+0xd4`.
+    // The field write moved the index and left the highlight behind, which is the scroll that moves
+    // every row while the focus stays invisible -- the same defect the wheel step was fixed for on
+    // 2026-08-12, still live on this path until 2026-09-12. The select also stores the edge sample
+    // the next tick judges its press against, so the wrap destination this overrode cannot be read
+    // back as a row the selection occupied.
     //
     // A wheel step is exempt: it never moved the native cursor, so there is nothing to hold, and
-    // writing anyway drags the selection off whatever row the pointer is over -- the mouse and the
-    // wheel fighting each other for the same field, which reads as mouse row navigation being
-    // broken.
+    // selecting anyway drags the highlight off whatever row the pointer is over -- the mouse and
+    // the wheel fighting over one selection, which reads as mouse row navigation being broken.
     let native_pin = (!wheel_only)
-        .then(|| i32::try_from(pinned_row).ok())
-        .flatten()
-        .and_then(|row| row.checked_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET));
-    if let Some(native_pin) = native_pin {
-        unsafe {
-            *((dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET + MENU_ITEM_LIST_CURSOR_FIELD_OFFSET)
-                as *mut i32) = native_pin;
-        }
-        // The sample stored at the top of this function is where the native list put the cursor,
-        // which is the wrap destination we just overrode. Held keys repeat on consecutive ticks, so
-        // leaving that stale value here would make the next press judge its edge from a row the
-        // selection never visibly occupied.
-        SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(pinned_row, Ordering::SeqCst);
-    }
+        .then(|| unsafe { save_picker_select_native_row(dialog, pinned_row, "edge-scroll-pin") })
+        .flatten();
     if !outcome.scrolled() {
         append_autoload_debug(format_args!(
             "save-picker: edge-press held at listing limit down={down} press_row={press_row} model_row={model_row} wrap_target={cursor} pinned_native_row={native_pin:?}"
@@ -2444,355 +2622,10 @@ pub unsafe fn save_picker_menu_pump_resubmit() -> bool {
     false
 }
 
-/// Escape text for the Scaleform-HTML SetText path (the `ErStats` row fields parse with bHTML=1,
-/// so a character/file name containing `&`, `<` or `>` must not be interpreted as markup).
-pub fn save_picker_html_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
-/// One dim Scaleform-HTML line for the browse rows' `ErStats` fields (same size/color language as
-/// the stats panel's attribute lines), NUL-terminated UTF-16 for the native SetText wrapper. An
-/// empty `text` yields a bare NUL so the field renders blank.
-pub fn save_picker_browse_html_utf16(text: &str) -> Vec<u16> {
-    save_picker_browse_html_utf16_color(text, "#8f887a")
-}
-
-pub fn save_picker_error_html_utf16(text: &str) -> Vec<u16> {
-    save_picker_browse_html_utf16_color(text, "#d8a052")
-}
-
-pub fn save_picker_browse_html_utf16_color(text: &str, color: &str) -> Vec<u16> {
-    // Match the native ProfileSelect filename/timestamp fields; the asset gives ErStats a native-height box.
-    save_picker_html_utf16_color_size(text, color, 24)
-}
-
-fn save_picker_html_utf16_color_size(text: &str, color: &str, font_height: i32) -> Vec<u16> {
-    if text.is_empty() {
-        return vec![0];
-    }
-    let mut s = String::from("<p align=\"left\"><font size=\"");
-    s.push_str(&font_height.to_string());
-    s.push_str("\" color=\"");
-    s.push_str(color);
-    s.push_str("\">");
-    s.push_str(&save_picker_html_escape(text));
-    s.push_str("</font></p>");
-    s.encode_utf16().chain(core::iter::once(0)).collect()
-}
-
-pub fn save_picker_set_visible_status(message: er_save_picker_core::PickerStatusMessage) {
-    if let Some(model) = er_save_picker_core::model::active_save_picker_lock().as_mut() {
-        model.set_status_message(message);
-    }
-}
-
-/// Character budget for the per-file character list fragment. This text is merged onto the single
-/// inline `ErStats` row field beside the filename and timestamp, so it must stay short enough to read
-/// as row detail instead of a wrapped second line.
-pub const SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET: usize = 34;
-
-/// Font height for one synthetic ProfileSelect field.
-///
-/// A host that ships the live-layout editor answers with whatever is authored right now. A host
-/// that does not -- every standalone shell, and every unit test -- gets the shipped schema, which
-/// is the same number `crates/er-gfx/profile_05_010_layout.toml` builds the GFX box from. The
-/// absent hook must not answer 0: `size="0"` renders the drive strip and the path control
-/// invisible, so a shell that installs no hooks would browse with unreadable chrome.
-fn profile_editor_field_font_height(field_name: &str) -> i32 {
-    match hooks().profile_editor_field_font_height {
-        Some(height) => height(field_name),
-        None => {
-            er_gfx::profile_05_010_layout::shipped()
-                .field(field_name)
-                .font_height
-        }
-    }
-}
-
-pub fn save_picker_drive_cell_html_utf16(text: &str) -> Vec<u16> {
-    // The button frame already supplies the visual boundary. Keep the model's `>C:<` / `[S:]`
-    // wrappers for the boot overlay and selection semantics, but do not render that punctuation
-    // inside the compact native button -- it clips before the drive letter does.
-    let (selected, display) = if let Some(inner) = text
-        .strip_prefix('>')
-        .and_then(|inner| inner.strip_suffix('<'))
-    {
-        (true, inner)
-    } else if let Some(inner) = text
-        .strip_prefix('[')
-        .and_then(|inner| inner.strip_suffix(']'))
-    {
-        (false, inner)
-    } else {
-        (false, text)
-    };
-    let color = if selected { "#d8a052" } else { "#8f887a" };
-    let font_height = profile_editor_field_font_height("DriveCell_0");
-    save_picker_html_utf16_color_size(display, color, font_height)
-}
-
-/// CurrentPath control colours: the parchment tone the rest of the picker chrome uses, and the
-/// warning gold reserved for an entry the picker refused.
-const SAVE_PICKER_PATH_NORMAL_COLOR: &str = "#b8b1a2";
-const SAVE_PICKER_PATH_INVALID_COLOR: &str = "#e8c34a";
-
-pub fn save_picker_current_path_text(row: usize) -> Option<Vec<u16>> {
-    if save_picker_path_editor_active() {
-        return Some(vec![0]);
-    }
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
-        return None;
-    }
-    let guard = er_save_picker_core::model::active_save_picker_lock();
-    let model = guard.as_ref()?;
-    if model.drive_row() != Some(row) {
-        return Some(vec![0]);
-    }
-    // A rejected entry outranks the real folder: the user sees exactly what they typed, marked
-    // invalid, until they correct it (any successful commit or navigation refreshes the listing,
-    // which drops the rejected text and returns this control to the normal colour).
-    let (text, color) = match model.rejected_path_text() {
-        Some(rejected) => (rejected, SAVE_PICKER_PATH_INVALID_COLOR),
-        None => (model.current_dir().to_str()?, SAVE_PICKER_PATH_NORMAL_COLOR),
-    };
-    let escaped = save_picker_html_escape(text);
-    let font_height = profile_editor_field_font_height("CurrentPath");
-    let html = format!(
-        "<p align=\"left\"><font size=\"{font_height}\" color=\"{color}\">{escaped}</font></p>"
-    );
-    Some(html.encode_utf16().chain(core::iter::once(0)).collect())
-}
-
-pub fn save_picker_drive_cell_text(row: usize, cell: usize) -> Option<Vec<u16>> {
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
-        return None;
-    }
-    let guard = er_save_picker_core::model::active_save_picker_lock();
-    let model = guard.as_ref()?;
-    let text = model.drive_row_cell_label(row, cell).unwrap_or_default();
-    Some(save_picker_drive_cell_html_utf16(&text))
-}
-
-/// The `ErStats` fragments for ProfileSelect row `row` while the browse picker owns the window.
-/// The row-populate hook merges the two fragments into one inline field: file rows show active-slot
-/// count plus character names/levels beside `ER0000.sl2`, while navigation/status rows show their
-/// auxiliary copy beside the row label. Empty rows get blank fragments so neither leftover row text
-/// nor per-slot attribute stats render as junk there. `None` when the picker does not own the rows
-/// (the normal character-slot view keeps the attribute stats panel).
-pub fn save_picker_browse_stats_lines(row: usize) -> Option<(Vec<u16>, Vec<u16>)> {
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
-        return None;
-    }
-    let guard = er_save_picker_core::model::active_save_picker_lock();
-    let model = guard.as_ref()?;
-    let status_row = model.status_message().is_some() && row == 0;
-    if let Some((top, bottom)) = model.row_auxiliary_lines(row) {
-        if status_row {
-            return Some((
-                save_picker_error_html_utf16(&top),
-                save_picker_error_html_utf16(&bottom),
-            ));
-        }
-        return Some((
-            save_picker_browse_html_utf16(&top),
-            save_picker_browse_html_utf16(&bottom),
-        ));
-    }
-    let is_current = model.row_is_loaded_save(row);
-    let Some(chars) = model.row_file_characters(row) else {
-        // Empty row: blank the injected stats field so no per-slot attribute stats render as junk.
-        return Some((vec![0], vec![0]));
-    };
-    let count = if chars.len() == 1 {
-        "1 CHAR".to_owned()
-    } else {
-        format!("{} CHAR", chars.len())
-    };
-    let top = if is_current {
-        format!("* {count}")
-    } else {
-        count
-    };
-    let mut bottom = String::new();
-    let mut shown = 0usize;
-    for info in chars {
-        let seg = format!("{} L{}", info.name, info.level);
-        let sep = if bottom.is_empty() { "" } else { " / " };
-        if !bottom.is_empty()
-            && bottom.chars().count() + sep.chars().count() + seg.chars().count()
-                > SAVE_PICKER_BROWSE_LINE_CHAR_BUDGET
-        {
-            break;
-        }
-        bottom.push_str(sep);
-        bottom.push_str(&seg);
-        shown += 1;
-    }
-    if shown < chars.len() {
-        bottom.push_str(&format!(" +{}", chars.len() - shown));
-    }
-    Some((
-        save_picker_browse_html_utf16(&top),
-        save_picker_browse_html_utf16(&bottom),
-    ))
-}
-
-/// What a picker-owned row does with every optional ProfileSelect field family.
-///
-/// The `Level` caption/value and bottom `PlayTime` are hidden for every picker row. The remaining
-/// fields are row-kind-specific: a save-file row can stage its timestamp into top-right `Location`,
-/// metadata rows own `ErStats`, and only the drive-cycle row owns populated `DriveCell_0..25` cells.
-pub struct RowSlotInfo {
-    /// Replacement text for the `Location` field (when the file was last written), or `None` to hide
-    /// the field -- which is what every non-file row gets, and what a file whose timestamp is
-    /// unreadable gets rather than a fabricated date.
-    pub location: Option<String>,
-    /// Whether this row has real `ErStats` copy. False on the drive row unless a visible status
-    /// message temporarily owns it, so stale parent-folder copy cannot survive row-clip reuse.
-    pub er_stats: bool,
-    /// Number of populated drive-strip cells on this row. Zero outside the drive row and while a
-    /// visible status message temporarily owns its field band.
-    pub drive_cell_count: usize,
-    /// Focus target whose geometry the row's native animated Cursor must follow.
-    pub drive_strip_focus: Option<er_save_picker_core::DriveStripFocus>,
-}
-
-/// What the browse picker wants done with ProfileSelect row `row`'s per-slot info fields.
-///
-/// `None` when the picker does not own the rows. That is the load-bearing half of the scope: the
-/// vanilla character-slot views, the title-screen Load Game list first among them, render from the
-/// game's own records and must be left exactly as the game draws them. Same ownership gate as
-/// [`save_picker_browse_stats_lines`], so the two cannot disagree about who owns a row.
-pub fn save_picker_row_slot_info(row: usize) -> Option<RowSlotInfo> {
-    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 && !missing_save_selection_pending() {
-        return None;
-    }
-    let (last_saved, er_stats, drive_cell_count, drive_strip_focus) = {
-        let guard = er_save_picker_core::model::active_save_picker_lock();
-        let model = guard.as_ref()?;
-        let has_auxiliary_lines = model.row_auxiliary_lines(row).is_some();
-        let drive_cell_count = if model.drive_row() == Some(row) && !has_auxiliary_lines {
-            model.drive_strip_cell_count()
-        } else {
-            0
-        };
-        let drive_strip_focus = (drive_cell_count > 0)
-            .then(|| model.drive_strip_focus())
-            .flatten();
-        (
-            model.row_last_saved(row),
-            has_auxiliary_lines || model.row_file_characters(row).is_some(),
-            drive_cell_count,
-            drive_strip_focus,
-        )
-    };
-    Some(RowSlotInfo {
-        location: last_saved.and_then(save_picker_last_saved_text),
-        er_stats,
-        drive_cell_count,
-        drive_strip_focus,
-    })
-}
-
-/// Render one file's modification time as the row's last-saved text, in local time.
-/// `None` when the stamp predates the epoch or the OS cannot give a local offset for it -- the row
-/// then hides the field rather than showing a date we cannot stand behind.
-pub fn save_picker_last_saved_text(modified: std::time::SystemTime) -> Option<String> {
-    let secs = modified
-        .duration_since(std::time::SystemTime::UNIX_EPOCH)
-        .ok()?
-        .as_secs();
-    let secs = i64::try_from(secs).ok()?;
-    er_save_picker_core::model::format_last_saved(secs, unsafe { local_utc_offset_seconds(secs) }?)
-}
-
-/// The local zone's offset from UTC at the instant `utc_secs`, in seconds.
-///
-/// Asks Windows rather than assuming, and asks about that instant rather than about now:
-/// `SystemTimeToTzSpecificLocalTime` applies the zone's DST rules for the given date, so a save
-/// written on the other side of a DST boundary still renders the wall-clock time it was written at.
-/// (Comparing `GetLocalTime` to `GetSystemTime` would give only the current offset and misdate every
-/// file from the other side of the boundary by an hour.) The offset comes back as a number, which is
-/// all the pure formatter needs -- that is what keeps the rendering unit-testable.
-/// # Safety
-///
-/// Calls the Win32 time-zone API, which has no precondition beyond being on Windows. It is `unsafe`
-/// because that call is, not because a caller can get it wrong.
-pub unsafe fn local_utc_offset_seconds(utc_secs: i64) -> Option<i64> {
-    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
-    use windows::Win32::System::Time::{
-        FileTimeToSystemTime, SystemTimeToFileTime, SystemTimeToTzSpecificLocalTime,
-    };
-
-    /// 100ns ticks per second, and the seconds between the FILETIME (1601) and Unix (1970) epochs.
-    const TICKS_PER_SECOND: i64 = 10_000_000;
-    const FILETIME_EPOCH_TO_UNIX_SECONDS: i64 = 11_644_473_600;
-
-    fn to_filetime(secs: i64) -> Option<FILETIME> {
-        let ticks = secs
-            .checked_add(FILETIME_EPOCH_TO_UNIX_SECONDS)?
-            .checked_mul(TICKS_PER_SECOND)
-            .and_then(|t| u64::try_from(t).ok())?;
-        Some(FILETIME {
-            dwLowDateTime: ticks as u32,
-            dwHighDateTime: (ticks >> 32) as u32,
-        })
-    }
-
-    let utc_ft = to_filetime(utc_secs)?;
-    let mut utc_st = SYSTEMTIME::default();
-    unsafe { FileTimeToSystemTime(&utc_ft, &mut utc_st) }.ok()?;
-    let mut local_st = SYSTEMTIME::default();
-    unsafe { SystemTimeToTzSpecificLocalTime(None, &utc_st, &mut local_st) }.ok()?;
-    // Reading the local wall clock back as if it were UTC turns it into "unix seconds shifted by the
-    // offset", so the difference is the offset the zone applied at that instant.
-    let mut local_ft = FILETIME::default();
-    unsafe { SystemTimeToFileTime(&local_st, &mut local_ft) }.ok()?;
-    let local_ticks =
-        (u64::from(local_ft.dwHighDateTime) << 32) | u64::from(local_ft.dwLowDateTime);
-    let local_secs =
-        i64::try_from(local_ticks / TICKS_PER_SECOND as u64).ok()? - FILETIME_EPOCH_TO_UNIX_SECONDS;
-    Some(local_secs - utc_secs)
-}
-
-#[cfg(test)]
-mod save_picker_row_slot_info_tests {
-    use super::*;
-    use std::sync::atomic::Ordering;
-
-    /// Scope proof for the row Level/PlayTime rework: with no picker owning the rows -- the state
-    /// the vanilla character-slot views run in, the title-screen Load Game list among them -- the
-    /// gate answers `None` for every row, and `None` is the only answer the populate hook treats as
-    /// "leave this row exactly as the game drew it". A regression that made the suppression or the
-    /// last-saved text global would have to make this return `Some` here first.
-    #[test]
-    fn no_picker_means_no_row_is_ever_classified() {
-        assert_eq!(
-            SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst),
-            0,
-            "no picker session may be active in a unit test"
-        );
-        for row in 0..er_save_picker_core::model::PICKER_ROW_COUNT {
-            assert!(
-                save_picker_row_slot_info(row).is_none(),
-                "row {row} was classified without a picker owning the rows"
-            );
-            assert!(
-                save_picker_browse_stats_lines(row).is_none(),
-                "row {row} got browse stats without a picker owning the rows"
-            );
-        }
-    }
-}
+/// What the picker SAYS: row text, drive-cell labels, the status line, and the Scaleform-HTML
+/// wrapper each is rendered through.
+mod text;
+pub use text::*;
 
 /// Entry hook on the native ProfileSelect item-list builder (`PROFILE_SELECT_LIST_BUILDER_RVA`,
 /// FUN_140875590): while the browse picker owns the `05_010` rows, RE-stage the browse-row records
@@ -2969,4 +2802,180 @@ pub fn save_picker_title_start_dir() -> PathBuf {
         }
     }
     PathBuf::from("Z:\\")
+}
+
+/// Everything the Save Game destination browser needs from the game's menu pump, per pass.
+///
+/// The press itself only stages a request: `save_game_start_flow` sets
+/// `SAVE_DEST_OPEN_PICKER_PENDING` and parks in the browse stage, because opening the browser
+/// records and submits a `MenuJob`, which is menu-pump work and not game-task work. Something has
+/// to run in the pump and discharge that request, and until 2026-09-12 the only caller lived inside
+/// the product's `quit-rows` module. With that feature off the press staged a request nobody
+/// consumed: run br-20260912-190345-54bb logged `row press #1 ... opening the destination list`
+/// and then, 3.6 seconds later, `destination browser never opened after 180 ticks -- ending the
+/// flow, the user's save did not happen`. The button looked like a no-op.
+///
+/// The chrome it drives already lived here, beside `Load Character from File`'s own browser, which
+/// is why this entry point belongs here too rather than in a host: any host with a menu pump can
+/// call it, and the Save Game row then behaves the same in every one of them.
+///
+/// What clears the latch is that a picker ran, not that one is up. Re-arming on a picker that came
+/// back empty re-asks a question the user just declined -- with the operating system surface that
+/// reopened the dialog about 57 ms after every cancel, forever (bd `er-effects-rs-rsxi`).
+///
+/// # Safety
+///
+/// Menu-pump context: a `MenuWindowJob::Run` pass, which is the submit context every step below
+/// requires.
+pub unsafe fn save_flow_menu_pump() {
+    if er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
+        let system_dialog = er_telemetry_core::counters::SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
+        // Once, on the first pass that sees a staged request: the pump reached the open call with
+        // a dialog to open it over. Without it, a press that stages and then goes quiet cannot be
+        // told from a pump that stopped being called between the press and the next frame.
+        if SAVE_FLOW_PUMP_SAW_REQUEST.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: the menu pump has a staged open request; opening over System dialog=0x{system_dialog:x}"
+            ));
+        }
+        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
+            er_telemetry_core::counters::SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
+        } else {
+            // The one path that legitimately re-arms: a submit the dialog's job queue deferred.
+            // Counted so a run can tell that apart from the reopen loop, which must stay at zero.
+            er_telemetry_core::counters::SAVE_DEST_PICKER_OPEN_RETRY_COUNT
+                .fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    // Menu-pump-owned confirm-box submit. The game-task tick decides which box comes next and
+    // stages its id, because building and submitting a `MenuJob` is menu-pump work; this is the
+    // game's own menu pump executing a `MenuWindowJob`, which is that context. A failed submit
+    // leaves the latch set so the next pump retries -- the usual cause is the dialog's job queue
+    // still owning the previous box's job.
+    //
+    // It used to live in the product's own pump handler and nowhere else, so a standalone shell
+    // staged the overwrite confirm and nothing ever submitted it: run br-20260913-002757-9317 shows
+    // `overwrite-file-confirm BUILD TIMEOUT after 180 ticks (submit_pending=1)` on every attempt to
+    // overwrite an existing destination, with nothing written.
+    let pending_box = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
+    if pending_box != SAVE_FLOW_BOX_NONE
+        && unsafe { crate::save_flow_boxes::save_flow_submit_box(pending_box) }
+    {
+        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
+    }
+    unsafe { crate::software_keyboard::save_picker_menu_pump_path_editor() };
+    unsafe { save_picker_menu_pump_drive_strip_mouse() };
+    unsafe { save_picker_menu_pump_native_scrollbar() };
+    unsafe { save_picker_menu_pump_edge_scroll() };
+    unsafe { save_picker_menu_pump_rebuild() };
+    if save_picker_resubmit_pending() {
+        let _ = unsafe { save_picker_menu_pump_resubmit() };
+    }
+}
+
+/// One-shot latch for the staged-request line in [`save_flow_menu_pump`].
+static SAVE_FLOW_PUMP_SAW_REQUEST: AtomicUsize = AtomicUsize::new(0);
+
+// ---- the picker's own row activation, for a host with no repro detour --------------------------
+
+/// `CS::ProfileLoadDialog`'s slot-activation entry, read from the crate that declares it.
+const PROFILE_LOAD_ACTIVATE_RVA: u32 = er_title_flow::PROFILE_LOAD_ACTIVATE_RVA as u32;
+
+static PICKER_ACTIVATE_ORIG: AtomicUsize = AtomicUsize::new(0);
+static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
+
+/// Route a slot activation on our own browser to the browse handler instead of the game's load.
+///
+/// While the live `05_010` window is this crate's directory browser, every slot activation is a
+/// browse action -- up, switch drive, enter a directory, page, pick a file -- and never a character
+/// load. Forwarding it runs vanilla's OK handler, which asks **Start with selected profile**: on run
+/// br-20260912-203044-5fbd clicking a folder row raised exactly that confirm, because the only
+/// interception in the tree lives in `er-quickload`'s `system_quit_ownership_repro.rs` and a shell
+/// installs none of it.
+///
+/// Only the picker branch is here. Everything else -- the character-load arm, its flow gates, the
+/// diagnostics -- stays in the product, and this handler forwards those calls untouched, so a
+/// process carrying both keeps the product's behaviour.
+///
+/// # Safety
+///
+/// Installed by `er-hook`; the game calls it on its menu thread with a live `ProfileLoadDialog`.
+unsafe extern "system" fn picker_profile_load_activate_hook(
+    dialog: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = PICKER_ACTIVATE_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // Safety: the union publishes either the game trampoline or the next handler in the chain.
+    let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
+        unsafe { std::mem::transmute(orig) };
+    if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return unsafe { original(dialog, b, c, d) };
+    }
+    // Identity, not just the mode latch: `PROFILE_LOAD_DIALOG_VTABLE_RVA` moved on 1.17, and a
+    // stale address once made this comparison fail for every dialog, so every activation fell
+    // through to the native load with nothing in the log to say why.
+    let Ok(base) = game_module_base() else {
+        return unsafe { original(dialog, b, c, d) };
+    };
+    let vt = unsafe { safe_read_usize(dialog) }.unwrap_or(0);
+    let expected = er_game_base::mem::game_data_addr(
+        base,
+        er_title_flow::PROFILE_LOAD_DIALOG_VTABLE_RVA,
+        "PROFILE_LOAD_DIALOG_VTABLE_RVA",
+    );
+    if vt != expected {
+        return unsafe { original(dialog, b, c, d) };
+    }
+    let cursor = unsafe { safe_read_i32(dialog + er_title_flow::DIALOG_SLOT_CURSOR_B0C_OFFSET) }
+        .unwrap_or(-1);
+    unsafe { save_picker_handle_activation(dialog, cursor) }
+}
+
+/// Claim `ProfileLoadDialog`'s activation for the picker, for a host that has no repro detour.
+///
+/// Chained through the union, so the product's own detour on the same address keeps working beside
+/// it: whichever handler sees a picker-owned dialog first answers it, and every other activation is
+/// forwarded down the chain unchanged.
+pub fn install_picker_profile_load_activate_hook() -> bool {
+    if PICKER_ACTIVATE_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return true;
+    }
+    let Ok(addr) = er_game_base::mem::game_rva_for_hook(PROFILE_LOAD_ACTIVATE_RVA) else {
+        append_autoload_debug(format_args!(
+            "save-picker: failed to resolve the ProfileLoadDialog activation rva 0x{PROFILE_LOAD_ACTIVATE_RVA:x}; a row press will run the game's own load confirm instead of browsing"
+        ));
+        PICKER_ACTIVATE_INSTALLED.store(0, Ordering::SeqCst);
+        return false;
+    };
+    // Safety: the activation's ABI is the union's four-register shape, and `PICKER_ACTIVATE_ORIG`
+    // is the static the handler reads to call through.
+    match unsafe {
+        er_hook::register_union_hook(
+            addr,
+            picker_profile_load_activate_hook,
+            &PICKER_ACTIVATE_ORIG,
+        )
+    } {
+        Ok(()) => {
+            append_autoload_debug(format_args!(
+                "save-picker: registered ProfileLoadDialog activation 0x{addr:x} on the union; a row press on our browser browses instead of loading a character"
+            ));
+            true
+        }
+        Err(status) => {
+            append_autoload_debug(format_args!(
+                "save-picker: register_union_hook ProfileLoadDialog activation failed: {status:?}; a row press will run the game's own load confirm"
+            ));
+            PICKER_ACTIVATE_INSTALLED.store(0, Ordering::SeqCst);
+            false
+        }
+    }
 }

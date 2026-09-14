@@ -856,6 +856,34 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         er_telemetry_core::counters::SAVE_PICKER_DIM_Z_COVERING_DIALOG_FIRST_MS.load(Ordering::SeqCst)
             as isize
     ));
+    // The z-order of the `05_010_ProfileSelect` surface both Load rows open, read from the game's
+    // own per-frame draw bit rather than from whether this DLL called its own hide. `_samples` is
+    // the honest gate: 0 means the menu pump never ran and nothing was measured, which is a
+    // different answer from "the ordering was fine" -- pair it with
+    // `oracle_system_quit_row_resolve_count`, because a run with row presses and zero samples is a
+    // picker that went on screen with no pump behind it (run br-20260913-155423-2fe7:
+    // 13 presses, `oracle_profile_select_window_run_ticks = 0`). With samples present, read them as:
+    //
+    //   `_occluded_frames` > 0 late in a run -- `02_040_OptionSetting` is still drawn over the
+    //       picker, which is the user-reported defect. A small count at the start is the frames
+    //       before the hide fires and is expected.
+    //   `_clear_frames` rising -- the picker is the frontmost of the two, which is the fixed state.
+    //
+    // `_first_occluded_flags` and `_last_flags` are the raw bytes; `-1` means that sample never
+    // happened. A hidden `02_040_OptionSetting` reads 0x1 and a drawn one 0x7. `_top_alive_frames`
+    // is `02_000_IngameTop` only, and is aliveness rather than visibility -- that window reports
+    // `menu_id = 0xffff`, so it has no flag byte and no draw bit to read.
+    body.push_str(&format!(
+        "  \"oracle_profile_select_z_samples\": {},\n  \"oracle_profile_select_z_occluded_frames\": {},\n  \"oracle_profile_select_z_clear_frames\": {},\n  \"oracle_profile_select_z_first_occluded_flags\": {},\n  \"oracle_profile_select_z_last_flags\": {},\n  \"oracle_profile_select_z_last_menu_id\": {},\n  \"oracle_profile_select_z_top_alive_frames\": {},\n",
+        er_telemetry_core::counters::PROFILE_SELECT_Z_SAMPLES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_OCCLUDED_FRAMES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_CLEAR_FRAMES.load(Ordering::SeqCst),
+        er_telemetry_core::counters::PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS.load(Ordering::SeqCst)
+            as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_LAST_FLAGS.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_LAST_MENU_ID.load(Ordering::SeqCst) as isize,
+        er_telemetry_core::counters::PROFILE_SELECT_Z_TOP_ALIVE_FRAMES.load(Ordering::SeqCst)
+    ));
     // Per-slot info fields (Level caption/value, PlayTime) on browse rows with no character. `_hidden`
     // > 0 proves the suppression reached real rows; `_non_display` > 0 or a `_last_datatype` other
     // than 10 says the native visibility setter ignored the field, i.e. the text is still on screen.
@@ -917,6 +945,20 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
     body.push_str(&format!(
         "  \"oracle_autoload_empty_slot_rejections\": {},\n",
         er_telemetry_core::counters::PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS.load(Ordering::SeqCst)
+    ));
+    // Why the picker is up, and whether anyone said. `_reason` is an
+    // `er_save_picker_core::reason::MissingSaveReason` code: eight arming sites used to be
+    // indistinguishable in telemetry, so a probe could see the picker armed and could not tell a
+    // boot with no save on disk from a boot whose load this mod never issued. `_unrecorded` is a
+    // defect count -- the picker replaced the title and no caller claimed it -- and `_repick`
+    // counts the times a save the user chose failed and the picker came back instead of leaving a
+    // dead title.
+    body.push_str(&format!(
+        "  \"oracle_missing_save_reason\": {},\n  \"oracle_missing_save_reason_arms\": {},\n  \"oracle_missing_save_reason_unrecorded\": {},\n  \"oracle_missing_save_repick_count\": {},\n",
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_ARM_REASON.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_ARM_COUNT.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_UNRECORDED_ARMS.load(Ordering::SeqCst),
+        er_telemetry_core::counters::MISSING_SAVE_PICKER_REPICK_COUNT.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"oracle_save_picker_overlay_armed\": {},\n  \"oracle_save_picker_overlay_open_count\": {},\n  \"oracle_save_picker_overlay_draw_hits\": {},\n  \"oracle_save_picker_overlay_input_hits\": {},\n  \"oracle_save_picker_overlay_poll_count\": {},\n  \"oracle_save_picker_overlay_held_polls\": {},\n  \"oracle_save_picker_kbd_hook_hits\": {},\n  \"oracle_save_picker_overlay_pick_count\": {},\n  \"oracle_save_picker_overlay_pick_reject_count\": {},\n",

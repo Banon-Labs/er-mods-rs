@@ -194,7 +194,13 @@ pub unsafe fn system_quit_open_profile_load_dialog_on(system_dialog: usize) -> b
     append_autoload_debug(format_args!(
         "system-quit-dup: profile-load route FIRE 05_010_ProfileSelect wrapper 0x{wrapper_addr:x}(rcx=job_slot=0x{job_slot:x}, rdx=menu_window_list=dialog+0x50=0x{menu_window_list:x} count={menu_window_list_count}, r8=scene_proxy=0x{scene_proxy:x}) from system_dialog=0x{system_dialog:x}"
     ));
-    let ret = unsafe { wrapper(job_slot, menu_window_list, scene_proxy) };
+    // Armed across the submit and dropped straight after. The constructor this reaches runs
+    // synchronously on this thread, so the window opened here is the only one the rebind can touch;
+    // the title's Load Game submits through the same constructor with nothing armed.
+    let ret = {
+        let _picker_key = crate::profile_select_movie_key::PickerSubmitArm::new();
+        unsafe { wrapper(job_slot, menu_window_list, scene_proxy) }
+    };
     let job = SYSTEM_QUIT_PROFILE_LOAD_JOB_SLOT.load(Ordering::SeqCst);
     let job_vt = if job >= HEAP_LO {
         unsafe { safe_read_usize(job) }.unwrap_or(NULL)

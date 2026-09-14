@@ -6,7 +6,7 @@
 #
 #   DIAGFACTS|diagnosis=..|fixed=..|asked=..|blocked=..|promise=..|edited=..|handback=..
 #            |handbackkind=..|userneed=..|didwork=..|extblocked=..|carried=..|unread=..
-#            |consulted=..|future=..
+#            |consulted=..|future=..|deferral=..
 #
 # Emitted when either shape was found; a clean turn emits empty (fail-open).
 #
@@ -622,17 +622,19 @@ future = False
 if runs:
     closing_raw = runs[-1]
     closing_scrubbed = scrub(closing_raw)
+    # A log cannot answer before the input that produces it: an in-game input request in the same
+    # message puts the evidence in the future, which is the legitimate deferral rather than a
+    # skipped read. Measured -- "Use the item once; the log answers with one of three lines:" was a
+    # halt. Computed for the whole closing message rather than inside the branch below, because the
+    # deferred-investigation arm reads the same fact; the unread arm is unaffected, since it fires
+    # only when its own branch set `unread`, and inside that branch this is what it always was.
+    future = bool(FUTURE_EVIDENCE_RE.search(closing_scrubbed)) or bool(
+        USER_INPUT_REQUEST_RE.search(closing_scrubbed)
+    )
     if UNREAD_DEFER_RE.search(closing_scrubbed):
         strong = {t for t in ARTIFACT_STRONG_RE.findall(closing_raw) if len(t) > 3}
         named = bool(strong) or bool(ARTIFACT_WEAK_RE.search(closing_scrubbed))
         if named:
-            # A log cannot answer before the input that produces it: an in-game input request in
-            # the same message puts the evidence in the future, which is the legitimate deferral
-            # rather than a skipped read. Measured -- "Use the item once; the log answers with one
-            # of three lines:" was a halt.
-            future = bool(FUTURE_EVIDENCE_RE.search(closing_scrubbed)) or bool(
-                USER_INPUT_REQUEST_RE.search(closing_scrubbed)
-            )
             tool_text = " ".join(
                 tool_input_text(block) for kind, block in turn.blocks if kind == "tool"
             ).lower()
@@ -641,6 +643,75 @@ if runs:
                 if UNREAD_DEFER_RE.search(sentence):
                     unread = quote(sentence)
                     break
+
+# --- (2e) the deferred-investigation closer -----------------------------------------------------
+# The same failure as the promissory closer, one tense later: the closing prose names the agent's
+# own next investigative move instead of taking it. Six closers from a single session, verbatim, and
+# not one of them was caught:
+#
+#     ... which is where I look next.
+#     ... and the next place to look is `profile_table_guard`'s rebuild of `saveSlotsStates`.
+#     ... that is the next step / the next thing I check is ...
+#     The overlap that is real in a default build is the picker itself: ... which is where I look
+#     next.
+#     ... I will back out once this test says which side the bug is on.
+#     ... the next step halves it to five; if it is clean, the culprit is in the excluded ten and I
+#     load those instead.
+#
+# Why the neighbours are blind to them. The promissory arm above needs a work gerund heading the
+# sentence, and every one of these is an ordinary indicative clause. The unread arm needs the prose
+# to claim an artifact already holds the answer; these name a move, not a file.
+# `last_assistant_described_next_step` is the closest, and it misses on both halves at once: its
+# `next_noun` pattern wants one of its own nouns followed directly by a copula, so "the next place
+# to look is", "the next thing I check is" and "the next step halves it" all fall outside it, and
+# its handoff exemption is cleared by a single question mark anywhere in the message.
+#
+# The patterns are a named list rather than one alternation so that a regression names the shape it
+# broke. Only the final prose run is read, and a turn that kept working after its last prose has
+# already exited at the top of this file, so a mid-turn "the next place to look is X" followed by
+# the look is never seen.
+DEFERRAL_PATTERNS = {
+    # "... which is where I look next.", "that is where I go next."
+    "where_i_look_next": r"\bwhere\s+i\s+(?:look|go|check|read|dig|start|head|point|turn)\s+next\b",
+    # "the next place to look is profile_table_guard's rebuild of saveSlotsStates."
+    "next_place_to_look": r"\bthe\s+next\s+(?:place|file|function|candidate|suspect|row|line)\s+"
+                          r"to\s+(?:look|check|read|inspect|try|measure|test|trace)\b",
+    # "that is the next step", "this is the next thing".
+    "that_is_the_next": r"\b(?:that|this|which)(?:'s|\s+is)\s+the\s+next\s+"
+                        r"(?:step|thing|check|move|measurement|test|read|place)\b",
+    # "the next thing I check is the picker's own rebuild".
+    "the_next_i_verb": r"\bthe\s+next\s+(?:thing|step|check|move|test|measurement|place)\s+i\s+"
+                       r"(?:check|read|do|run|try|look|measure|inspect|take)\b",
+    # "the next step halves it to five" -- a plan in the present tense, with no copula for the
+    # described-next-step signal to anchor on.
+    "the_next_step": r"\bthe\s+next\s+(?:step|pass|round|bisect|halving|narrowing)\b",
+    # "I will back out once this test says which side the bug is on." The noun list deliberately
+    # excludes run, build and launch: those are what `FUTURE_EVIDENCE_RE` calls evidence that does
+    # not exist yet, and a pattern whose own exemption contradicts it is worse than no pattern.
+    "once_the_test_says": r"\bonce\s+(?:this|that|the)\s+"
+                          r"(?:test|check|bisect|measurement|experiment|comparison)\s+"
+                          r"(?:says|tells|lands|answers|comes\s+back|settles|reports)\b",
+}
+DEFERRAL_COMPILED = {name: re.compile(rx, re.IGNORECASE) for name, rx in DEFERRAL_PATTERNS.items()}
+
+# A step already taken, reported in the past tense. Measured out of the audit rather than reasoned
+# out: replaying the session these patterns were built from, the arm fired on "Push was the next
+# step in a script I had already run once, so the runtime precondition for these two commits never
+# got evaluated", which describes what happened and defers nothing. None of the six closers is in
+# the past tense, so this cannot quiet the family it was built for.
+DEFERRAL_PAST_RE = re.compile(
+    r"\b(?:was|were|had\s+been)\s+the\s+next\b|\bthe\s+next\s+\w+\s+(?:was|were)\b",
+    re.IGNORECASE,
+)
+
+deferral = ""
+if runs:
+    for sentence in closing_sentences(scrub(runs[-1])):
+        if DEFERRAL_PAST_RE.search(sentence):
+            continue
+        if any(rx.search(sentence) for rx in DEFERRAL_COMPILED.values()):
+            deferral = quote(sentence)
+            break
 
 # --- (3) the user asked ------------------------------------------------------------------------
 # `split_turns` keeps only blocks, not the prompt that opened the turn, so the prompt is recovered
@@ -699,13 +770,13 @@ try:
 except Exception:
     carried = False
 
-if not hit and not promise and not handback and not unread:
+if not hit and not promise and not handback and not unread and not deferral:
     sys.exit(0)
 
 print(
     "DIAGFACTS|diagnosis={}|fixed={}|asked={}|blocked={}|promise={}|edited={}"
     "|handback={}|handbackkind={}|userneed={}|didwork={}|extblocked={}|carried={}"
-    "|unread={}|consulted={}|future={}".format(
+    "|unread={}|consulted={}|future={}|deferral={}".format(
         hit or "",
         int(fixed),
         int(asked),
@@ -721,6 +792,7 @@ print(
         unread,
         int(consulted),
         int(future),
+        deferral,
     )
 )
 PY

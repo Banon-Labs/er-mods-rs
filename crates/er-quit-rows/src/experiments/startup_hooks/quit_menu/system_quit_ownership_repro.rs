@@ -1055,7 +1055,7 @@ pub(crate) fn install_system_quit_save_game_confirm_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva_for_hook(SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
+    let Ok(addr) = game_rva_for_hook(er_title_flow::SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve return-title request rva 0x{SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA:x}"
         ));
@@ -1249,7 +1249,9 @@ pub(crate) unsafe extern "system" fn system_quit_profile_load_activate_hook(
             // Baseline `oracle_msgbox_builds_since_switch_arm`: score the switch on its own builds.
             let msgbox_baseline = er_title_flow::MSGBOX_BUILDER_LOG.load(Ordering::SeqCst);
             MSGBOX_BUILDS_AT_SWITCH_ARM.store(msgbox_baseline, Ordering::SeqCst);
-            if let Ok(close_addr) = game_rva(SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA) {
+            if let Ok(close_addr) =
+                game_rva(er_title_flow::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA)
+            {
                 let close_fn: unsafe extern "system" fn(usize) =
                     unsafe { std::mem::transmute(close_addr) };
                 unsafe { close_fn(dialog) };

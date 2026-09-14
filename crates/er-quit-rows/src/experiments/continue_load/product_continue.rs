@@ -400,8 +400,8 @@ pub(crate) unsafe fn product_continue_autoload_tick(
                     append_autoload_debug(format_args!(
                         "product-core-autoload: *** GIVING UP on the Continue slot after {empty_ticks} consecutive empty-like ticks (slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} tick={tick}) *** -- this save cannot be loaded; arming the missing-save picker so the user can choose one that can"
                     ));
-                    let armed = arm_missing_save_picker_after_boot(
-                        "product-continue-empty-profile-exhausted",
+                    let armed = offer_missing_save_picker(
+                        er_save_picker_core::reason::MissingSaveReason::ContinueSlotEmpty,
                     );
                     append_autoload_debug(format_args!(
                         "product-core-autoload: late picker arm requested for slot={slot} map=0x{profile_map:x} level={profile_level} name_len={profile_name_len} -> armed_by_this_call={armed}"

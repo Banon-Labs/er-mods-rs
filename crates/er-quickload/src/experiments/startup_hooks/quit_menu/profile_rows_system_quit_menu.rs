@@ -892,6 +892,124 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     }
 }
 
+/// Hand the orphan-close gate's one-shot log guards back, so each switch reports for itself.
+///
+/// Called from `system_quit_arm_quickload_autoload`, beside the close budget it resets for the same
+/// reason: a guard that is spent once per process reports whichever occurrence came first, and the
+/// first one is the boot Continue, where the gate is supposed to decline.
+pub(crate) fn reset_orphan_title_window_diagnostics() {
+    ORPHAN_TITLE_GATE_DECLINED_LOGGED.store(false, Ordering::SeqCst);
+    ORPHAN_TITLE_NO_WINDOW_LOGGED.store(false, Ordering::SeqCst);
+    ORPHAN_TITLE_NO_ADDRESS_LOGGED.store(false, Ordering::SeqCst);
+}
+
+/// One-shot log guards for the three ways the orphan close can decline. Each fires once per switch
+/// so a refusal is visible without turning the menu frame into a log loop.
+static ORPHAN_TITLE_GATE_DECLINED_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ORPHAN_TITLE_NO_WINDOW_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static ORPHAN_TITLE_NO_ADDRESS_LOGGED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Ask the game to take back a title window that outlived the title, and count the ones still there.
+///
+/// Two jobs, deliberately in this order. The count comes first and is unconditional on everything
+/// except the map and the switch: every pump tick in which a title surface runs while
+/// `GameMan+0xc30` names a real map after a switch committed is the defect happening, whether or not
+/// this crate is allowed to act on it. That is the number a checker reads, and it must not be
+/// silenced by the fix being armed.
+///
+/// The act is `MENU_WINDOW_CLOSE_WITH_FAILED_RVA`, the game's own `CloseAsFailed(MenuWindow*)`. We
+/// do not tear anything down: the window sets its own result, its `MenuWindowJob` reads that on a
+/// later tick and runs `FUN_1407ada40`, and `ExecuteMenuJob` reaps the chain above it. Every step
+/// but the request is the engine's -- and the reaper is guaranteed a pass here in a way it is not
+/// from the game task, because reaching this function at all means the job is being run.
+///
+/// The window pointer is read from `job+0x130` on the frame that job is running, so there is no
+/// stored pointer to go stale. A resolver refusal on an unrecognised build leaves the orphan and
+/// logs, which is the behaviour that shipped before rather than a new failure.
+unsafe fn system_quit_close_orphaned_title_window(job: usize, filename: &str) {
+    let gm = crate::constants::game_man_ptr_or_null();
+    if gm == 0 {
+        return;
+    }
+    let Some(c30) = (unsafe { safe_read_i32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }) else {
+        return;
+    };
+    if c30 == crate::orphan_title_window::C30_TITLE_DEFAULT {
+        return;
+    }
+    let committed = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+    // Counted only once a switch has committed, because the boot handoff legitimately runs the
+    // title's windows for a fraction of a second after `GameMan+0xc30` names the incoming map. A
+    // boot that takes no switch left this at 36 when the term was absent, and a defect counter whose
+    // pass value is 0 cannot carry a floor of 36 on a clean load.
+    if committed {
+        er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD
+            .fetch_add(1, Ordering::SeqCst);
+    }
+    let spent =
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst);
+    if !crate::orphan_title_window::orphan_title_window_close_required(
+        filename, c30, committed, spent,
+    ) {
+        // Say which term declined, once per switch. A predicate with four terms that logs only when
+        // it passes cannot be diagnosed from a run; it can only be guessed at.
+        if !ORPHAN_TITLE_GATE_DECLINED_LOGGED.swap(true, Ordering::SeqCst) {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: gate declined for '{filename}' -- is_title_surface={} c30=0x{c30:x} (title default 0x{:x}) switch_committed={committed} spent={spent}/{} -- the false term is the one to fix",
+                crate::orphan_title_window::is_title_surface(filename),
+                crate::orphan_title_window::C30_TITLE_DEFAULT,
+                crate::orphan_title_window::MAX_CLOSE_REQUESTS_PER_SWITCH
+            ));
+        }
+        return;
+    }
+    // Both refusals below say so out loud, once per switch each. They used to return silently in the
+    // sibling shell and that cost a whole measurement: a switch left the title over the world with
+    // `oracle_title_surface_run_ticks_in_world` at 43 and `oracle_orphan_title_window_close_requests`
+    // at 0, and the log carried not one line explaining the gap. The cause was the second refusal --
+    // the close address had no row in `docs/recon/rva-map-1162-to-1170.verified.tsv`, so the
+    // translator correctly refused a 1.16.2 address on 1.17.1 and this function did nothing,
+    // invisibly. A gate that declines has to be distinguishable from a gate that was never asked.
+    let window =
+        unsafe { safe_read_usize(job + MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET) }.unwrap_or(0);
+    if window == 0 {
+        if !ORPHAN_TITLE_NO_WINDOW_LOGGED.swap(true, Ordering::SeqCst) {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: refused -- '{filename}' job=0x{job:x} has no owning window at +0x{MENU_WINDOW_JOB_OWNING_WINDOW_OFFSET:x}, so there is nothing to ask the game to close"
+            ));
+        }
+        return;
+    }
+    let Some(close_addr) = crate::experiments::gated_game_fn(
+        MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+        "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
+    ) else {
+        if !ORPHAN_TITLE_NO_ADDRESS_LOGGED.swap(true, Ordering::SeqCst) {
+            append_autoload_debug(format_args!(
+                "orphan-title-window: refused -- MENU_WINDOW_CLOSE_WITH_FAILED_RVA 0x{MENU_WINDOW_CLOSE_WITH_FAILED_RVA:x} did not resolve on this build, so '{filename}' stays over the world. Add a verified row for it to docs/recon/rva-map-1162-to-1170.verified.tsv"
+            ));
+        }
+        return;
+    };
+    // Justify the transmute: `MENU_WINDOW_CLOSE_WITH_FAILED_RVA` is resolved through the same
+    // build-verified translator every other direct call in this crate uses, and the signature
+    // matches the static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+    let close: unsafe extern "system" fn(usize) = unsafe { std::mem::transmute(close_addr) };
+    let requested = er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS
+        .fetch_add(1, Ordering::SeqCst)
+        + 1;
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        close(window);
+    }));
+    append_autoload_debug(format_args!(
+        "orphan-title-window: asked the game to close '{filename}' window=0x{window:x} job=0x{job:x} via CloseAsFailed 0x{close_addr:x} #{requested} (c30=0x{c30:x} is a real map and this switch committed, so the title job the switch abandoned is drawing over the world) panicked={}",
+        outcome.is_err()
+    ));
+}
+
 /// Post-original MenuWindowJob::Run work for System->Quit: System/ProfileSelect resource mapping + the
 /// real-system-window hide, the in-world-load abort + return-title submit that actually complete a profile
 /// switch, and save-picker pump maintenance. Extracted from the hook body so the winning MenuWindowJob::Run
@@ -899,6 +1017,9 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
 /// MinHook installs only one, so this hook's own install fails `MH_ERROR_ALREADY_CREATED` and none of this
 /// would otherwise run (2026-07-15 root cause: dead hook -> profile load never completes + System menu never
 /// hidden). `title_custom_cover_menu_window_run_hook` calls this after it runs the original.
+/// One-shot latch for the footer close below.
+static TITLE_INFORMATION_FOOTER_CLOSED: AtomicUsize = AtomicUsize::new(0);
+
 pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     let finalized_profile = system_windows::take_finalized_profile_select();
     if finalized_profile != 0
@@ -930,6 +1051,19 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     }
     let filename_ptr = unsafe { safe_read_usize(job + 0x60) }.unwrap_or(0);
     let filename = system_quit_read_wide_resource_name(filename_ptr);
+    // The title window a switch leaves behind. `crate::orphan_title_window` carries the mechanism;
+    // the short version is that `continue_confirm` takes `CS::TitleStep` out of `STEP_MenuJobWait`
+    // while the title's own job chain is still running, so neither of the game's two reapers ever
+    // sees a terminal result and `PRESS ANY BUTTON` keeps drawing over the loaded character.
+    //
+    // Done here because here is the menu pump. This function runs inside `CS::MenuWindowJob::Run`,
+    // which is the thread and the frame the game issues its own window closes from, and reaching it
+    // proves the job is still being run -- so the deregistration in `FUN_1407ada40` gets its pass.
+    // The drain in `own_load::loaders::load_drive` is the first line of the same fix, one step
+    // earlier; this is the backstop for a window that survived it.
+    if crate::orphan_title_window::is_title_surface(filename.as_str()) {
+        unsafe { system_quit_close_orphaned_title_window(job, filename.as_str()) };
+    }
     // Two fields, two resource names, two placements. The link field used to pass the path
     // editor's cache key, so both windows arrived here under one name and had to be told apart by
     // `build_url_keyboard_active()` -- with the Quit tab's field then getting no placement at all,
@@ -978,6 +1112,36 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                     unsafe { build_url_editor_window_run(base, owner) };
                 }
             }
+        }
+    }
+    // The title's publisher/copyright footer, closed here rather than covered.
+    //
+    // `05_020_TitleInformation` is its own `CS::MenuWindowJob` (bd
+    // the-title-footer-is-its-own-menuwindowjob-not-part-of-05000-2026-09-11), and its name reaches
+    // the same `job+0x60` field the list below reads. The boot cover only hid it, so once the cover
+    // stopped the footer was still drawing over the world -- the user's report. An earlier attempt
+    // closed the window latched by `title_native_menu_visual_title_information_hook`; run
+    // br-20260913-142426-cc94 shows that latch is never written
+    // (`oracle_title_pab_information_visual_builds = 0`), so the wrapper detour is not on the path
+    // this build takes and the window has to be caught here instead.
+    if filename == "05_020_TitleInformation" {
+        let window = unsafe { safe_read_usize(job + 0x130) }.unwrap_or(0);
+        let stopped = er_telemetry_core::counters::BOOT_VIEW_STOP_MS.load(Ordering::SeqCst) != 0;
+        let already = TITLE_INFORMATION_FOOTER_CLOSED
+            .swap(usize::from(stopped && window >= 0x10000), Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "title-footer: MenuWindowJob::Run 05_020_TitleInformation window=0x{window:x} cover_stopped={stopped} already_closed={already}"
+        ));
+        if stopped && already == 0 && window >= 0x10000 {
+            let closed = unsafe {
+                er_quit_menu_core::save_game_row::system_quit_save_game_close_window(
+                    window,
+                    "pab_title_information_footer",
+                )
+            };
+            append_autoload_debug(format_args!(
+                "title-footer: cancel-close of the publisher/copyright footer returned {closed}"
+            ));
         }
     }
     if matches!(
@@ -1115,16 +1279,10 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
             }
         }
     }
-    // Menu-pump-owned save-flow confirm box (save-game-flow WP2): the game-task tick decides
-    // which box comes next but must not build/submit a MenuJob, so it stages the box id here
-    // and this -- the game's own menu pump executing a MenuWindowJob, the same context the
-    // save-picker resubmit and the return-title chain use -- performs the submit. A failed
-    // submit keeps the pending latch set so the next pump retries (the common cause is the
-    // dialog's job queue still owning the previous box's job).
-    let pending_box = SAVE_FLOW_SUBMIT_BOX_PENDING.load(Ordering::SeqCst);
-    if pending_box != SAVE_FLOW_BOX_NONE && unsafe { save_flow_submit_box(pending_box) } {
-        SAVE_FLOW_SUBMIT_BOX_PENDING.store(SAVE_FLOW_BOX_NONE, Ordering::SeqCst);
-    }
+    // The save-flow confirm-box submit used to sit here. It now lives in
+    // `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, beside the picker maintenance
+    // that moved there for the same reason: that pump runs on every menu-window build rather than
+    // only this one, and a standalone shell reaches it while it never reaches this handler.
     // Menu-pump-owned destination browser open (save-game-flow WP3): Box2 "No" means "save
     // somewhere else", which the tick stages here because opening the picker stages records and
     // submits a MenuJob -- menu-pump work, not game-task work.
@@ -1135,30 +1293,12 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
     // the user just declined: with the OS surface that reopened comdlg32 ~57 ms after every Cancel,
     // forever, with no way out of the flow (bd `er-effects-rs-rsxi`). The tick's OpenTimeout could
     // not save it either, because each reopen blocks the whole frame, so the budget never accrued.
-    if SAVE_DEST_OPEN_PICKER_PENDING.load(Ordering::SeqCst) != 0 {
-        let system_dialog = SAVE_FLOW_DIALOG.load(Ordering::SeqCst);
-        if unsafe { system_quit_open_save_dest_picker(system_dialog) }.request_discharged() {
-            SAVE_DEST_OPEN_PICKER_PENDING.store(0, Ordering::SeqCst);
-        } else {
-            // The one path that legitimately re-arms. Counted so a run can prove which one it took:
-            // in OS mode this must stay 0, and any positive value is the reopen loop returning.
-            SAVE_DEST_PICKER_OPEN_RETRY_COUNT.fetch_add(1, Ordering::SeqCst);
-        }
-    }
-    // Menu-pump-owned save-picker maintenance: drive-cell input, native ScrollBarV sync,
-    // edge-scroll restaging, in-place row rebuild after navigation, and window resubmit after a
-    // navigation/pick close (same submit-context rule as the return-title chain below).
-    unsafe { save_picker_menu_pump_path_editor() };
+    // The browser open and the save-picker maintenance that used to sit here now run from
+    // `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, which the stepper calls on every
+    // build rather than only this one -- see that function for the run where the row went dead.
     // Menu-pump-owned build-url link field. Same context and same reason as the path editor above:
     // it builds and submits a native SoftwareKeyboardJob, which must not happen on the game task.
     unsafe { build_url_editor_menu_pump() };
-    unsafe { save_picker_menu_pump_drive_strip_mouse() };
-    unsafe { save_picker_menu_pump_native_scrollbar() };
-    unsafe { save_picker_menu_pump_edge_scroll() };
-    unsafe { save_picker_menu_pump_rebuild() };
-    if save_picker_resubmit_pending() {
-        let _ = unsafe { save_picker_menu_pump_resubmit() };
-    }
     // Menu-pump-owned return-title submit. This hook is the game's menu pump executing a
     // MenuWindowJob, so submitting the return-title chain from here (rather than from the concurrent
     // game-task tick) runs it in the menu pump's own frame and eliminates the Scaleform race that

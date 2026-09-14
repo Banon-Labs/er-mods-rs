@@ -333,3 +333,23 @@ pub static SAVE_PICKER_DIM_ARM_WAIT_TIMEOUTS: AtomicUsize = AtomicUsize::new(0);
 /// move-modifier can still drag any toplevel; this counts the times something moved the cover and
 /// we pulled it back, so "the blur is attached to the game" is measured rather than hoped for.
 pub static SAVE_PICKER_DIM_REANCHOR_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Why the missing-save picker was last armed, as an `er_save_picker_core::MissingSaveReason`
+/// code (telemetry oracle `oracle_missing_save_reason`; 0 means no arming site recorded one).
+///
+/// Eight paths arm the picker and each used to say why in one place only: a line in the debug
+/// log. A probe could see `oracle_save_picker_overlay_armed = 1` and had no way to tell a boot
+/// with no save on disk from a boot whose load this mod never issued -- two states that want
+/// different words on screen and different fixes in the code. This is that discriminator.
+pub static MISSING_SAVE_PICKER_ARM_REASON: AtomicUsize = AtomicUsize::new(0);
+/// Times a reason was recorded, cumulative (`oracle_missing_save_reason_arms`). Greater than 1
+/// means the picker was armed more than once in a session, which a re-arm after a failed pick
+/// does legitimately; `_reason` alone only remembers the latest.
+pub static MISSING_SAVE_PICKER_ARM_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Arms that named no reason (`oracle_missing_save_reason_unrecorded`). Non-zero is a defect in
+/// the arming path, not a state any save can produce: the picker replaced the title and no
+/// caller claimed it. It is counted rather than logged so a run proves its absence.
+pub static MISSING_SAVE_PICKER_UNRECORDED_ARMS: AtomicUsize = AtomicUsize::new(0);
+/// Times the picker was re-armed after a save the user picked failed to load
+/// (`oracle_missing_save_repick_count`). The first arm hands the user a choice; this counts the
+/// times that choice turned out not to work and the picker came back rather than dead-ending.
+pub static MISSING_SAVE_PICKER_REPICK_COUNT: AtomicUsize = AtomicUsize::new(0);

@@ -625,7 +625,7 @@ impl<'a> SerializedPlayerGameData<'a> {
                         *(slot_data.wrapping_add(record_off) as *mut u8) = v;
                     }
                 }
-                // `er_gfx::title_05_000::fnv1a64` in the product; that name is a `pub use` of
+                // `er_gfx::fnv1a64` in the product; that name is a `pub use` of
                 // this function, so the hash is byte-identical and the crate keeps its dependency
                 // on the shared primitive rather than on the GFx parser.
                 PROFILE_PREVIEW_FACE_HASH[slot].store(

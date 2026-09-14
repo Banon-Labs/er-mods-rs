@@ -493,18 +493,6 @@ pub(crate) fn move_probe_drive_key_foreground_only(vk: u32) {
     }
 }
 
-/// Stay-active gate (`ER_QUICKLOAD_STAY_ACTIVE=1` / `er-quickload-stay-active.txt`). When set, keep ER's
-/// input-accept flag `[DLUID+0x88d]` forced to 1 every tick so a virtual gamepad keeps driving the
-/// menus while ER is UNFOCUSED -- letting the user work in another window during a golden capture.
-/// Decoded: ER clears that flag each frame when it isn't `GetActiveWindow` (`0x141f292bd`); we re-set
-/// it. Touches only focus-input gating, never the sim/save/load.
-/// De-gated (deprecate-env-marker-gate-allowlists-2026-07-19): stay-active forced the input-accept
-/// flag `[DLUID+0x88d]` while unfocused -- a diagnostic golden-capture convenience gated by
-/// env/marker. Env/marker feature gates are forbidden; retired (permanently off).
-pub(crate) fn stay_active_enabled() -> bool {
-    false
-}
-
 /// True only while the harness is actively injecting input this frame -- the can-move probe's on burst
 /// (`MOVE_PROBE_ACTIVE`) or the System->Quit repro autopilot actively driving menus
 /// (`sq_repro_actively_driving`). This is the only window in which the product may fabricate a device or
@@ -559,6 +547,22 @@ fn autoload_load_started() -> bool {
 
 // ENV-gate RATIONALE: ER_QUICKLOAD_BLOCK_INPUT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn block_input_enabled() -> bool {
+    // Never. Removed 2026-09-13 by user directive: "I don't think we need an input blocker during
+    // any stages anymore."
+    //
+    // It was a Wine-probe proof feature -- suppress keyboard and gamepad so a run could not ride on
+    // a foreign press -- and the reasoning below is still an accurate record of why it existed. It
+    // outlived its purpose: the loads this branch now performs are driven from the game task and
+    // are proven by RAM oracles, not by the absence of input, and the one thing a suppressed
+    // keyboard reliably does on a live desktop is stop the player answering a prompt the game is
+    // waiting on. The Terms of Service dialog is exactly that prompt.
+    //
+    // The whole predicate below is left in place, unreachable, because it carries the measurements
+    // that justified each clause; deleting it would lose them. If a probe ever needs the block
+    // again it should arm it explicitly at its own call site rather than by reviving a default.
+    if true {
+        return false;
+    }
     // The sq-repro autopilot used to hold the input block engaged in-world here while it drove menus,
     // so its fabricated pad was the only input. Deleted 2026-09-05 with the autopilot: keeping the
     // clause would have held the block on for the whole run, because nothing advances SQ_REPRO_STATE

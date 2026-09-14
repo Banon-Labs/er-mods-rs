@@ -1,17 +1,5 @@
 use super::*;
 
-/// Model B: Live-dialog Load-Game fire (er-quickload-live-dialog.txt / ER_QUICKLOAD_LIVE_DIALOG).
-/// Off by default. Sibling to direct_build (the forge). Instead of forging a ProfileLoadDialog
-/// (factory 0x14081ead0 with a synthetic capture + no live MenuWindow -> a non-live dialog the
-/// native menu group never pumps -> wrong-map/crash), this locates the real Load-Game registry
-/// node (CS::MenuMemberFuncJob<TitleTopDialog>, vtable 0x142b265d0, member-fn chains to factory
-/// 0x14081ead0) and invokes its native run 0x1409aaba0(rcx=node) -- so the ProfileLoadDialog is
-/// born live & registered in menu-group 0x143d87350, which the native pump drives. STAGE2 then
-/// fires load_activate (vt+0xa0) + the guarded continue_confirm -> SetState(5). The forge path
-/// (direct_build) is untouched; this is a deliberate, separately-gated experiment.
-pub(crate) fn live_dialog_enabled() -> bool {
-    false
-}
 /// Arm the readiness-gated press-any-button advance. ENV `ER_QUICKLOAD_PAB_ADVANCE=1` or GAME_DIR file
 /// `er-quickload-pab-advance.txt`. Deliberately independent of the (deleted) direct
 /// "Continue pressed" trigger, which also used to drive `maybe_auto_open_menu`.
@@ -46,101 +34,33 @@ pub(crate) fn title_anim_speedup_factor() -> f32 {
 pub(crate) fn title_anim_speedup_enabled() -> bool {
     title_anim_speedup_factor() > TITLE_ANIM_SPEEDUP_MIN
 }
-/// True when the branch is replacing the native `05_001_Title_Logo` GFX bytes through the
-/// Scaleform MemoryFile seam. This is not a vanilla/main restore switch: it means the branch now
-/// owns that TitleBack resource, so old hooks that hide TitleBack would hide our replacement.
-pub(crate) fn title_resource_memory_gfx_enabled() -> bool {
-    false
-}
-
-/// Default-on product 05_000_title asset strip (er-effects-rs-dl0, runtime-derived since
-/// er-effects-rs-h7x): at Scaleform file-open the hook reads the vanilla movie payload out of the
-/// native MemoryFile the game's own FileOpener returns and applies
-/// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
-/// to the formerly-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input -- so
-/// press any button / the Continue menu text / the copyright footer never build or animate. The
-/// per-element hide hooks stay installed as defense-in-depth, but the served movie carries no
-/// visual placements. End-to-end prior proof with the (identical) stripped movie live: runtime
-/// artifact `title-05-000-native-ui-stripped-recorded-latest` reached event T_controllable
-/// (+21.9s) with the PressStart proxy still bindable (dialog+0xb78 readiness gate satisfied).
-/// Gated like `native_continue_enabled` (no new opt-in gate; splash-skip de-gating precedent):
-/// off for no-autoload / telemetry-only runs, so a pure observe run never
-/// mutates visual resources. `ER_QUICKLOAD_TITLE_05_000_MEMORY_GFX` remains the explicit override:
-/// a path replaces the default asset; `embedded:title-05-000-suppressed` arms the same runtime
-/// derivation; the literal `vanilla`/`off`/`0` forces the native on-disk movie while autoload
-/// stays on (handled in `load_title_scaleform_memory_gfx`).
-///
-/// Off by default since 2026-09-12, and the reason is that a movie is parsed once.
-///
-/// The engine opens `data0:/menu/05_000_title.gfx` exactly once per process and caches what it
-/// parsed. Measured on run br-20260912-054657-2484: one file-open at +12874ms, then
-/// `AcquireMenuResource '05_000_Title'` at +13370ms and again at +49056ms after the player chose
-/// System > Quit Game. So the strip is not "the boot title has no chrome" -- it is "no title in
-/// this process ever has chrome again", and the second one came up as a logo with no
-/// `PRESS ANY BUTTON` and no menu: no Continue, no Load Game, no Settings, and no way out but
-/// killing the game.
-///
-/// Conditioning the swap on the cover cannot fix that, because the only site that could refuse
-/// runs once, at boot, while the cover is legitimately up. The layer that re-evaluates per title
-/// is the per-element hide hooks this doc already calls defense-in-depth, and they are scoped by
-/// `title_visual_suppression_active()` -- they hid `PressStart`, `Info`, `ProgressInfo`,
-/// `Install_ProgressInfo` and the logo at +13371ms in that same run, and stand down once the
-/// cover stops. With the cover opaque in front of the title during boot there is nothing for the
-/// strip to protect that the cover is not already covering.
-pub(crate) fn title_05_000_strip_default_enabled() -> bool {
-    false
-}
 
 /// Default-on product masquerade cover Part A: suppress only the native `05_000_Title`
 /// MenuWindowJob visual wrapper while the zero-input autoload runs. If memory-GFX replacement is
 /// active, do not install the old TitleBack hide hooks: `05_001_Title_Logo` is the replacement
 /// surface on this branch, not a vanilla/main object to suppress.
 pub(crate) fn title_native_menu_visual_suppression_enabled() -> bool {
-    if title_resource_memory_gfx_enabled() || autoload_disabled() {
+    // Not gated on `loading-cover`, and the attempt is recorded here so it is not repeated. The
+    // name says masquerade and the doc above says visual, but the boot autoload's handoff runs
+    // through the surface this installs: with the cover compiled out of an `--features autoload`
+    // build, three consecutive runs (2026-09-13 10:33, 10:36, 10:39) sat at the title for their
+    // whole lives -- `c30=0xa010000 level=9 player=false`, `boot-view DECISION: own_menu=false
+    // loading_handoff=false world_handoff=false` -- while the 10:23 default build loaded on the
+    // same save. Splitting the load path out of the cover is real work, tracked separately; until
+    // then a build that autoloads gets the cover, because the alternative is a build that does not
+    // autoload at all.
+    if autoload_disabled() {
         return false;
     }
     !save_override_telemetry_only()
 }
 
-/// Passive, epilogue-neutral observer for native Scaleform menu-resource acquisition. This is
-/// intentionally separate from the title-cover/hide bundle: resource/memory-GFX proof needs the
-/// replaced `05_001_Title_Logo` visible, not hidden by TitleBackViewParts suppression hooks.
-pub(crate) fn title_menu_resource_observer_enabled() -> bool {
-    false
-}
-
-/// AUTO-confirm observe mode (er-quickload-auto-confirm.txt): drive the game's own natural title
-/// flow with Confirm input-taps so we can finally observe the view past the modal. No SetState
-/// forcing, no input block, no custom dismiss -- just the press the game polls for.
-pub(crate) fn auto_confirm_enabled() -> bool {
-    false
-}
-// ENV-gate RATIONALE: ER_QUICKLOAD_CONTINUE_DRIVE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn continue_drive_enabled() -> bool {
-    false
-}
-// ENV-gate RATIONALE: ER_QUICKLOAD_ARM_PROBE is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn arm_probe_enabled() -> bool {
-    false
-}
-// ENV-gate RATIONALE: ER_QUICKLOAD_NATIVE_ARM_LOOP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn native_arm_loop_enabled() -> bool {
-    false
-}
-// ENV-gate RATIONALE: ER_QUICKLOAD_TITLE_ACCEPT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn title_accept_enabled() -> bool {
-    false
-}
-// ENV-gate RATIONALE: ER_QUICKLOAD_TITLE_ACCEPT_INJECT is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
-pub(crate) fn title_accept_inject_enabled() -> bool {
-    false
-}
 // ENV-gate RATIONALE: ER_QUICKLOAD_SPLASH_SKIP is an explicit diagnostic/runtime probe switch; default behavior remains off unless the operator intentionally stages the gate.
 pub(crate) fn splash_skip_enabled() -> bool {
-    !save_override_telemetry_only()
-        || product_autoload_enabled()
-        || own_load_enabled()
-        || title_menu_resource_observer_enabled()
+    crate::autoload_cover_gates::splash_skip_required(
+        product_autoload_enabled(),
+        own_load_enabled(),
+    )
 }
 /// Force offline boot (no online login attempt -> no "Unable to start in online mode" modal),
 /// so the headless autoload reaches the real title/main-menu directly. Auto-on whenever the
@@ -148,5 +68,8 @@ pub(crate) fn splash_skip_enabled() -> bool {
 /// Gated (not always-on) so it never forces offline on a co-op/online launch that wants the
 /// getter live.
 pub(crate) fn online_disable_enabled() -> bool {
-    !save_override_telemetry_only() || own_stepper_enabled()
+    crate::autoload_cover_gates::online_disable_required(
+        product_autoload_enabled(),
+        own_stepper_enabled(),
+    )
 }

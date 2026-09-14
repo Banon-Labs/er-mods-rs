@@ -110,6 +110,63 @@ impl Phase {
 }
 
 static PHASE: AtomicUsize = AtomicUsize::new(Phase::Idle as usize);
+/// Non-zero while the pending request came from `er-quickload.toml` rather than from a player
+/// pressing a row. Only the unprompted kind is subject to the new-character refusal below.
+static REQUEST_IS_CONFIGURED: AtomicUsize = AtomicUsize::new(0);
+/// `GameDataMan::play_time` sampled the first frame a player was in the world, or `UNSAMPLED`.
+static FIRST_PRESENT_PLAY_TIME: AtomicUsize = AtomicUsize::new(UNSAMPLED_PLAY_TIME);
+
+/// No reading has been taken yet. A real `play_time` is seconds and never reaches this.
+const UNSAMPLED_PLAY_TIME: usize = usize::MAX;
+
+/// Below this many seconds on the first frame in the world, the character was made just now.
+///
+/// The reading is taken at first presence, not at import time, so a player who stands in the
+/// Chapel of Anticipation while the fetch runs is still recognised as new. A character loaded from
+/// a save arrives with its accumulated seconds, which are past this within the first minute of the
+/// very first session that ever saved it.
+const NEW_CHARACTER_PLAY_TIME_SECONDS: usize = 60;
+
+/// `GameDataMan::play_time` right now, or `None` when the singleton is not up.
+fn live_play_time_seconds() -> Option<u32> {
+    use eldenring::cs::GameDataMan;
+    use fromsoftware_shared::FromStatic;
+
+    // Safety: read through the upstream singleton accessor, which answers `Err` before the
+    // singleton exists; this is the same access the character reader makes.
+    let game_data_man = unsafe { GameDataMan::instance() }.ok()?;
+    Some(game_data_man.play_time)
+}
+
+/// Whether the character in the world right now is one the player just created.
+///
+/// # Why the configured import asks at all
+///
+/// Nothing else in [`tick`] distinguishes one character from another: its preconditions are the
+/// phase, the params and `player_present`, so the build lands on whichever character reaches the
+/// world first. For a player that is the difference between a harness and a disaster -- a
+/// character created seconds earlier in the Chapel of Anticipation came out wearing another
+/// character's armour at that character's level with its stats and inventory, bisected to this
+/// crate on 2026-09-13 over 22 loaded DLLs.
+///
+/// A player who presses `Load Build from URL` is asking for the rebuild and is never refused; this
+/// applies only to the import nobody asked for.
+fn character_was_just_created() -> bool {
+    let sampled = FIRST_PRESENT_PLAY_TIME.load(Ordering::SeqCst);
+    let seconds = if sampled == UNSAMPLED_PLAY_TIME {
+        let Some(seconds) = live_play_time_seconds() else {
+            // No reading means no evidence that this character is safe to rewrite, and the
+            // refusal is the recoverable half of that pair.
+            return true;
+        };
+        let seconds = seconds as usize;
+        FIRST_PRESENT_PLAY_TIME.store(seconds, Ordering::SeqCst);
+        seconds
+    } else {
+        sampled
+    };
+    seconds < NEW_CHARACTER_PLAY_TIME_SECONDS
+}
 
 /// The parsed build, handed from the fetch worker to the game task.
 static DOC: Mutex<Option<BuildDoc>> = Mutex::new(None);
@@ -365,7 +422,14 @@ pub fn request_configured() -> Result<bool, RequestError> {
         ));
         return Ok(false);
     };
-    request(&url).map(|()| true)
+    let outcome = request(&url).map(|()| true);
+    if outcome.is_ok() {
+        // Marks this pending request as the unprompted kind, which is the only kind
+        // `character_was_just_created` refuses. Set after the claim so a losing race cannot
+        // relabel a request a player made.
+        REQUEST_IS_CONFIGURED.store(1, Ordering::SeqCst);
+    }
+    outcome
 }
 
 /// The fetch proper. Runs on the worker thread; touches no game state.
@@ -503,7 +567,20 @@ pub unsafe fn tick() -> Option<Report> {
     if !unsafe { grant::player_present() } {
         return None;
     }
+    if REQUEST_IS_CONFIGURED.load(Ordering::SeqCst) != 0 && character_was_just_created() {
+        REQUEST_IS_CONFIGURED.store(0, Ordering::SeqCst);
+        let _ = DOC.lock().map(|mut slot| slot.take());
+        set_error(format!(
+            "REFUSED: the character in the world has under {NEW_CHARACTER_PLAY_TIME_SECONDS}s of \
+             play time, so it was created just now rather than loaded. A `{BUILD_URL_KEY}` in \
+             {CONFIG_FILE_NAME} rebuilds whichever character reaches the world first, and \
+             rewriting a character the player is still making is never what that was for. Load an \
+             existing character to import into it, or press `Load Build from URL` on this one."
+        ));
+        return None;
+    }
     let doc = DOC.lock().ok().and_then(|mut slot| slot.take())?;
+    REQUEST_IS_CONFIGURED.store(0, Ordering::SeqCst);
     // Claim the run before doing it: a panic must not leave the task retrying every frame.
     PHASE.store(Phase::Importing as usize, Ordering::SeqCst);
 

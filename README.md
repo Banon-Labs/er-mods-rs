@@ -24,7 +24,7 @@ anything else here unless the notes say so.
 | **`er_quickload.dll`** | Straight from process start to an in-world character with no menu input, and a real progress bar over the dead early-boot gap. Also owns the missing-save picker, the customized System > Quit load rows, and the loading-screen portrait and stat panel. [Manual](crates/er-quickload/README.md) |
 | `er_save_picker.dll` | The boot save picker on its own. Detects the product DLL and stays inert when it is loaded. |
 | `er_quit_menu.dll` | The customized System > Quit tab as a standalone harness. |
-| `er_loading_portrait.dll` / `er_loading_bar.dll` | Standalone shells for the portrait and the pre-native loading bar. **Never load either next to `er_quickload.dll`** -- two D3D12 Present compositors in one process. |
+| `er_loading_portrait.dll` | Standalone shell for the portrait. **Never load it next to `er_quickload.dll`** -- two D3D12 Present compositors in one process. |
 | `er_save_disable.dll` | Suppresses all save writes. Census/proof tool, not a play mod. |
 
 ### Inventory and equipment

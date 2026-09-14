@@ -70,9 +70,19 @@ fn log_dir() -> PathBuf {
 /// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
 /// runs -- mixing evidence from builds that no longer exist is how a count over one file
 /// gets read as one run's behaviour.
+/// A run directory moves this file out of the game directory; without the knob it stays there.
+///
+/// That is not a tidiness point. On run br-20260912-183117-e19a this shell took the process down
+/// inside the System-window restore, and the only line naming the window it died on was in this
+/// log -- in the game directory, while the run's own artifact directory held twenty-five files and
+/// none of them said it. Same failure `er-invasion-warp` had on 2026-09-08, same fix.
+/// `scripts/er_artifact_env.py` carries the matching entry.
+const LOG_PATH_ENV: &str = "ER_QUICKLOAD_QUIT_MENU_LOG_PATH";
+
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    let _ = dir;
     er_game_base::log::append_line(
-        &dir.join(LOG_FILE_NAME),
+        &er_game_base::log::redirected_artifact_path(LOG_PATH_ENV, LOG_FILE_NAME),
         format_args!("er-quit-menu: {args}"),
     );
 }

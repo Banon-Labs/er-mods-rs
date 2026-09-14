@@ -7,7 +7,6 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     {
         return;
     }
-    load_title_scaleform_memory_gfx();
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {

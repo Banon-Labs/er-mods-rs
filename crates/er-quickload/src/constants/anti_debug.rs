@@ -50,8 +50,6 @@ pub(crate) const PE_SECTION_SCAN_START: usize = 0;
 /// Current-process pseudo-handle (-1) for FlushInstructionCache, + whole-process flush size.
 pub(crate) const ER_CURRENT_PROCESS_PSEUDO_HANDLE: isize = -1;
 pub(crate) const FLUSH_WHOLE_PROCESS_SIZE: usize = 0;
-/// Zero fill for synthetic qword scratch buffers.
-pub(crate) const SYNTHETIC_ZERO_QWORD: u64 = 0;
 /// FromSoft assert wrapper 0x141eb97a0 (calls the core 0x141eb98d0 which, in the
 /// default mode, deliberately crashes via a null write at 0x141eb9999). Hooking
 /// it captures the failing assertion's expr/message/file (its rcx/rdx/r8 are
@@ -86,20 +84,27 @@ pub(crate) const BOOTSTRAP_DETAIL_PLAYER_UNAVAILABLE: &str = "player_unavailable
 pub(crate) const INITIAL_GAME_TASK_TICKS: u64 = 0;
 pub(crate) const GAME_TASK_TICK_INCREMENT: u64 = 1;
 pub(crate) const TASK_INSTANCE_WAIT_LOG_INTERVAL: u64 = 4096;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_MAX_CONFIRM_PULSES: u32 = 16;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DEFAULT_INTERVAL_TICKS: u64 = 30;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_LAST_PULSE_TICK: u64 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_HOOK_FRAMES: usize = 4;
 pub(crate) const SAFE_INPUT_KEY_UP_STATE: i16 = 0;
 pub(crate) const VK_RETURN_KEY: usize = 0x0d;
 pub(crate) const VK_SPACE_KEY: usize = 0x20;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYDOWN_LPARAM: isize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const KEYUP_LPARAM: isize = 0xc0000001u32 as isize;
 pub(crate) const DIK_RETURN: usize = 0x1c;
 pub(crate) const DIK_SPACE: usize = 0x39;
 pub(crate) const DIRECT_INPUT_CREATE_DEVICE_VTBL_INDEX: usize = 3;
 pub(crate) const DIRECT_INPUT_DEVICE_GET_STATE_VTBL_INDEX: usize = 9;
 pub(crate) const HRESULT_SUCCESS_FLOOR: i32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_DIRECT_INPUT_WAIT_TICKS: u64 = 300;
 // The TitleStep ctor (0x140b0b1c0) stores this derived vtable to owner+0
 // (`lea rax,[0x142b63bb0]; mov [rdi],rax` at 0x140b0b1e5). The previous value
@@ -222,17 +227,23 @@ pub(crate) const MENU_TASK_STATE_DELAY_OFFSET: usize =
     core::mem::offset_of!(MenuTaskStateLayout, delay_bits);
 pub(crate) const TASK_ENQUEUE_TRACE_LIMIT: usize = 256;
 pub(crate) const NO_SAFE_INPUT_CONFIRM_FRAMES: usize = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_CONFIRM_FRAME_DECREMENT: usize = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NO_CONFIRM_PULSES: u32 = 0;
 pub(crate) const SAFE_INPUT_FIRST_PULSE_INDEX: u32 = 0;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_NEXT_PULSE_OFFSET: u32 = 1;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_POST_MAP_MIN_CONFIRM_COUNT: u32 = 5;
+#[cfg(feature = "autoload")]
 pub(crate) const SAFE_INPUT_INITIAL_DELAY_TICKS: u64 = 0;
 pub(crate) const WINDOW_PID_UNSET: u32 = 0;
 pub(crate) const ENUM_WINDOWS_STOP_NUMERIC: i32 = 0;
 pub(crate) const ENUM_WINDOWS_CONTINUE_NUMERIC: i32 = 1;
 pub(crate) const DIRECT_INPUT_KEY_DOWN_MASK: u8 = 0x80;
 pub(crate) use er_title_flow::MENU_TRACE_UNSEEN_SEQ;
+#[cfg(feature = "autoload")]
 pub(crate) const POST_MAP_CONTINUATION_STATE_QWORD: usize = 2;
 pub(crate) use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
 pub(crate) use er_title_flow::TITLE_NATIVE_JOB_NOT_CALLED;
@@ -440,6 +451,16 @@ pub(crate) static TITLE_CUSTOM_COVER_BLACK_LAST_CALLER_RVA: AtomicUsize =
 /// preserved title job, instead of replacing the authoritative BeginTitle out-slot.
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const MENU_WINDOW_JOB_RUN_RVA: usize = 0x7ad1c0;
+/// `CS::TitleStep+0x128` -- the element count of the `DLFixedVector<MenuWindow*>` at
+/// `TitleStep+0xe0` that `STEP_MenuJobWait` pumps through `FUN_140733f20`.
+///
+/// Zeroed in the `TitleStep` constructor, grown as the title builds its windows, decremented by
+/// `FUN_140733d70` inside the teardown. Read in a live world it is the whole defect as a number: a
+/// non-zero count while a real map is mounted means title windows are still being updated over it,
+/// which is what the drain in `own_load::loaders::load_drive` waits on before it lets a switch
+/// commit. Derived from `er-title-flow`'s `TitleOwnerLayout` rather than re-declared, so the two
+/// cannot disagree about where the count sits.
+pub(crate) use er_title_flow::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET;
 #[allow(dead_code)] // Retained diagnostic state: no live reader today, kept with its sibling telemetry.
 pub(crate) static TITLE_CUSTOM_COVER_RUN_ORIG: AtomicUsize = AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 pub(crate) use er_telemetry_core::counters::TITLE_CUSTOM_COVER_RUN_RECURSION;

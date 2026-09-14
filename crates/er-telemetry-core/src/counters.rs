@@ -496,7 +496,6 @@ pub static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_BEFORE: AtomicUsize = AtomicUsize::n
 pub static SYSTEM_QUIT_DUPLICATE_LAST_COUNT_AFTER: AtomicUsize = AtomicUsize::new(0);
 pub static C30_WRITER_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static C30_WRITER_LOG_COUNT: AtomicUsize = AtomicUsize::new(0);
-pub static DISMISS_WRITE_LOG: AtomicUsize = AtomicUsize::new(0);
 pub static ANTI_ANTIDEBUG_APPLIED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_ANIM_DIAG_CALLS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_NATIVE_MENU_VISUAL_SUPPRESSED_BUILDS: AtomicUsize = AtomicUsize::new(0);
@@ -718,9 +717,6 @@ pub static TITLE_SCALEFORM_FILE_OPEN_INSTALLED: AtomicUsize = AtomicUsize::new(0
 pub static TITLE_SCALEFORM_FILE_OPEN_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_FILE_OPEN_LOGO_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SCALEFORM_FILE_OPEN_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_CORE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_MUTED_HITS: AtomicUsize = AtomicUsize::new(0);
@@ -731,19 +727,6 @@ pub static SOUND_POST_EVENT_FIRST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_MUTED_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_PLAYING_ID: AtomicUsize = AtomicUsize::new(0);
 pub static SOUND_POST_EVENT_LAST_FLAGS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_SERVES: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_FAILURES: AtomicUsize = AtomicUsize::new(0);
-/// Title file-opens that were left vanilla because no cover was drawing over them.
-///
-/// The strip takes the title's own `PRESS ANY BUTTON` prompt and menu out of the movie, which is
-/// right while the boot cover is painted over it and wrong the moment it is not. A non-zero count
-/// is the evidence that a title after boot -- the one a player reaches through System > Quit Game
-/// -- kept the controls it needs to load, continue or reach settings.
-pub static TITLE_05_000_RUNTIME_STRIP_DECLINED: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_INPUT_LEN: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS: AtomicUsize = AtomicUsize::new(0);
-pub static TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_ARMED: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_SERVES: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_05_010_RUNTIME_EDIT_FAILURES: AtomicUsize = AtomicUsize::new(0);
@@ -1010,6 +993,14 @@ pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_OPENED_COUNT: AtomicUsize = AtomicUsi
 /// Exports that failed after being accepted -- no character in the world, an unreadable catalog, or
 /// a shell-execute the OS refused.
 pub static SYSTEM_QUIT_GENERATE_BUILD_LINK_FAILED_COUNT: AtomicUsize = AtomicUsize::new(0);
+// ---- the cloned Save Game row --------------------------------------------------------------
+// The destination browser on a row of its own, for a load that leaves both vanilla rows alone. Its
+// flow, its stages and its counters are the Save Game ones already declared above -- what is new
+// here is only where the row sits, because a cloned row has a cloned row's pointers.
+/// Recorded cloned action object and `PropertyNewButtonController` for the row. Telemetry only:
+/// the row identity is the list cursor, here as everywhere else on this tab.
+pub static SYSTEM_QUIT_SAVE_GAME_AS_ACTION_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_SAVE_GAME_AS_CONTROLLER_LAST_OBJECT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_ACTION_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_SUCCESS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_OPEN_SAVE_DIR_FAILURE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1036,6 +1027,7 @@ pub static SYSTEM_QUIT_ROW_INDEX_LOAD_PROFILE_PLUS1: AtomicUsize = AtomicUsize::
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_SAVE_PROFILES_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_LOAD_BUILD_URL_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_INDEX_GENERATE_BUILD_LINK_PLUS1: AtomicUsize = AtomicUsize::new(0);
+pub static SYSTEM_QUIT_ROW_INDEX_SAVE_GAME_AS_PLUS1: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_ROW_RESOLVE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Resolutions that came from the dialog's own list cursor -- the only row identity, shared by mouse,
 /// keyboard and pad. Equal to `RESOLVE_COUNT - AMBIGUOUS_COUNT` by construction; a divergence would
@@ -1202,6 +1194,39 @@ pub static SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0
 pub static SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_SKIP_RESTORE_AFTER_QUICKLOAD_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_REAL_WINDOWS_HIDDEN: AtomicUsize = AtomicUsize::new(0);
+/// Z-order oracle for the `05_010_ProfileSelect` surface both Load rows open, sampled once per
+/// frame the picker window is running. Every field below is written by
+/// `er_quit_menu_core::system_windows::sample_profile_select_occlusion`.
+///
+/// # What is read, and why it answers the question
+///
+/// `CSMenuMan+0x90+menu_id` is the game's own per-menu flag byte, and bit
+/// `er_title_flow::OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT` (0x4) means that menu is drawn this
+/// frame. `02_040_OptionSetting` is the pane the player pressed the row on, so its draw bit still
+/// being set while the picker is up is the defect the user reported -- the picker is behind it.
+/// The hide clears that bit; run br-20260913-154443-65a2 recorded the transition as
+/// `flags=0x7->0x1` on the frame the picker came up.
+///
+/// # Sentinels
+///
+/// `_SAMPLES == 0` means nothing measured, which is not the same as "the ordering was fine".
+/// `_FIRST_OCCLUDED_FLAGS` and `_LAST_FLAGS` start at `usize::MAX` and are emitted as `-1`.
+pub static PROFILE_SELECT_Z_SAMPLES: AtomicUsize = AtomicUsize::new(0);
+/// Frames where `02_040_OptionSetting` still carried its draw bit while the picker was running.
+pub static PROFILE_SELECT_Z_OCCLUDED_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// Frames where it did not, i.e. the picker was the frontmost of the two.
+pub static PROFILE_SELECT_Z_CLEAR_FRAMES: AtomicUsize = AtomicUsize::new(0);
+/// The flag byte on the first occluded frame; `usize::MAX` until one happens.
+pub static PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The flag byte on the most recent sample; `usize::MAX` until one happens.
+pub static PROFILE_SELECT_Z_LAST_FLAGS: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// The `menu_id` the flag byte was read at, so a sample taken against the wrong window is visible
+/// rather than silently scored. `0x25` is `02_040_OptionSetting`.
+pub static PROFILE_SELECT_Z_LAST_MENU_ID: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Frames where the tracked `02_000_IngameTop` was still a live `MenuWindow`. Its `menu_id` reads
+/// `0xffff`, so it has no flag byte and no draw bit to read -- this is aliveness, not visibility,
+/// and is recorded separately rather than fused into the occlusion count.
+pub static PROFILE_SELECT_Z_TOP_ALIVE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1320,6 +1345,16 @@ pub static TITLE_ANIM_SPEED_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static TITLE_SETSTATE_TRACE_LAST_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// Times the title step was set to `PlayGame` -- the game committing a save load.
+///
+/// The one signal every load path shares. The boot cover's `LoadingSave` phase used to assert only
+/// from the Continue-confirm counters, so a load the game itself commits (configured-save commit ->
+/// native save-data read -> its own LoadGame builder -> this transition) left the label frozen on
+/// `PREPARING SAVE` while the bar filled from the world gauge underneath it.
+pub static TITLE_SETSTATE_PLAY_GAME_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// This epoch's baseline for [`TITLE_SETSTATE_PLAY_GAME_COUNT`].
+pub static BOOT_VIEW_PLAY_GAME_BASELINE: AtomicUsize = AtomicUsize::new(0);
 pub static SYNTHETIC_OUTER_PTR: AtomicUsize = AtomicUsize::new(0);
 pub static ASSERT_LOG_LINES_WRITTEN: AtomicUsize = AtomicUsize::new(0);
 pub static RENDER_FRAME_COUNT: AtomicUsize = AtomicUsize::new(0);
@@ -1424,6 +1459,12 @@ pub static PRODUCT_CONTINUE_EMPTY_PROFILE_TICKS: AtomicUsize = AtomicUsize::new(
 /// One-shot latch: the empty-profile window has already handed the choice back to the user, so the
 /// loud hand-back line is never repeated (the arm itself is idempotent regardless).
 pub static PRODUCT_CONTINUE_EMPTY_PROFILE_ESCALATED: AtomicUsize = AtomicUsize::new(0);
+/// Consecutive autoload ticks on which every liveness fact read false. Reset by a single tick of
+/// any of them, so a boot that is merely slow never accumulates toward the offer.
+pub static PRODUCT_CONTINUE_NO_PLAYER_TICKS: AtomicUsize = AtomicUsize::new(0);
+/// One-shot latch: a stalled boot has already been handed the save picker, so the loud line is
+/// never repeated (the arm itself is idempotent regardless).
+pub static PRODUCT_CONTINUE_NO_PLAYER_PICKER_OFFERED: AtomicUsize = AtomicUsize::new(0);
 pub static SAVE_PICKER_KBD_HOOK_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ONTO_DRAW_HITS: AtomicUsize = AtomicUsize::new(0);
 pub static PORTRAIT_ALPHA_COVER_PCT: AtomicUsize = AtomicUsize::new(0);

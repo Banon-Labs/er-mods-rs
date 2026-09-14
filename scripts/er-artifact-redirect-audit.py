@@ -223,8 +223,13 @@ CONST_STR = r'const\s+{name}\s*:\s*&(?:\'static\s+)?str\s*=\s*"([^"]+)"'
 # that crate from reading the environment itself. The knob is still declared at the writer, so this
 # parse still reads the table out of the code rather than out of a list someone must remember to
 # update. A trailing comma is optional because rustfmt adds one whenever the call wraps.
+# The env var may be a const too, and requiring a literal there silently lost three knobs. The
+# three standalone quit shells each declare `const LOG_PATH_ENV: &str = "ER_QUICKLOAD_..._PATH"`
+# and pass the const, so this regex matched none of them and the audit reported the launcher was
+# redirecting knobs "not honoured" -- when the crates honour them and the parse could not see it.
 SHARED_RESOLVER = re.compile(
-    r'redirected_artifact_path\(\s*"(?P<env>ER_QUICKLOAD_[A-Z0-9_]+)"\s*,\s*'
+    r'redirected_artifact_path\(\s*(?:"(?P<env>ER_QUICKLOAD_[A-Z0-9_]+)"'
+    r'|(?P<env_ident>[A-Z][A-Z0-9_]{3,}))\s*,\s*'
     r'(?:"(?P<literal>[A-Za-z0-9._-]+\.(?:log|jsonl|json|txt|bin))"'
     r'|(?P<ident>[A-Z][A-Z0-9_]{3,}))\s*,?\s*\)'
 )
@@ -360,6 +365,11 @@ def discover_knobs() -> list[Knob]:
             _record(found, env, name, relative)
         for match in SHARED_RESOLVER.finditer(text):
             env = match.group("env")
+            if env is None:
+                env_ident = match.group("env_ident")
+                env = _const_value(text, env_ident) or _crate_const_value(source, env_ident)
+            if env is None or not env.startswith("ER_QUICKLOAD_"):
+                continue
             if env in INPUT_CHANNEL_KNOBS or not env.endswith("_PATH"):
                 continue
             ident = match.group("ident")

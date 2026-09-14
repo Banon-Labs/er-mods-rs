@@ -1015,6 +1015,7 @@ pub(crate) fn install_quit_to_desktop_clean_kill_hook() {
     }
 }
 
+#[cfg(feature = "save-game-row")]
 pub(crate) fn install_system_quit_save_game_text_hook() {
     if SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.load(Ordering::SeqCst)
         != SYSTEM_QUIT_SAVE_GAME_TEXT_NOT_INSTALLED

@@ -82,6 +82,7 @@
 //!
 //! See [`host::install_host`]. This crate must not depend on the root crate.
 
+pub mod autocomplete;
 pub mod boot;
 pub mod config;
 pub mod host;
@@ -90,15 +91,18 @@ pub mod model;
 pub mod os_dialog;
 #[cfg(feature = "boot-flow")]
 pub mod overlay;
+pub mod reason;
 pub mod slots;
 pub mod surface;
 
+pub use autocomplete::*;
 pub use boot::*;
 pub use config::*;
 pub use host::*;
 pub use model::*;
 #[cfg(feature = "os-dialog")]
 pub use os_dialog::*;
+pub use reason::*;
 pub use slots::*;
 pub use surface::*;
 

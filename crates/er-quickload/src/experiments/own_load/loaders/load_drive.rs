@@ -172,6 +172,187 @@ pub(crate) unsafe fn own_load_drive(base: usize, gm: usize, owner: usize, want_s
     OWN_LOAD_PHASE_PUB.store(PHASE_DONE + 1, Ordering::SeqCst);
 }
 
+/// Publish the arguments a deferred `own_load_continue_fire` needs so the game task can call back.
+///
+/// `c30_real` and `fp_real` are not stored: both are recomputed by the retry from the values it
+/// passes, and `own_load_continue_fire` re-checks them itself before it writes anything.
+fn defer_own_load_continue(base: usize, title_owner: usize, c30: i32, fp_level: u32) {
+    OWN_LOAD_CONTINUE_DEFER_BASE.store(base, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_OWNER.store(title_owner, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_C30.store(c30 as usize, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFER_LEVEL.store(fp_level as usize, Ordering::SeqCst);
+    OWN_LOAD_CONTINUE_DEFERRED.store(true, Ordering::SeqCst);
+}
+
+/// Call `own_load_continue_fire` again for a commit that was held back waiting on the title
+/// teardown. Does nothing unless a commit is actually deferred.
+///
+/// The flag is taken, not read: only another hold re-arms it. That is what bounds the retry. Every
+/// other way out of `own_load_continue_fire` -- it commits, or one of its save-safety guards refuses
+/// -- leaves the flag down, so a commit that has become ungrantable stops after a single retry
+/// instead of re-entering, and re-logging its entry line, on every frame for the rest of the run.
+///
+/// # Safety
+///
+/// Game-task context. The callee re-checks every save-safety condition and aborts without a write
+/// on any failure, so a stale owner cannot turn into a save.
+pub(crate) unsafe fn own_load_continue_retry_deferred(n: u64) {
+    if !OWN_LOAD_CONTINUE_DEFERRED.swap(false, Ordering::SeqCst) {
+        return;
+    }
+    let base = OWN_LOAD_CONTINUE_DEFER_BASE.load(Ordering::SeqCst);
+    let owner = OWN_LOAD_CONTINUE_DEFER_OWNER.load(Ordering::SeqCst);
+    let c30 = OWN_LOAD_CONTINUE_DEFER_C30.load(Ordering::SeqCst) as i32;
+    let fp_level = OWN_LOAD_CONTINUE_DEFER_LEVEL.load(Ordering::SeqCst) as u32;
+    let c30_real = c30 != GAME_MAN_C30_UNSET && c30 != 0 && c30 != FULLREAD_C30_M10_DEFAULT;
+    let (fp_real, _live_level, _name_len) = unsafe { char_fingerprint(base) };
+    unsafe { own_load_continue_fire(base, owner, c30, c30_real, fp_real, fp_level, n) };
+}
+
+static OWN_LOAD_CONTINUE_DEFERRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static OWN_LOAD_CONTINUE_DEFER_BASE: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_OWNER: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_C30: AtomicUsize = AtomicUsize::new(0);
+static OWN_LOAD_CONTINUE_DEFER_LEVEL: AtomicUsize = AtomicUsize::new(0);
+
+/// Ask the title to close the menu the switch made it rebuild, and answer whether it is gone.
+///
+/// Which window may be asked is `crate::orphan_title_window`'s judgement plus one check that cannot
+/// be made there: `MENU_WINDOW_CLOSE_WITH_FAILED_RVA` closes any `MenuWindow`, including a
+/// `CS::MessageBoxDialog`, so the pointer read out of the title owner's holder slot is identified by
+/// its vtable before it is asked anything. A slot holding something this crate cannot name is left
+/// alone and the commit runs, which is the behaviour that shipped before.
+///
+/// Returns `true` when the commit may proceed: either the owner's `DLFixedVector<MenuWindow*>` at
+/// `owner+0xe0` has drained to zero elements, or the budget below is spent. Returns `false` while
+/// the engine is still working, which leaves the caller's phase where it was so the next tick asks
+/// again -- a commit must not be counted on a tick that did not commit.
+///
+/// The budget exists because a load must never be hostage to a teardown. If the count has not
+/// drained within `TITLE_MENU_DRAIN_BUDGET_TICKS`, this gives up, says so, and lets the commit run:
+/// a title window over a loaded world is the defect this is trying to remove, and it is still far
+/// better than a character that never loads.
+///
+/// # Safety
+///
+/// Game-task context, and every read is a fault-tolerant `safe_read_usize`. The one call it makes
+/// is the engine's own `CloseAsFailed(MenuWindow*)`, resolved through the build-verified translator.
+unsafe fn title_menu_drained_for_commit(base: usize, owner: usize, n: u64) -> bool {
+    /// Ticks the commit will wait for the engine to finish its own teardown before giving up.
+    ///
+    /// Measured, not chosen. At 240 the hold outlived the teardown it was waiting inside: the
+    /// 2026-09-11 20:21 run asked for the close at `+36960ms` and the log carried a second
+    /// world-loss line at `+37488ms`, 528 ms later, so holding that long let the switch's teardown
+    /// run to completion and drop the player on a real title screen -- a view this flow is never
+    /// meant to reach. The budget is now well inside that window, so the engine gets frames to reap
+    /// and the hold can never be what takes the world down.
+    const TITLE_MENU_DRAIN_BUDGET_TICKS: usize = 12;
+    static DRAIN_WAITED_TICKS: AtomicUsize = AtomicUsize::new(0);
+    static CLOSE_REQUESTED_FOR_WINDOW: AtomicUsize = AtomicUsize::new(0);
+    static CLOSE_REQUESTS_SPENT: AtomicUsize = AtomicUsize::new(0);
+    /// One line per run for an unrecognised holder slot, so a refusal is visible without turning the
+    /// commit into a log loop.
+    static DRAIN_WRONG_VTABLE_LOGGED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    let null = TITLE_OWNER_SCAN_START_ADDRESS;
+    if owner == null {
+        return true;
+    }
+    let Some(count) =
+        (unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET) })
+    else {
+        // The count is unreadable, so there is nothing to wait on and nothing to prove. Commit.
+        return true;
+    };
+    if count == 0 {
+        let waited = DRAIN_WAITED_TICKS.load(Ordering::SeqCst);
+        if waited != 0 {
+            append_autoload_debug(format_args!(
+                "title-menu-drain: owner=0x{owner:x} window count reached 0 after {waited} tick(s) -- the engine reaped the title menu the switch rebuilt; commit may proceed (#{n})"
+            ));
+            DRAIN_WAITED_TICKS.store(0, Ordering::SeqCst);
+            CLOSE_REQUESTED_FOR_WINDOW.store(0, Ordering::SeqCst);
+            CLOSE_REQUESTS_SPENT.store(0, Ordering::SeqCst);
+        }
+        return true;
+    }
+    let window =
+        unsafe { safe_read_usize(owner + TITLE_OWNER_MENU_HOLDER_E0_OFFSET) }.unwrap_or(null);
+    let spent = CLOSE_REQUESTS_SPENT.load(Ordering::SeqCst);
+    let switch_committed =
+        SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst) == 1;
+    if !crate::orphan_title_window::switch_title_menu_close_required(count, switch_committed, spent)
+    {
+        return true;
+    }
+    // Identify the window before asking it anything. `owner+0xe0` is element 0 of the title's own
+    // `DLFixedVector<MenuWindow*>` (the base is 8-aligned, so the vector's `-(int)base & 7` index
+    // fixup is 0 and element 0 sits exactly here), and on every switch measured so far it holds the
+    // `CS::TitleTopDialog` the title rebuilt. A slot holding anything else is someone's window and
+    // the close is refused: the pump-side gate in `system_quit_close_orphaned_title_window` judges by
+    // the game's own resource name and is the path that can still take it.
+    let window_vtable = if window == null {
+        null
+    } else {
+        unsafe { safe_read_usize(window) }.unwrap_or(null)
+    };
+    let title_dialog_vtable = er_game_base::mem::game_data_addr(
+        base,
+        TITLE_TOP_DIALOG_VTABLE_RVA,
+        "TITLE_TOP_DIALOG_VTABLE_RVA",
+    );
+    if window != null && window_vtable != title_dialog_vtable {
+        if !DRAIN_WRONG_VTABLE_LOGGED.swap(true, Ordering::SeqCst) {
+            append_autoload_debug(format_args!(
+                "title-menu-drain: refused -- owner=0x{owner:x} holder+0xe0=0x{window:x} has vtable 0x{window_vtable:x}, not the TitleTopDialog 0x{title_dialog_vtable:x}; this crate does not close a window it cannot name (#{n})"
+            ));
+        }
+        return true;
+    }
+    // Re-armed on the window pointer, not latched once per process. A switch rebuilds the title, so
+    // the second load gets a different `MenuWindow*` than the first; a process-wide one-shot is
+    // exactly why the first load used to look clean and every later one did not.
+    if window != null && CLOSE_REQUESTED_FOR_WINDOW.swap(window, Ordering::SeqCst) != window {
+        CLOSE_REQUESTS_SPENT.fetch_add(1, Ordering::SeqCst);
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS
+            .fetch_add(1, Ordering::SeqCst);
+        match crate::experiments::gated_game_fn(
+            MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
+            "MENU_WINDOW_CLOSE_WITH_FAILED_RVA",
+        ) {
+            Some(close_addr) => {
+                // Justify the transmute: the address is resolved through the same build-verified
+                // translator every other direct call here uses, and the signature matches the
+                // static decompile of `FUN_1407ac890` -- one `MenuWindow*` in rcx, no return.
+                let close: unsafe extern "system" fn(usize) =
+                    unsafe { std::mem::transmute(close_addr) };
+                unsafe { close(window) };
+                append_autoload_debug(format_args!(
+                    "title-menu-drain: asked CloseAsFailed 0x{close_addr:x} for the title window the switch rebuilt (owner=0x{owner:x} window=0x{window:x} count={count}) -- holding the commit so STEP_MenuJobWait can run FUN_1407ada40 itself (#{n})"
+                ));
+            }
+            None => {
+                append_autoload_debug(format_args!(
+                    "title-menu-drain: MENU_WINDOW_CLOSE_WITH_FAILED_RVA 0x{MENU_WINDOW_CLOSE_WITH_FAILED_RVA:x} did not resolve on this build -- committing without a drain, so the title menu will stay over the world (#{n})"
+                ));
+                return true;
+            }
+        }
+    }
+    let waited = DRAIN_WAITED_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if waited >= TITLE_MENU_DRAIN_BUDGET_TICKS {
+        append_autoload_debug(format_args!(
+            "title-menu-drain: giving up after {waited} tick(s) with owner=0x{owner:x} count={count} window=0x{window:x} -- committing anyway; a character that loads under a stale title beats one that never loads (#{n})"
+        ));
+        DRAIN_WAITED_TICKS.store(0, Ordering::SeqCst);
+        CLOSE_REQUESTED_FOR_WINDOW.store(0, Ordering::SeqCst);
+        CLOSE_REQUESTS_SPENT.store(0, Ordering::SeqCst);
+        return true;
+    }
+    false
+}
+
 /// Own-load final step (er-effects-rs-mr2): after the proven verify-only parse mounted a real c30 +
 /// real character, fire the guarded native `continue_confirm` 0x140b0e180 -> `SetState5` 0x140b0d960
 /// to stream the character into the playable world. `continue_confirm` reads owner = [rcx+8] off
@@ -249,6 +430,31 @@ pub(crate) unsafe fn own_load_continue_fire(
         ));
         return;
     }
+    // Hold the commit until the engine has taken down the title menu this switch made it rebuild.
+    //
+    // The switch tears the world down (`c30 0xe000000 -> 0xa010000`), the game acquires
+    // `05_000_Title` and `05_001_Title_Logo` a few milliseconds later, and `continue_confirm` then
+    // takes `CS::TitleStep` to `STEP_PlayGame` -- while the title's own job chain is still
+    // mid-flight. `STEP_MenuJobWait` never runs again, so `ExecuteMenuJob` never asks the job for a
+    // result and `FUN_1407ada40`, the only thing that deregisters the window from `CSMenuMan+0x90`
+    // and erases it from the owner's vector, never runs. The world then arrives underneath a title
+    // menu nothing will take down: `br-20260913-162421-3421` logged
+    // `title-dialog-orphan: ... owner_window_count=1` on the same frame as `T_controllable`.
+    //
+    // The check sits here rather than at a caller because this is the function every path provably
+    // reaches: its own `GUARD PASS` line is in the log of every switch, including the
+    // `own-load-switch-reload` path that has `own_load_continue_enabled=false`.
+    //
+    // Re-entry belongs to the game task, not to whoever called here: `defer_own_load_continue`
+    // publishes the arguments and the recurring task calls `own_load_continue_retry_deferred` each
+    // frame until the count drains or the budget is spent. Nothing is pumped and no field is
+    // written -- the close is the engine's own `CloseAsFailed`, and the wait is on the engine's own
+    // count.
+    if !unsafe { title_menu_drained_for_commit(base, title_owner, n) } {
+        defer_own_load_continue(base, title_owner, c30, fp_level);
+        return;
+    }
+    OWN_LOAD_CONTINUE_DEFERRED.store(false, Ordering::SeqCst);
     // Guard passed. Build the {[OWNER_IDX]=title_owner} shim and fire the native continue_confirm.
     let shim = &raw mut OWN_STEPPER_SHIM;
     unsafe { (*shim)[OWN_STEPPER_SHIM_OWNER_IDX] = title_owner };
@@ -695,7 +901,10 @@ pub(crate) unsafe fn own_load_pump_tick(base: usize, gm: usize, frame_delta: f32
         // Still working (Continue) -- keep pumping next frame.
         return;
     }
-    // Terminal: Success (2) or Failed (3). Latch done so we stop pumping regardless of the transition.
+    // Terminal: Success (2) or Failed (3). Latch done so we stop pumping regardless of the
+    // transition. Latching here is still right when `own_load_continue_fire` below holds the commit
+    // for the title-menu drain: the hold re-enters through `own_load_continue_retry_deferred` on the
+    // recurring game task, not through this pump, and the job must not be run a second time.
     OWN_LOAD_PUMP_DONE.store(true, Ordering::SeqCst);
     if state == MENUJOB_STATE_FAILED {
         append_autoload_debug(format_args!(

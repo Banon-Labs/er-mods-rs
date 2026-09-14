@@ -21,18 +21,6 @@ use crate::{experiments::*, ffi::*, hooks::*, telemetry::*};
 
 pub(crate) const NO_PROCESS_HANDLE: usize = 0;
 
-/// The crash/exit logger is now always installed (user directive 2026-07-08). It is non-fatal
-/// diagnostic telemetry: the VEH logs the fault's register/stack context and then leaves the
-/// exception for the game's own handlers (`VECTORED_FIRST_HANDLER` + `EXCEPTION_CONTINUE_SEARCH`),
-/// so writing it unconditionally never changes game behavior -- it only guarantees an
-/// `er-quickload-crash-log.txt` (or the `ER_QUICKLOAD_CRASH_LOG_PATH` redirect) exists for every run,
-/// instead of self-enabling only after a first crash had already created the sentinel file (which
-/// meant the very first crash of a clean install went unlogged). `deliberate_fail_fast_enabled()`
-/// stays a separate explicit opt-in, so this does not turn semaphore mismatches into crashes.
-pub(crate) fn crash_logger_enabled() -> bool {
-    true
-}
-
 /// Separate, explicit opt-in for deliberate proof-gate faults. Crash logging is diagnostic telemetry;
 /// it must not turn semantic semaphore mismatches into crashes unless a run explicitly asks for
 /// release/fail-fast behavior.

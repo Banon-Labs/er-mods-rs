@@ -231,13 +231,7 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     // PINNED: the env-driven memory-GFX loader that fed these two is deleted (it had been an
     // inert no-op since 2026-07-19), so both have always emitted 0.
     let title_scaleform_memory_gfx_bytes = 0usize;
-    let title_scaleform_memory_gfx_replacements =
-        TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
-    let title_scaleform_05_000_memory_gfx_replacements =
-        TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS.load(Ordering::SeqCst);
     let title_scaleform_memory_gfx_failures = 0usize;
-    let title_scaleform_memory_gfx_last_file =
-        TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE.load(Ordering::SeqCst);
     let title_scaleform_resource_ctor_installed =
         TITLE_SCALEFORM_RESOURCE_CTOR_INSTALLED.load(Ordering::SeqCst) != 0;
     let title_scaleform_resource_ctor_hits =
@@ -499,6 +493,45 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
         "  \"oracle_world_lost_to_title\": {},\n  \"oracle_switch_return_title_request_retired\": {},\n",
         er_telemetry_core::counters::WORLD_LOST_TO_TITLE_COUNT.load(Ordering::SeqCst),
         er_telemetry_core::counters::SWITCH_RETURN_TITLE_REQUEST_RETIRED_COUNT.load(Ordering::SeqCst)
+    ));
+    // The title left standing over a loaded world, as three numbers instead of a screenshot.
+    //
+    // `run_ticks_in_world` is the defect: menu-pump ticks in which `05_000_Title`,
+    // `05_001_Title_Logo` or `05_020_TitleInformation` ran its `MenuWindowJob` while `GameMan+0xc30`
+    // named a real map and a switch had committed. A switch that ends with this at 0 put no title
+    // surface over the character. `close_requests` is what this crate did about it; a non-zero
+    // `run_ticks_in_world` with 0 requests means the gate refused (wrong build, no window, budget
+    // spent) rather than the defect being absent. `menu_window_count` is the game's own tally at
+    // `TitleStep+0x128` -- the vector `STEP_MenuJobWait` pumps -- and `-1` means no title owner was
+    // resolvable this run, which is "not proven", not "proven zero".
+    //
+    // Sampled from the owner the title tick already latched, not from a fresh scan: resolving the
+    // title owner walks committed memory when its cache is cold, and a telemetry write must not pay
+    // for that.
+    let latched_title_owner =
+        er_telemetry_core::counters::SYSTEM_QUIT_QUICKLOAD_LAST_TITLE_OWNER.load(Ordering::SeqCst);
+    if latched_title_owner != NULL_PTR
+        && let Some(count) = unsafe {
+            crate::experiments::safe_read_i32(
+                latched_title_owner + crate::constants::TITLE_OWNER_MENU_WINDOW_COUNT_128_OFFSET,
+            )
+        }
+        && count >= 0
+    {
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT
+            .store(count as usize, Ordering::SeqCst);
+    }
+    let title_menu_window_count =
+        er_telemetry_core::counters::TITLE_OWNER_MENU_WINDOW_COUNT.load(Ordering::SeqCst);
+    let title_menu_window_count_json = if title_menu_window_count == usize::MAX {
+        -1i64
+    } else {
+        title_menu_window_count as i64
+    };
+    body.push_str(&format!(
+        "  \"oracle_title_surface_run_ticks_in_world\": {},\n  \"oracle_orphan_title_window_close_requests\": {},\n  \"oracle_title_owner_menu_window_count\": {title_menu_window_count_json},\n",
+        er_telemetry_core::counters::TITLE_SURFACE_RUN_TICKS_IN_WORLD.load(Ordering::SeqCst),
+        er_telemetry_core::counters::ORPHAN_TITLE_WINDOW_CLOSE_REQUESTS.load(Ordering::SeqCst)
     ));
     body.push_str(&format!(
         "  \"oracle_msgbox_total_builds\": {},\n  \"oracle_blocking_modal_present\": {},\n  \"oracle_blocking_modal_ptr\": {},\n  \"oracle_blocking_modal_vtable\": {},\n  \"oracle_blocking_modal_closing_latch\": {},\n  \"oracle_policy_window_total_builds\": {},\n  \"oracle_policy_window_any_seen\": {},\n  \"oracle_policy_window_ptr\": {},\n  \"oracle_policy_window_vtable\": {},\n  \"oracle_policy_window_args\": [{}, {}, {}, {}, {}],\n  \"oracle_policy_window_stack_arg0\": {},\n  \"oracle_policy_window_backing_flag_ptr\": {},\n  \"oracle_policy_window_stored_backing_flag_ptr\": {},\n  \"oracle_policy_window_backing_flag_value\": {},\n  \"oracle_policy_window_requested_flag_value\": {},\n  \"oracle_policy_window_caller_rva\": {},\n  \"oracle_policy_ctor_wrapper_hits\": {},\n  \"oracle_policy_ctor_wrapper_record\": {},\n  \"oracle_policy_ctor_wrapper_original_this\": {},\n  \"oracle_policy_ctor_wrapper_original_vtable\": {},\n  \"oracle_policy_ctor_wrapper_record_id\": {},\n  \"oracle_policy_ctor_wrapper_stack_arg0\": {},\n  \"oracle_policy_ctor_wrapper_backing_flag_ptr\": {},\n  \"oracle_policy_ctor_wrapper_ret\": {},\n  \"oracle_policy_ctor_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_wrapper_hits\": {},\n  \"oracle_policy_selector_wrapper_record\": {},\n  \"oracle_policy_selector_wrapper_original_this\": {},\n  \"oracle_policy_selector_wrapper_original_vtable\": {},\n  \"oracle_policy_selector_wrapper_owner\": {},\n  \"oracle_policy_selector_wrapper_requested_flag\": {},\n  \"oracle_policy_selector_wrapper_selector_arg\": {},\n  \"oracle_policy_selector_wrapper_ret\": {},\n  \"oracle_policy_selector_wrapper_caller_rva\": {},\n  \"oracle_policy_selector_ctor_hits\": {},\n  \"oracle_policy_selector_ctor_this\": {},\n  \"oracle_policy_selector_ctor_vtable\": {},\n  \"oracle_policy_selector_ctor_owner\": {},\n  \"oracle_policy_selector_ctor_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_requested_flag_value\": {},\n  \"oracle_policy_selector_ctor_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_selector_arg\": {},\n  \"oracle_policy_selector_ctor_stored_requested_flag_ptr\": {},\n  \"oracle_policy_selector_ctor_ret\": {},\n  \"oracle_policy_selector_ctor_caller_rva\": {},\n  \"oracle_policy_status_predicate_hits\": {},\n  \"oracle_policy_status_predicate_this\": {},\n  \"oracle_policy_status_predicate_owner\": {},\n  \"oracle_policy_status_predicate_flag_ptr\": {},\n  \"oracle_policy_status_predicate_flag_value\": {},\n  \"oracle_policy_status_predicate_ret\": {},\n  \"oracle_policy_status_predicate_caller_rva\": {},\n  \"oracle_policy_flag_setter_hits\": {},\n  \"oracle_policy_flag_setter_owner\": {},\n  \"oracle_policy_flag_setter_value\": {},\n  \"oracle_policy_flag_setter_force\": {},\n  \"oracle_policy_flag_setter_before\": {},\n  \"oracle_policy_flag_setter_after\": {},\n  \"oracle_policy_flag_setter_caller_rva\": {},\n  \"oracle_server_status_total_seen\": {},\n  \"oracle_server_status_any_seen\": {},\n  \"oracle_server_status_state\": {},\n  \"oracle_server_status_text_id\": {},\n",
@@ -831,75 +864,8 @@ fn write_title_visual_oracles(body: &mut String, base: usize) -> bool {
     );
     push_json_usize(
         body,
-        "oracle_title_scaleform_memory_gfx_replacements",
-        title_scaleform_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_memory_gfx_replaced",
-        title_scaleform_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replacements",
-        title_scaleform_05_000_memory_gfx_replacements,
-    );
-    push_json_bool(
-        body,
-        "oracle_title_scaleform_05_000_memory_gfx_replaced",
-        title_scaleform_05_000_memory_gfx_replacements != 0,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_armed",
-        TITLE_05_000_RUNTIME_STRIP_ARMED.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_serves",
-        TITLE_05_000_RUNTIME_STRIP_SERVES.load(Ordering::SeqCst),
-    );
-    // Non-zero means a title after boot kept its own prompt and menu. Zero after a return to
-    // title is the black-screen shape: stripped movie, no cover, nothing to press.
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_declined",
-        TITLE_05_000_RUNTIME_STRIP_DECLINED.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_failures",
-        TITLE_05_000_RUNTIME_STRIP_FAILURES.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_input_len",
-        TITLE_05_000_RUNTIME_STRIP_INPUT_LEN.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_output_len",
-        TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_input_class",
-        TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
-        "oracle_title_05_000_runtime_strip_output_validated",
-        TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED.load(Ordering::SeqCst),
-    );
-    push_json_usize(
-        body,
         "oracle_title_scaleform_memory_gfx_failures",
         title_scaleform_memory_gfx_failures,
-    );
-    push_json_usize(
-        body,
-        "oracle_title_scaleform_memory_gfx_last_file",
-        title_scaleform_memory_gfx_last_file,
     );
     push_json_bool(
         body,

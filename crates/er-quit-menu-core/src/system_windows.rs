@@ -23,6 +23,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use er_game_base::mem::{game_rva, safe_read_i32, safe_read_u8, safe_read_u16, safe_read_usize};
 use er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
 use er_telemetry_core::counters::{
+    PROFILE_SELECT_Z_CLEAR_FRAMES, PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS,
+    PROFILE_SELECT_Z_LAST_FLAGS, PROFILE_SELECT_Z_LAST_MENU_ID, PROFILE_SELECT_Z_OCCLUDED_FRAMES,
+    PROFILE_SELECT_Z_SAMPLES, PROFILE_SELECT_Z_TOP_ALIVE_FRAMES,
     SAVE_PICKER_REBUILD_PENDING_DIALOG, SYSTEM_QUIT_HIDE_REAL_WINDOWS_COUNT,
     SYSTEM_QUIT_INGAME_TOP_WINDOW, SYSTEM_QUIT_OPTION_SETTING_WINDOW,
     SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE, SYSTEM_QUIT_PROFILE_SELECT_WINDOW,
@@ -37,8 +40,9 @@ use er_title_flow::{
     OPTIONSETTING_COMPOSITE_OFFSET, OPTIONSETTING_COMPOSITE_PANE_CACHE_COUNT,
     OPTIONSETTING_COMPOSITE_PANE_CACHE_OFFSET, OPTIONSETTING_CURRENT_TAB,
     OPTIONSETTING_DIALOG_PANE_PROXY_OFFSET, OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA,
-    OPTIONSETTING_MENU_ID, OPTIONSETTING_TAB_CONTROL_OFFSET, OPTIONSETTING_TAB_VIEW_OFFSET,
-    OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET, SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT,
+    OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT, OPTIONSETTING_MENU_ID, OPTIONSETTING_TAB_CONTROL_OFFSET,
+    OPTIONSETTING_TAB_VIEW_OFFSET, OPTIONSETTING_TAB_VIEW_SELECTED_INDEX_OFFSET,
+    SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_COUNT,
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_REFRESH_LAST_SELECTED,
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_OLD_CURRENT,
     SYSTEM_QUIT_OPTIONSETTING_DIRECT_VISIBLE_LAST_SELECTED,
@@ -112,10 +116,19 @@ pub unsafe fn menu_window_set_visible_and_flags(
         ));
         return false;
     }
+    // The window arrives from a tracker stamped on an earlier frame, so by now it may have been
+    // freed -- and the next call is the game's own root-proxy constructor, which dereferences
+    // `window+0x188` with no validation of its own. A bare "is it heap-like" screen passes a freed
+    // block whose first qword happens to hold another heap pointer, and on run
+    // br-20260912-183117-e19a that is exactly what happened: the tracked `02_000_IngameTop`
+    // 0x1dc3d080 read vt=0 during the hide, was reused before the restore, and the ctor faulted
+    // reading 0x1dc3d208 (the window plus 0x188). A live MenuWindow's first qword is a vtable in
+    // the game image -- 0x142b00620 for IngameTop, 0x142b16b48 for OptionSetting, 0x142b25a78 for
+    // ProfileSelect, all measured on run br-20260912-034506-45db -- so that is the screen.
     let window_vt = unsafe { safe_read_usize(window) }.unwrap_or(NULL);
-    if window_vt < HEAP_LO {
+    if !er_game_base::mem::vtable_in_game_image(window_vt, base) {
         append_autoload_debug(format_args!(
-            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} invalid"
+            "system-quit-dup: {source} top-window visibility skipped -- window=0x{window:x} vt=0x{window_vt:x} is not a game vtable, so this window is dead or was never one"
         ));
         return false;
     }
@@ -185,6 +198,110 @@ pub unsafe fn menu_window_set_visible_and_flags(
     true
 }
 
+/// Read the `CSMenuMan` flag byte for a window, or `None` when that window has no flag slot.
+///
+/// `02_000_IngameTop` reports `menu_id = 0xffff` and is one of those: it is drawn through its
+/// `SceneObjProxy` alone, so the byte below says nothing about it and the caller must not pretend
+/// otherwise.
+///
+/// # Safety
+///
+/// Menu thread, with `base` the game module base. Every read is fault-safe, so a window freed
+/// between the tracker store and this call answers `None` rather than faulting.
+unsafe fn menu_visual_flags(base: usize, window: usize) -> Option<(u16, u8)> {
+    if window < HEAP_LO {
+        return None;
+    }
+    let menu_id = unsafe { safe_read_u16(window + 0x180) }.unwrap_or(u16::MAX);
+    if menu_id >= 0x47 {
+        return None;
+    }
+    let cs_menu_man = unsafe {
+        safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    }
+    .unwrap_or(NULL);
+    if cs_menu_man < HEAP_LO {
+        return None;
+    }
+    unsafe { safe_read_u8(cs_menu_man + 0x90 + menu_id as usize) }.map(|flags| (menu_id, flags))
+}
+
+/// Whether a `CSMenuMan` flag byte says its menu is drawn this frame.
+///
+/// The whole z-order verdict, as a value rather than as a bit test buried in a sampler. Bit
+/// [`OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT`] is the game's own "drawn this frame" bit and the
+/// other bits are not: the hide in [`menu_window_set_visible_and_flags`] writes `flags & 1`, so a
+/// hidden menu keeps bit 0, and the re-show writes `flags | 0x3` and leaves the draw bit for the
+/// engine to set when it actually draws.
+#[must_use]
+const fn menu_is_drawn_this_frame(flags: u8) -> bool {
+    flags & OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT != 0
+}
+
+/// Sample what is still being drawn in front of the `05_010_ProfileSelect` surface.
+///
+/// This is the z-order oracle for both Load rows. They reach the surface by different routes --
+/// **Load Character** submits over the container already loaded, **Load Character from File**
+/// stages a browse listing into `CS::ProfileSummary` first -- but both funnel through
+/// [`crate::profile_load_dialog::system_quit_open_profile_load_dialog_on`], so there is one surface
+/// to measure and one ordering to get right.
+///
+/// The measurement is the game's own per-frame draw bit, not an inference from whether this crate
+/// called its own hide: `CSMenuMan+0x90+menu_id` bit [`OPTIONSETTING_FLAG_ACTIVELY_SHOWN_BIT`] is
+/// set for the frames a menu is drawn. `02_040_OptionSetting` carrying it while the picker is
+/// running is exactly the user-reported defect.
+///
+/// Taken before the hide's own early return, so it keeps sampling for the whole life of the picker
+/// rather than only on the frame the hide first fires. A run where the menu pump never executes
+/// leaves `PROFILE_SELECT_Z_SAMPLES` at 0, which reads as "nothing measured" and never as "the
+/// ordering was fine".
+///
+/// # Safety
+///
+/// Menu thread, with `base` the game module base.
+unsafe fn sample_profile_select_occlusion(base: usize, profile: usize, top: usize, option: usize) {
+    if profile < HEAP_LO {
+        return;
+    }
+    PROFILE_SELECT_Z_SAMPLES.fetch_add(1, Ordering::SeqCst);
+    if top >= HEAP_LO {
+        let top_vt = unsafe { safe_read_usize(top) }.unwrap_or(NULL);
+        if er_game_base::mem::vtable_in_game_image(top_vt, base) {
+            PROFILE_SELECT_Z_TOP_ALIVE_FRAMES.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let Some((menu_id, flags)) = (unsafe { menu_visual_flags(base, option) }) else {
+        return;
+    };
+    PROFILE_SELECT_Z_LAST_MENU_ID.store(menu_id as usize, Ordering::SeqCst);
+    PROFILE_SELECT_Z_LAST_FLAGS.store(flags as usize, Ordering::SeqCst);
+    // One line per transition, not per frame: this runs on every presented frame the picker is up,
+    // and the thing a reader wants out of the log is when the answer changed, not 60 restatements
+    // a second of the answer that did not.
+    if menu_is_drawn_this_frame(flags) {
+        let seen = PROFILE_SELECT_Z_OCCLUDED_FRAMES.fetch_add(1, Ordering::SeqCst);
+        let _ = PROFILE_SELECT_Z_FIRST_OCCLUDED_FLAGS.compare_exchange(
+            usize::MAX,
+            flags as usize,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        );
+        if seen == 0 {
+            append_autoload_debug(format_args!(
+                "profile-select-z: `02_040_OptionSetting` window=0x{option:x} menu_id=0x{menu_id:x} flags=0x{flags:x} carries the draw bit while ProfileSelect 0x{profile:x} is running -- the pane is in front of the picker"
+            ));
+        }
+    } else if PROFILE_SELECT_Z_CLEAR_FRAMES.fetch_add(1, Ordering::SeqCst) == 0 {
+        append_autoload_debug(format_args!(
+            "profile-select-z: `02_040_OptionSetting` window=0x{option:x} menu_id=0x{menu_id:x} flags=0x{flags:x} has no draw bit while ProfileSelect 0x{profile:x} is running -- the picker is in front of the pane"
+        ));
+    }
+}
+
 /// Hide `02_000_IngameTop` and `02_040_OptionSetting` so a submitted ProfileSelect overlay is not
 /// drawn over the pause menu it came from.
 ///
@@ -196,6 +313,10 @@ pub unsafe fn hide_real_system_windows(base: usize, source: &str) {
     let top = SYSTEM_QUIT_INGAME_TOP_WINDOW.load(Ordering::SeqCst);
     let option = SYSTEM_QUIT_OPTION_SETTING_WINDOW.load(Ordering::SeqCst);
     let profile = SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
+    // Before the early return below, because this is the one call both hosts make on every frame
+    // the picker window is running -- and the frames after the hide has already fired are the ones
+    // that prove the ordering held rather than only flipped once.
+    unsafe { sample_profile_select_occlusion(base, profile, top, option) };
     if profile == 0 || SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0 {
         return;
     }
@@ -492,5 +613,38 @@ pub unsafe fn restore_real_system_windows(base: usize, source: &str, hooks: &Sys
     unsafe { reset_profile_select_state(source, hooks) };
     if restored_top || restored_option {
         SYSTEM_QUIT_RESTORE_REAL_WINDOWS_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod profile_select_occlusion_tests {
+    use super::menu_is_drawn_this_frame;
+
+    /// The byte `02_040_OptionSetting` carries while the pause menu is on screen, read live on run
+    /// br-20260913-154443-65a2 as the before value of that run's `flags=0x7->0x1` hide. A picker
+    /// opened under this is behind the Quit tab pane, which is the user-reported defect.
+    #[test]
+    fn a_pane_the_engine_is_drawing_occludes_the_picker() {
+        assert!(menu_is_drawn_this_frame(0x7));
+    }
+
+    /// The after value of the same hide. The draw bit is gone, so the picker is the frontmost of
+    /// the two.
+    #[test]
+    fn the_hide_clears_the_draw_bit_and_the_picker_is_clear() {
+        assert!(!menu_is_drawn_this_frame(0x1));
+    }
+
+    /// What the restore writes: bits 0 and 1, never the draw bit. The engine sets that itself on
+    /// the frame it draws, so a just-restored menu is not yet drawn and must not score as one.
+    #[test]
+    fn a_restored_menu_is_not_drawn_until_the_engine_draws_it() {
+        assert!(!menu_is_drawn_this_frame(0x3));
+    }
+
+    /// A menu with no bits at all.
+    #[test]
+    fn a_cleared_byte_is_not_drawn() {
+        assert!(!menu_is_drawn_this_frame(0x0));
     }
 }

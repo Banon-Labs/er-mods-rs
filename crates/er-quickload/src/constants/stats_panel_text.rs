@@ -450,21 +450,7 @@ pub(crate) const SCALEFORM_MEMORY_FILE_NAME_OFFSET: usize = 0x10;
 pub(crate) const SCALEFORM_MEMORY_FILE_CURSOR_OFFSET: usize = 0x24;
 #[allow(dead_code)] // Retained RE offset: decoded struct layout, no live reader today.
 pub(crate) const SCALEFORM_MEMORY_FILE_VALID_OFFSET: usize = 0x28;
-pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS;
-/// 05_000_title-only slice of `TITLE_SCALEFORM_MEMORY_GFX_REPLACEMENTS` (which aggregates both the
-/// 05_001 logo and 05_000 title slots): the product-strip proof oracle must show the stripped title
-/// movie was served on every title visit (cold boot + each System-Quit reload), unambiguously.
-pub(crate) use er_telemetry_core::counters::TITLE_SCALEFORM_05_000_MEMORY_GFX_REPLACEMENTS;
-pub(crate) static TITLE_SCALEFORM_MEMORY_GFX_LAST_FILE: AtomicUsize =
-    AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// Product-default 05_000_title strip is armed for runtime derivation (er-effects-rs-h7x): no
-/// embedded stripped movie; the Scaleform file-open hook reads the game's own vanilla bytes out of
-/// the native MemoryFile the FileOpener returns (payload owned by GLOBAL_GfxRepository) and applies
-/// `er_gfx::title_05_000::strip` -- 18 content-addressed tag edits, all-or-nothing, byte-identical
-/// to the previously-embedded `TITLE_05_000_TEXT_SUPPRESSED_GFX` for the known vanilla input
-/// (fixture-gated proof in `crates/er-gfx/tests/title_strip.rs`). 0 = disarmed, 1 = armed.
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_ARMED;
 
 /// Wwise post-event core (`AK::SoundEngine::PostEvent` shared numeric-id backend):
 /// Ghidra dump `FUN_14223a120`, deobf/live `0x14223a130` (`dump-deobf-shift.py`, content-unique).
@@ -487,27 +473,6 @@ pub(crate) use er_telemetry_core::counters::SOUND_POST_EVENT_LAST_FLAGS;
 pub(crate) static SOUND_POST_EVENT_LAST_CALLER_RVA: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 
-/// Successful runtime-strip serves (native MemoryFile data/len swapped to the derived movie).
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_SERVES;
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_DECLINED;
-/// Runtime-strip failures (unexpected file vtable, unreadable payload, parse/edit/write error).
-/// Every failure falls closed to the untouched native file (vanilla title UI).
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_FAILURES;
-/// Observed native 05_000 payload length at first successful read (0 until then).
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_LEN;
-/// Derived stripped movie length (0 until derived).
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_LEN;
-/// Input provenance: 0 = not yet classified, 1 = known vanilla (output proven byte-identical to
-/// the validated asset), 2 = unknown input (game update / other mod; edits applied all-or-nothing).
-/// NOTE (run 20260702-203258): the live repository payload is 12,176 bytes vs the 12,174-byte
-/// extracted corpus file -- 2 trailing bytes after the root End tag -- so class 2 is the expected
-/// steady state on the current game build; the output still derived byte-identical.
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_INPUT_CLASS;
-/// Whether the derived output matches the validated-asset fingerprint (len 11707 +
-/// FNV 0x17906a0e91ce5374): 0 = not derived yet, 1 = byte-identical to the validated v2 asset,
-/// 2 = clean all-or-nothing edit result with a different fingerprint (expected only after a game
-/// update changes untouched tags; not an error, but the proof of visual equivalence is then open).
-pub(crate) use er_telemetry_core::counters::TITLE_05_000_RUNTIME_STRIP_OUTPUT_VALIDATED;
 
 /// Stats-panel 05_010_ProfileSelect runtime edit armed (mirrors the 05_000 runtime strip): the
 /// Scaleform file-open hook reads the game's own vanilla `05_010_profileselect.gfx` payload out of

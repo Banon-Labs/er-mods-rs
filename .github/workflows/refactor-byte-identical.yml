@@ -171,8 +171,26 @@ jobs:
         run: |
           set -euo pipefail
           git checkout --force --detach "${{ steps.refs.outputs.merge_base }}"
-          # shellcheck disable=SC2046
-          cargo xwin build --release --target "$TARGET" $(cat "$RUNNER_TEMP/cargo-args")
+          # The package set was frozen from the HEAD commit, so a PR that ADDS a shipped cdylib
+          # names a package this older tree does not contain, and cargo exits 101 with
+          # `package ID specification ... did not match any packages` before compiling anything.
+          # That made the gate unpassable for every crate-adding PR -- measured on #435, which
+          # adds er-save-game-row. Drop the absent ones here rather than unfreezing the list:
+          # the comparison still needs one set, and a package that does not exist at the base
+          # has no base artifact to diff against anyway. The artifact loop below already
+          # tolerates a missing DLL the same way.
+          mapfile -t base_members < <(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))')
+          base_args=()
+          for tok in $(cat "$RUNNER_TEMP/cargo-args"); do
+            if [ "$tok" = "-p" ]; then continue; fi
+            if printf '%s\n' "${base_members[@]}" | grep -qxF "$tok"; then
+              base_args+=(-p "$tok")
+            else
+              echo "::warning::$tok does not exist at the merge-base; it is new in this PR and has no base artifact to compare"
+            fi
+          done
+          cargo xwin build --release --target "$TARGET" "${base_args[@]}"
           mkdir -p "$RUNNER_TEMP/dll-base"
           for dll in $(cat "$RUNNER_TEMP/artifacts"); do
             cp -f "target/$TARGET/release/$dll" "$RUNNER_TEMP/dll-base/" 2>/dev/null \

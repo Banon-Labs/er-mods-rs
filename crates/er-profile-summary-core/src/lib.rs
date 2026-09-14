@@ -94,3 +94,7 @@ pub use portrait_refresh::*;
 pub mod quit_panel_portrait;
 #[cfg(windows)]
 pub use quit_panel_portrait::*;
+
+/// A save-independent `PlaceName` id for a map, read from the game's own param tables -- the third
+/// source behind `er_save_loader::profile_summary`'s two, for the rows those two must withhold.
+pub mod map_place_names;

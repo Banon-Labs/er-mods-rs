@@ -78,7 +78,7 @@ fn verify_rva_for_hook(rva: u32, expected: &[u8], mask: &[u8], name: &str) -> Op
 /// The union rather than a bare `MhHook`: both of these addresses are also reachable by the product
 /// DLL, and two MinHook instances on one prologue overwrite each other's trampolines with nothing
 /// logged.
-fn mh_install_hook_once(
+pub(crate) fn mh_install_hook_once(
     flag: &AtomicUsize,
     not_installed: usize,
     installed_yes: usize,
@@ -650,7 +650,14 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
         if previous_window == 0 {
             // A fresh editor: re-arm the end-caret. This transition is the only per-open signal --
             // the window pointer itself gets recycled across opens.
+            //
+            // Two latches, because there are two implementations of the same idea: the host's, for a
+            // product whose `05_010` editor owns the caret, and this crate's own, which a shell uses
+            // because it has no such editor. Re-arming only the host's left a shell placing the
+            // caret on the first open and never again -- the second edit would have put every typed
+            // character in front of the path.
             reset_path_editor_caret_latch();
+            crate::scaleform_proxy::reset_path_editor_window_latches();
             let dialog = SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.load(Ordering::SeqCst);
             if dialog != 0
                 && SAVE_PICKER_REBUILD_PENDING_DIALOG
@@ -673,14 +680,48 @@ pub fn save_picker_note_path_editor_window_state(window: usize, state: i32) -> b
             .compare_exchange(active, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        *path_editor_outcome()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
-        append_autoload_debug(format_args!(
-            "save-picker-path: 02_990 MenuWindow became terminal state={state} window=0x{window:x}; released job=0x{active:x} as cancelled before proxy teardown"
-        ));
+        release_path_editor_keyboard(
+            active,
+            format_args!(
+                "save-picker-path: 02_990 MenuWindow became terminal state={state} window=0x{window:x}; released job=0x{active:x} before proxy teardown"
+            ),
+        );
     }
     false
+}
+
+/// Release a path-editor keyboard whose latch has to be dropped while the job may still be running.
+///
+/// The latch and ownership are different things, and the build-url field has had this right since
+/// 2026-08-23 while the save path never did. The job carries the intentionally empty
+/// `std::function` this crate hands the engine, and the `0x81d220` / `0x81d3d0` detours are the only
+/// reason that is safe: they recognise the job and never let the native side invoke it. Clearing the
+/// active-job slot without recording the job here makes `keyboard_owner_of` stop recognising it, the
+/// detour forwards to the original, and the engine calls the empty `std::function` --
+/// `std::bad_function_call` thrown straight through the game's stack.
+///
+/// That killed run br-20260912-211042-2222 the instant a typed path was submitted: cancelling never
+/// invokes the callback, so backing out of the field worked all session and the first accept was
+/// fatal. The crash record names it exactly -- `exception_code=0xe06d7363`,
+/// `cpp_throw_type=std::bad_function_call`, thrown at `eldenring.exe+0x81e198` with the released job
+/// still in `r15`. It is the same failure recorded as `dll:a71aa552` on 2026-08-23.
+///
+/// `Cancelled` is deposited only when nothing is already waiting: an accept records its text from
+/// the terminal callback and its window goes terminal immediately afterwards, so overwriting here
+/// would turn every accepted path into a cancel.
+fn release_path_editor_keyboard(job: usize, reason: std::fmt::Arguments<'_>) {
+    if job == 0 {
+        return;
+    }
+    remember_released_keyboard_job(job, KeyboardPurpose::SavePath);
+    let mut slot = path_editor_outcome()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if slot.is_none() {
+        *slot = Some(PathEditorOutcome::Cancelled);
+    }
+    drop(slot);
+    append_autoload_debug(reason);
 }
 
 fn path_editor_outcome() -> &'static Mutex<Option<PathEditorOutcome>> {
@@ -691,6 +732,7 @@ fn path_editor_outcome() -> &'static Mutex<Option<PathEditorOutcome>> {
 /// the native ProfileSelect MenuWindow finalizer has run; retaining any of these values lets a later
 /// `Load Character from File` reuse a dead dialog/job from the prior menu generation.
 pub fn save_picker_reset_path_editor_state() {
+    reset_path_completion();
     SAVE_PICKER_PATH_EDITOR_PENDING_DIALOG.store(0, Ordering::SeqCst);
     SAVE_PICKER_PATH_EDITOR_ACTIVE_DIALOG.store(0, Ordering::SeqCst);
     SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.store(0, Ordering::SeqCst);
@@ -1263,6 +1305,21 @@ unsafe fn submit_software_keyboard(
     PathEditorSubmit::Submitted
 }
 
+/// Is `window` still a live `CS::MenuWindow`?
+///
+/// The same screen `menu_pump::live_menu_window` applies to an owning window: a live one's first
+/// qword is a vtable inside the game image, a freed or recycled one's is not. Fault-safe, because
+/// this runs every pump tick against a pointer the game may have freed a frame ago.
+fn path_editor_window_is_live(window: usize) -> bool {
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        // Cannot resolve the image, so cannot say it is dead. Answering "live" keeps ownership
+        // where it is rather than cancelling an editor the user is still typing into.
+        return true;
+    };
+    let vt = unsafe { er_game_base::mem::safe_read_usize(window) }.unwrap_or(0);
+    er_game_base::mem::vtable_in_game_image(vt, base)
+}
+
 fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
     let mut guard = er_save_picker_core::model::active_save_picker_lock();
     let Some(model) = guard.as_mut() else {
@@ -1304,6 +1361,230 @@ fn apply_path_editor_outcome(dialog: usize, outcome: PathEditorOutcome) {
     }
 }
 
+// ---- inline path completion --------------------------------------------------------------------
+
+/// The keys that accept the standing completion.
+///
+/// Tab is the one a hand reaches for, and Right is the one that survives untouched; both are
+/// bound, and the difference between them is what happens to the field afterwards.
+///
+/// Right costs nothing: it moves the caret one character and does nothing at the end of the text,
+/// which is where the caret sits while typing and where `set_text_input_02_990_text` leaves it. The
+/// field stays open and the player keeps typing.
+///
+/// Tab closes the field, and that is the game's doing, not this crate's. Run br-20260912-221445-595f
+/// proved it with nothing at all bound to Tab: `offering 'Z:\home'` is followed straight by `the
+/// editor window 0x1cbab8480 is gone` and a cancel, with no accept line anywhere between them.
+/// `GetAsyncKeyState` reads a key without consuming it, so the press reaches the game's editor
+/// handling whatever this crate does with it, and the handling is not in the movie either -- the
+/// only ActionScript in `02_990_textinput.gfx` is 525 bytes of symbol-class linkage with no event
+/// handler in it (bd `tab-closes-the-02990-software-keyboard-2026-09-12`).
+///
+/// So Tab is not fought, it is honoured: the completion is written, and when the close arrives it
+/// commits that text instead of discarding it. Tab completes and opens the folder; Right completes
+/// and leaves you in the field.
+const VK_TAB: i32 = 0x09;
+const VK_RIGHT: i32 = 0x27;
+
+/// Rising-edge latch for the accept keys, one bit each, so a held key accepts once.
+static PATH_COMPLETION_ACCEPT_DOWN: AtomicUsize = AtomicUsize::new(0);
+
+/// The completion the player accepted, and the text the field held when it was last read.
+///
+/// Tab's accept writes the completion and the game then closes the field. Without these two the
+/// close reads as a cancel and the completion is thrown away, which is what made Tab useless: the
+/// player pressed the obvious key, watched the right text appear, and landed nowhere. Holding both
+/// lets the close ask one precise question -- was the field showing exactly the completion that was
+/// accepted? -- and commit it when the answer is yes.
+static PATH_COMPLETION_ACCEPTED_TEXT: Mutex<Option<String>> = Mutex::new(None);
+static PATH_COMPLETION_FIELD_TEXT: Mutex<Option<String>> = Mutex::new(None);
+
+/// Latched once when the field's document cannot be read, so the refusal is logged and not spammed.
+static PATH_COMPLETION_UNREADABLE: AtomicUsize = AtomicUsize::new(0);
+
+/// Fingerprint of the typed text the last offer was computed from, so the read is reported once
+/// per keystroke rather than once per frame.
+static PATH_COMPLETION_TYPED_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Hash of the completion currently drawn, so the field is written only when the offer changes.
+///
+/// `SetText` re-lays-out the text document, and doing that every frame while someone is typing is
+/// both wasteful and visible. Zero means nothing is drawn.
+static PATH_COMPLETION_DRAWN: AtomicUsize = AtomicUsize::new(0);
+
+/// A cheap change detector for the drawn completion. Not a security boundary: a collision draws
+/// the same text twice, which is invisible.
+fn completion_fingerprint(text: &str) -> usize {
+    let hash = er_game_base::fnv1a::fnv1a64(text.as_bytes());
+    // Never zero, because zero is the "nothing drawn" sentinel.
+    (hash as usize) | 1
+}
+
+fn nul_terminated_utf16(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// Poll the accept keys and report a rising edge.
+///
+/// `GetAsyncKeyState` rather than a native menu-event edge: while the software keyboard owns the
+/// screen the game is routing characters, not menu navigation, and the picker's own edge latch is
+/// drained by the drive strip. This is a read of the keyboard the player is already typing on and
+/// injects nothing.
+fn path_completion_accept_pressed() -> Option<&'static str> {
+    const KEYS: [(i32, &str); 2] = [(VK_TAB, "tab"), (VK_RIGHT, "right")];
+    let mut down = 0usize;
+    for (index, (code, _)) in KEYS.into_iter().enumerate() {
+        // Safety: a pure read of this thread's keyboard state; the call cannot fault.
+        let pressed =
+            unsafe { windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(code) < 0 };
+        if pressed {
+            down |= 1 << index;
+        }
+    }
+    let previous = PATH_COMPLETION_ACCEPT_DOWN.swap(down, Ordering::SeqCst);
+    KEYS.into_iter()
+        .enumerate()
+        .find(|(index, _)| {
+            let bit = 1 << index;
+            down & bit != 0 && previous & bit == 0
+        })
+        .map(|(_, (_, name))| name)
+}
+
+/// Forget any standing completion, so a reopened field does not inherit the last one.
+pub fn reset_path_completion() {
+    PATH_COMPLETION_ACCEPT_DOWN.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
+    PATH_COMPLETION_TYPED_SEEN.store(0, Ordering::SeqCst);
+    *PATH_COMPLETION_ACCEPTED_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+    *PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// The completion to commit if the field closes now, or `None` if the close is a plain cancel.
+///
+/// Yes only when the field was last seen holding exactly the text that was accepted. Typing after
+/// an accept changes the field, so the two stop matching and a later Back cancels as it should.
+fn path_completion_to_commit_on_close() -> Option<String> {
+    let accepted = PATH_COMPLETION_ACCEPTED_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    let field = PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone()?;
+    (field == accepted).then_some(accepted)
+}
+
+/// Offer, draw and accept an inline completion for the open path editor.
+///
+/// Called once per 02_990 `MenuWindowJob::Run`, which is the only context where the field's proxies
+/// are valid. The shape is deliberately one-directional: read what the player typed out of the
+/// controller, ask the picker model's completion for an offer, draw it behind the live text, and
+/// write it into the live field only when an accept key goes down. Nothing is written to the field
+/// on a frame where the player did not press one.
+///
+/// # Safety
+///
+/// 02_990 `MenuWindowJob::Run` context, with `menu_window` the live window for that job.
+pub unsafe fn save_picker_path_editor_completion_tick(base: usize, menu_window: usize) {
+    if SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst) == 0 {
+        return;
+    }
+    // The field's own document, not the keyboard controller. The controller holds a result mailbox
+    // written at confirm, so reading it offered completions for the text the field started with
+    // and never for anything typed since -- which on run br-20260912-214831-a541 meant typing
+    // `Z:\h` produced no offer and no log line at all.
+    let Some(typed) =
+        (unsafe { crate::scaleform_proxy::read_text_input_02_990_text(base, menu_window) })
+    else {
+        if PATH_COMPLETION_UNREADABLE.swap(1, Ordering::SeqCst) == 0 {
+            append_autoload_debug(format_args!(
+                "save-picker-path: the field's text document could not be read, so no completion can be offered"
+            ));
+        }
+        return;
+    };
+    PATH_COMPLETION_UNREADABLE.store(0, Ordering::SeqCst);
+    *PATH_COMPLETION_FIELD_TEXT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(typed.clone());
+    let offer = er_save_picker_core::autocomplete::suggestion_for(&typed);
+    // One line per distinct typed text, so a run says what was read and what it produced even when
+    // the answer is "nothing". A silent tick was what made the first build's failure invisible.
+    let typed_print = completion_fingerprint(&typed);
+    if PATH_COMPLETION_TYPED_SEEN.swap(typed_print, Ordering::SeqCst) != typed_print {
+        append_autoload_debug(format_args!(
+            "save-picker-path: field reads '{typed}' -> {}",
+            offer
+                .as_deref()
+                .map_or_else(|| "no completion".to_owned(), |offer| format!("'{offer}'"))
+        ));
+    }
+
+    if let Some(offer) = offer.as_deref()
+        && let Some(key) = path_completion_accept_pressed()
+    {
+        let utf16 = nul_terminated_utf16(offer);
+        match unsafe {
+            crate::scaleform_proxy::set_text_input_02_990_text(base, menu_window, &utf16)
+        } {
+            Ok(detail) => {
+                // The live field now holds the whole offer, so the run behind it would be a
+                // duplicate drawn at half strength. Clear it and let the next keystroke re-offer.
+                let _ = unsafe {
+                    crate::scaleform_proxy::set_text_input_02_990_ghost_text(
+                        base,
+                        menu_window,
+                        &[0],
+                    )
+                };
+                PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+                *PATH_COMPLETION_ACCEPTED_TEXT
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(offer.to_owned());
+                append_autoload_debug(format_args!(
+                    "save-picker-path: accepted the completion with {key}: '{typed}' -> '{offer}' ({detail})"
+                ));
+            }
+            Err(error) => append_autoload_debug(format_args!(
+                "save-picker-path: {key} could not accept the completion '{offer}': {error}"
+            )),
+        }
+        return;
+    }
+
+    // Nothing to accept this frame: keep the drawn run in step with the offer.
+    let wanted = offer.as_deref().map_or(0, completion_fingerprint);
+    if PATH_COMPLETION_DRAWN.swap(wanted, Ordering::SeqCst) == wanted {
+        return;
+    }
+    let utf16 = nul_terminated_utf16(offer.as_deref().unwrap_or(""));
+    match unsafe {
+        crate::scaleform_proxy::set_text_input_02_990_ghost_text(base, menu_window, &utf16)
+    } {
+        Ok(()) => {
+            if let Some(offer) = offer.as_deref() {
+                append_autoload_debug(format_args!(
+                    "save-picker-path: offering '{offer}' behind the typed '{typed}'; tab or right accepts it"
+                ));
+            }
+        }
+        Err(error) => {
+            // Put the detector back so the next tick retries rather than believing it drew this.
+            PATH_COMPLETION_DRAWN.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "save-picker-path: the completion run did not take text: {error}"
+            ));
+        }
+    }
+}
+
 /// Menu-pump-owned submit/result bridge. The native text editor and its job queue are never touched
 /// from FrameBegin or the recurring game task.
 ///
@@ -1329,14 +1610,69 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
                 .is_ok()
         {
             SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+            release_path_editor_keyboard(
+                active_before_watchdog,
+                format_args!(
+                    "save-picker-path: 02_990 MenuWindow stopped running for {} ProfileSelect ticks; released stale job=0x{active_before_watchdog:x} window=0x{editor_window:x} before reading freed controller state",
+                    now.saturating_sub(last)
+                ),
+            );
+        }
+    }
+
+    // The editor's own window, asked directly rather than through a callback.
+    //
+    // Run br-20260912-205253-822d closed the field with Back and `cancel consumed` was never
+    // logged: neither the result-state observer below nor the stale-tick watchdog above released
+    // ownership, so `SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB` stayed set and the submit path's
+    // `if ACTIVE_JOB != 0 { return }` refused every later open -- the field could not be re-entered
+    // for the rest of the session.
+    //
+    // Which native callback reports a Back depends on which SoftwareKeyboard backend is live, and
+    // on this machine it is the Scaleform fallback rather than the platform one (bd
+    // `softwarekeyboard-two-backends-field-vs-result-mailbox-2026-08-23`). The window is not
+    // backend-specific: a live `MenuWindow`'s first qword is a game vtable and a torn-down one is
+    // not, so this asks the object instead of trusting a callback to fire.
+    let editor_window = SAVE_PICKER_PATH_EDITOR_WINDOW.load(Ordering::SeqCst);
+    let editor_job = SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB.load(Ordering::SeqCst);
+    // An accept closes the window too, so window-gone is not by itself a cancel. The controller's
+    // own result code says which it was, and it is set before the terminal callback runs: on run
+    // br-20260912-220944-7f50 pressing Enter on `Z:\home` produced `cancel consumed; directory
+    // remains 'C:\users\...'` one line BEFORE `native editor accepted text="Z:\home"`, because
+    // this edge fired first, deposited `Cancelled`, and the pump drained the mailbox before the
+    // real outcome could reach it. The player pressed Enter on a valid path and went nowhere.
+    let native_accepted =
+        unsafe { software_keyboard_result_state(editor_job) } == Some(MENU_JOB_STATE_SUCCESS);
+    if editor_job != 0
+        && editor_window != 0
+        && !native_accepted
+        && !path_editor_window_is_live(editor_window)
+        && SAVE_PICKER_PATH_EDITOR_ACTIVE_JOB
+            .compare_exchange(editor_job, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    {
+        SAVE_PICKER_PATH_EDITOR_WINDOW.store(0, Ordering::SeqCst);
+        // Tab's close lands here, and the completion it wrote is still the field's text. Committing
+        // that rather than cancelling is what makes Tab usable at all: the key closes the field no
+        // matter what this crate does, so the choice is between honouring the completion and
+        // throwing it away.
+        if let Some(completed) = path_completion_to_commit_on_close() {
+            remember_released_keyboard_job(editor_job, KeyboardPurpose::SavePath);
             *path_editor_outcome()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-                Some(PathEditorOutcome::Cancelled);
+                Some(PathEditorOutcome::Accepted(completed.clone()));
+            reset_path_completion();
             append_autoload_debug(format_args!(
-                "save-picker-path: 02_990 MenuWindow stopped running for {} ProfileSelect ticks; released stale job=0x{active_before_watchdog:x} window=0x{editor_window:x} as cancelled before reading freed controller state",
-                now.saturating_sub(last)
+                "save-picker-path: the editor window 0x{editor_window:x} closed while still showing the accepted completion '{completed}'; committing it instead of cancelling"
             ));
+        } else {
+            release_path_editor_keyboard(
+                editor_job,
+                format_args!(
+                    "save-picker-path: the editor window 0x{editor_window:x} is gone while job=0x{editor_job:x} still held the latch; released it so the field can be opened again"
+                ),
+            );
         }
     }
 
@@ -1347,12 +1683,12 @@ pub unsafe fn save_picker_menu_pump_path_editor() {
             .compare_exchange(active_job, 0, Ordering::SeqCst, Ordering::SeqCst)
             .is_ok()
     {
-        *path_editor_outcome()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(PathEditorOutcome::Cancelled);
-        append_autoload_debug(format_args!(
-            "save-picker-path: observed native SoftwareKeyboard failed/cancelled state for job=0x{active_job:x}; released editor ownership"
-        ));
+        release_path_editor_keyboard(
+            active_job,
+            format_args!(
+                "save-picker-path: observed native SoftwareKeyboard failed/cancelled state for job=0x{active_job:x}; released the editor latch"
+            ),
+        );
     }
 
     let outcome = path_editor_outcome()

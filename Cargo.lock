@@ -3021,15 +3021,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-loading-bar"
-version = "0.1.0"
-dependencies = [
- "er-d3d12-compositor",
- "er-game-base",
- "er-loading-bar-core",
-]
-
-[[package]]
 name = "er-loading-bar-core"
 version = "0.1.0"
 
@@ -3131,6 +3122,7 @@ dependencies = [
  "er-loading-portrait-core",
  "er-save-loader",
  "er-telemetry-core",
+ "fromsoftware-shared",
 ]
 
 [[package]]
@@ -3206,6 +3198,8 @@ dependencies = [
  "er-profile-summary-core",
  "er-save-loader",
  "er-save-picker-core",
+ "er-save-redirect",
+ "er-save-suppress",
  "er-telemetry-core",
  "er-title-flow",
  "fromsoftware-shared",
@@ -3279,6 +3273,14 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "er-save-suppress",
+]
+
+[[package]]
+name = "er-save-game-row"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "er-quit-menu-core",
 ]
 
 [[package]]

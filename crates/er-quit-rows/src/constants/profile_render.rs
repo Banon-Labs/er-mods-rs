@@ -54,7 +54,8 @@ pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_NOT_INSTALLED: usize = 0;
 pub(crate) const SYSTEM_QUIT_WINDOW_LIST_PUSH_INSTALLED_YES: usize = 1;
 /// Live/deobf `CS::ProfileLoadDialog` activation vtable target (`dump 0x1409a47c0` -> deobf
 /// `0x1409a4670`). This builds/submits the native confirmation dialog for the selected profile.
-pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 = 0x9a4670;
+pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA: u32 =
+    er_title_flow::PROFILE_LOAD_ACTIVATE_RVA as u32;
 /// Live/deobf `<lambda_4c99...>::operator()` (`dump 0x1409a4ee0` -> deobf `0x1409a4d90`). This
 /// only writes `*(dialog+0x1cc8+0x14c)=2` and `dialog+0x1e8=Success`; runtime evidence showed the
 /// crash happens before this lambda is reached when the confirmation is accepted, so this transition
@@ -64,16 +65,8 @@ pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_CONFIRMED_RVA: u32 = 0x9a4d90;
 /// `0x140826d50`). This is the load job queued behind the native confirmation dialog; accepting
 /// confirmation reaches this job and then crashed at CSGaitemImp::Deserialize live/deobf `0x14067141a`.
 pub(crate) const SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA: u32 = 0x826d50;
-/// Native MenuWindow close-finalize `FUN_1407ac980` (dump `0x1407ac980` -> live/deobf `0x7ac890`,
-/// content-unique). Takes `rcx = MenuWindow*`; does `MenuJobResult::SetResult(&r, Failed, 0)` then
-/// invokes the window's own close vmethod (`window->vtable+0x60`). Calling it on the ProfileSelect
-/// window sets `owningMenuWindow+0x1e8` terminal, so `CS::MenuWindowJob::Run` (0x7ad1c0) reads a
-/// terminal result and `ExecuteMenuJob` (0x7a96f0) pops the job from the menu-job queue head. That
-/// is the native cancel/back close (approach B): it clears `queue[0]` so the return-title chain's
-/// `queue[0]==0` ready-gate finally passes and the direct chain can submit. See bd
-/// `system-quit-profileselect-native-close-B-path` / `menu-job-queue-pump-dequeue-mechanism`.
-pub(crate) const SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA: u32 =
-    er_game_base::rva::MENU_WINDOW_CLOSE_WITH_FAILED_RVA as u32;
+// `SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA` moved to `er-title-flow` on 2026-09-12 with the Save Game flow that
+// reads it; this crate reaches it through the same glob as every other shared address.
 /// Times the list-builder hook re-staged the browse rows before a native list build (oracle; each
 /// re-stage repairs any game-save record stomp that landed since the previous staging).
 /// One-shot latch: set when we have invoked the native ProfileSelect close during a return-title
@@ -198,11 +191,8 @@ pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_LAST_CONTEXT_ARG: AtomicUsize
     AtomicUsize::new(0);
 pub(crate) static SYSTEM_QUIT_PROFILE_LOAD_JOB_POST_RETURN_TITLE_FIRED: AtomicUsize =
     AtomicUsize::new(0);
-/// Native return-title semantic request used after System->ProfileSelect confirmation. This is
-/// `FUN_14067a490` in the Ghidra dump and maps to live/deobf `0x14067a3a0`; it sets the same
-/// GameMan return-title/save flags used by the normal Quit Game confirmation callback without
-/// displaying another confirmation dialog.
-pub(crate) const SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA: u32 = 0x67a3a0;
+// `SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA` moved to `er-title-flow` on 2026-09-12 with the Save Game flow that
+// reads it; this crate reaches it through the same glob as every other shared address.
 /// Guard on the native title Continue confirm `0x140b0e180` (`CONTINUE_CONFIRM_RVA`): it only reads
 /// GameMan+0xc30 -> owner+0xbc -> SetState(5) and picks no slot, so after a System->Quit switch the
 /// clean-title reload would re-stream the pre-switch GameMan/PlayerGameData state (no fresh

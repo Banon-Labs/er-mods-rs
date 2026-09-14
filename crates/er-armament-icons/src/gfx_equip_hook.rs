@@ -352,7 +352,7 @@ unsafe fn maybe_swap_equip_file(base: usize, file: usize, via: &str, url_slot: O
     if !unsafe { read_bytes(data, &mut input) } {
         return;
     }
-    let input_fnv = er_gfx::title_05_000::fnv1a64(&input);
+    let input_fnv = er_gfx::fnv1a64(&input);
 
     // Derive once per movie (cached for the process lifetime), then swap the File to it.
     // `slot` comes from the lookup itself: keying this cache on anything derived from the

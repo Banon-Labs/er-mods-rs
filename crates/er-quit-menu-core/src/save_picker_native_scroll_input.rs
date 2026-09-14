@@ -17,23 +17,11 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use er_game_base::mem::{game_module_base, game_rva, game_rva_for_hook};
-use er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA;
+use er_game_base::mem::{game_rva, game_rva_for_hook};
 use er_hook::{MH_STATUS, MhHook};
-use er_title_flow::{INPUTMGR_BITMAP_90_OFFSET, MENU_EVENT_PRESSED_BIT};
 
 use crate::host::append_autoload_debug;
 use crate::save_picker_menu::*;
-
-/// Learned `CSMenuManImp+0x90` event ids for vertical menu movement. `MoveA`(0x00) and `MoveB`(0x45)
-/// are the two ids the vertical-move predicate reads, but which one is up and which is down is not
-/// recorded anywhere -- so they are learned live, from a tick where exactly one id is set and
-/// exactly one direction is pressed on a device. `MENU_EVENT_ID_UNLEARNED` until then.
-pub(crate) static SAVE_PICKER_MENU_EVENT_DOWN_ID: AtomicUsize =
-    AtomicUsize::new(MENU_EVENT_ID_UNLEARNED);
-pub(crate) static SAVE_PICKER_MENU_EVENT_UP_ID: AtomicUsize =
-    AtomicUsize::new(MENU_EVENT_ID_UNLEARNED);
-pub(crate) const MENU_EVENT_ID_UNLEARNED: usize = usize::MAX;
 
 /// A press deferred at an extreme row, waiting for the native wrap it is about to cause, and how
 /// many pump ticks it may wait. Four ticks is generous for a wrap the list performs on the very
@@ -42,67 +30,12 @@ pub(crate) static SAVE_PICKER_PENDING_WRAP_MASK: AtomicUsize = AtomicUsize::new(
 pub(crate) static SAVE_PICKER_PENDING_WRAP_TICKS: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const PENDING_WRAP_MAX_TICKS: usize = 4;
 
-/// Vertical menu events dropped at a listing limit; diagnostic only.
-pub(crate) static SAVE_PICKER_LIMIT_SUPPRESSED_EVENTS: AtomicUsize = AtomicUsize::new(0);
 /// Selection moves with no key/pad/wheel behind them, i.e. the pointer; diagnostic only.
 pub(crate) static SAVE_PICKER_POINTER_CURSOR_MOVES: AtomicUsize = AtomicUsize::new(0);
 /// Times the grid scrolled its own view during a select and had to be put back.
 #[allow(dead_code)] // Retained: Picker diagnostic counter, beside the sibling counters that are live.
 pub(crate) static SAVE_PICKER_GRID_VIEW_RESTORES: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_GRID_GEOMETRY_LOGGED: AtomicUsize = AtomicUsize::new(0);
-
-/// The live `CSMenuManImp` keystate bitmap (`+0x90`), one byte per menu event id.
-pub(crate) unsafe fn save_picker_menu_event_keystate() -> Option<*mut u8> {
-    let base = game_module_base().ok()?;
-    let inputmgr = unsafe {
-        *((er_game_base::mem::game_data_addr(
-            base,
-            CS_MENU_MAN_GLOBAL_RVA,
-            "CS_MENU_MAN_GLOBAL_RVA",
-        )) as *const usize)
-    };
-    (inputmgr != 0).then(|| (inputmgr + INPUTMGR_BITMAP_90_OFFSET) as *mut u8)
-}
-
-/// Learn which vertical event id means down and which means up, from an unambiguous frame.
-///
-/// Ambiguous frames are skipped rather than guessed: getting this backwards would suppress the
-/// direction that still has somewhere to go, which is worse than not suppressing at all.
-pub(crate) unsafe fn save_picker_learn_vertical_menu_event_ids(down: bool, up: bool) {
-    if down == up
-        || SAVE_PICKER_MENU_EVENT_DOWN_ID.load(Ordering::SeqCst) != MENU_EVENT_ID_UNLEARNED
-    {
-        return;
-    }
-    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
-        return;
-    };
-    let a_set = unsafe { *keystate.add(MENU_EVENT_MOVE_A_00) } & MENU_EVENT_PRESSED_BIT != 0;
-    let b_set = unsafe { *keystate.add(MENU_EVENT_MOVE_B_45) } & MENU_EVENT_PRESSED_BIT != 0;
-    if a_set == b_set {
-        return;
-    }
-    let pressed_id = if a_set {
-        MENU_EVENT_MOVE_A_00
-    } else {
-        MENU_EVENT_MOVE_B_45
-    };
-    let other_id = if a_set {
-        MENU_EVENT_MOVE_B_45
-    } else {
-        MENU_EVENT_MOVE_A_00
-    };
-    let (down_id, up_id) = if down {
-        (pressed_id, other_id)
-    } else {
-        (other_id, pressed_id)
-    };
-    SAVE_PICKER_MENU_EVENT_UP_ID.store(up_id, Ordering::SeqCst);
-    SAVE_PICKER_MENU_EVENT_DOWN_ID.store(down_id, Ordering::SeqCst);
-    append_autoload_debug(format_args!(
-        "save-picker: learned vertical menu event ids down=0x{down_id:x} up=0x{up_id:x}"
-    ));
-}
 
 pub(crate) static SAVE_PICKER_SET_CURSOR_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_SET_CURSOR_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
@@ -204,6 +137,42 @@ pub(crate) static SAVE_PICKER_WHEEL_DELTA_ORIG: AtomicUsize = AtomicUsize::new(0
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::new(0);
 
+/// The direction of the last notch the hook below silenced, as a `SAVE_PICKER_NAV_WHEEL_*_MASK`,
+/// waiting for the edge-scroll pump to drain it.
+///
+/// A direction rather than a count, and deliberately: the accessor has two callers (the grid mouse
+/// handler `FUN_14073a5c0` and the scrollbar handler `FUN_140781460`), so one detent can be read
+/// twice in a frame. A bit set twice is still one step, which is the behaviour a player expects;
+/// a counter would scroll two rows for one notch whenever both callers ran.
+pub(crate) static SAVE_PICKER_NATIVE_WHEEL_EDGES: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the detour below is live, i.e. whether the latch above is a wheel source at all.
+///
+/// The pump asks before falling back to the host's own latch, so the two can never both act on one
+/// detent. They observe the same notch at different points -- the host reads `GetRawInputData`, this
+/// reads the game's per-frame menu event -- so they can land on different pump ticks, and combining
+/// them would scroll twice for one notch on exactly the ticks where they disagree.
+pub(crate) fn save_picker_native_wheel_latch_live() -> bool {
+    SAVE_PICKER_WHEEL_DELTA_ORIG.load(Ordering::SeqCst) != 0
+}
+
+/// Drain the latch. Returns the `SAVE_PICKER_NAV_WHEEL_*_MASK` bit, or 0 for no notch since the
+/// last drain.
+pub(crate) fn save_picker_take_native_wheel_edges() -> usize {
+    SAVE_PICKER_NATIVE_WHEEL_EDGES.swap(0, Ordering::SeqCst)
+}
+
+/// Drop an undrained notch, for the pump tick that finds the picker gone. Without this a detent
+/// spun as the browser closes is replayed into the listing the next time one opens.
+pub(crate) fn save_picker_clear_native_wheel_edges() {
+    SAVE_PICKER_NATIVE_WHEEL_EDGES.store(0, Ordering::SeqCst);
+}
+
+/// Wheel detents the edge-scroll pump actually acted on. The counterpart to
+/// `SAVE_PICKER_WHEEL_DELTA_SILENCED`: the two being far apart is the shape of a silenced wheel
+/// nobody owns, which is the defect run br-20260912-212001-9610 recorded.
+pub(crate) static SAVE_PICKER_WHEEL_EDGES_CONSUMED: AtomicUsize = AtomicUsize::new(0);
+
 /// The INTERLOCK: while the picker owns the screen, the game's own grid never sees a wheel notch.
 ///
 /// Two mechanisms can scroll this list for one detent -- the native grid handler and this pump --
@@ -221,8 +190,21 @@ pub(crate) static SAVE_PICKER_WHEEL_DELTA_SILENCED: AtomicUsize = AtomicUsize::n
 /// false at a clamp, so the game was an unreliable owner even when it was the only one.
 ///
 /// Scoped to the picker's own screen, and it silences a read rather than dropping the user's input:
-/// our own wheel latch comes from `GetRawInputData` and is untouched, so the detent still reaches
-/// the picker. Every other menu keeps its native wheel exactly as designed.
+/// the direction is latched into `SAVE_PICKER_NATIVE_WHEEL_EDGES` on the way past, so the detent
+/// still reaches the picker. Every other menu keeps its native wheel exactly as designed.
+///
+/// # Why the latch is here and not only in the host
+///
+/// It used to be only in the host: the product reads `GetRawInputData` and answers
+/// `take_nav_edges_for`. A standalone shell installs no such reader -- `er-save-game-row` leaves
+/// every `SavePickerMenuHooks` field `None` -- so this detour silenced the game's wheel and handed
+/// the notch to nobody, which made the picker's wheel strictly worse than vanilla's. Run
+/// br-20260912-212001-9610 is 20 `silenced native wheel notch` lines with no step behind any of
+/// them and `scroll_offset=0/25` throughout. Latching here fixes that for every host at once,
+/// because this is the one place a notch is observed no matter who loaded the DLL.
+///
+/// `out[1]` carries the direction and `out[0]` is always 0 for a wheel: the accessor writes
+/// `(0, -1)` for menu event `0x2c` and `(0, 1)` for `0x2d`, and zeroes both when neither is set.
 pub(crate) unsafe extern "system" fn save_picker_wheel_delta_hook(
     msg: usize,
     out: *mut i32,
@@ -239,16 +221,29 @@ pub(crate) unsafe extern "system" fn save_picker_wheel_delta_hook(
     if !owned || out.is_null() {
         return ret;
     }
-    let had_notch = unsafe { out.read_unaligned() != 0 || out.add(1).read_unaligned() != 0 };
+    let row_delta = unsafe { out.add(1).read_unaligned() };
+    let had_notch = unsafe { out.read_unaligned() != 0 } || row_delta != 0;
     if had_notch {
         unsafe {
             out.write_unaligned(0);
             out.add(1).write_unaligned(0);
         }
+        // Latch the direction before the silence is announced, so a run whose log ends mid-frame
+        // still shows the notch was handed on rather than merely dropped.
+        //
+        // Only a row delta is a direction. The accessor writes `out[0] = 0` on every path, so a
+        // column-only notch is not a shape it produces, and latching one would invent a direction
+        // out of a value that carries none.
+        let edge = match row_delta.signum() {
+            1 => SAVE_PICKER_NAV_WHEEL_DOWN_MASK,
+            -1 => SAVE_PICKER_NAV_WHEEL_UP_MASK,
+            _ => 0,
+        };
+        SAVE_PICKER_NATIVE_WHEEL_EDGES.fetch_or(edge, Ordering::SeqCst);
         let n = SAVE_PICKER_WHEEL_DELTA_SILENCED.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= 20 || n.is_multiple_of(50) {
             append_autoload_debug(format_args!(
-                "save-picker: silenced native wheel notch #{n} (the pump owns the wheel)"
+                "save-picker: silenced native wheel notch #{n} row_delta={row_delta} latched=0x{edge:x} (the pump owns the wheel)"
             ));
         }
     }
@@ -298,45 +293,82 @@ pub fn install_save_picker_wheel_delta_hook() {
     }
 }
 
-/// Move the picker's selection one row for a wheel detent the native grid declined to act on.
+/// Move the picker's selection onto `model_row` through the list's own select primitive.
 ///
-/// This calls `FUN_14073bc10` -- the list's own select-index primitive, the same call the grid's
-/// mouse hit test makes (`FUN_14073a5c0` tail) and the same one the wheel path would have reached
-/// via `FUN_14073b0c0` had its view-base gate let it through. Going through the select rather than
-/// writing `list+0xd4` is what carries the chrome with the selection; a bare field write moves the
-/// index and leaves the highlight where it was, which is the "rows scroll but the chrome doesn't
-/// travel" half of the report. The call re-enters our own detour above, so the view base stays
-/// pinned exactly as it does for a hover or a click.
+/// This calls `FUN_14073bc10`, the select primitive, which is the same call the grid's own mouse hit
+/// test makes. It moves the cell cursor and carries the chrome with it, and it re-enters the detour
+/// above so the view base stays pinned exactly as it does for a hover or a click.
+///
+/// The wrapper around it, `FUN_140738d40`, additionally fires the owning dialog's
+/// selection-changed callbacks, and it must not be used here: on run br-20260912-231628-6a27 it
+/// stopped the picker's scrolling outright. See bd
+/// `select-and-notify-wrapper-kills-picker-scrolling-2026-09-12`.
+///
+/// The grid refuses an index at or past its item count (`list+0xd0`) and the refusal is silent:
+/// `FUN_14073bc10` returns 0, writes no cursor and shows no chrome. A short directory stages fewer
+/// than ten occupied records and the rebuild sets the count from them, so that is reachable
+/// whenever the window holds empty slots. The row is clamped into the count here, because a
+/// selection on a row the grid does not have is a selection nobody can see.
+///
+/// Returns the index the grid accepted, or `None` when it accepted nothing.
+pub(crate) unsafe fn save_picker_select_native_row(
+    dialog: usize,
+    model_row: usize,
+    reason: &str,
+) -> Option<i32> {
+    let list = dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET;
+    let wanted = i32::try_from(model_row)
+        .ok()?
+        .checked_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET)?;
+    let count = unsafe { *((list + GRID_CONTROL_ITEM_COUNT_OFFSET) as *const i32) };
+    if count <= 0 {
+        append_autoload_debug(format_args!(
+            "save-picker: select declined, the grid holds no items reason={reason} wanted={wanted}"
+        ));
+        return None;
+    }
+    let index = wanted.clamp(0, count - 1);
+    let select = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32).ok()?;
+    let select: unsafe extern "system" fn(usize, u32) -> u64 =
+        unsafe { std::mem::transmute(select) };
+    let ret = unsafe { select(list, u32::try_from(index).ok()?) };
+    if ret != 1 {
+        append_autoload_debug(format_args!(
+            "save-picker: select declined reason={reason} wanted={wanted} index={index} count={count} ret={ret}; the highlight stays where it was"
+        ));
+        return None;
+    }
+    // Keep the pump's edge sampling honest: the next tick compares against this, and leaving the
+    // pre-step row here would read our own step back as a native move and swallow the next input.
+    SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
+        usize::try_from(index).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
+        Ordering::SeqCst,
+    );
+    if index != wanted {
+        append_autoload_debug(format_args!(
+            "save-picker: select clamped into the item count reason={reason} wanted={wanted} index={index} count={count}"
+        ));
+    }
+    Some(index)
+}
+
+/// Move the picker's selection one row for a wheel detent the native grid declined to act on.
 pub(crate) unsafe fn save_picker_wheel_step_native_cursor(
     dialog: usize,
     model_row: usize,
     from_cursor: i32,
 ) -> i32 {
-    let Ok(index) = i32::try_from(model_row)
-        .map(|row| row.saturating_add(PROFILE_SELECT_NATIVE_ROW_MODEL_OFFSET))
-        .and_then(u32::try_from)
+    let Some(index) = (unsafe { save_picker_select_native_row(dialog, model_row, "wheel-step") })
     else {
         return from_cursor;
     };
-    let Ok(select) = game_rva(MENU_ITEM_LIST_SET_CURSOR_RVA as u32) else {
-        return from_cursor;
-    };
-    let select: unsafe extern "system" fn(usize, u32) -> u64 =
-        unsafe { std::mem::transmute(select) };
-    let ret = unsafe { select(dialog + PROFILE_LOAD_DIALOG_ITEM_LIST_OFFSET, index) };
-    // Keep the pump's edge sampling honest: the next tick compares against this, and leaving the
-    // pre-step row here would read our own step back as a native move and swallow the next detent.
-    SAVE_PICKER_EDGE_SCROLL_PREV_CURSOR.store(
-        usize::try_from(index).unwrap_or(EDGE_SCROLL_NO_PREV_CURSOR),
-        Ordering::SeqCst,
-    );
     let n = SAVE_PICKER_WHEEL_NATIVE_STEPS.fetch_add(1, Ordering::SeqCst) + 1;
     if n <= 20 || n.is_multiple_of(25) {
         append_autoload_debug(format_args!(
-            "save-picker: wheel step #{n} the grid declined from={from_cursor} to_index={index} select_ret={ret}"
+            "save-picker: wheel step #{n} the grid declined from={from_cursor} to_index={index}"
         ));
     }
-    i32::try_from(index).unwrap_or(from_cursor)
+    index
 }
 
 /// `FUN_140736c90(grid, point)` -- the grid's pointer hit test, byte-verified unique at
@@ -476,31 +508,4 @@ pub(crate) unsafe fn save_picker_log_grid_geometry_once(list: usize) {
     append_autoload_debug(format_args!(
         "save-picker: grid geometry count={count} cols={cols} rows={rows} view_base={view:?}"
     ));
-}
-
-/// Clear this frame's vertical menu event so the native list never moves.
-///
-/// The list animates its own cursor move the instant it consumes the event, so a correction written
-/// afterwards still lets the animation play -- which is what a player sees at the end of a listing
-/// as a scroll that "happens" and then undoes itself. This runs from the MenuWindowJob::Run post
-/// hook: `Run` is the producer that sets `+0x90[id] |= 1`, and the menu's own Update consumes it
-/// later in the frame, so clearing here lands between the two.
-pub(crate) unsafe fn save_picker_clear_vertical_menu_event(down: bool) -> bool {
-    let id = if down {
-        SAVE_PICKER_MENU_EVENT_DOWN_ID.load(Ordering::SeqCst)
-    } else {
-        SAVE_PICKER_MENU_EVENT_UP_ID.load(Ordering::SeqCst)
-    };
-    if id == MENU_EVENT_ID_UNLEARNED {
-        return false;
-    }
-    let Some(keystate) = (unsafe { save_picker_menu_event_keystate() }) else {
-        return false;
-    };
-    let byte = unsafe { keystate.add(id) };
-    if unsafe { *byte } & MENU_EVENT_PRESSED_BIT == 0 {
-        return false;
-    }
-    unsafe { *byte &= !MENU_EVENT_PRESSED_BIT };
-    true
 }

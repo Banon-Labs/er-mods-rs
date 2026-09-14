@@ -80,9 +80,13 @@ REQUIRED_EDGES = {
     # An empty set is the honest entry, the same way `own_load_switch_reload_fire` spells it --
     # naming the old path would assert an edge that cannot exist.
     "save_picker_request_path_editor": set(),
-    "save_picker_menu_pump_path_editor": {
-        "experiments/startup_hooks/quit_menu/profile_rows_system_quit_menu.rs"
-    },
+    # Followed it out on 2026-09-12. The path editor's pump call now runs from
+    # `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, which every host reaches,
+    # instead of from the product's own `profile_rows_system_quit_menu` handler, which a
+    # standalone shell never reaches at all -- the comment left behind at that call site says so.
+    # The only caller still under an `experiments/` path is `er-quit-rows`, a different crate and
+    # outside this scan root, so an empty set is again the honest entry.
+    "save_picker_menu_pump_path_editor": set(),
 }
 
 REQUIRED_TERMS = {

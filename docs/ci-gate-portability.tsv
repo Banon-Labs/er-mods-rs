@@ -246,6 +246,8 @@ portable	-	check-single-dll-product-contract.py --selftest	source/AST/text analy
 portable	-	check-single-dll-product-contract.py	source/AST/text analysis only	product
 portable	-	check-feature-gates-bite.py --selftest	source/AST/text analysis only	product
 portable	-	check-feature-gates-bite.py	source/AST/text analysis only	product
+portable	-	check-constant-feature-gates.py --selftest	source/AST/text analysis only	product
+portable	-	check-constant-feature-gates.py	source/AST/text analysis only	product
 portable	-	check-rust-build.sh	full cross-linked DLL build plus wine lib tests; the one step over the 30s audit cap, so not measured by the sweep -- CI has always run it	cargo-build
 blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; er-hook needs vendor/minhook	cargo-build
 blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook	cargo-build

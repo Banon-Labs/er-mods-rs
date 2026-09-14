@@ -247,10 +247,8 @@ static BOOT_VIEW_BACKSTOP_PT_RISE_LAST_MS: AtomicUsize = AtomicUsize::new(0);
 // indistinguishable from the black boot frames underneath, so only the bar + label are visible.
 // (The game's real loading-bar widget/asset cannot be reused here: its menu resources are not in
 // game memory until ~+12.7s and the DLL must not unpack assets from disk itself.)
-pub(super) const BOOT_VIEW_TEXT_BASE_SCALE: usize = 2;
-const BOOT_VIEW_TEXT_REFERENCE_H: u32 = 1080;
-const BOOT_VIEW_TEXT_MIN_SCALE: usize = 1;
-const BOOT_VIEW_TEXT_MAX_SCALE: usize = 4;
+// The scale rule itself moved to `er_loading_bar_core::boot_text_scale`, which the save picker's
+// overlay also calls, so the two surfaces drawn on one frame cannot size their text differently.
 pub(crate) const BOOT_VIEW_GLYPH_H: usize = er_loading_bar_core::GLYPH_H;
 /// Advance per character (5px glyph + 1px gap, pre-scale).
 #[allow(dead_code)] // Retained: Glyph metric pair with the live BOOT_VIEW_GLYPH_H; kept so the two are read together.
@@ -267,10 +265,9 @@ fn boot_view_strip_height(text_scale: usize) -> usize {
 }
 
 fn boot_view_text_scale(backbuffer_h: u32) -> usize {
-    let scaled = (backbuffer_h as usize * BOOT_VIEW_TEXT_BASE_SCALE
-        + (BOOT_VIEW_TEXT_REFERENCE_H as usize / 2))
-        / BOOT_VIEW_TEXT_REFERENCE_H as usize;
-    scaled.clamp(BOOT_VIEW_TEXT_MIN_SCALE, BOOT_VIEW_TEXT_MAX_SCALE)
+    // One rule, shared with the save picker's overlay, so two surfaces on the same frame cannot
+    // disagree about how tall a line of text is.
+    er_loading_bar_core::boot_text_scale(backbuffer_h as usize)
 }
 /// Strip width = backbuffer width * NUM/DEN (clamped to a sane minimum).
 const BOOT_VIEW_STRIP_W_NUM: u32 = 19;

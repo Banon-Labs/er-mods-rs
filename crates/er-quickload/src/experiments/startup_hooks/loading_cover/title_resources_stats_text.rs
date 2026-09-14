@@ -7,7 +7,6 @@ pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     {
         return;
     }
-    load_title_scaleform_memory_gfx();
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
         status => {
@@ -510,6 +509,15 @@ pub(crate) unsafe fn title_child_name_matches(name_ptr: usize) -> bool {
         "PressStart"
             | "StaticSystemText_101000"
             | "PRESS BUTTON"
+            // The legal footer. The binder is handed a path relative to whichever proxy is asked,
+            // and `TitleTopDialog`'s initializer asks two different ones: it binds `Top` into
+            // dialog+0xa48 and then asks dialog+0xa48 for the bare `PressStart` (deobf-1.17.1
+            // 0x1409a9415), but asks the parent root for `Top/CopyrightText` (0x1409a98ac and
+            // 0x1409a991a, both `lea r8, [0x142b295a8]`). The bare `CopyrightText` below is the
+            // name as written in `05_000_title.gfx` and is what this list carried, so it never
+            // matched an argument: run br-20260913-143409-05ec hid `PressStart`, `Info`,
+            // `ProgressInfo` and `Install_ProgressInfo`, and left the footer on screen.
+            | "Top/CopyrightText"
             | "CopyrightText"
             | "ProgressInfo"
             | "Install_ProgressInfo"
@@ -1150,9 +1158,33 @@ pub(crate) fn profile_slot_place_name_id(slot: i32) -> Option<u32> {
     if !(0..PROFILE_SLOT_COUNT).contains(&slot) {
         return None;
     }
-    let guard = PROFILE_SLOT_PLACE_NAME_CACHE.lock().ok()?;
-    guard.as_ref()?.get(slot as usize).copied().flatten()
+    let from_save = PROFILE_SLOT_PLACE_NAME_CACHE
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref()?.get(slot as usize).copied().flatten());
+    if from_save.is_some() {
+        return from_save;
+    }
+    // Third tier, and the only one that does not depend on this container holding a second
+    // character. `er_save_loader::profile_summary::slot_place_name_ids` answers from the slot's own
+    // record, then from a sibling record that covers the same map; a character alone on their map
+    // exhausts both and the row renders blank. Measured on run br-20260913-155423-2fe7: four rows
+    // borrowed id 14000 from each other on body map 0x0e000000 and the fifth, on 0x15010000, had no
+    // donor. The game's own param tables key on that map and name it, so ask them.
+    let map = profile_slot_saved_map(slot)?;
+    let (id, source) = er_profile_summary_core::map_place_names::place_name_for_map(map)?;
+    let hits = PROFILE_ROW_PARAM_PLACE_NAME_HITS.fetch_add(1, Ordering::SeqCst) + 1;
+    if hits <= 10 || hits.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "stats-text: slot {slot} Location sourced from {} -- this save names no record covering body map 0x{map:08x}, and that table pairs it with PlaceName {id} (hits={hits})",
+            source.label()
+        ));
+    }
+    Some(id)
 }
+
+/// Rows whose `Location` came from the game's param tables because the save could not name the map.
+static PROFILE_ROW_PARAM_PLACE_NAME_HITS: AtomicUsize = AtomicUsize::new(0);
 
 /// Point slot `slot`'s live `ProfileSummary` record at `place_name_id` for the duration of one native
 /// row populate, returning the id it displaced.
@@ -1870,7 +1902,7 @@ pub(crate) unsafe extern "system" fn profile_row_populate_hook(
                 let rows = PROFILE_ROW_FOREIGN_LOCATION_ROWS.fetch_add(1, Ordering::SeqCst) + 1;
                 if rows <= 10 || rows.is_power_of_two() {
                     append_autoload_debug(format_args!(
-                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}) and no consistent record in this save covers that map, so there is no place name to show (rows={rows})",
+                        "stats-text: slot {slot} Location WITHHELD -- its record is another character's (body map 0x{:08x}); neither a consistent record in this save nor the game's own WORLD_MAP_PLACE_NAME_PARAM_ST / BONFIRE_WARP_PARAM_ST names that map, so there is no place name to show (rows={rows})",
                         profile_slot_saved_map(slot).unwrap_or(0)
                     ));
                 }

@@ -4,17 +4,6 @@ use super::*;
 use er_quit_menu_core::install_picker_dim_overlay;
 
 pub(crate) fn install_title_visual_startup_hooks() {
-    // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
-    // branches have kept the stock logo invisible, so resource-path proof must not depend on any
-    // visual/logo-hide state.
-    if title_menu_resource_observer_enabled() {
-        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-resource-observer".to_owned())
-                .spawn(install_title_menu_resource_acquire_observer_hook);
-        });
-    }
-
     // Stats-panel native text: arm the 05_010 GFX runtime edit (face box removed + `ErStats` field
     // added; served in-place by the Scaleform file-open observer) and install the row-populate hook
     // + the named-child binder hook (idempotent) so the character's attribute line renders in the

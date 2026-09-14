@@ -56,9 +56,14 @@ pub mod profile_05_010_layout;
 pub mod profile_05_010_protocol;
 pub mod raster;
 pub mod text_input_02_990;
-pub mod title_05_000;
 pub mod title_05_010;
 pub mod world_map_pin;
+
+/// The repository's one Rust FNV-1a implementation, re-exported because several crates fingerprint
+/// movie payloads and every one of them was reaching it through `title_05_000::fnv1a64` -- a path
+/// that named a deleted feature rather than a hash. `scripts/check-fnv1a-owner.py` keeps
+/// `er-game-base` the sole owner; this is a `pub use` of it, not a second copy.
+pub use er_game_base::fnv1a::fnv1a64;
 
 /// Twips per pixel. SWF/GFX stores every geometric quantity -- RECT bounds, matrix
 /// translations, font heights, and a live `GFx::TextField` document's source/layout bounds -- in

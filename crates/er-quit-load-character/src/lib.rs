@@ -72,9 +72,18 @@ fn log_dir() -> PathBuf {
 /// run's aside as `.log.prev`), later lines append. No log in this repo accumulates across
 /// runs -- mixing evidence from builds that no longer exist is how a count over one file
 /// gets read as one run's behaviour.
+/// A run directory moves this file out of the game directory; without the knob it stays there.
+///
+/// Its sibling shell `er-quit-menu` earned this on run br-20260912-183117-e19a: it faulted inside
+/// the System-window restore and the only line naming the window it died on sat in the game
+/// directory, outside the run that produced it. This shell arms the same rows and would have hidden
+/// the same evidence the same way. `scripts/er_artifact_env.py` carries the matching entry.
+const LOG_PATH_ENV: &str = "ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH";
+
 fn append_log(dir: &Path, args: std::fmt::Arguments<'_>) {
+    let _ = dir;
     er_game_base::log::append_line(
-        &dir.join(LOG_FILE_NAME),
+        &er_game_base::log::redirected_artifact_path(LOG_PATH_ENV, LOG_FILE_NAME),
         format_args!("er-quit-load-character: {args}"),
     );
 }
@@ -94,18 +103,21 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
     append_log(&log_dir(), args);
 }
 
-/// The two rows this shell arms. Spelled out rather than reached for as a named constant, because
+/// The rows this shell arms. Spelled out rather than reached for as a named constant, because
 /// the set and the action table below have to agree field for field: a row here with no flow beside
 /// it is a row that appears and does nothing.
 ///
 /// **Load Character from File** joined it once the picker moved into `er-quit-menu-core`
-/// (2026-09-11). Until then the browse surface, the row staging and the ingest were all
-/// `pub(crate)` inside `er-quickload`, so a shell could name the row and had nothing to open.
+/// (2026-09-11), and rode along unconditionally from then until 2026-09-13, which made the row this
+/// shell is named for impossible to have on its own: a profile asking for the two vanilla rows plus
+/// a Save Game row plus Load Character got a fifth row it had not asked for. It is now behind the
+/// `load-character-from-file` feature, off by default, and the row registry merges row sets across
+/// hosts so the row can be declared by whichever shell a profile wants it from.
 #[cfg(windows)]
 const CHARACTER_ROWS: er_quit_menu_core::row_cloner::RowSet =
     er_quit_menu_core::row_cloner::RowSet {
         load_character: true,
-        load_character_from_file: true,
+        load_character_from_file: cfg!(feature = "load-character-from-file"),
         ..er_quit_menu_core::row_cloner::RowSet::NONE
     };
 
@@ -118,7 +130,10 @@ fn row_actions() -> er_quit_menu_core::row_cloner::QuitRowActions {
         open_profile_load_dialog: Some(
             er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog,
         ),
-        open_save_picker_menu: Some(open_save_picker_for_row),
+        // Paired with the row above it: a flow with no row is dead code, and a row with no flow is
+        // a press that does nothing, so both sides read the same feature.
+        open_save_picker_menu: cfg!(feature = "load-character-from-file")
+            .then_some(open_save_picker_for_row as unsafe fn(usize) -> bool),
         ..er_quit_menu_core::row_cloner::QuitRowActions::default()
     }
 }
@@ -243,9 +258,14 @@ mod tests {
         assert!(actions.note_drive_strip_click_event.is_none());
     }
 
-    /// Both character rows, and neither build row. The build pair belongs to the sibling shell
-    /// `er-quit-menu`, and a shell arming both halves of the tab would be the co-loading the
-    /// conflict table exists to refuse, written into one DLL instead.
+    /// The character rows this build arms, and neither build row. The build pair belongs to the
+    /// sibling shell `er-quit-menu`, and a shell arming both halves of the tab would be the
+    /// co-loading the conflict table exists to refuse, written into one DLL instead.
+    ///
+    /// The expectation follows `load-character-from-file` rather than naming both rows, because
+    /// that feature is off by default since 2026-09-13 -- see [`CHARACTER_ROWS`] for why. It is
+    /// still an exact set comparison, so a build row that starts arming itself fails here under
+    /// either configuration, which is what this test is for.
     #[test]
     fn this_shell_arms_the_character_switch_and_neither_build_row() {
         let rows = CHARACTER_ROWS;
@@ -258,6 +278,11 @@ mod tests {
         .into_iter()
         .filter_map(|(label, armed)| armed.then_some(label))
         .collect();
-        assert_eq!(armed, vec!["Load Character", "Load Character from File"]);
+
+        let mut expected = vec!["Load Character"];
+        if cfg!(feature = "load-character-from-file") {
+            expected.push("Load Character from File");
+        }
+        assert_eq!(armed, expected);
     }
 }

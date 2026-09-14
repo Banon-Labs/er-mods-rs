@@ -67,7 +67,7 @@
 // out-of-range cursor or a stale dialog are all `Ambiguous`, and an ambiguous row never quits and
 // never runs anything.
 
-/// The six rows of the patched System -> Quit dialog, in property-list order.
+/// The seven rows of the patched System -> Quit dialog, in property-list order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuitRow {
     /// Native first row, relabelled "Save Game" by the `MsgRepository::GetAndFormat` hook.
@@ -92,6 +92,15 @@ pub enum QuitRow {
     /// planner's servers: the `?i=` form carries the whole build in the URL, so no account is
     /// minted and no row is written into someone else's free hobby service.
     GenerateBuildLink,
+    /// Cloned row, labelled "Save Game": opens the save-destination browser, and the character is
+    /// written to the file the player picks.
+    ///
+    /// It reads the same words as the native first row's own flow, and that is deliberate -- it is
+    /// the row a player presses to save. The two spellings can never be on screen together: the
+    /// substitution that relabels the native first row is gated on
+    /// [`crate::row_cloner::save_game_flow_is_owned`], which is false in exactly the load that
+    /// clones this row, so that row keeps its vanilla label while this one carries the words.
+    SaveGameAs,
 }
 
 impl QuitRow {
@@ -104,6 +113,7 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => 4,
             QuitRow::LoadBuildFromUrl => 5,
             QuitRow::GenerateBuildLink => 6,
+            QuitRow::SaveGameAs => 7,
         }
     }
 
@@ -119,18 +129,20 @@ impl QuitRow {
             QuitRow::LoadSaveProfiles => "Load Character from File",
             QuitRow::LoadBuildFromUrl => "Load Build from URL",
             QuitRow::GenerateBuildLink => "Generate Build Link",
+            QuitRow::SaveGameAs => "Save Game",
         }
     }
 }
 
-/// The six rows of the patched Quit dialog, in the captured table's stable order.
-pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 6] = [
+/// The seven rows of the patched Quit dialog, in the captured table's stable order.
+pub const QUIT_ROW_TABLE_ROWS: [QuitRow; 7] = [
     QuitRow::SaveGame,
     QuitRow::ReturnToDesktop,
     QuitRow::LoadProfile,
     QuitRow::LoadSaveProfiles,
     QuitRow::LoadBuildFromUrl,
     QuitRow::GenerateBuildLink,
+    QuitRow::SaveGameAs,
 ];
 
 /// The `std::function` storage inside a controller that the action thunks receive as their `this`.
@@ -163,6 +175,7 @@ pub struct QuitRowTable {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
 }
 
 impl QuitRowTable {
@@ -174,6 +187,7 @@ impl QuitRowTable {
             QuitRow::LoadSaveProfiles => self.load_save_profiles_index,
             QuitRow::LoadBuildFromUrl => self.load_build_from_url_index,
             QuitRow::GenerateBuildLink => self.generate_build_link_index,
+            QuitRow::SaveGameAs => self.save_game_as_index,
         }
     }
 
@@ -344,6 +358,7 @@ pub struct QuitRowFacts {
     pub load_save_profiles_index: i32,
     pub load_build_from_url_index: i32,
     pub generate_build_link_index: i32,
+    pub save_game_as_index: i32,
     /// The dialog the table above was captured from, and the dialog this activation belongs to.
     pub table_dialog: usize,
     pub activation_dialog: usize,
@@ -376,6 +391,7 @@ impl QuitRowFacts {
             load_save_profiles_index: table.load_save_profiles_index,
             load_build_from_url_index: table.load_build_from_url_index,
             generate_build_link_index: table.generate_build_link_index,
+            save_game_as_index: table.save_game_as_index,
             table_dialog,
             activation_dialog,
             cursor,
@@ -393,6 +409,7 @@ impl QuitRowFacts {
             load_save_profiles_index: self.load_save_profiles_index,
             load_build_from_url_index: self.load_build_from_url_index,
             generate_build_link_index: self.generate_build_link_index,
+            save_game_as_index: self.save_game_as_index,
         }
         .index(row)
     }
@@ -425,6 +442,7 @@ impl QuitRowFacts {
             self.load_save_profiles_index,
             self.load_build_from_url_index,
             self.generate_build_link_index,
+            self.save_game_as_index,
         ];
         if idx.iter().any(|index| *index >= self.row_count) {
             return false;
@@ -503,7 +521,7 @@ pub fn resolve_quit_row(facts: &QuitRowFacts) -> QuitRowVerdict {
 /// index, and what the label read live at the cursor actually is.
 pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
     format!(
-        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{}] live_label={:?} input_kind={:?}",
+        "cursor={} table=[save_game=#{} return_desktop=#{} load_profile=#{} load_save_profiles=#{} load_build_from_url=#{} generate_build_link=#{} save_game_as=#{}] live_label={:?} input_kind={:?}",
         facts.cursor,
         facts.save_game_index,
         facts.return_desktop_index,
@@ -511,6 +529,7 @@ pub fn quit_row_facts_text(facts: &QuitRowFacts) -> String {
         facts.load_save_profiles_index,
         facts.load_build_from_url_index,
         facts.generate_build_link_index,
+        facts.save_game_as_index,
         facts.cursor_row_label,
         facts.input_kind,
     )
@@ -588,7 +607,106 @@ pub fn quit_row_is_false_quit_claim(verdict: QuitRowVerdict) -> bool {
         Some(QuitRow::LoadProfile)
             | Some(QuitRow::LoadSaveProfiles)
             | Some(QuitRow::LoadBuildFromUrl)
+            | Some(QuitRow::SaveGameAs)
     )
+}
+
+/// Why a positively identified Return-to-Desktop press was not allowed to reach `ExitProcess(0)`.
+///
+/// Every variant names a state the process is genuinely in right now, never a leftover marker --
+/// see [`quit_exit_block`] for why that distinction is the whole point of this type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitExitBlock {
+    /// A save commit is armed or running. A process exit here tears the write in half.
+    SaveFlow,
+    /// The character-switch phase machine is mid-switch.
+    SwitchPhase,
+    /// `05_010_ProfileSelect` is on screen this frame, so the activation may be one the picker
+    /// re-dispatched through the native return-desktop controller rather than a press on the tab.
+    PickerWindowLive,
+    /// A `Load Character` press has asked for the picker and the window latch has not caught up
+    /// yet. Blocks only while something in this process is watching those windows.
+    ProfileLoadRequested,
+}
+
+impl QuitExitBlock {
+    pub fn label(self) -> &'static str {
+        match self {
+            QuitExitBlock::SaveFlow => "save-flow-in-flight",
+            QuitExitBlock::SwitchPhase => "switch-phase-active",
+            QuitExitBlock::PickerWindowLive => "profile-select-window-live",
+            QuitExitBlock::ProfileLoadRequested => "profile-load-requested",
+        }
+    }
+}
+
+/// The live process state that bears on whether the instant quit may run.
+///
+/// Each field is one term with one genuine consumer, captured from its counter at the moment of the
+/// press. No memory reads happen in here, which is what makes the decision unit-testable on the
+/// host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuitExitFacts {
+    /// `SAVE_FLOW_STAGE != SAVE_FLOW_STAGE_IDLE`.
+    pub save_flow_active: bool,
+    /// `SYSTEM_QUIT_QUICKLOAD_PHASE != SYSTEM_QUIT_QUICKLOAD_PHASE_IDLE`.
+    pub switch_phase_active: bool,
+    /// `SYSTEM_QUIT_PROFILE_SELECT_WINDOW != 0` -- written per frame by whichever
+    /// `MenuWindowJob::Run` owner this load has, and zeroed again when that window finalizes.
+    pub profile_select_window_live: bool,
+    /// `SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE != 0` -- set synchronously at the `Load Character`
+    /// click, cleared only by `system_windows::reset_profile_select_state`.
+    pub profile_load_requested: bool,
+    /// `PROFILE_SELECT_WINDOW_RUN_TICKS != 0` -- whether any `05_010_ProfileSelect` window has ever
+    /// run a frame under an owner in this process. The two owners that stamp this counter are the
+    /// only code that ever clears `profile_load_requested`, so this answers "does that request have
+    /// anybody to end it".
+    pub profile_select_window_observed: bool,
+}
+
+/// Whether a positively identified Return-to-Desktop press may run the irreversible
+/// `ExitProcess(0)`, and if not, which live state stopped it.
+///
+/// This sits behind [`resolve_quit_row`], never in front of it: by the time it is asked, the row
+/// table, the activation dialog, the list cursor and the live label at that cursor have already
+/// agreed that this is the game's own Return-to-Desktop row. So it does not ask "which row is
+/// this"; it asks "is the process in a state where quitting now would damage something".
+///
+/// # Why `profile_load_requested` needs a second term
+///
+/// The other three facts are live: each is written by machinery that is running, and each returns
+/// to its resting value on its own. `profile_load_requested` does not -- it is a latch set at the
+/// click, and the only code that clears it is `reset_profile_select_state`, reached from a
+/// `MenuWindowJob::Run` owner. A load with no such owner sets it once and never clears it, and the
+/// latch then reads as "a switch is in flight" for the rest of the session.
+///
+/// Measured on run `br-20260913-155423-2fe7`, a `quit-rows` module build carrying no
+/// `MenuWindowJob::Run` owner: `Load Character` at `+97s` set the latch, the player backed out, and
+/// the `Return to Desktop` press at `+239s` was refused with `switch_in_flight=true` while the
+/// quickload phase read 0 and `oracle_profile_select_window_run_ticks` read 0. The refusal forwarded
+/// the native activation, whose confirm box the product's own message-box suppression then ate under
+/// that same latch (`msgbox-skip ... scope=switch-active`), so the row was dead in both directions.
+/// The full product build of the same tree took the identical path with `run_ticks = 59` and refused
+/// nothing.
+///
+/// So the latch blocks only while `profile_select_window_observed` says somebody is watching those
+/// windows and will end the request. With an owner the guard is exactly what it was; without one it
+/// cannot wedge, because a request nothing can retract is not evidence of anything.
+#[must_use]
+pub fn quit_exit_block(facts: &QuitExitFacts) -> Option<QuitExitBlock> {
+    if facts.save_flow_active {
+        return Some(QuitExitBlock::SaveFlow);
+    }
+    if facts.switch_phase_active {
+        return Some(QuitExitBlock::SwitchPhase);
+    }
+    if facts.profile_select_window_live {
+        return Some(QuitExitBlock::PickerWindowLive);
+    }
+    if facts.profile_load_requested && facts.profile_select_window_observed {
+        return Some(QuitExitBlock::ProfileLoadRequested);
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -679,8 +797,8 @@ mod system_quit_row_identity_tests {
 
     /// The measured table from the fatal run: dialog 0x175842080, rows 0..3 =
     /// Save Game / Return to Desktop / Load Character / Load Character from File, cursor on row 1,
-    /// plus rows 4 and 5 (Load Build from URL, Generate Build Link), which the same cloner appends
-    /// in the same pass.
+    /// plus rows 4, 5 and 6 (Load Build from URL, Generate Build Link, the cloned Save Game), which
+    /// the same cloner appends in the same pass.
     fn facts() -> QuitRowFacts {
         QuitRowFacts {
             save_game_index: 0,
@@ -689,6 +807,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
             table_dialog: 0x175842080,
             activation_dialog: 0x175842080,
             cursor: 1,
@@ -981,6 +1100,7 @@ mod system_quit_row_identity_tests {
             load_save_profiles_index: 3,
             load_build_from_url_index: 4,
             generate_build_link_index: 5,
+            save_game_as_index: 6,
         };
         assert_eq!(table.row_count(), QUIT_ROW_TABLE_ROWS.len() as i32);
         // Every row in the stable table order must round-trip through `index`, so a row added to
@@ -1032,5 +1152,138 @@ mod system_quit_row_identity_tests {
             row: QuitRow::ReturnToDesktop,
             by: QuitRowDiscriminator::CursorRow,
         }));
+    }
+
+    /// A quiet in-world Quit tab: nothing is loading, nothing is saving, no picker is up. The
+    /// player pressed the game's own Return to Desktop and it has to quit.
+    fn idle_exit_facts() -> QuitExitFacts {
+        QuitExitFacts {
+            save_flow_active: false,
+            switch_phase_active: false,
+            profile_select_window_live: false,
+            profile_load_requested: false,
+            profile_select_window_observed: false,
+        }
+    }
+
+    #[test]
+    fn an_idle_process_lets_the_real_row_quit() {
+        assert_eq!(quit_exit_block(&idle_exit_facts()), None);
+    }
+
+    /// The reported defect, as its facts. Run `br-20260913-155423-2fe7`: a `quit-rows` module build
+    /// with no `MenuWindowJob::Run` owner, so `run_ticks` stayed 0 and the click-time latch set at
+    /// `+97s` was still 1 when `Return to Desktop` was pressed at `+239s` -- with the quickload
+    /// phase idle and no picker window on screen. Before the second term this refused the quit.
+    #[test]
+    fn a_latch_with_no_owner_to_clear_it_never_blocks_the_quit() {
+        let facts = QuitExitFacts {
+            profile_load_requested: true,
+            profile_select_window_observed: false,
+            ..idle_exit_facts()
+        };
+        assert_eq!(quit_exit_block(&facts), None);
+    }
+
+    /// The same latch in a load that does own a `MenuWindowJob::Run`. The request will be retracted
+    /// when the picker finalizes, so until then it is real evidence and the guard stands.
+    #[test]
+    fn a_latch_with_an_owner_still_blocks_the_quit() {
+        let facts = QuitExitFacts {
+            profile_load_requested: true,
+            profile_select_window_observed: true,
+            ..idle_exit_facts()
+        };
+        assert_eq!(
+            quit_exit_block(&facts),
+            Some(QuitExitBlock::ProfileLoadRequested)
+        );
+    }
+
+    /// The three live terms are untouched by the fix: each blocks on its own, with no owner needed
+    /// and no help from the others.
+    #[test]
+    fn every_live_term_blocks_the_quit_by_itself() {
+        for (facts, expected) in [
+            (
+                QuitExitFacts {
+                    save_flow_active: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::SaveFlow,
+            ),
+            (
+                QuitExitFacts {
+                    switch_phase_active: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::SwitchPhase,
+            ),
+            (
+                QuitExitFacts {
+                    profile_select_window_live: true,
+                    ..idle_exit_facts()
+                },
+                QuitExitBlock::PickerWindowLive,
+            ),
+        ] {
+            assert_eq!(quit_exit_block(&facts), Some(expected));
+        }
+    }
+
+    /// Exhaustive over the whole input shape, so no future edit can widen the exit without failing
+    /// this. Quitting is reachable from exactly three of the thirty-two states: every live term has
+    /// to be at rest, which fixes three of the five booleans, and of the four combinations the
+    /// other two make, only `requested && observed` -- a latch with an owner -- still blocks.
+    #[test]
+    fn quitting_requires_every_live_term_at_rest() {
+        let mut quits = Vec::new();
+        for save_flow_active in [false, true] {
+            for switch_phase_active in [false, true] {
+                for profile_select_window_live in [false, true] {
+                    for profile_load_requested in [false, true] {
+                        for profile_select_window_observed in [false, true] {
+                            let facts = QuitExitFacts {
+                                save_flow_active,
+                                switch_phase_active,
+                                profile_select_window_live,
+                                profile_load_requested,
+                                profile_select_window_observed,
+                            };
+                            if quit_exit_block(&facts).is_none() {
+                                quits.push(facts);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(quits.len(), 3);
+        for facts in &quits {
+            assert!(!facts.save_flow_active);
+            assert!(!facts.switch_phase_active);
+            assert!(!facts.profile_select_window_live);
+            // The only latched state that reaches the exit is the one nothing can retract.
+            assert!(!(facts.profile_load_requested && facts.profile_select_window_observed));
+        }
+    }
+
+    /// The block is reported, not merely counted, so a refusal in the log names which term did it
+    /// instead of a single boolean that three states can produce.
+    #[test]
+    fn every_block_has_a_distinct_label() {
+        let labels: Vec<&str> = [
+            QuitExitBlock::SaveFlow,
+            QuitExitBlock::SwitchPhase,
+            QuitExitBlock::PickerWindowLive,
+            QuitExitBlock::ProfileLoadRequested,
+        ]
+        .into_iter()
+        .map(QuitExitBlock::label)
+        .collect();
+        let mut sorted = labels.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), labels.len());
     }
 }

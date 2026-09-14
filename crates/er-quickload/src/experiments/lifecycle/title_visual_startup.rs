@@ -4,17 +4,6 @@ use super::*;
 use er_quit_menu_core::install_picker_dim_overlay;
 
 pub(crate) fn install_title_visual_startup_hooks() {
-    // Passive title-resource observer is deliberately independent of the cover/hide bundle: recent
-    // branches have kept the stock logo invisible, so resource-path proof must not depend on any
-    // visual/logo-hide state.
-    if title_menu_resource_observer_enabled() {
-        START_TITLE_MENU_RESOURCE_ACQUIRE_OBSERVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-resource-observer".to_owned())
-                .spawn(install_title_menu_resource_acquire_observer_hook);
-        });
-    }
-
     // Stats-panel native text: arm the 05_010 GFX runtime edit (face box removed + `ErStats` field
     // added; served in-place by the Scaleform file-open observer) and install the row-populate hook
     // + the named-child binder hook (idempotent) so the character's attribute line renders in the
@@ -36,6 +25,20 @@ pub(crate) fn install_title_visual_startup_hooks() {
                     // hook still runs the title-cover duties. Both are idempotent.
                     install_profile_row_populate_hook();
                     install_title_scene_obj_proxy_named_child_bind_hook();
+                    // Arming `PROFILE_05_010_RUNTIME_EDIT_ARMED` above decides that the edited movie
+                    // should be served; this observer is what serves it. Without it the flag is read
+                    // by nobody, the vanilla `05_010_profileselect.gfx` is handed to the menu, and
+                    // the face box the edit removes is still there with the `ErStats` field it adds
+                    // still absent.
+                    //
+                    // It used to be installed only under `title_native_menu_visual_suppression_enabled`,
+                    // which answers false with no boot autoload. Measured on run
+                    // br-20260913-154820-c63f, the quit-rows-only module: `stats-panel: registered
+                    // neutral bg` for all ten slots, and no `05_010 runtime edit derived` line
+                    // anywhere in the log -- the chrome armed and was never delivered. The call is
+                    // idempotent (three installed flags checked on entry), so the autoload path's
+                    // own `Once` below still costs nothing.
+                    install_title_menu_resource_acquire_observer_hook();
                 });
         });
     }
@@ -98,30 +101,6 @@ pub(crate) fn install_title_visual_startup_hooks() {
             let _ = std::thread::Builder::new()
                 .name("er-quickload-tfc-record-fix".to_owned())
                 .spawn(install_title_flow_context_record_regulation_fix_hook);
-        });
-    } else if title_resource_memory_gfx_enabled() {
-        // Branch-owned `05_001_Title_Logo` replacement: keep TitleBack visible, but hide the later
-        // title text layers (`PRESS ANY BUTTON` / Continue-ish title information) so the custom
-        // resource is not overdrawn by native text. Do not install the TitleBack/logo hide hooks here.
-        START_TITLE_PAB_INFORMATION_COVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-text-latch".to_owned())
-                .spawn(install_title_pab_information_visual_hook);
-        });
-        START_TITLE_GFX_VALUE_SET_VISIBLE.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-text-gfx-visible".to_owned())
-                .spawn(install_title_gfx_value_set_visible_hook);
-        });
-        START_TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-text-child-bind".to_owned())
-                .spawn(install_title_scene_obj_proxy_named_child_bind_hook);
-        });
-        START_TITLE_SCALEFORM_BIND_OBSERVER.call_once(|| {
-            let _ = std::thread::Builder::new()
-                .name("er-quickload-title-text-bind-observer".to_owned())
-                .spawn(install_title_scaleform_bind_observer_hook);
         });
     }
 

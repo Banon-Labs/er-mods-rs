@@ -148,6 +148,37 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         }
         return;
     }
+    // A save committed through the missing-save picker is loaded by the game, and this chain must
+    // not touch it.
+    //
+    // On 1.17.1 the commit is the whole loader: `complete_missing_save_selection_from_picker`
+    // releases the held save-data `ShowProgressJob`, that job re-reads the container, and the game
+    // calls its own LoadGame builder (bd `dead-boot-picker-is-the-only-loader-on-1171-2026-09-13`,
+    // which reached a live character with no Continue row and no `native-fullread` anywhere in the
+    // run). Submitting a second, hand-built full read into that is not a belt-and-braces: the two
+    // race, the game's save IO refuses ours, and refusing it runs `FUN_140e6f200`, which unloads
+    // the file cap and frees the request object the native job was still using. Every poll after
+    // that answers 4 -- "no save IO object" -- so our submit does not merely fail, it takes the
+    // native load down with it.
+    //
+    // Measured 2026-09-13 11:23 and 11:28, both on a picked save the picker had read a level-150
+    // character out of: submit at +18122 ms returned `b80=2`, the poll answered 5 then 4 inside
+    // 20 ms, `b80` was 0 by the first drain tick, and the boot sat on `PREPARING SAVE 6/11` with
+    // `c30=0xa010000` for the rest of the run.
+    //
+    // Same shape and same remedy as the `System->Quit` stand-down directly above: when a native
+    // owner is driving the load, this chain observes and does not steer.
+    let picker_committed =
+        er_telemetry_core::counters::SAVE_PICKER_OVERLAY_PICK_COUNT.load(Ordering::SeqCst) != 0;
+    if picker_committed {
+        if phase != FULLREAD_PHASE_DONE {
+            append_autoload_debug(format_args!(
+                "native-fullread: STAND-DOWN -- the missing-save picker committed a save and the released native save-data job owns this load (phase={phase})"
+            ));
+            FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
+        }
+        return;
+    }
     // Already finished: keep observing (the golden oracle is written by the caller's telemetry once
     // the native pump streams the world).
     if phase == FULLREAD_PHASE_DONE {
@@ -510,10 +541,12 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     /// One-shot by construction: `arm_missing_save_picker_after_boot` returns whether this call armed
     /// it, so a phase that is polled every frame cannot re-arm or spam. The refusal itself is logged by
     /// the caller; this only reports what recourse the user was given.
-    fn fullread_offer_save_picker(reason: &'static str) {
-        let armed = crate::experiments::arm_missing_save_picker_after_boot(reason);
+    fn fullread_offer_save_picker(reason: er_save_picker_core::reason::MissingSaveReason) {
+        let armed = crate::experiments::offer_missing_save_picker(reason);
         append_autoload_debug(format_args!(
-            "native-fullread: armed_by_this_call={armed} -- the full read refused to load a character (reason={reason}), so the missing-save picker is offered instead of leaving the title with no way forward"
+            "native-fullread: armed_by_this_call={armed} -- the full read refused to load a character (reason={} fault={:?}), so the missing-save picker is offered instead of leaving the title with no way forward",
+            reason.log_tag(),
+            reason.fault()
         ));
     }
 
@@ -592,7 +625,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             // the user hit: `GUARD FAIL ... -> DONE` at +16243ms and the run never moved again.
             // "This save cannot be loaded" is exactly the condition the missing-save picker exists
             // for, and the empty-profile path one screen earlier already answers it that way.
-            fullread_offer_save_picker("fullread-guard-fail");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadGuardFailed,
+            );
             return;
         }
         // Step 7 is hard-gated behind both the guard above and the commit sub-gate (default off):
@@ -617,7 +652,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-owner-null") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
-            fullread_offer_save_picker("fullread-commit-abort-owner-null");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadCommitAborted,
+            );
             return;
         }
         let new_game_flag =
@@ -629,7 +666,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             ));
             unsafe { fullread_disarm_slot_request(gm, "commit-abort-new-game-flag") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
-            fullread_offer_save_picker("fullread-commit-abort-new-game-flag");
+            fullread_offer_save_picker(
+                er_save_picker_core::reason::MissingSaveReason::FullReadWouldStartNewGame,
+            );
             return;
         }
         let shim = &raw mut OWN_STEPPER_SHIM;
@@ -853,117 +892,5 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
                 latched.push_str(&name);
             }
         }
-    }
-}
-/// Recipe Option 1 (genuine offline continue, flagless): drive the MoveMapList
-/// dispatcher 0x140afb880 each frame with GameMan b73 set so it begins
-/// current_slot_load and deserializes the real slot character (sets
-/// GameMan+0x10=1), also building the world singletons. owner is a synthetic
-/// buffer with +0x12c = slot. Never writes the force flag 0x143d856a0.
-pub(crate) unsafe fn continue_drive_tick(_module_base: usize, slot: i32, tick: u64) {
-    // Log readiness before the fixed drive gate: recent runs exit before the
-    // drive can fire, so the next runtime must tell us when GameMan first became
-    // available instead of turning the gate into another blind threshold knob.
-    let game_man = game_man_ptr_or_null();
-    if game_man == TITLE_OWNER_SCAN_START_ADDRESS {
-        return;
-    }
-    let first_seen_tick = match CONTINUE_DRIVE_GM_FIRST_SEEN_TICK.compare_exchange(
-        CONTINUE_DRIVE_GM_FIRST_SEEN_UNSET,
-        tick,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    ) {
-        Ok(_) => {
-            append_autoload_debug(format_args!(
-                "continue_drive: GameMan first_seen tick={tick} gm=0x{game_man:x} after_gm_gate={CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS}"
-            ));
-            tick
-        }
-        Err(existing) => existing,
-    };
-    let game_man_relative_gate =
-        first_seen_tick.saturating_add(CONTINUE_DRIVE_AFTER_GAME_MAN_TICKS);
-    let drive_gate_tick = core::cmp::max(CONTINUE_DRIVE_MIN_TICK, game_man_relative_gate);
-    if tick < drive_gate_tick {
-        return;
-    }
-    let real_done = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
-    let load_progress = unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
-    let map14 = unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
-    if real_done == GAME_MAN_REAL_LOAD_DONE_VALUE {
-        if tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64 {
-            append_autoload_debug(format_args!(
-                "continue_drive: REAL LOAD DONE gm+0x10=1 map14={map14} b80={load_progress} tick={tick}"
-            ));
-        }
-        return;
-    }
-    // Synthetic MoveMapList owner: the offline-continue path reads owner+0x12c
-    // (slot) and +0x12a. A persistent zeroed buffer suffices.
-    let mut owner_ptr = CONTINUE_OWNER_PTR.load(Ordering::SeqCst);
-    if owner_ptr == TITLE_OWNER_SCAN_START_ADDRESS {
-        let buf = vec![SYNTHETIC_ZERO_QWORD; CONTINUE_OWNER_QWORDS].into_boxed_slice();
-        owner_ptr = Box::leak(buf).as_mut_ptr() as usize;
-        CONTINUE_OWNER_PTR.store(owner_ptr, Ordering::SeqCst);
-    }
-    let owner = owner_ptr as *mut u8;
-    unsafe {
-        *(owner.add(CONTINUE_OWNER_SLOT_OFFSET) as *mut i32) = slot;
-        *(owner.add(CONTINUE_OWNER_FLAG_12A_OFFSET)) = CONTINUE_OWNER_FLAG_12A_VALUE;
-    }
-    // Until the async load has begun (b80 != 0), arm the slot + b73 so the
-    // dispatcher selects current_slot_load and begins. The begin is gated on
-    // b80==0, so re-arming after it starts cannot re-submit.
-    if !CONTINUE_DRIVE_BEGUN.load(Ordering::SeqCst) {
-        let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
-            std::mem::transmute(
-                match crate::experiments::gated_game_fn(
-                    FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA,
-                    "FORCE_PLAY_GAME_SET_SAVE_SLOT_RVA",
-                ) {
-                    Some(address) => address,
-                    None => return,
-                },
-            )
-        };
-        unsafe { set_save_slot(slot) };
-        unsafe {
-            *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *mut u8) = GAME_MAN_B73_FLAG_SET;
-        }
-        if load_progress != TITLE_NATIVE_JOB_TASK_DATA_ZERO {
-            CONTINUE_DRIVE_BEGUN.store(true, Ordering::SeqCst);
-        }
-    }
-    let first_attempt = !CONTINUE_DRIVE_FIRST_ATTEMPT_LOGGED.swap(true, Ordering::SeqCst);
-    if first_attempt {
-        let b73_before = unsafe { *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *const u8) };
-        append_autoload_debug(format_args!(
-            "continue_drive: FIRST dispatcher before slot={slot} b80={load_progress} b73={b73_before} real_done={real_done} map14={map14} tick={tick} gate_tick={drive_gate_tick}"
-        ));
-    }
-    let dispatcher: unsafe extern "system" fn(*mut u8) -> usize = unsafe {
-        std::mem::transmute(
-            match crate::experiments::gated_game_fn(
-                MOVEMAP_DISPATCHER_RVA,
-                "MOVEMAP_DISPATCHER_RVA",
-            ) {
-                Some(address) => address,
-                None => return,
-            },
-        )
-    };
-    let _ = unsafe { dispatcher(owner) };
-    if first_attempt
-        || tick % TITLE_JOB_OBSERVE_TICK_INTERVAL == TITLE_OWNER_SCAN_START_ADDRESS as u64
-    {
-        let real_after = unsafe { *((game_man + GAME_MAN_REAL_LOAD_DONE_OFFSET) as *const i32) };
-        let b80_after = unsafe { *((game_man + GAME_MAN_SAVE_STATE_B80_OFFSET) as *const u8) };
-        let b73_after = unsafe { *((game_man + GAME_MAN_B73_FLAG_OFFSET) as *const u8) };
-        let map14_after =
-            unsafe { *((game_man + FORCE_PLAY_GAME_GM_LOAD_VALUE_14_OFFSET) as *const i32) };
-        append_autoload_debug(format_args!(
-            "continue_drive: drove dispatcher slot={slot} b80={b80_after} b73={b73_after} real_done={real_after} map14={map14_after} tick={tick}"
-        ));
     }
 }

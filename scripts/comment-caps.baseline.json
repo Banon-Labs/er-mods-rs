@@ -18,7 +18,6 @@
     "crates/er-quickload/src/constants/profile_render.rs": 1,
     "crates/er-quickload/src/constants/render_handoff.rs": 3,
     "crates/er-quickload/src/experiments/continue_load/slot_resolution.rs": 3,
-    "crates/er-quickload/src/experiments/lifecycle/save_flow.rs": 14,
     "crates/er-quickload/src/experiments/lifecycle/task_tick.rs": 2,
     "crates/er-quickload/src/experiments/mod/product_core_own_stepper/fallback_drives.rs": 4,
     "crates/er-quickload/src/experiments/save_redirect/path_hooks.rs": 9,

@@ -9,15 +9,61 @@
 //! Moved out of `quit_menu/system_quit_dialog_handlers.rs`, which held this flow, the Scaleform
 //! handler lifetime hooks and the picked-save ingest in one file. Pure move, no behaviour change.
 
-use super::*;
-
 // Reached through `quit_menu`'s glob until the rows became a feature. These three are the
 // vanilla Save Game row's own text, and `er-quit-menu-core` owns them.
-use er_quit_menu_core::row_text::{
+use crate::host::append_autoload_debug;
+use crate::prologues::SAVE_REQUEST_RETRACT_B72_SIG;
+use crate::prologues::SAVE_REQUEST_RETRACT_B72_SIG_MASK;
+use crate::prologues::SAVE_REQUEST_RETRACT_B73_SIG;
+use crate::prologues::SAVE_REQUEST_RETRACT_B73_SIG_MASK;
+use crate::row_text::{
     SYSTEM_QUIT_SAVE_GAME_DIALOG_W, SYSTEM_QUIT_SAVE_GAME_HELP_W, SYSTEM_QUIT_SAVE_GAME_LABEL_W,
 };
-
-pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
+use crate::save_flow::save_dest_reset;
+use crate::save_flow_boxes::save_flow_verify_rva;
+use crate::save_flow_boxes::{
+    install_menu_job_emit_result_hook, save_flow_box_clear, save_flow_box_recipe_available,
+};
+use er_game_base::mem::game_rva;
+use er_game_base::mem::safe_read_usize;
+use er_game_base::mem::wide_equals_ascii;
+use er_game_base::stack::callstack_contains_game_rva;
+use er_telemetry_core::counters::SAVE_FLOW_DIALOG;
+use er_telemetry_core::counters::SAVE_FLOW_STAGE;
+use er_telemetry_core::counters::SAVE_FLOW_STAGE_TICKS;
+use er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW;
+use er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_CLOSE_COUNT;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_CONFIRM_COUNT;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES;
+use er_telemetry_core::counters::SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_WINDOW;
+use er_telemetry_core::counters::{
+    MENU_JOB_EMIT_RESULT_INSTALLED, SAVE_DEST_OPEN_PICKER_PENDING, SAVE_FLOW_ROW_PRESS_COUNT,
+    SYSTEM_QUIT_SAVE_GAME_TEXT_SUBSTITUTION_COUNT,
+};
+use er_title_flow::HOOK_ORIGINAL_UNSET;
+use er_title_flow::SAVE_FLOW_STAGE_CLOSING_ABORT;
+use er_title_flow::SAVE_FLOW_STAGE_CLOSING_COMMIT;
+use er_title_flow::SAVE_REQUEST_RETRACT_B72_RVA;
+use er_title_flow::SAVE_REQUEST_RETRACT_B73_RVA;
+use er_title_flow::SYSTEM_QUIT_PROFILESELECT_NATIVE_CLOSE_RVA;
+use er_title_flow::SYSTEM_QUIT_REQUEST_SAVE_RVA;
+use er_title_flow::SYSTEM_QUIT_SAVE_GAME_RETURN_TITLE_REQUEST_ORIG;
+use er_title_flow::SYSTEM_QUIT_SAVE_REQUEST_PROFILE_RVA;
+use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
+use er_title_flow::{
+    MSG_REPOSITORY_FORMAT_RVA, MSG_REPOSITORY_GET_AND_FORMAT_RVA, MSGBOX_BUILDER_ORIG,
+    SAVE_FLOW_STAGE_DEST_BROWSE, SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID,
+    SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID, SYSTEM_QUIT_SAVE_GAME_DIALOG_ID,
+    SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG,
+};
+use std::sync::atomic::Ordering;
+/// # Safety
+///
+/// A detour: the game calls it on its own thread with its own arguments, never call it directly.
+/// Every parameter is a native register whose lifetime ends with the call.
+pub unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
     out: usize,
     getter: usize,
     text_id: i32,
@@ -26,8 +72,13 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
 ) -> usize {
     // Every message the game formats passes here, so this is where a dialog's text ids can be
     // recorded for the `msgbox-builder` line that follows a few frames later.
-    unsafe { crate::experiments::note_msg_text_id(text_id, abbrev) };
-    let replacement = if text_id == SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID
+    unsafe { crate::msg_text_ids::note_msg_text_id(text_id, abbrev) };
+    // The three substitutions below describe a flow this build may not have. They are applied only
+    // while a host owns the row's action; see `save_game_flow_is_owned` for the run that measured
+    // what happens when they are not -- a button reading `Save Game` that quits to the title.
+    let replacement = if !crate::row_cloner::save_game_flow_is_owned() {
+        None
+    } else if text_id == SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID
         && unsafe { wide_equals_ascii(abbrev, b"GRMT") }
     {
         Some(SYSTEM_QUIT_SAVE_GAME_LABEL_W.as_ptr() as usize)
@@ -66,7 +117,11 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_get_and_format_hook(
 
 /// Native cancel-close of one menu window. `pub(crate)` because the save-flow tick closes the
 /// destination browser through the same primitive the deferred IngameTop close uses.
-pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
+/// # Safety
+///
+/// Game thread only. `window` must be a live `CS::MenuWindow` this flow owns; the close is a native
+/// call through its vtable and a stale pointer would dispatch into freed memory.
+pub unsafe fn system_quit_save_game_close_window(window: usize, label: &str) -> bool {
     if window < 0x10000 || window == TITLE_OWNER_SCAN_START_ADDRESS {
         return false;
     }
@@ -91,9 +146,11 @@ pub(crate) unsafe fn system_quit_save_game_close_window(window: usize, label: &s
     ));
     true
 }
-
-#[cfg(feature = "quit-rows")]
-pub(crate) unsafe fn system_quit_save_game_request_save_only() {
+/// # Safety
+///
+/// Game thread only. Writes the live `GameMan` save-request fields, which the game's own save task
+/// reads and clears on the same thread.
+pub unsafe fn system_quit_save_game_request_save_only() {
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
         append_autoload_debug(format_args!(
             "system-quit-save: failed to resolve RequestSave rva 0x{SYSTEM_QUIT_REQUEST_SAVE_RVA:x}"
@@ -127,7 +184,11 @@ pub(crate) unsafe fn system_quit_save_game_request_save_only() {
 /// always fires with `false`. The quit-to-desktop sites deliberately keep
 /// `system_quit_save_game_request_save_only` (true/true): under suppression those become
 /// intentional no-op saves -- the Save Game row is the only path that really writes.
-pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
+/// # Safety
+///
+/// Game thread only, and the same `GameMan` fields as the request above -- this variant also arms
+/// the one-shot suppression bypass, so it must not be called from a path the player did not press.
+pub unsafe fn system_quit_save_game_request_save_forced() {
     const FORCED_NOT_THROTTLED: u8 = false as u8;
     let Ok(request_save_addr) = game_rva(SYSTEM_QUIT_REQUEST_SAVE_RVA) else {
         append_autoload_debug(format_args!(
@@ -155,12 +216,12 @@ pub(crate) unsafe fn system_quit_save_game_request_save_forced() {
 /// Fails closed through `save_flow_verify_rva`: an unresolvable address or a single drifted
 /// byte skips the call and reports it. Not retracting costs CPU; calling unknown code costs
 /// the process.
-pub(crate) unsafe fn call_verified_retract(
-    rva: u32,
-    expected: &[u8],
-    mask: &[u8],
-    name: &str,
-) -> bool {
+/// # Safety
+///
+/// Calls into the game image at `rva` after byte-checking the prologue against `expected`/`mask`.
+/// The check is what makes the call defensible on an unrecognised build; a caller that passes a
+/// pattern matching a different function still transfers control there.
+pub unsafe fn call_verified_retract(rva: u32, expected: &[u8], mask: &[u8], name: &str) -> bool {
     let Some(address) = save_flow_verify_rva(rva, expected, mask, name) else {
         return false;
     };
@@ -173,7 +234,11 @@ pub(crate) unsafe fn call_verified_retract(
 ///
 /// `b72` / `b73` select which flags to clear -- the caller decides ownership; this only
 /// performs it. Returns the pair of "actually cleared" results.
-pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, bool) {
+/// # Safety
+///
+/// Game thread only. Calls the verified native retract entry points and reads back the `GameMan`
+/// request flags they clear.
+pub unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (bool, bool) {
     let cleared_b72 = b72
         && unsafe {
             call_verified_retract(
@@ -211,11 +276,11 @@ pub(crate) unsafe fn system_quit_save_request_retract(b72: bool, b73: bool) -> (
 /// `b72 && b73` -> `FUN_14067b940` -> one `FUN_140e6ef60` submit -> one enqueue -> one token.
 ///
 /// WP1/WP2 commit plan: overwrite the loaded save (WP3 adds a destination target).
-pub(crate) unsafe fn system_quit_save_game_close_menus(
-    dialog: usize,
-    source: &str,
-    commit: bool,
-) -> bool {
+/// # Safety
+///
+/// Game thread only. `dialog` must be the live System dialog this flow started from; the close walks
+/// its window list through raw pointers.
+pub unsafe fn system_quit_save_game_close_menus(dialog: usize, source: &str, commit: bool) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
             "system-quit-save: {source} abort -- dialog=0x{dialog:x} is not heap-like"
@@ -268,8 +333,6 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
     ));
     closed_option || closed_top
 }
-
-#[cfg(feature = "quit-rows")]
 /// Enter the Save Game flow from the row press: Straight to the destination list.
 ///
 /// Captures the System/Quit dialog the whole flow is anchored on, then hands the browser open to
@@ -290,7 +353,11 @@ pub(crate) unsafe fn system_quit_save_game_close_menus(
 /// costs only the overwrite confirm -- and an unconfirmable overwrite is refused at the pick
 /// (`save_dest_handle_picked_target`), never performed silently. A free destination name still
 /// commits, because it never needed a confirm in the first place.
-pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
+/// # Safety
+///
+/// Game thread only, from the row's own activation. `dialog` must be the live System dialog that
+/// owns the pressed row.
+pub unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     if dialog < 0x10000 || dialog == TITLE_OWNER_SCAN_START_ADDRESS {
         append_autoload_debug(format_args!(
             "save-flow: row press abort -- dialog=0x{dialog:x} is not heap-like"
@@ -308,7 +375,7 @@ pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     // installed at boot (`online_disable_enabled()` path in the game task), but make sure:
     // this call is idempotent, and the row press is the menu thread, i.e. the one context in
     // which no other thread can be executing the builder while MinHook patches it.
-    install_auto_accept_hook();
+    crate::host::install_msgbox_builder_capture();
     // Same reasoning for the answer observer: `CS::MenuJob::EmitResult` is what tells us which
     // button the user pressed on the branch where the dialog never stores its result. Install
     // is idempotent; if it is not live the poll falls back to `dialog+0x1e8` and reports
@@ -339,7 +406,11 @@ pub(crate) unsafe fn system_quit_save_game_start_flow(dialog: usize) -> bool {
     true
 }
 
-pub(crate) unsafe fn system_quit_save_game_deferred_close_tick() {
+/// # Safety
+///
+/// Game thread only, once per frame. It drains a frame counter and may close live menu windows, so
+/// off-thread it would race the menu system's own teardown.
+pub unsafe fn system_quit_save_game_deferred_close_tick() {
     let frames = SYSTEM_QUIT_SAVE_GAME_DEFER_TOP_FRAMES.load(Ordering::SeqCst);
     if frames == 0 {
         return;
@@ -380,7 +451,7 @@ const LEGACY_CONFIRM_CALLER_BAND: core::ops::Range<usize> = 0x7a3000..0x7a4000;
 
 /// Say once, and at most a handful of times, that a build comparison has no answer on this build.
 ///
-/// The same shape `er_quit_menu_core::row_cloner` uses for the row-return addresses: a refusal that
+/// The same shape `crate::row_cloner` uses for the row-return addresses: a refusal that
 /// is loud, bounded, and names the constant rather than going quiet.
 fn note_unsupported_build_comparison(what: &str) {
     use std::sync::atomic::AtomicUsize;
@@ -394,7 +465,10 @@ fn note_unsupported_build_comparison(what: &str) {
     }
 }
 
-pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
+/// # Safety
+///
+/// A detour: the game calls it, never call it directly.
+pub unsafe extern "system" fn system_quit_save_game_return_title_request_hook() {
     let dialog = SYSTEM_QUIT_SAVE_GAME_ARMED_DIALOG.swap(0, Ordering::SeqCst);
     let legacy_confirm_caller = if er_game_base::game_build::is_supported_build() {
         callstack_contains_game_rva(
@@ -428,4 +502,66 @@ pub(crate) unsafe extern "system" fn system_quit_save_game_return_title_request_
     }
     let original: unsafe extern "system" fn() = unsafe { std::mem::transmute(orig) };
     unsafe { original() };
+}
+
+/// Install the text detour that renames the native first Quit row and rewrites its confirm.
+///
+/// On the `er-hook` union rather than a bare `MhHook`, because a profile may carry another host
+/// that hooks `MsgRepository::GetAndFormat` for its own reasons; the union chains them instead of
+/// one silently replacing the other.
+///
+/// The detour substitutes nothing until a host arms the row -- see `save_game_flow_is_owned` -- so
+/// installing it does not, by itself, rename anything.
+pub fn install_system_quit_save_game_text_hook() {
+    if SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED
+        .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
+    let Ok(addr) = er_game_base::mem::game_rva_for_hook(MSG_REPOSITORY_GET_AND_FORMAT_RVA) else {
+        SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.store(0, Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "system-quit-save: failed to resolve MsgRepository::GetAndFormat rva 0x{MSG_REPOSITORY_GET_AND_FORMAT_RVA:x}"
+        ));
+        return;
+    };
+    match unsafe {
+        er_hook::register_union_hook5(
+            addr,
+            save_game_text_union_shim,
+            &SYSTEM_QUIT_SAVE_GAME_GET_AND_FORMAT_ORIG,
+        )
+    } {
+        Ok(()) => append_autoload_debug(format_args!(
+            "system-quit-save: hooked MsgRepository::GetAndFormat 0x{addr:x} on the 5-argument union; replacing native Quit rows GRMT/GRHK {SYSTEM_QUIT_FIRST_ROW_MENU_TEXT_ID}/{SYSTEM_QUIT_FIRST_ROW_LINEHELP_ID}; GRD:{SYSTEM_QUIT_SAVE_GAME_DIALOG_ID} while a host owns the row"
+        )),
+        Err(status) => {
+            SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED.store(0, Ordering::SeqCst);
+            append_autoload_debug(format_args!(
+                "system-quit-save: register_union_hook5 GetAndFormat failed: {status:?} -- the row keeps the game's own text"
+            ));
+        }
+    }
+}
+
+/// One install, whatever asks for it.
+static SYSTEM_QUIT_SAVE_GAME_TEXT_INSTALLED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// The union speaks in `usize`; the game's third argument is an `i32` text id.
+///
+/// # Safety
+///
+/// Called by the union with the game's own arguments.
+unsafe extern "system" fn save_game_text_union_shim(
+    out: usize,
+    getter: usize,
+    text_id: usize,
+    fmg_name: usize,
+    abbrev: usize,
+) -> usize {
+    unsafe {
+        system_quit_save_game_get_and_format_hook(out, getter, text_id as i32, fmg_name, abbrev)
+    }
 }

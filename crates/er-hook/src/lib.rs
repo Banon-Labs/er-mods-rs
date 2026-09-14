@@ -481,9 +481,23 @@ unsafe fn register_union_hook_resolved_with(
     orig_slot: &'static AtomicUsize,
     arity: UnionArity,
 ) -> Result<(), MH_STATUS> {
+    // Three lines, not one, and the reason is a whole afternoon (user directive 2026-09-13). The
+    // old single line said `hooked X at 0x...` at install time, which only reports that MinHook
+    // accepted an address -- so a detour carrying a stale 1.16.2 constant against a 1.17.1 game
+    // logged exactly like a working one and fired zero times. The attempt and its outcome are now
+    // separate records, and the failure line names the build-drift question by hand rather than
+    // leaving a reader to infer it.
+    hook_log(format_args!(
+        "hook attempt: {} wants game addr 0x{target:x} ({})",
+        as_dll_off(handler_addr),
+        arity.label()
+    ));
     match unsafe { MH_Initialize() } {
         MH_STATUS::MH_OK | MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {}
-        s => return Err(s),
+        s => {
+            hook_failed(target, handler_addr, s, "MinHook could not initialise");
+            return Err(s);
+        }
     }
     let mut unions = UNIONS.lock().unwrap_or_else(|e| e.into_inner());
     let slot = match union_admission(&unions, target, handler_addr, arity) {
@@ -544,6 +558,14 @@ unsafe fn register_union_hook_resolved_with(
     // with no registry line at all -- the union losing to a bare hook was as anonymous as a bare
     // hook losing to the union.
     registry_record(target, handler_addr, create_status, HookOwner::Union);
+    if create_status != MH_STATUS::MH_OK {
+        hook_failed(
+            target,
+            handler_addr,
+            create_status,
+            "MinHook refused to create the detour",
+        );
+    }
     create_status.ok()?;
     // Arm the slot before enabling the detour. These two stores used to happen after
     // `MH_EnableHook`, leaving a window in which the dispatcher was live but its head was still 0
@@ -566,11 +588,35 @@ unsafe fn register_union_hook_resolved_with(
             // Nothing is patched, so leave no armed head behind for a later slot reuse to inherit.
             UNION_HEADS[slot].store(0, Ordering::Release);
             orig_slot.store(0, Ordering::Release);
+            hook_failed(
+                target,
+                handler_addr,
+                s,
+                "MinHook could not enable the detour",
+            );
             return Err(s);
         }
     }
     unions.push(entry);
+    hook_log(format_args!(
+        "hook ok: {} now owns game addr 0x{target:x} ({}) -- the detour is installed and enabled",
+        as_dll_off(handler_addr),
+        arity.label()
+    ));
     Ok(())
+}
+
+/// The failure half of the attempt/outcome pair.
+///
+/// Every caller reaches here with a target it chose from a constant or a scan, and the most common
+/// reason a chosen address fails is that it was measured against a different game build. The
+/// question is asked in the line rather than left for a reader to think of, because the failure
+/// mode it names is silent otherwise: the feature simply never happens.
+fn hook_failed(target: usize, handler_addr: usize, status: MH_STATUS, what: &str) {
+    hook_log(format_args!(
+        "hook failed: {} could not take game addr 0x{target:x} -- {what} ({status:?}). Address          mismatch? This hook's address may have been measured against an older Elden Ring build          than the one running; re-measure it against the installed build before trusting it.",
+        as_dll_off(handler_addr)
+    ));
 }
 
 // ============================================================================
@@ -1395,12 +1441,14 @@ fn resolve_target(target: usize, what: &str) -> Option<usize> {
     match resolved {
         Some(address) if address != target => {
             hook_log(format_args!(
-                "HOOK TRANSLATED ({what}): 0x{target:x} -> 0x{address:x}"
+                "hook attempt ({what}): translated 0x{target:x} -> 0x{address:x} for the running build"
             ));
         }
         None => hook_log(format_args!(
-            "HOOK REFUSED ({what}): {} -- this address has no verified mapping for the running \
-             build, so installing here would detour whatever code now occupies it",
+            "hook failed ({what}): refused on {} -- this address has no verified mapping for the \
+             running build, so installing here would detour whatever code now occupies it. \
+             Address mismatch? The address was most likely measured against an older Elden Ring \
+             build than the one running; re-measure it against the installed build.",
             er_game_base::game_build::describe_build()
         )),
         Some(_) => {}

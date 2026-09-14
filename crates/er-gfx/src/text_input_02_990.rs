@@ -24,8 +24,8 @@ pub const VANILLA_FNV1A64: u64 = 0xe896_37d7_2af0_a2c8;
 /// after an update, not on a schedule.
 pub const RUNTIME_VANILLA_LEN: usize = 1152;
 pub const RUNTIME_VANILLA_FNV1A64: u64 = 0x8803_6987_5f1e_8e98;
-pub const INLINE_LEN: usize = 1160;
-pub const INLINE_FNV1A64: u64 = 0xcea6_6846_d53b_edc5;
+pub const INLINE_LEN: usize = 1189;
+pub const INLINE_FNV1A64: u64 = 0x5941_e20d_94b5_fbc4;
 
 const TEXT_INPUT_SPRITE_ID: u16 = 8;
 const TEXT_FIELD_CHARACTER_ID: u16 = 7;
@@ -37,6 +37,23 @@ const TEXT_FIELD_CHARACTER_ID: u16 = 7;
 /// are the font and the four chrome bitmaps.
 pub const TEXT_INPUT_SPRITE_NAME: &str = "TextInput";
 pub const TEXT_FIELD_INSTANCE_NAME: &str = "Text_0";
+
+/// Instance name of the completion run, a second placement of the same edit-text character one
+/// depth below the live field (`root -> TextInput -> Ghost_0`).
+///
+/// Autocomplete needs two runs of text in one place: what the player typed, and what would be
+/// there if they accepted the offer. Two placements of [`TEXT_FIELD_CHARACTER_ID`] give exactly
+/// that -- separate objects with separate text, same font, same metrics, same origin -- so the
+/// offer's leading characters land under the typed ones glyph for glyph and only its tail is
+/// visible. No new character is defined: a second instance of an existing one is cheaper and
+/// cannot drift from the field it has to align with.
+pub const GHOST_FIELD_INSTANCE_NAME: &str = "Ghost_0";
+
+/// Alpha the completion run is drawn at, as a `CXFORMWITHALPHA` multiplier out of 256.
+///
+/// Low enough to read as "not yours yet" against the typed text drawn over it at full strength,
+/// high enough to read at all against the picker's dark plate.
+const GHOST_ALPHA_MULT: i32 = 110;
 const PROFILE_LIST_CENTER_X_PX: f32 = 960.0;
 const PROFILE_LIST_CENTER_Y_PX: f32 = 540.0;
 const FIRST_COMPACT_ROW_CENTER_Y_PX: f32 = -216.0;
@@ -116,6 +133,47 @@ fn alpha_zero(tag: &mut Tag) {
     });
 }
 
+/// A second, dimmed placement of `place`, one depth below it and under its own instance name.
+///
+/// Everything else is copied: same character, same matrix, same flags. Dimming through the
+/// placement's colour transform rather than a cloned `DefineEditText` means the offer inherits
+/// whatever colour the field itself uses, so the two runs cannot end up different colours after a
+/// game update changes one of them.
+fn dimmed_twin_placement(place: &Tag, name: &str) -> Option<Tag> {
+    let Tag::PlaceObject2 {
+        flags,
+        depth,
+        character_id,
+        matrix,
+        ratio,
+        clip_depth,
+        force_long,
+        ..
+    } = place
+    else {
+        return None;
+    };
+    Some(Tag::PlaceObject2 {
+        // `HasColorTransform` and `HasName` are set here rather than copied; the rest of the
+        // source placement's flags describe fields this twin also carries.
+        flags: flags | 0x08 | 0x20,
+        depth: depth.checked_sub(1)?,
+        character_id: *character_id,
+        matrix: matrix.clone(),
+        color_transform: Some(CxformWithAlpha {
+            has_add: false,
+            has_mult: true,
+            nbits: 10,
+            mult: Some([256, 256, 256, GHOST_ALPHA_MULT]),
+            add: None,
+        }),
+        ratio: *ratio,
+        name: Some(name.to_owned()),
+        clip_depth: *clip_depth,
+        force_long: *force_long,
+    })
+}
+
 pub fn inline_current_path_editor(vanilla: &[u8]) -> Result<Vec<u8>, InlineTextInputError> {
     let corpus_variant = vanilla.len() == VANILLA_LEN && fnv1a64(vanilla) == VANILLA_FNV1A64;
     if !is_known_vanilla(vanilla) {
@@ -130,6 +188,7 @@ pub fn inline_current_path_editor(vanilla: &[u8]) -> Result<Vec<u8>, InlineTextI
     let mut found_root = false;
     let mut resized_field = false;
     let mut hidden_chrome = 0usize;
+    let mut placed_ghost = false;
 
     for tag in &mut movie.tags {
         match tag {
@@ -159,7 +218,7 @@ pub fn inline_current_path_editor(vanilla: &[u8]) -> Result<Vec<u8>, InlineTextI
                 resized_field = true;
             }
             Tag::DefineSprite { id, tags, .. } if *id == TEXT_INPUT_SPRITE_ID => {
-                for child in tags {
+                for child in tags.iter_mut() {
                     if matches!(
                         child,
                         Tag::PlaceObject2 {
@@ -169,6 +228,37 @@ pub fn inline_current_path_editor(vanilla: &[u8]) -> Result<Vec<u8>, InlineTextI
                     ) {
                         alpha_zero(child);
                         hidden_chrome += 1;
+                    }
+                }
+                // The completion run goes in behind the live field, at the same origin.
+                let field_index = tags.iter().position(|child| {
+                    matches!(
+                        child,
+                        Tag::PlaceObject2 {
+                            character_id: Some(TEXT_FIELD_CHARACTER_ID),
+                            ..
+                        }
+                    )
+                });
+                if let Some(index) = field_index
+                    && let Some(twin) =
+                        dimmed_twin_placement(&tags[index], GHOST_FIELD_INSTANCE_NAME)
+                {
+                    let Tag::PlaceObject2 {
+                        depth: twin_depth, ..
+                    } = &twin
+                    else {
+                        unreachable!("dimmed_twin_placement returns a PlaceObject2")
+                    };
+                    let twin_depth = *twin_depth;
+                    // A taken depth would replace whatever is already there. Refusing is the
+                    // right answer: the derivation fails closed and the field keeps working
+                    // without a completion run, rather than the movie losing a chrome object.
+                    if !tags.iter().any(|child| {
+                        matches!(child, Tag::PlaceObject2 { depth, .. } if *depth == twin_depth)
+                    }) {
+                        tags.insert(index, twin);
+                        placed_ghost = true;
                     }
                 }
             }
@@ -189,6 +279,11 @@ pub fn inline_current_path_editor(vanilla: &[u8]) -> Result<Vec<u8>, InlineTextI
     if hidden_chrome != 3 {
         return Err(InlineTextInputError::MissingStructure(
             "three native chrome placements in sprite 8",
+        ));
+    }
+    if !placed_ghost {
+        return Err(InlineTextInputError::MissingStructure(
+            "a free depth below the editable field for the completion run",
         ));
     }
     let out = movie.write().map_err(InlineTextInputError::Write)?;

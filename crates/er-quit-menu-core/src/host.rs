@@ -32,6 +32,20 @@ pub struct SaveDestOrigin {
 /// (see [`QuitMenuHost::defaults`]); hosts overwrite the ones they own.
 #[derive(Clone, Copy)]
 pub struct QuitMenuHost {
+    /// The directory the game's own save writer opens files in, when a host redirects it.
+    ///
+    /// The commit window builds its accepted-path set from this, so a write that lands anywhere
+    /// else is refused rather than followed. A host with no redirect answers `None` and the set is
+    /// built from the live path alone -- correct, because without a redirect there is nowhere else
+    /// for the write to go.
+    pub save_redirect_native_source_dir: fn() -> Option<std::path::PathBuf>,
+    /// Install the `CS::MessageBoxDialog` builder capture, which is what makes the Save Game
+    /// overwrite confirm answerable: the detour records the dialog pointer the flow's stage machine
+    /// polls. The product installs it at boot for its own reasons and the call is idempotent, so the
+    /// row press asks for it again rather than depending on that ordering. A host without one leaves
+    /// the default: the destination list still opens, and a pick that would clobber an existing file
+    /// is refused instead of written blind.
+    pub install_msgbox_builder_capture: fn(),
     // --- logging ----------------------------------------------------------------------
     /// Structured debug logging sink (the product's `append_autoload_debug`).
     pub append_autoload_debug: fn(std::fmt::Arguments<'_>),
@@ -105,10 +119,6 @@ pub struct QuitMenuHost {
     pub save_dest_start_dir: fn() -> Option<SaveDestOrigin>,
     /// Stage the chosen save destination target in the product save-flow state machine.
     pub save_dest_set_target: fn(PathBuf, &'static str),
-    /// True when the overwrite confirm recipe is buildable in the live game state.
-    pub save_flow_box_recipe_available: fn() -> bool,
-    /// Clear the save-flow confirm box state before a direct destination commit.
-    pub save_flow_box_clear: fn(),
 
     // --- the save picker's own browse surface (owner: product, until that surface moves) ------
     /// Re-stage the picker's browse rows onto `model`, returning whether any row was written.
@@ -268,6 +278,18 @@ fn default_take_bypass(_reason: &'static str) -> bool {
 unsafe fn default_dialog_from_action(_action_obj: usize) -> usize {
     0
 }
+/// The core owns the picker's snapshot, so it owns putting it back. This used to do nothing, and a
+/// shell that staged browse rows into the live `CS::ProfileSummary` left them there for the rest of
+/// the process -- visible on the title's `Load Game` list. A product overrides this with its own
+/// ledger-aware restore; nothing else needs one.
+#[cfg(windows)]
+unsafe fn default_restore_profile_summary(reason: &str) {
+    unsafe { crate::row_staging::restore_row_records(reason) };
+}
+
+/// There are no staged records to put back on a host build: `row_staging` is `#[cfg(windows)]`
+/// because staging writes the game's own `CS::ProfileSummary` table.
+#[cfg(not(windows))]
 unsafe fn default_restore_profile_summary(_reason: &str) {}
 fn default_arm_original(_save_path: &str) -> bool {
     false
@@ -278,18 +300,111 @@ fn default_no_pathbuf() -> Option<PathBuf> {
 unsafe fn default_ingest_save(_selected_path: &str) -> bool {
     false
 }
-fn default_no_save_dest_origin() -> Option<SaveDestOrigin> {
-    None
+/// Where the destination browser opens, what a new file there is called, and which file the
+/// running session has loaded.
+///
+/// Built from three answers this seam already gives without a host: [`system_quit_env_save_path`],
+/// [`system_quit_env_save_dir`] and [`default_save_root`]. A host that redirects the save writer
+/// overrides it, because only that host knows which directory its redirect is using; a shell gets
+/// the game's own container, which is the file it would be overwriting anyway.
+///
+/// Returning `None` here is what left the standalone **Save Game** row opening nothing in run
+/// br-20260912-194412-7743: the flow reached stage 3, found no directory to browse, and timed out
+/// 180 ticks later without writing the player's save.
+#[cfg(windows)]
+fn default_save_dest_origin() -> Option<SaveDestOrigin> {
+    let save_path = match system_quit_env_save_path() {
+        Ok(path) => path,
+        Err(reason) => {
+            append_autoload_debug(format_args!(
+                "save-dest-picker: refused to open -- {reason}"
+            ));
+            return None;
+        }
+    };
+    let loaded_path = PathBuf::from(crate::save_picker_menu::save_picker_windows_path_string(
+        &save_path,
+    ));
+    let Some(loaded_file_name) = std::path::Path::new(&save_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+    else {
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- loaded save '{save_path}' has no file name"
+        ));
+        return None;
+    };
+    // Start where the loaded save lives; fall back to the save root only if that directory is gone.
+    let start_dir = system_quit_env_save_dir()
+        .ok()
+        .map(|dir| {
+            PathBuf::from(crate::save_picker_menu::save_picker_windows_path_string(
+                &dir,
+            ))
+        })
+        .filter(|dir| dir.is_dir())
+        .or_else(|| {
+            default_save_root()
+                .and_then(|root| {
+                    root.to_str()
+                        .map(crate::save_picker_menu::save_picker_windows_path_string)
+                })
+                .map(PathBuf::from)
+                .filter(|root| root.is_dir())
+        });
+    let Some(start_dir) = start_dir else {
+        append_autoload_debug(format_args!(
+            "save-dest-picker: refused to open -- neither the loaded save's directory nor the save root is readable"
+        ));
+        return None;
+    };
+    Some(SaveDestOrigin {
+        start_dir,
+        loaded_file_name,
+        loaded_path,
+    })
 }
-fn default_set_target(_path: PathBuf, _source: &'static str) {}
-fn default_clear_save_flow_box() {}
-unsafe fn default_stage_row_records(_model: &er_save_picker_core::SavePickerModel) -> bool {
-    false
+/// A host build has no game save directory to browse, and the Wine path translation the windows
+/// arm above runs every candidate through lives in the `#[cfg(windows)]` `save_picker_menu`.
+/// `None` is what the seam already means by "no destination": the picker opens nothing.
+#[cfg(not(windows))]
+fn default_save_dest_origin() -> Option<SaveDestOrigin> {
+    None
 }
 fn default_reset_caret_latch() {}
 unsafe fn default_import_applied() {}
 fn default_windows_path_for_log(path: &str) -> String {
     path.to_owned()
+}
+
+// The three seams below are wired straight to a `#[cfg(windows)]` module on the game target.
+// Each needs a host stand-in for the same reason the neutral defaults above exist: an un-hosted
+// crate must never authorise a real save, and on a host build there is no game to authorise it
+// against. They are the crate's own no-ops, not a weaker version of the real thing.
+#[cfg(windows)]
+use crate::save_dest_commit_runtime::save_dest_set_target as default_save_dest_set_target;
+#[cfg(windows)]
+use crate::save_flow_boxes::install_save_flow_msgbox_builder_capture as default_install_msgbox_builder_capture;
+#[cfg(windows)]
+use crate::save_picker_menu::save_picker_stage_row_records as default_save_picker_stage_row_records;
+
+/// There is no `CS::MessageBoxDialog` builder to detour off the game target.
+#[cfg(not(windows))]
+fn default_install_msgbox_builder_capture() {}
+
+/// No `CreateFileW` detour reads the destination window on a host build, so arming one would
+/// record a target nothing can act on.
+#[cfg(not(windows))]
+fn default_save_dest_set_target(_path: PathBuf, _reason: &'static str) {}
+
+/// Staging writes the game's own `CS::ProfileSummary` records; `false` is the seam's existing
+/// answer for "the rows were not staged".
+#[cfg(not(windows))]
+unsafe fn default_save_picker_stage_row_records(
+    _model: &er_save_picker_core::SavePickerModel,
+) -> bool {
+    false
 }
 
 impl QuitMenuHost {
@@ -300,6 +415,8 @@ impl QuitMenuHost {
         Self {
             append_autoload_debug: default_log,
             append_crash_log: default_log,
+            save_redirect_native_source_dir: default_no_save_redirect,
+            install_msgbox_builder_capture: default_install_msgbox_builder_capture,
             default_save_root: default_no_root,
             save_picker_seamless_mode_after_settle: default_seamless,
             system_quit_env_save_path: default_no_save_path,
@@ -324,11 +441,9 @@ impl QuitMenuHost {
             system_quit_save_swap_arm_original: default_arm_original,
             save_picker_start_dir: default_no_pathbuf,
             system_quit_ingest_picked_save: default_ingest_save,
-            save_dest_start_dir: default_no_save_dest_origin,
-            save_dest_set_target: default_set_target,
-            save_flow_box_recipe_available: default_gate_off,
-            save_flow_box_clear: default_clear_save_flow_box,
-            save_picker_stage_row_records: default_stage_row_records,
+            save_dest_start_dir: default_save_dest_origin,
+            save_dest_set_target: default_save_dest_set_target,
+            save_picker_stage_row_records: default_save_picker_stage_row_records,
             reset_path_editor_caret_latch: default_reset_caret_latch,
             build_import_applied: default_import_applied,
         }
@@ -469,14 +584,8 @@ pub(crate) fn save_dest_set_target(path: PathBuf, source: &'static str) {
     (host().save_dest_set_target)(path, source)
 }
 #[allow(dead_code)]
-pub(crate) fn save_flow_box_recipe_available() -> bool {
-    (host().save_flow_box_recipe_available)()
-}
-#[allow(dead_code)]
-pub(crate) fn save_flow_box_clear() {
-    (host().save_flow_box_clear)()
-}
-#[allow(dead_code)]
+/// # Safety
+/// The model must stay alive across the call, and the host must be installed.
 pub(crate) unsafe fn save_picker_stage_row_records(
     model: &er_save_picker_core::SavePickerModel,
 ) -> bool {
@@ -489,6 +598,27 @@ pub(crate) fn reset_path_editor_caret_latch() {
 #[allow(dead_code)]
 pub(crate) unsafe fn build_import_applied() {
     unsafe { (host().build_import_applied)() }
+}
+
+/// Ask the host to install the builder capture. Idempotent by contract.
+///
+/// Its only caller is the save flow, which is `#[cfg(windows)]`.
+#[cfg(windows)]
+pub(crate) fn install_msgbox_builder_capture() {
+    (host().install_msgbox_builder_capture)()
+}
+
+/// A host that does not redirect the save writer.
+fn default_no_save_redirect() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Where the host redirects the game's save writer, if it does.
+///
+/// Its only caller is the destination commit, which is `#[cfg(windows)]`.
+#[cfg(windows)]
+pub(crate) fn save_redirect_native_source_dir() -> Option<std::path::PathBuf> {
+    (host().save_redirect_native_source_dir)()
 }
 
 #[cfg(test)]

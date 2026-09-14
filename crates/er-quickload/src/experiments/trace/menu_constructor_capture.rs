@@ -53,7 +53,7 @@ use crate::{
     TITLE_NATIVE_READY_PREDICATE_LAST_THIS, TITLE_NATIVE_READY_PREDICATE_LAST_VTABLE,
     TITLE_OWNER_SCAN_START_ADDRESS, TITLE_STATE_OWNER_GONE, append_autoload_debug,
     append_continue_trace, b80_mount_trace_summary, decode_thunk_hop, functor_chain_hits_factory,
-    game_module_base, live_dialog_enabled, own_stepper_enter_s2_phase, product_autoload_enabled,
+    game_module_base, own_stepper_enter_s2_phase, product_autoload_enabled,
     profile_select_load_flow_enabled, record_continue_candidate, safe_read_usize,
     trace_callers_summary, trace_first_game_caller_rva,
 };
@@ -557,9 +557,7 @@ pub(crate) unsafe extern "system" fn cap_builder_hook(
         trace_callers_summary()
     ));
     let ret = unsafe { call_cap_original(&CAP_BUILDER_ORIG, owner, rdx, effective_slot, r9) };
-    if (live_dialog_enabled() || product_autoload_enabled())
-        && ret != TITLE_OWNER_SCAN_START_ADDRESS
-    {
+    if product_autoload_enabled() && ret != TITLE_OWNER_SCAN_START_ADDRESS {
         #[repr(C)]
         struct SelectorBuilderOwnerLayout {
             unknown_000: [u8; 0xf8],

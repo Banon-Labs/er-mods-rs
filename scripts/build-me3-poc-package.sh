@@ -246,6 +246,10 @@ export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
 export ER_QUICKLOAD_CRASH_LOG=1
 export ER_QUICKLOAD_CRASH_LOG_PATH="$LOG_DIR/er-quickload-crash-log.txt"
 export ER_QUICKLOAD_AUTOLOAD_DEBUG_PATH="$LOG_DIR/er-quickload-autoload-debug.log"
@@ -256,6 +260,10 @@ export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
 # The companion shells' artifacts. These five had no redirect knob at all until 2026-08-31, so no
 # launcher could move them; the reload trace alone runs at ~655 MB/hour. Set even when this profile
 # loads only the product, so adding a companion native later does not silently start leaking.
@@ -274,6 +282,10 @@ export ER_QUICKLOAD_CRASH_LOGGING_LOG_PATH="$LOG_DIR/er-crash-log.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_LATEST_PATH="$LOG_DIR/er-crash-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$LOG_DIR/er-crash-breadcrumb-latest.txt"
 export ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$LOG_DIR/er-crash-modules.txt"
+export ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$LOG_DIR/er-focus-input.log"
+export ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$LOG_DIR/er-quit-load-character.log"
+export ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$LOG_DIR/er-quit-menu.log"
+export ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$LOG_DIR/er-save-game-row.log"
 export ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$LOG_DIR/er-build-import.log"
 
 args=()

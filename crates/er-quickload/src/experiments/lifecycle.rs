@@ -5,20 +5,15 @@
 
 use super::*;
 
-// The install-once primitive the save-flow boxes retry through, now shared out of `crate::mh`.
-use crate::mh::mh_install_hook_once;
-
-mod save_game_flow_handlers;
-pub(crate) use save_game_flow_handlers::*;
-
-mod save_dest_commit;
-pub(crate) use save_dest_commit::*;
-
-mod save_flow_boxes;
-pub(crate) use save_flow_boxes::*;
-
-mod save_flow;
-pub(crate) use save_flow::*;
+// The Save Game row's flow moved to `er-quit-menu-core` on 2026-09-12 -- the crate that already
+// held the row's label, its router and the destination browser it opens. Re-exported under the same
+// names so the product's call sites read unchanged, and so any other host can link the same code.
+// The facade that stood here is gone: `er-quit-menu-core` links `er-save-suppress` itself now and
+// reads the redirect directory through the host seam, so the wrappers had nothing left to wrap.
+pub(crate) use er_quit_menu_core::save_dest_commit_runtime::*;
+pub(crate) use er_quit_menu_core::save_flow::*;
+pub(crate) use er_quit_menu_core::save_flow_boxes::*;
+pub(crate) use er_quit_menu_core::save_game_row::*;
 
 mod task_tick;
 pub(crate) use task_tick::*;

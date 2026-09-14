@@ -536,9 +536,7 @@ pub(crate) unsafe fn own_stepper_stage2(
             }
         }
         OWN_STEPPER_EXPECTED_SLOT.store(expected_slot, Ordering::SeqCst);
-        if (live_dialog_enabled() || product_autoload_enabled())
-            && expected_slot != OWN_STEPPER_SLOT_NONE
-        {
+        if product_autoload_enabled() && expected_slot != OWN_STEPPER_SLOT_NONE {
             let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
                 std::mem::transmute(
                     match crate::experiments::gated_game_fn(
@@ -579,7 +577,7 @@ pub(crate) unsafe fn own_stepper_stage2(
         // that native selector instead of jumping straight to the cold full-read helper. This is the
         // proper Load-Game beginning: profile rows/record state -> load_activate -> selector tick ->
         // menu_deser/mount. The cold helper remains for the older non-selector diagnostic paths.
-        let native_selector_path = live_dialog_enabled() || product_autoload_enabled();
+        let native_selector_path = product_autoload_enabled();
         if native_selector_path {
             const LOAD_JOB_RUN_RVA: usize = PROFILE_LOAD_JOB_RUN_RVA;
             #[repr(C)]

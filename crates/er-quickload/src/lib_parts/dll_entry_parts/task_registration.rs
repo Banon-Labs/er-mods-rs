@@ -320,19 +320,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                     // the first autoload: the world loads and is playable, then ~2.2 s after world
                     // entry this evaluator raises `menuData+0x5e` and the session ends. Idempotent.
                     er_title_flow::install_movemap_advancer_probe();
-                    // Install the MessageBoxDialog builder hook for native telemetry. Product
-                    // autoload must not auto-accept: every pre/post-load message box is a hard
+                    // Install the MessageBoxDialog builder hook. It captures each built dialog
+                    // for the startup-modal blocking oracle and the save-flow confirm poll, and it
+                    // answers none of them: every pre/post-load message box is a hard
                     // investigation trigger whose semantic side effect must be skipped directly.
-                    // The legacy OK-handler dismiss path remains only for non-product probes.
+                    //
+                    // The `!product_autoload_enabled()` branch that used to sit here called
+                    // `force_dismiss_startup_dialog()`, which pressed the first button on every
+                    // dialog this hook captured while the player did not yet exist. It read as
+                    // "probes only", but the flag is armed by the boot autoload, so any build
+                    // compiled without one -- `--no-default-features --features
+                    // quit-rows,menu-trace`, measured in run br-20260913-154820-c63f -- answered
+                    // the player's own corrupted-save box for them. Both the call and the function
+                    // are deleted; see `startup_modals_menu_cover.rs` for the log lines and for why
+                    // the default build's behaviour is unchanged by that.
                     if online_disable_enabled() {
                         install_auto_accept_hook();
-                        if !product_autoload_enabled() {
-                            force_dismiss_startup_dialog();
-                        }
-                    }
-                    // Observe the natural flow past the modal: tap Confirm (game's own input).
-                    if auto_confirm_enabled() {
-                        auto_confirm_tap();
                     }
                     if let Ok(base) = game_module_base() {
                         unsafe { profile_editor_necromancy_tick(base) };
@@ -421,50 +424,7 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                         write_telemetry_throttled(&mut state, false);
                         return;
                     }
-                    // Read-only: log the native autoload-arm preconditions
-                    // (especially [slotmgr+0x8]) to decide the zero-input path.
-                    if arm_probe_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe { arm_precondition_probe(base, state.game_task_ticks) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Lever 2: zero-input title-accept via input-event injection
-                    // (staged probe -> fill -> inject) to bootstrap the front-end.
-                    if title_accept_enabled() {
-                        if let Ok(base) = game_module_base() {
-                            unsafe {
-                                title_accept_tick(
-                                    base,
-                                    state.game_task_ticks,
-                                    title_accept_inject_enabled(),
-                                )
-                            };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Per-frame native arm: re-set the slot each frame + latch so
-                    // the save-mgr update can arm before the title resets the slot.
-                    if native_arm_loop_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe { native_arm_loop_tick(base, slot, state.game_task_ticks) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
-                    // Recipe Option 1 (flagless): drive the genuine offline
-                    // continue (MoveMapList dispatcher + b73) to load the real slot.
-                    if continue_drive_enabled() {
-                        if let (Ok(base), Some(slot)) = (game_module_base(), state.autoload.slot())
-                        {
-                            unsafe { continue_drive_tick(base, slot, state.game_task_ticks) };
-                        }
-                        write_telemetry_throttled(&mut state, false);
-                        return;
-                    }
+                    #[cfg(feature = "autoload")]
                     process_safe_input_request(&mut state);
                     process_autoload_request(&mut state);
                     write_telemetry_throttled(&mut state, false);
@@ -653,6 +613,11 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
+                // A commit held back waiting for the engine to take down the title menu the switch
+                // made it rebuild. The retry lives on this tick because the tick demonstrably keeps
+                // running across the whole switch, and whatever called `own_load_continue_fire` the
+                // first time does not: a switch logs its `GUARD PASS` line exactly once.
+                unsafe { crate::experiments::own_load_continue_retry_deferred(state.game_task_ticks) };
                 // In-world correctness oracle: on the first frame the local player exists, log
                 // the load-correctness record + the T_controllable timeline marker once. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so

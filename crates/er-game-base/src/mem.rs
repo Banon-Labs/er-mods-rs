@@ -702,6 +702,41 @@ pub fn module_backing(_candidate: usize) -> Option<(String, usize)> {
     None
 }
 
+/// Whether the UTF-16 string at `ptr` is exactly `ascii`, terminator included.
+///
+/// A fault-safe read per unit, so an unmapped or misread pointer answers `false` rather than
+/// faulting. It stood in `quit_menu/system_quit_dialog_handlers.rs` and has nothing to do with
+/// the rows -- it reads memory, which is what this module is. Moved here from `er-quickload`
+/// on 2026-09-12 so the Save Game row's text detour can live outside the product.
+///
+/// # Safety
+///
+/// `ptr` is a raw address in this process. Every unit is read through
+/// [`safe_read_u16`], so an unmapped or misaligned address answers `false` instead of
+/// faulting; what the caller must guarantee is that the address is not being freed or rewritten
+/// by another thread while this walks it, since a fault-safe read is still a read of whatever is
+/// there at the time.
+pub unsafe fn wide_equals_ascii(ptr: usize, ascii: &[u8]) -> bool {
+    // `usize::MIN` is zero, so the null check is the whole check.
+    if ptr == 0 || ascii.is_empty() {
+        return false;
+    }
+    for (idx, want) in ascii.iter().copied().enumerate() {
+        let Some(unit) =
+            (unsafe { crate::mem::safe_read_u16(ptr + idx * core::mem::size_of::<u16>()) })
+        else {
+            return false;
+        };
+        if unit != want as u16 {
+            return false;
+        }
+    }
+    matches!(
+        unsafe { crate::mem::safe_read_u16(ptr + ascii.len() * core::mem::size_of::<u16>()) },
+        Some(0)
+    )
+}
+
 #[cfg(test)]
 mod cstr_tests {
     use super::{PAGE_SIZE, cstr_walk};

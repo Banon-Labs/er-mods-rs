@@ -283,6 +283,26 @@ unsafe fn attempt_profile_summary_reread(attempt: usize) -> bool {
 /// way, so the two are directly comparable.
 fn body_identity(bytes: &[u8], slot: i32) -> Option<RecordIdentity> {
     let slot = usize::try_from(slot).ok()?;
+    // `USER_DATA010.active_slot` first, because a body that parses is not a character. Deleting a
+    // character clears its bit there and leaves the `USER_DATA00N` body untouched, so every reader
+    // that skips this check reports the corpse: `all_slot_names` and `all_slot_stats` both walk the
+    // body directly and will happily return the deleted character's name and level.
+    //
+    // Skipping it made this function disagree with `write_profile_summary_records_from_save_bytes`,
+    // which does honour the bitmap, about the same bytes -- so a deleted slot 0 logged
+    // `record (level=0) DISAGREES with the container body (level=150); rewriting the records` and
+    // then `has no readable character slots` on the same tick, from one call. Read at face value
+    // that says the save has a level-150 character this mod is failing to load. It does not: the
+    // character was deleted, the picker arming is correct, and the only thing wrong was the line.
+    // Measured 2026-09-13 11:43 on the default container for SteamID64 76561197986456766.
+    if !er_save_loader::bnd4::active_slots(bytes)
+        .ok()?
+        .get(slot)
+        .copied()
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let name = er_save_loader::stats::all_slot_names(bytes)
         .get(slot)?
         .clone()?;

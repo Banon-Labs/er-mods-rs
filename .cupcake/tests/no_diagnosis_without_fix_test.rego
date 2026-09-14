@@ -388,3 +388,121 @@ test_halt_when_only_the_broad_blocked_fact_is_set if {
 	halts := guard.halt with input as stop_event(line)
 	"ER-EFFECTS-NO-ZERO-INFORMATION-STOP" in rule_ids(halts)
 }
+
+# --- ER-EFFECTS-NO-DEFERRED-INVESTIGATION ------------------------------------------------------
+
+# The full line the signal emits once the deferral field is included, as an override map. `asked` is
+# set on every one of these: five of the six verbatim closers answered a question and then stopped,
+# so an arm that inherited that exemption would exempt the family it exists to refuse.
+deferral_line(o) := concat("", [
+	"DIAGFACTS|diagnosis=|fixed=0|asked=1|blocked=", object.get(o, "blocked", "0"),
+	"|promise=|edited=", object.get(o, "edited", "0"),
+	"|handback=|handbackkind=|userneed=", object.get(o, "userneed", "0"),
+	"|didwork=1|extblocked=0|carried=0|unread=|consulted=0|future=", object.get(o, "future", "0"),
+	"|deferral=", object.get(o, "deferral", ""),
+])
+
+# The six closing sentences of 2026-09-12, verbatim from the transcript, each as its own case so a
+# regression names the shape it broke. The signal decides which sentences reach this field; what is
+# asserted here is that a turn carrying one of them, having written nothing, is refused.
+test_halt_on_where_i_look_next if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "The row the game clears under the profile table is the one that never comes back, which is where I look next."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+test_halt_on_the_next_place_to_look if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "The picker survives the rebuild and the row does not, and the next place to look is profile_table_guard's rebuild of saveSlotsStates."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+test_halt_on_that_is_the_next_step if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "The clone runs before the table is armed, so that is the next step; the next thing I check is the arming order."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+test_halt_on_a_finding_that_ends_on_where_i_look_next if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "The overlap that is real in a default build is the picker itself: the row it rebuilds under the profile table, which is where I look next."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+test_halt_on_once_this_test_says if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "I will back out once this test says which side the bug is on."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+test_halt_on_the_next_step_halves_it if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "the next step halves it to five; if it is clean, the culprit is in the excluded ten and I load those instead."}))
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+# The one-line blocker is the escape hatch this rule must never close: a bisect that cannot take its
+# next half until a live run reports is waiting on something real.
+test_allow_when_the_deferred_move_is_blocked if {
+	halts := guard.halt with input as stop_event(deferral_line({
+		"deferral": "Blocked: the bisect needs the new-character result from the live run before any file can be edited, so that is the next step.",
+		"blocked": "1",
+	}))
+	count(halts) == 0
+}
+
+# The turn that made the change and then said where it goes next is reporting, not stalling. This is
+# the precondition the first rule in this file has always turned on, and it stays.
+test_allow_when_the_deferral_turn_edited_a_file if {
+	halts := guard.halt with input as stop_event(deferral_line({
+		"deferral": "The clone now runs after the table is armed, which is where I look next.",
+		"edited": "1",
+	}))
+	count(halts) == 0
+}
+
+# An observation with no memory-read oracle is information only the user has, so the round trip
+# carries something and the launch handoff stays speakable.
+test_allow_when_the_deferred_move_needs_the_user if {
+	halts := guard.halt with input as stop_event(deferral_line({
+		"deferral": "The build is up on the same character; tell me what you see on the Quit tab, and that is the next step.",
+		"userneed": "1",
+	}))
+	count(halts) == 0
+}
+
+# A concrete in-game action handed over with the log line that will prove it. The evidence does not
+# exist until that action happens, so the deferral is a plan rather than a skipped step.
+test_allow_when_the_deferred_move_waits_on_evidence_that_does_not_exist_yet if {
+	halts := guard.halt with input as stop_event(deferral_line({
+		"deferral": "the next step is the line re-invade: owner= in er-quickload-autoload-debug.log, which proves the row survived.",
+		"future": "1",
+	}))
+	count(halts) == 0
+}
+
+# No deferral, no rule.
+test_allow_when_no_next_move_was_named if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": ""}))
+	count(halts) == 0
+}
+
+# A line missing `edited` beside a non-empty deferral is degraded, not old: it halts, like its
+# neighbours, so a broken signal cannot buy silence.
+test_halt_when_the_edited_field_is_missing_beside_a_deferral if {
+	line := "DIAGFACTS|diagnosis=|fixed=0|asked=0|blocked=0|promise=|deferral=that is the next step."
+	halts := guard.halt with input as stop_event(line)
+	"ER-EFFECTS-NO-DEFERRED-INVESTIGATION" in rule_ids(halts)
+}
+
+# The fifteen-field line the signal emitted before this arm existed carries no deferral, so a stale
+# signal leaves it silent rather than firing on every turn.
+test_allow_on_a_line_from_before_the_deferral_field if {
+	halts := guard.halt with input as stop_event(unread_line({"unread": ""}))
+	count(halts) == 0
+}
+
+# The correction has to send the agent to the step, quote the sentence, and leave the legitimate
+# deferrals speakable.
+test_deferral_reason_quotes_the_clause_and_demands_the_step if {
+	halts := guard.halt with input as stop_event(deferral_line({"deferral": "which is where I look next."}))
+	some d in halts
+	d.rule_id == "ER-EFFECTS-NO-DEFERRED-INVESTIGATION"
+	contains(d.reason, "which is where I look next.")
+	contains(d.reason, "Take that step now, in this turn")
+	contains(d.reason, "blocks it")
+}

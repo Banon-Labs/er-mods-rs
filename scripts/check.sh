@@ -2322,24 +2322,33 @@ python3 "$repo_root/scripts/er-moveset-coverage.py" --check
 # them in parallel: measured 2.2s + 4.2s warm for the two batches, against ~20 separate
 # invocations. scripts/check-test-target-coverage.py is what keeps the list complete from here.
 #
-# Batch 1 -- the game-adjacent shells and cores. Four of these (er-better-refills,
-# er-inventory-sort, er-loading-bar, er-save-disable) did not compile for the host until the
+# Batch 1 -- the game-adjacent shells and cores. Three of these (er-better-refills,
+# er-inventory-sort, er-save-disable) did not compile for the host until the
 # same day: a windows cdylib's items read as dead on Linux and `[workspace.lints.rust] warnings
 # = "deny"` promotes that to a hard error, so `cargo test -p <crate>` failed outright. Fixed
 # with the same crate-level `#![cfg_attr(not(windows), allow(dead_code, unused_imports))]` that
 # er-save-suppress, er-seamless-bugfixes and er-armament-icons already carry.
 # RE-armed 2026-09-01. Unwired on 2026-08-31 for a real reason -- er-inventory-sort's crate-level
 # allow was in a working tree and in no commit, so the batch stopped at 24 deny-by-default
-# dead-code errors -- and then left unwired after that lib.rs landed. All fourteen crate-level
-# allows the comment above describes are committed now; measured 2026-09-01, this line runs
-# 201 tests and every one passes. That is the whole 201: 1 + 8 + 18 + 29 + 44 + 3 + 1 + 12 + 1 +
-# 11 + 10 + 2 + 8 + 53, matching the per-crate host-lib counts the coverage gate had been
-# printing at nobody for a day.
+# dead-code errors -- and then left unwired after that lib.rs landed.
+#
+# `er-loading-bar` was a fourth member of both lists until b1117ce6 deleted the crate. cargo does
+# not treat an unmatched `-p` as an empty selection -- it exits 101 with `package ID specification
+# `er-loading-bar` did not match any packages` before compiling anything -- so the whole batch
+# stopped running the moment the crate went away, and the line read as a test failure rather than
+# as a name that no longer resolves.
+#
+# Measured 2026-09-14 after that removal: 647 tests across the fourteen crates below, all passing.
+# The previous count here was 201 from 2026-09-01 and had been stale since well before the
+# deletion -- er-npc-possess joined the line afterwards, and er-save-suppress alone now carries
+# 406 of the total. A per-crate breakdown is deliberately not restated: it went out of date within
+# days last time, and scripts/check-test-target-coverage.py is what actually keeps this list
+# complete.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-quickload-data -p er-build-watermark-core -p er-enemynpc-effects \
 	-p er-crash-logging-core -p er-hotkey-config -p er-loading-bar-core \
 	-p er-player-name-filter -p er-safe-input -p er-save-suppress \
-	-p er-better-refills -p er-inventory-sort -p er-loading-bar \
+	-p er-better-refills -p er-inventory-sort \
 	-p er-loading-portrait -p er-save-disable -p er-npc-possess
 # er-npc-possess joined this batch when the crate landed. Its whole point is that everything
 # above the possession seam -- the TOML reader, the schema, the not-live `[target]` staging, the
@@ -2389,6 +2398,19 @@ cargo check --manifest-path "$repo_root/Cargo.toml" -p er-shader-viewer
 # `-p er-title-flow --lib` additionally runs boot_hold's predicates -- the crate's only
 # host-portable logic, and untestable at all until the gates landed.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload -p er-title-flow --lib
+
+# ...and the crate's one integration test, which `--lib` above deliberately does not reach. It is
+# named explicitly rather than by widening that line, because the narrow compile surface is the
+# whole point of `--lib` there.
+#
+# `no_message_box_is_answered` pins a DELETION: this crate may capture a `CS::MessageBoxDialog`
+# and read its fields, and may never press a button on one. A deletion cannot be proven by a run
+# -- nothing happens, and nothing happening is what every broken build also looks like -- so the
+# proof is a source scan, which needs no game and no windows target. It went in with the deletion
+# and reached no gate until scripts/check-test-target-coverage.py reported it as a test target
+# nothing executes.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+	--test no_message_box_is_answered
 
 # The two shells whose host-portable logic sits deliberately outside their `#[cfg(windows)]` tree,
 # so it can be decided without the game. Neither was named anywhere until 2026-09-11, and
@@ -2491,12 +2513,29 @@ python3 "$repo_root/scripts/check-single-dll-product-contract.py"
 python3 "$repo_root/scripts/check-feature-gates-bite.py" --selftest
 python3 "$repo_root/scripts/check-feature-gates-bite.py"
 
+# ...and a runtime gate whose body is a literal is the same defect one layer down. On 2026-09-12
+# `title_05_000_strip_default_enabled` was a `-> bool { false }` under twenty-two lines of doc
+# explaining why it was off, keeping a movie strip, its cache, its swap function, eight counters
+# and eight oracle fields alive behind a branch that could never be taken. The feature was deleted;
+# this stops the population growing while the recorded ones are worked down.
+python3 "$repo_root/scripts/check-constant-feature-gates.py" --selftest
+python3 "$repo_root/scripts/check-constant-feature-gates.py"
+
 # ...and the configuration those gates describe has to keep compiling, or the counts above become
 # a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
 # save picker, the loading cover, the portraits and the menu trace, with no cloned rows.
 cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
   --target x86_64-pc-windows-msvc --no-default-features \
   --features autoload,save-picker,loading-cover,portrait,menu-trace
+
+# ...and the other direction, which is the one an installer sells: the System>Quit rows with no
+# boot autoload behind them. It did not build until 2026-09-13 -- the safe-input confirm driver
+# compiled unconditionally and named six functions that live behind `menu-trace`, so the only
+# configurations that had ever been built were the ones carrying the autoload. `menu-trace` is
+# named here because it is not separable yet; see the feature's comment in the crate manifest.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
+  --target x86_64-pc-windows-msvc --no-default-features \
+  --features quit-rows,menu-trace
 
 bash "$repo_root/scripts/check-rust-build.sh"
 

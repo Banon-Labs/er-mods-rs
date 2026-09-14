@@ -297,6 +297,31 @@ cannot produce save-path evidence at all."""
 evidence = "crates/er-save-disable/src/lib.rs:23; crates/er-save-suppress/Cargo.toml:11"
 
 [[conflict]]
+a = "er-save-game-row"
+b = "er-reload-trace"
+kind = "hook-collision"
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+HookSpec table, and each shell links `er-hook` statically, so whichever installs second finds a \
+`jmp` where the prologue should be. The Save Game row needs that observer to see the overwrite \
+confirm's result: without it `emit_observer_installed=0`, the confirm is never built, and picking \
+an existing destination dies on `overwrite-file-confirm BUILD TIMEOUT after 180 ticks` with \
+nothing written (run br-20260913-002757-9317). Same mechanism as the er-quit-rows pair above."""
+evidence = "crates/er-reload-trace/src/lib.rs (rva: 0x746e80); crates/er-quit-menu-core/src/save_flow_boxes.rs:916"
+
+[[conflict]]
+a = "er-save-game-row"
+b = "er-save-disable"
+kind = "hook-collision"
+reason = """Both install er-save-suppress's hook set from their own MinHook instance, and \
+whichever loads second finds every prologue already carrying a `jmp` and refuses it. Measured on \
+run br-20260912-235336-32f8: nine `prologue mismatch` lines whose observed bytes all open `e9`, \
+`save-job-body completion=NO`, and a browsed destination refused with "the SL save-job-body \
+observer is not installed" after the menus had already closed. The row press cannot write a save \
+in that state, which is also what er_save_disable exists to guarantee -- the two features are \
+opposites, not merely co-located."""
+evidence = "crates/er-save-disable/src/lib.rs:204; crates/er-quit-menu-core/src/save_flow.rs (install_save_flow_game_task)"
+
+[[conflict]]
 a = "er-quickload"
 b = "er-loading-portrait"
 kind = "present-compositor"
@@ -304,15 +329,6 @@ reason = """Double D3D12 Present hook. The product already links er-loading-port
 the standalone shell installs a second compositor over the same swapchain. The shell's own \
 header states it must NEVER be loaded alongside er_quickload.dll."""
 evidence = "crates/er-loading-portrait/src/lib.rs:11"
-
-[[conflict]]
-a = "er-quickload"
-b = "er-loading-bar"
-kind = "present-compositor"
-reason = """Unconditionally installs a second Present compositor with a SYNTHETIC demo frame \
-provider, painting a fake loading bar over the product's real one. Same conflict class as the \
-portrait shell."""
-evidence = "crates/er-loading-bar/src/lib.rs:102"
 
 # RESOLVED 2026-09-12 by a build feature, not by a code fix, and this is where the pair used to
 # be declared a `duplicate-owner` conflict.
@@ -522,12 +538,30 @@ evidence = "~/Elden/main-all-dlls.me3 (annotation on the er_reload_trace entry)"
 # whole point is that the code being harmless is not the question.
 # ---------------------------------------------------------------------------
 [opt_in_only]
+"er-save-game-row" = """The Save Game row alone. It is never auto-included because every profile \
+that already carries a row-arming host has that row, and a second arm gives the first Quit row two \
+routers -- see its [[conflict]] pairs. Ask for it by name when the run is about that one row: \
+`--with er-save-game-row --without er-quit-menu`, or with `--without er-quickload` for the row on \
+its own in an otherwise vanilla game."""
 "er-quit-load-character" = """REDUNDANT since 2026-09-12, not dangerous on its own: every row it \
 arms is already armed by `er-quit-menu`, which now passes `RowSet::ALL`. Loading both puts a \
 second cloner in the process, and because each cdylib links its own `er-quit-menu-core` the two \
 cannot share a row table -- see the [[conflict]] pair for the measured result (a six-cell grid \
 holding ten items and every press ambiguous). Kept as a shell for a profile that wants the two \
 character rows and nothing else: `--with er-quit-load-character`, without `er-quit-menu`."""
+"er-input-harness" = """Writes the game's input memory every frame by mere presence -- no env \
+var, no marker file, that is its contract. While it is loaded the player is not driving the \
+session, and the agent cannot tell its own writes from theirs, so any run used to observe a \
+user's input is invalid evidence.
+
+It already carries [[conflict]] pairs against `er-quickload` and `er-quit-rows`, and those were \
+not enough: a run that excludes both -- which every standalone-shell run does -- leaves nothing \
+to rank, so the dependency closure loaded it anyway. That is the same hole `er-loading-bar` came \
+through, and the same answer. Classifying it here is the fix, because a conflict pair can only \
+fire when the other side is present and this DLL is unwanted on its own.
+
+Load it only when the agent is driving the menus on purpose: `--with er-input-harness`."""
+
 "mushroom-man-runtime" = """Replaces a protector's param rows so the character wears the mushroom \
 head -- a VISIBLE costume change on whatever character the run loads. Harmless to the process \
 and hooks no prologue, which is exactly why it slipped in: co-loadable is not the same as \
@@ -922,3 +956,28 @@ byte-for-byte vanilla unless the null case occurs."""
 # synthetic tables, so an empty table here is a table with no members rather than a
 # feature nobody checks any more.
 
+# Two hosts arming the Quit tab's row router is one router too many, whichever rows each carries.
+# `er-save-game-row` clones nothing -- it arms `RowSet::NONE` -- but it still registers an action
+# table and puts its handlers on the union, and `er-quit-menu-core`'s statics are per DLL, so the two
+# tables disagree about who owns the first row's press.
+# RESOLVED 2026-09-13 by `crates/er-quit-menu-core/src/row_registry.rs`, and this is where the
+# row shells used to be declared `duplicate-owner` against each other.
+#
+# WHAT IT SAID. Each cdylib links its own copy of `er-quit-menu-core`, so `ROW_SET`, `ROW_ACTIONS`
+# and `ARM_ONCE` were per DLL: two hosts arming the Quit tab built two row tables claiming the same
+# native indices, and a press resolved against whichever the routing detour reached. Run
+# br-20260913-135314-4804 is the measurement -- `Return to Desktop=#5:Some(Ours(GenerateBuildLink))`
+# in the product's table while `er_quit_menu.dll` carried the row that action belongs to.
+#
+# WHY IT IS NO LONGER TRUE. `arm` now elects one owner per process through a named shared mapping
+# and every later caller registers its rows and flows through the owner's `er_quit_rows_register`
+# export, which merges them into the one table. That is the same shape `er-hook` uses for detours,
+# except elected by arrival order rather than by DLL name -- rows have no designated product, since
+# a build may carry any subset of them or none.
+
+[[conflict]]
+a = "er-save-game-row"
+b = "er-quit-rows"
+kind = "duplicate-owner"
+reason = "Same two-arm problem, and `er-quit-rows` is a whole second copy of the product besides."
+evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-rows/src/lib.rs"

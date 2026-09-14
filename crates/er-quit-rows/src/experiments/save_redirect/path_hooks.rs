@@ -320,6 +320,9 @@ pub(super) static SAVE_REDIRECT_DIR_W: OnceLock<Vec<u16>> = OnceLock::new();
 /// are redirected to that staged tree, never back to this source path.
 static SAVE_DIRECT_SOURCE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static SAVE_DIRECT_STAGE_ROOT: OnceLock<PathBuf> = OnceLock::new();
+/// 1 once a save the user picked has been staged over the active stage tree. From then on the
+/// boot-time source must never be staged again: it is the save the picker was armed to replace.
+static SAVE_STAGE_OWNED_BY_PICK: AtomicUsize = AtomicUsize::new(0);
 pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_DIAG_HITS;
 pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_DONE_STEAM_ID;
 pub(crate) use er_telemetry_core::counters::SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID;
@@ -638,7 +641,10 @@ pub(crate) fn missing_save_selection_pending() -> bool {
 /// IDEMPOTENT by construction -- `MissingSaveGate::try_arm` is a compare-exchange from `Idle`, so a
 /// second call (later tick, other thread) neither restarts a browse already `Pending` nor revokes a
 /// save already `Ready`. Returns whether this call did the arming.
-pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
+pub(crate) fn arm_missing_save_picker_after_boot(
+    reason: er_save_picker_core::reason::MissingSaveReason,
+) -> bool {
+    let tag = reason.log_tag();
     // SUPERSEDE first, arm second. Every reset below has to be in place before the gate opens,
     // because the gate is what other threads watch: the Present hook and the game task both call
     // `boot_open_missing_save_picker_if_pending` every frame, and either can be inside it the
@@ -671,7 +677,7 @@ pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
     let state_before = MISSING_SAVE_DIALOG_GATE.state();
     if state_before != er_save_redirect::MissingSaveState::Idle {
         append_autoload_debug(format_args!(
-            "save-override: late missing-save picker arm DECLINED (reason={reason}) -- selection state is already {state_before:?}; a pick in flight or already made is never restarted, revoked, or cleared"
+            "save-override: late missing-save picker arm DECLINED (reason={tag}) -- selection state is already {state_before:?}; a pick in flight or already made is never restarted, revoked, or cleared"
         ));
         return false;
     }
@@ -679,17 +685,81 @@ pub(crate) fn arm_missing_save_picker_after_boot(reason: &str) -> bool {
         .store(usize::MAX, Ordering::SeqCst);
     OWN_STEPPER_EXPECTED_SLOT.store(OWN_STEPPER_SLOT_NONE, Ordering::SeqCst);
     SAVE_PICKER_OS_BOOT_STATE.store(er_save_picker_core::BOOT_PICKER_IDLE, Ordering::SeqCst);
+    // Before the gate, with the other resets, and for the same reason: the overlay reads the
+    // recorded reason to seed its banner, and both the Present hook and the game task can be
+    // inside `boot_open_missing_save_picker_if_pending` the instant `try_arm` returns. Recorded
+    // after that point it would be a banner the user never sees.
+    er_save_picker_core::reason::record_missing_save_reason(reason);
     if !MISSING_SAVE_DIALOG_GATE.try_arm() {
         append_autoload_debug(format_args!(
-            "save-override: late missing-save picker arm REFUSED (reason={reason}) -- selection state is already {:?}; a pick in flight or already made is never restarted or revoked",
+            "save-override: late missing-save picker arm REFUSED (reason={tag}) -- selection state is already {:?}; a pick in flight or already made is never restarted or revoked",
             MISSING_SAVE_DIALOG_GATE.state()
         ));
         return false;
     }
     append_autoload_debug(format_args!(
-        "save-override: *** REJECTING the boot-accepted save and ARMING the missing-save picker LATE (reason={reason}) *** -- the autoload could not load what the boot check accepted; the 05_010 file browser presents itself over the boot cover, world entry stays denied, and the user's pick supersedes this selection"
+        "save-override: *** REJECTING the boot-accepted save and ARMING the missing-save picker LATE (reason={tag} fault={:?}) *** -- the autoload could not load what the boot check accepted; the 05_010 file browser presents itself over the boot cover, world entry stays denied, and the user's pick supersedes this selection",
+        reason.fault()
     ));
     true
+}
+
+/// Hand the user the picker for `reason`, whatever state the selection is already in.
+///
+/// The one entry point every give-up site calls, because "arm the picker" has three different
+/// correct answers and each site was picking one by accident:
+///
+/// | gate state | what it means | what happens |
+/// |---|---|---|
+/// | `Idle` | nobody has been asked yet | arm, banner names `reason` |
+/// | `Pending` | the picker is already up | nothing; a browse is never restarted |
+/// | `Ready` | the user picked, and that pick has now failed | revoke and re-arm, banner names the file |
+///
+/// The `Ready` row is the one that did not exist before. A pick that passed every validation and
+/// still did not load left the gate released and every give-up site declining, which is a dead
+/// title with no way forward -- the exact soft lock the late arm was added to remove, reappearing
+/// one selection later. The reason recorded for that re-arm is
+/// [`MissingSaveReason::PickedSaveDidNotLoad`](er_save_picker_core::reason::MissingSaveReason::PickedSaveDidNotLoad),
+/// not `reason`: the mechanical symptom is whatever the caller measured, but the fact the user
+/// needs is that the save they chose is the one that did not work. The caller's own reason still
+/// reaches the log line.
+///
+/// Returns whether this call put the picker up.
+pub(crate) fn offer_missing_save_picker(
+    reason: er_save_picker_core::reason::MissingSaveReason,
+) -> bool {
+    use er_save_picker_core::reason::MissingSaveReason;
+    // The table above is `MissingSaveGate::offer`, which is host-tested; this function only
+    // carries out what it decides. `AlreadyUp` still goes through the arm so the decline is
+    // logged with the reason that wanted it, rather than disappearing here.
+    if er_save_redirect::MissingSaveOffer::RearmAfterFailedPick != MISSING_SAVE_DIALOG_GATE.offer()
+    {
+        return arm_missing_save_picker_after_boot(reason);
+    }
+    let picked = er_save_picker_core::reason::picked_save_path();
+    append_autoload_debug(format_args!(
+        "save-override: *** THE SAVE THE USER PICKED DID NOT LOAD (measured as {}) *** -- picked='{}'; revoking the released selection and putting the picker back up rather than leaving a title with no way forward",
+        reason.log_tag(),
+        picked
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<unrecorded>".to_owned())
+    ));
+    // Carry the caller's measurement into the banner before the reason is replaced. Without this
+    // the player is told their save "passed every check and still did not load", which names no
+    // step and suggests nothing to do, while the step that actually failed sits one line above in a
+    // log they cannot see. `PickedSaveDidNotLoad` is still the reason armed -- the fact they need
+    // first is that the save they chose is the one that stopped -- but it now says what stopped.
+    er_save_picker_core::reason::record_reason_detail(format!(
+        "What failed: {} ({}).",
+        reason.banner().detail(),
+        reason.log_tag()
+    ));
+    er_telemetry_core::counters::MISSING_SAVE_PICKER_REPICK_COUNT.fetch_add(1, Ordering::SeqCst);
+    // Back to `Idle` so the arm's own compare-exchange is still the thing that opens the gate --
+    // one writer, one primitive. Everything the arm resets is reset by the arm.
+    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Idle);
+    arm_missing_save_picker_after_boot(MissingSaveReason::PickedSaveDidNotLoad)
 }
 
 /// True after an explicit loose save source (`er-quickload.toml save_file` / ER_QUICKLOAD_SAVE_FILE) or
@@ -1339,6 +1409,9 @@ pub(crate) fn enforce_save_override_or_abort() -> SaveOverrideMode {
         SAVE_OVERRIDE_EXPECTED_BYTES,
         runtime_config_error().unwrap_or_else(|| "none".to_owned())
     ));
+    er_save_picker_core::reason::record_missing_save_reason(
+        er_save_picker_core::reason::MissingSaveReason::BootNoUsableSave,
+    );
     set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
     SaveOverrideMode::Redirect
 }
@@ -1373,8 +1446,12 @@ pub(crate) fn resolve_deferred_save_override() {
         default_save_boot_container_names(),
         SAVE_OVERRIDE_EXPECTED_BYTES
     ));
-    set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
-    arm_missing_save_picker_after_boot("deferred-save-override-no-readable-default");
+    // The arm does the state transition, so the plain `set` that used to run first is gone: it
+    // put the gate in `Pending` and the arm then declined its own call, which logged a refusal on
+    // the one path where arming is exactly right and left no reason recorded for the banner.
+    arm_missing_save_picker_after_boot(
+        er_save_picker_core::reason::MissingSaveReason::SettledNoUsableSave,
+    );
 }
 
 /// Picker-mode helper for user-facing save selection. ERSC can register after our DllMain, so picker
@@ -1424,50 +1501,79 @@ pub(crate) fn complete_missing_save_selection_from_picker(
             return MissingSaveSelectionOutcome::Rejected(message);
         }
     };
-    match fs::read(&validated) {
-        Ok(bytes) if er_save_loader::bnd4::parse_entries(&bytes).is_ok() => {}
-        Ok(bytes) => {
-            let message = er_save_picker_core::PickerStatusMessage::new(
-                "NOT AN ELDEN RING SAVE",
-                "The file is not a readable BND4 save container.",
-            );
+    // One owner for "is this loadable", and it is the same predicate the listing filters on.
+    // This block used to be a hand-rolled `fs::read` plus a BND4 parse, which is strictly weaker:
+    // it accepts a well-formed container whose every slot is empty, so a pick could pass here and
+    // then dead-end at the autoload's own real-character fingerprint with the picker already
+    // gone. `save_picker_accepts` adds exactly that missing check (`NoLoadableCharacter`), so a
+    // container the browser would refuse to list cannot be committed by any other route -- the
+    // path editor and the OS dialog both arrive here.
+    let extensions: &[&str] = if save_picker_seamless_mode_after_settle("missing-save-completion") {
+        &["co2", "sl2"]
+    } else {
+        &["sl2"]
+    };
+    let slots = match er_save_picker_core::save_picker_accepts(
+        &validated,
+        &er_save_picker_core::PickerIntent::LoadSource,
+        extensions,
+    ) {
+        Ok(slots) => slots,
+        Err(rejection) => {
+            let message = rejection.status_message(extensions[0]);
             append_autoload_debug(format_args!(
-                "save-override: title picker rejected non-BND4 file '{}' len={} visible='{}: {}'",
+                "save-override: title picker REFUSED '{}' -- {rejection:?} visible='{}: {}'",
                 validated.display(),
-                bytes.len(),
                 message.headline(),
                 message.detail()
             ));
             return MissingSaveSelectionOutcome::Rejected(message);
         }
-        Err(err) => {
-            let message = er_save_picker_core::PickerStatusMessage::new(
-                "SAVE UNREADABLE",
-                "The save exists, but could not be read.",
-            );
-            append_autoload_debug(format_args!(
-                "save-override: title picker could not read '{}': {err} visible='{}: {}'",
-                validated.display(),
-                message.headline(),
-                message.detail()
-            ));
-            return MissingSaveSelectionOutcome::Rejected(message);
-        }
-    }
+    };
     if autoupdate_preferred_picker_dir_enabled()
         && let Some(dir) = validated.parent().filter(|dir| !dir.as_os_str().is_empty())
     {
         remember_preferred_save_picker_dir(dir);
     }
-    let source = save_redirect_source_for_validated_file(validated.clone());
-    let _ = activate_save_redirect_source(source, "title-picker-selection");
+    // A second selection in one process cannot re-point the redirect: the three pointers it would
+    // have to move are write-once (see `restage_picked_save_over_active_stage`). Moving the staged
+    // bytes is what makes the pick real, and a run that can do neither must say so on screen
+    // rather than release the gate onto the previous save.
+    if redirect_source_already_locked_in() {
+        if !restage_picked_save_over_active_stage(&validated) {
+            let message = er_save_picker_core::reason::redirect_already_committed_banner();
+            append_autoload_debug(format_args!(
+                "save-override: title picker could NOT commit '{}' -- the redirect is already activated and this run has no private stage tree to restage into; the pick is refused rather than silently loading the save it was meant to replace",
+                validated.display()
+            ));
+            return MissingSaveSelectionOutcome::Rejected(message);
+        }
+    } else {
+        let source = save_redirect_source_for_validated_file(validated.clone());
+        let _ = activate_save_redirect_source(source, "title-picker-selection");
+    }
     install_save_redirect_hooks();
+    er_save_picker_core::reason::record_picked_save(&validated);
     set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Ready);
     append_autoload_debug(format_args!(
-        "save-override: title picker selected save '{}'; redirect active, missing-save gate released",
-        validated.display()
+        "save-override: title picker selected save '{}' with {} loadable character slot(s) {:?}; redirect active, missing-save gate released",
+        validated.display(),
+        slots.len(),
+        slots
+            .iter()
+            .map(|slot| format!("{}:{} rl{}", slot.slot, slot.name, slot.level))
+            .collect::<Vec<_>>()
     ));
     MissingSaveSelectionOutcome::Completed
+}
+
+/// Whether this process has already committed the redirect to a save source.
+///
+/// All three pointers a commit sets are `OnceLock`s written through `let _ = ...set(...)`, so a
+/// second commit is a silent no-op that logs success. Any second selection has to read this first
+/// and take the restage route instead.
+fn redirect_source_already_locked_in() -> bool {
+    SAVE_DIRECT_SOURCE_FILE.get().is_some() || SAVE_REDIRECT_DIR_W.get().is_some()
 }
 
 /// Diagnostic-only observer for save-like IO while the missing-save selection is pending. The
@@ -1595,6 +1701,12 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     if !save_detour_disk_io_allowed() {
         return;
     }
+    // A pick owns the staged tree from the moment it restages it. `SAVE_DIRECT_SOURCE_FILE` still
+    // holds the boot-time source -- it is write-once -- so without this the next save-path
+    // observation would stage that source back over the save the user just chose.
+    if SAVE_STAGE_OWNED_BY_PICK.load(Ordering::SeqCst) != 0 {
+        return;
+    }
     let Some(source) = SAVE_DIRECT_SOURCE_FILE.get() else {
         let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
         if hit < 8 {
@@ -1617,23 +1729,8 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
     if prior == steam_id {
         return;
     }
-    match SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.compare_exchange(
-        0,
-        steam_id,
-        Ordering::SeqCst,
-        Ordering::SeqCst,
-    ) {
-        Ok(_) => {}
-        Err(in_progress) if in_progress == steam_id => return,
-        Err(in_progress) => {
-            let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
-            if hit < 16 {
-                append_autoload_debug(format_args!(
-                    "save-override: direct-file stage deferred for SteamID64 {steam_id}; SteamID64 {in_progress} already staging"
-                ));
-            }
-            return;
-        }
+    if !claim_stage_in_progress(steam_id) {
+        return;
     }
     let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
     if hit < 16 {
@@ -1643,6 +1740,41 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
             root.display()
         ));
     }
+    stage_save_source_into_root(source, root, steam_id);
+}
+
+/// Take the staging lock for `steam_id`, or report that somebody else has it.
+///
+/// Split out of [`ensure_direct_stage_for_steam_id`] when the picker gained a second stage
+/// writer: a re-pick restages the same root for the same id, so the two must contend through one
+/// latch rather than each having its own idea of what "already staging" means.
+fn claim_stage_in_progress(steam_id: u64) -> bool {
+    match SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.compare_exchange(
+        0,
+        steam_id,
+        Ordering::SeqCst,
+        Ordering::SeqCst,
+    ) {
+        Ok(_) => true,
+        Err(in_progress) => {
+            let hit = SAVE_DIRECT_STAGE_DIAG_HITS.fetch_add(1, Ordering::SeqCst);
+            if hit < 16 {
+                append_autoload_debug(format_args!(
+                    "save-override: direct-file stage deferred for SteamID64 {steam_id}; SteamID64 {in_progress} already staging"
+                ));
+            }
+            false
+        }
+    }
+}
+
+/// Write `source`'s bytes over every staged container under `root` for `steam_id`, and release
+/// the staging latch on every exit.
+///
+/// The caller has already taken that latch through [`claim_stage_in_progress`]. Two callers now
+/// reach this: the boot stage, which runs once per Steam id, and the picker's re-pick, which runs
+/// over a root that was already staged and must therefore not be gated on the done-latch.
+fn stage_save_source_into_root(source: &Path, root: &Path, steam_id: u64) -> bool {
     // Stage the source under every container name (`STAGED_SAVE_CONTAINER_NAMES`), never under a
     // name derived from the source's own extension and never under one derived from the Seamless
     // mode. This code runs inside the `CreateFileW` detour at DllMain+~190ms, and me3 loads
@@ -1668,7 +1800,7 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
                 dir.display()
             ));
             SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
-            return;
+            return false;
         }
     }
     // Under Wine the two case spellings resolve to one directory, so writing each 28 MB container
@@ -1683,7 +1815,7 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
                 source.display()
             ));
             SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
-            return;
+            return false;
         }
     };
     let container_names = staged_save_container_names();
@@ -1710,7 +1842,7 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
                         target.display()
                     ));
                     SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
-                    return;
+                    return false;
                 }
             }
         }
@@ -1731,6 +1863,63 @@ fn ensure_direct_stage_for_steam_id(steam_id: u64) {
         SAVE_DIRECT_STAGE_STALE_REMOVE_FAILED.load(Ordering::SeqCst)
     ));
     SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID.store(0, Ordering::SeqCst);
+    true
+}
+
+/// Replace the staged container bytes with a save the user picked, when the redirect has already
+/// been activated and therefore cannot be re-pointed.
+///
+/// # The write-once pointers this exists to work around
+///
+/// `SAVE_DIRECT_SOURCE_FILE`, `SAVE_DIRECT_STAGE_ROOT` and `SAVE_REDIRECT_DIR_W` are `OnceLock`s
+/// set through `let _ = ...set(...)`, which discards the failure. So a second
+/// `activate_save_redirect_source` in one process keeps the first source it was ever given, and
+/// logs a line saying it
+/// enforced the second -- and `ensure_direct_stage_for_steam_id` then returns early on its
+/// done-latch, so not one byte moves. Measured by reading the code on 2026-09-12 after a run where
+/// a configured `save_file` dead-booted and the picker was armed: every pick that picker could
+/// accept would have loaded the dead save it was armed to replace.
+///
+/// The redirect dir is deliberately left alone. It names our private stage tree, the game reads
+/// its containers by path, and swapping the bytes underneath is the whole change -- no hot-path
+/// read moves, and the `CreateFileW` detour keeps its lock-free `OnceLock` load.
+///
+/// Returns false when there is no private stage tree to write into, which is the case when the
+/// first selection was the game's own default save and the plan was `StagedRoot`. The caller must
+/// surface that as a visible rejection: loading the wrong character silently is the failure this
+/// function exists to prevent, and a quiet false would recreate it one layer up.
+fn restage_picked_save_over_active_stage(picked: &Path) -> bool {
+    let Some(root) = SAVE_DIRECT_STAGE_ROOT.get() else {
+        append_autoload_debug(format_args!(
+            "save-override: re-pick '{}' cannot restage -- this run has no private stage tree (the redirect was activated against a root that is not ours), so the picked save cannot replace the active one",
+            picked.display()
+        ));
+        return false;
+    };
+    let steam_id = OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    if plausible_steam_id64(steam_id).is_none() {
+        append_autoload_debug(format_args!(
+            "save-override: re-pick '{}' cannot restage -- no plausible active SteamID64 ({steam_id}) to name the staged containers",
+            picked.display()
+        ));
+        return false;
+    }
+    if !claim_stage_in_progress(steam_id) {
+        return false;
+    }
+    append_autoload_debug(format_args!(
+        "save-override: RESTAGING the picked save over the active stage for SteamID64 {steam_id}: '{}' -> root '{}' -- the redirect pointers are write-once, so the bytes move instead of the pointer",
+        picked.display(),
+        root.display()
+    ));
+    let staged = stage_save_source_into_root(picked, root, steam_id);
+    if staged {
+        // From here the staged tree belongs to the user's pick. The boot-time source is still in
+        // `SAVE_DIRECT_SOURCE_FILE` and a later `ensure_direct_stage_for_steam_id` would happily
+        // write it back over the pick, so that path is closed for the rest of the process.
+        SAVE_STAGE_OWNED_BY_PICK.store(1, Ordering::SeqCst);
+    }
+    staged
 }
 
 /// Delete every save artifact in a staged SteamID directory that this pass did not just write.
@@ -1929,8 +2118,9 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                 append_autoload_debug(format_args!(
                     "save-override: redirected save open FAILED -- arming the missing-save picker"
                 ));
-                set_missing_save_dialog_state(er_save_redirect::MissingSaveState::Pending);
-                crate::experiments::arm_missing_save_picker_after_boot("redirected-save-open-fail");
+                crate::experiments::offer_missing_save_picker(
+                    er_save_picker_core::reason::MissingSaveReason::RedirectedSaveOpenFailed,
+                );
             }
             let hit = SAVE_REDIRECT_HITS.fetch_add(1, Ordering::SeqCst);
             if hit < SAVE_REDIRECT_LOG_MAX {

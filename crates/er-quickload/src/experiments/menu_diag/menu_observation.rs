@@ -657,12 +657,44 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
     let mut found_item: Option<usize> = None;
     let mut found_member_node: Option<usize> = None;
     let mut hits = HIT_START;
+    // What the dialog actually holds, as opposed to what the scan is looking for.
+    //
+    // The scan reports its matches and nothing else, so a run where it matches nothing -- which is
+    // every 1.17.1 run measured so far, `hits=0` over 3000 repeats -- says only "not these two
+    // vtables" and cannot say what the rows are instead. These are the distinct vtable addresses
+    // of every heap object the dialog points at, with the offset each was found at, so the objects
+    // can be named in the 1.16.2 dump by their own `.rdata` address rather than guessed at.
+    const VTABLE_CENSUS_MAX: usize = 24;
+    /// Upper bound on the mapped image, so a vtable is told apart from a heap pointer by where it
+    /// lives. `eldenring.exe` 1.17.1 maps about 0x4.2 MB of `.text` plus its data sections; 0x8
+    /// MB is comfortably past the last section and far below any heap this game allocates.
+    const IMAGE_SPAN_MAX: usize = 0x800_0000;
+    let mut census: [(usize, usize, usize); VTABLE_CENSUS_MAX] =
+        [(NULL, NULL, NULL); VTABLE_CENSUS_MAX];
+    let mut census_len = HIT_START;
     let mut q = QW_START;
     while q < SCAN_QWORDS {
         let off = q * PTR_SZ;
         let p = unsafe { safe_read_usize(dialog + off) }.unwrap_or(NULL);
         if p != NULL && (p & PTR_ALIGN_MASK) == QW_START && p >= HEAP_LO {
             let vt = unsafe { safe_read_usize(p) }.unwrap_or(NULL);
+            // An image-range vtable is the object's identity; heap pointers are not.
+            if vt > base && vt < base + IMAGE_SPAN_MAX {
+                let mut seen = false;
+                let mut idx = HIT_START;
+                while idx < census_len {
+                    if census[idx].0 == vt {
+                        census[idx].2 += HIT_STEP;
+                        seen = true;
+                        break;
+                    }
+                    idx += HIT_STEP;
+                }
+                if !seen && census_len < VTABLE_CENSUS_MAX {
+                    census[census_len] = (vt, off, HIT_STEP);
+                    census_len += HIT_STEP;
+                }
+            }
             if vt == memberjob_vt {
                 // (a) a MenuMemberFuncJob registry entry node.
                 let mfn = unsafe { safe_read_usize(p + MEMBER_FN_18) }.unwrap_or(NULL);
@@ -768,6 +800,17 @@ pub(crate) unsafe fn scan_dialog_for_loadgame(
             }
             rows_walked += HIT_STEP;
             row += QW_STEP;
+        }
+    }
+    if found_member_node.is_none() {
+        let mut idx = HIT_START;
+        while idx < census_len {
+            let (vt, off, count) = census[idx];
+            append_autoload_debug(format_args!(
+                "loadgame-scan: census vt=0x{vt:x} rva=0x{:x} first_at=dialog+0x{off:x} objects={count}",
+                vt - base
+            ));
+            idx += HIT_STEP;
         }
     }
     append_autoload_debug(format_args!(

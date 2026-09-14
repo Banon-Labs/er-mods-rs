@@ -61,6 +61,13 @@ use std::{
 
 use crate::host::append_autoload_debug;
 
+/// Directory name of the private staged save tree this mod copies a chosen save into.
+///
+/// The single source of truth is `er_save_redirect::DIRECT_STAGE_ROOT_DIR_NAME`; this crate does
+/// not depend on that one (it would pull the Windows hooking graph into a host-testable picker),
+/// so the two spellings are pinned together by a test in the crate that links both.
+pub const PRIVATE_STAGE_DIR_NAME: &str = "er-quickload-save-redirect-stage";
+
 /// Rows per `05_010_ProfileSelect` window (native slot count).
 pub const PICKER_ROW_COUNT: usize = 10;
 /// ProfileSummary name field capacity: 16 UTF-16 units + NUL (0x22 bytes).
@@ -329,6 +336,17 @@ pub struct SavePickerModel {
     last_dir_per_drive: HashMap<PathBuf, PathBuf>,
     /// What this browsing session is for; locked at open time.
     intent: PickerIntent,
+    /// How many rows the surface drawing this model can show at once.
+    ///
+    /// `PICKER_ROW_COUNT` is a fact about the game's own window -- `05_010_ProfileSelect` has ten
+    /// profile slots and
+    /// cannot have eleven -- so it was the right constant while the native window was the only
+    /// surface. The DLL-drawn overlay has no such limit: it rasterises its own rows, and on a
+    /// 1080p frame it has room for roughly thirty. Holding both surfaces to ten made the overlay
+    /// page through a directory it could have shown at once. The view sets this per frame from
+    /// its own geometry (`set_row_capacity`), so what the cursor and the scroll window believe is
+    /// what the user can actually see.
+    row_capacity: usize,
 }
 
 /// Mounted drives that browse as folders: probe `A:\`..`Z:\` and keep the ones that are real
@@ -650,6 +668,7 @@ impl SavePickerModel {
             last_dir_per_drive: HashMap::new(),
             intent,
             drive_strip_path_focused: false,
+            row_capacity: PICKER_ROW_COUNT,
         };
         model.refresh();
         model.cursor = model.first_selectable_row();
@@ -754,9 +773,32 @@ impl SavePickerModel {
     /// does not consume row slots; the compact movie's ScrollBarV and edge-hover restaging own that
     /// affordance.
     fn entry_window_capacity(&self) -> usize {
-        PICKER_ROW_COUNT
+        self.row_capacity
             .saturating_sub(self.entry_row_base())
             .max(1)
+    }
+
+    /// Rows the surface drawing this model can show at once. Defaults to [`PICKER_ROW_COUNT`],
+    /// which is what the native window has and cannot exceed.
+    pub fn row_capacity(&self) -> usize {
+        self.row_capacity
+    }
+
+    /// Tell the model how many rows its view can draw, and re-clamp everything that depends on it.
+    ///
+    /// Called by the overlay every frame with a capacity derived from the frame height, so a
+    /// resolution change or a window resize cannot leave the cursor addressing a row that is no
+    /// longer on screen. A no-op when the capacity has not changed.
+    pub fn set_row_capacity(&mut self, rows: usize) {
+        let rows = rows.max(1);
+        if rows == self.row_capacity {
+            return;
+        }
+        self.row_capacity = rows;
+        self.scroll_offset = self.scroll_offset.min(self.max_scroll_offset());
+        if !self.row_selectable(self.cursor) || self.cursor >= rows {
+            self.cursor = self.first_selectable_row();
+        }
     }
 
     fn max_scroll_offset(&self) -> usize {
@@ -1073,13 +1115,23 @@ impl SavePickerModel {
         changed
     }
 
+    /// Step one place along the drive strip, which is a ring: `[C:] [S:] [Z:] [ current path ]`.
+    ///
+    /// Both directions wrap, and until 2026-09-12 only one did. Going right off the last drive
+    /// focuses the path bar, and from there `forward` simply returned `false` -- so the strip
+    /// cycled endlessly to the left and dead-ended to the right, one press in. The asymmetry was
+    /// invisible in the telemetry that mattered: run br-20260912-224118-0618 read 11 right presses
+    /// and delivered 40 of them to this function, which reported `changed=false` for all but nine.
     pub fn cycle_drive_from_drive_strip(&mut self, forward: bool) -> bool {
         if self.drive_strip_path_focused {
-            if forward {
-                return false;
-            }
             self.drive_strip_path_focused = false;
-            let Some(root) = self.drives.last().cloned() else {
+            // Off the path bar and round: right lands on the first drive, left on the last.
+            let wrapped = if forward {
+                self.drives.first().cloned()
+            } else {
+                self.drives.last().cloned()
+            };
+            let Some(root) = wrapped else {
                 return false;
             };
             let _ = self.switch_to_drive_root(root);
@@ -1204,11 +1256,11 @@ impl SavePickerModel {
     ) -> Option<EdgePressOutcome> {
         let first_content_row = self
             .entry_row_base()
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let last_visible_row = self
             .visible_row_count()
             .saturating_sub(1)
-            .min(PICKER_ROW_COUNT.saturating_sub(1));
+            .min(self.row_capacity.saturating_sub(1));
         let (at_edge, edge_row) = if down {
             (cursor >= last_visible_row, last_visible_row)
         } else {
@@ -1301,6 +1353,13 @@ impl SavePickerModel {
             if name.starts_with('.') {
                 continue;
             }
+            // Hide the private staged tree. It sits directly inside the save folder the picker
+            // opens on, so it is the first directory a user browsing for a save walks into, and
+            // what they find there is a copy this mod made -- of a save they already have, under a
+            // name that tells them nothing about which one. Picking it is never what they meant.
+            if name == PRIVATE_STAGE_DIR_NAME {
+                continue;
+            }
             // Detect the kind by STAT'ing the target (`Path::is_dir`/`is_file`), not the dirent
             // `file_type` (which does not follow symlinks and mis-reports reparse points): under
             // Wine, symlinked or btrfs-subvolume directories at the `Z:\` (= `/`) root -- `/usr`,
@@ -1370,7 +1429,7 @@ impl SavePickerModel {
 
     /// Meaning of `row` (0..PICKER_ROW_COUNT) in the current scroll window.
     pub fn row_meaning(&self, row: usize) -> PickerRow {
-        if row >= PICKER_ROW_COUNT {
+        if row >= self.row_capacity {
             return PickerRow::Empty;
         }
         if self.new_file_row() == Some(row) {
@@ -1652,9 +1711,9 @@ impl SavePickerModel {
         // on something actionable -- an entry -- rather than on `[..] up` or the drive cycler. Fall
         // back to any selectable row (a folder with nothing in it), else 0.
         let first_entry = self.entry_row_base();
-        (first_entry..PICKER_ROW_COUNT)
+        (first_entry..self.row_capacity)
             .find(|&r| self.row_selectable(r))
-            .or_else(|| (0..PICKER_ROW_COUNT).find(|&r| self.row_selectable(r)))
+            .or_else(|| (0..self.row_capacity).find(|&r| self.row_selectable(r)))
             .unwrap_or(0)
     }
 
@@ -1665,7 +1724,7 @@ impl SavePickerModel {
     /// Move the highlight directly to a visible/selectable row. Used by mouse hit-testing surfaces
     /// that resolve a click to the row under the pointer before activating it.
     pub fn set_cursor(&mut self, row: usize) {
-        if row < PICKER_ROW_COUNT && self.row_selectable(row) {
+        if row < self.row_capacity && self.row_selectable(row) {
             self.cursor = row;
         }
     }
@@ -1673,7 +1732,7 @@ impl SavePickerModel {
     /// Move the highlight one selectable row up (`down=false`) or down, wrapping. No-op when only
     /// one row is selectable.
     pub fn move_cursor(&mut self, down: bool) {
-        let selectable: Vec<usize> = (0..PICKER_ROW_COUNT)
+        let selectable: Vec<usize> = (0..self.row_capacity)
             .filter(|&r| self.row_selectable(r))
             .collect();
         if selectable.len() < 2 {
