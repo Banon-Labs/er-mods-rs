@@ -46,15 +46,57 @@ pushed=$(cat)
 # scripts/test-git-pre-push-block-main.sh.
 printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
 
+# What this push actually sends, read off git's ref list rather than off the checkout.
+#
+# Each stdin line is `<local ref> <local sha> <remote ref> <remote sha>`. Field 2 is the local sha
+# being pushed and git writes forty zeros there when the ref is being deleted, spelling the local
+# ref `(delete)` as well. Both are measured off a real `git push --delete` by
+# scripts/test-pre-push-deletion-only.sh rather than asserted here. So `pushed_shas` is every
+# commit this push adds to origin, and `pushed_refs` is every ref it touches at all -- the two
+# together are what separate "deletes three branches" from "git sent no ref list".
+mapfile -t pushed_refs < <(printf '%s\n' "$pushed" | awk 'NF >= 2 { print $3 }')
+mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
+
+# A push that only deletes refs has no question for a gate to answer, so none of them run.
+#
+# Every gate below judges content: what the pushed commits compile to, whether the code in them
+# has ever run, what their diff against origin/main touches. A deletion sends no commit and adds
+# no object, so there is nothing for any of them to read -- and what they read instead was the
+# pushing checkout. `check-stages.py --stages-for-diff` with no `--rev` falls back to the working
+# tree against origin/main, and `check-runtime-evidence.sh` with no tip falls back to
+# `git rev-parse --short HEAD`. Measured 2026-09-14: `git push origin --delete
+# refactor/experiments-split`, run from a checkout sitting on an unrelated fix branch, selected
+# seven of eleven stages from six changed paths that all belonged to that branch's own commits,
+# and the deletion never completed. That is the shape PR #434 named -- a guard judging the
+# checked-out HEAD instead of the ref being sent -- in its purest form, because here there is no
+# ref being sent for it to judge.
+#
+# The one rule a deletion can break is the main-push guard above, which is why this skip sits
+# below it rather than above: `git push origin --delete main` reaches that guard as
+# `(delete) 000... refs/heads/main <sha>` and its remote-ref case refuses it.
+#
+# `pushed_refs` is what keeps the skip narrow, in both directions. An empty stdin stream is not a
+# deletion -- it is a push this hook cannot describe, the guard above already refuses it from a
+# main checkout, and it keeps exactly the behaviour it had. And a push carrying one deletion
+# alongside one real ref is not a deletion-only push either: `pushed_shas` is non-empty, so every
+# gate below runs on the content ref precisely as before.
+if [[ ${#pushed_refs[@]} -gt 0 && ${#pushed_shas[@]} -eq 0 ]]; then
+	printf 'pre-push: this push only DELETES refs, so no gate ran at all. That is not a pass\n' >&2
+	printf '          for anything -- a deletion sends no commit, and every gate here judges\n' >&2
+	printf '          the content of the commits being sent. The main-push guard DID run, and\n' >&2
+	printf '          it is what refuses a deletion of main.\n' >&2
+	printf 'pre-push: refs being deleted:\n' >&2
+	printf '            %s\n' "${pushed_refs[@]}" >&2
+	exit 0
+fi
+
 # DOES THE STATE BEING PUSHED COMPILE? Not "does my working tree compile" -- see the header of
 # scripts/check-committed-compiles.sh for why those are different questions, and how two commits
 # reached origin on 2026-08-31 that answered yes to the second and no to the first.
 #
-# Field 2 of each stdin line is the LOCAL sha being pushed; an all-zero sha means the ref is being
-# DELETED, which has nothing to compile. The TIP of each pushed ref is checked, not every commit
-# in the range: both historical failures were pushed tips, and checking intermediates would
-# multiply the cost for a case that has not happened here.
-mapfile -t pushed_shas < <(printf '%s\n' "$pushed" | awk 'NF >= 2 && $2 !~ /^0+$/ { print $2 }' | sort -u)
+# The TIP of each pushed ref is checked, not every commit in the range: both historical failures
+# were pushed tips, and checking intermediates would multiply the cost for a case that has not
+# happened here.
 if [[ ${#pushed_shas[@]} -gt 0 ]]; then
 	# ...BUT ONLY IF THESE COMMITS CAN CHANGE WHAT CARGO COMPILES (user directive 2026-09-06).
 	#
@@ -218,9 +260,16 @@ fi
 # once share one .git/config, which a run on 2026-09-13 was observed to clobber.
 #
 # Which commits it asks about: the pushed tips, the same `--rev` shape the compile gate above uses
-# and for the same reason. A ref being deleted contributes no tip, and with no tip at all the
-# selector falls back to the working tree against origin/main, which is the closest thing to a
-# question a deletion-only push has.
+# and for the same reason.
+#
+# This used to carry a second sentence saying that a deletion contributes no tip, so the selector
+# would fall back to the working tree against origin/main -- "the closest thing to a question a
+# deletion-only push has". It was not a question that push was asking. The fallback gated the
+# pushing checkout's own branch, and the deletion it was supposed to be about never completed
+# (measured 2026-09-14; see the skip near the top of this file, which now returns before this
+# line is ever reached). A deletion-only push cannot arrive here any more, so `pushed_shas` is
+# empty below only when git sent no ref list at all, and the whole suite is the right answer to
+# that.
 stage_argv=()
 for sha in "${pushed_shas[@]:-}"; do
 	[[ -n $sha ]] && stage_argv+=(--rev "$sha")
