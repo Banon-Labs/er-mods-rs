@@ -47,7 +47,7 @@ FIXEOF
 }
 
 check_repo() {
-	local root=$1 configured resolved
+	local root=$1 configured resolved raw_configured
 	# The state that arrives with it. Twice on 2026-08-31 -- once observed live, 21 seconds after
 	# the fact -- .git/config was rewritten with [core] reduced to exactly the four keys a fresh
 	# `git init` writes (repositoryformatversion, filemode, bare, logallrefupdates), with `bare`
@@ -62,7 +62,26 @@ check_repo() {
 	fi
 	configured=$(git -C "$root" config --get core.hooksPath || true)
 	[[ -n "$configured" ]] || fail "core.hooksPath is unset in $root, so the version-controlled hooks in scripts/hooks are not installed"
-	[[ "$configured" != /* ]] || fail "core.hooksPath is ABSOLUTE ($configured); it breaks the moment this checkout is renamed or moved, which is exactly what happened on 2026-08-31"
+	# An absolute value is correct until the checkout moves, and then it is silently wrong -- so
+	# the durable spelling is relative and this gate holds the key there. One absolute value is
+	# repaired rather than refused: the one naming this checkout's own scripts/hooks. beads writes
+	# it, on purpose (`FIX: Worktree hooks use absolute core.hooksPath (GH#2414)`,
+	# `main.configureSharedHooksPath`), so it arrives again every few minutes in a tree where
+	# agents run `bd`. Refusing it failed two pushes on 2026-09-14 after 344s and 148s of green
+	# gates, and told the pusher to run the repair by hand; the repair is one line and is right
+	# here. A path that resolves anywhere else is still a refusal -- that is the renamed-checkout
+	# failure of 2026-08-31, and repairing it would invent a destination nobody asked for.
+	if [[ "$configured" == /* ]]; then
+		if [[ "$(realpath -m -- "$configured")" == "$(realpath -m -- "$root/scripts/hooks")" ]]; then
+			raw_configured=$configured
+			git -C "$root" config core.hooksPath scripts/hooks
+			configured=scripts/hooks
+			printf '[check-git-hooks-installed] repaired -- core.hooksPath held %s, the absolute spelling of scripts/hooks in this checkout (beads writes that form); rewritten to the relative one\n' \
+				"$raw_configured"
+		else
+			fail "core.hooksPath is ABSOLUTE ($configured) and does not name this checkout's scripts/hooks; it breaks the moment this checkout is renamed or moved, which is exactly what happened on 2026-08-31"
+		fi
+	fi
 	resolved=$(cd -- "$root" && git rev-parse --path-format=absolute --git-path hooks)
 	[[ -d "$resolved" ]] || fail "core.hooksPath ($configured) resolves to $resolved, which does not exist -- no hook can run"
 	[[ -x "$resolved/pre-push" ]] || fail "$resolved/pre-push is missing or not executable -- nothing gates a push"
@@ -341,6 +360,19 @@ if [[ "${1:-}" == "--selftest" ]]; then
 	git -C "$tmp/after" config core.hooksPath scripts/hooks # the durable form
 	"$0" "$tmp/after" >/dev/null || {
 		echo "[check-git-hooks-installed] SELFTEST FAIL: a correct relative hooksPath was rejected" >&2
+		exit 1
+	}
+
+	# The absolute spelling of that same directory, which is what beads writes. Accepted, and the
+	# acceptance has to leave the durable form behind -- a gate that passed it through unchanged
+	# would hand the next checkout rename the 2026-08-31 failure with this gate green over it.
+	git -C "$tmp/after" config core.hooksPath "$tmp/after/scripts/hooks"
+	"$0" "$tmp/after" >/dev/null || {
+		echo "[check-git-hooks-installed] SELFTEST FAIL: the absolute spelling of this checkout's own scripts/hooks was rejected rather than repaired" >&2
+		exit 1
+	}
+	[[ "$(git -C "$tmp/after" config --get core.hooksPath)" == "scripts/hooks" ]] || {
+		echo "[check-git-hooks-installed] SELFTEST FAIL: the absolute spelling was accepted but not rewritten to scripts/hooks" >&2
 		exit 1
 	}
 
