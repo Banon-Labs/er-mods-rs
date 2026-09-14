@@ -748,10 +748,68 @@ def main() -> int:
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
-        # Deletion pushes are deliberately out of scope and fail closed.
+        # Deletion pushes (2026-09-14). Both spellings used to fail closed; they
+        # are now read by pushes_target_only_deletions, which is written in token
+        # operations rather than a pattern precisely so that it cannot repeat the
+        # wasm regex trap this runner exists to catch (bd
+        # a-regex-in-a-rego-rule-can-crash-opa-wasm-and-silence-every-policy-2026-09-14).
+        # These cases have to run here and not only under `opa test`: a green
+        # interpreter suite says nothing about the runtime that ships.
         PolicyCase(
-            "deny-git-push-deletion-refspec-from-main-session",
+            "allow-git-push-deletion-refspec-from-main-session",
             "git push origin :refs/heads/split/a",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "allow-git-push-delete-option-from-main-session",
+            "git push origin --delete refactor/experiments-split",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "allow-git-push-delete-multiple-branches-from-main-session",
+            "git push origin --delete stale/one stale/two",
+            True,
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # Every main spelling stays denied through the new exception, and the last
+        # of these runs from a feature branch where only push_targets_main -- a
+        # blocked_push_context rule carrying no exception guard -- can catch it.
+        PolicyCase(
+            "deny-git-push-delete-option-main-from-main-session",
+            "git push origin --delete main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-git-push-deletion-refspec-main-from-main-session",
+            "git push origin :refs/heads/main",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        PolicyCase(
+            "deny-git-push-delete-option-main-from-feature-branch",
+            "git push origin --delete heads/main",
+            False,
+            "Do not push directly to main",
+        ),
+        # A deletion mixed with any other push is not vouched for: the count-match
+        # is taken across the whole command.
+        PolicyCase(
+            "deny-git-push-deletion-chained-with-bare-push",
+            "git push origin --delete stale/one && git push",
+            False,
+            "Do not push directly to main",
+            extra_event={"signals": {"current_branch": "main\n"}},
+        ),
+        # An option the parser does not read leaves the command unrecognised, so
+        # `--force` alongside a deletion fails closed rather than riding along.
+        PolicyCase(
+            "deny-git-push-force-with-delete-option",
+            "git push --force origin --delete stale/one",
             False,
             "Do not push directly to main",
             extra_event={"signals": {"current_branch": "main\n"}},

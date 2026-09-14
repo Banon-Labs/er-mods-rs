@@ -327,15 +327,13 @@ test_deny_refspec_rename_chained_with_explicit_upstream_push if {
 	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
 }
 
-# Deletion pushes are deliberately out of scope: both spellings fail closed.
-test_deny_deletion_refspec_empty_source if {
-	denials := guard.deny with input as bash_event("git push origin :refs/heads/foo", "main\n")
-	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
-}
-
-test_deny_delete_option_push if {
-	denials := guard.deny with input as bash_event("git push origin --delete foo", "main\n")
-	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+# A deletion refspec is not a rename refspec, so it must not reach the rename
+# parser even now that deletions have one of their own.
+test_deny_deletion_refspec_reaching_the_rename_parser if {
+	not guard.pushes_target_only_explicit_nonmain_refspecs with input as bash_event(
+		"git push origin :refs/heads/foo",
+		"main\n",
+	)
 }
 
 # An option between `push` and the refspec is unparsed, so it fails closed.
@@ -580,6 +578,357 @@ test_deny_shell_read_heredoc_push_main if {
 	denials := guard.deny with input as bash_event(
 		"bash <<'EOF'\ngit push origin main\nEOF",
 		"feature/no-main-push\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# --- Deletion pushes (2026-09-14) ---------------------------------------------
+#
+# The exception these cover exists for a repo-wide stale-branch sweep, so the
+# allowed list and the denied list are both load-bearing: an allow that should
+# have denied costs a branch, and every case below was chosen to pin one or the
+# other side of that line. The branch signal reads `main` throughout because that
+# is the session shape the sweep runs from, and the one that used to deny.
+
+# The verbatim command that motivated the parser.
+test_allow_delete_option_nonmain_branch if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete refactor/experiments-split",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_delete_short_option_nonmain_branch if {
+	denials := guard.deny with input as bash_event("git push origin -d refactor/experiments-split", "main\n")
+	count(denials) == 0
+}
+
+test_allow_delete_option_multiple_branches if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one stale/two stale/three",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+# git accepts the option on either side of the remote, so the parser reads the
+# first non-option operand as the repository rather than trusting position.
+test_allow_delete_option_before_remote if {
+	denials := guard.deny with input as bash_event("git push --delete origin stale/one", "main\n")
+	count(denials) == 0
+}
+
+test_allow_delete_option_fully_qualified_ref if {
+	denials := guard.deny with input as bash_event("git push origin --delete refs/heads/stale/one", "main\n")
+	count(denials) == 0
+}
+
+test_allow_empty_source_refspec if {
+	denials := guard.deny with input as bash_event("git push origin :refs/heads/stale/one", "main\n")
+	count(denials) == 0
+}
+
+test_allow_empty_source_refspec_short_form if {
+	denials := guard.deny with input as bash_event("git push origin :stale/one", "main\n")
+	count(denials) == 0
+}
+
+test_allow_empty_source_refspec_multiple if {
+	denials := guard.deny with input as bash_event("git push origin :stale/one :stale/two", "main\n")
+	count(denials) == 0
+}
+
+test_allow_two_deletions_in_one_command if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git push origin --delete stale/two",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_deletion_followed_by_status_inspection if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git status --short --branch",
+		"main\n",
+	)
+	count(denials) == 0
+}
+
+test_allow_deletion_when_branch_signal_missing if {
+	denials := guard.deny with input as bash_event_no_branch_signal("git push origin --delete stale/one")
+	count(denials) == 0
+}
+
+test_allow_deletion_with_quoted_branch if {
+	denials := guard.deny with input as bash_event(`git push origin --delete "stale/one"`, "main\n")
+	count(denials) == 0
+}
+
+test_allow_wrapped_deletion if {
+	denials := guard.deny with input as bash_event("bash -c 'git push origin --delete stale/one'", "main\n")
+	count(denials) == 0
+}
+
+test_allow_deletion_in_subshell if {
+	denials := guard.deny with input as bash_event("(git push origin --delete stale/one)", "main\n")
+	count(denials) == 0
+}
+
+test_allow_deletion_piped_to_a_log if {
+	denials := guard.deny with input as bash_event("git push origin --delete stale/one | tee /tmp/sweep.log", "main\n")
+	count(denials) == 0
+}
+
+# Near misses on the main test. A branch is refused for having a path component
+# spelled `main`, never for merely containing those four letters, so an ordinary
+# branch name that happens to start or end with them still deletes.
+test_allow_deletion_of_branch_named_mainline if {
+	denials := guard.deny with input as bash_event("git push origin --delete mainline", "main\n")
+	count(denials) == 0
+}
+
+test_allow_deletion_of_branch_named_domain if {
+	denials := guard.deny with input as bash_event("git push origin --delete domain", "main\n")
+	count(denials) == 0
+}
+
+test_allow_deletion_of_branch_with_main_prefixed_component if {
+	denials := guard.deny with input as bash_event("git push origin --delete fix/main-menu-crash", "main\n")
+	count(denials) == 0
+}
+
+# --- ... and every spelling of main stays denied ------------------------------
+
+test_deny_delete_option_main if {
+	denials := guard.deny with input as bash_event("git push origin --delete main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_option_refs_heads_main if {
+	denials := guard.deny with input as bash_event("git push origin --delete refs/heads/main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# `heads/main` resolves to refs/heads/main on the remote, so deleting it deletes
+# main (see the push_targets_main comment for the verification).
+test_deny_delete_option_heads_main if {
+	denials := guard.deny with input as bash_event("git push origin --delete heads/main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_short_option_main if {
+	denials := guard.deny with input as bash_event("git push origin -d main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_option_before_remote_main if {
+	denials := guard.deny with input as bash_event("git push --delete origin main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_empty_source_refspec_main if {
+	denials := guard.deny with input as bash_event("git push origin :main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_empty_source_refspec_refs_heads_main if {
+	denials := guard.deny with input as bash_event("git push origin :refs/heads/main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# One main among several otherwise-deletable branches denies the whole command.
+test_deny_delete_option_multiple_branches_including_main if {
+	denials := guard.deny with input as bash_event("git push origin --delete stale/one main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# Conservative by design, matching the rename parser: a genuinely distinct branch
+# whose last component is `main` is refused rather than adjudicated.
+test_deny_delete_option_nested_main_component if {
+	denials := guard.deny with input as bash_event("git push origin --delete refs/heads/split/main", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A remote's HEAD symref normally resolves to main, so deleting it is the same
+# operation under another name.
+test_deny_delete_option_head if {
+	denials := guard.deny with input as bash_event("git push origin --delete HEAD", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_wrapped_deletion_of_main if {
+	denials := guard.deny with input as bash_event("bash -c 'git push origin --delete main'", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_command_substitution_running_a_deletion_of_main if {
+	denials := guard.deny with input as bash_event(`echo "$(git push origin --delete main)"`, "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# The proof that the new exception cannot override push_targets_main: that rule is
+# a blocked_push_context of its own with no exception guard on it, so a main
+# deletion denies from a feature branch, where nothing else in this guard would
+# have stopped it.
+test_deny_delete_option_main_from_feature_branch if {
+	denials := guard.deny with input as bash_event("git push origin --delete main", "feature/no-main-push\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_empty_source_refspec_main_from_feature_branch if {
+	denials := guard.deny with input as bash_event("git push origin :refs/heads/main", "feature/no-main-push\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# ... and the exception really is inapplicable there rather than merely outvoted.
+test_deletion_exception_does_not_hold_for_main if {
+	not guard.pushes_target_only_deletions with input as bash_event("git push origin --delete main", "main\n")
+}
+
+# --- Mixed commands fail closed -----------------------------------------------
+
+test_deny_deletion_chained_with_bare_push if {
+	denials := guard.deny with input as bash_event("git push origin --delete stale/one && git push", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_deletion_chained_with_main_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git push origin main",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A deletion plus a push that another exception would have vouched for on its own.
+# The count-match is taken across the whole command, so neither exception applies.
+test_deny_deletion_chained_with_explicit_upstream_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git push -u origin feature/x",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_deletion_chained_with_refspec_rename if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git push origin origin/a:refs/heads/split/a",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_deletion_chained_with_wrapped_bare_push if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && bash -c 'git push'",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# Two identical deletions collapse into one segment while the pattern still counts
+# two pushes, so the counts disagree and the command denies. Pinned because it is
+# a fail-closed quirk rather than a judgement about the command: write the second
+# deletion as its own call.
+test_deny_duplicate_identical_deletions if {
+	denials := guard.deny with input as bash_event(
+		"git push origin --delete stale/one && git push origin --delete stale/one",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# --- Option arrangements fail closed ------------------------------------------
+
+test_deny_force_before_deletion if {
+	denials := guard.deny with input as bash_event("git push --force origin --delete stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_force_after_deletion if {
+	denials := guard.deny with input as bash_event("git push origin --delete --force stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_upstream_option_with_deletion if {
+	denials := guard.deny with input as bash_event("git push -u origin --delete stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_dry_run_option_with_deletion if {
+	denials := guard.deny with input as bash_event("git push origin --delete stale/one --dry-run", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A bundled short option is not the `-d` this parser recognises.
+test_deny_bundled_short_options_with_deletion if {
+	denials := guard.deny with input as bash_event("git push origin -dv stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_repeated_delete_option if {
+	denials := guard.deny with input as bash_event("git push origin --delete --delete stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A global option before `push` is a shape this parser does not read, so it is
+# counted and not recognised, and the counts disagree.
+test_deny_git_c_deletion if {
+	denials := guard.deny with input as bash_event("git -C /tmp/repo push origin --delete stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# --- Malformed deletions fail closed ------------------------------------------
+
+test_deny_delete_option_with_no_operand if {
+	denials := guard.deny with input as bash_event("git push origin --delete", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_option_with_no_remote_and_no_operand if {
+	denials := guard.deny with input as bash_event("git push --delete", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_empty_source_refspec_with_empty_destination if {
+	denials := guard.deny with input as bash_event("git push origin :", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A colon on a `--delete` operand is not valid git and is not guessed at.
+test_deny_delete_option_with_colon_operand if {
+	denials := guard.deny with input as bash_event("git push origin --delete :stale/one", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+test_deny_delete_option_with_src_dst_operand if {
+	denials := guard.deny with input as bash_event("git push origin --delete stale/one:stale/two", "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A wildcard is expanded against refs this guard cannot enumerate, so it cannot be
+# shown to exclude main.
+test_deny_delete_option_wildcard if {
+	denials := guard.deny with input as bash_event(`git push origin --delete "refs/heads/*"`, "main\n")
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# A URL remote puts a colon in the slot the parser reads as the repository, which
+# it refuses rather than re-deriving where the operands start.
+test_deny_delete_option_with_url_remote if {
+	denials := guard.deny with input as bash_event(
+		"git push git@github.com:Banon-Labs/er-mods-rs.git --delete stale/one",
+		"main\n",
+	)
+	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
+}
+
+# An opaque payload naming git and push is unreadable whether or not it deletes.
+test_deny_unreadable_wrapper_payload_alongside_a_deletion if {
+	denials := guard.deny with input as bash_event(
+		"eval $x && git push origin --delete stale/one",
+		"main\n",
 	)
 	"ER-EFFECTS-BLOCK-MAIN-PUSH" in rule_ids(denials)
 }
