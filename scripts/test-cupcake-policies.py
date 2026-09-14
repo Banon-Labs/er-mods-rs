@@ -131,6 +131,23 @@ def run_case(case: PolicyCase) -> None:
     else:
         env["CUPCAKE_ORIGIN_MAIN_OIDS_OVERRIDE"] = "a" * 40 + " " + "a" * 40
 
+    # Same defensive default for the runtime-evidence verdict, and for the same reason the two
+    # above have one: the cases that are about this guard pin it through `extra_env` below, and
+    # every other push-shaped case must not inherit a live measurement of this machine.
+    #
+    # Without this line the verdict came from `.cupcake/signals/runtime_evidence_for_head.sh`
+    # reading the real checkout, so `allow-git-push-feature-branch` -- a case about whether an
+    # explicit feature refspec escapes the `main`-push guard -- went red on any branch that edits
+    # `crates/` and has not been launched. That is every crate-touching branch before its first
+    # run, which is when this suite is most likely to be run. The file's own header already states
+    # the rule this restores: a pinned verdict says "nothing about what has been built or launched
+    # on this machine".
+    #
+    # `NOTRUNTIME` rather than `OK`: it is the verdict for a push that touches no crate, which is
+    # what these fixtures are -- synthetic command strings that push nothing. It can never deny,
+    # so it cannot mask a different guard's refusal, and it does not assert a run happened.
+    env["CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE"] = "NOTRUNTIME"
+
     env.update(dict(case.extra_env))
 
     result = subprocess.run(
