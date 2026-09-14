@@ -256,6 +256,7 @@ portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only
 blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample	suite
 portable	-	test-check-config-guard.sh	source/AST/text analysis only	suite
 portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own	suite
+portable	-	test-pre-push-deletion-only.sh	builds its own bare remote plus working clone under mktemp and pushes only between them	suite
 portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1	suite
 portable	-	check-save-disable-warnings.py	source/AST/text analysis only	product
 portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only	suite
