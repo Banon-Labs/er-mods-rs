@@ -172,7 +172,83 @@ fi
 # step belongs to comes from the same scripts/check-stages.py table CI's matrix is generated from,
 # and check-stages.py --check (a step of the suite) refuses a step that belongs to no stage. What
 # the push gains is the same thing CI gains: a red lint stage says so in seconds instead of after
-# the cross-compile. ER_CHECK_JOBS=1 serialises it; ER_CHECK_STAGES=<names> narrows it, and is
-# deliberately NOT set here -- a push gets all of them.
-printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+# the cross-compile. ER_CHECK_JOBS=1 serialises it.
+#
+# AND SELECTING STAGES DID NOT REINTRODUCE ONE EITHER (2026-09-13). The stages this push runs are
+# now chosen from the diff. What is skipped is a whole STAGE that the diff cannot have invalidated;
+# the step list is untouched, and the selection is COMPUTED from the same table, at push time, with
+# no second inventory to fall behind:
+#
+#   * every stage already declares the files it reads, as repo-relative globs, beside the stage
+#     itself -- that declaration is what keys the stage's CI cache, so it was load-bearing before
+#     this line read it. `check-stages.py --stages-for-diff` matches the changed paths against
+#     those globs plus the stage's own gate scripts, and prints the stages that match.
+#   * add a stage, edit a glob, move a step between stages, and the selection follows. There is
+#     nothing here to edit a second time.
+#   * `check-stages.py --audit-inputs`, a case of the --selftest that is itself a step of the
+#     suite, reads every gate script a stage runs and fails when the stage does not declare a path
+#     that script opens. That is what stops the globs quietly under-claiming, which is the only way
+#     this selection could hide a gate. It found one before it was wired: `suite` runs
+#     scripts/test-git-pre-push-block-main.sh while declaring only `scripts/*.py`, so a diff
+#     consisting of that one test claimed no stage reads it.
+#
+# WHY IT IS WORTH DOING, measured on the last full pre-push run of a 9-file diff. Per-stage wall
+# clock: moveset 717s, addresses 619s, policy 413s, runtime-tools 222s, source 91s, lint 41s,
+# suite 23s, product 22s, cargo-build 4s, docs 2s, cargo-test 2s. The stages already run in
+# parallel, so a push waits for the SLOWEST SELECTED stage, not for the sum -- and `moveset`,
+# the critical path at twelve minutes, is invalidated by three globs that that diff did not touch.
+# It ran anyway. A documentation-only branch now waits on `lint` at 41s instead of on `moveset`.
+#
+# IT FAILS OPEN AND SAYS SO. An unresolvable diff base, a selector that raises, a changed path no
+# stage declares, or ER_SCOPE_ALL=1 all print every stage name, so the narrowed run becomes the
+# whole suite. The selector exits 0 in every one of those cases on purpose -- a non-zero exit under
+# `set -e` would abort this hook and run nothing at all, which is the one outcome worse than
+# running everything.
+#
+# AND IT SAYS WHAT IT DID NOT COVER, twice. The selector's stderr names every stage it left out and
+# the globs that missed, in the vocabulary the check-committed-compiles.sh skip above already uses;
+# then check.sh gives every step of an unselected stage the state SKIPPED with the same
+# "NOT SELECTED FOR THIS DIFF" reason, and its combined summary counts those separately from
+# `passed` and says in as many words that this run does not cover them.
+#
+# THE LOCKING IS UNCHANGED, AND PUSHES STAY SERIALISED. This still calls check.sh bare, so the run
+# takes the same exclusive lock it always did. Letting two pushes overlap was considered and
+# dropped: the stages already run in parallel inside one run, so a second concurrent push would
+# contend for the same cores while still waiting on its own slowest stage -- and two gate runs at
+# once share one .git/config, which a run on 2026-09-13 was observed to clobber.
+#
+# Which commits it asks about: the pushed tips, the same `--rev` shape the compile gate above uses
+# and for the same reason. A ref being deleted contributes no tip, and with no tip at all the
+# selector falls back to the working tree against origin/main, which is the closest thing to a
+# question a deletion-only push has.
+stage_argv=()
+for sha in "${pushed_shas[@]:-}"; do
+	[[ -n $sha ]] && stage_argv+=(--rev "$sha")
+done
+
+# Run once, not twice: the names go to stdout and the accounting to stderr, so stderr is caught in
+# a file and replayed rather than asking the same git question a second time. `|| true` because a
+# selector that somehow exits non-zero must still leave this hook running the whole suite below,
+# not abort the push under `set -e`.
+stage_report=$(mktemp)
+mapfile -t scope_stages < <(python3 scripts/check-stages.py --stages-for-diff \
+	"${stage_argv[@]}" 2>"$stage_report" || true)
+cat "$stage_report" >&2
+rm -f "$stage_report"
+mapfile -t all_stages < <(python3 scripts/check-stages.py --stages 2>/dev/null || true)
+
+if [[ ${#scope_stages[@]} -eq 0 || ${#scope_stages[@]} -eq ${#all_stages[@]} ]]; then
+	if [[ ${#scope_stages[@]} -eq 0 ]]; then
+		printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
+	fi
+	printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+	exec bash scripts/check.sh
+fi
+
+printf -v scope_csv '%s,' "${scope_stages[@]}"
+export ER_CHECK_STAGES="${scope_csv%,}"
+printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
+	"${#scope_stages[@]}" "${#all_stages[@]}" "$ER_CHECK_STAGES" >&2
+printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
+printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
 exec bash scripts/check.sh

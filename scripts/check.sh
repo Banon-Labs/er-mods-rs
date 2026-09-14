@@ -169,6 +169,11 @@ _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
 # in both directions, because it is the one whose verdict covers everything. The fan-out's children
 # take no lock at all -- they carry ER_CHECK_LOCK_HELD from the parent that already holds the
 # exclusive one, the same marker scripts/test-check-sh-accumulates.py relies on.
+#
+# This is what lets two branches be pushed at once: scripts/hooks/pre-push runs the stages its diff
+# selects one `--stage` at a time, so both pushes hold the lock shared. A push that selects every
+# stage still calls this file bare and still takes the exclusive lock, because at that point its
+# verdict does cover everything.
 if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
 	exec 9>"$_check_lock" || true
 	_check_lock_mode=-x
@@ -812,8 +817,9 @@ _check_fanout() {
 		echo "  instead would silently ignore the partition every other caller relies on." >&2
 		exit 2
 	fi
-	# A deliberate subset, for someone iterating on one area. It is not a way to make a push
-	# cheaper: the pre-push hook sets nothing, so it always gets every stage.
+	# A deliberate subset: someone iterating on one area, or scripts/hooks/pre-push running the
+	# stages the pushed diff can invalidate. The stages left out are reported below, by name, with
+	# no verdict -- see the stub loop under the result directory.
 	if [[ -n ${ER_CHECK_STAGES:-} ]]; then
 		IFS=',' read -r -a selected <<<"$ER_CHECK_STAGES"
 		printf '>>> check.sh: ER_CHECK_STAGES restricts this run to: %s\n' "$ER_CHECK_STAGES" >&2
@@ -834,6 +840,26 @@ _check_fanout() {
 	# not each refuse on the lock this process is holding. Same marker, same reason, as the one
 	# scripts/test-check-sh-accumulates.py already relies on.
 	export ER_CHECK_LOCK_HELD=1
+
+	# A stage this run will not execute still owes the merged report a state for every one of its
+	# steps. Without one, check-stage-report.py calls those steps `NO REPORT` and exits 1 -- right
+	# when a stage crashed, wrong when a stage was deliberately left out, and it is why narrowing a
+	# run with ER_CHECK_STAGES used to produce a red verdict whatever happened. `SKIPPED` is the
+	# state that report already spells "input absent, or not selected for this diff": it is
+	# green-with-holes, it is never printed as `passed`, and the closing lines count how many steps
+	# this run left without a verdict. The reason text is the same vocabulary
+	# scripts/er-change-scope.py uses for the steps it skips.
+	local stage_name
+	for stage_name in "${stages[@]}"; do
+		if ! printf '%s\n' "${selected[@]}" | grep -qxF -- "$stage_name"; then
+			command python3 "$repo_root/scripts/check-stages.py" \
+				--result-stub "$stage_name" --state SKIPPED \
+				--reason "NOT SELECTED FOR THIS DIFF -- no changed path matches this stage's inputs" \
+				>"$dir/$stage_name.tsv"
+			printf '>>> stage %-14s NOT SELECTED -- it did NOT run, and that is not a pass\n' \
+				"$stage_name" >&2
+		fi
+	done
 
 	# Where a green stage records that it was green for a given set of inputs. Opt-in
 	# (ER_CHECK_CACHE=1) rather than default, and the reason is soundness rather than caution: a
