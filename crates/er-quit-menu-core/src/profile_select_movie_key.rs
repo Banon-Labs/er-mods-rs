@@ -51,7 +51,10 @@ use crate::host::append_autoload_debug;
 /// [`er_title_flow::PROFILE_SELECT_WRAPPER_RVA`] the picker fires directly, and `FUN_1407fb050`, which copies a
 /// caller's `CSScaleformLoadInfo` onto its own stack first. Detouring the constructor rather than
 /// either caller means the rewrite happens once, in the one place both arrive.
-const MENU_WINDOW_JOB_BUILD_RVA: u32 = 0x7acb00;
+// The address is `er_title_flow`'s to declare: it hooks the same constructor passively as
+// `MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA`. Deriving the name here rather than re-spelling the
+// literal keeps one value for one function, which `scripts/check-rva-alias-drift.py` enforces.
+const MENU_WINDOW_JOB_BUILD_RVA: u32 = er_title_flow::MENU_WINDOW_JOB_NATIVE_CTOR_B_RVA;
 
 /// `CSScaleformLoadInfo::filename`, a `wchar_t*`. The struct is 16 bytes: an 8-byte `MenuJobResult`
 /// and this.
