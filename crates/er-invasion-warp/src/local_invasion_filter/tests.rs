@@ -1276,6 +1276,49 @@ fn the_idle_refusal_applies_only_while_choosing_a_new_candidate() {
     );
 }
 
+/// A session that has reached `state_in_world` must still resolve, and must still not be
+/// discoverable.
+///
+/// # What breaks without the retention half
+///
+/// `resolve_session` starts failing the moment a join completes, and every consequence is silent.
+/// No session means `publish_invasion_attempt_state` never sets `invasion_attempt_in_flight`,
+/// which means `invasion_warp_policy()` stops answering `MarkersOnly`, which means
+/// `request_invasion_warp` no longer refuses -- so the map pin and the warp hotkeys go live in the
+/// middle of an invasion. The user reviewed the opposite behaviour and kept it, in as many words:
+/// "unable to warp while invading, which is great" (2026-08-12).
+///
+/// # What breaks without the discovery half
+///
+/// The scan asks this question of every qword in ERSC's writable data. Six candidates have already
+/// been latched and rejected on a field that merely held a small constant, so every value added to
+/// the accepted set during discovery is a wider net over the same ocean. Retention is asking about
+/// one pointer that was identified properly; discovery is asking about a million that were not.
+#[test]
+fn being_in_an_invasion_is_retained_but_never_discovered() {
+    let code = product_code();
+    let body = code
+        .split_once("fn identifies_a_session(")
+        .expect("identifies_a_session must exist")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    assert!(
+        body.contains("!discovering && state == abi.state_in_world"),
+        "a session already in hand must keep resolving after the join completes, or the warp \
+         refusal silently lifts mid-invasion"
+    );
+    assert!(
+        !body.contains("|| state == abi.state_in_world\n"),
+        "state_in_world must never join the unconditional accepted set -- that is the discovery \
+         question, and it widens a haystack that has already produced six false positives"
+    );
+    assert!(
+        include_str!("ersc.rs").contains("state_in_world: 0x16,"),
+        "the state must be named on the ABI table rather than written as a bare literal at the \
+         use site, so the next Seamless renumber has one place to re-measure"
+    );
+}
+
 /// The first reading of a session must not arm the auto-search loop.
 ///
 /// # The run that bought this
