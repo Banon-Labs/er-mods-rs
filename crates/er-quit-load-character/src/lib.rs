@@ -258,9 +258,14 @@ mod tests {
         assert!(actions.note_drive_strip_click_event.is_none());
     }
 
-    /// Both character rows, and neither build row. The build pair belongs to the sibling shell
-    /// `er-quit-menu`, and a shell arming both halves of the tab would be the co-loading the
-    /// conflict table exists to refuse, written into one DLL instead.
+    /// The character rows this build arms, and neither build row. The build pair belongs to the
+    /// sibling shell `er-quit-menu`, and a shell arming both halves of the tab would be the
+    /// co-loading the conflict table exists to refuse, written into one DLL instead.
+    ///
+    /// The expectation follows `load-character-from-file` rather than naming both rows, because
+    /// that feature is off by default since 2026-09-13 -- see [`CHARACTER_ROWS`] for why. It is
+    /// still an exact set comparison, so a build row that starts arming itself fails here under
+    /// either configuration, which is what this test is for.
     #[test]
     fn this_shell_arms_the_character_switch_and_neither_build_row() {
         let rows = CHARACTER_ROWS;
@@ -273,6 +278,11 @@ mod tests {
         .into_iter()
         .filter_map(|(label, armed)| armed.then_some(label))
         .collect();
-        assert_eq!(armed, vec!["Load Character", "Load Character from File"]);
+
+        let mut expected = vec!["Load Character"];
+        if cfg!(feature = "load-character-from-file") {
+            expected.push("Load Character from File");
+        }
+        assert_eq!(armed, expected);
     }
 }
