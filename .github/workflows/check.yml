@@ -199,8 +199,10 @@ jobs:
   # shape if the eleven stage names were typed into a `matrix.stage` literal here.
   #
   # `scripts/check-stages.py --check` -- one of the steps of the suite itself -- refuses a check.sh
-  # step that belongs to no stage or to two, so the list this job emits provably covers every one
-  # of the 297 steps.
+  # step that belongs to no stage or to two, so the list this job emits provably covers every
+  # step check.sh runs. The count is deliberately not written here: it was 292 when this
+  # comment was first typed and 299 by the time anyone read it again, and a stale number in a
+  # sentence about anti-drift is the joke writing itself. `--counts` prints the live figure.
   #
   # SCOPING, added after #439 did the same for the pre-push hook. A pull request that adds a rego
   # policy does not need a Windows cross-compile, and running one costs a runner minute that buys
@@ -565,7 +567,7 @@ jobs:
         # It was a dot-prefixed directory until running this workflow under `act` caught the cost:
         # `actions/upload-artifact@v4` globbed it, found nothing, and reported that as a yellow
         # `::warning::` on a step that still went GREEN -- so every stage would have uploaded an
-        # empty artifact and the report job would have called all 292 steps NO REPORT, with no red
+        # empty artifact and the report job would have called every step NO REPORT, with no red
         # step anywhere to say why. An isolated probe pinned the cause to the dot and nothing else:
         # in one job, `dotless-results/*.tsv` uploaded and `.dot-results/*.tsv` did not, same
         # directory, same step, same relative form. `@actions/glob` will not match a path segment
