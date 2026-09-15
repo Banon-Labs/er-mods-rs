@@ -2123,6 +2123,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 
+# er-dinput-suppress-core: the DirectInput buffer-shape predicates and the left-button blanking
+# every overlay in the process shares. Host-buildable on purpose -- the sizes are the part that is
+# expensive to get wrong, and getting them wrong is silent: a mouse read misread as a keyboard one
+# reported "every arrow released" and re-armed a held key on every poll. The blanking tests pin the
+# two directions that matter, that a click outside a panel still reaches the game and that a
+# 256-byte DIK table arriving through a shared vtable is left untouched.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
+
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
