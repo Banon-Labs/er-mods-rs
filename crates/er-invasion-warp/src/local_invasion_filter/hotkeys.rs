@@ -40,11 +40,6 @@ fn enable_toggle_key_in_force() -> i32 {
         config.enable_toggle_key
     })
 }
-/// `VK_SHIFT`: held, the mark keys act on the location's name instead of its exact block --
-/// "everywhere that shares this name" rather than "this tile".
-#[cfg(windows)]
-const VK_SHIFT: i32 = 0x10;
-
 #[cfg(windows)]
 const KEY_DOWN_MASK: i16 = -0x8000;
 #[cfg(windows)]
@@ -134,12 +129,15 @@ impl MarkKeys {
         if !mark && !unmark {
             return;
         }
-        let by_name = (unsafe { GetAsyncKeyState(VK_SHIFT) } & KEY_DOWN_MASK) != 0;
+        // Shift used to select a by-name mark here, writing `named_location_text_ids`. That list
+        // was only ever read by the match-time filter, which was deleted, so the modifier was
+        // removed with it on 2026-09-15 rather than left as a keypress that writes a list nobody
+        // reads.
         if mark {
-            apply_mark(true, by_name);
+            apply_mark(true);
         }
         if unmark {
-            apply_mark(false, by_name);
+            apply_mark(false);
         }
     }
 
@@ -197,9 +195,9 @@ fn apply_enable_toggle() {
     }
 }
 
-/// Add or remove the player's current location, by block or by name, and write the file.
+/// Add or remove the player's current location and write the file.
 #[cfg(windows)]
-fn apply_mark(adding: bool, by_name: bool) {
+fn apply_mark(adding: bool) {
     let Some(anchor) = current_anchor() else {
         crate::standalone_log(format_args!(
             "local-invasion: cannot mark -- the player's location is not readable right now"
@@ -214,23 +212,7 @@ fn apply_mark(adding: bool, by_name: bool) {
     let _ = hot.reload_if_changed(&path);
     let mut config = hot.current().clone();
 
-    let changed = if by_name {
-        let count = if adding {
-            config.mark_place_names(&anchor)
-        } else {
-            config.unmark_place_names(&anchor)
-        };
-        if count == 0 && adding && anchor.named_location_count() == 0 {
-            crate::standalone_log(format_args!(
-                "local-invasion: {:#010x} has no place name on record, so there is nothing to mark \
-                 by name. Open the world map once this session -- that is where the names are read \
-                 from.",
-                anchor.block
-            ));
-            return;
-        }
-        count > 0
-    } else if adding {
+    let changed = if adding {
         config.mark_block(anchor.block)
     } else {
         config.unmark_block(anchor.block)
@@ -238,23 +220,20 @@ fn apply_mark(adding: bool, by_name: bool) {
 
     if !changed {
         crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- already in that state, file untouched",
+            "local-invasion: {} {:#010x} -- already in that state, file untouched",
             if adding { "mark" } else { "un-mark" },
-            anchor.block,
-            if by_name { " by name" } else { "" }
+            anchor.block
         ));
         return;
     }
 
     match hot.save(&path, &config) {
         Ok(true) => crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- now {} chosen, {} excluded, {} name(s){}",
+            "local-invasion: {} {:#010x} -- now {} chosen, {} excluded{}",
             if adding { "MARKED" } else { "EXCLUDED" },
             anchor.block,
-            if by_name { " by name" } else { "" },
             config.allowed_blocks.len(),
             config.blocked_blocks.len(),
-            config.named_location_text_ids.len(),
             if config.enabled {
                 ""
             } else {

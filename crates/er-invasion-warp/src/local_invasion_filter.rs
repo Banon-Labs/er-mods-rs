@@ -377,14 +377,13 @@ fn refresh_config() {
                 }
             }
             crate::standalone_log(format_args!(
-                "local-invasion: config loaded enabled={} mode={} search_by_location={} \
+                "local-invasion: config loaded enabled={} search_by_location={} \
                  search_radius={} widen_to_anywhere={} only_players_with_this_mod={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
-                 named={} ids={} blocks={} \
+                 blocks={} \
                  excluded={} mark={} unmark={} enable_toggle={} settings={}",
                 outcome.config.enabled,
-                outcome.config.mode.as_str(),
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
                 outcome.config.search_everywhere_when_exhausted,
@@ -408,8 +407,6 @@ fn refresh_config() {
                 outcome.config.ersc_show_observer,
                 outcome.config.ersc_lobby_key_observer,
                 outcome.config.ersc_invade_observer,
-                outcome.config.named_locations.len(),
-                outcome.config.named_location_text_ids.len(),
                 outcome.config.allowed_blocks.len(),
                 // Exclusions beat everything else, so a forgotten one is the hardest rejection to
                 // explain from the outside -- it looks identical to being in the wrong place.
@@ -422,20 +419,6 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
             ));
             warn_about_key_collisions(&outcome.config);
-        }
-        // Say that the typed names do nothing yet. `named_locations` is parsed and stored but never
-        // resolved to text ids, so it contributes nothing to a verdict -- and in `mode = "named"`
-        // with no ids collected that means every match is rejected, forever, for a user who did
-        // exactly what the file told them to. The verdict itself is reported
-        // (`NothingToMatchAgainst`), but nothing connected it to the names they typed.
-        if !outcome.config.named_locations.is_empty() {
-            crate::standalone_log(format_args!(
-                "local-invasion: {} typed name(s) in `named_locations` are NOT being used -- \
-                 resolving a place name string to its FMG text id is not implemented, so only ids \
-                 collected by Shift+Insert are matched. In mode = \"named\" with no such ids, every \
-                 match is rejected as NothingToMatchAgainst.",
-                outcome.config.named_locations.len()
-            ));
         }
         for issue in &outcome.issues {
             crate::standalone_log(format_args!(

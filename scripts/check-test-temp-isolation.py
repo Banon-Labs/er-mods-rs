@@ -185,7 +185,9 @@ FROZEN_PROCESS_SCOPED: dict[str, int] = {
     "crates/er-save-picker-core/src/lib.rs": 1,
     "crates/er-save-redirect/src/lib.rs": 3,
     "crates/er-invasion-warp/src/lib.rs": 1,
-    "crates/er-invasion-warp-core/src/local_invasion_config.rs": 4,
+    # Was 4 until 2026-09-15, when the tests covering the deleted match-time filter went with
+    # it. The floor tracks what the file actually has so a removal cannot read as a licence.
+    "crates/er-invasion-warp-core/src/local_invasion_config.rs": 3,
     "crates/soulsformats/src/lib.rs": 1,
     "crates/er-game-base/src/log.rs": 2,
     "crates/er-save-loader/src/lib_parts/load_methods.rs": 4,
