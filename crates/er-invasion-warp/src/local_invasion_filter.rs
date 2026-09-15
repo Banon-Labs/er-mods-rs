@@ -353,6 +353,29 @@ fn refresh_config() {
                 "local-invasion: config gone -- filter OFF (matches are left alone)"
             ));
         } else {
+            // A radius on its own does nothing, and does it silently. The widening search runs
+            // inside the `RequestLobbyList` detour, which `steam_hooks` installs, and the tile it
+            // starts from comes from `hunt_filter_value`, which answers `None` while `hunt` is
+            // off. So a player who sets only the radius -- the one key named after the feature --
+            // gets a config line confirming their value and no behaviour whatsoever. That is
+            // exactly what happened on 2026-09-15 with a file that had none of the three keys in
+            // it. Say which switch is missing rather than letting the radius look effective.
+            if outcome.config.prefilter_radius > 0 {
+                let missing = match (outcome.config.hunt, outcome.config.steam_hooks) {
+                    (true, true) => "",
+                    (false, true) => "hunt",
+                    (true, false) => "steam_hooks",
+                    (false, false) => "hunt and steam_hooks",
+                };
+                if !missing.is_empty() {
+                    crate::standalone_log(format_args!(
+                        "local-invasion: prefilter_radius={} does NOTHING while {} is off -- the \
+                         widening search runs inside the lobby-query detour and starts from the \
+                         tile hunt picks. Set {} = true in er-invasion-warp.toml.",
+                        outcome.config.prefilter_radius, missing, missing
+                    ));
+                }
+            }
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} mode={} hunt={} prefilter_radius={} \
                  search_everywhere_when_exhausted={} dll_users_only={} \
