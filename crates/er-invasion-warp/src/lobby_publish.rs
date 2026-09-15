@@ -395,6 +395,23 @@ mod live {
     static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
     static REFUSALS: AtomicUsize = AtomicUsize::new(0);
 
+    /// What this host has advertised, and how often it could not.
+    ///
+    /// `(published, refused)`. Both numbers already existed and neither reached any output, so
+    /// "am I broadcasting my location to invaders right now" had no answer short of reading the
+    /// source: every failure path in `publish_current_map` is a deliberate silent no-op, which
+    /// makes "not hosting" and "hosting but the advertisement was never found" identical from
+    /// outside. Asked on 2026-09-15 and unanswerable; the counters go on the heartbeat now.
+    ///
+    /// `published` zero while hosting means invaders filtering on location cannot see this host.
+    #[must_use]
+    pub fn tallies() -> (usize, usize) {
+        (
+            PUBLISHES.load(Ordering::SeqCst),
+            REFUSALS.load(Ordering::SeqCst),
+        )
+    }
+
     fn matchmaking() -> Option<usize> {
         let cached = MATCHMAKING.load(Ordering::SeqCst);
         if cached != 0 {
@@ -1348,7 +1365,7 @@ mod live {
 pub use live::{
     advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
     install_pool_filter_hook, persona_name, publish_current_map, reapply_pool_if_toggled,
-    report_persona_plumbing_once, tally,
+    report_persona_plumbing_once, tallies as publish_tallies, tally,
 };
 
 #[cfg(test)]
