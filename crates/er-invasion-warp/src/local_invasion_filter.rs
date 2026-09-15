@@ -1499,6 +1499,12 @@ static JOIN_PROGRESS_LAST: AtomicU64 = AtomicU64::new(u64::MAX);
 static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 
 /// When the engine first reported a dead join while Seamless still claimed a match, in [`now_ms`].
+/// The last in-world refusal, so it is written once rather than every tick.
+///
+/// The reading holds for as long as the invasion does, and this runs on the game task, so without
+/// the latch the log fills with one repeated sentence while the player is playing.
+static IN_WORLD_DROP_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+
 /// `0` = not currently reporting one.
 static DEAD_JOIN_SINCE_MS: AtomicU64 = AtomicU64::new(0);
 
@@ -2655,6 +2661,37 @@ fn drop_a_match_the_engine_has_already_failed(
     };
     if state == session.abi.state_idle {
         DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    // `state_in_world` is the player standing in the host's world, and this path must not touch it.
+    //
+    // The engine reading `lobbyState == None` is what brought us here, and in a Seamless invasion
+    // that is not proof the attempt is dead: Seamless owns the session, and `0x16` is its word for
+    // "the invasion landed". The two readings disagree because they describe different things, and
+    // when they do, the one that can see the player is right.
+    //
+    // Acting anyway costs the game. The Cancel row is withdrawn at `0x16`, so `cancel_stalled_
+    // attempt_inner` falls through to `OPTIONSELECT_LEAVEWORLD` and tears the player out of a live
+    // invasion -- a hard lock in run br-20260915-025202-c779, and again in br-20260915-173901-7934,
+    // the first run whose lobby query was genuinely unfiltered and so the first to reach a real
+    // host at all. `connect_phase` already refuses this state for the deadline path; this caller
+    // is a second door onto the same action and did not.
+    //
+    // What is given up is real and much smaller: a player genuinely stranded holding a dead match
+    // at `0x16` now spends the invasion item to leave instead of being recovered automatically.
+    // Nothing distinguishes stranded from invading by state alone, so the choice is between
+    // occasionally costing an item and occasionally hard-locking the game.
+    if state == session.abi.state_in_world {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        actions::log_refusal_once(
+            &IN_WORLD_DROP_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: NOT dropping this match -- the engine reports no session, but \
+                 Seamless reads {state:#04x}, which is the player standing in the host's world. \
+                 Cancelling here drives OPTIONSELECT_LEAVEWORLD, which has hard-locked the game \
+                 twice. If the match really is dead, leaving costs the invasion item."
+            ),
+        );
         return;
     }
     // Cleared before the cancel rather than after it, so a cancel that is refused -- a poisoned
