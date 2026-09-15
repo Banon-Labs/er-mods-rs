@@ -407,6 +407,32 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
+            "prefilter_radius" => match unquote(value).parse::<u8>() {
+                Ok(v) if usize::from(v) <= usize::from(crate::search_ring::MAX_RADIUS) => {
+                    config.prefilter_radius = v;
+                }
+                Ok(v) => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!(
+                        "prefilter_radius {v} is past the {} the ring is capped at -- keeping {}",
+                        crate::search_ring::MAX_RADIUS,
+                        config.prefilter_radius
+                    ),
+                }),
+                Err(_) => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("prefilter_radius must be a whole number, got {value:?}"),
+                }),
+            },
+            "search_everywhere_when_exhausted" => match parse_bool(value) {
+                Some(v) => config.search_everywhere_when_exhausted = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!(
+                        "search_everywhere_when_exhausted must be true or false, got {value:?}"
+                    ),
+                }),
+            },
             "mode" => match LocalInvasionMode::parse(&unquote(value)) {
                 Some(v) => config.mode = v,
                 None => issues.push(ConfigIssue {
@@ -639,6 +665,15 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             }
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
+            }
+            "prefilter_radius" => {
+                out.push_str(&format!("prefilter_radius = {}\n", config.prefilter_radius));
+            }
+            "search_everywhere_when_exhausted" => {
+                out.push_str(&format!(
+                    "search_everywhere_when_exhausted = {}\n",
+                    config.search_everywhere_when_exhausted
+                ));
             }
             "ersc_observers" => {
                 out.push_str(&format!("ersc_observers = {}\n", config.ersc_observers));
