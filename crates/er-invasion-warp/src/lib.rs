@@ -41,6 +41,7 @@ pub mod map_gfx;
 pub mod map_hooks;
 #[cfg(windows)]
 mod map_live_pins;
+pub mod map_piece_live;
 pub mod map_seams;
 mod overlay;
 pub mod place_name;
