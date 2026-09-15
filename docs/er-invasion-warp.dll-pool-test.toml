@@ -19,9 +19,6 @@
 # because any invasion that happens is a real match rather than something the filter allowed.
 enabled = false
 
-# Inert in this build -- it drove the match-time filter, which was deleted. Left at the default.
-mode = "exact"
-
 # MUST stay false. This narrows the search to one location, which is a different feature and
 # would confuse this test.
 search_by_location = false
@@ -46,6 +43,5 @@ reject_notice = true
 # Unused for this test; left at defaults so the file is complete.
 allowed_blocks = []
 blocked_blocks = []
-named_location_text_ids = []
 mark_key = "Insert"
 unmark_key = "Delete"

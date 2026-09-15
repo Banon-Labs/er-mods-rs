@@ -10,7 +10,8 @@
 //! closes. Every rejection costs a full match negotiation and cancel.
 //!
 //! Narrowing the query removes the sampling entirely. Seamless already does exactly this -- it
-//! attaches five filters to its lobby-list request, every one of them a key some host published:
+//! attaches five filters to its lobby-list request, every one of them a key some host published.
+//! Measured on 1.9.9:
 //!
 //! ```text
 //!   AddRequestLobbyListStringFilter("lobby_breakin_lobby_ykssr_199_6",       "true")
@@ -19,6 +20,16 @@
 //!   AddRequestLobbyListNumericalFilter("ykssr_dlc", 1)
 //!   AddRequestLobbyListStringFilter("lobby_key", "<sha256>")
 //! ```
+//!
+//! Three of those five key names do not exist on the installed 2.0.1 build. It hashes its key
+//! names: a host's nine published keys were read back live on 2026-09-15 and only `lobby_key` and
+//! `ykssr_dlc` are plain, with `lobby_type` absent entirely and the value
+//! `yknx3_seamless_master_lobby` carried under a 64-character hex key instead. This module already
+//! paid for treating the list above as current -- its `SetLobbyData` observer matched
+//! `key == "lobby_type"`, so it latched no advertisement lobby at all and a host published nothing
+//! while reporting no refusals. Match the value, never the key. The block is kept because the
+//! shape of the search is unchanged and it is what this module's own filter imitates; the key
+//! names in it are historical.
 //!
 //! None of them carries the host's location -- that is the gap this module fills, and the reason a
 //! host must run this DLL for it to work at all: only a lobby's owner may call `SetLobbyData`, so
@@ -705,8 +716,8 @@ mod live {
         // Both keys are decided before the early return, because they change at different moments
         // and the map is the one that moves least. This used to read only the map value and
         // return when it was unchanged, which put every lobby check -- and the effects write
-        // behind them -- behind a loading screen: a host who used Taunter's Tongue standing still
-        // kept advertising `none` until they walked into another block. That is the whole window
+        // behind them -- behind a loading screen: a host who used the Dried Fingers standing
+        // still kept advertising `none` until they walked into another block. That is the whole window
         // the feature exists to cover, and the doc on `publish_host_effects` claimed it was
         // covered while this return swallowed it.
         let pending_map = pending_publish(current_block(), last_published().as_deref());
@@ -798,12 +809,14 @@ mod live {
 
     /// The effects value to publish, or `None` when it is what the lobby already carries.
     ///
-    /// Asked every tick, which is one `HasSpecialEffectId` call per table entry -- next to the
-    /// block read this function already does, that is not worth a cheaper schedule. Nothing else
-    /// can detect the change: the effect toggles the instant the item is used, with no loading
-    /// screen and no other event to hang a publish on.
+    /// Asked every tick, which is two fault-closed reads and a bit test -- next to the block read
+    /// this function already does, that is not worth a cheaper schedule. Nothing else can detect
+    /// the change: the rule toggles the instant the item is used, with no loading screen and no
+    /// other event to hang a publish on.
     fn pending_effects() -> Option<String> {
-        let value = crate::host_effects::active_effects_value();
+        // `None` here is "the session could not be read", which is not the same as "no rules are
+        // on" and must not overwrite the key with `none`. See `host_effects::active_effects_value`.
+        let value = crate::host_effects::active_effects_value()?;
         let last = LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner());
         (last.as_deref() != Some(value.as_str())).then_some(value)
     }
