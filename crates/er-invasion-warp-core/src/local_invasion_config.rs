@@ -82,7 +82,7 @@ mode = "exact"
 # A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
 # marked exactly one, or the map you are standing in if you have marked none. Several marked
 # locations cannot be expressed and hunt will say so and stay out of the way.
-hunt = false
+search_by_location = false
 
 # Widen the query outward from where you are standing, one ring of map tiles at a time.
 #
@@ -94,14 +94,14 @@ hunt = false
 # `steam_hooks` installs, and the tile it starts from is the one `hunt` picks -- with either of
 # those off a radius is read, echoed back on the config line, and never acted on. The DLL says
 # so in its log rather than leaving you to work it out.
-prefilter_radius = 0
+search_radius = 0
 
 # When the rings are spent, drop the filter and ask for everywhere.
 #
 # Off, the search keeps asking for the last tile rather than quietly reverting to an unfiltered
 # query -- widening to a population you did not ask for is the thing hunt exists to avoid. On,
 # it is the last rung of the ladder: everywhere, once nearby has been exhausted.
-search_everywhere_when_exhausted = false
+widen_to_anywhere = false
 
 # Announce what the search is doing on the game's own message banner.
 #
@@ -166,7 +166,7 @@ ersc_invade_observer = true
 # It is ABSOLUTE, not a preference. While this is on, the entire vanilla population is invisible to
 # you for hosting AND for invading -- you will only ever meet other people running this DLL with
 # this same option on. Turn it on for a session with friends, not permanently.
-dll_users_only = false
+only_players_with_this_mod = false
 
 # THE TWO USEFUL COMBINATIONS, since these switches are independent:
 #
@@ -366,7 +366,7 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
-            "dll_users_only" => match parse_bool(value) {
+            "only_players_with_this_mod" | "dll_users_only" => match parse_bool(value) {
                 Some(v) => config.dll_users_only = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
@@ -424,14 +424,14 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
-            "hunt" => match parse_bool(value) {
+            "search_by_location" | "hunt" => match parse_bool(value) {
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
-            "prefilter_radius" => match unquote(value).parse::<u8>() {
+            "search_radius" | "prefilter_radius" => match unquote(value).parse::<u8>() {
                 Ok(v) if usize::from(v) <= usize::from(crate::search_ring::MAX_RADIUS) => {
                     config.prefilter_radius = v;
                 }
@@ -448,7 +448,7 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("prefilter_radius must be a whole number, got {value:?}"),
                 }),
             },
-            "search_everywhere_when_exhausted" => match parse_bool(value) {
+            "widen_to_anywhere" | "search_everywhere_when_exhausted" => match parse_bool(value) {
                 Some(v) => config.search_everywhere_when_exhausted = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
@@ -675,7 +675,9 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
         let key = line.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
         match key {
             "enabled" => out.push_str(&format!("enabled = {}\n", config.enabled)),
-            "hunt" => out.push_str(&format!("hunt = {}\n", config.hunt)),
+            "search_by_location" => {
+                out.push_str(&format!("search_by_location = {}\n", config.hunt));
+            }
             // These two were missing, and the default arm below copies the shipped file'S line
             // verbatim -- so every write silently reset them to `false`, on disk and in memory
             // (`save` adopts the re-parsed round-trip). Marking a location with Insert was enough
@@ -690,12 +692,12 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
             }
-            "prefilter_radius" => {
-                out.push_str(&format!("prefilter_radius = {}\n", config.prefilter_radius));
+            "search_radius" => {
+                out.push_str(&format!("search_radius = {}\n", config.prefilter_radius));
             }
-            "search_everywhere_when_exhausted" => {
+            "widen_to_anywhere" => {
                 out.push_str(&format!(
-                    "search_everywhere_when_exhausted = {}\n",
+                    "widen_to_anywhere = {}\n",
                     config.search_everywhere_when_exhausted
                 ));
             }
@@ -723,8 +725,11 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                     config.ersc_lobby_key_observer
                 ));
             }
-            "dll_users_only" => {
-                out.push_str(&format!("dll_users_only = {}\n", config.dll_users_only));
+            "only_players_with_this_mod" => {
+                out.push_str(&format!(
+                    "only_players_with_this_mod = {}\n",
+                    config.dll_users_only
+                ));
             }
             "mode" => out.push_str(&format!("mode = \"{}\"\n", config.mode.as_str())),
             "named_locations" => {
@@ -944,6 +949,63 @@ impl HotConfig {
 
 #[cfg(test)]
 mod tests {
+
+    /// A file written before the 2026-09-15 rename must still be read, exactly.
+    ///
+    /// The four switches were named after their implementation -- `hunt` for the lobby filter,
+    /// `prefilter_radius` for the ring, `dll_users_only` for the pool substitution -- and none of
+    /// those words say what the player gets. Renaming them is worth doing once; silently resetting
+    /// somebody's settings while doing it is not, and an unknown key is ignored, so a parser that
+    /// only knew the new names would drop every old file's values back to default without a word.
+    #[test]
+    fn the_names_before_the_rename_are_still_read() {
+        let old = "\
+enabled = true\n\
+hunt = true\n\
+prefilter_radius = 2\n\
+search_everywhere_when_exhausted = true\n\
+dll_users_only = true\n";
+        let parsed = parse_local_invasion_config(old);
+        let (config, issues) = (parsed.config, parsed.issues);
+        assert!(
+            issues.is_empty(),
+            "the old spellings should parse without complaint, got {issues:?}"
+        );
+        assert!(config.hunt, "hunt did not carry to search_by_location");
+        assert_eq!(
+            config.prefilter_radius, 2,
+            "prefilter_radius did not carry to search_radius"
+        );
+        assert!(
+            config.search_everywhere_when_exhausted,
+            "search_everywhere_when_exhausted did not carry to widen_to_anywhere"
+        );
+        assert!(
+            config.dll_users_only,
+            "dll_users_only did not carry to only_players_with_this_mod"
+        );
+    }
+
+    /// The new names parse too, and to the same fields.
+    #[test]
+    fn the_names_after_the_rename_reach_the_same_fields() {
+        let new = "\
+enabled = true\n\
+search_by_location = true\n\
+search_radius = 3\n\
+widen_to_anywhere = true\n\
+only_players_with_this_mod = true\n";
+        let parsed = parse_local_invasion_config(new);
+        let (config, issues) = (parsed.config, parsed.issues);
+        assert!(
+            issues.is_empty(),
+            "the new spellings should parse cleanly, got {issues:?}"
+        );
+        assert!(config.hunt);
+        assert_eq!(config.prefilter_radius, 3);
+        assert!(config.search_everywhere_when_exhausted);
+        assert!(config.dll_users_only);
+    }
 
     /// Every key the writer can emit must exist in the shipped template.
     ///
