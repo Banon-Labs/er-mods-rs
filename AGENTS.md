@@ -192,6 +192,28 @@ If and only if the agent's recent user-facing prose referred to an entity, ident
 
 Persistent user directive (2026-07-17): when a tool, script, helper, or documented workflow fails because of a hard-coded local path, username, machine layout, or one-off assumption, fix the reusable tool/instruction at the point of failure before continuing the one-off task. Prefer env-overridable, current-user-aware defaults (`$HOME`, discovered repo root, explicit `*_DIR`/`*_BIN` overrides, bounded known-location fallbacks) over `/home/banon`, `/home/choza`, or other user-specific literals. Do not paper over the failure by running an ad-hoc command that only works in the current session; preserve the reusable fix with validation so future identical use cases benefit.
 
+## UnitCrew's Cheat Table -- Networking Reference, Never Committed
+
+`third_party/better connections all good3.CT` is a Cheat Engine table by **UnitCrew**, kept as a
+read-only reverse-engineering reference for anything touching this mod's networking (user
+directive 2026-09-15).
+
+**It must never be checked in.** It is 8.5 MB of another author's work carrying their own embedded
+scripts and structure definitions. `.gitignore` covers `third_party/*.CT` and `third_party/*.ct`;
+that is the same carve-out the de-Arxan'd images and the Seamless archive get -- an input this repo
+reads and never redistributes.
+
+Measured contents: 8411 entries, 142 of them networking-related. It is a general Elden Ring table,
+not a Seamless-internals one -- its `Seamless Co-op` group holds no addresses, and `Current Session`
+resolves `WorldChrMan + 9C -> 580 -> 0*10 -> 10EF8`, which is the game's own session object and not
+Steam's lobby. Do not go looking there for where `ersc.dll` keeps its advertisement lobby.
+
+What it is good for: param structure names (`NetworkAreaParam`, `NetworkParam`, `NetworkMsgParam`,
+`MultiPlayCorrectionParam`), the multiplayer request entry points (`requestSOS`, `requestBlackSOS`,
+`requestForceJoinBlackSOS`, `requestKickSession`, `requestLeaveSession`), and `WorldChrMan`-rooted
+pointer paths into session state. It is XML: entries are `<Description>"name"</Description>` with
+`<Address>` and `<Offset>` siblings, and a large Ascii85 logo blob at the top to skip.
+
 ## Ghidra Runtime Dump: First-Pass RE Source
 
 **For ANY Elden Ring RE lookup, consult the Ghidra runtime dump FIRST -- before our own static disasm (`scripts/disas-deobf.sh` / `er_disasm`) or any runtime probe -- whenever a Ghidra project is relevant** (resolving a function/VA to a name + signature, decompiling to readable C, getting struct/field layouts, RTTI class names, namespaces). It has real symbols/types that the raw deobf binary lacks, so it is the cheapest, most authoritative first pass; only fall back to disasm/runtime when the dump cannot answer (e.g. runtime-only values, code the dump didn't symbolize).
