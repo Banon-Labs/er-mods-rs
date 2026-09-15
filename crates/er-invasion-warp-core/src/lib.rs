@@ -110,6 +110,7 @@ pub mod param_row;
 pub mod reject_notice;
 pub use param_row::*;
 
+pub mod search_ring;
 pub mod select;
 pub use select::*;
 
