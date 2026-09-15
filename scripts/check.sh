@@ -175,12 +175,55 @@ _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
 # stage still calls this file bare and still takes the exclusive lock, because at that point its
 # verdict does cover everything.
 if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
-	exec 9>"$_check_lock" || true
+	# `<>` and not `>`: opening for write TRUNCATES, so a refusing run used to blank the
+	# holder's pid a line before reading it, and every refusal said "pid unknown". The holder
+	# record is the only thing that distinguishes a live run from a descriptor some unrelated
+	# process inherited and never closed, which is what a Proton game tree does to fd 9.
+	exec 9<>"$_check_lock" || true
 	_check_lock_mode=-x
 	[[ -n $_check_stage ]] && _check_lock_mode=-s
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
-		echo "check.sh: REFUSED -- another run already holds $_check_lock (pid ${_holder:-unknown})." >&2
+		# A lock nobody is running is not contention, it is a leaked descriptor. Measured
+		# 2026-09-15: `fuser` on this file named wineserver, winedevice.exe and rpcss.exe -- the
+		# launched game's Proton tree, holding fd 9 it inherited from a check.sh that exited long
+		# before. The refusal is correct about the flock and wrong about what it means, and no
+		# amount of waiting clears it, so a push stays blocked until somebody reaches for
+		# ER_CHECK_FORCE=1 and thereby disarms the guard for the case it is actually for.
+		#
+		# Breaking it is safe precisely because of the holder record above: a live run always
+		# writes its pid, so an empty record or a dead one means no run is behind this lock.
+		_holder_live=0
+		[[ -n $_holder && -r /proc/$_holder/cmdline ]] && _holder_live=1
+		# A /proc scan rather than a process-name search tool: the name-matching tools are
+		# blocked repo-wide because they false-negative on this box's Windows-side processes,
+		# and reading cmdline directly is what the sanctioned helpers do anyway.
+		_other_check=0
+		for _c in /proc/[0-9]*/cmdline; do
+			[[ -r $_c ]] || continue
+			[[ ${_c%/cmdline} == /proc/$$ ]] && continue
+			if tr '\0' ' ' <"$_c" 2>/dev/null | grep -q 'scripts/check\.sh'; then
+				_other_check=1
+				break
+			fi
+		done
+		if [[ $_holder_live == 0 && $_other_check == 0 ]]; then
+			echo "check.sh: the lock is stale -- ${_holder:-no pid recorded} and no check.sh is running." >&2
+			echo "  Breaking it. A descriptor inherited by an unrelated process (the launched" >&2
+			echo "  game's Proton tree does this) keeps an flock alive after its owner exits." >&2
+			rm -f "$_check_lock"
+			exec 9<>"$_check_lock" || true
+		fi
+	fi
+	if ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		_holder_what="no pid recorded"
+		if [[ -n $_holder ]] && [[ -r /proc/$_holder/cmdline ]]; then
+			_holder_what="alive: $(tr '\0' ' ' </proc/"$_holder"/cmdline)"
+		elif [[ -n $_holder ]]; then
+			_holder_what="pid $_holder is GONE -- the lock is held by a descriptor some other process inherited and never closed"
+		fi
+		echo "check.sh: REFUSED -- another run already holds $_check_lock (${_holder_what})." >&2
 		echo "  A whole-suite run holds it exclusively; a single --stage run holds it shared, so" >&2
 		echo "  the refusal you are reading is either a whole-suite run against yours, or yours" >&2
 		echo "  against a whole-suite run. Two --stage runs never collide." >&2
@@ -189,7 +232,10 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 		echo "  Wait for that run and read ITS result, or override with ER_CHECK_FORCE=1." >&2
 		exit 2
 	fi
-	echo "$$" >&9
+	# Through the path, not through fd 9: fd 9 is positioned at offset 0 and never seeks, so a
+	# re-entrant write would interleave. A fresh `>` truncates and writes while we hold the
+	# lock on the inode, which flock is unaffected by.
+	echo "$$" > "$_check_lock"
 	# ...and a step of this suite may re-enter this preamble. test-check-sh-accumulates.py lifts
 	# it verbatim and drives it over synthetic suites -- deliberately, because testing a copy
 	# would prove nothing about the file that runs. Those children are not a second run competing
