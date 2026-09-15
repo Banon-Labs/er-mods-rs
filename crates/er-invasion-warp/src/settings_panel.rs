@@ -21,7 +21,7 @@
 
 #![cfg(windows)]
 
-use er_invasion_warp_core::local_invasion::{LocalInvasionConfig, LocalInvasionMode};
+use er_invasion_warp_core::local_invasion::LocalInvasionConfig;
 
 use er_invasion_warp_core::local_invasion_config::HotConfig;
 
@@ -182,11 +182,6 @@ fn apply_pending_edits() {
                     ));
                 }
             }
-            SettingEdit::Cycle("mode") => {
-                config.mode = next_mode(config.mode);
-                applied += 1;
-                changed.push(format!("mode={}", config.mode.as_str()));
-            }
             SettingEdit::Cycle("search_radius") => {
                 // 0 asks Steam only for the tile the player stands in; each step adds a ring
                 // around it, and the cap is the one `search_ring` enforces. Wrapping back to 0
@@ -254,13 +249,8 @@ fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
         "search_by_location" => config.hunt,
         "reject_notice" => config.reject_notice,
         "map_pins" => config.map_pins,
-        "steam_hooks" => config.steam_hooks,
         "only_players_with_this_mod" => config.dll_users_only,
         "widen_to_anywhere" => config.search_everywhere_when_exhausted,
-        "ersc_observers" => config.ersc_observers,
-        "ersc_show_observer" => config.ersc_show_observer,
-        "ersc_lobby_key_observer" => config.ersc_lobby_key_observer,
-        "ersc_invade_observer" => config.ersc_invade_observer,
         _ => false,
     }
 }
@@ -272,35 +262,28 @@ fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
         "search_by_location" => config.hunt = !config.hunt,
         "reject_notice" => config.reject_notice = !config.reject_notice,
         "map_pins" => config.map_pins = !config.map_pins,
-        "steam_hooks" => config.steam_hooks = !config.steam_hooks,
         "only_players_with_this_mod" => config.dll_users_only = !config.dll_users_only,
         "widen_to_anywhere" => {
             config.search_everywhere_when_exhausted = !config.search_everywhere_when_exhausted;
         }
-        "ersc_observers" => config.ersc_observers = !config.ersc_observers,
-        "ersc_show_observer" => config.ersc_show_observer = !config.ersc_show_observer,
-        "ersc_lobby_key_observer" => {
-            config.ersc_lobby_key_observer = !config.ersc_lobby_key_observer;
-        }
-        "ersc_invade_observer" => config.ersc_invade_observer = !config.ersc_invade_observer,
         _ => return false,
     }
     true
 }
 
-/// The next value in `mode`'s cycle.
-fn next_mode(mode: LocalInvasionMode) -> LocalInvasionMode {
-    match mode {
-        LocalInvasionMode::ExactOnly => LocalInvasionMode::PreferExactThenArea,
-        LocalInvasionMode::PreferExactThenArea => LocalInvasionMode::NamedOnly,
-        LocalInvasionMode::NamedOnly => LocalInvasionMode::ExactOnly,
-    }
-}
-
 /// Build the rows the panel shows, from the config in force right now.
 ///
-/// Every key appears. A key the panel cannot change appears read-only with the reason, because a
-/// settings screen that silently omits a setting is indistinguishable from one that lost it.
+/// Every key a player can act on appears, and a key the panel cannot change appears read-only
+/// with the reason -- a settings screen that silently omits a setting a player set is
+/// indistinguishable from one that lost it.
+///
+/// What it deliberately does not show, since 2026-09-15: the hook switches (`steam_hooks`,
+/// `map_pins`, the four `ersc_*`). Those install or withhold detours so a crash can be attributed
+/// to one hook, they are still read out of the file, and every one of them is a way to break the
+/// mod rather than to configure it -- `steam_hooks = false` silently takes `search_by_location`,
+/// `search_radius` and the pool filter with it. A player scrolling a settings panel has no way to
+/// know that, and the eight rows they had to scroll past to reach the three that matter were the
+/// reason the panel read as more complicated than the feature.
 fn build_view() -> SettingsView {
     let Some(config) = current_config() else {
         return SettingsView {
@@ -315,18 +298,6 @@ fn build_view() -> SettingsView {
     let key_name = er_invasion_warp_core::keybind::key_name;
     let mut rows = vec![
         toggle_row("enabled", config.enabled, None),
-        SettingRow {
-            key: "mode",
-            value: config.mode.as_str().to_owned(),
-            control: RowControl::Cycle,
-            // It cycles, it saves, and it changes nothing about who you meet. Its only consumer
-            // was `LocalInvasionConfig::judge`, which ran at `SetMultiplayJoinData` -- after the
-            // connection already existed -- and that filter was deleted for spending a real
-            // connection to learn what the query could have asked for. The field stays because
-            // the narrowing is moving into the query, where a mode will pick tiles instead of
-            // verdicts. Until then the row has to say so, or it reads as a live lever.
-            note: Some("inert in this build -- search_radius narrows the query instead"),
-        },
         toggle_row(
             "search_by_location",
             config.hunt,
@@ -361,52 +332,10 @@ fn build_view() -> SettingsView {
         ),
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
-        // The five rows below install or withhold detours. They are here so a crash can be
-        // attributed to one hook instead of to the mod, and not one of them is a preference
-        // anybody wants to express. Saying that on the row is cheaper than the alternative: a
-        // player switches `steam_hooks` off, loses the three features that live behind it, and
-        // reads a config line reporting everything healthy.
-        toggle_row(
-            "map_pins",
-            config.map_pins,
-            Some("diagnostic -- off isolates the world-map hooks; the pins are the feature"),
-        ),
-        toggle_row(
-            "steam_hooks",
-            config.steam_hooks,
-            Some("leave on -- it installs search_by_location, search_radius and the pool filter"),
-        ),
-        toggle_row(
-            "ersc_observers",
-            config.ersc_observers,
-            Some("leave off -- arming the pair killed the game at 24.9s, against 251s off"),
-        ),
-        toggle_row(
-            "ersc_show_observer",
-            config.ersc_show_observer,
-            Some("diagnostic -- names which half crashes; idle while ersc_observers is off"),
-        ),
-        toggle_row(
-            "ersc_lobby_key_observer",
-            config.ersc_lobby_key_observer,
-            Some("diagnostic -- names which half crashes; idle while ersc_observers is off"),
-        ),
-        toggle_row(
-            "ersc_invade_observer",
-            config.ersc_invade_observer,
-            Some("diagnostic -- it cancelled item-invasions, and this build cancels nothing"),
-        ),
     ];
-    rows.push(SettingRow {
-        key: "named_locations",
-        value: format!("{} name(s)", config.named_locations.len()),
-        control: RowControl::ReadOnly,
-        note: Some("not implemented: a typed place name has no known route to its FMG text id"),
-    });
-    // Two of these three still decide something -- `search_by_location` asks Steam for the one
-    // marked location and refuses to run while it is excluded -- and the third rides with `mode`
-    // into the deleted filter. A single shared note would have to be vague enough to cover both,
-    // so they get one each.
+    // Both of these decide something: `search_by_location` asks Steam for the one marked
+    // location, and refuses to run while that location is excluded. A third row sat here until
+    // 2026-09-15 -- `named_location_text_ids`, which only `mode` ever read.
     for (key, len, note) in [
         (
             "allowed_blocks",
@@ -417,11 +346,6 @@ fn build_view() -> SettingsView {
             "blocked_blocks",
             config.blocked_blocks.len(),
             "excluded with the unmark key -- an exclusion also stops search_by_location",
-        ),
-        (
-            "named_location_text_ids",
-            config.named_location_text_ids.len(),
-            "inert in this build -- only mode consulted these, and mode judges nothing",
         ),
     ] {
         rows.push(SettingRow {

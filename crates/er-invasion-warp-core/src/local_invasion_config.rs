@@ -32,7 +32,7 @@
 //! `[local_invasion]` section's body and it behaves identically. [`SECTION_NAME`] is exported for
 //! that purpose.
 
-use crate::local_invasion::{LocalInvasionConfig, LocalInvasionMode, PlaceNameTextId};
+use crate::local_invasion::LocalInvasionConfig;
 
 /// File name looked for next to the DLL.
 pub const CONFIG_FILE_NAME: &str = "er-invasion-warp.toml";
@@ -56,22 +56,6 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
-
-# INERT IN THIS BUILD. Set it to anything; nothing changes about who you meet.
-#
-# It judged a destination once the connection to the host already existed, and that filter was
-# deleted: a rejection Seamless honoured spent a real connection to end up nowhere, and one it
-# refused left you invading somewhere you had asked not to go. The narrowing moved to
-# search_radius, which asks Steam for the right places instead of declining the wrong answers.
-#
-# The key stays because a mode belongs in the query too -- picking which tiles to ask for rather
-# than which arrivals to refuse -- and that is the shape it will come back in. It is spelled out
-# here rather than deleted so the file never quietly loses a setting somebody had set.
-#
-#   "exact" -- only the exact location you are anchored to.
-#   "area"  -- that exact location, or anywhere sharing one of its place names.
-#   "named" -- ignore where you are; accept only the locations listed below.
-mode = "exact"
 
 # HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
 #
@@ -119,6 +103,13 @@ widen_to_anywhere = false
 # otherwise be wallpaper within a minute; silence means nothing has moved since the last notice.
 reject_notice = false
 
+# ----------------------------------------------------------------------------------------------
+# DIAGNOSTICS BELOW. These six install or withhold hooks so a crash can be attributed to one of
+# them. They are not preferences, they are not shown in the F4 panel, and every one of them is a
+# way to break the mod rather than to configure it. Leave them alone unless you are bisecting a
+# crash.
+# ----------------------------------------------------------------------------------------------
+
 # Draw invasion pins on the world map.
 #
 # On by default -- the pins are the feature. Turning it off withholds the WorldMapViewModel
@@ -160,6 +151,10 @@ ersc_lobby_key_observer = true
 # br-20260908-230004-d163 did 13 times in a row.
 ersc_invade_observer = true
 
+# ----------------------------------------------------------------------------------------------
+# Back to ordinary settings.
+# ----------------------------------------------------------------------------------------------
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -181,25 +176,12 @@ only_players_with_this_mod = false
 #
 # Both together works too: only DLL users, and only at the place you are standing.
 
-# NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
-# every load. Turning a typed place name into the FMG text id the game matches on has not been
-# reversed, so there is nothing to compare a string against.
-#
-# Use Shift+Insert instead: stand somewhere, press it, and every location sharing that place's name
-# is accepted from then on. That writes `named_location_text_ids` below, which IS consulted.
-#
-# Be careful with mode = "named": if this list is the only thing you filled in, no ids exist and
-# every match would be rejected -- were mode judging anything, which in this build it is not.
-named_locations = []
-
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
 # allows -- a marked place is always accepted, in every mode -- so you can leave mode = "exact"
 # and just collect places as you visit them.
 #
 #   mark_key         "invade here"      -> allowed_blocks   (and clears any exclusion)
 #   unmark_key       "not here"         -> blocked_blocks   (and clears any mark)
-#   Shift+mark_key   mark every place sharing this one's name -> named_location_text_ids
-#   Shift+unmark_key un-mark those
 #
 # The world map colours its invasion pins by these two lists, and by nothing else: chosen is the
 # brightest marker, excluded the dimmest, and anything in neither list keeps the middle one. That
@@ -230,19 +212,18 @@ unmark_key = "Delete"
 # actually playing in. The banner tells you which way it went.
 enable_toggle_key = "F3"
 
-# The in-game settings panel, by NAME, from the same list. It shows every key in this file and
-# writes each change straight back here -- this file stays the source of truth, and the panel
-# re-reads it, so an edit you make by hand while the panel is open still wins.
+# The in-game settings panel, by NAME, from the same list. It shows every key above that is a
+# setting rather than a diagnostic, and writes each change straight back here -- this file stays
+# the source of truth, and the panel re-reads it, so an edit you make by hand while the panel is
+# open still wins.
 #
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
 
-# Locations you excluded. An exclusion beats everything, including a mode that would accept it.
+# Locations you excluded. An exclusion is the strongest thing you can say about a place: it stops
+# the search from asking for that location even when it is the one you marked.
 blocked_blocks = []
-
-# Raw PlaceName text ids. Shift+Insert appends here; you can also add ids by hand.
-named_location_text_ids = []
 "#;
 
 /// A parse problem worth telling the user about.
@@ -445,24 +426,6 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("widen_to_anywhere must be true or false, got {value:?}"),
                 }),
             },
-            "mode" => match LocalInvasionMode::parse(&unquote(value)) {
-                Some(v) => config.mode = v,
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!(
-                        "mode must be \"exact\", \"area\" or \"named\", got {value:?} -- \
-                         keeping {:?}",
-                        config.mode
-                    ),
-                }),
-            },
-            "named_locations" => match parse_string_array(value) {
-                Some(v) => config.named_locations = v,
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!("named_locations must be an array of strings, got {value:?}"),
-                }),
-            },
             "mark_key" => {
                 config.mark_key =
                     key_setting("mark_key", value, fallback.mark_key, line_no, &mut issues);
@@ -494,15 +457,6 @@ pub fn parse_local_invasion_config_with_fallback(
                     &mut issues,
                 );
             }
-            "named_location_text_ids" => match parse_int_array(value) {
-                Some(v) => config.named_location_text_ids = v.into_iter().collect(),
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!(
-                        "named_location_text_ids must be an array of integers, got {value:?}"
-                    ),
-                }),
-            },
             "blocked_blocks" => match parse_block_array(value) {
                 Some(v) => config.blocked_blocks = v.into_iter().collect(),
                 None => issues.push(ConfigIssue {
@@ -563,46 +517,6 @@ fn array_body(value: &str) -> Option<&str> {
     value.trim().strip_prefix('[')?.strip_suffix(']')
 }
 
-fn parse_string_array(value: &str) -> Option<Vec<String>> {
-    let body = array_body(value)?;
-    if body.trim().is_empty() {
-        return Some(Vec::new());
-    }
-    let mut out = Vec::new();
-    for item in body.split(',') {
-        let item = item.trim();
-        if item.is_empty() {
-            continue;
-        }
-        // Require quotes: a bare word here is a typo, and accepting it would let `named_locations
-        // = [Haligtree]` look valid while matching a name nobody wrote.
-        let unquoted = item.strip_prefix('"')?.strip_suffix('"')?;
-        out.push(unquoted.to_owned());
-    }
-    Some(out)
-}
-
-fn parse_int_array(value: &str) -> Option<Vec<PlaceNameTextId>> {
-    let body = array_body(value)?;
-    if body.trim().is_empty() {
-        return Some(Vec::new());
-    }
-    let mut out = Vec::new();
-    for item in body.split(',') {
-        let item = item.trim();
-        if item.is_empty() {
-            continue;
-        }
-        out.push(item.parse::<PlaceNameTextId>().ok()?);
-    }
-    Some(out)
-}
-
-/// Block ids, accepted as `0x3c353800` or plain decimal.
-///
-/// Hex is the form every log line, every RE note and every telemetry document in this repo prints
-/// a block id in, so a user copying one out of the log must be able to paste it straight in. The
-/// writer below emits hex for the same reason.
 fn parse_block_array(value: &str) -> Option<Vec<u32>> {
     let body = array_body(value)?;
     if body.trim().is_empty() {
@@ -692,18 +606,6 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                     config.dll_users_only
                 ));
             }
-            "mode" => out.push_str(&format!("mode = \"{}\"\n", config.mode.as_str())),
-            "named_locations" => {
-                let names = config
-                    .named_locations
-                    .iter()
-                    // A quote inside a name would produce a file this parser cannot read back, so
-                    // drop it rather than write a config that breaks on the next reload.
-                    .map(|name| format!("\"{}\"", name.replace('"', "")))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push_str(&format!("named_locations = [{names}]\n"));
-            }
             "mark_key" => out.push_str(&format!(
                 "mark_key = \"{}\"\n",
                 crate::keybind::key_name(config.mark_key)
@@ -720,15 +622,6 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                 "settings_key = \"{}\"\n",
                 crate::keybind::key_name(config.settings_key)
             )),
-            "named_location_text_ids" => {
-                let ids = config
-                    .named_location_text_ids
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push_str(&format!("named_location_text_ids = [{ids}]\n"));
-            }
             "blocked_blocks" => {
                 let blocks = config
                     .blocked_blocks
@@ -898,6 +791,7 @@ impl HotConfig {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// The names before the 2026-09-15 rename are gone, and must stay gone.
     ///
@@ -993,9 +887,6 @@ only_players_with_this_mod = true\n";
         );
     }
 
-    use super::*;
-    use crate::local_invasion::{InvasionAnchor, InvasionCandidate, KeepReason, Verdict};
-
     /// Every file that tells a user where to put the config must name the file the DLL opens.
     ///
     /// # What it cost to get this wrong
@@ -1037,34 +928,6 @@ only_players_with_this_mod = true\n";
                  following it saves the file where nothing reads it"
             );
         }
-    }
-
-    #[test]
-    fn a_marked_config_round_trips_through_the_writer() {
-        // The mark keys rewrite the file; if the writer emitted anything the parser drops, a mark
-        // would vanish on the next reload while the key press looked like it worked.
-        let mut config = LocalInvasionConfig {
-            enabled: true,
-            mode: crate::local_invasion::LocalInvasionMode::PreferExactThenArea,
-            named_locations: vec!["Miquella's Haligtree".to_owned()],
-            ..Default::default()
-        };
-        config.mark_block(0x3c35_3800);
-        config.mark_block(0x0f00_0000);
-        config
-            .named_location_text_ids
-            .extend([1_400_100, 1_400_200]);
-        let rendered = render_local_invasion_config(&config);
-        let parsed = parse_local_invasion_config(&rendered);
-        assert_eq!(parsed.issues, Vec::new(), "our own output must parse clean");
-        assert_eq!(parsed.config, config);
-        // And the comments survive, so a user who pressed Insert still has the file that explains
-        // what the key did.
-        assert!(rendered.contains("Shift+Insert"), "{rendered}");
-        assert!(
-            rendered.contains("allowed_blocks = [0x0f000000, 0x3c353800]"),
-            "{rendered}"
-        );
     }
 
     #[test]
@@ -1204,9 +1067,11 @@ only_players_with_this_mod = true\n";
                 &name[..name.len().min(90)]
             );
         }
-        // The property is trivially true of zero sites, and this file has had four for months.
+        // The property is trivially true of zero sites, so the floor exists to catch the scan
+        // silently ceasing to match the code it constrains. It was four for months and is three
+        // since 2026-09-15, when the tests covering the deleted match-time filter went with it.
         assert!(
-            sites >= 4,
+            sites >= 3,
             "found only {sites} temp-path sites; the scan stopped matching the code it is \
              supposed to constrain, so a shared path would now pass unexamined"
         );
@@ -1309,36 +1174,6 @@ only_players_with_this_mod = true\n";
     }
 
     #[test]
-    fn the_shipped_default_file_parses_and_is_off() {
-        let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
-        assert_eq!(
-            parsed.issues,
-            Vec::new(),
-            "the file we generate must not warn about itself"
-        );
-        assert!(!parsed.config.enabled);
-        assert_eq!(parsed.config.mode, LocalInvasionMode::ExactOnly);
-    }
-
-    #[test]
-    fn parses_a_full_config() {
-        let parsed = parse_local_invasion_config(
-            r#"
-            [local_invasion]
-            enabled = true
-            mode = "area"
-            named_locations = ["Miquella's Haligtree", "Leyndell"]
-            named_location_text_ids = [1000, 2000]
-            "#,
-        );
-        assert_eq!(parsed.issues, Vec::new());
-        assert!(parsed.config.enabled);
-        assert_eq!(parsed.config.mode, LocalInvasionMode::PreferExactThenArea);
-        assert_eq!(parsed.config.named_locations.len(), 2);
-        assert!(parsed.config.named_location_text_ids.contains(&2000));
-    }
-
-    #[test]
     fn another_crates_section_in_a_shared_toml_is_skipped_not_warned_about() {
         let parsed = parse_local_invasion_config(
             r#"
@@ -1359,85 +1194,11 @@ only_players_with_this_mod = true\n";
     }
 
     #[test]
-    fn a_bad_value_is_reported_and_the_rest_still_applies() {
-        let parsed = parse_local_invasion_config(
-            r#"
-            enabled = true
-            mode = "somewhere-nice"
-            "#,
-        );
-        assert!(parsed.config.enabled, "the good key still took effect");
-        assert_eq!(parsed.config.mode, LocalInvasionMode::ExactOnly);
-        assert_eq!(parsed.issues.len(), 1);
-        assert!(parsed.issues[0].message.contains("mode must be"));
-    }
-
-    #[test]
     fn an_unknown_key_is_surfaced_rather_than_silently_dropped() {
         let parsed = parse_local_invasion_config("enabbled = true\n");
         assert!(!parsed.config.enabled);
         assert_eq!(parsed.issues.len(), 1);
         assert!(parsed.issues[0].message.contains("unknown key"));
-    }
-
-    #[test]
-    fn a_bare_word_in_named_locations_is_a_typo_not_a_name() {
-        let parsed = parse_local_invasion_config("named_locations = [Haligtree]\n");
-        assert_eq!(parsed.issues.len(), 1);
-        assert!(parsed.config.named_locations.is_empty());
-    }
-
-    #[test]
-    fn a_hash_inside_a_quoted_name_is_not_a_comment() {
-        let parsed = parse_local_invasion_config(r#"named_locations = ["Grace #2"]"#);
-        assert_eq!(parsed.issues, Vec::new());
-        assert_eq!(parsed.config.named_locations, vec!["Grace #2".to_owned()]);
-    }
-
-    #[test]
-    fn hot_reload_picks_up_an_edit_and_a_deletion() {
-        let dir = std::env::temp_dir().join(format!("er-invasion-warp-cfg-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("er-invasion-warp.toml");
-        std::fs::write(&path, "enabled = false\nmode = \"exact\"\n").unwrap();
-
-        let mut hot = HotConfig::with_poll_interval_ms(0);
-        let first = hot
-            .reload_if_changed(&path)
-            .expect("first look always loads");
-        assert!(!first.config.enabled);
-        assert!(
-            hot.reload_if_changed(&path).is_none(),
-            "an unchanged file must not report a reload"
-        );
-
-        // Edit it the way a user would, mid-session. No mtime games: the watcher compares the
-        // file's text, so an edit inside one mtime tick is seen like any other.
-        std::fs::write(&path, "enabled = true\nmode = \"area\"\n").unwrap();
-        let second = hot
-            .reload_if_changed(&path)
-            .expect("an edited file must be picked up");
-        assert!(second.config.enabled);
-        assert_eq!(second.config.mode, LocalInvasionMode::PreferExactThenArea);
-        assert!(hot.current().enabled);
-
-        // Deleting the file must switch the filter off, not leave the last config latched.
-        std::fs::remove_file(&path).unwrap();
-        let third = hot
-            .reload_if_changed(&path)
-            .expect("a deleted file is a change");
-        assert!(third.reverted_to_defaults);
-        assert!(
-            !hot.current().enabled,
-            "losing the config must stop cancelling matches, not keep filtering blind"
-        );
-        let anchor = InvasionAnchor::new(0x0f00_0000, [100]);
-        assert_eq!(
-            hot.current()
-                .judge(&anchor, &InvasionCandidate::named(0x3c35_3800, 999)),
-            Verdict::Keep(KeepReason::FilterDisabled)
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Two edits inside one mtime tick, both of which must land.
