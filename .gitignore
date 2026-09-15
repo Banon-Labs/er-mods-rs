@@ -99,3 +99,10 @@ vendor-archive/
 # join every stage back into one verdict. A local run of the same command leaves the directory
 # behind; it is a run artifact, not a source file.
 stage-results/
+
+# Cheat Engine tables are third-party reverse-engineering references, never repo content.
+# `third_party/better connections all good3.CT` (by UnitCrew) is 8.5 MB of another author's
+# work and carries their embedded scripts and structure definitions; it is read here and
+# never redistributed, the same category as the de-Arxan'd images and the Seamless archive.
+third_party/*.CT
+third_party/*.ct
