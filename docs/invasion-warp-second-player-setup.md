@@ -8,7 +8,7 @@ Two roles. They need different things, and the host's side is the easy one.
 
 The DLL publishes your current map onto your Steam lobby every tick, and that path reads no
 config at all -- it is not gated on `enabled`, not gated on `hunt`, and it does not need the
-`er-invasion-warp-core.toml` file to exist. A config file will appear next to the DLL on first run;
+`er-invasion-warp.toml` file to exist. A config file will appear next to the DLL on first run;
 you can ignore it.
 
 If your loader is me3, add the DLL as a native alongside Seamless:
@@ -76,7 +76,7 @@ line says which check failed and why -- no guessing required.
 ## If you are the INVADER -- invading someone at the place you are standing
 
 This is the path that is **proven working against real hosts** (2026-08-06). Edit
-`er-invasion-warp-core.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
+`er-invasion-warp.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
 
 ```toml
 [local_invasion]
