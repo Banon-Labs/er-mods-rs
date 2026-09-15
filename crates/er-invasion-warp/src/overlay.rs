@@ -74,8 +74,12 @@ pub(crate) enum RowControl {
 pub(crate) enum SettingEdit {
     /// Flip the boolean named by this key.
     Toggle(&'static str),
-    /// Advance `mode` to the next value.
-    CycleMode,
+    /// Advance the row this key names to its next value.
+    ///
+    /// Keyed rather than one variant per setting: `mode` was the only cycling row when this was
+    /// written, and hard-coding it meant the next one -- `prefilter_radius`, which steps 0..3 --
+    /// could not be added to the panel at all without touching the renderer.
+    Cycle(&'static str),
 }
 
 /// The rows the game task most recently published. Replaced whole, never edited in place.
@@ -223,7 +227,7 @@ fn draw(ui: &Ui) {
                     }
                     RowControl::Cycle => {
                         if ui.button(&label) {
-                            record(SettingEdit::CycleMode);
+                            record(SettingEdit::Cycle(row.key));
                         }
                     }
                     RowControl::ReadOnly => ui.text_disabled(&label),
@@ -240,6 +244,15 @@ fn draw(ui: &Ui) {
                 hudhook::imgui::WindowHoveredFlags::ROOT_AND_CHILD_WINDOWS,
             );
         });
+
+    // `want_capture_mouse` is the question actually being asked -- "is imgui using the mouse right
+    // now" -- and it is the flag imgui maintains for precisely this decision. The hover test above
+    // answers a narrower one and goes false the moment an item inside the window becomes active,
+    // which is exactly when a click is happening. Measured 2026-09-15: the panel drew 1652 frames
+    // and counted zero clicks while its own buttons were firing, so every press both worked the
+    // row and swung the sword. Keeping the hover as well costs nothing and covers the frame after
+    // a release, when capture has already been handed back.
+    let pointer_owned = pointer_owned || ui.io().want_capture_mouse;
 
     // The click still reaches imgui -- hudhook feeds that from the window procedure. This keeps
     // the swing it would otherwise also trigger out of the game, and needs no host status.

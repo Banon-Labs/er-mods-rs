@@ -84,6 +84,25 @@ mode = "exact"
 # locations cannot be expressed and hunt will say so and stay out of the way.
 hunt = false
 
+# Widen the query outward from where you are standing, one ring of map tiles at a time.
+#
+# 0 asks Steam for your exact tile only. 1 adds the eight tiles around it, 2 the ring beyond
+# that, and 3 is the cap the ring builder enforces. Each query round asks for the next tile in
+# turn, so the search moves instead of re-asking for a place nobody is in.
+#
+# This does nothing on its own. The widening runs inside the lobby-query detour that
+# `steam_hooks` installs, and the tile it starts from is the one `hunt` picks -- with either of
+# those off a radius is read, echoed back on the config line, and never acted on. The DLL says
+# so in its log rather than leaving you to work it out.
+prefilter_radius = 0
+
+# When the rings are spent, drop the filter and ask for everywhere.
+#
+# Off, the search keeps asking for the last tile rather than quietly reverting to an unfiltered
+# query -- widening to a population you did not ask for is the thing hunt exists to avoid. On,
+# it is the last rung of the ladder: everywhere, once nearby has been exhausted.
+search_everywhere_when_exhausted = false
+
 # Announce what the search is doing on the game's own message banner.
 #
 # The name is older than what it does. This build does not reject a connected invasion for being
@@ -925,6 +944,50 @@ impl HotConfig {
 
 #[cfg(test)]
 mod tests {
+
+    /// Every key the writer can emit must exist in the shipped template.
+    ///
+    /// The writer walks `DEFAULT_CONFIG_TOML` line by line and emits a value for each key it
+    /// recognises. A key with a `match` arm but no template line is therefore never visited: the
+    /// arm is dead, the value is dropped on every save, and the config round-trips back to its
+    /// default. Nothing errors -- `save` reports that the file "did not read back as what was
+    /// written" and the setting simply refuses to move.
+    ///
+    /// That is exactly what `prefilter_radius` did on 2026-09-15. Clicking it in the settings
+    /// panel logged a successful write six times in a row while the value stayed at 0, because
+    /// the arm had been added and the template line had not.
+    #[test]
+    fn every_writable_key_has_a_line_in_the_shipped_template() {
+        let source = include_str!("local_invasion_config.rs");
+        // The arms of the writer's dispatch, read out of this file rather than listed by hand --
+        // a hand-kept list is the same failure one level up.
+        let writer = source
+            .split_once("for line in DEFAULT_CONFIG_TOML.lines()")
+            .expect("the writer's loop should still be here")
+            .1;
+        let writer = writer.split_once("\n}").map_or(writer, |(body, _)| body);
+        let mut missing = Vec::new();
+        for chunk in writer.split("\n            \"").skip(1) {
+            let Some((key, _)) = chunk.split_once('"') else {
+                continue;
+            };
+            if key.is_empty() || key.contains(' ') {
+                continue;
+            }
+            let has_line = DEFAULT_CONFIG_TOML
+                .lines()
+                .any(|line| line.split_once('=').is_some_and(|(k, _)| k.trim() == key));
+            if !has_line {
+                missing.push(key.to_owned());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these keys can be written but have no line in the shipped template, so every save \
+             drops them and the setting cannot be changed: {missing:?}"
+        );
+    }
+
     use super::*;
     use crate::local_invasion::{InvasionAnchor, InvasionCandidate, KeepReason, Verdict};
 
