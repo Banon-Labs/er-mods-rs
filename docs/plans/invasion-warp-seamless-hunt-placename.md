@@ -406,10 +406,32 @@ so it was the obvious candidate for a map-free name source. Two facts came out o
   regions that *replace* a place name, the exceptions. A tile with no override has no entry, so
   this manager alone cannot name an arbitrary neighbour.
 
-That leaves the base position-to-name source still unidentified. The next read is the param side
-rather than another manager: whatever `WorldMapPiece`/`WorldMapPlaceName` param the region managers
-override, since the on-screen area name appears on a save where the map has never been opened and
-must therefore come from somewhere resident at world load.
+### The base source, found on the param side (2026-09-15)
+
+The manager overrides a param, and that param is `WorldMapPlaceNameParam`. Reading the param-name
+table out of `eldenring-deobf.bin` -- a flat array of `{name pointer, table index}` pairs at
+`0x143b3c000` -- puts three map params next to each other on 1.16.2:
+
+| param | name string | table index |
+|---|---|---|
+| `WorldMapPointParam` | `0x142bb3400` | `0x57` |
+| `WorldMapPieceParam` | `0x142bb3428` | `0x58` |
+| `WorldMapPlaceNameParam` | `0x142bb3480` | `0x5a` |
+
+That index is the same currency this repo already spends: `map_seams.rs:181` reaches
+`BonfireWarpParamLookup` at table index `0x2B`, so the machinery for getting at a param by index is
+written and working.
+
+This supersedes the grace-position approach entirely. A param is resident from load, carries no
+dependency on the map view model, and `WorldMapPlaceNameParam` is by construction the mapping from
+a piece of the map to the name shown on it -- which is the table the banner wants, without a single
+pin row.
+
+**What is established, and what is not.** Established: the param exists, its name string, and its
+table index on 1.16.2. Not established: the row layout -- which fields carry the area/grid
+coordinates and which carries the `PlaceName` text id -- and the index on 1.17.1, which is the build
+actually installed. Both are static reads and neither has been done; no code should be written
+against a guessed layout.
 
 `nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
 resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
