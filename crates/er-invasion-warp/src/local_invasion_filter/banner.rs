@@ -114,6 +114,10 @@ pub(super) fn announce_success(_enabled: bool, _destination: u32) {}
 pub(crate) fn announce_prefilter_step(_enabled: bool, _block: u32, _ordinal: usize, _total: usize) {
 }
 
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize) {}
+
 /// Put a successful invasion on the same banner the rejections use.
 ///
 /// Shares [`RejectNotice`] with [`announce_rejection`] on purpose: one banner, one memory of what
@@ -178,6 +182,41 @@ pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize,
         }
         crate::standalone_log(format_args!(
             "local-invasion: could not show the search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still widening; \
+             only the on-screen notice is missing."
+        ));
+    }
+}
+
+/// Say that the search has run out of nearby places and dropped the location filter.
+///
+/// The rung this announces was previously invisible: `advance_ring` logged one line to the file
+/// and returned, so the escalation happened silently and then happened again on every query round
+/// for as long as the search ran. A player watching the screen saw a search that never changed.
+///
+/// Shares [`RejectNotice`] with every other banner here, which is what suppresses the repeat --
+/// the everywhere rung is re-derived per round, so without the shared latch this would repaint
+/// roughly every fifteen seconds.
+#[cfg(windows)]
+pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_search_everywhere(enabled, nearby)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the lobby-query detour -- the same auto-closing announcement
+    // surface every other banner here uses.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the widened-search banner (\"{text}\") -- the message \
              functions did not verify, or the menu is not up yet. The search is still widening; \
              only the on-screen notice is missing."
         ));

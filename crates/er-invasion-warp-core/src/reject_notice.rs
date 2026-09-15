@@ -119,6 +119,15 @@ enum Announced {
     /// already tried still counts as news: the number is what tells the player the search is
     /// moving, and suppressing a repeat would make a stalled rotation look like a working one.
     Searching(usize),
+    /// The ring is spent and the search has dropped the location filter.
+    ///
+    /// Payload-free, unlike [`Self::Searching`], because this rung does not move: every round
+    /// after it asks the same unfiltered question. Announcing it once is the whole point -- the
+    /// log repeated the same sentence on every query round and the banner said nothing at all,
+    /// so from the player's seat a search that had already widened looked identical to one still
+    /// grinding through nearby tiles. Reported 2026-09-15 as "I have not observed it going from
+    /// searching nearby to searching everywhere"; it had been searching everywhere for minutes.
+    SearchingEverywhere,
 }
 
 /// Tracks what was last announced so repeats can be suppressed.
@@ -171,6 +180,31 @@ impl RejectNotice {
                 "No invasion where you are -- searching {} of {nearby} nearby locations",
                 ordinal - 1
             ),
+        })
+    }
+
+    /// Announce that the widening search has run out of nearby places and dropped the filter.
+    ///
+    /// Returns `None` on a repeat, which is the common case by a wide margin: the everywhere rung
+    /// is re-derived on every query round, so this is asked roughly every fifteen seconds for as
+    /// long as the search runs.
+    ///
+    /// `nearby` is how many places were tried before giving up, and it is worth carrying because
+    /// the two cases read completely differently to a player. Forty-eight tried and empty is a
+    /// quiet neighbourhood; one tried is a legacy dungeon, where a block id encodes a dungeon and
+    /// a floor rather than a grid position, so there are no neighbours to ask about and the radius
+    /// the player set could never have applied.
+    pub fn observe_search_everywhere(&mut self, enabled: bool, nearby: usize) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
+        self.last_announced = Some(Announced::SearchingEverywhere);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        Some(match nearby {
+            0 => "No nearby locations to search here -- looking everywhere instead".to_string(),
+            1 => "No invasion where you are -- looking everywhere instead".to_string(),
+            n => format!("No invasion in {n} nearby locations -- looking everywhere instead"),
         })
     }
 
@@ -908,5 +942,55 @@ mod tests {
             notice.observe_arrival(true, LIMGRAVE, None, None).is_none(),
             "turning the notice on must not replay an arrival from minutes ago"
         );
+    }
+    /// The rung that was invisible. Announced once, then suppressed -- it is re-derived on every
+    /// query round, and repainting the banner every fifteen seconds is what the shared latch
+    /// exists to prevent.
+    #[test]
+    fn widening_to_everywhere_is_announced_once_and_then_suppressed() {
+        let mut notice = RejectNotice::new();
+        assert_eq!(
+            notice.observe_search_everywhere(true, 48).as_deref(),
+            Some("No invasion in 48 nearby locations -- looking everywhere instead")
+        );
+        assert_eq!(notice.observe_search_everywhere(true, 48), None);
+        assert_eq!(notice.observe_search_everywhere(true, 48), None);
+    }
+
+    /// A ring of one is a legacy dungeon, where the radius could never have applied. Saying
+    /// "no invasion in 0 nearby locations" there would be arithmetic rather than English.
+    #[test]
+    fn a_ring_with_no_neighbours_says_so_instead_of_counting_zero() {
+        let mut notice = RejectNotice::new();
+        let text = notice
+            .observe_search_everywhere(true, 0)
+            .expect("the first escalation is news");
+        assert!(
+            text.contains("No nearby locations to search here"),
+            "{text}"
+        );
+        assert!(!text.contains('0'), "{text}");
+    }
+
+    /// A step between two exhaustions makes the second one news again, the same way two failed
+    /// connections in a row are two pieces of news rather than one repeated.
+    #[test]
+    fn a_step_between_two_exhaustions_unsuppresses_the_second() {
+        let mut notice = RejectNotice::new();
+        assert!(notice.observe_search_everywhere(true, 8).is_some());
+        assert!(
+            notice
+                .observe_prefilter_step(true, 2, 9, Some("Limgrave"))
+                .is_some()
+        );
+        assert!(notice.observe_search_everywhere(true, 8).is_some());
+    }
+
+    /// Gated on the same option as every other banner: somebody who turned notices off does not
+    /// start getting them because their search widened.
+    #[test]
+    fn the_widened_search_banner_respects_the_notice_switch() {
+        let mut notice = RejectNotice::new();
+        assert_eq!(notice.observe_search_everywhere(false, 48), None);
     }
 }
