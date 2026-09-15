@@ -166,6 +166,14 @@ fn apply_pending_edits() {
                 if toggle_bool(&mut config, key) {
                     applied += 1;
                     changed.push(format!("{key}={}", read_bool(&config, key)));
+                    // The panel's `enabled` row is the same switch as the toggle key, so it owes
+                    // the player the same promise: off means no further searches start, not just
+                    // that the next match is judged differently.
+                    if *key == "enabled" && !config.enabled {
+                        crate::local_invasion_filter::stand_down_hunt(
+                            "you switched the filter off in the settings panel",
+                        );
+                    }
                 } else {
                     crate::standalone_log(format_args!(
                         "settings-panel: no boolean named `{key}` -- the panel and the config \

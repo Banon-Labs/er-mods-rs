@@ -465,6 +465,39 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
     }
 }
 
+/// Stand the auto re-search loop down because the player asked, not because the engine did.
+///
+/// # Why this had to exist
+///
+/// Every cancel path in this filter re-arms the hunt -- deliberately, because cancelling a match
+/// it rejected is the hunt (`actions.rs:368`). The loop was only ever stood down by three things:
+/// a `Keep` verdict, an invasion actually landing, and the player opening Seamless's own menu.
+/// The third is the only player-driven one, and it is observed by `install_show_observer`, which
+/// runs under `config.ersc_observers && config.ersc_show_observer` -- and `ersc_observers` has
+/// shipped `false` since the `0x140010043` crash was traced to those detours. So in the
+/// configuration everyone actually runs, a player could not stop the loop at all: they cancelled,
+/// and it started another search, which is the whole of "it did not give up when I asked".
+///
+/// This is the detour-free replacement. It touches no `ersc.dll` seam and works in the default
+/// configuration, because it is driven by our own switch rather than by observing Seamless.
+#[cfg(windows)]
+pub(crate) fn stand_down_hunt(reason: &str) {
+    let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
+    PENDING_REINVADE.store(false, Ordering::SeqCst);
+    if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
+        backoff.stand_down();
+    }
+    // Only when there was something to stop. A line every time the switch is flipped would say
+    // "stood down" for a loop that was never running, which is the kind of log that teaches a
+    // reader to stop believing it.
+    if was_armed {
+        crate::standalone_log(format_args!(
+            "local-invasion: auto re-search stood down -- {reason}. Nothing here will start \
+             another search until you ask for one."
+        ));
+    }
+}
+
 /// The config currently in force, re-reading the file first.
 pub(crate) fn current_config() -> Option<LocalInvasionConfig> {
     refresh_config();
@@ -2079,6 +2112,16 @@ fn drive_pending_cancel() {
     ));
 }
 
+/// The state a driven cancel settles through on its way back to idle.
+///
+/// The supported build's `Abi` does not name it, so nothing pins it: it is v1.9.9's `0x23` carried
+/// across the uniform `+1` renumber, and the static store scan supports that reading -- v1.9.9
+/// writes `0x23` at one site and the supported build writes `0x24` at one site, the same one-site
+/// shape as the `0x22`/`0x23` pair that moved with it. Mirrors
+/// [`crate::stall_watchdog::state::CANCEL_SETTLING`], which carries the full derivation.
+#[cfg(windows)]
+const CANCEL_SETTLING_STATE: u32 = crate::stall_watchdog::state::CANCEL_SETTLING;
+
 /// Publish whether an invasion attempt is in flight, for the warp gate and the map's icon choice.
 ///
 /// # Why "not idle" and not "== SEARCHING"
@@ -2104,9 +2147,18 @@ fn publish_invasion_attempt_state(session: SeamlessSession) {
     // unknown, it is uninitialised, and treating it as an invasion in progress locks the warp gate
     // shut forever. That is exactly what a player hit on 2026-09-04: every map marker refused with
     // "an invasion attempt is in flight", from a session whose state never left 0x00.
-    let in_flight = read_session_state(session.abi, session.session)
-        .is_some_and(|state| state != 0 && state != session.abi.state_idle);
-    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(in_flight);
+    let state = read_session_state(session.abi, session.session);
+    let binding = state.is_some_and(|state| state != 0 && state != session.abi.state_idle);
+    // The cancel unwind is the one window where the two answers differ. Once the session enters
+    // `state_cancelling` the player has already asked for this to stop, and Seamless then spends
+    // its own `joinCheck` countdown -- 30.0 s, an f32 inside a virtualised module we cannot reach
+    // -- walking back out. Reporting an attempt in flight for those 30 s is the complaint; still
+    // refusing the warp for them is the safety that bd `er-effects-rs-uob3` records, because ersc
+    // is unwinding a join and the player must not be moved through it.
+    let cancelling = state.is_some_and(|state| {
+        state == session.abi.state_cancelling || state == CANCEL_SETTLING_STATE
+    });
+    er_invasion_warp_core::warp::set_invasion_attempt_state(binding && !cancelling, binding);
 }
 
 /// The gate the popup skip uses: the state of the session reached from the option-menu object

@@ -1819,3 +1819,42 @@ fn discovery_refuses_a_busy_candidate_while_nothing_is_happening() {
         "discovery has to refuse a candidate that is busy while no join is in flight:\n{body}"
     );
 }
+
+/// The player-driven stand-down, asserted from the source because the flags it clears are
+/// process-global statics a host test cannot observe.
+///
+/// Both switches that mean "stop" must reach `stand_down_hunt`. Before this, only three things
+/// disarmed the loop and all three were the engine's doing -- a `Keep` verdict, an invasion
+/// landing, and the show observer, which is gated behind `ersc_observers` and has shipped off
+/// since the `0x140010043` crash. A player who cancelled got another search.
+#[test]
+fn both_off_switches_stand_the_hunt_down() {
+    let hotkeys = include_str!("hotkeys.rs");
+    assert!(
+        hotkeys.contains("stand_down_hunt("),
+        "the enable toggle key must stand the auto re-search down, or switching the filter off \
+         leaves it starting searches the switch says it stopped"
+    );
+    let panel = include_str!("../settings_panel.rs");
+    assert!(
+        panel.contains("stand_down_hunt("),
+        "the panel's `enabled` row is the same switch as the toggle key and owes the same promise"
+    );
+    let filter = include_str!("../local_invasion_filter.rs");
+    let body = filter
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this file")
+        .1;
+    let body = body.split_once("\n}").expect("it ends").0;
+    for cleared in [
+        "AUTO_SEARCH_ARMED.swap(false",
+        "PENDING_REINVADE.store(false",
+        "backoff.stand_down()",
+    ] {
+        assert!(
+            body.contains(cleared),
+            "standing down must clear `{cleared}` -- leaving any one of them set restarts the \
+             search the player just stopped"
+        );
+    }
+}
