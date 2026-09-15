@@ -32,6 +32,7 @@
 
 pub mod announce;
 pub mod drive;
+pub mod host_effects;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
 pub mod lynchpin_use;
