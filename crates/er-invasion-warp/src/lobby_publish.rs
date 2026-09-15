@@ -702,11 +702,27 @@ mod live {
     /// Every failure path is a silent no-op on purpose. Not being findable by location is a missing
     /// convenience; a DLL that panics or spams because Steam was not ready would be a broken game.
     pub fn publish_current_map() {
-        let Some(value) = pending_publish(current_block(), last_published().as_deref()) else {
-            // Nothing to say: either the block is unreadable, or it is what was published last.
-            // Silent on purpose and every tick, so it cannot be logged here -- the counters and
-            // the two lines below are what tell the difference from outside.
+        // Both keys are decided before the early return, because they change at different moments
+        // and the map is the one that moves least. This used to read only the map value and
+        // return when it was unchanged, which put every lobby check -- and the effects write
+        // behind them -- behind a loading screen: a host who used Taunter's Tongue standing still
+        // kept advertising `none` until they walked into another block. That is the whole window
+        // the feature exists to cover, and the doc on `publish_host_effects` claimed it was
+        // covered while this return swallowed it.
+        let pending_map = pending_publish(current_block(), last_published().as_deref());
+        let effects_value = pending_effects();
+        if pending_map.is_none() && effects_value.is_none() {
+            // Nothing to say: the block is unreadable or unchanged, and the effects are what was
+            // published last. Silent on purpose and every tick, so it cannot be logged here --
+            // the counters and the lines below are what tell the difference from outside.
             return;
+        }
+        // For the "no advertisement" line below, which needs something to name. The map value is
+        // the more useful of the two there: it says where the host nobody can see is standing.
+        let value = match (pending_map.clone(), current_block()) {
+            (Some(pending), _) => pending,
+            (None, Some(block)) => map_value(block),
+            (None, None) => "an unreadable block".to_owned(),
         };
         let Some(iface) = matchmaking() else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
@@ -764,15 +780,32 @@ mod live {
             }
             return;
         }
-        if !write_one_key(iface, lobby, LOBBY_MAP_KEY, &value) {
-            return;
+        // Two independent writes past one set of lobby checks. They share the checks because
+        // every one of those is a fact about the lobby rather than about a value, and a second
+        // copy would be a second place for them to drift; they do not share a skip, because a map
+        // that has not moved says nothing about whether an item was just used.
+        if let Some(value) = pending_map
+            && write_one_key(iface, lobby, LOBBY_MAP_KEY, &value)
+        {
+            *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
         }
-        *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
-        // The effects key rides the same ownership and advertisement checks, which is the reason
-        // it is published from here rather than from a tick of its own: every one of those checks
-        // is a fact about the lobby, not about the value, and duplicating them would be a second
-        // place for them to drift.
-        publish_host_effects(iface, lobby);
+        if let Some(value) = effects_value
+            && write_one_key(iface, lobby, LOBBY_HOST_EFFECTS_KEY, &value)
+        {
+            *LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+        }
+    }
+
+    /// The effects value to publish, or `None` when it is what the lobby already carries.
+    ///
+    /// Asked every tick, which is one `HasSpecialEffectId` call per table entry -- next to the
+    /// block read this function already does, that is not worth a cheaper schedule. Nothing else
+    /// can detect the change: the effect toggles the instant the item is used, with no loading
+    /// screen and no other event to hang a publish on.
+    fn pending_effects() -> Option<String> {
+        let value = crate::host_effects::active_effects_value();
+        let last = LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner());
+        (last.as_deref() != Some(value.as_str())).then_some(value)
     }
 
     /// Write one key, read it back, and count the result. `true` when the lobby now holds `value`.
@@ -815,23 +848,6 @@ mod live {
                 ));
                 false
             }
-        }
-    }
-
-    /// Publish which multiplayer effects are active on this host, when the answer has changed.
-    ///
-    /// Only on a change, which is not an optimisation here so much as the difference between a
-    /// key and a heartbeat: the map value moves when the host walks through a loading screen, and
-    /// this one moves when they use an item, so a host standing still with the tongue up would
-    /// otherwise spend a Steam write every tick saying nothing new.
-    fn publish_host_effects(iface: usize, lobby: u64) {
-        let value = crate::host_effects::active_effects_value();
-        let mut last = LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner());
-        if last.as_deref() == Some(value.as_str()) {
-            return;
-        }
-        if write_one_key(iface, lobby, LOBBY_HOST_EFFECTS_KEY, &value) {
-            *last = Some(value);
         }
     }
 
