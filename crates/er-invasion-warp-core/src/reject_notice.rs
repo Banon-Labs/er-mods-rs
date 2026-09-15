@@ -113,6 +113,12 @@ enum Announced {
     /// would make the second one a repeat of the first and swallow it, which is the opposite of
     /// what a player retrying a failing hunt needs to see.
     Failed(u32),
+    /// Which step of the widening search is being asked for, by ordinal.
+    ///
+    /// Keyed by ordinal rather than by tile so a ring that comes back round to a tile it has
+    /// already tried still counts as news: the number is what tells the player the search is
+    /// moving, and suppressing a repeat would make a stalled rotation look like a working one.
+    Searching(usize),
 }
 
 /// Tracks what was last announced so repeats can be suppressed.
@@ -125,6 +131,49 @@ pub struct RejectNotice {
 }
 
 impl RejectNotice {
+    /// Announce which place the widening search is asking for, and how far through it is.
+    ///
+    /// `place` is the name when one is known and `None` when it is not. A tile id is deliberately
+    /// not used as a substitute: `m60_51_36_00` tells a player nothing, and a banner that shows it
+    /// is worse than one that just counts. The count alone is still useful -- it is what separates
+    /// "nobody is nearby" from "we have three tiles left to ask about".
+    ///
+    /// Returns `None` when this exact step was the last thing announced, so a query loop that
+    /// re-asks for the same tile does not repaint the banner every frame.
+    pub fn observe_prefilter_step(
+        &mut self,
+        enabled: bool,
+        ordinal: usize,
+        total: usize,
+        place: Option<&str>,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::Searching(ordinal));
+        self.last_announced = Some(Announced::Searching(ordinal));
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // The first step is the player's own tile, and saying "1 of 9 nearby" about where they are
+        // standing reads as a failure before anything has failed.
+        if ordinal == 1 {
+            return Some(match place {
+                Some(name) => format!("Searching for an invasion in {name}"),
+                None => "Searching for an invasion where you are".to_string(),
+            });
+        }
+        let nearby = total.saturating_sub(1);
+        Some(match place {
+            Some(name) => format!(
+                "No invasion where you are -- searching {} of {nearby} nearby locations ({name})",
+                ordinal - 1
+            ),
+            None => format!(
+                "No invasion where you are -- searching {} of {nearby} nearby locations",
+                ordinal - 1
+            ),
+        })
+    }
+
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -306,6 +355,78 @@ impl RejectNotice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first step is where the player is standing, and must not read as a failure.
+    #[test]
+    fn the_first_step_does_not_announce_a_failure_before_anything_failed() {
+        let mut notice = RejectNotice::default();
+        let said = notice
+            .observe_prefilter_step(true, 1, 9, Some("Liurnia Lake Shore"))
+            .expect("the first step is news");
+        assert!(said.contains("Liurnia Lake Shore"));
+        assert!(
+            !said.contains("No invasion"),
+            "step one is the search starting, not a place that came back empty: {said}"
+        );
+    }
+
+    /// From the second step on, the count is what resolves the ambiguity.
+    #[test]
+    fn a_later_step_counts_the_nearby_locations_excluding_the_centre() {
+        let mut notice = RejectNotice::default();
+        notice.observe_prefilter_step(true, 1, 9, None);
+        let said = notice
+            .observe_prefilter_step(true, 4, 9, Some("Stormhill"))
+            .expect("a new ordinal is news");
+        assert!(
+            said.contains("3 of 8"),
+            "the centre is not a nearby location: {said}"
+        );
+        assert!(said.contains("Stormhill"));
+    }
+
+    /// A tile id is never shown in place of a name.
+    ///
+    /// `m60_51_36_00` tells a player nothing, so the banner counts instead. The count alone still
+    /// separates "nobody is nearby" from "three tiles left to ask about", which is the whole
+    /// reason the rotation announces itself.
+    #[test]
+    fn a_missing_name_leaves_the_count_rather_than_showing_a_tile_id() {
+        let mut notice = RejectNotice::default();
+        notice.observe_prefilter_step(true, 1, 9, None);
+        let said = notice
+            .observe_prefilter_step(true, 2, 9, None)
+            .expect("a new ordinal is news");
+        assert!(said.contains("1 of 8"));
+        assert!(
+            !said.contains("m60"),
+            "no tile id may reach a player: {said}"
+        );
+    }
+
+    /// Re-asking for the same step does not repaint the banner every frame.
+    #[test]
+    fn the_same_step_twice_is_announced_once() {
+        let mut notice = RejectNotice::default();
+        assert!(notice.observe_prefilter_step(true, 2, 9, None).is_some());
+        assert!(notice.observe_prefilter_step(true, 2, 9, None).is_none());
+        assert!(
+            notice.observe_prefilter_step(true, 3, 9, None).is_some(),
+            "moving on is news again"
+        );
+    }
+
+    /// With the notice switched off the search still advances, silently.
+    #[test]
+    fn a_disabled_notice_announces_nothing_but_still_tracks_the_step() {
+        let mut notice = RejectNotice::default();
+        assert_eq!(notice.observe_prefilter_step(false, 2, 9, None), None);
+        assert_eq!(
+            notice.observe_prefilter_step(true, 2, 9, None),
+            None,
+            "the step was still recorded, so re-announcing it would be a repeat"
+        );
+    }
 
     const LIMGRAVE: u32 = 0x3c2a_2400; // m60_42_36_00
 

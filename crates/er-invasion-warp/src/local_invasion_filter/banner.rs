@@ -117,6 +117,11 @@ pub(super) fn announce_failure(enabled: bool, attempt: u32) {
 #[cfg(not(windows))]
 pub(super) fn announce_success(_enabled: bool, _destination: u32) {}
 
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_prefilter_step(_enabled: bool, _block: u32, _ordinal: usize, _total: usize) {
+}
+
 /// Put a successful invasion on the same banner the rejections use.
 ///
 /// Shares [`RejectNotice`] with [`announce_rejection`] on purpose: one banner, one memory of what
@@ -145,6 +150,43 @@ pub(super) fn announce_success(enabled: bool, destination: u32) {
         crate::standalone_log(format_args!(
             "local-invasion: could not show the success banner (\"{text}\") -- the message \
              functions did not verify, or the menu is not up yet. The invasion still happened; \
+             only the on-screen notice is missing."
+        ));
+    }
+}
+
+/// Say which place the widening search is asking for, on the same banner as everything else.
+///
+/// Shares [`RejectNotice`] with the rejection and success paths, so the banner keeps one memory of
+/// what it last said: a step announced here clears the latch, and a rejection that follows is
+/// spoken rather than swallowed as a repeat of something from before the search moved.
+///
+/// The name comes from [`crate::place_name::place_name_for_block`], which answers `None` until the
+/// world map has been opened. That is a real gap and it is left visible rather than papered over
+/// with a tile id: the count still tells the player the search is moving, which is the thing the
+/// rotation would otherwise hide.
+#[cfg(windows)]
+pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize, total: usize) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let place = crate::place_name::place_name_for_block(block);
+        guard.observe_prefilter_step(enabled, ordinal, total, place.as_deref())
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the lobby-query detour -- the same auto-closing announcement
+    // surface the rejection banner uses.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still widening; \
              only the on-screen notice is missing."
         ));
     }
