@@ -42,9 +42,17 @@ pub mod map_hooks;
 #[cfg(windows)]
 mod map_live_pins;
 pub mod map_seams;
+mod overlay;
 pub mod place_name;
 pub mod restart_backoff;
 mod seamless_probe;
+pub mod settings_panel;
+// Public on the rlib for the same reason `map_seams` and `place_name` are: its `state` constants
+// and the watchdog's diagnostic accessors are a documented protocol vocabulary, pinned against the
+// live `Abi` by `the_state_codes_match_the_supported_abi`. `TIMED_STATES` has been deliberately
+// empty since 2026-09-13 -- every entry it held was v1.9.9 numbering and two of them are not
+// statically recoverable -- so nothing in this DLL reads the constants today, and a private module
+// makes that safety decision look like dead code. See bd `er-effects-rs-zoft`.
 pub mod stall_watchdog;
 
 use std::path::{Path, PathBuf};
@@ -162,6 +170,13 @@ fn spawn_catalog_task() {
         .spawn(|| {
             // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and
             // hung a boot. er_game_base::wait backs off in user space and gives up.
+            // The settings panel joins whatever imgui the process already has rather than
+            // installing a second `Present` hook. It runs here, on this spawned thread, and not
+            // in `DllMain`: hudhook's install takes locks and enumerates modules, and the guest
+            // probe resolves an export out of another DLL -- none of which may happen under the
+            // loader lock. Installing it from `DllMain` deadlocked the boot on 2026-09-15, with
+            // the process alive and burning CPU and no window ever appearing.
+            crate::overlay::install_from_installer_thread();
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
             else {
@@ -177,6 +192,8 @@ fn spawn_catalog_task() {
             // Same ownership rule as the warp driver: one instance for the process, touched only
             // by this single-threaded task.
             let mut mark_keys = crate::local_invasion_filter::MarkKeys::new();
+            // Same ownership rule again: one latch for the process, polled only by this task.
+            let mut settings_key = crate::settings_panel::SettingsKey::new();
             crate::local_invasion_filter::ensure_config_file();
             let mut frame: u64 = 0;
             let handle = task.run_recurring(
@@ -208,6 +225,11 @@ fn spawn_catalog_task() {
                     unsafe {
                         warp_drive.tick(standalone_log, standalone_publish_warp_json);
                     }
+                    // The settings panel's game-thread half: poll its key, apply whatever was
+                    // clicked last frame in one read-modify-write, and republish the rows. The
+                    // renderer touches no config lock and writes no file -- it runs inside
+                    // `Present`, where an `fs::write` would stall the swapchain.
+                    crate::settings_panel::tick(&mut settings_key);
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
@@ -385,6 +407,7 @@ pub unsafe extern "system" fn DllMain(
                  dies with no PANIC line after this point, it did not panic."
             ));
 
+            crate::overlay::remember_module(module_base);
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),

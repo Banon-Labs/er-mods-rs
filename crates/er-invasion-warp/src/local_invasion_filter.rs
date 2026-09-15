@@ -281,7 +281,7 @@ static REINVADES: AtomicUsize = AtomicUsize::new(0);
 /// merely disapproved of.
 static UNENFORCED_REJECTS: AtomicUsize = AtomicUsize::new(0);
 
-static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
+pub(crate) static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
 /// Trampoline to the original `SetMultiplayJoinData` -- the module's only detour, and it is on the
 /// game, not on Seamless.
@@ -322,7 +322,7 @@ static MENU_SEAMS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the config lives: in the game directory, next to every other `er-*.toml`, so a user
 /// editing it does not have to hunt for it.
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     er_game_base::log::game_directory_path().map_or_else(
         || PathBuf::from(CONFIG_FILE_NAME),
         |dir| dir.join(CONFIG_FILE_NAME),
@@ -364,8 +364,8 @@ fn refresh_config() {
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
-                 excluded={} mark={} unmark={} enable_toggle={} warp_nearest={} warp_next={} \
-                 warp_other_area={}",
+                 excluded={} mark={} unmark={} enable_toggle={} settings={} \
+                 warp_nearest={} warp_next={} warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -400,6 +400,7 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
@@ -444,6 +445,8 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
     let bindings = [
         ("mark_key", config.mark_key),
         ("unmark_key", config.unmark_key),
+        ("enable_toggle_key", config.enable_toggle_key),
+        ("settings_key", config.settings_key),
         ("warp_nearest_key", config.warp_nearest_key),
         ("warp_next_key", config.warp_next_key),
         ("warp_other_area_key", config.warp_other_area_key),
@@ -463,7 +466,7 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
 }
 
 /// The config currently in force, re-reading the file first.
-fn current_config() -> Option<LocalInvasionConfig> {
+pub(crate) fn current_config() -> Option<LocalInvasionConfig> {
     refresh_config();
     let guard = CONFIG.lock().ok()?;
     guard.as_ref().map(|hot| hot.current().clone())

@@ -14,7 +14,6 @@ mod config;
 #[cfg(windows)]
 mod crash_telemetry;
 // Ungated on purpose: pure classification, so its tests run on the host.
-mod dinput_state;
 // Ungated on purpose: pure catalog-filter rules, so its tests run on the host.
 mod duration_filter;
 #[cfg(windows)]

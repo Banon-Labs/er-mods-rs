@@ -40,6 +40,7 @@ pub const VK_DELETE: VirtualKey = 0x2e;
 /// It has no historical value to preserve, so it is chosen rather than inherited: F3 is
 /// clear of the three warp keys, of the mark pair, and of the game's own bindings.
 pub const VK_F3: VirtualKey = 0x72;
+pub const VK_F4: VirtualKey = 0x73;
 
 /// `VK_F7` -- the historical "warp to the nearest invasion point" key, still the default.
 pub const VK_F7: VirtualKey = 0x76;
