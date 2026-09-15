@@ -1348,12 +1348,40 @@ mod live {
             // No readable block means no ring to draw; the single-tile value still stands.
             return Some(centre);
         };
-        advance_ring(
+        match advance_ring(
             here,
             config.prefilter_radius,
             config.search_everywhere_when_exhausted,
-        )
-        .or(Some(centre))
+        ) {
+            RingStep::Ask(value) => Some(value),
+            // The ladder's last rung. Returning `None` here is the whole mechanism: the caller
+            // adds no string filter, so the query goes out unfiltered and the entire population
+            // comes back.
+            RingStep::Everywhere => None,
+            // The ring could not be built or read. That is not the player asking for everywhere,
+            // so it falls back to the single tile rather than widening to a population nobody
+            // asked for.
+            RingStep::Unavailable => Some(centre),
+        }
+    }
+
+    /// What one round of the widening search should ask Steam for.
+    ///
+    /// This exists because the two ways of not naming a tile are opposites and were both spelled
+    /// `None`. `advance_ring` returned `None` to mean "drop the filter, ask everywhere", and
+    /// `hunt_target` ended in `.or(Some(centre))` -- written for the case where no ring could be
+    /// built, and swallowing the deliberate one as well. So the everywhere rung announced itself
+    /// on screen and in the log and then put the filter straight back on the player's own tile:
+    /// run br-20260915-173522-e76b said "looking everywhere instead" and went on asking for
+    /// `m11_05_00_00` for 33 consecutive connects, every one of them dying at the deadline
+    /// against a pool of stale entries. An enum cannot be collapsed by an `.or`.
+    enum RingStep {
+        /// Ask for this location.
+        Ask(String),
+        /// Add no filter at all -- the ring is spent and the player opted into everywhere.
+        Everywhere,
+        /// No ring could be built or read; the caller decides what to fall back to.
+        Unavailable,
     }
 
     /// Take the next tile of the widening search, announcing each step.
@@ -1366,8 +1394,10 @@ mod live {
         here: er_invasion_warp_core::invasion_warp::BlockKey,
         radius: u8,
         everywhere: bool,
-    ) -> Option<String> {
-        let mut guard = SEARCH.lock().ok()?;
+    ) -> RingStep {
+        let Ok(mut guard) = SEARCH.lock() else {
+            return RingStep::Unavailable;
+        };
         let restart = guard
             .as_ref()
             .is_none_or(|(anchor, _)| *anchor != here.raw());
@@ -1377,7 +1407,9 @@ mod live {
                 er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
             ));
         }
-        let (_, ring) = guard.as_mut()?;
+        let Some((_, ring)) = guard.as_mut() else {
+            return RingStep::Unavailable;
+        };
 
         let Some(step) = ring.advance() else {
             if everywhere {
@@ -1400,9 +1432,9 @@ mod live {
                 let notice = crate::local_invasion_filter::current_config_snapshot()
                     .is_none_or(|config| config.reject_notice);
                 crate::local_invasion_filter::banner::announce_search_everywhere(notice, nearby);
-                return None;
+                return RingStep::Everywhere;
             }
-            return Some(map_value(here));
+            return RingStep::Ask(map_value(here));
         };
         // A step means the ring is moving again, so the next exhaustion is fresh news.
         EVERYWHERE_SAID.store(0, Ordering::SeqCst);
@@ -1425,7 +1457,7 @@ mod live {
             step.ordinal,
             step.total,
         );
-        Some(map_value(step.block))
+        RingStep::Ask(map_value(step.block))
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
