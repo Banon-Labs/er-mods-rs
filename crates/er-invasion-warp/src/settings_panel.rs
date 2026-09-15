@@ -182,10 +182,30 @@ fn apply_pending_edits() {
                     ));
                 }
             }
-            SettingEdit::CycleMode => {
+            SettingEdit::Cycle("mode") => {
                 config.mode = next_mode(config.mode);
                 applied += 1;
                 changed.push(format!("mode={}", config.mode.as_str()));
+            }
+            SettingEdit::Cycle("prefilter_radius") => {
+                // 0 asks Steam only for the tile the player stands in; each step adds a ring
+                // around it, and the cap is the one `search_ring` enforces. Wrapping back to 0
+                // rather than stopping at the top is what makes a single button enough.
+                config.prefilter_radius =
+                    if config.prefilter_radius >= er_invasion_warp_core::search_ring::MAX_RADIUS {
+                        0
+                    } else {
+                        config.prefilter_radius + 1
+                    };
+                applied += 1;
+                changed.push(format!("prefilter_radius={}", config.prefilter_radius));
+            }
+            SettingEdit::Cycle(key) => {
+                crate::standalone_log(format_args!(
+                    "settings-panel: no cycling row named `{key}` -- the panel and the config \
+                     disagree about what this DLL has, which is a build mismatch, not a player \
+                     error"
+                ));
             }
         }
     }
@@ -220,6 +240,7 @@ fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
         "map_pins" => config.map_pins,
         "steam_hooks" => config.steam_hooks,
         "dll_users_only" => config.dll_users_only,
+        "search_everywhere_when_exhausted" => config.search_everywhere_when_exhausted,
         "ersc_observers" => config.ersc_observers,
         "ersc_show_observer" => config.ersc_show_observer,
         "ersc_lobby_key_observer" => config.ersc_lobby_key_observer,
@@ -237,6 +258,9 @@ fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
         "map_pins" => config.map_pins = !config.map_pins,
         "steam_hooks" => config.steam_hooks = !config.steam_hooks,
         "dll_users_only" => config.dll_users_only = !config.dll_users_only,
+        "search_everywhere_when_exhausted" => {
+            config.search_everywhere_when_exhausted = !config.search_everywhere_when_exhausted;
+        }
         "ersc_observers" => config.ersc_observers = !config.ersc_observers,
         "ersc_show_observer" => config.ersc_show_observer = !config.ersc_show_observer,
         "ersc_lobby_key_observer" => {
@@ -281,7 +305,36 @@ fn build_view() -> SettingsView {
             control: RowControl::Cycle,
             note: Some("exact / area / named"),
         },
-        toggle_row("hunt", config.hunt, None),
+        toggle_row(
+            "hunt",
+            config.hunt,
+            // The cost, on the row that charges it. Hunt filters the lobby query on a key only
+            // this DLL publishes, so with nobody else running this build every entry it finds is
+            // stale and nothing lands -- which on screen is "Invasion failed -- no connection",
+            // over and over, with the config line reporting everything healthy.
+            Some("only matches hosts running this mod -- nothing lands if nobody else is"),
+        ),
+        SettingRow {
+            key: "prefilter_radius",
+            value: config.prefilter_radius.to_string(),
+            control: RowControl::Cycle,
+            // The note is the whole reason this row is worth clicking. A radius does nothing on
+            // its own: the widening search runs inside the lobby-query detour `steam_hooks`
+            // installs, and its first tile comes from `hunt`. Saying so on the row is the only
+            // place a player finds out before concluding the feature is broken.
+            note: Some(if config.prefilter_radius == 0 {
+                "0 = your tile only; click to widen"
+            } else if config.hunt && config.steam_hooks {
+                "rings of map tiles searched outward from where you stand"
+            } else {
+                "INERT -- needs hunt and steam_hooks on"
+            }),
+        },
+        toggle_row(
+            "search_everywhere_when_exhausted",
+            config.search_everywhere_when_exhausted,
+            Some("when the rings run out, drop the filter instead of re-asking for the last tile"),
+        ),
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("dll_users_only", config.dll_users_only, None),
         toggle_row("map_pins", config.map_pins, None),

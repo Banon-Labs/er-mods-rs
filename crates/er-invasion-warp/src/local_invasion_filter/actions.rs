@@ -890,6 +890,7 @@ pub(super) fn watch_for_failed_connect(session: SeamlessSession) {
     ));
     let notice = super::current_config().is_none_or(|config| config.reject_notice);
     super::banner::announce_failure(notice, attempt);
+    explain_if_hunt_is_emptying_the_pool(attempt);
     // Defence in depth over the allowlist above. `cancel_stalled_attempt_inner` falls back to
     // OPTIONSELECT_LEAVEWORLD when the Cancel row is not offered, and that fallback is what turned
     // a misjudged state into a player torn out of a live invasion. It is right for the stall
@@ -1061,4 +1062,45 @@ pub(super) fn cancel_match(reason: RejectReason) -> bool {
          to stand the loop down."
     ));
     true
+}
+
+/// How many connects in a row must die before hunt is named as the likely reason.
+///
+/// One dead host is ordinary -- a player quit, a lobby entry went stale. A run of them while hunt
+/// is on is a different thing, and it has one overwhelmingly likely cause.
+const HUNT_EMPTY_POOL_STREAK: u32 = 3;
+
+/// Say that hunt is probably why nothing lands, once a streak makes it the likely answer.
+///
+/// Hunt adds a Steam lobby-list filter on a key only this DLL publishes, so the only hosts it can
+/// match are ones running this build. When nobody else is, the entries it does find are stale: the
+/// connect reaches the join state and never lands, the deadline calls it lost, and the player sees
+/// "Invasion failed -- no connection" on every attempt with nothing explaining it.
+///
+/// Measured 2026-09-15 on a live session: with hunt on, every attempt died at the deadline; with
+/// hunt off and nothing else changed, the next attempt loaded into an invasion. The mechanism was
+/// clear from the config line and the failure was not, which is the gap this closes -- the log
+/// already said what happened, over and over, and never once said why.
+///
+/// Said once per streak, not once per failure: repeating it every 1500ms would bury the line that
+/// carries the state and the timing.
+fn explain_if_hunt_is_emptying_the_pool(attempt: u32) {
+    if attempt != HUNT_EMPTY_POOL_STREAK {
+        return;
+    }
+    let Some(config) = super::current_config() else {
+        return;
+    };
+    if !config.hunt {
+        return;
+    }
+    crate::standalone_log(format_args!(
+        "local-invasion: {attempt} connects in a row have died at the deadline with hunt on. Hunt \
+         filters the lobby query on a key only this DLL publishes, so the only hosts it can match \
+         are ones running this build -- if nobody else is, every entry it finds is stale and no \
+         connection can land. This is hunt working as designed against an empty pool, not a \
+         failure of the connection. Set hunt = false in er-invasion-warp.toml to match everybody \
+         again; note that prefilter_radius only acts inside the hunt-filtered query, so it goes \
+         inert with it."
+    ));
 }
