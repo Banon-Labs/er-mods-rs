@@ -462,6 +462,16 @@ impl InvasionWarpDrive {
             // disabled?") after a run whose log carried four such rejections and no counter for
             // them -- the heartbeat printed a healthy-looking line beside an inert filter.
             let (keeps, cancels, reinvades, unenforced) = crate::local_invasion_filter::tallies();
+            // The settings panel, as two numbers that fail differently. `drawn` is frames the
+            // panel rendered into: zero while it is open means this DLL's guest registration
+            // never reached the host's frame, which looks on screen exactly like the key not
+            // working. `clicks` is presses it took: a panel that draws and never takes a click
+            // is one whose DirectInput suppression did not arm, and every press on it is
+            // reaching the game as a swing instead.
+            let panel_open = crate::overlay::is_open();
+            let panel_draws = crate::overlay::draws();
+            let panel_clicks = crate::overlay::clicks();
+            let panel_suppressed = er_dinput_suppress_core::suppressed_mouse_clicks();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} \
                  nearest[{}]_state={:#06x} \
@@ -473,6 +483,8 @@ impl InvasionWarpDrive {
                  UNENFORCED={unenforced}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
+                 panel[open={panel_open} drawn={panel_draws} clicks={panel_clicks} \
+                 clicks_kept_from_game={panel_suppressed}] \
                  hotkey_refused={} \
                  -- invasion locations are markers, not warp destinations: the three warp keys and \
                  the map's own confirm are all declined, and the pins are drawn dimmed to show it",

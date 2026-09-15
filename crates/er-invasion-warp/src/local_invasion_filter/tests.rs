@@ -367,6 +367,47 @@ fn product_code() -> String {
     .join("\n")
 }
 
+/// `product_code` stops at the first `#[cfg(test)]`, so that attribute may only appear last.
+///
+/// The truncation is what keeps a needle written in a test from satisfying a guard written about
+/// shipping code. It is also a loaded gun: the attribute is ordinary Rust and reads as harmless
+/// anywhere, but one placed early cuts the scanned string off at that line and every gate above
+/// silently passes on the handful of lines that survive. Measured 2026-09-15 -- gating two
+/// unused-in-release imports with it truncated the parent to its first 133 lines and took eight
+/// source-scan tests down at once, which at least failed loudly; a gate that scans for something
+/// it must never find would have gone green instead.
+///
+/// So the rule is the attribute appears exactly once per scanned file, on the trailing test
+/// module. Anything else wants `#[allow(unused)]`, a `cfg(test)` submodule of its own, or the
+/// constant referenced through its module path.
+#[test]
+fn the_only_cfg_test_in_scanned_source_is_the_trailing_test_module() {
+    let attribute = format!("#[cfg({})]", "test");
+    for (name, source) in [
+        (
+            "local_invasion_filter.rs",
+            include_str!("../local_invasion_filter.rs"),
+        ),
+        ("actions.rs", include_str!("actions.rs")),
+    ] {
+        let occurrences = source.matches(&attribute).count();
+        assert!(
+            occurrences <= 1,
+            "{name} carries {occurrences} `cfg(test)` attributes; product_code() truncates at the \
+             first, so every source scan above it reads a fraction of the file"
+        );
+        let Some((_, tail)) = source.split_once(&attribute) else {
+            // No test module in this file at all, so nothing truncates and nothing to place.
+            continue;
+        };
+        assert!(
+            tail.trim_start().starts_with("mod tests;"),
+            "{name}'s only `cfg(test)` must sit on the trailing test module, not on an item in \
+             the middle of the file"
+        );
+    }
+}
+
 /// The session scanner's shipping code, comments and test module removed.
 ///
 /// A second reader rather than a widened `product_code`, because these guards pin the shape of one
@@ -386,6 +427,7 @@ fn filter_module_code() -> String {
         include_str!("menu_object.rs"),
         include_str!("banner.rs"),
         include_str!("menu_seams.rs"),
+        include_str!("session_field_trace.rs"),
     ]
     .join("\n")
 }
@@ -457,8 +499,8 @@ fn no_invasion_target_is_ever_chosen_by_steam_id() {
 /// to one of them is invisible and the whole point of the tracing is lost.
 #[test]
 fn the_session_watch_window_covers_every_known_field() {
-    let begin = SESSION_WATCH_BEGIN;
-    let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
+    let begin = session_field_trace::SESSION_WATCH_BEGIN;
+    let end = begin + session_field_trace::SESSION_WATCH_WORDS * 8;
     // Every build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
     // a stale build's state offset but not the supported one's would trace nothing at all.
@@ -497,7 +539,7 @@ fn the_session_watch_window_covers_every_known_field() {
 fn the_session_watch_window_stays_small() {
     const {
         assert!(
-            SESSION_WATCH_WORDS * 8 <= 0x200,
+            session_field_trace::SESSION_WATCH_WORDS * 8 <= 0x200,
             "a per-frame read of this size is no longer negligible"
         )
     };
@@ -1818,4 +1860,192 @@ fn discovery_refuses_a_busy_candidate_while_nothing_is_happening() {
         body.contains("!JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state != abi.state_idle"),
         "discovery has to refuse a candidate that is busy while no join is in flight:\n{body}"
     );
+}
+
+/// The player-driven stand-down, asserted from the source because the flags it clears are
+/// process-global statics a host test cannot observe.
+///
+/// Both switches that mean "stop" must reach `stand_down_hunt`. Before this, only three things
+/// disarmed the loop and all three were the engine's doing -- a `Keep` verdict, an invasion
+/// landing, and the show observer, which is gated behind `ersc_observers` and has shipped off
+/// since the `0x140010043` crash. A player who cancelled got another search.
+#[test]
+fn both_off_switches_stand_the_hunt_down() {
+    let hotkeys = include_str!("hotkeys.rs");
+    assert!(
+        hotkeys.contains("stand_down_hunt("),
+        "the enable toggle key must stand the auto re-search down, or switching the filter off \
+         leaves it starting searches the switch says it stopped"
+    );
+    let panel = include_str!("../settings_panel.rs");
+    assert!(
+        panel.contains("stand_down_hunt("),
+        "the panel's `enabled` row is the same switch as the toggle key and owes the same promise"
+    );
+    let filter = include_str!("../local_invasion_filter.rs");
+    let body = filter
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this file")
+        .1;
+    let body = body.split_once("\n}").expect("it ends").0;
+    for cleared in [
+        "AUTO_SEARCH_ARMED.swap(false",
+        "PENDING_REINVADE.store(false",
+        "backoff.stand_down()",
+    ] {
+        assert!(
+            body.contains(cleared),
+            "standing down must clear `{cleared}` -- leaving any one of them set restarts the \
+             search the player just stopped"
+        );
+    }
+}
+
+#[test]
+fn the_connect_deadline_times_only_states_ersc_offers_a_cancel_row_for() {
+    // Regression, caught live on run br-20260915-025202-c779, the first run the deadline shipped
+    // in. The phase mapping was a blocklist -- "not idle, not searching, not cancelling, therefore
+    // connecting" -- so it called `0x16` a connect. `0x16` is a successful invasion: 313 attempts
+    // reached it and dwelt there between 771ms and 465 seconds, because that dwell is the
+    // invasion itself. The deadline fired 1500ms in, found no Cancel row offered, fell through to
+    // OPTIONSELECT_LEAVEWORLD, and tore the player out of a live invasion into a hard lock.
+    //
+    // Deriving the timed set from ERSC's own hide-predicate is what makes that unrepresentable:
+    // `0x16` is not in it, and neither is any other state Seamless would not let the player cancel
+    // by hand.
+    let source = filter_module_code();
+    let phase = source
+        .split_once("fn connect_phase(")
+        .expect("the phase mapping exists")
+        .1
+        .split_once("\n}")
+        .expect("phase body")
+        .0;
+    assert!(
+        phase.contains("cancel_row_offered"),
+        "the timed set must come from ERSC's own Cancel-row predicate, not from a list here -- \
+         a hand-written list drifts from the predicate and a blocklist times states nobody has \
+         ever measured"
+    );
+    assert!(
+        !phase.contains("0x16"),
+        "the mapping must not name the in-world state at all; it is excluded by not being in the \
+         predicate, which is the property that survives a Seamless renumber"
+    );
+    // Searching is in the predicate and must still be excluded from it by name.
+    let searching_at = phase
+        .find("state_searching")
+        .expect("searching must be excluded explicitly");
+    let offered_at = phase.find("cancel_row_offered").expect("checked above");
+    assert!(
+        searching_at < offered_at,
+        "searching must be returned BEFORE the predicate is consulted -- ERSC draws a Cancel row \
+         during a search, and timing it cancels healthy hunts in a quiet bracket"
+    );
+    // And an invasion that happened is never a connect, whatever states it unwinds through.
+    let arrived_at = phase
+        .find("INVASION_ACTUALLY_HAPPENED")
+        .expect("a successful invasion must be recognised before any state is consulted");
+    assert!(
+        arrived_at < searching_at,
+        "the success latch must be checked before the raw state, because a successful invasion \
+         walks the same cancelling states a dead attempt does"
+    );
+
+    let watcher = source
+        .split_once("fn watch_for_failed_connect(")
+        .expect("the deadline watcher exists")
+        .1
+        .split_once("\n}\n")
+        .expect("watcher body")
+        .0;
+    let armed_at = watcher
+        .find("AUTO_SEARCH_ARMED")
+        .expect("the watcher must only run while the hunt is armed");
+    let observe_at = watcher
+        .find("observe(")
+        .expect("the watcher feeds the clock");
+    assert!(
+        armed_at < observe_at,
+        "the armed check must come BEFORE any observation, or an attempt the player already \
+         stopped is called lost and cancelled out from under them"
+    );
+    // The second defence: never reach the LEAVEWORLD fallback from this path.
+    let refusal_at = watcher
+        .find("!super::lock_report::cancel_row_offered")
+        .expect("the watcher must refuse to act outside the Cancel-row set");
+    let cancel_at = watcher
+        .find("cancel_stalled_attempt(")
+        .expect("the watcher drives the cancel");
+    assert!(
+        refusal_at < cancel_at,
+        "the row check must come BEFORE the cancel, or a misjudged state falls through to \
+         OPTIONSELECT_LEAVEWORLD -- which is what hard-locked run br-20260915-025202-c779"
+    );
+}
+
+/// The `0x16` regression, asserted against the real code rather than against its source text.
+///
+/// The source-scan test beside this one pins the shape of [`super::actions::connect_phase`]; this
+/// one runs it. The distinction earned its keep the hard way: a scan can only say the mapping
+/// mentions the right predicate, and the build that hard-locked run br-20260915-025202-c779
+/// mentioned every right thing while still classifying a live invasion as a connect in progress.
+///
+/// `ersc::Abi` is a `const` table, so the supported build's real state codes are available on the
+/// host with no game and no memory read -- including `state_in_world`, which the ABI has named all
+/// along. That name is the whole indictment of the blocklist that shipped: the number the deadline
+/// tore a player out of was not unknown, it was already written down one module over.
+#[test]
+fn the_deadline_never_classifies_a_live_invasion_as_a_connect() {
+    use er_invasion_warp_core::attempt_verdict::Phase;
+
+    let abi = &super::ersc::SUPPORTED[0];
+
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_in_world),
+        Phase::Connecting,
+        "state_in_world ({:#06x}) is the player standing in the host's world -- timing it drove \
+         OPTIONSELECT_LEAVEWORLD 1.5s into a successful invasion and hard-locked the game",
+        abi.state_in_world
+    );
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_idle),
+        Phase::Connecting,
+        "an idle session has no attempt to call lost"
+    );
+    for settling in [
+        abi.state_cancelling,
+        crate::stall_watchdog::state::CANCEL_SETTLING,
+    ] {
+        assert_ne!(
+            super::actions::connect_phase(abi, settling),
+            Phase::Connecting,
+            "state {settling:#06x} is a cancel already unwinding; answering it with another \
+             cancel is what wedged a session for 30s"
+        );
+    }
+    assert_eq!(
+        super::actions::connect_phase(abi, abi.state_searching),
+        Phase::Searching,
+        "searching is unbounded by nature -- one measured search sat 280 seconds"
+    );
+    // And the states that are genuinely a connect in progress still are, or the feature is inert.
+    // These are ERSC's own Cancel-row set minus searching, which is the set the mapping derives.
+    for connecting in [0x0f_u32, 0x10, 0x12] {
+        assert_eq!(
+            super::actions::connect_phase(abi, connecting),
+            Phase::Connecting,
+            "state {connecting:#06x} is one ERSC draws a Cancel row for, so it is a connect the \
+             player could already have called off"
+        );
+    }
+    // Every state the success walk passes through on its way to the world is left alone. None is
+    // in the Cancel-row set, and each was measured brief: 0x13 max 116ms, 0x14 max 183ms.
+    for transient in [abi.state_offer_received, 0x14, 0x15] {
+        assert_ne!(
+            super::actions::connect_phase(abi, transient),
+            Phase::Connecting,
+            "state {transient:#06x} is a step of the successful join, not a stuck connect"
+        );
+    }
 }

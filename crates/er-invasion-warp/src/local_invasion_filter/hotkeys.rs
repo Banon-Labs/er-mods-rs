@@ -194,6 +194,12 @@ fn apply_enable_toggle() {
     let mut config = hot.current().clone();
     config.enabled = !config.enabled;
     let now_on = config.enabled;
+    // Switching the filter off is the player saying "stop". It used to change only the verdict
+    // applied to the next match, leaving the auto re-search loop armed -- so the searches kept
+    // coming after the switch said they would not.
+    if !now_on {
+        super::stand_down_hunt("you switched the filter off");
+    }
 
     match hot.save(&path, &config) {
         Ok(true) => crate::standalone_log(format_args!(

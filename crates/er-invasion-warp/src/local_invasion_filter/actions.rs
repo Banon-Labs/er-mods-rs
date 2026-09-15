@@ -19,12 +19,13 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::{
-    AUTO_SEARCH_ARMED, CANCELS, INVADE_ACTION_UNCALLABLE, INVASION_ACTUALLY_HAPPENED,
-    JOIN_IN_FLIGHT, NoSession, OurCall, PENDING_REINVADE, REINVADES, RESTART_BACKOFF, RejectReason,
-    SELF_RECOVERIES, STALL_RECOVERIES, STALL_WATCHDOG, SeamlessSession, cancel_row_refusal, ersc,
-    ersc_action, inside_ersc_callback, lock_shape_refusal, module_backing, not_identified_detail,
-    note_state_after_our_action, now_ms, read_session_state, report_lock_preconditions,
-    resolve_ersc_abi, resolve_session, session_guard_refuses, session_scan,
+    ATTEMPT_VERDICT, AUTO_SEARCH_ARMED, CANCELS, FAILED_CONNECTS, INVADE_ACTION_UNCALLABLE,
+    INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, NoSession, OurCall, PENDING_REINVADE, REINVADES,
+    RESTART_BACKOFF, RejectReason, SELF_RECOVERIES, STALL_RECOVERIES, STALL_WATCHDOG,
+    SeamlessSession, cancel_row_refusal, ersc, ersc_action, inside_ersc_callback,
+    lock_shape_refusal, module_backing, not_identified_detail, note_state_after_our_action, now_ms,
+    read_session_state, report_lock_preconditions, resolve_ersc_abi, resolve_session,
+    session_guard_refuses, session_scan,
 };
 
 /// Refuse to invoke a Seamless action with a null `this`, and say why.
@@ -927,4 +928,135 @@ pub(super) fn watch_for_stall(session: SeamlessSession) {
     if action == Some(crate::stall_watchdog::StallAction::CancelAndResearch) {
         cancel_stalled_attempt(session, state, crate::stall_watchdog::STALL_THRESHOLD_MS);
     }
+}
+
+/// Which phase of an attempt a raw session state is, for the connect deadline.
+///
+/// # This is an allowlist, and it is an allowlist because a blocklist shipped and broke a live run
+///
+/// The first version asked "is this state neither idle, searching, nor cancelling?" and called
+/// everything else a connect. That makes every state nobody has measured timeable by default, which
+/// is exactly backwards. Measured on run br-20260915-025202-c779, the first live run it shipped in:
+///
+/// ```text
+///   0x14 -> 0x16  held 124ms          <- the player is now in the host's world
+///   the connection at state 0x0016 has not landed in 1500ms -- calling it lost
+///   ERSC would draw its own Cancel row: no  -- driving OPTIONSELECT_LEAVEWORLD instead
+/// ```
+///
+/// `0x16` is a successful invasion, and the aggregation the deadline itself came from says so in
+/// as many words: 313 attempts reached it and dwelt there between 771ms and 465 seconds, because
+/// that dwell is the invasion. Timing it tore the player out of a live invasion and hard-locked
+/// the game. The same mistake, on the same state, that `stall_watchdog` records twice.
+///
+/// So a state is a connect only by being on the list below. Anything absent -- unknown, renumbered
+/// by a Seamless update, or simply never seen -- is [`Phase::Idle`] and carries no deadline.
+///
+/// # The list is ERSC's own, not one of ours
+///
+/// The timed set is `lock_report::cancel_row_offered` minus searching: `0x0f`, `0x10`, `0x12`. That
+/// is the predicate Seamless uses to decide whether to draw its Cancel row, so every state this
+/// times is one the player could have cancelled by hand, and the action taken on a verdict can only
+/// ever be the button they were already being offered. Deriving the set from the predicate rather
+/// than listing states means the two cannot drift apart.
+///
+/// Searching is excluded for the reason recorded on [`Phase::Searching`]: it is unbounded by
+/// nature, one measured search sat 280 seconds, and timing it cancels healthy hunts.
+pub(super) fn connect_phase(
+    abi: &ersc::Abi,
+    state: u32,
+) -> er_invasion_warp_core::attempt_verdict::Phase {
+    use er_invasion_warp_core::attempt_verdict::Phase;
+    // Checked first, and before the state is consulted at all. A successful invasion unwinds
+    // through the same cancelling states a dead one does, so the state alone cannot tell them
+    // apart -- this latch can, and it is the same signal `watch_for_stall` was given after the
+    // watchdog cancelled an invasion five seconds after accepting it.
+    if INVASION_ACTUALLY_HAPPENED.load(Ordering::SeqCst) {
+        return Phase::Arrived;
+    }
+    // Never timed, and never folded into the branch below even though the predicate names it.
+    if state == abi.state_searching {
+        return Phase::Searching;
+    }
+    if super::lock_report::cancel_row_offered(state) {
+        return Phase::Connecting;
+    }
+    // Everything else, including every state nobody has measured. An unmeasured state is one we
+    // know nothing about, and the safe treatment of it is to leave it alone.
+    Phase::Idle
+}
+
+/// Call a connect lost once it outlives every success on record, then tell the player and cancel it.
+///
+/// # What this is for
+///
+/// The wait the player sits through after a failed match is not Seamless computing an answer -- it
+/// is a timeout counting down on an answer already decided, and the player can infer it because a
+/// working invasion would have put them in the host's world by now. Measured across 262 runs: no
+/// success ever took longer than 441ms from the match, and no failure ever resolved sooner than
+/// 2346ms. [`er_invasion_warp_core::attempt_verdict`] carries the full table and the contamination
+/// note that goes with it.
+///
+/// # Why this may drive a cancel when [`watch_for_stall`] proved so dangerous
+///
+/// The danger there was never the action; it was what earned it. That detector fired on a state
+/// that had merely sat still, which an unmeasured state is entitled to do, and so it twice
+/// cancelled a recovery the game was already performing. This fires only on a connect that has
+/// outlived every recorded success, and [`cancel_stalled_attempt`] still refuses unless ERSC's own
+/// hide-predicate would have drawn a Cancel row -- `0x12`, where the dead connects sit, is inside
+/// that set. So the worst case is pressing a button the player could have pressed.
+///
+/// The arming gate is copied from [`watch_for_stall`] for the reason recorded there, and is the
+/// second of the two defences: with the loop unarmed there is no hunt to call lost.
+pub(super) fn watch_for_failed_connect(session: SeamlessSession) {
+    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
+        // Reset rather than leave the clock running. A hunt that ends mid-connect must not hand a
+        // part-elapsed deadline to the next one the player starts.
+        if let Ok(mut guard) = ATTEMPT_VERDICT.lock() {
+            *guard = er_invasion_warp_core::attempt_verdict::AttemptVerdict::new();
+        }
+        return;
+    }
+    let Some(state) = read_session_state(session.abi, session.session) else {
+        return;
+    };
+    let phase = connect_phase(session.abi, state);
+    let verdict = {
+        let mut guard = match ATTEMPT_VERDICT.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe(now_ms(), phase)
+    };
+    if verdict != Some(er_invasion_warp_core::attempt_verdict::Verdict::Failed) {
+        return;
+    }
+    let attempt = FAILED_CONNECTS.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: the connection at state {state:#06x} has not landed in {}ms, and no \
+         invasion on record has ever taken longer than 441ms from the match (n=313). Calling it \
+         lost and cancelling, so the hunt can restart now instead of after Seamless's timeout.",
+        er_invasion_warp_core::attempt_verdict::CONNECT_DEADLINE_MS
+    ));
+    let notice = super::current_config().is_none_or(|config| config.reject_notice);
+    super::banner::announce_failure(notice, attempt);
+    // Defence in depth over the allowlist above. `cancel_stalled_attempt_inner` falls back to
+    // OPTIONSELECT_LEAVEWORLD when the Cancel row is not offered, and that fallback is what turned
+    // a misjudged state into a player torn out of a live invasion. It is right for the stall
+    // detector, which runs on attempts the engine has already abandoned. It is wrong here: if this
+    // path ever reaches a state Seamless would not draw a Cancel row for, the phase mapping was
+    // wrong and the correct action is none.
+    if !super::lock_report::cancel_row_offered(state) {
+        crate::standalone_log(format_args!(
+            "local-invasion: not cancelling after all -- state {state:#06x} is outside the set \
+             ERSC draws its own Cancel row for, so the deadline judged a state it should never \
+             have been timing. The banner stands; nothing was driven."
+        ));
+        return;
+    }
+    cancel_stalled_attempt(
+        session,
+        state,
+        er_invasion_warp_core::attempt_verdict::CONNECT_DEADLINE_MS,
+    );
 }

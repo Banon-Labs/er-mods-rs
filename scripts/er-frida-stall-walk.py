@@ -9,8 +9,22 @@ threads, 77 in `ntsync_schedule`, 40 in `futex_wait`, zero running. The crash lo
 covers one thread -- the one that faulted -- and a deadlock is a statement about at least two, so
 the artifact that could have named it was the live process, and it was gone.
 
-Frida attaches to a wedged process fine; a stalled thread is exactly what `Thread.backtrace` is
-for. This is the tool that has to run before any teardown of a husk.
+A stalled thread is exactly what `Thread.backtrace` is for, and this is the tool that has to run
+before any teardown of a husk.
+
+Frida does not always get to run it, and that is not a rare edge. Measured 2026-09-15
+on the hard lock in run
+br-20260915-025202-c779: the server came up inside the container normally and then `dev.attach()`
+itself died with `frida.TransportError: timeout was reached`. A process wedged badly enough has no
+thread left able to service the injection, so the attach that would diagnose the freeze is blocked
+by the freeze. That is not a tool fault to route around -- it is a measurement, and it separates a
+total freeze from a spin, which is the first thing anyone wants to know.
+
+So a failed walk is a result, not an error. Every run writes `stall-walk-<stamp>.txt` whatever
+happens, and a run that could not attach writes one saying exactly that. `er-teardown.py`'s
+walk-first gate reads that artifact, so a game nothing can attach to is still tearable down without
+an unchecked `--walked` assertion -- and the reason it could not be walked is on disk instead of in
+an agent's summary.
 
     python3 scripts/er-frida-up.py               # once, if the server is not already up
     uv run --with frida python3 scripts/er-frida-stall-walk.py
@@ -53,6 +67,15 @@ DEFAULT_OUT = pathlib.Path.home() / ".cache" / "er-frida"
 SNAPSHOT_GAP_SECONDS = 1.0
 # Frames printed per thread in the readable report. The JSON keeps all of them.
 REPORT_DEPTH = 12
+
+
+WALK_FAILED_MARKER = "STALL WALK FAILED -- could not attach to the wedged process"
+"""The first line of a report written by a walk that could not attach.
+
+`er-teardown.py` matches this string to tell a walk that ran from one that could not, so the two
+scripts have to agree on it verbatim. Neither imports the other, so the duplicate is kept honest by
+that script's selftest, which reads this file and fails if the two drift apart.
+"""
 
 
 def take(script, count: int) -> list:
@@ -206,18 +229,48 @@ def main() -> int:
     if pid is None:
         print("no eldenring.exe in the prefix -- nothing to walk", file=sys.stderr)
         return 1
-    session = dev.attach(pid)
-    script = session.create_script(AGENT.read_text(encoding="utf-8"))
-    script.load()
-    snapshots = take(script, max(1, args.repeat))
-    frozen = frozen_threads(snapshots)
-    text = render(snapshots, frozen)
-
     out_dir = args.out or DEFAULT_OUT
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     json_path = out_dir / f"stall-walk-{stamp}.json"
     text_path = out_dir / f"stall-walk-{stamp}.txt"
+
+    # Everything from here can fail on exactly the process this tool exists for, so the artifact is
+    # written on both paths. A walk that could not attach is evidence -- see the module docstring --
+    # and it is the only thing standing between a total freeze and an unchecked `--walked`.
+    session = None
+    try:
+        session = dev.attach(pid)
+        script = session.create_script(AGENT.read_text(encoding="utf-8"))
+        script.load()
+        snapshots = take(script, max(1, args.repeat))
+        frozen = frozen_threads(snapshots)
+        text = render(snapshots, frozen)
+    except Exception as exc:  # noqa: BLE001 -- any failure here is a result to record, not to raise
+        text = (
+            f"{WALK_FAILED_MARKER}\n"
+            f"pid        {pid}\n"
+            f"failed at  {type(exc).__name__}: {exc}\n"
+            "\n"
+            "The frida server was reachable -- this got far enough to enumerate processes and find\n"
+            "the game -- and the attach itself did not complete. A process wedged this hard has no\n"
+            "thread left to service the injection, so there are no backtraces to be had from it by\n"
+            "any means. That is the finding: a total freeze, not a spin, and not a tool that was\n"
+            "merely pointed at the wrong place.\n"
+            "\n"
+            "er-teardown.py accepts this artifact, so the game can be cleared without asserting a\n"
+            "walk that never happened.\n"
+        )
+        text_path.write_text(text, encoding="utf-8")
+        print(text)
+        print(f"report {text_path}")
+        if session is not None:
+            try:
+                session.detach()
+            except Exception:  # noqa: BLE001 -- detaching a session that never attached
+                pass
+        return 4
+
     json_path.write_text(json.dumps(snapshots, indent=1), encoding="utf-8")
     text_path.write_text(text, encoding="utf-8")
     print(text)

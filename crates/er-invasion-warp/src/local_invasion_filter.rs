@@ -127,11 +127,14 @@ mod menu_seams;
 pub use map_pins_view::{log_pin_tier_tally, pin_appearance_for, pin_choice_signature};
 pub(crate) mod differential_scan;
 pub(crate) mod lock_report;
+/// The per-frame session field-write tracer, lifted out when this file hit its size limit.
+mod session_field_trace;
 pub(crate) mod session_scan;
+use session_field_trace::trace_session_field_writes;
 
 use actions::{
     arm_self_recovery, cancel_match, cancel_stalled_attempt_inner, drive_pending_reinvade,
-    log_refusal_once, watch_for_stall,
+    log_refusal_once, watch_for_failed_connect, watch_for_stall,
 };
 /// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
 /// callers already look for them.
@@ -223,6 +226,14 @@ static INVADE_ACTION_UNCALLABLE: AtomicBool = AtomicBool::new(false);
 static STALL_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
 /// Stall detection state. Behind a mutex rather than atomics because the decision reads and writes
 /// "which state, and since when" together; a torn read there would restart the clock at random.
+/// Calls a connect lost once it has outlived every success on record, so the player is told and
+/// freed instead of waiting out Seamless's timeout. Behind a mutex because the decision reads and
+/// updates "is a connect being timed, and since when" together.
+static ATTEMPT_VERDICT: Mutex<er_invasion_warp_core::attempt_verdict::AttemptVerdict> =
+    Mutex::new(er_invasion_warp_core::attempt_verdict::AttemptVerdict::new());
+/// How many attempts the deadline has called lost. Its only job is to make two failures in a row
+/// two pieces of news rather than a repeat of one -- see `reject_notice::Announced::Failed`.
+static FAILED_CONNECTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
     Mutex::new(crate::stall_watchdog::StallWatchdog::new());
 /// Slows the restart when Seamless is refusing attempts instantly -- the opposite failure to the
@@ -281,7 +292,7 @@ static REINVADES: AtomicUsize = AtomicUsize::new(0);
 /// merely disapproved of.
 static UNENFORCED_REJECTS: AtomicUsize = AtomicUsize::new(0);
 
-static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
+pub(crate) static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
 /// Trampoline to the original `SetMultiplayJoinData` -- the module's only detour, and it is on the
 /// game, not on Seamless.
@@ -322,7 +333,7 @@ static MENU_SEAMS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 
 /// Where the config lives: in the game directory, next to every other `er-*.toml`, so a user
 /// editing it does not have to hunt for it.
-fn config_path() -> PathBuf {
+pub(crate) fn config_path() -> PathBuf {
     er_game_base::log::game_directory_path().map_or_else(
         || PathBuf::from(CONFIG_FILE_NAME),
         |dir| dir.join(CONFIG_FILE_NAME),
@@ -364,8 +375,8 @@ fn refresh_config() {
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
-                 excluded={} mark={} unmark={} enable_toggle={} warp_nearest={} warp_next={} \
-                 warp_other_area={}",
+                 excluded={} mark={} unmark={} enable_toggle={} settings={} \
+                 warp_nearest={} warp_next={} warp_other_area={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -400,6 +411,7 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.mark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
+                er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
@@ -444,6 +456,8 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
     let bindings = [
         ("mark_key", config.mark_key),
         ("unmark_key", config.unmark_key),
+        ("enable_toggle_key", config.enable_toggle_key),
+        ("settings_key", config.settings_key),
         ("warp_nearest_key", config.warp_nearest_key),
         ("warp_next_key", config.warp_next_key),
         ("warp_other_area_key", config.warp_other_area_key),
@@ -462,8 +476,80 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
     }
 }
 
+/// Stand the auto re-search loop down because the player asked, not because the engine did.
+///
+/// # Why this had to exist
+///
+/// Every cancel path in this filter re-arms the hunt -- deliberately, because cancelling a match
+/// it rejected is the hunt (`actions.rs:368`). The loop was only ever stood down by three things:
+/// a `Keep` verdict, an invasion actually landing, and the player opening Seamless's own menu.
+/// The third is the only player-driven one, and it is observed by `install_show_observer`, which
+/// runs under `config.ersc_observers && config.ersc_show_observer` -- and `ersc_observers` has
+/// shipped `false` since the `0x140010043` crash was traced to those detours. So in the
+/// configuration everyone actually runs, a player could not stop the loop at all: they cancelled,
+/// and it started another search, which is the whole of "it did not give up when I asked".
+///
+/// This is the detour-free replacement. It touches no `ersc.dll` seam and works in the default
+/// configuration, because it is driven by our own switch rather than by observing Seamless.
+#[cfg(windows)]
+pub(crate) fn stand_down_hunt(reason: &str) {
+    let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
+    PENDING_REINVADE.store(false, Ordering::SeqCst);
+    if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
+        backoff.stand_down();
+    }
+    // Only when there was something to stop. A line every time the switch is flipped would say
+    // "stood down" for a loop that was never running, which is the kind of log that teaches a
+    // reader to stop believing it.
+    if was_armed {
+        crate::standalone_log(format_args!(
+            "local-invasion: auto re-search stood down -- {reason}. Nothing here will start \
+             another search until you ask for one."
+        ));
+    }
+    cancel_live_search_for_player(reason);
+}
+
+/// Cancel a search that is running right now, because the player said stop.
+///
+/// Standing the loop down is not the same act and does not imply this one: it stops the next
+/// search, and on its own it leaves the current one running until Seamless finishes with it. A
+/// player who flips the switch during a search means both.
+///
+/// Refuses outside the four states where ersc draws its own Cancel row (`0x0e`, `0x0f`, `0x10`,
+/// `0x12`). Driving the action outside them is driving a row the player could not have clicked,
+/// which is outside every precondition its author arranged for -- and the state where a match is
+/// judged is measurably outside that set.
+#[cfg(windows)]
+fn cancel_live_search_for_player(reason: &str) {
+    let Ok(session) = resolve_session() else {
+        // No session is no search. Silent: flipping the switch out in the world is the common
+        // case and owes no line.
+        return;
+    };
+    let Some(state) = read_session_state(session.abi, session.session) else {
+        return;
+    };
+    if state == session.abi.state_idle {
+        return;
+    }
+    if !lock_report::cancel_row_offered(state) {
+        crate::standalone_log(format_args!(
+            "local-invasion: you asked to stop ({reason}) but the session is at {state:#06x}, \
+             where Seamless withdraws its own Cancel row -- the attempt is past the point it can \
+             be called off and is left alone. The loop is stood down, so nothing follows it."
+        ));
+        return;
+    }
+    if actions::cancel_match(er_invasion_warp_core::local_invasion::RejectReason::PlayerStopped) {
+        crate::standalone_log(format_args!(
+            "local-invasion: cancelled the live search at {state:#06x} because {reason}"
+        ));
+    }
+}
+
 /// The config currently in force, re-reading the file first.
-fn current_config() -> Option<LocalInvasionConfig> {
+pub(crate) fn current_config() -> Option<LocalInvasionConfig> {
     refresh_config();
     let guard = CONFIG.lock().ok()?;
     guard.as_ref().map(|hot| hot.current().clone())
@@ -2076,6 +2162,16 @@ fn drive_pending_cancel() {
     ));
 }
 
+/// The state a driven cancel settles through on its way back to idle.
+///
+/// The supported build's `Abi` does not name it, so nothing pins it: it is v1.9.9's `0x23` carried
+/// across the uniform `+1` renumber, and the static store scan supports that reading -- v1.9.9
+/// writes `0x23` at one site and the supported build writes `0x24` at one site, the same one-site
+/// shape as the `0x22`/`0x23` pair that moved with it. Mirrors
+/// [`crate::stall_watchdog::state::CANCEL_SETTLING`], which carries the full derivation.
+#[cfg(windows)]
+const CANCEL_SETTLING_STATE: u32 = crate::stall_watchdog::state::CANCEL_SETTLING;
+
 /// Publish whether an invasion attempt is in flight, for the warp gate and the map's icon choice.
 ///
 /// # Why "not idle" and not "== SEARCHING"
@@ -2101,9 +2197,18 @@ fn publish_invasion_attempt_state(session: SeamlessSession) {
     // unknown, it is uninitialised, and treating it as an invasion in progress locks the warp gate
     // shut forever. That is exactly what a player hit on 2026-09-04: every map marker refused with
     // "an invasion attempt is in flight", from a session whose state never left 0x00.
-    let in_flight = read_session_state(session.abi, session.session)
-        .is_some_and(|state| state != 0 && state != session.abi.state_idle);
-    er_invasion_warp_core::warp::set_invasion_attempt_in_flight(in_flight);
+    let state = read_session_state(session.abi, session.session);
+    let binding = state.is_some_and(|state| state != 0 && state != session.abi.state_idle);
+    // The cancel unwind is the one window where the two answers differ. Once the session enters
+    // `state_cancelling` the player has already asked for this to stop, and Seamless then spends
+    // its own `joinCheck` countdown -- 30.0 s, an f32 inside a virtualised module we cannot reach
+    // -- walking back out. Reporting an attempt in flight for those 30 s is the complaint; still
+    // refusing the warp for them is the safety that bd `er-effects-rs-uob3` records, because ersc
+    // is unwinding a join and the player must not be moved through it.
+    let cancelling = state.is_some_and(|state| {
+        state == session.abi.state_cancelling || state == CANCEL_SETTLING_STATE
+    });
+    er_invasion_warp_core::warp::set_invasion_attempt_state(binding && !cancelling, binding);
 }
 
 /// The gate the popup skip uses: the state of the session reached from the option-menu object
@@ -2590,6 +2695,10 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // then sees that idle and arms the restart; `drive_pending_reinvade` fires it. Running them in
     // this order recovers a stalled attempt within one tick of it settling rather than three.
     watch_for_stall(session);
+    // After the stall detector, before self-recovery: the deadline may cancel, and running it
+    // ahead of the arming below lets a called-lost attempt restart within the same tick rather
+    // than the next one -- the same ordering argument the line above makes.
+    watch_for_failed_connect(session);
     arm_self_recovery(session);
     drive_pending_reinvade(session);
 }
@@ -2942,146 +3051,6 @@ fn read_join_progress() -> Option<er_invasion_warp_core::join_progress::JoinProg
 pub fn join_progress_idle_samples() -> usize {
     JOIN_PROGRESS_IDLE_SAMPLES.load(Ordering::Relaxed)
 }
-
-/// The window of the session object that is watched for VM writes.
-///
-/// Chosen to span every field the static read identified plus the unexplained space between them:
-/// state `+0x110`, the lobby id `+0x178` and owner `+0x180`, the per-offer block `+0x190..0x227`,
-/// the `+0x1D4` / `+0x1F0` latches Seek writes, and the `+0x229` flag the lobby key mixes in.
-/// Deliberately not `cfg(windows)`: it is plain arithmetic, and the tests that prove the window
-/// still covers every known field have to run on the host build like every other test here.
-const SESSION_WATCH_BEGIN: usize = 0x100;
-const SESSION_WATCH_WORDS: usize = 0x30; // 0x30 * 8 = 0x180 bytes -> 0x100..0x280
-
-/// Previous snapshot, and which session it came from.
-#[cfg(windows)]
-static SESSION_SNAPSHOT: Mutex<Option<(usize, [u64; SESSION_WATCH_WORDS])>> = Mutex::new(None);
-
-/// How many field-change lines have been written, so a churning field cannot flood the log.
-#[cfg(windows)]
-static SESSION_FIELD_LINES: AtomicUsize = AtomicUsize::new(0);
-/// The cap. Generous enough to cover a whole invasion sequence, small enough to stay readable.
-#[cfg(windows)]
-const SESSION_FIELD_LINE_BUDGET: usize = 400;
-
-/// Report which session fields changed since the last frame, with the state they changed under.
-///
-/// # Why this exists
-///
-/// States `0x0E`, `0x11`, `0x12`, `0x13` and `0x14` are written by no instruction in ersc's
-/// readable code -- a byte-anchored scan for `C7 /0 disp32=0x110 imm32` finds only
-/// `{0,1,3,6,9,0xD,0x22,0x23}`, and the sole register-sourced write produces `0x0C`/`0x15`. The
-/// rest come out of the Themida VM. Reading that code is not available: a live dump of the module
-/// showed `.themida` is 99.68% byte-identical to disk with unchanged entropy, so the original
-/// instructions never exist in memory to be recovered.
-///
-/// What is available is the effect. Every field the VM writes is written into an object this
-/// module already holds a pointer to, so diffing that object per frame maps the state machine
-/// empirically -- which fields move together, which precede a transition, which carry a
-/// destination -- without reading a single VM instruction.
-///
-/// Pure observation: it reads and logs, and writes nothing back.
-///
-/// # Safety
-/// Game task thread; every read is fault-closed and the window is a fixed span of an object the
-/// caller already validated.
-#[cfg(windows)]
-fn trace_session_field_writes(seamless: SeamlessSession) {
-    let session = seamless.session;
-    if SESSION_FIELD_LINES.load(Ordering::SeqCst) >= SESSION_FIELD_LINE_BUDGET {
-        return;
-    }
-    let mut current = [0_u64; SESSION_WATCH_WORDS];
-    for (index, slot) in current.iter_mut().enumerate() {
-        let at = session + SESSION_WATCH_BEGIN + index * 8;
-        // A fault-closed read that fails leaves the slot zero. That could masquerade as a change,
-        // so a failed read abandons the whole snapshot rather than inventing a transition.
-        let Some(value) = (unsafe { er_game_base::mem::safe_read_usize(at) }) else {
-            return;
-        };
-        *slot = value as u64;
-    }
-
-    let mut guard = match SESSION_SNAPSHOT.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    let previous = match guard.as_ref() {
-        // A different session object is a different machine; its first frame is a baseline, not a
-        // set of changes.
-        Some((owner, _)) if *owner != session => None,
-        Some((_, snapshot)) => Some(*snapshot),
-        None => None,
-    };
-    *guard = Some((session, current));
-    drop(guard);
-
-    let Some(previous) = previous else {
-        return;
-    };
-    let changed: Vec<(usize, u64, u64)> = (0..SESSION_WATCH_WORDS)
-        .filter(|index| previous[*index] != current[*index])
-        .map(|index| {
-            (
-                SESSION_WATCH_BEGIN + index * 8,
-                previous[index],
-                current[index],
-            )
-        })
-        .collect();
-    if changed.is_empty() {
-        return;
-    }
-    let state =
-        unsafe { er_game_base::mem::safe_read_i32(session + seamless.abi.session_state_offset) }
-            .unwrap_or(-1);
-    // `+0x238` alone is not a field change worth a line: it is a clock, and it ticks once a frame.
-    //
-    // Measured on run br-20260910-012230-666e, where the second cancel stuck at 0x23 and this
-    // logger wrote one line per tick for the whole wait. The upper half of the qword decodes as an
-    // f64 running 0.386 -> 0.443 -> ... -> 14.1 seconds and still climbing, one step per tick, so
-    // the "change" is a cooldown advancing normally rather than anything a reader needs told 500
-    // times. Reporting it as a cooldown once a second says strictly more in 1/40th the lines.
-    if changed.len() == 1 && changed[0].0 == SESSION_COOLDOWN_OFFSET {
-        let seconds = f64::from_bits(changed[0].2 & 0xffff_ffff_0000_0000);
-        let whole = seconds as usize;
-        if COOLDOWN_LAST_WHOLE_SECOND.swap(whole, Ordering::SeqCst) != whole {
-            // The meaning is per-state and must not be asserted across all of them. This line
-            // first fired at state 0x16 saying "this is the wait the player sees after a cancel",
-            // which is false there -- 0x16 is being in an invasion, and its clock is how long the
-            // player has been fighting.
-            let meaning = if state == seamless.abi.state_cancelling as i32 {
-                "an armed re-invade waits for idle, so this clock is the wait after a cancel"
-            } else if state == seamless.abi.state_searching as i32 {
-                "this clock is how long the search has been running"
-            } else {
-                "what this clock measures in this state has not been established"
-            };
-            crate::standalone_log(format_args!(
-                "local-invasion: the session has been in state {state:#04x} for {whole}s -- \
-                 `session+0x{SESSION_COOLDOWN_OFFSET:x}` is a clock, not a field change, and it \
-                 advances once a frame. {meaning}."
-            ));
-        }
-        return;
-    }
-    let line = SESSION_FIELD_LINES.fetch_add(1, Ordering::SeqCst) + 1;
-    crate::standalone_log(format_args!(
-        "local-invasion: session fields changed at state {state:#04x} -- {changed:x?} \
-         (offset, before, after). These are writes this DLL did not make; the ones at offsets with \
-         no readable writer came from the Themida VM. Line {line}/{SESSION_FIELD_LINE_BUDGET}."
-    ));
-    if line == SESSION_FIELD_LINE_BUDGET {
-        crate::standalone_log(format_args!(
-            "local-invasion: session field tracing has hit its {SESSION_FIELD_LINE_BUDGET}-line \
-             budget and will stay quiet from here. Raise SESSION_FIELD_LINE_BUDGET if a longer \
-             sequence is needed; the cap exists so one churning field cannot bury the run."
-        ));
-    }
-}
-
-#[cfg(not(windows))]
-fn trace_session_field_writes(_session: SeamlessSession) {}
 
 /// `(keeps, cancels, automatic re-searches, unenforced rejections)` so a run can be judged without
 /// reading the log.

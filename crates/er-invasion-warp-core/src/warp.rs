@@ -281,15 +281,52 @@ pub enum WarpPolicy {
 static INVASION_ATTEMPT_IN_FLIGHT: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-/// Record whether an invasion attempt is in flight. Called once per frame from the session tracer.
-pub fn set_invasion_attempt_in_flight(in_flight: bool) {
-    INVASION_ATTEMPT_IN_FLIGHT.store(in_flight, core::sync::atomic::Ordering::SeqCst);
+/// Whether the attempt is still binding on the warp, as distinct from whether it is worth showing.
+///
+/// The two part company for exactly one window: after a cancel is driven, Seamless walks
+/// `state_cancelling` / the settling state for as long as its own `joinCheck` countdown takes --
+/// measured at 30.0 s, an f32 inside a Themida-virtualised module that nothing here can shorten.
+/// The player asked for that to stop and, from their seat, it did. So the pins stop saying
+/// otherwise the moment the cancel is driven, while the warp stays refused until the session is
+/// genuinely idle, because ersc is still unwinding a join and moving the player through it is how
+/// a session gets corrupted (bd `er-effects-rs-uob3`).
+///
+/// Defaults to `false` for the same reason as the display latch: nothing looked yet, so nothing is
+/// blocked.
+static WARP_BOUND_BY_ATTEMPT: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Record what the session is doing, as two separate answers. Called once per frame from the
+/// session tracer.
+///
+/// `showing` drives the pin dim, the icon tier and the banner -- everything cosmetic. `binding`
+/// drives the warp refusal and nothing else. Passing one value for both is the bug this signature
+/// exists to make impossible: a single flag meant a cancel either lied to the player for 30 s or
+/// unlocked a warp in the middle of ersc's unwind.
+pub fn set_invasion_attempt_state(showing: bool, binding: bool) {
+    INVASION_ATTEMPT_IN_FLIGHT.store(showing, core::sync::atomic::Ordering::SeqCst);
+    WARP_BOUND_BY_ATTEMPT.store(binding, core::sync::atomic::Ordering::SeqCst);
 }
 
-/// Whether an invasion attempt is in flight, as last published.
+/// Record both answers as one value, for callers that mean "nothing is happening at all".
+pub fn set_invasion_attempt_in_flight(in_flight: bool) {
+    set_invasion_attempt_state(in_flight, in_flight);
+}
+
+/// Whether an attempt should be shown as in flight: the pin dim, the icon tier, the banner.
+///
+/// Goes false as soon as a cancel is driven. Do not gate a state change on this -- see
+/// [`warp_bound_by_attempt`].
 #[must_use]
 pub fn invasion_attempt_in_flight() -> bool {
     INVASION_ATTEMPT_IN_FLIGHT.load(core::sync::atomic::Ordering::SeqCst)
+}
+
+/// Whether an attempt still forbids a warp. Stays true through the whole cancel unwind, so it is
+/// the one to ask before moving the player.
+#[must_use]
+pub fn warp_bound_by_attempt() -> bool {
+    WARP_BOUND_BY_ATTEMPT.load(core::sync::atomic::Ordering::SeqCst)
 }
 
 /// The policy in force this instant.
@@ -301,7 +338,8 @@ pub fn invasion_attempt_in_flight() -> bool {
 /// there is no brighter state to read it against.
 #[must_use]
 pub fn invasion_warp_policy() -> WarpPolicy {
-    if invasion_attempt_in_flight() {
+    // `warp_bound_by_attempt`, not the display latch: this decides whether the player moves.
+    if warp_bound_by_attempt() {
         WarpPolicy::MarkersOnly
     } else {
         WarpPolicy::Warpable
@@ -1164,5 +1202,51 @@ mod tests {
             rendered.contains("nothing was written"),
             "a refusal must say the engine was left alone: {rendered}"
         );
+    }
+}
+
+#[cfg(test)]
+mod cancel_window_tests {
+    use super::*;
+
+    /// The whole point of the split: during a driven cancel the pins stop saying "attempt in
+    /// flight" while the warp stays refused. One flag could not express this, and collapsing it
+    /// back to one is the regression this test exists to catch.
+    #[test]
+    fn a_cancel_frees_the_display_and_still_refuses_the_warp() {
+        set_invasion_attempt_state(true, true);
+        assert!(
+            invasion_attempt_in_flight(),
+            "an attempt shows as in flight"
+        );
+        assert_eq!(invasion_warp_policy(), WarpPolicy::MarkersOnly);
+
+        // The cancel is driven: the player asked for this to stop.
+        set_invasion_attempt_state(false, true);
+        assert!(
+            !invasion_attempt_in_flight(),
+            "the pins must brighten the moment the cancel is driven -- waiting out ersc's 30s \
+             joinCheck is the complaint this change exists to fix"
+        );
+        assert_eq!(
+            invasion_warp_policy(),
+            WarpPolicy::MarkersOnly,
+            "the warp must stay refused while ersc unwinds the join, or the player is moved \
+             through it (bd er-effects-rs-uob3)"
+        );
+
+        // Idle at last.
+        set_invasion_attempt_state(false, false);
+        assert_eq!(invasion_warp_policy(), WarpPolicy::Warpable);
+    }
+
+    /// The single-value helper must still mean "both", or a caller that means "nothing is
+    /// happening" would leave the warp bound forever.
+    #[test]
+    fn the_one_value_helper_sets_both() {
+        set_invasion_attempt_in_flight(true);
+        assert!(invasion_attempt_in_flight() && warp_bound_by_attempt());
+        set_invasion_attempt_in_flight(false);
+        assert!(!invasion_attempt_in_flight() && !warp_bound_by_attempt());
     }
 }

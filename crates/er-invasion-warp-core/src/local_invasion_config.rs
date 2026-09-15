@@ -201,6 +201,14 @@ unmark_key = "Delete"
 # actually playing in. The banner tells you which way it went.
 enable_toggle_key = "F3"
 
+# The in-game settings panel, by NAME, from the same list. It shows every key in this file and
+# writes each change straight back here -- this file stays the source of truth, and the panel
+# re-reads it, so an edit you make by hand while the panel is open still wins.
+#
+# The file is REGENERATED from the shipped template on every save, so comments you add yourself
+# do not survive a change made in game. Your values do.
+settings_key = "F4"
+
 # The three invasion-point keys, by NAME, from the same list above.
 #
 # CHANGE THESE IF ANOTHER MOD FIGHTS YOU FOR THEM. They were hard-coded to F7/F8/F9, which is a
@@ -439,6 +447,15 @@ pub fn parse_local_invasion_config_with_fallback(
                     &mut issues,
                 );
             }
+            "settings_key" => {
+                config.settings_key = key_setting(
+                    "settings_key",
+                    value,
+                    fallback.settings_key,
+                    line_no,
+                    &mut issues,
+                );
+            }
             "warp_nearest_key" => {
                 config.warp_nearest_key = key_setting(
                     "warp_nearest_key",
@@ -673,6 +690,10 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "enable_toggle_key" => out.push_str(&format!(
                 "enable_toggle_key = \"{}\"\n",
                 crate::keybind::key_name(config.enable_toggle_key)
+            )),
+            "settings_key" => out.push_str(&format!(
+                "settings_key = \"{}\"\n",
+                crate::keybind::key_name(config.settings_key)
             )),
             "warp_nearest_key" => out.push_str(&format!(
                 "warp_nearest_key = \"{}\"\n",
