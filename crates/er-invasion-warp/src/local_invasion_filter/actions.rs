@@ -962,7 +962,10 @@ pub(super) fn watch_for_stall(session: SeamlessSession) {
 ///
 /// Searching is excluded for the reason recorded on [`Phase::Searching`]: it is unbounded by
 /// nature, one measured search sat 280 seconds, and timing it cancels healthy hunts.
-fn connect_phase(abi: &ersc::Abi, state: u32) -> er_invasion_warp_core::attempt_verdict::Phase {
+pub(super) fn connect_phase(
+    abi: &ersc::Abi,
+    state: u32,
+) -> er_invasion_warp_core::attempt_verdict::Phase {
     use er_invasion_warp_core::attempt_verdict::Phase;
     // Checked first, and before the state is consulted at all. A successful invasion unwinds
     // through the same cancelling states a dead one does, so the state alone cannot tell them

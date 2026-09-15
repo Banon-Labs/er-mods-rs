@@ -1941,3 +1941,69 @@ fn the_connect_deadline_times_only_states_ersc_offers_a_cancel_row_for() {
          OPTIONSELECT_LEAVEWORLD -- which is what hard-locked run br-20260915-025202-c779"
     );
 }
+
+/// The `0x16` regression, asserted against the real code rather than against its source text.
+///
+/// The source-scan test beside this one pins the shape of [`super::actions::connect_phase`]; this
+/// one runs it. The distinction earned its keep the hard way: a scan can only say the mapping
+/// mentions the right predicate, and the build that hard-locked run br-20260915-025202-c779
+/// mentioned every right thing while still classifying a live invasion as a connect in progress.
+///
+/// `ersc::Abi` is a `const` table, so the supported build's real state codes are available on the
+/// host with no game and no memory read -- including `state_in_world`, which the ABI has named all
+/// along. That name is the whole indictment of the blocklist that shipped: the number the deadline
+/// tore a player out of was not unknown, it was already written down one module over.
+#[test]
+fn the_deadline_never_classifies_a_live_invasion_as_a_connect() {
+    use er_invasion_warp_core::attempt_verdict::Phase;
+
+    let abi = &super::ersc::SUPPORTED[0];
+
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_in_world),
+        Phase::Connecting,
+        "state_in_world ({:#06x}) is the player standing in the host's world -- timing it drove \
+         OPTIONSELECT_LEAVEWORLD 1.5s into a successful invasion and hard-locked the game",
+        abi.state_in_world
+    );
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_idle),
+        Phase::Connecting,
+        "an idle session has no attempt to call lost"
+    );
+    for settling in [
+        abi.state_cancelling,
+        crate::stall_watchdog::state::CANCEL_SETTLING,
+    ] {
+        assert_ne!(
+            super::actions::connect_phase(abi, settling),
+            Phase::Connecting,
+            "state {settling:#06x} is a cancel already unwinding; answering it with another \
+             cancel is what wedged a session for 30s"
+        );
+    }
+    assert_eq!(
+        super::actions::connect_phase(abi, abi.state_searching),
+        Phase::Searching,
+        "searching is unbounded by nature -- one measured search sat 280 seconds"
+    );
+    // And the states that are genuinely a connect in progress still are, or the feature is inert.
+    // These are ERSC's own Cancel-row set minus searching, which is the set the mapping derives.
+    for connecting in [0x0f_u32, 0x10, 0x12] {
+        assert_eq!(
+            super::actions::connect_phase(abi, connecting),
+            Phase::Connecting,
+            "state {connecting:#06x} is one ERSC draws a Cancel row for, so it is a connect the \
+             player could already have called off"
+        );
+    }
+    // Every state the success walk passes through on its way to the world is left alone. None is
+    // in the Cancel-row set, and each was measured brief: 0x13 max 116ms, 0x14 max 183ms.
+    for transient in [abi.state_offer_received, 0x14, 0x15] {
+        assert_ne!(
+            super::actions::connect_phase(abi, transient),
+            Phase::Connecting,
+            "state {transient:#06x} is a step of the successful join, not a stuck connect"
+        );
+    }
+}
