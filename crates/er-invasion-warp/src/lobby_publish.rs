@@ -176,6 +176,10 @@ pub const FRIENDS_LOCAL_PERSONA_NAME: &str = "SteamAPI_ISteamFriends_GetPersonaN
 /// our publish target turns "the offset is probably the advertisement lobby" into a fact checked on
 /// every write -- and if the offset is ever wrong, or Seamless reorders its lobbies in a future
 /// version, publishing refuses instead of writing somewhere nobody reads.
+/// Historical. Seamless 1.9.9 filed the marker under this name; 2.0.0 hashes its key names, so
+/// the marker now arrives under a 64-character hex key that differs per build. Nothing matches on
+/// this any more -- the value is what identifies the advertisement, and the key that carried it is
+/// captured from the write itself. Kept because it is what a reader of older notes will look for.
 pub const ADVERTISEMENT_MARKER_KEY: &str = "lobby_type\0";
 /// The value [`ADVERTISEMENT_MARKER_KEY`] carries on the advertisement lobby.
 pub const ADVERTISEMENT_MARKER_VALUE: &str = "yknx3_seamless_master_lobby";
@@ -320,11 +324,11 @@ pub fn hunt_refusal(
 #[cfg(windows)]
 mod live {
     use super::{
-        ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE,
-        FRIENDS_ACCESSOR, FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME,
-        FRIENDS_REQUEST_USER_INFORMATION, GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY,
-        MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR,
-        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, map_value, pending_publish,
+        ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_VALUE, FRIENDS_ACCESSOR,
+        FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME, FRIENDS_REQUEST_USER_INFORMATION,
+        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR,
+        REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR, USER_GET_STEAM_ID_SLOT,
+        hunt_filter_value, hunt_refusal, map_value, pending_publish,
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -394,6 +398,8 @@ mod live {
     static LAST_PUBLISHED: Mutex<Option<String>> = Mutex::new(None);
     static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
     static REFUSALS: AtomicUsize = AtomicUsize::new(0);
+    /// Latches the "no advertisement lobby" line, which the tick would otherwise repeat forever.
+    static NO_ADVERTISEMENT_SAID: AtomicBool = AtomicBool::new(false);
 
     /// What this host has advertised, and how often it could not.
     ///
@@ -641,7 +647,18 @@ mod live {
         let Some(read) = get_lobby_data(iface) else {
             return false;
         };
-        let got = unsafe { read(iface, lobby, ADVERTISEMENT_MARKER_KEY.as_ptr()) };
+        // The key the marker was actually written under, not the constant: on Seamless 2.0.0
+        // those differ, and asking for the constant returns an empty string, which would refuse a
+        // lobby this module had already identified correctly.
+        let observed = ADVERTISEMENT_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(mut key_owned) = observed else {
+            return false;
+        };
+        key_owned.push(0);
+        let got = unsafe { read(iface, lobby, key_owned.as_ptr()) };
         // Same foreign-pointer rule as `published_value` above: fault-safe read, not a null check.
         let value = unsafe { er_game_base::mem::safe_read_cstr(got as usize, MAX_LOBBY_VALUE_LEN) };
         value.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes())
@@ -661,6 +678,9 @@ mod live {
     /// convenience; a DLL that panics or spams because Steam was not ready would be a broken game.
     pub fn publish_current_map() {
         let Some(value) = pending_publish(current_block(), last_published().as_deref()) else {
+            // Nothing to say: either the block is unreadable, or it is what was published last.
+            // Silent on purpose and every tick, so it cannot be logged here -- the counters and
+            // the two lines below are what tell the difference from outside.
             return;
         };
         let Some(iface) = matchmaking() else {
@@ -672,6 +692,21 @@ mod live {
         // key was never on the lobby invaders query. `None` here means Seamless has not declared
         // an advertisement yet, which is the ordinary state until the world is opened.
         let Some(lobby) = advertisement_lobby() else {
+            // Said once, because until 2026-09-15 this was indistinguishable from not hosting at
+            // all: a host with an open world, Seamless sitting in a lobby, and
+            // advert[published=0 refused=0] -- which reads as "nothing has happened yet" when what
+            // actually happened is that the advertisement this module watches for was never seen,
+            // so no invader filtering on location can ever match this host.
+            if NO_ADVERTISEMENT_SAID.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            crate::standalone_log(format_args!(
+                "lobby-publish: not advertising {value} -- Seamless has not declared an \
+                 advertisement lobby where this module watches for one. Before the world is open \
+                 that is the ordinary state; with the world open and other players able to join, \
+                 it means no invader filtering on location can see this host, and the observer on \
+                 SetLobbyData never caught the creation this session."
+            ));
             return;
         };
         // Refuse rather than write somewhere nobody queries. The struct offset that produced this
@@ -783,6 +818,13 @@ mod live {
     /// the advertisement, by writing the marker to it; watching that write is definitional rather
     /// than inferential, and it needs no offset, no ownership reasoning, and no candidate probing.
     static ADVERTISEMENT_LOBBY: AtomicU64 = AtomicU64::new(0);
+    /// The key the marker arrived under, kept so the read-back can ask for the same one.
+    ///
+    /// Seamless 2.0.0 hashes its lobby-data key names, so the constant this module used to read
+    /// with (`lobby_type`) returns nothing there and the verification would refuse a lobby it had
+    /// just correctly identified. Captured from the write rather than assumed, which also means a
+    /// build that hashes it differently needs no change here.
+    static ADVERTISEMENT_KEY: Mutex<Option<Vec<u8>>> = Mutex::new(None);
     /// Suppresses our own `SetLobbyData` calls in the observer, so publishing our key can never be
     /// mistaken for Seamless declaring an advertisement.
     static IN_OUR_OWN_WRITE: AtomicBool = AtomicBool::new(false);
@@ -803,6 +845,49 @@ mod live {
     static MATCHMAKING_DECLINE_LOGGED: AtomicBool = AtomicBool::new(false);
     static SET_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
 
+    /// How many of Seamless's own lobby writes to print before going quiet.
+    ///
+    /// Seven is what a host's creation burst was measured at, so this covers one whole
+    /// advertisement and then stops rather than following the session forever.
+    const OBSERVED_WRITE_BUDGET: usize = 12;
+    /// How many have been printed.
+    static OBSERVED_WRITES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Render bytes Seamless wrote, exactly as they are.
+    fn show(bytes: Option<&[u8]>) -> String {
+        let Some(bytes) = bytes else {
+            return "<unreadable>".to_owned();
+        };
+        // These are Seamless's bytes and the point of the line is to show what they are. A write
+        // that is not valid UTF-8 is itself the finding, so it must be printed rather than
+        // dropped, which is what strict decoding would do at the moment it matters most.
+        // UTF-8 Lossy: shown as written, never rejected.
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// Print the key and value Seamless just wrote, for as long as the budget lasts.
+    ///
+    /// The observer matched on one exact pair and said nothing about anything else, so a session
+    /// where the pair never arrived was indistinguishable from a session where Seamless never
+    /// wrote at all -- and both end as `advert[published=0 refused=0]`, which reads as "nothing
+    /// has happened yet". Measured 2026-09-15 on a host with an open world and a co-op partner
+    /// connected: no advertisement lobby was ever latched, and the installed `ersc.dll` contains
+    /// neither `lobby_type` nor `yknx3_seamless_master_lobby` as plain strings, so the pair this
+    /// module waits for cannot be confirmed from the binary either. What Seamless actually writes
+    /// is therefore the one missing fact, and only the hook can supply it.
+    fn report_observed_write(lobby: u64, key: Option<&[u8]>, value: usize) {
+        if OBSERVED_WRITES.fetch_add(1, Ordering::SeqCst) >= OBSERVED_WRITE_BUDGET {
+            return;
+        }
+        let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) };
+        let shown_key = show(key);
+        let shown_value = show(value_bytes.as_deref());
+        crate::standalone_log(format_args!(
+            "lobby-publish: observed Seamless write lobby={lobby:#x} key={shown_key:?} \
+             value={shown_value:?}"
+        ));
+    }
+
     /// Watch Seamless declare its advertisement lobby. Observation only: every call is passed
     /// straight through, nothing is altered, and our own writes are ignored.
     unsafe extern "system" fn set_lobby_data_hook(
@@ -822,13 +907,31 @@ mod live {
         // half of the same bug.
         if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) {
             let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) };
-            if key_bytes.as_deref()
-                == Some(ADVERTISEMENT_MARKER_KEY.trim_end_matches('\0').as_bytes())
+            report_observed_write(lobby as u64, key_bytes.as_deref(), value);
+            // Matched on the value alone, because the key is not stable across Seamless builds.
+            //
+            // This tested `key == "lobby_type"` until 2026-09-15, and on the installed 2.0.0 build
+            // that key does not exist: Seamless hashes most of its lobby-data key names, and the
+            // marker arrives as
+            //   key="700f7f504eb977a3c7899037923afe28083a7361b5fde7b098a76d8666bb0376"
+            //   value="yknx3_seamless_master_lobby"
+            // captured live from this hook. The old test therefore never fired, no advertisement
+            // lobby was ever latched, and a host with an open world published nothing at all while
+            // reporting advert[published=0 refused=0] -- which reads as "not hosting yet".
+            //
+            // The value is the half worth matching anyway: it is Seamless's own name for what the
+            // lobby is, while the key is just where it filed it. A build that hashes the value too
+            // would break this again, and would be caught the same way -- the observed-write lines
+            // above print every pair.
             {
                 let value_bytes =
                     unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) };
                 if value_bytes.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes()) {
                     let lobby = lobby as u64;
+                    if let Some(bytes) = key_bytes.as_deref() {
+                        *ADVERTISEMENT_KEY.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(bytes.to_vec());
+                    }
                     let previous = ADVERTISEMENT_LOBBY.swap(lobby, Ordering::SeqCst);
                     if previous != lobby {
                         // A new advertisement lobby means whatever we published before is on a
