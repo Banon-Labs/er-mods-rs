@@ -40,31 +40,6 @@ fn enable_toggle_key_in_force() -> i32 {
         config.enable_toggle_key
     })
 }
-/// The three warp keys, read from the config every poll, for the same reason and with the same
-/// fallback as [`mark_keys_in_force`].
-///
-/// These are the pair's sharper case. `VK_F7` was not merely unavailable on a compact keyboard, it
-/// was also another mod's default in the same me3 profile, so one press reached both features and a
-/// live session warped when the player meant the other thing -- with no config key on either side
-/// to move.
-#[cfg(windows)]
-pub fn warp_keys_in_force() -> (i32, i32, i32) {
-    current_config().map_or(
-        (
-            er_invasion_warp_core::keybind::VK_F7,
-            er_invasion_warp_core::keybind::VK_F8,
-            er_invasion_warp_core::keybind::VK_F9,
-        ),
-        |config| {
-            (
-                config.warp_nearest_key,
-                config.warp_next_key,
-                config.warp_other_area_key,
-            )
-        },
-    )
-}
-
 /// `VK_SHIFT`: held, the mark keys act on the location's name instead of its exact block --
 /// "everywhere that shares this name" rather than "this tile".
 #[cfg(windows)]

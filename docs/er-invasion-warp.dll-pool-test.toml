@@ -19,12 +19,12 @@
 # because any invasion that happens is a real match rather than something the filter allowed.
 enabled = false
 
-# Irrelevant while `enabled = false`, left at the default.
+# Inert in this build -- it drove the match-time filter, which was deleted. Left at the default.
 mode = "exact"
 
-# MUST stay false. Hunt narrows the search to a location key, which is a different feature and
+# MUST stay false. This narrows the search to one location, which is a different feature and
 # would confuse this test.
-hunt = false
+search_by_location = false
 
 # THE THING BEING TESTED.
 #
@@ -36,11 +36,11 @@ hunt = false
 #
 # So: turn it on, both of you, at the same time. If one of you has it off, you will not find each
 # other -- that is the feature working, not a failure.
-dll_users_only = true
+only_players_with_this_mod = true
 
-# Puts a short message on screen when a match is refused, e.g. "Rejected m60_42_36_00 (elsewhere)".
-# Harmless here -- with `enabled = false` nothing is refused, so you should never see one. If you
-# DO see one during this test, something is wrong and it is worth reporting.
+# Puts a short message on screen when a match arrives, naming where the server sent you. Nothing
+# is refused in this build, so it is a status line rather than a rejection notice -- useful here
+# as confirmation that a match landed at all.
 reject_notice = true
 
 # Unused for this test; left at defaults so the file is complete.

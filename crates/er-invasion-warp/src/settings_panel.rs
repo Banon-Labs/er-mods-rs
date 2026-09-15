@@ -319,7 +319,13 @@ fn build_view() -> SettingsView {
             key: "mode",
             value: config.mode.as_str().to_owned(),
             control: RowControl::Cycle,
-            note: Some("exact / area / named"),
+            // It cycles, it saves, and it changes nothing about who you meet. Its only consumer
+            // was `LocalInvasionConfig::judge`, which ran at `SetMultiplayJoinData` -- after the
+            // connection already existed -- and that filter was deleted for spending a real
+            // connection to learn what the query could have asked for. The field stays because
+            // the narrowing is moving into the query, where a mode will pick tiles instead of
+            // verdicts. Until then the row has to say so, or it reads as a live lever.
+            note: Some("inert in this build -- search_radius narrows the query instead"),
         },
         toggle_row(
             "search_by_location",
@@ -355,16 +361,41 @@ fn build_view() -> SettingsView {
         ),
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
-        toggle_row("map_pins", config.map_pins, None),
-        toggle_row("steam_hooks", config.steam_hooks, None),
-        toggle_row("ersc_observers", config.ersc_observers, None),
-        toggle_row("ersc_show_observer", config.ersc_show_observer, None),
+        // The five rows below install or withhold detours. They are here so a crash can be
+        // attributed to one hook instead of to the mod, and not one of them is a preference
+        // anybody wants to express. Saying that on the row is cheaper than the alternative: a
+        // player switches `steam_hooks` off, loses the three features that live behind it, and
+        // reads a config line reporting everything healthy.
+        toggle_row(
+            "map_pins",
+            config.map_pins,
+            Some("diagnostic -- off isolates the world-map hooks; the pins are the feature"),
+        ),
+        toggle_row(
+            "steam_hooks",
+            config.steam_hooks,
+            Some("leave on -- it installs search_by_location, search_radius and the pool filter"),
+        ),
+        toggle_row(
+            "ersc_observers",
+            config.ersc_observers,
+            Some("leave off -- arming the pair killed the game at 24.9s, against 251s off"),
+        ),
+        toggle_row(
+            "ersc_show_observer",
+            config.ersc_show_observer,
+            Some("diagnostic -- names which half crashes; idle while ersc_observers is off"),
+        ),
         toggle_row(
             "ersc_lobby_key_observer",
             config.ersc_lobby_key_observer,
-            None,
+            Some("diagnostic -- names which half crashes; idle while ersc_observers is off"),
         ),
-        toggle_row("ersc_invade_observer", config.ersc_invade_observer, None),
+        toggle_row(
+            "ersc_invade_observer",
+            config.ersc_invade_observer,
+            Some("diagnostic -- it cancelled item-invasions, and this build cancels nothing"),
+        ),
     ];
     rows.push(SettingRow {
         key: "named_locations",
@@ -372,19 +403,32 @@ fn build_view() -> SettingsView {
         control: RowControl::ReadOnly,
         note: Some("not implemented: a typed place name has no known route to its FMG text id"),
     });
-    for (key, len) in [
-        ("allowed_blocks", config.allowed_blocks.len()),
-        ("blocked_blocks", config.blocked_blocks.len()),
+    // Two of these three still decide something -- `search_by_location` asks Steam for the one
+    // marked location and refuses to run while it is excluded -- and the third rides with `mode`
+    // into the deleted filter. A single shared note would have to be vague enough to cover both,
+    // so they get one each.
+    for (key, len, note) in [
+        (
+            "allowed_blocks",
+            config.allowed_blocks.len(),
+            "marked with the mark key -- one mark is what search_by_location aims at",
+        ),
+        (
+            "blocked_blocks",
+            config.blocked_blocks.len(),
+            "excluded with the unmark key -- an exclusion also stops search_by_location",
+        ),
         (
             "named_location_text_ids",
             config.named_location_text_ids.len(),
+            "inert in this build -- only mode consulted these, and mode judges nothing",
         ),
     ] {
         rows.push(SettingRow {
             key,
             value: format!("{len} entr{}", if len == 1 { "y" } else { "ies" }),
             control: RowControl::ReadOnly,
-            note: Some("edited with the mark keys on the world map"),
+            note: Some(note),
         });
     }
     for (key, code) in [
@@ -392,9 +436,6 @@ fn build_view() -> SettingsView {
         ("unmark_key", config.unmark_key),
         ("enable_toggle_key", config.enable_toggle_key),
         ("settings_key", config.settings_key),
-        ("warp_nearest_key", config.warp_nearest_key),
-        ("warp_next_key", config.warp_next_key),
-        ("warp_other_area_key", config.warp_other_area_key),
     ] {
         rows.push(SettingRow {
             key,

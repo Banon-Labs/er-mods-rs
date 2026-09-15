@@ -1,17 +1,4 @@
-//! The arrival oracle that decides whether a warp actually worked, and the three hotkeys that used
-//! to trigger one.
-//!
-//! # The hotkeys no longer move the player
-//!
-//! Invasion locations are map markers, not fast-travel destinations
-//! ([`er_invasion_warp_core::warp::WarpPolicy::MarkersOnly`]), so F7/F8/F9 are refused along with the
-//! world map's own confirm. The refusal is taken here, at the top of the press handler, rather than
-//! left to the warp call at the bottom: reaching that call means decoding the whole invasion
-//! catalog and resolving thousands of candidate coordinates, and doing all of that on every press
-//! to then decline is a stutter the player would feel for no reason.
-//!
-//! The keys are still read and still answer, because a key that does nothing at all and a key
-//! whose handler is broken look identical from the outside. Pressing one now logs why.
+//! The arrival oracle that decides whether a warp actually worked.
 //!
 //! # The oracle is still live, and still needed
 //!
@@ -20,22 +7,22 @@
 //! being requested. That is a distinction worth keeping wired up even while nothing issues one:
 //! if the policy is ever revisited, the evidence path is the part that took real runs to build.
 //!
-//! What each key meant, kept because the selection helpers still implement it: F7 the nearest
-//! point, F8 the catalog's stable order, F9 another area entirely. Only F7 needed world
-//! coordinates -- see the note on the candidate set in [`InvasionWarpDrive::tick`] for why that
-//! distinction is load-bearing.
+//! # The three warp hotkeys are gone (2026-09-15)
 //!
-//! # Why hotkeys existed, when the goal was the world map (historical)
+//! F7 "nearest", F8 "next in catalog order" and F9 "first point in another area" were removed
+//! along with `warp_nearest_key` / `warp_next_key` / `warp_other_area_key` and the selection
+//! helpers behind them. They had already stopped moving anybody: invasion locations are markers
+//! rather than fast-travel destinations, so every press was declined by
+//! [`er_invasion_warp_core::warp::WarpPolicy::MarkersOnly`] before the catalog was even read.
 //!
-//! The world-map surface is a shell around a warp call. Until that call was proven to relocate the
-//! player and stream the destination, a map UI would have been decoration over an unknown. These
-//! hotkeys were the smallest trigger that exercised the whole payload -- catalog -> engine
-//! coordinate conversion -> target choice -> explicit spawn -> stage kick -> settled read-back --
-//! and they answered the questions static RE could not: whether the world streams at the
-//! destination, whether the disaster remap moves the block under us, and whether the yaw lands the
-//! way the `.aip` table authored it. That work is done; the warp is proven and then deliberately
-//! not offered. Read this section as the record of how the mechanism below was established, not as
-//! a description of what pressing a key does today.
+//! What replaced them is the world map. The pins are injected into the map's own warp row list,
+//! so choosing one goes through the game's confirm path -- the surface a player already knows,
+//! with no binding to collide with another mod. Three keys that answered "declined" were three
+//! more things to explain and three more defaults to keep out of somebody else's way.
+//!
+//! The payload they were built to exercise is untouched: catalog -> engine coordinate conversion
+//! -> explicit spawn -> stage kick -> settled read-back all still run, driven by the map confirm
+//! and judged by the oracle below.
 //!
 //! # What "it worked" means here
 //!
@@ -49,44 +36,8 @@
 use er_invasion_warp_core::warp::{WARP_ARRIVAL_TICK_BUDGET, WarpArrival, WarpOutcome};
 
 #[cfg(windows)]
-use er_invasion_warp_core::invasion_warp::InvasionWarpTarget;
-#[cfg(windows)]
-use er_invasion_warp_core::select::{
-    ResolvedTarget, first_in_other_area, nearest_from, next_target_from,
-};
-#[cfg(windows)]
 use er_invasion_warp_core::warp::classify_arrival;
 
-/// `VK_F7`, the default for "warp to the nearest invasion spawn point that is not the one under
-/// our feet" -- no longer the binding.
-///
-/// # Why these became config keys
-///
-/// These three were hard-coded, and F7 in particular is a popular default: another mod loaded in
-/// the same me3 profile had taken it too, so one press reached both features and a live session
-/// warped when the player meant the other thing. Neither side had a config key, so the only fix
-/// available was unloading a mod. The binding now comes from `warp_nearest_key` /
-/// `warp_next_key` / `warp_other_area_key` in `er-invasion-warp.toml`, by name, re-read while the
-/// game runs -- see [`crate::local_invasion_filter::warp_keys_in_force`]. The constants remain as
-/// the fallback when the config is unreadable, because losing the file should cost the player
-/// their lists, not their keyboard.
-pub const VK_WARP_NEAREST: i32 = 0x76;
-/// `VK_F8`, the default for "step to the next invasion spawn point in the catalog's stable order".
-/// Unlike "nearest" this crosses the map, because the order is by block id rather than by distance.
-pub const VK_WARP_NEXT: i32 = 0x77;
-/// `VK_F9`, the default for "jump to the first spawn point in a different area than the one the
-/// player is in" -- base game <-> Shadow of the Erdtree. A deliberate single action rather than
-/// something inferred from candidate counts, because "can the warp leave its own area" is the one
-/// question a filtered candidate list cannot answer.
-pub const VK_WARP_OTHER_AREA: i32 = 0x78;
-
-/// `GetAsyncKeyState` sets the high bit while the key is held.
-#[cfg(windows)]
-const KEY_DOWN_MASK: i16 = -0x8000;
-/// `GetAsyncKeyState`'s low bit: the key was pressed since the previous call on this thread.
-/// This is what catches a press shorter than one game frame.
-#[cfg(windows)]
-const KEY_PRESSED_SINCE_MASK: i16 = 0x0001;
 /// How often the driver logs a heartbeat while idle, in game-task ticks (~60/s, so ~10s).
 ///
 /// Without it, "the hotkey never fired" and "the driver never ran" and "the window never had
@@ -101,16 +52,9 @@ const HEARTBEAT_TICK_INTERVAL: u64 = 600;
 /// rest. At 60 ticks the loader is long finished and the list is the whole profile.
 const ROSTER_LOG_TICK: u64 = 60;
 
-/// The catalog read + per-target coordinate conversion is a deliberate one-frame cost paid on a
-/// keypress. This bounds it so a corrupt catalog cannot turn one keypress into an unbounded
-/// walk on the game thread.
-#[cfg(windows)]
-const MAX_TARGETS_TO_RESOLVE: usize = 16_384;
-
 #[cfg(windows)]
 #[link(name = "user32")]
 unsafe extern "system" {
-    fn GetAsyncKeyState(vkey: i32) -> i16;
     fn GetForegroundWindow() -> isize;
     fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
 }
@@ -136,74 +80,9 @@ pub fn game_has_focus() -> bool {
 }
 
 #[cfg(windows)]
-/// Edge-detected key state: fires once per physical press, not once per frame held.
-struct KeyEdge {
-    vkey: i32,
-    was_down: bool,
-}
-
-#[cfg(windows)]
-impl KeyEdge {
-    const fn new(vkey: i32) -> Self {
-        Self {
-            vkey,
-            was_down: false,
-        }
-    }
-
-    /// True once per physical press.
-    ///
-    /// Both bits of `GetAsyncKeyState` are used, and the low one is not optional. The high bit
-    /// (`0x8000`) means "down right now", which this samples once per game frame -- so a press
-    /// shorter than a frame falls between two samples and is never seen. The low bit (`0x0001`)
-    /// means "was pressed since the previous call on this thread", which latches exactly that
-    /// case. Without it a synthetic keystroke (and, rarely, a very fast human tap) does nothing
-    /// at all, silently.
-    fn pressed_this_tick(&mut self) -> bool {
-        let state = unsafe { GetAsyncKeyState(self.vkey) };
-        let down = (state & KEY_DOWN_MASK) != 0;
-        let pressed_since_last_call = (state & KEY_PRESSED_SINCE_MASK) != 0;
-        let edge = (down && !self.was_down) || pressed_since_last_call;
-        self.was_down = down;
-        edge
-    }
-
-    /// The raw state word, for the diagnostic heartbeat.
-    fn raw_state(&self) -> i16 {
-        unsafe { GetAsyncKeyState(self.vkey) }
-    }
-
-    /// Drop the latch when we stop listening (focus lost), so returning to the game does not
-    /// replay a press that happened in another window.
-    fn forget(&mut self) {
-        self.was_down = false;
-    }
-
-    /// Move this edge onto a different key, and forget everything about the old one.
-    ///
-    /// Returns whether the binding actually moved, so the caller can log it once.
-    ///
-    /// The reset is the load-bearing half, and it is two resets. `was_down` is about the old key,
-    /// so leaving it set means the new key is treated as already held -- its first press either
-    /// vanishes or, if the key happens to be down at the instant of the swap, its release invents
-    /// one. The discarded `GetAsyncKeyState` read clears the OS's own per-thread "pressed since
-    /// last call" latch for the new key, which has been accumulating since the process started and
-    /// would otherwise arrive as a phantom press the moment the key is bound.
-    fn rebind(&mut self, vkey: i32) -> bool {
-        if self.vkey == vkey {
-            return false;
-        }
-        self.vkey = vkey;
-        self.was_down = false;
-        let _ = unsafe { GetAsyncKeyState(vkey) };
-        true
-    }
-}
-
-#[cfg(windows)]
 /// What the driver is doing right now.
 enum DriveState {
-    /// Waiting for a keypress.
+    /// Nothing in flight.
     Idle,
     /// A warp was issued; waiting for the world to settle so arrival can be judged.
     AwaitingArrival {
@@ -255,21 +134,9 @@ fn take_external_warp() -> Option<WarpOutcome> {
 #[cfg(windows)]
 /// The whole driver. One instance, owned by the game task.
 pub struct InvasionWarpDrive {
-    nearest_key: KeyEdge,
-    next_key: KeyEdge,
-    other_area_key: KeyEdge,
     state: DriveState,
-    /// Stable id of the last target warped to, so [`next_from`] advances instead of repeating.
-    last_target_id: Option<u64>,
     warps_issued: u32,
     warps_arrived: u32,
-    /// Presses declined because invasion locations are markers rather than warp destinations.
-    ///
-    /// Separate from "ignored" for the reason every other counter here is separate: a key that was
-    /// never pressed and a key that was pressed and deliberately declined are the same silence in
-    /// the log otherwise, and only one of them means the player is trying to do something the
-    /// build no longer does.
-    warps_refused_by_policy: u32,
     /// Game-task ticks seen, for the heartbeat cadence.
     ticks: u64,
 }
@@ -286,41 +153,10 @@ impl InvasionWarpDrive {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            nearest_key: KeyEdge::new(VK_WARP_NEAREST),
-            next_key: KeyEdge::new(VK_WARP_NEXT),
-            other_area_key: KeyEdge::new(VK_WARP_OTHER_AREA),
             state: DriveState::Idle,
-            last_target_id: None,
             warps_issued: 0,
             warps_arrived: 0,
-            warps_refused_by_policy: 0,
             ticks: 0,
-        }
-    }
-
-    /// Move the three edges onto whatever `er-invasion-warp.toml` currently names, and say so once
-    /// per change.
-    ///
-    /// The log line is not decoration. A rebind that took and a rebind that was silently ignored
-    /// look identical from the player's side -- they press the new key and something either
-    /// happens or does not -- so the only way to tell a config that did not apply from a feature
-    /// that is broken is for the DLL to state which key it is now listening for.
-    fn adopt_configured_keys(&mut self, log: fn(std::fmt::Arguments<'_>)) {
-        let (nearest, next, other_area) = crate::local_invasion_filter::warp_keys_in_force();
-        let moved = [
-            self.nearest_key.rebind(nearest),
-            self.next_key.rebind(next),
-            self.other_area_key.rebind(other_area),
-        ];
-        // Silent on the very first tick, where every edge "moves" from its built-in default onto
-        // the identical configured value -- there is nothing to tell the player there.
-        if moved.iter().any(|changed| *changed) {
-            log(format_args!(
-                "invasion-warp: hotkeys now nearest={} next={} other_area={}",
-                er_invasion_warp_core::keybind::key_name(nearest),
-                er_invasion_warp_core::keybind::key_name(next),
-                er_invasion_warp_core::keybind::key_name(other_area),
-            ));
         }
     }
 
@@ -408,16 +244,13 @@ impl InvasionWarpDrive {
             ));
         }
 
-        // Adopt any rebinding the player made in `er-invasion-warp.toml` since the last tick. The
-        // config read behind this is throttled to roughly once a second and compares the file's
-        // text, so a tick that changes nothing costs an integer comparison per key.
-        self.adopt_configured_keys(log);
-
         let focused = game_has_focus();
 
-        // The heartbeat exists because every "nothing happened" path below is silent, and
-        // during the first live run they were indistinguishable: no focus, no keypress and no
-        // driver all looked identical in the log.
+        // The heartbeat exists because every "nothing happened" path here is silent, and during
+        // the first live run they were indistinguishable: no focus, no driver and no game task
+        // all looked identical in the log. `focused` is still worth printing with the warp keys
+        // gone -- the mark keys and the settings key are read by other pollers under the same
+        // guard, so a window that never had focus explains their silence too.
         if self.ticks.is_multiple_of(HEARTBEAT_TICK_INTERVAL) {
             // (passed, queried) per bucket -- the visibility oracle. `ours 0/N` with a healthy
             // shipped ratio means our rows are reaching the filter and being rejected, which is
@@ -483,8 +316,7 @@ impl InvasionWarpDrive {
             let panel_suppressed = er_dinput_suppress_core::suppressed_mouse_clicks();
             log(format_args!(
                 "invasion-warp: heartbeat tick={} focused={focused} \
-                 nearest[{}]_state={:#06x} \
-                 next[{}]_state={:#06x} block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
+                 block={} player={} pins={} msb[{msb_points} points/{msb_maps} \
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
@@ -494,14 +326,9 @@ impl InvasionWarpDrive {
                  drawn={banners_drawn} empty={banners_empty}] \
                  panel[open={panel_open} drawn={panel_draws} clicks={panel_clicks} \
                  clicks_kept_from_game={panel_suppressed}] \
-                 hotkey_refused={} \
-                 -- invasion locations are markers, not warp destinations: the three warp keys and \
-                 the map's own confirm are all declined, and the pins are drawn dimmed to show it",
+                 -- invasion locations are markers, not warp destinations: the map's own confirm \
+                 is declined while a search is armed, and the pins are drawn dimmed to show it",
                 self.ticks,
-                er_invasion_warp_core::keybind::key_name(self.nearest_key.vkey),
-                self.nearest_key.raw_state() as u16,
-                er_invasion_warp_core::keybind::key_name(self.next_key.vkey),
-                self.next_key.raw_state() as u16,
                 block.map_or_else(|| "none".to_string(), |b| format!("{b:#010x}")),
                 player.map_or_else(
                     || "none".to_string(),
@@ -512,167 +339,7 @@ impl InvasionWarpDrive {
                 verdicts.0,
                 verdicts.3,
                 verdicts.2,
-                self.warps_refused_by_policy,
             ));
-        }
-
-        if !focused {
-            self.nearest_key.forget();
-            self.next_key.forget();
-            self.other_area_key.forget();
-            return;
-        }
-        let want_nearest = self.nearest_key.pressed_this_tick();
-        let want_next = self.next_key.pressed_this_tick();
-        let want_other_area = self.other_area_key.pressed_this_tick();
-        if !want_nearest && !want_next && !want_other_area {
-            return;
-        }
-        log(format_args!(
-            "invasion-warp: hotkey edge detected (nearest={want_nearest} next={want_next})"
-        ));
-
-        // Refuse before the catalog decode below. `request_invasion_warp` would refuse anyway --
-        // it is the single choke point and this is not a second gate that could disagree with it
-        // -- but only after ~7000 targets had been collected and, for F7, run through coordinate
-        // conversion. Declining early costs the player nothing; declining late costs a frame hitch
-        // on every press.
-        if er_invasion_warp_core::warp::invasion_warp_policy()
-            == er_invasion_warp_core::warp::WarpPolicy::MarkersOnly
-        {
-            self.warps_refused_by_policy = self.warps_refused_by_policy.saturating_add(1);
-            log(format_args!(
-                "invasion-warp: hotkey ignored -- {}. Cancel the search, or let it finish, and the \
-                 key works again; the map's pins un-dim at the same moment",
-                er_invasion_warp_core::warp::WarpError::NotAWarpDestination
-            ));
-            return;
-        }
-
-        let Some(player_position) =
-            (unsafe { er_invasion_warp_core::warp::player_physics_position(base) })
-        else {
-            log(format_args!(
-                "invasion-warp: hotkey ignored -- no local player yet (load into the world first)"
-            ));
-            return;
-        };
-
-        // The full catalog is the candidate set for everything except "nearest".
-        //
-        // Only "nearest" needs world coordinates, because only it needs distances. The warp
-        // itself never does: the explicit-spawn slot takes block-local coordinates and
-        // MoveMapStep runs ConvertBlockCoordsToPhysicsCoords on them once the destination area
-        // has loaded. Filtering every candidate through that conversion up front -- it resolves
-        // only blocks in the player's currently resident area -- silently made every other area
-        // unreachable. A live run showed it as "2591 of 7073 targets converted" while standing
-        // in the DLC: exactly the dlc02 count, with the whole base game excluded.
-        let catalog = match unsafe {
-            er_invasion_warp_core::invasion_warp::collect_invasion_warp_catalog()
-        } {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                log(format_args!(
-                    "invasion-warp: hotkey ignored -- catalog unavailable: {error}"
-                ));
-                return;
-            }
-        };
-        let targets = catalog.targets();
-        if targets.is_empty() {
-            log(format_args!(
-                "invasion-warp: hotkey ignored -- the catalog is empty"
-            ));
-            return;
-        }
-
-        let target = if want_nearest {
-            let resolved = unsafe { resolve_catalog(base, log) };
-            match nearest_from(&resolved, player_position) {
-                Some(index) => resolved[index].target,
-                None => {
-                    log(format_args!(
-                        "invasion-warp: hotkey ignored -- no NEAREST target ({} of {} placeable \
-                         in this area, and none outside the same-point radius)",
-                        resolved.len(),
-                        targets.len()
-                    ));
-                    return;
-                }
-            }
-        } else if want_next {
-            match next_target_from(targets, self.last_target_id) {
-                Some(index) => targets[index],
-                None => return,
-            }
-        } else {
-            let current_area =
-                unsafe { er_invasion_warp_core::warp::current_block_id(base) }.map(|block| {
-                    er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block).area()
-                });
-            let Some(current_area) = current_area else {
-                log(format_args!(
-                    "invasion-warp: hotkey ignored -- current block id unavailable, so 'other \
-                     area' has nothing to be other than"
-                ));
-                return;
-            };
-            match first_in_other_area(targets, current_area) {
-                Some(index) => {
-                    log(format_args!(
-                        "invasion-warp: cross-area jump: leaving area {current_area} for area {}",
-                        targets[index].block.area()
-                    ));
-                    targets[index]
-                }
-                None => {
-                    log(format_args!(
-                        "invasion-warp: hotkey ignored -- every catalog target is already in \
-                         area {current_area}"
-                    ));
-                    return;
-                }
-            }
-        };
-
-        match unsafe { er_invasion_warp_core::warp::request_invasion_warp(&target) } {
-            Ok(outcome) => {
-                self.warps_issued = self.warps_issued.saturating_add(1);
-                self.last_target_id = Some(target.stable_id());
-                log(format_args!(
-                    "invasion-warp: warp issued via {} -> block {} (requested {:#010x}, effective \
-                     {:#010x}) point {} pos [{:.2}, {:.2}, {:.2}] yaw {:.4} spawn_flag={} \
-                     session_touches={} candidates={}",
-                    if want_nearest {
-                        "NEAREST"
-                    } else if want_next {
-                        "NEXT"
-                    } else {
-                        "OTHER-AREA"
-                    },
-                    target.block,
-                    outcome.requested_block,
-                    outcome.effective_block,
-                    target.point_index,
-                    outcome.spawn_position[0],
-                    outcome.spawn_position[1],
-                    outcome.spawn_position[2],
-                    outcome.spawn_yaw,
-                    outcome.spawn_flag,
-                    outcome.session_touches,
-                    targets.len(),
-                ));
-                self.state = DriveState::AwaitingArrival {
-                    outcome: Box::new(outcome),
-                    ticks_waited: 0,
-                };
-            }
-            Err(error) => {
-                log(format_args!(
-                    "invasion-warp: warp REFUSED for block {} point {}: {error}",
-                    target.block, target.point_index
-                ));
-            }
         }
     }
 }
@@ -688,49 +355,6 @@ unsafe fn settled_reading(base: usize) -> Option<(u32, [f32; 3])> {
     let block = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
     let position = unsafe { er_invasion_warp_core::warp::player_physics_position(base) }?;
     Some((block, position))
-}
-
-#[cfg(windows)]
-/// Read the live catalog and convert every target through the engine's own
-/// `ConvertBlockCoordsToPhysicsCoords`, dropping the ones it refuses.
-///
-/// # Safety
-///
-/// Game task thread.
-unsafe fn resolve_catalog(base: usize, log: fn(std::fmt::Arguments<'_>)) -> Vec<ResolvedTarget> {
-    let catalog =
-        match unsafe { er_invasion_warp_core::invasion_warp::collect_invasion_warp_catalog() } {
-            Ok(catalog) => catalog,
-            Err(error) => {
-                log(format_args!(
-                    "invasion-warp: catalog unavailable at hotkey time: {error}"
-                ));
-                return Vec::new();
-            }
-        };
-    let targets: &[InvasionWarpTarget] = catalog.targets();
-    let considered = targets.len().min(MAX_TARGETS_TO_RESOLVE);
-    if targets.len() > considered {
-        log(format_args!(
-            "invasion-warp: catalog has {} targets, resolving only the first {considered} \
-             (MAX_TARGETS_TO_RESOLVE)",
-            targets.len()
-        ));
-    }
-    let mut resolved = Vec::with_capacity(considered);
-    for target in &targets[..considered] {
-        if let Some(entry) = unsafe { er_invasion_warp_core::warp::resolve_target(base, target) } {
-            resolved.push(entry);
-        }
-    }
-    if resolved.len() != considered {
-        log(format_args!(
-            "invasion-warp: {} of {considered} targets converted to world coordinates; the rest \
-             sit in blocks whose world info is not resident",
-            resolved.len()
-        ));
-    }
-    resolved
 }
 
 /// One human-readable line describing how a warp ended.
@@ -875,35 +499,14 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_two_hotkeys_are_distinct_function_keys() {
-        assert_ne!(VK_WARP_NEAREST, VK_WARP_NEXT);
-        assert_eq!(VK_WARP_NEAREST, 0x76, "F7");
-        assert_eq!(VK_WARP_NEXT, 0x77, "F8");
-    }
-
-    /// These constants are now only the FALLBACK for an unreadable config, so they must agree with
-    /// what the shipped config file and the config type call the defaults. A drift between the
-    /// three would mean a player who deletes their config gets different keys than one who keeps
-    /// the shipped file, with nothing saying so.
-    #[test]
-    fn the_fallback_constants_match_the_shipped_defaults() {
-        let shipped = er_invasion_warp_core::local_invasion_config::parse_local_invasion_config(
-            er_invasion_warp_core::local_invasion_config::DEFAULT_CONFIG_TOML,
-        )
-        .config;
-        assert_eq!(shipped.warp_nearest_key, VK_WARP_NEAREST);
-        assert_eq!(shipped.warp_next_key, VK_WARP_NEXT);
-        assert_eq!(shipped.warp_other_area_key, VK_WARP_OTHER_AREA);
-
-        let built_in = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
-        assert_eq!(built_in.warp_nearest_key, VK_WARP_NEAREST);
-        assert_eq!(built_in.warp_next_key, VK_WARP_NEXT);
-        assert_eq!(built_in.warp_other_area_key, VK_WARP_OTHER_AREA);
-    }
-
-    /// The five keys this crate binds must not ship colliding with each other. A player can still
+    /// The keys this crate binds must not ship colliding with each other. A player can still
     /// create a collision by hand -- and is warned when they do -- but the defaults must not.
+    ///
+    /// It was five keys until 2026-09-15; the three warp keys went with the feature. The two that
+    /// remain plus the two function keys are the whole surface now, and the assertion is kept
+    /// rather than dropped as trivial: the shipped defaults are what a player who never opens the
+    /// file is playing with, and F3/F4 sitting next to each other is exactly the kind of pair a
+    /// later edit collides by hand.
     #[test]
     fn the_shipped_keys_do_not_collide_with_each_other() {
         let shipped = er_invasion_warp_core::local_invasion_config::parse_local_invasion_config(
@@ -913,9 +516,8 @@ mod tests {
         let keys = [
             shipped.mark_key,
             shipped.unmark_key,
-            shipped.warp_nearest_key,
-            shipped.warp_next_key,
-            shipped.warp_other_area_key,
+            shipped.enable_toggle_key,
+            shipped.settings_key,
         ];
         for (index, key) in keys.iter().enumerate() {
             assert!(

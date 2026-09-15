@@ -94,7 +94,7 @@ status_only if {
 	tokens[i + 1] == "--status"
 }
 
-# The relaunch that has to ride along. `er-run-branch.py` is the only sanctioned
+# The relaunch that has to ride along. `er-run-branch.py` is the sanctioned
 # launcher in this repo; `~/Elden/launch.sh` is the user's own and is accepted too.
 relaunches if {
 	invokes("er-run-branch.py")
@@ -102,6 +102,15 @@ relaunches if {
 
 relaunches if {
 	contains(norm_command, "Elden/launch.sh")
+}
+
+# `er-run-gamescope.sh` is a launcher too: it calls `er-run-branch.py` inside gamescope's nested
+# X server, which is what lets the game boot while the host Xwayland sits at its client ceiling.
+# Added 2026-09-15, after the guard refused a teardown paired with a real relaunch it could not
+# recognise -- a correct rule applied to a launcher that had not been told to it, which leaves
+# the user with no game exactly like the case the rule exists to prevent.
+relaunches if {
+	contains(norm_command, "er-run-gamescope.sh")
 }
 
 # A dry run stages and launches nothing, so pairing a teardown with one would
