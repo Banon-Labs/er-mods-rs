@@ -212,6 +212,10 @@ pub enum KeepReason {
 /// Why a candidate was rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RejectReason {
+    /// Not a rejection at all: the player asked for the search to stop, with the filter's switch
+    /// or the settings panel. Carried through the same cancel path because the action is the same
+    /// one -- ersc's own Cancel row -- and the reason is what the log line says happened.
+    PlayerStopped,
     /// Not the anchor's block, in a mode that requires it.
     WrongBlock,
     /// Not one of the anchor's place names.

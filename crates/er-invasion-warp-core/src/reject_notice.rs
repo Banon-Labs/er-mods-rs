@@ -87,6 +87,10 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
         RejectReason::CandidateUnnamed => "open your map",
         RejectReason::NothingToMatchAgainst => "open your map",
         RejectReason::ExcludedByUser => "you excluded it",
+        // Not a rejection, and the banner has to stop saying it is: the player pressed the switch,
+        // so the one fact they cannot already see is that the request landed rather than being
+        // swallowed.
+        RejectReason::PlayerStopped => "you stopped it",
     }
 }
 
@@ -103,6 +107,12 @@ enum Announced {
     /// A destination the mod did not judge -- the filter's master switch is off, so this is the
     /// server's choice reported as-is.
     Arrived(u32),
+    /// A connection that outlived every recorded success, carrying which attempt it was.
+    ///
+    /// The ordinal is what makes two failures in a row two pieces of news. A payload-free variant
+    /// would make the second one a repeat of the first and swallow it, which is the opposite of
+    /// what a player retrying a failing hunt needs to see.
+    Failed(u32),
 }
 
 /// Tracks what was last announced so repeats can be suppressed.
@@ -251,6 +261,30 @@ impl RejectNotice {
         }
         append_host(&mut text, host);
         Some(text)
+    }
+
+    /// Feed an attempt the deadline called lost. Returns the text to display, or `None`.
+    ///
+    /// `attempt` distinguishes one failed hunt from the next; see [`Announced::Failed`]. The caller
+    /// owns the count because this type deliberately accumulates nothing across attempts.
+    ///
+    /// No place and no host: join data never arrived, so there is no destination to name. Saying
+    /// where would mean naming the last place the player *was* told about, which reads as a
+    /// rejection from somewhere they never reached.
+    pub fn observe_failure(&mut self, enabled: bool, attempt: u32) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::Failed(attempt));
+        self.last_announced = Some(Announced::Failed(attempt));
+        // A failure ends the run of rejections it followed, exactly as a success does; the count
+        // belongs to that run.
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // Worded as the outcome first, like the other three, so the banner reads as one surface
+        // reporting four results rather than four unrelated messages. "No connection" rather than
+        // "timed out" on purpose: Seamless's timeout has not fired yet, and claiming it had would
+        // be reporting something this mod did not observe.
+        Some("Invasion failed -- no connection".to_string())
     }
 
     /// How many rejections have been suppressed since the last announcement.

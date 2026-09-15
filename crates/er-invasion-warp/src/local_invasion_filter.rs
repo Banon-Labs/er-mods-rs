@@ -131,7 +131,7 @@ pub(crate) mod session_scan;
 
 use actions::{
     arm_self_recovery, cancel_match, cancel_stalled_attempt_inner, drive_pending_reinvade,
-    log_refusal_once, watch_for_stall,
+    log_refusal_once, watch_for_failed_connect, watch_for_stall,
 };
 /// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
 /// callers already look for them.
@@ -223,6 +223,14 @@ static INVADE_ACTION_UNCALLABLE: AtomicBool = AtomicBool::new(false);
 static STALL_RECOVERIES: AtomicUsize = AtomicUsize::new(0);
 /// Stall detection state. Behind a mutex rather than atomics because the decision reads and writes
 /// "which state, and since when" together; a torn read there would restart the clock at random.
+/// Calls a connect lost once it has outlived every success on record, so the player is told and
+/// freed instead of waiting out Seamless's timeout. Behind a mutex because the decision reads and
+/// updates "is a connect being timed, and since when" together.
+static ATTEMPT_VERDICT: Mutex<er_invasion_warp_core::attempt_verdict::AttemptVerdict> =
+    Mutex::new(er_invasion_warp_core::attempt_verdict::AttemptVerdict::new());
+/// How many attempts the deadline has called lost. Its only job is to make two failures in a row
+/// two pieces of news rather than a repeat of one -- see `reject_notice::Announced::Failed`.
+static FAILED_CONNECTS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static STALL_WATCHDOG: Mutex<crate::stall_watchdog::StallWatchdog> =
     Mutex::new(crate::stall_watchdog::StallWatchdog::new());
 /// Slows the restart when Seamless is refusing attempts instantly -- the opposite failure to the
@@ -494,6 +502,45 @@ pub(crate) fn stand_down_hunt(reason: &str) {
         crate::standalone_log(format_args!(
             "local-invasion: auto re-search stood down -- {reason}. Nothing here will start \
              another search until you ask for one."
+        ));
+    }
+    cancel_live_search_for_player(reason);
+}
+
+/// Cancel a search that is running right now, because the player said stop.
+///
+/// Standing the loop down is not the same act and does not imply this one: it stops the next
+/// search, and on its own it leaves the current one running until Seamless finishes with it. A
+/// player who flips the switch during a search means both.
+///
+/// Refuses outside the four states where ersc draws its own Cancel row (`0x0e`, `0x0f`, `0x10`,
+/// `0x12`). Driving the action outside them is driving a row the player could not have clicked,
+/// which is outside every precondition its author arranged for -- and the state where a match is
+/// judged is measurably outside that set.
+#[cfg(windows)]
+fn cancel_live_search_for_player(reason: &str) {
+    let Ok(session) = resolve_session() else {
+        // No session is no search. Silent: flipping the switch out in the world is the common
+        // case and owes no line.
+        return;
+    };
+    let Some(state) = read_session_state(session.abi, session.session) else {
+        return;
+    };
+    if state == session.abi.state_idle {
+        return;
+    }
+    if !lock_report::cancel_row_offered(state) {
+        crate::standalone_log(format_args!(
+            "local-invasion: you asked to stop ({reason}) but the session is at {state:#06x}, \
+             where Seamless withdraws its own Cancel row -- the attempt is past the point it can \
+             be called off and is left alone. The loop is stood down, so nothing follows it."
+        ));
+        return;
+    }
+    if actions::cancel_match(er_invasion_warp_core::local_invasion::RejectReason::PlayerStopped) {
+        crate::standalone_log(format_args!(
+            "local-invasion: cancelled the live search at {state:#06x} because {reason}"
         ));
     }
 }
@@ -2645,6 +2692,10 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     // then sees that idle and arms the restart; `drive_pending_reinvade` fires it. Running them in
     // this order recovers a stalled attempt within one tick of it settling rather than three.
     watch_for_stall(session);
+    // After the stall detector, before self-recovery: the deadline may cancel, and running it
+    // ahead of the arming below lets a called-lost attempt restart within the same tick rather
+    // than the next one -- the same ordering argument the line above makes.
+    watch_for_failed_connect(session);
     arm_self_recovery(session);
     drive_pending_reinvade(session);
 }
