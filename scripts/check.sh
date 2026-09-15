@@ -1010,6 +1010,11 @@ bash "$repo_root/scripts/test-git-pre-push-block-main.sh"
 # exports GIT_DIR to hooks in a linked WORKTREE, so a fixture write leaks onto the shared
 # checkout; see the header of scripts/test-pre-push-scrubs-git-env.sh.
 bash "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
+# ...and that a push which only deletes refs runs no gate at all. Every gate the hook invokes
+# judges the content of the commits being sent, and a deletion sends none -- so before this they
+# judged the pushing checkout instead, and a branch deletion was blocked by the unrelated branch
+# the agent happened to have out. See the header of scripts/test-pre-push-deletion-only.sh.
+bash "$repo_root/scripts/test-pre-push-deletion-only.sh"
 # The build gates must yield to the person at the keyboard, and three of the four levers that
 # make that true are invisible from the process that sets them. See the header of
 # scripts/test-cpu-courtesy.sh.
@@ -2002,6 +2007,7 @@ shellcheck "$repo_root/scripts/check-no-local-main-commits.sh"
 shellcheck "$repo_root/scripts/git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-git-pre-push-block-main.sh"
 shellcheck "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
+shellcheck "$repo_root/scripts/test-pre-push-deletion-only.sh"
 shellcheck "$repo_root/scripts/pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/test-pr-refactor-scope.sh"
 shellcheck "$repo_root/scripts/probe-dll-build-determinism.sh"
