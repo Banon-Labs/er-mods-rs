@@ -74,22 +74,61 @@ pub const TABLE: &[(&str, i32)] = &[("tongue", 28)];
 
 /// The comma-separated list of active effect names, or `LOBBY_HOST_EFFECTS_NONE` when none are.
 ///
-/// An unreadable player is `none` rather than an omission or an error. The distinction that
-/// matters to a reader is between a host who answered and a host who could not be asked, and the
-/// absence of the key already carries the second -- this is only ever reached with a live lobby,
-/// which means a live session.
+/// An unreadable player publishes `none` too, because a reader cannot act on the difference: both
+/// mean "do not come here expecting to get in". The log does say which, once per change, and that
+/// is not decoration -- `none` on the wire has two causes and the first question asked of a host
+/// advertising it is which one applies. Without the line, answering needs a rebuild.
 #[cfg(windows)]
 #[must_use]
 pub fn active_effects_value() -> String {
-    let active: Vec<&str> = TABLE
-        .iter()
-        .filter(|(_, id)| local_player_has_speffect(*id) == Some(true))
-        .map(|(name, _)| *name)
-        .collect();
-    if active.is_empty() {
-        return crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE.to_owned();
+    let mut active: Vec<&str> = Vec::new();
+    let mut unreadable = 0usize;
+    for (name, id) in TABLE {
+        match local_player_has_speffect(*id) {
+            Some(true) => active.push(name),
+            Some(false) => {}
+            None => unreadable += 1,
+        }
     }
-    active.join(",")
+    let value = if active.is_empty() {
+        crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE.to_owned()
+    } else {
+        active.join(",")
+    };
+    say_once(&value, unreadable);
+    value
+}
+
+/// Say what `value` means, once per distinct answer.
+///
+/// This runs on the game task and is asked every tick, so it is latched on the sentence rather
+/// than on a flag: a host who uses the item, drops it and uses it again gets three lines, and a
+/// host standing still gets one.
+#[cfg(windows)]
+fn say_once(value: &str, unreadable: usize) {
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<String>> = Mutex::new(None);
+
+    let text = if unreadable == TABLE.len() {
+        format!(
+            "host-effects: publishing {value} because the player cannot be read -- no world, or \
+             a null SpEffect container. This is not the same as the item being off, and an \
+             invader cannot tell the two apart from the lobby."
+        )
+    } else if value == crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE {
+        format!(
+            "host-effects: publishing {value} -- asked and answered. SpEffect 28 is absent, so \
+             `CanBeSoloInvaded` is false and no invader can enter this world solo."
+        )
+    } else {
+        format!("host-effects: publishing {value} -- this host is invadable")
+    };
+    let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
+    if said.as_deref() == Some(text.as_str()) {
+        return;
+    }
+    crate::standalone_log(format_args!("{text}"));
+    *said = Some(text);
 }
 
 /// Host-side stub: there is no player off the game, so nothing is active.
