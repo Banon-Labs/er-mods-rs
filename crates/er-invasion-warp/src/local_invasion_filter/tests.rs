@@ -367,6 +367,47 @@ fn product_code() -> String {
     .join("\n")
 }
 
+/// `product_code` stops at the first `#[cfg(test)]`, so that attribute may only appear last.
+///
+/// The truncation is what keeps a needle written in a test from satisfying a guard written about
+/// shipping code. It is also a loaded gun: the attribute is ordinary Rust and reads as harmless
+/// anywhere, but one placed early cuts the scanned string off at that line and every gate above
+/// silently passes on the handful of lines that survive. Measured 2026-09-15 -- gating two
+/// unused-in-release imports with it truncated the parent to its first 133 lines and took eight
+/// source-scan tests down at once, which at least failed loudly; a gate that scans for something
+/// it must never find would have gone green instead.
+///
+/// So the rule is the attribute appears exactly once per scanned file, on the trailing test
+/// module. Anything else wants `#[allow(unused)]`, a `cfg(test)` submodule of its own, or the
+/// constant referenced through its module path.
+#[test]
+fn the_only_cfg_test_in_scanned_source_is_the_trailing_test_module() {
+    let attribute = format!("#[cfg({})]", "test");
+    for (name, source) in [
+        (
+            "local_invasion_filter.rs",
+            include_str!("../local_invasion_filter.rs"),
+        ),
+        ("actions.rs", include_str!("actions.rs")),
+    ] {
+        let occurrences = source.matches(&attribute).count();
+        assert!(
+            occurrences <= 1,
+            "{name} carries {occurrences} `cfg(test)` attributes; product_code() truncates at the \
+             first, so every source scan above it reads a fraction of the file"
+        );
+        let Some((_, tail)) = source.split_once(&attribute) else {
+            // No test module in this file at all, so nothing truncates and nothing to place.
+            continue;
+        };
+        assert!(
+            tail.trim_start().starts_with("mod tests;"),
+            "{name}'s only `cfg(test)` must sit on the trailing test module, not on an item in \
+             the middle of the file"
+        );
+    }
+}
+
 /// The session scanner's shipping code, comments and test module removed.
 ///
 /// A second reader rather than a widened `product_code`, because these guards pin the shape of one
@@ -386,6 +427,7 @@ fn filter_module_code() -> String {
         include_str!("menu_object.rs"),
         include_str!("banner.rs"),
         include_str!("menu_seams.rs"),
+        include_str!("session_field_trace.rs"),
     ]
     .join("\n")
 }
@@ -457,8 +499,8 @@ fn no_invasion_target_is_ever_chosen_by_steam_id() {
 /// to one of them is invisible and the whole point of the tracing is lost.
 #[test]
 fn the_session_watch_window_covers_every_known_field() {
-    let begin = SESSION_WATCH_BEGIN;
-    let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
+    let begin = session_field_trace::SESSION_WATCH_BEGIN;
+    let end = begin + session_field_trace::SESSION_WATCH_WORDS * 8;
     // Every build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
     // a stale build's state offset but not the supported one's would trace nothing at all.
@@ -497,7 +539,7 @@ fn the_session_watch_window_covers_every_known_field() {
 fn the_session_watch_window_stays_small() {
     const {
         assert!(
-            SESSION_WATCH_WORDS * 8 <= 0x200,
+            session_field_trace::SESSION_WATCH_WORDS * 8 <= 0x200,
             "a per-frame read of this size is no longer negligible"
         )
     };
