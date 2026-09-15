@@ -179,14 +179,21 @@ mod tests {
 
     #[test]
     fn the_deadline_sits_in_the_empty_gap_between_the_two_distributions() {
-        assert!(
-            CONNECT_DEADLINE_MS > SLOWEST_RECORDED_SUCCESS_MS,
-            "a deadline under the slowest success calls working invasions lost"
-        );
-        assert!(
-            CONNECT_DEADLINE_MS < FASTEST_SELF_RESOLVED_FAILURE_MS,
-            "a deadline over the fastest real timeout saves the player nothing"
-        );
+        // `const` blocks rather than plain asserts, at clippy's suggestion and to its credit: both
+        // operands are constants, so this is decidable at compile time and a bad deadline should
+        // fail the build rather than one test run.
+        const {
+            assert!(
+                CONNECT_DEADLINE_MS > SLOWEST_RECORDED_SUCCESS_MS,
+                "a deadline under the slowest success calls working invasions lost"
+            );
+        }
+        const {
+            assert!(
+                CONNECT_DEADLINE_MS < FASTEST_SELF_RESOLVED_FAILURE_MS,
+                "a deadline over the fastest real timeout saves the player nothing"
+            );
+        }
     }
 
     #[test]
