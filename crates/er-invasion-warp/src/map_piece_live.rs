@@ -121,6 +121,35 @@ pub unsafe fn map_pieces() -> Option<Vec<MapPiece>> {
     (!pieces.is_empty()).then_some(pieces)
 }
 
+/// The `PlaceName` text id covering a map-space position, or `-1` when none does.
+///
+/// `-1` is the same "no name" sentinel the pin path uses, so this drops in where that path gives
+/// up. It is never a fabricated id: an id that resolves in no FMG renders as the literal
+/// `?PlaceName?`, which is worse on screen than an unnamed pin.
+///
+/// The pieces are re-read on each call rather than cached. This runs where the pin path has
+/// already failed, which is rare, and a cache would have to be invalidated on a regulation
+/// hot-reload that this module has no way to observe.
+///
+/// # Safety
+///
+/// Game task thread. Reads only.
+#[cfg(windows)]
+#[must_use]
+pub unsafe fn place_name_text_id_at(x: f32, z: f32) -> i32 {
+    let Some(pieces) = (unsafe { map_pieces() }) else {
+        return -1;
+    };
+    er_invasion_warp_core::map_piece::place_name_at(&pieces, x, z).unwrap_or(-1)
+}
+
+/// Host build: no game memory, so no name.
+#[cfg(not(windows))]
+#[must_use]
+pub fn place_name_text_id_at(_x: f32, _z: f32) -> i32 {
+    -1
+}
+
 #[cfg(not(windows))]
 #[must_use]
 pub fn map_pieces() -> Option<Vec<er_invasion_warp_core::map_piece::MapPiece>> {

@@ -972,9 +972,19 @@ pub(crate) unsafe fn nearest_place_name_text_id(
     area: u8,
     coords: MapCoordinates,
 ) -> i32 {
-    unsafe { nearest_place_name_in_area(begin, existing_rows, Some(area), coords) }
-        .or_else(|| unsafe { nearest_place_name_in_area(begin, existing_rows, None, coords) })
-        .unwrap_or(-1)
+    if let Some(text_id) =
+        unsafe { nearest_place_name_in_area(begin, existing_rows, Some(area), coords) }
+            .or_else(|| unsafe { nearest_place_name_in_area(begin, existing_rows, None, coords) })
+    {
+        return text_id;
+    }
+    // Both pin scans came up empty, which is the case that used to produce an invisible pin:
+    // a legacy dungeon whose area ships no grace row carrying a positive `PlaceName` label
+    // yields nothing for every pin in that area, and a pin whose eight labels are all negative
+    // is not drawn at all. `WorldMapPieceParam` does not depend on any pin existing, so it
+    // answers where the scan cannot -- at region granularity, which is the right answer for a
+    // dungeon that has no nearer name of its own.
+    unsafe { crate::map_piece_live::place_name_text_id_at(coords.x, coords.z) }
 }
 
 /// Nearest shipped `PlaceName` label, restricted to `area` when it is `Some`.
