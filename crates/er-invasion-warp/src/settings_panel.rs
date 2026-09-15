@@ -199,6 +199,22 @@ fn apply_pending_edits() {
                     };
                 applied += 1;
                 changed.push(format!("prefilter_radius={}", config.prefilter_radius));
+                // Raising the radius is the player asking for the widening search, and the
+                // widening search cannot run without the two switches it rides on: the ring
+                // starts from the tile hunt picks, and it runs inside the lobby-query detour
+                // steam_hooks installs. Leaving them for the player to find means the row they
+                // just clicked reports a number and changes nothing, which is how this setting
+                // spent its first evening. Arm them here rather than explain them afterwards.
+                if config.prefilter_radius > 0 {
+                    if !config.hunt {
+                        config.hunt = true;
+                        changed.push("hunt=true (needed by the radius)".to_owned());
+                    }
+                    if !config.steam_hooks {
+                        config.steam_hooks = true;
+                        changed.push("steam_hooks=true (needed by the radius)".to_owned());
+                    }
+                }
             }
             SettingEdit::Cycle(key) => {
                 crate::standalone_log(format_args!(

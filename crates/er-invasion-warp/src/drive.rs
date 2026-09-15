@@ -466,6 +466,11 @@ impl InvasionWarpDrive {
             // 2026-09-15, so nothing rejects a connected match and nothing can fail to enforce
             // one. `cancels` is still real: the deadline abandons a connect going nowhere.
             let (keeps, cancels, reinvades) = crate::local_invasion_filter::tallies();
+            // What this host has told the world about where it is standing. Zero published while
+            // hosting means an invader filtering on location cannot see this host at all -- a
+            // state that was previously indistinguishable from not hosting, because every failure
+            // path in the publish is a silent no-op.
+            let (adverts, advert_refusals) = crate::lobby_publish::publish_tallies();
             // The settings panel, as two numbers that fail differently. `drawn` is frames the
             // panel rendered into: zero while it is open means this DLL's guest registration
             // never reached the host's frame, which looks on screen exactly like the key not
@@ -483,6 +488,7 @@ impl InvasionWarpDrive {
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
+                 advert[published={adverts} refused={advert_refusals}] \
                  local[kept={keeps} cancelled={cancels} rearmed={reinvades}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
