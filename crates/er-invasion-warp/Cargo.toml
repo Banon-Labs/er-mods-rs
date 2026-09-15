@@ -45,6 +45,22 @@ path = "../er-hook"
 [target.'cfg(windows)'.dependencies]
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The one-imgui-host-per-process arbitration for the settings panel. This DLL hosts the overlay
+# only if it loads before every other overlay shell and draws as a GUEST otherwise -- which is
+# the case in every profile a player uses -- so exactly one `Present` hook exists in the process.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+# Blanking the DirectInput left button while the panel owns the pointer. A guest owns no
+# `MessageFilter`, and ELDEN RING reads the mouse through DirectInput anyway, so this is what
+# stops a click on the panel also being a weapon swing.
+er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
+# Pinned to the SAME hudhook every other overlay shell carries -- the `ui` pointer crosses a DLL
+# boundary and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemServices",
+] }
 
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
 # set, denied. Zero violations on the shipping target

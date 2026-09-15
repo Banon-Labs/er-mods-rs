@@ -367,6 +367,13 @@ pub struct LocalInvasionConfig {
     /// a restart and so a player reading the config later sees the state they are actually
     /// playing in.
     pub enable_toggle_key: crate::keybind::VirtualKey,
+    /// Virtual-key code for opening and closing the in-game settings panel.
+    ///
+    /// The panel is a second front end onto this file, not a replacement for it: it shows every
+    /// key below, writes each change straight back here, and re-reads the file so a hand edit
+    /// made while it is open still wins. Bound by name like every other key, and for the same
+    /// reason -- a hard-coded default is a key another mod in the profile may already own.
+    pub settings_key: crate::keybind::VirtualKey,
     /// Virtual-key code for "the nearest invasion point that is not the one under our feet".
     ///
     /// Configurable for a sharper reason than the mark keys. This was hard-coded to `VK_F7`, and
@@ -433,6 +440,7 @@ impl Default for LocalInvasionConfig {
             mark_key: crate::keybind::VK_INSERT,
             unmark_key: crate::keybind::VK_DELETE,
             enable_toggle_key: crate::keybind::VK_F3,
+            settings_key: crate::keybind::VK_F4,
             warp_nearest_key: crate::keybind::VK_F7,
             warp_next_key: crate::keybind::VK_F8,
             warp_other_area_key: crate::keybind::VK_F9,

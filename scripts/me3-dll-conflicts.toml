@@ -715,7 +715,24 @@ WHAT THIS RESTS ON, stated plainly: ONE 600s run, plus an identified and removed
 2026-09-03 demotion failed because it had clean runs and no mechanism; this one has the mechanism. \
 If it is still wrong the failure is loud and immediate -- `0x140010043` inside the first minute -- \
 so a single launch re-falsifies it. Restore the `[[conflict]]` row if that happens, and do not \
-re-demote on absence alone."""
+re-demote on absence alone.
+
+IT NOW DRAWS AN IMGUI OVERLAY, added with the settings panel. Exactly one `Present` hook exists in \
+the process regardless of how many shells draw, because this one joins the same arbitration \
+`er-invasion-path` and `er-net-effects` use: it probes for a host, claims \
+`claim_overlay_ownership()` only if there is none, and otherwise registers through \
+`er_overlay_register_guest_v1` at ABI tag `0x0903` and draws inside the host's frame. In every \
+profile that carries more than one overlay shell this one is the GUEST -- `er_build_watermark.dll` \
+and `er_invasion_path.dll` both load ahead of it in `release-invasion-warp.me3` -- so its hudhook \
+install path does not run at all there.
+
+IT ALSO CHAINS ONE MORE HANDLER ONTO THE MOUSE `IDirectInputDevice8::GetDeviceState`, through \
+`er-dinput-suppress-core` and the `er-hook` union, never a bare `MhHook`. It blanks `rgbButtons[0]` \
+only while its own panel owns the pointer, so a click on the panel is not also a weapon swing. That \
+entry already carries `er-net-effects`, `er-quickload` and `er-enemynpc-effects`; a fourth chained \
+handler is what the union is for, and two handlers blanking the same byte is idempotent. Each DLL \
+keeps its OWN `POINTER_OVER_OVERLAY` static -- one shared bool would be last-writer-wins between \
+two overlays and the click would reach the game about half the time."""
 
 "er-diag-harness" = """Co-loadable with the product, and co-loadable is the whole point: this \
 shell exists to carry five detours the product USED TO install unconditionally, so every one of \

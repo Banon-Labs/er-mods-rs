@@ -1,0 +1,24 @@
+[package]
+name = "er-dinput-suppress-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_dinput_suppress_core"
+
+# Host-buildable on purpose: `dinput_state`'s buffer-shape predicates are the part that is
+# expensive to get wrong -- a mouse read misread as a keyboard one reported "every arrow
+# released" and re-armed a held key every poll -- so they are proven by `cargo test` on Linux
+# rather than trusted from memory. Only the hook install needs Windows.
+[dependencies]
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+] }
+
+[lints]
+workspace = true
