@@ -165,17 +165,22 @@ mod tests {
     /// that "simplifies" the stride has something to fail against.
     #[test]
     fn the_holder_offsets_match_the_decompiled_lookup() {
-        const INDEX: usize = er_invasion_warp_core::map_piece::WORLD_MAP_PIECE_PARAM_INDEX;
+        // Not named `INDEX`. `scripts/rva_symbols.py` resolves an upstream `Type::INDEX` by
+        // pooling this tree's declarations of the last path segment first, so a bare `INDEX`
+        // anywhere in `crates/` answers for every one of them -- this constant made
+        // `SpEffectParam::INDEX` evaluate to 88 instead of upstream's 15 and failed that
+        // script's selftest from a file with nothing to do with `SpEffectParam`.
+        const PIECE_INDEX: usize = er_invasion_warp_core::map_piece::WORLD_MAP_PIECE_PARAM_INDEX;
         const {
             assert!(
-                INDEX < 0xc2,
+                PIECE_INDEX < 0xc2,
                 "the engine refuses an index at or above its own bound"
             )
         };
         // repo + 0x80 + 0x58 * 72
-        assert_eq!(0x80 + INDEX * 72, 0x1940);
+        assert_eq!(0x80 + PIECE_INDEX * 72, 0x1940);
         // repo + 0x88 + (0x58 * 9) * 8 -- the same holder, eight bytes on from its count
-        assert_eq!(0x88 + (INDEX * 9) * 8, 0x1948);
-        assert_eq!(0x88 + (INDEX * 9) * 8, 0x80 + INDEX * 72 + 8);
+        assert_eq!(0x88 + (PIECE_INDEX * 9) * 8, 0x1948);
+        assert_eq!(0x88 + (PIECE_INDEX * 9) * 8, 0x80 + PIECE_INDEX * 72 + 8);
     }
 }

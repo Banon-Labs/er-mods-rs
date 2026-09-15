@@ -2067,6 +2067,80 @@ pub fn popup_skip_gate_is_idle() -> (bool, &'static str) {
     )
 }
 
+/// How many qwords of the session this module will hand out for diffing.
+///
+/// Eight, so `session+0x00 .. session+0x40`. The rules live in the first of them and anything
+/// stored beside them -- a count rather than a bit -- lands in the rest. It stops well short of
+/// `session+0x150`, the state field, so a window read cannot be confused with a state read.
+pub const SESSION_WINDOW_QWORDS: usize = 8;
+
+/// The head of the session and the address it was read from.
+///
+/// The flags qword alone cannot answer "did a limit change from one to three", which is what the
+/// Dried Fingers rule actually does to a solo host. A window can: the field that moves is the
+/// field that carries it.
+///
+/// The address comes back with it because a window without one is not comparable to the next
+/// window. The session is a heap allocation this module does not own, and `resolve_session` will
+/// happily hand out a different one -- measured on run `br-20260915-184655-ba0a`, where a
+/// caller diffing two windows reported all eight qwords moving at once, pointer values included,
+/// on a host who had touched nothing. That was two allocations being subtracted from each other.
+pub fn seamless_session_head() -> Result<(usize, [u64; SESSION_WINDOW_QWORDS]), &'static str> {
+    let session = resolve_session().map_err(NoSession::label)?;
+    read_session_state(session.abi, session.session)
+        .ok_or_else(|| NoSession::SessionUnreadable.label())?;
+    let mut window = [0u64; SESSION_WINDOW_QWORDS];
+    for (index, slot) in window.iter_mut().enumerate() {
+        // SAFETY: fault-closed, and bounded to the head of an object already proved to be one.
+        *slot = unsafe {
+            er_game_base::mem::safe_read_usize(session.session + index * size_of::<usize>())
+        }
+        .ok_or_else(|| NoSession::SessionUnreadable.label())? as u64;
+    }
+    Ok((session.session, window))
+}
+
+/// Seamless's game-rule flags -- the qword at `session+0x00`.
+///
+/// One bitfield holds every rule the Judicator's Rulebook and its sibling menus toggle. Read out
+/// of the three toggle actions, which are byte-identical apart from the mask and the message id:
+///
+/// ```text
+/// ersc+0x25a50:  mov rax,[rcx+0x58]        ; the session, as every option action opens
+///                cmp dword [rax+0x150],6   ; refuse unless the session is in this state
+///                mov rbx,[rax]             ; the flags
+///                mov rcx,rbx
+///                xor rcx,0x10000           ; 0x20000 at +0x25c0c, 0x40000 at +0x25d8c
+///                mov [rax],rcx
+/// ```
+///
+/// Reading it needs no hook: the flags are the session's first field, and the session is what
+/// [`resolve_session`] already produces. The value is published rather than interpreted
+/// field-by-field because the meaning of a bit is measured one at a time -- see
+/// [`crate::host_effects`], which names the ones that are.
+///
+/// It goes through the full resolver rather than the menu object alone. `OSM` is set by the
+/// observer on `show`, so a host who has not opened a Seamless menu this session has none, and
+/// reading the rules only when a menu has been opened would publish `none` for the whole of a
+/// session where the rule was turned on before the last quit. `resolve_session` falls back to the
+/// scan, which recognises the object by its own state field.
+///
+/// The error side is [`NoSession::label`] rather than a `None`, because the four ways this can
+/// fail are not one fact. "Seamless is not loaded", "this is a build nobody measured", "no session
+/// has been identified yet" and "the session pointer does not read" send a reader to four
+/// different places, and a log line that guesses one of them sends them to the wrong one.
+pub fn seamless_game_rules() -> Result<u64, &'static str> {
+    let session = resolve_session().map_err(NoSession::label)?;
+    // Prove the object before believing its first field. A pointer that does not carry a session
+    // state is not a session, and its `+0x00` would be an arbitrary qword published to strangers.
+    read_session_state(session.abi, session.session)
+        .ok_or_else(|| NoSession::SessionUnreadable.label())?;
+    // SAFETY: fault-closed read of the field every option action writes its rule bit into.
+    let flags = unsafe { er_game_base::mem::safe_read_usize(session.session) }
+        .ok_or_else(|| NoSession::SessionUnreadable.label())?;
+    Ok(flags as u64)
+}
+
 /// Host-side stub: there is no Seamless to read a session out of.
 #[cfg(not(windows))]
 #[must_use]

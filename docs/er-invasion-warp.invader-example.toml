@@ -29,9 +29,6 @@
 # Master switch for the location feature.
 enabled = true
 
-# Inert in this build -- it drove the deleted match-time filter. Left at the default.
-mode = "exact"
-
 # Ask Steam for one location instead of taking whoever answers. This is the feature.
 search_by_location = true
 
@@ -57,7 +54,6 @@ only_players_with_this_mod = false
 # Empty is correct for "just wherever I am standing right now".
 allowed_blocks = []
 blocked_blocks = []
-named_location_text_ids = []
 
 # The mark keys, by name. Recognised: Insert Delete Home End PageUp PageDown Backspace Tab
 # Enter Escape Space Left Up Right Down PrintScreen ScrollLock Pause CapsLock, F1..F24, any single
