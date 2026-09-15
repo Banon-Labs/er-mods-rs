@@ -42,23 +42,50 @@
 //! `CS::SpecialEffect::HasTauntersTongueEffect` (`0x1404f9f60` on 1.16.2, `0x1404fad30` on 1.17.1)
 //! walks the entry list testing `paramId == 0x1c` and nothing else.
 
-/// `CS::SpecialEffect::HasSpecialEffectId` -- `(SpecialEffect*, i32 id) -> bool`.
-///
-/// The same function `er-seamless-bugfixes` pins in its null-container guard, and the same one the
-/// native toggle above tail-jumps into from `CS::ChrIns::HasSpecialEffectId` (`0x1403f1f80`, two
-/// instructions: `MOV RCX,[RCX+0x178]` then `JMP` here). Calling the inner function directly means
-/// this module does the `+0x178` hop itself and can refuse a null container rather than fault on
-/// it -- which is the exact crash that guard exists for.
-///
-/// Mapped for the running build: `docs/recon/rva-map-1162-to-1170.verified.tsv` carries
-/// `0x1404f9940 -> 0x1404fa710`, verdict `IDENTICAL-LEAF`, ratio 1.000 over 13 instructions.
-#[cfg(windows)]
-const HAS_SPECIAL_EFFECT_ID_RVA: usize = 0x4f9940;
-
 /// `CS::ChrIns::specialEffect`. Named by the null-container guard's own disassembly of
 /// `CS::ChrIns::HasSpecialEffectId`, whose first instruction is `MOV RCX,[RCX+0x178]`.
 #[cfg(windows)]
 const CHR_INS_SPECIAL_EFFECT_OFFSET: usize = 0x178;
+
+/// `CS::SpecialEffect` -> the head of its entry list.
+///
+/// Read rather than called, and that is the point. This started as a `transmute` of
+/// `CS::SpecialEffect::HasSpecialEffectId` and the call returned false on a host who had used
+/// the item -- with no fault, no refusal and nothing in the log to say which of the two was
+/// wrong, the id or the call. A walk cannot fail that quietly: every id it sees can be printed,
+/// so "the effect is absent" and "we are reading the wrong list" stop being the same answer.
+///
+/// The chain is the game's own. `CS::SpecialEffect::HasTauntersTongueEffect` is thirteen
+/// instructions and does nothing else, disassembled here out of `eldenring-deobf-1.17.1.bin` --
+/// the installed build, not 1.16.2:
+///
+/// ```text
+/// 1404fad30: mov  0x8(%rcx),%rcx      ; head = [container + 0x08]
+/// 1404fad34: test %rcx,%rcx
+/// 1404fad37: je   1404fad4f           ; empty list -> false
+/// 1404fad40: cmpl $0x1c,0x8(%rcx)     ; id = [entry + 0x08]
+/// 1404fad44: je   1404fad52           ; -> true
+/// 1404fad46: mov  0x30(%rcx),%rcx     ; next = [entry + 0x30]
+/// 1404fad4a: test %rcx,%rcx
+/// 1404fad4d: jne  1404fad40
+/// ```
+#[cfg(windows)]
+const SPECIAL_EFFECT_HEAD_OFFSET: usize = 0x08;
+
+/// `entry -> SpEffectParam id`, from `cmpl $0x1c,0x8(%rcx)` above.
+#[cfg(windows)]
+const SPECIAL_EFFECT_ENTRY_ID_OFFSET: usize = 0x08;
+
+/// `entry -> next`, from `mov 0x30(%rcx),%rcx` above.
+#[cfg(windows)]
+const SPECIAL_EFFECT_ENTRY_NEXT_OFFSET: usize = 0x30;
+
+/// How far the walk will follow `next` before giving up.
+///
+/// A corrupt or torn list would otherwise be an unbounded walk on the game task. No player
+/// carries anything near this many effects; the cap is a backstop, not a limit.
+#[cfg(windows)]
+const MAX_SPECIAL_EFFECT_ENTRIES: usize = 512;
 
 /// The effects worth telling an invader about: the name published, and the SpEffect asked for.
 ///
@@ -75,53 +102,68 @@ pub const TABLE: &[(&str, i32)] = &[("tongue", 28)];
 /// The comma-separated list of active effect names, or `LOBBY_HOST_EFFECTS_NONE` when none are.
 ///
 /// An unreadable player publishes `none` too, because a reader cannot act on the difference: both
-/// mean "do not come here expecting to get in". The log does say which, once per change, and that
-/// is not decoration -- `none` on the wire has two causes and the first question asked of a host
-/// advertising it is which one applies. Without the line, answering needs a rebuild.
+/// mean "do not come here expecting to get in". The log does say which, once per change, and now
+/// also prints every id the player is carrying -- which is the line that answers "the item is on
+/// and the key still says none" without another build.
 #[cfg(windows)]
 #[must_use]
 pub fn active_effects_value() -> String {
-    let mut active: Vec<&str> = Vec::new();
-    let mut unreadable = 0usize;
-    for (name, id) in TABLE {
-        match local_player_has_speffect(*id) {
-            Some(true) => active.push(name),
-            Some(false) => {}
-            None => unreadable += 1,
-        }
-    }
+    let ids = local_player_speffects();
+    let active: Vec<&str> = match &ids {
+        Some(ids) => TABLE
+            .iter()
+            .filter(|(_, id)| ids.contains(id))
+            .map(|(name, _)| *name)
+            .collect(),
+        None => Vec::new(),
+    };
     let value = if active.is_empty() {
         crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE.to_owned()
     } else {
         active.join(",")
     };
-    say_once(&value, unreadable);
+    say_once(&value, ids.as_deref());
     value
 }
 
-/// Say what `value` means, once per distinct answer.
+/// Say what `value` means and what the player is actually carrying, once per distinct answer.
 ///
 /// This runs on the game task and is asked every tick, so it is latched on the sentence rather
-/// than on a flag: a host who uses the item, drops it and uses it again gets three lines, and a
-/// host standing still gets one.
+/// than on a flag: the ids change and the line reappears, the player stands still and it does not.
 #[cfg(windows)]
-fn say_once(value: &str, unreadable: usize) {
+fn say_once(value: &str, ids: Option<&[i32]>) {
     use std::sync::Mutex;
     static SAID: Mutex<Option<String>> = Mutex::new(None);
 
-    let text = if unreadable == TABLE.len() {
-        format!(
+    let text = match ids {
+        None => format!(
             "host-effects: publishing {value} because the player cannot be read -- no world, or \
              a null SpEffect container. This is not the same as the item being off, and an \
              invader cannot tell the two apart from the lobby."
-        )
-    } else if value == crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE {
-        format!(
-            "host-effects: publishing {value} -- asked and answered. SpEffect 28 is absent, so \
-             `CanBeSoloInvaded` is false and no invader can enter this world solo."
-        )
-    } else {
-        format!("host-effects: publishing {value} -- this host is invadable")
+        ),
+        // The list, every time, even on success. It is the only thing that can distinguish "the
+        // id we ask about is wrong" from "the effect really is absent", and the first version of
+        // this module could tell you neither: it called `HasSpecialEffectId` and reported the
+        // `false` it got back as fact.
+        Some(ids) => {
+            let carried = if ids.is_empty() {
+                "nothing".to_owned()
+            } else {
+                ids.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            if value == crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE {
+                format!(
+                    "host-effects: publishing {value} -- the player carries {carried}, and none \
+                     of those is in this build's table ({})",
+                    table_summary()
+                )
+            } else {
+                format!("host-effects: publishing {value} -- the player carries {carried}")
+            }
+        }
     };
     let mut said = SAID.lock().unwrap_or_else(|e| e.into_inner());
     if said.as_deref() == Some(text.as_str()) {
@@ -131,6 +173,17 @@ fn say_once(value: &str, unreadable: usize) {
     *said = Some(text);
 }
 
+/// The table as `name=id` pairs, for the line above. Printed rather than described so the id the
+/// build is asking about is in the log beside the ids the player has.
+#[cfg(windows)]
+fn table_summary() -> String {
+    TABLE
+        .iter()
+        .map(|(name, id)| format!("{name}={id}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Host-side stub: there is no player off the game, so nothing is active.
 #[cfg(not(windows))]
 #[must_use]
@@ -138,43 +191,44 @@ pub fn active_effects_value() -> String {
     crate::lobby_publish::LOBBY_HOST_EFFECTS_NONE.to_owned()
 }
 
-/// Whether the local player carries `id`, or `None` when the question cannot be asked.
+/// Every SpEffect id currently on the local player, or `None` when the list cannot be read.
 ///
-/// `None` and `Some(false)` are kept apart on purpose. "The world is not up" and "the host is not
-/// running the item" are the same silence to a caller that collapses them, and only one of the two
-/// is worth publishing.
+/// `None` and `Some(empty)` are kept apart on purpose. "The world is not up" and "the player has
+/// no effects" are the same silence to a caller that collapses them, and only one of the two is
+/// worth publishing.
 ///
 /// # Safety
 ///
-/// Reads are fault-closed and the call is made only with a non-null container, so a world that is
-/// still loading yields `None` rather than a fault. It must still run on the game task thread:
-/// `WorldChrMan::instance` and the effect list both belong to it.
+/// Every read is fault-closed, so a world that is still loading yields `None` rather than a
+/// fault. It must still run on the game task thread: `WorldChrMan::instance` and the effect list
+/// both belong to it.
 #[cfg(windows)]
-fn local_player_has_speffect(id: i32) -> Option<bool> {
+fn local_player_speffects() -> Option<Vec<i32>> {
     use fromsoftware_shared::FromStatic;
 
-    type HasSpecialEffectIdFn = unsafe extern "system" fn(usize, i32) -> bool;
-
-    let base = er_game_base::mem::game_module_base().ok()?;
     let world_chr_man = unsafe { eldenring::cs::WorldChrMan::instance() }.ok()?;
     let player = world_chr_man.main_player.as_ref()?;
     // `PlayerIns.chr_ins` is the struct's first field, so this pointer is the `ChrIns` the engine
-    // expects -- the same identity `warp::player_physics_position` relies on.
+    // expects -- the same identity `warp::player_physics_position` relies on, and that one is
+    // known good because its answer reaches the heartbeat.
     let chr_ins = core::ptr::from_ref(&player.chr_ins) as usize;
-    // The `+0x178` hop, done here rather than by calling `CS::ChrIns::HasSpecialEffectId`, so a
-    // null container is a `None` instead of the `0x8` access violation recorded in
-    // `er-seamless-bugfixes`'s null-container guard.
     let container =
         unsafe { er_game_base::mem::safe_read_usize(chr_ins + CHR_INS_SPECIAL_EFFECT_OFFSET) }?;
     if container == 0 {
         return None;
     }
-    let address = er_game_base::game_build::resolve_game_address(
-        base + HAS_SPECIAL_EFFECT_ID_RVA,
-        "HAS_SPECIAL_EFFECT_ID_RVA",
-    )?;
-    let has: HasSpecialEffectIdFn = unsafe { core::mem::transmute(address) };
-    Some(unsafe { has(container, id) })
+    let mut entry =
+        unsafe { er_game_base::mem::safe_read_usize(container + SPECIAL_EFFECT_HEAD_OFFSET) }?;
+    let mut ids = Vec::new();
+    while entry != 0 && ids.len() < MAX_SPECIAL_EFFECT_ENTRIES {
+        let id =
+            unsafe { er_game_base::mem::safe_read_i32(entry + SPECIAL_EFFECT_ENTRY_ID_OFFSET) }?;
+        ids.push(id);
+        entry = unsafe {
+            er_game_base::mem::safe_read_usize(entry + SPECIAL_EFFECT_ENTRY_NEXT_OFFSET)
+        }?;
+    }
+    Some(ids)
 }
 
 #[cfg(test)]
