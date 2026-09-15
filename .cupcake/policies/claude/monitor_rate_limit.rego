@@ -50,6 +50,21 @@ throttled if {
 	regex.match(throttled_tail_pattern, norm_command)
 }
 
+# The other shape that cannot emit an unthrottled stream: a command whose last
+# stage IS scripts/er-push-watched.sh. That script re-executes itself through the
+# committed throttle and exits 2 when the throttle file is missing, so its stdout is
+# throttled by construction and a second throttle appended by the caller only
+# coalesces an already-coalesced stream. Its own header tells the caller to name one
+# path and no second one; before this rule that documented command was refused, which
+# cost a push on 2026-09-14 and teaches the next agent to bolt on a redundant stage.
+# The pattern requires no pipe after the script, so piping its output somewhere else
+# is still refused -- that would be a stream this rule has not seen.
+self_throttling_tail_pattern := `scripts/er-push-watched\.sh[^|]*$`
+
+throttled if {
+	regex.match(self_throttling_tail_pattern, norm_command)
+}
+
 # A `ws:` monitor has no pipeline, so there is nowhere to put the throttle.
 websocket_monitor if {
 	object.get(input.tool_input, "ws", null) != null
