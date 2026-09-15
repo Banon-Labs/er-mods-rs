@@ -371,7 +371,8 @@ fn refresh_config() {
             ));
         } else {
             crate::standalone_log(format_args!(
-                "local-invasion: config loaded enabled={} mode={} hunt={} dll_users_only={} \
+                "local-invasion: config loaded enabled={} mode={} hunt={} prefilter_radius={} \
+                 search_everywhere_when_exhausted={} dll_users_only={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
@@ -380,6 +381,8 @@ fn refresh_config() {
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
+                outcome.config.prefilter_radius,
+                outcome.config.search_everywhere_when_exhausted,
                 // Every option that changes behaviour must appear here. These three were missing,
                 // and the gap cost a live A/B on 2026-08-06: the file was edited mid-session to turn
                 // `dll_users_only` on, this line duly reprinted -- proving the reload had happened --

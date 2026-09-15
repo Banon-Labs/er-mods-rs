@@ -324,7 +324,7 @@ mod live {
         FRIENDS_ACCESSOR, FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME,
         FRIENDS_REQUEST_USER_INFORMATION, GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY,
         MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR,
-        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, pending_publish,
+        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, map_value, pending_publish,
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -1185,7 +1185,20 @@ mod live {
         (slot != 0).then(|| unsafe { core::mem::transmute::<usize, AddStringFilterFn>(slot) })
     }
 
-    /// The one location to ask for, or `None` to leave the query alone.
+    /// The ring this search is walking, and where it has got to.
+    ///
+    /// Keyed by the tile it was anchored at, so walking into a new tile restarts the search there
+    /// rather than continuing a ring drawn around somewhere the player has left.
+    static SEARCH: Mutex<Option<(u32, er_invasion_warp_core::search_ring::SearchRing)>> =
+        Mutex::new(None);
+
+    /// The location this query round should ask for, or `None` to leave the query alone.
+    ///
+    /// `None` carries two different meanings and both are correct here: hunt is off or cannot
+    /// express what was asked (the refusal path below says which), or the ring is exhausted and
+    /// the player asked to search everywhere once it was. The second is the ladder's last rung --
+    /// an unfiltered query returns the whole population again, vanilla hosts included, and the
+    /// reject filter takes over deciding where you land.
     fn hunt_target() -> Option<String> {
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let marked: Vec<u32> = config.allowed_blocks.iter().copied().collect();
@@ -1198,7 +1211,63 @@ mod live {
             }
             return None;
         }
-        hunt_filter_value(config.hunt, &marked, &excluded, current_block())
+        let centre = hunt_filter_value(config.hunt, &marked, &excluded, current_block())?;
+        if config.prefilter_radius == 0 {
+            return Some(centre);
+        }
+        let Some(here) = current_block() else {
+            // No readable block means no ring to draw; the single-tile value still stands.
+            return Some(centre);
+        };
+        advance_ring(
+            here,
+            config.prefilter_radius,
+            config.search_everywhere_when_exhausted,
+        )
+        .or(Some(centre))
+    }
+
+    /// Take the next tile of the widening search, announcing each step.
+    ///
+    /// Returns `None` only when the ring is spent and the player opted into searching everywhere;
+    /// every other path yields a tile. A spent ring with that option off keeps asking for the last
+    /// tile rather than silently reverting to an unfiltered query, because reverting would widen
+    /// the search to a population the player did not ask for.
+    fn advance_ring(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> Option<String> {
+        let mut guard = SEARCH.lock().ok()?;
+        let restart = guard
+            .as_ref()
+            .is_none_or(|(anchor, _)| *anchor != here.raw());
+        if restart {
+            *guard = Some((
+                here.raw(),
+                er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
+            ));
+        }
+        let (_, ring) = guard.as_mut()?;
+
+        let Some(step) = ring.advance() else {
+            if everywhere {
+                crate::standalone_log(format_args!(
+                    "prefilter: every nearby location came back empty -- searching everywhere"
+                ));
+                return None;
+            }
+            return Some(map_value(here));
+        };
+        // Counted out loud on purpose. A rotation that says nothing makes "no invasions found"
+        // ambiguous: the player cannot tell an empty ring from one with tiles left to try.
+        crate::standalone_log(format_args!(
+            "prefilter: asking for {} ({} of {})",
+            map_value(step.block),
+            step.ordinal,
+            step.total
+        ));
+        Some(map_value(step.block))
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.

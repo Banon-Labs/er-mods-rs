@@ -245,6 +245,24 @@ pub struct LocalInvasionConfig {
     /// this DLL's users publish, so while it is on a host without the DLL is invisible to you. That
     /// is a trade the user must choose, never a default.
     pub hunt: bool,
+    /// How many rings of neighbouring tiles the prefilter may widen to, when it finds nobody.
+    ///
+    /// `0` keeps today's behaviour exactly: ask for one tile and stop. Above zero the search asks
+    /// for the player's own tile first and then walks outward a ring at a time, one tile per query
+    /// round, because a Steam string filter is equality on a single value and several filters
+    /// `and` together -- so widening is something that happens across rounds, never within one.
+    ///
+    /// Capped by [`crate::search_ring::MAX_RADIUS`]. Three rings is 48 neighbours, which at one
+    /// tile per round is already a long search; the cap exists so a mistyped radius cannot become
+    /// a rotation nobody can sit through.
+    pub prefilter_radius: u8,
+    /// After every tile in the ring has been asked for and answered nothing, drop the filter.
+    ///
+    /// Off by default, because it is a different bargain rather than more of the same one: with no
+    /// filter the query returns the whole population again, vanilla hosts included, and where you
+    /// land is then decided by the reject filter rather than by Steam. It is the rung a player
+    /// takes deliberately when they would rather invade somewhere than nowhere.
+    pub search_everywhere_when_exhausted: bool,
     /// Match only other players running this DLL with this option on.
     ///
     /// Rewrites Seamless's `lobby_key` into a pool of our own (see
@@ -410,6 +428,8 @@ impl Default for LocalInvasionConfig {
             // this DLL's users publish, so while it is on a host without the DLL cannot be seen at
             // all. Losing reach is not something to inherit from a default.
             hunt: false,
+            prefilter_radius: 0,
+            search_everywhere_when_exhausted: false,
             // OFF: it hides the entire vanilla population in both directions.
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.
