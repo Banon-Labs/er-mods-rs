@@ -1858,3 +1858,86 @@ fn both_off_switches_stand_the_hunt_down() {
         );
     }
 }
+
+#[test]
+fn the_connect_deadline_times_only_states_ersc_offers_a_cancel_row_for() {
+    // Regression, caught live on run br-20260915-025202-c779, the first run the deadline shipped
+    // in. The phase mapping was a blocklist -- "not idle, not searching, not cancelling, therefore
+    // connecting" -- so it called `0x16` a connect. `0x16` is a successful invasion: 313 attempts
+    // reached it and dwelt there between 771ms and 465 seconds, because that dwell is the
+    // invasion itself. The deadline fired 1500ms in, found no Cancel row offered, fell through to
+    // OPTIONSELECT_LEAVEWORLD, and tore the player out of a live invasion into a hard lock.
+    //
+    // Deriving the timed set from ERSC's own hide-predicate is what makes that unrepresentable:
+    // `0x16` is not in it, and neither is any other state Seamless would not let the player cancel
+    // by hand.
+    let source = filter_module_code();
+    let phase = source
+        .split_once("fn connect_phase(")
+        .expect("the phase mapping exists")
+        .1
+        .split_once("\n}")
+        .expect("phase body")
+        .0;
+    assert!(
+        phase.contains("cancel_row_offered"),
+        "the timed set must come from ERSC's own Cancel-row predicate, not from a list here -- \
+         a hand-written list drifts from the predicate and a blocklist times states nobody has \
+         ever measured"
+    );
+    assert!(
+        !phase.contains("0x16"),
+        "the mapping must not name the in-world state at all; it is excluded by not being in the \
+         predicate, which is the property that survives a Seamless renumber"
+    );
+    // Searching is in the predicate and must still be excluded from it by name.
+    let searching_at = phase
+        .find("state_searching")
+        .expect("searching must be excluded explicitly");
+    let offered_at = phase.find("cancel_row_offered").expect("checked above");
+    assert!(
+        searching_at < offered_at,
+        "searching must be returned BEFORE the predicate is consulted -- ERSC draws a Cancel row \
+         during a search, and timing it cancels healthy hunts in a quiet bracket"
+    );
+    // And an invasion that happened is never a connect, whatever states it unwinds through.
+    let arrived_at = phase
+        .find("INVASION_ACTUALLY_HAPPENED")
+        .expect("a successful invasion must be recognised before any state is consulted");
+    assert!(
+        arrived_at < searching_at,
+        "the success latch must be checked before the raw state, because a successful invasion \
+         walks the same cancelling states a dead attempt does"
+    );
+
+    let watcher = source
+        .split_once("fn watch_for_failed_connect(")
+        .expect("the deadline watcher exists")
+        .1
+        .split_once("\n}\n")
+        .expect("watcher body")
+        .0;
+    let armed_at = watcher
+        .find("AUTO_SEARCH_ARMED")
+        .expect("the watcher must only run while the hunt is armed");
+    let observe_at = watcher
+        .find("observe(")
+        .expect("the watcher feeds the clock");
+    assert!(
+        armed_at < observe_at,
+        "the armed check must come BEFORE any observation, or an attempt the player already \
+         stopped is called lost and cancelled out from under them"
+    );
+    // The second defence: never reach the LEAVEWORLD fallback from this path.
+    let refusal_at = watcher
+        .find("!super::lock_report::cancel_row_offered")
+        .expect("the watcher must refuse to act outside the Cancel-row set");
+    let cancel_at = watcher
+        .find("cancel_stalled_attempt(")
+        .expect("the watcher drives the cancel");
+    assert!(
+        refusal_at < cancel_at,
+        "the row check must come BEFORE the cancel, or a misjudged state falls through to \
+         OPTIONSELECT_LEAVEWORLD -- which is what hard-locked run br-20260915-025202-c779"
+    );
+}

@@ -42,6 +42,10 @@ pub(super) fn announce_verdict(_enabled: bool, _destination: u32, _reason: Rejec
 
 /// Host-side stub.
 #[cfg(not(windows))]
+pub(super) fn announce_failure(_enabled: bool, _attempt: u32) {}
+
+/// Host-side stub.
+#[cfg(not(windows))]
 pub(super) fn announce_arrival(_enabled: bool, _destination: u32) {}
 
 /// Report a destination that arrived while the filter was switched off.
@@ -71,6 +75,40 @@ pub(super) fn announce_arrival(enabled: bool, destination: u32) {
         crate::standalone_log(format_args!(
             "local-invasion: could not show the arrival banner (\"{text}\") -- the message \
              functions did not verify, or the menu is not up yet."
+        ));
+    }
+}
+
+/// Tell the player a connection is dead, at the moment a working one would already have landed.
+///
+/// Shares the one notice latch with the other three messages, so the surface cannot leave a
+/// rejection on screen while reporting a failure, or the reverse.
+///
+/// No place and no host name here, unlike every other banner: join data never arrived, so there is
+/// no destination and no host id to resolve. Naming one would mean naming whoever the player was
+/// last told about, which reads as a failure to reach somewhere they never got near.
+#[cfg(windows)]
+pub(super) fn announce_failure(enabled: bool, attempt: u32) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_failure(enabled, attempt)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game task thread, the same context and the same auto-closing announcement surface as
+    // the other three banners.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the failed-connection banner (\"{text}\") -- the \
+             message functions did not verify, or the menu is not up yet. The attempt is still \
+             cancelled; only the on-screen notice is missing."
         ));
     }
 }
