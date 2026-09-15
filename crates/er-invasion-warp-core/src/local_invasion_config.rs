@@ -366,7 +366,7 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
-            "only_players_with_this_mod" | "dll_users_only" => match parse_bool(value) {
+            "only_players_with_this_mod" => match parse_bool(value) {
                 Some(v) => config.dll_users_only = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
@@ -424,14 +424,14 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
-            "search_by_location" | "hunt" => match parse_bool(value) {
+            "search_by_location" => match parse_bool(value) {
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
-            "search_radius" | "prefilter_radius" => match unquote(value).parse::<u8>() {
+            "search_radius" => match unquote(value).parse::<u8>() {
                 Ok(v) if usize::from(v) <= usize::from(crate::search_ring::MAX_RADIUS) => {
                     config.prefilter_radius = v;
                 }
@@ -448,7 +448,7 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("prefilter_radius must be a whole number, got {value:?}"),
                 }),
             },
-            "widen_to_anywhere" | "search_everywhere_when_exhausted" => match parse_bool(value) {
+            "widen_to_anywhere" => match parse_bool(value) {
                 Some(v) => config.search_everywhere_when_exhausted = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
@@ -950,15 +950,14 @@ impl HotConfig {
 #[cfg(test)]
 mod tests {
 
-    /// A file written before the 2026-09-15 rename must still be read, exactly.
+    /// The names before the 2026-09-15 rename are gone, and must stay gone.
     ///
-    /// The four switches were named after their implementation -- `hunt` for the lobby filter,
-    /// `prefilter_radius` for the ring, `dll_users_only` for the pool substitution -- and none of
-    /// those words say what the player gets. Renaming them is worth doing once; silently resetting
-    /// somebody's settings while doing it is not, and an unknown key is ignored, so a parser that
-    /// only knew the new names would drop every old file's values back to default without a word.
+    /// No alias was kept, deliberately (user directive, same day): two spellings for one setting
+    /// is the ambiguity the rename exists to remove, and an alias kept "for now" is how both
+    /// survive for years. A file still using the old words gets defaults and a complaint about
+    /// each line, which is loud and fixable -- unlike an alias, which is silent and permanent.
     #[test]
-    fn the_names_before_the_rename_are_still_read() {
+    fn the_names_before_the_rename_are_refused() {
         let old = "\
 enabled = true\n\
 hunt = true\n\
@@ -966,24 +965,19 @@ prefilter_radius = 2\n\
 search_everywhere_when_exhausted = true\n\
 dll_users_only = true\n";
         let parsed = parse_local_invasion_config(old);
-        let (config, issues) = (parsed.config, parsed.issues);
-        assert!(
-            issues.is_empty(),
-            "the old spellings should parse without complaint, got {issues:?}"
-        );
-        assert!(config.hunt, "hunt did not carry to search_by_location");
+        let complaints = parsed.issues.len();
         assert_eq!(
-            config.prefilter_radius, 2,
-            "prefilter_radius did not carry to search_radius"
+            complaints, 4,
+            "each retired name should be reported as unknown, got {:?}",
+            parsed.issues
         );
         assert!(
-            config.search_everywhere_when_exhausted,
-            "search_everywhere_when_exhausted did not carry to widen_to_anywhere"
+            !parsed.config.hunt,
+            "the retired `hunt` must not still set anything"
         );
-        assert!(
-            config.dll_users_only,
-            "dll_users_only did not carry to only_players_with_this_mod"
-        );
+        assert_eq!(parsed.config.prefilter_radius, 0);
+        assert!(!parsed.config.search_everywhere_when_exhausted);
+        assert!(!parsed.config.dll_users_only);
     }
 
     /// The new names parse too, and to the same fields.

@@ -363,13 +363,13 @@ fn refresh_config() {
             if outcome.config.prefilter_radius > 0 {
                 let missing = match (outcome.config.hunt, outcome.config.steam_hooks) {
                     (true, true) => "",
-                    (false, true) => "hunt",
+                    (false, true) => "search_by_location",
                     (true, false) => "steam_hooks",
-                    (false, false) => "hunt and steam_hooks",
+                    (false, false) => "search_by_location and steam_hooks",
                 };
                 if !missing.is_empty() {
                     crate::standalone_log(format_args!(
-                        "local-invasion: prefilter_radius={} does NOTHING while {} is off -- the \
+                        "local-invasion: search_radius={} does nothing while {} is off -- the \
                          widening search runs inside the lobby-query detour and starts from the \
                          tile hunt picks. Set {} = true in er-invasion-warp.toml.",
                         outcome.config.prefilter_radius, missing, missing
@@ -377,8 +377,8 @@ fn refresh_config() {
                 }
             }
             crate::standalone_log(format_args!(
-                "local-invasion: config loaded enabled={} mode={} hunt={} prefilter_radius={} \
-                 search_everywhere_when_exhausted={} dll_users_only={} \
+                "local-invasion: config loaded enabled={} mode={} search_by_location={} \
+                 search_radius={} widen_to_anywhere={} only_players_with_this_mod={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
