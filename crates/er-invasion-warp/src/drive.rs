@@ -461,7 +461,11 @@ impl InvasionWarpDrive {
             // It was reported that way on 2026-09-06 ("I didn't only invade locally. It might be
             // disabled?") after a run whose log carried four such rejections and no counter for
             // them -- the heartbeat printed a healthy-looking line beside an inert filter.
-            let (keeps, cancels, reinvades, unenforced) = crate::local_invasion_filter::tallies();
+            // This used to carry a fourth number, counting matches judged a rejection that could
+            // not be cancelled and proceeded anyway. The location filter was deleted on
+            // 2026-09-15, so nothing rejects a connected match and nothing can fail to enforce
+            // one. `cancels` is still real: the deadline abandons a connect going nowhere.
+            let (keeps, cancels, reinvades) = crate::local_invasion_filter::tallies();
             // The settings panel, as two numbers that fail differently. `drawn` is frames the
             // panel rendered into: zero while it is open means this DLL's guest registration
             // never reached the host's frame, which looks on screen exactly like the key not
@@ -479,8 +483,7 @@ impl InvasionWarpDrive {
                  maps] map[opens={opens} injected={injections} skipped={skips}] \
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
-                 local[kept={keeps} cancelled={cancels} rearmed={reinvades} \
-                 UNENFORCED={unenforced}] \
+                 local[kept={keeps} cancelled={cancels} rearmed={reinvades}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
                  panel[open={panel_open} drawn={panel_draws} clicks={panel_clicks} \
