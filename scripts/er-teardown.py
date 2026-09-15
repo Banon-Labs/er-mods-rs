@@ -74,8 +74,10 @@ import argparse
 import glob
 import datetime
 import os
+import re
 import select
 import signal
+import subprocess
 import sys
 
 DEFAULT_PREFIX = os.path.expanduser(
@@ -485,6 +487,33 @@ def stamp_run_outcome(reason: str, game_dir: str | None = None) -> str | None:
     return line
 
 
+def x11_slots_left() -> int:
+    """How many more clients the X server will accept, or `-1` when it cannot be measured.
+
+    A teardown that kills every process and still leaves the server full has not finished the
+    job: the next launch dies inside `vkCreateSwapchainKHR` with a black window and no crash
+    dump, which reads as a broken build and was diagnosed as one for eight launches on
+    2026-09-14. Measured that night, this path is already clean -- a launch takes the count from
+    236 to 253 and back to 236 -- and this line is what keeps it that way instead of leaving it
+    a fact somebody has to remember. See bd
+    `xwayland-maxclients-starvation-kills-er-boot-2026-09-14`.
+    """
+    probe = os.path.join(os.path.dirname(os.path.abspath(__file__)), "x11-client-headroom.py")
+    if not os.path.isfile(probe):
+        return -1
+    try:
+        proc = subprocess.run(
+            [sys.executable, probe, "--quiet", "--required", "0"],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return -1
+    found = re.search(r"(\d+) more clients can connect", proc.stdout)
+    return int(found.group(1)) if found else -1
+
+
 def teardown(
     prefix: str = DEFAULT_PREFIX,
     verbose: bool = True,
@@ -545,6 +574,12 @@ def teardown(
             print(f"[er-teardown] STILL ALIVE: {remaining}")
         else:
             print("[er-teardown] clean -- zero prefix processes remain")
+        # Processes are only half of what a run holds. The other half is X11 client slots, and
+        # a server with none left fails the next launch in a way that looks nothing like this.
+        slots = x11_slots_left()
+        if slots >= 0:
+            verdict = "room for the next launch" if slots >= 40 else "NOT ENOUGH for a launch"
+            print(f"[er-teardown] x11 slots free: {slots} -- {verdict}")
     return len(targets)
 
 
