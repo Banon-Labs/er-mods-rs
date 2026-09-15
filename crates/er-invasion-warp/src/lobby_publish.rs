@@ -332,7 +332,7 @@ mod live {
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -1312,6 +1312,15 @@ mod live {
     static SEARCH: Mutex<Option<(u32, er_invasion_warp_core::search_ring::SearchRing)>> =
         Mutex::new(None);
 
+    /// Whether the "asking for everywhere" line has been said for the current ring.
+    ///
+    /// The escalation is re-derived on every query round, so without this the same sentence is
+    /// written to the log roughly every fifteen seconds for as long as the search runs -- which
+    /// is what run br-20260915-173121-1941 did, burying the one line that mattered under copies
+    /// of itself. Cleared whenever the ring yields a step, so a ring that starts moving again can
+    /// report its next exhaustion.
+    static EVERYWHERE_SAID: AtomicU8 = AtomicU8::new(0);
+
     /// The location this query round should ask for, or `None` to leave the query alone.
     ///
     /// `None` carries two different meanings and both are correct here: hunt is off or cannot
@@ -1372,13 +1381,31 @@ mod live {
 
         let Some(step) = ring.advance() else {
             if everywhere {
-                crate::standalone_log(format_args!(
-                    "prefilter: every nearby location came back empty -- searching everywhere"
-                ));
+                // `nearby` separates the two ways a ring runs out, and they are not the same
+                // news. A spent 48-tile ring means the neighbourhood is empty. A ring of one
+                // tile means the player is somewhere with no grid neighbours at all -- a legacy
+                // dungeon, whose block id encodes a dungeon and a floor rather than a position
+                // -- so the radius they set could never have applied and the search widened on
+                // its first round. Run br-20260915-173121-1941 was the second case, in
+                // `m11_05_00_00`, and the log's single undifferentiated sentence is why it read
+                // as the escalation never happening.
+                let nearby = ring.len().saturating_sub(1);
+                if EVERYWHERE_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "prefilter: the ring is spent ({nearby} nearby location(s) tried) -- \
+                         dropping the location filter and asking for everywhere. Every query \
+                         round from here asks the same unfiltered question, so this is said once."
+                    ));
+                }
+                let notice = crate::local_invasion_filter::current_config_snapshot()
+                    .is_none_or(|config| config.reject_notice);
+                crate::local_invasion_filter::banner::announce_search_everywhere(notice, nearby);
                 return None;
             }
             return Some(map_value(here));
         };
+        // A step means the ring is moving again, so the next exhaustion is fresh news.
+        EVERYWHERE_SAID.store(0, Ordering::SeqCst);
         // Counted out loud on purpose. A rotation that says nothing makes "no invasions found"
         // ambiguous: the player cannot tell an empty ring from one with tiles left to try.
         crate::standalone_log(format_args!(
