@@ -187,7 +187,7 @@ fn apply_pending_edits() {
                 applied += 1;
                 changed.push(format!("mode={}", config.mode.as_str()));
             }
-            SettingEdit::Cycle("prefilter_radius") => {
+            SettingEdit::Cycle("search_radius") => {
                 // 0 asks Steam only for the tile the player stands in; each step adds a ring
                 // around it, and the cap is the one `search_ring` enforces. Wrapping back to 0
                 // rather than stopping at the top is what makes a single button enough.
@@ -208,7 +208,7 @@ fn apply_pending_edits() {
                 if config.prefilter_radius > 0 {
                     if !config.hunt {
                         config.hunt = true;
-                        changed.push("hunt=true (needed by the radius)".to_owned());
+                        changed.push("search_by_location=true (needed by the radius)".to_owned());
                     }
                     if !config.steam_hooks {
                         config.steam_hooks = true;
@@ -251,12 +251,12 @@ fn apply_pending_edits() {
 fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
     match key {
         "enabled" => config.enabled,
-        "hunt" => config.hunt,
+        "search_by_location" => config.hunt,
         "reject_notice" => config.reject_notice,
         "map_pins" => config.map_pins,
         "steam_hooks" => config.steam_hooks,
-        "dll_users_only" => config.dll_users_only,
-        "search_everywhere_when_exhausted" => config.search_everywhere_when_exhausted,
+        "only_players_with_this_mod" => config.dll_users_only,
+        "widen_to_anywhere" => config.search_everywhere_when_exhausted,
         "ersc_observers" => config.ersc_observers,
         "ersc_show_observer" => config.ersc_show_observer,
         "ersc_lobby_key_observer" => config.ersc_lobby_key_observer,
@@ -269,12 +269,12 @@ fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
 fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
     match key {
         "enabled" => config.enabled = !config.enabled,
-        "hunt" => config.hunt = !config.hunt,
+        "search_by_location" => config.hunt = !config.hunt,
         "reject_notice" => config.reject_notice = !config.reject_notice,
         "map_pins" => config.map_pins = !config.map_pins,
         "steam_hooks" => config.steam_hooks = !config.steam_hooks,
-        "dll_users_only" => config.dll_users_only = !config.dll_users_only,
-        "search_everywhere_when_exhausted" => {
+        "only_players_with_this_mod" => config.dll_users_only = !config.dll_users_only,
+        "widen_to_anywhere" => {
             config.search_everywhere_when_exhausted = !config.search_everywhere_when_exhausted;
         }
         "ersc_observers" => config.ersc_observers = !config.ersc_observers,
@@ -322,16 +322,18 @@ fn build_view() -> SettingsView {
             note: Some("exact / area / named"),
         },
         toggle_row(
-            "hunt",
+            "search_by_location",
             config.hunt,
             // The cost, on the row that charges it. Hunt filters the lobby query on a key only
             // this DLL publishes, so with nobody else running this build every entry it finds is
             // stale and nothing lands -- which on screen is "Invasion failed -- no connection",
             // over and over, with the config line reporting everything healthy.
-            Some("only matches hosts running this mod -- nothing lands if nobody else is"),
+            Some(
+                "aim at a place instead of taking whoever answers -- needs hosts running this mod",
+            ),
         ),
         SettingRow {
-            key: "prefilter_radius",
+            key: "search_radius",
             value: config.prefilter_radius.to_string(),
             control: RowControl::Cycle,
             // The note is the whole reason this row is worth clicking. A radius does nothing on
@@ -339,20 +341,20 @@ fn build_view() -> SettingsView {
             // installs, and its first tile comes from `hunt`. Saying so on the row is the only
             // place a player finds out before concluding the feature is broken.
             note: Some(if config.prefilter_radius == 0 {
-                "0 = your tile only; click to widen"
+                "0 = exactly where you stand; click to widen"
             } else if config.hunt && config.steam_hooks {
                 "rings of map tiles searched outward from where you stand"
             } else {
-                "INERT -- needs hunt and steam_hooks on"
+                "inert -- needs search_by_location and steam_hooks on"
             }),
         },
         toggle_row(
-            "search_everywhere_when_exhausted",
+            "widen_to_anywhere",
             config.search_everywhere_when_exhausted,
-            Some("when the rings run out, drop the filter instead of re-asking for the last tile"),
+            Some("when the rings run out, take anyone anywhere instead of retrying the last tile"),
         ),
         toggle_row("reject_notice", config.reject_notice, None),
-        toggle_row("dll_users_only", config.dll_users_only, None),
+        toggle_row("only_players_with_this_mod", config.dll_users_only, None),
         toggle_row("map_pins", config.map_pins, None),
         toggle_row("steam_hooks", config.steam_hooks, None),
         toggle_row("ersc_observers", config.ersc_observers, None),
