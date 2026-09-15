@@ -2025,3 +2025,59 @@ fn the_ring_step_type_keeps_its_three_outcomes() {
         assert!(body.contains(variant), "RingStep lost {variant}: {body}");
     }
 }
+
+/// The second door onto `OPTIONSELECT_LEAVEWORLD` must be shut in `state_in_world`.
+///
+/// `connect_phase` already refuses that state for the deadline path, and the test beside this one
+/// asserts it. This is the other caller: `drop_a_match_the_engine_has_already_failed` acts on the
+/// engine reporting `lobbyState == None`, which in a Seamless invasion is not proof the attempt is
+/// dead -- Seamless owns the session and `0x16` is its word for "the invasion landed". It checked
+/// only for idle, so a live invasion fell straight through to the cancel, whose Cancel row is
+/// withdrawn at `0x16`, whose fallback is `OPTIONSELECT_LEAVEWORLD`. That hard-locked run
+/// br-20260915-025202-c779 and then br-20260915-173901-7934, the first run whose lobby query was
+/// genuinely unfiltered and so the first to reach a real host at all.
+///
+/// Structural because the function is `cfg(windows)` and reads live session memory. What is
+/// pinned is the order: the refusal has to precede the cancel, or it is decoration.
+#[test]
+fn the_orphan_drop_refuses_a_player_standing_in_the_hosts_world() {
+    let source = filter_module_code();
+    let body = source
+        .split_once("fn drop_a_match_the_engine_has_already_failed(")
+        .expect("the orphan-drop path exists")
+        .1;
+    let body = &body[..body
+        .find("\n#[cfg(windows)]\nfn trace_join_progress")
+        .expect("it is followed by trace_join_progress")];
+    let refusal_at = body
+        .find("if state == session.abi.state_in_world {")
+        .expect("the in-world state must be refused by name, not by a set that might drift");
+    let cancel_at = body
+        .find("cancel_stalled_attempt_inner(")
+        .expect("this path drives the cancel");
+    assert!(
+        refusal_at < cancel_at,
+        "the in-world refusal must come BEFORE the cancel, or a live invasion falls through to \
+         OPTIONSELECT_LEAVEWORLD -- which hard-locked two runs"
+    );
+    // And it must return rather than fall through having only logged.
+    let arm = &body[refusal_at..cancel_at];
+    assert!(
+        arm.contains("return;"),
+        "the in-world arm must return: {arm}"
+    );
+}
+
+/// `state_in_world` is not in the set where Seamless draws its own Cancel row, which is exactly
+/// why the orphan-drop path reached the LEAVEWORLD fallback. Pinned so that if the set is ever
+/// widened to include it, the refusal above is re-examined rather than silently made redundant.
+#[test]
+fn the_cancel_row_is_not_offered_in_world() {
+    let abi = &super::ersc::SUPPORTED[0];
+    assert!(
+        !super::lock_report::cancel_row_offered(abi.state_in_world),
+        "if Seamless started drawing Cancel at {:#06x}, the fallback that hard-locks would no \
+         longer be reached and the refusal beside it deserves another look",
+        abi.state_in_world
+    );
+}
