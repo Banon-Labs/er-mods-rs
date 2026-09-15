@@ -2081,3 +2081,65 @@ fn the_cancel_row_is_not_offered_in_world() {
         abi.state_in_world
     );
 }
+
+/// The effects key must not be gated on the map having moved.
+///
+/// It was, and silently. `publish_current_map` returned early when the block was unchanged, and
+/// the effects write sat behind that return -- so a host who used Taunter's Tongue standing still
+/// went on advertising `none` until they walked into another block. Every window the feature
+/// exists to cover is exactly the window where nobody is walking anywhere.
+///
+/// Structural, because the function is `cfg(windows)` and talks to Steam. What it pins is the
+/// order: both pending values are decided before the return that can skip the tick.
+#[test]
+fn the_effects_key_is_decided_before_the_unchanged_map_returns() {
+    let source = include_str!("../lobby_publish.rs");
+    let body = source
+        .split_once("pub fn publish_current_map()")
+        .expect("the publish entry point exists")
+        .1;
+    let body = &body[..body
+        .find("\n    /// Write one key, read it back")
+        .expect("it is followed by write_one_key")];
+    let effects_at = body
+        .find("pending_effects()")
+        .expect("the effects value must be computed here");
+    let bail_at = body
+        .find("return;")
+        .expect("the nothing-to-say return exists");
+    assert!(
+        effects_at < bail_at,
+        "pending_effects() must be called before the early return, or a host standing still \
+         never republishes: {body}"
+    );
+    // And the return must require both to be empty. Gating on the map alone is the regression.
+    let guard = &body[..bail_at];
+    assert!(
+        guard.contains("pending_map.is_none() && effects_value.is_none()"),
+        "the tick may only be skipped when neither key has anything to say: {guard}"
+    );
+}
+
+/// The two writes must not share a skip either. A map that has not moved says nothing about
+/// whether an item was just used, and vice versa.
+#[test]
+fn the_two_keys_are_written_independently() {
+    let source = include_str!("../lobby_publish.rs");
+    let body = source
+        .split_once("pub fn publish_current_map()")
+        .expect("the publish entry point exists")
+        .1;
+    let body = &body[..body
+        .find("\n    /// Write one key, read it back")
+        .expect("it is followed by write_one_key")];
+    for key in ["LOBBY_MAP_KEY", "LOBBY_HOST_EFFECTS_KEY"] {
+        let at = body
+            .find(key)
+            .unwrap_or_else(|| panic!("{key} must be written from here: {body}"));
+        let arm = &body[..at];
+        assert!(
+            arm.rfind("if let Some(value) =").is_some(),
+            "{key} must be written under its own `if let`, not behind the other key's success"
+        );
+    }
+}
