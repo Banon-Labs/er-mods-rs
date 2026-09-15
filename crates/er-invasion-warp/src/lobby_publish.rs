@@ -81,6 +81,31 @@ use er_invasion_warp_core::invasion_warp::BlockKey;
 /// are `lobby_*` / `ykssr_*` / `matchmaking_*`; nothing of ours may look like one of those.
 pub const LOBBY_MAP_KEY: &str = "er_invasion_warp_map";
 
+/// The second key this host publishes: which multiplayer effects are active on it.
+///
+/// Where `LOBBY_MAP_KEY` says where a host is, this says what invading them would be like --
+/// whether they are running the item that raises the invader count, which is the difference
+/// between a world an invader can get into and one they cannot.
+///
+/// It is a separate key rather than a field appended to the map value because the two have
+/// different lifetimes. The map changes when the host walks through a loading screen; this
+/// changes when they use an item, which can happen without moving. One value per fact also keeps
+/// a Steam string filter able to ask for either independently -- a filter tests one key for
+/// equality, so a combined value could only ever be matched whole.
+///
+/// The value is a comma-separated list of the effect names that are active, or `none`. A name
+/// rather than a raw id, because the id is a fact about this game build and the lobby outlives
+/// it: a reader on a different build must not have to know our param table to understand the
+/// advertisement.
+pub const LOBBY_HOST_EFFECTS_KEY: &str = "er_invasion_warp_effects";
+
+/// Its value when nothing this module knows about is active.
+///
+/// Published rather than omitted. An absent key and a host with no effects are the same silence
+/// otherwise, and the difference matters to a reader: absent means "this host is not running the
+/// DLL, or is running a build older than this key", while `none` means "asked and answered".
+pub const LOBBY_HOST_EFFECTS_NONE: &str = "none";
+
 /// `ISteamMatchmaking::SetLobbyData` -- vtable slot 20.
 ///
 /// Cross-checked two ways rather than taken from the SDK header alone: static RE of `ersc.dll`
@@ -326,9 +351,9 @@ mod live {
     use super::{
         ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_VALUE, FRIENDS_ACCESSOR,
         FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME, FRIENDS_REQUEST_USER_INFORMATION,
-        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY, MATCHMAKING_ACCESSOR,
-        REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR, USER_GET_STEAM_ID_SLOT,
-        hunt_filter_value, hunt_refusal, map_value, pending_publish,
+        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_HOST_EFFECTS_KEY, LOBBY_MAP_KEY,
+        MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR,
+        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, map_value, pending_publish,
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
@@ -620,9 +645,9 @@ mod live {
     ///
     /// `SetLobbyData` returning `true` proved nothing: the non-owner write returned true and
     /// vanished. This is the direct measurement of the effect rather than the call.
-    fn published_value(iface: usize, lobby: u64) -> Option<String> {
+    fn published_value(iface: usize, lobby: u64, key_name: &str) -> Option<String> {
         let read = get_lobby_data(iface)?;
-        let key = format!("{LOBBY_MAP_KEY}\0");
+        let key = format!("{key_name}\0");
         let got = unsafe { read(iface, lobby, key.as_ptr()) };
         // Steam's return is a foreign pointer for exactly the same reason its arguments are, and
         // `is_null` is exactly the guard that let `0x011000010e05acda` into `strlen` on the
@@ -739,11 +764,28 @@ mod live {
             }
             return;
         }
+        if !write_one_key(iface, lobby, LOBBY_MAP_KEY, &value) {
+            return;
+        }
+        *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+        // The effects key rides the same ownership and advertisement checks, which is the reason
+        // it is published from here rather than from a tick of its own: every one of those checks
+        // is a fact about the lobby, not about the value, and duplicating them would be a second
+        // place for them to drift.
+        publish_host_effects(iface, lobby);
+    }
+
+    /// Write one key, read it back, and count the result. `true` when the lobby now holds `value`.
+    ///
+    /// Read-back is not belt and braces. `SetLobbyData` returning `true` proved nothing here: the
+    /// non-owner write returned true and evaporated at the server, so a counter built on the
+    /// return value reported publishes that never happened.
+    fn write_one_key(iface: usize, lobby: u64, key_name: &str, value: &str) -> bool {
         let Some(write) = set_lobby_data(iface) else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return false;
         };
-        let key = format!("{LOBBY_MAP_KEY}\0");
+        let key = format!("{key_name}\0");
         let payload = format!("{value}\0");
         // Our own write goes through the same vtable slot we observe, so silence the observer for
         // its duration -- otherwise publishing could be mistaken for Seamless declaring a lobby.
@@ -754,29 +796,50 @@ mod live {
             // Steam refused. Do not record it as published, or a transient failure would be
             // remembered as success and never retried.
             REFUSALS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return false;
         }
-        // Read it back. `ok` is what the call said; this is what the lobby has. The non-owner
-        // write said true and left nothing behind, so the return value alone is not evidence and
-        // a counter built on it reports publishes that never happened.
-        match published_value(iface, lobby) {
-            Some(ref got) if got == &value => {
-                *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
+        match published_value(iface, lobby, key_name) {
+            Some(ref got) if got == value => {
                 let n = PUBLISHES.fetch_add(1, Ordering::SeqCst) + 1;
                 crate::standalone_log(format_args!(
-                    "lobby-publish: {LOBBY_MAP_KEY} = {value} on lobby {lobby:#x} (#{n}, read back)"
+                    "lobby-publish: {key_name} = {value} on lobby {lobby:#x} (#{n}, read back)"
                 ));
+                true
             }
             other => {
                 REFUSALS.fetch_add(1, Ordering::SeqCst);
                 crate::standalone_log(format_args!(
-                    "lobby-publish: REFUSED -- wrote {LOBBY_MAP_KEY} = {value} to lobby \
+                    "lobby-publish: REFUSED -- wrote {key_name} = {value} to lobby \
                      {lobby:#x} and Steam accepted it, but reading it back gives {other:?}. The \
                      write did not stick; this host is NOT findable by location."
                 ));
+                false
             }
         }
     }
+
+    /// Publish which multiplayer effects are active on this host, when the answer has changed.
+    ///
+    /// Only on a change, which is not an optimisation here so much as the difference between a
+    /// key and a heartbeat: the map value moves when the host walks through a loading screen, and
+    /// this one moves when they use an item, so a host standing still with the tongue up would
+    /// otherwise spend a Steam write every tick saying nothing new.
+    fn publish_host_effects(iface: usize, lobby: u64) {
+        let value = crate::host_effects::active_effects_value();
+        let mut last = LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner());
+        if last.as_deref() == Some(value.as_str()) {
+            return;
+        }
+        if write_one_key(iface, lobby, LOBBY_HOST_EFFECTS_KEY, &value) {
+            *last = Some(value);
+        }
+    }
+
+    /// The effects value last written, so an unchanged answer costs no Steam call.
+    ///
+    /// Separate from `LAST_PUBLISHED` because the two change at different moments: the map value
+    /// moves when the host walks through a loading screen, this one when they use an item.
+    static LAST_EFFECTS: Mutex<Option<String>> = Mutex::new(None);
 
     fn last_published() -> Option<String> {
         LAST_PUBLISHED
