@@ -358,13 +358,42 @@ with "cannot express that"), relocated from configuration to timing, so it wants
 a per-value tally -- which tile was asked for, how many lobbies came back, how many rounds until the
 ring closed -- not a log line nobody reads.
 
-**Naming a neighbour tile is feasible with one constraint.** `nearest_place_name_text_id`
-(`map_hooks.rs:969`) takes map coordinates rather than a block id and walks the constructed
-world-map pin rows, so any tile can be named once its grid x/y is converted to a coordinate -- but
-only while those rows exist, which today means after the world map has been built at least once.
-Snapshot the id-to-name table when the map first builds rather than calling the resolver from the
-search path. The `-1` case needs a fallback in the banner text: that function's own doc records that
-an unresolvable id renders as the literal `?PlaceName?`, not as an empty string.
+**Naming a neighbour tile must not depend on the player having opened the map** (user directive
+2026-09-15: snapshot on load, or at least before the map is opened). The first shape considered --
+snapshot the table when the world map first builds -- is rejected: a player who never opens the map
+would get `?PlaceName?` in the banner, and the banner is the thing that makes the ladder legible.
+
+The way out is that the pin rows are not where the names live. `nearest_place_name_in_area`
+(`map_hooks.rs:981`) reads each pin row's `ROW_PARAM_POINTER_OFFSET` and then
+`PARAM_LABEL_KIND_BASE` / `PARAM_LABEL_TEXT_ID_BASE` **out of the param row it points at**, so the
+name is param data that the map UI merely renders. Build the id-to-name table from the param table
+directly at DLL load and the map never enters the picture.
+
+The param is **`BonfireWarpParam`**, and its layout is already written down here -- the module doc
+of `er-invasion-warp-core/src/param_row.rs` tabulates every field the pin constructor copies, and
+`map_seams.rs:181` names the lookup (`BonfireWarpParamLookup`, `0x140d25c30`, param table index
+`0x2B`). So the "which param" question is answered; an earlier draft of this section said it was
+written down nowhere, which was wrong.
+
+Getting from a block id to map coordinates is also already solved in live memory, and deliberately
+independent of the map UI: `legacy_map_regions.rs` reads `CS::WorldMapLegacyConverter`, whose entry
+per legacy block carries the overworld block it projects into and the map-space origin of that
+projection, and which the engine keeps resident because the map has to draw dungeons the player has
+never entered. Overworld blocks get their origin from `WorldGridAreaInfo::GetWorldAreaInfoCoordinates`
+(`0x1406338d0`, recorded in `invasion_warp.rs:35`).
+
+**The one genuinely unmeasured link is a grace's position without the map.** `BonfireWarpParam`
+carries the entity id, the cleared-event flag, the icon, the category bits and the eight labels --
+no coordinates. The pin rows have coordinates because the map's own construction path resolves
+them. So a load-time table needs whatever resolves a bonfire entity id to a world position, and
+that is the piece to read next.
+
+`nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
+resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
+to name.
+
+The `-1` case still needs a fallback in the banner text: that function's own doc records that an
+unresolvable id renders as the literal `?PlaceName?`, not as an empty string.
 
 ### Documentation status
 
