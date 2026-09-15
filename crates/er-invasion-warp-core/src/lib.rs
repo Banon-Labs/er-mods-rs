@@ -102,6 +102,7 @@ pub use oracles::*;
 pub mod sampler;
 pub use sampler::*;
 
+pub mod map_piece;
 pub mod map_surface;
 pub use map_surface::*;
 

@@ -136,7 +136,7 @@ def main() -> int:
             f"sample {sample}  as f32 {span}"
         )
 
-    # The four floats of a map piece are two RANGES, not two points -- and the difference is
+    # The four floats of a map piece are two ranges, not two points -- and the difference is
     # not cosmetic: paired as (x0, z0, x1, z1) a third of the rows look inside-out, which reads
     # as "these are not a rectangle" and sends you looking for a centre-and-extent that is not
     # there. Paired as (min, max) per axis, every row holds. Re-derived on every run rather
