@@ -72,6 +72,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import datetime
 import os
 import select
 import signal
@@ -694,8 +695,113 @@ def selftest() -> int:
             "ZOMBIE (already dead, unreaped; nothing to walk -- tear down)"
         ),
     )
+    # The walk-report reader, which is what turned `--walked` from an assertion into a check.
+    # Exercised against a temp directory rather than the real cache so a selftest run cannot be
+    # satisfied -- or broken -- by whatever a previous wedge left behind.
+    import tempfile
+
+    global WALK_REPORT_DIR  # noqa: PLW0603 -- redirected for the duration of these cases only
+    real_dir = WALK_REPORT_DIR
+    try:
+        with tempfile.TemporaryDirectory() as scratch:
+            WALK_REPORT_DIR = scratch
+            check("no walk report at all reads as none", recent_walk_report() is None)
+
+            good = os.path.join(scratch, "stall-walk-20260915-030000.txt")
+            with open(good, "w", encoding="utf-8") as handle:
+                handle.write("thread 0x1  ntdll.dll!NtWaitForSingleObject\n")
+            found = recent_walk_report()
+            check(
+                "a fresh report satisfies the gate and reads as a real walk",
+                found is not None and found[0] == good and found[1] is False,
+            )
+
+            # The case the gate exists to allow: the walk ran, could not attach, and said so.
+            failed = os.path.join(scratch, "stall-walk-20260915-030100.txt")
+            with open(failed, "w", encoding="utf-8") as handle:
+                handle.write(WALK_FAILED_MARKER + "\npid 2005094\n")
+            os.utime(good, (0, datetime.datetime.now().timestamp() - 5))
+            found = recent_walk_report()
+            check(
+                "a report recording a failed attach still satisfies the gate, and is flagged",
+                found is not None and found[0] == failed and found[1] is True,
+            )
+
+            # An old report describes a previous wedge. Accepting it would let one walk authorise
+            # every teardown for the rest of the machine's uptime.
+            stale = datetime.datetime.now().timestamp() - WALK_REPORT_MAX_AGE_SECONDS - 60
+            os.utime(failed, (0, stale))
+            os.utime(good, (0, stale))
+            check("a stale report does not satisfy the gate", recent_walk_report() is None)
+    finally:
+        WALK_REPORT_DIR = real_dir
+
+    # The marker is duplicated across two scripts because neither imports the other; this is what
+    # keeps the duplicate honest. A drift here means a failed walk stops satisfying the gate and
+    # the wedge becomes untearable again except through --walked.
+    walk_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "er-frida-stall-walk.py")
+    try:
+        with open(walk_script, encoding="utf-8") as handle:
+            walk_source = handle.read()
+    except OSError:
+        walk_source = ""
+    check(
+        "the failed-walk marker matches the script that writes it",
+        f'WALK_FAILED_MARKER = "{WALK_FAILED_MARKER}"' in walk_source,
+    )
     print("selftest:", "PASS" if failures == 0 else "FAIL")
     return 1 if failures else 0
+
+
+# Kept verbatim in step with scripts/er-frida-stall-walk.py, whose selftest asserts the match.
+WALK_FAILED_MARKER = "STALL WALK FAILED -- could not attach to the wedged process"
+WALK_REPORT_DIR = os.path.join(os.path.expanduser("~"), ".cache", "er-frida")
+# A report older than this describes a previous wedge, not this one. Ten minutes is far longer than
+# the walk takes and far shorter than the gap between two sessions wedging.
+WALK_REPORT_MAX_AGE_SECONDS = 600
+
+
+def recent_walk_report(now: float | None = None) -> tuple[str, bool] | None:
+    """The newest stall-walk report if one was written recently, and whether it records a failure.
+
+    This is what turns `--walked` from an assertion into a check. It used to be a bare flag: the
+    caller said the walk had happened and nothing verified it, so the gate protected the evidence
+    only from an agent willing to be honest about not having collected it.
+
+    A report that records a failed attach counts. That is the whole point -- measured 2026-09-15,
+    `dev.attach()` times out on a freeze total enough to leave no thread able to service the
+    injection, so demanding a successful walk demands something the wedge itself forbids, and the
+    only exit left was the unchecked flag this replaces.
+    """
+    # `datetime` rather than `time`, deliberately. This module refuses to import `time` so that a
+    # sleep cannot be reintroduced without the selftest noticing -- see "the module has no time
+    # facility to sleep on" -- and `datetime` gives a clock with no way to block on one.
+    now = datetime.datetime.now().timestamp() if now is None else now
+    try:
+        names = os.listdir(WALK_REPORT_DIR)
+    except OSError:
+        return None
+    newest: tuple[float, str] | None = None
+    for name in names:
+        if not (name.startswith("stall-walk-") and name.endswith(".txt")):
+            continue
+        path = os.path.join(WALK_REPORT_DIR, name)
+        try:
+            age = now - os.path.getmtime(path)
+        except OSError:
+            continue
+        if age > WALK_REPORT_MAX_AGE_SECONDS or age < 0:
+            continue
+        if newest is None or os.path.getmtime(path) > newest[0]:
+            newest = (os.path.getmtime(path), path)
+    if newest is None:
+        return None
+    path = newest[1]
+    try:
+        head = open(path, encoding="utf-8", errors="replace").read(400)
+    except OSError:
+        return None
+    return path, WALK_FAILED_MARKER in head
 
 
 def wedged_and_walkable(health: str) -> bool:
@@ -732,8 +838,10 @@ def main() -> int:
         "--walked",
         action="store_true",
         help=(
-            "assert the wedged game's threads have already been walked "
-            "(scripts/er-frida-stall-walk.py). Required to tear down a HUSK."
+            "tear down a HUSK even though no walk report can be found. The gate normally "
+            "satisfies itself from the report scripts/er-frida-stall-walk.py leaves behind, "
+            "including one that records a failed attach, so this is the last resort rather "
+            "than the ordinary path."
         ),
     )
     parser.add_argument("--selftest", action="store_true")
@@ -775,16 +883,33 @@ def main() -> int:
     # So a HUSK refuses here rather than dying quietly. A live game and an already-dead one are
     # unaffected: there is nothing to walk in either.
     if wedged_and_walkable(game_health(args.prefix)):
-        if not args.walked:
+        report = recent_walk_report()
+        if report is None and not args.walked:
             print(
                 "[er-teardown] REFUSING to tear down a WEDGED game -- its threads have not been "
                 "walked, and killing it destroys the only evidence that can name the deadlock.\n"
                 "  walk it first:  uv run --with frida python3 scripts/er-frida-stall-walk.py\n"
                 "  (bring the server up first if needed: python3 scripts/er-frida-up.py)\n"
-                "  then repeat this command with --walked",
+                "  a walk that cannot attach still writes a report, and that report satisfies\n"
+                "  this gate -- so --walked is only for when even that produced nothing",
                 file=sys.stderr,
             )
             return 3
+        if report is None:
+            print(
+                "[er-teardown] tearing down a WEDGED game with no walk report at all, on "
+                "--walked. Nothing was verified; whatever this game was doing is now unknowable."
+            )
+        else:
+            path, failed = report
+            if failed:
+                print(
+                    f"[er-teardown] walk report {path} records that the attach itself failed. "
+                    "That is the finding -- a freeze total enough to block its own diagnosis -- "
+                    "and it is on disk, so this teardown destroys nothing that was recoverable."
+                )
+            else:
+                print(f"[er-teardown] walk report {path} -- threads were walked, clearing the game")
 
     teardown(args.prefix, reason=args.reason, game_dir=args.game_dir)
     return 0
