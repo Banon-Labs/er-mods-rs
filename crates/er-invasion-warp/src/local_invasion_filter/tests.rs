@@ -112,25 +112,24 @@ fn a_sub_millisecond_dwell_never_reports_as_a_stalled_task() {
     assert_eq!(implied_fps(1, 1), Some(1000));
 }
 
+/// The mark keys are the historical defaults, and distinct from the two function keys.
+///
+/// It checked them against the warp driver's F7/F8/F9 until 2026-09-15, when those keys were
+/// removed with the feature. The hazard it guards is unchanged and is not about warping: two
+/// pollers on one key eat each other's `GetAsyncKeyState` "pressed since last call" edge, so one
+/// of the two features silently stops firing. Only the defaults can be asserted -- the keys are
+/// configurable, so a player is free to collide on purpose, and the config line reports which
+/// keys are live when they do.
 #[test]
-fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
+fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_function_keys() {
     let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
     assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
     assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
-    // Sharing a key with the warp driver would make the two pollers eat each other's
-    // GetAsyncKeyState "pressed since last call" edge.
-    //
-    // Only the defaults can be checked here: the keys are configurable now, so a player is free
-    // to name a warp key and collide on purpose. That is their choice to make and the log line
-    // reports which keys are live, but the shipped defaults must not collide out of the box.
-    for warp_key in [
-        crate::drive::VK_WARP_NEAREST,
-        crate::drive::VK_WARP_NEXT,
-        crate::drive::VK_WARP_OTHER_AREA,
-    ] {
-        assert_ne!(defaults.mark_key, warp_key);
-        assert_ne!(defaults.unmark_key, warp_key);
+    for function_key in [defaults.enable_toggle_key, defaults.settings_key] {
+        assert_ne!(defaults.mark_key, function_key);
+        assert_ne!(defaults.unmark_key, function_key);
     }
+    assert_ne!(defaults.enable_toggle_key, defaults.settings_key);
 }
 
 /// A player who names a key must be able to see which key is live, or a typo that parsed into

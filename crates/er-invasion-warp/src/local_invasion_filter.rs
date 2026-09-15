@@ -105,7 +105,7 @@ mod hotkeys;
 /// Both items are `#[cfg(windows)]` inside the module -- they read `GetAsyncKeyState` -- so the
 /// re-export has to be gated too, or the host-target test build looks for names that do not exist.
 #[cfg(windows)]
-pub use hotkeys::{MarkKeys, warp_keys_in_force};
+pub use hotkeys::MarkKeys;
 
 mod ersc;
 
@@ -382,8 +382,7 @@ fn refresh_config() {
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  named={} ids={} blocks={} \
-                 excluded={} mark={} unmark={} enable_toggle={} settings={} \
-                 warp_nearest={} warp_next={} warp_other_area={}",
+                 excluded={} mark={} unmark={} enable_toggle={} settings={}",
                 outcome.config.enabled,
                 outcome.config.mode.as_str(),
                 outcome.config.hunt,
@@ -421,9 +420,6 @@ fn refresh_config() {
                 er_invasion_warp_core::keybind::key_name(outcome.config.unmark_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.enable_toggle_key),
                 er_invasion_warp_core::keybind::key_name(outcome.config.settings_key),
-                er_invasion_warp_core::keybind::key_name(outcome.config.warp_nearest_key),
-                er_invasion_warp_core::keybind::key_name(outcome.config.warp_next_key),
-                er_invasion_warp_core::keybind::key_name(outcome.config.warp_other_area_key),
             ));
             warn_about_key_collisions(&outcome.config);
         }
@@ -458,18 +454,15 @@ fn refresh_config() {
 /// is the least debuggable shape a keybinding bug can take, and now that every key is
 /// configurable a player can produce it by hand in one edit.
 ///
-/// A warning rather than a refusal: the config is the player's, and the mark keys and the warp
-/// keys are read by different pollers in different situations, so a deliberate overlap is theirs
-/// to make. What must not happen is it being silent.
+/// A warning rather than a refusal: the config is the player's, and these keys are read by
+/// different pollers in different situations, so a deliberate overlap is theirs to make. What must
+/// not happen is it being silent.
 fn warn_about_key_collisions(config: &LocalInvasionConfig) {
     let bindings = [
         ("mark_key", config.mark_key),
         ("unmark_key", config.unmark_key),
         ("enable_toggle_key", config.enable_toggle_key),
         ("settings_key", config.settings_key),
-        ("warp_nearest_key", config.warp_nearest_key),
-        ("warp_next_key", config.warp_next_key),
-        ("warp_other_area_key", config.warp_other_area_key),
     ];
     for (index, (name, key)) in bindings.iter().enumerate() {
         for (other_name, other_key) in &bindings[index + 1..] {

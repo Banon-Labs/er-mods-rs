@@ -57,16 +57,20 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
 
-# How a destination is judged:
-#   "exact" -- only the exact location you are anchored to.
-#   "area"  -- that exact location, or anywhere sharing one of its place names. If where you stand
-#              carries one name, that is one place to look; if it carries five, five.
-#   "named" -- ignore where you are; accept only the locations listed below.
+# INERT IN THIS BUILD. Set it to anything; nothing changes about who you meet.
 #
-# OPEN YOUR WORLD MAP ONCE per session if you use "area" or "named". Place names are read off the
-# world map's own rows, so before you have opened it no location has a name, every name-based
-# judgement fails closed, and both modes behave like "exact". The log says so the first time it
-# happens. "exact" compares locations directly and never needs the map.
+# It judged a destination once the connection to the host already existed, and that filter was
+# deleted: a rejection Seamless honoured spent a real connection to end up nowhere, and one it
+# refused left you invading somewhere you had asked not to go. The narrowing moved to
+# search_radius, which asks Steam for the right places instead of declining the wrong answers.
+#
+# The key stays because a mode belongs in the query too -- picking which tiles to ask for rather
+# than which arrivals to refuse -- and that is the shape it will come back in. It is spelled out
+# here rather than deleted so the file never quietly loses a setting somebody had set.
+#
+#   "exact" -- only the exact location you are anchored to.
+#   "area"  -- that exact location, or anywhere sharing one of its place names.
+#   "named" -- ignore where you are; accept only the locations listed below.
 mode = "exact"
 
 # HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
@@ -108,7 +112,7 @@ widen_to_anywhere = false
 # The name is older than what it does. This build does not reject a connected invasion for being
 # in the wrong place -- that cost you a connection to learn something the query could have asked
 # for -- so there is no rejection to announce. What it announces now is arrival ("Invaded
-# Limgrave") and, while prefilter_radius is widening the search, which place is being asked for
+# Limgrave") and, while search_radius is widening the search, which place is being asked for
 # ("searching 3 of 9 nearby locations -- Stormhill").
 #
 # Only a CHANGE is announced. Seamless retries roughly every 20 seconds and the same line would
@@ -170,9 +174,10 @@ only_players_with_this_mod = false
 
 # THE TWO USEFUL COMBINATIONS, since these switches are independent:
 #
-#   enabled = true,  dll_users_only = false   filter by LOCATION, meet everybody (the default use)
-#   enabled = false, dll_users_only = true    invade ANYWHERE as normal, but only ever meet other
-#                                             DLL users -- a private global community
+#   search_by_location = true,  only_players_with_this_mod = false
+#       aim the query at one place, and still meet everybody who is there
+#   search_by_location = false, only_players_with_this_mod = true
+#       invade anywhere as normal, but only ever meet other people running this DLL
 #
 # Both together works too: only DLL users, and only at the place you are standing.
 
@@ -184,7 +189,7 @@ only_players_with_this_mod = false
 # is accepted from then on. That writes `named_location_text_ids` below, which IS consulted.
 #
 # Be careful with mode = "named": if this list is the only thing you filled in, no ids exist and
-# EVERY match is rejected.
+# every match would be rejected -- were mode judging anything, which in this build it is not.
 named_locations = []
 
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
@@ -232,23 +237,6 @@ enable_toggle_key = "F3"
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
-
-# The three invasion-point keys, by NAME, from the same list above.
-#
-# CHANGE THESE IF ANOTHER MOD FIGHTS YOU FOR THEM. They were hard-coded to F7/F8/F9, which is a
-# popular enough choice that another mod in the same profile had taken F7 too -- one press reached
-# both, and there was no way to separate them short of unloading something. Now there is.
-#
-#   warp_nearest_key      the nearest invasion point that is not the one you are standing on
-#   warp_next_key         the next point in the catalog's own order, which crosses the map
-#   warp_other_area_key   the first point in a DIFFERENT area (base game <-> Shadow of the Erdtree)
-#
-# Invasion locations are markers rather than fast-travel destinations, so pressing one of these
-# currently logs why it declined instead of moving you. The keys are still read -- a key that does
-# nothing at all and a key whose handler is broken look identical from the outside.
-warp_nearest_key = "F7"
-warp_next_key = "F8"
-warp_other_area_key = "F9"
 
 # Locations you excluded. An exclusion beats everything, including a mode that would accept it.
 blocked_blocks = []
@@ -370,7 +358,9 @@ pub fn parse_local_invasion_config_with_fallback(
                 Some(v) => config.dll_users_only = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("dll_users_only must be true or false, got {value:?}"),
+                    message: format!(
+                        "only_players_with_this_mod must be true or false, got {value:?}"
+                    ),
                 }),
             },
             "steam_hooks" => match parse_bool(value) {
@@ -428,7 +418,7 @@ pub fn parse_local_invasion_config_with_fallback(
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("enabled must be true or false, got {value:?}"),
+                    message: format!("search_by_location must be true or false, got {value:?}"),
                 }),
             },
             "search_radius" => match unquote(value).parse::<u8>() {
@@ -438,23 +428,21 @@ pub fn parse_local_invasion_config_with_fallback(
                 Ok(v) => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!(
-                        "prefilter_radius {v} is past the {} the ring is capped at -- keeping {}",
+                        "search_radius {v} is past the {} the ring is capped at -- keeping {}",
                         crate::search_ring::MAX_RADIUS,
                         config.prefilter_radius
                     ),
                 }),
                 Err(_) => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("prefilter_radius must be a whole number, got {value:?}"),
+                    message: format!("search_radius must be a whole number, got {value:?}"),
                 }),
             },
             "widen_to_anywhere" => match parse_bool(value) {
                 Some(v) => config.search_everywhere_when_exhausted = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!(
-                        "search_everywhere_when_exhausted must be true or false, got {value:?}"
-                    ),
+                    message: format!("widen_to_anywhere must be true or false, got {value:?}"),
                 }),
             },
             "mode" => match LocalInvasionMode::parse(&unquote(value)) {
@@ -502,33 +490,6 @@ pub fn parse_local_invasion_config_with_fallback(
                     "settings_key",
                     value,
                     fallback.settings_key,
-                    line_no,
-                    &mut issues,
-                );
-            }
-            "warp_nearest_key" => {
-                config.warp_nearest_key = key_setting(
-                    "warp_nearest_key",
-                    value,
-                    fallback.warp_nearest_key,
-                    line_no,
-                    &mut issues,
-                );
-            }
-            "warp_next_key" => {
-                config.warp_next_key = key_setting(
-                    "warp_next_key",
-                    value,
-                    fallback.warp_next_key,
-                    line_no,
-                    &mut issues,
-                );
-            }
-            "warp_other_area_key" => {
-                config.warp_other_area_key = key_setting(
-                    "warp_other_area_key",
-                    value,
-                    fallback.warp_other_area_key,
                     line_no,
                     &mut issues,
                 );
@@ -758,18 +719,6 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             "settings_key" => out.push_str(&format!(
                 "settings_key = \"{}\"\n",
                 crate::keybind::key_name(config.settings_key)
-            )),
-            "warp_nearest_key" => out.push_str(&format!(
-                "warp_nearest_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_nearest_key)
-            )),
-            "warp_next_key" => out.push_str(&format!(
-                "warp_next_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_next_key)
-            )),
-            "warp_other_area_key" => out.push_str(&format!(
-                "warp_other_area_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_other_area_key)
             )),
             "named_location_text_ids" => {
                 let ids = config
@@ -1503,22 +1452,22 @@ only_players_with_this_mod = true\n";
             std::env::temp_dir().join(format!("er-invasion-warp-fast-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("er-invasion-warp.toml");
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"F7\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"Insert\"\n").unwrap();
 
         let mut hot = HotConfig::with_poll_interval_ms(0);
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("first look loads")
                 .config
-                .warp_nearest_key,
-            crate::keybind::VK_F7
+                .mark_key,
+            crate::keybind::VK_INSERT
         );
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"]\"\n").unwrap();
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("the second edit must land too")
                 .config
-                .warp_nearest_key,
+                .mark_key,
             crate::keybind::parse_key("]").expect("] is a key")
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1527,9 +1476,9 @@ only_players_with_this_mod = true\n";
     /// The FALLBACK rule. A typo on a reload keeps the key that was working -- not the shipped
     /// default, and not nothing.
     ///
-    /// Falling back to F7 would be actively wrong: F7 is the binding a colliding mod had already
-    /// taken, so a typo would silently drag the player back onto the collision they had moved away
-    /// from, and the log would say the config loaded fine.
+    /// Falling back to the shipped default would be actively wrong. The reason the rule exists is
+    /// a player on a keyboard with no Insert key: a typo on the line they added to fix that would
+    /// drag them back onto a key they cannot press, and the log would say the config loaded fine.
     #[test]
     fn a_malformed_key_on_reload_keeps_the_previous_value_not_the_shipped_default() {
         let dir =
@@ -1537,26 +1486,26 @@ only_players_with_this_mod = true\n";
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("er-invasion-warp.toml");
         let chosen = crate::keybind::parse_key("]").expect("] is a key");
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"]\"\n").unwrap();
 
         let mut hot = HotConfig::with_poll_interval_ms(0);
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("first look loads")
                 .config
-                .warp_nearest_key,
+                .mark_key,
             chosen
         );
 
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"Winkey\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"Winkey\"\n").unwrap();
         let outcome = hot
             .reload_if_changed(&path)
             .expect("the edit is a change even though it does not parse");
         assert_eq!(
-            outcome.config.warp_nearest_key, chosen,
+            outcome.config.mark_key, chosen,
             "a typo must not drag the binding back to the shipped default"
         );
-        assert_eq!(hot.current().warp_nearest_key, chosen);
+        assert_eq!(hot.current().mark_key, chosen);
         assert_eq!(outcome.issues.len(), 1, "{:?}", outcome.issues);
         let message = &outcome.issues[0].message;
         assert!(message.contains("Winkey"), "{message}");
@@ -1564,38 +1513,43 @@ only_players_with_this_mod = true\n";
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The three warp keys are readable by name, like the mark keys, and survive the writer -- the
-    /// mark keys rewrite this file, so a warp key the writer dropped would be erased on the first
-    /// mark press.
+    /// The keys that remain are readable by name and survive the writer -- the mark keys rewrite
+    /// this file, so a key the writer dropped would be erased on the first mark press.
+    ///
+    /// It covered the three warp keys until 2026-09-15, when they were removed with the feature.
+    /// The writer bug it guards against was never specific to those keys:
+    /// `render_local_invasion_config` walks the shipped template and copies verbatim any line it
+    /// has no arm for, so a key with a parse arm and no writer arm is reset on every save.
     #[test]
-    fn the_warp_keys_are_configurable_and_survive_the_writer() {
+    fn the_keys_are_configurable_and_survive_the_writer() {
         let parsed = parse_local_invasion_config(
-            "[local_invasion]\nwarp_nearest_key = \"]\"\nwarp_next_key = \"K\"\n\
-             warp_other_area_key = \"KP_Plus\"\n",
+            "[local_invasion]\nmark_key = \"]\"\nunmark_key = \"K\"\n\
+             enable_toggle_key = \"KP_Plus\"\n",
         );
         assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
-        assert_eq!(parsed.config.warp_nearest_key, 0xdd);
-        assert_eq!(parsed.config.warp_next_key, 0x4b);
-        assert_eq!(parsed.config.warp_other_area_key, 0x6b);
+        assert_eq!(parsed.config.mark_key, 0xdd);
+        assert_eq!(parsed.config.unmark_key, 0x4b);
+        assert_eq!(parsed.config.enable_toggle_key, 0x6b);
 
         let rendered = render_local_invasion_config(&parsed.config);
-        assert!(rendered.contains("warp_nearest_key = \"]\""), "{rendered}");
-        assert!(rendered.contains("warp_next_key = \"K\""), "{rendered}");
+        assert!(rendered.contains("mark_key = \"]\""), "{rendered}");
+        assert!(rendered.contains("unmark_key = \"K\""), "{rendered}");
         assert!(
-            rendered.contains("warp_other_area_key = \"KP_Plus\""),
+            rendered.contains("enable_toggle_key = \"KP_Plus\""),
             "{rendered}"
         );
         assert_eq!(parse_local_invasion_config(&rendered).config, parsed.config);
     }
 
-    /// The shipped file must name all five keys, and they must be the historical defaults so an
-    /// existing player's muscle memory keeps working.
+    /// The shipped file must name every key it binds, at the historical defaults, so an existing
+    /// player's muscle memory keeps working.
     #[test]
-    fn the_shipped_file_names_the_warp_keys_at_their_historical_defaults() {
+    fn the_shipped_file_names_the_keys_at_their_historical_defaults() {
         let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
         assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
-        assert_eq!(parsed.config.warp_nearest_key, crate::keybind::VK_F7);
-        assert_eq!(parsed.config.warp_next_key, crate::keybind::VK_F8);
-        assert_eq!(parsed.config.warp_other_area_key, crate::keybind::VK_F9);
+        assert_eq!(parsed.config.mark_key, crate::keybind::VK_INSERT);
+        assert_eq!(parsed.config.unmark_key, crate::keybind::VK_DELETE);
+        assert_eq!(parsed.config.enable_toggle_key, crate::keybind::VK_F3);
+        assert_eq!(parsed.config.settings_key, crate::keybind::VK_F4);
     }
 }
