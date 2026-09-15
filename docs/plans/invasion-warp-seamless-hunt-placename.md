@@ -450,12 +450,33 @@ therefore addresses a row **directly**, with no coordinates, no converter, no ma
 pin. That is the whole difficulty dissolved: the lookup the banner needs is an integer reinterpreted
 as decimal digits.
 
-**What is established, and what is not.** Established: the param, its row count, its overworld
-coverage, and that its row id is the block id's decimal digit packing -- all read out of the
-installed regulation, offline. Not established: which field of the row carries the `PlaceName` text
-id (the reader used here needs no paramdef and so reports ids, not fields), and whether a region
-with no row falls back to a coarser tile or to nothing. Both are static reads. No code should be
-written against a guessed field offset -- the 10-row detour above is what that costs.
+### The tile-keyed table and the name-carrying table are two different params
+
+Dumping the rows (`scripts/map-region-place-names.py`, written for this) settles it, and the
+answer is a split nobody would guess from the param names:
+
+| param | rows | stride | what the row actually holds |
+|---|---|---|---|
+| `MapGdRegionInfoParam` | 293 | `0x20` | a flag at `+0x00`, a small area-shaped value at `+0x04`. Keyed by the block id, and **carries no name** |
+| `WorldMapPieceParam` | 34 | `0x40` | text id at `+0x04` (`62010`, `62011`, `62012`, `62020`, ...), four floats at `+0x08..+0x17`, a second text id at `+0x18` (`63010`, ...) |
+| `WorldMapPlaceNameParam` | 10 | `0x20` | names nothing |
+
+So `MapGdRegionInfoParam` answers "is this tile a region" and `WorldMapPieceParam` answers "what is
+that region called", and joining them is the remaining work. Thirty-four pieces is the granularity a
+player thinks in -- Limgrave, Liurnia, Caelid -- which is the right granularity for the banner
+anyway: "searching 3 of 8 nearby locations (Liurnia Lake Shore)" wants a region name, not a tile
+number.
+
+The float columns are what make this readable rather than guesswork: `+0x08..+0x14` decode as
+`0.0..9648.0` in map space, which is a coordinate range and not any kind of id, while `+0x04` and
+`+0x18` decode as `0.0` floats and as structured five-digit ids. The tool prints both columns for
+exactly that reason.
+
+**Still to establish.** How a block id reaches a piece -- the four floats are not a plain min/max
+rectangle (row 6 has `x0 2607 > x1 1971`), so they are a centre-and-extent or an origin-and-size and
+that has to be read rather than assumed; and what a tile outside every piece should fall back to.
+Both are offline reads against the same dump. No code against a guessed field offset: the ten-row
+detour two sections up is what that costs.
 
 `nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
 resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
