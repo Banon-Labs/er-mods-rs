@@ -294,11 +294,77 @@ narrows what arrives, the filter judges what did. Turning hunt on does not turn 
 
 ### Does the name match the feature
 
-Partly. "Hunt" reads as "go looking harder", and what it does is the opposite -- it **narrows** the
-search so you are shown fewer worlds, and it costs you every host who is not running this mod. A name
-closer to the mechanism would be along the lines of `target_one_location` or `narrow_query`. This is
-a naming observation, not a defect: both shipped config files lead with the cost in capital letters
-and neither oversells it.
+No, and the decision taken 2026-09-15 is to rename the key to `prefilter`.
+
+"Hunt" reads as "go looking harder", and what it does is the opposite -- it **narrows** the search so
+you are shown fewer worlds, and it costs you every host who is not running this mod.
+
+The names that suggest themselves first are all wrong for one reason worth writing down, because it
+is not obvious: `target_one_location`, `search_one_location` and `one_location_only` all describe
+*which place* is chosen, and that is already what `mode` does. `hunt_filter_value`
+(`lobby_publish.rs:246`) aims at the single marked block, or the block the player is standing in --
+the same block `LocalInvasionMode::ExactOnly` judges candidates against. Two config keys whose names
+both mean "one location" cannot be told apart in a settings panel.
+
+The distinction that matters is **when** each acts, not what it selects:
+
+| key | acts on | every host visible | mechanism |
+|---|---|---|---|
+| `mode` | the answer Steam returned | yes, then declines the wrong ones | judge `ServerPushJoinData+0x00` at `SetMultiplayJoinData` |
+| `prefilter` (was `hunt`) | the question | no -- only mod users publish the key | Steam lobby-list string filter on `RequestLobbyList` |
+
+Read as a pair they become "`mode` decides what you accept; `prefilter` decides what you are
+offered". Runner-up name considered and rejected: `narrow_the_search`, plainer but it does not pair.
+
+Sweep cost: about 220 `hunt*` identifier sites. Two facts make it cheaper than it looks --
+`settings_panel.rs:284` derives the in-game panel label from the raw key string, so the rename
+reaches the UI in the same edit, and `local_invasion_config.rs:517` surfaces an unknown key as a
+reported issue rather than dropping it, so a stale `hunt = true` complains instead of silently
+reverting. An alias is still worth the one line.
+
+### The escalation ladder (user directive 2026-09-15)
+
+The goal the user stated is to **remove the need to search a location and cancel** -- rejection
+sampling is the thing to get rid of, not to tune. The shape asked for is a ladder that widens on its
+own and reports where it is:
+
+| rung | filter asked of Steam | who can answer |
+|---|---|---|
+| 1 | the player's exact block | mod users in that tile |
+| 2 | each neighbouring tile in turn, one per query round | mod users in the ring |
+| 3 | no filter at all (opt-in, after the ring is exhausted) | everybody, including vanilla hosts |
+
+Rung 2 works because our detour recomputes the filter value on every `RequestLobbyList`
+(`lobby_publish.rs:1195-1221`), so successive rounds can name successive tiles. One query can still
+only carry one value -- a Steam string filter is equality with no or, and several filters and
+together -- so the ring is covered over rounds, never in one shot.
+
+**Rung 3 is why the reject filter must not be deleted.** With no string filter the answer set is the
+whole population again, and the only thing that can tell where a candidate would actually land is
+`mode` judging the server-sent destination. Deleting the reject filter would leave rung 3 accepting
+anything, anywhere.
+
+**The banner has to say which rung it is on**, or "no invasions found" stops meaning anything: the
+player cannot distinguish an empty ring from a ring we have not finished asking about. The agreed
+shape names the place as well as the count, because a player recognises a place name and has no idea
+what tile 3 of 8 is:
+
+```
+Could not find an invasion in Liurnia Lake Shore -- searching 3 of 8 nearby locations
+```
+
+This is the same failure `hunt_refusal` already exists to prevent (a silent `None` conflating "off"
+with "cannot express that"), relocated from configuration to timing, so it wants the same treatment:
+a per-value tally -- which tile was asked for, how many lobbies came back, how many rounds until the
+ring closed -- not a log line nobody reads.
+
+**Naming a neighbour tile is feasible with one constraint.** `nearest_place_name_text_id`
+(`map_hooks.rs:969`) takes map coordinates rather than a block id and walks the constructed
+world-map pin rows, so any tile can be named once its grid x/y is converted to a coordinate -- but
+only while those rows exist, which today means after the world map has been built at least once.
+Snapshot the id-to-name table when the map first builds rather than calling the resolver from the
+search path. The `-1` case needs a fallback in the banner text: that function's own doc records that
+an unresolvable id renders as the literal `?PlaceName?`, not as an empty string.
 
 ### Documentation status
 

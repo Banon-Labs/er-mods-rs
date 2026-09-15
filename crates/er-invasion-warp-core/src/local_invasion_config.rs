@@ -1,4 +1,4 @@
-//! Loading [`LocalInvasionConfig`] from `er-invasion-warp-core.toml`, and RELOADING it while the game
+//! Loading [`LocalInvasionConfig`] from `er-invasion-warp.toml`, and RELOADING it while the game
 //! runs.
 //!
 //! # Hot reload, and why it is content-polled rather than event-driven
@@ -255,7 +255,7 @@ pub struct ParsedConfig {
     pub issues: Vec<ConfigIssue>,
 }
 
-/// Parse `er-invasion-warp-core.toml` text.
+/// Parse `er-invasion-warp.toml` text.
 ///
 /// Accepts the schema at top level or inside a `[local_invasion]` section, so the same function
 /// serves the standalone file and the embedded-in-a-shared-TOML case. Sections other than
@@ -887,6 +887,49 @@ impl HotConfig {
 mod tests {
     use super::*;
     use crate::local_invasion::{InvasionAnchor, InvasionCandidate, KeepReason, Verdict};
+
+    /// Every file that tells a user where to put the config must name the file the DLL opens.
+    ///
+    /// # What it cost to get this wrong
+    ///
+    /// Four user-facing files spelled the name after the crate directory rather than after
+    /// [`CONFIG_FILE_NAME`] -- the same name with `-core` inserted before the extension. A user
+    /// following the setup guide saves the file where nothing reads it, the DLL writes its own
+    /// default alongside, and the symptom is "the mod ignores its own config": no error, no log
+    /// line, nothing to search for. The wrong spelling is also the plausible one, because it is
+    /// what the crate directory is called, so it comes back every time somebody writes a new doc
+    /// from memory.
+    ///
+    /// The needle is assembled here rather than written out, so this file does not contain the
+    /// string it forbids.
+    #[test]
+    fn every_user_facing_file_names_the_config_the_dll_actually_opens() {
+        let wrong = CONFIG_FILE_NAME.replace(".toml", "-core.toml");
+        for (name, text) in [
+            (
+                "local_invasion_config.rs",
+                include_str!("local_invasion_config.rs"),
+            ),
+            (
+                "docs/invasion-warp-second-player-setup.md",
+                include_str!("../../../docs/invasion-warp-second-player-setup.md"),
+            ),
+            (
+                "docs/er-invasion-warp.dll-pool-test.toml",
+                include_str!("../../../docs/er-invasion-warp.dll-pool-test.toml"),
+            ),
+            (
+                "docs/er-invasion-warp.invader-example.toml",
+                include_str!("../../../docs/er-invasion-warp.invader-example.toml"),
+            ),
+        ] {
+            assert!(
+                !text.contains(&wrong),
+                "{name} names the config {wrong:?}; the DLL opens {CONFIG_FILE_NAME:?}, so a user \
+                 following it saves the file where nothing reads it"
+            );
+        }
+    }
 
     #[test]
     fn a_marked_config_round_trips_through_the_writer() {
