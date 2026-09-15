@@ -427,11 +427,35 @@ dependency on the map view model, and `WorldMapPlaceNameParam` is by constructio
 a piece of the map to the name shown on it -- which is the table the banner wants, without a single
 pin row.
 
-**What is established, and what is not.** Established: the param exists, its name string, and its
-table index on 1.16.2. Not established: the row layout -- which fields carry the area/grid
-coordinates and which carries the `PlaceName` text id -- and the index on 1.17.1, which is the build
-actually installed. Both are static reads and neither has been done; no code should be written
-against a guessed layout.
+**And then the row counts falsified it.** `WorldMapPlaceNameParam` has **10 rows** in the installed
+regulation (`python3 scripts/regulation-params.py WorldMapPlaceNameParam`). Ten rows cannot name a
+world. Its neighbours are no better: `WorldMapPieceParam` has 34, `WorldMapPointParam` 472 with
+coordinate-shaped ids. So the name-string table gave the right *neighbourhood* and the wrong param,
+and the index `0x5a` above is correct about what it indexes and useless for this purpose.
+
+### `MapGdRegionInfoParam` is the table, and its row id IS the block id
+
+293 rows, and the id packing is the one this repo already uses. `invasion_warp.rs:51` records
+`BlockKey` as `[index, region, block, area]`; a `MapGdRegionInfoParam` id read as decimal digits is
+the same four fields:
+
+```text
+60081002  ->  area 60   block 08   region 10   index 02     (m60_08_10_02)
+10000000  ->  area 10   block 00   region 00   index 00     (m10_00_00_00)
+```
+
+184 of the 293 rows are area 60 -- the overworld -- which is exactly the coverage a per-tile name
+table needs and exactly what `WorldMapPlaceNameParam`'s ten rows could never provide. A block id
+therefore addresses a row **directly**, with no coordinates, no converter, no map view model and no
+pin. That is the whole difficulty dissolved: the lookup the banner needs is an integer reinterpreted
+as decimal digits.
+
+**What is established, and what is not.** Established: the param, its row count, its overworld
+coverage, and that its row id is the block id's decimal digit packing -- all read out of the
+installed regulation, offline. Not established: which field of the row carries the `PlaceName` text
+id (the reader used here needs no paramdef and so reports ids, not fields), and whether a region
+with no row falls back to a coarser tile or to nothing. Both are static reads. No code should be
+written against a guessed field offset -- the 10-row detour above is what that costs.
 
 `nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
 resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
