@@ -385,8 +385,31 @@ never entered. Overworld blocks get their origin from `WorldGridAreaInfo::GetWor
 **The one genuinely unmeasured link is a grace's position without the map.** `BonfireWarpParam`
 carries the entity id, the cleared-event flag, the icon, the category bits and the eight labels --
 no coordinates. The pin rows have coordinates because the map's own construction path resolves
-them. So a load-time table needs whatever resolves a bonfire entity id to a world position, and
-that is the piece to read next.
+them: `nearest_place_name_in_area` reads the position out of the pin row at `+0x10` / `+0x14`, and
+`project_to_map` calls `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` against converters
+held on the map **view model**. Both are map-construction artefacts, so neither survives a session
+where the map was never opened.
+
+### The lead that was read, and what it ruled out (2026-09-15)
+
+`CS::CSMapPlaceNameOverrideRegionMan` is the only `PlaceName`-named symbol in the whole 1.16.2
+dump (`0x140a73790`), and a region manager is the right shape for "what is this position called",
+so it was the obvious candidate for a map-free name source. Two facts came out of reading it:
+
+- **It is constructed at world load, not at map open.** Its single call site is `FUN_14061e800` at
+  `0x14061f243` -- a `FieldArea` initialiser that allocates `WorldAreaTime`, `WorldMapManImp` and a
+  row of sibling region managers (`CSPlayRegionPointMan`, `CSRideJumpRegionMan`,
+  `CSOpenChrActivateThresholdRegionMan`) and stores each in a global. So
+  `GLOBAL_CSMapPlaceNameOverrideRegionMan` is live from the moment a world is up, which is the
+  property the banner needs.
+- **It is an `Override` table, so it is not the base mapping.** The name says what it holds:
+  regions that *replace* a place name, the exceptions. A tile with no override has no entry, so
+  this manager alone cannot name an arbitrary neighbour.
+
+That leaves the base position-to-name source still unidentified. The next read is the param side
+rather than another manager: whatever `WorldMapPiece`/`WorldMapPlaceName` param the region managers
+override, since the on-screen area name appears on a save where the map has never been opened and
+must therefore come from somewhere resident at world load.
 
 `nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
 resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
