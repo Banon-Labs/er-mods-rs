@@ -1267,6 +1267,17 @@ mod live {
             step.ordinal,
             step.total
         ));
+        // The log is for us; this is for the player. Gated on the same option as every other
+        // banner, so somebody who turned notices off does not start getting them because they
+        // widened their search.
+        let notice = crate::local_invasion_filter::current_config_snapshot()
+            .is_none_or(|config| config.reject_notice);
+        crate::local_invasion_filter::banner::announce_prefilter_step(
+            notice,
+            step.block.raw(),
+            step.ordinal,
+            step.total,
+        );
         Some(map_value(step.block))
     }
 
