@@ -472,11 +472,30 @@ The float columns are what make this readable rather than guesswork: `+0x08..+0x
 `+0x18` decode as `0.0` floats and as structured five-digit ids. The tool prints both columns for
 exactly that reason.
 
-**Still to establish.** How a block id reaches a piece -- the four floats are not a plain min/max
-rectangle (row 6 has `x0 2607 > x1 1971`), so they are a centre-and-extent or an origin-and-size and
-that has to be read rather than assumed; and what a tile outside every piece should fall back to.
-Both are offline reads against the same dump. No code against a guessed field offset: the ten-row
-detour two sections up is what that costs.
+### The four floats are two ranges, and that was one wrong pairing away from a dead end
+
+Read as `(x0, z0, x1, z1)` a third of the rows look inside-out -- row 6 gives `x0 2607 > x1 1971` --
+which reads as "these are not a rectangle at all" and sends you hunting for a centre-and-extent that
+does not exist. The pairing is per axis, not per corner:
+
+| offset | field |
+|---|---|
+| `+0x08` | x min |
+| `+0x0c` | x max |
+| `+0x10` | z min |
+| `+0x14` | z max |
+
+`+0x08 < +0x0c` and `+0x10 < +0x14` hold for **all 34 rows**, with no exceptions and no special
+cases. `scripts/map-region-place-names.py` re-derives that on every run and prints it, rather than
+recording it here where a paramdef change could leave it stale.
+
+So the join is a plain point-in-rectangle test: take a tile's map-space position, find the piece
+whose x and z ranges contain it, read the `PlaceName` text id at `+0x04`. Nothing about it needs the
+map to have been opened.
+
+**Still to establish:** what a tile outside every piece should fall back to. That is a product
+decision as much as a measurement -- `?PlaceName?` must never reach the banner, so the fallback is
+either the coarsest containing piece or a plain "nearby".
 
 `nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
 resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id

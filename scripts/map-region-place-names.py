@@ -136,6 +136,26 @@ def main() -> int:
             f"sample {sample}  as f32 {span}"
         )
 
+    # The four floats of a map piece are two RANGES, not two points -- and the difference is
+    # not cosmetic: paired as (x0, z0, x1, z1) a third of the rows look inside-out, which reads
+    # as "these are not a rectangle" and sends you looking for a centre-and-extent that is not
+    # there. Paired as (min, max) per axis, every row holds. Re-derived on every run rather
+    # than written down, so a paramdef change cannot leave a stale claim in a comment.
+    if width >= 0x18:
+        pairs = [
+            ("+0x08 < +0x0c  (x)", 0x08, 0x0C),
+            ("+0x10 < +0x14  (z)", 0x10, 0x14),
+        ]
+        print("\nfloat pairs read as ranges:")
+        for label, low, high in pairs:
+            held = sum(
+                1
+                for b in body.values()
+                if struct.unpack_from("<f", b, low)[0] < struct.unpack_from("<f", b, high)[0]
+            )
+            verdict = "holds for every row" if held == len(body) else f"holds for {held}/{len(body)}"
+            print(f"  {label}: {verdict}")
+
     for row_id in args.row_id:
         if row_id not in body:
             print(f"\nrow {row_id}: absent")
