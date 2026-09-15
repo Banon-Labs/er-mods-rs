@@ -15,6 +15,10 @@ name = "er_dinput_suppress_core"
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
+# The shared counter the product's runtime oracles read. The detour that feeds it moved here out
+# of `er-net-effects`, so its writer has to move with it or the oracle reads 0 forever, which is
+# indistinguishable from "the mouse was never polled".
+er-telemetry-core = { path = "../er-telemetry-core" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_LibraryLoader",

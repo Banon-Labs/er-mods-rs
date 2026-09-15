@@ -2894,6 +2894,7 @@ name = "er-dinput-suppress-core"
 version = "0.1.0"
 dependencies = [
  "er-hook",
+ "er-telemetry-core",
  "windows 0.62.2",
 ]
 

@@ -93,6 +93,7 @@ pub unsafe fn install_mouse_suppression() -> Result<usize, MH_STATUS> {
         )?;
     }
 
+    publish_detour_addresses(mouse_addr);
     // The registrar owns the detour for the life of the process; nothing uninstalls it.
     INSTALLED.store(true, Ordering::Relaxed);
     Ok(mouse_addr)
@@ -103,6 +104,11 @@ pub unsafe fn install_mouse_suppression() -> Result<usize, MH_STATUS> {
 #[must_use]
 pub fn mouse_hook_fires() -> usize {
     HOOK_FIRES.load(Ordering::Relaxed)
+}
+
+/// Record which detours resolved, for the product's runtime oracles.
+fn publish_detour_addresses(mouse_addr: usize) {
+    er_telemetry_core::counters::DINPUT_MOUSE_GET_STATE_ORIG.store(mouse_addr, Ordering::Relaxed);
 }
 
 /// How many clicks this module has kept out of the game.
@@ -124,6 +130,11 @@ unsafe extern "system" fn mouse_get_state_hook(
     unused: usize,
 ) -> usize {
     HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
+    // The same count, in the shared table the product's runtime oracles read. This module owns the
+    // detour now, so it owns the counter's only write site: `er-net-effects` used to hold both and
+    // moving one without the other leaves the oracle reading 0 forever, which reads as "the mouse
+    // was never polled" rather than "nobody wrote this".
+    er_telemetry_core::counters::DINPUT_MOUSE_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
     let next = ORIG.load(Ordering::Relaxed);
     if next == 0 {
         return 0;
