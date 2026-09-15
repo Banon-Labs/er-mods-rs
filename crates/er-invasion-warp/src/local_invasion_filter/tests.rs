@@ -1973,3 +1973,55 @@ fn the_deadline_never_classifies_a_live_invasion_as_a_connect() {
         );
     }
 }
+
+/// The everywhere rung must reach the caller as "add no filter", and nothing may turn it back
+/// into a location.
+///
+/// Structural, because the code it guards is `cfg(windows)` and reads live game state. That is
+/// also how the bug shipped: `advance_ring` returned `None` for "drop the filter and ask
+/// everywhere", `hunt_target` ended in `.or(Some(centre))` -- written for the unrelated case of
+/// no readable block -- and the two `None`s were indistinguishable. Run br-20260915-173522-e76b
+/// announced "looking everywhere instead" on screen and in the log, then asked Steam for the
+/// player's own tile 33 more times, every connect dying at the deadline against stale entries.
+/// A type the compiler checks replaced the `Option`; this stops the collapse coming back.
+#[test]
+fn the_everywhere_rung_cannot_be_collapsed_back_into_a_location() {
+    let source = include_str!("../lobby_publish.rs");
+    let hunt = source
+        .split_once("fn hunt_target()")
+        .expect("hunt_target exists")
+        .1;
+    let body = &hunt[..hunt
+        .find("\n    /// What one round of the widening search")
+        .expect("hunt_target is followed by the RingStep definition")];
+    assert!(
+        body.contains("RingStep::Everywhere => None"),
+        "the everywhere rung must reach the caller as None, which is what makes the query          unfiltered: {body}"
+    );
+    // The exact shape that swallowed it. `.or(` on the ring result restores a filter the rung
+    // just dropped, and does it silently -- the banner and the log still say "everywhere".
+    assert!(
+        !body.contains(".or(Some("),
+        "an `.or(Some(..))` on the ring result collapses the everywhere rung back into a tile:          {body}"
+    );
+    // And the fallback must stay distinguishable rather than being folded in with it.
+    assert!(
+        body.contains("RingStep::Unavailable => Some(centre)"),
+        "an unbuildable ring must fall back to the single tile, not widen to everywhere: {body}"
+    );
+}
+
+/// The three outcomes stay three. Collapsing `Unavailable` into `Everywhere` would widen the
+/// search whenever the ring could not be read, which is the opposite failure and just as quiet.
+#[test]
+fn the_ring_step_type_keeps_its_three_outcomes() {
+    let source = include_str!("../lobby_publish.rs");
+    let decl = source
+        .split_once("enum RingStep {")
+        .expect("RingStep exists")
+        .1;
+    let body = &decl[..decl.find("\n    }").expect("RingStep closes")];
+    for variant in ["Ask(String)", "Everywhere", "Unavailable"] {
+        assert!(body.contains(variant), "RingStep lost {variant}: {body}");
+    }
+}
