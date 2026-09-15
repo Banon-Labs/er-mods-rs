@@ -201,61 +201,6 @@ fn this_module_installs_exactly_five_detours_and_all_three_seamless_ones_are_rea
     );
 }
 
-/// A session that reads idle while a join is in flight is proven wrong, and must be dropped.
-///
-/// Measured live, run `br-20260909-000018-d691`: the scan reported `found at 0x309c0038 ... owner
-/// 0x0`, the player invaded, and the one rejection came back `cannot cancel (WrongBlock) -- the
-/// session is in state 0x1`. The player was mid-search, so the real session read `state_searching`
-/// and the cached object could not have been it. Without this the same wrong pointer refuses every
-/// rejection for the rest of the run, which is exactly what that run did: one reject, one
-/// `NOT cancelled`, the invasion proceeded, no banner.
-#[test]
-fn a_session_reading_idle_during_a_join_is_dropped_rather_than_waited_out() {
-    let source = filter_module_code();
-    let body = source
-        .split_once("fn cancel_match(")
-        .expect("cancel_match exists")
-        .1;
-    // Anchored on the reading itself rather than on the old refusal arm: the cancel-row check
-    // became a report on 2026-09-08 (it was a UI rule refusing a state measured to cancel), and
-    // the idle drop is now its own arm just after it.
-    let refusal = body
-        .split_once("cancel_row_refusal(")
-        .expect("the cancel-row reading is still taken")
-        .1;
-    // Bounded, so a call to the same function anywhere else in `cancel_match` cannot satisfy this.
-    // Three earlier gates in this file matched their own assertion text; scoping the window is
-    // what stops that class of false pass.
-    let arm = &refusal[..refusal.len().min(2_500)];
-    assert!(
-        arm.contains("JOIN_IN_FLIGHT.load("),
-        "the refusal must distinguish an idle session mid-join from one that is merely idle"
-    );
-    assert!(
-        arm.contains("state_idle"),
-        "it is specifically the idle reading that proves the pointer wrong"
-    );
-    assert!(
-        arm.contains("session_scan::invalidate_cached_session()"),
-        "a pointer proven wrong must be dropped, or every later rejection refuses on the same \
-         reading"
-    );
-    // And the row reading itself must stay a report. It is ERSC's hide-predicate -- when Seamless
-    // draws the Cancel row -- while the cancel action at ersc+0x258d0 has no state precondition at
-    // all. Obeying it refused `state 0x16` on 2026-09-08, the same state a Frida-driven cancel had
-    // succeeded from eight times that evening (22 -> 35 every time, no crash).
-    // `arm` already begins after the call, so the row-reading block is everything up to the first
-    // line that closes it. Splitting on the call name again finds nothing and would hand back the
-    // whole window, which then matches the idle drop's own `return false` -- a false fail this
-    // test produced on its first run.
-    let row_reading = arm.split_once("\n    }").map_or(arm, |(inside, _)| inside);
-    assert!(
-        !row_reading.contains("return false"),
-        "the cancel-row reading must not refuse: it describes the row Seamless draws, not what \
-         the action accepts"
-    );
-}
-
 /// Turning the filter off must not turn the banner off.
 ///
 /// `enabled = false` means "judge nothing", not "say nothing": the player still wants to be told
@@ -869,15 +814,19 @@ fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
         "the armed check must come BEFORE arming a restart, or a kept match restarts once \
          before the guard is consulted"
     );
-    // And the disarm on Keep is the other half of the same invariant.
-    let keep = source
-        .split_once("Verdict::Keep(reason) => {")
-        .expect("keep arm exists")
+    // And the disarm on an accepted match is the other half of the same invariant.
+    //
+    // It used to live in a `Keep` arm beside a `Reject` arm. The location filter was deleted on
+    // 2026-09-15, so there is one path now and every match takes it -- which makes the disarm
+    // more load-bearing, not less: there is no longer a second arm that could have done it.
+    let accept = source
+        .split_once("fn judge_incoming_match(")
+        .expect("the join-data handler exists")
         .1;
     assert!(
-        keep[..keep.find("Verdict::Reject").unwrap_or(keep.len())]
+        accept[..accept.find("\nfn ").unwrap_or(accept.len())]
             .contains("AUTO_SEARCH_ARMED.store(false"),
-        "a kept match must disarm the loop; self-recovery relies on it"
+        "an accepted match must disarm the loop; self-recovery relies on it"
     );
 }
 
@@ -1664,65 +1613,41 @@ fn a_bare_session_find_cannot_veto_an_owner_find() {
     );
 }
 
-/// A rejection that was not enforced has to be counted, not merely logged.
+/// No connected invasion may be cancelled because of where it is.
 ///
-/// The user-visible failure on 2026-09-06 was "I didn't only invade locally. It might be disabled?"
-/// -- and the filter was armed, judging correctly, and enforcing nothing. Every other state this
-/// module can be in shows up in the heartbeat; that one showed up only as four lines buried in 408,
-/// so the run read as healthy right up until somebody read the log by hand.
+/// This replaces the two tests that pinned the old behaviour, and it pins the opposite. The
+/// location filter ran at `SetMultiplayJoinData`, which is after the connection to the host
+/// exists, so its only available move was to tear down an invasion that had already been
+/// negotiated. Deleted 2026-09-15 by user directive; the narrowing lives in `lobby_publish`, where
+/// it costs a query rather than a connection.
 ///
-/// The counter is the oracle: above zero means a match this module rejected proceeded anyway.
+/// A source scan rather than a call, because the thing being asserted is an absence: there is no
+/// function left to invoke. The needles are assembled so this file does not contain them.
+///
+/// `cancel_match` itself is deliberately not on the list. Cancelling is still a real thing this
+/// module does -- the deadline abandons a connect that has gone nowhere, on the player's behalf
+/// and at their request. What was deleted is the reason, not the mechanism: no location verdict
+/// may reach it. The machinery that carried a verdict to a cancel is what must stay gone.
 #[test]
-fn an_unenforced_rejection_is_counted_and_reported() {
+fn no_connected_invasion_is_cancelled_for_its_location() {
     let code = product_code();
+    for needle in [
+        format!("fn {}_pending_cancel(", "drive"),
+        format!("fn {}_pending_cancel(", "arm"),
+        format!("{}::Reject", "Verdict"),
+    ] {
+        assert!(
+            !code.contains(&needle),
+            "{needle} is back: a match that has already connected must not be cancelled for \
+             being in the wrong place"
+        );
+    }
+    // The one cancel that survives must be the player's, not a judgement about where they landed.
+    let stopped = format!("{}::{}", "RejectReason", "PlayerStopped");
     assert!(
-        code.contains("UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);"),
-        "the path that declines to cancel a rejected match must increment the counter, or an inert \
-         filter is indistinguishable from a working one"
+        code.contains(&stopped),
+        "the surviving cancel path should be the player-initiated one; {stopped} is missing"
     );
-    assert!(
-        code.contains("UNENFORCED_REJECTS.load(Ordering::SeqCst),"),
-        "the counter must be published through `tallies`, or nothing outside this module can see it"
-    );
-    let heartbeat = include_str!("../drive.rs");
-    assert!(
-        heartbeat.contains("UNENFORCED={unenforced}"),
-        "the heartbeat must print the unenforced count -- it is the one number that says whether \
-         the filter worked, as opposed to whether it ran"
-    );
-}
-
-#[test]
-fn a_rejection_arms_the_pending_cancel_rather_than_driving_it_where_it_is_judged() {
-    // The verdict is reached inside `set_join_data_hook`, a detour on the game's own
-    // `SetMultiplayJoinData`. Driving from there calls into ersc.dll in the state the server's
-    // offer left behind, which is outside the set ERSC draws its own Cancel row for.
-    super::arm_pending_cancel(0x3d2f2c00, RejectReason::WrongBlock, true);
-    let armed = {
-        let guard = super::PENDING_CANCEL.lock();
-        let guard = match guard {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *guard
-    };
-    let armed = armed.expect("the rejection is armed for the game task");
-    assert_eq!(armed.destination, 0x3d2f2c00);
-
-    // One slot, not a queue: the server is waiting on the newest offer, so a second rejection
-    // replaces the first rather than queueing a cancel for a match already superseded.
-    super::arm_pending_cancel(0x12000000, RejectReason::WrongPlaceName, false);
-    let armed = {
-        let guard = super::PENDING_CANCEL.lock();
-        let mut guard = match guard {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.take()
-    };
-    let armed = armed.expect("the newer rejection replaced the older one");
-    assert_eq!(armed.destination, 0x12000000);
-    assert!(!armed.notice);
 }
 
 /// Discarding a wrong shape-scan guess must not delete the differential snapshot.

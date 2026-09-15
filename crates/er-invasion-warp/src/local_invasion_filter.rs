@@ -90,10 +90,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::fnv1a::fnv1a64;
-use er_invasion_warp_core::local_invasion::{
-    InvasionAnchor, InvasionCandidate, LocalInvasionConfig, LocalInvasionMode, RejectReason,
-    Verdict,
-};
+use er_invasion_warp_core::local_invasion::{InvasionAnchor, LocalInvasionConfig};
 use er_invasion_warp_core::local_invasion_config::{
     CONFIG_FILE_NAME, DEFAULT_CONFIG_TOML, HotConfig,
 };
@@ -133,8 +130,8 @@ pub(crate) mod session_scan;
 use session_field_trace::trace_session_field_writes;
 
 use actions::{
-    arm_self_recovery, cancel_match, cancel_stalled_attempt_inner, drive_pending_reinvade,
-    log_refusal_once, watch_for_failed_connect, watch_for_stall,
+    arm_self_recovery, cancel_stalled_attempt_inner, drive_pending_reinvade, log_refusal_once,
+    watch_for_failed_connect, watch_for_stall,
 };
 /// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
 /// callers already look for them.
@@ -277,20 +274,6 @@ static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
 static CANCELS: AtomicUsize = AtomicUsize::new(0);
 static KEEPS: AtomicUsize = AtomicUsize::new(0);
 static REINVADES: AtomicUsize = AtomicUsize::new(0);
-/// Matches judged a rejection that were then not cancelled -- the invasion proceeded anyway.
-///
-/// The oracle that was missing, and its absence is why a broken filter looked like a working one
-/// for a whole session. Every other state this module can be in is visible from the heartbeat, but
-/// "armed, judging correctly, and enforcing nothing" was visible only to someone who read four
-/// specific lines out of 408 and understood that `NOT cancelled` meant the feature was inert. The
-/// user's report -- "if we were on the strictest settings, I didn't only invade locally. It might
-/// be disabled?" -- is that gap stated from the player's seat.
-///
-/// A non-zero value here is the failure: the filter said no and the player went anyway. It belongs
-/// beside `CANCELS`, because the two together are the only honest statement of what the filter did
-/// -- a rejection count on its own cannot distinguish a match that was stopped from one that was
-/// merely disapproved of.
-static UNENFORCED_REJECTS: AtomicUsize = AtomicUsize::new(0);
 
 pub(crate) static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
@@ -828,35 +811,6 @@ impl NoSession {
             Self::SessionUnreadable => "<session-unreadable>",
         }
     }
-}
-
-/// What to say after "cannot cancel -- SessionNotIdentified", built from the scan's live state.
-///
-/// Not an instruction to the player. The one thing that narrows the differential scan is another
-/// invasion, and the numbers say how close it is, so the line reports progress and leaves it at
-/// that. Returns a `&'static str` because the refusal is latched and logged once; the counts are
-/// rendered into a leaked string only on the pass that actually prints.
-#[cfg(windows)]
-fn not_identified_detail() -> &'static str {
-    let (held, rounds) = differential_scan::progress();
-    if held == 0 {
-        return ". No candidates are recorded, so the sweeper has not managed an idle pass yet -- \
-                nothing to narrow.";
-    }
-    Box::leak(
-        format!(
-            ". The differential scan is down to {held} candidate(s) after {rounds} join(s); it \
-             adopts one only when a single candidate is left, and each invasion narrows it \
-             further. Opening Seamless's menu does NOT help -- the observer that would learn the \
-             object from it is disabled because detouring ersc.dll faults the game."
-        )
-        .into_boxed_str(),
-    )
-}
-
-#[cfg(not(windows))]
-fn not_identified_detail() -> &'static str {
-    ""
 }
 
 /// Resolve the option-menu object and its session, validating structurally.
@@ -1757,78 +1711,6 @@ fn place_names_for_block(block: u32) -> Vec<i32> {
     crate::map_hooks::registry_place_names_for_block(block)
 }
 
-/// One latch per distinct explanation, so saying one thing never silences the others.
-///
-/// A single shared latch was the first version's defect: whichever cause happened to arrive first
-/// spent it, and every later rejection -- with a different cause and a different fix -- went
-/// unexplained for the rest of the session.
-static SAID_EMPTY_NAMED_LIST: AtomicUsize = AtomicUsize::new(0);
-static SAID_MAP_NEVER_OPENED: AtomicUsize = AtomicUsize::new(0);
-static SAID_BLOCK_HAS_NO_NAME: AtomicUsize = AtomicUsize::new(0);
-
-/// Explain a rejection caused by missing information rather than by a wrong location, having first
-/// established which information is missing.
-///
-/// From the player's seat every one of these looks the same -- nobody is hosting there -- and each
-/// has a different fix, or none. The first version of this asserted a single cause ("open your
-/// world map") for all of them without checking anything, which meant it confidently gave the
-/// wrong advice in the most common case and made a false claim about `named` mode on the way past.
-/// Diagnosing by asserting is the same error as the frozen telemetry document: an instrument that
-/// reports a conclusion it never measured.
-///
-/// The three real causes, distinguished by state this function actually reads:
-///
-/// * `named` mode with an empty id list -- nothing to compare against, and the map cannot help
-///   because opening it populates the pin registry, never `named_location_text_ids`.
-/// * the pin registry is entirely empty -- the world map has not been built this session, so no
-///   block anywhere has a name. Opening the map once fixes every subsequent match.
-/// * the registry has names but not for this block -- that location carries no named invasion pin.
-///   Opening the map again changes nothing; only `exact` mode, or marking the place, will help.
-///
-/// Rejecting in all three cases stays correct. Accepting a destination whose location cannot be
-/// verified would land the player exactly where they filtered against. What was wrong was doing it
-/// silently, and then explaining it wrongly.
-fn explain_missing_names(reason: RejectReason, mode: LocalInvasionMode, destination: u32) {
-    if !matches!(
-        reason,
-        RejectReason::CandidateUnnamed | RejectReason::NothingToMatchAgainst
-    ) {
-        return;
-    }
-    // `named` mode reaches `NothingToMatchAgainst` from an empty CONFIG list, before any name is
-    // consulted. Nothing about the map is involved, so none of the map advice applies.
-    if reason == RejectReason::NothingToMatchAgainst && mode == LocalInvasionMode::NamedOnly {
-        if SAID_EMPTY_NAMED_LIST.swap(1, Ordering::SeqCst) == 0 {
-            crate::standalone_log(format_args!(
-                "local-invasion: mode = \"named\" with an EMPTY list rejects everything, including \
-                 the location you are standing in -- it is stricter than \"exact\", not looser. \
-                 Mark a place with Shift+Insert, or add ids to named_location_text_ids, or switch \
-                 mode."
-            ));
-        }
-        return;
-    }
-    let named_blocks = crate::map_hooks::registry_named_block_count();
-    if named_blocks == 0 {
-        if SAID_MAP_NEVER_OPENED.swap(1, Ordering::SeqCst) == 0 {
-            crate::standalone_log(format_args!(
-                "local-invasion: no location has a name yet, so every name-based judgement fails \
-                 closed. Names are read off the world map's own rows -- OPEN YOUR WORLD MAP ONCE \
-                 and matches will judge normally. `exact` mode never needs them."
-            ));
-        }
-        return;
-    }
-    if SAID_BLOCK_HAS_NO_NAME.swap(1, Ordering::SeqCst) == 0 {
-        crate::standalone_log(format_args!(
-            "local-invasion: {named_blocks} location(s) have names, but {destination:#010x} is not \
-             one of them -- that block carries no named invasion pin, so `area` and `named` cannot \
-             judge it and it will keep being rejected. Opening the map again will not change this: \
-             use `exact`, or mark the place with Insert."
-        ));
-    }
-}
-
 /// Judge an incoming match and cancel it if the user's rules say so.
 ///
 /// `join_data` is the `ServerPushJoinData*` from `SetMultiplayJoinData`'s second argument.
@@ -1916,77 +1798,43 @@ pub fn judge_incoming_match(join_data: usize) {
         ));
         session_scan::adopt_proven_session(session);
     }
-    let candidate = InvasionCandidate::new(destination, place_names_for_block(destination));
-    match config.judge(&anchor, &candidate) {
-        Verdict::Keep(reason) => {
-            KEEPS.fetch_add(1, Ordering::SeqCst);
-            // The search that just landed is over; nothing to re-arm.
-            //
-            // Unless the join then dies, which is what `KEPT_JOIN_PENDING` is for. Reported live
-            // 2026-09-10: "attempt, stall, wait 30 seconds, failed to invade, and invasion loop
-            // canceled". Measured on run br-20260910-022619-1fa2 -- `KEEP 0x0f000000 (ExactBlock)`
-            // at line 1193, `lobby=4 proto=6 rpc=5 -> Progressing` at 1194, and 30830ms later
-            // everything zero. The hunt disarmed on the accept and nothing armed it again, so a
-            // join the player never got to play ended their session's hunting outright.
-            KEPT_JOIN_PENDING.store(true, Ordering::SeqCst);
-            AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
-            PENDING_REINVADE.store(false, Ordering::SeqCst);
-            crate::standalone_log(format_args!(
-                "local-invasion: KEEP {destination:#010x} ({reason:?}); anchor {:#010x} with {} \
-                 named location(s)",
-                anchor.block,
-                anchor.named_location_count()
-            ));
-            // The banner for this does not fire here. A kept match is a match we allowed, not an
-            // invasion that happened: measured 2026-08-16, joins sat dead for 53-213s after this
-            // exact instant. Saying "Invasion successful" at join time can therefore be a lie. It
-            // is announced from the tick instead, when the engine reports `LobbyState::Client` and
-            // the join has demonstrably landed.
-            PENDING_SUCCESS_BLOCK.store(destination as usize, Ordering::SeqCst);
-        }
-        Verdict::Reject(reason) => {
-            crate::standalone_log(format_args!(
-                "local-invasion: REJECT {destination:#010x} ({reason:?}); anchor {:#010x} with {} \
-                 named location(s), destination with {}, mode={}",
-                anchor.block,
-                anchor.named_location_count(),
-                candidate.named_location_count(),
-                config.mode.as_str()
-            ));
-            explain_missing_names(reason, config.mode, destination);
-            // The host, named. Logged before it is put on a banner, because the read is new and a
-            // wrong id printed to the player is worse than no id at all. `None` here is the honest
-            // answer for a target list the engine has already emptied.
-            if let Some(id) = host_steam_id() {
-                crate::standalone_log(format_args!(
-                    "local-invasion: the host of that match is Steam id {id} ({id:#018x}), read \
-                     from the Seamless session while the negotiation is still open"
-                ));
-            }
-            // The banner fires on the verdict, and the wording is what makes that honest.
-            //
-            // It used to fire here saying "Rejected", before the cancel was attempted, so a path
-            // that then declined to cancel had already told the player the invasion was stopped --
-            // reported live 2026-09-04: "the popup tells me I'm rejecting a location to invade but
-            // it still invades it". The fix at the time was to move the banner behind a successful
-            // cancel, and that traded one wrong answer for a worse one: a rejection that could not
-            // be cancelled showed nothing, which is indistinguishable from the mod not being
-            // loaded, and is how the whole evening of 2026-09-09 was spent.
-            //
-            // Both failures come from one banner trying to say two things. The verdict and the
-            // enforcement are separate facts, and the player is owed the first one every single
-            // time: this match is not local. Whether Seamless could be driven to drop it is the
-            // second fact, and `drive_pending_cancel` still owns it.
-            banner::announce_verdict(config.reject_notice, destination, reason);
-            // Refuse the join itself rather than cancel it afterwards. `SosSignMan::JoinSession`
-            // calls this seam and then `CSSessionManager::JoinSession`; once that second call has
-            // run, `lobbyState` is `Joining` and the engine parks any disconnect request until the
-            // Steam RPC resolves on its own -- 30.2s and 30.3s on the two rejections of run
-            // br-20260910-012622-fd23 whose RPC never came back. See `CS_SESSION_MANAGER_JOIN_SESSION`.
-            REFUSE_NEXT_JOIN.store(true, Ordering::SeqCst);
-            arm_pending_cancel(destination, reason, config.reject_notice);
-        }
+    // No match is judged here any more, and none is cancelled.
+    //
+    // # Why the location filter was deleted rather than tuned
+    //
+    // It ran at `SetMultiplayJoinData`, which is after the connection to the host exists. So its
+    // only available move was to tear down an invasion that had already been negotiated -- and
+    // every failure this feature produced over its life came from that one property: a rejection
+    // Seamless would not honour left the player invading somewhere they had asked not to go with
+    // a banner saying it had been stopped, and a rejection Seamless did honour spent a real
+    // connection to end up nowhere. Neither is better than simply not filtering here.
+    //
+    // The narrowing moved to where it costs nothing: `lobby_publish` asks Steam only for the
+    // locations the player wants, so a match that arrives here is one the query already accepted.
+    // Filtering at the question is free; filtering at the answer costs a connection every time.
+    //
+    // What remains is the report. Where the server just sent you is worth saying, and this is the
+    // first instant it is knowable on this machine.
+    banner::announce_arrival(config.reject_notice, destination);
+    crate::standalone_log(format_args!(
+        "local-invasion: match to {destination:#010x} accepted -- this build does not reject a \
+         connected invasion by location; the prefilter narrows the query instead. Anchor \
+         {:#010x}.",
+        anchor.block
+    ));
+    if let Some(id) = host_steam_id() {
+        crate::standalone_log(format_args!(
+            "local-invasion: the host of this match is Steam id {id} ({id:#018x}), read from the \
+             Seamless session"
+        ));
     }
+    // The search that just landed is over. A join that then dies re-arms through
+    // `KEPT_JOIN_PENDING`, the same way an accepted match always has.
+    KEEPS.fetch_add(1, Ordering::SeqCst);
+    KEPT_JOIN_PENDING.store(true, Ordering::SeqCst);
+    AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
+    PENDING_REINVADE.store(false, Ordering::SeqCst);
+    PENDING_SUCCESS_BLOCK.store(destination as usize, Ordering::SeqCst);
 }
 
 /// `SeamlessSession +0x1d8` -- the Steam id of the host this attempt is negotiating with.
@@ -2058,112 +1906,6 @@ fn host_steam_id() -> Option<u64> {
 /// the engine's join reaches a terminal state, so the ordinary between-invasions case -- where a
 /// real session legitimately reads idle -- is unaffected.
 static JOIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
-
-/// Ticks a rejection waits for the sweeper to produce a session before it is counted unenforced.
-///
-/// The sweeper takes a few seconds and a join takes ten or more, so this is a window that fits
-/// inside the time the match is still cancellable, not a hopeful retry loop.
-const CANCEL_RETRY_TICKS: usize = 600;
-/// How long the current rejection has been waiting.
-static CANCEL_RETRIES: AtomicUsize = AtomicUsize::new(0);
-
-/// A rejection judged but not yet cancelled, waiting for the game task to drive it.
-///
-/// # Why the cancel does not fire where the verdict is reached
-///
-/// [`judge_incoming_match`] runs inside `set_join_data_hook`, a detour on the game's own
-/// `CS::SosSignMan::SetMultiplayJoinData`. Driving an ERSC action from there means calling into
-/// `ersc.dll` from a frame the game entered, in whatever session state the server's offer left
-/// behind -- and that state is measurably outside the set ERSC's hide-predicate draws its Cancel row
-/// for. Arming here and firing from the recurring `CSTaskImp` task moves the call to a frame that
-/// owns nothing of Seamless's, and lets [`cancel_row_refusal`] see a settled state rather than one
-/// mid-transition.
-///
-/// One slot, not a queue: a second rejection arriving before the first has fired replaces it. The
-/// newest offer is the one the server is waiting on, and cancelling a match that has already been
-/// superseded would drive the action for nothing.
-static PENDING_CANCEL: Mutex<Option<PendingCancel>> = Mutex::new(None);
-
-/// The three things the deferred cancel needs to finish the job the verdict started.
-#[derive(Clone, Copy)]
-struct PendingCancel {
-    destination: u32,
-    reason: RejectReason,
-    /// Whether the player asked for the on-screen notice, captured with the verdict rather than
-    /// re-read at fire time: the config can change between the two, and the banner belongs to the
-    /// decision it describes.
-    notice: bool,
-}
-
-/// Record a rejection for the game task to act on.
-fn arm_pending_cancel(destination: u32, reason: RejectReason, notice: bool) {
-    let mut guard = match PENDING_CANCEL.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(previous) = guard.replace(PendingCancel {
-        destination,
-        reason,
-        notice,
-    }) {
-        crate::standalone_log(format_args!(
-            "local-invasion: a second rejection arrived before the first was driven -- \
-             {:#010x} ({:?}) is dropped in favour of {destination:#010x} ({reason:?}). The server \
-             is waiting on the newer offer; cancelling a superseded one drives ERSC for nothing.",
-            previous.destination, previous.reason
-        ));
-    }
-}
-
-/// Fire the armed cancel from the game task, and announce only what actually happened.
-///
-/// The banner is emitted here rather than at the verdict for the reason recorded on
-/// [`cancel_match`]'s return value: a notice that says "rejected" when nothing was cancelled is
-/// the one signal the player has, and it used to be able to lie.
-fn drive_pending_cancel() {
-    let armed = {
-        let mut guard = match PENDING_CANCEL.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.take()
-    };
-    let Some(armed) = armed else {
-        return;
-    };
-    if cancel_match(armed.reason) {
-        banner::announce_rejection(armed.notice, armed.destination, armed.reason);
-        return;
-    }
-    // A session that is not resolvable yet is not the same as a refusal, and discarding the
-    // rejection on the first tick threw away the whole window in which it could still be
-    // cancelled. The sweeper runs on its own thread and takes seconds; the join takes ten or
-    // more, so re-arming costs nothing and buys the only chance this rejection has.
-    //
-    // Bounded, because a rejection that can never be driven must still end as an honest
-    // unenforced count rather than sitting armed forever and silently replacing the next one.
-    if matches!(resolve_session(), Err(NoSession::SessionNotIdentified)) {
-        let waited = CANCEL_RETRIES.fetch_add(1, Ordering::SeqCst) + 1;
-        if waited <= CANCEL_RETRY_TICKS {
-            let mut guard = match PENDING_CANCEL.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            *guard = Some(armed);
-            return;
-        }
-    }
-    CANCEL_RETRIES.store(0, Ordering::SeqCst);
-    UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);
-    crate::standalone_log(format_args!(
-        "local-invasion: NOT cancelled {:#010x} ({:?}) -- the match was judged a rejection but \
-         Seamless was not driven, so the invasion PROCEEDS. No banner is shown: a notice saying \
-         the filter could not act is the failure dressed as a feature, and it was rejected on \
-         sight -- \"you literally added feature text encapsulating in short 'I am useless'\". The \
-         reason is logged immediately above this line.",
-        armed.destination, armed.reason
-    ));
-}
 
 /// The state a driven cancel settles through on its way back to idle.
 ///
@@ -2677,7 +2419,6 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     //
     // `cancel_match` resolves the session itself and says plainly when it cannot, which is the
     // honest failure this path was missing. Attempting and reporting beats returning early.
-    drive_pending_cancel();
     // Everything below is Seamless-side and purely observational until a rejected match has
     // actually armed a re-search, so a run without Seamless loaded costs one failed module lookup.
     let Ok(session) = resolve_session() else {
@@ -3058,18 +2799,46 @@ pub fn join_progress_idle_samples() -> usize {
 /// `(keeps, cancels, automatic re-searches, unenforced rejections)` so a run can be judged without
 /// reading the log.
 ///
-/// The fourth number is the one that says whether the filter worked, as opposed to whether it ran.
-/// See [`UNENFORCED_REJECTS`]: any value above zero means a match this module rejected went ahead
-/// regardless, which from the player's seat is indistinguishable from the mod being switched off.
+/// `cancels` survives because the stall watchdog still cancels a search that is going nowhere.
+/// That is a different act: it abandons an attempt the player is waiting on, not a connection they
+/// already have.
 #[must_use]
-pub fn tallies() -> (usize, usize, usize, usize) {
+pub fn tallies() -> (usize, usize, usize) {
     (
         KEEPS.load(Ordering::SeqCst),
         CANCELS.load(Ordering::SeqCst),
         REINVADES.load(Ordering::SeqCst),
-        UNENFORCED_REJECTS.load(Ordering::SeqCst),
     )
 }
 
 #[cfg(test)]
 mod tests;
+
+/// What to say after "cannot cancel -- SessionNotIdentified", built from the scan's live state.
+///
+/// Not an instruction to the player. The one thing that narrows the differential scan is another
+/// invasion, and the numbers say how close it is, so the line reports progress and leaves it at
+/// that. Returns a `&'static str` because the refusal is latched and logged once; the counts are
+/// rendered into a leaked string only on the pass that actually prints.
+#[cfg(windows)]
+fn not_identified_detail() -> &'static str {
+    let (held, rounds) = differential_scan::progress();
+    if held == 0 {
+        return ". No candidates are recorded, so the sweeper has not managed an idle pass yet -- \
+                nothing to narrow.";
+    }
+    Box::leak(
+        format!(
+            ". The differential scan is down to {held} candidate(s) after {rounds} join(s); it \
+             adopts one only when a single candidate is left, and each invasion narrows it \
+             further. Opening Seamless's menu does NOT help -- the observer that would learn the \
+             object from it is disabled because detouring ersc.dll faults the game."
+        )
+        .into_boxed_str(),
+    )
+}
+
+#[cfg(not(windows))]
+fn not_identified_detail() -> &'static str {
+    ""
+}
