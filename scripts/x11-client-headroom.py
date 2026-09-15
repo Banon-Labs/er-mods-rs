@@ -40,11 +40,40 @@ PROTOCOL_CEILING = 256
 # no run has yet been observed reaching the title screen to measure that.
 DEFAULT_REQUIRED = 40
 
-X11_SOCKET = os.environ.get("ER_X11_SOCKET", "/tmp/.X11-unix/X0")
+def socket_candidates() -> list[str]:
+    """Where this `$DISPLAY`'s server listens, filesystem path and abstract name both.
+
+    A nested server -- gamescope's Xwayland, for instance -- binds only the abstract name, so a
+    probe hard-coded to `/tmp/.X11-unix/X0` measures the host's pool while the game is talking to
+    a different server entirely. Getting that backwards reports starvation where there is none.
+    """
+    override = os.environ.get("ER_X11_SOCKET")
+    if override:
+        return [override]
+    display = os.environ.get("DISPLAY", ":0")
+    number = display.lstrip(":").split(".")[0] or "0"
+    return [f"/tmp/.X11-unix/X{number}", f"\0/tmp/.X11-unix/X{number}"]
 
 
-def probe(want: int, sock_path: str = X11_SOCKET) -> tuple[int, str]:
+X11_SOCKET = socket_candidates()[0]
+
+
+def probe(want: int, sock_path: str | None = None) -> tuple[int, str]:
     """Open up to `want` simultaneous connections. Returns (opened, refusal reason or "")."""
+    if sock_path is None:
+        for candidate in socket_candidates():
+            probe_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe_sock.settimeout(2)
+                probe_sock.connect(candidate)
+                sock_path = candidate
+                break
+            except OSError:
+                continue
+            finally:
+                probe_sock.close()
+        if sock_path is None:
+            return 0, f"no X server socket for DISPLAY={os.environ.get('DISPLAY', ':0')}"
     held: list[socket.socket] = []
     reason = ""
     try:

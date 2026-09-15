@@ -84,11 +84,16 @@ mode = "exact"
 # locations cannot be expressed and hunt will say so and stay out of the way.
 hunt = false
 
-# Announce a rejection on the game's own message banner ("Rejected invasion: m60_42_36_00").
+# Announce what the search is doing on the game's own message banner.
 #
-# Only a CHANGE of wrong destination is announced. Seamless retries roughly every 20 seconds and
-# the same wrong place comes back around constantly, so announcing every one would be wallpaper
-# within a minute. Silence after the first means "still being sent to the same wrong place".
+# The name is older than what it does. This build does not reject a connected invasion for being
+# in the wrong place -- that cost you a connection to learn something the query could have asked
+# for -- so there is no rejection to announce. What it announces now is arrival ("Invaded
+# Limgrave") and, while prefilter_radius is widening the search, which place is being asked for
+# ("searching 3 of 9 nearby locations -- Stormhill").
+#
+# Only a CHANGE is announced. Seamless retries roughly every 20 seconds and the same line would
+# otherwise be wallpaper within a minute; silence means nothing has moved since the last notice.
 reject_notice = false
 
 # Draw invasion pins on the world map.
