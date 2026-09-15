@@ -126,6 +126,68 @@ pub fn parse_rows(rows: &[u8]) -> Vec<MapPiece> {
     out
 }
 
+/// `PARAM` container offsets, shared by the file on disk and the blob the engine keeps in memory.
+///
+/// The engine loads a param as one blob and does not rewrite its internal offsets, so the row
+/// index still holds file-relative data offsets rather than pointers. [`parse_param_file`] checks
+/// every one of them against the blob's own length, so a build that did start rewriting them
+/// yields no pieces rather than a read through a bogus address.
+pub const PARAM_ROW_COUNT_OFFSET: usize = 0x0A;
+/// First entry of the row index.
+pub const PARAM_ROW_INDEX_OFFSET: usize = 0x40;
+/// Bytes per row-index entry: `{ int id, pad, long data offset, long name offset }`.
+pub const PARAM_ROW_INDEX_STRIDE: usize = 24;
+/// Where an entry keeps its row's data offset.
+pub const PARAM_ROW_DATA_OFFSET: usize = 8;
+
+/// Parse a whole `PARAM` blob -- header, row index, row bodies -- into pieces.
+///
+/// Prefer this to [`parse_rows`] when the source is the engine's own param file, because the row
+/// bodies are addressed by the index rather than laid out contiguously. A row whose recorded
+/// offset does not fit inside `blob` is skipped: the alternative is reading whatever follows the
+/// allocation, and a missing piece degrades to an unnamed location while a bad read is a crash in
+/// a game task.
+#[must_use]
+pub fn parse_param_file(blob: &[u8]) -> Vec<MapPiece> {
+    if blob.len() < PARAM_ROW_INDEX_OFFSET {
+        return Vec::new();
+    }
+    let row_count = u16::from_le_bytes([
+        blob[PARAM_ROW_COUNT_OFFSET],
+        blob[PARAM_ROW_COUNT_OFFSET + 1],
+    ]) as usize;
+
+    let mut out = Vec::new();
+    for index in 0..row_count {
+        let entry = PARAM_ROW_INDEX_OFFSET + index * PARAM_ROW_INDEX_STRIDE;
+        if entry + PARAM_ROW_INDEX_STRIDE > blob.len() {
+            break;
+        }
+        let at = entry + PARAM_ROW_DATA_OFFSET;
+        let data_offset = i64::from_le_bytes([
+            blob[at],
+            blob[at + 1],
+            blob[at + 2],
+            blob[at + 3],
+            blob[at + 4],
+            blob[at + 5],
+            blob[at + 6],
+            blob[at + 7],
+        ]);
+        let Ok(data_offset) = usize::try_from(data_offset) else {
+            continue;
+        };
+        let Some(end) = data_offset.checked_add(ROW_STRIDE) else {
+            continue;
+        };
+        if end > blob.len() {
+            continue;
+        }
+        out.extend(parse_rows(&blob[data_offset..end]));
+    }
+    out
+}
+
 /// The `PlaceName` text id for a map-space position, or `None` when no piece covers it.
 ///
 /// Pieces overlap -- a legacy dungeon's piece sits inside its region's -- so the tightest covering
@@ -232,6 +294,59 @@ mod tests {
         let mut bytes = rows(&[row(62010, (0.0, 100.0), (0.0, 100.0))]);
         bytes.extend_from_slice(&[0_u8; ROW_STRIDE / 2]);
         assert_eq!(parse_rows(&bytes).len(), 1);
+    }
+
+    /// A whole `PARAM` blob parses through its row index, not by assuming a contiguous layout.
+    #[test]
+    fn a_param_blob_parses_through_its_row_index() {
+        let bodies = [
+            row(62010, (0.0, 100.0), (0.0, 100.0)),
+            row(62030, (40.0, 60.0), (40.0, 60.0)),
+        ];
+        // Header, then a two-entry index, then the bodies -- deliberately in the opposite order
+        // to the index, so a parser that ignored the offsets would return them swapped.
+        let index_end = PARAM_ROW_INDEX_OFFSET + 2 * PARAM_ROW_INDEX_STRIDE;
+        let mut blob = vec![0_u8; index_end];
+        blob[PARAM_ROW_COUNT_OFFSET..PARAM_ROW_COUNT_OFFSET + 2]
+            .copy_from_slice(&2_u16.to_le_bytes());
+        let second_at = index_end;
+        let first_at = index_end + ROW_STRIDE;
+        for (slot, offset) in [(0_usize, first_at), (1, second_at)] {
+            let at = PARAM_ROW_INDEX_OFFSET + slot * PARAM_ROW_INDEX_STRIDE + PARAM_ROW_DATA_OFFSET;
+            blob[at..at + 8].copy_from_slice(&(offset as i64).to_le_bytes());
+        }
+        blob.extend_from_slice(&bodies[1]);
+        blob.extend_from_slice(&bodies[0]);
+
+        let parsed = parse_param_file(&blob);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(
+            parsed[0].place_name_text_id, 62010,
+            "the index decides the order"
+        );
+        assert_eq!(place_name_at(&parsed, 50.0, 50.0), Some(62030));
+    }
+
+    /// An offset that does not fit the blob is skipped rather than read.
+    #[test]
+    fn a_row_offset_outside_the_blob_is_skipped() {
+        let mut blob = vec![0_u8; PARAM_ROW_INDEX_OFFSET + PARAM_ROW_INDEX_STRIDE];
+        blob[PARAM_ROW_COUNT_OFFSET..PARAM_ROW_COUNT_OFFSET + 2]
+            .copy_from_slice(&1_u16.to_le_bytes());
+        let at = PARAM_ROW_INDEX_OFFSET + PARAM_ROW_DATA_OFFSET;
+        blob[at..at + 8].copy_from_slice(&(1_i64 << 40).to_le_bytes());
+        assert!(parse_param_file(&blob).is_empty());
+    }
+
+    /// A negative offset is skipped too, rather than wrapping into a huge index.
+    #[test]
+    fn a_negative_row_offset_is_skipped() {
+        let mut blob = vec![0_u8; PARAM_ROW_INDEX_OFFSET + PARAM_ROW_INDEX_STRIDE + ROW_STRIDE];
+        blob[PARAM_ROW_COUNT_OFFSET..PARAM_ROW_COUNT_OFFSET + 2]
+            .copy_from_slice(&1_u16.to_le_bytes());
+        let at = PARAM_ROW_INDEX_OFFSET + PARAM_ROW_DATA_OFFSET;
+        blob[at..at + 8].copy_from_slice(&(-8_i64).to_le_bytes());
+        assert!(parse_param_file(&blob).is_empty());
     }
 
     /// The param index did not move between the two builds this repo works against.
