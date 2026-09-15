@@ -100,6 +100,27 @@ check_case() {
 
 check_case bare_flipped 'git config core.bare true' 'core.bare      false -> true'
 check_case hookspath_unset 'git config --unset core.hooksPath' 'core.hooksPath scripts/hooks -> <unset>'
+check_case hookspath_redirected 'git config core.hooksPath .beads/hooks' 'core.hooksPath scripts/hooks -> .beads/hooks'
+
+# --- and the re-spelling that is not damage ------------------------------------------------------
+# beads rewrites this key to the absolute spelling of the same directory (`FIX: Worktree hooks use
+# absolute core.hooksPath (GH#2414)`), and it does so in whatever tree an agent happens to run `bd`
+# in. Compared as strings that reads as a gate rewriting the config it is checking, and on
+# 2026-09-14 it failed two pushes after 344s and 148s of green gates. The directory did not move,
+# so the guard must pass -- while the redirect case above, which does move it, stays refused.
+build_fixture "$tmp/absolutised" "git config core.hooksPath \"$tmp/absolutised/scripts/hooks\""
+if out=$(run_fixture "$tmp/absolutised"); then
+	echo "$label ok -- an absolute re-spelling of the same hooks directory is accepted"
+	if ! printf '%s' "$out" | grep -q 'same directory'; then
+		echo "$label FAIL: the re-spelling passed silently. It has to be reported, or a config" >&2
+		echo "  that moved under the run looks afterwards like a checkout nothing touched." >&2
+		fail=1
+	fi
+else
+	echo "$label FAIL: absolutised was REFUSED. core.hooksPath was re-spelled, not repointed:" >&2
+	echo "  scripts/hooks and <root>/scripts/hooks are one directory, and beads writes the second." >&2
+	fail=1
+fi
 
 if ((fail)); then
 	exit 1

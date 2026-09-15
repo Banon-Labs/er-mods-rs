@@ -65,11 +65,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -576,6 +578,47 @@ def repo_top_level() -> frozenset[str]:
     return frozenset(p.name for p in REPO.iterdir() if p.is_dir() and p.name not in skip)
 
 
+@functools.lru_cache(maxsize=1)
+def tracked_paths() -> frozenset[str]:
+    """Every path `git` can name in a diff, asked once.
+
+    A submodule appears here as its gitlink -- `third_party/ER-Save-File-Readers`, one entry --
+    and never as an interior file, and an ignored path does not appear at all. That is the whole
+    reason this exists: the audit below is about which stage a push must select, and a push diff
+    can only ever name a path in this set.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return frozenset()
+    return frozenset(entry for entry in out.split("\0") if entry)
+
+
+def is_diffable(raw: str) -> bool:
+    """Can a push diff name `raw`, or anything under it?
+
+    The audit used to ask the filesystem instead, and the filesystem answers differently in
+    different checkouts of the same commit: an ignored `vendor/` tree and a populated submodule
+    exist in the main working tree and not in a `git worktree`, so the same commit came back
+    green in one and red in the other. Measured 2026-09-14 -- `suite` reported
+    `third_party/ER-Save-File-Readers/testdata/vagabond/save_slots/0.sl2` and `policy` reported
+    `vendor/seamless-coop-v1.9.9/SeamlessCoop/ersc.dll`, blocking a push from a worktree over two
+    files no commit has ever carried. Neither can appear in a diff, so declaring them would buy
+    nothing; the filter is the fix, not a wider `inputs`.
+    """
+    tracked = tracked_paths()
+    if raw in tracked:
+        return True
+    prefix = raw.rstrip("/") + "/"
+    return any(entry.startswith(prefix) for entry in tracked)
+
+
 def code_without_prose(text: str, suffix: str) -> str:
     """`text` with comments and docstrings blanked, so a path named in prose is not read as a read.
 
@@ -603,12 +646,16 @@ def _load_comment_scanner():
 
 
 def named_repo_paths(source: str, top_level: frozenset[str]) -> set[str]:
-    """Repo-relative paths and globs a gate script names, keeping only the ones that resolve.
+    """Repo-relative paths and globs a gate script names, keeping only the ones git can name.
 
     Resolving is what separates a read from a fixture: `crates/nope/src/does-not-exist.rs` and
     `docs/x.md` are invented by selftests and name nothing, while `docs/recon/` and
-    `crates/er-hook/src/lib.rs` are files on disk. A glob is kept when it matches at least one
-    file, which is the same test `stage_input_digest` applies.
+    `crates/er-hook/src/lib.rs` are files git tracks. A glob is kept when it matches at least one
+    tracked file, which is the same test `stage_input_digest` applies narrowed by
+    [`is_diffable`].
+
+    Tracked rather than merely present on disk, because the audit this feeds is about which stage
+    a push must select and the two answers differ per checkout -- see `is_diffable`.
     """
     found: set[str] = set()
     for match in _LITERAL_PATH.finditer(source):
@@ -618,10 +665,13 @@ def named_repo_paths(source: str, top_level: frozenset[str]) -> set[str]:
             continue
         if any(char in raw for char in "*?["):
             try:
-                if next(iter(REPO.glob(raw)), None) is not None:
-                    found.add(raw)
+                hits = [f for f in REPO.glob(raw) if f.is_file()]
             except (ValueError, OSError, IndexError):
                 continue
+            if any(is_diffable(f.relative_to(REPO).as_posix()) for f in hits):
+                found.add(raw)
+            continue
+        if not is_diffable(raw):
             continue
         target = REPO / raw
         if target.is_file():
@@ -976,6 +1026,36 @@ def selection_selftest() -> int:
         "every path a stage's gates read is declared by that stage",
         not problems,
         "; ".join(problems[:3]),
+    )
+
+    # --- ...asked of git, so the answer does not depend on which checkout is asking -----------
+    case(
+        "a tracked file is diffable and an invented one is not",
+        is_diffable("scripts/check-stages.py") and not is_diffable("scripts/nope-xyz.py"),
+        f"tracked={is_diffable('scripts/check-stages.py')} "
+        f"invented={is_diffable('scripts/nope-xyz.py')}",
+    )
+    gitlinks = [
+        entry.split("\t", 1)[1]
+        for entry in subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "--stage"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        ).stdout.splitlines()
+        if entry.startswith("160000 ")
+    ]
+    # A submodule is one gitlink in the index and its interior is not in the index at all, so a
+    # push diff names the gitlink and never a file under it. Deriving the name from git rather
+    # than typing one keeps the control alive when the submodule list changes; with none checked
+    # out there is nothing to control and the case says so rather than passing on an empty set.
+    case(
+        "a submodule's interior is not diffable, only its gitlink",
+        bool(gitlinks)
+        and all(is_diffable(link) for link in gitlinks)
+        and not any(is_diffable(f"{link}/README.md") for link in gitlinks),
+        f"gitlinks={gitlinks[:3]}",
     )
     return failures
 
