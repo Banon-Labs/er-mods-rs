@@ -297,13 +297,11 @@ static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
 /// this mod does to Seamless, not a detail, which is why nothing here does it yet.
 #[cfg(windows)]
 const CAN_USE_GOODS: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
-    name: "CanUseGoods",
-    rva: 0x0068_e010,
-    prologue: &[0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x53, 0x56, 0x57, 0x41],
-    // goodsId, player, spEffect, chrType, rightWeaponId, leftWeaponId, cannotConsumeForRepair.
-    // Three of those are stack arguments, so the detour must carry all seven or its call to the
-    // trampoline writes its own shadow space over the caller's fifth, sixth and seventh.
-    arg_count: 7,
+    name: "CanMainPlayerUseGoods",
+    rva: 0x0068_dee0,
+    prologue: &[0x40, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x83, 0xec, 0x50],
+    // `goodsId` and `cannotConsumeForRepair`, both in registers.
+    arg_count: 2,
 };
 
 /// The trampoline for [`CAN_USE_GOODS`].
@@ -325,35 +323,21 @@ static ORIG_CAN_USE_GOODS: core::sync::atomic::AtomicUsize =
 /// Called by MinHook in place of the game's function, on whatever thread asked.
 #[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
-unsafe extern "system" fn can_use_goods_entry(
-    goods_id: u32,
-    player: usize,
-    sp_effect: usize,
-    chr_type: u32,
-    right_weapon_id: u32,
-    left_weapon_id: u32,
-    cannot_consume_for_repair: u8,
-) -> u8 {
+unsafe extern "system" fn can_use_goods_entry(goods_id: u32, cannot_consume_for_repair: u8) -> u8 {
     use core::sync::atomic::{AtomicUsize, Ordering};
 
     static WIDENED_SAID: AtomicUsize = AtomicUsize::new(0);
 
-    type CanUseGoodsFn = unsafe extern "system" fn(u32, usize, usize, u32, u32, u32, u8) -> u8;
+    type CanMainPlayerUseGoodsFn = unsafe extern "system" fn(u32, u8) -> u8;
 
     let orig = ORIG_CAN_USE_GOODS.load(Ordering::SeqCst);
     if orig == 0 {
         return 0;
     }
-    // SAFETY: the trampoline MinHook returned for this seam, called with the arity the seam
-    // records and the arguments this detour was handed, untouched.
+    // SAFETY: the trampoline MinHook returned for this seam, with both of its arguments untouched.
     let verdict = unsafe {
-        core::mem::transmute::<usize, CanUseGoodsFn>(orig)(
+        core::mem::transmute::<usize, CanMainPlayerUseGoodsFn>(orig)(
             goods_id,
-            player,
-            sp_effect,
-            chr_type,
-            right_weapon_id,
-            left_weapon_id,
             cannot_consume_for_repair,
         )
     };
@@ -365,7 +349,10 @@ unsafe extern "system" fn can_use_goods_entry(
     }
     if WIDENED_SAID.swap(1, Ordering::SeqCst) == 0 {
         crate::standalone_log(format_args!(
-            "vanilla-fingers: CanUseGoods refused goods {goods_id} and this widened it. Seamless              keeps the game's own online flag clear, so vanilla's multiplayer gates refuse every              invasion item; the search these rows start is Seamless's, not vanilla's. Printed once."
+            "vanilla-fingers: CanMainPlayerUseGoods refused goods {goods_id} and this widened it. \
+             Seamless keeps the game's own online flag clear, so vanilla's multiplayer gates refuse \
+             every invasion item; the search these rows start is Seamless's, not vanilla's. Printed \
+             once."
         ));
     }
     1
