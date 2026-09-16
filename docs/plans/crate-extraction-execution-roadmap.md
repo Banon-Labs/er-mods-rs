@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,445 |
+| all `experiments/**` | 76 | 41,466 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -143,7 +143,7 @@ somebody's in-flight edit.
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 830 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,719 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,228 | stale-RVA call-site closure |
-| `lifecycle/task_tick.rs` | 423 | dead-counter census |
+| `lifecycle/task_tick.rs` | 444 | dead-counter census |
 | `input_block.rs` | 1,656 | dead-counter census |
 | `startup_hooks/diagnostics/system_quit_ownership_repro.rs` | 1,309 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,074 | stale-RVA call-site closure |
@@ -258,7 +258,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `input_trace.rs` | 934 | product diagnostic | D4 |
 | `lifecycle.rs` | 25 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 116 | product install ordering | `STAY` |
-| `lifecycle/task_tick.rs` | 423 | product recurring-task scheduling | `STAY` |
+| `lifecycle/task_tick.rs` | 444 | product recurring-task scheduling | `STAY` |
 | `lifecycle/title_visual_startup.rs` | 156 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |

@@ -30,7 +30,7 @@ push_watched="$repo_root/scripts/er-push-watched.sh"
 
 fail=0
 ok() { printf '  ok    %s\n' "$1"; }
-# A failure prints what it SAW, not only what it wanted.
+# A failure prints what it saw, not only what it wanted.
 #
 # Written after this suite failed inside the pre-push gate on 2026-09-15 while passing every
 # standalone reproduction, including one run with a hook-like git environment. The gate log carried
