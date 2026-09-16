@@ -279,9 +279,6 @@ static PASS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 /// Dialogs this module declined to open, and dialogs it let through.
 #[cfg(windows)]
 static POPUPS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
-/// Whether the handoff pass-through has been reported once.
-#[cfg(windows)]
-static HANDOFF_PASSTHROUGH_SAID: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static POPUPS_PASSED: AtomicUsize = AtomicUsize::new(0);
 
@@ -539,39 +536,24 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
         // SAFETY: the union stored the trampoline for this exact target.
         return unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d) };
     }
-    // A handoff in flight must reach Seamless, not be swallowed here.
+    // The handoff's dialog is no longer passed through, and this reverses f20f2485.
     //
-    // This detour's whole purpose is to decline Seamless's dialog and drive `ersc+0x25850` itself,
-    // which is right for a player reaching for the Lynchpin and wrong for the finger's `Both near
-    // and far` row -- because that direct call is precisely the one measured not to search. So a
-    // Lynchpin use that this module requested is passed through untouched.
+    // That commit let Seamless's own dialog through during a near+far handoff, on the grounds that
+    // swallowing it turned the use back into a direct `ersc+0x25850` call that does not search.
+    // Two things were wrong with it.
     //
-    // Measured on run br-20260916-094626-89c0, comparing the two drives on `ersc+0xa96e0`, the
-    // handler Seamless registers against goods `0x7fde63`:
+    // Its evidence was a hit count on `ersc+0xa96e0`, read as Seamless's handler for goods
+    // `0x7fde63`. That address is a thunk -- `e9` into the packed section followed by non-code --
+    // so the `+3` against `+0` it reported is not a measurement of anything.
     //
-    // | driven | Seamless's handler | new lobby calls |
-    // | --- | --- | --- |
-    // | Lynchpin from outside | +3 | `RequestLobbyList` 1, filters 5 |
-    // | the finger's handoff | +0 | none |
-    //
-    // The engine latched both uses identically -- `menuGaitemUseState` stepped 0, 1, 2 in each --
-    // so Seamless was simply never shown the second one. This is why.
-    if HANDOFF_STAGE.load(Ordering::SeqCst) != HANDOFF_IDLE {
-        if HANDOFF_PASSTHROUGH_SAID.swap(1, Ordering::SeqCst) == 0 {
-            crate::standalone_log(format_args!(
-                "lynchpin: letting Seamless's own dialog through -- this is the near+far handoff, \
-                 and swallowing it would turn the Lynchpin's use back into the direct \
-                 `ersc+0x25850` call that does not search. Printed once."
-            ));
-        }
-        POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
-        let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
-        if orig == 0 {
-            return 0;
-        }
-        // SAFETY: the union stored the trampoline for this exact target.
-        return unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d) };
-    }
+    // And the direct call that does not search is the one made with a SYNTHESISED owner. The skip
+    // path does not do that: it captures Seamless's own option-menu object from the dialog and
+    // drives the action through the real one. Run br-20260916-100817-3fe0 is the only run that
+    // ever reached `RequestLobbyList`, and its log is that sequence in order -- the Lynchpin
+    // pinned, `captured Seamless's option-menu object OSM=0x469ad518`, `drove ERSC invade through
+    // the real menu object ... no synthesized owner`, `started the search inline`, session state
+    // to `0x0e SEARCHING`, and the query. Every run after the pass-through landed captures
+    // nothing, drives nothing, and is silent on all 38 matchmaking slots.
     let (idle, source) = crate::local_invasion_filter::popup_skip_gate_is_idle();
     if idle {
         POPUPS_SKIPPED.fetch_add(1, Ordering::SeqCst);
@@ -889,7 +871,7 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     // time, and consumed on the first press once the slot itself held it. The player's own slots
     // are read first and put back when the use is over.
     // SAFETY: game task thread; every read is fault-closed.
-    if let Some(saved) = unsafe { read_quick_slots() } {
+    if DRIVE_MAY_WRITE_EQUIP_STATE && let Some(saved) = unsafe { read_quick_slots() } {
         if let Ok(mut guard) = SAVED_QUICK_SLOTS.lock() {
             if guard.is_none() {
                 *guard = Some(saved);
@@ -912,6 +894,15 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
 /// The slot a driven use borrows, and the player's own contents while it is borrowed.
 #[cfg(windows)]
 const DRIVEN_QUICK_SLOT: u32 = 5;
+
+/// Whether the handoff may change the player's quick slot and clear a stale queued use.
+///
+/// Both of those write game state around the press, and neither happened in the only three runs
+/// that ever produced a search -- br-20260916-094049-974b, -095259-a7f4 and -100817-3fe0. They
+/// were added afterwards, for the separate question of getting the item consumed, and every run
+/// since has been silent on the matchmaking slots. Held off while that coincidence is tested.
+#[cfg(windows)]
+const DRIVE_MAY_WRITE_EQUIP_STATE: bool = false;
 
 /// What the player had in their quick slots before a driven use borrowed one.
 #[cfg(windows)]
@@ -1147,7 +1138,8 @@ unsafe fn drive_handoff_press() {
             if let Some(player) = unsafe { main_player_chr_ins() } {
                 let queued =
                     unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
-                if let Some(stale) = queued
+                if DRIVE_MAY_WRITE_EQUIP_STATE
+                    && let Some(stale) = queued
                     && stale != pinned_now
                     && stale != QUEUED_USE_ITEM_IDLE
                 {
