@@ -217,3 +217,31 @@ if (ersc === null) {
     console.log(`who-asks: session slot unreadable: ${e.message}`);
   }
 }
+
+// A second control, because the first one went quiet.
+//
+// `SteamAPI_RunCallbacks` fired 600 times in one attach and not once in the next, while the lobby
+// hooks stayed silent in both. That makes the silence unreadable: a hook that says nothing and a
+// hook that was never reached look identical without something in the same attach that is known to
+// fire. `PeekMessageW` logged 1200 calls earlier in this session and belongs to the game's own
+// message loop rather than to Steam, so it survives whatever quietens the Steam pump.
+let framePumped = 0;
+try {
+  const peek = Module.getGlobalExportByName('PeekMessageW');
+  Interceptor.attach(peek, {
+    onEnter() {
+      framePumped += 1;
+      if (framePumped === 1 || framePumped === 1200) {
+        console.log(
+          `who-asks: control2 -- PeekMessageW fired ${framePumped}x; steam callbacks so far ${pumped}`
+        );
+      }
+    },
+  });
+  console.log(`who-asks: control2 PeekMessageW @${peek}`);
+} catch (e) {
+  console.log(`who-asks: control2 failed: ${e.message}`);
+}
+
+// Reload marker, so a silent attach is distinguishable from a stale one.
+console.log('who-asks: reloaded -- controls re-armed on a single attach');
