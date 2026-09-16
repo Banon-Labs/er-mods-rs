@@ -31,6 +31,7 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
 pub mod lobby_publish;

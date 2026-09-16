@@ -129,6 +129,17 @@ pub type UnionFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usiz
 /// may be the next handler rather than the game trampoline, so it must call through this
 /// signature and not through the game's own narrower one.
 pub type UnionFn5 = unsafe extern "system" fn(usize, usize, usize, usize, usize) -> usize;
+/// The seven-argument shape, for a target whose fifth, sixth and seventh integer arguments arrive
+/// at `[rsp+0x20]`, `[rsp+0x28]` and `[rsp+0x30]`.
+///
+/// `CS::CanUseGoods` is the case this exists for:
+/// `CanUseGoods(goodsId, PlayerIns*, SpecialEffect*, CharacterType, rightWeaponId, leftWeaponId,
+/// cannotConsumeForRepair)`. Reached through a four- or five-argument dispatcher it reads whatever
+/// the caller left above the home area as two weapon ids and a bool, which is the same stack-args
+/// failure class that produced the access violation `menu_trace_hooks.rs` records for the world
+/// block ctor. Same chaining contract as [`UnionFn`].
+pub type UnionFn7 =
+    unsafe extern "system" fn(usize, usize, usize, usize, usize, usize, usize) -> usize;
 
 /// How many arguments a union slot's dispatcher forwards.
 ///
@@ -139,6 +150,7 @@ pub type UnionFn5 = unsafe extern "system" fn(usize, usize, usize, usize, usize)
 enum UnionArity {
     Four,
     Five,
+    Seven,
 }
 
 impl UnionArity {
@@ -148,6 +160,7 @@ impl UnionArity {
         match self {
             UnionArity::Four => DISPATCHERS[slot] as *mut c_void,
             UnionArity::Five => DISPATCHERS5[slot] as *mut c_void,
+            UnionArity::Seven => DISPATCHERS7[slot] as *mut c_void,
         }
     }
 
@@ -156,6 +169,7 @@ impl UnionArity {
         match self {
             UnionArity::Four => "4-argument",
             UnionArity::Five => "5-argument",
+            UnionArity::Seven => "7-argument",
         }
     }
 }
@@ -213,7 +227,27 @@ unsafe extern "system" fn union_dispatch5<const N: usize>(
     unsafe { f(a, b, c, d, e) }
 }
 
-/// Both dispatcher pools from one slot list, so they cannot come out different lengths and a slot
+/// The seven-argument dispatcher. Same slot table and same head as [`union_dispatch`]; only the
+/// signature differs, so the three stack arguments the caller wrote above its home area are
+/// forwarded rather than left for the callee to read as whatever happened to be there.
+unsafe extern "system" fn union_dispatch7<const N: usize>(
+    a: usize,
+    b: usize,
+    c: usize,
+    d: usize,
+    e: usize,
+    f: usize,
+    g: usize,
+) -> usize {
+    let head = UNION_HEADS[N].load(Ordering::Acquire);
+    if head == 0 {
+        return 0;
+    }
+    let handler: UnionFn7 = unsafe { std::mem::transmute::<usize, UnionFn7>(head) };
+    unsafe { handler(a, b, c, d, e, f, g) }
+}
+
+/// Every dispatcher pool from one slot list, so they cannot come out different lengths and a slot
 /// index cannot mean one thing in one pool and another in the other.
 macro_rules! union_dispatcher_pools {
     ($($n:literal)*) => {
@@ -221,6 +255,8 @@ macro_rules! union_dispatcher_pools {
             [ $( union_dispatch::<$n> as UnionFn ),* ];
         static DISPATCHERS5: [UnionFn5; MAX_UNION_SLOTS] =
             [ $( union_dispatch5::<$n> as UnionFn5 ),* ];
+        static DISPATCHERS7: [UnionFn7; MAX_UNION_SLOTS] =
+            [ $( union_dispatch7::<$n> as UnionFn7 ),* ];
     };
 }
 union_dispatcher_pools!(
@@ -358,6 +394,64 @@ pub unsafe fn register_union_hook_runtime_derived(
         }
     }
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
+/// Register a seven-argument handler on a game function entry, following an Arxan stub if the
+/// running process has left one there.
+///
+/// This is the only public seven-argument entry point on purpose. The arity and the stub-follow
+/// are the two things a caller would otherwise get wrong independently, and both failures are
+/// silent: a narrower dispatcher hands the callee garbage stack arguments, and a hook on a stub
+/// catches nothing at all.
+///
+/// # Safety
+/// `handler` must be a valid [`UnionFn7`] matching the target's ABI (exactly seven
+/// integer/pointer arguments, no floats); `orig_slot` must be the static the handler reads to call
+/// its original, and the handler must call that value through [`UnionFn7`] rather than through the
+/// game's own signature, because it may be the next handler in the chain. `entry` must have been
+/// derived from the running image.
+#[cfg(windows)]
+pub unsafe fn register_union_hook7_runtime_derived(
+    entry: usize,
+    handler: UnionFn7,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    let what = format!("register_union_hook7_runtime_derived 0x{entry:x}");
+    let Some(target) = detour_target_following_arxan(entry, &what) else {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    };
+    unsafe {
+        register_union_hook_resolved_with(target, handler as usize, orig_slot, UnionArity::Seven)
+    }
+}
+
+/// Where a detour on `entry` must be written on the running build, Arxan included.
+///
+/// Two outcomes, and the caller does not have to tell them apart:
+///
+/// * the entry holds the image's own code -- it is audited against the image's function table the
+///   way every other runtime-derived target is, and returned;
+/// * the entry opens with Arxan's `jmp rel32` -- the jump is followed and the body it lands on is
+///   returned. That body is outside the image, so `.pdata` has nothing to say about it and the
+///   audit that stands in its place is the entry's own: a declared function entry whose first five
+///   bytes were replaced is still a declared function entry, and the jump is the image telling us
+///   where its code went.
+///
+/// Returns `None` when the entry is not a sound detour site for any reason the audit names.
+#[cfg(windows)]
+pub fn detour_target_following_arxan(entry: usize, what: &str) -> Option<usize> {
+    if let Some(body) = detour_site::follow_arxan_stub(entry) {
+        let mut opening = [0u8; 1];
+        if !unsafe { er_game_base::mem::read_bytes(body, &mut opening) } {
+            hook_log(format_args!(
+                "SITE REFUSED ({what}): 0x{entry:x} is an Arxan stub to 0x{body:x}, which cannot be \
+                 read"
+            ));
+            return None;
+        }
+        return Some(body);
+    }
+    detour_site::write_site_is_sound(entry, detour_site::DETOUR_PATCH_BYTES, what).then_some(entry)
 }
 
 /// [`register_union_hook`] for a target whose fifth integer/pointer argument arrives at

@@ -1750,9 +1750,8 @@ pub unsafe fn tick() {
     // SAFETY: game task thread; each is fault-closed and idempotent.
     unsafe {
         shorten_use_animation();
-        crate::vanilla_invasion_items::enable_offline_use();
+        crate::can_use_goods_gate::install();
         crate::vanilla_invasion_items::install_bounds_popup_takeover();
-        crate::vanilla_invasion_items::install_can_use_goods_widening();
         install_popup_skip();
         install_selected_quick_slot();
         drain_requested_use();
