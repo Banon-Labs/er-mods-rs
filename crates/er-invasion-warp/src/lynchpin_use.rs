@@ -137,6 +137,17 @@ static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
 /// The inventory index the current override is pinning.
 #[cfg(windows)]
 static PINNED_ITEM_IDX: AtomicUsize = AtomicUsize::new(0);
+/// The item id the current override is pinning. The four stores used to name
+/// [`LYNCHPIN_ITEM_ID`] directly, which made the whole driver a Lynchpin driver; the mechanism is
+/// the same for any goods row, and the vanilla invasion fingers need it too.
+#[cfg(windows)]
+static PINNED_ITEM_ID: AtomicUsize = AtomicUsize::new(0);
+/// An item id asked for from outside the game thread, resolved to an inventory index on the next
+/// tick. [`request_use`] reads the inventory itself, so it may only be called from the game task;
+/// an export cannot honour that, and a thread that reads a moving inventory list is the kind of
+/// bug that shows up as a wrong item being used rather than as a fault.
+#[cfg(windows)]
+static REQUESTED_ITEM_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Latched once the first non-Lynchpin menu is let through, so the line prints once.
 #[cfg(windows)]
@@ -534,8 +545,23 @@ pub unsafe fn install_popup_skip() -> bool {
 /// Game task thread.
 #[cfg(windows)]
 pub unsafe fn request_use() -> bool {
+    // SAFETY: game task thread, which is this function's own contract.
+    unsafe { request_use_item(LYNCHPIN_ITEM_ID) }
+}
+
+/// Use one held item by id, starting on the next tick.
+///
+/// Returns whether the item was found in the inventory to use. The id is the one the menu spells,
+/// goods id with the category nibble -- `crate::vanilla_invasion_items::with_category` builds it
+/// from a param row id.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+pub unsafe fn request_use_item(item_id: u32) -> bool {
     // SAFETY: game task thread; every read is fault-closed.
-    let Some(index) = (unsafe { inventory_index(LYNCHPIN_ITEM_ID) }) else {
+    let Some(index) = (unsafe { inventory_index(item_id) }) else {
         crate::standalone_log(format_args!(
             "lynchpin: asked to use the item, but it is not in the inventory -- it appears only \
              after sitting at a site of grace"
@@ -543,8 +569,48 @@ pub unsafe fn request_use() -> bool {
         return false;
     };
     PINNED_ITEM_IDX.store(index, Ordering::SeqCst);
+    PINNED_ITEM_ID.store(item_id as usize, Ordering::SeqCst);
     PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "lynchpin: pinned item {item_id:#x} at inventory index {index} for {PIN_FRAMES} frame(s)"
+    ));
     true
+}
+
+/// Ask for an item to be used from a thread the game does not own.
+///
+/// Stores the id only. The next [`tick`] resolves it against the inventory and arms the pin, so
+/// every read of the game's own lists still happens on the game task.
+#[cfg(windows)]
+pub fn request_use_item_offthread(item_id: u32) {
+    REQUESTED_ITEM_ID.store(item_id as usize, Ordering::SeqCst);
+}
+
+/// Drain an off-thread request, on the game task.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn drain_requested_use() {
+    let wanted = REQUESTED_ITEM_ID.swap(0, Ordering::SeqCst);
+    if wanted == 0 {
+        return;
+    }
+    // A use already in flight is not interrupted: the four stores are a per-frame override and
+    // two of them at once would pin one index while naming another item's id.
+    if PIN_FRAMES_LEFT.load(Ordering::SeqCst) != 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: declined to use {wanted:#x} -- a use is already in flight"
+        ));
+        return;
+    }
+    // SAFETY: game task thread.
+    if !unsafe { request_use_item(wanted as u32) } {
+        crate::standalone_log(format_args!(
+            "lynchpin: asked to use {wanted:#x}, but it is not in the inventory"
+        ));
+    }
 }
 
 /// The inventory index of one item id, or `None` when it is not held.
@@ -652,7 +718,10 @@ unsafe fn drive_pinned_use() {
     let index = PINNED_ITEM_IDX.load(Ordering::SeqCst) as i32;
     // SAFETY: the four stores the engine's own `Request` makes, into the struct it makes them in.
     unsafe {
-        core::ptr::write_volatile((state + USE_ITEM_ID_OFFSET) as *mut u32, LYNCHPIN_ITEM_ID);
+        core::ptr::write_volatile(
+            (state + USE_ITEM_ID_OFFSET) as *mut u32,
+            PINNED_ITEM_ID.load(Ordering::SeqCst) as u32,
+        );
         core::ptr::write_volatile((state + USE_ITEM_IDX_OFFSET) as *mut i32, index);
         core::ptr::write_volatile((state + USE_ARG_OFFSET) as *mut i32, 0);
     }
@@ -694,7 +763,9 @@ pub unsafe fn tick() {
         shorten_use_animation();
         crate::vanilla_invasion_items::enable_offline_use();
         crate::vanilla_invasion_items::install_bounds_popup_takeover();
+        crate::vanilla_invasion_items::install_can_use_goods_widening();
         install_popup_skip();
+        drain_requested_use();
         drive_pinned_use();
     }
     // No `install_menu_object_observer()` call here, and this is not an omission.

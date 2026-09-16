@@ -248,6 +248,194 @@ const START_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapS
 static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 
+/// `CanUseGoods` -- the predicate that decides whether an item's `Use` is offered at all.
+///
+/// Clearing `disableOffline` on the three rows is necessary and not sufficient. Reading the
+/// function on 2026-09-16 showed the fingers pass through several more vanilla online gates, each
+/// of which Seamless deliberately leaves in the state that fails them:
+///
+/// | gate | decompiled line |
+/// | --- | --- |
+/// | `IsInOnlineMode()` | 104 |
+/// | `CS::WorldChrManImp::CanStartMultiplay` | 330 |
+/// | `CS::PlayerIns::CanUseBreakInItem` | 359 |
+/// | `GLOBAL_CSSessionManager->lobbyState != Client` | 381 |
+///
+/// Measured before that read, on run `br-20260916-062320-c428`: the engine's own `Use` request was
+/// driven three times, its four stores landed -- `item_id=0x4000006f idx=429` read back out of
+/// `/proc` -- and nothing happened, because the predicate refuses before the animation.
+///
+/// Verified the same way as the seam below rather than trusted: 1.16.2 `0x14068e010` maps to
+/// 1.17 `0x14068ee60`, and the 24 prologue bytes at those two addresses are byte-identical across
+/// the two de-Arxan'd images. That row is now in
+/// `docs/recon/rva-map-1162-to-1170.verified.tsv`.
+///
+/// # This seam refuses at runtime, and that refusal is correct
+///
+/// `CanUseGoods` is one of the functions Arxan stubs in the live process. Measured on run
+/// `br-20260916-064622-8ef9`: its entry reads `e9 ee 15 96 ff 55 53 56 57 41` where the de-Arxan
+/// image has `44 89 4c 24 20 55 53 56 57 41` -- the first five bytes replaced by a `jmp rel32`,
+/// with bytes 5..15 surviving, which is what proves the address is right rather than wrong.
+///
+/// It is anti-tamper and not somebody's detour: of 60 entries taken from the verified map and read
+/// out of `/proc`, 43 are byte-identical to the image and 17 start with `e9`, across functions as
+/// unrelated as save-slot list builders. No mod hooks those.
+///
+/// So MinHook must not go here -- it would copy an Arxan stub as its trampoline -- and the
+/// prologue gate refusing is the protection working. The two narrower gates this predicate uses
+/// for the fingers are pristine and hookable, measured the same way:
+///
+/// | gate | 1.17 address | live bytes |
+/// | --- | --- | --- |
+/// | `CS::PlayerIns::CanUseBreakInItem` | `0x140657d50` | match the image |
+/// | `CS::WorldChrManImp::CanStartMultiplay` | `0x14050aa50` | match the image |
+///
+/// Hooking those two is still not enough on its own. `IsInOnlineMode()` is read at decompiled line
+/// 104 into `local_21f`, copied to `local_188` at line 300, and both appear in the single `AND` at
+/// lines 865-877 that produces the verdict -- so a false there refuses the item whatever the other
+/// gates say, and Seamless keeps that flag clear deliberately. Widening it is a decision about what
+/// this mod does to Seamless, not a detail, which is why nothing here does it yet.
+#[cfg(windows)]
+const CAN_USE_GOODS: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
+    name: "CanUseGoods",
+    rva: 0x0068_e010,
+    prologue: &[0x44, 0x89, 0x4c, 0x24, 0x20, 0x55, 0x53, 0x56, 0x57, 0x41],
+    // goodsId, player, spEffect, chrType, rightWeaponId, leftWeaponId, cannotConsumeForRepair.
+    // Three of those are stack arguments, so the detour must carry all seven or its call to the
+    // trampoline writes its own shadow space over the caller's fifth, sixth and seventh.
+    arg_count: 7,
+};
+
+/// The trampoline for [`CAN_USE_GOODS`].
+#[cfg(windows)]
+static ORIG_CAN_USE_GOODS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// `CanUseGoods`, widened for the three invasion fingers and for nothing else.
+///
+/// # Why the original runs first
+///
+/// This only ever turns a `false` into a `true`, and only for a finger. Returning `true` outright
+/// would also answer for "the item is not held" and "one is already in flight", which are the
+/// engine's checks to make and not this module's -- so the verdict is taken, and overridden only
+/// when it was a refusal about a row this mod re-enabled.
+///
+/// # Safety
+///
+/// Called by MinHook in place of the game's function, on whatever thread asked.
+#[cfg(windows)]
+#[allow(clippy::too_many_arguments)]
+unsafe extern "system" fn can_use_goods_entry(
+    goods_id: u32,
+    player: usize,
+    sp_effect: usize,
+    chr_type: u32,
+    right_weapon_id: u32,
+    left_weapon_id: u32,
+    cannot_consume_for_repair: u8,
+) -> u8 {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static WIDENED_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    type CanUseGoodsFn = unsafe extern "system" fn(u32, usize, usize, u32, u32, u32, u8) -> u8;
+
+    let orig = ORIG_CAN_USE_GOODS.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // SAFETY: the trampoline MinHook returned for this seam, called with the arity the seam
+    // records and the arguments this detour was handed, untouched.
+    let verdict = unsafe {
+        core::mem::transmute::<usize, CanUseGoodsFn>(orig)(
+            goods_id,
+            player,
+            sp_effect,
+            chr_type,
+            right_weapon_id,
+            left_weapon_id,
+            cannot_consume_for_repair,
+        )
+    };
+    if verdict != 0 {
+        return verdict;
+    }
+    if !routes_the_range_popup(with_category(goods_id)) {
+        return verdict;
+    }
+    if WIDENED_SAID.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: CanUseGoods refused goods {goods_id} and this widened it. Seamless              keeps the game's own online flag clear, so vanilla's multiplayer gates refuse every              invasion item; the search these rows start is Seamless's, not vanilla's. Printed once."
+        ));
+    }
+    1
+}
+
+/// Put [`can_use_goods_entry`] in front of the game's predicate.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+pub unsafe fn install_can_use_goods_widening() -> bool {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    if ORIG_CAN_USE_GOODS.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    // SAFETY: game task thread; the seam checks its own prologue and refuses otherwise.
+    let address = match unsafe { crate::map_seams::verify_seam(&CAN_USE_GOODS) } {
+        Ok(address) => address,
+        Err(error) => {
+            if REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "vanilla-fingers: refused {} -- {error}. The fingers stay greyed out, because                      clearing `disableOffline` only answers one of this predicate's gates.                      Printed once.",
+                    CAN_USE_GOODS.name
+                ));
+            }
+            return false;
+        }
+    };
+    let hook = match unsafe {
+        er_hook::MhHook::new(
+            address as *mut core::ffi::c_void,
+            can_use_goods_entry as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: failed to create the CanUseGoods detour @0x{address:x} --                  {status:?}. The address resolved and its prologue matched."
+            ));
+            return false;
+        }
+    };
+    ORIG_CAN_USE_GOODS.store(hook.trampoline() as usize, Ordering::SeqCst);
+    // SAFETY: the hook was created above; enabling is MinHook's own queued path.
+    if unsafe { hook.queue_enable() }.is_err() {
+        ORIG_CAN_USE_GOODS.store(0, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: applies the queue this function just added to.
+    match unsafe { er_hook::MH_ApplyQueued() } {
+        er_hook::MH_STATUS::MH_OK => {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: armed the CanUseGoods widening @0x{address:x} -- the three                  fingers are now offered in a Seamless session, where vanilla's online gates                  refuse them."
+            ));
+            true
+        }
+        status => {
+            ORIG_CAN_USE_GOODS.store(0, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: MH_ApplyQueued refused the CanUseGoods detour -- {status:?}"
+            ));
+            false
+        }
+    }
+}
+
 /// `CSPlayerMenuCtrl + 0x3d` -- `isBreakInMultiRegion`, where vanilla records the pressed row.
 ///
 /// Cross-checked against a live dump: `+0x8` `selectedGoodsItemId` held `0x40000070` while the

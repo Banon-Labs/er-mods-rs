@@ -463,6 +463,30 @@ pub extern "C" fn er_invasion_warp_request_invade() -> i32 {
     i32::from(local_invasion_filter::request_invade())
 }
 
+/// Use one held item, by the id the menu spells, on this DLL's own game thread next tick.
+///
+/// # Why an export
+///
+/// AGENTS.md's 2026-07-22 order is that the agent drives every required input, and reaching the
+/// Festering Bloody Finger through the real menus is an inventory route whose row count nothing
+/// here can know. The engine's own `Use` command is four stores into
+/// `CSMenuMan->menuData->menuGaitemUseState` plus the `ChrIns+0x168` repeat count, which
+/// `lynchpin_use` already drives for the Challenger's Lynchpin; this is the same driver with the
+/// item id as a parameter.
+///
+/// The id is not resolved here. The inventory lookup reads lists the game is free to move, so it
+/// happens on the game task like every other read in this module -- this only records what was
+/// asked for. Returns 1 when the request was recorded.
+///
+/// `crate::vanilla_invasion_items::with_category` turns a goods row id into this id: the
+/// Festering Bloody Finger is row 111, so `0x4000006f`.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_use_item(item_id: u32) -> i32 {
+    lynchpin_use::request_use_item_offthread(item_id);
+    1
+}
+
 /// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring
 /// `ersc.dll` itself.
 ///
