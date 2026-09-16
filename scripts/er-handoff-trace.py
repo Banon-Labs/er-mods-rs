@@ -78,6 +78,23 @@ def selftest() -> int:
     return 0
 
 
+
+def report_filters(counts: dict) -> None:
+    """Print what the query actually asked Steam for, which is what says whom it can match.
+
+    A filter on Seamless's password hash means the reachable pool is every host sharing that
+    exact password, so an empty result would be a settings fact rather than anything this mod
+    did. Counting the calls cannot distinguish that from a query nobody answered.
+    """
+    filters = counts["lobby"].get("filters") or []
+    if not filters:
+        print("FILTERS   : none captured")
+        return
+    print(f"FILTERS   : {len(filters)} pair(s) on the wire")
+    for f in filters:
+        print(f"   {f['key']} = {f['value']}   (comparison {f['comparison']})")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -142,6 +159,7 @@ def main() -> int:
             if counts["lobby"]["hits"]:
                 print("LOBBY:", json.dumps(counts["lobby"]["hits"]), flush=True)
                 print("PAD  :", json.dumps(counts["pad"]), flush=True)
+                report_filters(counts)
                 return 0
         counts = trace.exports_sync.counts()
         print("  no lobby calls; pad so far:", json.dumps(counts["pad"]), flush=True)
@@ -150,6 +168,7 @@ def main() -> int:
     print()
     print("PAD EXPORT:", json.dumps(counts["pad"], indent=1), flush=True)
     print("LOBBY     :", json.dumps(counts["lobby"]["hits"]), flush=True)
+    report_filters(counts)
     print(f"({counts['lobby']['hooked']} slots hooked, so an empty hits map is a real silence)")
     return 1
 

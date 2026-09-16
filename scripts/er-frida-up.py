@@ -330,8 +330,10 @@ def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
 
     def ask() -> None:
         try:
-            import frida
-
+            frida = import_frida()
+            if frida is None:
+                answered.append(False)
+                return
             dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
             dev.enumerate_processes()
             answered.append(True)
@@ -344,14 +346,32 @@ def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
     return bool(answered) and answered[0]
 
 
+
+def import_frida():
+    """Import the real frida package, or say plainly that it is not installed here.
+
+    `scripts/frida/` holds the agent `.js` files and has no `__init__.py`, so under a bare
+    `python3` it is picked up as a namespace package for the name `frida` and the import
+    succeeds with an empty module. Every later attribute access then fails as
+    `module 'frida' has no attribute 'get_device_manager'`, which reads as an api change
+    rather than as a missing dependency. Returns `None` when frida is unavailable.
+    """
+    try:
+        import frida
+    except ImportError:
+        return None
+    if not hasattr(frida, "get_device_manager"):
+        return None
+    return frida
+
+
 def status() -> int:
     up = listening()
     print(f"127.0.0.1:{PORT} {'OPEN' if up else 'closed'}")
     if not up:
         return 1
-    try:
-        import frida
-    except ImportError:
+    frida = import_frida()
+    if frida is None:
         print("frida python not importable here; run under `uv run --with frida`")
         return 0
     device = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
