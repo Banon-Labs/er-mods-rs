@@ -323,6 +323,30 @@ pub(super) fn lock_shape_refusal(session: &SeamlessSession) -> Option<&'static s
             "_Type at session+0x100 is not a shape MSVC's mutex constructors write, so this is not              a _Mtx_internal_imp_t and the session pointer identifies something else",
         );
     }
+    // A `_Thread_id` of exactly zero means nobody has ever held this lock, and that is decisive.
+    //
+    // `_Mtx_unlock` writes [`MTX_THREAD_ID_UNOWNED`] -- `0xffffffff` -- when the last recursion
+    // level is released, so a mutex that has been used and freed reads that, never zero. Zero is
+    // the value left by the constructor, which means no thread has taken it since the object was
+    // built. Seamless has been running its own session for the whole run; its lock cannot be
+    // untouched.
+    //
+    // Measured on two runs, 2026-09-15, and the difference is the whole bug:
+    //
+    // | run                      | `_Type`    | `_Thread_id` | calling the invade action |
+    // |--------------------------|------------|--------------|---------------------------|
+    // | br-20260916-030928-9e37  | `0x100c7`  | `0x4`        | returned, state `0x1`->`0xe` |
+    // | br-20260916-025336-64fc  | `0x100003` | `0x0`        | never returned            |
+    //
+    // The second wedged this module's worker thread and then wedged a plain Frida thread calling
+    // the same address, which rules out thread context and leaves the object itself. `_Type` does
+    // not separate them -- both carry `_Mtx_try`, so `mutex_type_is_constructible` accepts both --
+    // and the owner field does.
+    if thread == 0 {
+        return Some(
+            "`_Thread_id` at session+0x148 is zero, so no thread has ever held this lock.              `_Mtx_unlock` writes 0xffffffff on release, never zero, and Seamless has been using              its session all run -- so this object is not that session. Calling the action here is              what hung a worker thread and a Frida thread alike, both unrecoverably.",
+        );
+    }
     // Ownership is read before recursiveness, and that order is the fix for a hard lock.
     //
     // This used to return `None` for any recursive or plain mutex before looking at the owner at
