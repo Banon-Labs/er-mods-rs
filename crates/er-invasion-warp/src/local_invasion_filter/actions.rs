@@ -514,6 +514,22 @@ pub fn request_invade() -> bool {
 ///
 /// Reports the transition in both directions. A latch that only ever says "broken" leaves a
 /// recovered session looking dead, which is the same false negative one level up.
+/// # The call succeeding is not the search starting
+///
+/// Driving `ersc+0x25850` from the game task moves the session to `0x0e SEARCHING` and produces
+/// no Steam traffic at all. Measured with every other precondition satisfied on run
+/// br-20260916-145227-68b5: the session resolved, this check reported `reads as itself again`,
+/// the action ran, the state moved, and all 38 matchmaking slots stayed at zero.
+///
+/// The one run that did query -- br-20260916-100817-3fe0 -- called the same function with the
+/// same owner from a different place: the popup-skip path, inside Seamless's own dialog, logging
+/// `started the search inline`. So the difference between a search and a state write is the
+/// calling context, not the arguments.
+///
+/// Two contexts have been tried and neither queries from here: the game task (this one), and a
+/// Frida call from `CS::FeSystemAnnounceView::Update`
+/// (bd seamless-state-0x0e-alone-does-not-make-it-query-steam). The bounds popup's own thread
+/// hard-locked the game twice and is not a third option.
 fn invade_action_callable(abi: &ersc::Abi) -> bool {
     let callable = {
         // A thread inside an ersc callback is a temporary refusal, not a broken build --
