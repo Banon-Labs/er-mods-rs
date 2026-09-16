@@ -121,6 +121,29 @@ pub extern "system" fn er_quickload_hold_dinput_key(dik: u8) {
     crate::input_blocker::InputBlocker::get_instance().set_injected_key(dik);
 }
 
+/// C-ABI export: hold (or release, with all zeroes) an XInput pad state.
+///
+/// # Why the keyboard export is not enough
+///
+/// They are different stages and the game acts on whichever device is live. Measured on run
+/// br-20260916-074718-82a9, a native Steam install: an `XInputGetState` counter saw 590 polls in
+/// six seconds, all on slot 0, every one returning `ERROR_SUCCESS` -- a pad is connected and ELDEN
+/// RING reads it about 98 times a second. On the same run a held `DIK_W` moved the character
+/// exactly 0.000 while every link of the keyboard chain was confirmed working: the harness reported
+/// `delivered=true`, an `Interceptor` caught `er_quickload_hold_dinput_key` with `lastDik 17`, and
+/// `oracle_dinput_kb_hook_fires` / `oracle_dinput_injected_key_stamps` both climbed. A stamp that
+/// lands in a buffer the character is not acting on is indistinguishable from no input at all,
+/// which is the trap AGENTS.md names: inject at the stage the game actually polls, and verify which.
+///
+/// `buttons` is the `XINPUT_GAMEPAD.wButtons` mask, ORed onto whatever the real pad reported so a
+/// player's own input keeps working. The two thumb values are the left stick, written only when
+/// nonzero. All zeroes is the resting state and stamps nothing.
+#[unsafe(no_mangle)]
+pub extern "system" fn er_quickload_hold_xinput_pad(buttons: u16, thumb_lx: i16, thumb_ly: i16) {
+    crate::input_blocker::InputBlocker::get_instance()
+        .set_injected_pad(buttons, thumb_lx, thumb_ly);
+}
+
 /// C-ABI export: the live `05_010_ProfileSelect` dialog our save-file picker runs on, or 0.
 ///
 /// This is the only way to know which cursor is the PICKER'S. The picker's cursor is a

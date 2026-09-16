@@ -10,7 +10,7 @@
 //! changes. Every name here is re-exported from `er_telemetry_core::counters` with a glob, so
 //! each consumer still spells it `er_telemetry_core::counters::<name>`.
 
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicU32, AtomicU64, AtomicUsize};
 
 pub static EFFECT_HOTKEY_PENDING_UP: AtomicUsize = AtomicUsize::new(0);
 pub static EFFECT_HOTKEY_PENDING_DOWN: AtomicUsize = AtomicUsize::new(0);
@@ -42,6 +42,22 @@ pub static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 /// the keyboard focus. Non-zero here with `DINPUT_KB_HOOK_FIRES` non-zero means the game read a
 /// buffer we authored; a zero here while the harness is injecting means the stamp never ran.
 pub static DINPUT_INJECTED_KEY_STAMPS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many times the game polls `XInputGetState`, and how many of those we stamped a pad state
+/// into.
+///
+/// Measured on run br-20260916-074718-82a9: 590 polls in six seconds, all on slot 0, every one
+/// returning `ERROR_SUCCESS` -- a pad is connected and ER reads it about 98 times a second. A
+/// keyboard scancode stamped into the DInput buffer on that machine reached the game
+/// (`DINPUT_KB_HOOK_FIRES` 21342, `DINPUT_INJECTED_KEY_STAMPS` 35) and moved the character exactly
+/// 0.000, which is what injecting at a stage the game is not acting on looks like.
+pub static XINPUT_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+pub static XINPUT_INJECTED_PAD_STAMPS: AtomicUsize = AtomicUsize::new(0);
+/// The pad state to stamp: buttons in the low 16 bits, then the left stick as two `i16` axes.
+/// All-zero is the resting value and stamps nothing, so this is inert outside an injection window.
+pub static INJECTED_PAD_BUTTONS: AtomicU32 = AtomicU32::new(0);
+pub static INJECTED_PAD_THUMB_LX: AtomicI32 = AtomicI32::new(0);
+pub static INJECTED_PAD_THUMB_LY: AtomicI32 = AtomicI32::new(0);
 /// Win32 virtual-key code the harness is holding down at the USER32 layer (0 = nothing held). ER
 /// 1.17 imports `GetKeyState`/`GetKeyboardState`/`ToAscii` from USER32 and no RawInput API at all,
 /// so this is a keyboard stage the game genuinely reads. Stamped into the results of the two USER32
