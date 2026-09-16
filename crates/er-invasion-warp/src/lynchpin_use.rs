@@ -947,7 +947,11 @@ unsafe fn drive_handoff_press() {
             crate::standalone_log(format_args!(
                 "lynchpin: the handed-off Lynchpin settled for \
                  {HANDOFF_SETTLE_BEFORE_PRESS_MS}ms, so the use action is pressed and held for \
-                 {HANDOFF_PRESS_HELD_MS}ms."
+                 {HANDOFF_PRESS_HELD_MS}ms. Pin at this moment: {} tick(s) left on item {:#x} -- \
+                 zero there would mean the quick-slot answer had already stopped and the press \
+                 used whatever the real slot holds.",
+                PIN_FRAMES_LEFT.load(Ordering::SeqCst),
+                PINNED_ITEM_ID.load(Ordering::SeqCst)
             ));
         }
         HANDOFF_PRESSING => {
@@ -1238,7 +1242,17 @@ unsafe fn drive_pinned_use() {
                 unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
             queued == Some(pinned)
         });
-        if still_using {
+        // A handoff in flight keeps its own pin alive, because the press comes 2500ms later and
+        // `PIN_FRAMES` counts 90 ticks -- a fraction of a second here, not a second and a half.
+        //
+        // Without this the pin expires long before the settle ends, `drive_pinned_use` returns
+        // early, the quick-slot answer stops being given, and the press then uses whatever the real
+        // quick slot holds rather than the Lynchpin. Run br-20260916-092608-2780 shows both halves
+        // in one breath -- "pinned item 0x407fde63 ... for 90 frame(s)" next to "settled for
+        // 2500ms" -- and four attempts produced no lobby calls at all.
+        let handoff_in_flight = HANDOFF_STAGE.load(Ordering::SeqCst) != HANDOFF_IDLE
+            && pinned == LYNCHPIN_ITEM_ID as i32;
+        if still_using || handoff_in_flight {
             PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
         }
     }
