@@ -327,13 +327,29 @@ unsafe extern "system" fn start_invasion_entry(
     };
     let range = SearchRange::from_multi_region_flag(flag);
     let adopted = adopt_search_range(range, 0);
-    // Armed for the game task, never driven from this thread: the menu thread has no valid
-    // Seamless owner, and driving inline faulted inside ersc at `rcx+0x58`.
+    // Armed for the game task, never driven from this thread. Twice now.
+    //
+    // Driving inline was tried on 2026-09-16 because `lynchpin_use` does exactly that and works,
+    // and it hard locked the game on the first Both near and far press. The log's last two lines
+    // say why: the captured owner was refused for carrying `0x3b81506c3b8150c8` at `+0x58` instead
+    // of the session, the synthesized owner was built as designed -- and the call into
+    // `ersc+0x25850` then blocked the menu thread, which is the thread the whole game's UI runs on.
+    //
+    // The difference from `lynchpin_use` is the thread, not the owner. That file's detour sits on
+    // `OpenConversationChoicesMenu`, which `ersc.dll` itself called, so the call re-enters a module
+    // already on the stack with its own lock held by this very thread. The bounds popup is the
+    // game's own menu, with no `ersc` frame beneath it, so the same call is a first acquire that can
+    // and does block.
+    //
+    // Arming is worse in one way and better in every other: the call still blocks, but it blocks
+    // on a thread of ours while the game keeps rendering. A hung search the player can walk away
+    // from beats a frozen game.
     let requested = crate::local_invasion_filter::arm_invade_request("a vanilla invasion finger");
+    let driven = false;
     announce_search(range);
     crate::standalone_log(format_args!(
         "vanilla-fingers: the bounds popup chose {range:?} (isBreakInMultiRegion={flag}, \
-         step={step}), adopted={adopted}, requested={requested}"
+         step={step}), adopted={adopted}, driven_inline={driven}, requested={requested}"
     ));
     answer
 }
