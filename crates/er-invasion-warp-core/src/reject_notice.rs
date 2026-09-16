@@ -194,17 +194,40 @@ impl RejectNotice {
     /// quiet neighbourhood; one tried is a legacy dungeon, where a block id encodes a dungeon and
     /// a floor rather than a grid position, so there are no neighbours to ask about and the radius
     /// the player set could never have applied.
-    pub fn observe_search_everywhere(&mut self, enabled: bool, nearby: usize) -> Option<String> {
+    pub fn observe_search_everywhere(
+        &mut self,
+        enabled: bool,
+        nearby: usize,
+        mod_only: bool,
+    ) -> Option<String> {
         let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
         self.last_announced = Some(Announced::SearchingEverywhere);
         self.suppressed = 0;
         if repeat || !enabled {
             return None;
         }
+        // "Everywhere" is a lie while hunt is on, and it is the lie the player acts on.
+        //
+        // Dropping the location filter leaves the hunt filter, which asks Steam for a key only
+        // hosts running this build publish. Measured 2026-09-15, run br-20260915-161554-f2a2:
+        // every match found that way reached state `0x12` and died at the connect deadline,
+        // because the entries were stale -- nobody else was running it. Turning hunt off in the
+        // same session, with no restart, landed an invasion within 27 seconds.
+        //
+        // So the widened search is not a search of everywhere. It is a search of everyone running
+        // this mod, which on most evenings is nobody, and a banner that says otherwise sends the
+        // player off to wait for an invasion that cannot arrive.
+        let reach = if mod_only {
+            " -- but still only hosts running this mod"
+        } else {
+            ""
+        };
         Some(match nearby {
-            0 => "No nearby locations to search here -- looking everywhere instead".to_string(),
-            1 => "No invasion where you are -- looking everywhere instead".to_string(),
-            n => format!("No invasion in {n} nearby locations -- looking everywhere instead"),
+            0 => format!("No nearby locations to search here -- looking everywhere instead{reach}"),
+            1 => format!("No invasion where you are -- looking everywhere instead{reach}"),
+            n => {
+                format!("No invasion in {n} nearby locations -- looking everywhere instead{reach}")
+            }
         })
     }
 
@@ -950,11 +973,11 @@ mod tests {
     fn widening_to_everywhere_is_announced_once_and_then_suppressed() {
         let mut notice = RejectNotice::new();
         assert_eq!(
-            notice.observe_search_everywhere(true, 48).as_deref(),
+            notice.observe_search_everywhere(true, 48, false).as_deref(),
             Some("No invasion in 48 nearby locations -- looking everywhere instead")
         );
-        assert_eq!(notice.observe_search_everywhere(true, 48), None);
-        assert_eq!(notice.observe_search_everywhere(true, 48), None);
+        assert_eq!(notice.observe_search_everywhere(true, 48, false), None);
+        assert_eq!(notice.observe_search_everywhere(true, 48, false), None);
     }
 
     /// A ring of one is a legacy dungeon, where the radius could never have applied. Saying
@@ -963,7 +986,7 @@ mod tests {
     fn a_ring_with_no_neighbours_says_so_instead_of_counting_zero() {
         let mut notice = RejectNotice::new();
         let text = notice
-            .observe_search_everywhere(true, 0)
+            .observe_search_everywhere(true, 0, false)
             .expect("the first escalation is news");
         assert!(
             text.contains("No nearby locations to search here"),
@@ -977,13 +1000,13 @@ mod tests {
     #[test]
     fn a_step_between_two_exhaustions_unsuppresses_the_second() {
         let mut notice = RejectNotice::new();
-        assert!(notice.observe_search_everywhere(true, 8).is_some());
+        assert!(notice.observe_search_everywhere(true, 8, false).is_some());
         assert!(
             notice
                 .observe_prefilter_step(true, 2, 9, Some("Limgrave"))
                 .is_some()
         );
-        assert!(notice.observe_search_everywhere(true, 8).is_some());
+        assert!(notice.observe_search_everywhere(true, 8, false).is_some());
     }
 
     /// Gated on the same option as every other banner: somebody who turned notices off does not
@@ -991,6 +1014,6 @@ mod tests {
     #[test]
     fn the_widened_search_banner_respects_the_notice_switch() {
         let mut notice = RejectNotice::new();
-        assert_eq!(notice.observe_search_everywhere(false, 48), None);
+        assert_eq!(notice.observe_search_everywhere(false, 48, false), None);
     }
 }

@@ -116,7 +116,7 @@ pub(crate) fn announce_prefilter_step(_enabled: bool, _block: u32, _ordinal: usi
 
 /// Host build: no banner surface.
 #[cfg(not(windows))]
-pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize) {}
+pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize, _mod_only: bool) {}
 
 /// Put a successful invasion on the same banner the rejections use.
 ///
@@ -198,13 +198,13 @@ pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize,
 /// the everywhere rung is re-derived per round, so without the shared latch this would repaint
 /// roughly every fifteen seconds.
 #[cfg(windows)]
-pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize) {
+pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only: bool) {
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.observe_search_everywhere(enabled, nearby)
+        guard.observe_search_everywhere(enabled, nearby, mod_only)
     };
     let Some(text) = announcement else {
         return;
