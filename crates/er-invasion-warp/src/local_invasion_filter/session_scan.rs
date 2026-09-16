@@ -890,6 +890,26 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
             if owner != 0 {
                 return;
             }
+            // A bare hit knows the session but not its holder, so ask for the holder now rather
+            // than waiting for a differential pass that may never come.
+            //
+            // `owner_among` is the same question the change-proven path asks, and it is cheap
+            // against a one-element set. Without this the run keeps a provisional answer whose
+            // owner is 0, and an owner of 0 cannot drive anything -- both ersc actions take it as
+            // `rcx` and read the session out of `+0x58`. Measured on run br-20260916-101429-e595:
+            // the near+far handoff fired three times, pressed three times, pinned the Lynchpin
+            // three times, and `RequestLobbyList` never reached our detour once, because
+            // `resolve_session` had answered `owner 0x0` and every drive declined.
+            if let Some((held_session, held_owner)) = owner_among(&[session]) {
+                crate::standalone_log(format_args!(
+                    "local-invasion: owner {held_owner:#x} found for the bare session                      {held_session:#x} on the same pass that found it -- the drive needs a holder                      to pass as `this`, and waiting for a differential pass left runs unable to                      search at all."
+                ));
+                CACHED_SLOT.store(0, Ordering::SeqCst);
+                CACHED_OWNER.store(held_owner, Ordering::SeqCst);
+                CACHED_SESSION.store(held_session, Ordering::SeqCst);
+                SWEEP_BUDGET.store(0, Ordering::SeqCst);
+                return;
+            }
             // A bare session is provisional, so this thread keeps its post rather than retiring
             // on it. Returning here is what made the owner scan above dead code: the sweeper
             // exited on the first thing the shape scan latched -- routinely a look-alike, five
