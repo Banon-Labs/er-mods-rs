@@ -893,10 +893,10 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     // are read first and put back when the use is over.
     // SAFETY: game task thread; every read is fault-closed.
     if DRIVE_MAY_WRITE_EQUIP_STATE && let Some(saved) = unsafe { read_quick_slots() } {
-        if let Ok(mut guard) = SAVED_QUICK_SLOTS.lock() {
-            if guard.is_none() {
-                *guard = Some(saved);
-            }
+        if let Ok(mut guard) = SAVED_QUICK_SLOTS.lock()
+            && guard.is_none()
+        {
+            *guard = Some(saved);
         }
         // SAFETY: as above; the setter takes an inventory index, which is what `index` is.
         let equipped = unsafe { equip_quick_slot(DRIVEN_QUICK_SLOT, index as u32) };
