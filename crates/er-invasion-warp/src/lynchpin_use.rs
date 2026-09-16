@@ -170,6 +170,10 @@ const HANDOFF_IDLE: usize = 0;
 const HANDOFF_WAITING_FOR_LATCH: usize = 1;
 #[cfg(windows)]
 const HANDOFF_PRESSING: usize = 2;
+/// Waiting for the character to report it has finished the finger, before the Lynchpin is pinned
+/// at all.
+#[cfg(windows)]
+const HANDOFF_AWAITING_IDLE: usize = 3;
 /// How long to wait between the Lynchpin being pinned and the use action being pressed, and how
 /// long to hold it, in milliseconds rather than ticks.
 ///
@@ -800,36 +804,54 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
 /// every search driven that way sat at `SEARCHING` and matched nobody.
 #[cfg(windows)]
 pub fn request_lynchpin_use_offthread() {
-    // End the finger's own pin first, or this request waits behind it.
+    // Ask, and let the tick decide when: the character has to finish the finger first.
     //
-    // `drain_requested_use` will not start a second use while one is in flight, and the finger's
-    // pin is kept alive for as long as `tae_queued_use_item` holds it -- up to 600 frames, ten
-    // seconds. This function is called from the finger's popup answer, so the finger has already
-    // done its job; leaving its pin running only delays the handoff past the point where anything
-    // is still waiting for it. Measured on run br-20260916-091135-c653: the handoff logged, the
-    // Lynchpin was never pinned, and 38 of 38 matchmaking slots stayed at zero.
+    // Everything else about the two drives is now known to be identical: same item, a live pin with
+    // 90 ticks left, a 2500ms settle, a 500ms hold, the same export confirmed reached, and the same
+    // XInput detour that demonstrably moves the character. Run br-20260916-093054-8135 measured the
+    // pin at the moment of the press and it was alive, which refuted the last suspect.
     //
-    // Setting the counter to 1 rather than 0 is deliberate: the next tick then runs
-    // `drive_pinned_use`'s own `left == 1` arm, which puts `menuGaitemUseState` back the way the
-    // engine leaves it and restores `GameMan+0xbc8`. Zeroing it would skip that cleanup and leave
-    // the game reading a finger as the selected quick item.
+    // What differs is the character. Driving the Lynchpin by hand starts from an idle character;
+    // this handoff runs from the finger's own popup answer, with the finger's use still playing,
+    // and an item use cannot begin on top of another. So the pin is deferred until
+    // `tae_queued_use_item` reads -1 again -- the character saying it is done -- which is an
+    // acknowledgement rather than another delay. Every step that worked in this investigation came
+    // from waiting on a state the game reports; every one that failed came from picking a duration.
+    HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
+    HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
+    HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
+}
+
+/// Pin the Lynchpin once the character is free, then let [`drive_handoff_press`] take it.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn drive_handoff_pin() {
+    if HANDOFF_STAGE.load(Ordering::SeqCst) != HANDOFF_AWAITING_IDLE {
+        return;
+    }
+    // SAFETY: fault-closed; `None` before there is a player.
+    let character_is_free = unsafe { main_player_chr_ins() }.is_some_and(|player| {
+        // SAFETY: as above. -1 is the resting value: nothing queued for TAE's UseGoods.
+        let queued = unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
+        queued == Some(-1)
+    });
+    if !character_is_free {
+        return;
+    }
+    // The finger is done, so its pin can go. Set to 1 rather than 0 so the next tick still runs
+    // `drive_pinned_use`'s `left == 1` arm and restores `menuGaitemUseState` and `GameMan+0xbc8`.
     if PIN_FRAMES_LEFT.load(Ordering::SeqCst) > 1 {
-        // The pinned id is cleared too, or the keep-alive undoes this on the very next tick.
-        //
-        // `drive_pinned_use` resets the counter back to a full window for as long as
-        // `tae_queued_use_item` still reads the pinned item, which it does here because the finger
-        // is mid-use -- so shortening the counter alone achieved nothing and run
-        // br-20260916-091849-c540 shows it: the handoff logged and the Lynchpin was never pinned,
-        // because the counter never reached zero and `drain_requested_use` never ran. Zeroing the
-        // id makes the keep-alive's comparison fail, the counter runs down to its `left == 1` arm,
-        // and the cleanup there still restores `menuGaitemUseState` and `GameMan+0xbc8`.
         PINNED_ITEM_ID.store(0, Ordering::SeqCst);
         PIN_FRAMES_LEFT.store(1, Ordering::SeqCst);
     }
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
-    HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
-    HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
     HANDOFF_STAGE.store(HANDOFF_WAITING_FOR_LATCH, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "lynchpin: the character finished the finger, so the handed-off Lynchpin is requested now"
+    ));
 }
 
 /// `er_quickload.dll`'s pad-injection export, or 0 when that DLL is not in the profile.
@@ -1317,6 +1339,7 @@ pub unsafe fn tick() {
         install_selected_quick_slot();
         drain_requested_use();
         drive_pinned_use();
+        drive_handoff_pin();
         drive_handoff_press();
     }
     // No `install_menu_object_observer()` call here, and this is not an omission.
