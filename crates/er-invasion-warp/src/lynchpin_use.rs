@@ -832,15 +832,17 @@ unsafe fn drive_handoff_pin() {
     if HANDOFF_STAGE.load(Ordering::SeqCst) != HANDOFF_AWAITING_IDLE {
         return;
     }
-    // SAFETY: fault-closed; `None` before there is a player.
-    let character_is_free = unsafe { main_player_chr_ins() }.is_some_and(|player| {
-        // SAFETY: as above. -1 is the resting value: nothing queued for TAE's UseGoods.
-        let queued = unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
-        queued == Some(-1)
-    });
-    if !character_is_free {
-        return;
-    }
+    // No idle gate here, and that is a correction rather than an omission.
+    //
+    // This waited for `tae_queued_use_item` to read -1 again -- the character reporting it had
+    // finished the finger. That signal never arrives: `ChrIns+0x160` stays latched at the used item
+    // after a drive, observed stuck for 24 seconds with the character alive and ticking. So the
+    // stage parked here forever and `drive_handoff_press` never ran at all.
+    //
+    // Measured rather than reasoned: a trace of every call into `er_quickload_hold_xinput_pad`
+    // during three handoffs recorded six calls, all on one thread, which were exactly the driver's
+    // own three press/release pairs. The product's press was absent from that list entirely, so
+    // every timing theory tested against it was being tested against a press that never happened.
     // The finger is done, so its pin can go. Set to 1 rather than 0 so the next tick still runs
     // `drive_pinned_use`'s `left == 1` arm and restores `menuGaitemUseState` and `GameMan+0xbc8`.
     if PIN_FRAMES_LEFT.load(Ordering::SeqCst) > 1 {
