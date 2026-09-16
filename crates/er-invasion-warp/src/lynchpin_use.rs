@@ -150,6 +150,18 @@ const USE_STATE_IDLE: u8 = 0;
 const USE_STATE_REQUESTED: u8 = 1;
 #[cfg(windows)]
 const USE_STATE_LATCHED: u8 = 2;
+/// `ChrIns+0x160` -- `tae_queued_use_item`, the id the character is actually using. It is `-1`
+/// when nothing is in flight, so it doubles as the "still going" signal that keeps the pin alive.
+#[cfg(windows)]
+const CHR_INS_QUEUED_USE_ITEM: usize = 0x160;
+/// The hard ceiling on a keep-alive, in frames. The longest use animation measured is the vanilla
+/// invasion fingers' own, TimeAct 50030 at 3.900s, so ten seconds is generous without being open
+/// ended if the field ever sticks.
+#[cfg(windows)]
+const PIN_FRAMES_MAX: usize = 600;
+/// Frames spent on the use in flight, against [`PIN_FRAMES_MAX`].
+#[cfg(windows)]
+static PIN_FRAMES_SPENT: AtomicUsize = AtomicUsize::new(0);
 /// Whether the latch has been reported for the use in flight.
 #[cfg(windows)]
 static USE_ACKNOWLEDGED: AtomicUsize = AtomicUsize::new(0);
@@ -558,6 +570,140 @@ pub unsafe fn install_popup_skip() -> bool {
     }
 }
 
+/// `CS::PlayerIns::GetSelectedQuickSlotItemId(PlayerIns*, int *out)` -- what the character asks
+/// when the use action fires, to find out which item it is using.
+///
+/// # Why the answer is given here rather than stamped into the struct
+///
+/// The engine's own override reads `menuGaitemUseState+0xc`, so the documented way to drive an
+/// inventory-only item is to re-stamp that field for the length of the use. This module did that
+/// from its `CSTaskImp` task and it never once produced a use -- measured on run
+/// br-20260916-070713-aabd with a control: the Challenger's Lynchpin, pinned at inventory index
+/// 1701, behaved exactly like the finger at 429, and nothing in `ChrIns+0x150..0x180` moved for
+/// either. The request itself was accepted every time, `menuGaitemUseState+0x8` stepping `0 -> 2`
+/// under an 8ms sampler, so the press was reaching the player and only the item was missing.
+///
+/// Nothing orders a game task against this reader, and a store that lands after its reader has run
+/// is invisible to it however many frames it is repeated. Answering the question directly removes
+/// the ordering from the problem: while a use of ours is in flight, this is the item.
+///
+/// The seam is `verify_seam`-gated like the others. Its prologue is identical on both builds
+/// (`48 89 5c 24 10 57 48 83 ec 20 c7 02 ff ff ff ff` -- the `*out = -1` is right there in it), and
+/// it is byte-identical to the shipped image in live memory, unlike `CanUseGoods`.
+#[cfg(windows)]
+const SELECTED_QUICK_SLOT_ITEM: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
+    name: "CS::PlayerIns::GetSelectedQuickSlotItemId",
+    rva: 0x0065_65c0,
+    prologue: &[0x48, 0x89, 0x5c, 0x24, 0x10, 0x57, 0x48, 0x83, 0xec, 0x20],
+    arg_count: 2,
+};
+
+/// The trampoline for [`SELECTED_QUICK_SLOT_ITEM`].
+#[cfg(windows)]
+static ORIG_SELECTED_QUICK_SLOT: AtomicUsize = AtomicUsize::new(0);
+
+/// Answer the character with the pinned item while one of our uses is in flight.
+///
+/// # Safety
+///
+/// Called by MinHook in place of the game's function, on the game's own thread.
+#[cfg(windows)]
+unsafe extern "system" fn selected_quick_slot_entry(player: usize, out: *mut i32) -> *mut i32 {
+    static ANSWERED_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    type SelectedQuickSlotFn = unsafe extern "system" fn(usize, *mut i32) -> *mut i32;
+
+    let orig = ORIG_SELECTED_QUICK_SLOT.load(Ordering::SeqCst);
+    if orig == 0 {
+        return out;
+    }
+    // SAFETY: the trampoline MinHook returned, with both arguments untouched. The original runs
+    // first so that everything it does to `out` and to the pouch slot still happens.
+    let result = unsafe { core::mem::transmute::<usize, SelectedQuickSlotFn>(orig)(player, out) };
+    if PIN_FRAMES_LEFT.load(Ordering::SeqCst) == 0 {
+        return result;
+    }
+    let pinned = PINNED_ITEM_ID.load(Ordering::SeqCst);
+    if pinned == 0 || out.is_null() {
+        return result;
+    }
+    // SAFETY: the out parameter the caller passed and the original just wrote through.
+    unsafe { core::ptr::write_volatile(out, pinned as i32) };
+    if ANSWERED_SAID.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: answered the quick-slot question with {pinned:#x} -- the character asked \
+             which item it is using while one of ours was pinned. Printed once."
+        ));
+    }
+    result
+}
+
+/// Put [`selected_quick_slot_entry`] in front of the game's getter.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn install_selected_quick_slot() -> bool {
+    static REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    if ORIG_SELECTED_QUICK_SLOT.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    // SAFETY: game task thread; the seam checks its own prologue and refuses otherwise.
+    let address = match unsafe { crate::map_seams::verify_seam(&SELECTED_QUICK_SLOT_ITEM) } {
+        Ok(address) => address,
+        Err(error) => {
+            if REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "lynchpin: refused {} -- {error}. A pinned use will be accepted and then use \
+                     nothing, because the character has no way to learn which item it is. \
+                     Printed once.",
+                    SELECTED_QUICK_SLOT_ITEM.name
+                ));
+            }
+            return false;
+        }
+    };
+    let hook = match unsafe {
+        er_hook::MhHook::new(
+            address as *mut core::ffi::c_void,
+            selected_quick_slot_entry as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "lynchpin: failed to create the quick-slot detour @0x{address:x} -- {status:?}"
+            ));
+            return false;
+        }
+    };
+    ORIG_SELECTED_QUICK_SLOT.store(hook.trampoline() as usize, Ordering::SeqCst);
+    // SAFETY: the hook was created above; enabling is MinHook's own queued path.
+    if unsafe { hook.queue_enable() }.is_err() {
+        ORIG_SELECTED_QUICK_SLOT.store(0, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: applies the queue this function just added to.
+    match unsafe { er_hook::MH_ApplyQueued() } {
+        er_hook::MH_STATUS::MH_OK => {
+            crate::standalone_log(format_args!(
+                "lynchpin: armed the quick-slot answer on {} @0x{address:x}",
+                SELECTED_QUICK_SLOT_ITEM.name
+            ));
+            true
+        }
+        status => {
+            ORIG_SELECTED_QUICK_SLOT.store(0, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "lynchpin: MH_ApplyQueued refused the quick-slot detour -- {status:?}"
+            ));
+            false
+        }
+    }
+}
+
 /// Ask for the Lynchpin to be used, starting on the next tick.
 ///
 /// Returns whether the item was found in the inventory to use.
@@ -593,6 +739,7 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     PINNED_ITEM_IDX.store(index, Ordering::SeqCst);
     PINNED_ITEM_ID.store(item_id as usize, Ordering::SeqCst);
     USE_ACKNOWLEDGED.store(0, Ordering::SeqCst);
+    PIN_FRAMES_SPENT.store(0, Ordering::SeqCst);
     PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
     crate::standalone_log(format_args!(
         "lynchpin: pinned item {item_id:#x} at inventory index {index} for {PIN_FRAMES} frame(s)"
@@ -788,6 +935,7 @@ unsafe fn drive_pinned_use() {
         return;
     }
     PIN_FRAMES_LEFT.store(left - 1, Ordering::SeqCst);
+    let spent = PIN_FRAMES_SPENT.fetch_add(1, Ordering::SeqCst);
     let Ok(base) = er_game_base::mem::game_module_base() else {
         return;
     };
@@ -848,6 +996,30 @@ unsafe fn drive_pinned_use() {
     // So: keep asking while the state reads idle, and stop the moment it reads latched. That is an
     // acknowledgement from the engine rather than a frame budget, and it cannot re-press the action
     // once the use is under way, because 2 is not 0.
+    // Kept alive while the character is actually using the item, rather than for a fixed 90 frames.
+    //
+    // 90 frames is 1.5s and the vanilla fingers' own use animation is 3.900s (TimeAct 50030), so
+    // the window expired well before the consume event at the end of the clip -- and expiring is
+    // not passive here, it writes `-1` back over the item id and stops answering the quick-slot
+    // question, which cancels the use it just started. Measured on run br-20260916-072232-b1cf:
+    // `ChrIns+0x160` took the id and the popup never opened.
+    //
+    // `tae_queued_use_item` reading our id is the character saying it is still busy with it, so
+    // that is what extends the window, bounded by `PIN_FRAMES_MAX` so a stuck field cannot hold the
+    // override open for the rest of the session.
+    if spent < PIN_FRAMES_MAX {
+        let pinned = PINNED_ITEM_ID.load(Ordering::SeqCst) as i32;
+        // SAFETY: fault-closed; `None` before there is a player.
+        let still_using = unsafe { main_player_chr_ins() }.is_some_and(|player| {
+            // SAFETY: as above.
+            let queued =
+                unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
+            queued == Some(pinned)
+        });
+        if still_using {
+            PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
+        }
+    }
     // SAFETY: fault-closed read of the struct this function already writes.
     let observed = unsafe { er_game_base::mem::safe_read_u8(state + USE_STATE_OFFSET) };
     if observed == Some(USE_STATE_LATCHED) && USE_ACKNOWLEDGED.swap(1, Ordering::SeqCst) == 0 {
@@ -899,6 +1071,7 @@ pub unsafe fn tick() {
         crate::vanilla_invasion_items::install_bounds_popup_takeover();
         crate::vanilla_invasion_items::install_can_use_goods_widening();
         install_popup_skip();
+        install_selected_quick_slot();
         drain_requested_use();
         drive_pinned_use();
     }
