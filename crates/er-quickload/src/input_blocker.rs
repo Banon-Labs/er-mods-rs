@@ -13,6 +13,19 @@ pub use er_telemetry_core::counters::DINPUT_INJECTED_KEY_STAMPS;
 /// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
 /// while the harness holds, ER does not read keyboard via DInput on native -> our `set_injected_key`
 /// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
+///
+/// # Answered on the native Linux build, 2026-09-16
+///
+/// It does read it. Run br-20260916-074718-82a9, a native Steam install, ended with
+/// `oracle_dinput_kb_hook_fires = 17118` and `oracle_dinput_injected_key_stamps = 32`, so the game
+/// calls the keyboard `GetDeviceState` constantly and our scancode reaches the buffer it reads.
+///
+/// That is worth stating because it rules the channel out as a suspect: a held `DIK_W` (0x11) moved
+/// the player exactly `0.000` on that run while the harness reported `delivered=true`, the product
+/// export was confirmed reached by an `Interceptor` (`calls: 1, lastDik: 17`), and these counters
+/// showed the stamp landing. Whatever swallows that press is downstream of the stamp, not the
+/// absence of a DInput read, so do not go looking for `WM_KEYDOWN` or RawInput on the strength of a
+/// dead keypress alone -- check these two counters first.
 pub use er_telemetry_core::counters::DINPUT_KB_HOOK_FIRES;
 pub(crate) use er_telemetry_core::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
 pub(crate) use er_telemetry_core::counters::INJECTED_KEY;
