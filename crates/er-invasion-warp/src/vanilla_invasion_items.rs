@@ -248,6 +248,18 @@ const START_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapS
 static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 
+/// A range to answer the bounds popup with, regardless of the row pressed. Zero is the resting
+/// value and means the player's own press decides.
+#[cfg(windows)]
+pub(crate) static FORCED_SEARCH_RANGE: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+#[cfg(windows)]
+pub(crate) const FORCED_RANGE_NONE: usize = 0;
+#[cfg(windows)]
+pub(crate) const FORCED_RANGE_NEARBY: usize = 1;
+#[cfg(windows)]
+pub(crate) const FORCED_RANGE_NEAR_AND_FAR: usize = 2;
+
 /// `CanUseGoods` -- the predicate that decides whether an item's `Use` is offered at all.
 ///
 /// Clearing `disableOffline` on the three rows is necessary and not sufficient. Reading the
@@ -500,7 +512,30 @@ unsafe extern "system" fn start_invasion_entry(
     else {
         return answer;
     };
-    let range = SearchRange::from_multi_region_flag(flag);
+    let chosen = SearchRange::from_multi_region_flag(flag);
+    // An override, for proving the `Both near and far` branch while the popup's cursor cannot be
+    // driven to it.
+    //
+    // The popup answers row 0 every time under agent input: reproduced three times on
+    // br-20260916-083008-92e8 and after, always `isBreakInMultiRegion=0`. A D-pad Down after the
+    // use animation left it at 0, the same Down mid-animation stopped the chain firing at all, and
+    // a full left-stick down likewise. Driving a cursor nobody can read back is how this repo
+    // already lost a day to a `GridControl`, so the range is overridden here instead and the
+    // navigation left as its own problem.
+    //
+    // Zero, the resting value, means "whatever the player pressed" -- so this is inert in a normal
+    // session and cannot silently answer for somebody.
+    let forced = FORCED_SEARCH_RANGE.load(Ordering::SeqCst);
+    let range = match forced {
+        FORCED_RANGE_NEARBY => SearchRange::NearbyOnly,
+        FORCED_RANGE_NEAR_AND_FAR => SearchRange::BothNearAndFar,
+        _ => chosen,
+    };
+    if forced != FORCED_RANGE_NONE {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: the popup answered {chosen:?} and an override replaced it with              {range:?}. This is a test hook, not a product path -- the player's press is what              decides when nothing has set it."
+        ));
+    }
     let adopted = adopt_search_range(range, 0);
     // Armed for the game task, never driven from this thread. Twice now.
     //
