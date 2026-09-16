@@ -23,8 +23,8 @@ use er_invasion_warp_core::local_invasion::RejectReason;
 use super::{
     ATTEMPT_DRIVEN, ATTEMPT_VERDICT, AUTO_SEARCH_ARMED, CANCELS, ErscActionFn, FAILED_CONNECTS,
     INVADE_ACTION_REFUSAL_SAID, INVADE_ACTION_UNCALLABLE, INVADE_GUARD_REFUSAL_SAID,
-    INVADE_IN_FLIGHT, INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, NoSession, OurCall,
-    PENDING_REINVADE, REINVADES, RESTART_BACKOFF, SELF_RECOVERIES, STALL_RECOVERIES,
+    INVADE_IN_FLIGHT, INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, MISMATCHED_ARM_SAID, NoSession,
+    OurCall, PENDING_REINVADE, REINVADES, RESTART_BACKOFF, SELF_RECOVERIES, STALL_RECOVERIES,
     STALL_WATCHDOG, SeamlessSession, cancel_row_refusal, ersc, ersc_action, inside_ersc_callback,
     lock_shape_refusal, module_backing, not_identified_detail, note_state_after_our_action, now_ms,
     read_session_state, report_lock_preconditions, resolve_ersc_abi, resolve_session,
@@ -122,18 +122,34 @@ fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> 
         // `rcx=0x75bf1d30[unreadable]`, backtrace `ersc.dll+0x25850 <- er_invasion_warp.dll`. The
         // checks above had passed it as "plausible, tag absent" on both occasions -- they judge
         // the session, and a stale captured OSM is a separate pointer that none of them read.
+        // Readable is not the same as right, and both failures end in the same place.
+        //
+        // Readability was the only test here, and `report_lock_preconditions` was already printing
+        // the stronger one beside it without anything acting on the answer: run
+        // br-20260916-025336-64fc drove the invade with `owner+0x58=0x0 (disagrees, so the action
+        // will lock a different object than the one read)` in its own line. Zero is readable. It
+        // is also the null Seamless dereferences, and the call never came back.
+        //
+        // So the test is agreement with the session this tick resolved. A captured owner pointing
+        // at a different session is pointing at the previous match's, which is freed.
         // SAFETY: fault-closed read of the one field the action dereferences.
-        if unsafe { er_game_base::mem::safe_read_usize(session.osm + OWNER_SESSION_OFFSET) }
-            .is_none()
-        {
+        let carried =
+            unsafe { er_game_base::mem::safe_read_usize(session.osm + OWNER_SESSION_OFFSET) };
+        if carried != Some(session.session) {
             log_refusal_once(
                 &OWNER_REFUSAL_SAID,
                 format_args!(
-                    "local-invasion: refusing to drive ERSC's {what} with the captured owner \
-                     {:#x} -- it is not readable at +{OWNER_SESSION_OFFSET:#x}, the one field \
-                     both actions dereference. Falling back to a synthesized owner, which holds \
-                     the session at that offset by construction.",
-                    session.osm
+                    "local-invasion: not driving ERSC's {what} through the captured owner {:#x} \
+                     -- it carries {} at +{OWNER_SESSION_OFFSET:#x}, not the session this tick \
+                     resolved ({:#x}), and that field is the only thing both actions dereference. \
+                     Falling back to a synthesized owner, which holds the right session there by \
+                     construction.",
+                    session.osm,
+                    match carried {
+                        Some(value) => format!("{value:#x}"),
+                        None => "nothing readable".to_owned(),
+                    },
+                    session.session
                 ),
             );
             return Some(synthesized_owner(session.session));
@@ -526,9 +542,23 @@ fn invade_action_callable(abi: &ersc::Abi) -> bool {
 /// Disarms before calling, so a session that fails to leave idle costs one extra invade at most
 /// rather than one per frame.
 pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
-    if !PENDING_REINVADE.load(Ordering::SeqCst) || !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
+    let pending = PENDING_REINVADE.load(Ordering::SeqCst);
+    let armed = AUTO_SEARCH_ARMED.load(Ordering::SeqCst);
+    if !pending || !armed {
+        // Said once per arming, and only when one flag stands without the other -- the shape that
+        // means something took the request away between arming and this tick. Both clear is the
+        // ordinary resting state and says nothing. Run br-20260916-024013-f7ff armed a search on a
+        // live session, took the ladder's first rung, and then produced no drive line and no
+        // refusal line at all, which left this return as the only remaining explanation and no way
+        // to tell which half of it fired.
+        if (pending != armed) && !MISMATCHED_ARM_SAID.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "local-invasion: an armed search is not being driven and never will be --                  pending={pending} armed={armed}. Something cleared one flag without the other                  after the request was made; opening Seamless's own menu is the usual cause."
+            ));
+        }
         return;
     }
+    MISMATCHED_ARM_SAID.store(false, Ordering::SeqCst);
     // `invade` returns immediately unless the session is idle, so this is the same precondition
     // ERSC itself enforces -- checked here so a no-op call is not counted as a restart.
     let state = read_session_state(session.abi, session.session);

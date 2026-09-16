@@ -236,6 +236,8 @@ pub fn session_report() -> String {
 /// that ended. The prefilter ladder advanced on each one, so a search that never reached the
 /// network looked exactly like a working near-to-far escalation.
 static ATTEMPT_DRIVEN: AtomicBool = AtomicBool::new(false);
+/// Whether the half-armed report has been made since the last complete arming.
+static MISMATCHED_ARM_SAID: AtomicBool = AtomicBool::new(false);
 /// Whether the guard-refusal and action-refusal drops have each been reported.
 ///
 /// Both paths were silent, which is how a run spent 1,836 ticks declining to drive and reporting
