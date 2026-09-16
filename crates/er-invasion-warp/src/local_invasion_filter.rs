@@ -836,6 +836,8 @@ struct SeamlessSession {
     abi: &'static ersc::Abi,
 }
 
+/// Whether the no-session refusal has been reported once.
+static NO_SESSION_SAID: AtomicUsize = AtomicUsize::new(0);
 /// The option-menu object, observed once when Seamless builds its menu. Zero until then.
 static OSM: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline for the one ERSC observer.
@@ -995,6 +997,19 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
         // `scan_for_session` recognises the object by its own state field rather than being handed
         // a pointer to it, so the filter keeps working with nothing hooked inside Seamless.
         let Some((slot, session, owner)) = cached_scan_for_session(base, abi) else {
+            // Said once, because a run that never resolves a session is silent otherwise and looks
+            // exactly like a run that resolved one and found no hosts.
+            //
+            // Three failure shapes reach the same outcome -- no search -- and nothing outside the
+            // process could tell them apart: no session at all (here), a session with `owner 0x0`
+            // (the drive declines, see the report below), and a healthy owned session that simply
+            // matched nobody. Only the third says anything about hosts, and two full runs were read
+            // as the third when they were the first two.
+            if NO_SESSION_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "local-invasion: no session resolved -- the scan crossed ersc.dll's writable                      data and found no pointer to one, so every drive will decline and no search                      can start. A silent run after this line is this, not `no hosts were found`.                      Printed once."
+                ));
+            }
             return Err(NoSession::SessionNotIdentified);
         };
         if OSM_REPORTED.swap(1, Ordering::SeqCst) == 0 {
