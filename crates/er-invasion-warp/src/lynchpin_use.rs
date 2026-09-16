@@ -152,6 +152,9 @@ const USE_STATE_LATCHED: u8 = 2;
 /// when nothing is in flight, so it doubles as the "still going" signal that keeps the pin alive.
 #[cfg(windows)]
 const CHR_INS_QUEUED_USE_ITEM: usize = 0x160;
+/// What [`CHR_INS_QUEUED_USE_ITEM`] reads when the character is using nothing.
+#[cfg(windows)]
+const QUEUED_USE_ITEM_IDLE: i32 = -1;
 /// The hard ceiling on a keep-alive, in frames. The longest use animation measured is the vanilla
 /// invasion fingers' own, TimeAct 50030 at 3.900s, so ten seconds is generous without being open
 /// ended if the field ever sticks.
@@ -1035,6 +1038,39 @@ unsafe fn drive_handoff_press() {
                 HANDOFF_STAGE.store(HANDOFF_IDLE, Ordering::SeqCst);
                 return;
             }
+            // Retire the finger's own queued use before pressing, or the press is refused.
+            //
+            // `ChrIns+0x160` does not clear when a use finishes -- it keeps the last item -- so by
+            // the time the handoff presses, the field still reads the finger that started it. The
+            // engine will not begin a second use while it holds one, and it drops the request
+            // without ever reaching Seamless. Measured on run br-20260916-113129-edaa: two
+            // presses, both reporting `ChrIns+0x160` at `0x4000006f`, the Festering Bloody Finger,
+            // against a pinned `0x407fde63`, and zero calls on all 38 matchmaking slots.
+            //
+            // Writing the field's own idle value is what the engine does when a use completes, and
+            // the character is genuinely finished here -- `HANDOFF_WAITING_FOR_LATCH` is only
+            // reached after the finger's animation has ended.
+            let pinned_now = PINNED_ITEM_ID.load(Ordering::SeqCst) as i32;
+            // SAFETY: fault-closed; `None` before there is a player.
+            if let Some(player) = unsafe { main_player_chr_ins() } {
+                let queued =
+                    unsafe { er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM) };
+                if let Some(stale) = queued
+                    && stale != pinned_now
+                    && stale != QUEUED_USE_ITEM_IDLE
+                {
+                    // SAFETY: game task thread; the field is an i32 the engine itself resets.
+                    unsafe {
+                        core::ptr::write_volatile(
+                            (player + CHR_INS_QUEUED_USE_ITEM) as *mut i32,
+                            QUEUED_USE_ITEM_IDLE,
+                        );
+                    }
+                    crate::standalone_log(format_args!(
+                        "lynchpin: retired the finger's stale queued use ({stale:#x}) before the                          handoff press -- the engine refuses a second use while that field holds                          one, which is how a correct press reached Seamless as nothing."
+                    ));
+                }
+            }
             // SAFETY: the export resolved above, called with the button mask it documents.
             unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(PAD_A, 0, 0) };
             HANDOFF_PRESSED_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
@@ -1063,6 +1099,24 @@ unsafe fn drive_handoff_press() {
                 unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(0, 0, 0) };
             }
             HANDOFF_STAGE.store(HANDOFF_IDLE, Ordering::SeqCst);
+            // Say whether the engine actually took the item, because without it a run cannot be
+            // read. `ChrIns+0x160` holding the pinned id is the character accepting the Lynchpin;
+            // anything else means the press was consumed and dropped, and the two want opposite
+            // fixes. Run br-20260916-112839-ef59 pressed twice, produced no lobby call, and had
+            // no way to say which of those had happened.
+            let pinned = PINNED_ITEM_ID.load(Ordering::SeqCst) as i32;
+            // SAFETY: fault-closed; `None` before there is a player.
+            let queued = unsafe { main_player_chr_ins() }.and_then(|player| unsafe {
+                er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM)
+            });
+            match queued {
+                Some(id) if id == pinned => crate::standalone_log(format_args!(
+                    "lynchpin: the character TOOK the handed-off item -- `ChrIns+0x160` reads                      {id:#x}. A silent Seamless after this line is Seamless, not the press."
+                )),
+                other => crate::standalone_log(format_args!(
+                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {other:?}, not the                      pinned {pinned:#x}. The engine consumed the request and refused the item, so                      nothing was ever asked of Seamless this attempt."
+                )),
+            }
         }
         _ => {}
     }
