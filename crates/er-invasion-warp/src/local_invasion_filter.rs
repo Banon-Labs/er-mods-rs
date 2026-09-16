@@ -200,6 +200,41 @@ impl Drop for OurCall {
         IN_OUR_CALL.store(false, Ordering::SeqCst);
     }
 }
+/// Whether the dead-radius warning has been said.
+static RADIUS_WITHOUT_HUNT_SAID: AtomicBool = AtomicBool::new(false);
+
+/// Say once when a configured search radius can never do anything.
+///
+/// `prefilter_radius` is consulted only inside `hunt_target`, which returns before the ring when
+/// `hunt` is off, and the ring itself runs inside the `RequestLobbyList` detour that `steam_hooks`
+/// installs. So either switch being off makes the radius inert -- and inert silently, which is how
+/// a player who set `search_radius = 3` watches a search that never widens and has nothing to read
+/// about why.
+#[cfg(windows)]
+pub fn warn_if_radius_is_inert(hunt: bool, steam_hooks: bool, radius: u8) {
+    if radius == 0 || (hunt && steam_hooks) {
+        return;
+    }
+    if RADIUS_WITHOUT_HUNT_SAID.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let missing = match (hunt, steam_hooks) {
+        (false, false) => "`hunt` and `steam_hooks` are both off",
+        (false, true) => "`hunt` is off",
+        (true, false) => "`steam_hooks` is off",
+        (true, true) => unreachable!("guarded above"),
+    };
+    crate::standalone_log(format_args!(
+        "prefilter: `search_radius = {radius}` can never take effect, because {missing}. The ring \
+         is decided inside the lobby query, and that query is only narrowed when both are on. \
+         Nothing is broken; the radius is simply not consulted, and this is said once."
+    ));
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub fn warn_if_radius_is_inert(_hunt: bool, _steam_hooks: bool, _radius: u8) {}
+
 /// One line about whether Seamless has a session at all, for the heartbeat.
 ///
 /// This existed only as a passing `SessionNotIdentified` inside a refusal, and its absence cost

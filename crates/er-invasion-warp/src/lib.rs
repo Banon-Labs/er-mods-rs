@@ -304,6 +304,16 @@ fn spawn_catalog_task() {
                     // struct offset that pointed at the wrong lobby in every run.
                     // `steam_hooks = false` withholds all three -- see the key's docs. Read from
                     // the same snapshot as `map_pins` so one config read serves both gates.
+                    // Said here because this is where both switches are in hand at once, and a
+                    // radius that can never be consulted is otherwise indistinguishable from a
+                    // search that simply never widens.
+                    if let Some(config) = config_snapshot.as_ref() {
+                        crate::local_invasion_filter::warn_if_radius_is_inert(
+                            config.hunt,
+                            config.steam_hooks,
+                            config.prefilter_radius,
+                        );
+                    }
                     if config_snapshot
                         .as_ref()
                         .map(|config| config.steam_hooks)
