@@ -435,14 +435,30 @@ unsafe fn install_xinput_hook() {
         let Ok(module) = (unsafe { GetModuleHandleA(name) }) else {
             continue;
         };
-        let Some(target) = (unsafe { GetProcAddress(module, s!("XInputGetState")) }) else {
+        let Some(exported) = (unsafe { GetProcAddress(module, s!("XInputGetState")) }) else {
             continue;
         };
+        // Follow a Wine forwarding thunk before hooking.
+        //
+        // On this prefix the export does not begin a function: it reads `e9 d1 ec 74 02`, a
+        // five-byte relative jump into the module's real implementation. Detouring that address
+        // means overwriting the jump itself, and the install silently fails to take -- measured on
+        // run br-20260916-081922-9b62, where `XINPUT_HOOK_FIRES` stayed 0 while
+        // `DINPUT_KB_HOOK_FIRES` climbed to 310 on the same snapshot, so the counters were live and
+        // this detour simply never ran. It also made the entry look already hooked, which is how a
+        // Wine thunk gets mistaken for somebody else's trampoline.
+        const JMP_REL32: u8 = 0xe9;
+        const JMP_REL32_LEN: usize = 5;
+        let mut target = exported as usize;
+        // SAFETY: reading the first bytes of a resolved export in a loaded module.
+        if unsafe { *(target as *const u8) } == JMP_REL32 {
+            // SAFETY: as above; the displacement is the four bytes after the opcode.
+            let displacement = unsafe { *((target + 1) as *const i32) };
+            target = (target + JMP_REL32_LEN).wrapping_add_signed(displacement as isize);
+        }
+        let target = target as *mut core::ffi::c_void;
         let hook = match unsafe {
-            er_hook::MhHook::new(
-                target as *mut core::ffi::c_void,
-                xinput_get_state_detour as *mut core::ffi::c_void,
-            )
+            er_hook::MhHook::new(target, xinput_get_state_detour as *mut core::ffi::c_void)
         } {
             Ok(hook) => hook,
             Err(_) => continue,
