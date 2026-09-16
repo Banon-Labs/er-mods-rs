@@ -56,6 +56,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(windows)]
 use crate::map_seams::{MapSeam, verify_seam};
+use std::sync::Mutex;
 
 /// `CSMenuMan+0x8` -> `CSMenuData`, then `+0x70` -> `CSMenuGaitemUseState`.
 #[cfg(windows)]
@@ -880,10 +881,58 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     USE_ACKNOWLEDGED.store(0, Ordering::SeqCst);
     PIN_FRAMES_SPENT.store(0, Ordering::SeqCst);
     PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
+    // Put the item in the slot the equip system owns, not just in the answer one reader gets.
+    //
+    // The detour on `GetSelectedQuickSlotItemId` tells that reader the pinned id while the equip
+    // entries still hold whatever the player left there, and the consume follows the entries: on
+    // run br-20260916-130933-5b28 the Lynchpin queued and `ChrIns+0x168` stayed at zero every
+    // time, and consumed on the first press once the slot itself held it. The player's own slots
+    // are read first and put back when the use is over.
+    // SAFETY: game task thread; every read is fault-closed.
+    if let Some(saved) = unsafe { read_quick_slots() } {
+        if let Ok(mut guard) = SAVED_QUICK_SLOTS.lock() {
+            if guard.is_none() {
+                *guard = Some(saved);
+            }
+        }
+        // SAFETY: as above; the setter takes an inventory index, which is what `index` is.
+        let equipped = unsafe { equip_quick_slot(DRIVEN_QUICK_SLOT, index as u32) };
+        crate::standalone_log(format_args!(
+            "lynchpin: put the item in quick slot {DRIVEN_QUICK_SLOT} through the game's own              setter (equipped={equipped}); the player's slots were read first and go back when              the use ends"
+        ));
+    }
     crate::standalone_log(format_args!(
         "lynchpin: pinned item {item_id:#x} at inventory index {index} for {PIN_FRAMES} frame(s)"
     ));
     true
+}
+
+/// The slot a driven use borrows, and the player's own contents while it is borrowed.
+#[cfg(windows)]
+const DRIVEN_QUICK_SLOT: u32 = 5;
+
+/// What the player had in their quick slots before a driven use borrowed one.
+#[cfg(windows)]
+static SAVED_QUICK_SLOTS: Mutex<Option<[i32; QUICK_SLOT_COUNT]>> = Mutex::new(None);
+
+/// Give the player their quick slots back.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn release_borrowed_quick_slot() {
+    let Ok(mut guard) = SAVED_QUICK_SLOTS.lock() else {
+        return;
+    };
+    let Some(saved) = guard.take() else {
+        return;
+    };
+    // SAFETY: game task thread.
+    unsafe { restore_quick_slots(&saved) };
+    crate::standalone_log(format_args!(
+        "lynchpin: gave the player's quick slots back after the driven use"
+    ));
 }
 
 /// Ask for the Challenger's Lynchpin itself to be used, from any thread.
@@ -1142,6 +1191,8 @@ unsafe fn drive_handoff_press() {
             let queued = unsafe { main_player_chr_ins() }.and_then(|player| unsafe {
                 er_game_base::mem::safe_read_i32(player + CHR_INS_QUEUED_USE_ITEM)
             });
+            // SAFETY: game task thread.
+            unsafe { release_borrowed_quick_slot() };
             match queued {
                 Some(id) if id == pinned => crate::standalone_log(format_args!(
                     "lynchpin: the character TOOK the handed-off item -- `ChrIns+0x160` reads                      {id:#x}. A silent Seamless after this line is Seamless, not the press."
@@ -1229,6 +1280,122 @@ unsafe fn inventory_index(item_id: u32) -> Option<usize> {
     // inventory keys on -- the bare goods id answers -1.
     let index = unsafe { get_item_idx(inventory, &raw const item_id) };
     (index >= 0).then_some(index as usize)
+}
+
+/// `CS::EquipGameData::SetQuickSlotItem(EquipGameData*, slot, _, inventoryIndex)`.
+///
+/// The fourth argument is an inventory index, not the `0x4`-tagged item id.
+/// `CS::EquipItemData::GetQuickSlotIndexByInventoryIndex` walks `quickSlotEntries[i].index`
+/// comparing against an inventory index, which is what says so; feeding it a param id empties the
+/// slot instead of filling it.
+#[cfg(windows)]
+const SET_QUICK_SLOT_ITEM_RVA: u32 = 0x0024_9a30;
+
+/// `CS::EquipGameData::GetItemIdByQuickSlotIndex(EquipGameData*, int *out, uint slot)`.
+///
+/// Reports item ids through an out pointer while the setter above takes inventory indices, so
+/// putting a slot back means converting the saved id with [`inventory_index`].
+#[cfg(windows)]
+const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: u32 = 0x0024_7ee0;
+
+/// How many quick slots the equip entries hold.
+#[cfg(windows)]
+const QUICK_SLOT_COUNT: usize = 10;
+
+/// `EquipGameData`, which is embedded in `PlayerGameData` rather than pointed to.
+#[cfg(windows)]
+unsafe fn equip_game_data() -> Option<usize> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let game_data_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::GAME_DATA_MAN_GLOBAL_RVA,
+        "GAME_DATA_MAN_GLOBAL_RVA",
+    );
+    if game_data_man == 0 {
+        return None;
+    }
+    // SAFETY: fault-closed read of the first pointer inside `GameDataMan`.
+    let player_game_data = unsafe { er_game_base::mem::safe_read_usize(game_data_man + 0x8) }?;
+    (player_game_data != 0).then_some(player_game_data + PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET)
+}
+
+/// Every quick slot, read through the game's own getter.
+///
+/// Read all of them before writing any: this module once wrote ten slots having saved one value,
+/// and there was nothing to put back.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn read_quick_slots() -> Option<[i32; QUICK_SLOT_COUNT]> {
+    let getter = er_game_base::mem::game_rva_named(
+        GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA,
+        "GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA",
+    )
+    .ok()?;
+    // SAFETY: game task thread.
+    let equip = unsafe { equip_game_data() }?;
+    type GetBySlotFn = unsafe extern "system" fn(usize, *mut i32, u32) -> *mut i32;
+    // SAFETY: version-translated address, the engine's own three-argument getter.
+    let get_by_slot: GetBySlotFn = unsafe { core::mem::transmute(getter) };
+    let mut slots = [-1i32; QUICK_SLOT_COUNT];
+    for (slot, entry) in slots.iter_mut().enumerate() {
+        let mut out: i32 = -1;
+        // SAFETY: as above; `out` is this frame's stack.
+        unsafe { get_by_slot(equip, &raw mut out, slot as u32) };
+        *entry = out;
+    }
+    Some(slots)
+}
+
+/// Put an item into a quick slot the way the menu does.
+///
+/// This is what makes a driven use reach the character. Answering
+/// [`SELECTED_QUICK_SLOT_ITEM`] instead only tells one reader a different story while the equip
+/// system still holds whatever the player left in the slot, and the consume follows the equip
+/// system: measured on run br-20260916-130933-5b28, the item queued and `ChrIns+0x168` stayed at
+/// zero every time until the slot itself held it, and then it consumed on the first press.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn equip_quick_slot(slot: u32, inventory_index: u32) -> bool {
+    let Ok(setter) =
+        er_game_base::mem::game_rva_named(SET_QUICK_SLOT_ITEM_RVA, "SET_QUICK_SLOT_ITEM_RVA")
+    else {
+        return false;
+    };
+    // SAFETY: game task thread.
+    let Some(equip) = (unsafe { equip_game_data() }) else {
+        return false;
+    };
+    type SetQuickSlotFn = unsafe extern "system" fn(usize, u32, u64, u32);
+    // SAFETY: version-translated address, the engine's own four-argument setter.
+    let set: SetQuickSlotFn = unsafe { core::mem::transmute(setter) };
+    // SAFETY: as above.
+    unsafe { set(equip, slot, 0, inventory_index) };
+    true
+}
+
+/// Put the player's own quick slots back after a driven use.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn restore_quick_slots(saved: &[i32; QUICK_SLOT_COUNT]) {
+    for (slot, &item) in saved.iter().enumerate() {
+        if item < 0 {
+            continue;
+        }
+        // SAFETY: game task thread; the getter reports ids and the setter takes indices.
+        if let Some(index) = unsafe { inventory_index(item as u32) } {
+            // SAFETY: as above.
+            unsafe { equip_quick_slot(slot as u32, index as u32) };
+        }
+    }
 }
 
 /// The local `PlayerIns`, or `None` before the world exists.
