@@ -85,6 +85,13 @@ const EQUIP_INVENTORY_DATA_OFFSET: usize = 0x158;
 /// `EquipParamGoods.goodsUseAnim`, `u8`, within a 0xb0-byte row.
 #[cfg(windows)]
 const GOODS_USE_ANIM_OFFSET: usize = 0x42;
+/// `refId_default` in the same row. The engine guards the use with `if (-1 < refId)`, and the
+/// Lynchpin ships `-8`, so its use is dropped after the quick-slot reader is asked once.
+#[cfg(windows)]
+const GOODS_REF_ID_DEFAULT_OFFSET: usize = 0x04;
+/// The smallest value that passes that guard, chosen so the item borrows no other item's effect.
+#[cfg(windows)]
+const REF_ID_USABLE: i32 = 0;
 /// The Challenger's Lynchpin, as the menu spells it: goods `8380003` with the goods category
 /// nibble.
 #[cfg(windows)]
@@ -345,6 +352,25 @@ pub unsafe fn shorten_use_animation() -> bool {
     let before = unsafe { er_game_base::mem::safe_read_u8(field) };
     // SAFETY: same byte, inside the same row.
     unsafe { core::ptr::write_volatile(field as *mut u8, SHORT_USE_ANIM) };
+    // The same row's `refId_default`, which is what actually decides whether the item can be used
+    // at all. Seamless ships `-8` and the engine guards on `if (-1 < refId)`, so every press was
+    // dropped after the quick-slot reader was asked exactly once -- an accepted item is asked
+    // four times. Measured on run br-20260916-120114-ab03, with the row checked pristine first
+    // (`ref -8, anim 66`) and both oracles zeroed before every press: writing 0 here makes the
+    // character queue the item, on three presses out of four, where before it never did.
+    //
+    // It does not get the item consumed. `ChrIns+0x168`, the TAE event 65 count that Seamless's
+    // own handler runs off, stayed 0 across all four presses. An earlier run appeared to show
+    // consumption and did not: that counter had not been zeroed and was reading residue. So this
+    // write clears the request gate and no more -- the consumption gate is still unidentified.
+    let ref_field = row + GOODS_REF_ID_DEFAULT_OFFSET;
+    // SAFETY: fault-tolerant read of one dword inside the same row.
+    let ref_before = unsafe { er_game_base::mem::safe_read_i32(ref_field) };
+    // SAFETY: same dword, inside the same row.
+    unsafe { core::ptr::write_volatile(ref_field as *mut i32, REF_ID_USABLE) };
+    crate::standalone_log(format_args!(
+        "lynchpin: refId_default {ref_before:?} -> {REF_ID_USABLE} on the live row          0x{row:x}+0x04. The engine refuses to start a use while this is below zero, so without          it the press reaches Seamless as nothing at all."
+    ));
     ANIM_SHORTENED.store(1, Ordering::SeqCst);
     crate::standalone_log(format_args!(
         "lynchpin: use animation {before:?} -> {SHORT_USE_ANIM} on the live row 0x{row:x}+0x42. \
