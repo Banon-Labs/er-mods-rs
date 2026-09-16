@@ -1449,11 +1449,21 @@ mod live {
         // then found nobody in ninety seconds.
         //
         // `Nearby only` still narrows, because narrowing is what that row is for.
-        if crate::local_invasion_filter::finger_reach_is_near_and_far() {
+        // Which branch decided is reported, because two of them produce an unfiltered query for
+        // opposite reasons and the log could not tell them apart.
+        //
+        // Run br-20260916-100817-3fe0 printed "no location to ask for -- ... the query goes out
+        // unfiltered", which is the `no_centre` branch, not this one. So the query was unfiltered by
+        // accident rather than by the `Both near and far` rule, and `Nearby only` would take the
+        // same path and silently lose the block filtering that row exists for. A reason is not
+        // interchangeable with the outcome it happens to share.
+        let reach_is_near_and_far = crate::local_invasion_filter::finger_reach_is_near_and_far();
+        if reach_is_near_and_far {
             if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!(
-                    "hunt: `Both near and far` is in force, so this query goes out unfiltered -- \
-                     narrowing it to a map tile is what that row exists not to do. Printed once."
+                    "hunt: decision=near_and_far -- `Both near and far` is in force, so this query \
+                     goes out unfiltered on purpose. Narrowing it to a map tile is what that row \
+                     exists not to do. Printed once."
                 ));
             }
             return None;
@@ -1475,7 +1485,10 @@ mod live {
             // used to be a bare `?` that left the query unfiltered without a word.
             if HUNT_NO_CENTRE_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!(
-                    "hunt: no location to ask for -- hunt is on and nothing refused it, but no                      marked block and no readable current block gave a value. The query goes out                      unfiltered. Printed once."
+                    "hunt: decision=no_centre -- hunt is on and nothing refused it, but no marked \
+                     block and no readable current block gave a value, so the query goes out \
+                     unfiltered by accident. `Nearby only` reaching this is a bug: that row is \
+                     supposed to narrow. Printed once."
                 ));
             }
             return None;
