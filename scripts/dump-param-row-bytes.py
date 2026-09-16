@@ -6,7 +6,7 @@ item by editing its param row leaves the live bytes and the on-disk bytes disagr
 that differs names the field without anyone having to guess which field it is first. Pair it with a
 live dump (`scripts/frida/goods-row-live.js`) and diff the two.
 
-Field NAMES need a paramdef this does not have, and that is fine for a diff: a differing offset is
+Field names need a paramdef this does not have, and that is fine for a diff: a differing offset is
 located by number and looked up afterwards. Row stride comes from the row-entry table, the same way
 `diff-regulation-params.py` derives it, so no paramdef is needed to know where a row ends either.
 
