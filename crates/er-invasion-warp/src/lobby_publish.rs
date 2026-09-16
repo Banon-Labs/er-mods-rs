@@ -1580,7 +1580,14 @@ mod live {
                 }
                 let notice = crate::local_invasion_filter::current_config_snapshot()
                     .is_none_or(|config| config.reject_notice);
-                crate::local_invasion_filter::banner::announce_search_everywhere(notice, nearby);
+                // `mod_only` is `hunt`: the widened query drops the location key and keeps the
+                // one only this build's hosts publish, so "everywhere" still means "everyone
+                // running this mod" and the banner has to say so.
+                let mod_only = crate::local_invasion_filter::current_config_snapshot()
+                    .is_some_and(|config| config.hunt);
+                crate::local_invasion_filter::banner::announce_search_everywhere(
+                    notice, nearby, mod_only,
+                );
                 return RingStep::Everywhere;
             }
             Taken::Step(step) => step,
