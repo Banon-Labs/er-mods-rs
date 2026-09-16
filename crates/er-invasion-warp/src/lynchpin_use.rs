@@ -306,7 +306,7 @@ unsafe extern "system" fn open_choices_entry(a: usize, b: usize, c: usize, d: us
 /// `CSMenuGaitemUseState+0xc` is the item id the game itself wrote for the use in flight, so it
 /// names the item without this module having to guess from the menu.
 #[cfg(windows)]
-unsafe fn item_in_use() -> Option<u32> {
+pub(crate) unsafe fn item_in_use() -> Option<u32> {
     let base = er_game_base::mem::game_module_base().ok()?;
     let menu_man = er_game_base::mem::read_global_ptr(
         base,
