@@ -172,6 +172,38 @@ def run(agent_path: pathlib.Path, log_path: pathlib.Path) -> int:
         print("no eldenring.exe appeared in the prefix", file=sys.stderr)
         return 1
 
+    # One watcher at a time, because a second one silently breaks the first's hooks.
+    #
+    # Measured twice on 2026-09-15. Two attaches were live on the same process and the newer
+    # agent's `Interceptor.attach` calls took no effect at all: its integrity controls
+    # (`SteamAPI_RunCallbacks`, `PeekMessageW`, ersc's `_Mtx_lock`) never fired once, while the
+    # very same hooks in a single-attach session fired 600, 1200 and 500 times. Nothing reports an
+    # error -- the agent loads, prints its "hooked" lines, and then says nothing forever, which
+    # reads exactly like "the thing I am watching never happens" and is how two conclusions got
+    # drawn from silence that meant nothing.
+    #
+    # Refusing is the whole fix. A watcher is meant to be attached once and its agent file edited
+    # in place; wanting two is wanting one agent with both sets of hooks in it.
+    existing = [s for s in dev.enumerate_processes() if s.pid == pid]
+    attached_already = False
+    try:
+        # `enumerate_pending_children` is not it; the session list is what says who is attached.
+        attached_already = any(
+            getattr(s, "pid", None) == pid for s in getattr(dev, "enumerate_sessions", list)()
+        )
+    except Exception:
+        attached_already = False
+    if attached_already:
+        print(
+            "another watcher is already attached to this process. A second attach loads and then "
+            "its hooks silently do nothing -- measured twice on 2026-09-15, with every integrity "
+            "control dead while the same hooks fired hundreds of times in a single-attach "
+            "session. Stop the other watcher, or put both sets of hooks in one agent file.",
+            file=sys.stderr,
+        )
+        return 2
+    del existing
+
     session = dev.attach(pid)
     print(f"attached to eldenring.exe (windows pid {pid})", flush=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
