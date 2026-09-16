@@ -1724,10 +1724,27 @@ fn the_sweeper_does_not_retire_on_a_session_with_no_owner() {
         .split_once("await_sweep_request")
         .expect("the bare-session arm waits for another request rather than returning")
         .0;
+    // Two returns are allowed here now, and the distinction is the point: the sweeper may retire
+    // once it has an owner, and may never retire while it does not.
+    //
+    // The second return was added on 2026-09-16, inside the `owner_among(&[session])` arm that
+    // turns a bare hit into an owned one on the same pass. Retiring there is correct -- the answer
+    // is complete -- and not retiring there was the whole of the near+far handoff's intermittency:
+    // run br-20260916-101429-e595 fired the handoff three times, pressed three times, pinned the
+    // Lynchpin three times, and `RequestLobbyList` never reached our detour, because the cached
+    // answer read `owner 0x0` and every drive declined on it.
+    let returns = bare.matches("return;").count();
     assert!(
-        !bare.contains("return;") || bare.matches("return;").count() == 1,
-        "only the proven arm may return; the bare-session arm has to keep the loop alive:\n{bare}"
+        returns <= 2,
+        "the bare-session arm may return only after it has found an owner:\n{bare}"
     );
+    if returns == 2 {
+        assert!(
+            bare.contains("owner_among(&[session])"),
+            "a second return in the bare arm is only allowed for the owner lookup that makes the \
+             answer complete:\n{bare}"
+        );
+    }
 }
 
 /// The externally-requested search must not demand a pointer the shipping build can never hold.
