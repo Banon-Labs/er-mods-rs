@@ -745,6 +745,27 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     true
 }
 
+/// Ask for the Challenger's Lynchpin itself to be used, from any thread.
+///
+/// # Why the finger's near+far row routes here instead of calling the action
+///
+/// Calling `ersc+0x25850` directly is not the Lynchpin interaction, and an A/B on run
+/// br-20260916-083935-5990 measured the difference on the matchmaking interface `ersc.dll` holds
+/// at `ersc+0x21b610`, sweeping all 38 vtable slots so the count carries its own control:
+///
+/// | driven | `RequestLobbyList` | `AddRequestLobbyListStringFilter` |
+/// | --- | --- | --- |
+/// | `ersc+0x25850` called directly | 0 | 0 |
+/// | the Lynchpin used as an item | 2 | 10 |
+///
+/// The direct call still moves `session+0x150` to `0x0e`, so it looks like a search and never
+/// becomes one -- the state is a symptom of Seamless searching, not the cause of it. That is why
+/// every search driven that way sat at `SEARCHING` and matched nobody.
+#[cfg(windows)]
+pub fn request_lynchpin_use_offthread() {
+    request_use_item_offthread(LYNCHPIN_ITEM_ID);
+}
+
 /// Ask for an item to be used from a thread the game does not own.
 ///
 /// Stores the id only. The next [`tick`] resolves it against the inventory and arms the pin, so
