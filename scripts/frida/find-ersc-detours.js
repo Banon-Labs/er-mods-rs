@@ -27,7 +27,10 @@ function sections (base) {
   for (let i = 0; i < sectionCount; i++) {
     const s = first.add(i * 40);
     out.push({
-      name: s.readUtf8String(8).replace(/\0+$/, ''),
+      // Section names are eight bytes, NUL-padded. `readUtf8String(8)` refuses to decode the
+      // padding, so the name is assembled a byte at a time and stops at the first NUL.
+      name: (() => { let n = ''; for (let b = 0; b < 8; b++) {
+        const c = s.add(b).readU8(); if (c === 0) break; n += String.fromCharCode(c); } return n; })(),
       rva: s.add(12).readU32(),
       size: s.add(8).readU32(),
     });
@@ -44,7 +47,7 @@ rpc.exports = {
     if (pdata === undefined) return { error: 'no .pdata' };
     const lo = ersc.base, hi = ersc.base.add(ersc.size);
     const entries = Math.floor(pdata.size / 12);
-    const out = { entries, intoErsc: [], indirect: 0, stubbed: 0 };
+    const out = { entries, intoErsc: [], viaTrampoline: [], indirect: 0, stubbed: 0 };
     const table = game.base.add(pdata.rva);
     for (let i = 0; i < entries; i++) {
       const start = table.add(i * 12).readU32();
@@ -62,9 +65,26 @@ rpc.exports = {
       if (to.compare(lo) >= 0 && to.compare(hi) < 0) {
         out.intoErsc.push({ rva: '0x' + start.toString(16), to: '+0x' + to.sub(ersc.base).toString(16) });
       } else {
-        // Arxan replaces entries with a jump into memory it decrypted itself, which belongs to no
-        // module. Counted rather than listed, so the ersc list stays readable.
+        // A jump into memory that belongs to no module is either an Arxan stub or a detour whose
+        // trampoline was allocated rather than placed inside its own module -- which is what
+        // MinHook and most hooking libraries do. They are told apart by following the jump: a
+        // trampoline hands control onward to the hooking module within a hop or two, an Arxan
+        // stub does not.
         out.stubbed += 1;
+        let cursor = to;
+        for (let hop = 0; hop < 4; hop++) {
+          let head;
+          try { head = cursor.readU8(); } catch (e) { break; }
+          if (head !== JMP_REL32) break;
+          let next;
+          try { next = cursor.add(5).add(cursor.add(1).readS32()); } catch (e) { break; }
+          if (next.compare(lo) >= 0 && next.compare(hi) < 0) {
+            out.viaTrampoline.push({ rva: '0x' + start.toString(16),
+                                     to: '+0x' + next.sub(ersc.base).toString(16), hops: hop + 1 });
+            break;
+          }
+          cursor = next;
+        }
       }
     }
     return out;

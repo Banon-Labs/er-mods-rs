@@ -1193,12 +1193,21 @@ unsafe fn drive_handoff_press() {
             });
             // SAFETY: game task thread.
             unsafe { release_borrowed_quick_slot() };
+            // `ChrIns+0x168` is the oracle that decides, not `+0x160`. The queue field only
+            // says the request carried the pin; the consume count is what TAE event 65 raises,
+            // and a handler registered against the goods id has nothing to run off until it does.
+            // Measured on run br-20260916-135818-8f5b: the item queued on a drive that never
+            // consumed, so reporting the queue alone calls a dead press a live one.
+            // SAFETY: fault-closed; `None` before there is a player.
+            let consumed = unsafe { main_player_chr_ins() }.and_then(|player| unsafe {
+                er_game_base::mem::safe_read_i32(player + CHR_INS_CONSUME_COUNT_OFFSET)
+            });
             match queued {
                 Some(id) if id == pinned => crate::standalone_log(format_args!(
-                    "lynchpin: the character TOOK the handed-off item -- `ChrIns+0x160` reads                      {id:#x}. A silent Seamless after this line is Seamless, not the press."
+                    "lynchpin: the character took the handed-off item -- `ChrIns+0x160` reads {id:#x}, and the consume count `ChrIns+0x168` reads {consumed:?}. Only a non-zero consume count means the use completed; a queue with a zero count is a press the engine accepted and never carried through, and Seamless is never told about those."
                 )),
                 other => crate::standalone_log(format_args!(
-                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {other:?}, not the                      pinned {pinned:#x}. The engine consumed the request and refused the item, so                      nothing was ever asked of Seamless this attempt."
+                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {other:?}, not the pinned {pinned:#x}, and the consume count reads {consumed:?}. Nothing was ever asked of Seamless this attempt."
                 )),
             }
         }
