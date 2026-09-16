@@ -174,6 +174,12 @@ const HANDOFF_PRESSING: usize = 2;
 /// press and not a hold.
 #[cfg(windows)]
 const HANDOFF_PRESS_HELD_FRAMES: usize = 6;
+/// Frames between the Lynchpin being pinned and the use action being pressed. The finger's own
+/// measured recipe waits about two and a half seconds, which is roughly this many frames.
+#[cfg(windows)]
+const HANDOFF_SETTLE_BEFORE_PRESS: usize = 150;
+#[cfg(windows)]
+static HANDOFF_SETTLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static HANDOFF_PRESS_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Whether the latch has been reported for the use in flight.
@@ -779,7 +785,24 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
 /// every search driven that way sat at `SEARCHING` and matched nobody.
 #[cfg(windows)]
 pub fn request_lynchpin_use_offthread() {
+    // End the finger's own pin first, or this request waits behind it.
+    //
+    // `drain_requested_use` will not start a second use while one is in flight, and the finger's
+    // pin is kept alive for as long as `tae_queued_use_item` holds it -- up to 600 frames, ten
+    // seconds. This function is called from the finger's popup answer, so the finger has already
+    // done its job; leaving its pin running only delays the handoff past the point where anything
+    // is still waiting for it. Measured on run br-20260916-091135-c653: the handoff logged, the
+    // Lynchpin was never pinned, and 38 of 38 matchmaking slots stayed at zero.
+    //
+    // Setting the counter to 1 rather than 0 is deliberate: the next tick then runs
+    // `drive_pinned_use`'s own `left == 1` arm, which puts `menuGaitemUseState` back the way the
+    // engine leaves it and restores `GameMan+0xbc8`. Zeroing it would skip that cleanup and leave
+    // the game reading a finger as the selected quick item.
+    if PIN_FRAMES_LEFT.load(Ordering::SeqCst) > 1 {
+        PIN_FRAMES_LEFT.store(1, Ordering::SeqCst);
+    }
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
+    HANDOFF_SETTLE_FRAMES.store(0, Ordering::SeqCst);
     HANDOFF_STAGE.store(HANDOFF_WAITING_FOR_LATCH, Ordering::SeqCst);
 }
 
@@ -862,7 +885,22 @@ unsafe fn drive_handoff_press() {
             // land on.
             let pinned_is_lynchpin =
                 PINNED_ITEM_ID.load(Ordering::SeqCst) == LYNCHPIN_ITEM_ID as usize;
-            if !pinned_is_lynchpin || PIN_FRAMES_LEFT.load(Ordering::SeqCst) == 0 {
+            if !pinned_is_lynchpin {
+                return;
+            }
+            // Press a while after the pin, not the moment it appears.
+            //
+            // The recipe that works for the finger is pin, wait about two and a half seconds, then
+            // one press -- pressing in the same breath as the pin produced nothing across four
+            // attempts. This waited only for the pin to be live and pressed immediately, and run
+            // br-20260916-091408-8820 shows the result: the Lynchpin pinned at inventory index
+            // 1701, "the use action is pressed for 6 frame(s)" logged, and 38 of 38 matchmaking
+            // slots still at zero.
+            //
+            // Counted from the pin rather than slept on, because this runs on the game task and a
+            // sleep here would stall the frame it is counting.
+            let waited = HANDOFF_SETTLE_FRAMES.fetch_add(1, Ordering::SeqCst);
+            if waited < HANDOFF_SETTLE_BEFORE_PRESS {
                 return;
             }
             let hold = hold_pad();
