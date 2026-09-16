@@ -1070,14 +1070,22 @@ fn hold_pad() -> usize {
 #[cfg(windows)]
 unsafe fn drive_handoff_press() {
     type HoldPadFn = unsafe extern "system" fn(u16, i16, i16) -> ();
-    /// `XINPUT_GAMEPAD_X`, which is the use-item binding. Not `A` (`0x1000`), which this pressed for
-    /// its whole life.
+    /// The button the handoff presses.
     ///
-    /// Measured 2026-09-16, five drives per arm with both oracles zeroed before each one and nothing
-    /// else changed but the mask: the Lynchpin queued 5/5 either way, and reached TAE event 65 -- the
-    /// consume the goods-id handler runs off -- 3/5 on `X` against 0/5 on `A`. So the engine latched
-    /// the request from both buttons and only the real binding carried it through to a use.
-    const PAD_USE_ITEM: u16 = 0x4000;
+    /// `A`, not `X`, and the evidence points opposite ways depending on which outcome is measured:
+    ///
+    /// | measured | `A` 0x1000 | `X` 0x4000 |
+    /// | --- | --- | --- |
+    /// | a search reaching `RequestLobbyList` | 3 runs | never |
+    /// | the Lynchpin consumed, one process | 0/5 | 3/5 |
+    ///
+    /// The search is the thing this feature exists for, and the only runs that ever produced one --
+    /// br-20260916-094049-974b, -095259-a7f4 and -100817-3fe0 -- pressed `A` and recorded the
+    /// use-state reaching 2, the engine's action update latching the request. No run since the switch
+    /// to `X` has reached that state or produced a search, including ones where the item demonstrably
+    /// consumed. So what Seamless watches is the latched request, not the completed use, and `A` is
+    /// what produces it.
+    const PAD_USE_ITEM: u16 = 0x1000;
 
     match HANDOFF_STAGE.load(Ordering::SeqCst) {
         HANDOFF_WAITING_FOR_LATCH => {
