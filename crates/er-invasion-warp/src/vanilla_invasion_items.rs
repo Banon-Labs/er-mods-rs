@@ -554,7 +554,29 @@ unsafe extern "system" fn start_invasion_entry(
     // Arming is worse in one way and better in every other: the call still blocks, but it blocks
     // on a thread of ours while the game keeps rendering. A hung search the player can walk away
     // from beats a frozen game.
-    let requested = crate::local_invasion_filter::arm_invade_request("a vanilla invasion finger");
+    // `Both near and far` hands the search to Seamless's own item, not to its action function.
+    //
+    // Measured A/B, run br-20260916-083935-5990, all 38 slots of the matchmaking interface
+    // `ersc.dll` holds swept so the counts carry their own control: calling `ersc+0x25850` directly
+    // produced no lobby calls at all while moving `session+0x150` to `0x0e`, and using the Challenger's
+    // Lynchpin as an item produced `RequestLobbyList` twice and
+    // `AddRequestLobbyListStringFilter` ten times. The state write is a symptom of Seamless
+    // searching, not the cause, so the direct call looked like a search and never became one.
+    //
+    // `Nearby only` keeps the direct call: that row is this mod's own block-filtered search, which
+    // the filter drives itself, and it is not supposed to reach Seamless's matchmaking at all.
+    let requested = match range {
+        SearchRange::BothNearAndFar => {
+            crate::lynchpin_use::request_lynchpin_use_offthread();
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: Both near and far hands off to the Challenger's Lynchpin itself                  -- its item path is what queries Steam, where calling ersc's action directly only                  sets the state and never searches."
+            ));
+            true
+        }
+        SearchRange::NearbyOnly => {
+            crate::local_invasion_filter::arm_invade_request("a vanilla invasion finger")
+        }
+    };
     let driven = false;
     announce_search(range);
     crate::standalone_log(format_args!(
