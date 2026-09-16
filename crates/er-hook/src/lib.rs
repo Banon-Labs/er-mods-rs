@@ -1787,6 +1787,86 @@ pub fn patch_3byte_stub(
     true
 }
 
+/// Put back the bytes a 3-byte stub overwrote, at `base+rva`.
+///
+/// # Why this is not [`patch_3byte_stub`] with the arguments swapped
+///
+/// That function audits its target with [`detour_site::write_site_is_sound`], which asks whether
+/// the address looks like a function entry. After a stub has been written the site opens
+/// `31 c0 c3` -- a body, not a prologue -- so the audit that protects the first write rejects the
+/// second one.
+///
+/// The check here is stronger than the audit it replaces rather than weaker. All three bytes must
+/// equal the stub this crate wrote, so the write proceeds only from a site that is demonstrably
+/// our own patch and nothing else: a drifted address, a build that refused the original patch, or
+/// a second restore all fail to match and are declined. A one-byte prologue check cannot say that
+/// much -- `0x48` is a REX prefix and opens a large fraction of the image.
+///
+/// Returns whether the original bytes are in place when it returns, so a caller that restores
+/// once can log the outcome rather than assume it.
+#[cfg(windows)]
+pub fn restore_3byte_stub(
+    base: usize,
+    rva: usize,
+    stub: [u8; STUB_LEN],
+    original: [u8; STUB_LEN],
+    label: &str,
+) -> bool {
+    let Some(address) = er_game_base::game_build::resolve_game_address(base + rva, label) else {
+        hook_log(format_args!(
+            "{label}: REFUSED restore -- rva 0x{rva:x} has no verified mapping for the running \
+             build, so the bytes to put back cannot be aimed at the function they came from"
+        ));
+        return false;
+    };
+    let target = address as *mut u8;
+    let mut i = BYTE_START;
+    while i < STUB_LEN {
+        let seen = unsafe { *target.add(i) };
+        if seen != stub[i] {
+            hook_log(format_args!(
+                "{label}: DECLINED restore -- byte {i} at 0x{address:x} is 0x{seen:x}, not the \
+                 0x{:x} this crate's stub put there. Either the patch never landed or something \
+                 else owns these bytes; either way they are not ours to write.",
+                stub[i]
+            ));
+            return false;
+        }
+        i += BYTE_STEP;
+    }
+    let mut old_protect = PAGE_PROTECT_UNSET;
+    let protect_ok = unsafe {
+        VirtualProtect(
+            target as *mut c_void,
+            STUB_LEN,
+            PAGE_EXECUTE_READWRITE,
+            &mut old_protect,
+        )
+    };
+    if protect_ok == WIN32_FALSE {
+        hook_log(format_args!("{label}: VirtualProtect failed on restore"));
+        return false;
+    }
+    let mut i = BYTE_START;
+    while i < STUB_LEN {
+        unsafe { *target.add(i) = original[i] };
+        i += BYTE_STEP;
+    }
+    let mut restored = PAGE_PROTECT_UNSET;
+    unsafe { VirtualProtect(target as *mut c_void, STUB_LEN, old_protect, &mut restored) };
+    unsafe {
+        FlushInstructionCache(
+            CURRENT_PROCESS_PSEUDO_HANDLE,
+            target as *const c_void,
+            STUB_LEN,
+        )
+    };
+    hook_log(format_args!(
+        "{label}: restored 0x{address:x} to its own first {STUB_LEN} bytes"
+    ));
+    true
+}
+
 /// Patch a 0x48-prologue function body to `xor eax,eax; ret` (return 0) at `base+rva`. Validates
 /// the expected first byte, VirtualProtects RWX, writes the 3-byte stub, restores protection, and
 /// flushes the icache. Used to force-offline the IsOnlineMode getter + login-readiness predicate.

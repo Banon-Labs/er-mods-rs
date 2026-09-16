@@ -264,6 +264,27 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // OWN_LOAD_PUMP_JOB != 0 / OWN_LOAD_PUMP_DONE, so it costs nothing until armed+built and
     // never re-pumps once terminal. Must run through the loading screen (player absent), so it
     // is here in the recurring game task, before the player check. Pure native call + reads.
+    // Lift the boot's offline forcing, once, as soon as a player exists.
+    //
+    // `apply_online_disable` stubs `GameMan::IsOnlineMode` to `xor eax,eax; ret` from `DllMain`, so
+    // the autoload reaches the title with no login attempt and no `Unable to start in online mode`
+    // modal. Every consumer of that getter then reads offline -- including the one that decides
+    // whether a multiplayer item may be USED, which is why the Bloody Finger and the rest are
+    // refused in a Seamless session. Measured 2026-09-15: `ersc.dll` is not what does that to them.
+    // It registers goods handlers for its own seven items only, and its module holds no reference
+    // to this getter and no instruction touching `GameMan+0xbc8`.
+    //
+    // A player being present is the signal because it is exactly the boundary the patch was for:
+    // before it, the title is being driven; after it, someone is playing and wants their items. It
+    // cannot be gated on Seamless instead -- me3 loads `ersc.dll` after our `DllMain`, so a
+    // presence check where the patch is applied answers a false negative.
+    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+        crate::constants::RESTORE_ONLINE_MODE.call_once(|| {
+            if let Ok(base) = game_module_base() {
+                er_title_flow::restore_online_mode(base);
+            }
+        });
+    }
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). EMA of the frame delta +
     // per-epoch worst frame time. Unconditional, cheap; read by the telemetry as oracle_fps / oracle_min_fps.
     {

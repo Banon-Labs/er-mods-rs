@@ -172,6 +172,9 @@ pub(crate) static START_CONTINUE_TRACE: Once = Once::new();
 pub(crate) static START_SAFE_INPUT_HOOKS: Once = Once::new();
 pub(crate) static START_SPLASH_SKIP: Once = Once::new();
 pub(crate) static START_ONLINE_DISABLE: Once = Once::new();
+// The undo for the line above, fired from the game task rather than at attach: the boot needs the
+// getter stubbed and a player in a world needs it back. See `restore_online_mode`.
+pub(crate) static RESTORE_ONLINE_MODE: Once = Once::new();
 // START_FOREGROUND_FORCE removed 2026-07-16 (foreground-force dropped from the product).
 pub(crate) static START_SOUND_POST_EVENT_OBSERVER: Once = Once::new();
 pub(crate) static START_TITLE_NATIVE_MENU_VISUAL_SUPPRESS: Once = Once::new();

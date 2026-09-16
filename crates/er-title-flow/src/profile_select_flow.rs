@@ -751,6 +751,51 @@ pub fn apply_online_disable() {
     ));
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
 }
+/// Put `GameMan::IsOnlineMode` back, so the game stops answering every consumer with "offline".
+///
+/// # What this is undoing, and why it was ever done
+///
+/// [`apply_online_disable`] stubs that getter to `xor eax,eax; ret` for the boot, which is how an
+/// autoload reaches the title with no login attempt and no `Unable to start in online mode` modal
+/// in the way. The getter's own doc comment already noted the cost: it is the one lever in that
+/// set which changes what the player can *do* rather than what they see.
+///
+/// The concrete cost is the vanilla multiplayer items. `IsOnlineMode` false puts the game on the
+/// same branch a player takes when they pick `Play Offline`, and on that branch the *use* action is
+/// refused for the Bloody Finger, the Festering Bloody Finger, the Recusant Finger, the effigies
+/// and the cipher rings alike. Nothing in `ersc.dll` does that to them -- measured 2026-09-15, it
+/// registers goods handlers for its own seven items only (8380001-6, 8380012) and its module
+/// contains no reference to this getter's address and no instruction touching `GameMan+0xbc8`.
+/// The offline state those items see is ours.
+///
+/// # Why a restore and not a narrower gate
+///
+/// The obvious alternative is to not apply the patch on a Seamless launch. It cannot be written:
+/// `ersc.dll` is loaded by me3 *after* our `DllMain`, and this patch is spawned from `DllMain`, so
+/// a presence check at that moment answers a confident false negative -- the same trap
+/// `save_redirect::path_hooks` documents for its own ERSC latch. Applying for the boot and lifting
+/// afterwards needs no such check: by the time anyone can use an item, the boot is long over.
+///
+/// Returns whether the getter is reading its own bytes when this returns. `false` is a normal
+/// answer on a build where the patch was refused in the first place -- there is nothing to undo --
+/// and [`er_hook::restore_3byte_stub`] declines rather than writes when the bytes are not the ones
+/// it put there.
+pub fn restore_online_mode(base: usize) -> bool {
+    let restored = er_hook::restore_3byte_stub(
+        base,
+        ONLINE_DISABLE_RVA,
+        ONLINE_DISABLE_STUB,
+        ONLINE_DISABLE_ORIGINAL,
+        "IsOnlineMode getter",
+    );
+    append_autoload_debug(format_args!(
+        "online-restore: IsOnlineMode@0x{:x} restored={restored} -- the getter reads GameMan+0xbc8 \
+         again, so the vanilla multiplayer items stop being refused for offline",
+        er_game_base::mem::game_data_addr(base, ONLINE_DISABLE_RVA, "ONLINE_DISABLE_RVA")
+    ));
+    restored
+}
+
 // apply_foreground_force removed (user directive 2026-07-16): patching IsGameInForeground to always-true
 // made the game grab the OS cursor on world-entry; the product must use real focus state. See bootstrap.rs.
 /// Force the SaveLoad2 storage-select op gate to pass cold (bd b80-ROOTCAUSE-cold-no-user-signin):
