@@ -264,19 +264,13 @@ test_allow_bash_with_no_proof if {
 	})
 }
 
-# The rule body matches on the path alone and never reads `tool_name`; what keeps a
-# Read out of it is the `required_tools` routing in the package metadata, which the
-# engine applies before the policy is evaluated at all. So a hand-built Read event
-# does reach the deny here, and this test records that rather than hiding it.
-#
-# Scoping by routing instead of by an in-body allowlist is the fail-closed choice: a
-# write tool that nobody adds to the list would slip the gate, whereas a read tool
-# that somebody routes here by mistake is merely refused. Reading the code is not
-# blocked in practice -- Read is not in `required_tools`.
-test_tool_name_is_not_what_scopes_this_gate if {
+# An unlisted tool carrying a crate path is still refused, which is the half of the old
+# routing-only argument that was worth keeping: a write tool nobody adds to a list must not slip
+# the gate. Listing readers rather than writers keeps that direction while letting a reader read.
+test_an_unknown_tool_with_a_crate_path_still_denies if {
 	denied({
 		"hook_event_name": "PreToolUse",
-		"tool_name": "Read",
+		"tool_name": "SomeNewWriteTool",
 		"tool_input": {"file_path": "crates/er-quickload/src/lib.rs"},
 		"signals": {"frida_evidence": ""},
 	})
@@ -345,4 +339,45 @@ test_denial_is_high_severity if {
 	some decision in guard.deny with input as edit_event("crates/er-quickload/src/lib.rs", "")
 	decision.rule_id == RULE
 	decision.severity == "HIGH"
+}
+
+# A reader is not an editor, and the routing metadata is not the contract.
+#
+# Added 2026-09-16 after a subagent reading `crates/er-telemetry-core/src/counters.rs` with the
+# Read tool was refused by this policy and could not find anything in `.cupcake/` that explained
+# it. The deny body checked only the path, so anything the engine routed here was refused. A gate
+# whose purpose is to make an agent go and look must never be the thing that stops it looking.
+test_allow_read_of_a_crate_file_with_no_evidence if {
+	event := {
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Read",
+		"tool_input": {"file_path": "crates/er-telemetry-core/src/counters.rs"},
+		"signals": {"frida_evidence": UNPROVEN_NOTHING},
+	}
+
+	count(guard.deny) == 0 with input as event
+}
+
+test_allow_grep_of_a_crate_file_with_no_evidence if {
+	event := {
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Grep",
+		"tool_input": {"file_path": "crates/er-invasion-warp/src/lib.rs"},
+		"signals": {"frida_evidence": UNPROVEN_NOTHING},
+	}
+
+	count(guard.deny) == 0 with input as event
+}
+
+# An absent `tool_name` denies, for the same reason an unknown one does: the empty string is not
+# a reader, and a gate that opens on a missing key opens on exactly the malformed input it is
+# least able to judge.
+test_deny_when_the_tool_name_key_is_absent if {
+	event := {
+		"hook_event_name": "PreToolUse",
+		"tool_input": {"file_path": "crates/er-invasion-warp/src/lib.rs"},
+		"signals": {"frida_evidence": UNPROVEN_NOTHING},
+	}
+
+	count(guard.deny) == 1 with input as event
 }

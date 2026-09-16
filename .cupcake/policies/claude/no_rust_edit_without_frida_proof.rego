@@ -119,8 +119,26 @@ said := "<the frida_evidence signal failed; cupcake replaced its output with a f
 	not is_string(raw_evidence)
 }
 
+# The tools that only look. Everything else carrying a `crates/**/*.rs` path is treated as a
+# write, so a write tool nobody thought to list is still refused.
+#
+# Routing metadata was the whole guard until 2026-09-16, when a subagent reading
+# `crates/er-telemetry-core/src/counters.rs` with the Read tool was refused by this policy and
+# could not find anything in `.cupcake/` that explained it. A gate whose purpose is to make an
+# agent go and look must never be the thing that stops it looking, and a reader has nothing to
+# offer as evidence because it changes nothing.
+#
+# The previous shape was argued for rather than measured: a test here recorded that a hand-built
+# Read event does reach the deny, and reasoned that it did not matter because routing keeps Read
+# out. It did matter. Routing is an optimisation; the deny body is the contract. Listing readers
+# rather than writers keeps the fail-closed direction the old argument was right about.
+read_only_tools := {"Read", "Grep", "Glob", "NotebookRead", "WebFetch", "WebSearch", "LSP"}
+
+tool_name := object.get(input, "tool_name", "")
+
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
+	not read_only_tools[tool_name]
 	rust_under_crates
 	not proven
 
