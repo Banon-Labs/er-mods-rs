@@ -20,6 +20,12 @@ function follow (address) {
     : address;
 }
 
+// Measured 2026-09-16: on a run with no controller attached, `FD4PadManager`'s builders are never
+// called at all (0 hits in 3s, both Arxan-stubbed), so they are not a tick here. `XInputGetState`
+// is, at ~82 calls/second, and it is the better unit anyway -- it is the exact call that samples
+// the pad state this module injects, so a hold counted in these is a hold the game actually read.
+const XINPUT = 'XINPUT1_4.dll';
+const XINPUT_READ = 'XInputGetState';
 const game = Process.findModuleByName('eldenring.exe');
 const quickload = Process.findModuleByName('er_quickload.dll');
 if (game === null) throw new Error('eldenring.exe is not present');
@@ -32,7 +38,12 @@ let frames = 0;
 // the completion that the game thread sends.
 let pending = null;
 
-Interceptor.attach(follow(game.base.add(BUILDER_A_RVA)), {
+const xinput = Process.findModuleByName(XINPUT);
+const tick = xinput === null
+  ? follow(game.base.add(BUILDER_A_RVA))
+  : follow(xinput.getExportByName(XINPUT_READ));
+
+Interceptor.attach(tick, {
   onEnter () {
     frames += 1;
     if (pending === null) return;

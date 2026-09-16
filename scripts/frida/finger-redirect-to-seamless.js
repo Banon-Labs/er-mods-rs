@@ -32,6 +32,12 @@ const SESSION_STATE_IDLE = 1;
 // finger ON reported `result=1 row=0`, so that reading was wrong and the filter built on it
 // discarded the only answer that acts. `result` is the answer itself.
 const NOT_ANSWERED = -1;
+// The two rows of the bounds prompt, as the popup reports them. Measured 2026-09-16 by pressing
+// D-pad RIGHT before the confirm in one run and pressing the confirm alone in the others: the run
+// that moved right reported 2, every run that did not reported 1. The rows are laid out LEFT/RIGHT
+// with the cursor starting on the left, so:
+const ANSWER_NEARBY_ONLY = 1;
+const ANSWER_BOTH_NEAR_AND_FAR = 2;
 
 function follow (address) {
   return address.readU8() === 0xe9
@@ -40,7 +46,8 @@ function follow (address) {
 }
 
 const ersc = Process.findModuleByName('ersc.dll');
-const out = { armed: ersc !== null, owner: null, redirectRow: -1, fired: 0, log: [], seen: [] };
+const out = { armed: ersc !== null, owner: null, redirectRow: ANSWER_BOTH_NEAR_AND_FAR,
+  fired: 0, log: [], seen: [] };
 let armed = false;
 
 function note (line) {
@@ -66,8 +73,15 @@ if (ersc !== null) {
       out.seen.push('result=' + result + ' row=' + row);
       if (out.seen.length > 12) out.seen.shift();
       if (result === NOT_ANSWERED) return;
+      // The branch the whole feature is. `Both near and far` goes to Seamless; `Nearby only` is
+      // deliberately NOT redirected -- it belongs to this repo's own block-based nearby filter,
+      // and taking it over here would be the feature choosing for the player.
+      if (result === ANSWER_NEARBY_ONLY && out.redirectRow === ANSWER_BOTH_NEAR_AND_FAR) {
+        note('answer ' + result + ' is Nearby only -- left to the local block-based filter');
+        return;
+      }
       if (out.redirectRow !== -1 && result !== out.redirectRow) {
-        note('confirm result=' + result + ' row=' + row + ' -- not the redirect row, left alone');
+        note('answer ' + result + ' is not the redirect answer ' + out.redirectRow + '; left alone');
         return;
       }
       const owner = ptr(out.owner);
@@ -99,7 +113,7 @@ rpc.exports = {
     const state = sessionState(owner);
     if (state === null) return { ok: false, why: 'that owner has no readable session' };
     out.owner = String(owner);
-    out.redirectRow = (row === undefined || row === null) ? -1 : row;
+    out.redirectRow = (row === undefined || row === null) ? ANSWER_BOTH_NEAR_AND_FAR : row;
     armed = true;
     return { ok: true, owner: out.owner, sessionState: state, redirectRow: out.redirectRow };
   },
