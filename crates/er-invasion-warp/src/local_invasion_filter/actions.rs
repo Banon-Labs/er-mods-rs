@@ -25,10 +25,10 @@ use super::{
     INVADE_ACTION_REFUSAL_SAID, INVADE_ACTION_UNCALLABLE, INVADE_GUARD_REFUSAL_SAID,
     INVADE_IN_FLIGHT, INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, MISMATCHED_ARM_SAID, NoSession,
     OurCall, PENDING_REINVADE, REINVADES, RESTART_BACKOFF, SELF_RECOVERIES, STALL_RECOVERIES,
-    STALL_WATCHDOG, SeamlessSession, cancel_row_refusal, ersc, ersc_action, inside_ersc_callback,
-    lock_shape_refusal, module_backing, not_identified_detail, note_state_after_our_action, now_ms,
-    read_session_state, report_lock_preconditions, resolve_ersc_abi, resolve_session,
-    session_guard_refuses, session_scan,
+    STALL_WATCHDOG, SeamlessSession, USE_IN_FLIGHT_SAID, cancel_row_refusal, ersc, ersc_action,
+    inside_ersc_callback, lock_shape_refusal, module_backing, not_identified_detail,
+    note_state_after_our_action, now_ms, read_session_state, report_lock_preconditions,
+    resolve_ersc_abi, resolve_session, session_guard_refuses, session_scan,
 };
 
 /// Refuse to invoke a Seamless action with a null `this`, and say why.
@@ -56,6 +56,14 @@ use super::{
 ///
 /// See `synthesized_owner` for the disassembly both actions open with.
 const OWNER_SESSION_OFFSET: usize = 0x58;
+
+/// What `CSMenuGaitemUseState+0xc` holds when no item is being used.
+///
+/// The field is an item id and its empty value is `-1`, which reads back as this. Treating any
+/// `Some` as a use in flight is what made the item-use gate never open: run
+/// br-20260916-035624-a813 logged `holding the armed search while item 0xffffffff is still being
+/// used` and drove nothing.
+const NO_ITEM_IN_USE: u32 = 0xffff_ffff;
 
 fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> {
     // The identification, not just a guard on the call. `resolve_session` accepts a candidate on
@@ -581,6 +589,34 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         return;
     }
     REINVADE_NOT_IDLE_SAID.store(false, Ordering::SeqCst);
+    // Not while the player is still using something.
+    //
+    // Both hard locks and both hangs arrived one tick after a finger press, and the one call that
+    // returned -- br-20260916-030928-9e37, driven from Frida -- had no item use in flight. The
+    // game's own goods path runs inside `ersc.dll` and takes the session mutex while a use is
+    // being processed, so a drive that lands in that window is a second acquire of a lock the
+    // game is holding, and `lock_shape_refusal`'s single reading is a sample taken before the
+    // race rather than a fact about it.
+    //
+    // `CSMenuGaitemUseState+0xc` is the game's own record of the use in flight, which is the
+    // native owner of this question. `None` means nothing is being used and the drive may go.
+    #[cfg(windows)]
+    // `-1` is the field's empty value, not an item.
+    if let Some(item) = unsafe { crate::lynchpin_use::item_in_use() }
+        && item != NO_ITEM_IN_USE
+    {
+        if !USE_IN_FLIGHT_SAID.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "local-invasion: holding the armed search while item {item:#x} is still being \
+                 used -- the game's own goods path is inside ersc.dll with the session mutex, and \
+                 driving into that window is what blocked every previous attempt. The request \
+                 stays armed and goes on the first tick after the use completes."
+            ));
+        }
+        return;
+    }
+    #[cfg(windows)]
+    USE_IN_FLIGHT_SAID.store(false, Ordering::SeqCst);
     // Both bails below used to return without a word, and the silence cost a whole run. Measured
     // br-20260916-020020-8468: 1,836 `the attempt ended without us cancelling it` lines, zero
     // `about to drive ERSC invade`, zero session-state transitions, and -- confirmed through a
@@ -596,6 +632,7 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
                 "local-invasion: an armed search was dropped before it could be driven --                  {refusal:?}. No attempt was made, so nothing the loop counts after this is an                  attempt either."
             ),
         );
+        say_the_search_was_dropped();
         return;
     }
     let Some(invade) = ersc_action(
@@ -611,6 +648,7 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
                 session.abi.invade_action_rva
             ),
         );
+        say_the_search_was_dropped();
         return;
     };
     PENDING_REINVADE.store(false, Ordering::SeqCst);
@@ -626,6 +664,7 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
                  on is in the line immediately above."
             ),
         );
+        say_the_search_was_dropped();
         return;
     }
     // Off the game's thread, because this call is allowed to block and the game is not.
@@ -1302,4 +1341,20 @@ fn explain_if_hunt_is_emptying_the_pool(attempt: u32) {
          again; note that prefilter_radius only acts inside the hunt-filtered query, so it goes \
          inert with it."
     ));
+}
+
+/// Put the dropped search on the banner, gated on the same notice option as every other message.
+///
+/// Three bails in `drive_pending_reinvade` used to end a search with a log line and nothing on
+/// screen. From the chair that is identical to a search quietly running: run
+/// br-20260916-040126-e719 left "Searching for an invasion in Foot of the Forge" up while the
+/// search had already been dropped on its first tick, and the player waited on it.
+#[cfg(not(windows))]
+fn say_the_search_was_dropped() {}
+
+#[cfg(windows)]
+fn say_the_search_was_dropped() {
+    let notice = crate::local_invasion_filter::current_config_snapshot()
+        .is_none_or(|config| config.reject_notice);
+    crate::local_invasion_filter::banner::announce_cannot_search(notice);
 }

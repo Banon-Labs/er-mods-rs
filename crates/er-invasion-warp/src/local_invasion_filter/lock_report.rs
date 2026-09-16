@@ -217,6 +217,99 @@ const MTX_TRY: u32 = 0x02;
 /// What `_Mtx_unlock` writes into `_Thread_id` when the last recursion level is released.
 const MTX_THREAD_ID_UNOWNED: u32 = 0xffff_ffff;
 
+/// Where the `CRITICAL_SECTION` starts inside an `_Mtx_internal_imp_t`, and its three live fields.
+///
+/// MSVC lays the type out as `int _Type` at `+0`, a `CRITICAL_SECTION` at `+8`, `long _Thread_id`
+/// at `+0x48` and `int _Count` at `+0x4c`. The lock this module actually blocks on is that
+/// `CRITICAL_SECTION`, not the `_Type` word beside it.
+const MTX_CRITICAL_SECTION_OFFSET: usize = 0x08;
+const CS_LOCK_COUNT_OFFSET: usize = MTX_CRITICAL_SECTION_OFFSET + 0x08;
+const CS_RECURSION_COUNT_OFFSET: usize = MTX_CRITICAL_SECTION_OFFSET + 0x0c;
+const CS_OWNING_THREAD_OFFSET: usize = MTX_CRITICAL_SECTION_OFFSET + 0x10;
+
+/// The largest value a Wine thread id can plausibly take in `OwningThread`.
+///
+/// Ids here are small: the game task tick reported `0x178` on run br-20260916-040126-e719. The
+/// bound only has to separate an id from a pointer or a float, and every observed id is four
+/// orders of magnitude below it.
+const CS_OWNING_THREAD_MAX: usize = 0x10_0000;
+
+/// Whether the lock at `mutex` is one `InitializeCriticalSection` could have produced.
+///
+/// # Why this replaces narrowing the session signature again
+///
+/// Every earlier discriminator asked whether an object *resembled* a session, and each one was
+/// beaten by the next run. Run br-20260916-040126-e719 settled the argument: the object
+/// `ersc.dll` itself points at read `_Type=0xc20693b2`, `_Thread_id=0xffffffff`, `_Count=-1` --
+/// values that pass `_Mtx_try`, pass `_Mtx_recursive` and pass the never-held test -- while the
+/// `CRITICAL_SECTION` underneath read `DebugInfo=0x7f7fffee7f7fffee` and
+/// `OwningThread=0xff7fffeeff7fffee`. That is the `±FLT_MAX` pair an axis-aligned bounding box is
+/// initialised to. Float noise satisfies any bit predicate eventually, so narrowing the signature
+/// buys exactly one run each time.
+///
+/// This asks a different question, and it is the question that matters: not "does this look like a
+/// session" but "is the lock I am about to take a lock". Three fields answer it, and uninitialised
+/// heap cannot fake them together:
+///
+/// | field | free | held | the AABB buffer |
+/// |---|---|---|---|
+/// | `LockCount` | `-1` | `>= 0` | `-1039889336` |
+/// | `RecursionCount` | `0` | `>= 1` | `-1039933411` |
+/// | `OwningThread` | `0` | a thread id | `0xff7fffeeff7fffee` |
+///
+/// `RecursionCount` and `OwningThread` must also agree with each other: a section with recursion
+/// and no owner, or an owner and no recursion, is torn rather than merely unfamiliar.
+fn critical_section_refusal(mutex: usize) -> Option<&'static str> {
+    let lock_count = unsafe { er_game_base::mem::safe_read_i32(mutex + CS_LOCK_COUNT_OFFSET) };
+    let recursion = unsafe { er_game_base::mem::safe_read_i32(mutex + CS_RECURSION_COUNT_OFFSET) };
+    let owner = unsafe { er_game_base::mem::safe_read_usize(mutex + CS_OWNING_THREAD_OFFSET) };
+    let (Some(lock_count), Some(recursion), Some(owner)) = (lock_count, recursion, owner) else {
+        return Some(
+            "the `CRITICAL_SECTION` inside the session mutex did not read back, so there is no \
+             lock at this address to take",
+        );
+    };
+    critical_section_verdict(lock_count, recursion, owner)
+}
+
+/// The judgement [`critical_section_refusal`] makes, with the reads already done.
+///
+/// Split from the reading half so the measured numbers can be put to it directly in a test. The
+/// reading half needs a live process; the rule does not, and the rule is the part that was wrong.
+fn critical_section_verdict(lock_count: i32, recursion: i32, owner: usize) -> Option<&'static str> {
+    if lock_count < -1 {
+        return Some(
+            "`LockCount` inside the session mutex is below -1, which `InitializeCriticalSection` \
+             never writes -- this is uninitialised memory, and taking it parks the caller forever",
+        );
+    }
+    if recursion < 0 {
+        return Some(
+            "`RecursionCount` inside the session mutex is negative, so the lock was never \
+             initialised and the first acquire would not return",
+        );
+    }
+    if owner > CS_OWNING_THREAD_MAX {
+        return Some(
+            "`OwningThread` inside the session mutex is far too large to be a thread id, so this \
+             is not a `CRITICAL_SECTION` -- run br-20260916-040126-e719 read 0xff7fffeeff7fffee \
+             there, the `-FLT_MAX` an axis-aligned bounding box is initialised to",
+        );
+    }
+    if (recursion == 0) != (owner == 0) {
+        return Some(
+            "`RecursionCount` and `OwningThread` inside the session mutex disagree about whether \
+             anybody holds it, so the lock is torn and acquiring it has no defined outcome",
+        );
+    }
+    None
+}
+
+/// Whether the lock at `mutex` is intact, for callers that want a yes or no rather than a reason.
+fn critical_section_is_initialised(mutex: usize) -> bool {
+    critical_section_refusal(mutex).is_none()
+}
+
 /// The session states ERSC's own hide-predicate lets its Cancel row through.
 ///
 /// Read out of `ersc+0x26b40`, which is nine instructions: it loads `[this+0x58]` and then
@@ -318,6 +411,12 @@ pub(super) fn lock_shape_refusal(session: &SeamlessSession) -> Option<&'static s
             "the mutex header at session+0x100 did not read back, so this address is not a live              session and the action's own first load would fault",
         );
     };
+    // Asked before `_Type`, because this is the field the caller actually blocks on. A `_Type`
+    // word is four bytes that random memory reproduces often; a `CRITICAL_SECTION` is three
+    // agreeing fields that it does not.
+    if let Some(refusal) = critical_section_refusal(mutex) {
+        return Some(refusal);
+    }
     if !mutex_type_is_constructible(kind) {
         return Some(
             "_Type at session+0x100 is not a shape MSVC's mutex constructors write, so this is not              a _Mtx_internal_imp_t and the session pointer identifies something else",
@@ -437,6 +536,26 @@ pub(super) fn mutex_shape_identifies_a_session(abi: &ersc::Abi, session: usize) 
     // `_Count` on a non-recursive `std::mutex` only ever goes `0 -> 1`, so anything else is not
     // this object. The same `0x451200` reads `0x6fff` here -- 28,671 nested acquisitions, which
     // no lock has ever held.
+    // `_Thread_id` of exactly zero means no thread has ever held this lock, and Seamless's own
+    // session cannot be that: it has been holding its session up for the whole run.
+    //
+    // `_Mtx_unlock` writes [`MTX_THREAD_ID_UNOWNED`] -- `0xffffffff` -- on release, so a lock that
+    // has been used and freed reads that value, never zero. Zero is what the constructor leaves.
+    //
+    // This is the same test [`lock_shape_refusal`] makes before driving, moved to where it stops
+    // the object being chosen at all. Run br-20260916-035835-073d shows why both are wanted: the
+    // sweep latched `0xd780038`, the drive refused it for this exact reason, and the search then
+    // sat armed against an object the scan was still perfectly happy with -- a refusal at the door
+    // does not send the sweeper back out, and a signature does.
+    let thread = unsafe { er_game_base::mem::safe_read_i32(mutex + MTX_THREAD_ID_OFFSET) };
+    if thread.is_none_or(|raw| raw == 0) {
+        return false;
+    }
+    // The same question the drive asks, asked while the scan is still choosing. A refusal at the
+    // door does not send the sweeper back out; a signature does.
+    if !critical_section_is_initialised(mutex) {
+        return false;
+    }
     let count = unsafe { er_game_base::mem::safe_read_i32(mutex + MTX_COUNT_OFFSET) };
     let recursive = (kind & MTX_RECURSIVE) != 0;
     count.is_some_and(|raw| recursive || (raw as u32) <= 1)
@@ -619,6 +738,51 @@ pub(super) fn report_lock_preconditions(session: &SeamlessSession, owner: usize,
 /// the mapping is a chain of early returns whose order is load-bearing: a `_Type` that is not a
 /// mutex has to be answered before `_Thread_id`, because on a wrong object that field is a
 /// coincidence. Reordering the chain would still compile and would still log a confident sentence.
+#[cfg(test)]
+mod critical_section_tests {
+    use super::critical_section_verdict;
+
+    /// The exact reading that parked the game, taken from run br-20260916-040126-e719.
+    ///
+    /// `ersc.dll`'s own global pointed at this object, so no better session pointer exists to find
+    /// -- the lock simply had not been initialised. Every field is a fragment of the `±FLT_MAX`
+    /// pair an axis-aligned bounding box starts life as.
+    #[test]
+    fn the_bounding_box_that_parked_the_game_is_refused() {
+        let refusal =
+            critical_section_verdict(-1_039_889_336, -1_039_933_411, 0xff7f_ffee_ff7f_ffee);
+        assert!(
+            refusal.is_some(),
+            "the reading that hung run br-20260916-040126-e719 must not be accepted"
+        );
+    }
+
+    #[test]
+    fn a_freshly_initialised_lock_is_accepted() {
+        // What `InitializeCriticalSection` leaves behind: free, unowned, no recursion.
+        assert_eq!(critical_section_verdict(-1, 0, 0), None);
+    }
+
+    #[test]
+    fn a_lock_somebody_holds_is_accepted() {
+        // The game task tick read 0x178 on the same run, which is the scale a thread id has here.
+        assert_eq!(critical_section_verdict(0, 1, 0x178), None);
+    }
+
+    #[test]
+    fn a_lock_that_claims_recursion_with_no_owner_is_refused() {
+        // Torn rather than unfamiliar: the two fields are written together or not at all.
+        assert!(critical_section_verdict(0, 2, 0).is_some());
+        assert!(critical_section_verdict(0, 0, 0x178).is_some());
+    }
+
+    #[test]
+    fn an_owner_the_size_of_a_pointer_is_refused() {
+        // The failure mode that started this: a heap pointer sitting where a thread id belongs.
+        assert!(critical_section_verdict(-1, 1, 0x1b8e_a6c4_0000).is_some());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

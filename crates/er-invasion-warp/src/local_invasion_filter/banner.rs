@@ -118,6 +118,10 @@ pub(crate) fn announce_prefilter_step(_enabled: bool, _block: u32, _ordinal: usi
 #[cfg(not(windows))]
 pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize, _mod_only: bool) {}
 
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_cannot_search(_enabled: bool) {}
+
 /// Put a successful invasion on the same banner the rejections use.
 ///
 /// Shares [`RejectNotice`] with [`announce_rejection`] on purpose: one banner, one memory of what
@@ -218,6 +222,39 @@ pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only:
         crate::standalone_log(format_args!(
             "local-invasion: could not show the widened-search banner (\"{text}\") -- the message \
              functions did not verify, or the menu is not up yet. The search is still widening; \
+             only the on-screen notice is missing."
+        ));
+    }
+}
+
+/// Tell the player the search they armed was dropped before it asked anybody.
+///
+/// Shares [`RejectNotice`] with every other banner here, which is what keeps this to one painting:
+/// the refusal is re-derived on every tick that would otherwise drive the action, so without the
+/// shared latch this repaints several times a second.
+///
+/// No place name, unlike the search banners. A search that never went out was not a search of
+/// anywhere, and naming the tile it would have asked about reads as a search still running there.
+#[cfg(windows)]
+pub(crate) fn announce_cannot_search(enabled: bool) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_cannot_search(enabled)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game task thread, the same auto-closing announcement surface as every other banner.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the dropped-search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still dropped; \
              only the on-screen notice is missing."
         ));
     }

@@ -119,6 +119,12 @@ enum Announced {
     /// already tried still counts as news: the number is what tells the player the search is
     /// moving, and suppressing a repeat would make a stalled rotation look like a working one.
     Searching(usize),
+    /// The search was armed and then dropped before a single query could go out.
+    ///
+    /// Payload-free on purpose: the reason is always the same shape -- Seamless has no live
+    /// session to search from -- and repeating it once per game tick would paint the banner
+    /// several times a second.
+    CannotSearch,
     /// The ring is spent and the search has dropped the location filter.
     ///
     /// Payload-free, unlike [`Self::Searching`], because this rung does not move: every round
@@ -194,6 +200,29 @@ impl RejectNotice {
     /// quiet neighbourhood; one tried is a legacy dungeon, where a block id encodes a dungeon and
     /// a floor rather than a grid position, so there are no neighbours to ask about and the radius
     /// the player set could never have applied.
+    /// Say that an armed search was dropped before it could ask anybody, and why.
+    ///
+    /// # The silence this replaces
+    ///
+    /// Run br-20260916-040126-e719 put "Searching for an invasion in Foot of the Forge" on screen
+    /// and then said nothing for the rest of the run. The search had already been dropped: the
+    /// object `ersc.dll` points at as its session had an uninitialised `CRITICAL_SECTION` at
+    /// `+0x100`, so there was no lock to take and no query could ever go out. The player watched a
+    /// banner that named a place, believed a search was running, and waited.
+    ///
+    /// A refusal that reaches only the log is indistinguishable, from the chair, from a search
+    /// that is quietly working. This is the same refusal said out loud.
+    #[must_use]
+    pub fn observe_cannot_search(&mut self, enabled: bool) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::CannotSearch);
+        self.last_announced = Some(Announced::CannotSearch);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        Some("Invasion search stopped -- Seamless has no session to search from".to_string())
+    }
+
     pub fn observe_search_everywhere(
         &mut self,
         enabled: bool,

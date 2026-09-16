@@ -245,3 +245,21 @@ try {
 
 // Reload marker, so a silent attach is distinguishable from a stale one.
 console.log('who-asks: reloaded -- controls re-armed on a single attach');
+
+// Arm now, not on a callback count.
+//
+// The count was chosen so the arm landed after the world was up, but it depends on
+// `SteamAPI_RunCallbacks` being pumped, and on an unfocused game it is not -- the controls sit at
+// zero and the arm never fires. The heartbeat's `ersc_session=` field already says a session is
+// resolvable, which is the condition the count was standing in for, so arm directly.
+try {
+  const mine = Process.findModuleByName('er_invasion_warp.dll');
+  const armNow = mine === null ? null : mine.findExportByName('er_invasion_warp_request_invade');
+  if (armNow === null) {
+    console.log('who-asks: cannot arm -- export missing');
+  } else {
+    console.log(`who-asks: arming immediately -> ${new NativeFunction(armNow, 'bool', [])()}`);
+  }
+} catch (e) {
+  console.log(`who-asks: immediate arm failed: ${e.message}`);
+}
