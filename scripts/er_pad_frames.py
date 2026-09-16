@@ -1,6 +1,6 @@
 """Frame-counted controller taps, with no sleeps anywhere in the drive path.
 
-A button hold is a number of GAME FRAMES, asserted from inside the game's own per-frame pad
+A button hold is a number of game frames, asserted from inside the game's own per-frame pad
 builder, and the caller blocks on the completion message that builder sends.  That removes the two
 things `scripts/check-no-timeouts.py` bans -- sleep as synchronization and unbounded waits -- and it
 removes a real bug with them: a hold expressed in seconds is a different number of frames every run.
@@ -22,8 +22,8 @@ PAD_RIGHT = 0x0008
 
 # A press a menu reads as one clean edge: asserted long enough to be sampled, released long enough
 # that the next assert is a new edge rather than auto-repeat.
-HOLD_FRAMES = 6
-GAP_FRAMES = 12
+HOLD_FRAMES = 22
+GAP_FRAMES = 34
 # Hard cap on any single wait. Every wait in this module is bounded by it.
 WAIT_SECONDS = 30.0
 
@@ -38,6 +38,15 @@ class Pad:
         self._script.on("message", self._on_message)
         self._script.load()
         self._next_id = 0
+        # Start from neutral, because the previous driver may not have.
+        #
+        # `pad-frames.js` only writes pad state while a tap is pending, so a run killed mid-hold
+        # leaves its mask asserted for the rest of the process's life. The game then sees a button
+        # held forever, which produces no new edge: menus stop responding, the quick-item cursor
+        # freezes, and every later driver reports "input is not reaching the game" while the pad is
+        # in fact reaching it perfectly. Measured 2026-09-16 -- six D-pad presses moved the cursor
+        # zero times across 342 game frames, and one release fixed it.
+        self.release()
 
     def _on_message(self, message, _data):
         if message.get("type") == "send" and message["payload"].get("kind") == "tap-done":
