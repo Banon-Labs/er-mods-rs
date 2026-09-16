@@ -463,11 +463,14 @@ fn write_player_presence_oracle(body: &mut String) {
     // number below is the overlay's traffic, never the game's. That is what made run
     // br-20260905-031610-5406 unreadable: 150 supplied SendInput frames against 0 RawInput key events,
     // with no way to tell "the key never arrived" from "the key arrived and did nothing".
+    // The pad stage is here too, and it is the one that matters on a machine with a controller
+    // plugged in: `oracle_xinput_hook_fires` climbing while `oracle_dinput_injected_key_stamps`
+    // also climbs and the character does not move is the signature of injecting at the wrong stage.
     // `*_fires` = the game asked this stage for the keyboard. `*_stamps` = we answered "held" into the
     // buffer/return value it was about to read. Stamping happens after the original call, which is what
     // makes it focus-independent: both stages otherwise report only for the thread that owns focus.
     body.push_str(&format!(
-        "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
+        "  \"oracle_dinput_kb_hook_fires\": {},\n  \"oracle_dinput_injected_key_stamps\": {},\n  \"oracle_user32_get_keyboard_state_fires\": {},\n  \"oracle_user32_get_key_state_fires\": {},\n  \"oracle_user32_injected_vk_stamps\": {},\n  \"oracle_user32_get_cursor_pos_fires\": {},\n  \"oracle_dinput_mouse_hook_fires\": {},\n  \"oracle_xinput_hook_fires\": {},\n  \"oracle_xinput_injected_pad_stamps\": {},\n  \"oracle_move_probe_on_disp_milli\": {},\n  \"oracle_move_probe_off_tail_disp_milli\": {},\n  \"oracle_pad_gate_mgr_2f8\": {},\n  \"oracle_pad_gate_mgr_2f9\": {},\n  \"oracle_pad_gate_debug_byte\": {},\n  \"oracle_pad_gate_shut_on_inject_frames\": {},\n",
         crate::input_blocker::DINPUT_KB_HOOK_FIRES.load(Ordering::Relaxed),
         crate::input_blocker::DINPUT_INJECTED_KEY_STAMPS.load(Ordering::Relaxed),
         crate::experiments::USER32_GET_KEYBOARD_STATE_FIRES.load(Ordering::Relaxed),
@@ -475,6 +478,8 @@ fn write_player_presence_oracle(body: &mut String) {
         crate::experiments::USER32_INJECTED_VK_STAMPS.load(Ordering::Relaxed),
         crate::experiments::USER32_GET_CURSOR_POS_FIRES.load(Ordering::Relaxed),
         er_telemetry_core::counters::DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::XINPUT_HOOK_FIRES.load(Ordering::Relaxed),
+        er_telemetry_core::counters::XINPUT_INJECTED_PAD_STAMPS.load(Ordering::Relaxed),
         er_telemetry_core::counters::ON_DISP_MILLI.load(Ordering::Relaxed),
         er_telemetry_core::counters::OFF_TAIL_DISP_MILLI.load(Ordering::Relaxed),
         er_telemetry_core::counters::PAD_GATE_MGR_2F8.load(Ordering::Relaxed),
