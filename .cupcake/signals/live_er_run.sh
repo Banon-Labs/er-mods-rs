@@ -36,7 +36,7 @@ printf "%s\n" "$out"
 # cannot shell out per path"). A policy cannot, but a signal can, and the over-broad deny refused
 # edits to crates the classifier itself reports as skipped -- measured 2026-09-16 on
 # `crates/er-invasion-warp/src/local_invasion_filter.rs` against a run launched `--without
-# er-invasion-warp`, where `classify` said `SKIP crate-builds-no-loaded-dll` and the PreToolUse
+# er-invasion-warp`, where `classify` said `skip crate-builds-no-loaded-dll` and the PreToolUse
 # policy denied the edit anyway.
 #
 # Bounded like the status call above, and fail-open in the same direction: printing no closure lines

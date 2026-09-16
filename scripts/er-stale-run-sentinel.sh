@@ -541,7 +541,7 @@ def main():
     # classifier without shelling out per edited path -- the gap
     # .cupcake/policies/claude/no_source_edit_during_live_run.rego used to paper over by denying
     # every `crates/` edit. That over-broad deny refused edits to a crate this very classifier
-    # reports SKIP for, which is a guard blocking work its own invariant permits.
+    # reports skip for, which is a guard blocking work its own invariant permits.
     if MODE == "closure":
         for name in sorted(closure):
             d = pkg_dir.get(name)
