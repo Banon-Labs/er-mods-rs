@@ -404,6 +404,10 @@ pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 /// An independent byte search for `48 8b 05 ?? ?? ?? ?? 0f b6 80 c8 0b 00 00 c3` over
 /// `eldenring-deobf-1.17.1.bin` returns that address and no other, so the two methods agree and
 /// the translation is not being taken on trust.
+// Not a prologue: these are the three bytes the boot patch overwrote, kept so lifting it can put
+// the getter back. They are the head of `mov rax, [rip+disp32]`, and the displacement that follows
+// is never rewritten -- so restoring them is a memcpy of what was already there, not a detour being
+// assembled. `check-prologue-bytes.py` reads this line.
 pub const ONLINE_DISABLE_ORIGINAL: [u8; 3] = [0x48, 0x8b, 0x05];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)

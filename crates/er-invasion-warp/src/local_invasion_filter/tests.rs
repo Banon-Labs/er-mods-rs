@@ -1894,17 +1894,25 @@ fn the_connect_deadline_times_only_states_ersc_offers_a_cancel_row_for() {
         "the armed check must come BEFORE any observation, or an attempt the player already \
          stopped is called lost and cancelled out from under them"
     );
-    // The second defence: never reach the LEAVEWORLD fallback from this path.
-    let refusal_at = watcher
-        .find("!super::lock_report::cancel_row_offered")
-        .expect("the watcher must refuse to act outside the Cancel-row set");
-    let cancel_at = watcher
-        .find("cancel_stalled_attempt(")
-        .expect("the watcher drives the cancel");
+    // The watcher must still refuse to act outside the Cancel-row set, even now that the only
+    // thing left to act with is a log line: the refusal is what says the phase mapping was wrong.
     assert!(
-        refusal_at < cancel_at,
-        "the row check must come BEFORE the cancel, or a misjudged state falls through to \
-         OPTIONSELECT_LEAVEWORLD -- which is what hard-locked run br-20260915-025202-c779"
+        watcher.contains("!super::lock_report::cancel_row_offered"),
+        "the watcher must keep the Cancel-row check, because reaching a state outside that set \
+         means the mapping misjudged and that is worth saying out loud"
+    );
+    // And it must never drive a cancel again.
+    //
+    // User ground truth, 2026-09-16, given while invading: "Because of the er-invasion-warp
+    // feature it says no connection. I normally can invade people." Both halves of that sentence
+    // are this path -- "no connection" is its banner, and the cancel is what made the sentence
+    // true. The deadline came from an aggregation of runs this mod was itself driving, so it
+    // described connects shaped by the instrument rather than connects as the player meets them.
+    assert!(
+        !watcher.contains("cancel_stalled_attempt(session"),
+        "the connect deadline must REPORT, never cancel. Restoring an action here requires a \
+         dwell distribution measured with this mod not driving -- `--without er-invasion-warp` \
+         makes that a one-command run"
     );
 }
 
