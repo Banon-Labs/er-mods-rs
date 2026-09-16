@@ -2100,6 +2100,23 @@ shellcheck "$repo_root/scripts/git-strip-path-from-history.sh"
 # design; run it by hand, and it refuses if a real run is live.
 bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
 
+# The Frida evidence gate, which refuses a Rust edit under crates/ until a session has attached and
+# reported back (.cupcake/policies/claude/no_rust_edit_without_frida_proof.rego). Three steps,
+# because the gate has three parts that can each fail silently:
+#
+# The verdict reader decides what `PROVEN` means -- an absent log, a session that received nothing,
+# and a record older than `HEAD` all have to keep reading `UNPROVEN`, or the gate hands out
+# permission it never measured.
+python3 "$repo_root/scripts/er-frida-evidence.py" --selftest
+# The watcher's own assertions, including the one that its waits are events rather than sleeps.
+python3 "$repo_root/scripts/er-frida-watch.py" --selftest
+# The join between them, which neither selftest can see: a real watch's message count reaching the
+# log without anyone typing it. Drives run() against a stubbed device and ends the watch four ways
+# -- detach, silent detach, terminate, interrupt -- so a recorder moved into a branch that never
+# runs fails here instead of quietly leaving every future edit ungated. No game, no Frida, no
+# network.
+python3 "$repo_root/scripts/test-frida-evidence-wiring.py"
+
 # Launch REACHABILITY gate (2026-08-04). A launch takes the user's screen and yields one recording;
 # spending it on a predicate that cannot fire returns a clean-looking run that proves nothing. The
 # selftest runs first and includes the concrete regression -- the `requestCode latches 2` terminator

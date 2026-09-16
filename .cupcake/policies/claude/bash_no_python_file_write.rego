@@ -46,11 +46,25 @@ invokes_python if {
 # reading a file to answer a question is the thing this guard wants to stay
 # cheap. `pathlib.Path.write_text` / `write_bytes` carry the mode in the method
 # name, and `shutil.copy`/`move` write without ever naming a mode.
+# A python file MODE, and nothing else that happens to be a quoted string.
+#
+# The mode alphabet is exactly `rwxab+t`, and a real mode is at most four of them.
+# Pinning both is what keeps ordinary keyword arguments out: `errors='replace'`
+# begins with `r`, and a looser `['"][rwxa][a-z+]*['"]` reads it as the mode `r`
+# plus `eplace` and denies a pure read. Measured 2026-09-16, one command after this
+# guard landed -- `open(p, encoding='utf8', errors='replace').read()` was refused,
+# which is a guard blocking the exact work it exempts.
+write_mode_pattern := `open\([^)]*['"][wxa][rwxab+t]{0,3}['"]`
+
+# `r+`, and the two spellings that put the binary flag on either side of it
+# (`rb+`, `r+b`). Update mode reads as well as writes, so it belongs here.
+read_plus_pattern := `open\([^)]*['"]r[bt]*\+[bt]*['"]`
+
 write_pattern contains pattern if {
 	some pattern in [
-		# open(..., 'w'), "w", 'wb', 'a', 'r+', 'x' -- any mode that can write.
-		`open\([^)]*['"][rwxa][a-z+]*\+?['"]`,
-		`open\([^)]*mode[[:space:]]*=[[:space:]]*['"][rwxa][a-z+]*\+?['"]`,
+		write_mode_pattern,
+		read_plus_pattern,
+		`open\([^)]*mode[[:space:]]*=[[:space:]]*['"][wxa][rwxab+t]{0,3}['"]`,
 		`\.write_text\(`,
 		`\.write_bytes\(`,
 		`\.writelines\(`,
@@ -59,34 +73,14 @@ write_pattern contains pattern if {
 	]
 }
 
-# `open(...)` modes that only read. Listed so the mode regex above can stay one
-# expression: it accepts `r` to catch `r+`, and this removes the read-only ones.
-read_only_open_pattern := `open\([^)]*['"]r[b]?['"]`
-
 writes_a_file if {
 	some pattern in write_pattern
 	regex.match(pattern, command)
-	pattern != read_only_open_pattern
-}
-
-# A bare `open(path, 'r')` or `open(path, 'rb')` is a read. The mode pattern
-# above matches it (it has to, to catch `r+`), so subtract it back out: a
-# command whose ONLY write-shaped match is a read-only open is not a write.
-only_reads if {
-	regex.match(`open\([^)]*['"]r[b]?['"]`, command)
-	not regex.match(`open\([^)]*['"][wxa]`, command)
-	not regex.match(`open\([^)]*['"]r[b]?\+`, command)
-	not regex.match(`\.write_text\(`, command)
-	not regex.match(`\.write_bytes\(`, command)
-	not regex.match(`\.writelines\(`, command)
-	not regex.match(`shutil\.(copy|copy2|copyfile|move)\(`, command)
-	not regex.match(`os\.(remove|unlink|rename|replace|truncate)\(`, command)
 }
 
 python_file_write_detected if {
 	invokes_python
 	writes_a_file
-	not only_reads
 	not runs_a_committed_script
 }
 

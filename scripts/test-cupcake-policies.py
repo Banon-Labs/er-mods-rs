@@ -292,6 +292,47 @@ def run_runtime_evidence_signal_checks() -> None:
         )
 
 
+def run_signal_executable_checks() -> None:
+    """Every script in `.cupcake/signals/` must be executable, with a shebang.
+
+    A signal placed in that directory is auto-discovered and run as the command
+    `./.cupcake/signals/<name>.sh` -- directly, not through `bash`. Without the executable bit the
+    kernel refuses the exec and cupcake records exit code 126, and a signal that exits non-zero is
+    not delivered to the policy as its output at all: the string is replaced by a failure record,
+    `{"error", "exit_code", "output", "success"}`. Every string comparison the policy makes against
+    a word is then undefined, the rule body fails, and the decision set comes back empty. Cupcake
+    reports a clean allow and exits 0.
+
+    So one missing `chmod +x` turns a guard off in production while `opa test` stays green, and
+    nothing anywhere says so. Measured 2026-09-16 on `frida_evidence.sh`, which shipped without the
+    bit: `cupcake eval` allowed a `crates/**/*.rs` edit carrying no measurement at all, which is the
+    single thing that policy exists to refuse.
+
+    Fixing the one file does not close the class. This does.
+    """
+    signals = sorted((REPO_ROOT / ".cupcake" / "signals").glob("*.sh"))
+    if not signals:
+        raise AssertionError(
+            ".cupcake/signals/ holds no *.sh at all. Either the directory moved or this gate is "
+            "watching the wrong place; an empty walk makes every signal innocent."
+        )
+    for script in signals:
+        rel = script.relative_to(REPO_ROOT)
+        if not os.access(script, os.X_OK):
+            raise AssertionError(
+                f"{rel} is not executable. Cupcake auto-discovers it and execs it directly, so "
+                "the kernel refuses with exit code 126, cupcake replaces its output with a "
+                "failure record, and every policy reading it silently allows. Run "
+                f"`chmod +x {rel}`."
+            )
+        first = script.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+        if not first or not first[0].startswith("#!"):
+            raise AssertionError(
+                f"{rel} has no shebang. Exec'd directly, it is the interpreter line that decides "
+                "what runs it; without one the exec fails the same way a missing bit does."
+            )
+
+
 def run_orphaned_rego_suites() -> None:
     if not shutil.which("opa"):
         print("skip: orphaned rego suites (no opa on PATH)")
@@ -339,6 +380,10 @@ def main() -> int:
     # Flushed, and first: buffered output does not survive SIGKILL, and this notice is worth
     # nothing if the cap eats it.
     print(FOREGROUND_CAP_NOTICE, flush=True)
+    # First and cheapest: a signal that cannot be exec'd turns its policies off in production while
+    # every other gate here stays green, so there is no point spending 237 CPU-seconds before
+    # asking whether the signals can run at all.
+    run_signal_executable_checks()
     run_orphaned_rego_suites()
     run_runtime_evidence_signal_checks()
     cases = [

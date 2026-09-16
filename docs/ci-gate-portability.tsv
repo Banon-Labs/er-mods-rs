@@ -209,6 +209,9 @@ partial	game-install	check-ersc-version-supported.py --selftest	both parsers sti
 blocked	game-install	check-ersc-version-supported.py	'SKIP: no Seamless Co-op at ...' -- the installed build is the entire subject	product
 portable	-	check-markdown-code-blocks.py	source/AST/text analysis only	lint
 portable	-	er-stale-run-sentinel.sh --selftest	source/AST/text analysis only	runtime-tools
+portable	-	er-frida-evidence.py --selftest	tempdir log + a non-repo path for the HEAD lookup; no game, no frida module, no network	runtime-tools
+portable	-	er-frida-watch.py --selftest	source/AST/text analysis only; its agent file is tracked	runtime-tools
+portable	-	test-frida-evidence-wiring.py	drives run() against a stubbed device in-process; stdlib only, no game, no frida module, no network	runtime-tools
 portable	-	er-launch-gate.py --selftest	source/AST/text analysis only	runtime-tools
 blocked	game-install	diff-regulation-params.py --effects-json	exits 2 on purpose: 'could not look' is not evidence the effects.json ids agree	product
 blocked	game-install	check-starting-classes.py	exits 2 on purpose: the starting-class table drifts silently	product

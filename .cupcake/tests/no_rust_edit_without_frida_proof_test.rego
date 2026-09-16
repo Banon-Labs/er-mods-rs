@@ -1,0 +1,348 @@
+# OPA unit tests for no_rust_edit_without_frida_proof.
+#
+# Not loaded by the cupcake engine (which scans .cupcake/policies/<harness>/
+# and .cupcake/system/ only). Run with:
+#   opa test .cupcake/policies/claude/no_rust_edit_without_frida_proof.rego \
+#            .cupcake/tests/no_rust_edit_without_frida_proof_test.rego
+#
+# The rule under test is the executable half of the AGENTS.md line "The order is
+# Frida, then Frida, then Frida, and only then a DLL". It denies a Write/Edit to
+# `crates/**/*.rs` unless the `frida_evidence` signal opens with `PROVEN`.
+#
+# Every test below that asserts a denial is asserting a fail-closed path: absent
+# signal, empty signal, missing signals object, `UNPROVEN` verdict. That direction
+# is the whole design -- the opposite of `no_source_edit_during_live_run`, which
+# fails open because a broken signal there means "no run to protect".
+package cupcake.policies.claude.no_rust_edit_without_frida_proof_test
+
+import rego.v1
+
+import data.cupcake.policies.claude.no_rust_edit_without_frida_proof as guard
+
+RULE := "ER-EFFECTS-NO-RUST-EDIT-WITHOUT-FRIDA-PROOF"
+
+# The two verdict lines `scripts/er-frida-evidence.py --check` can print, copied
+# from its own format strings so a change to the wording breaks a test here.
+PROVEN := "PROVEN agent=scripts/frida/ersc-session.js pid=388 messages=12 seconds=41.5"
+
+UNPROVEN_NOTHING := "UNPROVEN no-frida-evidence nothing has attached to the game and reported back"
+
+UNPROVEN_SILENT := "UNPROVEN silent-session the last watch on scripts/frida/x.js reported 0 messages, so it observed nothing"
+
+UNPROVEN_SPENT := "UNPROVEN spent-by-commit the last measurement predates HEAD, so it belongs to a change that is already committed"
+
+edit_event(path, signal) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Edit",
+	"tool_input": {"file_path": path},
+	"signals": {"frida_evidence": signal},
+}
+
+rule_ids(denials) := {d.rule_id | some d in denials}
+
+denied(event) if {
+	denials := guard.deny with input as event
+	RULE in rule_ids(denials)
+}
+
+# --- a Rust edit with no measurement behind it is DENIED ----------------------
+
+test_deny_relative_crates_path_with_no_signal_key if {
+	denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_path": "crates/er-invasion-warp/src/local_invasion_filter.rs"},
+		"signals": {},
+	})
+}
+
+# The engine is expected to attach `signals` for a policy that declares
+# `required_signals`, but a rule that only denies when it is handed its evidence
+# reader's output is not a gate. No `signals` object at all still denies.
+test_deny_when_the_signals_object_is_missing_entirely if {
+	denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_path": "crates/er-invasion-warp/src/local_invasion_filter.rs"},
+	})
+}
+
+# An empty string is what a timed-out or crashed reader produces, and it is the
+# case the signal script's comment calls out by name.
+test_deny_on_an_empty_signal if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", ""))
+}
+
+# --- the signal command itself failing ----------------------------------------
+#
+# A signal whose command exits non-zero never reaches the policy as its output:
+# cupcake substitutes this record. Every test above hands the rule a string, which
+# is how the live gate sat inert on 2026-09-16 with `opa test` fully green -- the
+# script was not executable, an auto-discovered signal is exec'd directly rather
+# than through `bash`, and `cupcake eval` allowed a `crates/` edit on exit code 126.
+
+FAILURE_RECORD := {
+	"error": "signal command failed",
+	"exit_code": 126,
+	"output": "",
+	"success": false,
+}
+
+test_deny_when_the_signal_command_failed if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", FAILURE_RECORD))
+}
+
+test_deny_on_the_exact_126_record_that_was_measured if {
+	denied(edit_event(
+		"crates/er-invasion-warp/src/local_invasion_filter.rs",
+		{"error": "Permission denied (os error 13)", "exit_code": 126, "output": "", "success": false},
+	))
+}
+
+# The refusal has to say the reader broke, because "go and measure" is the wrong
+# instruction when the evidence path is what is broken.
+test_reason_names_a_broken_signal_rather_than_a_missing_measurement if {
+	some decision in guard.deny with input as edit_event("crates/er-quickload/src/lib.rs", FAILURE_RECORD)
+	decision.rule_id == RULE
+	contains(decision.reason, "frida_evidence signal failed")
+	contains(decision.reason, "executable")
+}
+
+# Any other non-string is the same class and denies the same way.
+test_deny_when_the_signal_is_a_number if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", 126))
+}
+
+test_deny_when_the_signal_is_null if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", null))
+}
+
+# A failure record whose `output` happens to contain the verdict is still a failed
+# signal. Reading a word out of the wreckage is how a broken gate looks open.
+test_a_failure_record_carrying_proven_text_still_denies if {
+	denied(edit_event(
+		"crates/er-quickload/src/lib.rs",
+		{"error": "timed out", "exit_code": 124, "output": "PROVEN agent=x messages=9", "success": false},
+	))
+}
+
+test_deny_on_unproven_nothing_recorded if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_on_unproven_silent_session if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", UNPROVEN_SILENT))
+}
+
+test_deny_on_unproven_spent_by_commit if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", UNPROVEN_SPENT))
+}
+
+# `UNPROVEN` contains `PROVEN`; only a line that STARTS with it opens the gate.
+test_unproven_is_not_read_as_proven if {
+	denied(edit_event("crates/er-game-base/src/mem.rs", "UNPROVEN"))
+}
+
+test_deny_absolute_path_under_crates if {
+	denied(edit_event("/home/banon/projects/er-mods-rs/crates/er-game-base/src/mem.rs", ""))
+}
+
+# An agent worktree puts the repo somewhere else entirely; the `/crates/` segment
+# is what carries, not the repo root.
+test_deny_worktree_path_under_crates if {
+	denied(edit_event(
+		"/home/banon/projects/er-mods-rs/.worktrees/quickload-slim/crates/er-quit-menu-core/src/menu_pump.rs",
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_deny_write_tool_too if {
+	denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Write",
+		"tool_input": {"file_path": "crates/er-gfx/src/text_input_02_990.rs"},
+		"signals": {"frida_evidence": UNPROVEN_NOTHING},
+	})
+}
+
+test_deny_multiedit_tool_too if {
+	denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "MultiEdit",
+		"tool_input": {"file_path": "crates/er-hook/src/lib.rs"},
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+# --- a measured session opens the gate ----------------------------------------
+
+test_allow_crates_edit_when_proven if {
+	not denied(edit_event("crates/er-invasion-warp/src/local_invasion_filter.rs", PROVEN))
+}
+
+test_allow_absolute_crates_edit_when_proven if {
+	not denied(edit_event("/home/banon/projects/er-mods-rs/crates/er-quickload/src/lib.rs", PROVEN))
+}
+
+test_allow_write_tool_when_proven if {
+	not denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Write",
+		"tool_input": {"file_path": "crates/er-game-base/src/mem.rs"},
+		"signals": {"frida_evidence": PROVEN},
+	})
+}
+
+# The reader prints one line, but a signal that arrives with a trailing newline
+# must still read as proof rather than as a broken reader.
+test_allow_when_the_verdict_carries_a_trailing_newline if {
+	not denied(edit_event("crates/er-quickload/src/lib.rs", concat("", [PROVEN, "\n"])))
+}
+
+# --- non-Rust files are never touched, proof or no proof ----------------------
+
+test_allow_toml_with_no_proof if {
+	not denied(edit_event("crates/er-invasion-warp/Cargo.toml", ""))
+}
+
+test_allow_workspace_toml_with_no_proof if {
+	not denied(edit_event("Cargo.toml", UNPROVEN_NOTHING))
+}
+
+test_allow_markdown_with_no_proof if {
+	not denied(edit_event("AGENTS.md", ""))
+}
+
+test_allow_markdown_under_crates_with_no_proof if {
+	not denied(edit_event("crates/er-invasion-warp/README.md", UNPROVEN_SILENT))
+}
+
+test_allow_script_with_no_proof if {
+	not denied(edit_event("scripts/er-frida-evidence.py", ""))
+}
+
+test_allow_frida_agent_file_with_no_proof if {
+	not denied(edit_event("scripts/frida/ersc-session.js", UNPROVEN_NOTHING))
+}
+
+# Writing this very gate, and its tests, has to stay possible with no proof at
+# all -- otherwise the first UNPROVEN verdict locks the gate's own repair shut.
+test_allow_this_policy_with_no_proof if {
+	not denied(edit_event(".cupcake/policies/claude/no_rust_edit_without_frida_proof.rego", ""))
+}
+
+test_allow_this_test_file_with_no_proof if {
+	not denied(edit_event(".cupcake/tests/no_rust_edit_without_frida_proof_test.rego", ""))
+}
+
+test_allow_the_signal_script_with_no_proof if {
+	not denied(edit_event(".cupcake/signals/frida_evidence.sh", ""))
+}
+
+test_allow_json_data_with_no_proof if {
+	not denied(edit_event("data/effects.json", ""))
+}
+
+# Rust outside `crates/` is out of scope by construction: the host-side tools and
+# the build-support scripts do not compile into anything the game loads.
+test_allow_rust_outside_crates if {
+	not denied(edit_event("tools/er-param-inspect/src/main.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_build_support_rust if {
+	not denied(edit_event("build-support/prologue_build.rs", ""))
+}
+
+# --- the guard stays out of everything else -----------------------------------
+
+test_allow_bash_with_no_proof if {
+	not denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Bash",
+		"tool_input": {"command": "cargo xwin build --release --target x86_64-pc-windows-msvc"},
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+# The rule body matches on the path alone and never reads `tool_name`; what keeps a
+# Read out of it is the `required_tools` routing in the package metadata, which the
+# engine applies before the policy is evaluated at all. So a hand-built Read event
+# does reach the deny here, and this test records that rather than hiding it.
+#
+# Scoping by routing instead of by an in-body allowlist is the fail-closed choice: a
+# write tool that nobody adds to the list would slip the gate, whereas a read tool
+# that somebody routes here by mistake is merely refused. Reading the code is not
+# blocked in practice -- Read is not in `required_tools`.
+test_tool_name_is_not_what_scopes_this_gate if {
+	denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Read",
+		"tool_input": {"file_path": "crates/er-quickload/src/lib.rs"},
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+test_allow_post_tool_use_event if {
+	not denied({
+		"hook_event_name": "PostToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_path": "crates/er-quickload/src/lib.rs"},
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+test_allow_when_there_is_no_file_path_at_all if {
+	not denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {},
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+# No `tool_input` key at all. Nothing to gate, so nothing is denied -- but the rule must reach
+# that answer rather than going undefined on the way, which is the failure mode that let the
+# missing `signals` object through.
+test_allow_when_there_is_no_tool_input_at_all if {
+	not denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Edit",
+		"signals": {"frida_evidence": ""},
+	})
+}
+
+# The two defaults together: neither key present. Still an answer, still not a crash.
+test_a_bare_event_is_answered_rather_than_undefined if {
+	not denied({"hook_event_name": "PreToolUse", "tool_name": "Edit"})
+}
+
+# --- the denial says what to do about it --------------------------------------
+
+# A refusal that does not name the instrument is a refusal the next agent argues
+# with. The reason carries the two commands that produce the evidence, the path
+# it refused, and what the reader actually said.
+test_reason_names_the_frida_commands_and_the_target if {
+	some decision in guard.deny with input as edit_event("crates/er-quickload/src/lib.rs", UNPROVEN_SILENT)
+	decision.rule_id == RULE
+	contains(decision.reason, "scripts/er-frida-up.py")
+	contains(decision.reason, "scripts/er-frida-watch.py")
+	contains(decision.reason, "crates/er-quickload/src/lib.rs")
+	contains(decision.reason, "reported 0 messages")
+}
+
+test_reason_says_the_signal_was_absent_when_it_was if {
+	some decision in guard.deny with input as {
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Edit",
+		"tool_input": {"file_path": "crates/er-quickload/src/lib.rs"},
+		"signals": {},
+	}
+	decision.rule_id == RULE
+	contains(decision.reason, "<signal absent>")
+}
+
+test_denial_is_high_severity if {
+	some decision in guard.deny with input as edit_event("crates/er-quickload/src/lib.rs", "")
+	decision.rule_id == RULE
+	decision.severity == "HIGH"
+}

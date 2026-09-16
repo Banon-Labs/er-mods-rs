@@ -21,6 +21,15 @@ such mismatch.
 
 Every message the agent sends is appended to the log as JSON, one per line, so the transcript
 survives the watcher and can be read while it is still running.
+
+# What the exit writes down
+
+When the watch ends -- a detach, an interrupt, a `SIGTERM` -- it records what the session did
+through `scripts/er-frida-evidence.py`: the agent file, the pid, how many messages came back, how
+long it ran. `.cupcake/policies/claude/no_rust_edit_without_frida_proof.rego` reads that record and
+refuses a Rust edit under `crates/` without one, so this is where the right to write the code comes
+from. The count is taken here, by the tool, for the obvious reason: evidence a caller can type is
+not evidence.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ import json
 import os
 import pathlib
 import select
+import signal
 import sys
 import time
 
@@ -53,6 +63,48 @@ WATCH_SLICE_SECONDS = 4.0
 WAIT_FOR_GAME_SECONDS = 300
 # How often the "still waiting" line is printed while the game has yet to appear.
 PROGRESS_EVERY_SECONDS = 10.0
+# The evidence recorder, beside this file. Hyphenated, so it is loaded by path rather than imported
+# by name; see `evidence_module`.
+EVIDENCE_SCRIPT = pathlib.Path(__file__).resolve().parent / "er-frida-evidence.py"
+
+
+def evidence_module():
+    """`scripts/er-frida-evidence.py` as a module object.
+
+    Loaded from its path because the filename carries hyphens and no `import` statement can spell
+    it. Its `__name__` is not `__main__` here, so its argument parser does not run.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("er_frida_evidence", EVIDENCE_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {EVIDENCE_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def record_evidence(agent_path: pathlib.Path, pid: int, messages: int, seconds: float) -> None:
+    """Append what this watch observed, for the gate that reads it.
+
+    `.cupcake/policies/claude/no_rust_edit_without_frida_proof.rego` refuses a Rust edit under
+    `crates/` until a record exists that attached to a pid and received at least one message, so
+    this call is what earns the right to write the code the measurement was for. It belongs here
+    rather than in an agent's hands: evidence an agent can type is evidence that proves nothing.
+
+    Nothing it can do may change the watcher's exit code. A failed record costs the caller a gate
+    they then have to open by measuring again, which is annoying; a failed record that turns a
+    successful watch into a non-zero exit costs them the belief that the watch worked at all.
+    """
+    try:
+        evidence_module().record(str(agent_path), int(pid), int(messages), float(seconds))
+    except Exception as exc:
+        print(
+            f"could not record frida evidence ({exc}). The watch itself was fine; "
+            f"`python3 scripts/er-frida-evidence.py --check` will say UNPROVEN.",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def blocking_slice(watch: er_run_lib.DirectoryWatch, seconds: float) -> None:
@@ -206,83 +258,124 @@ def run(agent_path: pathlib.Path, log_path: pathlib.Path) -> int:
 
     session = dev.attach(pid)
     print(f"attached to eldenring.exe (windows pid {pid})", flush=True)
+    attached_at = time.monotonic()
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log = open(log_path, "a", buffering=1, encoding="utf-8")
+    # How many messages the agent sent back. This is the number the evidence gate reads, and it is
+    # counted here rather than by anyone reading the transcript afterwards: a watch that attached
+    # and received nothing observed nothing, and a zero licenses no edit.
+    seen = {"messages": 0}
 
     def on_message(message, _data):
+        seen["messages"] += 1
         record = {"at": time.time(), "message": message}
         log.write(json.dumps(record) + "\n")
         payload = message.get("payload", message)
         print(f"AGENT {payload}", flush=True)
 
-    script = None
-    stamp = None
+    try:
+        script = None
+        stamp = None
 
-    def load() -> None:
-        nonlocal script, stamp
-        if script is not None:
-            script.unload()
-        source = agent_path.read_text(encoding="utf-8")
-        script = session.create_script(source)
-        script.on("message", on_message)
-        script.load()
-        stamp = agent_path.stat().st_mtime
-        print(f"loaded {agent_path.name} ({len(source)} bytes)", flush=True)
+        def load() -> None:
+            nonlocal script, stamp
+            if script is not None:
+                script.unload()
+            source = agent_path.read_text(encoding="utf-8")
+            script = session.create_script(source)
+            script.on("message", on_message)
+            script.load()
+            stamp = agent_path.stat().st_mtime
+            print(f"loaded {agent_path.name} ({len(source)} bytes)", flush=True)
 
-    load()
-    # The session ending is the only reason to stop; the agent stays live across the whole play
-    # session so a hook is never installed while the player is mid-action.
-    detached = {"why": None}
-    # A pipe, because the detach arrives on one of Frida's own threads while this one is parked in
-    # `select`. Writing a byte makes the detach an event this loop can wait on alongside the agent
-    # file, so the two things that end the watch both end it immediately.
-    wake_read, wake_write = os.pipe()
+        load()
+        # The session ending is the only reason to stop; the agent stays live across the whole play
+        # session so a hook is never installed while the player is mid-action.
+        detached = {"why": None}
+        # A pipe, because the detach arrives on one of Frida's own threads while this one is parked
+        # in `select`. Writing a byte makes the detach an event this loop can wait on alongside the
+        # agent file, so the two things that end the watch both end it immediately.
+        wake_read, wake_write = os.pipe()
 
-    def on_detached(reason, *_):
-        detached["why"] = reason
+        def on_detached(reason, *_):
+            detached["why"] = reason
+            try:
+                os.write(wake_write, b"x")
+            except OSError:
+                pass
+
+        session.on("detached", on_detached)
+
+        # A backgrounded watcher is usually ended with `SIGTERM`, whose default action is to kill
+        # the process where it stands -- past the `finally` below, so the session's measurement
+        # would go unrecorded and the gate would refuse the edit it was taken for. Turning the
+        # signal into the same byte on the wake pipe a detach writes ends the watch through the
+        # ordinary path instead. `os.write` is one of the few calls a handler may safely make.
+        def on_terminate(_signum, _frame) -> None:
+            detached["why"] = "terminated"
+            try:
+                os.write(wake_write, b"x")
+            except OSError:
+                pass
+
         try:
-            os.write(wake_write, b"x")
-        except OSError:
+            signal.signal(signal.SIGTERM, on_terminate)
+        except (ValueError, OSError):
+            # Only installable from the main thread. A watcher driven from somewhere else keeps
+            # the default action and simply records nothing when it is terminated.
             pass
 
-    session.on("detached", on_detached)
-    # An edit to the agent is a write in its directory, so the reload is driven by inotify rather
-    # than by re-stat'ing the file twice a second. The directory rather than the file: an editor
-    # that saves by writing a temporary file and renaming it over the original replaces the inode,
-    # and a watch pinned to the old one would go deaf at the first save.
-    with er_run_lib.DirectoryWatch(agent_path.parent) as agent_watch:
-        while detached["why"] is None:
-            waiting = [wake_read] + ([agent_watch.fd] if agent_watch.available else [])
-            try:
-                ready, _, _ = select.select(waiting, [], [], WATCH_SLICE_SECONDS)
-            except OSError:
-                ready = []
-            for fd in ready:
-                try:
-                    os.read(fd, 65536)  # drain; the state below is re-read either way
-                except OSError:
-                    pass
-            if detached["why"] is not None:
-                break
-            try:
-                current = agent_path.stat().st_mtime
-            except OSError:
-                continue
-            if current != stamp:
-                print("agent file changed, reloading in place", flush=True)
-                try:
-                    load()
-                except Exception as exc:  # a bad edit must not end the session
-                    print(f"reload failed, keeping the previous agent: {exc}", flush=True)
-                    stamp = current
-    os.close(wake_read)
-    os.close(wake_write)
-    print(f"session detached: {detached['why']}", flush=True)
-    log.close()
+        # An edit to the agent is a write in its directory, so the reload is driven by inotify
+        # rather than by re-stat'ing the file twice a second. The directory rather than the file:
+        # an editor that saves by writing a temporary file and renaming it over the original
+        # replaces the inode, and a watch pinned to the old one would go deaf at the first save.
+        try:
+            with er_run_lib.DirectoryWatch(agent_path.parent) as agent_watch:
+                while detached["why"] is None:
+                    waiting = [wake_read] + ([agent_watch.fd] if agent_watch.available else [])
+                    try:
+                        ready, _, _ = select.select(waiting, [], [], WATCH_SLICE_SECONDS)
+                    except OSError:
+                        ready = []
+                    for fd in ready:
+                        try:
+                            os.read(fd, 65536)  # drain; the state below is re-read either way
+                        except OSError:
+                            pass
+                    if detached["why"] is not None:
+                        break
+                    try:
+                        current = agent_path.stat().st_mtime
+                    except OSError:
+                        continue
+                    if current != stamp:
+                        print("agent file changed, reloading in place", flush=True)
+                        try:
+                            load()
+                        except Exception as exc:  # a bad edit must not end the session
+                            print(f"reload failed, keeping the previous agent: {exc}", flush=True)
+                            stamp = current
+        except KeyboardInterrupt:
+            # Ending a watch by hand is an ordinary way for it to finish, not a fault. Caught so it
+            # exits zero with its evidence recorded, rather than unwinding through a traceback.
+            detached["why"] = "interrupted"
+        os.close(wake_read)
+        os.close(wake_write)
+        print(f"session detached: {detached['why']}", flush=True)
+    finally:
+        # Every path out of the watch comes through here: a detach, an interrupt, a `SIGTERM`, or
+        # an exception from Frida. What the session observed is recorded once, whichever it was.
+        record_evidence(agent_path, pid, seen["messages"], time.monotonic() - attached_at)
+        try:
+            log.close()
+        except OSError:
+            pass
     return 0
 
 
 def selftest() -> int:
+    import inspect
+
     checks = [
         ("the agent file exists", DEFAULT_AGENT.is_file()),
         ("the agent hooks the invade action", "0x25850" in DEFAULT_AGENT.read_text()),
@@ -308,6 +401,27 @@ def selftest() -> int:
             "every wait is an event wait, never a delay",
             # Built from pieces so the assertion does not match its own source text.
             ("ti" + "me.sl" + "eep(") not in pathlib.Path(__file__).read_text(encoding="utf-8"),
+        ),
+        (
+            "the evidence recorder exists beside this file",
+            EVIDENCE_SCRIPT.is_file(),
+        ),
+        (
+            "messages are counted, because a session that received none observed nothing",
+            'seen["messages"] += 1' in pathlib.Path(__file__).read_text(encoding="utf-8"),
+        ),
+        (
+            "every exit from the watch records what it saw, including an interrupt",
+            "finally:" in pathlib.Path(__file__).read_text(encoding="utf-8")
+            and "record_evidence(agent_path, pid, seen[" in pathlib.Path(__file__).read_text(encoding="utf-8"),
+        ),
+        (
+            "a failed record cannot change the watcher's exit code",
+            "except Exception" in inspect.getsource(record_evidence),
+        ),
+        (
+            "the evidence is written by this tool, not typed by its caller",
+            "def record(" in EVIDENCE_SCRIPT.read_text(encoding="utf-8"),
         ),
     ]
     failed = 0

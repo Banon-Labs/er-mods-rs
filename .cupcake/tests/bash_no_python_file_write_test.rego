@@ -90,3 +90,34 @@ test_other_tools_are_untouched if {
 		"tool_input": {"file_path": "a.rs", "old_string": "x", "new_string": "y"},
 	}
 }
+
+# --- keyword arguments are not modes -------------------------------------
+#
+# Added 2026-09-16, one command after the guard landed: it refused a pure read
+# because `errors='replace'` begins with `r`, which a loose mode regex read as a
+# python mode. A guard that blocks the work it exempts is a guard gap.
+
+test_errors_replace_is_not_a_write if {
+	cmd := `python3 -c "print(open(p, encoding='utf8', errors='replace').read())"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_encoding_keyword_is_not_a_write if {
+	cmd := `python3 -c "open('a.log', encoding='utf8').read()"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_errors_replace_alongside_a_real_write_is_denied if {
+	cmd := `python3 -c "s=open(p,encoding='utf8',errors='replace').read(); open(p,'w').write(s)"`
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_read_plus_is_a_write if {
+	cmd := `python3 -c "f=open('a.bin','r+b')"`
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_append_mode_is_a_write if {
+	cmd := `python3 -c "open('a.log','a').write('x')"`
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
