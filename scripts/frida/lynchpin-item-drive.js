@@ -33,6 +33,13 @@ const USE_ARG = 0x14;
 const GET_SELECTED_QUICK_SLOT_ITEM_ID = ptr('0x140657410');
 const GET_ITEM_INVENTORY_IDX = ptr('0x14024c560');
 
+// `GameMan+0xbc8` is `isInOnlineMode`. Seamless keeps it clear, and `CanUseGoods` refuses every
+// vanilla multiplayer item while it is -- so the module under test raises it for the duration of a
+// finger use and puts it back. Clearing `disableOffline` on the row is the other half of the same
+// refusal; do both, because the working drive does both.
+const GAME_MAN = ptr('0x143d6d988');
+const GAME_MAN_IS_IN_ONLINE_MODE = 0xbc8;
+
 const GAME_DATA_MAN = ptr('0x143d61f98');
 const GAME_DATA_MAN_PLAYER_GAME_DATA = 0x8;
 // Both of these are EMBEDDED, so the chain is address arithmetic and not a dereference.
@@ -55,6 +62,22 @@ const GOODS_TAG = 0x40000000;
 
 let pinnedItemId = 0;
 let answered = 0;
+let onlineModeWas = null;
+
+function holdOnlineMode (raise) {
+  try {
+    const man = GAME_MAN.readPointer();
+    if (man.isNull()) return null;
+    const at = man.add(GAME_MAN_IS_IN_ONLINE_MODE);
+    if (raise) {
+      if (onlineModeWas === null) onlineModeWas = at.readU8();
+      at.writeU8(1);
+      return onlineModeWas;
+    }
+    if (onlineModeWas !== null) { at.writeU8(onlineModeWas); onlineModeWas = null; }
+    return null;
+  } catch (e) { return null; }
+}
 
 // Run the original first so its pouch-slot work still happens, then overwrite the answer. The
 // function's own prologue writes `*out = -1` (`c7 02 ff ff ff ff`), so replacing it outright
@@ -138,12 +161,13 @@ rpc.exports = {
     if (st === null) return { ok: false, why: 'menuGaitemUseState is unreachable' };
     pinnedItemId = itemId | 0;
     answered = 0;
+    const onlineWas = holdOnlineMode(true);
     st.add(USE_ITEM_ID).writeU32(itemId);
     st.add(USE_ITEM_IDX).writeU32(idx);
     st.add(USE_ARG).writeU32(0);
     // A byte, not a dword: 0x9..0xb are adjacent fields and a wider store clobbers them.
     st.add(USE_STATE).writeU8(1);
-    return { ok: true, itemId: '0x' + itemId.toString(16), idx };
+    return { ok: true, itemId: '0x' + itemId.toString(16), idx, onlineModeWas: onlineWas };
   },
 
   // What the engine did with the request. State 2 is its action update latching it; roughly half
@@ -163,7 +187,18 @@ rpc.exports = {
     return out;
   },
 
-  unpin () { pinnedItemId = 0; return { answered }; },
+  // Clearing the request byte matters: a request the engine never latched stays at 1 and the
+  // next `pin` writes into a struct that is already mid-request. The module under test writes 0
+  // here for the same reason.
+  unpin () {
+    pinnedItemId = 0;
+    holdOnlineMode(false);
+    try {
+      const st = useStateStruct();
+      if (st !== null) st.add(USE_STATE).writeU8(0);
+    } catch (e) { /* fault-closed */ }
+    return { answered };
+  },
 };
 
 console.log('lynchpin-item-drive: ready (quick-slot reader answered, no DLL export used)');
