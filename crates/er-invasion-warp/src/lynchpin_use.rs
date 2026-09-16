@@ -897,8 +897,10 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
         }
         // SAFETY: as above; the setter takes an inventory index, which is what `index` is.
         let equipped = unsafe { equip_quick_slot(DRIVEN_QUICK_SLOT, index as u32) };
+        // SAFETY: game task thread.
+        let why = unsafe { equip_refusal() };
         crate::standalone_log(format_args!(
-            "lynchpin: put the item in quick slot {DRIVEN_QUICK_SLOT} through the game's own              setter (equipped={equipped}); the player's slots were read first and go back when              the use ends"
+            "lynchpin: put the item in quick slot {DRIVEN_QUICK_SLOT} through the game's own setter (equipped={equipped}, {why}); the player's slots were read first and go back when the use ends"
         ));
     }
     crate::standalone_log(format_args!(
@@ -1202,12 +1204,15 @@ unsafe fn drive_handoff_press() {
             let consumed = unsafe { main_player_chr_ins() }.and_then(|player| unsafe {
                 er_game_base::mem::safe_read_i32(player + CHR_INS_CONSUME_COUNT_OFFSET)
             });
-            match queued {
-                Some(id) if id == pinned => crate::standalone_log(format_args!(
-                    "lynchpin: the character took the handed-off item -- `ChrIns+0x160` reads {id:#x}, and the consume count `ChrIns+0x168` reads {consumed:?}. Only a non-zero consume count means the use completed; a queue with a zero count is a press the engine accepted and never carried through, and Seamless is never told about those."
+            match (consumed, queued) {
+                (Some(count), _) if count > 0 => crate::standalone_log(format_args!(
+                    "lynchpin: the use completed -- the consume count `ChrIns+0x168` reads {count}, which is what TAE event 65 raises and the only thing a handler registered against the goods id can run off. `ChrIns+0x160` reads {queued:?}; a completed use clears it, so that is expected."
                 )),
-                other => crate::standalone_log(format_args!(
-                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {other:?}, not the pinned {pinned:#x}, and the consume count reads {consumed:?}. Nothing was ever asked of Seamless this attempt."
+                (_, Some(id)) if id == pinned => crate::standalone_log(format_args!(
+                    "lynchpin: queued but not consumed -- `ChrIns+0x160` holds {id:#x} and the consume count is {consumed:?}. The engine took the request and never carried it through, so Seamless was never told."
+                )),
+                _ => crate::standalone_log(format_args!(
+                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {queued:?}, not the pinned {pinned:#x}, and the consume count is {consumed:?}."
                 )),
             }
         }
@@ -1386,6 +1391,24 @@ unsafe fn equip_quick_slot(slot: u32, inventory_index: u32) -> bool {
     // SAFETY: as above.
     unsafe { set(equip, slot, 0, inventory_index) };
     true
+}
+
+/// Why [`equip_quick_slot`] refused, for a log line that can be acted on.
+///
+/// A bare `equipped=false` says nothing: the address lookup and the `EquipGameData` chain fail for
+/// different reasons and want different fixes.
+#[cfg(windows)]
+unsafe fn equip_refusal() -> &'static str {
+    if er_game_base::mem::game_rva_named(SET_QUICK_SLOT_ITEM_RVA, "SET_QUICK_SLOT_ITEM_RVA")
+        .is_err()
+    {
+        return "the setter's address did not resolve for this build";
+    }
+    // SAFETY: game task thread.
+    if unsafe { equip_game_data() }.is_none() {
+        return "`GameDataMan` or its `PlayerGameData` is not up yet";
+    }
+    "the setter ran"
 }
 
 /// Put the player's own quick slots back after a driven use.
