@@ -37,7 +37,10 @@ AGENT = HERE / "frida" / "lynchpin-item-drive.js"
 FESTERING_BLOODY_FINGER = 111
 CHALLENGERS_LYNCHPIN = 0x7FDE63
 VANILLA_FINGERS = [102, 111, 112]
-PAD_A = 0x1000
+# `XINPUT_GAMEPAD_X`, the use-item binding. `A` (0x1000) queues the request and never carries it
+# through to a use: five drives per arm with the oracles zeroed gave the Challenger's Lynchpin
+# consumed 3/5 on X against 0/5 on A, with the queue at 5/5 either way.
+PAD_USE_ITEM = 0x4000
 
 # Bounded waits, well inside the repo's 30s cap, spent in an external `sleep` so this process owns
 # no timer of its own.
@@ -142,7 +145,7 @@ def main() -> int:
             drive.exports_sync.unpin()
             continue
         settle(SETTLE_SECONDS)
-        pad.exports_sync.press(PAD_A)
+        pad.exports_sync.press(PAD_USE_ITEM)
         settle(PRESS_HOLD_SECONDS)
         pad.exports_sync.release()
         # The proof is `ChrIns+0x160` taking the pinned id -- that is the character accepting the
