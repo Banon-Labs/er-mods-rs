@@ -160,6 +160,22 @@ const PIN_FRAMES_MAX: usize = 600;
 /// Frames spent on the use in flight, against [`PIN_FRAMES_MAX`].
 #[cfg(windows)]
 static PIN_FRAMES_SPENT: AtomicUsize = AtomicUsize::new(0);
+/// Where the near+far handoff has got to: nothing, waiting for the pinned Lynchpin to latch, or
+/// holding the use action down for its edge.
+#[cfg(windows)]
+static HANDOFF_STAGE: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+const HANDOFF_IDLE: usize = 0;
+#[cfg(windows)]
+const HANDOFF_WAITING_FOR_LATCH: usize = 1;
+#[cfg(windows)]
+const HANDOFF_PRESSING: usize = 2;
+/// Frames the press is held. Long enough for the game to see an edge, short enough that it is a
+/// press and not a hold.
+#[cfg(windows)]
+const HANDOFF_PRESS_HELD_FRAMES: usize = 6;
+#[cfg(windows)]
+static HANDOFF_PRESS_FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Whether the latch has been reported for the use in flight.
 #[cfg(windows)]
 static USE_ACKNOWLEDGED: AtomicUsize = AtomicUsize::new(0);
@@ -764,6 +780,121 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
 #[cfg(windows)]
 pub fn request_lynchpin_use_offthread() {
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
+    HANDOFF_STAGE.store(HANDOFF_WAITING_FOR_LATCH, Ordering::SeqCst);
+}
+
+/// `er_quickload.dll`'s pad-injection export, or 0 when that DLL is not in the profile.
+///
+/// Resolved once and cached. A miss is inert: the handoff then pins the Lynchpin and waits for a
+/// press that never comes, which is exactly what it did before this existed and is no worse.
+#[cfg(windows)]
+fn hold_pad() -> usize {
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use windows::core::s;
+
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    const MISSING: usize = usize::MAX;
+
+    match CACHED.load(Ordering::SeqCst) {
+        0 => {}
+        MISSING => return 0,
+        address => return address,
+    }
+    // SAFETY: resolving one export from a module that may or may not be loaded.
+    let resolved = unsafe {
+        GetModuleHandleA(s!("er_quickload.dll"))
+            .ok()
+            .and_then(|module| GetProcAddress(module, s!("er_quickload_hold_xinput_pad")))
+            .map_or(0, |address| address as usize)
+    };
+    CACHED.store(
+        if resolved == 0 { MISSING } else { resolved },
+        Ordering::SeqCst,
+    );
+    if resolved == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: er_quickload.dll has no `er_quickload_hold_xinput_pad`, so the near+far \
+             handoff can pin the Lynchpin but cannot press it. Load er-quickload in the profile."
+        ));
+    }
+    resolved
+}
+
+/// Drive the use action for a handed-off Lynchpin, once its pin has latched.
+///
+/// # Why the handoff has to press at all
+///
+/// Pinning only answers the question "which item"; something still has to press Use. For the
+/// finger that press is the player's own. The Lynchpin this hands off to has nobody pressing it,
+/// and run br-20260916-085320-768e measured the consequence: the handoff logged, and then 38 of 38
+/// matchmaking slots stayed at zero across two attempts, while driving the same Lynchpin by hand on
+/// the same run produced `RequestLobbyList` and five filter calls.
+///
+/// # Why it waits for the latch instead of counting frames
+///
+/// `ChrIns+0x160` taking the item is the character saying it has accepted it. Pressing in the same
+/// breath as the pin does not work -- four attempts that way produced nothing -- and a fixed delay
+/// would be a guess at a frame budget dressed up as synchronisation.
+///
+/// The press is a single edge held for a few frames and then released. Holding it every frame is
+/// what stopped the finger working: `GetSelectedGoodsUseAnim` lives in `HksEnv`, and a behaviour
+/// script watching for a press sees one rising edge and then a level that never rises again.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn drive_handoff_press() {
+    type HoldPadFn = unsafe extern "system" fn(u16, i16, i16) -> ();
+    const PAD_A: u16 = 0x1000;
+
+    match HANDOFF_STAGE.load(Ordering::SeqCst) {
+        HANDOFF_WAITING_FOR_LATCH => {
+            // Wait for the pin, not for the latch.
+            //
+            // Waiting on `ChrIns+0x160` was circular and mine: that field only takes the item once
+            // the use has started, and the use starts because of this press. Run
+            // br-20260916-090943-0e7e sat there forever -- the handoff logged, the decline was
+            // gone, and the press line never printed because the condition could not become true.
+            //
+            // The pin being live is the right precondition: `drive_pinned_use` has by then written
+            // the request and is answering the quick-slot question, so the press has something to
+            // land on.
+            let pinned_is_lynchpin =
+                PINNED_ITEM_ID.load(Ordering::SeqCst) == LYNCHPIN_ITEM_ID as usize;
+            if !pinned_is_lynchpin || PIN_FRAMES_LEFT.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            let hold = hold_pad();
+            if hold == 0 {
+                HANDOFF_STAGE.store(HANDOFF_IDLE, Ordering::SeqCst);
+                return;
+            }
+            // SAFETY: the export resolved above, called with the button mask it documents.
+            unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(PAD_A, 0, 0) };
+            HANDOFF_PRESS_FRAMES.store(HANDOFF_PRESS_HELD_FRAMES, Ordering::SeqCst);
+            HANDOFF_STAGE.store(HANDOFF_PRESSING, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "lynchpin: the handed-off Lynchpin is pinned, so the use action is pressed for \
+                 {HANDOFF_PRESS_HELD_FRAMES} frame(s). This is the press the handoff used to be \
+                 missing."
+            ));
+        }
+        HANDOFF_PRESSING => {
+            let left = HANDOFF_PRESS_FRAMES.load(Ordering::SeqCst);
+            if left > 1 {
+                HANDOFF_PRESS_FRAMES.store(left - 1, Ordering::SeqCst);
+                return;
+            }
+            let hold = hold_pad();
+            if hold != 0 {
+                // SAFETY: as above; all zeroes releases.
+                unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(0, 0, 0) };
+            }
+            HANDOFF_STAGE.store(HANDOFF_IDLE, Ordering::SeqCst);
+        }
+        _ => {}
+    }
 }
 
 /// Ask for an item to be used from a thread the game does not own.
@@ -782,16 +913,19 @@ pub fn request_use_item_offthread(item_id: u32) {
 /// Game task thread.
 #[cfg(windows)]
 unsafe fn drain_requested_use() {
-    let wanted = REQUESTED_ITEM_ID.swap(0, Ordering::SeqCst);
-    if wanted == 0 {
+    // A use already in flight makes this wait, rather than dropping the request.
+    //
+    // The order matters and the old order was a bug of mine: it took the request out first and then
+    // refused it, so the id was gone. The near+far handoff asks for the Challenger's Lynchpin from
+    // inside the finger's own popup, while the finger's use is still running, and run
+    // br-20260916-090746-199e logged exactly that -- "declined to use 0x407fde63 -- a use is
+    // already in flight" -- after which nothing latched and 38 of 38 matchmaking slots stayed at
+    // zero. Leaving the id in place costs one atomic load a tick and the next tick picks it up.
+    if PIN_FRAMES_LEFT.load(Ordering::SeqCst) != 0 {
         return;
     }
-    // A use already in flight is not interrupted: the four stores are a per-frame override and
-    // two of them at once would pin one index while naming another item's id.
-    if PIN_FRAMES_LEFT.load(Ordering::SeqCst) != 0 {
-        crate::standalone_log(format_args!(
-            "lynchpin: declined to use {wanted:#x} -- a use is already in flight"
-        ));
+    let wanted = REQUESTED_ITEM_ID.swap(0, Ordering::SeqCst);
+    if wanted == 0 {
         return;
     }
     // SAFETY: game task thread.
@@ -1100,6 +1234,7 @@ pub unsafe fn tick() {
         install_selected_quick_slot();
         drain_requested_use();
         drive_pinned_use();
+        drive_handoff_press();
     }
     // No `install_menu_object_observer()` call here, and this is not an omission.
     //
