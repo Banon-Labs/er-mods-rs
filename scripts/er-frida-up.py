@@ -235,6 +235,31 @@ def ensure_binary() -> pathlib.Path:
     return server
 
 
+def clear_staged_agent() -> bool:
+    """Delete the agent DLL a dead server left staged in the prefix, so the next attach can stage.
+
+    Measured 2026-09-16, and it cost three attaches to recognise. `frida-server.exe` unpacks its
+    injector payload to `%TEMP%/re.frida.server/x86_64/frida-agent.dll` and, on this Wine target,
+    refuses to overwrite one a previous server left behind:
+
+        frida.PermissionDeniedError: error opening file
+        "C:\\users\\steamuser\\AppData\\Local\\Temp\\re.frida.server\\x86_64\\frida-agent.dll":
+        File exists
+
+    Deleting the tree by hand is not enough either -- a server already running does not re-stage,
+    and the next attach fails the other way round with `unable to find DLL at ...`. Both halves
+    have to happen together, which is why this lives inside the restart rather than beside it.
+    """
+    staged = (
+        prefix()
+        / "drive_c/users/steamuser/AppData/Local/Temp/re.frida.server"
+    )
+    if not staged.exists():
+        return False
+    shutil.rmtree(staged, ignore_errors=True)
+    return not staged.exists()
+
+
 def start(force: bool = False) -> int:
     # An open port is not proof of a usable server. Measured 2026-09-08: a server started before
     # `scripts/er-teardown.py` killed the prefix keeps its listening socket, accepts the connection,
@@ -249,12 +274,16 @@ def start(force: bool = False) -> int:
         # previous container's namespace (mnt:[4026533261]) while the game had moved to a new one
         # (mnt:[4026533335]), so every enumerate hung and `--force` appeared to do nothing.
         stop()
+        if clear_staged_agent():
+            print("cleared the agent DLL a previous server left staged in the prefix")
     elif listening():
         if server_sees_the_prefix():
             print(f"frida-server already listening on 127.0.0.1:{PORT} and answering")
             return 0
         print("frida-server is listening but not answering; replacing it", flush=True)
         stop()
+        if clear_staged_agent():
+            print("cleared the agent DLL a previous server left staged in the prefix")
     wine = wine_binary()
     if wine is None:
         print("no Proton wine binary found under Steam", file=sys.stderr)
@@ -440,6 +469,10 @@ def selftest() -> int:
         ("the download url names the pinned version", FRIDA_VERSION in DOWNLOAD),
         ("the cache directory is user-owned, not a repo path", "er-mods-rs" not in str(CACHE)),
         ("--force stops the old server before starting a new one", "stop()" in force_branch),
+        (
+            "--force clears the agent DLL a dead server left staged",
+            "clear_staged_agent()" in force_branch,
+        ),
         (
             "the server is stopped by comm, never a broad pkill -f pattern",
             # Built from pieces so the check does not match its own source text -- a literal here
