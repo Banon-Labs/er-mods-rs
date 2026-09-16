@@ -145,8 +145,6 @@ static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
 const GAME_MAN_IS_IN_ONLINE_MODE: usize = 0xbc8;
 /// `menuGaitemUseState+0x8` once the engine has taken the request: 0 idle, 1 requested, 2 latched.
 #[cfg(windows)]
-const USE_STATE_IDLE: u8 = 0;
-#[cfg(windows)]
 const USE_STATE_REQUESTED: u8 = 1;
 #[cfg(windows)]
 const USE_STATE_LATCHED: u8 = 2;
@@ -1028,14 +1026,21 @@ unsafe fn drive_pinned_use() {
              {USE_STATE_LATCHED}, so the player's action update has taken it"
         ));
     }
-    // Written only when the state reads idle, which is the difference between asking again and
-    // cancelling what was already accepted.
+    // Raised on the first frame of the window and never again: the action is an edge, not a level.
     //
-    // Re-writing 1 unconditionally looked harmless and was not. On run br-20260916-070219-5926 a
-    // 10ms sampler caught the state stepping 0 -> 2 -> 1: the engine latched the request, and the
-    // next tick here put it back to 1 on top of the latch. Writing while it reads 1 is a no-op
-    // anyway, and writing while it reads 2 stamps on a use that is already under way.
-    if observed == Some(USE_STATE_IDLE) {
+    // Counting the action path settled this. Across one drive, with a control proving the hooks
+    // fire (`EquipParamGoods::GetEntry` 435333 -> 1521325):
+    //
+    //   action update 0x1403daa90      93 ->  325
+    //   use-state latch 0x140768c60     0 ->  232
+    //   FUN_140407fd0(pad, 7, 1)        0 ->  232, and the id really is 7, `USE_ITEM`
+    //
+    // So the press was reaching the character 232 times, once a frame for about four seconds,
+    // because re-asking whenever the state read idle re-pressed it every frame after the engine
+    // reset it. `GetSelectedGoodsUseAnim` is called from `HksEnv` -- the behaviour script picks the
+    // animation -- and a script watching for a press sees one rising edge and then a level that
+    // never rises again. Holding the button down forever is not pressing it.
+    if left == PIN_FRAMES {
         // SAFETY: the request itself, into the struct the engine's own `Request` writes.
         unsafe {
             core::ptr::write_volatile((state + USE_STATE_OFFSET) as *mut u8, USE_STATE_REQUESTED)
