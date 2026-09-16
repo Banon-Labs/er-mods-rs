@@ -76,6 +76,17 @@ const USE_ARG_OFFSET: usize = 0x14;
 /// `ChrIns+0x168`, unnamed in the 1.16.2 dump: the repeat count TAE event 65 loops on.
 #[cfg(windows)]
 const CHR_INS_CONSUME_COUNT_OFFSET: usize = 0x168;
+
+/// What a driven use stores into [`CHR_INS_CONSUME_COUNT_OFFSET`], and therefore the level a
+/// completed use has to read below.
+///
+/// TAE event 65 opens `for (n = chrIns->field49_0x168; n != 0; n--) { consume, apply, summon }`,
+/// so at zero the event fires and does nothing -- which is why the drive writes this at all. It is
+/// named rather than spelled `1` in two places because those two places were the whole defect: the
+/// drive wrote the value and the press then read it back as proof the use had happened, an oracle
+/// that could not return anything but success.
+#[cfg(windows)]
+const DRIVEN_CONSUME_COUNT: i32 = 1;
 /// `PlayerGameData+0x2b0` -> `EquipGameData`.
 #[cfg(windows)]
 const PLAYER_GAME_DATA_EQUIP_GAME_DATA_OFFSET: usize = 0x2b0;
@@ -1251,24 +1262,35 @@ unsafe fn drive_handoff_press() {
             });
             // SAFETY: game task thread.
             unsafe { release_borrowed_quick_slot() };
-            // `ChrIns+0x168` is the oracle that decides, not `+0x160`. The queue field only
-            // says the request carried the pin; the consume count is what TAE event 65 raises,
-            // and a handler registered against the goods id has nothing to run off until it does.
-            // Measured on run br-20260916-135818-8f5b: the item queued on a drive that never
-            // consumed, so reporting the queue alone calls a dead press a live one.
+            // `ChrIns+0x168` decides, but only as a rise, never as a level.
+            //
+            // The level is our own write. `drive_pinned_use` stores `1` into this field every
+            // tick it holds the pin, because TAE event 65 loops `for (n = field; n != 0; n--)`
+            // and at zero the event fires and does nothing. So reading the field back after the
+            // press and calling a nonzero value a completed use reads our own store and reports
+            // success unconditionally -- it cannot produce any other verdict, and it did not:
+            // run br-20260916-193045-979a logged "the use completed" on all four handoffs while
+            // `ChrIns+0x160` held the finger's id (`0x40000066` / `0x40000070`) and never the
+            // Lynchpin's `0x407fde63`, and no query reached Steam on any of them.
+            //
+            // The event DECREMENTS the count, so a use that actually ran leaves the field lower
+            // than the pin put it, not higher. What is compared is therefore the value against
+            // the one this drive wrote: unchanged means the event never ran.
             // SAFETY: fault-closed; `None` before there is a player.
             let consumed = unsafe { main_player_chr_ins() }.and_then(|player| unsafe {
                 er_game_base::mem::safe_read_i32(player + CHR_INS_CONSUME_COUNT_OFFSET)
             });
-            match (consumed, queued) {
-                (Some(count), _) if count > 0 => crate::standalone_log(format_args!(
-                    "lynchpin: the use completed -- the consume count `ChrIns+0x168` reads {count}, which is what TAE event 65 raises and the only thing a handler registered against the goods id can run off. `ChrIns+0x160` reads {queued:?}; a completed use clears it, so that is expected."
+            let ran_the_consume_event =
+                matches!(consumed, Some(count) if count < DRIVEN_CONSUME_COUNT);
+            match (ran_the_consume_event, queued) {
+                (true, _) => crate::standalone_log(format_args!(
+                    "lynchpin: the use completed -- `ChrIns+0x168` reads {consumed:?}, below the {DRIVEN_CONSUME_COUNT} this drive wrote, and TAE event 65 is what counts it down. `ChrIns+0x160` reads {queued:?}."
                 )),
                 (_, Some(id)) if id == pinned => crate::standalone_log(format_args!(
-                    "lynchpin: queued but not consumed -- `ChrIns+0x160` holds {id:#x} and the consume count is {consumed:?}. The engine took the request and never carried it through, so Seamless was never told."
+                    "lynchpin: queued but not consumed -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}, the value this drive wrote. The engine took the request and never carried it through, so Seamless was never told."
                 )),
                 _ => crate::standalone_log(format_args!(
-                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {queued:?}, not the pinned {pinned:#x}, and the consume count is {consumed:?}."
+                    "lynchpin: the press was dropped -- `ChrIns+0x160` reads {queued:?}, not the pinned {pinned:#x}, and the consume count still reads {consumed:?}, the value this drive wrote. The character was using something else when the press landed."
                 )),
             }
         }
@@ -1641,7 +1663,10 @@ unsafe fn drive_pinned_use() {
     if let Some(player) = unsafe { main_player_chr_ins() } {
         // SAFETY: the repeat count TAE event 65 loops on; at zero the event does nothing at all.
         unsafe {
-            core::ptr::write_volatile((player + CHR_INS_CONSUME_COUNT_OFFSET) as *mut u32, 1)
+            core::ptr::write_volatile(
+                (player + CHR_INS_CONSUME_COUNT_OFFSET) as *mut u32,
+                DRIVEN_CONSUME_COUNT as u32,
+            )
         };
     }
     if crate::vanilla_invasion_items::routes_the_range_popup(

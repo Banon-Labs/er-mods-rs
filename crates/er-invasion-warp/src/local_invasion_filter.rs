@@ -135,8 +135,8 @@ pub use actions::{
     arm_invade_request, drive_invade_inline, drive_invade_with_owner, request_invade,
 };
 use actions::{
-    arm_self_recovery, cancel_stalled_attempt_inner, drive_pending_reinvade, log_refusal_once,
-    watch_for_failed_connect, watch_for_stall,
+    arm_self_recovery, cancel_stalled_attempt_inner, connect_phase, drive_pending_reinvade,
+    log_refusal_once, watch_for_failed_connect, watch_for_stall,
 };
 use lock_report::{
     HANDLER_ERSC_LOBBY_KEY, HANDLER_ERSC_SHOW, HANDLER_GAME_TASK, HANDLER_JOIN_DATA,
@@ -362,6 +362,30 @@ static AUTO_SEARCH_ARMED: AtomicBool = AtomicBool::new(false);
 static CANCELS: AtomicUsize = AtomicUsize::new(0);
 static KEEPS: AtomicUsize = AtomicUsize::new(0);
 static REINVADES: AtomicUsize = AtomicUsize::new(0);
+
+/// When a search this module caused was last seen to start, or `0` for "no search of ours is
+/// outstanding". Feeds [`release_a_search_nothing_is_running`].
+static OUR_SEARCH_SET_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// The `RequestLobbyList` count at the moment that search was set, so the detector reads a delta
+/// rather than a total. A total is already nonzero by the second search of a session and would
+/// report every one after it as live.
+static OUR_SEARCH_SET_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+
+/// How many searches were released because nothing picked them up.
+static SEARCHES_RELEASED: AtomicUsize = AtomicUsize::new(0);
+
+/// So "cannot judge this, the detour is not live" is said once rather than every tick.
+static RELEASE_BLIND_SAID: AtomicUsize = AtomicUsize::new(0);
+
+/// How long a search gets to reach Steam before it is treated as one nothing picked up.
+///
+/// Seamless queries within a second of the state changing on a healthy session: run
+/// br-20260916-083935-5990 walked `0x0e -> 0x0f` nineteen times, each in the same breath. The
+/// window here is two orders of magnitude wider than that because the cost of being wrong is
+/// asymmetric -- releasing a real search costs the player one search, and leaving a dead one
+/// parked costs them every invasion for the rest of the session.
+const SEARCH_MUST_REACH_STEAM_WITHIN_MS: u64 = 20_000;
 
 pub(crate) static CONFIG: Mutex<Option<HotConfig>> = Mutex::new(None);
 
@@ -1623,6 +1647,103 @@ fn note_state_after_our_action(session: SeamlessSession, what: &str) {
         return;
     }
     log_transition(session.abi, previous, state, Some(what));
+    // Start the clock on a search we caused, so `release_a_search_nothing_is_running` can tell a
+    // request that was picked up from one that was not. Armed here rather than at the call site
+    // because this is the one place that knows the action landed: the drive is allowed to block,
+    // and an invade that never returned set no state to watch.
+    if state == session.abi.state_searching {
+        OUR_SEARCH_SET_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
+        OUR_SEARCH_SET_REQUESTS.store(crate::lobby_publish::hunt_requests().1, Ordering::SeqCst);
+    }
+}
+
+/// Put the session back to idle when the search we asked for never reached Steam.
+///
+/// # The lockout this exists to prevent
+///
+/// `ersc+0x25850`, the action every invade in this module drives, is nine instructions: take the
+/// session lock, return unless the state reads idle, store `state_searching`, unlock. It starts
+/// nothing. Seamless runs the search from a consumer of that state, and when that consumer does
+/// not pick the request up, the field simply stays where we put it.
+///
+/// The second of those nine instructions is what makes a stuck value expensive rather than
+/// cosmetic: the guard is "return unless the state reads idle", so a session parked at
+/// `state_searching` refuses every later invade -- ours, and the player's own Challenger's
+/// Lynchpin through Seamless's own menu, which drives the same action. Measured on run
+/// br-20260916-193045-979a: one restart drove the state to `0x0e` at tick 11400, it still read
+/// `0x0e` twenty minutes later, no query ever went out, and the four vanilla-finger handoffs after
+/// it could not have started one. What the player saw was a search indicator that never resolved
+/// and no Seamless banner at all.
+///
+/// # Why a query is the oracle and the state is not
+///
+/// The state is the request. Only a `RequestLobbyList` going out says the request was picked up,
+/// which is why this compares a delta on [`crate::lobby_publish::hunt_requests`] rather than
+/// reading the field again. With that detour not live nobody is counting, so a zero means nothing
+/// at all, and this declines to judge and says so once.
+///
+/// # Why the field is written rather than the cancel action driven
+///
+/// `ersc+0x258d0` sets `state_cancelling`, which needs the same consumer to unwind. Driving it
+/// when the consumer is the thing that is missing trades one parked state for another. The field
+/// is the one this module already reads every tick and the one `ersc` itself stores a constant
+/// into; with no query in the whole window there is no search in flight to race.
+fn release_a_search_nothing_is_running(session: SeamlessSession) {
+    let set_at = OUR_SEARCH_SET_AT_MS.load(Ordering::SeqCst);
+    if set_at == 0 {
+        return;
+    }
+    if now_ms().saturating_sub(set_at) < SEARCH_MUST_REACH_STEAM_WITHIN_MS {
+        return;
+    }
+    if read_session_state(session.abi, session.session) != Some(session.abi.state_searching) {
+        // It moved on its own, which is the consumer doing its job. Nothing to release.
+        OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    let (detour_live, requests) = crate::lobby_publish::hunt_requests();
+    if !detour_live {
+        if RELEASE_BLIND_SAID.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: a search has held the searching state for \
+                 {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and this module cannot tell whether it \
+                 reached Steam -- the RequestLobbyList detour is not live, so a count of zero \
+                 means nobody is counting. Leaving the session alone. Printed once."
+            ));
+        }
+        return;
+    }
+    if requests > OUR_SEARCH_SET_REQUESTS.load(Ordering::SeqCst) {
+        // Seamless asked Steam, so the request was picked up and this is a real search.
+        OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
+    AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
+    PENDING_REINVADE.store(false, Ordering::SeqCst);
+    // SAFETY: the session resolved this tick and `read_session_state` above proved this address
+    // holds a readable state field for the supported build. The value written is the same constant
+    // `ersc` itself stores through `mov dword ptr [rdi+0x150], imm`.
+    unsafe {
+        core::ptr::write_volatile(
+            (session.session + session.abi.session_state_offset) as *mut u32,
+            session.abi.state_idle,
+        );
+    }
+    LAST_SESSION_STATE.store(session.abi.state_idle as usize, Ordering::SeqCst);
+    let count = SEARCHES_RELEASED.fetch_add(1, Ordering::SeqCst) + 1;
+    crate::standalone_log(format_args!(
+        "local-invasion: released the search (#{count}) -- the session held the searching state \
+         for {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and Seamless never asked Steam for a lobby, so \
+         nothing was searching. The state is back to idle because the invade action refuses to run \
+         while it reads anything else, and leaving it parked would have blocked the Challenger's \
+         Lynchpin as well."
+    ));
+    // SAFETY: the game's menu thread, which is this surface's stated contract. A refusal is not an
+    // error here -- the release has already happened and only the notice would be missing.
+    unsafe {
+        crate::announce::show("The search did not reach Seamless");
+    }
 }
 
 /// Feed the restart backoff the shape of the attempt, from transitions it already sees.
@@ -1681,6 +1802,9 @@ static JOIN_PROGRESS_IDLE_SAMPLES: AtomicUsize = AtomicUsize::new(0);
 /// The reading holds for as long as the invasion does, and this runs on the game task, so without
 /// the latch the log fills with one repeated sentence while the player is playing.
 static IN_WORLD_DROP_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+
+/// The last connecting refusal, latched for the same reason as the in-world one above.
+static CONNECTING_DROP_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 
 /// `0` = not currently reporting one.
 static DEAD_JOIN_SINCE_MS: AtomicU64 = AtomicU64::new(0);
@@ -2661,6 +2785,13 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
             .ok_or("<state-unreadable>"),
         Err(reason) => Err(reason.label()),
     });
+    // Above the early return for the same reason the trace is: a session parked at
+    // `state_searching` refuses every later invade, so the longer this waits on some other gate
+    // the longer the player cannot invade at all. It costs one clock read on a tick with no
+    // outstanding search of ours.
+    if let Ok(session) = resolve_session() {
+        release_a_search_nothing_is_running(session);
+    }
     // Before the early return below, and that placement is the whole point. A rejection is armed
     // from the join-data detour and driven here, and it used to sit under a `resolve_session`
     // guard -- so a session that stopped resolving between the verdict and this tick stranded the
@@ -2928,6 +3059,42 @@ fn drop_a_match_the_engine_has_already_failed(
     // unreachable.
     if state == session.abi.state_searching {
         DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    // A handshake in progress is not a dead match, and this detector was cancelling every one.
+    //
+    // Measured on run br-20260916-083935-5990: nineteen rounds, each one Seamless matching a host,
+    // walking `0x0e -> 0x0f -> 0x12`, and sitting at `0x12` until this path cancelled it at ~8s
+    // with `lobby=0 proto=6 rpc=0`. The same signature the searching carve-out above was written
+    // from, one state later. The hunt therefore never got past the handshake in a run where
+    // `RequestLobbyList reached our detour` and Seamless was answering -- so "Seamless's networking
+    // is dormant" (bd er-effects-rs-bfln) was this code cancelling, not Seamless declining.
+    //
+    // `lobbyState == None` cannot mean the attempt is dead here, because in a Seamless invasion it
+    // is `None` at every point: Seamless owns the session and the engine's lobby is never used.
+    // The `state_in_world` carve-out below already concedes exactly that at `0x16`, and there is
+    // no reason the premise would be false at `0x16`, true at `0x12`, and false again at `0x0e`.
+    //
+    // The set deferred to is `connect_phase`'s own, derived from ERSC's Cancel-row predicate, so
+    // this cannot drift from the states the deadline already refuses to cancel. That path reached
+    // the same conclusion for the same states and kept the observation while dropping the action
+    // ("the deadline reports and no longer cancels"); this is the second door onto that action and
+    // now answers the same way. What is given up is the 2026-09-10 complaint's recovery during a
+    // connect only -- a genuinely stuck `0x12` now waits for Seamless's own timeout to return it
+    // to idle, where this detector still acts.
+    if connect_phase(session.abi, state)
+        == er_invasion_warp_core::attempt_verdict::Phase::Connecting
+    {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        actions::log_refusal_once(
+            &CONNECTING_DROP_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: NOT dropping this match -- the engine reports no session, but \
+                 Seamless reads {state:#04x}, which is a connect in progress. The engine's lobby \
+                 is never used in a Seamless invasion, so its being empty says nothing here. \
+                 Cancelling this is what ended all nineteen matches of run br-20260916-083935-5990."
+            ),
+        );
         return;
     }
     // `state_in_world` is the player standing in the host's world, and this path must not touch it.

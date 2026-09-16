@@ -1387,9 +1387,27 @@ mod live {
             };
             let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
             if n == 1 {
+                // The flag is printed at the decision, not only at config load, because the two
+                // disagreed and nothing could say which config this read.
+                //
+                // Run br-20260916-083935-5990: `config loaded ... search_by_location=false
+                // ... blocks=0` on its only config-load line, and then this filter went out
+                // anyway, narrowing the query to `m60_52_53_00`. Both gates below it return
+                // `None` on `enabled == false`, so the snapshot this path saw cannot have been
+                // the one that was logged -- and with no flag here there is no way to tell a
+                // stale snapshot from a reload nobody printed. That run then reported "3 connects
+                // in a row have died at the deadline with hunt on", which is the cost: the filter
+                // restricts results to hosts running this DLL, so no join can land.
+                let flag = crate::local_invasion_filter::current_config_snapshot().map_or(
+                    "<no snapshot>",
+                    |config| if config.hunt { "true" } else { "false" },
+                );
                 crate::standalone_log(format_args!(
-                    "hunt: asking Steam for hosts at {value} only (#{n}) -- hosts without this \
-                         DLL do not publish the key and will not be returned"
+                    "hunt: asking Steam for hosts at {value} only (#{n}), \
+                     search_by_location={flag} at this call -- hosts without this DLL do not \
+                     publish the key and will not be returned. If that flag reads false, this \
+                     filter should not have gone out and the query was narrowed against the \
+                     user's settings."
                 ));
             }
         }
@@ -1799,15 +1817,45 @@ mod live {
             FILTERS_ADDED.load(Ordering::SeqCst),
         )
     }
+
+    /// `(the detour is live, queries Seamless actually sent)`.
+    ///
+    /// Deliberately not the same pair as [`hunt_tally`], whose second number counts the queries
+    /// this module narrowed. A search running with the ladder off narrows nothing and would read
+    /// zero there while Seamless asks Steam perfectly well, so one cannot stand in for the other.
+    ///
+    /// What this pair is for: deciding whether a session sitting at `state_searching` is a search
+    /// at all. `ersc+0x25850` is nine instructions -- take the session lock, return unless the
+    /// state reads idle, store `0x0e`, unlock -- so the state is a request, not a search, and only
+    /// a query going out says the request was picked up. The first element is what makes a zero
+    /// readable: with the detour not live, zero means nobody is counting.
+    #[must_use]
+    pub fn hunt_requests() -> (bool, usize) {
+        (
+            HUNT_HOOK_LIVE.load(Ordering::SeqCst) != 0,
+            REQUESTS_SEEN.load(Ordering::SeqCst),
+        )
+    }
 }
 
 #[cfg(windows)]
 pub use live::{
-    advance_search_place, advertisement_lobby, hunt_tally, install_advertisement_observer,
-    install_hunt_hook, install_pool_filter_hook, persona_name, publish_current_map,
-    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder,
-    tallies as publish_tallies, tally,
+    advance_search_place, advertisement_lobby, hunt_requests, hunt_tally,
+    install_advertisement_observer, install_hunt_hook, install_pool_filter_hook, persona_name,
+    publish_current_map, reapply_pool_if_toggled, report_persona_plumbing_once,
+    restart_search_ladder, tallies as publish_tallies, tally,
 };
+
+/// Host-target stand-in, so `local_invasion_filter` compiles under `cargo test` on Linux.
+///
+/// `false` for the detour is the honest answer off Windows and the one that makes the caller safe:
+/// its contract is that a zero count means nothing when nobody is counting, so every judgement
+/// that depends on this declines rather than acting on a count that was never taken.
+#[cfg(not(windows))]
+#[must_use]
+pub fn hunt_requests() -> (bool, usize) {
+    (false, 0)
+}
 
 #[cfg(test)]
 mod tests {
