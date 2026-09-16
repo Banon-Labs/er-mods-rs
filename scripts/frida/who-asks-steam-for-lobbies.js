@@ -71,6 +71,8 @@ for (const name of WATCH) {
 // `steam_api64.dll`, so a line from it proves both that Interceptor is live and that hooks on this
 // specific module take -- which is the exact claim the silence of the lobby hooks depends on.
 let pumped = 0;
+/// Set by the arming block below, once the export has been resolved.
+let armWhenInWorld = () => {};
 const control = steam === null ? null : steam.findExportByName('SteamAPI_RunCallbacks');
 if (control === null) {
   console.log('who-asks: control SteamAPI_RunCallbacks not found');
@@ -79,6 +81,7 @@ if (control === null) {
   Interceptor.attach(control, {
     onEnter() {
       pumped += 1;
+      armWhenInWorld();
       if (pumped === 1 || pumped === 600 || pumped === 6000) {
         console.log(
           `who-asks: control -- SteamAPI_RunCallbacks fired ${pumped}x, hooks on ${STEAM} are live`
@@ -104,8 +107,21 @@ if (ours === null) {
   if (arm === null) {
     console.log('who-asks: er_invasion_warp_request_invade is not exported');
   } else {
-    const armed = new NativeFunction(arm, 'bool', [])();
-    console.log(`who-asks: armed a search through our own export -> ${armed}`);
+    // Armed from inside the Steam callback pump rather than at load, because an agent attached
+    // during boot runs before the world exists: the arm lands while no session can be resolved and
+    // the ladder takes its first rung against whatever block is readable at the title screen.
+    // `SteamAPI_RunCallbacks` is the only thing here that ticks, since this watcher's `setTimeout`
+    // never fires -- so a count on it is the clock.
+    const ARM_AFTER_CALLBACKS = 3000;
+    let armedOnce = false;
+    armWhenInWorld = () => {
+      if (armedOnce || pumped < ARM_AFTER_CALLBACKS) {
+        return;
+      }
+      armedOnce = true;
+      const armed = new NativeFunction(arm, 'bool', [])();
+      console.log(`who-asks: armed a search at callback ${pumped} -> ${armed}`);
+    };
   }
 }
 
