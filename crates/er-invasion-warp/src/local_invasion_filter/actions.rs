@@ -1143,11 +1143,26 @@ pub(super) fn watch_for_failed_connect(session: SeamlessSession) {
         ));
         return;
     }
-    cancel_stalled_attempt(
-        session,
-        state,
-        er_invasion_warp_core::attempt_verdict::CONNECT_DEADLINE_MS,
-    );
+    // The deadline reports and no longer cancels.
+    //
+    // User ground truth, 2026-09-16, while invading: "Because of the er-invasion-warp feature it
+    // says no connection. I normally can invade people." That sentence names this code twice --
+    // "no connection" is this path's own banner text, from `RejectNotice::observe_failure`, and the
+    // cancel below is what turned a connect that was still in progress into a dead one.
+    //
+    // The deadline was derived from an aggregation of this mod's own runs (n=313, slowest success
+    // 441ms), so it describes connects that completed while the mod was shaping them, not connects
+    // as the player experiences them without it. Timing a distribution measured through the
+    // instrument being calibrated is how all four members of this family went wrong: the stall
+    // watchdog cancelled a kept match at 0x15, cancelled a 0x11 retry 33x in one run, and the first
+    // connect deadline tore the player out of a live invasion at 0x16. Every one was a detector
+    // acting on a state whose real dwell nobody had measured from outside.
+    //
+    // So the observation stays -- the log line and the banner still say the connect is slow, which
+    // is the diagnostic worth having -- and the action goes. Restoring it needs a dwell
+    // distribution measured with this mod not driving, which `--without er-invasion-warp` now makes
+    // a one-command run.
+    let _ = cancel_stalled_attempt;
 }
 
 /// Per-site latches for [`log_refusal_once`]. Separate so a cancel refusal cannot silence an invade
