@@ -367,13 +367,15 @@ fn audit_write_site(address: usize, needed: u32, _what: &str) -> Result<EntryKin
     if !unsafe { er_game_base::mem::read_bytes(address, &mut opening) } {
         return Err(Refusal::Unreadable);
     }
-    // Before anything else about shape: is the image's own code even here? An Arxan-stubbed entry
-    // is a declared function entry with room to spare, so every later check passes it and the
-    // write lands on the jump.
+    // A `jmp rel32` here means the image's own code is not at this entry, and Arxan is only one
+    // of the two things that put it there: another module's MinHook detour looks byte-identical,
+    // and chaining onto one is the ordinary
+    // case -- `map_gfx` chains onto er-armament-icons' detour of the GFx tag parser on every
+    // launch. Refusing on the byte alone broke that chain on run br-20260916-193045-979a, which is
+    // why this reports and does not judge. A caller that knows its target is Arxan-stubbed asks
+    // for the body explicitly, through `detour_target_following_arxan`.
     if opening[0] == ARXAN_STUB_OPCODE {
-        if let Some(target) = follow_arxan_stub(address) {
-            return Err(Refusal::ArxanStub { target });
-        }
+        let _ = follow_arxan_stub(address);
     }
     let kind = classify_live(address)?;
     judge(kind, &opening, needed)?;
@@ -422,8 +424,11 @@ pub fn follow_arxan_stub(entry: usize) -> Option<usize> {
     }
     let relative = i32::from_le_bytes(displacement) as isize;
     let target = (entry + ARXAN_STUB_LEN).wrapping_add_signed(relative);
+    // The displacement prints in decimal. `{:+#x}` on a negative `isize` prints its two's
+    // complement, so a backward jump of 6941202 read as `+0xffffffffff9615ee` on run
+    // br-20260916-193045-979a -- sixteen digits that look like an address and are not one.
     hook_log(format_args!(
-        "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative:+#x} -> 0x{target:x}. The detour belongs on          the body, not the entry"
+        "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
     ));
     Some(target)
 }
