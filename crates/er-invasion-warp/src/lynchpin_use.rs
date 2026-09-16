@@ -268,6 +268,9 @@ static PASS_REPORTED: AtomicUsize = AtomicUsize::new(0);
 /// Dialogs this module declined to open, and dialogs it let through.
 #[cfg(windows)]
 static POPUPS_SKIPPED: AtomicUsize = AtomicUsize::new(0);
+/// Whether the handoff pass-through has been reported once.
+#[cfg(windows)]
+static HANDOFF_PASSTHROUGH_SAID: AtomicUsize = AtomicUsize::new(0);
 #[cfg(windows)]
 static POPUPS_PASSED: AtomicUsize = AtomicUsize::new(0);
 
@@ -496,6 +499,39 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
                  Lynchpin ({LYNCHPIN_ITEM_ID:#x}) -- letting it through untouched. This detour is \
                  on a game function that serves every such menu, and without this check it drove \
                  an invasion out of the co-op open-your-world menu. Printed once."
+            ));
+        }
+        POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
+        let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
+        if orig == 0 {
+            return 0;
+        }
+        // SAFETY: the union stored the trampoline for this exact target.
+        return unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d) };
+    }
+    // A handoff in flight must reach Seamless, not be swallowed here.
+    //
+    // This detour's whole purpose is to decline Seamless's dialog and drive `ersc+0x25850` itself,
+    // which is right for a player reaching for the Lynchpin and wrong for the finger's `Both near
+    // and far` row -- because that direct call is precisely the one measured not to search. So a
+    // Lynchpin use that this module requested is passed through untouched.
+    //
+    // Measured on run br-20260916-094626-89c0, comparing the two drives on `ersc+0xa96e0`, the
+    // handler Seamless registers against goods `0x7fde63`:
+    //
+    // | driven | Seamless's handler | new lobby calls |
+    // | --- | --- | --- |
+    // | Lynchpin from outside | +3 | `RequestLobbyList` 1, filters 5 |
+    // | the finger's handoff | +0 | none |
+    //
+    // The engine latched both uses identically -- `menuGaitemUseState` stepped 0, 1, 2 in each --
+    // so Seamless was simply never shown the second one. This is why.
+    if HANDOFF_STAGE.load(Ordering::SeqCst) != HANDOFF_IDLE {
+        if HANDOFF_PASSTHROUGH_SAID.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "lynchpin: letting Seamless's own dialog through -- this is the near+far handoff, \
+                 and swallowing it would turn the Lynchpin's use back into the direct \
+                 `ersc+0x25850` call that does not search. Printed once."
             ));
         }
         POPUPS_PASSED.fetch_add(1, Ordering::SeqCst);
