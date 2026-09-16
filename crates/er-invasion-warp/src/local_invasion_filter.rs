@@ -644,6 +644,30 @@ pub(crate) const FINGER_REACH_NEARBY: usize = 1;
 pub(crate) const FINGER_REACH_NEAR_AND_FAR: usize = 2;
 
 /// Whether the finger's popup chose `Both near and far`, which must not narrow the lobby query.
+/// Whether Seamless has a session object the module could drive through.
+///
+/// The near+far handoff cannot reach Seamless without one: the option-menu object is found by
+/// walking ersc's writable data for a qword whose `+0x58` is session-shaped, so no session means
+/// no object, nothing to drive and no query. Asked before the handoff starts so a run that cannot
+/// possibly search says so at the top instead of after the item has been pinned, pressed and
+/// consumed.
+#[cfg(windows)]
+pub(crate) fn session_is_resolvable() -> bool {
+    let Some(abi) = resolve_ersc_abi() else {
+        return false;
+    };
+    let Some(base) = ersc_module_base() else {
+        return false;
+    };
+    session_scan::cached_scan_for_session(base, abi).is_some()
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub(crate) fn session_is_resolvable() -> bool {
+    false
+}
+
 pub(crate) fn finger_reach_is_near_and_far() -> bool {
     FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
 }

@@ -928,6 +928,27 @@ unsafe fn release_borrowed_quick_slot() {
     ));
 }
 
+/// Whether Seamless has a session object this run, and so whether a handoff can reach it at all.
+///
+/// # Why the handoff says this before it starts
+///
+/// The near+far row hands off to the Challenger's Lynchpin so that Seamless's own matchmaking
+/// runs. That only ever happened once, on run br-20260916-100817-3fe0, and its log is a sequence
+/// with a precondition at the front: Seamless's option-menu object was captured
+/// (`OSM=0x469ad518`, `session=0x469ac930`), the action was driven through the real object, and
+/// `RequestLobbyList` followed. The object is found by walking ersc's writable data for a qword
+/// whose `+0x58` is session-shaped, so with no session there is no object, nothing to drive, and
+/// no query.
+///
+/// Every silent run since has been in that state, and said nothing about it until the item had
+/// been pinned, pressed and consumed -- which reads as a working handoff right up to the moment
+/// nothing happens. Reporting the precondition at the top turns those runs from silent into
+/// explained.
+#[cfg(windows)]
+fn seamless_session_is_known() -> bool {
+    crate::local_invasion_filter::session_is_resolvable()
+}
+
 /// Ask for the Challenger's Lynchpin itself to be used, from any thread.
 ///
 /// # Why the finger's near+far row routes here instead of calling the action
@@ -959,10 +980,24 @@ pub fn request_lynchpin_use_offthread() {
     // `tae_queued_use_item` reads -1 again -- the character saying it is done -- which is an
     // acknowledgement rather than another delay. Every step that worked in this investigation came
     // from waiting on a state the game reports; every one that failed came from picking a duration.
+    // Say at the top whether this handoff can reach Seamless at all.
+    //
+    // Without a session object there is nothing to capture and nothing to drive, so the item is
+    // pinned, pressed and consumed and then nothing follows -- which reads as a working handoff
+    // until the silence at the end. Six runs on 2026-09-16 were exactly that.
+    if !seamless_session_is_known() && HANDOFF_NO_SESSION_SAID.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: handing off with no Seamless session in this process -- the item will be used and nothing will follow. The option-menu object is found by walking ersc's writable data for a qword whose `+0x58` is session-shaped, so with no session there is nothing to drive the search through. A silent run after this line is this, not `no hosts were found`. Printed once."
+        ));
+    }
     HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
     HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
     HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
 }
+
+/// One line per process when a handoff starts with no session to reach.
+#[cfg(windows)]
+static HANDOFF_NO_SESSION_SAID: AtomicUsize = AtomicUsize::new(0);
 
 /// Pin the Lynchpin once the character is free, then let [`drive_handoff_press`] take it.
 ///
