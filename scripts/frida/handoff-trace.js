@@ -23,7 +23,7 @@ const LOBBY_NAMES = {
   14: 'JoinLobby',
 };
 
-const out = { pad: { resolved: false, calls: 0, masks: {}, threads: {} }, lobby: { hooked: 0, hits: {} } };
+const out = { pad: { resolved: false, calls: 0, masks: {}, threads: {} }, lobby: { hooked: 0, hits: {}, filters: [] } };
 
 const product = Process.findModuleByName('er_quickload.dll');
 if (product !== null) {
@@ -54,8 +54,31 @@ if (ersc !== null) {
     try { fn = vtable.add(slot * Process.pointerSize).readPointer(); } catch (e) { break; }
     if (fn.isNull() || Process.findModuleByAddress(fn) === null) continue;
     const label = LOBBY_NAMES[slot] ? `${slot} ${LOBBY_NAMES[slot]}` : `${slot}`;
+    // Slot 5 carries the only thing that says WHOM the query can match, so its arguments are
+    // read rather than counted. `AddRequestLobbyListStringFilter(self, key, value, comparison)`:
+    // if one of the pairs going out is Seamless's password hash, then the pool the invader can
+    // reach is every host sharing that password and nobody else, and an empty result is a
+    // settings fact rather than anything this mod did. A count alone cannot tell those apart.
+    const capture = slot === 5;
     try {
-      Interceptor.attach(fn, { onEnter () { out.lobby.hits[label] = (out.lobby.hits[label] || 0) + 1; } });
+      Interceptor.attach(fn, {
+        onEnter (args) {
+          const seen = (out.lobby.hits[label] = (out.lobby.hits[label] || 0) + 1);
+          // Said on the first hit of each slot, so a watch with no rpc poller still shows the
+          // moment Seamless speaks to Steam. Slot 13 is `CreateLobby`: seeing it is the proof
+          // that Seamless brought its own session up, which is the precondition every search
+          // depends on and which no amount of driving can substitute for.
+          if (seen === 1) console.log(`lobby: slot ${label} called`);
+          if (!capture) return;
+          // Fault-closed: a non-string argument records what failed instead of killing the hook.
+          let key = '<unreadable>';
+          let value = '<unreadable>';
+          try { key = args[1].readUtf8String(); } catch (e) { key = `<${e.message}>`; }
+          try { value = args[2].readUtf8String(); } catch (e) { value = `<${e.message}>`; }
+          out.lobby.filters.push({ key, value, comparison: args[3].toInt32() });
+          console.log(`lobby filter: ${key} = ${value}`);
+        },
+      });
       out.lobby.hooked += 1;
     } catch (e) { /* slots can share an address; a second hook there is refused */ }
   }
