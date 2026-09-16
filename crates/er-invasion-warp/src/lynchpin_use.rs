@@ -799,6 +799,16 @@ pub fn request_lynchpin_use_offthread() {
     // engine leaves it and restores `GameMan+0xbc8`. Zeroing it would skip that cleanup and leave
     // the game reading a finger as the selected quick item.
     if PIN_FRAMES_LEFT.load(Ordering::SeqCst) > 1 {
+        // The pinned id is cleared too, or the keep-alive undoes this on the very next tick.
+        //
+        // `drive_pinned_use` resets the counter back to a full window for as long as
+        // `tae_queued_use_item` still reads the pinned item, which it does here because the finger
+        // is mid-use -- so shortening the counter alone achieved nothing and run
+        // br-20260916-091849-c540 shows it: the handoff logged and the Lynchpin was never pinned,
+        // because the counter never reached zero and `drain_requested_use` never ran. Zeroing the
+        // id makes the keep-alive's comparison fail, the counter runs down to its `left == 1` arm,
+        // and the cleanup there still restores `menuGaitemUseState` and `GameMan+0xbc8`.
+        PINNED_ITEM_ID.store(0, Ordering::SeqCst);
         PIN_FRAMES_LEFT.store(1, Ordering::SeqCst);
     }
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
