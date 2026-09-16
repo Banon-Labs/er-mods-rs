@@ -52,7 +52,7 @@
 //! the leave prompt included, falls through untouched.
 
 #[cfg(windows)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(windows)]
 use crate::map_seams::{MapSeam, verify_seam};
@@ -170,26 +170,33 @@ const HANDOFF_IDLE: usize = 0;
 const HANDOFF_WAITING_FOR_LATCH: usize = 1;
 #[cfg(windows)]
 const HANDOFF_PRESSING: usize = 2;
-/// Frames the press is held.
+/// How long to wait between the Lynchpin being pinned and the use action being pressed, and how
+/// long to hold it, in milliseconds rather than ticks.
 ///
-/// Thirty rather than six, which is what the drive that actually works holds. Six was my guess at
-/// "enough for an edge" and run br-20260916-092022-98c3 measured what it buys: the Lynchpin pinned
-/// at inventory index 1701, the press logged, and 38 of 38 matchmaking slots still at zero -- while
-/// the same item driven by hand with a half-second hold produces `RequestLobbyList` and five filter
-/// calls. Half a second is about thirty frames.
-///
-/// It is still a press and not a hold: it releases, and a level that never falls is what stopped
-/// the finger working before.
+/// Ticks are not frames here and that is the whole reason this did not work. This task runs far
+/// faster than the display: a 90-tick pin window expired before a 20ms sampler could catch the
+/// online flag it sets, measured on 2026-09-16, so a "150 frame" settle and a "30 frame" hold were
+/// a small fraction of the 2.5s and 0.5s the drive that works uses. Counting ticks was me assuming
+/// a tick rate I had already measured to be wrong.
 #[cfg(windows)]
-const HANDOFF_PRESS_HELD_FRAMES: usize = 30;
-/// Frames between the Lynchpin being pinned and the use action being pressed. The finger's own
-/// measured recipe waits about two and a half seconds, which is roughly this many frames.
+const HANDOFF_SETTLE_BEFORE_PRESS_MS: u64 = 2500;
 #[cfg(windows)]
-const HANDOFF_SETTLE_BEFORE_PRESS: usize = 150;
+const HANDOFF_PRESS_HELD_MS: u64 = 500;
+/// When the Lynchpin was pinned, as milliseconds since the process started. Zero means "not yet".
 #[cfg(windows)]
-static HANDOFF_SETTLE_FRAMES: AtomicUsize = AtomicUsize::new(0);
+static HANDOFF_PINNED_AT_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
-static HANDOFF_PRESS_FRAMES: AtomicUsize = AtomicUsize::new(0);
+static HANDOFF_PRESSED_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Milliseconds since this module first asked, from a monotonic clock.
+#[cfg(windows)]
+fn now_ms() -> u64 {
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
 /// Whether the latch has been reported for the use in flight.
 #[cfg(windows)]
 static USE_ACKNOWLEDGED: AtomicUsize = AtomicUsize::new(0);
@@ -820,7 +827,8 @@ pub fn request_lynchpin_use_offthread() {
         PIN_FRAMES_LEFT.store(1, Ordering::SeqCst);
     }
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
-    HANDOFF_SETTLE_FRAMES.store(0, Ordering::SeqCst);
+    HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
+    HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
     HANDOFF_STAGE.store(HANDOFF_WAITING_FOR_LATCH, Ordering::SeqCst);
 }
 
@@ -915,10 +923,16 @@ unsafe fn drive_handoff_press() {
             // 1701, "the use action is pressed for 6 frame(s)" logged, and 38 of 38 matchmaking
             // slots still at zero.
             //
-            // Counted from the pin rather than slept on, because this runs on the game task and a
-            // sleep here would stall the frame it is counting.
-            let waited = HANDOFF_SETTLE_FRAMES.fetch_add(1, Ordering::SeqCst);
-            if waited < HANDOFF_SETTLE_BEFORE_PRESS {
+            // Measured on a clock rather than counted in ticks, for the reason on
+            // `HANDOFF_SETTLE_BEFORE_PRESS_MS`. Read rather than slept on, because this runs on the
+            // game task and a sleep here would stall the very frames it is waiting for.
+            let pinned_at = HANDOFF_PINNED_AT_MS.load(Ordering::SeqCst);
+            let now = now_ms();
+            if pinned_at == 0 {
+                HANDOFF_PINNED_AT_MS.store(now.max(1), Ordering::SeqCst);
+                return;
+            }
+            if now.saturating_sub(pinned_at) < HANDOFF_SETTLE_BEFORE_PRESS_MS {
                 return;
             }
             let hold = hold_pad();
@@ -928,18 +942,17 @@ unsafe fn drive_handoff_press() {
             }
             // SAFETY: the export resolved above, called with the button mask it documents.
             unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(PAD_A, 0, 0) };
-            HANDOFF_PRESS_FRAMES.store(HANDOFF_PRESS_HELD_FRAMES, Ordering::SeqCst);
+            HANDOFF_PRESSED_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
             HANDOFF_STAGE.store(HANDOFF_PRESSING, Ordering::SeqCst);
             crate::standalone_log(format_args!(
-                "lynchpin: the handed-off Lynchpin is pinned, so the use action is pressed for \
-                 {HANDOFF_PRESS_HELD_FRAMES} frame(s). This is the press the handoff used to be \
-                 missing."
+                "lynchpin: the handed-off Lynchpin settled for \
+                 {HANDOFF_SETTLE_BEFORE_PRESS_MS}ms, so the use action is pressed and held for \
+                 {HANDOFF_PRESS_HELD_MS}ms."
             ));
         }
         HANDOFF_PRESSING => {
-            let left = HANDOFF_PRESS_FRAMES.load(Ordering::SeqCst);
-            if left > 1 {
-                HANDOFF_PRESS_FRAMES.store(left - 1, Ordering::SeqCst);
+            let pressed_at = HANDOFF_PRESSED_AT_MS.load(Ordering::SeqCst);
+            if now_ms().saturating_sub(pressed_at) < HANDOFF_PRESS_HELD_MS {
                 return;
             }
             let hold = hold_pad();
