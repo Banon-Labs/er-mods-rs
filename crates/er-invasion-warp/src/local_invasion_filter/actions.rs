@@ -21,13 +21,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use er_invasion_warp_core::local_invasion::RejectReason;
 
 use super::{
-    ATTEMPT_VERDICT, AUTO_SEARCH_ARMED, CANCELS, FAILED_CONNECTS, INVADE_ACTION_UNCALLABLE,
-    INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, NoSession, OurCall, PENDING_REINVADE, REINVADES,
-    RESTART_BACKOFF, SELF_RECOVERIES, STALL_RECOVERIES, STALL_WATCHDOG, SeamlessSession,
-    cancel_row_refusal, ersc, ersc_action, inside_ersc_callback, lock_shape_refusal,
-    module_backing, not_identified_detail, note_state_after_our_action, now_ms, read_session_state,
-    report_lock_preconditions, resolve_ersc_abi, resolve_session, session_guard_refuses,
-    session_scan,
+    ATTEMPT_DRIVEN, ATTEMPT_VERDICT, AUTO_SEARCH_ARMED, CANCELS, ErscActionFn, FAILED_CONNECTS,
+    INVADE_ACTION_REFUSAL_SAID, INVADE_ACTION_UNCALLABLE, INVADE_GUARD_REFUSAL_SAID,
+    INVADE_IN_FLIGHT, INVASION_ACTUALLY_HAPPENED, JOIN_IN_FLIGHT, NoSession, OurCall,
+    PENDING_REINVADE, REINVADES, RESTART_BACKOFF, SELF_RECOVERIES, STALL_RECOVERIES,
+    STALL_WATCHDOG, SeamlessSession, cancel_row_refusal, ersc, ersc_action, inside_ersc_callback,
+    lock_shape_refusal, module_backing, not_identified_detail, note_state_after_our_action, now_ms,
+    read_session_state, report_lock_preconditions, resolve_ersc_abi, resolve_session,
+    session_guard_refuses, session_scan,
 };
 
 /// Refuse to invoke a Seamless action with a null `this`, and say why.
@@ -51,6 +52,11 @@ use super::{
 /// A declined action costs one unfiltered match. A null `this` costs the session.
 ///
 /// Not `cfg`-gated: its callers are not either, and the host build exercises their state machine.
+/// `[rcx + 0x58]` -- the only field ERSC's invade and cancel actions read off their `this`.
+///
+/// See `synthesized_owner` for the disassembly both actions open with.
+const OWNER_SESSION_OFFSET: usize = 0x58;
+
 fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> {
     // The identification, not just a guard on the call. `resolve_session` accepts a candidate on
     // `plausible_session_pointer` -- at least 0x10000 and 8-aligned -- plus a state field holding one
@@ -106,6 +112,32 @@ fn ersc_owner_or_refuse(session: &SeamlessSession, what: &str) -> Option<usize> 
         return None;
     }
     if session.osm != 0 {
+        // The captured owner has to be readable where ERSC reads it, and that is one place:
+        // `[rcx + 0x58]`, the first instruction of both actions. An owner that fails this is not
+        // an owner, and handing it over is a fault inside `ersc.dll` rather than a refusal here.
+        //
+        // Measured twice, both times the same instruction. Run `br-20260916-004838-87fe`:
+        // `access-violation addr=0x18002585a rcx=0x736046b8 fault_addr=0x73604710`, which is
+        // `rcx+0x58`. Run `br-20260916-010425-1eb0`, from the game task this time:
+        // `rcx=0x75bf1d30[unreadable]`, backtrace `ersc.dll+0x25850 <- er_invasion_warp.dll`. The
+        // checks above had passed it as "plausible, tag absent" on both occasions -- they judge
+        // the session, and a stale captured OSM is a separate pointer that none of them read.
+        // SAFETY: fault-closed read of the one field the action dereferences.
+        if unsafe { er_game_base::mem::safe_read_usize(session.osm + OWNER_SESSION_OFFSET) }
+            .is_none()
+        {
+            log_refusal_once(
+                &OWNER_REFUSAL_SAID,
+                format_args!(
+                    "local-invasion: refusing to drive ERSC's {what} with the captured owner \
+                     {:#x} -- it is not readable at +{OWNER_SESSION_OFFSET:#x}, the one field \
+                     both actions dereference. Falling back to a synthesized owner, which holds \
+                     the session at that offset by construction.",
+                    session.osm
+                ),
+            );
+            return Some(synthesized_owner(session.session));
+        }
         return Some(session.osm);
     }
     // No OSM was found, and one is not needed. See `synthesized_owner`.
@@ -226,6 +258,52 @@ pub(super) fn log_refusal_once(latch: &Mutex<Option<String>>, message: std::fmt:
 static INVADE_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 static STALLED_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
 
+/// Arm a search without first insisting the session is resolvable right now.
+///
+/// [`request_invade`] refuses when `resolve_session` cannot identify Seamless's session at the
+/// instant it is called, and drops the request on the floor. That is wrong for a request made from
+/// a menu detour: the player pressed a button, and whether the resolver happens to recognise the
+/// session on that one frame is not something they chose. Measured on run
+/// `br-20260916-005630-402a`: the vanilla finger's popup was answered, `request_invade` came back
+/// `SessionNotIdentified`, and the search never started -- in a run whose own log had resolved the
+/// session minutes earlier and printed its address.
+///
+/// Arming instead of resolving costs nothing, because the resolving already happens somewhere
+/// better. The game task re-resolves the session every tick before it calls
+/// [`drive_pending_reinvade`], and that function re-checks idleness and re-validates the owner
+/// before it drives anything. So a request that arrives during a transient simply waits for the
+/// next tick that can act on it, which is what the player meant by pressing the row.
+///
+/// Both flags are still needed: `PENDING_REINVADE` is what the drain consumes and
+/// `AUTO_SEARCH_ARMED` is what it checks first, so setting one arms a request refused on the same
+/// tick it is made.
+#[cfg(windows)]
+pub fn arm_invade_request(why: &str) -> bool {
+    // A new search starts at the player's own tile. Without this the ring resumes wherever the
+    // last one was abandoned, so using the item again announces a search starting and then asks
+    // about somewhere twenty tiles away.
+    crate::lobby_publish::restart_search_ladder();
+    // Take the first rung here, so the opening banner names where the search is actually looking.
+    // Nothing else can: the only other caller is the Steam filter detour, and it does not run
+    // while Seamless searches -- every run so far reports `filter[ours 0/0]`. That is why the
+    // player saw one notice per use of the item and nothing afterwards.
+    crate::lobby_publish::advance_search_place();
+    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
+    PENDING_REINVADE.store(true, Ordering::SeqCst);
+    crate::standalone_log(format_args!(
+        "local-invasion: a search was armed for {why} -- it runs on the next game tick that can \
+         resolve the session and finds it idle, rather than being refused for the state of this \
+         one frame."
+    ));
+    true
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub fn arm_invade_request(_why: &str) -> bool {
+    false
+}
+
 /// Arm a search for the next game tick, from outside this DLL.
 ///
 /// Backs `er_invasion_warp_request_invade`; see that export for why the caller may not simply call
@@ -244,20 +322,21 @@ pub fn request_invade() -> bool {
     //
     // Asking `resolve_session` is therefore both correct and stricter in the way that matters: it
     // re-validates the pointer on every call rather than trusting a cached one.
+    // The session is reported, not required. Demanding one here threw away real requests for the
+    // state of a single frame: `resolve_session` answers `SessionNotIdentified` after a map
+    // change until the scan finds the new one, and a request made in that window was refused
+    // outright rather than waiting a tick. The finger popup hit exactly this and had to stop
+    // using this function; the export deserves the same treatment rather than a second rule.
+    //
+    // `drive_pending_reinvade` re-resolves on every tick and declines until it can, so an
+    // unresolvable session costs a delay, never the request.
     if let Err(cause) = resolve_session() {
         crate::standalone_log(format_args!(
-            "local-invasion: a search was requested from outside this DLL, but no session is \
-             resolvable right now ({cause:?}) -- nothing to drive."
+            "local-invasion: a search was requested from outside this DLL while no session was \
+             resolvable ({cause:?}) -- arming it anyway, for the first tick that can resolve one."
         ));
-        return false;
     }
-    AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
-    PENDING_REINVADE.store(true, Ordering::SeqCst);
-    crate::standalone_log(format_args!(
-        "local-invasion: a search was requested from outside this DLL -- armed for the next game \
-         tick, where the invade action runs on the thread that owns it."
-    ));
-    true
+    arm_invade_request("a request from outside this DLL")
 }
 
 /// Start the search now, on the calling thread, instead of arming it for the game tick.
@@ -472,8 +551,21 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         return;
     }
     REINVADE_NOT_IDLE_SAID.store(false, Ordering::SeqCst);
-    if session_guard_refuses(session.abi, session.session).is_some() {
+    // Both bails below used to return without a word, and the silence cost a whole run. Measured
+    // br-20260916-020020-8468: 1,836 `the attempt ended without us cancelling it` lines, zero
+    // `about to drive ERSC invade`, zero session-state transitions, and -- confirmed through a
+    // live Frida hook on the interface vtable itself -- zero calls to
+    // `ISteamMatchmaking::RequestLobbyList` or `AddRequestLobbyListStringFilter`. Every one of
+    // those attempts declined here and re-armed on the next tick, so the loop counted 1,836
+    // attempts that never happened and the prefilter ladder climbed over all of them.
+    if let Some(refusal) = session_guard_refuses(session.abi, session.session) {
         PENDING_REINVADE.store(false, Ordering::SeqCst);
+        log_refusal_once(
+            &INVADE_GUARD_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: an armed search was dropped before it could be driven --                  {refusal:?}. No attempt was made, so nothing the loop counts after this is an                  attempt either."
+            ),
+        );
         return;
     }
     let Some(invade) = ersc_action(
@@ -482,6 +574,13 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         session.abi.invade_prologue,
     ) else {
         PENDING_REINVADE.store(false, Ordering::SeqCst);
+        log_refusal_once(
+            &INVADE_ACTION_REFUSAL_SAID,
+            format_args!(
+                "local-invasion: an armed search was dropped because ersc+{:#x} would not hand                  out its invade action. No attempt was made.",
+                session.abi.invade_action_rva
+            ),
+        );
         return;
     };
     PENDING_REINVADE.store(false, Ordering::SeqCst);
@@ -499,17 +598,73 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         );
         return;
     }
-    let _call = OurCall::enter();
-    unsafe { invade(owner, 0, 1, 1) };
-    drop(_call);
-    // Claim the searching state we just caused, before the tracer can read it as the user pressing
-    // the option and arm a loop that is already armed.
-    note_state_after_our_action(session, "restart search");
-    let count = REINVADES.fetch_add(1, Ordering::SeqCst) + 1;
-    crate::standalone_log(format_args!(
-        "local-invasion: search restarted automatically (#{count}) -- press Cancel search yourself \
-         to stop"
-    ));
+    // Off the game's thread, because this call is allowed to block and the game is not.
+    //
+    // It blocked on 2026-09-16, run br-20260916-014344-dc40: `about to drive ERSC invade ...
+    // state=0x1 idle`, every precondition clear, the session mutex reading free and unowned at the
+    // instant of the check -- and no successor line ever. The player's game hard locked on a
+    // Nearby Only press. `lynchpin_use` had already measured the same signature from the same
+    // cause and written it down: arming moves the call to the game task tick, and the game's own
+    // goods path can be inside `ersc.dll` holding the session mutex at that moment. A free mutex
+    // one instruction earlier is not a promise that the call returns.
+    //
+    // The Lynchpin answers this by calling inline on the thread Seamless already drove into. The
+    // vanilla finger popup has no such thread -- it is the game's own menu, with no `ersc.dll`
+    // frame beneath it -- so the answer here is a thread of our own. If ERSC blocks, this worker
+    // blocks, waits for the mutex the goods path is holding, and proceeds when it frees. The game
+    // keeps rendering either way, which is the property that was missing.
+    //
+    // One at a time: the restart loop runs an attempt roughly every fifteen seconds and a blocked
+    // worker would otherwise accumulate one thread per round.
+    if INVADE_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        crate::standalone_log(format_args!(
+            "local-invasion: not restarting the search -- the previous invade call has not \
+             returned from ersc.dll yet. It is waiting on a lock rather than failing, and \
+             starting a second would queue behind it."
+        ));
+        return;
+    }
+    let invade_address = invade as usize;
+    let osm = session.osm;
+    let session_address = session.session;
+    let abi = session.abi;
+    let spawned = std::thread::Builder::new()
+        .name("er-invasion-warp invade".to_owned())
+        .spawn(move || {
+            let session = SeamlessSession {
+                osm,
+                session: session_address,
+                abi,
+            };
+            {
+                let _call = OurCall::enter();
+                // Set before the call, not after: the call is allowed to block, and an attempt
+                // that is in flight is still an attempt.
+                ATTEMPT_DRIVEN.store(true, Ordering::SeqCst);
+                // SAFETY: `ersc_action` verified this address against the prologue for the
+                // supported build, and `owner` was read back before the caller released the game
+                // thread. The arguments are the ones `ersc+0x25850` reads.
+                unsafe {
+                    core::mem::transmute::<usize, ErscActionFn>(invade_address)(owner, 0, 1, 1)
+                };
+            }
+            INVADE_IN_FLIGHT.store(false, Ordering::SeqCst);
+            // Claim the searching state we just caused, before the tracer can read it as the user
+            // pressing the option and arm a loop that is already armed.
+            note_state_after_our_action(session, "restart search");
+            let count = REINVADES.fetch_add(1, Ordering::SeqCst) + 1;
+            crate::standalone_log(format_args!(
+                "local-invasion: search restarted automatically (#{count}) -- press Cancel search \
+                 yourself to stop"
+            ));
+        });
+    if spawned.is_err() {
+        INVADE_IN_FLIGHT.store(false, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "local-invasion: could not start the thread that drives ERSC's invade, so this \
+             restart is skipped. The hunt stays armed and the next tick tries again."
+        ));
+    }
 }
 
 /// Re-arm the search when an attempt died without us cancelling it.
@@ -598,7 +753,21 @@ pub(super) fn arm_self_recovery(session: SeamlessSession) {
             return;
         }
     }
+    // Was there an attempt at all? A decline is not an attempt that ended, and counting it as one
+    // is what produced 1,836 phantom attempts in one run while nothing reached Steam. The retry
+    // still happens -- `PENDING_REINVADE` is set either way -- but nothing is counted, the ladder
+    // does not move, and the player is not told a place was tried when none was.
+    if !ATTEMPT_DRIVEN.swap(false, Ordering::SeqCst) {
+        PENDING_REINVADE.store(true, Ordering::SeqCst);
+        return;
+    }
     PENDING_REINVADE.store(true, Ordering::SeqCst);
+    // The attempt at this place found nobody, so the next one asks somewhere else -- and says so.
+    // This is the only thing that moves the ladder now. It used to move inside the Steam
+    // query detour, which does not fire while Seamless is searching, so the ring stood still and
+    // the player got one notice per use of the item and silence through every restart after it.
+    #[cfg(windows)]
+    crate::lobby_publish::advance_search_place();
     let count = SELF_RECOVERIES.fetch_add(1, Ordering::SeqCst) + 1;
     crate::standalone_log(format_args!(
         "local-invasion: the attempt ended without us cancelling it (#{count}) -- restarting the \

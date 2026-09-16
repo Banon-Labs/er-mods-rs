@@ -129,13 +129,15 @@ mod session_field_trace;
 pub(crate) mod session_scan;
 use session_field_trace::trace_session_field_writes;
 
+/// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
+/// callers already look for them.
+pub use actions::{
+    arm_invade_request, drive_invade_inline, drive_invade_with_owner, request_invade,
+};
 use actions::{
     arm_self_recovery, cancel_stalled_attempt_inner, drive_pending_reinvade, log_refusal_once,
     watch_for_failed_connect, watch_for_stall,
 };
-/// Called from outside this DLL and from `lynchpin_use`, so the names stay where their
-/// callers already look for them.
-pub use actions::{drive_invade_inline, drive_invade_with_owner, request_invade};
 use lock_report::{
     HANDLER_ERSC_LOBBY_KEY, HANDLER_ERSC_SHOW, HANDLER_GAME_TASK, HANDLER_JOIN_DATA,
     cancel_row_refusal, enter_ersc_callback, enter_handler, inside_ersc_callback,
@@ -198,6 +200,53 @@ impl Drop for OurCall {
         IN_OUR_CALL.store(false, Ordering::SeqCst);
     }
 }
+/// One line about whether Seamless has a session at all, for the heartbeat.
+///
+/// This existed only as a passing `SessionNotIdentified` inside a refusal, and its absence cost
+/// hours: run br-20260916-020529-29db had no live session, so no invade call could be made and no
+/// lobby query could follow, and every symptom downstream -- a prefilter ladder climbing with
+/// nothing behind it, a banner that never changed -- read as this mod being broken. The state of
+/// the thing everything else depends on belongs in the line that is printed every ten seconds.
+#[cfg(windows)]
+#[must_use]
+pub fn session_report() -> String {
+    match resolve_session() {
+        Ok(session) => match read_session_state(session.abi, session.session) {
+            Some(state) => format!("{:#x}@{state:#04x}", session.session),
+            None => format!("{:#x}@unreadable", session.session),
+        },
+        Err(cause) => format!("{cause:?}"),
+    }
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+#[must_use]
+pub fn session_report() -> String {
+    "not-windows".to_owned()
+}
+
+/// True once an invade call has actually been made, until the attempt it started is counted.
+///
+/// This is what separates an attempt from a decline. Run br-20260916-020020-8468 logged 1,836
+/// `the attempt ended without us cancelling it` lines with zero `about to drive ERSC invade`, zero
+/// session-state transitions, and zero `ISteamMatchmaking::RequestLobbyList` calls measured
+/// through a live hook on the interface vtable: every one of those was `drive_pending_reinvade`
+/// declining silently and `arm_self_recovery` re-arming on the next tick, counted as an attempt
+/// that ended. The prefilter ladder advanced on each one, so a search that never reached the
+/// network looked exactly like a working near-to-far escalation.
+static ATTEMPT_DRIVEN: AtomicBool = AtomicBool::new(false);
+/// Whether the guard-refusal and action-refusal drops have each been reported.
+///
+/// Both paths were silent, which is how a run spent 1,836 ticks declining to drive and reporting
+/// each decline as an attempt that ended.
+static INVADE_GUARD_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+static INVADE_ACTION_REFUSAL_SAID: Mutex<Option<String>> = Mutex::new(None);
+/// True while a drive of ERSC's invade is out on its own thread and has not returned.
+///
+/// The call is allowed to block -- see the comment at the spawn -- so this is what stops the
+/// fifteen-second restart loop from stacking one blocked thread per round behind the first.
+static INVADE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 /// Armed by our own cancel: search again as soon as the session settles back to idle. Cleared the
 /// moment the re-invade fires, so a session that never returns to idle cannot make this repeat.
 static PENDING_REINVADE: AtomicBool = AtomicBool::new(false);
@@ -479,6 +528,8 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
 #[cfg(windows)]
 pub(crate) fn stand_down_hunt(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
+    // The finger's override lives exactly as long as its search does.
+    set_finger_reach(FINGER_REACH_NONE);
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -537,7 +588,50 @@ fn cancel_live_search_for_player(reason: &str) {
 pub(crate) fn current_config() -> Option<LocalInvasionConfig> {
     refresh_config();
     let guard = CONFIG.lock().ok()?;
-    guard.as_ref().map(|hot| hot.current().clone())
+    let config = guard.as_ref().map(|hot| hot.current().clone())?;
+    Some(apply_finger_override(config))
+}
+
+/// Which reach a vanilla invasion finger asked for, or `FINGER_REACH_NONE`.
+///
+/// An in-memory override rather than a write to the player's file, for two reasons the user gave
+/// directly: using an item must not edit their settings, and it must not hinge on what those
+/// settings happen to be. A finger whose behaviour depends on `search_by_location` being on is a
+/// finger that does nothing for most players, silently -- which is exactly the failure the config
+/// line above already warns about for a bare `search_radius`.
+static FINGER_REACH: AtomicUsize = AtomicUsize::new(FINGER_REACH_NONE);
+pub(crate) const FINGER_REACH_NONE: usize = 0;
+pub(crate) const FINGER_REACH_NEARBY: usize = 1;
+pub(crate) const FINGER_REACH_NEAR_AND_FAR: usize = 2;
+
+/// Record what the finger's popup chose. Cleared by [`stand_down_hunt`] with everything else.
+pub(crate) fn set_finger_reach(reach: usize) {
+    FINGER_REACH.store(reach, Ordering::SeqCst);
+}
+
+/// Overlay the finger's choice on the loaded config, for as long as its search is running.
+///
+/// The three switches are forced together because they are one mechanism: the widening search runs
+/// inside the lobby-query detour, so it needs `steam_hooks`; the tile it starts from comes from
+/// `hunt_filter_value`, which answers `None` while `hunt` is off; and the filter judges nothing at
+/// all while `enabled` is false. Setting the radius without them is the silent no-op this module
+/// already logs a warning about.
+fn apply_finger_override(mut config: LocalInvasionConfig) -> LocalInvasionConfig {
+    let reach = FINGER_REACH.load(Ordering::SeqCst);
+    if reach == FINGER_REACH_NONE {
+        return config;
+    }
+    config.enabled = true;
+    config.hunt = true;
+    config.steam_hooks = true;
+    // The player's own radius still decides how wide "nearby" is; the choice only decides whether
+    // the search may stop being nearby. A file with no radius set would otherwise make `Nearby
+    // only` a single-tile search, which is an empty search.
+    if config.prefilter_radius == 0 {
+        config.prefilter_radius = 1;
+    }
+    config.search_everywhere_when_exhausted = reach == FINGER_REACH_NEAR_AND_FAR;
+    config
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2734,6 +2828,22 @@ fn drop_a_match_the_engine_has_already_failed(
         return;
     };
     if state == session.abi.state_idle {
+        DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
+        return;
+    }
+    // Searching is not a dead match. It is the state that means nobody has answered yet, and it is
+    // unbounded by nature -- `connect_phase` already refuses to time it for that reason, and
+    // `stall_watchdog`'s own doc records what happens when something does: "a player who started a
+    // hunt got a search that killed itself, every time, which is what invasions just fail looks
+    // like from their seat".
+    //
+    // This path reached it through `ersc_claims_attempt`, which is only `ersc_state != idle`, so
+    // every searching frame read as an attempt Seamless was holding against an engine with no
+    // session. That is also true of a search with nobody in range, and the two are identical from
+    // here. Measured on run `br-20260916-011647-2736`: seven rounds, each cancelled at ~8s with
+    // `lobby=0 proto=6`, so the prefilter ring never widened once and the everywhere rung was
+    // unreachable.
+    if state == session.abi.state_searching {
         DEAD_JOIN_SINCE_MS.store(0, Ordering::SeqCst);
         return;
     }

@@ -1,0 +1,203 @@
+// Who asks Steam for a lobby list during a Seamless invasion search, and from which module.
+//
+// The question this settles: `er-invasion-warp` hooks `ISteamMatchmaking::RequestLobbyList` at the
+// address it reads out of the game's own vtable, and that detour has never once been entered --
+// run br-20260916-015211-aa43 logged zero hits in 6043 lines with `hunt_hooked = true`. So either
+// nothing asks Steam for lobbies during an invasion search, or the asking goes through an address
+// our detour is not on.
+//
+// The obvious explanation is already falsified statically: `ersc.dll` and `eldenring.exe` both
+// carry the string `SteamMatchMaking009`, so they share one interface version, one vtable and one
+// set of function addresses.
+//
+// So this hooks the flat API in `steam_api64.dll` instead, which is a different entry point to the
+// same work and is exported by name, and reports the calling module for every hit. A call that
+// arrives here from `ersc.dll` while our own detour stays silent localises the problem to our hook
+// address; no call at all localises it to Seamless not using the lobby list.
+const STEAM = 'steam_api64.dll';
+const WATCH = [
+  'SteamAPI_ISteamMatchmaking_RequestLobbyList',
+  'SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter',
+  'SteamAPI_ISteamMatchmaking_RequestLobbyData',
+  'SteamAPI_ISteamMatchmaking_JoinLobby',
+  'SteamAPI_ISteamMatchmaking_CreateLobby',
+];
+
+const steam = Process.findModuleByName(STEAM);
+if (steam === null) {
+  console.log(`who-asks: ${STEAM} is not loaded`);
+} else {
+  console.log(`who-asks: ${STEAM} @${steam.base}`);
+}
+
+function whereFrom(address) {
+  const owner = Process.findModuleByAddress(address);
+  return owner ? `${owner.name}+0x${address.sub(owner.base).toString(16)}` : `${address}`;
+}
+
+const counts = {};
+for (const name of WATCH) {
+  let address = null;
+  try {
+    address = steam === null ? null : steam.findExportByName(name);
+  } catch (e) {
+    address = null;
+  }
+  if (address === null) {
+    console.log(`who-asks: ${name} -- export not found`);
+    continue;
+  }
+  counts[name] = 0;
+  console.log(`who-asks: hooked ${name} @${address}`);
+  Interceptor.attach(address, {
+    onEnter(args) {
+      counts[name] += 1;
+      const n = counts[name];
+      // Every call for the first few, then thinned: a search retries on a timer and the point is
+      // made by the first one. A line per call would bury the module name under its own repeats.
+      if (n > 6 && n % 25 !== 0) {
+        return;
+      }
+      console.log(`who-asks: ${name} #${n} from ${whereFrom(this.returnAddress)}`);
+    },
+  });
+}
+
+// Integrity control, and it has to be a function in THIS module.
+//
+// `PeekMessageW` was the control and it never fired once, so the first pass of this agent proved
+// nothing at all: a Steam hook that says nothing and a hook that was never installed read
+// identically. `SteamAPI_RunCallbacks` is pumped every frame by any Steam application and lives in
+// `steam_api64.dll`, so a line from it proves both that Interceptor is live and that hooks on this
+// specific module take -- which is the exact claim the silence of the lobby hooks depends on.
+let pumped = 0;
+const control = steam === null ? null : steam.findExportByName('SteamAPI_RunCallbacks');
+if (control === null) {
+  console.log('who-asks: control SteamAPI_RunCallbacks not found');
+} else {
+  console.log(`who-asks: control SteamAPI_RunCallbacks @${control}`);
+  Interceptor.attach(control, {
+    onEnter() {
+      pumped += 1;
+      if (pumped === 1 || pumped === 600 || pumped === 6000) {
+        console.log(
+          `who-asks: control -- SteamAPI_RunCallbacks fired ${pumped}x, hooks on ${STEAM} are live`
+        );
+      }
+    },
+  });
+}
+
+// Drive the search from here, rather than asking the player to press anything.
+//
+// `er_invasion_warp_request_invade` only sets the two atomics the game task drains, so calling it
+// from Frida's thread arms exactly what the finger popup arms and leaves the actual call to
+// `ersc.dll` on the thread that already owns it. The reach in force is whatever the last popup
+// chose, which the run log records as BothNearAndFar.
+//
+// Called at load rather than on a timer: `setTimeout` does not fire under this watcher.
+const ours = Process.findModuleByName('er_invasion_warp.dll');
+if (ours === null) {
+  console.log('who-asks: er_invasion_warp.dll is not loaded -- cannot arm a search from here');
+} else {
+  const arm = ours.findExportByName('er_invasion_warp_request_invade');
+  if (arm === null) {
+    console.log('who-asks: er_invasion_warp_request_invade is not exported');
+  } else {
+    const armed = new NativeFunction(arm, 'bool', [])();
+    console.log(`who-asks: armed a search through our own export -> ${armed}`);
+  }
+}
+
+// The flat wrappers are the wrong instrument, and their own control says so.
+//
+// Not one of the five fired, and neither did `SteamAPI_RunCallbacks` beside them, while
+// `PeekMessageW` hooks in this same attach logged 1200 calls. Hooks are live; these functions are
+// simply not entered. That is what using the C++ interface looks like: both `eldenring.exe` and
+// `ersc.dll` carry the string `SteamMatchMaking009`, so both resolve the interface through
+// `SteamInternal_FindOrCreateUserInterface` and call its virtual methods, never the wrappers.
+//
+// So resolve the interface the same way they do and hook the vtable slot itself. Slot 4 is
+// `RequestLobbyList` and slot 5 `AddRequestLobbyListStringFilter` in the Steamworks header order,
+// which is the pair `er-invasion-warp` already detours -- so a hit here while our DLL's log stays
+// empty localises the failure to our hook, and silence in both says Seamless never asks.
+const SLOTS = { 4: 'RequestLobbyList', 5: 'AddRequestLobbyListStringFilter', 13: 'CreateLobby', 14: 'JoinLobby' };
+try {
+  const getUser = steam.findExportByName('SteamAPI_GetHSteamUser');
+  const find = steam.findExportByName('SteamInternal_FindOrCreateUserInterface');
+  if (getUser === null || find === null) {
+    console.log('who-asks: cannot resolve the interface -- accessor exports missing');
+  } else {
+    const user = new NativeFunction(getUser, 'int32', [])();
+    const version = Memory.allocUtf8String('SteamMatchMaking009');
+    const iface = new NativeFunction(find, 'pointer', ['int32', 'pointer'])(user, version);
+    console.log(`who-asks: ISteamMatchmaking(SteamMatchMaking009) user=${user} iface=${iface}`);
+    if (!iface.isNull()) {
+      const vtable = iface.readPointer();
+      const seen = {};
+      for (const slot of Object.keys(SLOTS)) {
+        const fn = vtable.add(parseInt(slot, 10) * Process.pointerSize).readPointer();
+        const name = SLOTS[slot];
+        seen[name] = 0;
+        console.log(`who-asks: vtable[${slot}] ${name} @${fn} (${whereFrom(fn)})`);
+        Interceptor.attach(fn, {
+          onEnter() {
+            seen[name] += 1;
+            const n = seen[name];
+            if (n > 6 && n % 25 !== 0) {
+              return;
+            }
+            console.log(`who-asks: VTABLE ${name} #${n} from ${whereFrom(this.returnAddress)}`);
+          },
+        });
+      }
+    }
+  }
+} catch (e) {
+  console.log(`who-asks: vtable hook failed: ${e.message}`);
+}
+
+// Is Seamless's session pointer there at all?
+//
+// Every drive in this run died upstream of the lobby question: the DLL logs `SessionNotIdentified`
+// and never reaches `drive_pending_reinvade`, so no invade call is made and nothing can reach
+// Steam. A working run resolved it as "found at 0x1b76c1130 via a pointer in ersc's own writable
+// data at 0x180c64c88" -- ersc+0xc64c88 with the module at its preferred base. Read that slot and
+// the session head it points at, which says whether the pointer is absent or the resolver is
+// rejecting something real.
+const SESSION_SLOT_RVA = 0xc64c88;
+const ersc = Process.findModuleByName('ersc.dll');
+if (ersc === null) {
+  console.log('who-asks: ersc.dll not loaded');
+} else {
+  const slot = ersc.base.add(SESSION_SLOT_RVA);
+  try {
+    const session = slot.readPointer();
+    console.log(`who-asks: ersc+0x${SESSION_SLOT_RVA.toString(16)} @${slot} -> session ${session}`);
+    if (!session.isNull()) {
+      // The slot holds the OWNER, not the session -- both actions read `rcx+0x58` exactly once,
+      // and the working run reported `owner 0x72cffd20` beside `session 0x1b76c1130`. So the hop
+      // is `+0x58` first; reading `+0x150` on the owner faults, which is what the first pass did.
+      let owner = 'unreadable';
+      try {
+        owner = `${session.add(0x58).readPointer()}`;
+      } catch (e) {
+        owner = `+0x58 unreadable (${e.message})`;
+      }
+      console.log(`who-asks: owner ${session} -> +0x58 session ${owner}`);
+      try {
+        const real = session.add(0x58).readPointer();
+        if (!real.isNull()) {
+          console.log(
+            `who-asks: session ${real} +0x150 state=0x${real.add(0x150).readU32().toString(16)} ` +
+              `+0x14c guard=${real.add(0x14c).readS32()}`
+          );
+        }
+      } catch (e) {
+        console.log(`who-asks: session head unreadable: ${e.message}`);
+      }
+    }
+  } catch (e) {
+    console.log(`who-asks: session slot unreadable: ${e.message}`);
+  }
+}

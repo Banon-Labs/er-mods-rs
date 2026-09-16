@@ -56,6 +56,7 @@ pub mod settings_panel;
 // statically recoverable -- so nothing in this DLL reads the constants today, and a private module
 // makes that safety decision look like dead code. See bd `er-effects-rs-zoft`.
 pub mod stall_watchdog;
+pub mod vanilla_invasion_items;
 
 use std::path::{Path, PathBuf};
 

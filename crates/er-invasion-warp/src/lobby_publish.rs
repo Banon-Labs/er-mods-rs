@@ -1361,6 +1361,17 @@ mod live {
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
+        // Said on the first call, because "the detour is live" and "the detour never ran" are
+        // indistinguishable without it. Run br-20260916-014906-00bd reported
+        // `oracle_invasion_warp_hunt_hooked = true` with `hunt_filters = 0` and no refusal line,
+        // which could mean Seamless never asks Steam for a lobby list during an invasion search,
+        // or that it asks and `hunt_target` declines without a word. Those want opposite fixes.
+        let hits = REQUESTS_SEEN.fetch_add(1, Ordering::SeqCst) + 1;
+        if hits == 1 {
+            crate::standalone_log(format_args!(
+                "hunt: RequestLobbyList reached our detour for the first time -- so Seamless does                  ask Steam through this slot, and anything the ladder decides can reach the query."
+            ));
+        }
         if let Some(value) = hunt_target()
             && let Some(add) = add_string_filter(iface)
         {
@@ -1413,6 +1424,12 @@ mod live {
     /// report its next exhaustion.
     static EVERYWHERE_SAID: AtomicU8 = AtomicU8::new(0);
 
+    /// How many times `RequestLobbyList` has reached our detour, filtered or not.
+    static REQUESTS_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// Whether the "nothing to ask for" line has been said.
+    static HUNT_NO_CENTRE_SAID: AtomicU8 = AtomicU8::new(0);
+
     /// The location this query round should ask for, or `None` to leave the query alone.
     ///
     /// `None` carries two different meanings and both are correct here: hunt is off or cannot
@@ -1432,7 +1449,17 @@ mod live {
             }
             return None;
         }
-        let centre = hunt_filter_value(config.hunt, &marked, &excluded, current_block())?;
+        let Some(centre) = hunt_filter_value(config.hunt, &marked, &excluded, current_block())
+        else {
+            // The refusal above explains every case it recognises; this is what is left, and it
+            // used to be a bare `?` that left the query unfiltered without a word.
+            if HUNT_NO_CENTRE_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "hunt: no location to ask for -- hunt is on and nothing refused it, but no                      marked block and no readable current block gave a value. The query goes out                      unfiltered. Printed once."
+                ));
+            }
+            return None;
+        };
         if config.prefilter_radius == 0 {
             return Some(centre);
         }
@@ -1440,7 +1467,7 @@ mod live {
             // No readable block means no ring to draw; the single-tile value still stands.
             return Some(centre);
         };
-        match advance_ring(
+        match peek_ring(
             here,
             config.prefilter_radius,
             config.search_everywhere_when_exhausted,
@@ -1467,6 +1494,7 @@ mod live {
     /// run br-20260915-173522-e76b said "looking everywhere instead" and went on asking for
     /// `m11_05_00_00` for 33 consecutive connects, every one of them dying at the deadline
     /// against a pool of stale entries. An enum cannot be collapsed by an `.or`.
+    #[derive(Clone)]
     enum RingStep {
         /// Ask for this location.
         Ask(String),
@@ -1487,24 +1515,37 @@ mod live {
         radius: u8,
         everywhere: bool,
     ) -> RingStep {
-        let Ok(mut guard) = SEARCH.lock() else {
-            return RingStep::Unavailable;
-        };
-        let restart = guard
-            .as_ref()
-            .is_none_or(|(anchor, _)| *anchor != here.raw());
-        if restart {
-            *guard = Some((
-                here.raw(),
-                er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
-            ));
+        /// One rung, taken while the ring's lock is held and acted on after it is dropped.
+        enum Taken {
+            Step(er_invasion_warp_core::search_ring::Step),
+            Spent(usize),
+            Stuck,
         }
-        let Some((_, ring)) = guard.as_mut() else {
-            return RingStep::Unavailable;
-        };
-
-        let Some(step) = ring.advance() else {
-            if everywhere {
+        // The lock is scoped, and that scope is load-bearing. Everything below it calls into the
+        // game -- a place name reads the engine's message repository, the banner draws on the
+        // game's own announcement surface -- and this used to run with `SEARCH` still held. That
+        // was survivable only while one thread ever took it. It stopped being survivable the
+        // moment the popup detour began restarting the ladder from the menu thread: the game task
+        // held `SEARCH` inside a game call the menu thread had to service, and the menu thread was
+        // sitting on `SEARCH.lock()`. Hard lock, reported on the first Nearby Only press.
+        let taken = {
+            let Ok(mut guard) = SEARCH.lock() else {
+                return RingStep::Unavailable;
+            };
+            let restart = guard
+                .as_ref()
+                .is_none_or(|(anchor, _)| *anchor != here.raw());
+            if restart {
+                *guard = Some((
+                    here.raw(),
+                    er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
+                ));
+            }
+            let Some((_, ring)) = guard.as_mut() else {
+                return RingStep::Unavailable;
+            };
+            match ring.advance() {
+                Some(step) => Taken::Step(step),
                 // `nearby` separates the two ways a ring runs out, and they are not the same
                 // news. A spent 48-tile ring means the neighbourhood is empty. A ring of one
                 // tile means the player is somewhere with no grid neighbours at all -- a legacy
@@ -1513,7 +1554,23 @@ mod live {
                 // its first round. Run br-20260915-173121-1941 was the second case, in
                 // `m11_05_00_00`, and the log's single undifferentiated sentence is why it read
                 // as the escalation never happening.
-                let nearby = ring.len().saturating_sub(1);
+                None if everywhere => Taken::Spent(ring.len().saturating_sub(1)),
+                None => {
+                    // Nearby-only, and the neighbourhood is spent. Going round again keeps the
+                    // search inside the radius the player asked for and keeps it audible; the old
+                    // behaviour re-asked for the same tile forever, so the banner fell silent and
+                    // a search still grinding away looked exactly like one that had died.
+                    ring.rewind();
+                    match ring.advance() {
+                        Some(step) => Taken::Step(step),
+                        None => Taken::Stuck,
+                    }
+                }
+            }
+        };
+        let step = match taken {
+            Taken::Stuck => return RingStep::Ask(map_value(here)),
+            Taken::Spent(nearby) => {
                 if EVERYWHERE_SAID.swap(1, Ordering::SeqCst) == 0 {
                     crate::standalone_log(format_args!(
                         "prefilter: the ring is spent ({nearby} nearby location(s) tried) -- \
@@ -1526,7 +1583,7 @@ mod live {
                 crate::local_invasion_filter::banner::announce_search_everywhere(notice, nearby);
                 return RingStep::Everywhere;
             }
-            return RingStep::Ask(map_value(here));
+            Taken::Step(step) => step,
         };
         // A step means the ring is moving again, so the next exhaustion is fresh news.
         EVERYWHERE_SAID.store(0, Ordering::SeqCst);
@@ -1550,6 +1607,96 @@ mod live {
             step.total,
         );
         RingStep::Ask(map_value(step.block))
+    }
+
+    /// Where the ladder points, with the tile it was anchored at.
+    ///
+    /// The Steam query and the attempt loop want opposite things from the ring, and until now both
+    /// called `advance`: the query runs several times per attempt, so the search widened at the
+    /// rate Steam happened to be asked rather than at the rate attempts failed. This holds the
+    /// answer so the query can read it, and leaves moving it to `advance_search_place`.
+    ///
+    /// `Everywhere` has to survive in here rather than be re-derived from the ring, because
+    /// `SearchRing::exhausted` is already true the moment the last tile is handed out -- the ring
+    /// alone cannot tell "asking for the final tile" from "past the end, asking for everywhere".
+    static CURRENT_RUNG: Mutex<Option<(u32, RingStep)>> = Mutex::new(None);
+
+    /// Take the next place and remember it, so later queries ask for it without moving on.
+    fn take_next_place(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> RingStep {
+        let step = advance_ring(here, radius, everywhere);
+        if !matches!(step, RingStep::Unavailable) {
+            if let Ok(mut guard) = CURRENT_RUNG.lock() {
+                *guard = Some((here.raw(), step.clone()));
+            }
+        }
+        step
+    }
+
+    /// Where this query round should ask, without moving the ladder on.
+    ///
+    /// Takes the first rung itself when nothing has been taken, so a fresh search opens filtered
+    /// to where the player stands. A different anchor means they walked into a new tile, which is
+    /// a new search: continuing the old ring would keep asking about a neighbourhood they left.
+    fn peek_ring(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> RingStep {
+        if let Ok(guard) = CURRENT_RUNG.lock() {
+            if let Some((anchor, step)) = guard.as_ref() {
+                if *anchor == here.raw() {
+                    return step.clone();
+                }
+            }
+        }
+        take_next_place(here, radius, everywhere)
+    }
+
+    /// Move the search to the next place, because the attempt at this one found nobody.
+    ///
+    /// Called when an attempt ends, which is what makes the ladder visible: one attempt ends, one
+    /// rung moves, one banner names where the search went. The player saw a single notice per use
+    /// of the item and nothing for the forty-six restarts that followed, and this is why -- the
+    /// rung only ever moved inside a Steam detour that was not firing during the search.
+    ///
+    /// Silent when hunt is off, when no block is readable, or when the radius is zero: all three
+    /// mean there is no ladder to climb.
+    pub fn advance_search_place() {
+        let Some(config) = crate::local_invasion_filter::current_config_snapshot() else {
+            return;
+        };
+        if !config.hunt || config.prefilter_radius == 0 {
+            return;
+        }
+        let Some(here) = current_block() else {
+            return;
+        };
+        take_next_place(
+            here,
+            config.prefilter_radius,
+            config.search_everywhere_when_exhausted,
+        );
+    }
+
+    /// Begin the ladder again at the player's own tile, for a search that has just been armed.
+    ///
+    /// Without this, using the item a second time resumes the ring wherever the last search
+    /// abandoned it: the player would be told a search was starting and then watch it ask about
+    /// somewhere twenty tiles away.
+    pub fn restart_search_ladder() {
+        if let Ok(mut guard) = CURRENT_RUNG.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = SEARCH.lock() {
+            if let Some((_, ring)) = guard.as_mut() {
+                ring.rewind();
+            }
+        }
+        EVERYWHERE_SAID.store(0, Ordering::SeqCst);
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
@@ -1617,9 +1764,10 @@ mod live {
 
 #[cfg(windows)]
 pub use live::{
-    advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
-    install_pool_filter_hook, persona_name, publish_current_map, reapply_pool_if_toggled,
-    report_persona_plumbing_once, tallies as publish_tallies, tally,
+    advance_search_place, advertisement_lobby, hunt_tally, install_advertisement_observer,
+    install_hunt_hook, install_pool_filter_hook, persona_name, publish_current_map,
+    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder,
+    tallies as publish_tallies, tally,
 };
 
 #[cfg(test)]
