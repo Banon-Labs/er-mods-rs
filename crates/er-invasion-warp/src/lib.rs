@@ -487,6 +487,28 @@ pub extern "C" fn er_invasion_warp_use_item(item_id: u32) -> i32 {
     1
 }
 
+/// Answer the next bounds popup with a chosen range instead of the row that was pressed.
+///
+/// `0` clears it and gives the popup back to the player, `1` is `Nearby only`, `2` is
+/// `Both near and far`.
+///
+/// # Why a test hook exists at all
+///
+/// The popup answers row 0 under every agent-driven input tried so far -- reproduced three times,
+/// always `isBreakInMultiRegion=0`, with a D-pad Down after the animation, the same Down during it,
+/// and a full left-stick down. Proving the `Both near and far` branch should not wait on solving
+/// menu navigation, and driving a cursor that cannot be read back is exactly how this repo once
+/// moved a `GridControl` nobody was watching.
+///
+/// It is inert unless set, so a normal session is untouched and the player's press still decides.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_force_search_range(range: u32) -> i32 {
+    vanilla_invasion_items::FORCED_SEARCH_RANGE
+        .store(range as usize, core::sync::atomic::Ordering::SeqCst);
+    1
+}
+
 /// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring
 /// `ersc.dll` itself.
 ///
