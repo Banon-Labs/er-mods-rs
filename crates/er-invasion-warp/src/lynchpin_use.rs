@@ -1019,7 +1019,14 @@ fn hold_pad() -> usize {
 #[cfg(windows)]
 unsafe fn drive_handoff_press() {
     type HoldPadFn = unsafe extern "system" fn(u16, i16, i16) -> ();
-    const PAD_A: u16 = 0x1000;
+    /// `XINPUT_GAMEPAD_X`, which is the use-item binding. Not `A` (`0x1000`), which this pressed for
+    /// its whole life.
+    ///
+    /// Measured 2026-09-16, five drives per arm with both oracles zeroed before each one and nothing
+    /// else changed but the mask: the Lynchpin queued 5/5 either way, and reached TAE event 65 -- the
+    /// consume the goods-id handler runs off -- 3/5 on `X` against 0/5 on `A`. So the engine latched
+    /// the request from both buttons and only the real binding carried it through to a use.
+    const PAD_USE_ITEM: u16 = 0x4000;
 
     match HANDOFF_STAGE.load(Ordering::SeqCst) {
         HANDOFF_WAITING_FOR_LATCH => {
@@ -1098,7 +1105,7 @@ unsafe fn drive_handoff_press() {
                 }
             }
             // SAFETY: the export resolved above, called with the button mask it documents.
-            unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(PAD_A, 0, 0) };
+            unsafe { core::mem::transmute::<usize, HoldPadFn>(hold)(PAD_USE_ITEM, 0, 0) };
             HANDOFF_PRESSED_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
             HANDOFF_STAGE.store(HANDOFF_PRESSING, Ordering::SeqCst);
             crate::standalone_log(format_args!(
