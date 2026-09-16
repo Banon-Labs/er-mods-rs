@@ -535,11 +535,22 @@ fn invade_action_callable(abi: &ersc::Abi) -> bool {
     }
     if !INVADE_ACTION_UNCALLABLE.swap(true, Ordering::SeqCst) {
         crate::standalone_log(format_args!(
-            "local-invasion: NOT restarting the search -- ersc+{:#x} does not hold the bytes this \
-             module measured, so the invade action cannot be called. Cancelling still works (it \
-             reads a different address), so rejected matches are cancelled and the hunt stops \
-             there. This line is printed once per change, not once per tick.",
-            abi.invade_action_rva
+            "local-invasion: not restarting the search -- ersc+{:#x} does not hold the bytes this module measured, so the invade action cannot be called. Expected {:02x?}, read {:02x?}. Cancelling still works, it reads a different entry.",
+            abi.invade_action_rva,
+            abi.invade_prologue,
+            super::ersc_module_base()
+                .map(|base| {
+                    // Byte at a time through the fault-closed reader, because there is no
+                    // slice form of it and a refusal that cannot show what it read is the
+                    // reason this line existed for a day without being diagnosable.
+                    (0..abi.invade_prologue.len())
+                        .map(|i| unsafe {
+                            er_game_base::mem::safe_read_u8(base + abi.invade_action_rva + i)
+                                .unwrap_or(0)
+                        })
+                        .collect::<Vec<u8>>()
+                })
+                .unwrap_or_default(),
         ));
     }
     false
