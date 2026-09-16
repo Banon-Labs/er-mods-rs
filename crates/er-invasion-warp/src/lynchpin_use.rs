@@ -192,6 +192,41 @@ static HANDOFF_PINNED_AT_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static HANDOFF_PRESSED_AT_MS: AtomicU64 = AtomicU64::new(0);
 
+/// One field of `CSMenuMan->menuData->menuGaitemUseState`, or `None` when it cannot be reached.
+///
+/// `width` is 0 for the single state byte and 1 for a dword. Read for the press log, so the silent
+/// handoff and the external drive that works can be compared on the struct the engine reads rather
+/// than on the timings around it, which are already known to match.
+#[cfg(windows)]
+fn use_state_field(width: usize, offset: usize) -> Option<i64> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let menu_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+        "CS_MENU_MAN_GLOBAL_RVA",
+    );
+    if menu_man == 0 {
+        return None;
+    }
+    // SAFETY: fault-closed reads of the struct `drive_pinned_use` already writes.
+    let menu_data = unsafe {
+        er_game_base::mem::safe_read_usize(
+            menu_man + er_game_base::rva::CS_MENU_MAN_MENU_DATA_OFFSET,
+        )
+    }?;
+    if menu_data == 0 {
+        return None;
+    }
+    let address = menu_data + MENU_GAITEM_USE_STATE_OFFSET + offset;
+    if width == 0 {
+        // SAFETY: as above.
+        unsafe { er_game_base::mem::safe_read_u8(address) }.map(i64::from)
+    } else {
+        // SAFETY: as above.
+        unsafe { er_game_base::mem::safe_read_i32(address) }.map(i64::from)
+    }
+}
+
 /// Milliseconds since this module first asked, from a monotonic clock.
 #[cfg(windows)]
 fn now_ms() -> u64 {
@@ -971,11 +1006,14 @@ unsafe fn drive_handoff_press() {
             crate::standalone_log(format_args!(
                 "lynchpin: the handed-off Lynchpin settled for \
                  {HANDOFF_SETTLE_BEFORE_PRESS_MS}ms, so the use action is pressed and held for \
-                 {HANDOFF_PRESS_HELD_MS}ms. Pin at this moment: {} tick(s) left on item {:#x} -- \
-                 zero there would mean the quick-slot answer had already stopped and the press \
-                 used whatever the real slot holds.",
+                 {HANDOFF_PRESS_HELD_MS}ms. Pin: {} tick(s) on item {:#x}. \
+                 menuGaitemUseState state={:?} itemId={:?} itemIdx={:?} -- the one thing never \
+                 compared against the external drive that does produce lobby calls.",
                 PIN_FRAMES_LEFT.load(Ordering::SeqCst),
-                PINNED_ITEM_ID.load(Ordering::SeqCst)
+                PINNED_ITEM_ID.load(Ordering::SeqCst),
+                use_state_field(0, USE_STATE_OFFSET),
+                use_state_field(1, USE_ITEM_ID_OFFSET),
+                use_state_field(1, USE_ITEM_IDX_OFFSET)
             ));
         }
         HANDOFF_PRESSING => {
