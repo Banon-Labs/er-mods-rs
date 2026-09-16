@@ -93,6 +93,16 @@ const GOODS_REF_ID_DEFAULT_OFFSET: usize = 0x04;
 /// The smallest value that passes that guard, chosen so the item borrows no other item's effect.
 #[cfg(windows)]
 const REF_ID_USABLE: i32 = 0;
+
+/// Whether the module rewrites the Lynchpin's `refId_default`.
+///
+/// On, because without it the engine refuses the use and the item never queues at all. It was
+/// held off once to test whether writing it was what stopped Seamless opening its dialog -- run
+/// br-20260916-145958-aad2, row left pristine at -8, session waited out: still no dialog, no
+/// capture, no query. So the write is not what silenced Seamless, and turning it off only costs
+/// the use.
+#[cfg(windows)]
+const WRITE_REF_ID_DEFAULT: bool = true;
 /// The Challenger's Lynchpin, as the menu spells it: goods `8380003` with the goods category
 /// nibble.
 #[cfg(windows)]
@@ -361,6 +371,17 @@ pub unsafe fn shorten_use_animation() -> bool {
     // own handler runs off, stayed 0 across all four presses. An earlier run appeared to show
     // consumption and did not: that counter had not been zeroed and was reading residue. So this
     // write clears the request gate and no more -- the consumption gate is still unidentified.
+    // Held off: writing this may be what stopped Seamless seeing the item at all.
+    //
+    // With the row pristine at -8 the engine refuses the use, and run br-20260916-100817-3fe0 --
+    // the only run that ever reached `RequestLobbyList` -- had it pristine, opened Seamless's own
+    // dialog, and searched from the skip path. With 0 the engine accepts and consumes the item as
+    // an ordinary one, and no run since has opened that dialog. Consuming the item was never the
+    // thing that reaches Seamless; being refused by the engine may be.
+    if !WRITE_REF_ID_DEFAULT {
+        ANIM_SHORTENED.store(1, Ordering::SeqCst);
+        return true;
+    }
     let ref_field = row + GOODS_REF_ID_DEFAULT_OFFSET;
     // SAFETY: fault-tolerant read of one dword inside the same row.
     let ref_before = unsafe { er_game_base::mem::safe_read_i32(ref_field) };
