@@ -1628,10 +1628,10 @@ mod live {
         everywhere: bool,
     ) -> RingStep {
         let step = advance_ring(here, radius, everywhere);
-        if !matches!(step, RingStep::Unavailable) {
-            if let Ok(mut guard) = CURRENT_RUNG.lock() {
-                *guard = Some((here.raw(), step.clone()));
-            }
+        if !matches!(step, RingStep::Unavailable)
+            && let Ok(mut guard) = CURRENT_RUNG.lock()
+        {
+            *guard = Some((here.raw(), step.clone()));
         }
         step
     }
@@ -1646,12 +1646,11 @@ mod live {
         radius: u8,
         everywhere: bool,
     ) -> RingStep {
-        if let Ok(guard) = CURRENT_RUNG.lock() {
-            if let Some((anchor, step)) = guard.as_ref() {
-                if *anchor == here.raw() {
-                    return step.clone();
-                }
-            }
+        if let Ok(guard) = CURRENT_RUNG.lock()
+            && let Some((anchor, step)) = guard.as_ref()
+            && *anchor == here.raw()
+        {
+            return step.clone();
         }
         take_next_place(here, radius, everywhere)
     }
@@ -1691,10 +1690,10 @@ mod live {
         if let Ok(mut guard) = CURRENT_RUNG.lock() {
             *guard = None;
         }
-        if let Ok(mut guard) = SEARCH.lock() {
-            if let Some((_, ring)) = guard.as_mut() {
-                ring.rewind();
-            }
+        if let Ok(mut guard) = SEARCH.lock()
+            && let Some((_, ring)) = guard.as_mut()
+        {
+            ring.rewind();
         }
         EVERYWHERE_SAID.store(0, Ordering::SeqCst);
     }
