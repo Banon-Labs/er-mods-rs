@@ -1437,7 +1437,27 @@ mod live {
     /// the player asked to search everywhere once it was. The second is the ladder's last rung --
     /// an unfiltered query returns the whole population again, vanilla hosts included, and the
     /// reject filter takes over deciding where you land.
+    static NEAR_AND_FAR_UNFILTERED_SAID: AtomicUsize = AtomicUsize::new(0);
+
     fn hunt_target() -> Option<String> {
+        // `Both near and far` asks Steam for everyone, so it gets no location filter at all.
+        //
+        // The row's whole contract is that the search stops being near: it hands off to the
+        // Challenger's Lynchpin and lets Seamless's own matchmaking run. Narrowing that query to a
+        // map tile is the opposite of it, and the captured filters showed exactly that going out --
+        // `er_invasion_warp_map=m60_52_53_00` beside Seamless's own four keys, on a search that
+        // then found nobody in ninety seconds.
+        //
+        // `Nearby only` still narrows, because narrowing is what that row is for.
+        if crate::local_invasion_filter::finger_reach_is_near_and_far() {
+            if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "hunt: `Both near and far` is in force, so this query goes out unfiltered -- \
+                     narrowing it to a map tile is what that row exists not to do. Printed once."
+                ));
+            }
+            return None;
+        }
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let marked: Vec<u32> = config.allowed_blocks.iter().copied().collect();
         // Exclusions bind hunt as well as the reject filter. Reading only the marked list let the

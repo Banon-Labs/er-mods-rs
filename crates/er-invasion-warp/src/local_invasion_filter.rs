@@ -643,6 +643,11 @@ pub(crate) const FINGER_REACH_NONE: usize = 0;
 pub(crate) const FINGER_REACH_NEARBY: usize = 1;
 pub(crate) const FINGER_REACH_NEAR_AND_FAR: usize = 2;
 
+/// Whether the finger's popup chose `Both near and far`, which must not narrow the lobby query.
+pub(crate) fn finger_reach_is_near_and_far() -> bool {
+    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
+}
+
 /// Record what the finger's popup chose. Cleared by [`stand_down_hunt`] with everything else.
 pub(crate) fn set_finger_reach(reach: usize) {
     FINGER_REACH.store(reach, Ordering::SeqCst);
