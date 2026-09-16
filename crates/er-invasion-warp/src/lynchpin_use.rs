@@ -134,6 +134,28 @@ static SKIP_REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
 /// Frames of use-state override still owed.
 #[cfg(windows)]
 static PIN_FRAMES_LEFT: AtomicUsize = AtomicUsize::new(0);
+/// `GameMan->isInOnlineMode`, the single byte `IsInOnlineMode()` returns.
+///
+/// The whole function is `return GLOBAL_GameMan->isInOnlineMode` -- 15 bytes, `mov rax,[rip+d]` /
+/// `movzx eax,byte [rax+0xbc8]` / `ret` -- so the flag can be written directly and no detour has to
+/// go anywhere near it. The offset is `0xbc8` on both 1.16.2 and 1.17.1, read out of the two
+/// de-Arxan'd images; the singleton itself is [`er_game_base::rva::GAME_MAN_SINGLETON_RVA`], which
+/// the address translation already carries.
+#[cfg(windows)]
+const GAME_MAN_IS_IN_ONLINE_MODE: usize = 0xbc8;
+/// `menuGaitemUseState+0x8` once the engine has taken the request: 0 idle, 1 requested, 2 latched.
+#[cfg(windows)]
+const USE_STATE_IDLE: u8 = 0;
+#[cfg(windows)]
+const USE_STATE_REQUESTED: u8 = 1;
+#[cfg(windows)]
+const USE_STATE_LATCHED: u8 = 2;
+/// Whether the latch has been reported for the use in flight.
+#[cfg(windows)]
+static USE_ACKNOWLEDGED: AtomicUsize = AtomicUsize::new(0);
+/// The value to put back, plus one, so that zero can mean "not currently held".
+#[cfg(windows)]
+static ONLINE_MODE_RESTORE: AtomicUsize = AtomicUsize::new(0);
 /// The inventory index the current override is pinning.
 #[cfg(windows)]
 static PINNED_ITEM_IDX: AtomicUsize = AtomicUsize::new(0);
@@ -570,6 +592,7 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
     };
     PINNED_ITEM_IDX.store(index, Ordering::SeqCst);
     PINNED_ITEM_ID.store(item_id as usize, Ordering::SeqCst);
+    USE_ACKNOWLEDGED.store(0, Ordering::SeqCst);
     PIN_FRAMES_LEFT.store(PIN_FRAMES, Ordering::SeqCst);
     crate::standalone_log(format_args!(
         "lynchpin: pinned item {item_id:#x} at inventory index {index} for {PIN_FRAMES} frame(s)"
@@ -678,6 +701,81 @@ unsafe fn main_player_chr_ins() -> Option<usize> {
     (player != 0).then_some(player)
 }
 
+/// Say the game is online for exactly as long as one of our finger uses is in flight.
+///
+/// # Why this is necessary, and why it is this narrow
+///
+/// `CanUseGoods` refuses an invasion finger before the animation, and reading it showed why: the
+/// verdict is one large `AND`, and `IsInOnlineMode()` is in it twice -- read at decompiled line 104
+/// into `local_21f`, copied into `local_188` at line 300, and both terms appear in the condition at
+/// lines 865-877. A false there refuses the item whatever else passes. Seamless keeps that flag
+/// clear on purpose, so under Seamless every vanilla multiplayer item is permanently greyed out,
+/// which is exactly the behaviour these three rows are being taken back from.
+///
+/// Detouring `CanUseGoods` is not available: Arxan stubs it in the live process, where its entry
+/// reads `e9 ee 15 96 ff` against the image's `44 89 4c 24 20` -- 17 of 60 verified entries are
+/// stubbed the same way, so the prologue gate refusing it is the protection working.
+///
+/// So the flag is written, not the code, and only inside the window this module already owns:
+/// raised on the first frame of a pinned finger use and put back on the last, about 90 frames
+/// later. The Challenger's Lynchpin does not get it, because that path already works without it and
+/// a widening that changes a working path is a regression waiting to happen. Outside those frames
+/// Seamless sees the flag exactly as it left it.
+///
+/// # Safety
+///
+/// Game task thread.
+#[cfg(windows)]
+unsafe fn hold_online_mode(base: usize, raise: bool) {
+    let game_man = er_game_base::mem::read_global_ptr(
+        base,
+        er_game_base::rva::GAME_MAN_SINGLETON_RVA,
+        "GAME_MAN_SINGLETON_RVA",
+    );
+    if game_man == 0 {
+        return;
+    }
+    let flag = (game_man + GAME_MAN_IS_IN_ONLINE_MODE) as *mut u8;
+    if raise {
+        // Re-asserted every frame of the window rather than written once on the first.
+        //
+        // Writing it once was not enough, and the reason is measured rather than assumed: a 20ms
+        // sampler reading the byte out of `/proc` never once caught it set, across two drives that
+        // both logged the raise. Something puts it back faster than the 90-frame window suggests.
+        // Re-asserting costs one store per frame and removes the question of who else writes it.
+        //
+        // The value to put back is recorded on the first frame only, so a later frame cannot
+        // record the 1 this function itself wrote and turn the restore into a no-op.
+        if ONLINE_MODE_RESTORE.load(Ordering::SeqCst) == 0 {
+            // SAFETY: fault-closed read of a singleton the game keeps for its whole life.
+            let Some(before) =
+                (unsafe { er_game_base::mem::safe_read_u8(game_man + GAME_MAN_IS_IN_ONLINE_MODE) })
+            else {
+                return;
+            };
+            ONLINE_MODE_RESTORE.store(before as usize + 1, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "lynchpin: holding `GameMan+0x{GAME_MAN_IS_IN_ONLINE_MODE:x}` at 1 for this finger \
+                 use; it read {before}. CanUseGoods refuses every vanilla multiplayer item while \
+                 that byte is clear, and Seamless keeps it clear."
+            ));
+        }
+        // SAFETY: the byte `IsInOnlineMode` returns, in the singleton resolved above.
+        unsafe { core::ptr::write_volatile(flag, 1) };
+        return;
+    }
+    let held = ONLINE_MODE_RESTORE.swap(0, Ordering::SeqCst);
+    if held == 0 {
+        return;
+    }
+    // SAFETY: as above; restores the value read when the window opened.
+    unsafe { core::ptr::write_volatile(flag, (held - 1) as u8) };
+    crate::standalone_log(format_args!(
+        "lynchpin: put `GameMan+0x{GAME_MAN_IS_IN_ONLINE_MODE:x}` back to {}",
+        held - 1
+    ));
+}
+
 /// Hold the use-state override for one frame, if a use was asked for.
 ///
 /// # Safety
@@ -732,12 +830,48 @@ unsafe fn drive_pinned_use() {
             core::ptr::write_volatile((player + CHR_INS_CONSUME_COUNT_OFFSET) as *mut u32, 1)
         };
     }
-    if left == PIN_FRAMES {
-        // SAFETY: the request itself, raised once. Holding it every frame would re-press the
-        // action rather than hold the override.
-        unsafe { core::ptr::write_volatile((state + USE_STATE_OFFSET) as *mut u8, 1) };
+    if crate::vanilla_invasion_items::routes_the_range_popup(
+        PINNED_ITEM_ID.load(Ordering::SeqCst) as u32
+    ) {
+        // SAFETY: game task thread; fails closed when the singleton is not up.
+        unsafe { hold_online_mode(base, true) };
+    }
+    // The request is re-raised until the engine acknowledges it, rather than written once.
+    //
+    // `+0x8` is a three-value state -- 0 idle, 1 requested, 2 latched -- and the player's own
+    // per-frame action update is what reads the 1, drives the `USE_ITEM` action and latches it to
+    // 2. Writing the 1 on a single frame only works if this task runs before that update in the
+    // same frame, and nothing here guarantees the order: on run br-20260916-065936-0bb0 all four
+    // stores were read back out of `/proc` while `ChrIns+0x164` never left `0xffffffff`, which is
+    // what a request that was overwritten before anybody read it looks like.
+    //
+    // So: keep asking while the state reads idle, and stop the moment it reads latched. That is an
+    // acknowledgement from the engine rather than a frame budget, and it cannot re-press the action
+    // once the use is under way, because 2 is not 0.
+    // SAFETY: fault-closed read of the struct this function already writes.
+    let observed = unsafe { er_game_base::mem::safe_read_u8(state + USE_STATE_OFFSET) };
+    if observed == Some(USE_STATE_LATCHED) && USE_ACKNOWLEDGED.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: the engine latched the use request -- `menuGaitemUseState+0x8` read \
+             {USE_STATE_LATCHED}, so the player's action update has taken it"
+        ));
+    }
+    // Written only when the state reads idle, which is the difference between asking again and
+    // cancelling what was already accepted.
+    //
+    // Re-writing 1 unconditionally looked harmless and was not. On run br-20260916-070219-5926 a
+    // 10ms sampler caught the state stepping 0 -> 2 -> 1: the engine latched the request, and the
+    // next tick here put it back to 1 on top of the latch. Writing while it reads 1 is a no-op
+    // anyway, and writing while it reads 2 stamps on a use that is already under way.
+    if observed == Some(USE_STATE_IDLE) {
+        // SAFETY: the request itself, into the struct the engine's own `Request` writes.
+        unsafe {
+            core::ptr::write_volatile((state + USE_STATE_OFFSET) as *mut u8, USE_STATE_REQUESTED)
+        };
     }
     if left == 1 {
+        // SAFETY: game task thread; a no-op when the window was never opened.
+        unsafe { hold_online_mode(base, false) };
         // SAFETY: hand the struct back the way the engine leaves it, so nothing later reads the
         // Lynchpin as the selected quick item.
         unsafe {
