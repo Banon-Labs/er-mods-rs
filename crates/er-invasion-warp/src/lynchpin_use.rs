@@ -170,10 +170,18 @@ const HANDOFF_IDLE: usize = 0;
 const HANDOFF_WAITING_FOR_LATCH: usize = 1;
 #[cfg(windows)]
 const HANDOFF_PRESSING: usize = 2;
-/// Frames the press is held. Long enough for the game to see an edge, short enough that it is a
-/// press and not a hold.
+/// Frames the press is held.
+///
+/// Thirty rather than six, which is what the drive that actually works holds. Six was my guess at
+/// "enough for an edge" and run br-20260916-092022-98c3 measured what it buys: the Lynchpin pinned
+/// at inventory index 1701, the press logged, and 38 of 38 matchmaking slots still at zero -- while
+/// the same item driven by hand with a half-second hold produces `RequestLobbyList` and five filter
+/// calls. Half a second is about thirty frames.
+///
+/// It is still a press and not a hold: it releases, and a level that never falls is what stopped
+/// the finger working before.
 #[cfg(windows)]
-const HANDOFF_PRESS_HELD_FRAMES: usize = 6;
+const HANDOFF_PRESS_HELD_FRAMES: usize = 30;
 /// Frames between the Lynchpin being pinned and the use action being pressed. The finger's own
 /// measured recipe waits about two and a half seconds, which is roughly this many frames.
 #[cfg(windows)]
