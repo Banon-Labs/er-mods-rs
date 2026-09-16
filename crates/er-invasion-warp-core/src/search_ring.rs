@@ -141,6 +141,27 @@ impl SearchRing {
         })
     }
 
+    /// The tile the ring is asking for right now, without moving on to the next one.
+    ///
+    /// `None` before the first [`Self::advance`], which is a real state rather than an edge case:
+    /// the ring is built when the search is armed and the first rung is taken when the search
+    /// actually starts, so there is a window where the ring exists and has no current tile.
+    ///
+    /// The split between this and `advance` is what lets one thing own the ladder. The Steam
+    /// query asks where to look every time it runs -- several times per attempt -- while the rung
+    /// only moves when an attempt has ended with nobody found. Letting the query advance the ring,
+    /// as it used to, tied how fast the search widened to how often Steam happened to be asked.
+    #[must_use]
+    pub fn current(&self) -> Option<Step> {
+        let index = self.next.checked_sub(1)?;
+        let block = *self.tiles.get(index)?;
+        Some(Step {
+            block,
+            ordinal: self.next,
+            total: self.tiles.len(),
+        })
+    }
+
     /// How many tiles this ring holds.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -169,6 +190,50 @@ impl SearchRing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reading_where_the_search_is_does_not_move_it_on() {
+        // The whole point of the split. The Steam query asks this several times per attempt, and
+        // when it called `advance` instead the ladder climbed at the rate Steam happened to be
+        // asked -- so a search either raced through the neighbourhood or, when the query detour
+        // was not firing at all, never left the first tile. Run br-20260916-012912-c513 was the
+        // second case: one banner, then forty-six silent restarts.
+        let mut ring = SearchRing::new(overworld(51, 36), 1);
+        assert_eq!(
+            ring.current(),
+            None,
+            "nothing is asked for before the first rung"
+        );
+        let first = ring.advance().expect("a ring always holds its centre");
+        assert_eq!(ring.current(), Some(first));
+        assert_eq!(
+            ring.current(),
+            Some(first),
+            "reading it twice is still the same rung"
+        );
+        let second = ring.advance().expect("radius 1 has neighbours");
+        assert_ne!(second, first);
+        assert_eq!(ring.current(), Some(second));
+    }
+
+    #[test]
+    fn a_spent_ring_still_knows_which_tile_it_last_asked_for() {
+        // `exhausted` goes true the moment the final tile is handed out, so it cannot be used to
+        // mean "past the end, ask everywhere" -- `current` is what separates them.
+        let mut ring = SearchRing::new(overworld(51, 36), 0);
+        let only = ring.advance().expect("the centre");
+        assert!(
+            ring.exhausted(),
+            "a radius-0 ring is spent after its one tile"
+        );
+        assert_eq!(ring.current(), Some(only));
+        assert_eq!(ring.advance(), None);
+        assert_eq!(
+            ring.current(),
+            Some(only),
+            "running off the end changes nothing"
+        );
+    }
 
     fn overworld(x: u8, z: u8) -> BlockKey {
         BlockKey::from_parts(60, x, z, 0)

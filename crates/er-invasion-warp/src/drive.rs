@@ -310,6 +310,10 @@ impl InvasionWarpDrive {
             // working. `clicks` is presses it took: a panel that draws and never takes a click
             // is one whose DirectInput suppression did not arm, and every press on it is
             // reaching the game as a swing instead.
+            // Three reads against the cached answer, the same ones the game task already makes
+            // every tick. Without it, "Seamless has no session" is invisible until something
+            // downstream refuses, and everything downstream refuses silently.
+            let session_report = crate::local_invasion_filter::session_report();
             let panel_open = crate::overlay::is_open();
             let panel_draws = crate::overlay::draws();
             let panel_clicks = crate::overlay::clicks();
@@ -321,7 +325,8 @@ impl InvasionWarpDrive {
                  icon[movie={map_movies} red_served={red_served} derive_failed={red_failures}] \
                  filter[ours {}/{} shipped {}/{}] \
                  advert[published={adverts} refused={advert_refusals}] \
-                 local[kept={keeps} cancelled={cancels} rearmed={reinvades}] \
+                 local[kept={keeps} cancelled={cancels} rearmed={reinvades} \
+                 ersc_session={session_report}] \
                  banner[shown={banners_shown} refused={banners_refused} \
                  drawn={banners_drawn} empty={banners_empty}] \
                  panel[open={panel_open} drawn={panel_draws} clicks={panel_clicks} \

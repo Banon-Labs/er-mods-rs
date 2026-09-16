@@ -158,7 +158,7 @@ static POPUPS_PASSED: AtomicUsize = AtomicUsize::new(0);
 ///
 /// Game task thread. The call is the engine's own lookup and takes no lock this module holds.
 #[cfg(windows)]
-unsafe fn goods_row(goods_id: u32) -> Option<usize> {
+pub(crate) unsafe fn goods_row(goods_id: u32) -> Option<usize> {
     let base = er_game_base::mem::game_module_base().ok()?;
     // The engine's own precondition, and the reason the first build of this module killed the
     // process 1140ms into boot. `EquipParamGoods::GetEntry` opens by loading
@@ -692,6 +692,8 @@ pub unsafe fn tick() {
     // SAFETY: game task thread; each is fault-closed and idempotent.
     unsafe {
         shorten_use_animation();
+        crate::vanilla_invasion_items::enable_offline_use();
+        crate::vanilla_invasion_items::install_bounds_popup_takeover();
         install_popup_skip();
         drive_pinned_use();
     }

@@ -323,20 +323,34 @@ pub(super) fn lock_shape_refusal(session: &SeamlessSession) -> Option<&'static s
             "_Type at session+0x100 is not a shape MSVC's mutex constructors write, so this is not              a _Mtx_internal_imp_t and the session pointer identifies something else",
         );
     }
-    let reduced = kind & !MTX_RECURSIVE;
-    if reduced == MTX_PLAIN || (kind & MTX_RECURSIVE) != 0 {
-        return None;
-    }
-    if count == 0 || thread == MTX_THREAD_ID_UNOWNED {
-        return None;
-    }
-    if thread == current_thread_id() {
+    // Ownership is read before recursiveness, and that order is the fix for a hard lock.
+    //
+    // This used to return `None` for any recursive or plain mutex before looking at the owner at
+    // all. Recursion only makes a re-lock safe for the thread that already holds it; a different
+    // thread blocks on a recursive mutex exactly as it blocks on a plain one. So the one arm that
+    // recursion changes is the same-thread arm, and skipping the foreign-owner arm with it turned
+    // the deadlock refusal below into dead code.
+    //
+    // Measured 2026-09-15, run `br-20260916-010723-f65a`: a vanilla invasion finger armed a search,
+    // the game task drove ERSC invade while the player's goods use still had ersc's own path inside
+    // this mutex, and the log ends on `about to drive ERSC invade ... state=0x1 IDLE` with no
+    // successor line -- the same signature `lynchpin_use` records for run
+    // `br-20260909-234803-535c`. The refusal text for that case was already written here; nothing
+    // could ever reach it.
+    let unowned = count == 0 || thread == MTX_THREAD_ID_UNOWNED;
+    if !unowned && thread != current_thread_id() {
         return Some(
-            "this thread already holds the session mutex, so the action's _Mtx_lock would return              _Thrd_busy and ERSC would throw errno 36 out of a nounwind boundary",
+            "another thread holds the session mutex, so the action would block the caller inside \
+             ersc.dll rather than return",
         );
     }
+    let recursive = (kind & MTX_RECURSIVE) != 0;
+    if unowned || recursive || (kind & !MTX_RECURSIVE) == MTX_PLAIN {
+        return None;
+    }
     Some(
-        "another thread holds the session mutex, so the action would block the caller inside          ersc.dll rather than return",
+        "this thread already holds the session mutex, so the action's _Mtx_lock would return \
+         _Thrd_busy and ERSC would throw errno 36 out of a nounwind boundary",
     )
 }
 
