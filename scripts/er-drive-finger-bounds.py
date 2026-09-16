@@ -40,6 +40,9 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--reset-first", action="store_true",
                     help="if the finger is already ON, answer its leave prompt to turn it off "
                          "before raising the bounds prompt")
+    ap.add_argument("--redirect", metavar="OWNER",
+                    help="hex pointer whose +0x58 is the Seamless session; a Both-near-and-far "
+                         "answer then calls ersc+0x25850 with it instead of the vanilla request")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -75,6 +78,19 @@ def main(argv: list[str]) -> int:
             events.put(message["payload"])
             print("  EVENT " + str(message["payload"]), flush=True)
 
+    # Enable the item before anything presses it. Seamless leaves all four of CanUseGoods' terms
+    # failing for the vanilla fingers, so without this the use press is refused and the run reads
+    # as "the item raised nothing" -- a false negative this driver produced repeatedly.
+    gate = sess.create_script((REPO / "scripts/frida/force-canusegoods.js").read_text())
+    gate.on("message", on_message)
+    gate.load()
+    gate_report = gate.exports_sync.report()
+    print(f"gate: body={gate_report['body']} followed={gate_report['followed']} "
+          f"enabled={gate_report['enabled']}", flush=True)
+    if not gate_report["enabled"]:
+        print("refusing to press: the CanUseGoods override is not enabled")
+        return 11
+
     oracle = sess.create_script((REPO / "scripts/frida/finger-prompt-oracle.js").read_text())
     oracle.load()
     popup = sess.create_script((REPO / "scripts/frida/bounds-popup-oracle.js").read_text())
@@ -90,6 +106,10 @@ def main(argv: list[str]) -> int:
     cycle.load()
     rows = sess.create_script((REPO / "scripts/frida/popup-row-oracle.js").read_text())
     rows.load()
+    redirect = sess.create_script(
+        (REPO / "scripts/frida/finger-redirect-to-seamless.js").read_text())
+    redirect.on("message", on_message)
+    redirect.load()
     pad = Pad(sess)
 
     def tap(mask: int, down: float = 0, up: float = 0) -> None:
@@ -117,6 +137,14 @@ def main(argv: list[str]) -> int:
     if cycle.exports_sync.selected()["id"] == before:
         print("refusing to confirm: input is not reaching the game (window focus?)")
         return 4
+    # The hook being installed is not the hook running. CanUseGoods is reached about 200 times a
+    # second, so a zero here after a pad tap means the override is answering nothing.
+    live = gate.exports_sync.report()
+    print(f"gate live: calls={live['calls']} forced={live['forced']} "
+          f"lastGoods={live['lastGoods']}", flush=True)
+    if live["calls"] == 0:
+        print("refusing to confirm: the CanUseGoods override has not been reached")
+        return 12
     for _ in range(20):
         if cycle.exports_sync.selected()["id"] == FINGER:
             break
@@ -154,24 +182,16 @@ def main(argv: list[str]) -> int:
         tap(PAD_B, down=0.3, up=0.5)
         return 7
     print(f"gate passed: prompt {raised['message']} is the one predicted", flush=True)
-
-    # Closed loop: press, read the row back, press again if it did not move. A press is not
-    # proof the cursor moved, and confirming the wrong row toggles the item instead of choosing
-    # a range -- which has already happened twice.
-    want = 1 if args.row == "right" else 0
-    for attempt in range(1, 7):
-        here = rows.exports_sync.row()
-        print(f"  row reads {here}", flush=True)
-        if here.get("ok") and here["row"] == want:
-            break
-        tap(PAD_RIGHT if want == 1 else PAD_LEFT, down=0.25, up=0.9)
-    else:
-        here = rows.exports_sync.row()
-        if not (here.get("ok") and here["row"] == want):
-            print(f"refusing to confirm: the row never reached {want}; it reads {here}")
-            tap(PAD_B, down=0.3, up=0.5)
-            return 8
-    print(f"gate passed: the highlighted row is {want}", flush=True)
+    # The highlight cannot be read: popupState+0x1a4 reports 0 for both rows and nothing in 2 KB
+    # of that struct moves on a D-pad or stick press. What can be read is the answer the game took,
+    # after the fact -- 1 for Nearby only, 2 for Both near and far. So the move is best effort and
+    # the answer is the proof; a run that aimed right and was answered 1 says so instead of
+    # claiming the row it wanted.
+    if args.row == "right":
+        tap(PAD_RIGHT)
+    if args.redirect:
+        armed = redirect.exports_sync.arm(args.redirect, 2 if args.row == "right" else 1)
+        print(f"redirect armed: {armed}", flush=True)
     tap(PAD_A, down=0.4, up=0.3)
     settle()
 
@@ -180,6 +200,14 @@ def main(argv: list[str]) -> int:
     print("consumer: " + str(consumer.exports_sync.report()["confirmVirtual"]), flush=True)
     print("ersc actions: " + str(actions.exports_sync.report()["counts"]), flush=True)
     print("finger after: " + str(oracle.exports_sync.variant()["active"]), flush=True)
+    report = redirect.exports_sync.report()
+    print("redirect: fired=" + str(report["fired"]) + " " + str(report["log"]), flush=True)
+    wanted = 2 if args.row == "right" else 1
+    got = answered[-1]["result"] if answered else None
+    verdict = ("the answer matched the row aimed at"
+               if got == wanted else
+               f"THE ROW MOVE DID NOT TAKE -- aimed at {wanted}, the game was answered {got}")
+    print("VERDICT: " + verdict, flush=True)
     return 0
 
 
