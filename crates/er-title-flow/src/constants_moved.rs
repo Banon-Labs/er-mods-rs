@@ -381,6 +381,31 @@ pub const ONLINE_DISABLE_EXPECTED_FIRST: u8 = 0x48;
 /// bytes followed by the next function, so a 3-byte stub is self-contained).
 pub const ONLINE_DISABLE_STUB: [u8; 3] = [0x31, 0xc0, 0xc3];
 
+/// The three bytes `ONLINE_DISABLE_STUB` overwrites, so the getter can be put back.
+///
+/// `48 8b 05` opens `mov rax, [rip+disp32]`, the first instruction of
+/// `GameMan::IsOnlineMode`. Read out of `eldenring-deobf.bin` at `0x67a030`, where the whole
+/// function is `48 8b 05 e1 f8 6e 03  0f b6 80 c8 0b 00 00  c3` -- load the `GameMan` pointer,
+/// `movzx eax, byte ptr [rax+0xbc8]`, return. Only the first three bytes are ever written, so the
+/// rest of the function is still intact underneath the stub and restoring these three is the whole
+/// undo.
+///
+/// # Why anything wants it back
+///
+/// Forcing the getter to 0 puts every one of its consumers on the offline branch, and the vanilla
+/// multiplayer items are among them: with `IsOnlineMode` false the game refuses the *use* action on
+/// the Bloody Finger, the Festering Bloody Finger and the rest, exactly as it does for a player who
+/// chose `Play Offline`. That is correct while an autoload is carrying the player through the title
+/// with no login, and wrong the moment they are in a world and want those items. So the patch is
+/// applied for the boot and lifted after it.
+///
+/// The getter is at `0x67a030` on 1.16.2 and `0x67ae80` on 1.17, a move
+/// `docs/recon/rva-map-1162-to-1170.verified.tsv:308` records as `IDENTICAL-LEAF` at ratio 1.000.
+/// An independent byte search for `48 8b 05 ?? ?? ?? ?? 0f b6 80 c8 0b 00 00 c3` over
+/// `eldenring-deobf-1.17.1.bin` returns that address and no other, so the two methods agree and
+/// the translation is not being taken on trust.
+pub const ONLINE_DISABLE_ORIGINAL: [u8; 3] = [0x48, 0x8b, 0x05];
+
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
 /// creates its runnable only if the sign-in check returns true and the user index is <= 3; cold
 /// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
