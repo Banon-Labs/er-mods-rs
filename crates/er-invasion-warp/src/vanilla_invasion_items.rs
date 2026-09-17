@@ -250,7 +250,10 @@ fn queue_the_places_being_searched() {
         // search nobody is doing, and the player reads a screen that is still hunting when the
         // answer is already in. One line says what is true instead.
         search_banner::clear();
-        crate::local_invasion_filter::banner::announce_nothing_to_search(true);
+        crate::local_invasion_filter::banner::announce_nothing_to_search(
+            true,
+            crate::local_invasion_filter::finger_reach_is_nearby_only(),
+        );
         crate::standalone_log(format_args!(
             "vanilla-fingers: skipped all {} nearby place(s) around block 0x{block:08x} at radius \
              {radius} -- the pre-flight already found no host anywhere carrying a block id, so \

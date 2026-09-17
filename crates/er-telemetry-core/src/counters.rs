@@ -1593,6 +1593,27 @@ pub static PAB_ADVANCE_SETTLE: AtomicUsize = AtomicUsize::new(0);
 /// `SET job=0x84d8e080 keycode=0xb6d1ffff` -- two different objects, and the write landed in the one
 /// no frame had watched settle. Zero means no window is open.
 pub static PAB_ADVANCE_SETTLE_JOB: AtomicUsize = AtomicUsize::new(0);
+/// How many times a settle window has been opened this process. It is the log's rate limiter and
+/// the count is the diagnostic: the window re-opens once per menu-pump pass whenever the gate is
+/// live with no press-any-button in sight, so an unbounded line per arm is one line per pass. Run
+/// `br-20260917-183537-0445` measured 21,824 of them and 8.3 MB of log in four minutes. Never reset
+/// per switch -- a per-switch reset restores the flood after every switch, which is the shape this
+/// bound exists to stop.
+pub static PAB_ADVANCE_ARMS: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the arm numbered `arms` prints its pair of `pab-advance:` lines.
+///
+/// The first eight, then powers of two -- the `reload-drain-b80` bound from `title_tick_cover`,
+/// living here beside the counter it reads so that a host-compiled test can hold it.
+/// `product_autoload_gates.rs` is `include!`d under `#[cfg(windows)]`, so a test written next to
+/// the call site would never run on the Linux host that `stage / cargo-test` uses, and a bound with
+/// no test is the state that produced the flood in the first place. Run `br-20260917-183537-0445`
+/// measured 21,824 arms; this admits 18 of them.
+#[must_use]
+pub fn pab_advance_arm_should_log(arms: usize) -> bool {
+    arms <= 8 || arms.is_power_of_two()
+}
+
 pub static OBSERVED_ACTIVE_STEAM_ID64: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
@@ -1923,3 +1944,47 @@ pub static STATS_RECORD_NOT_A_CHARACTER: AtomicUsize = AtomicUsize::new(0);
 pub static PROFILE_OFFSCREEN_SETTLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 pub static MODEL_WAS_LIVE: AtomicUsize = AtomicUsize::new(0);
 pub static RETURN_DESKTOP_CONTROLLER_DIAG: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+mod pab_advance_log_bound_tests {
+    use super::pab_advance_arm_should_log;
+
+    #[test]
+    fn the_first_eight_arms_all_print() {
+        for arms in 1..=8 {
+            assert!(pab_advance_arm_should_log(arms), "arm {arms} must print");
+        }
+    }
+
+    #[test]
+    fn the_gap_between_powers_of_two_is_silent() {
+        for arms in [9, 10, 11, 12, 13, 14, 15, 17, 100, 1000, 21_823] {
+            assert!(
+                !pab_advance_arm_should_log(arms),
+                "arm {arms} must not print"
+            );
+        }
+    }
+
+    #[test]
+    fn powers_of_two_keep_reporting_how_far_it_has_gone() {
+        for arms in [16, 32, 64, 1024, 16_384] {
+            assert!(pab_advance_arm_should_log(arms), "arm {arms} must print");
+        }
+    }
+
+    /// The defect this bound exists for, stated as the measurement that found it: run
+    /// `br-20260917-183537-0445` armed the settle window 21,824 times in four minutes and wrote a
+    /// line for every one of them, 8.3 MB of `er-quickload-autoload-debug.log` while the player
+    /// stood still in a loaded world. No gate may write a line per frame whatever state it meets.
+    #[test]
+    fn the_measured_flood_costs_at_most_twenty_lines() {
+        let printed = (1..=21_824)
+            .filter(|&n| pab_advance_arm_should_log(n))
+            .count();
+        assert!(
+            printed <= 20,
+            "21,824 arms printed {printed} times; the flood is back"
+        );
+    }
+}

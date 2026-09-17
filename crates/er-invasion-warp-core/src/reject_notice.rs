@@ -386,14 +386,28 @@ impl RejectNotice {
     /// neighbourhood was asked. On this path it was not: one pre-flight query established that no
     /// host anywhere carries a block id, so every one of those queries is known empty before it is
     /// sent, and a banner that recites 48 places it is skipping describes a search nobody is doing.
-    pub fn observe_nothing_to_search(&mut self, enabled: bool) -> Option<String> {
+    /// `nearby_only` is the row the player pressed, and it changes both halves of the sentence.
+    /// "nearby or far" claims a reach that row does not have, and "invading as usual" promises an
+    /// invasion it will not get: with nobody publishing a block id anywhere, a search that keeps
+    /// its location filter returns nothing, which is the correct outcome and not a failure.
+    /// Measured on run `br-20260917-183537-0445`, where this line was shown for a `Nearby only`
+    /// finger and the invasion that followed landed in a different map.
+    pub fn observe_nothing_to_search(
+        &mut self,
+        enabled: bool,
+        nearby_only: bool,
+    ) -> Option<String> {
         let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
         self.last_announced = Some(Announced::SearchingEverywhere);
         self.suppressed = 0;
         if repeat || !enabled {
             return None;
         }
-        Some("Nobody is hosting nearby or far -- invading as usual".to_string())
+        Some(if nearby_only {
+            "Nobody is hosting nearby -- nothing to invade".to_string()
+        } else {
+            "Nobody is hosting nearby or far -- invading as usual".to_string()
+        })
     }
 
     pub fn observe_success(
@@ -1108,5 +1122,42 @@ mod tests {
     fn the_widened_search_banner_respects_the_notice_switch() {
         let mut notice = RejectNotice::new();
         assert_eq!(notice.observe_search_everywhere(false, 48, false), None);
+    }
+
+    /// `Nearby only` may not be told an invasion is coming. Nobody publishing a block id anywhere
+    /// means the nearby ring is empty, and for a row with no far half that is the end of the
+    /// search, not a handoff to an unfiltered one. Run `br-20260917-183537-0445` showed the old
+    /// wording -- "nearby or far -- invading as usual" -- to a `Nearby only` finger, and the
+    /// invasion that followed landed in block `0x0a000000` from an anchor of `0x3d302d00`.
+    #[test]
+    fn nearby_only_is_not_promised_an_invasion_it_will_not_get() {
+        let mut notice = RejectNotice::new();
+        let said = notice
+            .observe_nothing_to_search(true, true)
+            .expect("the first notice is always shown");
+        assert!(
+            said.contains("nearby"),
+            "the row searched nearby, so the notice must say so: {said}"
+        );
+        assert!(
+            !said.contains("far"),
+            "`Nearby only` never asked about far: {said}"
+        );
+        assert!(
+            !said.contains("invading"),
+            "nothing is being invaded, and saying so is the defect: {said}"
+        );
+    }
+
+    /// The other row keeps its wording, because for it the sentence is true: `Both near and far`
+    /// really does hand over to an unfiltered Seamless search once the near half is exhausted.
+    #[test]
+    fn near_and_far_still_says_it_is_invading_as_usual() {
+        let mut notice = RejectNotice::new();
+        let said = notice
+            .observe_nothing_to_search(true, false)
+            .expect("the first notice is always shown");
+        assert!(said.contains("far"), "{said}");
+        assert!(said.contains("invading"), "{said}");
     }
 }

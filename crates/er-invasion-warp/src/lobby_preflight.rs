@@ -529,7 +529,10 @@ mod live {
             clear_sweep();
             arm_sweep(&[]);
             crate::local_invasion_filter::search_banner::clear();
-            crate::local_invasion_filter::banner::announce_nothing_to_search(true);
+            crate::local_invasion_filter::banner::announce_nothing_to_search(
+                true,
+                crate::local_invasion_filter::finger_reach_is_nearby_only(),
+            );
             crate::standalone_log(format_args!(
                 "preflight: dropped the armed nearby ring -- nobody anywhere publishes a block \
                  id, so every one of its queries is known empty before it is sent. The place \

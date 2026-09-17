@@ -1650,13 +1650,23 @@ mod live {
         // controls that make a zero mean "the set is empty" rather than "the filter matches
         // nothing". `Unknown` deliberately does not take this branch: a search armed a frame
         // before the answer lands must not skip its own ring on no evidence.
-        if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes {
+        //
+        // `Nearby only` is excluded for the same reason it is excluded from the sweep-exhausted
+        // branch above: an unfiltered query is not a cheaper way to search nearby, it is a search
+        // of everywhere. Measured on run `br-20260917-183537-0445` -- a Bloody Finger pressed with
+        // `Nearby only` from block `0x3d302d00` took this branch and Seamless matched
+        // `0x0a000000`, a different map, which is what the player saw. That row keeps its filter
+        // and falls through to the narrowing path below; the query it produces returns nothing,
+        // which is the truthful answer to "is anybody hosting nearby" when nobody publishes at all.
+        if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes
+            && !crate::local_invasion_filter::finger_reach_is_nearby_only()
+        {
             if PREFLIGHT_SKIP_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!(
                     "hunt: decision=nobody_publishes -- the pre-flight query found no host \
                      anywhere carrying `{LOBBY_MAP_KEY}`, so the ring would be empty at every \
                      step. This query goes out with Seamless's own shape and no location filter. \
-                     Printed once."
+                     `Nearby only` does not reach here. Printed once."
                 ));
             }
             return None;

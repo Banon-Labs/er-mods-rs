@@ -108,7 +108,7 @@ pub(crate) fn announce_found_host(_enabled: bool, _block: u32) {}
 
 /// Host build: no banner surface.
 #[cfg(not(windows))]
-pub(crate) fn announce_nothing_to_search(_enabled: bool) {}
+pub(crate) fn announce_nothing_to_search(_enabled: bool, _nearby_only: bool) {}
 
 /// Host build: no banner surface.
 #[cfg(not(windows))]
@@ -243,13 +243,13 @@ pub(crate) fn announce_found_host(enabled: bool, block: u32) {
 /// and on this path the neighbourhood was never asked: one pre-flight query settled it for
 /// everywhere at once.
 #[cfg(windows)]
-pub(crate) fn announce_nothing_to_search(enabled: bool) {
+pub(crate) fn announce_nothing_to_search(enabled: bool, nearby_only: bool) {
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        guard.observe_nothing_to_search(enabled)
+        guard.observe_nothing_to_search(enabled, nearby_only)
     };
     paint_or_log(announcement, "the nothing-to-search banner");
 }

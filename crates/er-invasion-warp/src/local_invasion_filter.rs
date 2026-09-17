@@ -788,6 +788,23 @@ pub(crate) fn finger_reach_is_near_and_far() -> bool {
     FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
 }
 
+/// Whether the finger's popup chose `Nearby only`, which must never produce an unfiltered query.
+///
+/// This is not the negation of [`finger_reach_is_near_and_far`]: `FINGER_REACH_NONE` is a third
+/// state and it means no finger started this search at all, so the map-pin and config-driven paths
+/// keep whatever behaviour they had. Only the row that promised the player "nearby" is bound by it.
+///
+/// The hole it closes, measured live on run `br-20260917-183537-0445`: the player used a Bloody
+/// Finger with `Nearby only` while standing in block `0x3d302d00`, the pre-flight found no host
+/// anywhere publishing a block id, and `hunt_target`'s `NobodyPublishes` short-circuit returned
+/// `None` -- no filter -- so Seamless matched `0x0a000000` and the invasion landed in a different
+/// map. That short-circuit is a real optimisation for `Both near and far`, whose second phase is
+/// meant to be unfiltered; for `Nearby only` there is no second phase to widen into, and an
+/// unfiltered query is not a faster way to search nearby, it is a different search.
+pub(crate) fn finger_reach_is_nearby_only() -> bool {
+    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEARBY
+}
+
 /// Record what the finger's popup chose. Cleared by [`stand_down_hunt`] with everything else.
 pub(crate) fn set_finger_reach(reach: usize) {
     FINGER_REACH.store(reach, Ordering::SeqCst);
