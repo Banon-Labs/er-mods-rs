@@ -155,10 +155,23 @@ pub unsafe fn install() -> bool {
         return true;
     }
 
-    let Ok(base) = er_game_base::mem::game_module_base() else {
+    // `game_rva_for_hook`, not `base + rva`, and not `game_rva` either.
+    //
+    // Raw arithmetic is what `check-stale-rva-calls.py` and `audit-1170-gate-bypass.py` both flag
+    // here, and they are right to: `CAN_USE_GOODS_RVA` is a 1.16.2 address and nothing in
+    // `base + rva` asks whether it still means anything on the running build. It happens to be
+    // correct on 1.17.1 -- run br-20260917-031812-b399 logged `CanUseGoods @0x14068ee60 answered`
+    // -- which is evidence about today's build, not about the next one, and the failure would be
+    // silent.
+    //
+    // The hook helper and not `game_rva` because the address is about to be handed to
+    // `register_union_hook7_runtime_derived`, which owns the single resolve. A second one is not
+    // merely redundant: `game_rva_for_hook`'s own doc records three detours installed on the wrong
+    // function that way, with no error and no log line. An address this build cannot map is
+    // refused inside the hook API instead, as `HOOK REFUSED`.
+    let Ok(entry) = er_game_base::mem::game_rva_for_hook(CAN_USE_GOODS_RVA as u32) else {
         return false;
     };
-    let entry = base + CAN_USE_GOODS_RVA;
     // SAFETY: a seven-argument handler on a seven-argument target; `ORIG_CAN_USE_GOODS` is the
     // static the handler calls through `UnionFn7`.
     match unsafe {

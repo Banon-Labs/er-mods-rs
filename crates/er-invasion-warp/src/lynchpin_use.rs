@@ -1635,8 +1635,13 @@ const SET_QUICK_SLOT_ITEM_RVA: u32 = 0x0024_9a30;
 ///
 /// Reports item ids through an out pointer while the setter above takes inventory indices, so
 /// putting a slot back means converting the saved id with [`inventory_index`].
+///
+/// Derived from `er-game-base` rather than written out again: `er-build-import-runtime` reaches the
+/// same function to read the quickbar back after an import, and a second literal is what
+/// `scripts/check-rva-alias-drift.py` counts as drift.
 #[cfg(windows)]
-const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: u32 = 0x0024_7ee0;
+const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: u32 =
+    er_game_base::rva::GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA as u32;
 
 /// How many quick slots the equip entries hold.
 #[cfg(windows)]

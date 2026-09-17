@@ -137,12 +137,14 @@ const SET_QUICK_OR_POUCH_OR_RUNE_RVA: usize = 0x249a50;
 /// addressing, `MOV ECX,dword ptr [RCX + RAX*0x4 + 0x3e4]`. Recorded, not written: see
 /// [`read_physick`] for why writing it directly produced error icons in the flask.
 const EQUIP_GAME_DATA_PHYSIC_TEARS: usize = 0x3e4;
-/// `CS::EquipGameData::GetItemIdByQuickSlotIndex(egd, int *out, uint index) -> int*` --
-/// The QUICKBAR read-back, and another out-parameter getter. Its whole body is
-/// `if (index < 10) *out = entries[index + 0x16]; else *out = -1;`, so it answers for the ten
-/// quickbar positions and refuses the pouch. The value it hands back is the category-tagged item
-/// id, not a bare param id.
-const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;
+/// `CS::EquipGameData::GetItemIdByQuickSlotIndex` -- the quickbar read-back.
+///
+/// Derived from `er-game-base` rather than written out again: `er-invasion-warp` reaches the same
+/// function to find which slot holds an invasion finger, and a second literal is what
+/// `scripts/check-rva-alias-drift.py` counts as drift. The behaviour it documents is unchanged and
+/// now lives with the value.
+const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize =
+    er_game_base::rva::GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA;
 /// `EquipGameData::equipmentEntries`, a `ChrAsmEquipEntries` -- 39 `int`s of category-tagged item
 /// ids indexed by `ChrAsmSlot`, of which `0x16..0x1F` are `quickItem1..10` and `0x20..0x25` are
 /// `pouch1..6`. This is the array the pouch writer `FUN_14024bb20` stores into

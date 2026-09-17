@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// The filter's source as these tests read it: the parent plus the modules split out of it.
+///
+/// Seven tests assert on what is and is not in the filter's own text, and each used to
+/// `include_str!` the parent file alone. That reads as "the filter" only while the filter is one
+/// file. When `join_outcome` was split out on 2026-09-17 to get back under the 3200-line limit,
+/// five of those tests went red at once -- `the orphan-drop path exists`,
+/// `trace_session_state must exist`, and so on -- reporting that code had been deleted when it had
+/// only moved. Concatenating here keeps the question the tests are asking ("is this behaviour
+/// still in the filter") independent of which file currently holds it.
+///
+/// Add a module to this list when the next split happens, or these tests will lie in the same way.
+///
+/// The parent comes last, and the order is load-bearing. `product_code` truncates this whole string
+/// at the first test-configuration attribute it finds, and the parent's trailing test module is the
+/// only one in the set -- so with the parent first, every line of every module after it is cut and
+/// the scans read a fraction of the filter. Splitting a module out therefore means adding it above
+/// this line, never below.
+const FILTER_SOURCE: &str = concat!(
+    include_str!("join_outcome.rs"),
+    include_str!("../local_invasion_filter.rs"),
+);
+
 /// Every option that changes behaviour has to show up in the `config loaded` line.
 ///
 /// Not a style rule -- it is the difference between a hot-reload you can verify and one you can
@@ -46,7 +68,7 @@ fn every_behaviour_changing_option_is_named_in_the_config_line() {
          longer reading it"
     );
 
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let line_start = source
         .find("local-invasion: config loaded")
         .expect("the config-loaded log line");
@@ -297,21 +319,18 @@ fn the_lobby_key_is_never_published_or_altered() {
 /// parent's own `#[cfg(test)]` would otherwise truncate everything concatenated behind it, which
 /// is the silent-blindness failure `filter_module_code` below already documents.
 fn product_code() -> String {
-    [
-        include_str!("../local_invasion_filter.rs"),
-        include_str!("actions.rs"),
-    ]
-    .map(|source| {
-        let shipping = source
-            .split_once("#[cfg(test)]")
-            .map_or(source, |(before, _)| before);
-        shipping
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
-    .join("\n")
+    [FILTER_SOURCE, include_str!("actions.rs")]
+        .map(|source| {
+            let shipping = source
+                .split_once("#[cfg(test)]")
+                .map_or(source, |(before, _)| before);
+            shipping
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .join("\n")
 }
 
 /// `product_code` stops at the first `#[cfg(test)]`, so that attribute may only appear last.
@@ -331,10 +350,7 @@ fn product_code() -> String {
 fn the_only_cfg_test_in_scanned_source_is_the_trailing_test_module() {
     let attribute = format!("#[cfg({})]", "test");
     for (name, source) in [
-        (
-            "local_invasion_filter.rs",
-            include_str!("../local_invasion_filter.rs"),
-        ),
+        ("local_invasion_filter.rs", FILTER_SOURCE),
         ("actions.rs", include_str!("actions.rs")),
     ] {
         let occurrences = source.matches(&attribute).count();
@@ -369,7 +385,7 @@ fn the_only_cfg_test_in_scanned_source_is_the_trailing_test_module() {
 /// here means a future split costs one line in this function rather than a gate nobody notices.
 fn filter_module_code() -> String {
     [
-        include_str!("../local_invasion_filter.rs"),
+        FILTER_SOURCE,
         include_str!("actions.rs"),
         include_str!("menu_object.rs"),
         include_str!("banner.rs"),
@@ -705,7 +721,7 @@ fn the_version_discriminator_actually_discriminates() {
 /// produces an actionable line rather than a filter that silently does nothing.
 #[test]
 fn an_unrecognised_seamless_build_is_refused_rather_than_guessed_at() {
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let resolver = source
         .split_once("fn resolve_ersc_abi(")
         .expect("the version gate exists")
@@ -1036,7 +1052,7 @@ fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
     // detour, failed, and reported `ErscUnrecognised`. A live invasion was judged, rejected,
     // and then not cancelled because of it. Whatever the recurring check reads must be
     // something nothing patches.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let resolver = source
         .split_once("fn resolve_session(")
         .expect("resolve_session exists")
@@ -1832,7 +1848,7 @@ fn both_off_switches_stand_the_hunt_down() {
         panel.contains("stand_down_hunt("),
         "the panel's `enabled` row is the same switch as the toggle key and owes the same promise"
     );
-    let filter = include_str!("../local_invasion_filter.rs");
+    let filter = FILTER_SOURCE;
     let body = filter
         .split_once("pub(crate) fn stand_down_hunt(")
         .expect("the stand-down is in this file")
@@ -2081,7 +2097,7 @@ fn the_orphan_drop_refuses_a_player_standing_in_the_hosts_world() {
         .expect("the orphan-drop path exists")
         .1;
     let body = &body[..body
-        .find("\n#[cfg(windows)]\nfn trace_join_progress")
+        .find("\n#[cfg(windows)]\npub(crate) fn trace_join_progress")
         .expect("it is followed by trace_join_progress")];
     let refusal_at = body
         .find("if state == session.abi.state_in_world {")

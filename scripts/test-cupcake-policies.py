@@ -1481,21 +1481,28 @@ def main() -> int:
         # the word "python" from the interpreter's own invocation). This repo
         # deliberately writes refusal logic and safety docs that name the
         # forbidden binary, so that text has to stay editable.
+        # Written as a shell heredoc into a file rather than as a python program.
+        #
+        # It used to be `python3 - <<'PY' ... p.write_text(...)`, and that stopped being a
+        # legitimate shape on 2026-09-16 when `no_python_file_write` began refusing inline python
+        # that writes files -- so this case asserted `allow` against a command the rulebook now
+        # denies for a reason that has nothing to do with what it is testing, and
+        # `stage / policy` went red. The subject here was never python: it is whether a command
+        # naming the forbidden binary inside ordinary prose is mistaken for an attempt to
+        # launch it. A heredoc into a file is what the python guard itself points at as the
+        # visible-in-the-command way to write one, so the same text reaches the launch guard with
+        # nothing else for any other policy to object to.
         PolicyCase(
-            "allow-python-heredoc-editing-docstring-naming-eac-launcher",
-            "python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            "p = Path('scripts/frida-dump-module.py')\n"
-            "s = p.read_text(encoding='utf-8')\n"
-            'old = """* Offline `eldenring.exe` ONLY. Refuses'
-            " `start_protected_game.exe` / EAC, like the sibling\n"
-            "  `frida-nudge.py`.\n"
+            "allow-heredoc-writing-docstring-naming-eac-launcher",
+            "cat > scripts/frida-dump-module.py <<'EOF'\n"
+            '"""Dump a module out of the running game.\n'
+            "\n"
+            "* Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the\n"
+            "  sibling `frida-nudge.py`.\n"
             '"""\n'
-            "assert old in s\n"
-            "p.write_text(s.replace(old, ''), encoding='utf-8')\n"
-            "PY",
+            "EOF",
             True,
-            extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
+            extra_tool_input={"description": "Rewrite the docstring that names the EAC launcher"},
         ),
         # ... but the exemption must not become a launch bypass. A pipe on the
         # heredoc REDIRECTION line feeds the program's output to a shell, so a
@@ -1837,14 +1844,25 @@ def main() -> int:
         # policy survives cupcake's WASM runtime, which is the half that went inert for 36 days
         # once already. The allow case is the load-bearing one: this guard refuses a write, so a
         # false positive costs an author an edit they cannot make.
+        # Aimed at a `.py` file, not at Rust under `crates/`.
+        #
+        # The caps guard scans `.rs`, `.py`, `.sh` and `.bash` alike, so the subject is unchanged --
+        # but `no_rust_edit_without_frida_proof` denies every `.rs` under `crates/` whenever the
+        # last Frida measurement has been spent by a commit, and then that refusal is the one
+        # cupcake returns. The expected text goes missing and this case fails for a reason that has
+        # nothing to do with capitals. It also fails asymmetrically: after a local Frida run it
+        # passes, and in continuous integration -- which never runs Frida and so never holds a
+        # measurement -- it can never pass. A policy test must not depend on which of two guards
+        # fires first, and a file the other guard does not look at is how this one stops depending
+        # on it.
         PolicyCase(
             "deny-write-shouted-word-into-a-comment",
             "",
             False,
             "shouted word going into a comment",
             {
-                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
-                "content": "// this is NOT the same pointer\nfn f() {}\n",
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# this is NOT the same pointer\ndef f():\n    pass\n",
             },
             include_timeout=False,
             tool_name="Write",
@@ -1855,8 +1873,13 @@ def main() -> int:
             True,
             None,
             {
-                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
-                "content": "// the x86 `NOT` instruction, quoted\nfn f() {}\n",
+                # A `.py` file for the same reason as the deny case above: an `allow` expectation
+                # against Rust under `crates/` is really an expectation that no second guard denies
+                # it either, and `no_rust_edit_without_frida_proof` always does once a commit has
+                # spent the measurement. This case is the load-bearing one of the pair -- it proves
+                # backticks rescue a mnemonic -- so it must fail only when backticks stop working.
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# the x86 `NOT` instruction, quoted\ndef f():\n    pass\n",
             },
             include_timeout=False,
             tool_name="Write",
