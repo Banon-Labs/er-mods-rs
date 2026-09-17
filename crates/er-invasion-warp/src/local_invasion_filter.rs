@@ -656,21 +656,32 @@ pub(crate) fn hand_off_to_seamless(reason: &str) {
     if was_armed {
         crate::standalone_log(format_args!(
             "local-invasion: handed the search back to Seamless -- {reason}. The filter, the \
-             location narrowing and the re-search loop are all retired, and the Challenger's \
-             Lynchpin is asked for so Seamless starts its own search; nothing here will judge or \
-             cancel what it finds."
+             location narrowing and the re-search loop are all retired. The search itself keeps \
+             running and its next query goes out with nothing of ours on it, so the whole \
+             population answers it; nothing here will judge or cancel what it finds."
         ));
     }
-    // Retiring the override is only half of it, and the first run proved the half was not enough.
+    // No item is asked for here, and asking for one was never possible.
     //
-    // Run br-20260917-015929-ef68: the handover fired on the first near+far use, exactly as
-    // written -- and `ersc+0x25850` had been called zero times, because the search it was handing
-    // over had never started. The finger's own row arms an invade that needs a menu object this
-    // process has never captured, so the far half handed Seamless an empty hand.
+    // This used to call `lynchpin_use::request_lynchpin_invasion()`, on the reasoning that the
+    // Lynchpin used as an item is what measurably reaches Steam. The reasoning was sound; the
+    // placement could not work. A handover only fires while the near half's search is in flight,
+    // and the game refuses item use for the whole of a search -- reported by the player,
+    // 2026-09-16: "I cannot press my square button to activate an item while we are searching or
+    // until I reach the host's world", square being the use-item binding.
     //
-    // The Lynchpin used as an item is the thing that measurably reaches Steam (2 lobby requests
-    // and 10 filters, against 0 and 0 for the direct action call), so the far half asks for it.
-    crate::lynchpin_use::request_lynchpin_invasion();
+    // Measured rather than taken on trust, on br-20260917-031431-f91c with
+    // `scripts/frida/use-gate-by-session-state.js`: driven from a session reading `0x01`,
+    // `GetSelectedGoodsUseAnim` fired and TAE 65 consumed. That function was reached on no
+    // previous driven press in this repo's history, and the only thing that differed is the state.
+    //
+    // So every `queued but not consumed` line was a use refused at the gate, not a flaky drive,
+    // and the retry that used to sit below was arguing with a rule.
+    //
+    // The far half does not need the item anyway. The near half already started the search; all
+    // this has to do is stop narrowing it, which the lines above do -- `FINGER_REACH_NONE` and a
+    // cleared sweep make `lobby_publish::hunt_target` answer `None`, so Seamless's next query
+    // carries only its own four keys.
 }
 
 /// Host-side stub.

@@ -1241,9 +1241,10 @@ if (ersc === null) {
   // baseline, the session the scan above chose, the lead and rule-byte histories -- is initialised
   // by the time the game next polls its pad, so no tick can run against a half-built agent.
   //
-  // The periods are staggered rather than shared so the samplers rarely land on the same frame,
-  // and each one returns immediately when nothing moved. A tick that does all three reads 0x211
-  // bytes and follows three pointers.
+  // The three periods share a common multiple every 120 ticks -- once every second and a half at
+  // the measured rate -- and that is the only frame carrying all of them: 0x200 bytes of the lead,
+  // 0x11 around the rule byte, and the three pointers the goods field sits behind. Every other
+  // frame carries one sampler or none, and a sampler that finds nothing moved sends nothing.
   const tick = gameTick();
   if (tick === null) {
     say({
