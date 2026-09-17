@@ -250,7 +250,7 @@ fn queue_the_places_being_searched() {
     // is why this reads as a missing banner rather than a wrong invasion: one place was asked, over
     // and over, instead of the region.
     if crate::local_invasion_filter::finger_reach_is_nearby_only() {
-        search_banner::queue_ring(&ring);
+        search_banner::queue_ring(&ring, true);
         crate::lobby_preflight::arm_sweep(&ring);
         crate::standalone_log(format_args!(
             "vanilla-fingers: queued all {} nearby place(s) around block 0x{block:08x} at radius \
@@ -290,7 +290,10 @@ fn queue_the_places_being_searched() {
         ));
         return;
     }
-    search_banner::queue_ring(&ring);
+    search_banner::queue_ring(
+        &ring,
+        crate::local_invasion_filter::finger_reach_is_nearby_only(),
+    );
     // The same list, asked about rather than recited. The banner names where the search is
     // looking; the sweep is what makes that true, and it is also what ends the nearby half of
     // `Both near and far` -- a place that answers zero is a place that has been asked.

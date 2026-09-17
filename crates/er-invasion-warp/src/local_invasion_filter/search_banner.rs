@@ -51,18 +51,39 @@ pub(crate) struct Step {
     pub(crate) total: usize,
 }
 
-/// The places still to announce, oldest first, and when the last one was shown.
+/// The recital's whole state: what is left to say, when the last line went up, whether the ring
+/// starts over when it runs out, and the ring to refill from when it does.
 ///
-/// `None` rather than an empty deque so the static is constructible in a `const` context without
-/// depending on which release made `VecDeque::new` const.
-static QUEUE: Mutex<Option<(VecDeque<Step>, u64)>> = Mutex::new(None);
+/// The repeat flag exists because the two rows want opposite things from an exhausted ring. `Both
+/// near and far` wants it to end: the recital finishing is how the player is told the near half is
+/// over and the far half has begun. `Nearby only` has no far half, so for that row the end of the
+/// ring is the start of the next lap -- "When I exhausted nearby, the banner didn't come up again
+/// saying it was going through 1-N locations again for a new player. It should keep doing this on
+/// repeat until I cancel" (user, live, 2026-09-17).
+///
+/// The search itself was never the problem and does not need restarting: run
+/// br-20260917-193816-8621 shows it cycling `0x12 -> 0x0e SEARCHING -> 0x0f -> 0x12` for as long as
+/// the finger stays armed. Only the recital died, because [`pump`] popped and nothing refilled.
+#[derive(Default)]
+struct Queue {
+    pending: VecDeque<Step>,
+    last_shown: u64,
+    repeat: bool,
+    /// The ring as queued, so a lap can be refilled without the caller queuing again. Left empty
+    /// when `repeat` is false, so a one-shot recital holds nothing extra.
+    ring: Vec<Step>,
+}
 
-fn with_queue<T>(f: impl FnOnce(&mut (VecDeque<Step>, u64)) -> T) -> T {
+/// `None` rather than an empty queue so the static is constructible in a `const` context without
+/// depending on which release made `VecDeque::new` const.
+static QUEUE: Mutex<Option<Queue>> = Mutex::new(None);
+
+fn with_queue<T>(f: impl FnOnce(&mut Queue) -> T) -> T {
     let mut guard = match QUEUE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     };
-    let slot = guard.get_or_insert_with(|| (VecDeque::new(), 0));
+    let slot = guard.get_or_insert_with(Queue::default);
     f(slot)
 }
 
@@ -71,32 +92,49 @@ fn with_queue<T>(f: impl FnOnce(&mut (VecDeque<Step>, u64)) -> T) -> T {
 /// Replacing rather than appending is deliberate: a second search supersedes the first, and a
 /// player who re-armed should see the new ring rather than the tail of the old one. The first
 /// place is shown on the next drain rather than after a second, so arming is acknowledged at once.
-pub(crate) fn queue_ring(blocks: &[u32]) {
+///
+/// `repeat` makes the recital a loop rather than a drain: when the last place has been named the
+/// ring is refilled and lap two starts at "1 of N" again. It belongs to `Nearby only`, whose
+/// search has nowhere to hand over to, and it is the caller's to decide rather than this module's
+/// because only the caller knows which row the player pressed.
+pub(crate) fn queue_ring(blocks: &[u32], repeat: bool) {
     let total = blocks.len();
-    with_queue(|(queue, last_shown)| {
-        queue.clear();
-        for (index, block) in blocks.iter().copied().take(MAX_QUEUED).enumerate() {
-            queue.push_back(Step {
-                block,
-                ordinal: index + 1,
-                total,
-            });
-        }
-        *last_shown = 0;
+    let steps: Vec<Step> = blocks
+        .iter()
+        .copied()
+        .take(MAX_QUEUED)
+        .enumerate()
+        .map(|(index, block)| Step {
+            block,
+            ordinal: index + 1,
+            total,
+        })
+        .collect();
+    with_queue(|queue| {
+        queue.pending = steps.iter().copied().collect();
+        queue.ring = if repeat { steps } else { Vec::new() };
+        queue.repeat = repeat;
+        queue.last_shown = 0;
     });
 }
 
 /// Forget whatever is pending, for a search that ended before it was recited.
+///
+/// This is also how a repeating recital stops, so it clears the lap state with the queue: a
+/// cancel that left `repeat` set would refill on the next pump and the banner would outlive the
+/// search it describes.
 pub(crate) fn clear() {
-    with_queue(|(queue, last_shown)| {
-        queue.clear();
-        *last_shown = 0;
+    with_queue(|queue| {
+        queue.pending.clear();
+        queue.ring.clear();
+        queue.repeat = false;
+        queue.last_shown = 0;
     });
 }
 
 /// How many places are still waiting to be named.
 pub(crate) fn pending() -> usize {
-    with_queue(|(queue, _)| queue.len())
+    with_queue(|queue| queue.pending.len())
 }
 
 /// The next place to name, or `None` when there is nothing queued or it is not time yet.
@@ -108,15 +146,21 @@ pub(crate) fn pump(now_ms: u64) -> Option<Step> {
     if now_ms == 0 {
         return None;
     }
-    with_queue(|(queue, last_shown)| {
-        if queue.is_empty() {
+    with_queue(|queue| {
+        if queue.pending.is_empty() {
+            // A repeating recital starts its next lap here rather than at the call site, so no
+            // caller has to notice the ring ran out. A non-repeating one ends, which is what tells
+            // the player of `Both near and far` that the near half is over.
+            if !queue.repeat || queue.ring.is_empty() {
+                return None;
+            }
+            queue.pending = queue.ring.iter().copied().collect();
+        }
+        if queue.last_shown != 0 && now_ms.saturating_sub(queue.last_shown) < STEP_INTERVAL_MS {
             return None;
         }
-        if *last_shown != 0 && now_ms.saturating_sub(*last_shown) < STEP_INTERVAL_MS {
-            return None;
-        }
-        *last_shown = now_ms;
-        queue.pop_front()
+        queue.last_shown = now_ms;
+        queue.pending.pop_front()
     })
 }
 
@@ -222,7 +266,7 @@ mod tests {
             Err(poisoned) => poisoned.into_inner(),
         };
         clear();
-        queue_ring(blocks);
+        queue_ring(blocks, false);
         guard
     }
 
@@ -269,7 +313,7 @@ mod tests {
     fn rearming_replaces_what_was_left_rather_than_queueing_behind_it() {
         let _queue = fresh(&[1, 2, 3]);
         assert!(pump(1_000).is_some());
-        queue_ring(&[9]);
+        queue_ring(&[9], false);
         assert_eq!(pending(), 1);
         assert_eq!(
             pump(1_001).map(|step| step.block),
@@ -303,7 +347,7 @@ mod tests {
     fn the_overworld_ring_queued_is_the_one_the_query_side_walks() {
         let _queue = fresh(&[]);
         // Limgrave, the tile run br-20260916-233426-b38b was standing in.
-        queue_ring(&nearby_ring(0x3c34_3500, 1));
+        queue_ring(&nearby_ring(0x3c34_3500, 1), false);
         assert_eq!(pending(), 9, "centre plus its eight neighbours");
         let first = pump(1_000).expect("due");
         assert_eq!(first.block, 0x3c34_3500, "the centre is asked for first");
@@ -319,5 +363,54 @@ mod tests {
     #[test]
     fn the_clock_never_hands_back_the_value_that_means_unreadable() {
         assert!(now_ms() >= 1);
+    }
+
+    /// The user-visible rule for `Nearby only`: "When I exhausted nearby, the banner didn't come up
+    /// again saying it was going through 1-N locations again for a new player. It should keep doing
+    /// this on repeat until I cancel."
+    #[test]
+    fn a_repeating_ring_starts_its_next_lap_at_one_of_n() {
+        let _queue = fresh(&[]);
+        queue_ring(&[11, 22, 33], true);
+        let mut clock = 1_000;
+        let mut lap_one = Vec::new();
+        for _ in 0..3 {
+            let step = pump(clock).expect("the lap is due");
+            lap_one.push((step.block, step.ordinal, step.total));
+            clock += STEP_INTERVAL_MS;
+        }
+        assert_eq!(lap_one, vec![(11, 1, 3), (22, 2, 3), (33, 3, 3)]);
+        let again = pump(clock).expect("an exhausted repeating ring refills rather than ending");
+        assert_eq!(
+            (again.block, again.ordinal, again.total),
+            (11, 1, 3),
+            "lap two starts at the first place, numbered from one again"
+        );
+    }
+
+    /// `Both near and far` keeps the old behaviour, because for that row the recital ending is the
+    /// signal that the near half is over and the far half has begun.
+    #[test]
+    fn a_one_shot_ring_still_ends_when_it_runs_out() {
+        let _queue = fresh(&[]);
+        queue_ring(&[11, 22], false);
+        let mut clock = 1_000;
+        for _ in 0..2 {
+            assert!(pump(clock).is_some());
+            clock += STEP_INTERVAL_MS;
+        }
+        assert_eq!(pump(clock), None, "nothing refills a one-shot recital");
+    }
+
+    /// Cancelling has to stop the loop as well as empty it: a `clear` that left the repeat flag set
+    /// would refill on the next pump and leave the banner describing a search that is over.
+    #[test]
+    fn clearing_a_repeating_ring_stops_it_repeating() {
+        let _queue = fresh(&[]);
+        queue_ring(&[11, 22], true);
+        assert!(pump(1_000).is_some());
+        clear();
+        assert_eq!(pump(2_000), None);
+        assert_eq!(pending(), 0);
     }
 }
