@@ -30,11 +30,39 @@
 //! request can already be complete when `RequestWait` first ticks -- d8 is 2 on entry, the `d8 == 1`
 //! advance is skipped, and the session-end arm runs against a NowLoading job that is null.
 //!
+//! The per-tick log below was added to settle that, and run br-20260917-150910-3f60 settled it. The
+//! boot load, which keeps its world and was played for six minutes, ticks this step exactly twice:
+//! `d8=0` then `d8=1`, and leaves through the advance arm. The System > Quit switch in the same
+//! process ticks it twenty-two times and every one of them reads `d8=2`; it never sees 0 or 1. Two
+//! user-visible symptoms fall out of that single divergence, and both were reported as separate bugs:
+//! the loading bar never moves off `frame=1/500 progress=0permille`, because `FUN_14067a320` -- which
+//! is what sets `loadingScreenData +0xc = 0`, `+0x10 = 1`, `+0x8 = mode` -- lives only in the arm we
+//! never reach; and the world is then torn to the title map (`WORLD LOST`), which is the black screen
+//! that ends at press-any-button.
+//!
+//! Where the stale 2 comes from is now static fact rather than inference. `C7 ?? D8 00 00 00 02 00 00
+//! 00` matches four times in the whole image, and exactly one of them is in the `InGameStep` family:
+//! `STEP_MoveMap_Update+0x1f6` (0x140aec916), which stores 2 unconditionally once
+//! `FUN_140eb5530(childStep)` reports the move finished. Our switch mounts the map before
+//! `continue_confirm` restarts the machine into `RequestWait`, so the 2 is residue from a move that
+//! is already over -- the same class of stale latch as `menuData+0x5d` and the `GameMan+0x10` warp,
+//! which `own_load_switch_reload` already retires at that commit for the same reason.
+//!
 //! What the guard does. On entry with `d8 == 2` and a null NowLoading job while a genuinely real map is
 //! mounted, it rewrites d8 to 1 and lets the original run. The game then takes its own healthy `d8 == 1`
 //! branch -- the same fade, the same `FUN_14067a320`, the same `FUN_140aed270(this, 4)` advance a normal
-//! load takes. Nothing here calls a game function, and nothing skips one; the only write is to the
-//! dispatch value, and only to a value the native code sets itself one step earlier.
+//! load takes. Nothing here calls a game function, and nothing skips one; the only writes are to the
+//! dispatch value and to a destination field, both to values the native code sets itself.
+//!
+//! The destination field is the half that was missing the first time this was tried. Writing d8 2 -> 1
+//! alone did stop the black screen and then stalled instead: the step it advances into starts a map
+//! move, `GameMan+0x14` had already been consumed and cleared to 0xffffffff by our own pre-mounted
+//! move, and `STEP_WorldResWait` waited forever on block ff/ff/ff/ff (run br-20260905-211954-d2a7).
+//! That is a block-id problem, not an argument against the arm. `FUN_14067b290`, the slot deserialize,
+//! ends with `SetMoveMapStepBlockId(GameMan+0xc30)`, so the value the step wants is the map the save's
+//! own bytes just wrote into `+0xc30`, and the guard restores exactly that before converting the arm.
+//! `FUN_140aed270(this, n)` itself starts nothing -- decompiled, it writes `n` to `InGameStep+0x4c` and
+//! range-checks `+0x48`, raising the `移動先ステップ未定義` error when the index is out of range.
 //!
 //! Why it cannot wedge a world that is not coming. Every correction spends one of a fixed budget
 //! (`MAX_CORRECTIONS`) armed per switch. When the budget is gone the native store runs untouched and the
@@ -56,6 +84,19 @@ use crate::telemetry::append_autoload_debug;
 /// `requestCode` values `STEP_RequestWait` dispatches on. `ADVANCE` is the one whose arm leaves the
 /// step (to step 4); `SESSION_END` is the one whose arm clears `+0xd8`.
 const REQUEST_CODE_SESSION_END: i32 = 2;
+
+/// The arm that leaves the step: fade, `FUN_14067a320(mode)` to start the loading bar, then
+/// `FUN_140aed270(this, 4)`. A boot load's second tick reads this value and is gone from the step.
+const REQUEST_CODE_ADVANCE: i32 = 1;
+
+/// `GameMan+0x14` once `STEP_MoveMap_Init` has copied it into the MoveMapStep and cleared it. A move
+/// that starts while the field reads this has nowhere to go and `STEP_WorldResWait` never finishes.
+const MOVEMAP_BLOCK_ID_UNSET: i32 = -1;
+
+/// Conversions allowed per switch. Past this the native store runs untouched and the game returns to
+/// the title exactly as it does without this guard, so a world that is never coming cannot become a
+/// hang. One conversion is enough when it works: the step is gone after the advance.
+const MAX_CORRECTIONS: usize = 4;
 
 /// The title/new-game default map id. `c30` equal to this means no real world is mounted, so a session
 /// end is the game doing its job and the guard must not touch it.
@@ -87,7 +128,7 @@ pub(crate) fn arm_request_wait_guard_for_switch() {
     TICK_LOGS.store(0, Ordering::SeqCst);
     CORRECTIONS_MADE.store(0, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "requestwait-observer: armed for this switch -- every STEP_RequestWait tick is logged with its d8, and a session-end is REPORTED, never converted"
+        "requestwait-observer: armed for this switch -- every STEP_RequestWait tick is logged with its d8, and a stale session-end on a real world is converted to the advance arm (budget {MAX_CORRECTIONS})"
     ));
 }
 
@@ -117,6 +158,29 @@ fn mounted_map_id() -> i32 {
     }
     unsafe { safe_read_i32(gm + er_title_flow::GAME_MAN_SAVED_MAP_C30_OFFSET) }
         .unwrap_or(C30_M10_DEFAULT)
+}
+
+/// `GameMan+0x14` (`moveMapStepBlockId`) -- the destination `STEP_MoveMap_Init` copies into the
+/// MoveMapStep's `mapId` and then clears behind itself.
+fn movemap_step_block_id() -> i32 {
+    let gm = game_man_ptr_or_null();
+    if gm <= 0x10000 {
+        return MOVEMAP_BLOCK_ID_UNSET;
+    }
+    unsafe { safe_read_i32(gm + GAME_MAN_MOVEMAP_STEP_BLOCK_ID_14_OFFSET) }
+        .unwrap_or(MOVEMAP_BLOCK_ID_UNSET)
+}
+
+/// Put a destination back into `GameMan+0x14`, the way the slot deserialize's own trailing
+/// `SetMoveMapStepBlockId(GameMan+0xc30)` does. Returns whether the write landed.
+fn set_movemap_step_block_id(block: i32) -> bool {
+    let gm = game_man_ptr_or_null();
+    if gm <= 0x10000 {
+        return false;
+    }
+    unsafe {
+        er_game_base::mem::safe_write_i32(gm + GAME_MAN_MOVEMAP_STEP_BLOCK_ID_14_OFFSET, block)
+    }
 }
 
 unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
@@ -152,25 +216,28 @@ unsafe extern "system" fn step_request_wait_hook(in_game_step: usize) {
             ));
         }
         if nowloading == 0 && world_is_real {
-            // Observe only. This used to rewrite d8 2 -> 1 so the native code would take its
-            // `d8 == 1` arm instead of ending the session. It did stop the black screen, and it was
-            // still wrong: that arm calls `FUN_140aed270(this, 4)` and advances the step, which after
-            // the MoveMap has already completed starts a second load. Measured on run
-            // br-20260905-211954-d2a7 -- MoveMap init #2 (the switch's real load) got a correct
-            // destination block 0x1c000000, and a third init nine seconds later, caused by this
-            // conversion, found `GameMan+0x14` already consumed and cleared to 0xffffffff, so
-            // STEP_WorldResWait waited forever on block ff/ff/ff/ff. Trading a black screen for a
-            // permanent stall is not a fix, and a guard that re-drives a load the game had already
-            // finished has no business in the product.
-            //
-            // The defect is upstream of both arms: this step should not be reached with d8 == 2 at
-            // all. A load that keeps its world leaves via the d8 == 1 arm first (br-20260904-165518-e3be
-            // sits at ig_d8 = 1 for its whole session), so the question the tick log above exists to
-            // answer is whether our switch ever ticks this step while d8 is still 1.
+            // Restore the destination first, then convert the arm. Order matters: the original runs
+            // immediately after this and its `d8 == 1` branch advances into a step that reads
+            // `GameMan+0x14`, so the block has to be back before the dispatch value changes.
             let n = CORRECTIONS_MADE.fetch_add(1, Ordering::SeqCst) + 1;
-            if n <= MAX_ENTRY_LOGS {
+            if n > MAX_CORRECTIONS {
+                if n == MAX_CORRECTIONS + 1 {
+                    append_autoload_debug(format_args!(
+                        "requestwait-guard: conversion budget spent after {MAX_CORRECTIONS} -- letting the native store of 0 into InGameStep+0xd8 run. The world goes back to the title exactly as it did before this guard existed; suppressing the teardown forever would trade a black screen for a hang"
+                    ));
+                }
+            } else {
+                let block_before = movemap_step_block_id();
+                let restored =
+                    block_before == MOVEMAP_BLOCK_ID_UNSET && set_movemap_step_block_id(c30);
+                let wrote = unsafe {
+                    er_game_base::mem::safe_write_i32(
+                        in_game_step + INGAMESTEP_REQUEST_CODE_D8_OFFSET,
+                        REQUEST_CODE_ADVANCE,
+                    )
+                };
                 append_autoload_debug(format_args!(
-                    "requestwait-guard: OBSERVED session-end #{n} -- the native code is about to store 0 into InGameStep+0xd8 on a REAL world (c30=0x{c30:x}) whose NowLoading job is gone, and STEP_GameStepWait will turn that into SetMapId(0xff,0xff,0xff,0xff). NOT intervening: rewriting d8 here re-drives the load"
+                    "requestwait-guard: CONVERTED session-end #{n} -- InGameStep+0xd8 2 -> 1 (wrote={wrote}) on a real world (c30=0x{c30:x}) whose NowLoading job is gone. The original now takes its d8==1 arm: FUN_14067a320 starts the loading bar (loadingScreenData +0xc=0 +0x10=1 +0x8=mode) and FUN_140aed270(this,4) advances out of this step. GameMan+0x14 read 0x{block_before:x}, restored={restored} from GameMan+0xc30=0x{c30:x} -- without a destination the move that step starts waits on block ff/ff/ff/ff forever"
                 ));
             }
         }
@@ -217,7 +284,7 @@ pub(crate) fn install_request_wait_guard() -> bool {
                     crate::mh::leak_installed_hook(hook);
                     HOOK_INSTALLED.store(1, Ordering::SeqCst);
                     append_autoload_debug(format_args!(
-                        "requestwait-guard: hooked STEP_RequestWait at 0x{addr:x} (pass-through until a switch arms it)"
+                        "requestwait-guard: hooked STEP_RequestWait, asked for 0x{addr:x} -- that is the 1.16.2 constant, not the live entry; MhHook logs the address it translated to for the running build on the line above. Pass-through until a switch arms it"
                     ));
                     true
                 }
