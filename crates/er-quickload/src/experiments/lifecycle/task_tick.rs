@@ -278,13 +278,18 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // before it, the title is being driven; after it, someone is playing and wants their items. It
     // cannot be gated on Seamless instead -- me3 loads `ersc.dll` after our `DllMain`, so a
     // presence check where the patch is applied answers a false negative.
-    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
-        crate::constants::RESTORE_ONLINE_MODE.call_once(|| {
-            if let Ok(base) = game_module_base() {
-                er_title_flow::restore_online_mode(base);
-            }
-        });
-    }
+    // Nothing here puts the getter back. User directive 2026-09-17: this mod must never let
+    // `GameMan::IsOnlineMode` answer true at any point in the process, because a modded client
+    // that reports online can reach official FromSoftware matchmaking and get the player banned
+    // from official services without their knowledge. A presence-gated or boot-scoped restore is
+    // still a restore, so there is no narrower version of this worth keeping.
+    //
+    // The vanilla multiplayer items are what the restore used to buy, and they no longer need it:
+    // overriding `CanUseGoods`' return for goods rows 102/111/112 makes the Bloody Finger, the
+    // Festering Bloody Finger and the Recusant Finger usable under Seamless with zero param bytes
+    // written -- confirmed on the user's own live session 2026-09-16, item menu open and invasion
+    // landing. See bd `vanilla-fingers-usable-by-canusegoods-return-override-2026-09-16` for the
+    // Arxan-stub follow and why the two narrow gates under it are not sufficient.
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). EMA of the frame delta +
     // per-epoch worst frame time. Unconditional, cheap; read by the telemetry as oracle_fps / oracle_min_fps.
     {

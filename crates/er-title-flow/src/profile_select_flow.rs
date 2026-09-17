@@ -780,21 +780,22 @@ pub fn apply_online_disable() {
 /// answer on a build where the patch was refused in the first place -- there is nothing to undo --
 /// and [`er_hook::restore_3byte_stub`] declines rather than writes when the bytes are not the ones
 /// it put there.
-pub fn restore_online_mode(base: usize) -> bool {
-    let restored = er_hook::restore_3byte_stub(
-        base,
-        ONLINE_DISABLE_RVA,
-        ONLINE_DISABLE_STUB,
-        ONLINE_DISABLE_ORIGINAL,
-        "IsOnlineMode getter",
-    );
-    append_autoload_debug(format_args!(
-        "online-restore: IsOnlineMode@0x{:x} restored={restored} -- the getter reads GameMan+0xbc8 \
-         again, so the vanilla multiplayer items stop being refused for offline",
-        er_game_base::mem::game_data_addr(base, ONLINE_DISABLE_RVA, "ONLINE_DISABLE_RVA")
-    ));
-    restored
-}
+// restore_online_mode removed (user directive 2026-09-17). It used to hand
+// `GameMan::IsOnlineMode` its real bytes back the first frame a local player existed, which turned
+// online mode on for the whole process for the rest of the session. The objection is not cosmetic:
+// a modded client that answers online can reach official FromSoftware matchmaking, and the player
+// can be banned from official services without ever being told this mod did it. There is no
+// narrower version worth keeping -- a presence-gated or boot-scoped restore is still a restore, and
+// the window it opens is exactly the window in which someone is playing.
+//
+// What it existed to buy was the vanilla multiplayer items, which are refused on the offline
+// branch. They are bought instead by overriding `CanUseGoods`' return for goods rows 102/111/112,
+// which writes no param byte and touches no global: confirmed on the user's live session
+// 2026-09-16 with the item menu opening and an invasion landing. See bd
+// `vanilla-fingers-usable-by-canusegoods-return-override-2026-09-16`, which also carries the
+// Arxan-stub follow the hook needs and the reason the two narrow gates below the return
+// (`CanUseBreakInItem`, `CanStartMultiplay`) cannot settle it -- `IsInOnlineMode` is inlined into
+// the final AND, so only the return value answers all four terms at once.
 
 // apply_foreground_force removed (user directive 2026-07-16): patching IsGameInForeground to always-true
 // made the game grab the OS cursor on world-entry; the product must use real focus state. See bootstrap.rs.
