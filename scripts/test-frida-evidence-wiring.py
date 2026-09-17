@@ -111,6 +111,24 @@ def spin_until(predicate) -> bool:
     return False
 
 
+# How long a single fake watch may take before the harness calls it hung.
+#
+# Every ending here is driven by this process, so a watch that has not finished is not slow, it is
+# stuck -- and `watch.run` parks on a `select` with nothing to wake it. Left unbounded that is not a
+# failing test, it is a test that never returns: measured 2026-09-16, one of these held
+# `/run/user/1000/er-mods-rs-check-sh.lock` for 4 hours 21 minutes at zero CPU, inside the
+# `runtime-tools` stage of a `git push`, and every later push was refused for concurrency by a run
+# that could never finish. A safety cap, never the synchronisation -- the endings below are.
+WATCH_CAP_SECONDS = 20.0
+
+
+def end_watch(session: "FakeSession") -> None:
+    """Make `watch.run` return, whatever went wrong. Safe to call more than once."""
+    handler = session.handlers.get("detached")
+    if handler is not None:
+        handler("process-terminated")
+
+
 def drive(session: FakeSession, messages: int, ending: str, failures: list) -> None:
     """Send `messages` through the agent's own callback, then end the watch `ending`'s way."""
     # `session.handlers["detached"]` is registered after the script's message handler, so waiting
@@ -118,6 +136,7 @@ def drive(session: FakeSession, messages: int, ending: str, failures: list) -> N
     # harness ends up flaky and then ignored.
     if not spin_until(lambda: "detached" in session.handlers):
         failures.append("the watcher never registered a detach handler")
+        end_watch(session)
         return
     on_message = session.scripts[-1].handlers["message"]
     for index in range(messages):
@@ -131,6 +150,7 @@ def drive(session: FakeSession, messages: int, ending: str, failures: list) -> N
     # kills this process and the test reports nothing at all.
     if not spin_until(lambda: signal.getsignal(signal.SIGTERM) not in (signal.SIG_DFL, None)):
         failures.append("the watcher never installed its terminate handler")
+        end_watch(session)
         return
     if ending == "sigterm":
         os.kill(os.getpid(), signal.SIGTERM)
@@ -150,7 +170,25 @@ def one_watch(tmp: pathlib.Path, agent: pathlib.Path, messages: int, ending: str
     failures: list = []
     driver = threading.Thread(target=drive, args=(session, messages, ending, failures), daemon=True)
     driver.start()
-    code = watch.run(agent, tmp / "hits.jsonl")
+
+    # The watchdog. `watch.run` has to stay on the main thread -- two of the three endings are
+    # signals, and the `select` they interrupt is parked there -- so the cap cannot be a join on it.
+    finished = threading.Event()
+
+    def watchdog() -> None:
+        if finished.wait(WATCH_CAP_SECONDS):
+            return
+        failures.append(
+            f"the {ending} watch did not finish inside {WATCH_CAP_SECONDS:.0f}s -- forcing a "
+            "detach so this run ends instead of holding the check lock"
+        )
+        end_watch(session)
+
+    threading.Thread(target=watchdog, daemon=True).start()
+    try:
+        code = watch.run(agent, tmp / "hits.jsonl")
+    finally:
+        finished.set()
     driver.join(10)
 
     rows = []
