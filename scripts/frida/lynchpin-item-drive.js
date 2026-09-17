@@ -42,6 +42,16 @@ const GAME_MAN_IS_IN_ONLINE_MODE = 0xbc8;
 
 const GAME_DATA_MAN = ptr('0x143d61f98');
 const GAME_DATA_MAN_PLAYER_GAME_DATA = 0x8;
+
+// `PlayerGameData::chr_type`, asserted at `0x98` by `crates/er-game-base/src/pgd.rs`.
+const PLAYER_GAME_DATA_CHR_TYPE = 0x98;
+// `ChrType::Local`: alone in your own world, or hosting one. Every other value is a role the
+// engine handed you for somebody else's session.
+const CHR_TYPE_LOCAL = 0;
+const CHR_TYPE_NAMES = {
+  0: 'Local', 1: 'WhitePhantom', 2: 'Duelist', 8: 'GrayPhantom', 13: 'Arena',
+  15: 'BloodyFinger', 16: 'Recusant', 17: 'BluePhantom', 18: 'FesteringBloodyFinger',
+};
 // Both of these are EMBEDDED, so the chain is address arithmetic and not a dereference.
 // `GetEquipInventoryData` is literally `lea rax,[rcx+0x158]; ret`. Dereferencing the first one
 // hands back an image address and a quantity of zero for an item the character is holding.
@@ -212,6 +222,33 @@ rpc.exports = {
       if (man.isNull()) return { ready: false, why: 'CSMenuMan is null' };
       return { ready: true };
     } catch (e) { return { ready: false, why: 'faulted: ' + e.message }; }
+  },
+
+  // What the local player currently IS in the session, so a caller can refuse to drive an
+  // invasion item into a session that is already under way.
+  //
+  // `ready()` is not this check and never was: it answers "a world exists", which is just as true
+  // inside somebody else's world. On 2026-09-16 that gap let the Lynchpin be driven while the user
+  // was a guest mid-invasion -- their words, "you're using an item to invade, while I'm in an
+  // invasion lol".
+  //
+  // `PlayerGameData::chr_type` is the field, at `0x98`, which this repo asserts rather than
+  // assumes (`crates/er-game-base/src/pgd.rs`: `offset_of!(PlayerGameData, chr_type) == 0x98`).
+  // `0` is Local -- alone at home, or a host. Everything else is a multiplayer role the engine
+  // gave you: 15/16/18 are the invader kinds, 1/8/17 the phantoms. The names come from
+  // `crates/er-invasion-path/src/census.rs`, which built the list from a live session.
+  //
+  // A read that faults answers `null`, and a caller must treat that as a refusal too: not knowing
+  // what you are is not permission to act.
+  role () {
+    try {
+      const man = GAME_DATA_MAN.readPointer();
+      if (man.isNull()) return null;
+      const pgd = man.add(GAME_DATA_MAN_PLAYER_GAME_DATA).readPointer();
+      if (pgd.isNull()) return null;
+      const chrType = pgd.add(PLAYER_GAME_DATA_CHR_TYPE).readS32();
+      return { chrType, name: CHR_TYPE_NAMES[chrType] || 'unknown', local: chrType === CHR_TYPE_LOCAL };
+    } catch (e) { return null; }
   },
 
   // Clear `disableOffline` so `CanUseGoods` stops refusing the vanilla fingers.

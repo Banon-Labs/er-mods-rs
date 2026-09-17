@@ -586,7 +586,13 @@ pub(super) fn drive_pending_reinvade(session: SeamlessSession) {
         // live session, took the ladder's first rung, and then produced no drive line and no
         // refusal line at all, which left this return as the only remaining explanation and no way
         // to tell which half of it fired.
-        if (pending != armed) && !MISMATCHED_ARM_SAID.swap(true, Ordering::SeqCst) {
+        // Only while the session is idle. `pending=false armed=true` is also the ordinary shape of
+        // a search that is in flight -- the drive consumed the pending flag and the arming stands
+        // until the attempt ends -- so at any other state this line calls a healthy search
+        // permanently broken. Run br-20260917-004351-2fe4 printed it at state 0x0e, nine lines
+        // before the same search was released normally.
+        let idle = read_session_state(session.abi, session.session) == Some(session.abi.state_idle);
+        if idle && (pending != armed) && !MISMATCHED_ARM_SAID.swap(true, Ordering::SeqCst) {
             crate::standalone_log(format_args!(
                 "local-invasion: an armed search is not being driven and never will be --                  pending={pending} armed={armed}. Something cleared one flag without the other                  after the request was made; opening Seamless's own menu is the usual cause."
             ));
@@ -1153,8 +1159,17 @@ pub(super) fn watch_for_failed_connect(session: SeamlessSession) {
          lost and cancelling, so the hunt can restart now instead of after Seamless's timeout.",
         er_invasion_warp_core::attempt_verdict::CONNECT_DEADLINE_MS
     ));
-    let notice = super::current_config().is_none_or(|config| config.reject_notice);
-    super::banner::announce_failure(notice, attempt);
+    // The banner goes with the cancel it used to accompany.
+    //
+    // This path stopped cancelling because its deadline was derived from runs this mod was already
+    // shaping, so it cannot tell a slow connect from a dead one. The failure notice was left
+    // behind, which means the player is told "Invasion failed -- no connection" about a connect
+    // nothing is acting on and that may still land. The user's report is that sentence verbatim,
+    // twice, and the second time with "I bet if I use my lynchpin without this mod, I would get
+    // one" -- a banner that announces a failure the mod has admitted it cannot judge is worse than
+    // silence, because it reads as the mod's verdict on an invasion that was still arriving.
+    //
+    // The log line above stays. It is the diagnostic, and it costs the player nothing.
     explain_if_hunt_is_emptying_the_pool(attempt);
     // Defence in depth over the allowlist above. `cancel_stalled_attempt_inner` falls back to
     // OPTIONSELECT_LEAVEWORLD when the Cancel row is not offered, and that fallback is what turned

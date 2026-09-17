@@ -358,8 +358,7 @@ is_whitelisted_read_command(cmd) if {
 		"od", # Octal dump
 	}
 
-	some verb in safe_read_verbs
-	commands.has_verb(cmd, verb)
+	commands.has_dangerous_verb(cmd, safe_read_verbs)
 
 	# CRITICAL: Exclude sed -i specifically
 	# This check is NOT redundant with lines 188-192. OPA evaluates ALL rule bodies
@@ -394,8 +393,7 @@ is_whitelisted_read_command(cmd) if {
 		"ls", # List files
 	}
 
-	some verb in safe_read_verbs
-	commands.has_verb(first_part, verb)
+	commands.has_dangerous_verb(first_part, safe_read_verbs)
 }
 
 # Check whether a Bash command is a known parent-directory mutator.  The
@@ -409,10 +407,16 @@ is_whitelisted_read_command(cmd) if {
 # has_command_verb block in .cupcake/system/commands.rego for why the heredoc
 # body is welded onto the command text by the time a policy sees it, and why
 # nothing that actually runs is lost by requiring command position.
+#
+# SHARED ACROSS THIS FILE'S FOUR USES (2026-09-16), rather than redefined per rule as it was before.
+# has_any_command_verb/has_dangerous_verb below build ONE combined regex.match call for a whole verb
+# set instead of one call per verb; that collapse only holds if every caller passes the SAME set
+# value, so the set moved out to one place a caller cannot accidentally fork from the others. See
+# the note on commands.has_dangerous_verb for why the collapse itself matters beyond style.
+destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
+
 parent_destructive_command_detected(cmd) if {
-	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
-	some verb in destructive_parent_verbs
-	commands.has_command_verb(cmd, verb)
+	commands.has_any_command_verb(cmd, destructive_parent_verbs)
 }
 
 parent_destructive_command_detected(cmd) if {
@@ -441,9 +445,7 @@ safe_mktemp_file_cleanup(cmd) if {
 
 unsafe_parent_destructive_segment(cmd) if {
 	some segment in shell_command_segments(cmd)
-	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
-	some verb in destructive_parent_verbs
-	commands.has_verb(segment, verb)
+	commands.has_dangerous_verb(segment, destructive_parent_verbs)
 	not safe_mktemp_rm_segment(segment)
 }
 
@@ -464,9 +466,11 @@ shell_command_segments(cmd) := segments if {
 }
 
 destructive_command_mentions_absolute_path(cmd) if {
-	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
-	some verb in destructive_parent_verbs
-	regex.match(concat("", [`(^|[[:space:];|&])`, verb, `[[:space:]][^\n;|&]*[[:space:]]/`]), cmd)
+	pattern := concat("", [
+		`(^|[[:space:];|&])(`, commands.verb_alternation(destructive_parent_verbs), `)`,
+		`[[:space:]][^\n;|&]*[[:space:]]/`,
+	])
+	regex.match(pattern, cmd)
 }
 
 # The command's SHELL region: every line except heredoc payload.
@@ -549,9 +553,7 @@ heredoc_tag(line) := tag if {
 affected_dir_is_destructive_target(command, affected_dir) if {
 	not safe_mktemp_file_parent_overapprox(command, affected_dir)
 	some segment in shell_command_segments(command)
-	destructive_parent_verbs := {"rm", "rmdir", "mv", "cp", "chmod", "chown", "chgrp", "rsync", "install", "truncate", "shred"}
-	some verb in destructive_parent_verbs
-	commands.has_command_verb(segment, verb)
+	commands.has_any_command_verb(segment, destructive_parent_verbs)
 	segment_targets_affected_dir(segment, affected_dir)
 }
 

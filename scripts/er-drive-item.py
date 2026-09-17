@@ -68,7 +68,19 @@ def selftest() -> int:
         "0x140d3b5b0",  # EquipParamGoods::GetEntry
     ):
         assert needed in text, f"the agent must carry {needed}"
-    for export in ("ready", "enableFingers", "pin", "state", "unpin"):
+    # The session-role refusal, asserted structurally so it cannot be deleted quietly. `ready()`
+    # answers "a world exists", which is equally true inside somebody else's world; `role()` is the
+    # one that separates them, and the driver must consult it before it presses anything.
+    assert "0x98" in text, "the agent must carry PlayerGameData::chr_type at 0x98"
+    own = pathlib.Path(__file__).read_text(encoding="utf-8")
+    gate = own.index("drive.exports_sync.role()")
+    assert gate < own.index("enable_fingers("), (
+        "the role refusal must come before anything is driven, or it guards nothing"
+    )
+    assert 'REFUSING to drive: the player is' in own and 'if role is None:' in own, (
+        "both halves have to refuse: a non-local role, and a role that cannot be read at all"
+    )
+    for export in ("ready", "role", "enableFingers", "pin", "state", "unpin"):
         assert f"{export} (" in text or f"{export} (" in text, f"the agent must export {export}"
     assert "setTimeout" not in text and "setInterval" not in text, "no timers in the agent"
     # A mention in prose is fine; resolving the module is the dependency that would matter.
@@ -85,6 +97,12 @@ def main() -> int:
     )
     parser.add_argument("--goods", type=lambda v: int(v, 0), default=FESTERING_BLOODY_FINGER)
     parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument(
+        "--role-only",
+        action="store_true",
+        help="read the player's session role and stop -- presses nothing. This is how the "
+        "refusal gate gets proved against a live game without driving an item into it.",
+    )
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -117,6 +135,31 @@ def main() -> int:
         print(f"world never came up: {json.dumps(state)}", file=sys.stderr)
         return 2
     print("world ready", flush=True)
+
+    # A world existing is not permission to drive an invasion item into it. Refuse unless the
+    # player is `ChrType::Local` -- alone at home or hosting -- and refuse just as hard when the
+    # role cannot be read, because not knowing what the player is doing is not a green light.
+    #
+    # Written after driving the Lynchpin while the user was a guest mid-invasion on 2026-09-16.
+    # The rule it enforces was already in AGENTS.md as prose; prose did not stop it.
+    role = drive.exports_sync.role()
+    if role is None:
+        print(
+            "REFUSING to drive: the player's ChrType could not be read, so this cannot tell "
+            "'alone at home' from 'inside somebody else's world'",
+            file=sys.stderr,
+        )
+        return 3
+    if not role.get("local"):
+        print(
+            f"REFUSING to drive: the player is {role['name']} (ChrType {role['chrType']}), which "
+            "means a session is already under way -- driving an invasion item here interrupts it",
+            file=sys.stderr,
+        )
+        return 3
+    print(f"role: {role['name']} (ChrType {role['chrType']}) -- alone, safe to drive", flush=True)
+    if args.role_only:
+        return 0
 
     print("fingers:", json.dumps(drive.exports_sync.enable_fingers(VANILLA_FINGERS)), flush=True)
 

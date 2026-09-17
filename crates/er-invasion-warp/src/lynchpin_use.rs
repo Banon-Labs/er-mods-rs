@@ -107,13 +107,33 @@ const REF_ID_USABLE: i32 = 0;
 
 /// Whether the module rewrites the Lynchpin's `refId_default`.
 ///
-/// On, because without it the engine refuses the use and the item never queues at all. It was
-/// held off once to test whether writing it was what stopped Seamless opening its dialog -- run
-/// br-20260916-145958-aad2, row left pristine at -8, session waited out: still no dialog, no
-/// capture, no query. So the write is not what silenced Seamless, and turning it off only costs
-/// the use.
+/// Off since 2026-09-16, with the press it existed for.
+///
+/// It was on because without it the engine refuses a use this module was about to drive, and it
+/// was held off once to test whether the write was what stopped Seamless opening its dialog --
+/// run br-20260916-145958-aad2, row left pristine at -8: still no dialog. So it was kept, since
+/// turning it off only cost the drive.
+///
+/// The drive is gone. `request_lynchpin_use_offthread` no longer presses anything, so nothing in
+/// this module needs the guard relaxed, and what remains is a param row mutated for a player who
+/// is using the item themselves. The user's report is the cost of that: "it doesn't allow me to
+/// use the lynchpin to do seamless invades. Its in some bugged state." A row this module rewrites
+/// is a row Seamless reads differently from the one its author shipped, and the mod has no
+/// business changing an item the player uses by hand.
 #[cfg(windows)]
-const WRITE_REF_ID_DEFAULT: bool = true;
+const WRITE_REF_ID_DEFAULT: bool = false;
+
+/// Whether the module rewrites the Lynchpin's use animation.
+///
+/// Off for the same reason, and this one was never A/B'd while it was on -- unlike
+/// `WRITE_REF_ID_DEFAULT`, which was. It replaced TimeAct 50530 (5.000s) with 55000 (1.433s) to
+/// make the retired auto-press finish sooner, and swapping an item's animation swaps the TAE
+/// events inside it. Seamless's own handler for this item runs off the consume event in the
+/// animation the item actually ships with, so a shorter one is a plausible way to lose it
+/// entirely; that was never measured, and with the press retired there is no reason left to find
+/// out the hard way.
+#[cfg(windows)]
+const WRITE_USE_ANIMATION: bool = false;
 /// The Challenger's Lynchpin, as the menu spells it: goods `8380003` with the goods category
 /// nibble.
 #[cfg(windows)]
@@ -121,6 +141,11 @@ const LYNCHPIN_ITEM_ID: u32 = 0x407f_de63;
 /// The same id as the param table spells it.
 #[cfg(windows)]
 const LYNCHPIN_GOODS_ID: u32 = 0x7f_de63;
+
+/// The category bits an inventory item id carries above its goods row id: `0x4000006f` is goods
+/// row 111. Masked off to get back to the row a param lookup wants.
+#[cfg(windows)]
+const GOODS_CATEGORY_TAG_MASK: u32 = 0xf000_0000;
 /// The Throwing Dagger's use animation: TimeAct 55000, 1.433 seconds, measured.
 #[cfg(windows)]
 const SHORT_USE_ANIM: u8 = 17;
@@ -223,6 +248,18 @@ const HANDOFF_PRESS_HELD_MS: u64 = 500;
 static HANDOFF_PINNED_AT_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static HANDOFF_PRESSED_AT_MS: AtomicU64 = AtomicU64::new(0);
+
+/// How many presses this handoff has spent trying to get the item consumed.
+#[cfg(windows)]
+static HANDOFF_PRESS_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+/// The press budget for one handoff.
+///
+/// The use-item binding consumed the Lynchpin 3 times in 5 with an identical pin (bd
+/// `use-item-is-pad-x-0x4000-not-a-1000`), so four attempts take that past 97% while still ending
+/// a handoff whose failure is not chance.
+#[cfg(windows)]
+const HANDOFF_MAX_PRESSES: usize = 4;
 
 /// One field of `CSMenuMan->menuData->menuGaitemUseState`, or `None` when it cannot be reached.
 ///
@@ -369,8 +406,10 @@ pub unsafe fn shorten_use_animation() -> bool {
     let field = row + GOODS_USE_ANIM_OFFSET;
     // SAFETY: fault-tolerant read of one byte inside a row the engine just handed back.
     let before = unsafe { er_game_base::mem::safe_read_u8(field) };
-    // SAFETY: same byte, inside the same row.
-    unsafe { core::ptr::write_volatile(field as *mut u8, SHORT_USE_ANIM) };
+    if WRITE_USE_ANIMATION {
+        // SAFETY: same byte, inside the same row.
+        unsafe { core::ptr::write_volatile(field as *mut u8, SHORT_USE_ANIM) };
+    }
     // The same row's `refId_default`, which is what actually decides whether the item can be used
     // at all. Seamless ships `-8` and the engine guards on `if (-1 < refId)`, so every press was
     // dropped after the quick-slot reader was asked exactly once -- an accepted item is asked
@@ -391,6 +430,14 @@ pub unsafe fn shorten_use_animation() -> bool {
     // thing that reaches Seamless; being refused by the engine may be.
     if !WRITE_REF_ID_DEFAULT {
         ANIM_SHORTENED.store(1, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "lynchpin: the goods row at 0x{row:x} is left exactly as Seamless allocated it \
+             (refId_default and goodsUseAnim {before:?} both untouched). The two writes existed \
+             for the auto-press this module no longer performs, and run br-20260916-100817-3fe0 -- \
+             the only run that ever reached RequestLobbyList -- had refId_default pristine at -8, \
+             opened Seamless's own dialog and searched from it, while no run after the write to 0 \
+             has opened that dialog again."
+        ));
         return true;
     }
     let ref_field = row + GOODS_REF_ID_DEFAULT_OFFSET;
@@ -402,12 +449,14 @@ pub unsafe fn shorten_use_animation() -> bool {
         "lynchpin: refId_default {ref_before:?} -> {REF_ID_USABLE} on the live row          0x{row:x}+0x04. The engine refuses to start a use while this is below zero, so without          it the press reaches Seamless as nothing at all."
     ));
     ANIM_SHORTENED.store(1, Ordering::SeqCst);
-    crate::standalone_log(format_args!(
-        "lynchpin: use animation {before:?} -> {SHORT_USE_ANIM} on the live row 0x{row:x}+0x42. \
-         Measured lengths: 66 is TimeAct 50530 at 5.000s, 8 is 50030 at 3.900s, 6 is 50230 at \
-         3.167s, 17 is 55000 at 1.433s. The row is not in regulation.bin -- ersc.dll allocates it \
-         at init -- so this is the only place the value exists."
-    ));
+    if WRITE_USE_ANIMATION {
+        crate::standalone_log(format_args!(
+            "lynchpin: use animation {before:?} -> {SHORT_USE_ANIM} on the live row 0x{row:x}+0x42. \
+             Measured lengths: 66 is TimeAct 50530 at 5.000s, 8 is 50030 at 3.900s, 6 is 50230 at \
+             3.167s, 17 is 55000 at 1.433s. The row is not in regulation.bin -- ersc.dll allocates \
+             it at init -- so this is the only place the value exists."
+        ));
+    }
     true
 }
 
@@ -515,6 +564,25 @@ pub(crate) unsafe fn item_in_use() -> Option<u32> {
     .map(|raw| raw as u32)
 }
 
+/// Whether this module may decline Seamless's own start-a-search dialog and call the invade action
+/// in its place.
+///
+/// # Why this is false
+///
+/// The substitution cannot be equivalent, and that is now a static fact rather than a judgement.
+/// `ersc+0x25850` read end to end out of the loaded image is nine instructions: take the session
+/// from `owner+0x58`, return unless `+0x150` reads idle, lock `+0x100`, write `0xe` to `+0x150`,
+/// unlock. No Steam call, no query, no candidate list. Nothing anywhere in `ersc.dll` compares
+/// `+0x150` against `0xe` either, so the pump that turns searching into matchmaking is not reached
+/// by writing the state.
+///
+/// That same function is the dialog row's own callback -- the option menu is built at
+/// `ersc+0x30eea` as a closure over `{captured object, fn = 0x25850}`, with cancel beside it at
+/// `ersc+0x30fdf`. So choosing the row runs exactly what the skip path called. Declining the
+/// dialog therefore never bought a shortcut to the same work: it removed the dialog and kept only
+/// the state write, which is the user's report -- "there is no dialog to accept".
+const SKIP_SEAMLESS_DIALOG: bool = false;
+
 /// The detour on `OpenConversationChoicesMenu`.
 ///
 /// # Safety
@@ -587,7 +655,7 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
     // to `0x0e SEARCHING`, and the query. Every run after the pass-through landed captures
     // nothing, drives nothing, and is silent on all 38 matchmaking slots.
     let (idle, source) = crate::local_invasion_filter::popup_skip_gate_is_idle();
-    if idle {
+    if idle && SKIP_SEAMLESS_DIALOG {
         POPUPS_SKIPPED.fetch_add(1, Ordering::SeqCst);
         // Inline, on this thread, which is the whole difference between this and the version that
         // hard-locked the game.
@@ -621,16 +689,48 @@ unsafe extern "system" fn open_choices_hook(dialog: usize, b: usize, c: usize, d
             POPUPS_SKIPPED.load(Ordering::SeqCst),
             POPUPS_PASSED.load(Ordering::SeqCst)
         ));
+        if !started {
+            // Give the player their dialog back.
+            //
+            // Declining it and then failing to drive anything is the worst outcome this module can
+            // produce: the press is eaten, no dialog opens, no search runs, and the item reads as
+            // broken. That is the state the user reported as "it doesn't allow me to use the
+            // lynchpin to do seamless invades. Its in some bugged state", and it is entirely ours
+            // -- without this DLL the same press opens Seamless's own dialog and invades the way
+            // it always has.
+            //
+            // So the skip is now conditional on the drive actually starting a search. When it does
+            // not, the original runs and the player gets stock Seamless. The floor this sets is
+            // the one that matters for a mod: the worst it can do to an item is nothing.
+            POPUPS_SKIPPED.fetch_sub(1, Ordering::SeqCst);
+            let passed = POPUPS_PASSED.fetch_add(1, Ordering::SeqCst) + 1;
+            crate::standalone_log(format_args!(
+                "lynchpin: the inline drive started nothing, so Seamless's own dialog is opened \
+                 instead of being swallowed (passed through {passed}). A press this module cannot \
+                 turn into a search belongs to Seamless."
+            ));
+            let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
+            if orig == 0 {
+                return 0;
+            }
+            // SAFETY: the union stored the trampoline for this exact target, and the arguments are
+            // the ones this detour was entered with, untouched.
+            return unsafe {
+                core::mem::transmute::<usize, er_hook::UnionFn>(orig)(dialog, b, c, d)
+            };
+        }
         return 0;
     }
     let passed = POPUPS_PASSED.fetch_add(1, Ordering::SeqCst) + 1;
     if PASS_REPORTED.swap(1, Ordering::SeqCst) == 0 {
         crate::standalone_log(format_args!(
-            "lynchpin: a dialog was let through because the session does not read idle \
-             (passed {passed}, skipped {}) -- gate answered from {source}. If this was \
-             the item's own start-a-search prompt then the gate is wrong, not the \
-             dialog. Printed once.",
-            POPUPS_SKIPPED.load(Ordering::SeqCst)
+            "lynchpin: the Lynchpin's dialog was let through to Seamless (passed {passed}, \
+             skipped {}, session idle={idle} from {source}). The row the player picks calls \
+             ersc+0x25850 itself, so there is nothing this module can do here that choosing \
+             the row does not already do. The option-menu object was {} on the way past. \
+             Printed once.",
+            POPUPS_SKIPPED.load(Ordering::SeqCst),
+            if adopted { "captured" } else { "refused" }
         ));
     }
     let orig = ORIG_OPEN_CHOICES.load(Ordering::SeqCst);
@@ -917,10 +1017,81 @@ pub unsafe fn request_use_item(item_id: u32) -> bool {
             "lynchpin: put the item in quick slot {DRIVEN_QUICK_SLOT} through the game's own setter (equipped={equipped}, {why}); the player's slots were read first and go back when the use ends"
         ));
     }
+    // SAFETY: game task thread; the row lookup and both accesses are fault-closed.
+    unsafe { relax_goods_row_for_this_use(item_id) };
     crate::standalone_log(format_args!(
         "lynchpin: pinned item {item_id:#x} at inventory index {index} for {PIN_FRAMES} frame(s)"
     ));
     true
+}
+
+/// Which row this module has borrowed, and what to put back in it.
+///
+/// Zero in the row slot means nothing is borrowed and [`restore_goods_row`] is a no-op.
+#[cfg(windows)]
+static RELAXED_ROW: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static RELAXED_REF_ID_WAS: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);
+
+/// Let the engine start a use this module is driving, for exactly as long as it is driving it.
+///
+/// # Why this is scoped rather than written once at boot
+///
+/// The engine guards a use with `if (-1 < refId_default)` and the Lynchpin ships `-8`, so an
+/// injected use is dropped after the quick-slot reader is asked once. That is precisely what run
+/// br-20260917-005836-0d46 recorded: `ChrIns+0x160` took the item, the reader answered 21 times,
+/// and the use-state never left 0.
+///
+/// This module used to answer that by rewriting the row at boot and leaving it rewritten. That is
+/// a param row the player's own presses read too, and the cost was the user's report: "it doesn't
+/// allow me to use the lynchpin to do seamless invades. Its in some bugged state." A permanent
+/// rewrite makes Seamless read an item its author did not ship.
+///
+/// So the relaxation lives exactly as long as the pin does. Outside a driven use the row holds what
+/// `ersc.dll` allocated, which is what [`restore_goods_row`] guarantees when the pin runs out.
+#[cfg(windows)]
+unsafe fn relax_goods_row_for_this_use(item_id: u32) {
+    if RELAXED_ROW.load(Ordering::SeqCst) != 0 {
+        return;
+    }
+    let Some(row) = (unsafe { goods_row(item_id & !GOODS_CATEGORY_TAG_MASK) }) else {
+        return;
+    };
+    let field = row + GOODS_REF_ID_DEFAULT_OFFSET;
+    // SAFETY: fault-tolerant read of one dword inside a row the engine handed back.
+    let Some(was) = (unsafe { er_game_base::mem::safe_read_i32(field) }) else {
+        return;
+    };
+    if was >= 0 {
+        // Already usable, so there is nothing to borrow and nothing to put back.
+        return;
+    }
+    RELAXED_REF_ID_WAS.store(was, Ordering::SeqCst);
+    RELAXED_ROW.store(row, Ordering::SeqCst);
+    // SAFETY: the same dword, inside the same row.
+    unsafe { core::ptr::write_volatile(field as *mut i32, REF_ID_USABLE) };
+    crate::standalone_log(format_args!(
+        "lynchpin: refId_default {was} -> {REF_ID_USABLE} on row 0x{row:x}+0x04 for the length of \
+         this driven use only. The engine drops a use while that field is below zero, and the row \
+         goes back to {was} when the pin expires, so a press the player makes themselves reads the \
+         row Seamless allocated."
+    ));
+}
+
+/// Put the row back the way `ersc.dll` allocated it. Idempotent.
+#[cfg(windows)]
+unsafe fn restore_goods_row() {
+    let row = RELAXED_ROW.swap(0, Ordering::SeqCst);
+    if row == 0 {
+        return;
+    }
+    let was = RELAXED_REF_ID_WAS.load(Ordering::SeqCst);
+    // SAFETY: the dword this module borrowed, in the row it read it from.
+    unsafe { core::ptr::write_volatile((row + GOODS_REF_ID_DEFAULT_OFFSET) as *mut i32, was) };
+    crate::standalone_log(format_args!(
+        "lynchpin: refId_default put back to {was} on row 0x{row:x}+0x04 -- the driven use is over \
+         and the row is Seamless's again."
+    ));
 }
 
 /// The slot a driven use borrows, and the player's own contents while it is borrowed.
@@ -929,12 +1100,21 @@ const DRIVEN_QUICK_SLOT: u32 = 5;
 
 /// Whether the handoff may change the player's quick slot and clear a stale queued use.
 ///
-/// Both of those write game state around the press, and neither happened in the only three runs
-/// that ever produced a search -- br-20260916-094049-974b, -095259-a7f4 and -100817-3fe0. They
-/// were added afterwards, for the separate question of getting the item consumed, and every run
-/// since has been silent on the matchmaking slots. Held off while that coincidence is tested.
+/// Held off since 2026-09-16 on a coincidence -- the only three runs that ever produced a search
+/// predated both writes -- and that coincidence is now tested and dead. Run br-20260917-021644-7b1d
+/// pressed four times with this off: `ChrIns+0x160` took the Lynchpin on every press and
+/// `ChrIns+0x168` never moved off the `1` the drive wrote, so the item was never consumed and
+/// Seamless was never told. Four for four is not the 3-in-5 chance the retry was built for.
+///
+/// The equip write is what makes it consume, measured on run br-20260916-130933-5b28 and recorded
+/// in bd `equip-the-item-natively-and-the-lynchpin-consumes-2026-09-16`: the consume path follows
+/// the equip entries, not the reader this module detours, so lying to `GetSelectedQuickSlotItemId`
+/// while the slot still holds the player's own item gets the request taken and the use dropped.
+/// With `SetQuickSlotItem` writing the slot, `ChrIns+0x168` went 0 -> 1 on the first press.
+///
+/// The player's slots are read before the borrow and put back when the use ends.
 #[cfg(windows)]
-const DRIVE_MAY_WRITE_EQUIP_STATE: bool = false;
+const DRIVE_MAY_WRITE_EQUIP_STATE: bool = true;
 
 /// What the player had in their quick slots before a driven use borrowed one.
 #[cfg(windows)]
@@ -1022,10 +1202,36 @@ pub fn request_lynchpin_use_offthread() {
             "lynchpin: handing off with no Seamless session in this process -- the item will be used and nothing will follow. The option-menu object is found by walking ersc's writable data for a qword whose `+0x58` is session-shaped, so with no session there is nothing to drive the search through. A silent run after this line is this, not `no hosts were found`. Printed once."
         ));
     }
-    HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
+    // Nothing is armed, and that is the fix rather than an omission.
+    //
+    // The stages below pin the Lynchpin and then hold pad `A` for 500ms. `A` is jump. The player
+    // reported it on run br-20260916-233426-b38b -- "attempting to search near and far makes me
+    // jump after I accept the item to use it" -- and the same run's log shows the press bought
+    // nothing: `the press was dropped -- ChrIns+0x160 reads Some(1073741936), not the pinned
+    // 0x407fde63`. `DRIVE_MAY_WRITE_EQUIP_STATE` is false, so the stale queued use is never
+    // retired and the press cannot land. A jump was the whole observable effect.
+    //
+    // The near+far row now drives `ersc+0x25850` through the real option-menu object instead --
+    // see `vanilla_invasion_items` -- which is the call the frida prototype made when it landed
+    // an invasion in another host's world. The machinery below is left intact and reachable from
+    // `request_use_item_offthread`, because a player using the Lynchpin themselves still goes
+    // through it; what is removed is this module pressing a button on the player's behalf.
+    if HANDOFF_RETIRED_SAID.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "lynchpin: the near+far handoff no longer presses anything. It used to hold pad `A` \
+             for {HANDOFF_PRESS_HELD_MS}ms, which is jump, and the use was dropped anyway. The \
+             row drives Seamless's invade action through the captured option-menu object now. \
+             Printed once."
+        ));
+    }
+    HANDOFF_STAGE.store(HANDOFF_IDLE, Ordering::SeqCst);
     HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
     HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
 }
+
+/// One line per process when the retired handoff is asked for.
+#[cfg(windows)]
+static HANDOFF_RETIRED_SAID: AtomicUsize = AtomicUsize::new(0);
 
 /// One line per process when a handoff starts with no session to reach.
 #[cfg(windows)]
@@ -1137,13 +1343,20 @@ unsafe fn drive_handoff_press() {
     /// | a search reaching `RequestLobbyList` | 3 runs | never |
     /// | the Lynchpin consumed, one process | 0/5 | 3/5 |
     ///
-    /// The search is the thing this feature exists for, and the only runs that ever produced one --
-    /// br-20260916-094049-974b, -095259-a7f4 and -100817-3fe0 -- pressed `A` and recorded the
-    /// use-state reaching 2, the engine's action update latching the request. No run since the switch
-    /// to `X` has reached that state or produced a search, including ones where the item demonstrably
-    /// consumed. So what Seamless watches is the latched request, not the completed use, and `A` is
-    /// what produces it.
-    const PAD_USE_ITEM: u16 = 0x1000;
+    /// Those two rows were taken while the handoff pressed into a use that could not start:
+    /// `DRIVE_MAY_WRITE_EQUIP_STATE` is false, so `ChrIns+0x160` still held the finger and the
+    /// engine refuses a second use while it does. Both arms were therefore measuring a dropped
+    /// press, and "`A` reached a search three times" is three runs of a search that the finger's
+    /// own `arm_invade_request` could equally have started.
+    ///
+    /// `X` is the use-item binding, and it is the one that makes the character take the item --
+    /// the only outcome that can precede a use at all. Proved outside this DLL on 2026-09-16, same
+    /// process, same pin: `scripts/er-drive-item.py --goods 8380003` reported "`ACCEPTED` --
+    /// ChrIns+0x160 went 0x40000be0 -> 0x407fde63`, pressing `X`.
+    ///
+    /// The stage below already reads `ChrIns+0x160` after the release and says whether the item
+    /// was taken, so this choice reports on itself rather than needing another argument.
+    const PAD_USE_ITEM: u16 = 0x4000;
 
     match HANDOFF_STAGE.load(Ordering::SeqCst) {
         HANDOFF_WAITING_FOR_LATCH => {
@@ -1286,9 +1499,38 @@ unsafe fn drive_handoff_press() {
                 (true, _) => crate::standalone_log(format_args!(
                     "lynchpin: the use completed -- `ChrIns+0x168` reads {consumed:?}, below the {DRIVEN_CONSUME_COUNT} this drive wrote, and TAE event 65 is what counts it down. `ChrIns+0x160` reads {queued:?}."
                 )),
-                (_, Some(id)) if id == pinned => crate::standalone_log(format_args!(
-                    "lynchpin: queued but not consumed -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}, the value this drive wrote. The engine took the request and never carried it through, so Seamless was never told."
-                )),
+                (_, Some(id)) if id == pinned => {
+                    // Press again, because this failure is stochastic and there is an oracle for it.
+                    //
+                    // The engine latches the request from the press and carries it through on its
+                    // own schedule; measured across five drives per arm on 2026-09-16, the
+                    // use-item binding consumed the Lynchpin three times in five with an identical
+                    // pin and identical timing (bd `use-item-is-pad-x-0x4000-not-a-1000`). One
+                    // press is therefore a coin toss, and the user's report of a single-press
+                    // handoff is exactly that: "Near+far now *attempts* to invade, but does not".
+                    //
+                    // This is a retry against a measured rate, not a knob hiding an unknown: the
+                    // count above -- `ChrIns+0x168` falling below what this drive wrote -- decides
+                    // when to stop, and the attempt cap stops it from pressing forever if the real
+                    // cause turns out not to be chance at all. Four attempts take a 3-in-5 rate
+                    // past 97%.
+                    let attempt = HANDOFF_PRESS_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt < HANDOFF_MAX_PRESSES {
+                        crate::standalone_log(format_args!(
+                            "lynchpin: queued but not consumed on press {attempt} of {HANDOFF_MAX_PRESSES} -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}. Re-pinning and pressing again; the count falling is what ends this."
+                        ));
+                        // Re-pin as well as re-arm: the previous pin has expired or is about to,
+                        // and a press with no live pin is the dropped press below.
+                        request_use_item_offthread(LYNCHPIN_ITEM_ID);
+                        HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
+                        HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
+                        HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
+                        return;
+                    }
+                    crate::standalone_log(format_args!(
+                        "lynchpin: queued but not consumed after {attempt} press(es) -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}, the value this drive wrote. The engine took every request and carried none of them through, so Seamless was never told. At this count the cause is not chance."
+                    ));
+                }
                 _ => crate::standalone_log(format_args!(
                     "lynchpin: the press was dropped -- `ChrIns+0x160` reads {queued:?}, not the pinned {pinned:#x}, and the consume count still reads {consumed:?}, the value this drive wrote. The character was using something else when the press landed."
                 )),
@@ -1296,6 +1538,36 @@ unsafe fn drive_handoff_press() {
         }
         _ => {}
     }
+}
+
+/// Start Seamless's own invasion, by using the Challenger's Lynchpin the way the player does.
+///
+/// This is the far half of `Both near and far`, and it is an item use rather than an action call
+/// for the reason the table on [`request_lynchpin_use_offthread`] records: driving `ersc+0x25850`
+/// directly produced `RequestLobbyList 0` and `AddRequestLobbyListStringFilter 0`, while the same
+/// item used through the engine produced 2 and 10. The direct call moves `session+0x150` to
+/// `0x0e` and stops there -- a search that looks started and never asks anybody.
+///
+/// Nothing is pressed. [`request_use_item_offthread`] stores the id and the next game tick runs
+/// the engine's own `request_use_item`, which is the path a player's hand takes.
+/// # A pin is not a use
+///
+/// The first version of this asked [`request_use_item_offthread`] and stopped there. Run
+/// br-20260917-020824-793d is what that does: `pinned item 0x407fde63 at inventory index 1701 for
+/// 90 frame(s)`, then `refId_default put back to -8 -- the driven use is over`, and no consume, no
+/// `ersc+0x25850`, no search. The pin makes the item available to a press; it is not a press.
+///
+/// So this arms the handoff stage machine as well, and [`drive_handoff_press`] supplies the press
+/// once the pin is live and settled. The user's report of the half-version, watching the banner
+/// say the search had widened: "'Looking everywhere instead' except..you aren't".
+#[cfg(windows)]
+pub fn request_lynchpin_invasion() {
+    request_use_item_offthread(LYNCHPIN_ITEM_ID);
+    HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
+    HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
+    // A fresh handoff gets the whole press budget; the retry path below spends it.
+    HANDOFF_PRESS_ATTEMPTS.store(0, Ordering::SeqCst);
+    HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
 }
 
 /// Ask for an item to be used from a thread the game does not own.
@@ -1620,6 +1892,8 @@ unsafe fn hold_online_mode(base: usize, raise: bool) {
 unsafe fn drive_pinned_use() {
     let left = PIN_FRAMES_LEFT.load(Ordering::SeqCst);
     if left == 0 {
+        // SAFETY: game task thread; a no-op unless a row is actually borrowed.
+        unsafe { restore_goods_row() };
         return;
     }
     PIN_FRAMES_LEFT.store(left - 1, Ordering::SeqCst);

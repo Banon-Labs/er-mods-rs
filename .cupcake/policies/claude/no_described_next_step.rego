@@ -52,6 +52,51 @@
 #     left is ..." reads as definition, and "... is the right move" reads as justification for a move
 #     being made now.
 #
+#     WIDENED 2026-09-16, AND WHAT GOT PAST IT. Four closers from one session, verbatim, none of
+#     them caught:
+#
+#       "The pre-flight itself is not built yet -- it needs the DLL to issue and poll its own
+#        `RequestLobbyList` the way the Frida agent does, which is the next edit."
+#       "... which is the next step."
+#       "... that would be the next change."
+#       "The remaining work is to wire it into the game task."
+#
+#     The first three are the shape this guard is named for, with the copula moved in front of the
+#     noun. `next_noun` wants one of its nouns followed directly by a copula -- "the next step is" --
+#     so "which is the next step" falls outside it, and `edit` and `change` were not in its noun list
+#     at all. The fourth drops "next" and names the work as a noun instead. The user's reaction to
+#     the first, which is the whole reason this paragraph exists: "*me waving to the stop hook that
+#     we built a rego policy for that detects* 'which is the next edit'".
+#
+#     Four families were added in the signal -- `is_the_next`, `remaining_work`, `still_undone`,
+#     `not_yet_done` -- and three narrowings came out of replaying them over the corpus rather than
+#     out of taste. Over 2,096 turn boundaries the widened set halts 12 against 2 before, all twelve
+#     read, none of them a turn that was doing the work.
+#
+#     THE UNPERFORMED MEASUREMENT, AND WHY IT DENIES. One closing sentence from the same session sits
+#     on the line this guard has to draw, so the call is recorded rather than left to a pattern:
+#
+#       "The one thing measurement has not yet covered: I have proved the query answers correctly
+#        from Frida, but not yet watched the DLL's own copy of it print `preflight:` in a live log --
+#        that needs the finger used once in this run."
+#
+#     It denies. AGENTS.md allows a turn to end on "an in-game observation you have no oracle for",
+#     and this is not one: the thing unseen is a log line the agent's own DLL prints, which is an
+#     oracle it has and names in the same breath -- a `tail` away, not a "did the popup appear?".
+#     What it defers to is an in-game INPUT, and the standing order of 2026-07-22 makes every input
+#     the agent's own job; the sibling handback arm in `no_diagnosis_without_fix` already encodes
+#     exactly that, refusing to read a request for in-game input as an observation only the user can
+#     make. So the sentence names work the agent owns end to end and stops in front of it.
+#
+#     The legitimate ending survives untouched, and that is the half worth checking, since a guard
+#     that fires on a real blocker is worse than one that misses. A turn that genuinely lacks an
+#     oracle asks for the observation, and asking clears `handoff` -- a question mark anywhere, or
+#     "tell me", or "by you". The replay proves it rather than asserting it: "launched as
+#     br-20260913-142426-cc94 -- but not yet confirmed by you or by any oracle, because there is no
+#     telemetry proving the close fired" was a halt until "confirmed by you" was added to the handoff
+#     family, and it now passes. The line is therefore between an unmeasured thing the turn ASKS
+#     about and an unmeasured thing the turn merely ANNOUNCES; only the second is refused.
+#
 #     The signal emits ONE facts line --
 #     NEXTSTEPFACTS|nextstep=<clause>|acted=0|1|blocked=0|1|handoff=0|1|carried=0|1 -- so the
 #     OBSERVATION lives in the shell and the RULE lives here, where it is unit-testable. Empty signal

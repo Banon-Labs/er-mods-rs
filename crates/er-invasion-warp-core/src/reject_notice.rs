@@ -220,7 +220,20 @@ impl RejectNotice {
         if repeat || !enabled {
             return None;
         }
-        Some("Invasion search stopped -- Seamless has no session to search from".to_string())
+        // Two wordings were wrong here before this one, in opposite ways.
+        //
+        // "Seamless has no session to search from" named an object the player cannot see and
+        // cannot act on. Replacing it with "Seamless is not connected yet" was worse: it asserts a
+        // cause this module has not established, and "yet" hands the player a job. Their answer
+        // was the correct one -- "why not? The user isn't going to do anything to connect it."
+        //
+        // What is measured is only this: the search did not start. Why Seamless's own networking
+        // is silent is an open question with a real measurement behind it and no answer yet: zero
+        // calls on all 38 slots of ersc's matchmaking interface over 120s in-world with the hooks
+        // proven live, 331 of 344 runs never declaring a lobby, our own DLL set and the autoload
+        // both ruled out by their controls, and Steam logged on throughout. A banner may not turn
+        // that into a cause, and it may not ask for something only this mod can do.
+        Some("No invasion started".to_string())
     }
 
     pub fn observe_search_everywhere(

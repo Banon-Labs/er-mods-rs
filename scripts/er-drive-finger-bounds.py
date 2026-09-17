@@ -20,6 +20,11 @@ from er_pad_frames import Pad, WAIT_SECONDS  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 FINGER = 0x4000006F
+# How long to wait for a world before calling the boot failed, counted in game frames rather than
+# seconds: a slow load is then patience and a dead process is still a failure. Forty settles of
+# thirty frames is about two minutes at 30fps, which covers a cold load.
+WORLD_SETTLES = 40
+WORLD_SETTLE_FRAMES = 30
 MESSAGE_BOUNDS = 20000010
 MESSAGE_LEAVE = 20000011
 
@@ -34,6 +39,14 @@ PAD_LEFT = 0x0004
 
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--finger",
+        type=lambda v: int(v, 0),
+        default=FINGER,
+        help="which finger to use, as a tagged item id. Default is the Festering Bloody "
+        "Finger (0x4000006f); 0x40000070 is the Bloody Finger. The bounds prompt is the "
+        "same for both -- this only has to match what the character is carrying.",
+    )
     ap.add_argument("--row", default="right", choices=("left", "right"),
                     help="left = Nearby only, right = Both near and far")
     ap.add_argument("--dwell", type=float, default=12.0)
@@ -43,6 +56,10 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--redirect", metavar="OWNER",
                     help="hex pointer whose +0x58 is the Seamless session; a Both-near-and-far "
                          "answer then calls ersc+0x25850 with it instead of the vanilla request")
+    ap.add_argument("--ersc-trace", action="store_true",
+                    help="count calls to Seamless's option actions. This hooks ersc+0x25850, which "
+                         "er_invasion_warp byte-checks before calling, so the DLL's own invade "
+                         "drive is refused for as long as it is armed. Diagnostic only.")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
 
@@ -99,9 +116,20 @@ def main(argv: list[str]) -> int:
     consumer = sess.create_script((REPO / "scripts/frida/finger-answer-consumer.js").read_text())
     consumer.on("message", on_message)
     consumer.load()
-    actions = sess.create_script((REPO / "scripts/frida/ersc-action-trace.js").read_text())
-    actions.on("message", on_message)
-    actions.load()
+    # Off by default, because arming it disables the thing this driver exists to test.
+    #
+    # `ersc-action-trace.js` puts an `Interceptor` on `ersc+0x25850`, and `er_invasion_warp`
+    # byte-checks that function's prologue before it will call it. With the trace loaded the DLL
+    # reads Frida's trampoline instead of Seamless's bytes and logs "an armed search was dropped
+    # because ersc+0x25850 would not hand out its invade action" -- measured on
+    # br-20260917-025609-d24a, where the far half reached the drive with a correct owner and was
+    # refused by our own instrument. The codebase already learned this about its own detours; a
+    # Frida hook on the same address is the same mistake wearing a different hat.
+    actions = None
+    if args.ersc_trace:
+        actions = sess.create_script((REPO / "scripts/frida/ersc-action-trace.js").read_text())
+        actions.on("message", on_message)
+        actions.load()
     cycle = sess.create_script((REPO / "scripts/frida/native-quickslot-cycle.js").read_text())
     cycle.load()
     rows = sess.create_script((REPO / "scripts/frida/popup-row-oracle.js").read_text())
@@ -129,13 +157,50 @@ def main(argv: list[str]) -> int:
         except queue.Empty:
             return None
 
-    predicted = oracle.exports_sync.variant()
+    # The oracle answers `{ok: false, why: ...}` while the player does not exist yet, and the
+    # launcher returns as soon as the DLL says it loaded -- which is a minute before a world. This
+    # used to index `verdict` straight away and die with `KeyError: 'verdict'`, reporting a boot
+    # that had not finished as a broken driver.
+    #
+    # Waited out in game frames rather than seconds, so a slow load is patience and a dead process
+    # is a failure.
+    for _ in range(WORLD_SETTLES):
+        predicted = oracle.exports_sync.variant()
+        if predicted.get("ok"):
+            break
+        settle(WORLD_SETTLE_FRAMES)
+    else:
+        print(
+            f"the world never came up: {predicted.get('why', predicted)}",
+            file=sys.stderr,
+        )
+        return 2
     print(f"oracle: {predicted['verdict']}", flush=True)
 
-    before = cycle.exports_sync.selected()["id"]
+    # Is input arriving? Ask the thing that can answer it.
+    #
+    # This used to tap Down and require the selected id to change, calling a no-change
+    # "input is not reaching the game (window focus?)". That oracle is invalid whenever the
+    # quick-slot ring holds a single item: the id cannot change, so a perfectly live run was
+    # refused with a diagnosis naming the wrong cause. Measured on br-20260917-025609-d24a with
+    # `scripts/er-pad-reaches.py`: the game polled `XInputGetState` 31 times, was handed the
+    # injected D-pad Down mask on 20 of them (`masks={'0x2': 20}`), and the slot stayed on
+    # 0x40000070 -- which was already the finger this run wanted.
+    #
+    # So liveness is measured where it is observable: the mask the game is handed. Cycling is then
+    # only about reaching the wanted item, and a ring of one needs no cycling at all.
+    reaches = sess.create_script((REPO / "scripts/frida/pad-reaches-the-game.js").read_text())
+    reaches.load()
+    reaches.exports_sync.reset()
     tap(PAD_DOWN)
-    if cycle.exports_sync.selected()["id"] == before:
-        print("refusing to confirm: input is not reaching the game (window focus?)")
+    arrival = reaches.exports_sync.report()
+    print(f"pad: polls={arrival['polls']} masks={arrival['masks']}", flush=True)
+    if arrival["polls"] == 0:
+        print("refusing to confirm: the game is not polling XInputGetState at all")
+        return 4
+    if arrival["nonZeroMasks"] == 0:
+        print("refusing to confirm: the game polls but never receives the injected mask -- "
+              "the injector is the broken half, not window focus")
         return 4
     # The hook being installed is not the hook running. CanUseGoods is reached about 200 times a
     # second, so a zero here after a pad tap means the override is answering nothing.
@@ -145,12 +210,27 @@ def main(argv: list[str]) -> int:
     if live["calls"] == 0:
         print("refusing to confirm: the CanUseGoods override has not been reached")
         return 12
+    # Which finger this run is aiming at. The bounds prompt is the same for every one of them, so
+    # the choice is only about what the character is carrying -- and a character carrying the
+    # Bloody Finger and not the Festering one used to fail here with a blank refusal that named
+    # neither the item it wanted nor the ones it walked past.
+    wanted = args.finger
+    # Named apart from the `seen` event list above on purpose: rebinding that name here would
+    # point `on_message`'s closure at this list and silently throw every recorded event away.
+    slots_walked: list[int] = []
     for _ in range(20):
-        if cycle.exports_sync.selected()["id"] == FINGER:
+        now = cycle.exports_sync.selected()["id"]
+        if now not in slots_walked:
+            slots_walked.append(now)
+        if now == wanted:
             break
         tap(PAD_DOWN)
-    if cycle.exports_sync.selected()["id"] != FINGER:
-        print("refusing to confirm: the cursor never reached the finger")
+    if cycle.exports_sync.selected()["id"] != wanted:
+        print(
+            f"refusing to confirm: the cursor never reached {wanted:#x} -- the quick slots hold "
+            f"{[hex(x) for x in slots_walked]}. Pass --finger with one of those, or put the finger "
+            "want in a quick slot.",
+        )
         return 5
 
     if predicted["active"]:
@@ -198,7 +278,10 @@ def main(argv: list[str]) -> int:
     answered = [e for e in seen if e.get("kind") == "answer"]
     print("row the game read: " + (str(answered[-1]) if answered else "NOT CAPTURED"), flush=True)
     print("consumer: " + str(consumer.exports_sync.report()["confirmVirtual"]), flush=True)
-    print("ersc actions: " + str(actions.exports_sync.report()["counts"]), flush=True)
+    print("ersc actions: " + (
+        str(actions.exports_sync.report()["counts"]) if actions is not None
+        else "not traced -- pass --ersc-trace, and expect the DLL's own invade drive to be "
+             "refused while it is on"), flush=True)
     print("finger after: " + str(oracle.exports_sync.variant()["active"]), flush=True)
     report = redirect.exports_sync.report()
     print("redirect: fired=" + str(report["fired"]) + " " + str(report["log"]), flush=True)

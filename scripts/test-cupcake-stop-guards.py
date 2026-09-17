@@ -69,6 +69,23 @@ CASES = [
         "-- no tool call, no blocker, no question (the 2026-09-08 directive)",
     ),
     Case(
+        "described_next_step_nominal.jsonl",
+        "describing a next step instead of starting it",
+        "the same rule reached by the nominal spelling, verbatim from 2026-09-16: 'The pre-flight "
+        "itself is not built yet -- ... which is the next edit.' The turn made a real edit first, "
+        "so the fixture also pins that a delivered turn does not excuse the closer that defers the "
+        "rest. It escaped because the guard's noun list wanted a copula after the noun ('the next "
+        "step is'), and this puts the copula in front of it",
+    ),
+    Case(
+        "described_next_step_no_oracle.jsonl",
+        None,
+        "the other half of that widening: 'launched as br-20260913-142426-cc94 -- but not yet "
+        "confirmed by you or by any oracle' is the in-game observation AGENTS.md names as a "
+        "legitimate ending, and it must NOT halt. It did before 'confirmed by you' joined the "
+        "handoff family, which is the false positive the nominal spellings nearly bought",
+    ),
+    Case(
         "idle_hold.jsonl",
         "announced holding/idling",
         "turn is a pure pause announcing an idle hold while a background task runs",

@@ -368,7 +368,7 @@ mod live {
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -454,6 +454,32 @@ mod live {
         )
     }
 
+    /// The key Seamless filed its advertisement marker under on this build, once it has written
+    /// one.
+    ///
+    /// Exposed because the pre-flight query has to ask for the same pair Seamless advertises with,
+    /// and 2.0.x hashes its key names per build -- so the name cannot be a constant and cannot be
+    /// carried in a note. Measured 2026-09-16 against 31 live advertisements: 30 of them filed the
+    /// marker under `700f7f50..76` and one older build still used the plain `lobby_type`, which is
+    /// also why the observed key beats any list.
+    ///
+    /// `None` until Seamless declares an advertisement in this process. A caller with nothing here
+    /// must query without the pair rather than guess at it.
+    pub fn advertisement_key() -> Option<Vec<u8>> {
+        ADVERTISEMENT_KEY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The matchmaking interface, for a caller that issues its own query.
+    ///
+    /// The same process-wide singleton `SetLobbyData` goes through, so a filter added against it is
+    /// on the accumulator Steam consumes at the next `RequestLobbyList`.
+    pub fn matchmaking_interface() -> Option<usize> {
+        matchmaking()
+    }
+
     fn matchmaking() -> Option<usize> {
         let cached = MATCHMAKING.load(Ordering::SeqCst);
         if cached != 0 {
@@ -487,10 +513,41 @@ mod live {
         (slot != 0).then(|| unsafe { core::mem::transmute::<usize, SetLobbyDataFn>(slot) })
     }
 
+    /// The last block the game task saw, so a reader on another thread has one at all.
+    ///
+    /// `current_block_id` calls a game function that answers on the game task and did not answer
+    /// inside the lobby-query detour: run br-20260917-000642-f680 logged the heartbeat reading
+    /// `block=0x3c343500` every 600 ticks while the query on Steam's thread decided
+    /// `decision=no_centre -- no marked block and no readable current block gave a value, so the
+    /// query goes out unfiltered by accident`. The ladder therefore never narrowed to anywhere,
+    /// which is the whole of "I don't get any banners for any location".
+    ///
+    /// Zero means "never read", which is not a block id the engine uses, so there is no value to
+    /// confuse with an unset one.
+    static LAST_BLOCK: AtomicU32 = AtomicU32::new(0);
+
+    /// Record the block for readers that cannot ask the engine themselves. Game task only.
+    pub fn note_current_block() {
+        let Ok(base) = er_game_base::mem::game_module_base() else {
+            return;
+        };
+        // SAFETY: game task thread, which is the contract `current_block_id` states.
+        if let Some(raw) = unsafe { er_invasion_warp_core::warp::current_block_id(base) } {
+            LAST_BLOCK.store(raw, Ordering::SeqCst);
+        }
+    }
+
     fn current_block() -> Option<BlockKey> {
-        let base = er_game_base::mem::game_module_base().ok()?;
-        let raw = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
-        Some(BlockKey::from_raw(raw))
+        // Ask the engine first: on the game task this is current, and the cache is only ever a
+        // frame behind it anyway.
+        if let Ok(base) = er_game_base::mem::game_module_base()
+            && let Some(raw) = unsafe { er_invasion_warp_core::warp::current_block_id(base) }
+        {
+            LAST_BLOCK.store(raw, Ordering::SeqCst);
+            return Some(BlockKey::from_raw(raw));
+        }
+        let cached = LAST_BLOCK.load(Ordering::SeqCst);
+        (cached != 0).then(|| BlockKey::from_raw(cached))
     }
 
     /// Do we own this lobby? Only an owner's `SetLobbyData` survives the server.
@@ -1357,10 +1414,32 @@ mod live {
         c: usize,
         d: usize,
     ) -> usize {
+        // Our own query, on our own thread, carrying the filters it was built with.
+        //
+        // This detour is installed at the method's entry rather than on the vtable pointer, so it
+        // catches every caller of `RequestLobbyList` in the process -- the flat export
+        // `lobby_preflight` calls included. Without this check the existence query would go out
+        // carrying `er_invasion_warp_map != ""` and `er_invasion_warp_map == <some tile>` at once,
+        // which measures the tile and reports it as the answer to a question about everywhere. It
+        // is not an ERSC frame either, so the callback scope below must not be entered for it.
+        if own_query_in_flight() {
+            let orig = ORIG_REQUEST_LOBBY_LIST.load(Ordering::SeqCst);
+            if orig == 0 {
+                return 0;
+            }
+            return unsafe {
+                core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, b, c, d)
+            };
+        }
         // ERSC calls this slot, so a frame of ours reached from here is a frame ERSC entered. The
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
+        // Filters accumulate on the interface singleton and the next request consumes every one of
+        // them, whoever wrote it. Two threads staging at once do not produce two narrowed queries;
+        // they produce one carrying both sets and one carrying none. Held across the staging and
+        // the request it belongs to, on both sides of that race.
+        let _staging = lock_query_staging();
         // Said on the first call, because "the detour is live" and "the detour never ran" are
         // indistinguishable without it. Run br-20260916-014906-00bd reported
         // `oracle_invasion_warp_hunt_hooked = true` with `hunt_filters = 0` and no refusal line,
@@ -1418,6 +1497,51 @@ mod live {
         unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, b, c, d) }
     }
 
+    /// Held from the first filter written onto the matchmaking interface until the request that
+    /// consumes them.
+    static QUERY_STAGING: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        /// Set while this thread is building and sending a query of this mod's own.
+        static OWN_QUERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn lock_query_staging() -> std::sync::MutexGuard<'static, ()> {
+        match QUERY_STAGING.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Whether this thread is inside a query of our own.
+    #[must_use]
+    pub fn own_query_in_flight() -> bool {
+        OWN_QUERY.with(std::cell::Cell::get)
+    }
+
+    /// Claim the matchmaking interface for a query of our own, for as long as the guard lives.
+    ///
+    /// Two things at once, because they are the two halves of the same hazard: the staging lock
+    /// keeps Seamless's request from consuming filters we wrote, and the thread flag keeps our own
+    /// request from being narrowed by our own detour.
+    #[must_use]
+    pub fn stage_own_query() -> OwnQuery {
+        let lock = lock_query_staging();
+        OWN_QUERY.with(|flag| flag.set(true));
+        OwnQuery { _lock: lock }
+    }
+
+    /// The guard [`stage_own_query`] hands back. Dropping it releases both halves.
+    pub struct OwnQuery {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for OwnQuery {
+        fn drop(&mut self) {
+            OWN_QUERY.with(|flag| flag.set(false));
+        }
+    }
+
     fn add_string_filter(iface: usize) -> Option<AddStringFilterFn> {
         let vtable = unsafe { er_game_base::mem::safe_read_usize(iface) }?;
         let slot = unsafe {
@@ -1448,6 +1572,9 @@ mod live {
     /// Whether the "nothing to ask for" line has been said.
     static HUNT_NO_CENTRE_SAID: AtomicU8 = AtomicU8::new(0);
 
+    /// Whether the pre-flight skip has been explained.
+    static PREFLIGHT_SKIP_SAID: AtomicU8 = AtomicU8::new(0);
+
     /// The location this query round should ask for, or `None` to leave the query alone.
     ///
     /// `None` carries two different meanings and both are correct here: hunt is off or cannot
@@ -1456,6 +1583,9 @@ mod live {
     /// an unfiltered query returns the whole population again, vanilla hosts included, and the
     /// reject filter takes over deciding where you land.
     static NEAR_AND_FAR_UNFILTERED_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    /// Whether the sweep's hit has been reported.
+    static SWEEP_HIT_SAID: AtomicUsize = AtomicUsize::new(0);
 
     fn hunt_target() -> Option<String> {
         // `Both near and far` asks Steam for everyone, so it gets no location filter at all.
@@ -1476,12 +1606,57 @@ mod live {
         // same path and silently lose the block filtering that row exists for. A reason is not
         // interchangeable with the outcome it happens to share.
         let reach_is_near_and_far = crate::local_invasion_filter::finger_reach_is_near_and_far();
-        if reach_is_near_and_far {
-            if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
+        // The neighbourhood sweep asked every nearby place directly, so its answer outranks the
+        // ring's rotation.
+        //
+        // `Both near and far` used to return here unconditionally, unfiltered from its first
+        // round, on the reasoning that the row's contract is to stop being near. That reading
+        // deleted the near half: the row is two phases, and the player watched the first one
+        // never happen and the second one never announce itself. "Once I exhaust all nearby
+        // locations when doing near+far, I don't transition into a seamless invasion scheme."
+        // Both halves are now real, and the sweep is what separates them.
+        match crate::lobby_preflight::nearby() {
+            crate::lobby_preflight::Nearby::Found(block) => {
+                if SWEEP_HIT_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "hunt: decision=sweep_hit -- a nearby place answered with a host in it, \
+                         so this query asks for that one rather than continuing the rotation. \
+                         Printed once."
+                    ));
+                }
+                return Some(map_value(BlockKey::from_raw(block)));
+            }
+            // The far half. Every nearby place was asked and none of them had anybody, so the
+            // location filter comes off for good: the detour adds nothing, the query goes out
+            // exactly as Seamless built it, and the whole population answers it. `Nearby only`
+            // does not take this branch -- staying near is the entire point of that row.
+            crate::lobby_preflight::Nearby::Empty(asked) if reach_is_near_and_far => {
+                if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "hunt: decision=near_and_far_after_sweep -- all {asked} nearby place(s) \
+                         answered zero, so the near half of `Both near and far` is over and this \
+                         query goes out with no filter of ours at all. Printed once."
+                    ));
+                }
+                return None;
+            }
+            _ => {}
+        }
+        // Nobody anywhere publishes a block id, so narrowing to one can only return nothing.
+        //
+        // The ring is up to 49 queries at radius three and every one of them is guaranteed empty
+        // in that case. `lobby_preflight` answers it with a single query built on
+        // `k_ELobbyComparisonNotEqual` against the empty string, and its header carries the two
+        // controls that make a zero mean "the set is empty" rather than "the filter matches
+        // nothing". `Unknown` deliberately does not take this branch: a search armed a frame
+        // before the answer lands must not skip its own ring on no evidence.
+        if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes {
+            if PREFLIGHT_SKIP_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!(
-                    "hunt: decision=near_and_far -- `Both near and far` is in force, so this query \
-                     goes out unfiltered on purpose. Narrowing it to a map tile is what that row \
-                     exists not to do. Printed once."
+                    "hunt: decision=nobody_publishes -- the pre-flight query found no host \
+                     anywhere carrying `{LOBBY_MAP_KEY}`, so the ring would be empty at every \
+                     step. This query goes out with Seamless's own shape and no location filter. \
+                     Printed once."
                 ));
             }
             return None;
@@ -1754,6 +1929,11 @@ mod live {
             ring.rewind();
         }
         EVERYWHERE_SAID.store(0, Ordering::SeqCst);
+        // A new search gets to report its own decisions. Without this the second use of the item
+        // runs a whole search whose log says nothing, because every line it would write was
+        // already written by the first one.
+        NEAR_AND_FAR_UNFILTERED_SAID.store(0, Ordering::SeqCst);
+        SWEEP_HIT_SAID.store(0, Ordering::SeqCst);
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
@@ -1840,10 +2020,11 @@ mod live {
 
 #[cfg(windows)]
 pub use live::{
-    advance_search_place, advertisement_lobby, hunt_requests, hunt_tally,
-    install_advertisement_observer, install_hunt_hook, install_pool_filter_hook, persona_name,
-    publish_current_map, reapply_pool_if_toggled, report_persona_plumbing_once,
-    restart_search_ladder, tallies as publish_tallies, tally,
+    advance_search_place, advertisement_key, advertisement_lobby, hunt_requests, hunt_tally,
+    install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
+    matchmaking_interface, note_current_block, persona_name, publish_current_map,
+    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder, stage_own_query,
+    tallies as publish_tallies, tally,
 };
 
 /// Host-target stand-in, so `local_invasion_filter` compiles under `cargo test` on Linux.

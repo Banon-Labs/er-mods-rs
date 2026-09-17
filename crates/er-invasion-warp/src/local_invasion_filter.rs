@@ -126,6 +126,8 @@ pub(crate) mod differential_scan;
 /// The per-frame session field-write tracer, lifted out when this file hit its size limit.
 mod lobby_key_observer;
 pub(crate) mod lock_report;
+/// The paced recital of the places a nearby search is asking about.
+pub(crate) mod search_banner;
 mod session_field_trace;
 pub(crate) mod session_scan;
 use session_field_trace::trace_session_field_writes;
@@ -371,7 +373,10 @@ static OUR_SEARCH_SET_AT_MS: AtomicU64 = AtomicU64::new(0);
 /// The `RequestLobbyList` count at the moment that search was set, so the detector reads a delta
 /// rather than a total. A total is already nonzero by the second search of a session and would
 /// report every one after it as live.
-static OUR_SEARCH_SET_REQUESTS: AtomicUsize = AtomicUsize::new(0);
+static OUR_SEARCH_SET_CLOCK: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the "Seamless is running it" line has been said for the current search.
+static SEARCH_IS_LIVE_SAID: AtomicUsize = AtomicUsize::new(0);
 
 /// How many searches were released because nothing picked them up.
 static SEARCHES_RELEASED: AtomicUsize = AtomicUsize::new(0);
@@ -594,6 +599,9 @@ pub(crate) fn stand_down_hunt(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
     // The finger's override lives exactly as long as its search does.
     set_finger_reach(FINGER_REACH_NONE);
+    // So does the neighbourhood it measured. A sweep left behind would let the next search read
+    // an answer about somewhere the player has walked away from.
+    crate::lobby_preflight::clear_sweep();
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -609,6 +617,65 @@ pub(crate) fn stand_down_hunt(reason: &str) {
     }
     cancel_live_search_for_player(reason);
 }
+
+/// Give the running search back to Seamless, unfiltered and unjudged, and stop touching it.
+///
+/// # Why this is not [`stand_down_hunt`]
+///
+/// That function ends in [`cancel_live_search_for_player`], because every caller it has means
+/// "stop". This one means the opposite: the search must keep running, with nothing of ours
+/// attached to it any more.
+///
+/// # What the far half of `Both near and far` was actually doing
+///
+/// Dropping the location filter is not handing over. [`apply_finger_override`] forces `enabled`,
+/// `hunt` and `steam_hooks` on for as long as `FINGER_REACH` is set, so after the sweep emptied,
+/// the search was still ours in every respect that matters -- our detour on the query, our
+/// judgement on every match, our cancel and re-arm behind it. The only thing that changed at the
+/// near/far boundary was `hunt_target` returning `None`.
+///
+/// User, 2026-09-16: "You are failing to route your near+far where the far goes through normal
+/// seamless." The far half is supposed to be the Challenger's Lynchpin's own search, and the
+/// Lynchpin's search has none of those things on it.
+///
+/// # One store does all of it
+///
+/// `FINGER_REACH_NONE` retires the whole overlay at once -- the three switches revert to whatever
+/// the player's own config says, `finger_reach_is_near_and_far` goes false, and the ring stops
+/// narrowing. Seamless's session is not written, not read and not cancelled: it stays in
+/// `state_searching` and finishes on its own.
+#[cfg(windows)]
+pub(crate) fn hand_off_to_seamless(reason: &str) {
+    let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
+    set_finger_reach(FINGER_REACH_NONE);
+    crate::lobby_preflight::clear_sweep();
+    PENDING_REINVADE.store(false, Ordering::SeqCst);
+    if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
+        backoff.stand_down();
+    }
+    if was_armed {
+        crate::standalone_log(format_args!(
+            "local-invasion: handed the search back to Seamless -- {reason}. The filter, the \
+             location narrowing and the re-search loop are all retired, and the Challenger's \
+             Lynchpin is asked for so Seamless starts its own search; nothing here will judge or \
+             cancel what it finds."
+        ));
+    }
+    // Retiring the override is only half of it, and the first run proved the half was not enough.
+    //
+    // Run br-20260917-015929-ef68: the handover fired on the first near+far use, exactly as
+    // written -- and `ersc+0x25850` had been called zero times, because the search it was handing
+    // over had never started. The finger's own row arms an invade that needs a menu object this
+    // process has never captured, so the far half handed Seamless an empty hand.
+    //
+    // The Lynchpin used as an item is the thing that measurably reaches Steam (2 lobby requests
+    // and 10 filters, against 0 and 0 for the direct action call), so the far half asks for it.
+    crate::lynchpin_use::request_lynchpin_invasion();
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub(crate) fn hand_off_to_seamless(_reason: &str) {}
 
 /// Cancel a search that is running right now, because the player said stop.
 ///
@@ -1045,6 +1112,32 @@ fn resolve_session() -> Result<SeamlessSession, NoSession> {
         //
         // `scan_for_session` recognises the object by its own state field rather than being handed
         // a pointer to it, so the filter keeps working with nothing hooked inside Seamless.
+        // Seamless's own item-handler closure names the owner outright, and it lives on the game's
+        // heap rather than inside `ersc.dll`. `cached_scan_for_session` crosses only the module's
+        // writable sections, so it cannot reach that object however long it runs -- which is what
+        // run br-20260917-024109-9973 recorded: `no session resolved`, then
+        // `ersc_session=SessionNotIdentified` on all seven heartbeats, with Seamless healthy.
+        //
+        // Tried first because it is an identification rather than a shape match: the needle is a
+        // pointer only Seamless writes, and the object behind it has to resolve through two hops
+        // to something calling itself a session.
+        if let Some((session, owner)) =
+            session_scan::cached_owner_from_item_handler_closure(base, abi)
+        {
+            if OSM_REPORTED.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "local-invasion: session resolved from Seamless's item-handler closure -- \
+                     session 0x{session:x}, owner 0x{owner:x}, with no dialog opened and nothing \
+                     hooked inside ersc.dll. This is the path that works before any of Seamless's \
+                     own items has been used."
+                ));
+            }
+            return Ok(SeamlessSession {
+                abi,
+                session,
+                osm: owner,
+            });
+        }
         let Some((slot, session, owner)) = cached_scan_for_session(base, abi) else {
             // Said once, because a run that never resolves a session is silent otherwise and looks
             // exactly like a run that resolved one and found no hosts.
@@ -1468,8 +1561,29 @@ fn note_state_after_our_action(session: SeamlessSession, what: &str) {
     // and an invade that never returned set no state to watch.
     if state == session.abi.state_searching {
         OUR_SEARCH_SET_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
-        OUR_SEARCH_SET_REQUESTS.store(crate::lobby_publish::hunt_requests().1, Ordering::SeqCst);
+        // An unreadable baseline stores zero, which is a value the clock can legitimately hold.
+        // That is harmless in this direction: the worst it does is make a clock sitting at zero
+        // look unmoved, and an unmoved clock releases -- the safe outcome. The dangerous direction
+        // is the deadline read, which is why that one keeps the `Option`.
+        OUR_SEARCH_SET_CLOCK.store(session_clock(session).unwrap_or(0), Ordering::SeqCst);
     }
+}
+
+/// Seamless's own per-frame clock on the session, as a raw qword.
+///
+/// `session+0x238` is advanced once a frame by whatever inside Seamless is servicing the session
+/// -- established in [`session_field_trace`], which had to special-case it precisely because it
+/// ticks every frame and buried the log. Zero means it could not be read, which is treated as no
+/// evidence rather than as a stopped clock.
+#[cfg(windows)]
+fn session_clock(session: SeamlessSession) -> Option<usize> {
+    unsafe { er_game_base::mem::safe_read_usize(session.session + SESSION_COOLDOWN_OFFSET) }
+}
+
+/// Host-side stub: no session memory to read, so no evidence either way.
+#[cfg(not(windows))]
+fn session_clock(_session: SeamlessSession) -> Option<usize> {
+    None
 }
 
 /// Put the session back to idle when the search we asked for never reached Steam.
@@ -1490,12 +1604,25 @@ fn note_state_after_our_action(session: SeamlessSession, what: &str) {
 /// it could not have started one. What the player saw was a search indicator that never resolved
 /// and no Seamless banner at all.
 ///
-/// # Why a query is the oracle and the state is not
+/// # The oracle this used to use, and why it was always wrong
 ///
-/// The state is the request. Only a `RequestLobbyList` going out says the request was picked up,
-/// which is why this compares a delta on [`crate::lobby_publish::hunt_requests`] rather than
-/// reading the field again. With that detour not live nobody is counting, so a zero means nothing
-/// at all, and this declines to judge and says so once.
+/// It compared a delta on [`crate::lobby_publish::hunt_requests`]: a `RequestLobbyList` going out
+/// was taken as proof the request had been picked up. That counter can never increase, so this
+/// released every search it ever watched, at twenty seconds, including healthy ones -- and told
+/// the player "The search did not reach Seamless" every time.
+///
+/// Seamless does not find invasion targets through `ISteamMatchmaking::RequestLobbyList` at all.
+/// Measured across five runs where it was fully connected, with the control every earlier zero
+/// lacked: `hunt_hooked` true, `hunt_filters` 0, and 30 successful `SetLobbyData` writes through
+/// the same `SteamMatchMaking009` vtable in one of them. So the interface resolves, the vtable is
+/// right, our hooking works -- and slot 4 is simply never entered.
+///
+/// # The oracle now
+///
+/// `session+0x238` is a clock Seamless advances once a frame while it is servicing the session.
+/// If it has moved since the invade landed, the consumer is alive and the search is running,
+/// whatever Steam call it makes to run it. If it is frozen, nothing is consuming the request and
+/// the state is parked -- which is the case this exists for.
 ///
 /// # Why the field is written rather than the cancel action driven
 ///
@@ -1516,23 +1643,64 @@ fn release_a_search_nothing_is_running(session: SeamlessSession) {
         OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
         return;
     }
-    let (detour_live, requests) = crate::lobby_publish::hunt_requests();
-    if !detour_live {
+    // An unreadable clock releases anyway, and that is the opposite of what this did for one
+    // build.
+    //
+    // It returned here and left the session alone, on the reasoning that releasing without
+    // evidence could cancel a healthy search. That reasoning ignored which failure is worse. A
+    // session parked at `state_searching` refuses every later invade -- the invade action's second
+    // instruction is "return unless the state reads idle" -- so the item silently stops working
+    // for the rest of the session, and so does the player's own Challenger's Lynchpin. Measured on
+    // run br-20260917-010514-40be: the drive landed, the state moved to `0x0e`, this line printed,
+    // and the search never ended. The user's report was "I just stall after nearby is exhausted
+    // still".
+    //
+    // The read was not even failing. `session_clock` returned `unwrap_or(0)` and zero was then
+    // read as "unreadable", so a clock that legitimately holds zero -- which it does until
+    // Seamless starts advancing it -- took the branch that parks the session forever. A failed
+    // read must never be spelled the same way as a value, which is the rule the field tracer two
+    // modules over already follows by abandoning its snapshot rather than inventing a transition.
+    let Some(clock) = session_clock(session) else {
         if RELEASE_BLIND_SAID.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
                 "local-invasion: a search has held the searching state for \
-                 {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and this module cannot tell whether it \
-                 reached Steam -- the RequestLobbyList detour is not live, so a count of zero \
-                 means nobody is counting. Leaving the session alone. Printed once."
+                 {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and `session+0x{SESSION_COOLDOWN_OFFSET:x}` \
+                 could not be read at all, so this releases on the deadline alone. Leaving it \
+                 parked would refuse every later invade, including the player's own Lynchpin. \
+                 Printed once."
+            ));
+        }
+        release_parked_search(session);
+        return;
+    };
+    if clock != OUR_SEARCH_SET_CLOCK.load(Ordering::SeqCst) {
+        // Seamless is servicing the session, so the request was picked up and this is a real
+        // search. Re-arm the clock rather than clearing it: a consumer that stops later still
+        // parks the state, and that is the lockout this exists to prevent.
+        OUR_SEARCH_SET_AT_MS.store(now_ms().max(1), Ordering::SeqCst);
+        OUR_SEARCH_SET_CLOCK.store(clock, Ordering::SeqCst);
+        if SEARCH_IS_LIVE_SAID.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "local-invasion: the search has held the searching state for \
+                 {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and Seamless's own clock on the session is \
+                 still advancing, so it is running the search and this leaves it alone. Printed \
+                 once per search."
             ));
         }
         return;
     }
-    if requests > OUR_SEARCH_SET_REQUESTS.load(Ordering::SeqCst) {
-        // Seamless asked Steam, so the request was picked up and this is a real search.
-        OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
-        return;
-    }
+    release_parked_search(session);
+}
+
+/// Put the session back to idle and tell the player, for a search nothing picked up.
+///
+/// Both deadline paths end here -- the clock that never moved, and the clock that could not be
+/// read at all -- because the state write is the part that matters and neither case may skip it.
+/// A session left at `state_searching` refuses every later invade, so an unreleased search is not
+/// a search that might still land: it is the item, and the Challenger's Lynchpin, switched off for
+/// the rest of the session.
+#[cfg(windows)]
+fn release_parked_search(session: SeamlessSession) {
     OUR_SEARCH_SET_AT_MS.store(0, Ordering::SeqCst);
     AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
     PENDING_REINVADE.store(false, Ordering::SeqCst);
@@ -1547,19 +1715,26 @@ fn release_a_search_nothing_is_running(session: SeamlessSession) {
     }
     LAST_SESSION_STATE.store(session.abi.state_idle as usize, Ordering::SeqCst);
     let count = SEARCHES_RELEASED.fetch_add(1, Ordering::SeqCst) + 1;
+    SEARCH_IS_LIVE_SAID.store(0, Ordering::SeqCst);
     crate::standalone_log(format_args!(
         "local-invasion: released the search (#{count}) -- the session held the searching state \
-         for {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and Seamless never asked Steam for a lobby, so \
-         nothing was searching. The state is back to idle because the invade action refuses to run \
-         while it reads anything else, and leaving it parked would have blocked the Challenger's \
-         Lynchpin as well."
+         for {SEARCH_MUST_REACH_STEAM_WITHIN_MS}ms and nothing inside Seamless picked the request \
+         up. The state is back to idle because the invade action refuses to run while it reads \
+         anything else, and leaving it parked would have blocked the Challenger's Lynchpin too."
     ));
     // SAFETY: the game's menu thread, which is this surface's stated contract. A refusal is not an
     // error here -- the release has already happened and only the notice would be missing.
     unsafe {
-        crate::announce::show("The search did not reach Seamless");
+        // Not "did not reach Seamless" any more. That sentence was written when the oracle was a
+        // Steam call Seamless never makes, so it fired on every search including live ones, and
+        // it named a component rather than telling the player what happened to them.
+        crate::announce::show("No invasion found -- you can use the item again");
     }
 }
+
+/// Host-side stub: no session memory to write.
+#[cfg(not(windows))]
+fn release_parked_search(_session: SeamlessSession) {}
 
 /// Feed the restart backoff the shape of the attempt, from transitions it already sees.
 ///
@@ -2628,8 +2803,13 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
         // one: with Seamless absent or not yet up there is nothing to be mid-invasion of. Publish
         // it, so a session that goes away cannot strand the map dimmed and the warp refused.
         er_invasion_warp_core::warp::set_invasion_attempt_in_flight(false);
+        report_armed_search_that_cannot_start();
         return;
     };
+    // A session resolved, so a later failure gets to speak again rather than being swallowed as a
+    // repeat of this one.
+    ARMED_WITHOUT_SESSION_TICKS.store(0, Ordering::SeqCst);
+    ARMED_WITHOUT_SESSION_SAID.store(false, Ordering::SeqCst);
     publish_invasion_attempt_state(session);
     trace_session_state(session);
     // Watch which session fields the Themida VM writes, and when. This is the only way left to
@@ -2648,6 +2828,70 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     arm_self_recovery(session);
     drive_pending_reinvade(session);
 }
+
+/// How many consecutive ticks an armed search has waited for a session that never resolved.
+#[cfg(windows)]
+static ARMED_WITHOUT_SESSION_TICKS: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+/// Whether the player has been told about it.
+#[cfg(windows)]
+static ARMED_WITHOUT_SESSION_SAID: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+/// Roughly ten seconds at sixty ticks a second.
+///
+/// Not instant, because a session is legitimately unresolvable for a moment after a map change and
+/// after the world first loads -- announcing on the first tick would fire during ordinary play.
+/// Not a minute either: the point is to reach the player while they are still looking at the
+/// screen they armed the search from.
+#[cfg(windows)]
+const ARMED_WITHOUT_SESSION_GRACE_TICKS: usize = 600;
+
+/// Tell the player when a search they armed cannot start, instead of letting it sit silent.
+///
+/// # The silence this replaces
+///
+/// Run br-20260917-003247-2d10, in full: the finger was used, `Both near and far` chosen, all 49
+/// nearby places asked and answered, the widened-search banner painted -- and then nothing, for
+/// twelve thousand ticks, with `ersc_session=SessionNotIdentified` on every heartbeat. The search
+/// was armed and could never be driven, because the drive needs a session and Seamless parks that
+/// pointer conditionally (see the `session-pointer-not-always-parked-in-ersc-data-2026-09-16`
+/// measurement: three runs resolved it from three different slots, and one crossed all of ersc's
+/// writable data and found it nowhere).
+///
+/// The player's report of that run was "I never trigger any indication that the seamless invasion
+/// item has kicked off", and the honest reading is that nothing had kicked off. Everything the mod
+/// put on screen was about a search that was never running. A feature that cannot start has to say
+/// so; announcing the places it would have asked about and then falling silent is worse than
+/// saying nothing, because the recital reads as progress.
+///
+/// The wording names no pointer, no session, no detour and no part of this mod. It says the one
+/// thing a player can act on: it did not start.
+#[cfg(windows)]
+fn report_armed_search_that_cannot_start() {
+    if !AUTO_SEARCH_ARMED.load(Ordering::SeqCst) {
+        ARMED_WITHOUT_SESSION_TICKS.store(0, Ordering::SeqCst);
+        return;
+    }
+    let waited = ARMED_WITHOUT_SESSION_TICKS.fetch_add(1, Ordering::SeqCst) + 1;
+    if waited < ARMED_WITHOUT_SESSION_GRACE_TICKS
+        || ARMED_WITHOUT_SESSION_SAID.swap(true, Ordering::SeqCst)
+    {
+        return;
+    }
+    crate::standalone_log(format_args!(
+        "local-invasion: an armed search has waited {waited} tick(s) and Seamless's session has \
+         never once been resolvable, so the invade action cannot be driven and this search has \
+         not started. Telling the player, because the banner has been describing a search that \
+         is not running."
+    ));
+    let notice = current_config_snapshot().is_none_or(|config| config.reject_notice);
+    banner::announce_cannot_search(notice);
+}
+
+/// Host-side stub: no session to fail to resolve.
+#[cfg(not(windows))]
+fn report_armed_search_that_cannot_start() {}
 
 /// Read the engine's own view of the join, and log it when it changes.
 ///

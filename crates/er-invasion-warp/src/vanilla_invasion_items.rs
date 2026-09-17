@@ -197,6 +197,62 @@ pub unsafe fn enable_offline_use() -> bool {
     true
 }
 
+/// Queue every place this search will ask about, so the banner can name them one at a time.
+///
+/// # Why this is here and not in the query detour
+///
+/// `banner::announce_prefilter_step` was only ever reached from inside the lobby-query detour, so
+/// a place appeared on screen when and only when a `RequestLobbyList` went out. Seamless does not
+/// issue that query -- measured across six runs with `SetLobbyData` through the same interface as
+/// the control -- so the screen named the first tile once and then never again. Run
+/// br-20260916-233426-b38b: `prefilter: asking for m60_52_53_00 (1 of 49)`, exactly one line, and
+/// the player reported seeing the nearby banner with no places under it.
+///
+/// The ring does not need the query. It is arithmetic on the block the player is standing in, so
+/// it is known the moment the popup is answered, and [`search_banner`] recites it on the game task
+/// at one place a second.
+///
+/// A block that cannot be read clears the queue rather than reciting a stale ring: the last search
+/// was somewhere else, and naming those places would be a search of somewhere the player has left.
+#[cfg(windows)]
+fn queue_the_places_being_searched() {
+    use crate::local_invasion_filter::search_banner;
+
+    let radius = crate::local_invasion_filter::current_config_snapshot()
+        .map_or(1, |config| config.prefilter_radius);
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        search_banner::clear();
+        return;
+    };
+    // SAFETY: game task thread, called from the bounds popup's own answer handler; the getter is
+    // address-checked for this build and writes only the local it is given.
+    let Some(block) = (unsafe { er_invasion_warp_core::warp::current_block_id(base) }) else {
+        search_banner::clear();
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: the block the player is standing in is not readable, so the search \
+             banner has no places to name. The search itself is unaffected."
+        ));
+        return;
+    };
+    let ring = search_banner::nearby_ring(block, radius);
+    search_banner::queue_ring(&ring);
+    // The same list, asked about rather than recited. The banner names where the search is
+    // looking; the sweep is what makes that true, and it is also what ends the nearby half of
+    // `Both near and far` -- a place that answers zero is a place that has been asked.
+    crate::lobby_preflight::arm_sweep(&ring);
+    crate::standalone_log(format_args!(
+        "vanilla-fingers: queued {} place(s) for the search banner around \
+         block 0x{block:08x} at radius {radius}, named one per \
+         {}ms on the game task, and armed a lobby query for each of them",
+        search_banner::pending(),
+        search_banner::STEP_INTERVAL_MS
+    ));
+}
+
+/// Host-side stub: there is no player standing anywhere and no banner to paint.
+#[cfg(not(windows))]
+fn queue_the_places_being_searched() {}
+
 /// Put the range the player chose in force for this search, without touching their config.
 ///
 /// The two buttons are the control surface the config file used to be, and they stay out of it:
@@ -392,20 +448,94 @@ unsafe extern "system" fn start_invasion_entry(
     //
     // `Nearby only` keeps the direct call: that row is this mod's own block-filtered search, which
     // the filter drives itself, and it is not supposed to reach Seamless's matchmaking at all.
+    // Recite the places this search will ask about, whichever row was chosen.
+    //
+    // Queued here rather than inside the query detour, which is where `announce_prefilter_step`
+    // used to be reached from and why the screen only ever named one place. The ring is arithmetic
+    // on the block the player is standing in, so it is known now; the query discovers nothing the
+    // caller does not already have.
+    queue_the_places_being_searched();
+    // Ask, once, whether any host anywhere publishes a block id. A `no` turns the ring off before
+    // its first query rather than after its forty-ninth; see `lobby_preflight` for the controls.
+    crate::lobby_preflight::arm();
     let requested = match range {
+        // `Both near and far` drives Seamless's own invade action through the option-menu object
+        // some seam has handed over, and presses nothing.
+        //
+        // The row used to hand off to the Challenger's Lynchpin, which pinned the item and then
+        // held pad `A` for 500ms through `er_quickload_hold_xinput_pad`. `A` is jump. Run
+        // br-20260916-233426-b38b is what that does to a player -- reported as "attempting to
+        // search near and far makes me jump after I accept the item to use it" -- and the same
+        // run's log says the press achieved nothing anyway: `the press was dropped --
+        // ChrIns+0x160 reads Some(1073741936), not the pinned 0x407fde63`. So the handoff's only
+        // observable effect was the jump.
+        //
+        // What does work is measured: on 2026-09-16 a frida session called `ersc+0x25850` with the
+        // object `show` was called with and the player landed in another host's world, session
+        // state walking `0x1 -> 0xe -> 0xf -> 0x13 -> 0x14 -> 0x16` with the invasion SpEffects
+        // set. `drive_invade_with_owner` is that call, and it validates the owner before making
+        // it -- `+0x58` must lead to a session, the session must be idle, and the lock shape must
+        // be sane -- so a wrong pointer declines rather than wedging the menu thread the way the
+        // synthesized owner did.
         SearchRange::BothNearAndFar => {
-            crate::lynchpin_use::request_lynchpin_use_offthread();
-            crate::standalone_log(format_args!(
-                "vanilla-fingers: Both near and far hands off to the Challenger's Lynchpin itself                  -- its item path is what queries Steam, where calling ersc's action directly only                  sets the state and never searches."
-            ));
-            true
+            match crate::local_invasion_filter::search_banner::captured_menu_object() {
+                Some(owner) => crate::local_invasion_filter::drive_invade_with_owner(
+                    owner,
+                    "the vanilla finger's Both near and far",
+                ),
+                // No object in hand this frame, so arm the search rather than refuse it.
+                //
+                // Refusing was wrong twice over. It put "Cannot search yet -- Seamless has not
+                // opened a menu this session" in front of a player: this module's own capture
+                // state, recited at somebody who has no idea what a menu object is and can do
+                // nothing whatever with the sentence. And it threw the press away for the state
+                // of a single frame, when `arm_invade_request` exists for exactly this shape --
+                // it runs on the next game tick that can resolve the session and finds it idle,
+                // so the search starts by itself the moment an object arrives instead of needing
+                // the player to use the item again.
+                None => crate::local_invasion_filter::arm_invade_request(
+                    "a vanilla invasion finger, near and far, with no menu object captured yet",
+                ),
+            }
         }
         SearchRange::NearbyOnly => {
             crate::local_invasion_filter::arm_invade_request("a vanilla invasion finger")
         }
     };
+    // A row that could not start a search must put back the override it just adopted.
+    //
+    // `adopt_search_range` forces `enabled`, `hunt` and `steam_hooks` on for the duration of the
+    // search, and `stand_down_hunt` is the only thing that clears them -- so a row that adopts and
+    // then fails to start leaves the filter armed with nobody to retire it. The player then has a
+    // live local-invasion filter judging and cancelling every match, including the ones Seamless's
+    // own Challenger's Lynchpin brings in, with no search of ours running to justify it.
+    //
+    // Reported on run br-20260916-235321-0597 as "when I exhaust nearby, it doesn't transition to
+    // seamless invades; additionally it doesn't allow me to use the lynchpin to do seamless
+    // invades. Its in some bugged state." The log's matching pair is `Both near and far has no
+    // option-menu object to drive Seamless through` followed by `requested=false`, with the
+    // override left in force behind it.
+    if !requested {
+        crate::local_invasion_filter::stand_down_hunt(
+            "the finger's search could not start, so its override is retired rather than left \
+             armed with nothing running behind it",
+        );
+        crate::local_invasion_filter::search_banner::clear();
+    }
     let driven = false;
-    announce_search(range);
+    // Only claim a search that started.
+    //
+    // `announce_search` used to run unconditionally, so run br-20260917-000642-f680 put
+    // "Searching for a world, near and far" on screen in the same breath as logging `Both near and
+    // far has no option-menu object to drive Seamless through, so this search cannot start` -- a
+    // banner that says the opposite of the log is worse than no banner, because the player waits
+    // on it. The stand-down above has already cleared the place queue by this point, which is why
+    // no location names followed it either.
+    if requested {
+        announce_search(range);
+    } else {
+        announce_search_refused();
+    }
     crate::standalone_log(format_args!(
         "vanilla-fingers: the bounds popup chose {range:?} (isBreakInMultiRegion={flag}, \
          step={step}), adopted={adopted}, driven_inline={driven}, requested={requested}"
@@ -520,6 +650,45 @@ fn announce_search(range: SearchRange) {
         ));
     }
 }
+
+/// Say on screen that the search did not start, rather than leaving the claim that it did.
+///
+/// # Nothing here may name a part of this mod
+///
+/// The first draft of this said "Cannot search yet -- Seamless has not opened a menu this
+/// session", and the user's response to seeing it in game was "what in the absolute hell is this".
+/// It was right on the facts and useless as a message: a menu object is this module's bookkeeping,
+/// the player cannot act on it, and a banner they cannot act on is worse than silence because it
+/// reads as the mod being broken in a way they are expected to fix.
+///
+/// A player-facing line says what happened to the thing the player did. It never names a pointer,
+/// a capture, a session, a detour or Seamless's internals.
+///
+/// This is reached far less often now that the near+far row arms instead of refusing -- it is left
+/// for the case where nothing could be armed at all, which is a real outcome and still better said
+/// than swallowed.
+#[cfg(windows)]
+fn announce_search_refused() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static REFUSAL_BANNER_FAILED: AtomicUsize = AtomicUsize::new(0);
+
+    let text = "No invasion could be started";
+    // SAFETY: the game's menu thread with the menu up, the same surface `announce_search` uses.
+    if unsafe { crate::announce::show(text) } {
+        return;
+    }
+    if REFUSAL_BANNER_FAILED.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: could not show the refusal banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up. Printed once."
+        ));
+    }
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+fn announce_search_refused() {}
 
 #[cfg(test)]
 mod tests {

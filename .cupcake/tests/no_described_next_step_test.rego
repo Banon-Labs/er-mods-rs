@@ -77,6 +77,65 @@ test_allow_when_a_genuine_blocker_is_stated if {
 	not halted(facts("The next step is running the probe, which needs sudo.", "0", "1", "0", "0"))
 }
 
+# --- the four closers that escaped on 2026-09-16 ------------------------------------------------
+# The prose classification that finds these lives in the signal and is pinned by
+# scripts/test-described-next-step-signal.py. What is pinned here is the half this layer owns: with
+# the clause extracted and no exemption set, each one halts. They are named rather than folded into
+# the verbatim case so a regression says which closer came back.
+
+escape_next_edit := "The pre-flight itself is not built yet -- it needs the DLL to issue and poll its own RequestLobbyList the way the Frida agent does, which is the next edit."
+
+escape_next_step := "The gate answers correctly from the agent, and the DLL still reads the param, which is the next step."
+
+escape_next_change := "The param read is what makes it refuse, so dropping it and answering the gate instead is what I would do; that would be the next change."
+
+escape_remaining_work := "The remaining work is to wire it into the game task."
+
+# The judgement call, recorded in the policy comment under "the unperformed measurement": a log line
+# the agent's own DLL prints is an oracle it has, and the in-game input it defers to is an input the
+# agent drives itself, so this denies rather than resolving to the in-game-observation exemption.
+unperformed_measurement := "The one thing measurement has not yet covered: I have proved the query answers correctly from Frida, but not yet watched the DLL's own copy of it print preflight: in a live log -- that needs the finger used once in this run."
+
+test_halt_on_which_is_the_next_edit if {
+	halted(facts(escape_next_edit, "0", "0", "0", "0"))
+}
+
+test_halt_on_which_is_the_next_step if {
+	halted(facts(escape_next_step, "0", "0", "0", "0"))
+}
+
+test_halt_on_that_would_be_the_next_change if {
+	halted(facts(escape_next_change, "0", "0", "0", "0"))
+}
+
+test_halt_on_the_remaining_work_is if {
+	halted(facts(escape_remaining_work, "0", "0", "0", "0"))
+}
+
+test_halt_on_the_unperformed_measurement if {
+	halted(facts(unperformed_measurement, "0", "0", "0", "0"))
+}
+
+# The other half of the judgement, and the one that matters more: a turn that genuinely has no
+# oracle asks for the observation, asking sets `handoff`, and the guard stays out of its way. An
+# over-broad guard that fires on a legitimate ending is worse than the miss it was widened to close.
+test_allow_when_the_observation_is_asked_for if {
+	not halted(facts(
+		"Launched as br-20260913-142426-cc94 -- but not yet confirmed by you or by any oracle.",
+		"0", "0", "1", "0",
+	))
+}
+
+# Naming the next edit and then making it is the correct shape, and the widening must not touch it.
+test_allow_when_the_next_edit_was_made if {
+	not halted(facts(escape_next_edit, "1", "0", "0", "0"))
+}
+
+# The remaining work named beside the one thing that stops it being done now.
+test_allow_when_the_remaining_work_is_blocked if {
+	not halted(facts(escape_remaining_work, "0", "1", "0", "0"))
+}
+
 # --- the remaining exemption, and the shape of the halt -----------------------------------------
 
 # Live background work is already carrying the step.

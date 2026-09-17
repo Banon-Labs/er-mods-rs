@@ -29,7 +29,7 @@ for proc in /proc/[0-9]*; do
 	cmd="$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null)" || continue
 	[ -n "$cmd" ] || continue
 	pid="${proc#/proc/}"
-	# Skip this script and whatever launched it. A tool call that merely CONTAINS the word cargo --
+	# Skip this script and whatever launched it. A tool call that merely contains the word cargo --
 	# writing this file, for instance -- has that text in its own command line, and matching it
 	# would make the signal fire on itself and refuse every launch.
 	case " $self_tree " in *" $pid "*) continue ;; esac

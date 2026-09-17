@@ -53,6 +53,33 @@ OWNER_LINE = re.compile(
 )
 
 
+def as_address(value) -> int:
+    """The numeric value of a pointer that may arrive as text, a number, or nothing.
+
+    Frida's RPC hands a pointer back as a hex string, but `adopt_owner_of` returns whatever the
+    agent's own JSON carried -- sometimes an int, sometimes null. `int(value, 16)` then raises
+    ``TypeError: int() can't convert non-string with explicit base`` and the run dies holding a
+    perfectly good pointer. Every comparison here wants the number, so the conversion belongs in
+    one place rather than at each of the three call sites.
+    """
+    if value is None:
+        return 0
+    if isinstance(value, int):
+        return value
+    # `adopt_owner_of` answers with every address it found holding the session, not with one, so a
+    # list arrives here whenever the scan had more than a single candidate. The agent has already
+    # offered each of them to `er_invasion_warp_adopt_menu_object`, which validates before it
+    # stores, so the first is as good a representative as any for the "is there anything at all"
+    # test this function serves. Taking `str()` of the list instead produced
+    # ``ValueError: invalid literal for int() with base 16: "['0x1804674db', ...]"``.
+    if isinstance(value, (list, tuple)):
+        return as_address(value[0]) if value else 0
+    text = str(value).strip()
+    if not text:
+        return 0
+    return int(text, 16)
+
+
 def owner_from_dll_log() -> tuple:
     """(session, owner) as hex strings from the newest run's log, or (None, None)."""
     runs = sorted(RUNS.glob("br-*"), key=lambda d: d.stat().st_mtime, reverse=True)
@@ -155,7 +182,7 @@ def main() -> int:
     if osm is None:
         found_session, osm = owner_from_dll_log()
         print(f"from the DLL's log: session={found_session} owner={osm}", flush=True)
-    if (osm is None or int(osm, 16) == 0) and found_session is not None:
+    if as_address(osm) == 0 and found_session is not None:
         # `owner 0x0` means the DLL found the session but nothing that owns it, and both ersc
         # actions take the owner as `rcx` and read the session out of `[rcx+0x58]` -- so a bare
         # session cannot drive anything, and passing 0 is a null read inside ersc.dll.
@@ -164,9 +191,25 @@ def main() -> int:
         # holding the session pointer, and the address that holds it is `owner + 0x58`. The DLL's
         # own validation decides which candidate is real.
         print(f"owner is 0 -- scanning for whatever holds {found_session}", flush=True)
-        osm = script.exports_sync.adopt_owner_of(found_session)
+        found = script.exports_sync.adopt_owner_of(found_session)
+        # The scan answers with every address whose `+0x58` holds the session, and a byte-pattern
+        # hit inside ersc's own image is as likely as a real object -- 0x1804674db is not even
+        # aligned. So each candidate is asked for its session state, and the first that answers is
+        # the one kept. The previous code printed the whole list and then handed it to
+        # `state_at`, which read it as one pointer and returned None with three candidates in hand.
+        candidates = found if isinstance(found, (list, tuple)) else [found]
+        print(f"owner candidates: {candidates}", flush=True)
+        osm = None
+        for candidate in candidates:
+            if as_address(candidate) == 0:
+                continue
+            state = script.exports_sync.state_at(candidate)
+            print(f"  {candidate} state={state}", flush=True)
+            if state is not None:
+                osm = candidate
+                break
         print(f"adopted owner: {osm}", flush=True)
-    if osm is None or int(osm, 16) == 0:
+    if as_address(osm) == 0:
         print("no usable menu object: nothing in memory holds the session the DLL found",
               file=sys.stderr)
         return 3

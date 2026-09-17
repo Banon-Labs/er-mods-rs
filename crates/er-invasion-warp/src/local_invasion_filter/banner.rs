@@ -79,31 +79,15 @@ pub(super) fn announce_arrival(enabled: bool, destination: u32) {
 /// No place and no host name here, unlike every other banner: join data never arrived, so there is
 /// no destination and no host id to resolve. Naming one would mean naming whoever the player was
 /// last told about, which reads as a failure to reach somewhere they never got near.
+/// Deleted 2026-09-16 along with its only call site, in `watch_for_failed_connect`.
+///
+/// That path had already stopped cancelling, because its deadline was derived from runs this mod
+/// was shaping and cannot tell a slow connect from a dead one. The banner outlived the action and
+/// went on telling the player "Invasion failed -- no connection" about a connect nothing was
+/// acting on. `RejectNotice::observe_failure` is kept and still tested; nothing in the DLL calls
+/// it, so restoring the notice means restoring a judgement that can be defended first.
 #[cfg(windows)]
-pub(super) fn announce_failure(enabled: bool, attempt: u32) {
-    let announcement = {
-        let mut guard = match REJECT_NOTICE.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.observe_failure(enabled, attempt)
-    };
-    let Some(text) = announcement else {
-        return;
-    };
-    // SAFETY: game task thread, the same context and the same auto-closing announcement surface as
-    // the other three banners.
-    if !unsafe { crate::announce::show(&text) } {
-        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        crate::standalone_log(format_args!(
-            "local-invasion: could not show the failed-connection banner (\"{text}\") -- the \
-             message functions did not verify, or the menu is not up yet. The attempt is still \
-             cancelled; only the on-screen notice is missing."
-        ));
-    }
-}
+const _: () = ();
 
 /// Host-side stub; the decision half is tested against [`er_invasion_warp_core::reject_notice`].
 #[cfg(not(windows))]

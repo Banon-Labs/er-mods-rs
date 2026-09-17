@@ -36,6 +36,7 @@ Then, from any script:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import shutil
@@ -260,7 +261,64 @@ def clear_staged_agent() -> bool:
     return not staged.exists()
 
 
-def start(force: bool = False) -> int:
+def world_is_up() -> tuple[bool, str]:
+    """Whether the newest run has a player in a world yet, from its own telemetry.
+
+    The launcher returns as soon as the DLL logs that it loaded, which is a minute or more before
+    a world exists, and a frida-server started into that window puts an injector into a process
+    still building its own address space.
+
+    `oracle_player_present` is the product's own read of `WorldChrMan`, written by `er_quickload`
+    into the run's artifact directory, so this costs a file read and depends on no game hook of
+    this script's own. No telemetry file at all answers "unknown", which is treated as not ready.
+    """
+    # No game is the clearest not-ready there is, and it has to be checked before the files: a
+    # previous run's telemetry keeps saying a player was present long after that process died, so
+    # reading it first let the gate pass with nothing running at all.
+    if game_pid() is None:
+        return False, "no eldenring.exe is running"
+    runs = sorted(
+        (pathlib.Path.home() / ".cache" / "er-me3-runs").glob("br-*"),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for run in runs[:2]:
+        telemetry = run / "er-quickload-telemetry.json"
+        if not telemetry.exists():
+            continue
+        try:
+            data = json.loads(telemetry.read_text(encoding="utf-8", errors="replace"))
+        except (ValueError, OSError):
+            continue
+        if data.get("oracle_player_present"):
+            return True, f"{run.name}: a player is in a world"
+        return False, (
+            f"{run.name}: oracle_player_present is "
+            f"{data.get('oracle_player_present')!r}, step={data.get('oracle_system_step_label')!r}"
+        )
+    return False, "no run telemetry to read -- cannot tell whether a world exists"
+
+
+def start(force: bool = False, allow_early: bool = False) -> int:
+    # Refuse to start while the game is still booting.
+    #
+    # 2026-09-16: a server was started seconds after a launch, the drive that followed reported
+    # "input is not reaching the game", and the process was gone by the next check -- user's
+    # reading, "you definitely crashed the game by attaching frida too early". Injecting into a
+    # process that is still mapping its own modules is the one attach this repo never had a reason
+    # to make: every question these agents ask is about a world that does not exist yet.
+    #
+    # `--allow-early` exists for the boot itself being the subject.
+    if not allow_early:
+        ready, detail = world_is_up()
+        if not ready:
+            print(
+                f"REFUSING to start frida-server: the game is not in a world yet ({detail}). "
+                "Attaching during boot has killed the process. Wait for the world, or pass "
+                "--allow-early when the boot itself is what you are measuring.",
+                file=sys.stderr,
+            )
+            return 4
     # An open port is not proof of a usable server. Measured 2026-09-08: a server started before
     # `scripts/er-teardown.py` killed the prefix keeps its listening socket, accepts the connection,
     # and then hangs forever inside `enumerate_processes` -- so a watcher started against it sits
@@ -524,6 +582,12 @@ def main() -> int:
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--force", action="store_true", help="replace a running server outright")
+    parser.add_argument(
+        "--allow-early",
+        action="store_true",
+        help="start even though no world exists yet. Only for measuring the boot itself: "
+        "attaching during boot has killed the game.",
+    )
     args = parser.parse_args()
     if args.selftest:
         return selftest()
@@ -531,7 +595,7 @@ def main() -> int:
         return status()
     if args.stop:
         return stop()
-    return start(force=args.force)
+    return start(force=args.force, allow_early=args.allow_early)
 
 
 if __name__ == "__main__":

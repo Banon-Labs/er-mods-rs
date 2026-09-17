@@ -34,6 +34,7 @@ pub mod announce;
 pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
+pub mod lobby_preflight;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
 pub mod lynchpin_use;
@@ -279,6 +280,21 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context; every read is fault-closed and the one
                     // detour is installed on a byte-verified prologue.
                     unsafe { crate::lynchpin_use::tick() };
+                    // Name the next place the search is asking about, at one a second.
+                    //
+                    // Driven from here rather than from the lobby-query detour, which is where the
+                    // banner used to be reached from and why only the first tile was ever named:
+                    // Seamless does not issue that query, so the detour fires once or not at all.
+                    // The ring is known when the search is armed, so reciting it needs a tick and
+                    // nothing else. Self-gating -- an empty queue costs one lock and returns.
+                    // Send or collect the one query that says whether narrowing to a location can
+                    // find anybody at all. Self-gating: idle until a search arms it, and it keeps
+                    // its answer rather than re-asking, so the ordinary tick costs one atomic load.
+                    crate::lobby_preflight::tick();
+                    crate::local_invasion_filter::search_banner::pump_and_announce(
+                        crate::local_invasion_filter::current_config_snapshot()
+                            .is_some_and(|config| config.reject_notice),
+                    );
                     // Advertise this host's current map on its own Steam lobby, so an invader can
                     // ask for a location instead of sampling and rejecting. Gated internally on the
                     // block having changed, so a host standing still costs one string compare.
@@ -291,6 +307,11 @@ fn spawn_catalog_task() {
                     // No-ops harmlessly when this player is not hosting, when Steam is not ready, or
                     // when the block cannot be read. Not being findable by location is a missing
                     // convenience; a DLL that faulted here would be a broken game.
+                    // Record where the player is for readers that run on another thread. The
+                    // lobby-query detour runs on Steam's thread, where the engine's own map-id
+                    // getter answers nothing, so without this the ladder has no centre to ask for
+                    // and every query goes out unfiltered by accident.
+                    crate::lobby_publish::note_current_block();
                     crate::lobby_publish::publish_current_map();
                     // Keep the advertised pool matching the configured one; Seamless never
                     // rebuilds its advertisement, so a toggle has to be applied by us.

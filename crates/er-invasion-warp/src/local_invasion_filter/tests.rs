@@ -264,7 +264,10 @@ fn the_lobby_key_is_never_published_or_altered() {
     }
     // And the observer calls the original before reading, so a fault in our read can never
     // change the key Seamless publishes.
-    let source = include_str!("../local_invasion_filter.rs");
+    // Read through `filter_module_code` rather than from the parent file directly: the observer
+    // moved into `lobby_key_observer.rs` on 2026-09-16 and this `expect` then fired against code
+    // that had not changed at all.
+    let source = filter_module_code();
     let observer = source
         .split("unsafe extern \"system\" fn build_lobby_key_observer")
         .nth(1)
@@ -372,6 +375,12 @@ fn filter_module_code() -> String {
         include_str!("banner.rs"),
         include_str!("menu_seams.rs"),
         include_str!("session_field_trace.rs"),
+        // Split out on 2026-09-16 when the parent crossed 3200 lines again, and the cost of
+        // forgetting these two lines is exactly what the paragraph above predicted: the detour
+        // budget read four trampolines instead of five, and `the_lobby_key_is_never_published_or_
+        // altered` fired its `expect("the observer exists")` against correct code.
+        include_str!("lobby_key_observer.rs"),
+        include_str!("search_banner.rs"),
     ]
     .join("\n")
 }

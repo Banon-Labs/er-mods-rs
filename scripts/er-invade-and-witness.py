@@ -8,7 +8,7 @@ compare different searches:
                `sha256_update` call at `ersc+0xad90c` carries the whole preimage, so hashing it
                here and matching the string the search sends closes the reading.
   the filters  every `AddRequestLobbyListStringFilter` the search queries with.
-  the landing  a foreign world shows as a NEW main-player pointer with the session past `0x16`;
+  the landing  a foreign world shows as a new main-player pointer with the session past `0x16`;
                the SpEffect list says which side of the invasion the player is on.
 
 # Why this cannot run forever

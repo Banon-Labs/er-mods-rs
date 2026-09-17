@@ -54,7 +54,21 @@
 #     justification for a move being made now, and both fired on turns that were doing the work;
 #   * a step contingent on something landing or merging is not startable, so it is exempt.
 # Fenced code, backticked spans and double-quoted spans are stripped before matching, so quoting the
-# ban -- this file, the policy, a test fixture, a report about the guard -- cannot trip it.
+# ban -- this file, the policy, a test fixture, a report about the guard -- cannot trip it. Markdown
+# table rows are dropped too, for the reason `prose_only` records.
+#
+# Widened 2026-09-16, after four closers walked past it. Three of them put the copula in front of the
+# noun instead of behind it -- "which is the next edit", "which is the next step", "that would be the
+# next change" -- and `next_noun` wants its noun followed directly by a copula, so none of the three
+# reached it; `edit` and `change` were not in its noun list either. The fourth named the work as a
+# noun with no "next" in it at all: "The remaining work is to wire it into the game task." The
+# families that close those are `is_the_next`, `remaining_work`, `still_undone` and `not_yet_done`,
+# and each carries its own note below. Replayed over the same corpus (2,096 turn boundaries in the
+# ten newest transcripts) the widened set halts 12 of them against 2 before, and reading all twelve
+# found no turn that was doing the work: eight distinct turns, three of them counted once per
+# boundary that shares their window. Three narrowings came out of that reading rather than out of
+# taste, and each is recorded where it lives -- `half` out of `remaining_work`, `CAVEAT_FRAME_RE`
+# over `not_yet_done`, and "confirmed by you" added to `HANDOFF_RE`.
 #
 # The shared half of the classification (transcript discovery, turn bucketing, substantive work
 # against a status peek, blocked-on-user phrasing, live background work) comes from
@@ -98,17 +112,63 @@ def scrub(text):
     return re.sub(r'"[^"]*"', " ", text)
 
 
+def prose_only(text):
+    """`scrub`, and then drop markdown table rows.
+
+    A table cell is a status column, not a sentence, and the pipes between cells make one row read
+    as a run-on clause. Measured on the replay: the row `| the rebind | vanilla | just changed,
+    builds clean, not yet run |` was quoted back as a next step described and abandoned, and the
+    clause the agent would have been shown was three unrelated cells joined by slashes.
+    `cupcake_turn_scan.prose_paragraphs` already draws this line for the wall-of-text rule; this is
+    the same line drawn for one row at a time. Applied only where a match is hunted, not to the
+    message the exemptions read, so a blocker stated inside a table still exempts.
+    """
+    return "\n".join(
+        line for line in scrub(text).splitlines() if not line.lstrip().startswith("|")
+    )
+
+
 # --- (1) a forward-looking prescription of a next action ---------------------------------------
 # Each alternative is future-facing on its own, so no separate tense test is needed. The bare
 # prescription "the fix is to add a null check" is absent on purpose: it is the ordinary way to
 # report a fix that was just made, and including it turned completed work into a violation.
+#
+# The nouns a next action gets named with. Shared by the two families that put the copula on either
+# side of them, so widening the list cannot leave one half behind. `edit`, `change` and `piece` were
+# added 2026-09-16 with the reversed-copula family below; `commit` was left out on purpose, because
+# "X is the next commit on the branch" is an ordinary report about history.
+NEXT_NOUNS = (r"(?:approach|step|steps|move|thing|test|experiment|run|probe|attempt|action|check"
+              r"|pass|iteration|lead|angle|task|fix|edit|edits|change|changes|piece|job|patch"
+              r"|measurement)")
+
+# The participles a piece of undone work is named with. Two halves, both deliberate:
+#   * construction -- `built`, `wired`, `written`: an edit the agent makes;
+#   * measurement  -- `run`, `proven`, `watched`, `covered`: a run or a read the agent takes.
+# The measurement half is what reaches the closing shape decided in the policy comment under
+# "the unperformed measurement": a log line the agent's own code prints is an oracle it has, so
+# naming it as not yet seen is a step described rather than an observation it cannot make.
+DONE_WORDS = """
+built rebuilt wired written rewritten implemented added created made done hooked patched fixed
+applied plumbed generated staged packaged compiled extended ported integrated finished started
+begun run rerun tested retested measured proved proven verified validated checked captured
+recorded read exercised instrumented traced driven observed watched covered confirmed reproduced
+landed
+""".split()
+DONE_PART = "(?:%s)" % "|".join(DONE_WORDS)
+DONE_SET = set(DONE_WORDS)
+
 PATTERNS = {
     # "the next step is reading X", "the honest next test is the user path", "the next probe goes at
     # the binding layer". An adjective or two may sit before "next".
-    "next_noun": r"\b(?:the|a|an|my|our)\s+(?:\w+\s+){0,2}next\s+"
-                 r"(?:approach|step|steps|move|thing|test|experiment|run|probe|attempt|action|check"
-                 r"|pass|iteration|lead|angle|task|fix)\s+"
+    "next_noun": r"\b(?:the|a|an|my|our)\s+(?:\w+\s+){0,2}next\s+" + NEXT_NOUNS + r"\s+"
                  r"\b(?:is|are|would|will|should|follows|comes|goes|has\s+to|needs\s+to)\b",
+    # The same prescription with the copula in front of the noun instead of behind it: "which is the
+    # next edit", "that would be the next change", "the pre-flight is the next step". This is the
+    # spelling the guard missed on 2026-09-16 -- see the policy comment. The relative pronoun is
+    # consumed by the pattern rather than left in front of it, because `PRECEDING_DEMOTERS` holds
+    # `which` and `that`, so a match starting at the copula would demote itself every time.
+    "is_the_next": r"(?:\b(?:which|that|this|it)\b\s+)?"
+                   r"(?:is|are|'s|would\s+be|will\s+be|becomes)\s+the\s+next\s+" + NEXT_NOUNS + r"\b",
     # "the right approach would be", "a better test will be".
     "would_be": r"\b(?:the|a|an|my|our)\s+(?:\w+\s+){0,2}"
                 r"(?:fix|answer|solution|approach|move|play|tool|way|path|route|test|check|proof"
@@ -117,6 +177,41 @@ PATTERNS = {
     "way_forward": r"\bthe\s+(?:way|path|route)\s+forward\s+is\b",
     # "would be to walk the address space".
     "would_be_to": r"\bwould\s+be\s+to\s+(?:go\s+|then\s+|just\s+|actually\s+|first\s+)?[a-z]+\b",
+    # Undone work named as a noun: "the remaining work is to wire it into the game task", "the
+    # missing piece is the poll". The infinitive is required on the `what remains` spellings and on
+    # nothing else, because "what is left is" was deleted from this file once already for reading as
+    # a definition; "what is left to do is" cannot. `.cupcake/signals/last_assistant_diagnosis_
+    # without_fix.sh` draws the same line in `UNREAD_DEFER_RE`, so the two guards agree.
+    # `half` is deliberately not in the noun list: "the remaining half is not a code problem" is a
+    # finding about scope, and it was the one hit this family produced on the replay that named no
+    # work at all.
+    "remaining_work": r"\bthe\s+(?:remaining|outstanding|rest\s+of\s+the)\s+"
+                      r"(?:work|piece|pieces|step|steps|change|changes|edit|edits|task|tasks|bit"
+                      r"|bits)\s+(?:is|are|will\s+be|would\s+be)\b"
+                      r"|\bthe\s+(?:work|piece|part|change|edit|step)\s+that\s+remains\s+(?:is|are)\b"
+                      r"|\bwhat\s+remains\s+(?:to\s+be\s+done\s+)?is\s+to\b"
+                      r"|\bwhat(?:'s|\s+is)\s+left\s+(?:to\s+do\s+)?is\s+to\b"
+                      r"|\bthe\s+(?:only|one)\s+thing\s+(?:left|missing|still\s+missing)\s+is\b"
+                      r"|\bthe\s+missing\s+(?:piece|half|part|bit)\s+is\b",
+    # The work named as still owing: "that remains to be wired", "it still needs doing".
+    "still_undone": r"\bremains?\s+to\s+be\s+" + DONE_PART + r"\b"
+                    r"|\bstill\s+needs?\s+(?:doing|building|writing|wiring|implementing|hooking"
+                    r"|testing|running|measuring)\b"
+                    r"|\bstill\s+needs?\s+to\s+be\s+" + DONE_PART + r"\b"
+                    r"|\b(?:still|yet)\s+to\s+be\s+" + DONE_PART + r"\b",
+    # The same absence stated as a state rather than as a task: "the pre-flight itself is not built
+    # yet", "the poll is not implemented yet", "I have not yet watched it print".
+    #
+    # `yet` is required in every alternative, and that is the whole narrowing. Without it the
+    # sentence is a qualification -- "this is not proven at runtime" caveats a claim and says
+    # nothing about what happens next, and it is how most honest reports in this repo end. With it
+    # the sentence asserts that the thing is still owed, which is an outstanding item named and not
+    # taken. Measured, not reasoned: dropping the word fired on "the edit is in and the gate is
+    # green; it is not proven at runtime", which is a turn that delivered.
+    "not_yet_done": r"\bnot\s+yet\s+(?:been\s+)?" + DONE_PART + r"\b"
+                    r"|\bnot\s+(?:been\s+)?" + DONE_PART + r"\s+yet\b"
+                    r"|\b(?:isn'?t|aren'?t|hasn'?t|haven'?t)\s+(?:yet\s+(?:been\s+)?" + DONE_PART
+                    + r"\b|(?:been\s+)?" + DONE_PART + r"\s+yet\b)",
 }
 COMPILED = {name: re.compile(rx, re.IGNORECASE) for name, rx in PATTERNS.items()}
 
@@ -128,6 +223,19 @@ on in for at by during before after with to from of about within against under o
 that which whether while unless because since though although if when
 decides decided decide names named name mentions mentioned describes described
 """.split())
+
+# A sentence that announces itself as a qualification is a qualification, whatever the clause inside
+# it says. Applied to `not_yet_done` alone, because that family is the only one whose grammar is
+# shared with an ordinary caveat -- every other pattern here prescribes something outright. Out of
+# the replay rather than out of taste: "One caveat that matters for the merge order you asked about:
+# that branch is not written yet, so if 434/435/436 are ready before it is, merging them first costs
+# you slow pushes but nothing else" was a halt, and the undone branch in it is a premise of an
+# answer, not an item the turn stopped in front of.
+CAVEAT_FRAME_RE = re.compile(
+    r"\bcaveat\b|\bto\s+be\s+clear\b|\bfor\s+the\s+record\b"
+    r"|\bworth\s+(?:noting|saying)\b|\bnote\s+that\b|\bin\s+fairness\b",
+    re.IGNORECASE,
+)
 
 # Work words. A prescription with none of these names no action a tool call could begin, so it is
 # left alone: "the next step is obvious", "the way forward is clear".
@@ -143,6 +251,7 @@ lint format benchmark profile instrument emit register enable disable toggle con
 resolve ship harden delegate dispatch spawn walk crawl breakpoint xref xrefs disasm harness script
 gate query lookup snapshot experiment repro reproduce bisect isolate narrow enumerate map mapping
 press drive navigate inject searching walking tracing probing reading building running hooking
+change changes wiring
 """.split())
 
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z'\-]*")
@@ -171,8 +280,16 @@ def demoted(text, m):
 
 
 def concrete(text, m):
+    """True when the prescription names work a tool call could begin.
+
+    `DONE_WORDS` counts as well as `ACTION_WORDS`, because the participle in "the poll is not
+    implemented yet" is the work word of that sentence and `implement` is only in the list in its
+    bare form. Keeping two lists rather than stemming is deliberate: stemming would also fold
+    `reading` into `read` and `running` into `run` for every sentence in this repo.
+    """
     window = sentence_around(text, m.start()) + " " + text[m.end():m.end() + 140]
-    return any(w.lower().strip("-'") in ACTION_WORDS for w in WORD_RE.findall(window))
+    words = [w.lower().strip("-'") for w in WORD_RE.findall(window)]
+    return any(w in ACTION_WORDS or w in DONE_SET for w in words)
 
 
 def clause(text, m):
@@ -203,10 +320,12 @@ hit_index = -1
 for index, (kind, value) in enumerate(turn.blocks):
     if kind != "text":
         continue
-    scrubbed = scrub(value)
-    for rx in COMPILED.values():
+    scrubbed = prose_only(value)
+    for name, rx in COMPILED.items():
         for m in rx.finditer(scrubbed):
             if demoted(scrubbed, m) or not concrete(scrubbed, m):
+                continue
+            if name == "not_yet_done" and CAVEAT_FRAME_RE.search(sentence_around(scrubbed, m.start())):
                 continue
             hit, hit_index = clause(scrubbed, m), index
 if not hit:
@@ -242,7 +361,16 @@ HANDOFF_RE = re.compile(
     # `.cupcake/signals/last_assistant_stall_on_friction.sh` so the two guards agree about the same
     # sentence rather than each inventing a rule for it.
     r"|\b(?:and|then|once|after|when)\b[^.\n]{0,60}\bi'?ll\b"
-    r"|\bonly\s+you\s+can\b",
+    r"|\bonly\s+you\s+can\b"
+    # An outcome that can be settled only by the user looking. `AGENTS.md` names this as one of the
+    # four legitimate ways to end a turn -- "an in-game observation you have no oracle for" -- and
+    # the closing shape that says so is the passive one: "launched, but not yet confirmed by you or
+    # by any oracle, because there is no telemetry proving the close fired". It was a halt on the
+    # replay before this line existed. `by any oracle` is not enough on its own and is deliberately
+    # absent: naming the missing instrument is the agent's cue to build one, and the exemption is
+    # for the user's eyes, not for the absence.
+    r"|\b(?:confirmed|verified|seen|observed|judged|decided)\s+(?:only\s+)?by\s+(?:you|the\s+user)\b"
+    r"|\bby\s+(?:you|the\s+user)\s+or\s+by\b",
     re.IGNORECASE,
 )
 handoff = bool(HANDOFF_RE.search(message)) or scan.blocked_on_user(message)

@@ -45,6 +45,34 @@ VERBATIM = (
     "place we now know it isn't."
 )
 
+# The four closers that walked past the guard on 2026-09-16. The first and the fourth are verbatim;
+# the middle two are the trailing clause verbatim inside the sentence it closed. Three of them move
+# the copula in front of the noun, which is why `next_noun` could not see them, and the fourth names
+# the work as a noun with no "next" in it at all.
+ESCAPE_NEXT_EDIT = (
+    "The pre-flight itself is not built yet -- it needs the DLL to issue and poll its own "
+    "`RequestLobbyList` the way the Frida agent does, which is the next edit."
+)
+ESCAPE_NEXT_STEP = (
+    "The gate answers correctly from the agent, and the DLL still reads the param, which is the "
+    "next step."
+)
+ESCAPE_NEXT_CHANGE = (
+    "The param read is what makes it refuse, so dropping it and answering the gate instead is what "
+    "I would do; that would be the next change."
+)
+ESCAPE_REMAINING_WORK = "The remaining work is to wire it into the game task."
+
+# The judgement call, recorded in the policy comment under "the unperformed measurement". It ends on
+# naming a measurement nobody took, and it denies: the thing unseen is a log line the agent's own
+# DLL prints, so the oracle exists, and what it defers to is an in-game input the agent drives
+# itself. Verbatim, same session.
+UNPERFORMED_MEASUREMENT = (
+    "The one thing measurement has not yet covered: I have proved the query answers correctly from "
+    "Frida, but not yet watched the DLL's own copy of it print `preflight:` in a live log -- that "
+    "needs the finger used once in this run."
+)
+
 
 def user(text: str) -> dict:
     return {"type": "user", "message": {"content": text}}
@@ -272,6 +300,134 @@ def main() -> int:
             assistant_text("It dereferences a list head, so the state lives one level in."),
         ],
         acted="1",
+    )
+
+    # --- the four closers that escaped on 2026-09-16 ----------------------------------------------
+    # Each names a next action as a noun phrase rather than as a first-person intention, which is how
+    # all four cleared both this guard and `last_assistant_unexecuted_promise` at once. Every
+    # exemption is asserted clear as well as the clause being found: a halt that only happens because
+    # a fact was miscomputed is not the halt these tests are for.
+    for name, message in (
+        ("escape-which-is-the-next-edit", ESCAPE_NEXT_EDIT),
+        ("escape-which-is-the-next-step", ESCAPE_NEXT_STEP),
+        ("escape-that-would-be-the-next-change", ESCAPE_NEXT_CHANGE),
+        ("escape-the-remaining-work-is", ESCAPE_REMAINING_WORK),
+    ):
+        expect_facts(
+            name,
+            [user("keep going"), assistant_text(message)],
+            nextstep=True,
+            acted="0",
+            blocked="0",
+            handoff="0",
+            carried="0",
+        )
+
+    # The judgement call. It denies -- see the reasoning in the policy comment and in the constant
+    # above. This case is the one to revisit if the guard is ever accused of gagging a legitimate
+    # ending, because it is the closest one to the line.
+    expect_facts(
+        "unperformed-measurement-denies",
+        [user("keep going"), assistant_text(UNPERFORMED_MEASUREMENT)],
+        nextstep=True,
+        acted="0",
+        blocked="0",
+        handoff="0",
+        carried="0",
+    )
+
+    # The same shape with the edit made after it is announced. The correct order is to say it and do
+    # it, and saying it still has to be free.
+    expect_facts(
+        "escape-then-made-the-edit",
+        [
+            user("keep going"),
+            assistant_text(ESCAPE_REMAINING_WORK),
+            assistant_tool("Edit", file_path="crates/er-invasion-warp/src/lobby_publish.rs"),
+            tool_result(),
+            assistant_text("Wired into the game task; the gate is green."),
+        ],
+        nextstep=True,
+        acted="1",
+    )
+
+    # --- legitimate endings that must survive the widening ----------------------------------------
+
+    # An in-game observation with no oracle, which `AGENTS.md` names as a legitimate way to end a
+    # turn. The turn asks, and asking is what separates it from the measurement case above.
+    expect_facts(
+        "observation-only-the-user-can-make",
+        [
+            user("does the footer still show?"),
+            assistant_text(
+                "Read from source, compiled, built, launched as br-20260913-142426-cc94 -- but not "
+                "yet confirmed by you or by any oracle, because there is no telemetry proving the "
+                "close fired."
+            ),
+        ],
+        handoff="1",
+    )
+
+    # A caveat on work the turn delivered. Without `yet` the sentence qualifies a claim rather than
+    # naming an outstanding item, and every honest report in this repo ends on one.
+    expect_clean(
+        "delivered-work-caveat",
+        [
+            user("do it"),
+            assistant_text("The edit is in and the gate is green; it is not proven at runtime."),
+        ],
+    )
+
+    # A sentence that announces itself as a qualification, with an undone thing inside it as a
+    # premise of an answer. Measured off the replay corpus.
+    expect_clean(
+        "caveat-frame-is-not-a-prescription",
+        [
+            user("which order should I merge them in?"),
+            assistant_text(
+                "One caveat that matters for the merge order you asked about: that branch is not "
+                "written yet, so if 434/435/436 are ready before it is, merging them first costs "
+                "slow pushes but nothing else."
+            ),
+        ],
+    )
+
+    # A status column in a markdown table is not a sentence, and its pipes make one row read as a
+    # run-on clause. This exact row was quoted back as a next step before `prose_only` existed.
+    expect_clean(
+        "table-row-is-not-prose",
+        [
+            user("where does it stand?"),
+            assistant_text(
+                "| build | state |\n"
+                "| --- | --- |\n"
+                "| the rebind + vanilla | just changed, builds clean, not yet run |"
+            ),
+        ],
+    )
+
+    # Quoting the new triggers is still not committing them, the same as the old ones.
+    expect_clean(
+        "quoted-new-trigger-does-not-count",
+        [
+            user("what does it catch now?"),
+            assistant_text(
+                'It halts on "which is the next edit" and on "the remaining work is to wire it in" '
+                "when nothing began either."
+            ),
+        ],
+    )
+
+    # A step already taken, reported in the past tense, names nothing outstanding.
+    expect_clean(
+        "past-tense-names-nothing-outstanding",
+        [
+            user("so?"),
+            assistant_text(
+                "Push was the next step in a script I had already run once, so the runtime "
+                "precondition never got evaluated."
+            ),
+        ],
     )
 
     print("test-described-next-step-signal: OK")

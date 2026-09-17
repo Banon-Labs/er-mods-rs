@@ -22,14 +22,25 @@ The tuned guard fires on 9 of the same 2,142 turns (0.4%), and each quoted sente
 that was described and then abandoned.
 
 Usage:
-    python3 scripts/audit-described-next-step-false-positives.py [--window=N] [transcript.jsonl ...]
+    python3 scripts/audit-described-next-step-false-positives.py [--fast] [--window=N]
+                                                                 [transcript.jsonl ...]
 
 With no arguments it audits the newest transcripts for this repo under ~/.claude/projects/.
 Read-only: it never writes to the transcripts, and its fixtures live in a temp dir that is removed.
+
+`--fast` runs the same replay without a `bash` + `python3` process per turn boundary. It reads the
+signal's own python body out of the shell wrapper and executes it in this process against the same
+window of events, with the transcript loader in `cupcake_turn_scan` stubbed to hand back that window.
+Same code, same facts line, same verdict -- 2,000 boundaries in seconds instead of ten minutes. That
+matters because tuning a pattern is a loop, and a ten-minute loop gets run once and then guessed at.
+The default stays the subprocess path, which proves the wrapper and the environment as well as the
+classifier; `--fast` is for iteration, and both were compared on a whole transcript before this
+landed.
 """
 from __future__ import annotations
 
 import glob
+import io
 import json
 import os
 import subprocess
@@ -89,17 +100,22 @@ def would_halt(out: str) -> bool:
     )
 
 
-def audit(path: str, home: str) -> tuple[int, list[tuple[int, str]]]:
-    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    boundaries = []
+def boundaries_of(lines: list[str]) -> list[int]:
+    out = []
     for i, line in enumerate(lines):
         try:
             ev = json.loads(line)
         except ValueError:
             continue
         if isinstance(ev, dict) and is_real_user_prompt(ev):
-            boundaries.append(i)
-    boundaries.append(len(lines))  # the turn still open at the end of the transcript
+            out.append(i)
+    out.append(len(lines))  # the turn still open at the end of the transcript
+    return out
+
+
+def audit(path: str, home: str) -> tuple[int, list[tuple[int, str]]]:
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    boundaries = boundaries_of(lines)
 
     fixture_dir = Path(home) / ".claude" / "projects" / FAKE_PROJECT.replace("/", "-")
     fixture_dir.mkdir(parents=True, exist_ok=True)
@@ -125,11 +141,63 @@ def audit(path: str, home: str) -> tuple[int, list[tuple[int, str]]]:
     return len(boundaries), fires
 
 
+def signal_body() -> object:
+    """The signal's python program, lifted out of its shell wrapper and compiled.
+
+    The wrapper is `python3 - <<'PY' ... PY`, so the program is everything between the line that
+    opens the heredoc and the line that closes it. Lifting it rather than copying it is the point:
+    a copy is a second rule that drifts, and this audit exists to measure the rule that ships.
+    """
+    text = Path(SIGNAL).read_text(encoding="utf-8")
+    start = text.index("\n", text.index("python3 - <<'PY'")) + 1
+    return compile(text[start:text.rindex("\nPY")], str(SIGNAL), "exec")
+
+
+def audit_fast(path: str, code: object, scan) -> tuple[int, list[tuple[int, str]]]:
+    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    boundaries = boundaries_of(lines)
+    fires: list[tuple[int, str]] = []
+    for boundary in boundaries:
+        chunk = lines[max(0, boundary - WINDOW):boundary]
+        if not chunk:
+            continue
+        events = []
+        for line in chunk:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(ev, dict):
+                events.append(ev)
+        scan.latest_transcript = lambda *a, **k: str(path)
+        scan.load_events = lambda *a, **k: events
+        captured = io.StringIO()
+        real_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            exec(code, {"__name__": "__main__"})
+        except SystemExit:
+            pass  # the signal exits early on every turn it has nothing to say about
+        finally:
+            sys.stdout = real_stdout
+        out = captured.getvalue().strip()
+        if would_halt(out):
+            fires.append((boundary, out))
+    return len(boundaries), fires
+
+
 def main() -> int:
     args = sys.argv[1:]
     global WINDOW
+    fast = False
+    if args and args[0] == "--fast":
+        fast = True
+        args = args[1:]
     if args and args[0].startswith("--window="):
         WINDOW = int(args[0].split("=", 1)[1])
+        args = args[1:]
+    if args and args[0] == "--fast":
+        fast = True
         args = args[1:]
     paths = args or default_transcripts()
     if not paths:
@@ -137,6 +205,21 @@ def main() -> int:
         return 1
     total_turns = 0
     all_fires: list[tuple[str, int, str]] = []
+    if fast:
+        os.environ.setdefault("CUPCAKE_SIGNAL_REPO_ROOT", str(REPO_ROOT))
+        sys.path.insert(0, str(REPO_ROOT / "scripts"))
+        import cupcake_turn_scan as scan
+
+        code = signal_body()
+        for path in paths:
+            turns, fires = audit_fast(path, code, scan)
+            total_turns += turns
+            all_fires.extend((Path(path).name[:8], b, o) for b, o in fires)
+            print(f"{Path(path).name[:8]}: {turns} turns, {len(fires)} would halt", flush=True)
+        print(f"\nTOTAL: {len(all_fires)} halts across {total_turns} real turns")
+        for name, boundary, out in all_fires:
+            print(f"  {name} line {boundary}: {out[:200]}")
+        return 0
     with tempfile.TemporaryDirectory() as home:
         for path in paths:
             turns, fires = audit(path, home)
