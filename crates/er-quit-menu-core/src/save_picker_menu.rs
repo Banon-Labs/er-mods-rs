@@ -1040,6 +1040,33 @@ pub unsafe fn save_picker_native_close(dialog: usize, reason: &str) {
     }
 }
 
+/// A picker resubmit has already reopened the list, so the close it owns must not run the
+/// System-UI restore either.
+///
+/// `save_picker_resubmit_pending` alone cannot answer this. `save_picker_menu_pump_resubmit`
+/// clears both pending flags *before* it submits the reopen, and the queued post-Run restore for
+/// the window it closed is consumed on a later pass -- by which time the predicate reads false and
+/// the restore runs. Measured in run `br-20260917-041126-4836`: reopen at `+58604ms`, then
+/// `restore-real-profile-native-finalizer` one millisecond later putting the live save back, and
+/// the reopened list populated from the active container at `+58738ms`. The user picked a save
+/// file and got their own characters.
+///
+/// Cleared by the next `note_profile_select_finalized`, which is the reopened window's own: the
+/// resubmit cannot run while the previous window is still live (it early-returns on
+/// `SYSTEM_QUIT_PROFILE_SELECT_WINDOW`), so the old window's finalization always precedes the
+/// latch being set. A real backout of the reopened list therefore still restores.
+static SAVE_PICKER_RESUBMIT_OWNS_CLOSE: AtomicUsize = AtomicUsize::new(0);
+
+/// True while the close belongs to a reopen this crate performed.
+pub fn save_picker_resubmit_owns_close() -> bool {
+    SAVE_PICKER_RESUBMIT_OWNS_CLOSE.load(Ordering::SeqCst) != 0
+}
+
+/// Release the latch: the reopened window has finished, so the next close is the user's.
+pub fn clear_save_picker_resubmit_owns_close() {
+    SAVE_PICKER_RESUBMIT_OWNS_CLOSE.store(0, Ordering::SeqCst);
+}
+
 /// True while a picker-driven close must not run the normal restore path (a resubmit is queued).
 pub fn save_picker_resubmit_pending() -> bool {
     SAVE_PICKER_REOPEN_PENDING.load(Ordering::SeqCst) != 0
@@ -2601,6 +2628,11 @@ pub unsafe fn save_picker_menu_pump_resubmit() -> bool {
     SAVE_PICKER_OPEN_SLOTS_PENDING.store(0, Ordering::SeqCst);
     let opened = unsafe { system_quit_open_profile_load_dialog_on(system_dialog) };
     if opened {
+        // Take ownership of the close before anything else can interpret it as a backout. Both
+        // flags read by `save_picker_resubmit_pending` were cleared a few lines above, so without
+        // this the restore paths see an unclaimed close and put the live save back over the
+        // previewed one.
+        SAVE_PICKER_RESUBMIT_OWNS_CLOSE.store(1, Ordering::SeqCst);
         SAVE_PICKER_RESUBMIT_COUNT.fetch_add(1, Ordering::SeqCst);
         append_autoload_debug(format_args!(
             "save-picker: menu-pump resubmitted 05_010 window as {} (dialog=0x{system_dialog:x})",

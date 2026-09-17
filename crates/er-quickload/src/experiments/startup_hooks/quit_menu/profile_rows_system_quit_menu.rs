@@ -1036,7 +1036,9 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
         //
         // So the restore runs only for a close nobody claimed: a real backout. Leaving the hide
         // state up is also what the reopen wants -- the window is coming straight back.
-        if save_picker_resubmit_pending() {
+        if save_picker_resubmit_pending()
+            || er_quit_menu_core::save_picker_menu::save_picker_resubmit_owns_close()
+        {
             append_autoload_debug(format_args!(
                 "system-quit-dup: skipped finalizer restore for window=0x{finalized_profile:x}; a picker resubmit owns this close"
             ));
@@ -1221,7 +1223,9 @@ pub(crate) unsafe fn system_quit_menu_window_run_post(job: usize, ret: usize) {
                 // System UI hidden and let the resubmit block below reopen 05_010 instead of
                 // restoring (a restore here would clobber the staged rows and flash the
                 // System menu between pages).
-                if !save_picker_resubmit_pending() {
+                if !save_picker_resubmit_pending()
+                    && !er_quit_menu_core::save_picker_menu::save_picker_resubmit_owns_close()
+                {
                     unsafe {
                         system_quit_restore_real_system_windows(
                             base,
