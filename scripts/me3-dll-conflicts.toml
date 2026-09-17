@@ -330,31 +330,44 @@ the standalone shell installs a second compositor over the same swapchain. The s
 header states it must NEVER be loaded alongside er_quickload.dll."""
 evidence = "crates/er-loading-portrait/src/lib.rs:11"
 
-# RESOLVED 2026-09-12 by a build feature, not by a code fix, and this is where the pair used to
-# be declared a `duplicate-owner` conflict.
+# The pair that was deleted from this table on 2026-09-12, and came back the next day.
 #
-# WHAT IT SAID. Both DLLs armed the System>Quit rows through `er_quit_menu_core::row_cloner::arm`,
-# and two arms in one process is two `AddCancelButton` registrations appending two sets of rows to
-# one dialog, two row tables writing one set of telemetry counters, and two claims on the three
-# routing prologues. Separately, both derived the six-cell Quit panel, and
-# `er_gfx::options_02_040::quit6` fail-closes when handed bytes it has already edited, so whichever
-# ran second refused and the tab carried whichever half won.
-#
-# WHY IT IS NO LONGER TRUE. `quit-rows` came off `er-quickload`'s default feature set. A default
-# build makes neither call: the arm is behind `#[cfg(feature = "quit-rows")]`
-# (`diagnostics/layout_global_hooks.rs`), and the `02_040` derivation went behind the same feature
-# on 2026-09-12 (`loading_cover/profile_table_gfx_files.rs`) precisely so the panel a rows shell
-# fills is a panel it is allowed to widen. So the shell owns the rows and the grid, and the product
-# owns neither.
-#
-# WHAT BRINGS IT BACK. Naming `quit-rows` in a build of `er-quickload`. `check.sh` compiles that
-# configuration, so it is not hypothetical -- a profile that co-loads this shell with a
-# `--features quit-rows` product is the conflict above, word for word. Nothing in this table can
-# see a feature flag, so this stays a reader's warning rather than a check.
-#
-# STILL CONFLICTING, and the reason the complete row set is not available from shells yet:
-# `er-quit-menu` against `er-quit-load-character` (below). `arm` is a process-wide one-shot, so two
-# shells arming halves of the row set is not a way to ship both halves.
+# It was dropped because `quit-rows` had come off `er-quickload`'s default feature set, so a
+# default product armed no rows and derived no grid. Commit 63656666 put `quit-rows` back into
+# `default` on 2026-09-13 -- its own message says "the default build is untouched, `quit-rows` is
+# in the default set" -- and the deletion note had already written down what that would mean: "a
+# profile that co-loads this shell with a `--features quit-rows` product is the conflict above,
+# word for word". It does not depend on reading a feature flag any more, because the flag is on in
+# the default build every profile in this repo links.
+
+[[conflict]]
+a = "er-quickload"
+b = "er-quit-menu"
+kind = "duplicate-owner"
+reason = """Both arm the System>Quit rows through `er_quit_menu_core::row_cloner::arm` with \
+`RowSet::ALL`, and both offer an `open_profile_load_dialog`. Since 2026-09-13 `row_registry` \
+elects one owner by arrival order and every later host registers through it, so the process no \
+longer gets two row tables -- what it gets instead is whichever DLL won the race deciding what the \
+rows do, silently, with the loser's flows refused.
+
+Measured on run br-20260917-205031-edd3, which carried both. `er_quit_menu.dll` won the election \
+(`quit-row-registry: module 0x6ffff8470000 already holds the process row table -- delegating`, \
+from the product's log) and claimed the slot; the product's registration then came back \
+`open_profile_load_dialog=offered-but-already-held`. The two openers are not interchangeable. The \
+shell's opens the native `05_010_ProfileSelect` and a pick runs the game's own in-world load, so \
+gear and level change on the character already standing there and the world is never torn down. \
+The product's arms the save-safe switch and cancel-closes the picker, and the menu-pump \
+return-title chain then tears the world down and deserialises the picked slot. The player pressed \
+Load Character, picked another slot, and got the shell's behaviour with the product loaded -- the \
+user's report, verbatim: "You're still loading a character in place instead of doing a real load \
+when I load another slot in my save file".
+
+The grid half of the old entry still stands alongside it: both derive the six-cell `02_040` panel \
+and `er_gfx::options_02_040::quit6` fail-closes when handed bytes it has already edited, so \
+whichever runs second refuses. The product is the side to keep; the shell exists for profiles that \
+do not load it. Tracked as bd er-effects-rs-ye3q, which is the extraction that would make both \
+hosts behave identically and is not what this entry waits on."""
+evidence = "crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs:153; crates/er-quit-menu/src/lib.rs (arm_build_rows); crates/er-quit-menu-core/src/row_registry.rs; ~/.cache/er-me3-runs/br-20260917-205031-edd3/er-quit-menu.log"
 
 [[conflict]]
 a = "er-build-import"
