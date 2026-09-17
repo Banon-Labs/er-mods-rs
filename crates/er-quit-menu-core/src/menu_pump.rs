@@ -241,6 +241,32 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
     let owner = live_menu_window(raw_owner);
     if raw_owner != 0 && owner == 0 {
         note_dead_owner(filename, raw_owner);
+        // And then actually leave the tracker alone, which is what that line has always claimed to
+        // do and what the code below stopped doing the moment it fell through to the `match`.
+        //
+        // `raw_owner == 0` means the job no longer names a window: the picker really did close, and
+        // the owner-cleared arm below is right to restore the System windows. `raw_owner != 0 &&
+        // owner == 0` means the job still names a window that failed `live_menu_window`'s vtable
+        // screen on this frame, which is a different fact and was being treated as the first one --
+        // so one unreadable frame stamped the tracker with zero and ran the whole close path under
+        // a picker that was still on screen.
+        //
+        // What that cost, on run `br-20260917-192652-b918`: the log has `restore real windows
+        // source=standalone-profile-owner-cleared profile=0x0` followed by more of the picker's own
+        // `stats-text: summary row=... foreign_rows=64` lines, so the picker outlived its own
+        // teardown. `system_quit_profile_load_job_run_hook`'s block gate is `profile_window != 0 &&
+        // REAL_WINDOWS_HIDDEN != 0`, and `restore_real_system_windows` ends in
+        // `reset_profile_select_state`, which clears both. The player's next pick then ran the
+        // native load job unblocked: `system_quit_profile_load_activate_count = 0` against
+        // `system_quit_profile_load_job_run_last_profile_id = 7`. The character was swapped in place
+        // with no return-title and no save-safe switch, which is why the user read it as the build
+        // importer's behaviour rather than a save load, and why the portrait semaphore caught
+        // `target_slot=7 record(map=0xb0a0000) vs loaded(map=0x3d302d00)` -- the right character in
+        // the previous character's map.
+        //
+        // The two arms above this one store a possibly-zero `owner` into their own trackers for the
+        // same reason, so returning here fixes all three rather than just the picker's.
+        return;
     }
     match filename {
         INGAME_TOP_RESOURCE_NAME => {

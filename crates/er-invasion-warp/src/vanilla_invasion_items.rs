@@ -235,6 +235,33 @@ fn queue_the_places_being_searched() {
         return;
     };
     let ring = search_banner::nearby_ring(block, radius);
+    // `Nearby only` is excluded here for the same reason it is excluded from `hunt_target`'s
+    // `NobodyPublishes` branch: skipping the ring is a shortcut to the far half, and that row has
+    // no far half to be short-cut to. The ring is its whole search, so the places have to be
+    // queued, recited and asked, and the rotation has to keep cycling them for as long as the
+    // player leaves the finger armed.
+    //
+    // User report, live on run br-20260917-193816-8621: "I just attempted to invade nearby, and it
+    // didn't tell me any of the locations it searched in the banner ... Search should loop forever,
+    // but only on the region's block ids, if I invade nearby." The log shows exactly the branch
+    // below taken -- `sweep: armed for 0 nearby place(s)`, `skipped all 49 nearby place(s)` -- so
+    // the banner had nothing to name and the rotation had nothing to rotate. The query that
+    // followed was correctly filtered (`hunt: asking Steam for hosts at m61_48_45_00 only`), which
+    // is why this reads as a missing banner rather than a wrong invasion: one place was asked, over
+    // and over, instead of the region.
+    if crate::local_invasion_filter::finger_reach_is_nearby_only() {
+        search_banner::queue_ring(&ring);
+        crate::lobby_preflight::arm_sweep(&ring);
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: queued all {} nearby place(s) around block 0x{block:08x} at radius \
+             {radius} even though the pre-flight found no host anywhere carrying a block id. \
+             `Nearby only` does not take the skip: the ring is what that row searches, not a \
+             prelude to something wider, so every place is named and asked and the rotation keeps \
+             cycling them.",
+            ring.len()
+        ));
+        return;
+    }
     if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes {
         // An empty ring is the sweep's own way of saying the nearby half is over: `arm_sweep`
         // marks it finished and `nearby` reports `Empty(0)`, which is exactly the state 49 queries

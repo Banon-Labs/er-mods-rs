@@ -525,7 +525,18 @@ mod live {
         // marks it finished and `nearby()` reports `Empty(0)`, which is what
         // `hand_over_when_the_neighbourhood_is_empty` waits for. So the far half begins on this
         // tick instead of after 49 round-trips.
-        if matching == 0 && !matches!(nearby(), Nearby::Idle) {
+        //
+        // And it is not dropped for `Nearby only`, which is the third place that row has to be
+        // carved out of this short-circuit. Dropping the ring hands over to the far half; that row
+        // has no far half, so the hand-over is a hand-over to nothing and the player watches a
+        // banner with no places in it. User, live on run br-20260917-193816-8621: "Search should
+        // loop forever, but only on the region's block ids, if I invade nearby." Keeping the ring
+        // armed is what keeps the rotation cycling the region, and a host who arms this mod later
+        // in the session is then found on a subsequent pass rather than never.
+        if matching == 0
+            && !matches!(nearby(), Nearby::Idle)
+            && !crate::local_invasion_filter::finger_reach_is_nearby_only()
+        {
             clear_sweep();
             arm_sweep(&[]);
             crate::local_invasion_filter::search_banner::clear();
