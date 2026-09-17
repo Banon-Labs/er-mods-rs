@@ -70,7 +70,7 @@ const RECUSANT_FINGER: usize = 112;
 ///                          && IsBreakInLimitedByEventFlagId(FieldArea->playRegionParamId)
 /// ```
 ///
-/// State info `0x1a2` is NOT the world-open bit and must not be described as one: it appears in
+/// State info `0x1a2` is not the world-open bit and must not be described as one: it appears in
 /// `CanStartMultiplay` and `CanStartBreakIn` alike, in byte-identical position, so it gates both
 /// halves of multiplayer rather than picking out a host. What it actually is has not been read.
 ///
@@ -96,11 +96,16 @@ const GET_PARTY_MEMBER_INFO_RVA: u32 = 0x67_b120;
 /// ```
 ///
 /// Also read out of the image, and it had to be: this one moved `+0x12e0` while everything else
-/// around it moved `+0xe50`, so `scripts/map-rvas-1162-to-1170.py` returned `UNRESOLVED -- 143
-/// shape matches`. A `__security_check_cookie` prologue is not distinctive enough to sign. The
-/// call site settles it without signatures -- 1.16.2 `0x14068e1b4` is `call 0x1409f93c0` and
-/// 1.17.1 `0x14068f004` is `call 0x1409fa6a0`, in an instruction stream otherwise byte-identical
-/// for the twenty bytes either side.
+/// around it moved `+0xe50`, so `scripts/map-rvas-1162-to-1170.py` could not sign it: it answers
+/// `UNRESOLVED` over 143 shape matches, a `__security_check_cookie` prologue being far too
+/// ordinary to pick out. The call site settles it with no signature at all: 1.16.2
+/// `0x14068e1b4` is `call 0x1409f93c0` and 1.17.1 `0x14068f004` is `call 0x1409fa6a0`, in an
+/// instruction stream otherwise byte-identical for the twenty bytes either side.
+///
+/// All three addresses were then called live through Frida on run `br-20260917-190536-c9d4`, which
+/// is the part the de-Arxan'd image cannot supply: that image is unpacked and the running process
+/// is not, so a byte match there proves where the function went, not that the running one agrees.
+/// Ten messages over 83 seconds, every call returning a value rather than faulting.
 const PARTY_HAS_NON_NPC_PHANTOMS_RVA: u32 = 0x9f_a6a0;
 
 /// `bool CanUseBreakInItem(PlayerIns *player)` -- one argument in `rcx`, `al` out.
@@ -273,12 +278,25 @@ unsafe extern "system" fn can_use_goods_hook(
     }
     // The player's own world being open to other players is the engine's call, not this module's.
     //
-    // `CanUseGoods` reaches `CanUseBreakInItem` only after `CanStartMultiplay` has already passed,
-    // and under Seamless that outer term is what refuses -- which is the refusal this override
-    // exists to lift. Lifting it lifted the inner one with it, because a hook on the return value
-    // cannot see which of the four terms produced the zero. So the inner term is asked directly,
-    // and its `false` is kept: a host whose world is open may not press a Bloody Finger, exactly as
-    // vanilla decides it.
+    // A hook on the return value cannot see which of that function's terms produced the zero, so
+    // lifting the refusal lifted every term at once. The ones that matter are asked directly here
+    // instead, and a `false` from either is kept: a player whose own world is open does not get to
+    // invade out of it, exactly as vanilla decides it.
+    //
+    // Which term refuses under Seamless was measured, and the first guess was wrong. Frida on run
+    // `br-20260917-190536-c9d4`, solo, world loaded, five samples fifteen seconds apart, all
+    // identical:
+    //
+    // ```text
+    // canUseBreakInItem: true   canStartMultiplay: true   hasNonNpcPhantoms: false
+    // ```
+    //
+    // So `CanStartMultiplay` is not the refusing term -- it passes. `IsInOnlineMode` is the
+    // remaining candidate, and it is one this repo keeps false on purpose, so it is exactly the
+    // refusal this override exists to lift and the two above are exactly the ones it must not.
+    //
+    // The same run cleared the regression this change could have caused: both terms read "allowed"
+    // in ordinary solo play, so asking them cannot grey a finger that used to work.
     //
     // An unreadable answer forces anyway, for the same reason `connected_as_client` does: a read
     // that fails looks identical to a feature that never worked, and re-greying the item on a
