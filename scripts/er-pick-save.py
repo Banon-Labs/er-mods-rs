@@ -57,6 +57,10 @@ ORACLE_SCRIPT = REPO_ROOT / "scripts" / "save-slot-oracle.py"
 SAVE_REDIRECT_LIB = REPO_ROOT / "crates" / "er-save-redirect" / "src" / "lib.rs"
 STAGE_DIR_MARKER = "er-quickload-save-redirect-stage"
 
+# How many decoded launch-gate identities to keep. Entries are keyed by container state, so a stale
+# one can never be returned -- this only stops the file growing without bound across sessions.
+IDENTITY_CACHE_MAX_ENTRIES = 64
+
 EXIT_OK = 0
 EXIT_ERROR = 1
 
@@ -268,6 +272,77 @@ def pick(root: Path, container: str, seed: int) -> dict:
     )
 
 
+def identity_cache_path() -> Path:
+    """Where decoded launch-gate identities are remembered between launches."""
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    return Path(base) / "er-pick-save" / "launch-gate-identity.json"
+
+
+def cache_key(path: Path, slot: int) -> str:
+    """Identity of a decode, made of everything that could change its answer.
+
+    Size and modification time together are what the game changes when it writes a save, so a key
+    built from them cannot return a stale character: the moment the container is rewritten, the key
+    misses and the slot is decoded again. The path is in the key because two containers in one
+    account directory hold different characters at the same slot number.
+    """
+    stat = path.stat()
+    return f"{path}|{slot}|{stat.st_size}|{stat.st_mtime_ns}"
+
+
+def cached_identity(path: Path, slot: int) -> dict | None:
+    """The identity decoded for this exact container state, or `None` to decode it."""
+    try:
+        store = json.loads(identity_cache_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    entry = store.get(cache_key(path, slot)) if isinstance(store, dict) else None
+    return entry if isinstance(entry, dict) else None
+
+
+def remember_identity(path: Path, slot: int, entry: dict) -> None:
+    """Record a decode so the next launch of the same save does not pay for it again.
+
+    Best effort on purpose: an unwritable cache costs a slow launch, never a wrong one, so every
+    failure here is swallowed and the gate goes on decoding.
+    """
+    try:
+        target = identity_cache_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            store = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            store = {}
+        if not isinstance(store, dict):
+            store = {}
+        # Keyed by container state, so entries for a rewritten save are dead weight rather than a
+        # hazard. Kept bounded anyway: this is a launch gate, not an archive.
+        store[cache_key(path, slot)] = entry
+        if len(store) > IDENTITY_CACHE_MAX_ENTRIES:
+            store = dict(list(store.items())[-IDENTITY_CACHE_MAX_ENTRIES:])
+        target.write_text(json.dumps(store, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def active_container(root: Path, container: str, expected_bytes: int) -> Path | None:
+    """The eligible container the game most recently wrote, or `None` if there is none.
+
+    A save directory holds more than one `ER0000.*` of the right size: vanilla writes `.sl2`,
+    Seamless writes `.co2`, and both survive in the same account folder. Only one of them is the
+    save a launch will actually load, and it is the one with the newest mtime -- the same rule
+    `er-run-branch.py` already uses one function above to choose between account directories.
+
+    Deciding it here is not a nicety. Decoding one slot of a 28.9 MB container measured 19.5s on
+    2026-09-17, so a gate that decodes both spends 39s inside a 28s step bound and the launch is
+    refused before the game is reached, with the identity correctly decoded and thrown away.
+    """
+    candidates = eligible_saves(root, container, expected_bytes)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
 def targeted(root: Path, container: str, slot: int) -> dict:
     """Decode exactly the slot asked for, and stop at the first file that holds it.
 
@@ -284,8 +359,8 @@ def targeted(root: Path, container: str, slot: int) -> dict:
     """
     module = oracle()
     expected = expected_save_bytes()
-    candidates = eligible_saves(root, container, expected)
-    if not candidates:
+    active = active_container(root, container, expected)
+    if active is None:
         raise RuntimeError(
             f"no eligible {container} saves under {root} "
             f"(need ER0000.* of exactly {expected} bytes, outside {STAGE_DIR_MARKER}/)"
@@ -293,10 +368,24 @@ def targeted(root: Path, container: str, slot: int) -> dict:
     if not 0 <= slot < module.SLOT_COUNT:
         raise RuntimeError(f"slot {slot} is outside 0..{module.SLOT_COUNT - 1}")
 
-    entries = []
-    for path in candidates:
-        for entry in occupied_slots(module, path, only_slot=slot):
-            entries.append(describe(path, entry, root))
+    # One container, not every eligible one. The others are a previous format's copy of the same
+    # account and cannot be what this launch loads; decoding them doubles the gate's cost for an
+    # answer that is filtered away immediately afterwards.
+    #
+    # Cached on the container's own size and mtime. Decoding slot 0 of the live 28.9 MB container
+    # measured 38s on 2026-09-17, against the 28s bound `er-run-branch.py` puts on every step, so
+    # the gate refused the launch having correctly decoded the character it was refusing to launch.
+    # A save the game has not rewritten cannot hold a different character, so the second launch of
+    # one reads the answer instead of re-deriving it.
+    cached = cached_identity(active, slot)
+    if cached is not None:
+        return {"corpus_root": str(root), "count": 1, "targets": [cached]}
+    entries = [
+        describe(active, entry, root)
+        for entry in occupied_slots(module, active, only_slot=slot)
+    ]
+    if entries:
+        remember_identity(active, slot, entries[0])
     return {"corpus_root": str(root), "count": len(entries), "targets": entries}
 
 
