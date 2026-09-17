@@ -91,4 +91,33 @@ function scan() {
 send({ kind: 'ready', ersc: hex(ersc === null ? null : ersc.base) });
 send({ kind: 'scan', result: scan() });
 
-rpc.exports = { scan: scan };
+// Re-read the chain from a known closure address, with no scan.
+//
+// This is the question the DLL's cache actually has to answer: not "does this look like a session"
+// -- which is state-sensitive and says no while a search is running -- but "is this still the same
+// object". Reporting the state beside the pointers is what makes the difference visible: if the
+// pointers hold constant across a state change, then revalidating by pointer is sound and
+// revalidating by predicate is what was throwing the cache away.
+function chain(at) {
+    const start = ptr(at);
+    const captured = follow(start.sub(CLOSURE_FN_AT_OFFSET));
+    if (captured === null || captured.isNull()) return { ok: false, why: 'captured unreadable' };
+    const owner = follow(captured.add(OWNER_AT_CAPTURED_OFFSET));
+    if (owner === null || owner.isNull()) return { ok: false, why: 'owner unreadable' };
+    const session = follow(owner.add(SESSION_AT_OWNER_OFFSET));
+    if (session === null || session.isNull()) return { ok: false, why: 'session unreadable' };
+    return {
+        ok: true,
+        captured: hex(captured),
+        owner: hex(owner),
+        session: hex(session),
+        state: sessionState(session)
+    };
+}
+
+function sessionState(session) {
+    const value = u32(session.add(SESSION_STATE_OFFSET));
+    return value === null ? null : '0x' + (value >>> 0).toString(16);
+}
+
+rpc.exports = { scan: scan, chain: chain };

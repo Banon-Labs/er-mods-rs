@@ -706,8 +706,32 @@ pub(super) fn cached_owner_from_item_handler_closure(
 ) -> Option<(usize, usize)> {
     let at = NEEDLE_CLOSURE.load(Ordering::SeqCst);
     if at != 0 {
-        if let Some(found) = closure_resolves_to_a_session(abi, at) {
-            return Some(found);
+        // Revalidate by pointer, not with `identifies_a_session`.
+        //
+        // The first version re-ran that predicate here and paid a full address-space walk every
+        // time it said no: 90 walks in run br-20260917-025609-d24a against the 3 the cache was
+        // meant to allow, and each lapse let the shape scan answer instead -- one drive went out
+        // with `owner=0x736046b8`, which is not Seamless's object.
+        //
+        // The predicate is the wrong question for a cached hit. It asks "does this look like a
+        // session", which is state-sensitive; what the cache needs is "is this still the same
+        // object". Measured with `scripts/er-closure-chain-stability.py` on that run: 24 samples
+        // from one closure address, states `0x12` and `0x16`, and the owner and session pointers
+        // identical in every one.
+        let still = unsafe { er_game_base::mem::safe_read_usize(at - 8) }
+            .and_then(|captured| unsafe {
+                er_game_base::mem::safe_read_usize(captured + ersc::NEXT_OBJECT_OFFSET)
+            })
+            .and_then(|owner| {
+                unsafe { er_game_base::mem::safe_read_usize(owner + ersc::NEXT_OBJECT_OFFSET) }
+                    .map(|session| (session, owner))
+            });
+        let remembered = (
+            NEEDLE_SESSION.load(Ordering::SeqCst),
+            NEEDLE_OWNER.load(Ordering::SeqCst),
+        );
+        if remembered.0 != 0 && still == Some(remembered) {
+            return Some(remembered);
         }
         // The object moved or died. Drop it and let the paced walk find it again.
         NEEDLE_CLOSURE.store(0, Ordering::SeqCst);
@@ -828,6 +852,8 @@ fn owner_from_item_handler_closure(base: usize, abi: &ersc::Abi) -> Option<(usiz
         return None;
     }
     let (session, owner, at) = *hits.first()?;
+    NEEDLE_SESSION.store(session, Ordering::SeqCst);
+    NEEDLE_OWNER.store(owner, Ordering::SeqCst);
     NEEDLE_CLOSURE.store(at, Ordering::SeqCst);
     Some((session, owner))
 }
@@ -1161,6 +1187,11 @@ static OWNER_SCAN_TOO_WIDE_SAID: AtomicBool = AtomicBool::new(false);
 /// to keep off the game thread, paid on the game thread.
 #[cfg(windows)]
 static NEEDLE_CLOSURE: AtomicUsize = AtomicUsize::new(0);
+/// The pair the cached closure resolved to, so revalidation is a pointer comparison.
+#[cfg(windows)]
+static NEEDLE_SESSION: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static NEEDLE_OWNER: AtomicUsize = AtomicUsize::new(0);
 /// How many times the cached resolver has been asked while it had no answer.
 #[cfg(windows)]
 static NEEDLE_CALLS: AtomicUsize = AtomicUsize::new(0);

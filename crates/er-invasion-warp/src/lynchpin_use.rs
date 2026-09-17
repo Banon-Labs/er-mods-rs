@@ -249,18 +249,6 @@ static HANDOFF_PINNED_AT_MS: AtomicU64 = AtomicU64::new(0);
 #[cfg(windows)]
 static HANDOFF_PRESSED_AT_MS: AtomicU64 = AtomicU64::new(0);
 
-/// How many presses this handoff has spent trying to get the item consumed.
-#[cfg(windows)]
-static HANDOFF_PRESS_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
-
-/// The press budget for one handoff.
-///
-/// The use-item binding consumed the Lynchpin 3 times in 5 with an identical pin (bd
-/// `use-item-is-pad-x-0x4000-not-a-1000`), so four attempts take that past 97% while still ending
-/// a handoff whose failure is not chance.
-#[cfg(windows)]
-const HANDOFF_MAX_PRESSES: usize = 4;
-
 /// One field of `CSMenuMan->menuData->menuGaitemUseState`, or `None` when it cannot be reached.
 ///
 /// `width` is 0 for the single state byte and 1 for a dword. Read for the press log, so the silent
@@ -1502,33 +1490,23 @@ unsafe fn drive_handoff_press() {
                 (_, Some(id)) if id == pinned => {
                     // Press again, because this failure is stochastic and there is an oracle for it.
                     //
-                    // The engine latches the request from the press and carries it through on its
-                    // own schedule; measured across five drives per arm on 2026-09-16, the
-                    // use-item binding consumed the Lynchpin three times in five with an identical
-                    // pin and identical timing (bd `use-item-is-pad-x-0x4000-not-a-1000`). One
-                    // press is therefore a coin toss, and the user's report of a single-press
-                    // handoff is exactly that: "Near+far now *attempts* to invade, but does not".
+                    // One activation, and that is the whole budget.
                     //
-                    // This is a retry against a measured rate, not a knob hiding an unknown: the
-                    // count above -- `ChrIns+0x168` falling below what this drive wrote -- decides
-                    // when to stop, and the attempt cap stops it from pressing forever if the real
-                    // cause turns out not to be chance at all. Four attempts take a 3-in-5 rate
-                    // past 97%.
-                    let attempt = HANDOFF_PRESS_ATTEMPTS.fetch_add(1, Ordering::SeqCst) + 1;
-                    if attempt < HANDOFF_MAX_PRESSES {
-                        crate::standalone_log(format_args!(
-                            "lynchpin: queued but not consumed on press {attempt} of {HANDOFF_MAX_PRESSES} -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}. Re-pinning and pressing again; the count falling is what ends this."
-                        ));
-                        // Re-pin as well as re-arm: the previous pin has expired or is about to,
-                        // and a press with no live pin is the dropped press below.
-                        request_use_item_offthread(LYNCHPIN_ITEM_ID);
-                        HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
-                        HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
-                        HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
-                        return;
-                    }
+                    // This used to press up to four times, on a 3-in-5 consume rate measured
+                    // within a single process (bd `use-item-is-pad-x-0x4000-not-a-1000`). That
+                    // rate did not survive a relaunch -- 0/5 in a fresh one, bd
+                    // `pad-x-did-not-reproduce-in-a-fresh-process` -- so the retry was a
+                    // probability argument built on a number that only held for the process it was
+                    // taken in, and every run since has agreed with the fresh measurement: run
+                    // br-20260917-025609-d24a logged `queued but not consumed after 4 press(es)`
+                    // twice, eight presses and zero consumes.
+                    //
+                    // The Lynchpin is a toggle, so repeating it is not merely wasted either: a
+                    // press that does land while an earlier one is still in flight is a press that
+                    // can undo it. The user's rule, 2026-09-16: "We don't need to activate the
+                    // lynchpin more than once."
                     crate::standalone_log(format_args!(
-                        "lynchpin: queued but not consumed after {attempt} press(es) -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}, the value this drive wrote. The engine took every request and carried none of them through, so Seamless was never told. At this count the cause is not chance."
+                        "lynchpin: queued but not consumed -- `ChrIns+0x160` holds {id:#x} and the consume count still reads {consumed:?}, the value this drive wrote. The engine took the request and did not carry it through, so Seamless was never told. One activation is the budget; this handoff is over rather than pressing again."
                     ));
                 }
                 _ => crate::standalone_log(format_args!(
@@ -1565,8 +1543,6 @@ pub fn request_lynchpin_invasion() {
     request_use_item_offthread(LYNCHPIN_ITEM_ID);
     HANDOFF_PINNED_AT_MS.store(0, Ordering::SeqCst);
     HANDOFF_PRESSED_AT_MS.store(0, Ordering::SeqCst);
-    // A fresh handoff gets the whole press budget; the retry path below spends it.
-    HANDOFF_PRESS_ATTEMPTS.store(0, Ordering::SeqCst);
     HANDOFF_STAGE.store(HANDOFF_AWAITING_IDLE, Ordering::SeqCst);
 }
 
