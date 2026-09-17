@@ -769,7 +769,13 @@ def resolve_configured_save() -> dict:
     default_user_save = save_file is None
     search_dir = save_file.parent if save_file else default_user_save_dir()
 
-    code, out, err = run_script("er-pick-save.py", "--json", "--all", "--root", str(search_dir))
+    # `--slot`, not `--all`. This gate needs one character's identity and used to decode every
+    # occupied slot of every eligible file to get it: 20 decodes and 67s of CPU against a 28s step
+    # bound on 2026-09-17, so the launch was refused before the game was reached. The occupancy
+    # rule is unchanged -- the bitmap still decides -- only the number of slots decoded is.
+    code, out, err = run_script(
+        "er-pick-save.py", "--json", "--slot", str(slot), "--root", str(search_dir)
+    )
     if code != 0:
         raise RuntimeError(f"could not decode saves under {search_dir}: {err.strip() or out.strip()}")
     targets = json.loads(out)["targets"]

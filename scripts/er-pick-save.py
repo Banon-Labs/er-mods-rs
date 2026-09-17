@@ -158,7 +158,7 @@ def eligible_saves(root: Path, container: str, expected_bytes: int) -> list[Path
     return found
 
 
-def occupied_slots(module, path: Path) -> list[dict]:
+def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dict]:
     """Decode every slot of one save; return the occupied ones with their identity.
 
     Occupancy is the `USER_DATA010.active_slot` BITMAP, not "the body decodes".
@@ -184,7 +184,12 @@ def occupied_slots(module, path: Path) -> list[dict]:
     if bitmap is None:
         return []
     results = []
-    for slot in range(module.SLOT_COUNT):
+    # `only_slot` narrows WHICH slots are decoded and nothing else: the bitmap below still decides
+    # whether the slot is real, so a targeted read refuses a deleted character exactly as a sweep
+    # does. Decoding one slot of this container costs about three seconds, so a caller that wants
+    # one identity must not pay for ten.
+    wanted = range(module.SLOT_COUNT) if only_slot is None else (only_slot,)
+    for slot in wanted:
         if not bitmap[slot]:
             continue
         try:
@@ -261,6 +266,38 @@ def pick(root: Path, container: str, seed: int) -> dict:
     raise RuntimeError(
         f"drew {min(len(pool), MAX_DRAWS)} saves under {root} and none had an occupied slot"
     )
+
+
+def targeted(root: Path, container: str, slot: int) -> dict:
+    """Decode exactly the slot asked for, and stop at the first file that holds it.
+
+    This exists because [`inventory`] is the wrong instrument for the launch gate and was being
+    used as it. `er-run-branch.py` needs one character's identity -- the one the configuration
+    selects -- and was calling `--all`, which decodes every occupied slot of every eligible file
+    and then throws all but one away. Measured 2026-09-17 against the live APPDATA container:
+    twenty slot decodes, 67s of CPU, inside a 28s step bound, so every launch was refused before
+    the game was reached. One slot is one decode.
+
+    The bitmap is still the occupancy authority, so a slot the game will not load is refused here
+    exactly as it is in [`occupied_slots`] -- the saving is in how many slots are decoded, never in
+    which of them counts as real.
+    """
+    module = oracle()
+    expected = expected_save_bytes()
+    candidates = eligible_saves(root, container, expected)
+    if not candidates:
+        raise RuntimeError(
+            f"no eligible {container} saves under {root} "
+            f"(need ER0000.* of exactly {expected} bytes, outside {STAGE_DIR_MARKER}/)"
+        )
+    if not 0 <= slot < module.SLOT_COUNT:
+        raise RuntimeError(f"slot {slot} is outside 0..{module.SLOT_COUNT - 1}")
+
+    entries = []
+    for path in candidates:
+        for entry in occupied_slots(module, path, only_slot=slot):
+            entries.append(describe(path, entry, root))
+    return {"corpus_root": str(root), "count": len(entries), "targets": entries}
 
 
 def inventory(root: Path, container: str) -> dict:
@@ -405,6 +442,13 @@ def main() -> int:
     )
     parser.add_argument("--seed", type=int, help="RNG seed (default: random, always reported)")
     parser.add_argument("--all", action="store_true", help="inventory every valid target instead of picking")
+    parser.add_argument(
+        "--slot",
+        type=int,
+        help="decode only this slot and report it in the --all output shape. One decode instead of "
+        "every occupied slot of every eligible file, which is what keeps a launch gate inside its "
+        "step bound.",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
@@ -414,6 +458,10 @@ def main() -> int:
 
     try:
         root = resolve_root(args.root)
+        if args.slot is not None:
+            result = targeted(root, args.container, args.slot)
+            print(json.dumps(result, indent=2) if args.json else f"{result['count']} valid targets")
+            return EXIT_OK
         if args.all:
             result = inventory(root, args.container)
             print(json.dumps(result, indent=2) if args.json else f"{result['count']} valid targets")

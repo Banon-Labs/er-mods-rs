@@ -2,7 +2,7 @@
 """Does Seamless's item-handler closure chain stay the same object while the session state moves?
 
 `er_invasion_warp` caches the closure address the needle scan found and revalidates it on every
-`resolve_session`. What it revalidates WITH decides whether the cache works at all: run
+`resolve_session`. Which predicate it revalidates with decides whether the cache works at all: run
 br-20260917-025609-d24a re-ran `identifies_a_session` there and paid 90 full address-space walks in
 one run, because that predicate asks "does this look like a session" -- a state-sensitive question
 -- rather than "is this still the same object".
