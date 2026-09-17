@@ -1282,7 +1282,22 @@ pub unsafe fn pab_advance_try(step: usize) {
     }
     let count = unsafe { safe_read_i32(job + PAB_JOB_PRESS_COUNT_1E8_OFFSET) }.unwrap_or(-1) as u32;
     let keycode = unsafe { safe_read_i32(job + PAB_JOB_KEYCODE_180_OFFSET) }.unwrap_or(-1) as u32;
-    let settle = PAB_ADVANCE_SETTLE.fetch_add(1, Ordering::SeqCst) + 1;
+    // The settle window belongs to one job. Opening it on job A and firing into job B is not a
+    // settle at all -- nothing watched B for a single frame -- and the vtable check above cannot
+    // catch it, because both are real in-image menu jobs. Restart the count whenever the job under
+    // `step+0x130` changes, so the frames always describe the object the write will land in.
+    let settle_job = PAB_ADVANCE_SETTLE_JOB.swap(job, Ordering::SeqCst);
+    let settle = if settle_job == job {
+        PAB_ADVANCE_SETTLE.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        PAB_ADVANCE_SETTLE.store(1, Ordering::SeqCst);
+        if settle_job != 0 {
+            append_autoload_debug(format_args!(
+                "pab-advance: the settle window moved to another job, restarting it -- was 0x{settle_job:x}, now 0x{job:x} at step=0x{step:x} [+0x180]keycode=0x{keycode:x}. The old count described an object this write would not have touched"
+            ));
+        }
+        1
+    };
     if settle == 1 {
         append_autoload_debug(format_args!(
             "pab-advance: press-any-button job READY step=0x{step:x} job=0x{job:x} vt=0x{vt:x} [+0x1e8]count={count} [+0x180]keycode=0x{keycode:x} -- settling {PAB_ADVANCE_SETTLE_FRAMES} frames"

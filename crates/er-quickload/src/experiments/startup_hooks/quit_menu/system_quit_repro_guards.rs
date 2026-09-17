@@ -290,6 +290,23 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
     OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    // The press-any-button advance is the same shape of one-shot as the latches above, and it was
+    // the one this function forgot. `pab_advance_try` early-returns on `PAB_ADVANCE_FIRED != 0`
+    // (product_autoload_gates.rs:1264) and there is no other writer of zero anywhere in the tree,
+    // so the boot consumed it for the whole process and every later switch reached press-any-button
+    // with nothing left to advance it -- the user pressed a button by hand.
+    //
+    // Measured in run `br-20260917-134409-b1f9`: `pab-advance:` appears exactly twice in 76,800
+    // lines, both at boot (+10891 `job READY`, +12622 the write). Three character loads followed,
+    // each sitting title-resident for 19.9 s, 31.4 s and 36.5 s against the boot's 5.1 s, and each
+    // one outlived the 20 s composite cap that stops the cover -- which is what turns the wait
+    // black. Resetting the settle counter with it matters: it is `fetch_add`-only, so a stale count
+    // would let the next arm write before the job has settled.
+    er_telemetry_core::counters::PAB_ADVANCE_FIRED.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::PAB_ADVANCE_SETTLE.store(0, Ordering::SeqCst);
+    // The job the count belongs to is cleared with it, so the next window opens on whatever job the
+    // next press-any-button actually builds rather than matching a pointer from the last switch.
+    er_telemetry_core::counters::PAB_ADVANCE_SETTLE_JOB.store(0, Ordering::SeqCst);
     // Re-arm the product-core-autoload continue driver for repeatable switching (2026-07-15): FULLREAD_PHASE is
     // a one-shot that reaches FULLREAD_PHASE_DONE after the first switch's Continue and then early-returns
     // (product_continue.rs:282), so the 2ND consecutive switch's return-title reaches the title but nothing

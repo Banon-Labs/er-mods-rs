@@ -1585,6 +1585,14 @@ pub static PAB_ADVANCE_ORIG: AtomicUsize = AtomicUsize::new(0);
 pub static PAB_ADVANCE_HOOK_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 pub static PAB_ADVANCE_FIRED: AtomicUsize = AtomicUsize::new(0);
 pub static PAB_ADVANCE_SETTLE: AtomicUsize = AtomicUsize::new(0);
+/// The job pointer `PAB_ADVANCE_SETTLE` is counting frames for. The settle window and the object it
+/// settles on have to be one fact: the job is re-read from `step+0x130` on every call, and the
+/// node-update detour it hangs off is the menu pass for more than one step, so a count that outlives
+/// the job it opened on lets the last frame write into whatever job is current by then. Measured in
+/// run br-20260917-153344-7356: `READY job=0x3ade0080 keycode=0xffffffff` then
+/// `SET job=0x84d8e080 keycode=0xb6d1ffff` -- two different objects, and the write landed in the one
+/// no frame had watched settle. Zero means no window is open.
+pub static PAB_ADVANCE_SETTLE_JOB: AtomicUsize = AtomicUsize::new(0);
 pub static OBSERVED_ACTIVE_STEAM_ID64: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_DONE_STEAM_ID: AtomicU64 = AtomicU64::new(0);
 pub static SAVE_DIRECT_STAGE_IN_PROGRESS_STEAM_ID: AtomicU64 = AtomicU64::new(0);
