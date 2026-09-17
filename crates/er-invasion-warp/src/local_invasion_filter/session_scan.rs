@@ -743,7 +743,7 @@ pub(super) fn cached_owner_from_item_handler_closure(
     // once-only, and it equally cannot be every call. It gets one attempt per
     // `NEEDLE_WALK_EVERY_CALLS`, until it succeeds and the cache takes over.
     let attempt = NEEDLE_CALLS.fetch_add(1, Ordering::SeqCst);
-    if attempt % NEEDLE_WALK_EVERY_CALLS != 0 {
+    if !attempt.is_multiple_of(NEEDLE_WALK_EVERY_CALLS) {
         return None;
     }
     owner_from_item_handler_closure(base, abi)

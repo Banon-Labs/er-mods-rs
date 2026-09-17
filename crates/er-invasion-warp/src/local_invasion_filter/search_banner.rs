@@ -214,7 +214,8 @@ mod tests {
     ///
     /// The returned guard has to be held for the body of the test; dropping it early hands the
     /// queue to whoever is waiting.
-    #[must_use]
+    // No `#[must_use]`: `MutexGuard` already carries one, and clippy's `double_must_use` refuses
+    // the pair. The doc comment above is what tells a reader to hold the guard.
     fn fresh(blocks: &[u32]) -> std::sync::MutexGuard<'static, ()> {
         let guard = match TEST_LOCK.lock() {
             Ok(guard) => guard,
