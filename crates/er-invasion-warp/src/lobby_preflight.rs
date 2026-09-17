@@ -413,6 +413,33 @@ mod live {
             value.push(0);
             terminated.push((key, value, COMPARISON_EQUAL));
         }
+        // Seamless's own match key, so this asks about the population its search can actually
+        // return.
+        //
+        // Without it the two queries disagree by construction. `lobby_key` is a SHA-256 over the
+        // loaded param tables and Seamless filters its invasion search on it with
+        // `k_ELobbyComparisonEqual`, so a host whose mods differ is in another pool and is
+        // unreachable no matter what else matches. This query carried no such filter, so it counted
+        // the whole Seamless population and answered "somebody is publishing this location" about
+        // hosts the search that follows can never return -- and the player was told "Found a host
+        // in X -- invading" about a world their game cannot reach. Reported by the user on
+        // 2026-09-17 after thirty-two such matches, none of which ever connected.
+        //
+        // `None` before Seamless hands the key to Steam, and then this filter is simply absent
+        // rather than blank: an empty value asks for a pool nobody is in, which would turn "we
+        // have not seen the key yet" into "nobody is anywhere".
+        //
+        // The key comes from `lobby_publish`, which reads it off Steam, rather than from an
+        // observer on Seamless's own builder: detouring `ersc+0xad6e0` killed run
+        // `br-20260917-222254-be6f` 33 seconds in with `STATUS_ILLEGAL_INSTRUCTION` at
+        // `eldenring.exe+0x10043`.
+        if let Some(key) = crate::lobby_publish::seamless_match_key() {
+            terminated.push((
+                format!("{}\0", crate::lobby_publish::LOBBY_KEY_NAME).into_bytes(),
+                format!("{key}\0").into_bytes(),
+                COMPARISON_EQUAL,
+            ));
+        }
         for (key, value, comparison) in filters {
             terminated.push((
                 format!("{key}\0").into_bytes(),

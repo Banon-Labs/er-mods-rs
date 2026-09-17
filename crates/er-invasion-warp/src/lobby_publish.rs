@@ -43,8 +43,16 @@
 //!
 //! * a vanilla Seamless invader never filters on our key, so publishing it changes nothing for
 //!   them -- they still match this host exactly as before; and
-//! * `lobby_key` and `lobby_type`, the two keys that decide who can see whom at all, are never
-//!   written or filtered on here. Those stay Seamless's alone.
+//! * `lobby_type` is never written or filtered on here, and `lobby_key` is never written except
+//!   through the opt-in pool substitution -- which is the feature, is gated on the user's own
+//!   `dll_users_only`, and fails closed without it.
+//!
+//! `lobby_key` is now read, and filtered on by a query of our own. [`seamless_match_key`] hands it
+//! to `lobby_preflight::send_query`, which adds it to the sweep's own lobby query so the sweep
+//! counts the population Seamless's search can actually return. That narrows nobody's results but
+//! this player's, and not narrowing them was a bug: without the filter the sweep counted the whole
+//! Seamless population and told the player "Found a host in X -- invading" about worlds their game
+//! could never reach. Reported on 2026-09-17 after thirty-two such matches, none of which connected.
 //!
 //! So a host adopting this loses no reach. The cost falls entirely on an INVADER who chooses to
 //! filter, and it is theirs to choose: filtering narrows their own results to hosts running this
@@ -1167,6 +1175,59 @@ mod live {
         std::ffi::CString::new(pooled).ok()
     }
 
+    /// Seamless's own `lobby_key` for this session, learned without touching `ersc.dll`.
+    ///
+    /// # Why this is not read from Seamless's builder
+    ///
+    /// The value is computed inside `ersc.dll` at `ersc+0xad6e0`, and detouring it works exactly
+    /// once: run `br-20260917-222254-be6f` armed that hook and the game died 33 seconds later with
+    /// `STATUS_ILLEGAL_INSTRUCTION` at `eldenring.exe+0x10043`, Seamless's anti-tamper fault site.
+    /// So the key is taken from where Seamless hands it to Steam instead, through the two
+    /// `lsteamclient` vtable detours this module already installs and which have never faulted.
+    ///
+    /// Two sources, in order, because they fill at different moments:
+    ///
+    /// 1. [`VANILLA_LOBBY_KEY`], recorded by [`pooled_key_for`] on the way through either
+    ///    `SetLobbyData` (publishing, once at lobby creation) or
+    ///    `AddRequestLobbyListStringFilter` (searching, every time Seamless queries). The search
+    ///    half is what makes this usable by an invader rather than only by a host.
+    /// 2. The value currently published on the advertisement lobby, read straight back out of
+    ///    Steam. This covers the case the first cannot: a lobby created before our observers were
+    ///    installed, which leaves nothing recorded and a live key sitting on the lobby.
+    ///
+    /// The answer is the value a query of ours must filter on, so the pool substitution is already
+    /// applied -- source 1 is Seamless's untouched key and gets the transform here, source 2 is
+    /// read back from the lobby and therefore carries it already. `add_string_filter_hook` leaves
+    /// our own queries alone for that reason; see [`own_query_in_flight`].
+    #[must_use]
+    pub fn seamless_match_key() -> Option<String> {
+        let recorded = VANILLA_LOBBY_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(vanilla) = recorded {
+            return Some(key_for_our_own_query(&vanilla));
+        }
+        let iface = matchmaking()?;
+        let lobby = advertisement_lobby()?;
+        let published = published_value(iface, lobby, LOBBY_KEY_NAME)?;
+        // An absent key reads back as the empty string, and filtering on it would ask Steam for a
+        // pool nobody is in -- which is the one answer here that must never be invented.
+        (!published.is_empty()).then_some(published)
+    }
+
+    /// Put Seamless's untouched key into whichever pool this player's own searches are in.
+    ///
+    /// Identical to what [`pooled_key_for`] does to Seamless's filter on its way past, so the two
+    /// searches cannot end up asking about different populations.
+    fn key_for_our_own_query(vanilla: &str) -> String {
+        crate::local_invasion_filter::current_config_snapshot()
+            .and_then(|config| {
+                er_invasion_warp_core::lobby_pool::pooled_lobby_key(config.dll_users_only, vanilla)
+            })
+            .unwrap_or_else(|| vanilla.to_owned())
+    }
+
     /// Move an existing advertisement into or out of the DLL pool when the option is toggled.
     ///
     /// # Why the toggle needs this at all
@@ -1255,7 +1316,12 @@ mod live {
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
-        let substituted = pooled_key_for(key, value);
+        // Our own queries carry the finished value already -- `seamless_match_key` applied the
+        // pool transform when it handed the key over. Substituting again would hash an
+        // already-hashed key and put our search in a pool of one.
+        let substituted = (!own_query_in_flight())
+            .then(|| pooled_key_for(key, value))
+            .flatten();
         let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
         let orig = ORIG_ADD_STRING_FILTER.load(Ordering::SeqCst);
         if orig == 0 {
@@ -2030,11 +2096,11 @@ mod live {
 
 #[cfg(windows)]
 pub use live::{
-    advance_search_place, advertisement_key, advertisement_lobby, hunt_requests, hunt_tally,
-    install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
+    LOBBY_KEY_NAME, advance_search_place, advertisement_key, advertisement_lobby, hunt_requests,
+    hunt_tally, install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
     matchmaking_interface, note_current_block, persona_name, publish_current_map,
-    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder, stage_own_query,
-    tallies as publish_tallies, tally,
+    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder,
+    seamless_match_key, stage_own_query, tallies as publish_tallies, tally,
 };
 
 /// Host-target stand-in, so `local_invasion_filter` compiles under `cargo test` on Linux.

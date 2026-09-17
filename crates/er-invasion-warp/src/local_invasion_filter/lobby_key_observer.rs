@@ -4,6 +4,11 @@
 //! only: the observer reports the value and never writes one, because a key this process invents
 //! removes the player from every other player's matchmaking pool rather than joining them to it.
 //!
+//! It is a diagnostic and nothing depends on it. `lobby_preflight`'s query filter takes the key
+//! from `lobby_publish::seamless_match_key`, which reads it where Seamless hands it to Steam --
+//! detouring the builder below killed run `br-20260917-222254-be6f` 33 seconds in, so a feature
+//! resting on this switch would rest on a hook that must stay off.
+//!
 //! Split out of `local_invasion_filter` because it is independently failable -- a Seamless build
 //! that moved the builder should cost the comparison and nothing else -- and because the parent
 //! crossed this repo's hard Rust file-size limit.

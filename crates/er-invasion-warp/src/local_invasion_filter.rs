@@ -2798,6 +2798,24 @@ pub unsafe fn tick(keys: &mut MarkKeys, game_has_focus: bool) {
     crate::announce::poll_measurement();
     // Read-only, and independent of the filter: it reports the one string that decides whether two
     // Seamless players can find each other at all.
+    // Back behind the config gate, reverted the same day it was ungated, and the filter that
+    // needed it no longer does.
+    //
+    // Ungating it was meant to make `lobby_preflight::send_query`'s `lobby_key` filter work. It
+    // crashed the game: run br-20260917-222254-be6f installed this detour -- `observing ersc
+    // lobby-key builder @0x1800ad6e0` -- and died 33 seconds later with
+    // `STATUS_ILLEGAL_INSTRUCTION` at `eldenring.exe+0x10043`, the fault address this module
+    // already attributes to arming a detour inside `ersc.dll`. It was the only hook the change
+    // added; `show` and `invade` stayed off, because the shipped toml has `ersc_observers = false`.
+    // Read-only is not the same as safe: the body writes no key, and installing the detour still
+    // cost a boot.
+    //
+    // The filter now takes the key from `lobby_publish::seamless_match_key`, which reads it where
+    // Seamless hands it to Steam rather than where Seamless computes it -- through the
+    // `lsteamclient` detours on `SetLobbyData` and `AddRequestLobbyListStringFilter` that this DLL
+    // already installs, plus a plain `GetLobbyData` read back off the advertisement lobby. Nothing
+    // in that path touches `ersc.dll`, and the search half fills on the invader as well as the
+    // host. So this switch is back to being what its name says: a diagnostic.
     if ersc_observers.as_ref().map(|c| c.lobby_key).unwrap_or(true) {
         lobby_key_observer::install_lobby_key_observer();
     }

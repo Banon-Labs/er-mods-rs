@@ -371,11 +371,24 @@ impl RejectNotice {
         if repeat || !enabled {
             return None;
         }
+        // The word is "asking", not "invading", because finding a host is not arriving in their
+        // world. The sweep reads a lobby Steam published; joining it is Seamless's own connect,
+        // which can and does fail afterwards -- run `br-20260917-224518-f81b` restarted the same
+        // search fifteen times without one connect landing. The old wording promised the arrival
+        // and the player got the promise twice with no invasion behind it: "Found a host in
+        // Highroad Cross -- invading" and "but I did not invade. Seamless produces a message when
+        // I'm invading" (2026-09-17). Seamless's own invasion message is the only line entitled to
+        // claim the arrival, so this one stops at the request it actually made.
         Some(match place {
-            Some(place) if !place.is_empty() => format!("Found a host in {place} -- invading"),
+            Some(place) if !place.is_empty() => {
+                format!("Found a host in {place} -- asking Seamless to join")
+            }
             // Before the world map has been read nothing has a name, so the id is the fallback --
             // the same trade every other line here makes, for the same reason.
-            _ => format!("Found a host in {} -- invading", BlockKey::from_raw(block)),
+            _ => format!(
+                "Found a host in {} -- asking Seamless to join",
+                BlockKey::from_raw(block)
+            ),
         })
     }
 

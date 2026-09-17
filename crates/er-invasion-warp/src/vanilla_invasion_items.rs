@@ -382,6 +382,14 @@ pub(crate) const FORCED_RANGE_NEAR_AND_FAR: usize = 2;
 /// Recusant Finger's popup was up, and `+0x10` stepped `0 -> 1 -> 2 -> 3 -> 0` across one use.
 #[cfg(windows)]
 const CTRL_IS_BREAK_IN_MULTI_REGION: usize = 0x3d;
+/// `CSPlayerMenuCtrl + 0x8` -- `selectedGoodsItemId`, the item whose popup this is.
+///
+/// The one field that distinguishes a finger's range dialog from any other state this controller
+/// passes through. The step alone cannot: `+0x10` runs `0 -> 1 -> 2 -> 3 -> 0` across a single
+/// use, so 3 is a value the object holds in the ordinary course of events and a gate on it fires
+/// for whatever else brings the controller through the same number.
+#[cfg(windows)]
+const CTRL_SELECTED_GOODS: usize = 0x8;
 /// The ctrl's step, and the two values that mean a row was actually pressed.
 #[cfg(windows)]
 const CTRL_STEP_OFFSET: usize = 0x10;
@@ -389,6 +397,11 @@ const CTRL_STEP_OFFSET: usize = 0x10;
 const CTRL_STEP_CHOSE_ROW: [i32; 2] = [3, 4];
 #[cfg(windows)]
 const MULTI_REGION_OFF: u8 = 0;
+/// Said once when a popup that is not a finger's reaches the takeover, so a menu that trips the
+/// step every frame does not fill the log with the same sentence.
+#[cfg(windows)]
+static UNROUTED_POPUP_SAID: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
 
 impl SearchRange {
     /// Which row vanilla recorded, read back from its own field.
@@ -451,6 +464,35 @@ unsafe extern "system" fn start_invasion_entry(
     let Some(flag) =
         (unsafe { er_game_base::mem::safe_read_u8(ctrl + CTRL_IS_BREAK_IN_MULTI_REGION) })
     else {
+        return answer;
+    };
+    // Which item raised this popup. Without it the takeover has no idea what it is adopting.
+    //
+    // Reported twice by the user, in the same words both times: "Found a host in Highroad Cross --
+    // invading ( I stood still and did not invade)", then "but I did not invade. Seamless produces
+    // a message when I'm invading". Run br-20260917-224016-b8a1 is that report: the takeover
+    // adopted `NearbyOnly` at `step=3`, armed a search, and `local-invasion: about to drive ERSC
+    // invade` drove Seamless's own invade action -- the log's own words for it are "this drives a
+    // row the user could not have clicked". Nothing above it names an item, because nothing above
+    // it ever read one.
+    //
+    // The two gates that were here cannot carry that weight. `isBreakInMultiRegion` is a byte that
+    // reads 0 at rest and 0 for `Nearby only`, so it never refuses anything. And the step is a
+    // small integer on `CSPlayerMenuCtrl`, an object the whole player menu shares; a comment ten
+    // lines up already records the step returning to 3 on a frame no row was pressed, which is
+    // what the 214 spurious adoptions on run br-20260916-005322-27ca were.
+    //
+    // A goods id cannot be produced by accident: it is `0x40000000 | row`, and only the three
+    // fingers route this dialog. A popup that is not one of theirs is somebody else's business.
+    let selected = unsafe { er_game_base::mem::safe_read_i32(ctrl + CTRL_SELECTED_GOODS) }
+        .map(|item| item as u32);
+    let Some(selected) = selected.filter(|item| routes_the_range_popup(*item)) else {
+        if !UNROUTED_POPUP_SAID.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: the bounds popup reached step={step} with selectedGoodsItemId={:?},                  which is not one of the three invasion fingers -- declining it. This module drives                  Seamless's invade action, so adopting a popup nobody raised with a finger starts an                  invasion the player never asked for. Printed once; the decline itself is every time.",
+                selected.map(|item| format!("{item:#x}")),
+            ));
+        }
         return answer;
     };
     let chosen = SearchRange::from_multi_region_flag(flag);
@@ -600,9 +642,12 @@ unsafe extern "system" fn start_invasion_entry(
     } else {
         announce_search_refused();
     }
+    // Names the item this popup belongs to, because the line below arms an invasion search and
+    // there is no other record of what raised it.
     crate::standalone_log(format_args!(
         "vanilla-fingers: the bounds popup chose {range:?} (isBreakInMultiRegion={flag}, \
-         step={step}), adopted={adopted}, driven_inline={driven}, requested={requested}"
+         step={step}), adopted={adopted}, driven_inline={driven}, requested={requested}, \
+         selectedGoodsItemId={selected:#x}"
     ));
     answer
 }

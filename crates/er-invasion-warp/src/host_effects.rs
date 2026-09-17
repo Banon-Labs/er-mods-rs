@@ -515,28 +515,41 @@ fn clear_if_lobby_changed(latched: &mut Option<u64>, lobby: u64) {
 /// after one use -- which is the behaviour wanted, because the item cannot be used twice in a
 /// session anyway. Faults closed: no world, no player, or an id whose category is not goods all
 /// read as "no", and so does a build with no game to read.
+/// The goods row the local player last confirmed using, or `None` if the last confirmed item was
+/// not goods and when there is no world, no player or an unreadable field.
+///
+/// Split out of [`confirmed_dried_fingers`] so a caller can ask which item was used rather than
+/// only whether it was one particular one. The bounds-popup takeover needs that: it arms an
+/// invasion search, and a player who used no item at all reads identically to one who used a finger
+/// unless the row is named. Reported on run br-20260917-220822-932d, where a search armed itself
+/// with the player standing still.
 #[cfg(windows)]
-fn confirmed_dried_fingers() -> bool {
+pub(crate) fn confirmed_goods_row() -> Option<u32> {
     // The accessors come from `FromStatic`, which has to be in scope for the call to resolve --
     // without the import the error reads `no associated function named instance`, which looks like
     // a missing singleton rather than a missing trait. `instance`, not `instance_mut`: this reads.
     use fromsoftware_shared::FromStatic;
-    let Ok(world_chr_man) = (unsafe { eldenring::cs::WorldChrMan::instance() }) else {
-        return false;
-    };
-    let Some(player) = world_chr_man.main_player.as_ref() else {
-        return false;
-    };
+    let world_chr_man = unsafe { eldenring::cs::WorldChrMan::instance() }.ok()?;
+    let player = world_chr_man.main_player.as_ref()?;
     let address = player.as_ptr() as usize + CHR_INS_CONFIRMED_USED_GOODS;
     // SAFETY: fault-closed read of one dword inside an object the singleton just handed over.
     // `safe_read_i32` is the only signed-or-unsigned dword reader here; the value is an `ItemId`
     // bit pattern, so it is cast rather than interpreted as a number.
-    let Some(raw) = (unsafe { er_game_base::mem::safe_read_i32(address) }) else {
-        return false;
-    };
-    let raw = raw as u32;
-    raw & ITEM_CATEGORY_MASK == ITEM_CATEGORY_GOODS
-        && raw & !ITEM_CATEGORY_MASK == DRIED_FINGERS_ROW
+    let raw = unsafe { er_game_base::mem::safe_read_i32(address) }? as u32;
+    if raw & ITEM_CATEGORY_MASK != ITEM_CATEGORY_GOODS {
+        return None;
+    }
+    Some(raw & !ITEM_CATEGORY_MASK)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn confirmed_goods_row() -> Option<u32> {
+    None
+}
+
+#[cfg(windows)]
+fn confirmed_dried_fingers() -> bool {
+    confirmed_goods_row() == Some(DRIED_FINGERS_ROW)
 }
 
 #[cfg(not(windows))]
