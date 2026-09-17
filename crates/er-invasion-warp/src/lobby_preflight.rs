@@ -206,6 +206,19 @@ mod live {
     static MATCHING: AtomicU32 = AtomicU32::new(0);
     static SAID: AtomicUsize = AtomicUsize::new(0);
 
+    /// Set once the question has ever been answered, so the idle asker stops asking. `STAGE` alone
+    /// cannot say this: a failed collect returns it to `STAGE_IDLE`, which is indistinguishable
+    /// from never having asked.
+    static MATCHING_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// How many times the idle asker has armed the question this process.
+    static IDLE_ASKS: AtomicUsize = AtomicUsize::new(0);
+
+    /// Attempts allowed before the idle asker gives up. Steam is not resolvable on every tick a
+    /// world is up, and a failed collect returns to `STAGE_IDLE`, so a single try would lose the
+    /// answer to a transient. A backend that always fails stops here instead of asking forever.
+    const MAX_IDLE_ASKS: usize = 8;
+
     /// What the pre-flight concluded.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Verdict {
@@ -270,17 +283,79 @@ mod live {
     /// callbacks on, so the call handle can be polled through `ISteamUtils` without registering a
     /// callback of our own.
     pub fn tick() {
+        ask_once_while_nothing_is_searching();
         match STAGE.load(Ordering::SeqCst) {
             STAGE_WANTED => send(),
             STAGE_SENT => collect(),
             _ => {}
         }
-        // Deliberately not gated on the verdict above. Skipping the sweep when nobody anywhere
-        // publishes would save about five seconds of reads once per use of the item, and would
-        // cost the thing this module is for: every sentence the search puts on screen is then
-        // something a query answered, rather than something deduced and worded as if measured.
-        sweep_tick();
+        // One `RequestLobbyList` in flight at a time.
+        //
+        // This used to run the sweep unconditionally, and the comment here said so deliberately:
+        // the sweep's reads were worth five seconds because every sentence on screen should be
+        // something a query answered. The cost was not five seconds. `send()` issues the
+        // pre-flight and this line issued a sweep place in the same tick, two requests on one
+        // `ISteamMatchmaking`, and the pre-flight lost every time -- run br-20260917-163602-8eb6
+        // logged `the block-id existence query did not come back` three times out of three, so
+        // `verdict()` never left `Unknown` and the `NobodyPublishes` shortcut was unreachable
+        // code. The Frida trace names the collision: request 1 the existence pre-flight, request 2
+        // a sweep place, `since_previous_ms: 0`.
+        //
+        // Holding the sweep costs the pre-flight's own latency once and buys its answer, which is
+        // the answer that can make the whole 49-place walk unnecessary. A pre-flight that fails
+        // anyway returns to `STAGE_IDLE`, and the sweep then proceeds exactly as it always did.
+        let stage = STAGE.load(Ordering::SeqCst);
+        if stage != STAGE_WANTED && stage != STAGE_SENT {
+            sweep_tick();
+        }
         hand_over_when_the_neighbourhood_is_empty();
+    }
+
+    /// Ask the existence question while the session is idle, so the answer exists before it is
+    /// needed.
+    ///
+    /// Arming it when the item is used cannot work, and three runs measured why. The query is one
+    /// `RequestLobbyList`, and using a finger starts a search that issues its own: run
+    /// br-20260917-164642-cf98 logs `hunt: RequestLobbyList reached our detour for the first time`
+    /// -- Seamless's own query, narrowed by our hunt filter -- directly above
+    /// `preflight: the block-id existence query did not come back`, three runs out of three. A
+    /// pre-flight sent into a live search does not survive it, so `verdict()` never left `Unknown`
+    /// and every shortcut that reads it was unreachable code.
+    ///
+    /// Idle is the whole point, and it is what this module's `arm` doc already asked for: the
+    /// answer "changes only when somebody else installs this mod and opens their world, which is
+    /// not a per-search event". One question per session, asked when nothing competes for the
+    /// interface, answered long before an item is used.
+    ///
+    /// Retried rather than one-shot because Steam is not resolvable at every tick a world is: an
+    /// unresolvable interface leaves `send` at `STAGE_WANTED` and a failed collect returns to
+    /// `STAGE_IDLE`, and neither is an answer. The cap stops a backend that always fails from
+    /// asking forever.
+    fn ask_once_while_nothing_is_searching() {
+        if STAGE.load(Ordering::SeqCst) != STAGE_IDLE {
+            return;
+        }
+        // A search of any kind is a competitor for the interface. `Nearby::Idle` is the state
+        // where no ring is armed, which is the only time this is safe to ask.
+        if !matches!(nearby(), Nearby::Idle) {
+            return;
+        }
+        if MATCHING_SEEN.load(Ordering::SeqCst) != 0 {
+            return;
+        }
+        let attempts = IDLE_ASKS.fetch_add(1, Ordering::SeqCst) + 1;
+        if attempts > MAX_IDLE_ASKS {
+            return;
+        }
+        arm();
+        if attempts == 1 {
+            crate::standalone_log(format_args!(
+                "preflight: asking the block-id existence question while nothing is searching. A \
+                 search issues its own RequestLobbyList and a pre-flight sent into one does not \
+                 come back, so this is asked here instead of when an item is used -- once per \
+                 session, at most {MAX_IDLE_ASKS} attempts if Steam is not resolvable yet."
+            ));
+        }
     }
 
     /// The near/far boundary, taken on the game task rather than inside the query detour.
@@ -435,7 +510,32 @@ mod live {
             Answer::Count(matching) => matching,
         };
         MATCHING.store(matching, Ordering::SeqCst);
+        MATCHING_SEEN.store(1, Ordering::SeqCst);
         STAGE.store(STAGE_ANSWERED, Ordering::SeqCst);
+        // Abandon the ring here, not where it was armed.
+        //
+        // `queue_the_places_being_searched` asks `verdict()` too, and at that instant the answer
+        // cannot exist: using the item arms the pre-flight and queues the ring in the same call,
+        // so the query has not even been sent. That check is a fast path for a second use in a
+        // session that already has an answer, and it can never fire on the first. This is the
+        // moment the answer arrives, so this is where a ring that is now known to be 49 empty
+        // queries gets dropped.
+        //
+        // An empty sweep is the sweep's own way of saying the near half is over: `arm_sweep`
+        // marks it finished and `nearby()` reports `Empty(0)`, which is what
+        // `hand_over_when_the_neighbourhood_is_empty` waits for. So the far half begins on this
+        // tick instead of after 49 round-trips.
+        if matching == 0 && !matches!(nearby(), Nearby::Idle) {
+            clear_sweep();
+            arm_sweep(&[]);
+            crate::local_invasion_filter::search_banner::clear();
+            crate::local_invasion_filter::banner::announce_nothing_to_search(true);
+            crate::standalone_log(format_args!(
+                "preflight: dropped the armed nearby ring -- nobody anywhere publishes a block \
+                 id, so every one of its queries is known empty before it is sent. The place \
+                 queue is cleared rather than recited and the search widens now."
+            ));
+        }
         if SAID.swap(1, Ordering::SeqCst) == 0 {
             crate::standalone_log(format_args!(
                 "preflight: {matching} host(s) anywhere publish a block id under \
@@ -690,12 +790,21 @@ mod live {
         };
         match outcome {
             Outcome::Nothing => {}
-            Outcome::Found(block) => crate::standalone_log(format_args!(
-                "sweep: a host is in {} -- the search points there and stops widening.",
-                crate::lobby_publish::map_value(
-                    er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block)
-                )
-            )),
+            Outcome::Found(block) => {
+                // The queue goes before the answer does. The sweep has stopped asking, so every
+                // place still queued is one the search will never query, and the banner would go
+                // on naming them at one per 100ms underneath the line that says where it landed.
+                crate::local_invasion_filter::search_banner::clear();
+                crate::local_invasion_filter::banner::announce_found_host(true, block);
+                crate::standalone_log(format_args!(
+                    "sweep: a host is in {} -- the search points there and stops widening; the \
+                     place queue is cleared so the banner names the answer instead of the places \
+                     it is no longer asking about.",
+                    crate::lobby_publish::map_value(
+                        er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block)
+                    )
+                ));
+            }
             Outcome::Empty(asked) => {
                 crate::standalone_log(format_args!(
                     "sweep: all {asked} nearby place(s) answered zero, so the neighbourhood is \

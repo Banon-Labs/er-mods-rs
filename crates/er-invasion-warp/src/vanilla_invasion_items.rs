@@ -235,6 +235,31 @@ fn queue_the_places_being_searched() {
         return;
     };
     let ring = search_banner::nearby_ring(block, radius);
+    if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes {
+        // An empty ring is the sweep's own way of saying the nearby half is over: `arm_sweep`
+        // marks it finished and `nearby` reports `Empty(0)`, which is exactly the state 49 queries
+        // would have reached. `Both near and far` therefore widens on this frame instead of after
+        // 49 round-trips at 138ms each (measured, run br-20260917-155917-7c3a), and the player
+        // gets the Seamless invade shortly after the places finish reciting rather than long after.
+        //
+        // `Unknown` deliberately does not take this branch, for the same reason `hunt_target`
+        // refuses it: a search armed a frame before the answer lands must not skip its own ring on
+        // no evidence.
+        crate::lobby_preflight::arm_sweep(&[]);
+        // Nothing is recited. Naming 48 places for a search that asks none of them describes a
+        // search nobody is doing, and the player reads a screen that is still hunting when the
+        // answer is already in. One line says what is true instead.
+        search_banner::clear();
+        crate::local_invasion_filter::banner::announce_nothing_to_search(true);
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: skipped all {} nearby place(s) around block 0x{block:08x} at radius \
+             {radius} -- the pre-flight already found no host anywhere carrying a block id, so \
+             every one of those queries is known empty. The nearby half is over on this frame, the \
+             place queue is left empty rather than recited, and the search widens now.",
+            ring.len()
+        ));
+        return;
+    }
     search_banner::queue_ring(&ring);
     // The same list, asked about rather than recited. The banner names where the search is
     // looking; the sweep is what makes that true, and it is also what ends the nearby half of
@@ -454,10 +479,16 @@ unsafe extern "system" fn start_invasion_entry(
     // used to be reached from and why the screen only ever named one place. The ring is arithmetic
     // on the block the player is standing in, so it is known now; the query discovers nothing the
     // caller does not already have.
-    queue_the_places_being_searched();
     // Ask, once, whether any host anywhere publishes a block id. A `no` turns the ring off before
     // its first query rather than after its forty-ninth; see `lobby_preflight` for the controls.
+    //
+    // The order of these two lines is the feature, and reversing them was the bug. The ring used
+    // to be armed on the line before the question was asked, so no answer could ever turn it off
+    // and the sentence above described something that did not happen. Measured through Frida on
+    // run br-20260917-155917-7c3a: request 1 went out as the existence pre-flight
+    // (`er_invasion_warp_map != ""`) and request 2 was a sweep place regardless, 138ms later.
     crate::lobby_preflight::arm();
+    queue_the_places_being_searched();
     let requested = match range {
         // `Both near and far` drives Seamless's own invade action through the option-menu object
         // some seam has handed over, and presses nothing.

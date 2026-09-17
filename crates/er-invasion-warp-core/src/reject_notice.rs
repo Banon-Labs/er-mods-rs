@@ -104,6 +104,12 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
 enum Announced {
     Rejected(u32, RejectReason),
     Succeeded(u32),
+    /// The place the neighbourhood sweep stopped on, because somebody is hosting there.
+    ///
+    /// Kept apart from `Succeeded`, which means an invasion landed. This one means the search has
+    /// decided where to go and nothing has been joined yet, and sharing a variant would make the
+    /// later success at the same block read as a repeat of the find and be swallowed.
+    FoundHost(u32),
     /// A destination the mod did not judge -- the filter's master switch is off, so this is the
     /// server's choice reported as-is.
     Arrived(u32),
@@ -345,6 +351,51 @@ impl RejectNotice {
     ///
     /// Same shape as [`Self::observe`]: state advances even when the notice is disabled, and the
     /// place name is resolved by the caller so this type stays testable off the game.
+    /// Say the sweep found somebody, and where.
+    ///
+    /// The line this replaces was not a line: `sweep_tick`'s `Outcome::Found` wrote to the debug
+    /// file and nothing else, while the banner carried on reciting the rest of the ring at one
+    /// place per 100ms. So the moment the search stopped asking was the moment the screen started
+    /// lying -- naming places it would never query, for as long as the queue lasted. The caller
+    /// clears that queue and calls this instead.
+    pub fn observe_found_host(
+        &mut self,
+        enabled: bool,
+        block: u32,
+        place: Option<&str>,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::FoundHost(block));
+        self.last_announced = Some(Announced::FoundHost(block));
+        // Finding somebody ends the run of rejections it followed, exactly as a success does.
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        Some(match place {
+            Some(place) if !place.is_empty() => format!("Found a host in {place} -- invading"),
+            // Before the world map has been read nothing has a name, so the id is the fallback --
+            // the same trade every other line here makes, for the same reason.
+            _ => format!("Found a host in {} -- invading", BlockKey::from_raw(block)),
+        })
+    }
+
+    /// Say that nobody anywhere is publishing a place, so there is nothing to search near or far.
+    ///
+    /// Distinct from [`Self::observe_search_everywhere`], whose text is "No nearby locations to
+    /// search here" and "No invasion in N nearby locations" -- both of which claim the
+    /// neighbourhood was asked. On this path it was not: one pre-flight query established that no
+    /// host anywhere carries a block id, so every one of those queries is known empty before it is
+    /// sent, and a banner that recites 48 places it is skipping describes a search nobody is doing.
+    pub fn observe_nothing_to_search(&mut self, enabled: bool) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
+        self.last_announced = Some(Announced::SearchingEverywhere);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        Some("Nobody is hosting nearby or far -- invading as usual".to_string())
+    }
+
     pub fn observe_success(
         &mut self,
         enabled: bool,

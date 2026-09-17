@@ -104,6 +104,14 @@ pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize, _mod_on
 
 /// Host build: no banner surface.
 #[cfg(not(windows))]
+pub(crate) fn announce_found_host(_enabled: bool, _block: u32) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_nothing_to_search(_enabled: bool) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
 pub(crate) fn announce_cannot_search(_enabled: bool) {}
 
 /// Put a successful invasion on the same banner the rejections use.
@@ -207,6 +215,64 @@ pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only:
             "local-invasion: could not show the widened-search banner (\"{text}\") -- the message \
              functions did not verify, or the menu is not up yet. The search is still widening; \
              only the on-screen notice is missing."
+        ));
+    }
+}
+
+/// Say the sweep found somebody, naming the place it stopped on.
+///
+/// Called with the banner queue already cleared, which is the point: the queue and this line are
+/// two halves of one fact. Leaving the queue running would keep naming the places the search has
+/// just decided not to ask about, on top of the answer.
+#[cfg(windows)]
+pub(crate) fn announce_found_host(enabled: bool, block: u32) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let place = crate::place_name::place_name_for_block(block);
+        guard.observe_found_host(enabled, block, place.as_deref())
+    };
+    paint_or_log(announcement, "the found-a-host banner");
+}
+
+/// Say nobody anywhere is hosting, so the search goes out as an ordinary invasion.
+///
+/// Separate from the widened-search line because that one says the neighbourhood came back empty,
+/// and on this path the neighbourhood was never asked: one pre-flight query settled it for
+/// everywhere at once.
+#[cfg(windows)]
+pub(crate) fn announce_nothing_to_search(enabled: bool) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_nothing_to_search(enabled)
+    };
+    paint_or_log(announcement, "the nothing-to-search banner");
+}
+
+/// Paint a line, or say once why it could not be painted.
+///
+/// The three-line "show it, latch the failure, log it" tail was copied into every announcer here;
+/// this is that tail, named. A banner that cannot reach the screen is never fatal -- the search it
+/// describes is unaffected and only the notice is missing -- so the failure is reported once and
+/// the caller carries on.
+#[cfg(windows)]
+fn paint_or_log(announcement: Option<String>, what: &str) {
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread -- the same auto-closing announcement surface every other banner uses.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show {what} (\"{text}\") -- the message functions did not \
+             verify, or the menu is not up yet. The search is unaffected; only the notice is missing."
         ));
     }
 }
