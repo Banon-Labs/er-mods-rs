@@ -48,6 +48,70 @@ const BLOODY_FINGER: usize = 102;
 const FESTERING_BLOODY_FINGER: usize = 111;
 const RECUSANT_FINGER: usize = 112;
 
+/// `CS::PlayerIns::CanUseBreakInItem` on 1.17 -- the engine's own answer to "may this player use
+/// an invasion item right now", and the term this module must never override.
+///
+/// Carried from 1.16.2 `0x140656f00` with `scripts/map-rvas-1162-to-1170.py`: delta `+0xe50`,
+/// unique on a 38-byte signature, the same delta `CAN_USE_GOODS_RVA` took. Below the `0xafefe9`
+/// boundary, so 1.17.0 and 1.17.1 agree. The mapping was then read rather than trusted -- the
+/// disassembly at `0x140657d50` in `eldenring-deobf-1.17.1.bin` is instruction-for-instruction the
+/// 1.16.2 function, differing only in the rip displacements the moved globals force, and it ends
+/// in a `ret` at `+0x8d` for the 142 bytes Ghidra reports.
+///
+/// What it decides, from the decompile:
+///
+/// ```text
+/// CanUseBreakInItem(player) = IsInSafePosRange(player)
+///                          && WorldChrManImp::CanStartBreakIn(WorldChrMan)
+///                          && IsBreakInLimitedByEventFlagId(&player->playRegionId)
+///
+/// CanStartBreakIn(w)       = w->mainPlayerIns != null
+///                          && !HasSpecialEffectWithStateInfo(player->specialEffect, 0x1a2)
+///                          && IsBreakInLimitedByEventFlagId(FieldArea->playRegionParamId)
+/// ```
+///
+/// State info `0x1a2` is NOT the world-open bit and must not be described as one: it appears in
+/// `CanStartMultiplay` and `CanStartBreakIn` alike, in byte-identical position, so it gates both
+/// halves of multiplayer rather than picking out a host. What it actually is has not been read.
+///
+/// The reason to ask the engine at all rather than a lobby key is that Seamless 2.0.1 no longer
+/// spells its lobby-data key names in plaintext. `lobby_breakin_lobby_ykssr_199_6` -- the key
+/// `docs/invasion-warp-second-player-setup.md` records as reading `true` for an open world -- along
+/// with `breakin`, `ykssr` and `lobby_type`, occurs zero times in
+/// `vendor-archive/seamless/ersc-2.0.1.dll`. That doc's measurement was taken against an older
+/// build, so the key cannot be named statically today and an engine predicate is the firmer source.
+const CAN_USE_BREAK_IN_ITEM_RVA: u32 = 0x65_7d50;
+
+/// `CS::GetPartyMemberInfo` on 1.17 -- `return GLOBAL_GameMan->partyMemberInfo`, 15 bytes.
+///
+/// Read out of the 1.17.1 image rather than mapped: `CanUseGoods` calls it, and the instruction at
+/// `0x14068effc` is `call 0x14067b120` where 1.16.2's `0x14068e1ac` is `call 0x14067a2d0`.
+const GET_PARTY_MEMBER_INFO_RVA: u32 = 0x67_b120;
+
+/// `CS::PartyMemberInfo::HasNonNPCPhantoms` on 1.17 -- "are there other real players in my world".
+///
+/// ```text
+/// HasNonNPCPhantoms(p) = p->sessionPlayerCount >= 2
+///                     || SummoningFrame::HasNonNPCPhantoms(frame over CSEventMan's SosSignMan)
+/// ```
+///
+/// Also read out of the image, and it had to be: this one moved `+0x12e0` while everything else
+/// around it moved `+0xe50`, so `scripts/map-rvas-1162-to-1170.py` returned `UNRESOLVED -- 143
+/// shape matches`. A `__security_check_cookie` prologue is not distinctive enough to sign. The
+/// call site settles it without signatures -- 1.16.2 `0x14068e1b4` is `call 0x1409f93c0` and
+/// 1.17.1 `0x14068f004` is `call 0x1409fa6a0`, in an instruction stream otherwise byte-identical
+/// for the twenty bytes either side.
+const PARTY_HAS_NON_NPC_PHANTOMS_RVA: u32 = 0x9f_a6a0;
+
+/// `bool CanUseBreakInItem(PlayerIns *player)` -- one argument in `rcx`, `al` out.
+type CanUseBreakInItemFn = unsafe extern "system" fn(usize) -> bool;
+
+/// `PartyMemberInfo *GetPartyMemberInfo(void)`.
+type GetPartyMemberInfoFn = unsafe extern "system" fn() -> usize;
+
+/// `bool HasNonNPCPhantoms(PartyMemberInfo *info)`.
+type HasNonNpcPhantomsFn = unsafe extern "system" fn(usize) -> bool;
+
 /// Trampoline to the original `CanUseGoods`, or the next handler in the union chain.
 static ORIG_CAN_USE_GOODS: AtomicUsize = AtomicUsize::new(0);
 
@@ -56,6 +120,13 @@ static ORIG_CAN_USE_GOODS: AtomicUsize = AtomicUsize::new(0);
 /// ran" from "the gate ran and correctly declined".
 static FORCED: AtomicUsize = AtomicUsize::new(0);
 static LEFT_REFUSED_WHILE_CONNECTED: AtomicUsize = AtomicUsize::new(0);
+/// Refusals kept because the engine's own break-in predicate said no -- a safe position, or a
+/// region where invading is flagged off. Separate from the two above so one run can say which term
+/// spoke: a finger that has gone dead everywhere would show this climbing while `FORCED` stays at
+/// zero, and that is a different bug from the hook never installing.
+static LEFT_REFUSED_BY_BREAK_IN_TERM: AtomicUsize = AtomicUsize::new(0);
+/// Refusals kept because the player's own world has other real players in it.
+static LEFT_REFUSED_WHILE_HOSTING: AtomicUsize = AtomicUsize::new(0);
 
 /// Whether a goods row is one of the three this opens.
 fn is_invasion_finger(goods_id: usize) -> bool {
@@ -90,6 +161,70 @@ fn connected_as_client() -> Option<bool> {
     // SAFETY: fault-tolerant read of one int inside the manager the global just named.
     let state = unsafe { er_game_base::mem::safe_read_i32(manager + SESSION_LOBBY_STATE_OFFSET) }?;
     Some(state == lobby_state::CLIENT)
+}
+
+/// Ask the engine whether this player may use a break-in item at all.
+///
+/// `None` when nothing can be read or resolved, and every caller treats that as "do not let this
+/// decide". `CanStartBreakIn` dereferences `GLOBAL_WorldChrMan` through `FD4Singleton`, which
+/// `DLPanic`s on null rather than returning, so the global is checked here first: `CanUseGoods`
+/// reaches the call only past `CanStartMultiplay`, and this module calls it on frames where that
+/// term refused, which the engine itself never does.
+#[cfg(windows)]
+fn can_use_break_in_item(player: usize) -> Option<bool> {
+    if player == 0 {
+        return None;
+    }
+    let base = er_game_base::mem::game_module_base().ok()?;
+    // SAFETY: fault-tolerant read of a game global through the checked resolver.
+    let world_chr_man = unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            base,
+            er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA,
+            "WORLD_CHR_MAN_GLOBAL_RVA",
+        ))
+    }?;
+    if world_chr_man == 0 {
+        return None;
+    }
+    let entry = er_game_base::mem::game_rva_for_hook(CAN_USE_BREAK_IN_ITEM_RVA).ok()?;
+    // SAFETY: a one-argument predicate at an address this build mapped, called on the game thread
+    // the engine already calls it from. It reads three fields and calls two further predicates; it
+    // writes nothing and cannot re-enter `CanUseGoods`.
+    let f = unsafe { core::mem::transmute::<usize, CanUseBreakInItemFn>(entry) };
+    Some(unsafe { f(player) })
+}
+
+/// Host-side stub: there is no engine to ask.
+#[cfg(not(windows))]
+fn can_use_break_in_item(_player: usize) -> Option<bool> {
+    None
+}
+
+/// Whether the player's own world currently holds other real players.
+///
+/// `None` when either address cannot be mapped, and the caller treats that as "do not let this
+/// decide". `GetPartyMemberInfo` dereferences `GLOBAL_GameMan` without a null check of its own, so
+/// a zero return is taken as unreadable rather than passed on.
+#[cfg(windows)]
+fn world_has_other_players() -> Option<bool> {
+    let get_info = er_game_base::mem::game_rva_for_hook(GET_PARTY_MEMBER_INFO_RVA).ok()?;
+    let has_phantoms = er_game_base::mem::game_rva_for_hook(PARTY_HAS_NON_NPC_PHANTOMS_RVA).ok()?;
+    // SAFETY: a nullary getter at an address this build mapped, on the game thread the engine
+    // calls it from. It reads one field of a singleton and writes nothing.
+    let info = unsafe { core::mem::transmute::<usize, GetPartyMemberInfoFn>(get_info)() };
+    if info == 0 {
+        return None;
+    }
+    // SAFETY: a one-argument predicate over the pointer the getter just returned. It builds a
+    // stack `SummoningFrame`, reads it, destroys it, and writes nothing the caller owns.
+    Some(unsafe { core::mem::transmute::<usize, HasNonNpcPhantomsFn>(has_phantoms)(info) })
+}
+
+/// Host-side stub: there is no party to count.
+#[cfg(not(windows))]
+fn world_has_other_players() -> Option<bool> {
+    None
 }
 
 /// `CanUseGoods(goodsId, PlayerIns*, SpecialEffect*, CharacterType, rightWeaponId, leftWeaponId,
@@ -134,6 +269,35 @@ unsafe extern "system" fn can_use_goods_hook(
     }
     if connected_as_client() == Some(true) {
         LEFT_REFUSED_WHILE_CONNECTED.fetch_add(1, Ordering::Relaxed);
+        return verdict;
+    }
+    // The player's own world being open to other players is the engine's call, not this module's.
+    //
+    // `CanUseGoods` reaches `CanUseBreakInItem` only after `CanStartMultiplay` has already passed,
+    // and under Seamless that outer term is what refuses -- which is the refusal this override
+    // exists to lift. Lifting it lifted the inner one with it, because a hook on the return value
+    // cannot see which of the four terms produced the zero. So the inner term is asked directly,
+    // and its `false` is kept: a host whose world is open may not press a Bloody Finger, exactly as
+    // vanilla decides it.
+    //
+    // An unreadable answer forces anyway, for the same reason `connected_as_client` does: a read
+    // that fails looks identical to a feature that never worked, and re-greying the item on a
+    // failed read would hide this module rather than gate it.
+    if can_use_break_in_item(player) == Some(false) {
+        LEFT_REFUSED_BY_BREAK_IN_TERM.fetch_add(1, Ordering::Relaxed);
+        return verdict;
+    }
+    // A world open to other players is not a world to invade out of.
+    //
+    // `CanUseBreakInItem` above covers the flag and region side; this covers the population side,
+    // and they are genuinely different questions -- the engine asks both, in different places, and
+    // `HasNonNPCPhantoms` is the one that notices a co-op partner standing next to you. Being in
+    // co-op is one of the two ways `docs/invasion-warp-second-player-setup.md` records a world
+    // becoming invadable, so a player whose own world is invadable does not get to invade.
+    //
+    // Unreadable forces, as above.
+    if world_has_other_players() == Some(true) {
+        LEFT_REFUSED_WHILE_HOSTING.fetch_add(1, Ordering::Relaxed);
         return verdict;
     }
     FORCED.fetch_add(1, Ordering::Relaxed);
