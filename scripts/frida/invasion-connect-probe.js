@@ -50,7 +50,9 @@ const MATCHMAKING_ACCESSOR = 'SteamAPI_SteamMatchmaking_v009';
 // Both slots are pinned by `lobby_publish.rs`, and neither is detoured by our own DLL, so there is
 // no trampoline to attach over.
 const SLOTS = [
+  { slot: 12, name: 'GetLobbyByIndex' },
   { slot: 14, name: 'JoinLobby' },
+  { slot: 17, name: 'GetNumLobbyMembers' },
   { slot: 19, name: 'GetLobbyData', sample: 50 },
 ];
 

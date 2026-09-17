@@ -62,14 +62,40 @@
 /// How long after a host is matched a successful invasion is allowed to take before the attempt is
 /// called lost.
 ///
-/// 3.4x the slowest success ever recorded (441ms, n=313), and 754ms inside the earliest failure
-/// that ever resolved on its own (2254ms). Sitting in the empty gap is the point: it cannot beat a
-/// real invasion to the verdict, and a real timeout cannot beat it.
+/// The sample this was derived from contains no remote invasion at all, and on 2026-09-17 it
+/// killed the first one anybody has seen.
 ///
-/// Generous rather than tight because all 313 successes were measured on one machine's connection.
-/// A player whose handshake is genuinely slower than any sample here is the case this must not
-/// misreport, and the price of the margin is a second of the wait it exists to remove.
-pub const CONNECT_DEADLINE_MS: u64 = 1_500;
+/// The old value was 1500ms: 3.4x the slowest success on record (441ms, n=313) and inside the
+/// earliest self-resolving failure (2254ms). The arithmetic was right about the data and the data
+/// was the problem. The paragraph that set it said so itself -- "all 313 successes were measured
+/// on one machine's connection" -- and then bounded a connect to a stranger with them anyway.
+///
+/// What it cost, on run br-20260917-195855-46cf. A real host was found and the log says so:
+///
+/// ```text
+/// sweep: a host is in m61_48_45_00 -- the search points there and stops widening
+/// hunt: decision=sweep_hit -- a nearby place answered with a host in it
+/// local-invasion: session state 0x0e SEARCHING -> 0x0f -> 0x12
+/// local-invasion: the connection at state 0x0012 has not landed in 1500ms ... Calling it lost
+/// ```
+///
+/// That repeated for as long as the finger stayed armed, and the player's report was "I found a
+/// host in Highroad Cross and it says -- invading, but it doesn't invade". The connect was ours to
+/// wait on and we cancelled it about a second and a half in, every time.
+///
+/// The engine's own patience is the number that should have been copied, and it was measured
+/// rather than assumed: `scripts/frida/session-join-timers.js` on run br-20260917-205031-edd3 read
+/// `CSSessionManagerImp`'s `joinCheckTimeout` at **431.6 seconds** remaining. That field is an
+/// `FD4Time` counting down, so its value is what the engine armed itself to wait -- 287 times
+/// longer than this constant. A deadline that short is not a safety margin over the engine, it is
+/// a race against the thing it claims to observe.
+///
+/// 45 seconds keeps the constant doing the one job it was written for -- shortening the wait after
+/// a genuinely dead match, since the earliest self-resolving failure on record is 2254ms and
+/// Seamless's own timeout is far longer -- while putting it well past any handshake a live connect
+/// has been seen to need. It can no longer beat a real invasion to the verdict, which is the whole
+/// property the original paragraph claimed and the measurement disproved.
+pub const CONNECT_DEADLINE_MS: u64 = 45_000;
 
 /// Where an attempt is, as far as the deadline needs to care.
 ///
@@ -175,10 +201,13 @@ mod tests {
 
     /// The measured extremes, asserted so an edit to the deadline has to face them.
     const SLOWEST_RECORDED_SUCCESS_MS: u64 = 441;
-    const FASTEST_SELF_RESOLVED_FAILURE_MS: u64 = 2_254;
+    /// What the engine itself arms a join to wait, read live rather than reasoned about:
+    /// `scripts/frida/session-join-timers.js` on run br-20260917-205031-edd3 found
+    /// `CSSessionManagerImp`'s `joinCheckTimeout` holding 431.6 seconds.
+    const ENGINE_JOIN_PATIENCE_MS: u64 = 431_587;
 
     #[test]
-    fn the_deadline_sits_in_the_empty_gap_between_the_two_distributions() {
+    fn the_deadline_outlasts_every_connect_and_still_beats_the_engine() {
         // `const` blocks rather than plain asserts, at clippy's suggestion and to its credit: both
         // operands are constants, so this is decidable at compile time and a bad deadline should
         // fail the build rather than one test run.
@@ -188,10 +217,19 @@ mod tests {
                 "a deadline under the slowest success calls working invasions lost"
             );
         }
+        // The upper bound used to be the fastest self-resolving failure, 2254ms, on the reasoning
+        // that a slower deadline saves the player no waiting. That premise came from the same
+        // one-machine sample as the successes, and holding to it is what cancelled a real remote
+        // connect at 1.5s on run br-20260917-195855-46cf -- the player found a host in Highroad
+        // Cross and never invaded it. Saving a second of waiting is worth nothing if the thing
+        // being waited on is destroyed to do it.
+        //
+        // The engine's own countdown is the ceiling that means something: stay under it and the
+        // deadline still shortens a dead match, because the engine is the slower of the two.
         const {
             assert!(
-                CONNECT_DEADLINE_MS < FASTEST_SELF_RESOLVED_FAILURE_MS,
-                "a deadline over the fastest real timeout saves the player nothing"
+                CONNECT_DEADLINE_MS < ENGINE_JOIN_PATIENCE_MS,
+                "a deadline past the engine's own join timeout never fires, so it is not a deadline"
             );
         }
     }
