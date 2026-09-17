@@ -188,7 +188,7 @@ def occupied_slots(module, path: Path, only_slot: int | None = None) -> list[dic
     if bitmap is None:
         return []
     results = []
-    # `only_slot` narrows WHICH slots are decoded and nothing else: the bitmap below still decides
+    # `only_slot` narrows which slots are decoded and nothing else: the bitmap below still decides
     # whether the slot is real, so a targeted read refuses a deleted character exactly as a sweep
     # does. Decoding one slot of this container costs about three seconds, so a caller that wants
     # one identity must not pay for ten.

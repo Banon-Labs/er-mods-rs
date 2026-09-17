@@ -8,7 +8,7 @@ was refusing to launch. Two guesses at the cause -- decoding both containers, an
 `candidate_player_game_data_offsets` fallback -- were both wrong, and each cost a 40s round trip to
 find out. This exists so the next one is a measurement.
 
-    python3 scripts/profile-launch-gate.py <save-root> [--slot N] [--out FILE]
+    `python3 scripts/profile-launch-gate.py <save-root> [--slot N] [--out FILE]`
 
 Prints the twelve functions with the most self time. The gate's own cache is bypassed: a profile of
 a cache hit measures nothing.
