@@ -550,7 +550,26 @@ def candidate_score(slot_data: bytes, player_game_data_offset: int, face_magic_o
     return (name_len + len([stat for stat in stats if stat > 0]) + (1 if level > 0 else 0), -abs(face_magic_offset - player_game_data_offset))
 
 
-def candidate_player_game_data_offsets(slot_data: bytes, face_magic_offset: int) -> list[int]:
+def candidate_player_game_data_offsets(
+    slot_data: bytes, face_magic_offset: int, allow_wide_walk: bool = True
+) -> list[int]:
+    """Offsets that could be this face's PlayerGameData, cheapest search first.
+
+    `allow_wide_walk` gates only the last resort. The two known deltas and the measured delta
+    window are always tried, so every candidate the cheap paths can find is still found for every
+    face; what the flag decides is whether a face that answered nothing also pays an exhaustive
+    0x20000-offset walk.
+
+    That walk is the whole cost of this file. Profiled on the live APPDATA container
+    (`scripts/profile-launch-gate.py`, 2026-09-17): 8,422,136 calls to
+    `plausible_player_game_data`, which is 64 face magics -- `MAX_FACE_MAGIC_OFFSETS` -- each
+    walking 131,072 candidates, for 161s under the profiler and 38s without it. Most of those 64
+    are not real FaceData at all; they are four bytes that happen to read `face`, and each one
+    bought a full exhaustive search that found nothing.
+
+    `scan_player_game_data_offsets` already decided this question for itself: it windows to the
+    leading `PGD_SCAN_LEADING_FACE_COUNT` faces. The caller applies the same bound here.
+    """
     candidates: set[int] = set()
     for delta in (FIXTURE_FACE_TO_PLAYER_GAME_DATA_DELTA, LIVE_FACE_TO_PLAYER_GAME_DATA_DELTA):
         candidate = face_magic_offset - delta
@@ -586,6 +605,9 @@ def candidate_player_game_data_offsets(slot_data: bytes, face_magic_offset: int)
             key=lambda offset: candidate_score(slot_data, offset, face_magic_offset),
             reverse=True,
         )
+
+    if not allow_wide_walk:
+        return []
 
     start = max(0, face_magic_offset - MAX_PLAYER_TO_FACE_SEARCH)
     stop = max(start, face_magic_offset - PLAYER_GAME_DATA_MIN_SIZE)
@@ -718,8 +740,15 @@ def decode_sl2_bt_fixture_fields(slot_data: bytes) -> dict[str, Any]:
     # Fallback: Face-anchored scan (kept for saves where the name-anchored core
     # validator finds nothing but a co-located valid face buffer exists).
     candidates: list[tuple[tuple[int, int], int, int]] = []
-    for face_magic_offset in find_face_magic_offsets(slot_data):
-        for player_game_data_offset in candidate_player_game_data_offsets(slot_data, face_magic_offset):
+    for index, face_magic_offset in enumerate(find_face_magic_offsets(slot_data)):
+        # Every face gets the cheap searches; only the leading few get the exhaustive walk, the
+        # same bound `scan_player_game_data_offsets` puts on itself. Without it a slot pays that
+        # walk once per `face` byte-pattern in it -- 64 of them on the live container, which is
+        # where the launch gate's 38s went.
+        allow_wide_walk = index < PGD_SCAN_LEADING_FACE_COUNT
+        for player_game_data_offset in candidate_player_game_data_offsets(
+            slot_data, face_magic_offset, allow_wide_walk
+        ):
             candidates.append(
                 (
                     candidate_score(slot_data, player_game_data_offset, face_magic_offset),
