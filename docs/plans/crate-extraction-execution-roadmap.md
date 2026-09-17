@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,466 |
+| all `experiments/**` | 76 | 41,559 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -143,7 +143,7 @@ somebody's in-flight edit.
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 830 | stale-RVA call-site closure |
 | `own_load/drive.rs` | 1,719 | dead-counter census |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,228 | stale-RVA call-site closure |
-| `lifecycle/task_tick.rs` | 444 | dead-counter census |
+| `lifecycle/task_tick.rs` | 449 | dead-counter census |
 | `input_block.rs` | 1,656 | dead-counter census |
 | `startup_hooks/diagnostics/system_quit_ownership_repro.rs` | 1,309 | dead-counter census |
 | `trace/menu_trace_hooks.rs` | 2,074 | stale-RVA call-site closure |
@@ -258,7 +258,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `input_trace.rs` | 934 | product diagnostic | D4 |
 | `lifecycle.rs` | 25 | S10 lifecycle facade | R20 |
 | `lifecycle/hook_installers.rs` | 116 | product install ordering | `STAY` |
-| `lifecycle/task_tick.rs` | 444 | product recurring-task scheduling | `STAY` |
+| `lifecycle/task_tick.rs` | 449 | product recurring-task scheduling | `STAY` |
 | `lifecycle/title_visual_startup.rs` | 156 | product startup arming/order | R22 |
 | `mem.rs` | 44 | product compatibility helpers | R3 and R5 |
 | `menu_diag.rs` | 4 | product diagnostic facade | D4 |
@@ -272,7 +272,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
 | `own_load/loaders/load_drive.rs` | 941 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 772 | switch-reload adapter family | D5 |
-| `own_load/request_wait_guard.rs` | 270 | STEP_RequestWait session-end guard | D5 |
+| `own_load/request_wait_guard.rs` | 337 | STEP_RequestWait session-end guard | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
 | `own_stepper/bootstrap_drive.rs` | 997 | product bootstrap-drive policy | D5 |
 | `own_stepper/load_steps.rs` | 826 | product load-step policy | D5 |
@@ -299,7 +299,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/generate_build_link_row.rs` | 8 | product re-export facade: moved to `er_quit_menu_core::generate_build_link_row` | R18 |
 | `startup_hooks/quit_menu/mod.rs` | 38 | quit-menu module facade | R10-R20 |
 | `startup_hooks/save_picker/profile_05_010_editor_runtime.rs` | 1,404 | R12B1-R12B5 families listed in section 4.2 | R12A-R12B5 |
-| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,329 | mixed profile-row title, quit, and sampler families | R11 |
+| `startup_hooks/quit_menu/profile_rows_system_quit_menu.rs` | 1,333 | mixed profile-row title, quit, and sampler families | R11 |
 | `startup_hooks/save_picker/save_picker_menu.rs` | 81 | native picker, destination, and row-builder families | R17-R19 |
 | `startup_hooks/loading_cover/title_visual_hooks.rs` | 635 | split out of `profile_rows_system_quit_menu.rs`: the title's logo/PAB/native-menu hides and the `ErCharStats` row-populate. Owner is the loading-cover family, not the rows | R19 |
 | `startup_hooks/loading_cover/profile_render_drive.rs` | 860 | split out of `save_swap_profile_table.rs`: `force_profile_render_tick` and the three hooks that keep the offscreen target alive. Owner is the portrait family | R19 |
@@ -309,7 +309,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/quit_menu/system_quit_dialog_handlers.rs` | 181 | System>Quit dialog implementation and picker adapter; the row TEXT layer moved to `er_quit_menu_core::row_text` | R10 and R18 |
 | `startup_hooks/quit_menu/system_quit_hooks.rs` | 661 | product hooks, deletion candidates, and quit/title hook families | R2, R19, R22 |
 | `startup_hooks/diagnostics/system_quit_ownership_repro.rs` | 1,309 | ownership, telemetry, quit, and portrait families | R19 |
-| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 741 | product repro guard and quit/title families | R2 and R19 |
+| `startup_hooks/quit_menu/system_quit_repro_guards.rs` | 758 | product repro guard and quit/title families | R2 and R19 |
 | `startup_hooks/save_picker/mod.rs` | 32 | save-picker module facade | R17 |
 | `startup_hooks/save_picker/save_picker_boot.rs` | 421 | boot picker surface | R17 |
 | `startup_hooks/save_picker/save_picker_os_dialog.rs` | 19 | compatibility shim | R17-R18 |

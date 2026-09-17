@@ -82,14 +82,35 @@ def log_path() -> pathlib.Path:
 
 
 def head_commit_time(repo: pathlib.Path) -> int | None:
-    """`HEAD`'s commit time as a unix timestamp, or `None` outside a repo.
+    """When the newest committed Rust change landed, or `None` outside a repo.
 
     A record older than this is spent: the change it measured has been committed, and the next
     change needs its own measurement.
+
+    "Rust change" and not "commit". The gate this feeds exists to stop a `.rs` file under
+    `crates/` being written without somebody going and looking first, so the thing that consumes
+    a measurement is a committed Rust change -- and only that. Keying on plain `HEAD` made every
+    commit spend it, including ones that cannot possibly have used it: on 2026-09-17 a
+    `scripts/`-only commit (`a8c11bb1`, the launch-gate cache) spent a live measurement taken
+    minutes earlier, and the next Rust edit was refused with `spent-by-commit` for a reason that
+    had nothing to do with Rust. That is a false refusal, not a strict one, and a gate that
+    refuses for the wrong reason teaches the next agent to look for a way around it.
+
+    The pathspec is the same shape the policy uses to decide what it guards: `*.rs` under
+    `crates/`. A commit that touches both is still a Rust commit and still spends.
     """
     try:
         out = subprocess.run(
-            ["git", "-C", str(repo), "log", "-1", "--format=%ct"],
+            [
+                "git",
+                "-C",
+                str(repo),
+                "log",
+                "-1",
+                "--format=%ct",
+                "--",
+                "crates/**/*.rs",
+            ],
             capture_output=True,
             text=True,
             timeout=10,

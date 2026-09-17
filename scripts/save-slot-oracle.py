@@ -559,6 +559,34 @@ def candidate_player_game_data_offsets(slot_data: bytes, face_magic_offset: int)
     if candidates:
         return sorted(candidates)
 
+    # The measured delta window first. `scan_player_game_data_offsets` already searches exactly
+    # this range -- `PGD_FACE_DELTA_WINDOW_LOW..HIGH`, 0x600 bytes -- because that is where a
+    # PlayerGameData actually sits relative to its face buffer. The walk below searches the same
+    # relationship 0x20000 bytes wide, which is 85 times the work for the same answer whenever the
+    # answer is in the window, and it is a Python predicate per byte.
+    #
+    # That cost is not theoretical. A container whose slot 0 matched neither known delta made this
+    # function walk the full 0x20000 four times over, and one slot took 38s: past the 28s bound
+    # `er-run-branch.py` puts on every step, so three launches in a row were refused by the
+    # Autoload Identity Launch Gate after correctly decoding the character they were refusing to
+    # launch (2026-09-17).
+    #
+    # The wide walk is kept, untouched, as the last resort. Narrowing to the window alone would
+    # stop decoding any character whose PGD sits outside it, and the gate's whole job is to refuse
+    # to launch when it cannot name the character -- trading correctness for speed there is the
+    # wrong trade. This only reorders which search runs first.
+    start = max(0, face_magic_offset - PGD_FACE_DELTA_WINDOW_HIGH)
+    stop = max(start, face_magic_offset - PGD_FACE_DELTA_WINDOW_LOW)
+    for candidate in range(start, stop):
+        if plausible_player_game_data(slot_data, candidate, face_magic_offset):
+            candidates.add(candidate)
+    if candidates:
+        return sorted(
+            candidates,
+            key=lambda offset: candidate_score(slot_data, offset, face_magic_offset),
+            reverse=True,
+        )
+
     start = max(0, face_magic_offset - MAX_PLAYER_TO_FACE_SEARCH)
     stop = max(start, face_magic_offset - PLAYER_GAME_DATA_MIN_SIZE)
     for candidate in range(start, stop):
