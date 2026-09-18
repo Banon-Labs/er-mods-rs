@@ -31,6 +31,7 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
@@ -46,6 +47,8 @@ pub mod map_hooks;
 mod map_live_pins;
 pub mod map_piece_live;
 pub mod map_seams;
+pub mod multiplayer_menu_row;
+pub mod null_network_message;
 mod overlay;
 pub mod place_name;
 pub mod restart_backoff;
@@ -280,6 +283,19 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context; every read is fault-closed and the one
                     // detour is installed on a byte-verified prologue.
                     unsafe { crate::lynchpin_use::tick() };
+                    // The Escape menu's Multiplayer row, which Seamless leaves greyed because the
+                    // vanilla online flag is clear and the vanilla session is empty. One predicate
+                    // decides it and this answers that predicate's refusals; nothing about the
+                    // player's online state changes.
+                    //
+                    // Armed from the tick rather than from `DllMain` for the same reason every
+                    // other detour here is: MinHook must not run under the loader lock. Idempotent
+                    // after the first success, and it re-arms quietly until then because the game
+                    // module may not be mapped on the first tick.
+                    //
+                    // SAFETY: same game-task context; installs one detour on a byte-verified
+                    // prologue through the shared union.
+                    unsafe { crate::multiplayer_menu_row::install() };
                     // Name the next place the search is asking about, at one a second.
                     //
                     // Driven from here rather than from the lobby-query detour, which is where the

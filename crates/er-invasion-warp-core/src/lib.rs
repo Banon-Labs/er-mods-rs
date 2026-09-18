@@ -67,6 +67,7 @@ pub use host::*;
 
 pub mod aip;
 pub mod attempt_verdict;
+pub mod band_ladder;
 pub use aip::*;
 
 pub mod invasion_warp;

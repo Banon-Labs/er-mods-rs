@@ -78,6 +78,26 @@ pub const TWIPS_PER_PIXEL: i32 = 20;
 /// [`TWIPS_PER_PIXEL`] for the float paths (live text-document bounds are `f32`).
 pub const TWIPS_PER_PIXEL_F32: f32 = TWIPS_PER_PIXEL as f32;
 
+/// The narrowest signed bit width that holds every one of `values`.
+///
+/// A `MATRIX` stores its own field widths, and [`Matrix::write`] re-emits the widths it was given
+/// rather than recomputing them -- which is what preserves byte-identity for a movie nothing
+/// edited. An edit that enlarges a term therefore has to widen the field itself, or the writer
+/// truncates a value that no longer fits into a bit pattern that decodes as something else
+/// entirely. Every module that moves a placement needs this, so it lives here rather than as a
+/// fourth private copy.
+#[must_use]
+pub(crate) fn min_signed_nbits(values: &[i32]) -> u32 {
+    values
+        .iter()
+        .map(|&value| {
+            let magnitude = if value < 0 { !value } else { value } as u32;
+            u32::BITS - magnitude.leading_zeros() + 1
+        })
+        .max()
+        .unwrap_or(1)
+}
+
 // Tag code for `DefineSprite`. Its body is `spriteId: u16`, `frameCount: u16`,
 // then a nested tag stream parsed with the same parser and terminated by its
 // own `End(0)`. (A plain comment, not a doc comment: `include!` takes no docs.)

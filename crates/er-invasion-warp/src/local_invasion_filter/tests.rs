@@ -1858,13 +1858,98 @@ fn both_off_switches_stand_the_hunt_down() {
         "AUTO_SEARCH_ARMED.swap(false",
         "PENDING_REINVADE.store(false",
         "backoff.stand_down()",
+        // The two surfaces, not just the machinery. A search the player stopped that goes on
+        // naming one location a second is indistinguishable, from the chair, from one that never
+        // stopped -- which is the report this line was added for on 2026-09-17.
+        "search_banner::clear()",
+        "banner::forget_last_announcement()",
     ] {
         assert!(
             body.contains(cleared),
             "standing down must clear `{cleared}` -- leaving any one of them set restarts the \
-             search the player just stopped"
+             search the player just stopped, or leaves the screen claiming it is still running"
         );
     }
+}
+
+/// A cancel the player asked for must leave the loop disarmed, and `cancel_match` armed it.
+///
+/// `cancel_match` has exactly one caller -- `cancel_live_search_for_player`, which passes
+/// `RejectReason::PlayerStopped` -- so its unconditional re-arm, written for the rejection case it
+/// no longer serves, fired only on the player's own stop. Run `br-20260918-032135-4b68` measured
+/// what that cost: `auto re-search stood down` and `cancelled rejected match (#1) -- the search
+/// restarts automatically` four lines apart, an invade driven two milliseconds after the session
+/// reached idle, and `hunt: decision=no_finger` on the query that followed, because
+/// `stand_down_hunt` had already retired the finger. A `Nearby only` call-off invaded a host from
+/// the whole Seamless population, unnarrowed and unjudged.
+///
+/// Asserted from the source because both flags are process-global statics and the drive behind
+/// them is an `ersc.dll` call, neither of which a host test can observe.
+#[test]
+fn the_players_own_cancel_does_not_restart_the_search() {
+    let code = product_code();
+    let body = code
+        .split_once("fn cancel_match(")
+        .expect("the cancel action is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    let stopped_at = body.find("RejectReason::PlayerStopped").expect(
+        "the player's own stop must be told apart from a rejected destination by name -- the \
+         reason is already a parameter, and ignoring it is the whole defect",
+    );
+    let armed_at = body.find("AUTO_SEARCH_ARMED.store(true").expect(
+        "a rejected destination must still continue the hunt: cancelling a match this filter \
+         declined is the hunt, and removing that would end it on the first rejection",
+    );
+    assert!(
+        stopped_at < armed_at,
+        "the player's stop must be answered BEFORE the re-arm, or standing the hunt down and then \
+         cancelling the live search puts the loop straight back up:\n{body}"
+    );
+    let branch = &body[stopped_at..armed_at];
+    for cleared in [
+        "AUTO_SEARCH_ARMED.store(false",
+        "PENDING_REINVADE.store(false",
+        "return true",
+    ] {
+        assert!(
+            branch.contains(cleared),
+            "the player-stopped branch must contain `{cleared}` -- disarming is not enough on its \
+             own, because `stand_down_hunt` runs before the cancel is driven and anything that \
+             armed the loop in between would outlive the stop:\n{branch}"
+        );
+    }
+}
+
+/// The finger's narrowing is the last thing a stand-down retires, after the search it narrowed.
+///
+/// Retiring it first opens a window with the same shape as the bug beside it: `FINGER_REACH_NONE`
+/// makes `hunt_target` answer `no_finger` and takes `apply_finger_override`'s forced `enabled`
+/// with it, so a query going out while the stopped search is still unwinding reaches the whole
+/// population with nothing judging what comes back. That is the search the player declined.
+#[test]
+fn the_finger_override_outlives_the_search_it_narrowed() {
+    let code = product_code();
+    let body = code
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    let cancel_at = body
+        .find("cancel_live_search_for_player(")
+        .expect("standing down must cancel the search that is running right now");
+    let retire_at = body
+        .find("set_finger_reach(FINGER_REACH_NONE)")
+        .expect("standing down must retire the finger's override");
+    assert!(
+        cancel_at < retire_at,
+        "the cancel must come BEFORE the override is retired -- reversed, the narrowing and the \
+         reject filter come off a search that is still live:\n{body}"
+    );
 }
 
 #[test]

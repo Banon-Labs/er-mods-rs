@@ -396,6 +396,35 @@ pub unsafe fn register_union_hook_runtime_derived(
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
 }
 
+/// Register a four-argument handler on a game function entry, following an Arxan stub if the
+/// running process has left one there.
+///
+/// [`register_union_hook_runtime_derived`] audits the entry and stops there, which is right for an
+/// address a scan found inside `.text` and wrong for one Arxan has stubbed: the entry then opens
+/// `jmp rel32`, MinHook writes its five bytes over that jump, and the detour catches nothing while
+/// reporting itself installed. That silence is what [`register_union_hook7_runtime_derived`]
+/// already removes for a seven-argument target, and arity is the only reason this is a second
+/// function rather than the same one -- a four-argument target reached through a seven-argument
+/// dispatcher gets garbage where its stack arguments would be.
+///
+/// # Safety
+/// Same contract as [`register_union_hook_runtime_derived`]: `handler` must be a valid [`UnionFn`]
+/// matching the target's ABI, `orig_slot` must be the static the handler reads to call its
+/// original through [`UnionFn`] (it may be the next handler in the chain rather than the game
+/// trampoline), and `entry` must have been derived from the running image.
+#[cfg(windows)]
+pub unsafe fn register_union_hook_runtime_derived_following_arxan(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    let what = format!("register_union_hook_runtime_derived_following_arxan 0x{entry:x}");
+    let Some(target) = detour_target_following_arxan(entry, &what) else {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    };
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
 /// Register a seven-argument handler on a game function entry, following an Arxan stub if the
 /// running process has left one there.
 ///

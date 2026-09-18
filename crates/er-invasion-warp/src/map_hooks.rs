@@ -866,6 +866,65 @@ unsafe fn legacy_map_regions_for_view(
     Vec::new()
 }
 
+/// The legacy projection table, read once and kept for the rest of the process.
+///
+/// One entry per legacy block naming the overworld tile it projects into. Held because the search
+/// needs it on a path the map hooks do not run: `search_ring::ring_with_legacy` is what gives a
+/// player standing in a dungeon a neighbourhood to search, and it is called from the game task
+/// whenever the player's block changes, not when a map is drawn.
+///
+/// Caching for the process is correct rather than a shortcut. The table is the shipped game's own
+/// list of where dungeons sit on the world map: it does not vary with the player, the save, or
+/// which maps are resident. The ViewModel that holds it is rebuilt per world entry, so an
+/// uncached read would also return nothing during the load that a search is most likely to follow.
+#[cfg(windows)]
+static LEGACY_REGIONS: Mutex<
+    Option<Vec<er_invasion_warp_core::legacy_map_regions::LegacyMapRegion>>,
+> = Mutex::new(None);
+
+/// Every legacy dungeon the world map can place, for the search to build a ring from.
+///
+/// Empty while no world map exists -- before the first `MoveMapStep`, or if the converter tree is
+/// unreadable. An empty answer degrades the ring to grid arithmetic, which is exactly the
+/// behaviour that was there before this existed, so a caller needs no separate path for it.
+#[cfg(windows)]
+#[must_use]
+pub(crate) fn legacy_regions_for_search()
+-> Vec<er_invasion_warp_core::legacy_map_regions::LegacyMapRegion> {
+    let mut guard = match LEGACY_REGIONS.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(cached) = guard.as_ref() {
+        return cached.clone();
+    }
+    let Some(view_model) = authoritative_view_model() else {
+        // Not cached: there is no world map yet, and "not yet" must not be remembered as "none".
+        return Vec::new();
+    };
+    let regions = unsafe { legacy_map_regions_for_view(view_model) };
+    if regions.is_empty() {
+        return regions;
+    }
+    crate::standalone_log(format_args!(
+        "search-ring: the world map's legacy converter placed {} dungeon block(s), so a search \
+         anchored in one of them has a neighbourhood after all -- the overworld tile it projects \
+         into, the ring around that tile, and the other dungeons sitting in it. Without this a \
+         legacy block is not a grid position and the ring is the one block the player stands in.",
+        regions.len()
+    ));
+    *guard = Some(regions.clone());
+    regions
+}
+
+/// Host-side stub: there is no world map to read the table out of.
+#[cfg(not(windows))]
+#[must_use]
+pub(crate) fn legacy_regions_for_search()
+-> Vec<er_invasion_warp_core::legacy_map_regions::LegacyMapRegion> {
+    Vec::new()
+}
+
 /// `DAT_142ad82f8` -- the engine's converter-index -> map-layer-id table, `{0, 1, 10}`.
 ///
 /// Read live rather than hard-coded: if a patch ever reorders the converters, a baked table would

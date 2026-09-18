@@ -1,4 +1,9 @@
-//! Puts a line of text on the game's own auto-closing announcement surface.
+//! Puts a line or two of text on the game's own auto-closing announcement surface.
+//!
+//! Two, since 2026-09-17: `er_gfx::announce_notice::make_notice_two_line` sets the field's
+//! `Multiline` flag and grows it and the panel behind it by one line, so a `\n` in the text passed
+//! to [`show`] breaks the line instead of running together. Word wrap is deliberately left off, so
+//! a long single line still scrolls the way this surface always has.
 //!
 //! This is the surface that says "Grace discovered" — it appears, scrolls, expires, and never
 //! waits for input. It replaces a deleted `system_message` module, which used `showPopupMenu` and
@@ -686,7 +691,7 @@ mod tests {
         const {
             assert!(
                 MAX_CHARS >= 40,
-                "must fit 'Rejected m60_42_36_00 (elsewhere)'"
+                "must fit 'Rejected (elsewhere)\nm60_42_36_00'"
             )
         };
         const { assert!(MAX_CHARS <= 200, "a message this long would scroll forever") };

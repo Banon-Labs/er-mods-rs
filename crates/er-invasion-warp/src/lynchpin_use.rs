@@ -2030,8 +2030,14 @@ pub unsafe fn tick() {
     // SAFETY: game task thread; each is fault-closed and idempotent.
     unsafe {
         shorten_use_animation();
+        // Before the goods gate, because it is what makes the goods gate's own region term pass.
+        // Installed the other way round the item would open on a frame the engine still refuses,
+        // which is the split that had the game cancelling invasions the player had just started.
+        crate::break_in_region_gate::install();
         crate::can_use_goods_gate::install();
         crate::vanilla_invasion_items::install_bounds_popup_takeover();
+        crate::vanilla_invasion_items::install_cancel_prompt_takeover();
+        crate::null_network_message::install();
         install_popup_skip();
         install_selected_quick_slot();
         drain_requested_use();

@@ -1143,11 +1143,16 @@ mod live {
         BAND_RUNG.store(packed, Ordering::SeqCst);
     }
 
-    /// Climb one rung, and say which one, or `None` when the ladder is spent.
-    pub fn climb_band() -> Option<er_invasion_warp_core::band_ladder::Rung> {
-        let next = band_rung().next()?;
+    /// Climb one rung, and say which one and whether the ladder started over.
+    ///
+    /// The ladder wraps rather than stopping at its top rung: a search held open past the last
+    /// rung used to keep asking the band furthest from the player and never look at their own
+    /// again. The second element is true on the lap boundary, so the caller can say which of the
+    /// two happened instead of printing "climbing" for a step back down to the bottom.
+    pub fn climb_band() -> (er_invasion_warp_core::band_ladder::Rung, bool) {
+        let (next, restarted) = band_rung().next_or_restart();
         store_band_rung(next);
-        Some(next)
+        (next, restarted)
     }
 
     /// Return to the player's own band, for a search that has been stood down.
@@ -2040,9 +2045,18 @@ mod live {
                 .as_ref()
                 .is_none_or(|(anchor, _)| *anchor != here.raw());
             if restart {
+                // Built from the same list the recital and the sweep walk, rather than from grid
+                // arithmetic of its own. In a legacy dungeon that arithmetic yields one place, so
+                // this ladder had nothing to advance through and every query named the block the
+                // player was standing in.
                 *guard = Some((
                     here.raw(),
-                    er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
+                    er_invasion_warp_core::search_ring::SearchRing::from_places(
+                        crate::local_invasion_filter::search_banner::nearby_ring_blocks(
+                            here.raw(),
+                            radius,
+                        ),
+                    ),
                 ));
             }
             let Some((_, ring)) = guard.as_mut() else {

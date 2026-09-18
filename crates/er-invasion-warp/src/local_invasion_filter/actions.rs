@@ -1349,6 +1349,47 @@ pub(super) fn cancel_match(reason: RejectReason) -> bool {
     //
     // Standing the loop down stays possible and stays the player's call: opening Seamless's own
     // menu clears the flag (`show_observer`), and that is a deliberate act, unlike a sampling miss.
+    //
+    // Every reason but one is a rejection, and a rejection is the hunt. [`RejectReason::PlayerStopped`]
+    // is the player saying stop, and re-arming on it is how a call-off became an invasion.
+    //
+    // Measured on run `br-20260918-032135-4b68`, in the order the log wrote it:
+    //
+    // ```text
+    //   the bounds popup chose NearbyOnly ... requested=true
+    //   auto re-search stood down -- you used the finger again and confirmed the invasion
+    //     search should be called off. Nothing here will start another search until you ask for one.
+    //   about to drive ERSC cancel -- state=0x12
+    //   cancelled rejected match (#1) -- session returns to idle and the search restarts automatically
+    //   0x12 -> 0x23 CANCELLING -> 0x24 -> 0x01 IDLE
+    //   about to drive ERSC invade -- state=0x1 IDLE
+    //   0x01 IDLE -> 0x0e SEARCHING (driven by us: restart search)
+    //   hunt: decision=no_finger -- the query goes out exactly as Seamless built it
+    //   ... 0x13 -> 0x14 -> 0x16, host Steam id 76561198027062262
+    // ```
+    //
+    // `stand_down_hunt` cleared the flag four lines above; this store put it straight back, and
+    // `drive_pending_reinvade` fired two milliseconds after the session reached idle. The search it
+    // started was worse than the one the player stopped: `stand_down_hunt` had already retired the
+    // finger, so `hunt_target` answered `no_finger` and the query went out unnarrowed, with
+    // `apply_finger_override` no longer forcing `enabled`, so nothing judged what came back. A
+    // `Nearby only` call-off became a whole-population Seamless invasion. Player, 2026-09-17: "I
+    // called off invading nearby only, and as soon as I did, I invaded someone in seamless. Only
+    // near+far should ever hit seamless when near exhausts."
+    //
+    // The disarm is not merely "do not arm". `stand_down_hunt` runs before the cancel is driven, so
+    // anything that armed the loop in between -- the state tracker riding the unwind, a join this
+    // filter accepted dying -- would outlive the stop it was meant to end.
+    if reason == RejectReason::PlayerStopped {
+        AUTO_SEARCH_ARMED.store(false, Ordering::SeqCst);
+        PENDING_REINVADE.store(false, Ordering::SeqCst);
+        crate::standalone_log(format_args!(
+            "local-invasion: cancelled the search you stopped (#{fired}) -- the session returns to \
+             idle and stays there. Nothing restarts it: this cancel is the player's stop, not a \
+             rejected destination, and the loop is left disarmed the way `stand_down_hunt` asked."
+        ));
+        return true;
+    }
     AUTO_SEARCH_ARMED.store(true, Ordering::SeqCst);
     PENDING_REINVADE.store(true, Ordering::SeqCst);
     crate::standalone_log(format_args!(

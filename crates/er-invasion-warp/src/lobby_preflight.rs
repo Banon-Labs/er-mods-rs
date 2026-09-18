@@ -49,7 +49,9 @@
 //! query narrows our own result set and changes nothing for any other player.
 
 #[cfg(windows)]
-pub use live::{Nearby, Verdict, arm, arm_sweep, clear_sweep, is_armed, nearby, tick, verdict};
+pub use live::{
+    Nearby, Verdict, arm, arm_sweep, clear_sweep, end_search, is_armed, nearby, tick, verdict,
+};
 
 /// Host-side stand-ins, so the rest of the crate compiles under `cargo test` on Linux.
 #[cfg(not(windows))]
@@ -95,6 +97,10 @@ pub fn arm_sweep(_blocks: &[u32]) {}
 #[cfg(not(windows))]
 pub fn clear_sweep() {}
 
+/// Host-side stub.
+#[cfg(not(windows))]
+pub fn end_search() {}
+
 /// Host-side stub: nothing was ever asked, so nothing is known.
 #[cfg(not(windows))]
 #[must_use]
@@ -126,7 +132,7 @@ pub fn verdict() -> Verdict {
 
 #[cfg(windows)]
 mod live {
-    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
     use crate::lobby_publish::{LOBBY_MAP_KEY, advertisement_key, matchmaking_interface};
 
@@ -158,6 +164,13 @@ mod live {
     /// `bool GetAPICallResult(ISteamUtils*, SteamAPICall_t, void *out, int size, int expected,
     /// bool *failed)`.
     type GetResultFn = unsafe extern "system" fn(usize, u64, *mut u8, i32, i32, *mut bool) -> bool;
+    /// `CSteamID GetLobbyByIndex(ISteamMatchmaking*, int)`, the id returned as its `uint64`.
+    type GetLobbyByIndexFn = unsafe extern "system" fn(usize, i32) -> u64;
+    /// `const char *GetLobbyData(ISteamMatchmaking*, CSteamID, const char *key)`. Steam owns the
+    /// buffer and reuses it, so a value is copied out before the next call.
+    type GetLobbyDataFn = unsafe extern "system" fn(usize, u64, *const u8) -> *const u8;
+    /// `ISteamMatchmaking* SteamAPI_SteamMatchmaking_v009(void)`.
+    type MatchmakingAccessor = unsafe extern "system" fn() -> usize;
 
     const UTILS_ACCESSOR: &str = "SteamAPI_SteamUtils_v010\0";
     const ADD_STRING_FILTER: &str = "SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter\0";
@@ -168,6 +181,13 @@ mod live {
     const REQUEST_LOBBY_LIST: &str = "SteamAPI_ISteamMatchmaking_RequestLobbyList\0";
     const IS_API_CALL_COMPLETED: &str = "SteamAPI_ISteamUtils_IsAPICallCompleted\0";
     const GET_API_CALL_RESULT: &str = "SteamAPI_ISteamUtils_GetAPICallResult\0";
+    const MATCHMAKING_ACCESSOR: &str = "SteamAPI_SteamMatchmaking_v009\0";
+    const GET_LOBBY_BY_INDEX: &str = "SteamAPI_ISteamMatchmaking_GetLobbyByIndex\0";
+    const GET_LOBBY_DATA: &str = "SteamAPI_ISteamMatchmaking_GetLobbyData\0";
+
+    /// A lobby value is capped by Steam at `k_cubChatMetadataMax`. The walk stops at the
+    /// terminator; this only bounds an unterminated buffer.
+    const LOBBY_VALUE_MAX: usize = 8192;
 
     /// `k_ELobbyComparisonNotEqual`, from `steamclientpublic.h`. The operator the existence test is
     /// built out of; see this module's header for the controls that prove it is one.
@@ -248,6 +268,181 @@ mod live {
         (iface != 0).then_some(iface)
     }
 
+    fn matchmaking() -> Option<usize> {
+        let accessor = export(MATCHMAKING_ACCESSOR)?;
+        let iface = unsafe { core::mem::transmute::<usize, MatchmakingAccessor>(accessor)() };
+        (iface != 0).then_some(iface)
+    }
+
+    /// One lobby a finished query named, with the keys this mod publishes already read off it.
+    #[derive(Clone, Debug, Default, PartialEq, Eq)]
+    pub struct FoundLobby {
+        /// The lobby's own `CSteamID`, which is what a join is addressed to.
+        pub id: u64,
+        /// `er_invasion_warp_map` -- the block the host is standing in.
+        pub map: String,
+        /// `er_invasion_warp_effects` -- what invading them would be like.
+        pub effects: String,
+        /// Seamless's `lobby_key`. A host whose key differs is in another param pool.
+        pub lobby_key: String,
+    }
+
+    /// Read one key off a lobby, copying Steam's buffer before anything can invalidate it.
+    ///
+    /// Steam hands back an interior pointer it owns and reuses, so holding it across the next call
+    /// reads as an intermittently wrong string rather than as a crash.
+    fn lobby_value(iface: usize, read: GetLobbyDataFn, lobby: u64, key: &str) -> String {
+        let name = format!("{key}\0");
+        // SAFETY: an export resolved by name, called with the interface singleton, a lobby id the
+        // caller took from `GetLobbyByIndex`, and a terminated key that outlives the call.
+        let raw = unsafe { read(iface, lobby, name.as_ptr()) };
+        if raw.is_null() {
+            return String::new();
+        }
+        let mut bytes = Vec::new();
+        for offset in 0..LOBBY_VALUE_MAX {
+            // SAFETY: walking a terminated C string Steam owns, bounded by the cap above.
+            let byte = unsafe { *raw.add(offset) };
+            if byte == 0 {
+                break;
+            }
+            bytes.push(byte);
+        }
+        // A lobby value is written by another player's client, so its bytes are not ours to
+        // trust; this is display and comparison text either way.
+        // UTF-8 Lossy: one malformed byte must not discard the whole host.
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    /// Fetch the lobbies a finished query matched, with their keys.
+    ///
+    /// Until now this module asked Steam for a count and threw the answer away: `poll_query` read
+    /// the single `uint32` of `LobbyMatchList_t` and nothing here ever called `GetLobbyByIndex`.
+    /// A count is what let the banner say "found a host in Highroad Cross" while nobody held the
+    /// lobby that sentence was about.
+    ///
+    /// Proven live before it was written, which is the order this repo works in
+    /// (`scripts/er-prove-lobby-handoff.py`, run `br-20260918-003310-606c`): the same flat exports
+    /// in the same sequence returned lobby `109775241801277563` carrying
+    /// `er_invasion_warp_map = m61_48_45_00` and `er_invasion_warp_effects = allow_invaders`.
+    #[must_use]
+    pub fn fetch_lobbies(matching: u32) -> Vec<FoundLobby> {
+        let Some(iface) = matchmaking() else {
+            return Vec::new();
+        };
+        let (Some(by_index), Some(get_data)) = (export(GET_LOBBY_BY_INDEX), export(GET_LOBBY_DATA))
+        else {
+            return Vec::new();
+        };
+        // SAFETY: two exports resolved by name from a module that is loaded.
+        let by_index = unsafe { core::mem::transmute::<usize, GetLobbyByIndexFn>(by_index) };
+        // SAFETY: as above.
+        let read = unsafe { core::mem::transmute::<usize, GetLobbyDataFn>(get_data) };
+
+        let mut found = Vec::new();
+        for index in 0..matching.min(RESULT_COUNT.unsigned_abs()) {
+            let Ok(index) = i32::try_from(index) else {
+                break;
+            };
+            // SAFETY: the index is below the count Steam reported for this very query.
+            let id = unsafe { by_index(iface, index) };
+            if id == 0 {
+                continue;
+            }
+            found.push(FoundLobby {
+                id,
+                map: lobby_value(iface, read, id, crate::lobby_publish::LOBBY_MAP_KEY),
+                effects: lobby_value(
+                    iface,
+                    read,
+                    id,
+                    crate::lobby_publish::LOBBY_HOST_EFFECTS_KEY,
+                ),
+                lobby_key: lobby_value(iface, read, id, crate::lobby_publish::LOBBY_KEY_NAME),
+            });
+        }
+        found
+    }
+
+    /// Say whether the hosts the sweep found are in a pool this player's search can reach.
+    ///
+    /// Joining them is not the answer, and that was measured the hard way: entering a host's
+    /// advertisement lobby by hand put the player in her world as a co-op guest, not as an
+    /// invader. A bare `JoinLobby` is a co-op arrival, so the join Seamless never makes was never
+    /// a step this mod should make on its behalf. The proven join chain lives in
+    /// `scripts/frida/hand-lobby-to-seamless.js`, where an unproven mechanism belongs.
+    ///
+    /// What a non-member can read is enough. `GetLobbyData` needs no membership -- proven by
+    /// enumerating all nine of a live host's published keys from outside her lobby -- so her
+    /// `lobby_key` is in hand for free, and that key decides whether any search can return her.
+    /// Seamless compares it for equality, so a host whose key differs is invisible to every query
+    /// this game sends, however close she is standing and however many of this mod's keys she
+    /// publishes.
+    ///
+    /// Our own side of the comparison costs nothing either. `lobby_publish::seamless_match_key`
+    /// already answers it, from Seamless's key recorded on the way past either hook and from the
+    /// value live on the advertisement lobby, with this player's pool transform applied -- which is
+    /// precisely the string a query of ours filters on. No observer to enable, no config to opt
+    /// into.
+    fn report_found_lobbies() {
+        let lobbies = with_sweep(|slot| {
+            slot.as_ref()
+                .map(|sweep| sweep.lobbies.clone())
+                .unwrap_or_default()
+        });
+        if lobbies.is_empty() {
+            crate::standalone_log(format_args!(
+                "sweep: the place answered with a host but no lobby came back from \
+                 `GetLobbyByIndex`, so there is nothing to read. The count and the entries \
+                 disagreeing means the query was superseded between the two calls."
+            ));
+            return;
+        }
+        let ours = crate::lobby_publish::seamless_match_key();
+        for lobby in lobbies {
+            match ours.as_deref() {
+                Some(mine) if mine == lobby.lobby_key => {
+                    crate::standalone_log(format_args!(
+                        "sweep: lobby {} is in this player's pool -- map={} effects={} \
+                         lobby_key={}. The search can return this host, so a failure to connect \
+                         from here is not a matchmaking-pool failure.",
+                        lobby.id,
+                        lobby.map,
+                        lobby.effects,
+                        head(&lobby.lobby_key)
+                    ));
+                }
+                Some(mine) => {
+                    crate::standalone_log(format_args!(
+                        "sweep: lobby {} is unreachable -- its `lobby_key` is {} and this game \
+                         searches for {}. Seamless compares that key for equality, so this host \
+                         answers the sweep's count and can never answer the search that follows. \
+                         The two players are running different mod sets; nothing on this side \
+                         fixes it.",
+                        lobby.id,
+                        head(&lobby.lobby_key),
+                        head(mine)
+                    ));
+                }
+                None => {
+                    crate::standalone_log(format_args!(
+                        "sweep: lobby {} publishes `lobby_key` {}, and this game has not written \
+                         one of its own yet, so the pools cannot be compared. Seamless computes \
+                         its key when a search starts; before that there is nothing recorded to \
+                         compare against.",
+                        lobby.id,
+                        head(&lobby.lobby_key)
+                    ));
+                }
+            }
+        }
+    }
+
+    /// The readable head of a 64-character key, for a log line carrying two of them.
+    fn head(key: &str) -> &str {
+        &key[..key.len().min(12)]
+    }
+
     /// Ask the question. Idempotent: an answer already in hand is kept rather than re-asked.
     ///
     /// Re-asking on every search would be the safer-looking choice and is the wrong one. The answer
@@ -304,8 +499,41 @@ mod live {
         // Holding the sweep costs the pre-flight's own latency once and buys its answer, which is
         // the answer that can make the whole 49-place walk unnecessary. A pre-flight that fails
         // anyway returns to `STAGE_IDLE`, and the sweep then proceeds exactly as it always did.
+        //
+        // The same one-in-flight rule binds the sweep against Seamless's own query, and that is
+        // what `session_is_idle` below is for. Nothing held the sweep off Seamless: on run
+        // `br-20260918-000408-dc85` the sweep armed for 49 places at log line 149 and kept asking
+        // straight through Seamless's search, and by the measurement above the second request is
+        // the one that wins.
+        //
+        // Every observation of a failed invasion fits that one cause. Measured on
+        // `br-20260918-000408-dc85`, with the host reachable throughout:
+        //
+        // ```text
+        // her lobby, on the exact query Seamless sends   matching=1  (er-lobby-search-proof.py)
+        // Seamless calls to GetLobbyData / JoinLobby     0           (invasion-connect-probe.js)
+        // outbound P2P packets                          0
+        // cycles                                        0x0e -> 0x0f -> 0x12 -> 15s -> 0x0e
+        // ```
+        //
+        // A lobby list that never reaches Seamless's handler produces exactly that: nothing to
+        // read, nobody to dial, and a fifteen-second timeout it retries forever.
+        //
+        // This guard was removed once, on the grounds that run `br-20260917-235507-1c27` had it
+        // installed and failed anyway. That run cannot carry the argument: its query was narrowed
+        // to a tile whose own pre-flight had already answered zero, so no invasion could have
+        // landed there whatever the sweep did. The guard and an unnarrowed query have never run
+        // together, and together is what this is.
+        //
+        // The cost the removal was buying back is paid elsewhere instead: the sweep walks its ring
+        // only while nothing is searching, which is ordinary play before the finger is ever used.
+        // A neighbourhood mapped in advance is what the found-a-host banner then names.
         let stage = STAGE.load(Ordering::SeqCst);
-        if stage != STAGE_WANTED && stage != STAGE_SENT {
+        if stage != STAGE_WANTED
+            && stage != STAGE_SENT
+            && crate::local_invasion_filter::session_is_idle()
+        {
+            walk_the_ring_while_nothing_is_searching();
             sweep_tick();
         }
         hand_over_when_the_neighbourhood_is_empty();
@@ -628,6 +856,11 @@ mod live {
         call: Option<u64>,
         /// The first place found with somebody in it. The sweep stops there.
         found: Option<u32>,
+        /// The lobbies that place's query actually named, keys and all.
+        ///
+        /// The block above says where; this says who, and until it existed the answer to "who" was
+        /// thrown away with the rest of the `LobbyMatchList_t` the moment its count was read.
+        lobbies: Vec<FoundLobby>,
         /// How many places came back with an answer.
         answered: usize,
         /// Whether there is anything left to ask.
@@ -670,6 +903,31 @@ mod live {
     /// around wherever the player is standing now.
     pub fn arm_sweep(blocks: &[u32]) {
         let total = blocks.len();
+        // An identical ring keeps the walk it has already done instead of starting it over.
+        //
+        // This is what lets the near half of `Both near and far` ever finish. `tick` walks the
+        // ring only while the Seamless session is idle, and using an invasion finger arms the
+        // sweep and starts the search on the same frame, so a plain replace threw away whatever
+        // the idle ticks had measured and re-armed a 49-place ring into a session that would
+        // never be idle again. `next` then stayed at 0, `nearby` stayed `Asking`, and the
+        // `Nearby::Empty` branch in `lobby_publish::hunt_target` -- the only thing that drops the
+        // location filter for that row -- was unreachable code.
+        //
+        // Measured on run `br-20260918-020159-9b03`: `sweep: armed for 49 nearby place(s)` and
+        // then not one place answered across twenty-three search cycles.
+        let reused = with_sweep(|slot| match slot.as_ref() {
+            Some(sweep) if sweep.blocks == blocks => Some((sweep.answered, sweep.finished)),
+            _ => None,
+        });
+        if let Some((answered, finished)) = reused {
+            crate::standalone_log(format_args!(
+                "sweep: the ring of {total} nearby place(s) is already the one being walked -- \
+                 {answered} answered, finished={finished} -- so those answers are kept rather \
+                 than asked again from the start. Re-arming here is what used to delete the walk \
+                 the idle ticks had done."
+            ));
+            return;
+        }
         let generation = SWEEP_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         with_sweep(|slot| {
             *slot = Some(Sweep {
@@ -678,6 +936,7 @@ mod live {
                 next: 0,
                 call: None,
                 found: None,
+                lobbies: Vec::new(),
                 answered: 0,
                 finished: total == 0,
             });
@@ -688,9 +947,94 @@ mod live {
         ));
     }
 
+    /// The tile the idle walk last drew a ring around, or [`NO_CENTRE`] if it has not run.
+    static PREWALK_CENTRE: AtomicU32 = AtomicU32::new(NO_CENTRE);
+
+    /// Whether the ring now being walked was built with the world map's legacy table in hand.
+    ///
+    /// False while no world map exists yet, which is when the first ring of a session is built.
+    /// The walk re-arms on a block change alone, so without this a dungeon entered during that
+    /// window keeps its one-block ring for as long as the player stays in it.
+    static PREWALK_USED_LEGACY_TABLE: AtomicBool = AtomicBool::new(false);
+
+    /// Not a block id. Block ids are packed `mAA_BB_CC_DD` bytes, so the all-ones word is one no
+    /// map can produce, and it is distinct from the zero that `current_block` uses for unreadable.
+    const NO_CENTRE: u32 = u32::MAX;
+
+    /// Keep a ring armed around wherever the player is standing, while nothing is searching.
+    ///
+    /// The near half of `Both near and far` asks Steam one query per nearby place, and a query
+    /// issued while Seamless is searching does not come back -- only one `RequestLobbyList` can be
+    /// in flight on the interface, and the one Seamless sends is the one that wins. That is why
+    /// `sweep_tick` above is gated on the session being idle, and why arming the ring at the
+    /// moment an invasion finger is used could never work: the finger starts the search on the
+    /// same frame, so the ring was handed a session that would not be idle again.
+    ///
+    /// Walking it during ordinary play is the version of this that can finish. The module header
+    /// has described it that way since the gate went in -- "the sweep walks its ring only while
+    /// nothing is searching, which is ordinary play before the finger is ever used" -- and nothing
+    /// implemented it, so the ring was armed at the one moment it could not move. By the time the
+    /// item is used the neighbourhood is mapped, `nearby` already answers `Found` or `Empty`, and
+    /// `lobby_publish::hunt_target` picks the near half or the far half on the first query.
+    ///
+    /// Re-armed only when the centre tile changes, so a player standing still costs one atomic
+    /// load per tick and a player walking re-maps around wherever they arrive. [`arm_sweep`] keeps
+    /// an identical ring's answers, so the finger's own call is a no-op on a walk already done.
+    fn walk_the_ring_while_nothing_is_searching() {
+        let Some(here) = crate::lobby_publish::current_block() else {
+            return;
+        };
+        let here = here.raw();
+        // A ring built before the world map existed is a ring built without the legacy table, and
+        // in a legacy dungeon that is the difference between a neighbourhood and one block. The
+        // walk re-arms on a block change and nothing else, so that first ring would stand for as
+        // long as the player stayed put -- which is exactly the case a dungeon search is. Once the
+        // table is readable the ring is rebuilt for the block already being walked.
+        //
+        // `authoritative_view_model` is live for the whole of a loaded world rather than only
+        // while the map is open, so this waits on the load, not on the player opening anything.
+        let table_now = !crate::map_hooks::legacy_regions_for_search().is_empty();
+        let table_before = PREWALK_USED_LEGACY_TABLE.swap(table_now, Ordering::SeqCst);
+        let table_arrived = table_now && !table_before;
+        if PREWALK_CENTRE.swap(here, Ordering::SeqCst) == here && !table_arrived {
+            return;
+        }
+        let radius = crate::local_invasion_filter::current_config_snapshot()
+            .map_or(1, |config| config.prefilter_radius);
+        let ring = crate::local_invasion_filter::search_banner::nearby_ring(here, radius);
+        if table_arrived {
+            crate::standalone_log(format_args!(
+                "sweep: the world map's legacy table became readable, so the ring around the block \
+                 already being walked is rebuilt -- {} place(s) now. Built before the world map \
+                 exists, a ring in a legacy dungeon is the one block the player stands in, and the \
+                 walk only re-arms when they move.",
+                ring.len()
+            ));
+        }
+        arm_sweep(&ring);
+    }
+
     /// Forget the sweep, for a search that has been stood down.
+    ///
+    /// Nothing else to give back: the sweep reads lobbies and never enters one, so a stood-down
+    /// search leaves no membership behind in anybody's lobby.
     pub fn clear_sweep() {
         with_sweep(|slot| *slot = None);
+        // Let the idle walk map the neighbourhood again. Without this the centre still matches the
+        // tile the player is standing in, so the walk declines to re-arm and the ring the search
+        // just discarded is never rebuilt -- a second use of the item would then find `nearby`
+        // answering `Idle` with nothing behind it.
+        PREWALK_CENTRE.store(NO_CENTRE, Ordering::SeqCst);
+    }
+
+    /// Forget the sweep and the band it was climbing together, for a search that is over rather than
+    /// widening.
+    ///
+    /// Kept apart from [`clear_sweep`], which the band ladder itself calls between rungs: a rung
+    /// must survive the ring being re-armed under it, and must not survive the search ending.
+    pub fn end_search() {
+        clear_sweep();
+        crate::lobby_publish::reset_band();
     }
 
     /// What the sweep knows, for the ladder to point at and for the far half to wait on.
@@ -815,6 +1159,11 @@ mod live {
                     sweep.call = None;
                     sweep.answered += 1;
                     if matching > 0 {
+                        // The count is no longer the end of it. Until now a positive count set a
+                        // block and nothing ever held the lobby the banner was about: measured on
+                        // run `br-20260918-002055-bcc4`, `GetLobbyByIndex` was called zero times
+                        // in 46 search cycles while a host sat reachable throughout.
+                        sweep.lobbies = fetch_lobbies(matching);
                         sweep.found = Some(block);
                         sweep.finished = true;
                         return Outcome::Found(block);
@@ -836,7 +1185,31 @@ mod live {
                 // place still queued is one the search will never query, and the banner would go
                 // on naming them at one per 100ms underneath the line that says where it landed.
                 crate::local_invasion_filter::search_banner::clear();
-                crate::local_invasion_filter::banner::announce_found_host(true, block);
+                // Only a search somebody started may say so on screen.
+                //
+                // This walk runs during ordinary play -- that is the whole design, so the
+                // neighbourhood is mapped before the item is ever used -- and it painted "Found a
+                // host -- asking Seamless to join <place>" the moment the player walked into a
+                // block somebody was hosting in. Measured on run `br-20260918-192951-e31c`: the
+                // notice went up at log line 194, directly after map injection, and the first
+                // `the bounds popup chose NearbyOnly` is line 866. The player's words: it "pops up
+                // when I go into a location where someone is hosting before I even touch the
+                // recusant finger".
+                //
+                // Both halves of that sentence were false there. Nothing was asking Seamless
+                // anything, because no search was armed; and the sweep asks Steam for a count and
+                // keeps the lobbies for a search that may never be started. What the walk found is
+                // still worth the log line below -- it is the answer `hunt_target` reads when a
+                // search does begin -- so the finding is kept and only the claim is withdrawn.
+                let a_search_asked_for_this = crate::local_invasion_filter::finger_reach()
+                    != crate::local_invasion_filter::FINGER_REACH_NONE;
+                // `enabled` is the player's reject-notice option, like every other line the search
+                // paints. It was a literal `true` here, so this one banner ignored the setting.
+                let notice = crate::local_invasion_filter::current_config_snapshot()
+                    .is_none_or(|config| config.reject_notice);
+                if a_search_asked_for_this {
+                    crate::local_invasion_filter::banner::announce_found_host(notice, block);
+                }
                 crate::standalone_log(format_args!(
                     "sweep: a host is in {} -- the search points there and stops widening; the \
                      place queue is cleared so the banner names the answer instead of the places \
@@ -845,6 +1218,7 @@ mod live {
                         er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block)
                     )
                 ));
+                report_found_lobbies();
             }
             Outcome::Empty(asked) => {
                 crate::standalone_log(format_args!(
@@ -853,6 +1227,20 @@ mod live {
                      and the query goes out exactly as Seamless builds it; `Nearby only` keeps \
                      asking, because staying near is what that row is for."
                 ));
+                // `Nearby only` has one more thing to try before it gives up on the neighbourhood:
+                // the same ring, one matchmaking band higher. An empty ring at this player's band
+                // is not evidence that nobody is nearby -- Seamless matches its band value for
+                // equality, so a host one weapon-upgrade band away produces exactly this zero.
+                //
+                // Not for `Both near and far`: that row's next rung is dropping the location
+                // filter, taken directly below, and climbing a band at the same moment would widen
+                // place and band together with no way to attribute a later hit to either.
+                // The band ladder does not climb here, deliberately. This branch cannot be reached
+                // during a live search: `sweep_tick` runs only while the Seamless session is idle,
+                // so the ring freezes at place 1 and `Outcome::Empty` never arrives. Measured on
+                // `br-20260918-015127-6a6f`, where the ladder was wired here and never once fired.
+                // `local_invasion_filter::climb_band_on_failed_cycle` owns the climb instead,
+                // counting the search cycles that actually happen.
                 // Only the near-and-far row widens, so only it gets the banner. The notice option
                 // gates it like every other line the search paints.
                 if crate::local_invasion_filter::finger_reach_is_near_and_far() {

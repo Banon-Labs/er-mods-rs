@@ -123,6 +123,8 @@ pub mod menu_object;
 mod menu_seams;
 pub use map_pins_view::{log_pin_tier_tally, pin_appearance_for, pin_choice_signature};
 pub(crate) mod differential_scan;
+/// What a search cycle that connected to nobody widens next, lifted out at the size limit.
+mod failed_cycle;
 /// Join outcomes: the dead match the engine has already failed, and the progress read behind it.
 mod join_outcome;
 /// The per-frame session field-write tracer, lifted out when this file hit its size limit.
@@ -509,7 +511,8 @@ fn refresh_config() {
             }
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} search_by_location={} \
-                 search_radius={} widen_to_anywhere={} only_players_with_this_mod={} \
+                 search_radius={} widen_to_anywhere={} widen_band_when_nearby_exhausted={} \
+                 only_players_with_this_mod={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  blocks={} \
@@ -518,6 +521,11 @@ fn refresh_config() {
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
                 outcome.config.search_everywhere_when_exhausted,
+                // The band ladder's own switch. It decides whether a search that connects to
+                // nobody asks one matchmaking band higher next cycle, which changes which hosts
+                // can answer at all -- so a player who turns it off and still sees the ladder
+                // climb has no way to tell a stale build from an unparsed option without it.
+                outcome.config.widen_band_when_nearby_exhausted,
                 // Every option that changes behaviour must appear here. These three were missing,
                 // and the gap cost a live A/B on 2026-08-06: the file was edited mid-session to turn
                 // `dll_users_only` on, this line duly reprinted -- proving the reload had happened --
@@ -610,11 +618,18 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
 #[cfg(windows)]
 pub(crate) fn stand_down_hunt(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
-    // The finger's override lives exactly as long as its search does.
-    set_finger_reach(FINGER_REACH_NONE);
-    // So does the neighbourhood it measured. A sweep left behind would let the next search read
-    // an answer about somewhere the player has walked away from.
-    crate::lobby_preflight::clear_sweep();
+    // The recital of the places it was asking about goes now. This function's own log line
+    // promises "nothing here will start another search until you ask for one", and a screen still
+    // naming one location a second is the player's only evidence about whether that is true --
+    // reported 2026-09-17 for the finger's own call-off prompt as "this doesn't seem to cancel my
+    // seamless searching or the banner from reading back or appearing", and every other caller
+    // here means exactly the same thing by "stop".
+    //
+    // The latch goes with it. It suppresses a repeat by ordinal rather than by search, so a
+    // search called off during its first place would have the next search's `1 of N` swallowed --
+    // silence at the moment the player is checking whether the item did anything at all.
+    search_banner::clear();
+    banner::forget_last_announcement();
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -629,6 +644,21 @@ pub(crate) fn stand_down_hunt(reason: &str) {
         ));
     }
     cancel_live_search_for_player(reason);
+    // The finger's override lives exactly as long as its search does -- and the search outlives
+    // this function by the length of its own unwind, which is why these two lines are below the
+    // cancel rather than above it.
+    //
+    // Above it they were a hole with the same shape as the bug they sat beside. `FINGER_REACH_NONE`
+    // makes `lobby_publish::hunt_target` answer `no_finger`, so the query stops being narrowed, and
+    // it takes `apply_finger_override`'s forced `enabled` with it, so the reject filter stops
+    // judging what comes back -- while the search the player just stopped is still running. A query
+    // going out in that window is the whole population, unjudged, which is the search they
+    // declined. Retiring after the cancel means the narrowing is the last thing to go.
+    //
+    // The neighbourhood the sweep measured goes with it: a sweep left behind would let the next
+    // search read an answer about somewhere the player has walked away from.
+    set_finger_reach(FINGER_REACH_NONE);
+    crate::lobby_preflight::clear_sweep();
 }
 
 /// Give the running search back to Seamless, unfiltered and unjudged, and stop touching it.
@@ -661,7 +691,10 @@ pub(crate) fn stand_down_hunt(reason: &str) {
 pub(crate) fn hand_off_to_seamless(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
     set_finger_reach(FINGER_REACH_NONE);
-    crate::lobby_preflight::clear_sweep();
+    // The search is over rather than widening, so the band ladder goes back to the player's own
+    // band with it. A rung that outlived its search would start the next invasion somewhere the
+    // player never climbed to, with nothing on screen to say so.
+    crate::lobby_preflight::end_search();
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -810,6 +843,16 @@ pub(crate) fn set_finger_reach(reach: usize) {
     FINGER_REACH.store(reach, Ordering::SeqCst);
 }
 
+/// The raw reach, for the one caller that has to tell all three states apart.
+///
+/// The two predicates beside this each collapse the other two states into `false`, which is what
+/// their callers want and is wrong for `hunt_target`: it has to distinguish "the player chose a
+/// reach" from "no finger started this search" before it may narrow anything, and both predicates
+/// answer `false` to the second case and to one of the first two.
+pub(crate) fn finger_reach() -> usize {
+    FINGER_REACH.load(Ordering::SeqCst)
+}
+
 /// Overlay the finger's choice on the loaded config, for as long as its search is running.
 ///
 /// The three switches are forced together because they are one mechanism: the widening search runs
@@ -823,8 +866,32 @@ fn apply_finger_override(mut config: LocalInvasionConfig) -> LocalInvasionConfig
         return config;
     }
     config.enabled = true;
-    config.hunt = true;
     config.steam_hooks = true;
+    // `hunt` is deliberately not forced, and forcing it was the defect. Its own doc comment on
+    // `LocalInvasionConfig` says what it costs -- "hunt asks Steam for a key only this DLL's users
+    // publish, so while it is on a host without the DLL is invisible to you. That is a trade the
+    // user must choose, never a default" -- and this function turned it on for every finger, which
+    // made it exactly a default.
+    //
+    // What it cost, measured with `scripts/er-lobby-search-proof.py`, which sends the queries
+    // itself and reads every key of every lobby that comes back. Run `br-20260917-230843-fc3b`
+    // with this DLL loaded, and the control run with it withheld, agree:
+    //
+    // ```text
+    // unfiltered control            matching=50
+    // seamless shape                matching=50
+    // exists: any block id at all   matching=1
+    // exists: a key nobody carries  matching=0     <- negative control
+    // ```
+    //
+    // Fifty Seamless hosts reachable; one of them ran this DLL. So every search a finger started
+    // was narrowed to that one, and the player watched `Found a host in Highroad Cross` followed
+    // by no invasion, over and over, for as long as the finger stayed armed.
+    //
+    // The other two switches stay forced because they cost the player nothing. `enabled` arms the
+    // reject filter, which declines destinations it does not want and still sees every host --
+    // that is how a reach is meant to be enforced. `steam_hooks` installs the detour that path
+    // rides on. Only `hunt` trades reach away, so only `hunt` is the player's to spend.
     // The player's own radius still decides how wide "nearby" is; the choice only decides whether
     // the search may stop being nearby. A file with no radius set would otherwise make `Nearby
     // only` a single-tile search, which is an empty search.
@@ -1926,6 +1993,16 @@ fn log_transition(abi: &ersc::Abi, previous: usize, state: u32, driven_by: Optio
             None => String::new(),
         },
     ));
+    failed_cycle::advance_place_on_failed_cycle(abi, previous, state);
+    failed_cycle::climb_band_on_failed_cycle(abi, previous, state);
+    // A search starting from idle is the moment the player is looking for somebody again, and the
+    // only moment the search banners are allowed to speak after a match. Idle is the discriminator
+    // that matters: every other arrival at `SEARCHING` is a failed cycle restarting mid-search, and
+    // letting those lift the quiet would put the place recital back on screen during the invasion
+    // it was silenced for.
+    if state == abi.state_searching && previous as u32 == abi.state_idle {
+        banner::allow_search_banners();
+    }
 }
 
 /// Ticks per second over a dwell, or `None` when the interval is too short to divide meaningfully.

@@ -33,6 +33,34 @@
 //! double use. It must be `Client` and nothing weaker: during a search the state is `None` or
 //! `Joining`, and pressing the finger again there is how the player cancels the search and toggles
 //! the mode, in a loop.
+//!
+//! # Why the region term is dropped, and why by hand
+//!
+//! This module used to re-gate on `CS::PlayerIns::CanUseBreakInItem` (1.17.1 `0x140657d50`)
+//! wholesale. That function bundles the region question with two others, and the region question
+//! is the one Seamless disagrees with: Seamless makes zones invadable that vanilla flags off, so a
+//! player standing in one had every invasion item greyed -- in the inventory as much as the
+//! Multiplayer menu, because `CanUseGoods` is the one gate all three of its callers share
+//! (`GetSelectedGoodsUseAnim`, `IsItemUsable`, `CanMainPlayerUseGoods`).
+//!
+//! Measured live 2026-09-18 on the user's session, walking between two regions with
+//! `scripts/frida/breakin-region-gate.js`:
+//!
+//! ```text
+//! region 1400011  IsInSafePosRange=1 CanStartBreakIn=1 IsBreakInLimited=1 CanUseBreakInItem=1
+//! region 1400000  IsInSafePosRange=1 CanStartBreakIn=0 IsBreakInLimited=0 CanUseBreakInItem=0
+//! ```
+//!
+//! Exactly one term moves. `IsInSafePosRange` holds at 1 in both, and `CanStartBreakIn` collapses
+//! only because it asks the same region predicate about `FieldArea->playRegionParamId`. So
+//! [`can_use_break_in_item_ignoring_region`] asks the surviving terms itself.
+//!
+//! Forcing `IsBreakInLimitedByEventFlagId` is what the Frida agent did, and it works -- the user
+//! confirmed the items usable and an invasion obtainable. It is the wrong product shape because
+//! that predicate is shared: scanning `eldenring-deobf-1.17.1.bin` for calls landing on
+//! `0xa61980` finds three, and only two are these. The third, at `0x140a04c25` inside the function
+//! starting `0x140a04b4a`, belongs to something this mod has not read and must not change. Asking
+//! the terms directly patches no engine code at all.
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -48,39 +76,24 @@ const BLOODY_FINGER: usize = 102;
 const FESTERING_BLOODY_FINGER: usize = 111;
 const RECUSANT_FINGER: usize = 112;
 
-/// `CS::PlayerIns::CanUseBreakInItem` on 1.17 -- the engine's own answer to "may this player use
-/// an invasion item right now", and the term this module must never override.
+/// `CS::PlayerIns::CanUseBreakInItem` on 1.17.1 -- the engine's own answer to "may this player use
+/// an invasion item right now".
 ///
 /// Carried from 1.16.2 `0x140656f00` with `scripts/map-rvas-1162-to-1170.py`: delta `+0xe50`,
 /// unique on a 38-byte signature, the same delta `CAN_USE_GOODS_RVA` took. Below the `0xafefe9`
 /// boundary, so 1.17.0 and 1.17.1 agree. The mapping was then read rather than trusted -- the
 /// disassembly at `0x140657d50` in `eldenring-deobf-1.17.1.bin` is instruction-for-instruction the
-/// 1.16.2 function, differing only in the rip displacements the moved globals force, and it ends
-/// in a `ret` at `+0x8d` for the 142 bytes Ghidra reports.
+/// 1.16.2 function, differing only in the rip displacements the moved globals force.
 ///
-/// What it decides, from the decompile:
-///
-/// ```text
-/// CanUseBreakInItem(player) = IsInSafePosRange(player)
-///                          && WorldChrManImp::CanStartBreakIn(WorldChrMan)
-///                          && IsBreakInLimitedByEventFlagId(&player->playRegionId)
-///
-/// CanStartBreakIn(w)       = w->mainPlayerIns != null
-///                          && !HasSpecialEffectWithStateInfo(player->specialEffect, 0x1a2)
-///                          && IsBreakInLimitedByEventFlagId(FieldArea->playRegionParamId)
-/// ```
-///
-/// State info `0x1a2` is not the world-open bit and must not be described as one: it appears in
-/// `CanStartMultiplay` and `CanStartBreakIn` alike, in byte-identical position, so it gates both
-/// halves of multiplayer rather than picking out a host. What it actually is has not been read.
-///
-/// The reason to ask the engine at all rather than a lobby key is that Seamless 2.0.1 no longer
-/// spells its lobby-data key names in plaintext. `lobby_breakin_lobby_ykssr_199_6` -- the key
-/// `docs/invasion-warp-second-player-setup.md` records as reading `true` for an open world -- along
-/// with `breakin`, `ykssr` and `lobby_type`, occurs zero times in
-/// `vendor-archive/seamless/ersc-2.0.1.dll`. That doc's measurement was taken against an older
-/// build, so the key cannot be named statically today and an engine predicate is the firmer source.
+/// Its region term is the one Seamless disagrees with, and it is answered upstream by
+/// [`crate::break_in_region_gate`] rather than skipped here -- the engine asks the same question
+/// again while the invasion runs, so skipping it only here left the game cancelling what the
+/// player had started.
 const CAN_USE_BREAK_IN_ITEM_RVA: u32 = 0x65_7d50;
+
+/// `PlayerIns->playRegionId`, from `CanUseBreakInItem`'s own `lea rcx,[rbx+0x6e8]` at
+/// `0x140657db9`. Read only for the log line that names which region a finger was opened in.
+const PLAYER_INS_PLAY_REGION_ID_OFFSET: usize = 0x6e8;
 
 /// `CS::GetPartyMemberInfo` on 1.17 -- `return GLOBAL_GameMan->partyMemberInfo`, 15 bytes.
 ///
@@ -168,20 +181,51 @@ fn connected_as_client() -> Option<bool> {
     Some(state == lobby_state::CLIENT)
 }
 
-/// Ask the engine whether this player may use a break-in item at all.
+/// Ask the engine whether this player may use a break-in item.
+///
+/// # Why this asks the engine rather than reproducing it
+///
+/// It used to reproduce `CanUseBreakInItem` minus its two region calls, because the region flag is
+/// what greys the item in a zone Seamless makes playable. That opened the item and nothing else,
+/// and the engine re-asked the same question while the invasion ran and cancelled it -- measured on
+/// run `br-20260918-185924-8a9e` as network message `2200200`, "Invasion canceled". The flag is now
+/// answered for every caller by [`crate::break_in_region_gate`], so the engine's own predicate
+/// returns true here and there is nothing left to route around.
+///
+/// The terms it decides, from the 1.17.1 disassembly:
+///
+/// ```text
+/// CanUseBreakInItem(p) = IsInSafePosRange(p)
+///                     && CanStartBreakIn(WorldChrMan)
+///                     && IsBreakInLimitedByEventFlagId(&p->playRegionId)
+///
+/// CanStartBreakIn(w)   = w->mainPlayerIns != null
+///                     && !HasSpecialEffectWithStateInfo(sp, 0x1a2)
+///                     && IsBreakInLimitedByEventFlagId(FieldArea->playRegionParamId)
+/// ```
+///
+/// State info `0x1a2` is not the world-open bit and must not be described as one: it appears in
+/// `CanStartMultiplay` and `CanStartBreakIn` alike, in byte-identical position, so it gates both
+/// halves of multiplayer rather than picking out a host. What it actually is has not been read,
+/// which is why it is left able to refuse.
 ///
 /// `None` when nothing can be read or resolved, and every caller treats that as "do not let this
-/// decide". `CanStartBreakIn` dereferences `GLOBAL_WorldChrMan` through `FD4Singleton`, which
-/// `DLPanic`s on null rather than returning, so the global is checked here first: `CanUseGoods`
-/// reaches the call only past `CanStartMultiplay`, and this module calls it on frames where that
-/// term refused, which the engine itself never does.
+/// decide" -- a failed read looks identical to a feature that never worked, so re-greying the item
+/// on one would hide this module rather than gate it.
+///
+/// `CanStartBreakIn` dereferences `GLOBAL_WorldChrMan` through `FD4Singleton`, which `DLPanic`s on
+/// null rather than returning, so the global is checked here first: `CanUseGoods` reaches the call
+/// only past `CanStartMultiplay`, and this module calls it on frames where that term refused,
+/// which the engine itself never does.
 #[cfg(windows)]
 fn can_use_break_in_item(player: usize) -> Option<bool> {
     if player == 0 {
         return None;
     }
     let base = er_game_base::mem::game_module_base().ok()?;
-    // SAFETY: fault-tolerant read of a game global through the checked resolver.
+    // SAFETY: fault-tolerant read of a game global through the checked resolver, which translates
+    // this 1.16.2 rva for the running build -- `docs/recon/rva-map-1162-to-1170.data.tsv` maps
+    // `0x3d65f88` to `0x3d69ff8`, the address 1.17.1's own `CanUseBreakInItem` loads.
     let world_chr_man = unsafe {
         er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
             base,
@@ -301,6 +345,13 @@ unsafe extern "system" fn can_use_goods_hook(
     // An unreadable answer forces anyway, for the same reason `connected_as_client` does: a read
     // that fails looks identical to a feature that never worked, and re-greying the item on a
     // failed read would hide this module rather than gate it.
+    //
+    // That measurement left one case out, and 2026-09-18 added it: the player standing in a region
+    // vanilla flags non-pvp. There this term refused, the refusal was kept, and every invasion item
+    // greyed -- in the inventory as well as the Multiplayer menu, because `CanUseGoods` is the one
+    // gate all three of its callers share. The fix is upstream of this line, in
+    // [`crate::break_in_region_gate`], so the engine answers the region question the same way
+    // everywhere rather than this module answering it once for the item.
     if can_use_break_in_item(player) == Some(false) {
         LEFT_REFUSED_BY_BREAK_IN_TERM.fetch_add(1, Ordering::Relaxed);
         return verdict;
@@ -318,8 +369,41 @@ unsafe extern "system" fn can_use_goods_hook(
         LEFT_REFUSED_WHILE_HOSTING.fetch_add(1, Ordering::Relaxed);
         return verdict;
     }
-    FORCED.fetch_add(1, Ordering::Relaxed);
+    // The first opened finger names the region it was opened in, once.
+    //
+    // Without this the change is unprovable from a log: the counters are in telemetry, and a run
+    // that opened an item in a region vanilla permits anyway looks identical to one that opened it
+    // in a region vanilla refuses -- which is the only case this narrowing exists for. The region
+    // id is the whole difference, so it is the thing written down. Measured values to compare
+    // against: `1400011` permits invading and `1400000` does not.
+    //
+    // One line, not one per call: `CanUseGoods` is reached a few hundred times a second with a
+    // menu up, and the running total lives in the counters.
+    if FORCED.fetch_add(1, Ordering::Relaxed) == 0 {
+        let region = play_region_id(player);
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: opened goods {goods_id} in play region {region:?}. \
+             CanUseBreakInItem was asked and allowed it: its region term is answered upstream by \
+             the break-in region gate, so the engine gives the same answer to the running invasion \
+             and the region pool as it gives this item. IsInSafePosRange and the 0x1a2 state-info \
+             term can still refuse."
+        ));
+    }
     1
+}
+
+/// `player->playRegionId`, for the log line above. `None` when it cannot be read.
+///
+/// The offset is the engine's own: `CanUseBreakInItem` computes this field's address with
+/// `lea rcx,[rbx+0x6e8]` at `0x140657db9` before handing it to the region predicate.
+#[cfg(windows)]
+fn play_region_id(player: usize) -> Option<u32> {
+    if player == 0 {
+        return None;
+    }
+    // SAFETY: fault-tolerant read of one int inside the `PlayerIns` the engine passed in.
+    unsafe { er_game_base::mem::safe_read_i32(player + PLAYER_INS_PLAY_REGION_ID_OFFSET) }
+        .map(|value| value as u32)
 }
 
 /// Install the gate override, once.
@@ -447,6 +531,38 @@ mod tests {
                 !body.contains(forbidden),
                 "`{forbidden}` in the gate module -- this module answers the predicate and must \
                  never write a param row"
+            );
+        }
+    }
+
+    /// The region question is answered upstream, not reproduced here.
+    ///
+    /// Reproducing `CanUseBreakInItem` minus its region calls is what this module did between two
+    /// commits on 2026-09-18, and it opened the item while the engine went on refusing everywhere
+    /// else -- the game then cancelled the invasion the player had just started, as network
+    /// message `2200200`. The failure is silent from this module's side: the item works, the
+    /// invasion does not, and nothing here logs a thing. So the shape is asserted against.
+    #[test]
+    fn the_region_question_is_answered_upstream_not_reproduced_here() {
+        let source = include_str!("can_use_goods_gate.rs");
+        let code: String = source
+            .split("mod tests {")
+            .next()
+            .expect("a tests module")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        // The engine's own predicate is what the hook asks.
+        assert!(code.contains("can_use_break_in_item(player) == Some(false)"));
+        // A hand-rolled copy of the engine's terms is the shape that failed. `IsInSafePosRange` and
+        // the state-info predicate are the two it had to call to rebuild the decision, so naming
+        // either here means the copy is back.
+        for rebuilt in ["IsInSafePosRangeFn", "HasSpecialEffectWithStateInfoFn"] {
+            assert!(
+                !code.contains(rebuilt),
+                "`{rebuilt}` is back -- this module is rebuilding a predicate the engine owns, and \
+                 the region flag it skips is still refusing every other caller"
             );
         }
     }

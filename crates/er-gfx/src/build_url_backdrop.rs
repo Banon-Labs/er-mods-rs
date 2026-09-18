@@ -63,7 +63,7 @@
 //! deliberate slack around an unmeasured mapping, not a guess at the mapping.
 
 use crate::build_url_02_990::build_url_window_position;
-use crate::{CxformWithAlpha, Matrix, Movie, TWIPS_PER_PIXEL, Tag};
+use crate::{CxformWithAlpha, Matrix, Movie, TWIPS_PER_PIXEL, Tag, min_signed_nbits};
 
 /// Character id of the movie's solid-black plate, reused as the dim. Vanilla value, shared with
 /// [`crate::build_url_02_990`].
@@ -211,22 +211,6 @@ pub fn backdrop_stage_rect_px() -> BackdropRect {
         bottom: local.bottom + window_y,
         alpha_mult: local.alpha_mult,
     }
-}
-
-/// Narrowest signed bit width that can hold every value, as a `MATRIX` `Nbits`.
-///
-/// The codec reproduces a source's `Nbits` verbatim, which is right for tags nothing edits and
-/// wrong for one built from scratch: a scale term of several hundred thousand silently truncates at
-/// the widths the vanilla placements use.
-fn min_signed_nbits(values: &[i32]) -> u32 {
-    values
-        .iter()
-        .map(|&value| {
-            let magnitude = if value < 0 { !value } else { value } as u32;
-            u32::BITS - magnitude.leading_zeros() + 1
-        })
-        .max()
-        .unwrap_or(1)
 }
 
 /// The `MATRIX` that takes [`PLATE_CHARACTER_ID`]'s own bounds onto `target`.
