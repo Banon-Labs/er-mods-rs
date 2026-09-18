@@ -605,6 +605,37 @@ pub const WORLD_CHR_MAN_GLOBAL_RVA: usize = 0x3d65f88;
 /// `WorldChrMan::mainPlayerIns`, the local player inside the singleton above.
 pub const WORLD_CHR_MAN_PLAYER_INS_OFFSET: usize = 0x1e508;
 
+/// `CSPlayRegionPointMan` singleton global -- the table that decides which play region a position
+/// is in, and so what "nearby" means for an invasion.
+///
+/// Read out of `CS::ChrIns::GetPlayRegionId` (`0x1403e96d0`), which loads it four times; the first
+/// is `MOV RAX,qword ptr [0x143d6e388]` at `0x1403e96e4`. The load of
+/// [`WORLD_CHR_MAN_GLOBAL_RVA`] sits in the same function at `0x1403e971c` reading `0x143d65f88`,
+/// which is how this address is known to sit on the same 1.16.2 baseline as the rest of this file
+/// rather than on a dump carrying its own shift.
+///
+/// Region membership is positional, never per-block: `GetPlayRegionId` takes the character's
+/// physics position and hands it to `FUN_140a61290`, which walks this singleton and returns the
+/// region point whose own `contains` test accepts it. A block id therefore cannot be turned into a
+/// region by arithmetic -- the table has to be read, which is why this address exists.
+pub const PLAY_REGION_POINT_MAN_GLOBAL_RVA: usize = 0x3d6e388;
+
+/// The region-point container inside [`PLAY_REGION_POINT_MAN_GLOBAL_RVA`].
+///
+/// An embedded MSVC `std::map` rather than a pointer to one. `FUN_140a61290` reads
+/// `param_1->field1_0x8` and then dereferences it once to reach the first node, so `+0x8` is the
+/// head sentinel and `*(+0x8)` is where the in-order walk starts -- the same shape
+/// `er_invasion_warp_core::legacy_map_regions` already walks, down to the `isNull` byte at node
+/// `+0x19` that terminates a branch.
+pub const PLAY_REGION_POINT_MAN_MAP_OFFSET: usize = 0x8;
+
+/// A container node's own region-point object.
+///
+/// `FUN_140a61290` reads `node[5]` -- `node + 0x28` -- null-checks it, and calls its vtable slot
+/// `+0x10` as the `contains(position)` test. A null is skipped rather than fatal there, so a walk
+/// here must skip it too.
+pub const PLAY_REGION_POINT_NODE_POINT_OFFSET: usize = 0x28;
+
 // ---- Centralised by the #362 merge (move-vs-move) ------------------------------------------
 // These seven addresses were each declared as a literal in two crates at once, because two
 // branches independently moved the same constants into two different new crates: er-title-flow

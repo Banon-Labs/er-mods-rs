@@ -75,26 +75,65 @@ impl Rung {
         self.level_steps == 0 && self.weapon_steps == 0
     }
 
+    /// Every rung a lap walks, in order, nearest bands first.
+    ///
+    /// The order replaced a weapon-first sweep on 2026-09-18. That sweep asked all seven weapon
+    /// bands before stepping the level once, which put a host two level bands away at rung 16 of 35
+    /// -- measured live on run `br-20260918-224517-b8a9`, where an RL9 `+2` character asking `0_0`
+    /// climbed `0_1 0_2 0_3 0_4 0_5 0_6 1_0 1_1` over about two minutes while the friend it was
+    /// looking for published `2_1` the whole time. Ring ordering reaches that `2_1` at rung five.
+    ///
+    /// The player's own words for the shape they wanted, 2026-09-18: "its supposed to go 0_0, 1_0,
+    /// 1_1, 2_1, 2_2, 3_3" -- the diagonal, because a host at a higher character level usually
+    /// carries a higher weapon upgrade too, so the two numbers move together in the population
+    /// rather than independently. Their first three rungs are the first three here.
+    ///
+    /// `0_1` is inserted at rung three, which their sequence does not have. A pure diagonal visits
+    /// 11 of the 35 pairs, and dropping the other 24 would leave a host at `0_3` or `1_5` permanently
+    /// unreachable; worse, it pushes a host one weapon band up at the player's own level from rung
+    /// one to rung eleven. Ring ordering keeps the diagonal at the front and still names every pair.
+    ///
+    /// Coverage is asserted by a test rather than promised here: the order is a preference, but a
+    /// band this never asks for is a host the player can never meet.
+    #[must_use]
+    pub fn lap() -> Vec<Self> {
+        let mut order: Vec<Self> = (0..=MAX_LEVEL_STEPS)
+            .flat_map(|level_steps| {
+                (0..=MAX_WEAPON_BAND).map(move |weapon_steps| Self {
+                    level_steps,
+                    weapon_steps,
+                })
+            })
+            .collect();
+        // Ring by ring outward, level band ahead of weapon band inside a ring.
+        //
+        // `max` and not `level + weapon`: the ring is how far the furthest of the two bands has
+        // moved, which is what makes `1_1` a near rung rather than a distant one. That single choice
+        // is what puts the player's own diagonal at the front -- `0_0`, `1_0`, `1_1`, then `2_1`
+        // four rungs later -- while leaving every pair in the lap.
+        order.sort_by_key(|rung| {
+            (
+                rung.level_steps.max(rung.weapon_steps),
+                core::cmp::Reverse(rung.level_steps),
+                rung.weapon_steps,
+            )
+        });
+        order
+    }
+
     /// The next rung up, or `None` once the ladder is spent.
     ///
-    /// The weapon band climbs first and the level band takes a step only when it is exhausted.
-    /// Stepping the level band resets the weapon steps to zero rather than carrying them: the two
-    /// numbers are separate bands, and `3_7` is not a place anybody is.
+    /// A position in [`Self::lap`] rather than arithmetic on the two axes, because the order is no
+    /// longer something either axis can decide alone: the diagonal comes first and the leftover
+    /// pairs follow it.
+    ///
+    /// A rung the lap does not contain -- which no caller should produce -- answers `None` rather
+    /// than guessing, so a bad rung ends the ladder and restarts it instead of wandering off.
     #[must_use]
-    pub const fn next(self) -> Option<Self> {
-        if self.weapon_steps < MAX_WEAPON_BAND {
-            return Some(Self {
-                level_steps: self.level_steps,
-                weapon_steps: self.weapon_steps + 1,
-            });
-        }
-        if self.level_steps < MAX_LEVEL_STEPS {
-            return Some(Self {
-                level_steps: self.level_steps + 1,
-                weapon_steps: 0,
-            });
-        }
-        None
+    pub fn next(self) -> Option<Self> {
+        let order = Self::lap();
+        let at = order.iter().position(|rung| *rung == self)?;
+        order.get(at + 1).copied()
     }
 
     /// The next rung up, starting the ladder over at the player's own band once it is spent.
@@ -109,8 +148,9 @@ impl Rung {
     ///
     /// The lap is reported rather than silent, so the value the caller returns says which of the
     /// two things happened: climbing one rung, or starting the ladder again.
+    // Not `const` any more: the order it walks is [`Self::lap`], which allocates.
     #[must_use]
-    pub const fn next_or_restart(self) -> (Self, bool) {
+    pub fn next_or_restart(self) -> (Self, bool) {
         match self.next() {
             Some(next) => (next, false),
             None => (Self::own(), true),
@@ -154,14 +194,14 @@ pub fn climbed(value: &str, rung: Rung) -> Option<String> {
         return None;
     }
     let (level, weapon) = split_band(value)?;
+    // Both axes are offsets from the player's own band. This used to replace the weapon band with
+    // `rung.weapon_steps` whenever the level stepped, on the reasoning that a new level band starts
+    // its weapon bands again from the bottom -- and that was survivable only while the ladder swept
+    // one axis at a time. On the diagonal it silently throws the player's own weapon band away: a
+    // `2_1` character at rung `1_1` would ask `3_1`, meaning level +1 and weapon minus one, which is
+    // a band nobody on the diagonal intended to visit.
     let climbed_level = level.saturating_add(rung.level_steps);
-    // A level step means starting the weapon bands again from the bottom of that band, not
-    // carrying this player's own weapon band into it.
-    let climbed_weapon = if rung.level_steps == 0 {
-        weapon.saturating_add(rung.weapon_steps)
-    } else {
-        rung.weapon_steps
-    };
+    let climbed_weapon = weapon.saturating_add(rung.weapon_steps);
     Some(format!("{climbed_level}_{climbed_weapon}"))
 }
 
@@ -169,21 +209,80 @@ pub fn climbed(value: &str, rung: Rung) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// The whole walk, spelled out, because the order is the feature.
+    ///
+    /// Asserted as one literal sequence rather than as properties: the previous test checked three
+    /// indices and a last element, and every one of those still passed while the ladder was taking
+    /// sixteen rungs to reach a band three rungs away.
     #[test]
-    fn the_ladder_climbs_weapon_bands_before_level_bands() {
+    fn the_ladder_climbs_the_diagonal_level_first() {
         let mut rung = Rung::own();
-        let mut seen = Vec::new();
+        let mut seen = vec![(rung.level_steps, rung.weapon_steps)];
         while let Some(next) = rung.next() {
             seen.push((next.level_steps, next.weapon_steps));
             rung = next;
         }
-        assert_eq!(seen[0], (0, 1));
-        assert_eq!(seen[MAX_WEAPON_BAND as usize - 1], (0, MAX_WEAPON_BAND));
-        assert_eq!(seen[MAX_WEAPON_BAND as usize], (1, 0));
         assert_eq!(
-            seen.last().copied(),
-            Some((MAX_LEVEL_STEPS, MAX_WEAPON_BAND))
+            seen[..7].to_vec(),
+            vec![(0, 0), (1, 0), (1, 1), (0, 1), (2, 0), (2, 1), (2, 2)],
+            "the near rungs, and the player's own diagonal at the front of them"
         );
+        assert_eq!(
+            seen.len(),
+            (MAX_LEVEL_STEPS as usize + 1) * (MAX_WEAPON_BAND as usize + 1),
+            "the lap still names every pair; the order changed, the coverage did not"
+        );
+    }
+
+    /// Every pair appears exactly once. The order is a preference; the coverage is a contract, and
+    /// a band this never asks for is a host the player can never meet.
+    #[test]
+    fn the_lap_names_every_pair_once() {
+        let lap = Rung::lap();
+        let mut sorted = lap.clone();
+        sorted.sort_by_key(|rung| (rung.level_steps, rung.weapon_steps));
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            lap.len(),
+            "a pair appears twice, so one cycle is spent asking a band already asked"
+        );
+        assert_eq!(
+            lap.len(),
+            (MAX_LEVEL_STEPS as usize + 1) * (MAX_WEAPON_BAND as usize + 1)
+        );
+    }
+
+    /// The rung that cost an evening. It was sixteen failed cycles away; it is now five.
+    ///
+    /// Held as an upper bound rather than an equality, because the number is a consequence of the
+    /// ordering and a future ordering may better it. What must not happen again is a near host
+    /// sitting most of a lap away: at roughly fifteen seconds a cycle, sixteen rungs is four
+    /// minutes of a player holding a finger and being told nobody is online.
+    #[test]
+    fn a_host_two_level_bands_up_is_a_near_rung() {
+        let mut rung = Rung::own();
+        let mut rungs = 0usize;
+        while rung.level_steps != 2 || rung.weapon_steps != 1 {
+            rung = rung.next().expect("2_1 must be on the ladder at all");
+            rungs += 1;
+        }
+        assert_eq!(rungs, 5, "2_1 is five failed cycles away, not sixteen");
+        assert!(
+            rungs * 4 < (MAX_LEVEL_STEPS as usize + 1) * (MAX_WEAPON_BAND as usize + 1),
+            "a two-band host must be in the first quarter of the lap, not most of the way through"
+        );
+    }
+
+    /// Neither axis is ever stepped past its own cap, which is what makes the reset unnecessary.
+    #[test]
+    fn no_rung_exceeds_either_cap() {
+        let mut rung = Rung::own();
+        while let Some(next) = rung.next() {
+            assert!(next.level_steps <= MAX_LEVEL_STEPS, "level cap: {next:?}");
+            assert!(next.weapon_steps <= MAX_WEAPON_BAND, "weapon cap: {next:?}");
+            rung = next;
+        }
     }
 
     /// The ladder wraps instead of parking on its last rung, so a search held open keeps coming
@@ -191,10 +290,9 @@ mod tests {
     /// furthest from them and nobody at their own level could be returned.
     #[test]
     fn a_spent_ladder_starts_again_at_the_players_own_band() {
-        let top = Rung {
-            level_steps: MAX_LEVEL_STEPS,
-            weapon_steps: MAX_WEAPON_BAND,
-        };
+        // The last rung is whatever the lap ends on, not a pair anyone can name by hand -- under
+        // ring ordering `4_6` is the first rung of the outermost ring, not the last.
+        let top = *Rung::lap().last().expect("the lap is not empty");
         assert_eq!(top.next(), None, "this is the last rung");
         assert_eq!(top.next_or_restart(), (Rung::own(), true));
 
@@ -226,21 +324,41 @@ mod tests {
         assert_eq!(visited[0], Rung::own());
     }
 
+    /// The two hosts this ladder was built for, and how many failed cycles each now costs.
+    ///
+    /// Both were measured live and both used to be a whole sweep away. `2_2` against a `2_1`
+    /// player is the 2026-09-17 case -- six searches at `2_1` returned nothing and the first at
+    /// `2_2` returned her lobby. `2_1` against a `0_0` player is the 2026-09-18 case, where the
+    /// old weapon-first sweep put the friend at rung sixteen and the player never reached him.
     #[test]
-    fn the_first_rung_reaches_the_host_that_was_measured_unreachable() {
-        // The live case: this player searched `2_1`, the host published `2_2`, and six searches at
-        // `2_1` returned nothing while the first at `2_2` returned her lobby.
-        let first = Rung::own().next().expect("a ladder has a first rung");
-        assert_eq!(climbed("2_1", first).as_deref(), Some("2_2"));
+    fn the_hosts_that_were_measured_unreachable_are_near_rungs_now() {
+        let lap = Rung::lap();
+        let rung_of = |player: &str, host: &str| -> usize {
+            lap.iter()
+                .position(|rung| climbed(player, *rung).as_deref() == Some(host))
+                .unwrap_or_else(|| panic!("{host} is not reachable from {player} at all"))
+        };
+        assert_eq!(rung_of("2_1", "2_2"), 3, "one weapon band up, same level");
+        assert_eq!(
+            rung_of("0_0", "2_1"),
+            5,
+            "two level bands up, one weapon band"
+        );
     }
 
+    /// A level step carries the player's own weapon band with it.
+    ///
+    /// The inverse of this was asserted until 2026-09-18, when the ladder swept one axis at a time
+    /// and a level step reset the weapon band to the rung's own count. On a diagonal that reset
+    /// silently subtracts: a `2_3` player at rung `1_1` would ask `3_1`, a weapon band below their
+    /// own, which is a fight they never opted into.
     #[test]
-    fn a_level_step_starts_the_weapon_bands_again_rather_than_carrying_them() {
+    fn a_level_step_carries_the_players_own_weapon_band() {
         let rung = Rung {
             level_steps: 1,
-            weapon_steps: 0,
+            weapon_steps: 1,
         };
-        assert_eq!(climbed("2_3", rung).as_deref(), Some("3_0"));
+        assert_eq!(climbed("2_3", rung).as_deref(), Some("3_4"));
     }
 
     #[test]
@@ -279,18 +397,25 @@ mod tests {
         assert!(looks_like_band("6_3"));
     }
 
+    /// No rung ever asks below the player's own band on either axis.
+    ///
+    /// This used to assert something stricter -- that each rung is above the one before it -- and
+    /// that held only while the ladder swept a single axis. Ring ordering revisits a lower level
+    /// band after a higher one (`1_1` then `0_1`), so the sequence is not monotone and should not be:
+    /// what the player is owed is that the search never looks downward from where they are, since
+    /// invading beneath your own band puts you on somebody weaker who never agreed to it. That is a
+    /// property of every rung against the player, not of consecutive rungs against each other.
     #[test]
     fn climbing_never_descends() {
         let mut rung = Rung::own();
-        let mut previous = (2u32, 1u32);
+        let own = (2u32, 1u32);
         while let Some(next) = rung.next() {
             let asked = climbed("2_1", next).expect("a band value climbs");
             let parsed = split_band(&asked).expect("the climb produces a band value");
             assert!(
-                parsed.0 > previous.0 || (parsed.0 == previous.0 && parsed.1 > previous.1),
-                "{asked} is not above {previous:?}"
+                parsed.0 >= own.0 && parsed.1 >= own.1,
+                "{asked} is below the player's own {own:?}"
             );
-            previous = parsed;
             rung = next;
         }
     }

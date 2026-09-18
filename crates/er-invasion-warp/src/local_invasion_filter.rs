@@ -511,7 +511,7 @@ fn refresh_config() {
             }
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} search_by_location={} \
-                 search_radius={} widen_to_anywhere={} widen_band_when_nearby_exhausted={} \
+                 search_radius={} reach={} may_widen_to_anywhere={} may_climb_band={} \
                  only_players_with_this_mod={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
@@ -520,12 +520,14 @@ fn refresh_config() {
                 outcome.config.enabled,
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
-                outcome.config.search_everywhere_when_exhausted,
-                // The band ladder's own switch. It decides whether a search that connects to
-                // nobody asks one matchmaking band higher next cycle, which changes which hosts
-                // can answer at all -- so a player who turns it off and still sees the ladder
-                // climb has no way to tell a stale build from an unparsed option without it.
-                outcome.config.widen_band_when_nearby_exhausted,
+                // The reach, and the two rungs derived from it, rather than the file keys that used
+                // to decide them. Printed together because the whole point of deleting those keys is
+                // that these three always agree: a reader who sees `reach=1` with
+                // `may_widen_to_anywhere=true` is looking at a build where the promise `Nearby only`
+                // makes has been broken again.
+                finger_reach(),
+                may_widen_to_anywhere(),
+                may_climb_band(),
                 // Every option that changes behaviour must appear here. These three were missing,
                 // and the gap cost a live A/B on 2026-08-06: the file was edited mid-session to turn
                 // `dll_users_only` on, this line duly reprinted -- proving the reload had happened --
@@ -821,6 +823,38 @@ pub(crate) fn finger_reach_is_near_and_far() -> bool {
     FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
 }
 
+/// Whether this search may end by dropping the location filter and asking the whole population.
+///
+/// The single answer to that question, and deliberately not a config read. Two file keys used to
+/// decide it -- `widen_to_anywhere` and `widen_band_when_nearby_exhausted` -- and a file could
+/// therefore disagree with the row the player picked in the bounds popup. On 2026-09-18 one did:
+/// with `widen_to_anywhere = true` a search the player started as `Nearby only` exhausted its ring,
+/// dropped the filter and landed them in a stranger's world in another region, twice. Both keys are
+/// deleted and this is what replaced them.
+///
+/// `Both near and far` alone, so `FINGER_REACH_NONE` answers no: a search with no row behind it --
+/// the Challenger's Lynchpin, whose item raises no bounds popup -- gets the narrow promise rather
+/// than the wide one, because nobody chose the wide one.
+pub(crate) fn may_widen_to_anywhere() -> bool {
+    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
+}
+
+/// Whether this search may climb to a higher matchmaking band once nearby answers nothing.
+///
+/// `Nearby only` alone, and it is the rung that row has instead of widening: Seamless compares its
+/// `<level band>_<weapon band>` pair for equality, so a host one weapon-upgrade band away is not
+/// merely harder to find -- the query cannot return her, and the result is indistinguishable from
+/// an empty world. Measured 2026-09-18: a host publishing `2_1` answered nothing while this client
+/// asked `0_0`, and the first query that asked `2_1` returned her at index 0.
+///
+/// Not for `Both near and far`, which has the wider rung above; climbing a band and dropping the
+/// location filter at the same moment would move two axes at once and leave nobody able to say
+/// which found the host. Not for `FINGER_REACH_NONE` either -- a search nobody scoped takes no
+/// widening rung of any kind.
+pub(crate) fn may_climb_band() -> bool {
+    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEARBY
+}
+
 /// Whether the finger's popup chose `Nearby only`, which must never produce an unfiltered query.
 ///
 /// This is not the negation of [`finger_reach_is_near_and_far`]: `FINGER_REACH_NONE` is a third
@@ -898,7 +932,6 @@ fn apply_finger_override(mut config: LocalInvasionConfig) -> LocalInvasionConfig
     if config.prefilter_radius == 0 {
         config.prefilter_radius = 1;
     }
-    config.search_everywhere_when_exhausted = reach == FINGER_REACH_NEAR_AND_FAR;
     config
 }
 

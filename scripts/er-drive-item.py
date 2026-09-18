@@ -80,7 +80,7 @@ def selftest() -> int:
     assert 'REFUSING to drive: the player is' in own and 'if role is None:' in own, (
         "both halves have to refuse: a non-local role, and a role that cannot be read at all"
     )
-    for export in ("ready", "role", "enableFingers", "pin", "state", "unpin"):
+    for export in ("ready", "role", "enableFingers", "pin", "state", "unpin", "restoreFingers"):
         assert f"{export} (" in text or f"{export} (" in text, f"the agent must export {export}"
     assert "setTimeout" not in text and "setInterval" not in text, "no timers in the agent"
     # A mention in prose is fine; resolving the module is the dependency that would matter.
@@ -162,7 +162,20 @@ def main() -> int:
         return 0
 
     print("fingers:", json.dumps(drive.exports_sync.enable_fingers(VANILLA_FINGERS)), flush=True)
+    try:
+        return drive_loop(args, session, drive)
+    finally:
+        # Those three cleared bits are bytes in live `EquipParamGoods` rows, and Seamless hashes
+        # the param tables into `lobby_key`. Leaving them cleared leaves this client in a
+        # matchmaking pool nobody else is in -- measured 2026-09-18: a drive through here sent
+        # f89c2a507f99a522..., the same build driven by hand sent 34154670c4dbf536... and landed
+        # an invasion. So the restore is not tidiness, it is the difference between the game
+        # matching and not.
+        print("fingers restored:", json.dumps(drive.exports_sync.restore_fingers()), flush=True)
 
+
+def drive_loop(args, session, drive) -> int:
+    """Pin, press, and report -- with the param rows guaranteed to be put back by the caller."""
     pad = session.create_script(
         "const m = Process.findModuleByName('er_quickload.dll');\n"
         "const h = new NativeFunction(m.getExportByName('er_quickload_hold_xinput_pad'),"

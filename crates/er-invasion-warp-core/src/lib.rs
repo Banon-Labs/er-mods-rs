@@ -92,6 +92,12 @@ pub mod lobby_pool;
 pub mod local_invasion;
 pub mod local_invasion_config;
 
+/// Which play region a position belongs to, read out of `CSPlayRegionPointMan`. This is what
+/// `Nearby only` means: vanilla scopes an invasion by `playRegionId`, so the near pool is the blocks
+/// the player's own region contains, not a ring of tiles around them. Not re-exported -- it carries
+/// its own point type, the same reason [`legacy_map_regions`] is not.
+pub mod play_regions;
+
 /// What destination a seamless invasion actually chose, read out of `CSGameMan` after the fact.
 /// Not re-exported: it carries its own reading type, and Seamless's placement path has nothing
 /// to do with the `.aip`/MSB tables the rest of this crate reads.

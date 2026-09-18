@@ -250,7 +250,6 @@ fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
         "reject_notice" => config.reject_notice,
         "map_pins" => config.map_pins,
         "only_players_with_this_mod" => config.dll_users_only,
-        "widen_to_anywhere" => config.search_everywhere_when_exhausted,
         _ => false,
     }
 }
@@ -263,9 +262,6 @@ fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
         "reject_notice" => config.reject_notice = !config.reject_notice,
         "map_pins" => config.map_pins = !config.map_pins,
         "only_players_with_this_mod" => config.dll_users_only = !config.dll_users_only,
-        "widen_to_anywhere" => {
-            config.search_everywhere_when_exhausted = !config.search_everywhere_when_exhausted;
-        }
         _ => return false,
     }
     true
@@ -325,11 +321,9 @@ fn build_view() -> SettingsView {
                 "inert -- needs search_by_location and steam_hooks on"
             }),
         },
-        toggle_row(
-            "widen_to_anywhere",
-            config.search_everywhere_when_exhausted,
-            Some("when the rings run out, take anyone anywhere instead of retrying the last tile"),
-        ),
+        // There is no widening row. How far a search reaches is the row the finger asks for --
+        // `Nearby only` or `Both near and far` -- and a panel toggle that could contradict it would
+        // be the same defect this panel would then be advertising as a feature.
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
     ];

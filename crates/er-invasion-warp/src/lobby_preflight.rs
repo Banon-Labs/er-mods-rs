@@ -50,7 +50,8 @@
 
 #[cfg(windows)]
 pub use live::{
-    Nearby, Verdict, arm, arm_sweep, clear_sweep, end_search, is_armed, nearby, tick, verdict,
+    Nearby, Verdict, arm, arm_sweep, clear_sweep, end_search, found_host_band, is_armed, nearby,
+    tick, verdict,
 };
 
 /// Host-side stand-ins, so the rest of the crate compiles under `cargo test` on Linux.
@@ -96,6 +97,13 @@ pub fn arm_sweep(_blocks: &[u32]) {}
 /// Host-side stub.
 #[cfg(not(windows))]
 pub fn clear_sweep() {}
+
+/// Host-side stub: no sweep ran, so no host's band was read.
+#[cfg(not(windows))]
+#[must_use]
+pub fn found_host_band() -> Option<String> {
+    None
+}
 
 /// Host-side stub.
 #[cfg(not(windows))]
@@ -285,6 +293,14 @@ mod live {
         pub effects: String,
         /// Seamless's `lobby_key`. A host whose key differs is in another param pool.
         pub lobby_key: String,
+        /// Seamless's `<level band>_<weapon band>` pair, as this host publishes it.
+        ///
+        /// Read for the same reason the pool key is: Seamless compares it for equality, so a host
+        /// whose band differs cannot be returned however well every other field matches. Knowing
+        /// the value the sweep's own hit publishes is what lets a search ask for that band directly
+        /// instead of climbing the ladder blindly towards it -- measured 2026-09-18, the ladder
+        /// needed five failed cycles to reach a host it had already positively identified.
+        pub band: String,
     }
 
     /// Read one key off a lobby, copying Steam's buffer before anything can invalidate it.
@@ -325,6 +341,65 @@ mod live {
     /// (`scripts/er-prove-lobby-handoff.py`, run `br-20260918-003310-606c`): the same flat exports
     /// in the same sequence returned lobby `109775241801277563` carrying
     /// `er_invasion_warp_map = m61_48_45_00` and `er_invasion_warp_effects = allow_invaders`.
+    /// Seamless's advertised-availability flag, hashed like the rest of its key names.
+    ///
+    /// Matched by name because the name is stable for the one Seamless build this repo supports.
+    /// A host publishing `false` here is excluded from every query this game sends, whatever its
+    /// band or block says, so it is the one key worth re-reading before trusting an old hit.
+    const AVAILABLE_KEY: &str = "91489e05e1c2c5e7701b2d92ec209a8acd594349f1e21e73422430b114a7c467";
+
+    /// Seamless's `<level band>_<weapon band>` key, hashed like its others.
+    ///
+    /// Matched by name for the one build this repo supports. The value's `<digits>_<digits>` shape
+    /// is what identifies it across builds, and
+    /// `er_invasion_warp_core::band_ladder::looks_like_band` is where that test lives -- this
+    /// constant only saves reading every key off a lobby to find the one matching it.
+    const SEAMLESS_BAND_KEY: &str =
+        "21c40388cba69692c865c11604f6e340fb8f0df83bebea279e802ccc0d46de8e";
+
+    /// The band the host the sweep found publishes, when there is one and it is band-shaped.
+    ///
+    /// This is what lets a search ask for the band its target is actually in. The ladder still owns
+    /// the case where no host has been identified -- it is a walk through bands nobody has been seen
+    /// in -- but climbing towards a host whose band has already been read off their own lobby is
+    /// five wasted failed cycles, measured 2026-09-18 against a friend publishing `2_1` while the
+    /// search asked `0_0` and every other field already matched.
+    #[must_use]
+    pub fn found_host_band() -> Option<String> {
+        with_sweep(|slot| {
+            let sweep = slot.as_ref()?;
+            sweep.found?;
+            sweep
+                .lobbies
+                .iter()
+                .map(|lobby| lobby.band.clone())
+                .find(|band| er_invasion_warp_core::band_ladder::looks_like_band(band))
+        })
+    }
+
+    /// Whether any of these lobbies still advertises as available.
+    ///
+    /// `true` when the answer cannot be read at all -- no interface, no exports -- because failing
+    /// to ask is not evidence that a host has gone. Dropping a good hit because Steam was briefly
+    /// unreachable would cost the search the one host it had found.
+    #[must_use]
+    pub fn host_is_still_advertising(lobbies: &[u64]) -> bool {
+        if lobbies.is_empty() {
+            return true;
+        }
+        let Some(iface) = matchmaking() else {
+            return true;
+        };
+        let Some(get_data) = export(GET_LOBBY_DATA) else {
+            return true;
+        };
+        // SAFETY: an export resolved by name from a module that is loaded.
+        let read = unsafe { core::mem::transmute::<usize, GetLobbyDataFn>(get_data) };
+        lobbies
+            .iter()
+            .any(|id| lobby_value(iface, read, *id, AVAILABLE_KEY) == "true")
+    }
+
     #[must_use]
     pub fn fetch_lobbies(matching: u32) -> Vec<FoundLobby> {
         let Some(iface) = matchmaking() else {
@@ -359,6 +434,7 @@ mod live {
                     crate::lobby_publish::LOBBY_HOST_EFFECTS_KEY,
                 ),
                 lobby_key: lobby_value(iface, read, id, crate::lobby_publish::LOBBY_KEY_NAME),
+                band: lobby_value(iface, read, id, SEAMLESS_BAND_KEY),
             });
         }
         found
@@ -915,6 +991,70 @@ mod live {
         //
         // Measured on run `br-20260918-020159-9b03`: `sweep: armed for 49 nearby place(s)` and
         // then not one place answered across twenty-three search cycles.
+        // A sweep that has already found a host is not re-armed for any ring, identical or not.
+        //
+        // The identical-ring guard below is not enough, and the gap cost the whole of 2026-09-18.
+        // Measured on run `br-20260918-225557-5fc3`: the sweep found the host --
+        // `sweep: a host is in m32_02_00_00 -- the search points there and stops widening` -- and
+        // then the legacy table became readable, the ring was rebuilt from 3 places to 11, the
+        // rings compared unequal, and the answer was replaced by a fresh 11-place walk. Every query
+        // after that asked an overworld tile (`m60_36_47_00`, `m60_38_47_00`, ...) while the host
+        // published `m32_02_00_00`, so the one host the sweep had positively identified became
+        // unreachable by the search that identified him.
+        //
+        // A hit outranks a ring because of what each one is. The ring is a guess about where a host
+        // might be; the hit is Steam's own answer that a host occupies a named block. Discarding the
+        // second because the first grew is backwards, and the band ladder already owns the case
+        // where a hit goes stale -- `failed_cycle::advance_place_on_failed_cycle` calls
+        // `clear_sweep` after `CYCLES_BEFORE_THE_SWEEP_IS_STALE` cycles fail against it.
+        // A hit is only worth keeping while the host it names is still advertising. Re-read the
+        // lobby rather than trusting the answer: a host who closes their world leaves the lobby in
+        // place with `91489e05... = false`, so the id stays readable and the hit stays plausible
+        // while being useless. Measured 2026-09-18 on lobby `109775241925634276`, which went from
+        // `available = true` to `false` while this sweep still pointed the search at it, and every
+        // query kept naming a block whose host could no longer be returned by any query at all.
+        let found = with_sweep(|slot| {
+            let sweep = slot.as_ref()?;
+            let block = sweep.found?;
+            Some((
+                block,
+                sweep
+                    .lobbies
+                    .iter()
+                    .map(|lobby| lobby.id)
+                    .collect::<Vec<_>>(),
+            ))
+        });
+        let found = match found {
+            Some((block, lobbies)) if host_is_still_advertising(&lobbies) => Some(block),
+            Some((block, _)) => {
+                crate::standalone_log(format_args!(
+                    "sweep: the host this search was pointed at, in {}, no longer advertises as \
+                     available, so the hit is dropped and the {total}-place ring is armed. A closed \
+                     world leaves its lobby readable with the availability flag cleared, which is \
+                     why the id being resolvable is not evidence that anybody is in it.",
+                    crate::lobby_publish::map_value(
+                        er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block)
+                    )
+                ));
+                clear_sweep();
+                None
+            }
+            None => None,
+        };
+        if let Some(block) = found {
+            crate::standalone_log(format_args!(
+                "sweep: a host is already known to be in {} and the search is pointed there, so \
+                 this {total}-place ring is not armed over the top of it. Rebuilding the ring used \
+                 to replace the answer, and every query after that asked a tile the host was not \
+                 in. A hit that goes stale is dropped by the failed-cycle counter, not by a ring \
+                 that happened to grow.",
+                crate::lobby_publish::map_value(
+                    er_invasion_warp_core::invasion_warp::BlockKey::from_raw(block)
+                )
+            ));
+            return;
+        }
         let reused = with_sweep(|slot| match slot.as_ref() {
             Some(sweep) if sweep.blocks == blocks => Some((sweep.answered, sweep.finished)),
             _ => None,

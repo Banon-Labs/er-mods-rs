@@ -68,10 +68,11 @@ pub const BOTH_NEAR_AND_FAR_MSG: u32 = 20_000_016;
 /// game's dialog with `Nearby Only (default)` and `Both near and far`, and this mod adapts to
 /// those names rather than adding a vocabulary of its own beside them.
 ///
-/// They already correspond to configuration this crate has -- `prefilter_radius` and
-/// `search_everywhere_when_exhausted` on [`LocalInvasionConfig`]. What changes here is only where
-/// the choice comes from: today it is an edit to the config file, and it should be the button the
-/// player just pressed.
+/// This pair is now the only thing that decides how far a search may reach. There were two config
+/// keys beside it, `widen_to_anywhere` and `widen_band_when_nearby_exhausted`, and they are deleted:
+/// a key that can be set can disagree with the button, and on 2026-09-18 one did, turning a
+/// `Nearby only` invasion into a whole-population one. `prefilter_radius` survives because it says
+/// how wide near is, not whether the search may stop being near.
 ///
 /// [`LocalInvasionConfig`]: er_invasion_warp_core::local_invasion::LocalInvasionConfig
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

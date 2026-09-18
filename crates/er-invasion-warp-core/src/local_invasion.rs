@@ -128,34 +128,15 @@ pub struct LocalInvasionConfig {
     /// tile per round is already a long search; the cap exists so a mistyped radius cannot become
     /// a rotation nobody can sit through.
     pub prefilter_radius: u8,
-    /// After every tile in the ring has been asked for and answered nothing, drop the filter.
-    ///
-    /// Off by default, because it is a different bargain rather than more of the same one: with no
-    /// filter the query returns the whole population again, vanilla hosts included, and where you
-    /// land is then decided by the reject filter rather than by Steam. It is the rung a player
-    /// takes deliberately when they would rather invade somewhere than nowhere.
-    pub search_everywhere_when_exhausted: bool,
-    /// When the nearby ring is exhausted, search one matchmaking band higher, and keep climbing.
-    ///
-    /// On by default, which is unusual in this struct and is the point: without it two friends one
-    /// weapon-upgrade band apart cannot meet, and neither of them can tell why. Seamless publishes
-    /// a `<level band>_<weapon band>` pair and filters it for equality, so a host one band away is
-    /// not merely harder to reach -- she is indistinguishable from nobody being online. Measured
-    /// 2026-09-17 on run `br-20260918-005917-483b`: a host publishing `2_2` answered zero of six
-    /// searches from a client asking `2_1`, and answered the very next search that asked `2_2`.
-    ///
-    /// The climb starts only once the ring at the player's own band has been asked and answered
-    /// nothing, so a same-band host is always preferred. Then the weapon band steps up one at a
-    /// time, and when it runs out the level band takes a step and the weapon band starts again.
-    ///
-    /// Upward only, deliberately. Invading above your own band is a disadvantage the invader
-    /// accepts to find a fight at all; dragging the search downward would put them on somebody
-    /// weaker who never opted into that.
-    ///
-    /// `Nearby only` alone. `Both near and far` already has a wider rung to take -- it drops the
-    /// location filter and asks the whole population at the player's own band -- so climbing bands
-    /// there would widen two axes at once and nobody could say which one found the host.
-    pub widen_band_when_nearby_exhausted: bool,
+    // Widening used to live here, as `search_everywhere_when_exhausted` and
+    // `widen_band_when_nearby_exhausted`. Both are deleted rather than defaulted off, because a
+    // field that exists can be set: while they were configurable a file saying
+    // `widen_to_anywhere = true` turned a `Nearby only` search into a whole-population one, and on
+    // 2026-09-18 that put the player in two strangers' worlds in other regions when they had asked
+    // to invade next door. Which rung a search may take is settled by the row the player picked in
+    // the bounds popup and by nothing else, so it is read from the reach -- see
+    // `local_invasion_filter::may_widen_to_anywhere` and `may_climb_band` -- and no file key,
+    // settings-panel row or struct field is left that could disagree with it.
     /// Match only other players running this DLL with this option on.
     ///
     /// Rewrites Seamless's `lobby_key` into a pool of our own (see
@@ -303,12 +284,6 @@ impl Default for LocalInvasionConfig {
             // all. Losing reach is not something to inherit from a default.
             hunt: false,
             prefilter_radius: 0,
-            search_everywhere_when_exhausted: false,
-            // On, and the only reach-widening default in this struct. The others trade away who
-            // you can see; this one only adds hosts, upward, after the player's own band has been
-            // asked and come back empty. Left off, the mod ships with a failure mode that reads as
-            // "nobody is online" while a friend one weapon-upgrade band away hosts an open world.
-            widen_band_when_nearby_exhausted: true,
             // OFF: it hides the entire vanilla population in both directions.
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.

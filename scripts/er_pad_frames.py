@@ -67,6 +67,19 @@ class Pad:
     def release(self) -> None:
         self._script.exports_sync.release()
 
+    # Releasing on construction only helps the NEXT driver. A driver killed or raising mid-hold
+    # leaves the mask asserted until something else builds a `Pad`, and in the meantime the player
+    # has a game that answers no input -- on 2026-09-18 that cost a relaunch mid-session. Used as
+    # a context manager the release happens on every exit path, including an exception.
+    def __enter__(self) -> "Pad":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        try:
+            self.release()
+        except Exception:  # noqa: BLE001 -- a dead session cannot be released, and must not mask the real error
+            pass
+
 
 def wait_for(events: queue.Queue, match, seconds: float = WAIT_SECONDS):
     """Block until an event satisfies `match`, or the hard cap elapses. Never polls."""

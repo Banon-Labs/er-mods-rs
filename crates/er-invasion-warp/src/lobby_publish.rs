@@ -1170,7 +1170,18 @@ mod live {
     /// removes the possibility of a coincidence.
     fn band_ladder_value(key: usize, value: usize) -> Option<std::ffi::CString> {
         let rung = band_rung();
-        if rung.is_own() {
+        // A host the sweep has identified publishes its own band, and that value outranks the
+        // ladder. The ladder is a walk through bands nobody has been seen in; once a specific host
+        // is the target, the band to ask for is not a guess -- it was read off their lobby by the
+        // same query that found them.
+        //
+        // Measured 2026-09-18 on run `br-20260918-231013-c51f`: every field on the wire matched the
+        // friend's lobby except this one. Block `m32_02_00_00`, availability `true`, pool
+        // `34154670...` all agreed, and the band went out as `0_0` against his published `2_1`, so
+        // the one host the search had positively located was five failed cycles away -- about a
+        // minute and a quarter of the item being held, for a value already in memory.
+        let targeted = crate::lobby_preflight::found_host_band();
+        if rung.is_own() && targeted.is_none() {
             return None;
         }
         let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) }?;
@@ -1179,6 +1190,25 @@ mod live {
         }
         let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) }?;
         let original = std::str::from_utf8(&value_bytes).ok()?;
+        // The shape test still gates the rewrite, so a key that is not the band field is left alone
+        // whether a host has been found or not.
+        if !er_invasion_warp_core::band_ladder::looks_like_band(original) {
+            return None;
+        }
+        if let Some(band) = targeted {
+            if band == original {
+                return None;
+            }
+            if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "band-ladder: asking for {band} instead of {original} -- not a rung, but the \
+                     band the host this search is pointed at publishes on their own lobby. The \
+                     ladder walks bands nobody has been seen in; a located host's band is read, \
+                     not guessed. Printed once per rung."
+                ));
+            }
+            return std::ffi::CString::new(band).ok();
+        }
         let climbed = er_invasion_warp_core::band_ladder::climbed(original, rung)?;
         if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
             crate::standalone_log(format_args!(
@@ -1979,7 +2009,7 @@ mod live {
         match peek_ring(
             here,
             config.prefilter_radius,
-            config.search_everywhere_when_exhausted,
+            crate::local_invasion_filter::may_widen_to_anywhere(),
         ) {
             RingStep::Ask(value) => Some(value),
             // The ladder's last rung. Returning `None` here is the whole mechanism: the caller
@@ -2202,7 +2232,7 @@ mod live {
         take_next_place(
             here,
             config.prefilter_radius,
-            config.search_everywhere_when_exhausted,
+            crate::local_invasion_filter::may_widen_to_anywhere(),
         );
     }
 

@@ -17,9 +17,7 @@
 #[cfg(windows)]
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use super::{
-    FINGER_REACH_NONE, current_config_snapshot, ersc, finger_reach, finger_reach_is_near_and_far,
-};
+use super::{FINGER_REACH_NONE, ersc, finger_reach};
 
 /// Step the place ladder one tile each time a connect attempt falls back to searching.
 ///
@@ -44,10 +42,12 @@ use super::{
 /// [`climb_band_on_failed_cycle`] directly below already recognises it.
 ///
 /// Where the two rows part is not here but in `advance_ring`, which is the only place that can
-/// return `RingStep::Everywhere` and does so only when `search_everywhere_when_exhausted` is set
-/// -- and `apply_finger_override` sets that to `reach == FINGER_REACH_NEAR_AND_FAR`. So a spent
-/// ring widens for `Both near and far` and rewinds for `Nearby only`, and this function can step
-/// both without either reaching a population the player declined. User directive 2026-09-17,
+/// return `RingStep::Everywhere` and does so only when
+/// [`crate::local_invasion_filter::may_widen_to_anywhere`] answers yes -- that is, for `Both near
+/// and far` and nothing else. So a spent ring widens for that row and rewinds for `Nearby only`,
+/// and this function can step both without either reaching a population the player declined. It
+/// used to be a config field, which is how a file came to overrule the row. User directive
+/// 2026-09-17,
 /// after the `nobody_publishes` branch let the near row through: "I hit all 48 locations before
 /// invading in seamless, and this should never happen."
 #[cfg(windows)]
@@ -63,8 +63,8 @@ pub(super) fn advance_place_on_failed_cycle(abi: &ersc::Abi, previous: usize, st
         return;
     }
     // Both rows, and `Nearby only` is the one that needs it most. Its ring cannot widen whatever
-    // this does: `search_everywhere_when_exhausted` is `reach == FINGER_REACH_NEAR_AND_FAR`, so
-    // `advance_ring` takes its `None =>` arm and rewinds rather than returning `Everywhere`.
+    // this does: `may_widen_to_anywhere` is false for that row, so `advance_ring` takes its
+    // `None =>` arm and rewinds rather than returning `Everywhere`.
     // Stepping it here is the difference between a ring that rotates through the neighbourhood
     // and one frozen on tile 1 of 49, which is what every other caller leaves it at during a live
     // search.
@@ -147,12 +147,13 @@ pub(super) fn climb_band_on_failed_cycle(abi: &ersc::Abi, previous: usize, state
     {
         return;
     }
+    // One question, one answer: `may_climb_band` is true for `Nearby only` and for nothing else.
     // `Both near and far` has its own rung -- dropping the location filter -- and climbing bands
-    // underneath it would widen two axes at once with no way to say which one found a host.
-    if finger_reach_is_near_and_far() {
-        return;
-    }
-    if !current_config_snapshot().is_none_or(|config| config.widen_band_when_nearby_exhausted) {
+    // underneath it would widen two axes at once with no way to say which one found a host; a
+    // search with no row behind it takes no rung at all. This used to be two tests, a reach check
+    // and a `widen_band_when_nearby_exhausted` config read, and the config half is what let a file
+    // disagree with the row the player picked.
+    if !crate::local_invasion_filter::may_climb_band() {
         return;
     }
     let (rung, restarted) = crate::lobby_publish::climb_band();
