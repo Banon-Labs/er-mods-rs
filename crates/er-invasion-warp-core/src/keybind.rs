@@ -42,6 +42,17 @@ pub const VK_DELETE: VirtualKey = 0x2e;
 pub const VK_F3: VirtualKey = 0x72;
 pub const VK_F4: VirtualKey = 0x73;
 
+/// `Q` -- what the invasion-bounds popup falls back to on a frame where it cannot read the game's
+/// own key config.
+///
+/// Not a binding this crate chooses. `vanilla_invasion_items` asks `CSPcKeyConfig` which key the
+/// player has the menu back-out on, every poll, so a rebind needs no setting and no constant; this
+/// covers only the window before that singleton exists. `Q` is the right value for it twice over:
+/// it is what the live table holds for that action on this build, and run
+/// `br-20260918-161158-02c4` logged `keys=0x51` while the popup stood, from a player describing it
+/// as "B on the gamepad ... maps to Q on the keyboard".
+pub const VK_Q: VirtualKey = 0x51;
+
 /// `VK_F7` -- the historical "warp to the nearest invasion point" key, still the default.
 pub const VK_F7: VirtualKey = 0x76;
 /// `VK_F8` -- the historical "next point in the catalog's order" key, still the default.

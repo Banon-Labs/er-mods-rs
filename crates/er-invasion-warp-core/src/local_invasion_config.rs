@@ -91,6 +91,28 @@ search_radius = 0
 # it is the last rung of the ladder: everywhere, once nearby has been exhausted.
 widen_to_anywhere = false
 
+# When nearby is spent, look one matchmaking band higher, and keep climbing.
+#
+# On, and the only reach-widening setting here that ships on. Seamless advertises a
+# `<character-level band>_<weapon-upgrade band>` pair and matches it for EQUALITY, so a host one
+# weapon upgrade band away is not merely harder to find -- your game cannot see her at all, and
+# what you get instead is a search that looks exactly like an empty world. Two friends sat one
+# band apart for an evening over this: her world published `2_2`, this game asked `2_1`, six
+# searches aimed at her own map tile returned nothing, and the first search that asked `2_2`
+# found her immediately.
+#
+# The climb starts only after the nearby ring at YOUR band has been asked and answered nothing,
+# so an even fight nearby is always preferred. Then it steps up one weapon band at a time, and
+# when those run out it takes a character-level band and starts the weapon bands again.
+#
+# Upward only. Invading above your band is your disadvantage to accept; searching DOWN would put
+# you on somebody weaker who never agreed to that, so this ladder has no bottom rung.
+#
+# `Nearby only` invasions, never `Both near and far`. That row already has its own last rung in
+# `widen_to_anywhere`, and widening place and band at once would leave nobody able to say which
+# of the two found the host.
+widen_band_when_nearby_exhausted = true
+
 # Announce what the search is doing on the game's own message banner.
 #
 # The name is older than what it does. This build does not reject a connected invasion for being
@@ -220,6 +242,10 @@ enable_toggle_key = "F3"
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
+
+# There is no setting for what closes the "Attempting to invade another world." popup, and that is
+# deliberate: the mod reads the key you have bound to the game's own menu back-out, out of the
+# game's own key config, every time it checks. Rebind it in Key Bindings and this follows.
 
 # Locations you excluded. An exclusion is the strongest thing you can say about a place: it stops
 # the search from asking for that location even when it is the one you marked.
@@ -426,6 +452,15 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("widen_to_anywhere must be true or false, got {value:?}"),
                 }),
             },
+            "widen_band_when_nearby_exhausted" => match parse_bool(value) {
+                Some(v) => config.widen_band_when_nearby_exhausted = v,
+                None => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!(
+                        "widen_band_when_nearby_exhausted must be true or false, got {value:?}"
+                    ),
+                }),
+            },
             "mark_key" => {
                 config.mark_key =
                     key_setting("mark_key", value, fallback.mark_key, line_no, &mut issues);
@@ -574,6 +609,12 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                 out.push_str(&format!(
                     "widen_to_anywhere = {}\n",
                     config.search_everywhere_when_exhausted
+                ));
+            }
+            "widen_band_when_nearby_exhausted" => {
+                out.push_str(&format!(
+                    "widen_band_when_nearby_exhausted = {}\n",
+                    config.widen_band_when_nearby_exhausted
                 ));
             }
             "ersc_observers" => {
