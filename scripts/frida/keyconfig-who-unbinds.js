@@ -285,12 +285,21 @@ if (game === null) {
   // The enforcement point. One call per frame, and it is the owner of the quick-slot switch this
   // binding drives, so the check runs on the game's own clock with no timer involved and a restore
   // lands before the frame that would have read the dead row.
+  //
+  // A session ended while this was armed on 2026-09-19 and no cause was ever established: the game
+  // ran about eight minutes with the hook in place, restored the row, let the player switch
+  // weapons, and then terminated. `er-crash-log.txt` recorded no fault. That is an unexplained
+  // exit, and it is not a reason to give up the only anchor that answers the question -- a hook
+  // deleted on suspicion measures nothing at all. If it happens twice with this armed and not
+  // otherwise, that is evidence; once is a coincidence with a bad feeling attached.
   Interceptor.attach(game.base.add(FRAME_UPDATE_RVA), {
     onEnter() {
       counts.frames += 1;
       // Said once, because a hook on the wrong address is silent in exactly the way a hook on the
       // right address is when nothing has happened yet, and the first of those reads as an answer.
-      if (counts.frames === 1) send({ tag: 'frame-hook-live', rva: '0x' + FRAME_UPDATE_RVA.toString(16) });
+      if (counts.frames === 1) {
+        send({ tag: 'frame-hook-live', rva: '0x' + FRAME_UPDATE_RVA.toString(16) });
+      }
       enforce(configBase(), 'frame', this.context);
     },
   });
