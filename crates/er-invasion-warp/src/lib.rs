@@ -35,6 +35,11 @@ pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
+/// The bracket the far half of `Both near and far` asks for. Windows-only because it is state the
+/// running search reads on the Steam callback thread; the arithmetic it applies is in
+/// `er-invasion-warp-core` and is tested on the host.
+#[cfg(windows)]
+pub mod invade_difficulty;
 pub mod lobby_preflight;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
@@ -545,6 +550,38 @@ pub extern "C" fn er_invasion_warp_force_search_range(range: u32) -> i32 {
     vanilla_invasion_items::FORCED_SEARCH_RANGE
         .store(range as usize, core::sync::atomic::Ordering::SeqCst);
     1
+}
+
+/// Select the invade difficulty from outside, as an index into
+/// `er_invasion_warp_core::invade_difficulty::InvadeDifficulty::ALL`.
+///
+/// # Why this is an export and not an env var
+///
+/// The difficulty's only front end is the settings panel, deliberately -- it is held in memory so
+/// nothing can go stale in a file. That also leaves no way to drive it for a runtime proof, and the
+/// branch that needs proving is the one nothing else exercises: the far half of `Both near and far`
+/// asking for a bracket above the player's own. Same problem and same answer as
+/// [`er_invasion_warp_force_search_range`] directly above, which exists because the bounds popup's
+/// cursor could not be driven either.
+///
+/// It sets the same value the panel sets, through the same function, so a proof driven through here
+/// exercises the shipping path rather than a parallel one. It changes no behaviour on its own: a
+/// session nobody calls it in reads `Default`, which rewrites nothing.
+///
+/// Returns the index now in force, so a caller can tell a rejected index from an accepted one
+/// without reading the log.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_set_invade_difficulty(index: u32) -> i32 {
+    let wanted = er_invasion_warp_core::invade_difficulty::InvadeDifficulty::from_index(
+        usize::try_from(index).unwrap_or(0),
+    );
+    // Cycled rather than stored, so the one place that writes this value stays the one place. A
+    // second writer is how a panel and a driver come to disagree about what is in force.
+    while invade_difficulty::current() != wanted {
+        invade_difficulty::cycle();
+    }
+    i32::try_from(invade_difficulty::current().index()).unwrap_or(0)
 }
 
 /// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring

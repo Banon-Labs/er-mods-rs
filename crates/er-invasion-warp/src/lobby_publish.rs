@@ -1181,7 +1181,11 @@ mod live {
         // the one host the search had positively located was five failed cycles away -- about a
         // minute and a quarter of the item being held, for a value already in memory.
         let targeted = crate::lobby_preflight::found_host_band();
-        if rung.is_own() && targeted.is_none() {
+        // The far half reaches here with the rung back at the player's own band and the sweep
+        // cleared -- `hand_off_to_seamless` does both -- so without this test the difficulty could
+        // never rewrite anything. It is the one part of the overlay that survives the handover.
+        let difficulty = crate::invade_difficulty::in_far_half();
+        if rung.is_own() && targeted.is_none() && !difficulty {
             return None;
         }
         let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) }?;
@@ -1194,6 +1198,24 @@ mod live {
         // whether a host has been found or not.
         if !er_invasion_warp_core::band_ladder::looks_like_band(original) {
             return None;
+        }
+        // Ahead of the located host and ahead of the ladder, because it is the only one of the
+        // three the player said out loud. The other two are inferences this module drew -- a host
+        // the sweep saw, a band nobody has been seen in -- and both are about finding somebody at
+        // all; this is about which fight. In practice they do not compete: the handover clears the
+        // sweep and resets the rung, so in the far half `targeted` is `None` and `rung` is the
+        // player's own.
+        if let Some(band) = crate::invade_difficulty::band_for(original) {
+            if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "invade-difficulty: asking for {band} instead of {original} -- the far half of \
+                     `Both near and far` at {}. Seamless matches this value for equality, so this \
+                     is the whole of what the setting does: only hosts in that bracket can answer \
+                     any query from here on. Printed once per change.",
+                    crate::invade_difficulty::current().label()
+                ));
+            }
+            return std::ffi::CString::new(band).ok();
         }
         if let Some(band) = targeted {
             if band == original {
@@ -2242,6 +2264,11 @@ mod live {
     /// abandoned it: the player would be told a search was starting and then watch it ask about
     /// somewhere twenty tiles away.
     pub fn restart_search_ladder() {
+        // A new search opens in its near half, whatever the last one ended in. A far-half latch
+        // left standing would put the difficulty's bracket on the very first query of the next
+        // invasion -- the ring, at a band the player never climbed to -- and the only thing on
+        // screen would be a neighbourhood that has apparently emptied.
+        crate::invade_difficulty::leave_far_half();
         if let Ok(mut guard) = CURRENT_RUNG.lock() {
             *guard = None;
         }

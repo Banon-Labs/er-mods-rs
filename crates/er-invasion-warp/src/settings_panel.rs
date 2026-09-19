@@ -37,6 +37,13 @@ fn settings_key_in_force() -> i32 {
     })
 }
 
+/// The one row on this panel that is not a config key.
+///
+/// Named once and used by both halves -- the row that is built and the edit that is drained -- so
+/// the panel cannot end up offering a row whose click nothing recognises. Every other row is keyed
+/// by its name in `er-invasion-warp.toml`; this one has no name there on purpose.
+const DIFFICULTY_ROW: &str = "invade_difficulty";
+
 const KEY_DOWN_MASK: i16 = -0x8000;
 
 #[link(name = "user32")]
@@ -145,6 +152,30 @@ fn install_click_suppression() {
 /// Apply every edit the panel recorded since the last tick, in one read-modify-write.
 fn apply_pending_edits() {
     let edits = crate::overlay::drain_edits();
+    if edits.is_empty() {
+        return;
+    }
+    // Taken out before the config lock, because this one is not a config key and must never
+    // become one. It lives in memory for the life of the process -- see
+    // `crate::invade_difficulty` for the two reasons -- so it takes none of the
+    // reload-clone-mutate-save sequence below and writes nothing to the player's file.
+    let edits: Vec<SettingEdit> = edits
+        .into_iter()
+        .filter(|edit| {
+            if *edit != SettingEdit::Cycle(DIFFICULTY_ROW) {
+                return true;
+            }
+            let now = crate::invade_difficulty::cycle();
+            crate::standalone_log(format_args!(
+                "settings-panel: invade difficulty is now {} -- {}. Held in memory only: it is \
+                 gone at the next launch and there is no line in the config file that could \
+                 disagree with it.",
+                now.label(),
+                now.note()
+            ));
+            false
+        })
+        .collect();
     if edits.is_empty() {
         return;
     }
@@ -324,6 +355,21 @@ fn build_view() -> SettingsView {
         // There is no widening row. How far a search reaches is the row the finger asks for --
         // `Nearby only` or `Both near and far` -- and a panel toggle that could contradict it would
         // be the same defect this panel would then be advertising as a feature.
+        //
+        // This row is the other half of that rule rather than an exception to it. It does not
+        // decide how far the search reaches; it decides which bracket the far half asks for once
+        // the finger's own row has already sent it there. And it is the only row here that is not
+        // written to the file, so there is no line in a config from last week that could disagree
+        // with what it shows.
+        {
+            let difficulty = crate::invade_difficulty::current();
+            SettingRow {
+                key: DIFFICULTY_ROW,
+                value: difficulty.label().to_owned(),
+                control: RowControl::Cycle,
+                note: Some(difficulty.note()),
+            }
+        },
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
     ];

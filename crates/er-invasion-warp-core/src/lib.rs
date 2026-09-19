@@ -68,6 +68,11 @@ pub use host::*;
 pub mod aip;
 pub mod attempt_verdict;
 pub mod band_ladder;
+/// How far above their own bracket the far half of `Both near and far` asks. Not re-exported at
+/// the crate root: its `MAX_LEVEL_BAND` and `MAX_WEAPON_BAND` are ceilings on Seamless's own band
+/// field and would sit one glob away from `band_ladder`'s `MAX_WEAPON_BAND`, which counts steps
+/// above the player instead. Two different numbers under one name is how the wrong one gets used.
+pub mod invade_difficulty;
 pub use aip::*;
 
 pub mod invasion_warp;

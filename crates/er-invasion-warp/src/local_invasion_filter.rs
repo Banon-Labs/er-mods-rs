@@ -620,6 +620,10 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
 #[cfg(windows)]
 pub(crate) fn stand_down_hunt(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
+    // A search the player stopped is not a search in its far half. The difficulty itself survives
+    // -- it is their standing choice, not a property of this search -- but the latch that says the
+    // near half is over must not outlive the search that ended it.
+    crate::invade_difficulty::leave_far_half();
     // The recital of the places it was asking about goes now. This function's own log line
     // promises "nothing here will start another search until you ask for one", and a screen still
     // naming one location a second is the player's only evidence about whether that is true --
@@ -693,6 +697,12 @@ pub(crate) fn stand_down_hunt(reason: &str) {
 pub(crate) fn hand_off_to_seamless(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
     set_finger_reach(FINGER_REACH_NONE);
+    // The one thing that does not retire with the rest of the overlay. Everything above and below
+    // this line hands the search back to Seamless untouched; the difficulty is the player's
+    // standing instruction about which bracket that handed-back search should ask for, and the far
+    // half is the only place it applies. Set before the band ladder is reset, so no query can go
+    // out between the two reading a rung of one search and the bracket of none.
+    crate::invade_difficulty::enter_far_half();
     // The search is over rather than widening, so the band ladder goes back to the player's own
     // band with it. A rung that outlived its search would start the next invasion somewhere the
     // player never climbed to, with nothing on screen to say so.

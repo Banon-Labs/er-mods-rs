@@ -2278,3 +2278,101 @@ fn the_two_keys_are_written_independently() {
         );
     }
 }
+
+/// The difficulty is never a config key, on either side of the file.
+///
+/// The whole reason it is in memory is the bug that shipped as `widen_to_anywhere`: a key that
+/// could be set could disagree with the row the player picked, and on 2026-09-18 a file still
+/// carrying one from a previous week dropped them into two strangers' worlds. Both keys were
+/// deleted. Nothing here may quietly reintroduce the shape by giving the difficulty a line in the
+/// TOML, so this asserts the absence in the parser, the writer and the shipped template at once.
+#[test]
+fn the_invade_difficulty_never_reaches_the_config_file() {
+    // Assembled rather than written out, for the reason this module's docs give: a needle spelled
+    // in full would be found by a test that scans a file containing itself.
+    let key: String = ["invade", "difficulty"].join("_");
+    for (what, source) in [
+        (
+            "the parser",
+            include_str!("../../../er-invasion-warp-core/src/local_invasion_config.rs"),
+        ),
+        (
+            "the config struct",
+            include_str!("../../../er-invasion-warp-core/src/local_invasion.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(&key),
+            "{what} names `{key}` -- a difficulty with a line in the file can go stale in one, and \
+             that is the exact failure `widen_to_anywhere` was deleted for"
+        );
+    }
+}
+
+/// A click on the difficulty row costs no write, and is taken before the config lock.
+///
+/// Every other row on the panel goes through reload-clone-mutate-save. This one must not: it is
+/// not a config key, so a save carrying it would either drop it silently or invent a line for it.
+#[test]
+fn the_difficulty_row_is_applied_before_the_config_is_touched() {
+    let panel = include_str!("../settings_panel.rs");
+    let body = panel
+        .split_once("fn apply_pending_edits()")
+        .expect("the panel drains its edits here")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    let cycle_at = body
+        .find("invade_difficulty::cycle()")
+        .expect("the difficulty row must be applied at all");
+    let lock_at = body
+        .find("CONFIG.lock()")
+        .expect("every other row is applied under the config lock");
+    assert!(
+        cycle_at < lock_at,
+        "the difficulty must be taken out of the drained edits BEFORE the config is locked -- \
+         behind the lock it rides a read-modify-write that has no field to put it in:\n{body}"
+    );
+}
+
+/// The far-half latch dies with the search that set it.
+///
+/// Left standing, it puts the difficulty's bracket on the opening query of the next invasion --
+/// the ring, at a band the player never climbed to -- and the only thing on screen would be a
+/// neighbourhood that has apparently emptied. Both endings have to clear it: the player stopping
+/// the search, and a fresh search arming.
+#[test]
+fn the_far_half_latch_is_cleared_by_every_ending() {
+    let leave = ["leave", "far", "half"].join("_");
+    let enter = ["enter", "far", "half"].join("_");
+    let stand_down = product_code();
+    let body = stand_down
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        body.contains(&leave),
+        "standing down must leave the far half, or the difficulty outlives the search:\n{body}"
+    );
+    let publish = include_str!("../lobby_publish.rs");
+    let ladder = publish
+        .split_once("pub fn restart_search_ladder()")
+        .expect("a new search restarts the ladder")
+        .1
+        .split_once("\n    }")
+        .expect("a function body")
+        .0;
+    assert!(
+        ladder.contains(&leave),
+        "arming a new search must leave the far half:\n{ladder}"
+    );
+    // And exactly one place may enter it: the handover is the near/far boundary, and a second
+    // entry point would be a second definition of where the far half begins.
+    let entries = FILTER_SOURCE.matches(&enter).count();
+    assert_eq!(
+        entries, 1,
+        "the far half must be entered from the handover and nowhere else"
+    );
+}
