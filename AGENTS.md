@@ -79,9 +79,29 @@ away the entire time, and the section above already said so.
   and turns every access by every thread into a fault Frida must resume; on this target one was
   not. Measured 2026-09-15: a guard page on Seamless's session killed the game with `0xc0000005`
   at `ersc+0x89e23` -- one of ersc's own readers of that page -- while the player used an item.
-  Use `Thread.setHardwareWatchpoint` instead: four per thread, eight bytes each, no protection
-  change, and only the address asked for traps. When the field is unknown, an `Interceptor` on the
-  writer's caller is cheaper than widening the watch.
+  Use a hardware watchpoint instead: four per thread, eight bytes each, no protection change, and
+  only the address asked for traps. When the field is unknown, an `Interceptor` on the writer's
+  caller is cheaper than widening the watch.
+  - **It is a method on a THREAD OBJECT, not on `Thread`.** This line said
+    `Thread.setHardwareWatchpoint` until 2026-09-19 and that spelling does not exist: on Frida
+    17.17.0 `Object.getOwnPropertyNames(Thread)` is `length, name, prototype, _backtrace, sleep,
+    backtrace`, and the call raises `TypeError: not a function`. The real one comes off
+    `Process.enumerateThreads()`, whose entries carry `setHardwareBreakpoint`,
+    `unsetHardwareBreakpoint`, `setHardwareWatchpoint`, `unsetHardwareWatchpoint`, with the slot id
+    (0..3) first:
+
+    ```js
+    for (const thread of Process.enumerateThreads()) {
+      thread.setHardwareWatchpoint(0, address, 4, 'w');   // slot, address, size, 'r'|'w'|'rw'
+    }
+    Process.setExceptionHandler(function (details) { /* details.address is the writer */ });
+    ```
+
+    Measured the same day: 116 of 116 threads armed with the correct spelling, 0 of 116 with the
+    old one. **Count the successes and report the failures** -- an agent that only counted armed
+    threads printed `threadsArmed: 0` while the player pressed the button, which reads as "nothing
+    writes this field" when it means "nothing is watching". An instrument that reports an absence
+    it cannot detect is worse than no instrument.
 
 - **For a read-only question with no game running**, `/proc/<pid>/mem` via
   `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.

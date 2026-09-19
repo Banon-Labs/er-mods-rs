@@ -355,8 +355,37 @@ Interceptor.attach(poll, {
 const WATCH_SLOT = 0;
 let watching = null;
 
+// Whether the watchpoint attempt is worth repeating.
+//
+// It is retried while it fails for a reason that can change -- no character yet, a thread list
+// caught mid-load. It is NOT retried once the API itself is missing, which cannot change inside a
+// session: the first version retried unconditionally and emitted the same failure line on every
+// poll, 225 of them, which buries the run's real output under a defect in the instrument.
+let watchAttemptsLeft = 240;
+let watchApiReported = false;
+
 function watchRightWeaponSlot () {
   if (watching !== null) return watching;
+  if (watchAttemptsLeft <= 0) return null;
+  watchAttemptsLeft--;
+  // Say what this build of Frida actually offers, once, instead of guessing spellings. `Thread`
+  // is the static namespace this repo's notes name; a thread object from `enumerateThreads` is
+  // where Frida 16.2+ actually puts the per-thread hardware breakpoint and watchpoint methods.
+  if (!watchApiReported) {
+    watchApiReported = true;
+    const sample = Process.enumerateThreads()[0];
+    send({
+      tag: 'watchpoint-api',
+      frida: Frida.version,
+      threadStatics: Object.getOwnPropertyNames(Thread),
+      threadObject: sample === undefined
+        ? 'no threads to sample'
+        : Object.getOwnPropertyNames(sample).concat(
+          Object.getOwnPropertyNames(Object.getPrototypeOf(sample) || {}),
+        ),
+      note: 'What this Frida exposes for hardware watchpoints. Whichever name appears here is the one to call; anything else is a guess.',
+    });
+  }
   let equip;
   try {
     const manager = base.add(GAME_DATA_MAN_RVA).readPointer();
@@ -372,22 +401,47 @@ function watchRightWeaponSlot () {
   // thread would spend the four available slots on threads that never touch equipment; the poll's
   // own thread and the main thread are where a player-driven write can come from.
   const armed = [];
-  for (const thread of Process.enumerateThreads()) {
+  // Why the failures are collected rather than swallowed: the first version of this counted only
+  // successes and reported `threads: 0`, which reads as "nothing writes it" when it actually means
+  // "nothing is watching". A silent instrument that reports an absence is worse than no instrument,
+  // because the absence looks like a finding.
+  const refused = [];
+  const threads = Process.enumerateThreads();
+  for (const thread of threads) {
     try {
-      Thread.setHardwareWatchpoint(thread.id, address, 4, 'w');
+      // A method on the thread object, NOT the static `Thread.setHardwareWatchpoint` that this
+      // repo's notes name -- that spelling is `TypeError: not a function` on Frida 17.17.0, and
+      // because the first version counted only successes it reported zero armed threads as though
+      // that were a measurement. The slot id is the first argument: four per thread, 0..3.
+      thread.setHardwareWatchpoint(WATCH_SLOT, address, 4, 'w');
       armed.push(thread.id);
     } catch (error) {
-      continue;
+      if (refused.length < 3) refused.push(String(error));
     }
   }
-  watching = { address: address.toString(), threads: armed };
+  watching = armed.length === 0 ? null : { address: address.toString(), threads: armed };
+  // A missing method is not a condition that improves by trying again next frame.
+  if (armed.length === 0 && refused.some(function (why) { return why.indexOf('not a function') !== -1; })) {
+    watchAttemptsLeft = 0;
+  }
+  if (armed.length === 0 && watchAttemptsLeft > 0) {
+    // Quiet retry: no line until it either works or gives up, so a transient failure during a load
+    // screen does not fill the log with itself.
+    return null;
+  }
   send({
     tag: 'watchpoint',
-    slot: WATCH_SLOT,
     address: address.toString(),
-    threads: armed.length,
-    note: 'Write watchpoint on ChrAsm.right_weapon_slot. A press that produces no watchpoint hit never reached the cycle at all.',
+    threadsSeen: threads.length,
+    threadsArmed: armed.length,
+    refusedBecause: refused,
+    usable: armed.length > 0,
+    note: armed.length > 0
+      ? 'Write watchpoint on ChrAsm.right_weapon_slot. A press that produces no hit never reached the cycle.'
+      : 'NOT watching -- every thread refused the watchpoint, so silence here proves nothing. The reasons are above.',
   });
+  // Leave `watching` null on total failure so the next poll tries again: threads come and go, and
+  // a watchpoint that could not be placed during a load screen may place fine a second later.
   return watching;
 }
 
