@@ -12,12 +12,25 @@ has_verb(command, verb) if {
 	regex.match(pattern, command)
 }
 
-# Check if command contains ANY of the dangerous verbs from a set
-# More efficient than checking each verb individually in policy code
+# Check if command contains ANY of the dangerous verbs from a set, in ONE combined
+# regex.match call rather than one per verb (2026-09-16, bd
+# cupcake-wasm-regex-cache-reuse-oob-2026-09-16): see the deny-root-delete-after-heredoc-terminator
+# fix for the measured WASM regex-cache defect this collapse works around.
 has_dangerous_verb(command, verb_set) if {
-	some verb in verb_set
-	has_verb(command, verb)
+	pattern := concat("", ["(^|\\s)(", verb_alternation(verb_set), ")(\\s|$)"])
+	regex.match(pattern, command)
 }
+
+has_any_command_verb(command, verb_set) if {
+	pattern := concat("", [
+		command_position_prefix_pattern, path_prefix_pattern,
+		"(", verb_alternation(verb_set), ")",
+		`([ \t\n;&|(){}]|$)`,
+	])
+	regex.match(pattern, command)
+}
+
+verb_alternation(verb_set) := concat("|", [v | some v in verb_set])
 
 # ---------------------------------------------------------------------------
 # COMMAND POSITION (2026-08-31, bd protected-paths-parent-heredoc-prose-verb)

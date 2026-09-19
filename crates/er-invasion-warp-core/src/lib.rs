@@ -66,6 +66,7 @@ pub mod host;
 pub use host::*;
 
 pub mod aip;
+pub mod attempt_verdict;
 pub use aip::*;
 
 pub mod invasion_warp;
@@ -101,6 +102,7 @@ pub use oracles::*;
 pub mod sampler;
 pub use sampler::*;
 
+pub mod map_piece;
 pub mod map_surface;
 pub use map_surface::*;
 
@@ -108,6 +110,7 @@ pub mod param_row;
 pub mod reject_notice;
 pub use param_row::*;
 
+pub mod search_ring;
 pub mod select;
 pub use select::*;
 

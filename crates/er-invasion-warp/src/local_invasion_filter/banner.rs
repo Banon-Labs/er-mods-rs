@@ -12,7 +12,7 @@
 
 use std::sync::atomic::Ordering;
 
-use super::{NOTICE_FAILED, REJECT_NOTICE, RejectReason};
+use super::{NOTICE_FAILED, REJECT_NOTICE};
 
 /// The Steam persona name of the host this match belongs to, or `None`.
 ///
@@ -32,13 +32,9 @@ fn host_name() -> Option<String> {
     crate::lobby_publish::persona_name(super::host_steam_id()?)
 }
 
-/// Host-side stub: there is no game to show a banner in, and the decision half is tested directly
-/// against [`er_invasion_warp_core::reject_notice`] rather than through this.
+/// Host-side stub.
 #[cfg(not(windows))]
-pub(super) fn announce_rejection(_enabled: bool, _destination: u32, _reason: RejectReason) {}
-
-#[cfg(not(windows))]
-pub(super) fn announce_verdict(_enabled: bool, _destination: u32, _reason: RejectReason) {}
+pub(super) fn announce_failure(_enabled: bool, _attempt: u32) {}
 
 /// Host-side stub.
 #[cfg(not(windows))]
@@ -75,9 +71,48 @@ pub(super) fn announce_arrival(enabled: bool, destination: u32) {
     }
 }
 
+/// Tell the player a connection is dead, at the moment a working one would already have landed.
+///
+/// Shares the one notice latch with the other three messages, so the surface cannot leave a
+/// rejection on screen while reporting a failure, or the reverse.
+///
+/// No place and no host name here, unlike every other banner: join data never arrived, so there is
+/// no destination and no host id to resolve. Naming one would mean naming whoever the player was
+/// last told about, which reads as a failure to reach somewhere they never got near.
+/// Deleted 2026-09-16 along with its only call site, in `watch_for_failed_connect`.
+///
+/// That path had already stopped cancelling, because its deadline was derived from runs this mod
+/// was shaping and cannot tell a slow connect from a dead one. The banner outlived the action and
+/// went on telling the player "Invasion failed -- no connection" about a connect nothing was
+/// acting on. `RejectNotice::observe_failure` is kept and still tested; nothing in the DLL calls
+/// it, so restoring the notice means restoring a judgement that can be defended first.
+#[cfg(windows)]
+const _: () = ();
+
 /// Host-side stub; the decision half is tested against [`er_invasion_warp_core::reject_notice`].
 #[cfg(not(windows))]
 pub(super) fn announce_success(_enabled: bool, _destination: u32) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_prefilter_step(_enabled: bool, _block: u32, _ordinal: usize, _total: usize) {
+}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_search_everywhere(_enabled: bool, _nearby: usize, _mod_only: bool) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_found_host(_enabled: bool, _block: u32) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_nothing_to_search(_enabled: bool, _nearby_only: bool) {}
+
+/// Host build: no banner surface.
+#[cfg(not(windows))]
+pub(crate) fn announce_cannot_search(_enabled: bool) {}
 
 /// Put a successful invasion on the same banner the rejections use.
 ///
@@ -112,105 +147,165 @@ pub(super) fn announce_success(enabled: bool, destination: u32) {
     }
 }
 
-/// Put a rejection on the game's system-message banner, if the player asked for that.
+/// Say which place the widening search is asking for, on the same banner as everything else.
 ///
-/// The decision of whether to speak lives in [`er_invasion_warp_core::reject_notice`] and is unit-tested
-/// on the host; this only carries the answer to the screen. The notice is fed even when the option
-/// is off so that turning it on mid-session does not announce a place the player was rejected from
-/// minutes ago as though it had just happened.
+/// Shares [`RejectNotice`] with the rejection and success paths, so the banner keeps one memory of
+/// what it last said: a step announced here clears the latch, and a rejection that follows is
+/// spoken rather than swallowed as a repeat of something from before the search moved.
 ///
-/// Runs on the game thread, in the same call that judges the match -- which is the context
-/// `showPopupMenu` expects, and it null-checks the menu manager itself, so a message raised before
-/// the UI exists is dropped rather than faulting.
+/// The name comes from [`crate::place_name::place_name_for_block`], which answers `None` until the
+/// world map has been opened. That is a real gap and it is left visible rather than papered over
+/// with a tile id: the count still tells the player the search is moving, which is the thing the
+/// rotation would otherwise hide.
 #[cfg(windows)]
-pub(super) fn announce_rejection(enabled: bool, destination: u32, reason: RejectReason) {
+pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize, total: usize) {
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        // Resolve the area's own name for the banner. Done here rather than inside the notice so
-        // that type stays testable off the game: this is a call into the message repository.
-        //
-        // `None` before the world map has been read this session, which is the same condition that
-        // makes `area` mode fail closed -- the notice falls back to the block id, which is
-        // unfriendly but true.
-        let place = crate::place_name::place_name_for_block(destination);
-        let host = host_name();
-        guard.observe(
-            enabled,
-            destination,
-            reason,
-            place.as_deref(),
-            host.as_deref(),
-        )
+        let place = crate::place_name::place_name_for_block(block);
+        guard.observe_prefilter_step(enabled, ordinal, total, place.as_deref())
     };
     let Some(text) = announcement else {
         return;
     };
-    // The game's own auto-closing announcement surface -- the "Grace discovered" one. Not
-    // `system_message`/`showPopupMenu`, which is a blocking modal with an OK button: shipping that
-    // gave the user a dialog to dismiss per rejection, showing squares and then nothing, and the
-    // unattended dialog held the session open long enough to trip the stall watchdog.
-    //
-    // SAFETY: game thread, inside the join-data hook. Writes the live view's embedded message,
-    // which is exactly what the view's own Update does when it pops one. Both game functions are
-    // byte-checked before use.
-    if !unsafe { crate::announce::show(&text) } {
-        // Once, not per rejection: a banner that cannot be shown is a missing convenience, and
-        // saying so every 20 seconds would be its own spam.
-        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        crate::standalone_log(format_args!(
-            "local-invasion: could not show the rejection banner (\"{text}\") -- the message \
-             functions did not verify, or the menu is not up yet. Rejections still work; only the \
-             on-screen notice is missing."
-        ));
-    }
-}
-
-/// Say, the moment a match is judged, that it is not one the filter wanted.
-///
-/// # Why this is separate from [`announce_rejection`]
-///
-/// Because the verdict and the enforcement are two facts and one banner cannot carry both without
-/// lying about one of them. That has now been got wrong in both directions on live sessions:
-/// announcing "Rejected" at the verdict told the player an invasion had been stopped when the
-/// cancel then failed and it proceeded (2026-09-04), and moving the banner behind a successful
-/// cancel meant an uncancellable rejection showed nothing at all, which reads exactly like the mod
-/// not being loaded (2026-09-09).
-///
-/// So this one states only what is certainly true at the instant it fires -- this match is not
-/// local -- and never claims anything was stopped. `announce_rejection` still fires from
-/// `drive_pending_cancel` when a cancel actually lands, and that one may say so.
-///
-/// Deduplicated by destination, because a rejection is judged once but the tick can revisit it.
-#[cfg(windows)]
-pub(super) fn announce_verdict(enabled: bool, destination: u32, reason: RejectReason) {
-    if !enabled {
-        return;
-    }
-    if LAST_VERDICT_BLOCK.swap(destination, Ordering::SeqCst) == destination {
-        return;
-    }
-    let place = crate::place_name::place_name_for_block(destination)
-        .unwrap_or_else(|| format!("{destination:#010x}"));
-    // Short because the announce field is 1728px wide and the first attempt at a message like this
-    // measured 1729px, so it was placed successfully and never rendered.
-    let text = format!("Not local: {place}");
-    // SAFETY: game thread, inside the join-data hook -- the context `announce_rejection` shows
-    // from, and `show` byte-checks both game functions before using them.
+    // SAFETY: game thread, inside the lobby-query detour -- the same auto-closing announcement
+    // surface the rejection banner uses.
     if !unsafe { crate::announce::show(&text) } {
         if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
             return;
         }
         crate::standalone_log(format_args!(
-            "local-invasion: could not show the verdict banner (\"{text}\") -- reason {reason:?}"
+            "local-invasion: could not show the search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still widening; \
+             only the on-screen notice is missing."
         ));
     }
 }
 
-/// The last destination a verdict banner named, so a re-judged match does not repeat it.
+/// Say that the search has run out of nearby places and dropped the location filter.
+///
+/// The rung this announces was previously invisible: `advance_ring` logged one line to the file
+/// and returned, so the escalation happened silently and then happened again on every query round
+/// for as long as the search ran. A player watching the screen saw a search that never changed.
+///
+/// Shares [`RejectNotice`] with every other banner here, which is what suppresses the repeat --
+/// the everywhere rung is re-derived per round, so without the shared latch this would repaint
+/// roughly every fifteen seconds.
 #[cfg(windows)]
-static LAST_VERDICT_BLOCK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only: bool) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_search_everywhere(enabled, nearby, mod_only)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread, inside the lobby-query detour -- the same auto-closing announcement
+    // surface every other banner here uses.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the widened-search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still widening; \
+             only the on-screen notice is missing."
+        ));
+    }
+}
+
+/// Say the sweep found somebody, naming the place it stopped on.
+///
+/// Called with the banner queue already cleared, which is the point: the queue and this line are
+/// two halves of one fact. Leaving the queue running would keep naming the places the search has
+/// just decided not to ask about, on top of the answer.
+#[cfg(windows)]
+pub(crate) fn announce_found_host(enabled: bool, block: u32) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let place = crate::place_name::place_name_for_block(block);
+        guard.observe_found_host(enabled, block, place.as_deref())
+    };
+    paint_or_log(announcement, "the found-a-host banner");
+}
+
+/// Say nobody anywhere is hosting, so the search goes out as an ordinary invasion.
+///
+/// Separate from the widened-search line because that one says the neighbourhood came back empty,
+/// and on this path the neighbourhood was never asked: one pre-flight query settled it for
+/// everywhere at once.
+#[cfg(windows)]
+pub(crate) fn announce_nothing_to_search(enabled: bool, nearby_only: bool) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_nothing_to_search(enabled, nearby_only)
+    };
+    paint_or_log(announcement, "the nothing-to-search banner");
+}
+
+/// Paint a line, or say once why it could not be painted.
+///
+/// The three-line "show it, latch the failure, log it" tail was copied into every announcer here;
+/// this is that tail, named. A banner that cannot reach the screen is never fatal -- the search it
+/// describes is unaffected and only the notice is missing -- so the failure is reported once and
+/// the caller carries on.
+#[cfg(windows)]
+fn paint_or_log(announcement: Option<String>, what: &str) {
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game thread -- the same auto-closing announcement surface every other banner uses.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show {what} (\"{text}\") -- the message functions did not \
+             verify, or the menu is not up yet. The search is unaffected; only the notice is missing."
+        ));
+    }
+}
+
+/// Tell the player the search they armed was dropped before it asked anybody.
+///
+/// Shares [`RejectNotice`] with every other banner here, which is what keeps this to one painting:
+/// the refusal is re-derived on every tick that would otherwise drive the action, so without the
+/// shared latch this repaints several times a second.
+///
+/// No place name, unlike the search banners. A search that never went out was not a search of
+/// anywhere, and naming the tile it would have asked about reads as a search still running there.
+#[cfg(windows)]
+pub(crate) fn announce_cannot_search(enabled: bool) {
+    let announcement = {
+        let mut guard = match REJECT_NOTICE.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        guard.observe_cannot_search(enabled)
+    };
+    let Some(text) = announcement else {
+        return;
+    };
+    // SAFETY: game task thread, the same auto-closing announcement surface as every other banner.
+    if !unsafe { crate::announce::show(&text) } {
+        if NOTICE_FAILED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        crate::standalone_log(format_args!(
+            "local-invasion: could not show the dropped-search banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up yet. The search is still dropped; \
+             only the on-screen notice is missing."
+        ));
+    }
+}

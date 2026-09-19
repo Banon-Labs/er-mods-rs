@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import random
 import subprocess
 import sys
@@ -175,6 +176,11 @@ def run_script(script: str, *args: str) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
+# A booting Elden Ring took 17 X11 client slots before the server cut it off mid-boot, so it
+# wants more than that. This is the refusal threshold, not the game's measured appetite.
+X11_CLIENTS_REQUIRED = 40
+
+
 def steam_running() -> bool:
     """Ask the sanctioned helper. A bare `pgrep -x steam` false-negatives here and is guarded."""
     helper = SCRIPTS / "steam-running.sh"
@@ -182,6 +188,34 @@ def steam_running() -> bool:
         return True
     proc = subprocess.run(["bash", str(helper)], capture_output=True, timeout=20)
     return proc.returncode == 0
+
+
+def x11_headroom() -> tuple[int, str]:
+    """How many more X11 clients can connect, and who holds the rest.
+
+    Wine opens one X11 connection per thread. When the server is at its client ceiling the game's
+    early threads connect and a later one gets `NULL` from `XOpenDisplay`, which winex11
+    dereferences inside `vkCreateSwapchainKHR`. The window is black, the process exits, and
+    nothing is written anywhere -- so the failure reads as a bad DLL build. On 2026-09-14 it cost
+    eight launches and a bisect against DLLs that were never involved. Returns `(-1, "")` when the
+    probe cannot run, which is not a refusal: an unmeasurable server is not a starved one.
+    """
+    probe = SCRIPTS / "x11-client-headroom.py"
+    if not probe.is_file():
+        return -1, ""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(probe), "--required", str(X11_CLIENTS_REQUIRED)],
+            capture_output=True,
+            text=True,
+            timeout=SUBPROCESS_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return -1, ""
+    found = re.search(r"(\d+) more clients can connect", proc.stdout)
+    if not found:
+        return -1, ""
+    return int(found.group(1)), proc.stdout.strip()
 
 
 def normalize_path(value: str) -> str:
@@ -604,6 +638,17 @@ def preflight(args) -> tuple[dict, dict | None]:
             "--skip-steam-check to accept a non-representative environment."
         )
 
+    if not getattr(args, "skip_x11_check", False):
+        headroom, report = x11_headroom()
+        if 0 <= headroom < X11_CLIENTS_REQUIRED:
+            raise RuntimeError(
+                "REFUSING TO LAUNCH -- the X server has no room for the game:\n"
+                + report
+                + "\n\nThe launch would put a black window on screen and exit with no crash "
+                "dump. Free slots (a long-lived Steam client is the usual holder), or pass "
+                "--skip-x11-check to launch into it deliberately."
+            )
+
     closure_args = ["--json"]
     if args.no_fetch:
         closure_args.append("--no-fetch")
@@ -724,7 +769,13 @@ def resolve_configured_save() -> dict:
     default_user_save = save_file is None
     search_dir = save_file.parent if save_file else default_user_save_dir()
 
-    code, out, err = run_script("er-pick-save.py", "--json", "--all", "--root", str(search_dir))
+    # `--slot`, not `--all`. This gate needs one character's identity and used to decode every
+    # occupied slot of every eligible file to get it: 20 decodes and 67s of CPU against a 28s step
+    # bound on 2026-09-17, so the launch was refused before the game was reached. The occupancy
+    # rule is unchanged -- the bitmap still decides -- only the number of slots decoded is.
+    code, out, err = run_script(
+        "er-pick-save.py", "--json", "--slot", str(slot), "--root", str(search_dir)
+    )
     if code != 0:
         raise RuntimeError(f"could not decode saves under {search_dir}: {err.strip() or out.strip()}")
     targets = json.loads(out)["targets"]
@@ -1605,6 +1656,11 @@ def main() -> int:
     )
     parser.add_argument("--no-fetch", action="store_true", help="skip refreshing origin/main")
     parser.add_argument("--skip-steam-check", action="store_true")
+    parser.add_argument(
+        "--skip-x11-check",
+        action="store_true",
+        help="launch even when the X server has no client slots left for the game",
+    )
     parser.add_argument(
         "--allow-stale-launcher",
         action="store_true",

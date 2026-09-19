@@ -665,6 +665,219 @@ pub(super) fn owner_among(candidates: &[usize]) -> Option<(usize, usize)> {
     hits.first().copied()
 }
 
+/// Find Seamless's owner object by the one pointer only Seamless writes.
+///
+/// Returns `(session, owner)`, the same pair [`scan_for_session`] returns, so the caller does not
+/// care which found it.
+///
+/// # Why this exists beside a scan that already looks for a session
+///
+/// [`scan_for_session`] crosses `ersc.dll`'s own writable sections. The object this finds is on
+/// the game's heap, megabytes away from the module, so that scan cannot reach it however long it
+/// runs -- which is why run `br-20260917-024109-9973` logged `no session resolved` and then
+/// `ersc_session=SessionNotIdentified` on every heartbeat with Seamless perfectly healthy.
+///
+/// This looks for [`ersc::Abi::item_handler_rva`] instead: Seamless stores that function pointer
+/// one qword after the object it captured, and the handler reads the owner and the session from
+/// that object through two [`ersc::NEXT_OBJECT_OFFSET`] hops. A stray copy of the pointer cannot
+/// pass, because a copy has no object behind it that resolves to something calling itself a
+/// session.
+///
+/// Several distinct sessions would not be an identification, so the function answers `None`
+/// rather than picking one -- the same rule [`owner_among`] applies, and for the same reason: the
+/// answer is used to drive `ersc.dll`.
+///
+/// Runs on the sweeper thread. A pass is hundreds of thousands of reads and must never touch the
+/// game thread.
+/// The cached form, and the only one anything on the game thread may call.
+///
+/// A hit is remembered as the address the needle was found at, not as the pair it resolved to, so
+/// re-validating is the same three-hop read the handler itself does -- four reads, no walk. The
+/// closure is a live heap object for the life of the process, so the walk runs once.
+///
+/// `NEEDLE_WALKED` is what stops a process with no Seamless, or one where the handler is not
+/// registered yet, from paying for a full walk on every call. It is cleared by
+/// [`forget_item_handler_closure`] when the cached chain stops resolving, which is the only
+/// condition that can make a second walk worth its cost.
+#[cfg(windows)]
+pub(super) fn cached_owner_from_item_handler_closure(
+    base: usize,
+    abi: &ersc::Abi,
+) -> Option<(usize, usize)> {
+    let at = NEEDLE_CLOSURE.load(Ordering::SeqCst);
+    if at != 0 {
+        // Revalidate by pointer, not with `identifies_a_session`.
+        //
+        // The first version re-ran that predicate here and paid a full address-space walk every
+        // time it said no: 90 walks in run br-20260917-025609-d24a against the 3 the cache was
+        // meant to allow, and each lapse let the shape scan answer instead -- one drive went out
+        // with `owner=0x736046b8`, which is not Seamless's object.
+        //
+        // The predicate is the wrong question for a cached hit. It asks "does this look like a
+        // session", which is state-sensitive; what the cache needs is "is this still the same
+        // object". Measured with `scripts/er-closure-chain-stability.py` on that run: 24 samples
+        // from one closure address, states `0x12` and `0x16`, and the owner and session pointers
+        // identical in every one.
+        let still = unsafe { er_game_base::mem::safe_read_usize(at - 8) }
+            .and_then(|captured| unsafe {
+                er_game_base::mem::safe_read_usize(captured + ersc::NEXT_OBJECT_OFFSET)
+            })
+            .and_then(|owner| {
+                unsafe { er_game_base::mem::safe_read_usize(owner + ersc::NEXT_OBJECT_OFFSET) }
+                    .map(|session| (session, owner))
+            });
+        let remembered = (
+            NEEDLE_SESSION.load(Ordering::SeqCst),
+            NEEDLE_OWNER.load(Ordering::SeqCst),
+        );
+        if remembered.0 != 0 && still == Some(remembered) {
+            return Some(remembered);
+        }
+        // The object moved or died. Drop it and let the paced walk find it again.
+        NEEDLE_CLOSURE.store(0, Ordering::SeqCst);
+        NEEDLE_CALLS.store(0, Ordering::SeqCst);
+    }
+    // Seamless registers its item handler some way into a run, so the first calls of a process
+    // legitimately find nothing -- on run br-20260917-024652-20b0 the needle matched zero for the
+    // first fifty-odd passes and then one, for the rest of the run. So the walk cannot be
+    // once-only, and it equally cannot be every call. It gets one attempt per
+    // `NEEDLE_WALK_EVERY_CALLS`, until it succeeds and the cache takes over.
+    let attempt = NEEDLE_CALLS.fetch_add(1, Ordering::SeqCst);
+    if !attempt.is_multiple_of(NEEDLE_WALK_EVERY_CALLS) {
+        return None;
+    }
+    owner_from_item_handler_closure(base, abi)
+}
+
+/// Host-side stub. The needle walk is a Windows memory walk and has no meaning off the target.
+#[cfg(not(windows))]
+pub(super) fn cached_owner_from_item_handler_closure(
+    _base: usize,
+    _abi: &ersc::Abi,
+) -> Option<(usize, usize)> {
+    None
+}
+
+#[cfg(windows)]
+fn owner_from_item_handler_closure(base: usize, abi: &ersc::Abi) -> Option<(usize, usize)> {
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_PRIVATE: u32 = 0x2_0000;
+    const MBI_SIZE: usize = 48;
+    const MAX_REGIONS: usize = 1 << 16;
+    const MAX_REGION_BYTES: usize = 64 << 20;
+    const CHUNK: usize = 64 * 1024;
+
+    unsafe extern "system" {
+        fn VirtualQuery(
+            address: *const core::ffi::c_void,
+            buffer: *mut core::ffi::c_void,
+            length: usize,
+        ) -> usize;
+    }
+
+    let needle = base + abi.item_handler_rva;
+    // `(session, owner, closure address)` -- the address is what gets cached, because re-reading
+    // the chain from it is four reads where re-finding it is a walk of the whole address space.
+    let mut hits: Vec<(usize, usize, usize)> = Vec::new();
+    let mut info = [0u8; MBI_SIZE];
+    let mut buffer = vec![0u8; CHUNK];
+    let mut address: usize = 0x1_0000;
+    for _ in 0..MAX_REGIONS {
+        let wrote = unsafe {
+            VirtualQuery(
+                address as *const core::ffi::c_void,
+                info.as_mut_ptr().cast(),
+                MBI_SIZE,
+            )
+        };
+        if wrote == 0 {
+            break;
+        }
+        let field = |at: usize, width: usize| -> usize {
+            let mut value = 0usize;
+            for index in 0..width {
+                value |= (info[at + index] as usize) << (index * 8);
+            }
+            value
+        };
+        let region = field(0x00, 8);
+        let size = field(0x18, 8);
+        let state = field(0x20, 4) as u32;
+        let kind = field(0x28, 4) as u32;
+        if size == 0 {
+            break;
+        }
+        if state == MEM_COMMIT && kind == MEM_PRIVATE && size <= MAX_REGION_BYTES {
+            let end = region + size;
+            let mut cursor = region;
+            while cursor < end {
+                let span = CHUNK.min(end - cursor);
+                let window = &mut buffer[..span];
+                if unsafe { er_game_base::mem::read_bytes(cursor, window) } {
+                    let mut offset = 0usize;
+                    while offset + 8 <= span {
+                        let value = usize::from_le_bytes(
+                            window[offset..offset + 8].try_into().expect("eight bytes"),
+                        );
+                        if value == needle
+                            && offset >= 8
+                            && let at = cursor + offset
+                            && let Some((session, owner)) = closure_resolves_to_a_session(abi, at)
+                        {
+                            hits.push((session, owner, at));
+                        }
+                        offset += 8;
+                    }
+                }
+                cursor += span.saturating_sub(8).max(8);
+            }
+        }
+        let Some(next) = region.checked_add(size) else {
+            break;
+        };
+        address = next;
+    }
+    let sessions: std::collections::HashSet<usize> = hits.iter().map(|(s, _, _)| *s).collect();
+    crate::standalone_log(format_args!(
+        "local-invasion: item-handler needle {needle:#x} matched {} closure(s) naming {} distinct \
+         session(s){}",
+        hits.len(),
+        sessions.len(),
+        match hits.first() {
+            Some((session, owner, _)) => format!(", first session {session:#x} owner {owner:#x}"),
+            None => String::new(),
+        }
+    ));
+    if sessions.len() != 1 {
+        return None;
+    }
+    let (session, owner, at) = *hits.first()?;
+    NEEDLE_SESSION.store(session, Ordering::SeqCst);
+    NEEDLE_OWNER.store(owner, Ordering::SeqCst);
+    NEEDLE_CLOSURE.store(at, Ordering::SeqCst);
+    Some((session, owner))
+}
+
+/// Follow one candidate closure to the session it names, if it names one.
+///
+/// `at` is the address the needle was found at, so the captured object is the qword before it.
+#[cfg(windows)]
+fn closure_resolves_to_a_session(abi: &ersc::Abi, at: usize) -> Option<(usize, usize)> {
+    let captured = unsafe { er_game_base::mem::safe_read_usize(at - 8) }?;
+    if captured == 0 || !unsafe { er_game_base::mem::is_heap_aligned_ptr(captured) } {
+        return None;
+    }
+    let owner = unsafe { er_game_base::mem::safe_read_usize(captured + ersc::NEXT_OBJECT_OFFSET) }?;
+    if owner == 0 || !unsafe { er_game_base::mem::is_heap_aligned_ptr(owner) } {
+        return None;
+    }
+    let session = unsafe { er_game_base::mem::safe_read_usize(owner + ersc::NEXT_OBJECT_OFFSET) }?;
+    if session == 0 || !identifies_a_session(abi, session, true) {
+        return None;
+    }
+    Some((session, owner))
+}
+
 /// Read the session state field at `address`, or `None` if it is not readable.
 ///
 /// One dword, so the differential scan can re-test thousands of recorded addresses without paying
@@ -890,6 +1103,26 @@ fn sweep_until_answered(base: usize, abi: &'static ersc::Abi) {
             if owner != 0 {
                 return;
             }
+            // A bare hit knows the session but not its holder, so ask for the holder now rather
+            // than waiting for a differential pass that may never come.
+            //
+            // `owner_among` is the same question the change-proven path asks, and it is cheap
+            // against a one-element set. Without this the run keeps a provisional answer whose
+            // owner is 0, and an owner of 0 cannot drive anything -- both ersc actions take it as
+            // `rcx` and read the session out of `+0x58`. Measured on run br-20260916-101429-e595:
+            // the near+far handoff fired three times, pressed three times, pinned the Lynchpin
+            // three times, and `RequestLobbyList` never reached our detour once, because
+            // `resolve_session` had answered `owner 0x0` and every drive declined.
+            if let Some((held_session, held_owner)) = owner_among(&[session]) {
+                crate::standalone_log(format_args!(
+                    "local-invasion: owner {held_owner:#x} found for the bare session                      {held_session:#x} on the same pass that found it -- the drive needs a holder                      to pass as `this`, and waiting for a differential pass left runs unable to                      search at all."
+                ));
+                CACHED_SLOT.store(0, Ordering::SeqCst);
+                CACHED_OWNER.store(held_owner, Ordering::SeqCst);
+                CACHED_SESSION.store(held_session, Ordering::SeqCst);
+                SWEEP_BUDGET.store(0, Ordering::SeqCst);
+                return;
+            }
             // A bare session is provisional, so this thread keeps its post rather than retiring
             // on it. Returning here is what made the owner scan above dead code: the sweeper
             // exited on the first thing the shape scan latched -- routinely a look-alike, five
@@ -944,6 +1177,29 @@ const OWNER_SCAN_MAX_CANDIDATES: usize = 64;
 /// One line when the set is too wide, not one per pass.
 #[cfg(windows)]
 static OWNER_SCAN_TOO_WIDE_SAID: AtomicBool = AtomicBool::new(false);
+
+/// The owner the item-handler needle found, and the closure address it was found at.
+///
+/// The needle walk crosses the whole committed private address space, so it must run once and be
+/// validated thereafter, never repeated. Measured the hard way on run br-20260917-024652-20b0:
+/// without this cache the walk ran on every `resolve_session` call -- 237 full passes -- and the
+/// user reported the game "running at like 1fps". That is the same cost the sweeper thread exists
+/// to keep off the game thread, paid on the game thread.
+#[cfg(windows)]
+static NEEDLE_CLOSURE: AtomicUsize = AtomicUsize::new(0);
+/// The pair the cached closure resolved to, so revalidation is a pointer comparison.
+#[cfg(windows)]
+static NEEDLE_SESSION: AtomicUsize = AtomicUsize::new(0);
+#[cfg(windows)]
+static NEEDLE_OWNER: AtomicUsize = AtomicUsize::new(0);
+/// How many times the cached resolver has been asked while it had no answer.
+#[cfg(windows)]
+static NEEDLE_CALLS: AtomicUsize = AtomicUsize::new(0);
+/// One walk per this many unanswered calls. The walk is the whole committed private address space;
+/// the resolver is called several times a second, and Seamless registers its handler within the
+/// first minute of a run, so a few walks a minute finds it without the game noticing.
+#[cfg(windows)]
+const NEEDLE_WALK_EVERY_CALLS: usize = 256;
 
 #[cfg(windows)]
 static CACHED_SLOT: AtomicUsize = AtomicUsize::new(0);

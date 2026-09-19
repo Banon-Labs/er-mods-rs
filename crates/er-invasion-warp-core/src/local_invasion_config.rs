@@ -1,4 +1,4 @@
-//! Loading [`LocalInvasionConfig`] from `er-invasion-warp-core.toml`, and RELOADING it while the game
+//! Loading [`LocalInvasionConfig`] from `er-invasion-warp.toml`, and RELOADING it while the game
 //! runs.
 //!
 //! # Hot reload, and why it is content-polled rather than event-driven
@@ -32,7 +32,7 @@
 //! `[local_invasion]` section's body and it behaves identically. [`SECTION_NAME`] is exported for
 //! that purpose.
 
-use crate::local_invasion::{LocalInvasionConfig, LocalInvasionMode, PlaceNameTextId};
+use crate::local_invasion::LocalInvasionConfig;
 
 /// File name looked for next to the DLL.
 pub const CONFIG_FILE_NAME: &str = "er-invasion-warp.toml";
@@ -57,18 +57,6 @@ pub const DEFAULT_CONFIG_TOML: &str = r#"# er-invasion-warp-core -- local invasi
 # Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
 enabled = false
 
-# How a destination is judged:
-#   "exact" -- only the exact location you are anchored to.
-#   "area"  -- that exact location, or anywhere sharing one of its place names. If where you stand
-#              carries one name, that is one place to look; if it carries five, five.
-#   "named" -- ignore where you are; accept only the locations listed below.
-#
-# OPEN YOUR WORLD MAP ONCE per session if you use "area" or "named". Place names are read off the
-# world map's own rows, so before you have opened it no location has a name, every name-based
-# judgement fails closed, and both modes behave like "exact". The log says so the first time it
-# happens. "exact" compares locations directly and never needs the map.
-mode = "exact"
-
 # HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
 #
 # The filter above DECLINES matches: it sees every host and cancels the ones you do not want, which
@@ -82,14 +70,45 @@ mode = "exact"
 # A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
 # marked exactly one, or the map you are standing in if you have marked none. Several marked
 # locations cannot be expressed and hunt will say so and stay out of the way.
-hunt = false
+search_by_location = false
 
-# Announce a rejection on the game's own message banner ("Rejected invasion: m60_42_36_00").
+# Widen the query outward from where you are standing, one ring of map tiles at a time.
 #
-# Only a CHANGE of wrong destination is announced. Seamless retries roughly every 20 seconds and
-# the same wrong place comes back around constantly, so announcing every one would be wallpaper
-# within a minute. Silence after the first means "still being sent to the same wrong place".
+# 0 asks Steam for your exact tile only. 1 adds the eight tiles around it, 2 the ring beyond
+# that, and 3 is the cap the ring builder enforces. Each query round asks for the next tile in
+# turn, so the search moves instead of re-asking for a place nobody is in.
+#
+# This does nothing on its own. The widening runs inside the lobby-query detour that
+# `steam_hooks` installs, and the tile it starts from is the one `hunt` picks -- with either of
+# those off a radius is read, echoed back on the config line, and never acted on. The DLL says
+# so in its log rather than leaving you to work it out.
+search_radius = 0
+
+# When the rings are spent, drop the filter and ask for everywhere.
+#
+# Off, the search keeps asking for the last tile rather than quietly reverting to an unfiltered
+# query -- widening to a population you did not ask for is the thing hunt exists to avoid. On,
+# it is the last rung of the ladder: everywhere, once nearby has been exhausted.
+widen_to_anywhere = false
+
+# Announce what the search is doing on the game's own message banner.
+#
+# The name is older than what it does. This build does not reject a connected invasion for being
+# in the wrong place -- that cost you a connection to learn something the query could have asked
+# for -- so there is no rejection to announce. What it announces now is arrival ("Invaded
+# Limgrave") and, while search_radius is widening the search, which place is being asked for
+# ("searching 3 of 9 nearby locations -- Stormhill").
+#
+# Only a CHANGE is announced. Seamless retries roughly every 20 seconds and the same line would
+# otherwise be wallpaper within a minute; silence means nothing has moved since the last notice.
 reject_notice = false
+
+# ----------------------------------------------------------------------------------------------
+# DIAGNOSTICS BELOW. These six install or withhold hooks so a crash can be attributed to one of
+# them. They are not preferences, they are not shown in the F4 panel, and every one of them is a
+# way to break the mod rather than to configure it. Leave them alone unless you are bisecting a
+# crash.
+# ----------------------------------------------------------------------------------------------
 
 # Draw invasion pins on the world map.
 #
@@ -132,6 +151,10 @@ ersc_lobby_key_observer = true
 # br-20260908-230004-d163 did 13 times in a row.
 ersc_invade_observer = true
 
+# ----------------------------------------------------------------------------------------------
+# Back to ordinary settings.
+# ----------------------------------------------------------------------------------------------
+
 # Match ONLY other players running this DLL with this option turned on.
 #
 # Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
@@ -142,26 +165,16 @@ ersc_invade_observer = true
 # It is ABSOLUTE, not a preference. While this is on, the entire vanilla population is invisible to
 # you for hosting AND for invading -- you will only ever meet other people running this DLL with
 # this same option on. Turn it on for a session with friends, not permanently.
-dll_users_only = false
+only_players_with_this_mod = false
 
 # THE TWO USEFUL COMBINATIONS, since these switches are independent:
 #
-#   enabled = true,  dll_users_only = false   filter by LOCATION, meet everybody (the default use)
-#   enabled = false, dll_users_only = true    invade ANYWHERE as normal, but only ever meet other
-#                                             DLL users -- a private global community
+#   search_by_location = true,  only_players_with_this_mod = false
+#       aim the query at one place, and still meet everybody who is there
+#   search_by_location = false, only_players_with_this_mod = true
+#       invade anywhere as normal, but only ever meet other people running this DLL
 #
 # Both together works too: only DLL users, and only at the place you are standing.
-
-# NOT IMPLEMENTED YET -- anything listed here is parsed and then ignored, and the log says so on
-# every load. Turning a typed place name into the FMG text id the game matches on has not been
-# reversed, so there is nothing to compare a string against.
-#
-# Use Shift+Insert instead: stand somewhere, press it, and every location sharing that place's name
-# is accepted from then on. That writes `named_location_text_ids` below, which IS consulted.
-#
-# Be careful with mode = "named": if this list is the only thing you filled in, no ids exist and
-# EVERY match is rejected.
-named_locations = []
 
 # Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
 # allows -- a marked place is always accepted, in every mode -- so you can leave mode = "exact"
@@ -169,8 +182,6 @@ named_locations = []
 #
 #   mark_key         "invade here"      -> allowed_blocks   (and clears any exclusion)
 #   unmark_key       "not here"         -> blocked_blocks   (and clears any mark)
-#   Shift+mark_key   mark every place sharing this one's name -> named_location_text_ids
-#   Shift+unmark_key un-mark those
 #
 # The world map colours its invasion pins by these two lists, and by nothing else: chosen is the
 # brightest marker, excluded the dimmest, and anything in neither list keeps the middle one. That
@@ -201,28 +212,18 @@ unmark_key = "Delete"
 # actually playing in. The banner tells you which way it went.
 enable_toggle_key = "F3"
 
-# The three invasion-point keys, by NAME, from the same list above.
+# The in-game settings panel, by NAME, from the same list. It shows every key above that is a
+# setting rather than a diagnostic, and writes each change straight back here -- this file stays
+# the source of truth, and the panel re-reads it, so an edit you make by hand while the panel is
+# open still wins.
 #
-# CHANGE THESE IF ANOTHER MOD FIGHTS YOU FOR THEM. They were hard-coded to F7/F8/F9, which is a
-# popular enough choice that another mod in the same profile had taken F7 too -- one press reached
-# both, and there was no way to separate them short of unloading something. Now there is.
-#
-#   warp_nearest_key      the nearest invasion point that is not the one you are standing on
-#   warp_next_key         the next point in the catalog's own order, which crosses the map
-#   warp_other_area_key   the first point in a DIFFERENT area (base game <-> Shadow of the Erdtree)
-#
-# Invasion locations are markers rather than fast-travel destinations, so pressing one of these
-# currently logs why it declined instead of moving you. The keys are still read -- a key that does
-# nothing at all and a key whose handler is broken look identical from the outside.
-warp_nearest_key = "F7"
-warp_next_key = "F8"
-warp_other_area_key = "F9"
+# The file is REGENERATED from the shipped template on every save, so comments you add yourself
+# do not survive a change made in game. Your values do.
+settings_key = "F4"
 
-# Locations you excluded. An exclusion beats everything, including a mode that would accept it.
+# Locations you excluded. An exclusion is the strongest thing you can say about a place: it stops
+# the search from asking for that location even when it is the one you marked.
 blocked_blocks = []
-
-# Raw PlaceName text ids. Shift+Insert appends here; you can also add ids by hand.
-named_location_text_ids = []
 "#;
 
 /// A parse problem worth telling the user about.
@@ -247,7 +248,7 @@ pub struct ParsedConfig {
     pub issues: Vec<ConfigIssue>,
 }
 
-/// Parse `er-invasion-warp-core.toml` text.
+/// Parse `er-invasion-warp.toml` text.
 ///
 /// Accepts the schema at top level or inside a `[local_invasion]` section, so the same function
 /// serves the standalone file and the embedded-in-a-shared-TOML case. Sections other than
@@ -334,11 +335,13 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("enabled must be true or false, got {value:?}"),
                 }),
             },
-            "dll_users_only" => match parse_bool(value) {
+            "only_players_with_this_mod" => match parse_bool(value) {
                 Some(v) => config.dll_users_only = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("dll_users_only must be true or false, got {value:?}"),
+                    message: format!(
+                        "only_players_with_this_mod must be true or false, got {value:?}"
+                    ),
                 }),
             },
             "steam_hooks" => match parse_bool(value) {
@@ -392,29 +395,35 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("reject_notice must be true or false, got {value:?}"),
                 }),
             },
-            "hunt" => match parse_bool(value) {
+            "search_by_location" => match parse_bool(value) {
                 Some(v) => config.hunt = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("enabled must be true or false, got {value:?}"),
+                    message: format!("search_by_location must be true or false, got {value:?}"),
                 }),
             },
-            "mode" => match LocalInvasionMode::parse(&unquote(value)) {
-                Some(v) => config.mode = v,
-                None => issues.push(ConfigIssue {
+            "search_radius" => match unquote(value).parse::<u8>() {
+                Ok(v) if usize::from(v) <= usize::from(crate::search_ring::MAX_RADIUS) => {
+                    config.prefilter_radius = v;
+                }
+                Ok(v) => issues.push(ConfigIssue {
                     line: line_no,
                     message: format!(
-                        "mode must be \"exact\", \"area\" or \"named\", got {value:?} -- \
-                         keeping {:?}",
-                        config.mode
+                        "search_radius {v} is past the {} the ring is capped at -- keeping {}",
+                        crate::search_ring::MAX_RADIUS,
+                        config.prefilter_radius
                     ),
                 }),
+                Err(_) => issues.push(ConfigIssue {
+                    line: line_no,
+                    message: format!("search_radius must be a whole number, got {value:?}"),
+                }),
             },
-            "named_locations" => match parse_string_array(value) {
-                Some(v) => config.named_locations = v,
+            "widen_to_anywhere" => match parse_bool(value) {
+                Some(v) => config.search_everywhere_when_exhausted = v,
                 None => issues.push(ConfigIssue {
                     line: line_no,
-                    message: format!("named_locations must be an array of strings, got {value:?}"),
+                    message: format!("widen_to_anywhere must be true or false, got {value:?}"),
                 }),
             },
             "mark_key" => {
@@ -439,42 +448,15 @@ pub fn parse_local_invasion_config_with_fallback(
                     &mut issues,
                 );
             }
-            "warp_nearest_key" => {
-                config.warp_nearest_key = key_setting(
-                    "warp_nearest_key",
+            "settings_key" => {
+                config.settings_key = key_setting(
+                    "settings_key",
                     value,
-                    fallback.warp_nearest_key,
+                    fallback.settings_key,
                     line_no,
                     &mut issues,
                 );
             }
-            "warp_next_key" => {
-                config.warp_next_key = key_setting(
-                    "warp_next_key",
-                    value,
-                    fallback.warp_next_key,
-                    line_no,
-                    &mut issues,
-                );
-            }
-            "warp_other_area_key" => {
-                config.warp_other_area_key = key_setting(
-                    "warp_other_area_key",
-                    value,
-                    fallback.warp_other_area_key,
-                    line_no,
-                    &mut issues,
-                );
-            }
-            "named_location_text_ids" => match parse_int_array(value) {
-                Some(v) => config.named_location_text_ids = v.into_iter().collect(),
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!(
-                        "named_location_text_ids must be an array of integers, got {value:?}"
-                    ),
-                }),
-            },
             "blocked_blocks" => match parse_block_array(value) {
                 Some(v) => config.blocked_blocks = v.into_iter().collect(),
                 None => issues.push(ConfigIssue {
@@ -535,46 +517,6 @@ fn array_body(value: &str) -> Option<&str> {
     value.trim().strip_prefix('[')?.strip_suffix(']')
 }
 
-fn parse_string_array(value: &str) -> Option<Vec<String>> {
-    let body = array_body(value)?;
-    if body.trim().is_empty() {
-        return Some(Vec::new());
-    }
-    let mut out = Vec::new();
-    for item in body.split(',') {
-        let item = item.trim();
-        if item.is_empty() {
-            continue;
-        }
-        // Require quotes: a bare word here is a typo, and accepting it would let `named_locations
-        // = [Haligtree]` look valid while matching a name nobody wrote.
-        let unquoted = item.strip_prefix('"')?.strip_suffix('"')?;
-        out.push(unquoted.to_owned());
-    }
-    Some(out)
-}
-
-fn parse_int_array(value: &str) -> Option<Vec<PlaceNameTextId>> {
-    let body = array_body(value)?;
-    if body.trim().is_empty() {
-        return Some(Vec::new());
-    }
-    let mut out = Vec::new();
-    for item in body.split(',') {
-        let item = item.trim();
-        if item.is_empty() {
-            continue;
-        }
-        out.push(item.parse::<PlaceNameTextId>().ok()?);
-    }
-    Some(out)
-}
-
-/// Block ids, accepted as `0x3c353800` or plain decimal.
-///
-/// Hex is the form every log line, every RE note and every telemetry document in this repo prints
-/// a block id in, so a user copying one out of the log must be able to paste it straight in. The
-/// writer below emits hex for the same reason.
 fn parse_block_array(value: &str) -> Option<Vec<u32>> {
     let body = array_body(value)?;
     if body.trim().is_empty() {
@@ -608,7 +550,9 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
         let key = line.split_once('=').map(|(k, _)| k.trim()).unwrap_or("");
         match key {
             "enabled" => out.push_str(&format!("enabled = {}\n", config.enabled)),
-            "hunt" => out.push_str(&format!("hunt = {}\n", config.hunt)),
+            "search_by_location" => {
+                out.push_str(&format!("search_by_location = {}\n", config.hunt));
+            }
             // These two were missing, and the default arm below copies the shipped file'S line
             // verbatim -- so every write silently reset them to `false`, on disk and in memory
             // (`save` adopts the re-parsed round-trip). Marking a location with Insert was enough
@@ -622,6 +566,15 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             }
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
+            }
+            "search_radius" => {
+                out.push_str(&format!("search_radius = {}\n", config.prefilter_radius));
+            }
+            "widen_to_anywhere" => {
+                out.push_str(&format!(
+                    "widen_to_anywhere = {}\n",
+                    config.search_everywhere_when_exhausted
+                ));
             }
             "ersc_observers" => {
                 out.push_str(&format!("ersc_observers = {}\n", config.ersc_observers));
@@ -647,20 +600,11 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                     config.ersc_lobby_key_observer
                 ));
             }
-            "dll_users_only" => {
-                out.push_str(&format!("dll_users_only = {}\n", config.dll_users_only));
-            }
-            "mode" => out.push_str(&format!("mode = \"{}\"\n", config.mode.as_str())),
-            "named_locations" => {
-                let names = config
-                    .named_locations
-                    .iter()
-                    // A quote inside a name would produce a file this parser cannot read back, so
-                    // drop it rather than write a config that breaks on the next reload.
-                    .map(|name| format!("\"{}\"", name.replace('"', "")))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push_str(&format!("named_locations = [{names}]\n"));
+            "only_players_with_this_mod" => {
+                out.push_str(&format!(
+                    "only_players_with_this_mod = {}\n",
+                    config.dll_users_only
+                ));
             }
             "mark_key" => out.push_str(&format!(
                 "mark_key = \"{}\"\n",
@@ -674,27 +618,10 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
                 "enable_toggle_key = \"{}\"\n",
                 crate::keybind::key_name(config.enable_toggle_key)
             )),
-            "warp_nearest_key" => out.push_str(&format!(
-                "warp_nearest_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_nearest_key)
+            "settings_key" => out.push_str(&format!(
+                "settings_key = \"{}\"\n",
+                crate::keybind::key_name(config.settings_key)
             )),
-            "warp_next_key" => out.push_str(&format!(
-                "warp_next_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_next_key)
-            )),
-            "warp_other_area_key" => out.push_str(&format!(
-                "warp_other_area_key = \"{}\"\n",
-                crate::keybind::key_name(config.warp_other_area_key)
-            )),
-            "named_location_text_ids" => {
-                let ids = config
-                    .named_location_text_ids
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                out.push_str(&format!("named_location_text_ids = [{ids}]\n"));
-            }
             "blocked_blocks" => {
                 let blocks = config
                     .blocked_blocks
@@ -865,34 +792,142 @@ impl HotConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local_invasion::{InvasionAnchor, InvasionCandidate, KeepReason, Verdict};
 
+    /// The names before the 2026-09-15 rename are gone, and must stay gone.
+    ///
+    /// No alias was kept, deliberately (user directive, same day): two spellings for one setting
+    /// is the ambiguity the rename exists to remove, and an alias kept "for now" is how both
+    /// survive for years. A file still using the old words gets defaults and a complaint about
+    /// each line, which is loud and fixable -- unlike an alias, which is silent and permanent.
     #[test]
-    fn a_marked_config_round_trips_through_the_writer() {
-        // The mark keys rewrite the file; if the writer emitted anything the parser drops, a mark
-        // would vanish on the next reload while the key press looked like it worked.
-        let mut config = LocalInvasionConfig {
-            enabled: true,
-            mode: crate::local_invasion::LocalInvasionMode::PreferExactThenArea,
-            named_locations: vec!["Miquella's Haligtree".to_owned()],
-            ..Default::default()
-        };
-        config.mark_block(0x3c35_3800);
-        config.mark_block(0x0f00_0000);
-        config
-            .named_location_text_ids
-            .extend([1_400_100, 1_400_200]);
-        let rendered = render_local_invasion_config(&config);
-        let parsed = parse_local_invasion_config(&rendered);
-        assert_eq!(parsed.issues, Vec::new(), "our own output must parse clean");
-        assert_eq!(parsed.config, config);
-        // And the comments survive, so a user who pressed Insert still has the file that explains
-        // what the key did.
-        assert!(rendered.contains("Shift+Insert"), "{rendered}");
-        assert!(
-            rendered.contains("allowed_blocks = [0x0f000000, 0x3c353800]"),
-            "{rendered}"
+    fn the_names_before_the_rename_are_refused() {
+        let old = "\
+enabled = true\n\
+hunt = true\n\
+prefilter_radius = 2\n\
+search_everywhere_when_exhausted = true\n\
+dll_users_only = true\n";
+        let parsed = parse_local_invasion_config(old);
+        let complaints = parsed.issues.len();
+        assert_eq!(
+            complaints, 4,
+            "each retired name should be reported as unknown, got {:?}",
+            parsed.issues
         );
+        assert!(
+            !parsed.config.hunt,
+            "the retired `hunt` must not still set anything"
+        );
+        assert_eq!(parsed.config.prefilter_radius, 0);
+        assert!(!parsed.config.search_everywhere_when_exhausted);
+        assert!(!parsed.config.dll_users_only);
+    }
+
+    /// The new names parse too, and to the same fields.
+    #[test]
+    fn the_names_after_the_rename_reach_the_same_fields() {
+        let new = "\
+enabled = true\n\
+search_by_location = true\n\
+search_radius = 3\n\
+widen_to_anywhere = true\n\
+only_players_with_this_mod = true\n";
+        let parsed = parse_local_invasion_config(new);
+        let (config, issues) = (parsed.config, parsed.issues);
+        assert!(
+            issues.is_empty(),
+            "the new spellings should parse cleanly, got {issues:?}"
+        );
+        assert!(config.hunt);
+        assert_eq!(config.prefilter_radius, 3);
+        assert!(config.search_everywhere_when_exhausted);
+        assert!(config.dll_users_only);
+    }
+
+    /// Every key the writer can emit must exist in the shipped template.
+    ///
+    /// The writer walks `DEFAULT_CONFIG_TOML` line by line and emits a value for each key it
+    /// recognises. A key with a `match` arm but no template line is therefore never visited: the
+    /// arm is dead, the value is dropped on every save, and the config round-trips back to its
+    /// default. Nothing errors -- `save` reports that the file "did not read back as what was
+    /// written" and the setting simply refuses to move.
+    ///
+    /// That is exactly what `prefilter_radius` did on 2026-09-15. Clicking it in the settings
+    /// panel logged a successful write six times in a row while the value stayed at 0, because
+    /// the arm had been added and the template line had not.
+    #[test]
+    fn every_writable_key_has_a_line_in_the_shipped_template() {
+        let source = include_str!("local_invasion_config.rs");
+        // The arms of the writer's dispatch, read out of this file rather than listed by hand --
+        // a hand-kept list is the same failure one level up.
+        let writer = source
+            .split_once("for line in DEFAULT_CONFIG_TOML.lines()")
+            .expect("the writer's loop should still be here")
+            .1;
+        let writer = writer.split_once("\n}").map_or(writer, |(body, _)| body);
+        let mut missing = Vec::new();
+        for chunk in writer.split("\n            \"").skip(1) {
+            let Some((key, _)) = chunk.split_once('"') else {
+                continue;
+            };
+            if key.is_empty() || key.contains(' ') {
+                continue;
+            }
+            let has_line = DEFAULT_CONFIG_TOML
+                .lines()
+                .any(|line| line.split_once('=').is_some_and(|(k, _)| k.trim() == key));
+            if !has_line {
+                missing.push(key.to_owned());
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these keys can be written but have no line in the shipped template, so every save \
+             drops them and the setting cannot be changed: {missing:?}"
+        );
+    }
+
+    /// Every file that tells a user where to put the config must name the file the DLL opens.
+    ///
+    /// # What it cost to get this wrong
+    ///
+    /// Four user-facing files spelled the name after the crate directory rather than after
+    /// [`CONFIG_FILE_NAME`] -- the same name with `-core` inserted before the extension. A user
+    /// following the setup guide saves the file where nothing reads it, the DLL writes its own
+    /// default alongside, and the symptom is "the mod ignores its own config": no error, no log
+    /// line, nothing to search for. The wrong spelling is also the plausible one, because it is
+    /// what the crate directory is called, so it comes back every time somebody writes a new doc
+    /// from memory.
+    ///
+    /// The needle is assembled here rather than written out, so this file does not contain the
+    /// string it forbids.
+    #[test]
+    fn every_user_facing_file_names_the_config_the_dll_actually_opens() {
+        let wrong = CONFIG_FILE_NAME.replace(".toml", "-core.toml");
+        for (name, text) in [
+            (
+                "local_invasion_config.rs",
+                include_str!("local_invasion_config.rs"),
+            ),
+            (
+                "docs/invasion-warp-second-player-setup.md",
+                include_str!("../../../docs/invasion-warp-second-player-setup.md"),
+            ),
+            (
+                "docs/er-invasion-warp.dll-pool-test.toml",
+                include_str!("../../../docs/er-invasion-warp.dll-pool-test.toml"),
+            ),
+            (
+                "docs/er-invasion-warp.invader-example.toml",
+                include_str!("../../../docs/er-invasion-warp.invader-example.toml"),
+            ),
+        ] {
+            assert!(
+                !text.contains(&wrong),
+                "{name} names the config {wrong:?}; the DLL opens {CONFIG_FILE_NAME:?}, so a user \
+                 following it saves the file where nothing reads it"
+            );
+        }
     }
 
     #[test]
@@ -1032,9 +1067,11 @@ mod tests {
                 &name[..name.len().min(90)]
             );
         }
-        // The property is trivially true of zero sites, and this file has had four for months.
+        // The property is trivially true of zero sites, so the floor exists to catch the scan
+        // silently ceasing to match the code it constrains. It was four for months and is three
+        // since 2026-09-15, when the tests covering the deleted match-time filter went with it.
         assert!(
-            sites >= 4,
+            sites >= 3,
             "found only {sites} temp-path sites; the scan stopped matching the code it is \
              supposed to constrain, so a shared path would now pass unexamined"
         );
@@ -1137,36 +1174,6 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_default_file_parses_and_is_off() {
-        let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
-        assert_eq!(
-            parsed.issues,
-            Vec::new(),
-            "the file we generate must not warn about itself"
-        );
-        assert!(!parsed.config.enabled);
-        assert_eq!(parsed.config.mode, LocalInvasionMode::ExactOnly);
-    }
-
-    #[test]
-    fn parses_a_full_config() {
-        let parsed = parse_local_invasion_config(
-            r#"
-            [local_invasion]
-            enabled = true
-            mode = "area"
-            named_locations = ["Miquella's Haligtree", "Leyndell"]
-            named_location_text_ids = [1000, 2000]
-            "#,
-        );
-        assert_eq!(parsed.issues, Vec::new());
-        assert!(parsed.config.enabled);
-        assert_eq!(parsed.config.mode, LocalInvasionMode::PreferExactThenArea);
-        assert_eq!(parsed.config.named_locations.len(), 2);
-        assert!(parsed.config.named_location_text_ids.contains(&2000));
-    }
-
-    #[test]
     fn another_crates_section_in_a_shared_toml_is_skipped_not_warned_about() {
         let parsed = parse_local_invasion_config(
             r#"
@@ -1187,85 +1194,11 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_value_is_reported_and_the_rest_still_applies() {
-        let parsed = parse_local_invasion_config(
-            r#"
-            enabled = true
-            mode = "somewhere-nice"
-            "#,
-        );
-        assert!(parsed.config.enabled, "the good key still took effect");
-        assert_eq!(parsed.config.mode, LocalInvasionMode::ExactOnly);
-        assert_eq!(parsed.issues.len(), 1);
-        assert!(parsed.issues[0].message.contains("mode must be"));
-    }
-
-    #[test]
     fn an_unknown_key_is_surfaced_rather_than_silently_dropped() {
         let parsed = parse_local_invasion_config("enabbled = true\n");
         assert!(!parsed.config.enabled);
         assert_eq!(parsed.issues.len(), 1);
         assert!(parsed.issues[0].message.contains("unknown key"));
-    }
-
-    #[test]
-    fn a_bare_word_in_named_locations_is_a_typo_not_a_name() {
-        let parsed = parse_local_invasion_config("named_locations = [Haligtree]\n");
-        assert_eq!(parsed.issues.len(), 1);
-        assert!(parsed.config.named_locations.is_empty());
-    }
-
-    #[test]
-    fn a_hash_inside_a_quoted_name_is_not_a_comment() {
-        let parsed = parse_local_invasion_config(r#"named_locations = ["Grace #2"]"#);
-        assert_eq!(parsed.issues, Vec::new());
-        assert_eq!(parsed.config.named_locations, vec!["Grace #2".to_owned()]);
-    }
-
-    #[test]
-    fn hot_reload_picks_up_an_edit_and_a_deletion() {
-        let dir = std::env::temp_dir().join(format!("er-invasion-warp-cfg-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("er-invasion-warp.toml");
-        std::fs::write(&path, "enabled = false\nmode = \"exact\"\n").unwrap();
-
-        let mut hot = HotConfig::with_poll_interval_ms(0);
-        let first = hot
-            .reload_if_changed(&path)
-            .expect("first look always loads");
-        assert!(!first.config.enabled);
-        assert!(
-            hot.reload_if_changed(&path).is_none(),
-            "an unchanged file must not report a reload"
-        );
-
-        // Edit it the way a user would, mid-session. No mtime games: the watcher compares the
-        // file's text, so an edit inside one mtime tick is seen like any other.
-        std::fs::write(&path, "enabled = true\nmode = \"area\"\n").unwrap();
-        let second = hot
-            .reload_if_changed(&path)
-            .expect("an edited file must be picked up");
-        assert!(second.config.enabled);
-        assert_eq!(second.config.mode, LocalInvasionMode::PreferExactThenArea);
-        assert!(hot.current().enabled);
-
-        // Deleting the file must switch the filter off, not leave the last config latched.
-        std::fs::remove_file(&path).unwrap();
-        let third = hot
-            .reload_if_changed(&path)
-            .expect("a deleted file is a change");
-        assert!(third.reverted_to_defaults);
-        assert!(
-            !hot.current().enabled,
-            "losing the config must stop cancelling matches, not keep filtering blind"
-        );
-        let anchor = InvasionAnchor::new(0x0f00_0000, [100]);
-        assert_eq!(
-            hot.current()
-                .judge(&anchor, &InvasionCandidate::named(0x3c35_3800, 999)),
-            Verdict::Keep(KeepReason::FilterDisabled)
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Two edits inside one mtime tick, both of which must land.
@@ -1280,22 +1213,22 @@ mod tests {
             std::env::temp_dir().join(format!("er-invasion-warp-fast-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("er-invasion-warp.toml");
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"F7\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"Insert\"\n").unwrap();
 
         let mut hot = HotConfig::with_poll_interval_ms(0);
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("first look loads")
                 .config
-                .warp_nearest_key,
-            crate::keybind::VK_F7
+                .mark_key,
+            crate::keybind::VK_INSERT
         );
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"]\"\n").unwrap();
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("the second edit must land too")
                 .config
-                .warp_nearest_key,
+                .mark_key,
             crate::keybind::parse_key("]").expect("] is a key")
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1304,9 +1237,9 @@ mod tests {
     /// The FALLBACK rule. A typo on a reload keeps the key that was working -- not the shipped
     /// default, and not nothing.
     ///
-    /// Falling back to F7 would be actively wrong: F7 is the binding a colliding mod had already
-    /// taken, so a typo would silently drag the player back onto the collision they had moved away
-    /// from, and the log would say the config loaded fine.
+    /// Falling back to the shipped default would be actively wrong. The reason the rule exists is
+    /// a player on a keyboard with no Insert key: a typo on the line they added to fix that would
+    /// drag them back onto a key they cannot press, and the log would say the config loaded fine.
     #[test]
     fn a_malformed_key_on_reload_keeps_the_previous_value_not_the_shipped_default() {
         let dir =
@@ -1314,26 +1247,26 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("er-invasion-warp.toml");
         let chosen = crate::keybind::parse_key("]").expect("] is a key");
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"]\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"]\"\n").unwrap();
 
         let mut hot = HotConfig::with_poll_interval_ms(0);
         assert_eq!(
             hot.reload_if_changed(&path)
                 .expect("first look loads")
                 .config
-                .warp_nearest_key,
+                .mark_key,
             chosen
         );
 
-        std::fs::write(&path, "[local_invasion]\nwarp_nearest_key = \"Winkey\"\n").unwrap();
+        std::fs::write(&path, "[local_invasion]\nmark_key = \"Winkey\"\n").unwrap();
         let outcome = hot
             .reload_if_changed(&path)
             .expect("the edit is a change even though it does not parse");
         assert_eq!(
-            outcome.config.warp_nearest_key, chosen,
+            outcome.config.mark_key, chosen,
             "a typo must not drag the binding back to the shipped default"
         );
-        assert_eq!(hot.current().warp_nearest_key, chosen);
+        assert_eq!(hot.current().mark_key, chosen);
         assert_eq!(outcome.issues.len(), 1, "{:?}", outcome.issues);
         let message = &outcome.issues[0].message;
         assert!(message.contains("Winkey"), "{message}");
@@ -1341,38 +1274,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The three warp keys are readable by name, like the mark keys, and survive the writer -- the
-    /// mark keys rewrite this file, so a warp key the writer dropped would be erased on the first
-    /// mark press.
+    /// The keys that remain are readable by name and survive the writer -- the mark keys rewrite
+    /// this file, so a key the writer dropped would be erased on the first mark press.
+    ///
+    /// It covered the three warp keys until 2026-09-15, when they were removed with the feature.
+    /// The writer bug it guards against was never specific to those keys:
+    /// `render_local_invasion_config` walks the shipped template and copies verbatim any line it
+    /// has no arm for, so a key with a parse arm and no writer arm is reset on every save.
     #[test]
-    fn the_warp_keys_are_configurable_and_survive_the_writer() {
+    fn the_keys_are_configurable_and_survive_the_writer() {
         let parsed = parse_local_invasion_config(
-            "[local_invasion]\nwarp_nearest_key = \"]\"\nwarp_next_key = \"K\"\n\
-             warp_other_area_key = \"KP_Plus\"\n",
+            "[local_invasion]\nmark_key = \"]\"\nunmark_key = \"K\"\n\
+             enable_toggle_key = \"KP_Plus\"\n",
         );
         assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
-        assert_eq!(parsed.config.warp_nearest_key, 0xdd);
-        assert_eq!(parsed.config.warp_next_key, 0x4b);
-        assert_eq!(parsed.config.warp_other_area_key, 0x6b);
+        assert_eq!(parsed.config.mark_key, 0xdd);
+        assert_eq!(parsed.config.unmark_key, 0x4b);
+        assert_eq!(parsed.config.enable_toggle_key, 0x6b);
 
         let rendered = render_local_invasion_config(&parsed.config);
-        assert!(rendered.contains("warp_nearest_key = \"]\""), "{rendered}");
-        assert!(rendered.contains("warp_next_key = \"K\""), "{rendered}");
+        assert!(rendered.contains("mark_key = \"]\""), "{rendered}");
+        assert!(rendered.contains("unmark_key = \"K\""), "{rendered}");
         assert!(
-            rendered.contains("warp_other_area_key = \"KP_Plus\""),
+            rendered.contains("enable_toggle_key = \"KP_Plus\""),
             "{rendered}"
         );
         assert_eq!(parse_local_invasion_config(&rendered).config, parsed.config);
     }
 
-    /// The shipped file must name all five keys, and they must be the historical defaults so an
-    /// existing player's muscle memory keeps working.
+    /// The shipped file must name every key it binds, at the historical defaults, so an existing
+    /// player's muscle memory keeps working.
     #[test]
-    fn the_shipped_file_names_the_warp_keys_at_their_historical_defaults() {
+    fn the_shipped_file_names_the_keys_at_their_historical_defaults() {
         let parsed = parse_local_invasion_config(DEFAULT_CONFIG_TOML);
         assert_eq!(parsed.issues, Vec::new(), "{:?}", parsed.issues);
-        assert_eq!(parsed.config.warp_nearest_key, crate::keybind::VK_F7);
-        assert_eq!(parsed.config.warp_next_key, crate::keybind::VK_F8);
-        assert_eq!(parsed.config.warp_other_area_key, crate::keybind::VK_F9);
+        assert_eq!(parsed.config.mark_key, crate::keybind::VK_INSERT);
+        assert_eq!(parsed.config.unmark_key, crate::keybind::VK_DELETE);
+        assert_eq!(parsed.config.enable_toggle_key, crate::keybind::VK_F3);
+        assert_eq!(parsed.config.settings_key, crate::keybind::VK_F4);
     }
 }

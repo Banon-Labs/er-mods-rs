@@ -30,9 +30,26 @@ push_watched="$repo_root/scripts/er-push-watched.sh"
 
 fail=0
 ok() { printf '  ok    %s\n' "$1"; }
+# A failure prints what it saw, not only what it wanted.
+#
+# Written after this suite failed inside the pre-push gate on 2026-09-15 while passing every
+# standalone reproduction, including one run with a hook-like git environment. The gate log carried
+# ten assertion names and not one byte of the script's output, so the only way to tell a refusal
+# that fired with the wrong text from a push that was never refused at all was to guess. The
+# detail is optional and goes to stderr beside the name, indented so a run with no failures reads
+# exactly as it did before.
 bad() {
 	printf '  FAIL  %s\n' "$1" >&2
+	if [ "$#" -gt 1 ] && [ -n "$2" ]; then
+		printf '%s\n' "$2" | sed 's/^/          | /' >&2
+	fi
 	fail=1
+}
+
+# What the last `run_push` actually did, for a `bad` that needs to show its working.
+last_push_context() {
+	printf 'exit=%s gate-trace=%s bytes\n--- output ---\n%s' \
+		"${push_status:-unset}" "$(wc -c <"$GATE_TRACE" 2>/dev/null || echo 0)" "${push_output:-<empty>}"
 }
 
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/er-quickload-push-watched.XXXXXX")
@@ -95,6 +112,7 @@ run_push() { # run_push <local-ref> <remote-branch> [remote] -- captures output,
 				bash "$push_watched" "$@" 2>&1
 	)
 	status=$?
+	push_status=$status
 	return "$status"
 }
 
@@ -128,7 +146,7 @@ setup_push "main:refs/heads/pr-clobbered" "main:refs/heads/pr-work" "main:refs/h
 : >"$GATE_TRACE"
 before=$(remote_sha_of pr-clobbered)
 if run_push worktree-agent-fixture pr-clobbered origin; then
-	bad "a branch sitting on main's tip was pushed instead of refused"
+	bad "a branch sitting on main's tip was pushed instead of refused" "$(last_push_context)"
 else
 	status=$?
 	if [ "$status" -eq 3 ]; then
@@ -143,7 +161,7 @@ else
 	bad "the refused push moved pr-clobbered anyway"
 fi
 if [ -s "$GATE_TRACE" ]; then
-	bad "the refusal came after the pre-push gates ran, which is the waste this closes"
+	bad "the refusal came after the pre-push gates ran, which is the waste this closes" "$(last_push_context)"
 else
 	ok "the refusal came before the pre-push gates ran"
 fi
@@ -162,7 +180,7 @@ for needle in \
 	if [[ "$refusal" == *"$needle"* ]]; then
 		ok "the refusal names '$needle'"
 	else
-		bad "the refusal does not name '$needle'"
+		bad "the refusal does not name '$needle'" "$refusal"
 	fi
 done
 
@@ -188,7 +206,7 @@ fi
 # (ref tip equal to main tip) would miss: the same mistake made after main has moved on.
 : >"$GATE_TRACE"
 if run_push stale/behind pr-clobbered origin; then
-	bad "a branch on an ancestor of main was pushed instead of refused"
+	bad "a branch on an ancestor of main was pushed instead of refused" "$(last_push_context)"
 else
 	status=$?
 	if [ "$status" -eq 3 ]; then

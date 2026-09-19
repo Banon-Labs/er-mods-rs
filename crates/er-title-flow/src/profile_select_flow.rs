@@ -751,6 +751,41 @@ pub fn apply_online_disable() {
     ));
     let _ = ONLINE_PREDICATE_DISABLE_RVA;
 }
+// What the deleted restore was undoing. Kept because the measurement in it is still true, and
+// written as `//` rather than `///` because it documents a function that no longer exists -- a doc
+// comment with no item under it attaches to whatever declaration comes next, which here was
+// `apply_signin_force`, and `clippy::empty_line_after_doc_comments` failed the build over it.
+//
+// `apply_online_disable` stubs `GameMan::IsOnlineMode` to `xor eax,eax; ret` for the boot, which is
+// how an autoload reaches the title with no login attempt and no `Unable to start in online mode`
+// modal in the way. That getter's own doc comment already noted the cost: it is the one lever in
+// that set which changes what the player can *do* rather than what they see.
+//
+// The concrete cost is the vanilla multiplayer items. `IsOnlineMode` false puts the game on the
+// same branch a player takes when they pick `Play Offline`, and on that branch the *use* action is
+// refused for the Bloody Finger, the Festering Bloody Finger, the Recusant Finger, the effigies
+// and the cipher rings alike. Nothing in `ersc.dll` does that to them -- measured 2026-09-15, it
+// registers goods handlers for its own seven items only (8380001-6, 8380012) and its module
+// contains no reference to this getter's address and no instruction touching `GameMan+0xbc8`.
+// The offline state those items see is ours.
+//
+// restore_online_mode removed (user directive 2026-09-17). It used to hand
+// `GameMan::IsOnlineMode` its real bytes back the first frame a local player existed, which turned
+// online mode on for the whole process for the rest of the session. The objection is not cosmetic:
+// a modded client that answers online can reach official FromSoftware matchmaking, and the player
+// can be banned from official services without ever being told this mod did it. There is no
+// narrower version worth keeping -- a presence-gated or boot-scoped restore is still a restore, and
+// the window it opens is exactly the window in which someone is playing.
+//
+// What it existed to buy was the vanilla multiplayer items, which are refused on the offline
+// branch. They are bought instead by overriding `CanUseGoods`' return for goods rows 102/111/112,
+// which writes no param byte and touches no global: confirmed on the user's live session
+// 2026-09-16 with the item menu opening and an invasion landing. See bd
+// `vanilla-fingers-usable-by-canusegoods-return-override-2026-09-16`, which also carries the
+// Arxan-stub follow the hook needs and the reason the two narrow gates below the return
+// (`CanUseBreakInItem`, `CanStartMultiplay`) cannot settle it -- `IsInOnlineMode` is inlined into
+// the final `and`, so only the return value answers all four terms at once.
+
 // apply_foreground_force removed (user directive 2026-07-16): patching IsGameInForeground to always-true
 // made the game grab the OS cursor on world-entry; the product must use real focus state. See bootstrap.rs.
 /// Force the SaveLoad2 storage-select op gate to pass cold (bd b80-ROOTCAUSE-cold-no-user-signin):

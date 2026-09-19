@@ -294,11 +294,215 @@ narrows what arrives, the filter judges what did. Turning hunt on does not turn 
 
 ### Does the name match the feature
 
-Partly. "Hunt" reads as "go looking harder", and what it does is the opposite -- it **narrows** the
-search so you are shown fewer worlds, and it costs you every host who is not running this mod. A name
-closer to the mechanism would be along the lines of `target_one_location` or `narrow_query`. This is
-a naming observation, not a defect: both shipped config files lead with the cost in capital letters
-and neither oversells it.
+No, and the decision taken 2026-09-15 is to rename the key to `prefilter`.
+
+"Hunt" reads as "go looking harder", and what it does is the opposite -- it **narrows** the search so
+you are shown fewer worlds, and it costs you every host who is not running this mod.
+
+The names that suggest themselves first are all wrong for one reason worth writing down, because it
+is not obvious: `target_one_location`, `search_one_location` and `one_location_only` all describe
+*which place* is chosen, and that is already what `mode` does. `hunt_filter_value`
+(`lobby_publish.rs:246`) aims at the single marked block, or the block the player is standing in --
+the same block `LocalInvasionMode::ExactOnly` judges candidates against. Two config keys whose names
+both mean "one location" cannot be told apart in a settings panel.
+
+The distinction that matters is **when** each acts, not what it selects:
+
+| key | acts on | every host visible | mechanism |
+|---|---|---|---|
+| `mode` | the answer Steam returned | yes, then declines the wrong ones | judge `ServerPushJoinData+0x00` at `SetMultiplayJoinData` |
+| `prefilter` (was `hunt`) | the question | no -- only mod users publish the key | Steam lobby-list string filter on `RequestLobbyList` |
+
+Read as a pair they become "`mode` decides what you accept; `prefilter` decides what you are
+offered". Runner-up name considered and rejected: `narrow_the_search`, plainer but it does not pair.
+
+Sweep cost: about 220 `hunt*` identifier sites. Two facts make it cheaper than it looks --
+`settings_panel.rs:284` derives the in-game panel label from the raw key string, so the rename
+reaches the UI in the same edit, and `local_invasion_config.rs:517` surfaces an unknown key as a
+reported issue rather than dropping it, so a stale `hunt = true` complains instead of silently
+reverting. An alias is still worth the one line.
+
+### The escalation ladder (user directive 2026-09-15)
+
+The goal the user stated is to **remove the need to search a location and cancel** -- rejection
+sampling is the thing to get rid of, not to tune. The shape asked for is a ladder that widens on its
+own and reports where it is:
+
+| rung | filter asked of Steam | who can answer |
+|---|---|---|
+| 1 | the player's exact block | mod users in that tile |
+| 2 | each neighbouring tile in turn, one per query round | mod users in the ring |
+| 3 | no filter at all (opt-in, after the ring is exhausted) | everybody, including vanilla hosts |
+
+Rung 2 works because our detour recomputes the filter value on every `RequestLobbyList`
+(`lobby_publish.rs:1195-1221`), so successive rounds can name successive tiles. One query can still
+only carry one value -- a Steam string filter is equality with no or, and several filters and
+together -- so the ring is covered over rounds, never in one shot.
+
+**Rung 3 is why the reject filter must not be deleted.** With no string filter the answer set is the
+whole population again, and the only thing that can tell where a candidate would actually land is
+`mode` judging the server-sent destination. Deleting the reject filter would leave rung 3 accepting
+anything, anywhere.
+
+**The banner has to say which rung it is on**, or "no invasions found" stops meaning anything: the
+player cannot distinguish an empty ring from a ring we have not finished asking about. The agreed
+shape names the place as well as the count, because a player recognises a place name and has no idea
+what tile 3 of 8 is:
+
+```
+Could not find an invasion in Liurnia Lake Shore -- searching 3 of 8 nearby locations
+```
+
+This is the same failure `hunt_refusal` already exists to prevent (a silent `None` conflating "off"
+with "cannot express that"), relocated from configuration to timing, so it wants the same treatment:
+a per-value tally -- which tile was asked for, how many lobbies came back, how many rounds until the
+ring closed -- not a log line nobody reads.
+
+**Naming a neighbour tile must not depend on the player having opened the map** (user directive
+2026-09-15: snapshot on load, or at least before the map is opened). The first shape considered --
+snapshot the table when the world map first builds -- is rejected: a player who never opens the map
+would get `?PlaceName?` in the banner, and the banner is the thing that makes the ladder legible.
+
+The way out is that the pin rows are not where the names live. `nearest_place_name_in_area`
+(`map_hooks.rs:981`) reads each pin row's `ROW_PARAM_POINTER_OFFSET` and then
+`PARAM_LABEL_KIND_BASE` / `PARAM_LABEL_TEXT_ID_BASE` **out of the param row it points at**, so the
+name is param data that the map UI merely renders. Build the id-to-name table from the param table
+directly at DLL load and the map never enters the picture.
+
+The param is **`BonfireWarpParam`**, and its layout is already written down here -- the module doc
+of `er-invasion-warp-core/src/param_row.rs` tabulates every field the pin constructor copies, and
+`map_seams.rs:181` names the lookup (`BonfireWarpParamLookup`, `0x140d25c30`, param table index
+`0x2B`). So the "which param" question is answered; an earlier draft of this section said it was
+written down nowhere, which was wrong.
+
+Getting from a block id to map coordinates is also already solved in live memory, and deliberately
+independent of the map UI: `legacy_map_regions.rs` reads `CS::WorldMapLegacyConverter`, whose entry
+per legacy block carries the overworld block it projects into and the map-space origin of that
+projection, and which the engine keeps resident because the map has to draw dungeons the player has
+never entered. Overworld blocks get their origin from `WorldGridAreaInfo::GetWorldAreaInfoCoordinates`
+(`0x1406338d0`, recorded in `invasion_warp.rs:35`).
+
+**The one genuinely unmeasured link is a grace's position without the map.** `BonfireWarpParam`
+carries the entity id, the cleared-event flag, the icon, the category bits and the eight labels --
+no coordinates. The pin rows have coordinates because the map's own construction path resolves
+them: `nearest_place_name_in_area` reads the position out of the pin row at `+0x10` / `+0x14`, and
+`project_to_map` calls `CS::WorldMapAreaConverter::ConvertMsbCoordsToMapCoords` against converters
+held on the map **view model**. Both are map-construction artefacts, so neither survives a session
+where the map was never opened.
+
+### The lead that was read, and what it ruled out (2026-09-15)
+
+`CS::CSMapPlaceNameOverrideRegionMan` is the only `PlaceName`-named symbol in the whole 1.16.2
+dump (`0x140a73790`), and a region manager is the right shape for "what is this position called",
+so it was the obvious candidate for a map-free name source. Two facts came out of reading it:
+
+- **It is constructed at world load, not at map open.** Its single call site is `FUN_14061e800` at
+  `0x14061f243` -- a `FieldArea` initialiser that allocates `WorldAreaTime`, `WorldMapManImp` and a
+  row of sibling region managers (`CSPlayRegionPointMan`, `CSRideJumpRegionMan`,
+  `CSOpenChrActivateThresholdRegionMan`) and stores each in a global. So
+  `GLOBAL_CSMapPlaceNameOverrideRegionMan` is live from the moment a world is up, which is the
+  property the banner needs.
+- **It is an `Override` table, so it is not the base mapping.** The name says what it holds:
+  regions that *replace* a place name, the exceptions. A tile with no override has no entry, so
+  this manager alone cannot name an arbitrary neighbour.
+
+### The base source, found on the param side (2026-09-15)
+
+The manager overrides a param, and that param is `WorldMapPlaceNameParam`. Reading the param-name
+table out of `eldenring-deobf.bin` -- a flat array of `{name pointer, table index}` pairs at
+`0x143b3c000` -- puts three map params next to each other on 1.16.2:
+
+| param | name string | table index |
+|---|---|---|
+| `WorldMapPointParam` | `0x142bb3400` | `0x57` |
+| `WorldMapPieceParam` | `0x142bb3428` | `0x58` |
+| `WorldMapPlaceNameParam` | `0x142bb3480` | `0x5a` |
+
+That index is the same currency this repo already spends: `map_seams.rs:181` reaches
+`BonfireWarpParamLookup` at table index `0x2B`, so the machinery for getting at a param by index is
+written and working.
+
+This supersedes the grace-position approach entirely. A param is resident from load, carries no
+dependency on the map view model, and `WorldMapPlaceNameParam` is by construction the mapping from
+a piece of the map to the name shown on it -- which is the table the banner wants, without a single
+pin row.
+
+**And then the row counts falsified it.** `WorldMapPlaceNameParam` has **10 rows** in the installed
+regulation (`python3 scripts/regulation-params.py WorldMapPlaceNameParam`). Ten rows cannot name a
+world. Its neighbours are no better: `WorldMapPieceParam` has 34, `WorldMapPointParam` 472 with
+coordinate-shaped ids. So the name-string table gave the right *neighbourhood* and the wrong param,
+and the index `0x5a` above is correct about what it indexes and useless for this purpose.
+
+### `MapGdRegionInfoParam` is the table, and its row id IS the block id
+
+293 rows, and the id packing is the one this repo already uses. `invasion_warp.rs:51` records
+`BlockKey` as `[index, region, block, area]`; a `MapGdRegionInfoParam` id read as decimal digits is
+the same four fields:
+
+```text
+60081002  ->  area 60   block 08   region 10   index 02     (m60_08_10_02)
+10000000  ->  area 10   block 00   region 00   index 00     (m10_00_00_00)
+```
+
+184 of the 293 rows are area 60 -- the overworld -- which is exactly the coverage a per-tile name
+table needs and exactly what `WorldMapPlaceNameParam`'s ten rows could never provide. A block id
+therefore addresses a row **directly**, with no coordinates, no converter, no map view model and no
+pin. That is the whole difficulty dissolved: the lookup the banner needs is an integer reinterpreted
+as decimal digits.
+
+### The tile-keyed table and the name-carrying table are two different params
+
+Dumping the rows (`scripts/map-region-place-names.py`, written for this) settles it, and the
+answer is a split nobody would guess from the param names:
+
+| param | rows | stride | what the row actually holds |
+|---|---|---|---|
+| `MapGdRegionInfoParam` | 293 | `0x20` | a flag at `+0x00`, a small area-shaped value at `+0x04`. Keyed by the block id, and **carries no name** |
+| `WorldMapPieceParam` | 34 | `0x40` | text id at `+0x04` (`62010`, `62011`, `62012`, `62020`, ...), four floats at `+0x08..+0x17`, a second text id at `+0x18` (`63010`, ...) |
+| `WorldMapPlaceNameParam` | 10 | `0x20` | names nothing |
+
+So `MapGdRegionInfoParam` answers "is this tile a region" and `WorldMapPieceParam` answers "what is
+that region called", and joining them is the remaining work. Thirty-four pieces is the granularity a
+player thinks in -- Limgrave, Liurnia, Caelid -- which is the right granularity for the banner
+anyway: "searching 3 of 8 nearby locations (Liurnia Lake Shore)" wants a region name, not a tile
+number.
+
+The float columns are what make this readable rather than guesswork: `+0x08..+0x14` decode as
+`0.0..9648.0` in map space, which is a coordinate range and not any kind of id, while `+0x04` and
+`+0x18` decode as `0.0` floats and as structured five-digit ids. The tool prints both columns for
+exactly that reason.
+
+### The four floats are two ranges, and that was one wrong pairing away from a dead end
+
+Read as `(x0, z0, x1, z1)` a third of the rows look inside-out -- row 6 gives `x0 2607 > x1 1971` --
+which reads as "these are not a rectangle at all" and sends you hunting for a centre-and-extent that
+does not exist. The pairing is per axis, not per corner:
+
+| offset | field |
+|---|---|
+| `+0x08` | x min |
+| `+0x0c` | x max |
+| `+0x10` | z min |
+| `+0x14` | z max |
+
+`+0x08 < +0x0c` and `+0x10 < +0x14` hold for **all 34 rows**, with no exceptions and no special
+cases. `scripts/map-region-place-names.py` re-derives that on every run and prints it, rather than
+recording it here where a paramdef change could leave it stale.
+
+So the join is a plain point-in-rectangle test: take a tile's map-space position, find the piece
+whose x and z ranges contain it, read the `PlaceName` text id at `+0x04`. Nothing about it needs the
+map to have been opened.
+
+**Still to establish:** what a tile outside every piece should fall back to. That is a product
+decision as much as a measurement -- `?PlaceName?` must never reach the banner, so the fallback is
+either the coarsest containing piece or a plain "nearby".
+
+`nearest_place_name_text_id` (`map_hooks.rs:969`) stays as it is -- it is the map-pin path's
+resolver and it is correct there. The banner wants a separate, coordinate-free lookup from block id
+to name.
+
+The `-1` case still needs a fallback in the banner text: that function's own doc records that an
+unresolvable id renders as the literal `?PlaceName?`, not as an empty string.
 
 ### Documentation status
 

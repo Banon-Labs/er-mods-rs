@@ -10,6 +10,7 @@
 #
 # See docs/plans/experiments-module-split-audit.md section 2.
 
+0x100000    exempt:not-an-address     # ALLOW_INVADERS (Seamless rulebook bit), INVASION_ENTITY_ID_COUNT (a count) || Neither is a game RVA; they collide numerically.
 0x100001    exempt:not-an-address     # CONTEXT_CONTROL_AMD64 || Windows CONTEXT_FLAGS bitmask, not a game RVA.
 0x67b200    exempt:role-alias         # B80_LOAD_SAVE_DATA_INITIATOR_RVA, NATIVE_LOAD_SAVE_DATA_RVA, SYSTEM_QU  || FUN_14067b200(uint slot) -- request an asynchronous READ of a CH
 0x67b290    exempt:role-alias         # DESERIALIZE_SLOT_RVA, SYSTEM_QUIT_INWORLD_LOAD_RVA  || FUN_14067b290(int slot) -- apply a loaded character slot: alloca
@@ -23,7 +24,6 @@
 0x826510    exempt:role-alias         # CAP_BUILDER_RVA, LOADGAME_JOB_BUILD_RVA, SYSTEM_QUIT_PROFILE_LOAD_JOB_  || The LoadGame MenuJob factory. `__fastcall(rcx = out *DLRefCountP
 0x93b760    exempt:role-alias         # OPTIONSETTING_DIALOG_REFRESH_SELECTED_ROW_RVA, OPTIONSETTING_TAB_SELEC  || CompositeOptionSettingDialog per-tab activation: fn(composite, t
 0x9a4670    exempt:role-alias         # CAP_LOAD_ACTIVATE_RVA, PROFILE_LOAD_ACTIVATE_RVA, SYSTEM_QUIT_PROFILE_  || CS::ProfileLoadDialog vtable slot +0xa0 (slot 20) -- the "decide
-0xafb880    exempt:role-alias         # B80_DISPATCHER2_RVA, MOVEMAP_DISPATCHER_RVA  || The MoveMapStep per-tick save/load REQUEST dispatcher: `FUN_140a
 0xb0d960    exempt:role-alias         # CAP_SETSTATE_RVA, TITLE_SET_STATE_RVA  || `void FUN_140b0d960(TitleStep *this, int newState)` -- TitleStep || CAP_* = capture-hook role in one trace set; renaming loses the set
 0xd7f850    exempt:role-alias         # CSSCALEFORMVALUE_DTOR_RVA, MENU_WINDOW_ROOT_PROXY_SCRATCH_DTOR_RVA, SC  || `void CS::CSScaleformValue::~CSScaleformValue(CSScaleformValue *
 0xeb5530    exempt:role-alias         # CHILD_DONE_QUERY_RVA, MOVEMAP_CHILD_FINISHED_POLL_RVA  || Generic `EzChildStepBase` 'is the child step finished?' predicat
@@ -155,7 +155,6 @@
 0x679340    todo:quit-rows-copy       # GET_MOVEMAP_STEP_BLOCKID_RVA  || src/constants/render_handoff.rs
 0x679560    todo:quit-rows-copy       # SAVE_REQUEST_RETRACT_B73_VA  || build.rs
 0x679590    todo:quit-rows-copy       # SAVE_REQUEST_RETRACT_B72_VA  || build.rs
-0x67a3a0    todo:quit-rows-copy       # SYSTEM_QUIT_RETURN_TITLE_REQUEST_RVA  || src/constants/profile_render.rs
 0x67b100    todo:quit-rows-copy       # READ_67B100_RVA  || src/experiments/own_load/drive.rs
 0x67b1a0    todo:quit-rows-copy       # B80_FULL_LOAD_INITIATOR_RVA  || src/constants/stats_panel_text.rs
 0x67b4e0    todo:quit-rows-copy       # BLANK_SAVE_CONTAINER_REQUEST_RVA  || src/constants/stats_panel_text.rs

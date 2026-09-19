@@ -22,6 +22,12 @@ members = [
   # moved into `er-quit-menu-core` on 2026-09-12; before that the only build carrying all three of
   # the row's halves was the whole product.
   "crates/er-save-game-row",
+  # Blanking the DirectInput left button while an imgui panel owns the pointer, so a click on
+  # an overlay is not also a weapon swing. Extracted from `er-net-effects` because that crate
+  # is `crate-type = ["cdylib"]` and cannot be depended on, and a GUEST overlay in another DLL
+  # needs the same blanking -- a guest can read the mouse through the host's imgui context but
+  # owns no `MessageFilter`. Host-buildable: the buffer-shape predicates are `cargo test`-able.
+  "crates/er-dinput-suppress-core",
   "crates/er-hook",
   "crates/er-game-base",
   "crates/er-boot-profiler",

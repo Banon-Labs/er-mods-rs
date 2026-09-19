@@ -19,6 +19,9 @@ eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 er-quickload-data = { path = "../effects-data" }
 er-hook = { path = "../er-hook" }
+# The DirectInput left-button blanking, shared with every other overlay in the process so each
+# one can blank for its own rect instead of fighting over a single global bool.
+er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
 # Tier A only (zero external deps): the fresh-per-process log writer, so the run log and the
 # crash-telemetry log each describe exactly one run.
 er-game-base = { path = "../er-game-base" }

@@ -22,7 +22,27 @@ sentinel="$repo_root/scripts/er-stale-run-sentinel.sh"
 # of every Write/Edit and a hang here would stall the session rather than protect it.
 out="$(timeout 5 bash "$sentinel" status 2>/dev/null)" || true
 case "$out" in
-	*LIVE*) printf "%s" "$out" ;;
-	*) : ;;
+	*LIVE*) : ;;
+	*) exit 0 ;;
 esac
+
+printf "%s\n" "$out"
+
+# The crate directories whose source compiles into a DLL this run actually loaded, one per line,
+# each prefixed so the policy can match a path against them without mistaking a status line for one.
+#
+# Why the policy needs them: it used to deny every `crates/` edit while anything was live, and its
+# own comment admitted the gap ("the sentinel's own classifier is finer than this ... but a policy
+# cannot shell out per path"). A policy cannot, but a signal can, and the over-broad deny refused
+# edits to crates the classifier itself reports as skipped -- measured 2026-09-16 on
+# `crates/er-invasion-warp/src/local_invasion_filter.rs` against a run launched `--without
+# er-invasion-warp`, where `classify` said `skip crate-builds-no-loaded-dll` and the PreToolUse
+# policy denied the edit anyway.
+#
+# Bounded like the status call above, and fail-open in the same direction: printing no closure lines
+# leaves the policy with nothing to match, so the edit is allowed. That is the correct direction
+# because the PostToolUse sentinel still runs and still refuses to let a stale run continue.
+timeout 20 bash "$sentinel" closure 2>/dev/null | while IFS= read -r crate; do
+	[ -n "$crate" ] && printf "CLOSURE %s\n" "$crate"
+done
 exit 0

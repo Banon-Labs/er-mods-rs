@@ -185,7 +185,7 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // `switch-trigger #1: PROGRAMMATIC arm slot 0 ... presses=0` -- which made every menu-bug repro
     // impossible: on br-20260905-041435-e8d0 it tore the world down while er-input-harness was still
     // navigating the pause menu, so the second load under test was always this code's, never the
-    // menu's. scripts/check-world-lost.py scored such runs INCONCLUSIVE then and FAILS them now.
+    // menu's. scripts/check-world-lost.py scored such runs `INCONCLUSIVE` then and FAILS them now.
     // D3D12 present OVERLAY: once the GX device is up, find the game's live swapchain and hook
     // its real Present (the dummy-swapchain vtable differs under vkd3d-proton). Self-gated
     // (portrait path only, one-shot on success, bounded retries) so it's cheap every frame.
@@ -264,6 +264,32 @@ pub(crate) fn tick_before_player_lookup(task_data: &FD4TaskData) {
     // OWN_LOAD_PUMP_JOB != 0 / OWN_LOAD_PUMP_DONE, so it costs nothing until armed+built and
     // never re-pumps once terminal. Must run through the loading screen (player absent), so it
     // is here in the recurring game task, before the player check. Pure native call + reads.
+    // Lift the boot's offline forcing, once, as soon as a player exists.
+    //
+    // `apply_online_disable` stubs `GameMan::IsOnlineMode` to `xor eax,eax; ret` from `DllMain`, so
+    // the autoload reaches the title with no login attempt and no `Unable to start in online mode`
+    // modal. Every consumer of that getter then reads offline -- including the one that decides
+    // whether a multiplayer item may be USED, which is why the Bloody Finger and the rest are
+    // refused in a Seamless session. Measured 2026-09-15: `ersc.dll` is not what does that to them.
+    // It registers goods handlers for its own seven items only, and its module holds no reference
+    // to this getter and no instruction touching `GameMan+0xbc8`.
+    //
+    // A player being present is the signal because it is exactly the boundary the patch was for:
+    // before it, the title is being driven; after it, someone is playing and wants their items. It
+    // cannot be gated on Seamless instead -- me3 loads `ersc.dll` after our `DllMain`, so a
+    // presence check where the patch is applied answers a false negative.
+    // Nothing here puts the getter back. User directive 2026-09-17: this mod must never let
+    // `GameMan::IsOnlineMode` answer true at any point in the process, because a modded client
+    // that reports online can reach official FromSoftware matchmaking and get the player banned
+    // from official services without their knowledge. A presence-gated or boot-scoped restore is
+    // still a restore, so there is no narrower version of this worth keeping.
+    //
+    // The vanilla multiplayer items are what the restore used to buy, and they no longer need it:
+    // overriding `CanUseGoods`' return for goods rows 102/111/112 makes the Bloody Finger, the
+    // Festering Bloody Finger and the Recusant Finger usable under Seamless with zero param bytes
+    // written -- confirmed on the user's own live session 2026-09-16, item menu open and invasion
+    // landing. See bd `vanilla-fingers-usable-by-canusegoods-return-override-2026-09-16` for the
+    // Arxan-stub follow and why the two narrow gates under it are not sufficient.
     // FPS oracle (goal 2026-07-19: stable, load1-baseline-comparable framerate). EMA of the frame delta +
     // per-epoch worst frame time. Unconditional, cheap; read by the telemetry as oracle_fps / oracle_min_fps.
     {

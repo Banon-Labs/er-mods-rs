@@ -120,6 +120,9 @@ pub enum Refusal {
     TooShort { room: u32, needed: u32 },
     /// The image's exception directory could not be parsed, so the question cannot be asked.
     NoFunctionTable,
+    /// The entry opens with Arxan's `jmp rel32`. Writing here would destroy the jump; the detour
+    /// belongs on `target`, which [`follow_arxan_stub`] resolves.
+    ArxanStub { target: usize },
 }
 
 impl Refusal {
@@ -143,6 +146,10 @@ impl Refusal {
             Refusal::TooShort { room, needed } => {
                 format!("only 0x{room:x} bytes belong to this site and the write needs {needed}")
             }
+            Refusal::ArxanStub { target } => format!(
+                "it opens with Arxan's jmp rel32 to 0x{target:x}, so the image's code is not here \
+                 -- detour the body at that address instead, via follow_arxan_stub"
+            ),
             Refusal::NoFunctionTable => {
                 "the running image's exception directory could not be parsed, so its function \
                  boundaries are unknown"
@@ -360,9 +367,70 @@ fn audit_write_site(address: usize, needed: u32, _what: &str) -> Result<EntryKin
     if !unsafe { er_game_base::mem::read_bytes(address, &mut opening) } {
         return Err(Refusal::Unreadable);
     }
+    // A `jmp rel32` here means the image's own code is not at this entry, and Arxan is only one
+    // of the two things that put it there: another module's MinHook detour looks byte-identical,
+    // and chaining onto one is the ordinary
+    // case -- `map_gfx` chains onto er-armament-icons' detour of the GFx tag parser on every
+    // launch. Refusing on the byte alone broke that chain on run br-20260916-193045-979a, which is
+    // why this reports and does not judge. A caller that knows its target is Arxan-stubbed asks
+    // for the body explicitly, through `detour_target_following_arxan`.
+    if opening[0] == ARXAN_STUB_OPCODE {
+        let _ = follow_arxan_stub(address);
+    }
     let kind = classify_live(address)?;
     judge(kind, &opening, needed)?;
     Ok(kind)
+}
+
+/// The opcode Arxan leaves at a stubbed function entry: `jmp rel32`.
+pub const ARXAN_STUB_OPCODE: u8 = 0xe9;
+/// Length of that jump, and the number of bytes of the original prologue it displaces.
+pub const ARXAN_STUB_LEN: usize = 5;
+
+/// Where a detour on `entry` must actually be written.
+///
+/// Arxan rewrites the first five bytes of roughly a quarter of this game's function entries into a
+/// `jmp rel32`, leaving bytes `5..` of the original prologue in place -- which is what makes the
+/// damage subtle. Measured 2026-09-16 over 60 entries taken from the verified rva map and read out
+/// of `/proc/<pid>/mem`: 43 byte-identical to the image, 17 opening with `0xe9`, none differing any
+/// other way.
+///
+/// Both failure modes this prevents are real and neither announces itself:
+///
+/// - A detour written over the stub overwrites Arxan's jump. The five bytes are gone, the healing
+///   path is gone, and MinHook's trampoline is a copy of a jump to somewhere that no longer
+///   expects to be entered.
+/// - A hook placed at the entry and left there catches nothing. `scripts/frida/force-canusegoods.js`
+///   records the session this cost: `CanUseGoods` was hooked at its entry, logged zero calls, and
+///   the address was blamed. The address was right; the entry was a jump.
+///
+/// Returns `None` when the entry holds the image's own code, which is the ordinary case and means
+/// the caller should detour `entry` itself.
+#[cfg(windows)]
+pub fn follow_arxan_stub(entry: usize) -> Option<usize> {
+    let mut opcode = [0u8; 1];
+    if !unsafe { er_game_base::mem::read_bytes(entry, &mut opcode) } {
+        return None;
+    }
+    if opcode[0] != ARXAN_STUB_OPCODE {
+        return None;
+    }
+    let mut displacement = [0u8; 4];
+    if !unsafe { er_game_base::mem::read_bytes(entry + 1, &mut displacement) } {
+        hook_log(format_args!(
+            "ARXAN STUB at 0x{entry:x} opens with 0x{ARXAN_STUB_OPCODE:02x} but its displacement              could not be read, so the body it jumps to is unknown"
+        ));
+        return None;
+    }
+    let relative = i32::from_le_bytes(displacement) as isize;
+    let target = (entry + ARXAN_STUB_LEN).wrapping_add_signed(relative);
+    // The displacement prints in decimal. `{:+#x}` on a negative `isize` prints its two's
+    // complement, so a backward jump of 6941202 read as `+0xffffffffff9615ee` on run
+    // br-20260916-193045-979a -- sixteen digits that look like an address and are not one.
+    hook_log(format_args!(
+        "ARXAN STUB at 0x{entry:x}: jmp rel32 {relative} -> 0x{target:x}. The detour belongs on the body, not the entry"
+    ));
+    Some(target)
 }
 
 #[cfg(test)]

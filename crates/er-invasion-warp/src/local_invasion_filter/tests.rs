@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// The filter's source as these tests read it: the parent plus the modules split out of it.
+///
+/// Seven tests assert on what is and is not in the filter's own text, and each used to
+/// `include_str!` the parent file alone. That reads as "the filter" only while the filter is one
+/// file. When `join_outcome` was split out on 2026-09-17 to get back under the 3200-line limit,
+/// five of those tests went red at once -- `the orphan-drop path exists`,
+/// `trace_session_state must exist`, and so on -- reporting that code had been deleted when it had
+/// only moved. Concatenating here keeps the question the tests are asking ("is this behaviour
+/// still in the filter") independent of which file currently holds it.
+///
+/// Add a module to this list when the next split happens, or these tests will lie in the same way.
+///
+/// The parent comes last, and the order is load-bearing. `product_code` truncates this whole string
+/// at the first test-configuration attribute it finds, and the parent's trailing test module is the
+/// only one in the set -- so with the parent first, every line of every module after it is cut and
+/// the scans read a fraction of the filter. Splitting a module out therefore means adding it above
+/// this line, never below.
+const FILTER_SOURCE: &str = concat!(
+    include_str!("join_outcome.rs"),
+    include_str!("../local_invasion_filter.rs"),
+);
+
 /// Every option that changes behaviour has to show up in the `config loaded` line.
 ///
 /// Not a style rule -- it is the difference between a hot-reload you can verify and one you can
@@ -46,7 +68,7 @@ fn every_behaviour_changing_option_is_named_in_the_config_line() {
          longer reading it"
     );
 
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let line_start = source
         .find("local-invasion: config loaded")
         .expect("the config-loaded log line");
@@ -112,25 +134,24 @@ fn a_sub_millisecond_dwell_never_reports_as_a_stalled_task() {
     assert_eq!(implied_fps(1, 1), Some(1000));
 }
 
+/// The mark keys are the historical defaults, and distinct from the two function keys.
+///
+/// It checked them against the warp driver's F7/F8/F9 until 2026-09-15, when those keys were
+/// removed with the feature. The hazard it guards is unchanged and is not about warping: two
+/// pollers on one key eat each other's `GetAsyncKeyState` "pressed since last call" edge, so one
+/// of the two features silently stops firing. Only the defaults can be asserted -- the keys are
+/// configurable, so a player is free to collide on purpose, and the config line reports which
+/// keys are live when they do.
 #[test]
-fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_warp_keys() {
+fn the_default_mark_keys_are_insert_and_delete_and_are_distinct_from_the_function_keys() {
     let defaults = er_invasion_warp_core::local_invasion::LocalInvasionConfig::default();
     assert_eq!(defaults.mark_key, 0x2d, "VK_INSERT");
     assert_eq!(defaults.unmark_key, 0x2e, "VK_DELETE");
-    // Sharing a key with the warp driver would make the two pollers eat each other's
-    // GetAsyncKeyState "pressed since last call" edge.
-    //
-    // Only the defaults can be checked here: the keys are configurable now, so a player is free
-    // to name a warp key and collide on purpose. That is their choice to make and the log line
-    // reports which keys are live, but the shipped defaults must not collide out of the box.
-    for warp_key in [
-        crate::drive::VK_WARP_NEAREST,
-        crate::drive::VK_WARP_NEXT,
-        crate::drive::VK_WARP_OTHER_AREA,
-    ] {
-        assert_ne!(defaults.mark_key, warp_key);
-        assert_ne!(defaults.unmark_key, warp_key);
+    for function_key in [defaults.enable_toggle_key, defaults.settings_key] {
+        assert_ne!(defaults.mark_key, function_key);
+        assert_ne!(defaults.unmark_key, function_key);
     }
+    assert_ne!(defaults.enable_toggle_key, defaults.settings_key);
 }
 
 /// A player who names a key must be able to see which key is live, or a typo that parsed into
@@ -201,61 +222,6 @@ fn this_module_installs_exactly_five_detours_and_all_three_seamless_ones_are_rea
     );
 }
 
-/// A session that reads idle while a join is in flight is proven wrong, and must be dropped.
-///
-/// Measured live, run `br-20260909-000018-d691`: the scan reported `found at 0x309c0038 ... owner
-/// 0x0`, the player invaded, and the one rejection came back `cannot cancel (WrongBlock) -- the
-/// session is in state 0x1`. The player was mid-search, so the real session read `state_searching`
-/// and the cached object could not have been it. Without this the same wrong pointer refuses every
-/// rejection for the rest of the run, which is exactly what that run did: one reject, one
-/// `NOT cancelled`, the invasion proceeded, no banner.
-#[test]
-fn a_session_reading_idle_during_a_join_is_dropped_rather_than_waited_out() {
-    let source = filter_module_code();
-    let body = source
-        .split_once("fn cancel_match(")
-        .expect("cancel_match exists")
-        .1;
-    // Anchored on the reading itself rather than on the old refusal arm: the cancel-row check
-    // became a report on 2026-09-08 (it was a UI rule refusing a state measured to cancel), and
-    // the idle drop is now its own arm just after it.
-    let refusal = body
-        .split_once("cancel_row_refusal(")
-        .expect("the cancel-row reading is still taken")
-        .1;
-    // Bounded, so a call to the same function anywhere else in `cancel_match` cannot satisfy this.
-    // Three earlier gates in this file matched their own assertion text; scoping the window is
-    // what stops that class of false pass.
-    let arm = &refusal[..refusal.len().min(2_500)];
-    assert!(
-        arm.contains("JOIN_IN_FLIGHT.load("),
-        "the refusal must distinguish an idle session mid-join from one that is merely idle"
-    );
-    assert!(
-        arm.contains("state_idle"),
-        "it is specifically the idle reading that proves the pointer wrong"
-    );
-    assert!(
-        arm.contains("session_scan::invalidate_cached_session()"),
-        "a pointer proven wrong must be dropped, or every later rejection refuses on the same \
-         reading"
-    );
-    // And the row reading itself must stay a report. It is ERSC's hide-predicate -- when Seamless
-    // draws the Cancel row -- while the cancel action at ersc+0x258d0 has no state precondition at
-    // all. Obeying it refused `state 0x16` on 2026-09-08, the same state a Frida-driven cancel had
-    // succeeded from eight times that evening (22 -> 35 every time, no crash).
-    // `arm` already begins after the call, so the row-reading block is everything up to the first
-    // line that closes it. Splitting on the call name again finds nothing and would hand back the
-    // whole window, which then matches the idle drop's own `return false` -- a false fail this
-    // test produced on its first run.
-    let row_reading = arm.split_once("\n    }").map_or(arm, |(inside, _)| inside);
-    assert!(
-        !row_reading.contains("return false"),
-        "the cancel-row reading must not refuse: it describes the row Seamless draws, not what \
-         the action accepts"
-    );
-}
-
 /// Turning the filter off must not turn the banner off.
 ///
 /// `enabled = false` means "judge nothing", not "say nothing": the player still wants to be told
@@ -320,7 +286,10 @@ fn the_lobby_key_is_never_published_or_altered() {
     }
     // And the observer calls the original before reading, so a fault in our read can never
     // change the key Seamless publishes.
-    let source = include_str!("../local_invasion_filter.rs");
+    // Read through `filter_module_code` rather than from the parent file directly: the observer
+    // moved into `lobby_key_observer.rs` on 2026-09-16 and this `expect` then fired against code
+    // that had not changed at all.
+    let source = filter_module_code();
     let observer = source
         .split("unsafe extern \"system\" fn build_lobby_key_observer")
         .nth(1)
@@ -350,21 +319,56 @@ fn the_lobby_key_is_never_published_or_altered() {
 /// parent's own `#[cfg(test)]` would otherwise truncate everything concatenated behind it, which
 /// is the silent-blindness failure `filter_module_code` below already documents.
 fn product_code() -> String {
-    [
-        include_str!("../local_invasion_filter.rs"),
-        include_str!("actions.rs"),
-    ]
-    .map(|source| {
-        let shipping = source
-            .split_once("#[cfg(test)]")
-            .map_or(source, |(before, _)| before);
-        shipping
-            .lines()
-            .filter(|line| !line.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    })
-    .join("\n")
+    [FILTER_SOURCE, include_str!("actions.rs")]
+        .map(|source| {
+            let shipping = source
+                .split_once("#[cfg(test)]")
+                .map_or(source, |(before, _)| before);
+            shipping
+                .lines()
+                .filter(|line| !line.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .join("\n")
+}
+
+/// `product_code` stops at the first `#[cfg(test)]`, so that attribute may only appear last.
+///
+/// The truncation is what keeps a needle written in a test from satisfying a guard written about
+/// shipping code. It is also a loaded gun: the attribute is ordinary Rust and reads as harmless
+/// anywhere, but one placed early cuts the scanned string off at that line and every gate above
+/// silently passes on the handful of lines that survive. Measured 2026-09-15 -- gating two
+/// unused-in-release imports with it truncated the parent to its first 133 lines and took eight
+/// source-scan tests down at once, which at least failed loudly; a gate that scans for something
+/// it must never find would have gone green instead.
+///
+/// So the rule is the attribute appears exactly once per scanned file, on the trailing test
+/// module. Anything else wants `#[allow(unused)]`, a `cfg(test)` submodule of its own, or the
+/// constant referenced through its module path.
+#[test]
+fn the_only_cfg_test_in_scanned_source_is_the_trailing_test_module() {
+    let attribute = format!("#[cfg({})]", "test");
+    for (name, source) in [
+        ("local_invasion_filter.rs", FILTER_SOURCE),
+        ("actions.rs", include_str!("actions.rs")),
+    ] {
+        let occurrences = source.matches(&attribute).count();
+        assert!(
+            occurrences <= 1,
+            "{name} carries {occurrences} `cfg(test)` attributes; product_code() truncates at the \
+             first, so every source scan above it reads a fraction of the file"
+        );
+        let Some((_, tail)) = source.split_once(&attribute) else {
+            // No test module in this file at all, so nothing truncates and nothing to place.
+            continue;
+        };
+        assert!(
+            tail.trim_start().starts_with("mod tests;"),
+            "{name}'s only `cfg(test)` must sit on the trailing test module, not on an item in \
+             the middle of the file"
+        );
+    }
 }
 
 /// The session scanner's shipping code, comments and test module removed.
@@ -381,11 +385,18 @@ fn product_code() -> String {
 /// here means a future split costs one line in this function rather than a gate nobody notices.
 fn filter_module_code() -> String {
     [
-        include_str!("../local_invasion_filter.rs"),
+        FILTER_SOURCE,
         include_str!("actions.rs"),
         include_str!("menu_object.rs"),
         include_str!("banner.rs"),
         include_str!("menu_seams.rs"),
+        include_str!("session_field_trace.rs"),
+        // Split out on 2026-09-16 when the parent crossed 3200 lines again, and the cost of
+        // forgetting these two lines is exactly what the paragraph above predicted: the detour
+        // budget read four trampolines instead of five, and `the_lobby_key_is_never_published_or_
+        // altered` fired its `expect("the observer exists")` against correct code.
+        include_str!("lobby_key_observer.rs"),
+        include_str!("search_banner.rs"),
     ]
     .join("\n")
 }
@@ -457,8 +468,8 @@ fn no_invasion_target_is_ever_chosen_by_steam_id() {
 /// to one of them is invisible and the whole point of the tracing is lost.
 #[test]
 fn the_session_watch_window_covers_every_known_field() {
-    let begin = SESSION_WATCH_BEGIN;
-    let end = SESSION_WATCH_BEGIN + SESSION_WATCH_WORDS * 8;
+    let begin = session_field_trace::SESSION_WATCH_BEGIN;
+    let end = begin + session_field_trace::SESSION_WATCH_WORDS * 8;
     // Every build's state field, not just the installed one's: the window is a compile-time
     // constant and the same code traces whichever build is loaded, so a window that covers
     // a stale build's state offset but not the supported one's would trace nothing at all.
@@ -497,7 +508,7 @@ fn the_session_watch_window_covers_every_known_field() {
 fn the_session_watch_window_stays_small() {
     const {
         assert!(
-            SESSION_WATCH_WORDS * 8 <= 0x200,
+            session_field_trace::SESSION_WATCH_WORDS * 8 <= 0x200,
             "a per-frame read of this size is no longer negligible"
         )
     };
@@ -710,7 +721,7 @@ fn the_version_discriminator_actually_discriminates() {
 /// produces an actionable line rather than a filter that silently does nothing.
 #[test]
 fn an_unrecognised_seamless_build_is_refused_rather_than_guessed_at() {
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let resolver = source
         .split_once("fn resolve_ersc_abi(")
         .expect("the version gate exists")
@@ -827,15 +838,19 @@ fn self_recovery_cannot_resume_a_search_after_a_kept_match() {
         "the armed check must come BEFORE arming a restart, or a kept match restarts once \
          before the guard is consulted"
     );
-    // And the disarm on Keep is the other half of the same invariant.
-    let keep = source
-        .split_once("Verdict::Keep(reason) => {")
-        .expect("keep arm exists")
+    // And the disarm on an accepted match is the other half of the same invariant.
+    //
+    // It used to live in a `Keep` arm beside a `Reject` arm. The location filter was deleted on
+    // 2026-09-15, so there is one path now and every match takes it -- which makes the disarm
+    // more load-bearing, not less: there is no longer a second arm that could have done it.
+    let accept = source
+        .split_once("fn judge_incoming_match(")
+        .expect("the join-data handler exists")
         .1;
     assert!(
-        keep[..keep.find("Verdict::Reject").unwrap_or(keep.len())]
+        accept[..accept.find("\nfn ").unwrap_or(accept.len())]
             .contains("AUTO_SEARCH_ARMED.store(false"),
-        "a kept match must disarm the loop; self-recovery relies on it"
+        "an accepted match must disarm the loop; self-recovery relies on it"
     );
 }
 
@@ -1037,7 +1052,7 @@ fn the_recurring_build_fingerprint_never_reads_a_function_this_module_hooks() {
     // detour, failed, and reported `ErscUnrecognised`. A live invasion was judged, rejected,
     // and then not cancelled because of it. Whatever the recurring check reads must be
     // something nothing patches.
-    let source = include_str!("../local_invasion_filter.rs");
+    let source = FILTER_SOURCE;
     let resolver = source
         .split_once("fn resolve_session(")
         .expect("resolve_session exists")
@@ -1622,65 +1637,41 @@ fn a_bare_session_find_cannot_veto_an_owner_find() {
     );
 }
 
-/// A rejection that was not enforced has to be counted, not merely logged.
+/// No connected invasion may be cancelled because of where it is.
 ///
-/// The user-visible failure on 2026-09-06 was "I didn't only invade locally. It might be disabled?"
-/// -- and the filter was armed, judging correctly, and enforcing nothing. Every other state this
-/// module can be in shows up in the heartbeat; that one showed up only as four lines buried in 408,
-/// so the run read as healthy right up until somebody read the log by hand.
+/// This replaces the two tests that pinned the old behaviour, and it pins the opposite. The
+/// location filter ran at `SetMultiplayJoinData`, which is after the connection to the host
+/// exists, so its only available move was to tear down an invasion that had already been
+/// negotiated. Deleted 2026-09-15 by user directive; the narrowing lives in `lobby_publish`, where
+/// it costs a query rather than a connection.
 ///
-/// The counter is the oracle: above zero means a match this module rejected proceeded anyway.
+/// A source scan rather than a call, because the thing being asserted is an absence: there is no
+/// function left to invoke. The needles are assembled so this file does not contain them.
+///
+/// `cancel_match` itself is deliberately not on the list. Cancelling is still a real thing this
+/// module does -- the deadline abandons a connect that has gone nowhere, on the player's behalf
+/// and at their request. What was deleted is the reason, not the mechanism: no location verdict
+/// may reach it. The machinery that carried a verdict to a cancel is what must stay gone.
 #[test]
-fn an_unenforced_rejection_is_counted_and_reported() {
+fn no_connected_invasion_is_cancelled_for_its_location() {
     let code = product_code();
+    for needle in [
+        format!("fn {}_pending_cancel(", "drive"),
+        format!("fn {}_pending_cancel(", "arm"),
+        format!("{}::Reject", "Verdict"),
+    ] {
+        assert!(
+            !code.contains(&needle),
+            "{needle} is back: a match that has already connected must not be cancelled for \
+             being in the wrong place"
+        );
+    }
+    // The one cancel that survives must be the player's, not a judgement about where they landed.
+    let stopped = format!("{}::{}", "RejectReason", "PlayerStopped");
     assert!(
-        code.contains("UNENFORCED_REJECTS.fetch_add(1, Ordering::SeqCst);"),
-        "the path that declines to cancel a rejected match must increment the counter, or an inert \
-         filter is indistinguishable from a working one"
+        code.contains(&stopped),
+        "the surviving cancel path should be the player-initiated one; {stopped} is missing"
     );
-    assert!(
-        code.contains("UNENFORCED_REJECTS.load(Ordering::SeqCst),"),
-        "the counter must be published through `tallies`, or nothing outside this module can see it"
-    );
-    let heartbeat = include_str!("../drive.rs");
-    assert!(
-        heartbeat.contains("UNENFORCED={unenforced}"),
-        "the heartbeat must print the unenforced count -- it is the one number that says whether \
-         the filter worked, as opposed to whether it ran"
-    );
-}
-
-#[test]
-fn a_rejection_arms_the_pending_cancel_rather_than_driving_it_where_it_is_judged() {
-    // The verdict is reached inside `set_join_data_hook`, a detour on the game's own
-    // `SetMultiplayJoinData`. Driving from there calls into ersc.dll in the state the server's
-    // offer left behind, which is outside the set ERSC draws its own Cancel row for.
-    super::arm_pending_cancel(0x3d2f2c00, RejectReason::WrongBlock, true);
-    let armed = {
-        let guard = super::PENDING_CANCEL.lock();
-        let guard = match guard {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        *guard
-    };
-    let armed = armed.expect("the rejection is armed for the game task");
-    assert_eq!(armed.destination, 0x3d2f2c00);
-
-    // One slot, not a queue: the server is waiting on the newest offer, so a second rejection
-    // replaces the first rather than queueing a cancel for a match already superseded.
-    super::arm_pending_cancel(0x12000000, RejectReason::WrongPlaceName, false);
-    let armed = {
-        let guard = super::PENDING_CANCEL.lock();
-        let mut guard = match guard {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        guard.take()
-    };
-    let armed = armed.expect("the newer rejection replaced the older one");
-    assert_eq!(armed.destination, 0x12000000);
-    assert!(!armed.notice);
 }
 
 /// Discarding a wrong shape-scan guess must not delete the differential snapshot.
@@ -1758,10 +1749,27 @@ fn the_sweeper_does_not_retire_on_a_session_with_no_owner() {
         .split_once("await_sweep_request")
         .expect("the bare-session arm waits for another request rather than returning")
         .0;
+    // Two returns are allowed here now, and the distinction is the point: the sweeper may retire
+    // once it has an owner, and may never retire while it does not.
+    //
+    // The second return was added on 2026-09-16, inside the `owner_among(&[session])` arm that
+    // turns a bare hit into an owned one on the same pass. Retiring there is correct -- the answer
+    // is complete -- and not retiring there was the whole of the near+far handoff's intermittency:
+    // run br-20260916-101429-e595 fired the handoff three times, pressed three times, pinned the
+    // Lynchpin three times, and `RequestLobbyList` never reached our detour, because the cached
+    // answer read `owner 0x0` and every drive declined on it.
+    let returns = bare.matches("return;").count();
     assert!(
-        !bare.contains("return;") || bare.matches("return;").count() == 1,
-        "only the proven arm may return; the bare-session arm has to keep the loop alive:\n{bare}"
+        returns <= 2,
+        "the bare-session arm may return only after it has found an owner:\n{bare}"
     );
+    if returns == 2 {
+        assert!(
+            bare.contains("owner_among(&[session])"),
+            "a second return in the bare arm is only allowed for the owner lookup that makes the \
+             answer complete:\n{bare}"
+        );
+    }
 }
 
 /// The externally-requested search must not demand a pointer the shipping build can never hold.
@@ -1818,4 +1826,370 @@ fn discovery_refuses_a_busy_candidate_while_nothing_is_happening() {
         body.contains("!JOIN_IN_FLIGHT.load(Ordering::SeqCst) && state != abi.state_idle"),
         "discovery has to refuse a candidate that is busy while no join is in flight:\n{body}"
     );
+}
+
+/// The player-driven stand-down, asserted from the source because the flags it clears are
+/// process-global statics a host test cannot observe.
+///
+/// Both switches that mean "stop" must reach `stand_down_hunt`. Before this, only three things
+/// disarmed the loop and all three were the engine's doing -- a `Keep` verdict, an invasion
+/// landing, and the show observer, which is gated behind `ersc_observers` and has shipped off
+/// since the `0x140010043` crash. A player who cancelled got another search.
+#[test]
+fn both_off_switches_stand_the_hunt_down() {
+    let hotkeys = include_str!("hotkeys.rs");
+    assert!(
+        hotkeys.contains("stand_down_hunt("),
+        "the enable toggle key must stand the auto re-search down, or switching the filter off \
+         leaves it starting searches the switch says it stopped"
+    );
+    let panel = include_str!("../settings_panel.rs");
+    assert!(
+        panel.contains("stand_down_hunt("),
+        "the panel's `enabled` row is the same switch as the toggle key and owes the same promise"
+    );
+    let filter = FILTER_SOURCE;
+    let body = filter
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this file")
+        .1;
+    let body = body.split_once("\n}").expect("it ends").0;
+    for cleared in [
+        "AUTO_SEARCH_ARMED.swap(false",
+        "PENDING_REINVADE.store(false",
+        "backoff.stand_down()",
+    ] {
+        assert!(
+            body.contains(cleared),
+            "standing down must clear `{cleared}` -- leaving any one of them set restarts the \
+             search the player just stopped"
+        );
+    }
+}
+
+#[test]
+fn the_connect_deadline_times_only_states_ersc_offers_a_cancel_row_for() {
+    // Regression, caught live on run br-20260915-025202-c779, the first run the deadline shipped
+    // in. The phase mapping was a blocklist -- "not idle, not searching, not cancelling, therefore
+    // connecting" -- so it called `0x16` a connect. `0x16` is a successful invasion: 313 attempts
+    // reached it and dwelt there between 771ms and 465 seconds, because that dwell is the
+    // invasion itself. The deadline fired 1500ms in, found no Cancel row offered, fell through to
+    // OPTIONSELECT_LEAVEWORLD, and tore the player out of a live invasion into a hard lock.
+    //
+    // Deriving the timed set from ERSC's own hide-predicate is what makes that unrepresentable:
+    // `0x16` is not in it, and neither is any other state Seamless would not let the player cancel
+    // by hand.
+    let source = filter_module_code();
+    let phase = source
+        .split_once("fn connect_phase(")
+        .expect("the phase mapping exists")
+        .1
+        .split_once("\n}")
+        .expect("phase body")
+        .0;
+    assert!(
+        phase.contains("cancel_row_offered"),
+        "the timed set must come from ERSC's own Cancel-row predicate, not from a list here -- \
+         a hand-written list drifts from the predicate and a blocklist times states nobody has \
+         ever measured"
+    );
+    assert!(
+        !phase.contains("0x16"),
+        "the mapping must not name the in-world state at all; it is excluded by not being in the \
+         predicate, which is the property that survives a Seamless renumber"
+    );
+    // Searching is in the predicate and must still be excluded from it by name.
+    let searching_at = phase
+        .find("state_searching")
+        .expect("searching must be excluded explicitly");
+    let offered_at = phase.find("cancel_row_offered").expect("checked above");
+    assert!(
+        searching_at < offered_at,
+        "searching must be returned BEFORE the predicate is consulted -- ERSC draws a Cancel row \
+         during a search, and timing it cancels healthy hunts in a quiet bracket"
+    );
+    // And an invasion that happened is never a connect, whatever states it unwinds through.
+    let arrived_at = phase
+        .find("INVASION_ACTUALLY_HAPPENED")
+        .expect("a successful invasion must be recognised before any state is consulted");
+    assert!(
+        arrived_at < searching_at,
+        "the success latch must be checked before the raw state, because a successful invasion \
+         walks the same cancelling states a dead attempt does"
+    );
+
+    let watcher = source
+        .split_once("fn watch_for_failed_connect(")
+        .expect("the deadline watcher exists")
+        .1
+        .split_once("\n}\n")
+        .expect("watcher body")
+        .0;
+    let armed_at = watcher
+        .find("AUTO_SEARCH_ARMED")
+        .expect("the watcher must only run while the hunt is armed");
+    let observe_at = watcher
+        .find("observe(")
+        .expect("the watcher feeds the clock");
+    assert!(
+        armed_at < observe_at,
+        "the armed check must come BEFORE any observation, or an attempt the player already \
+         stopped is called lost and cancelled out from under them"
+    );
+    // The watcher must still refuse to act outside the Cancel-row set, even now that the only
+    // thing left to act with is a log line: the refusal is what says the phase mapping was wrong.
+    assert!(
+        watcher.contains("!super::lock_report::cancel_row_offered"),
+        "the watcher must keep the Cancel-row check, because reaching a state outside that set \
+         means the mapping misjudged and that is worth saying out loud"
+    );
+    // And it must never drive a cancel again.
+    //
+    // User ground truth, 2026-09-16, given while invading: "Because of the er-invasion-warp
+    // feature it says no connection. I normally can invade people." Both halves of that sentence
+    // are this path -- "no connection" is its banner, and the cancel is what made the sentence
+    // true. The deadline came from an aggregation of runs this mod was itself driving, so it
+    // described connects shaped by the instrument rather than connects as the player meets them.
+    assert!(
+        !watcher.contains("cancel_stalled_attempt(session"),
+        "the connect deadline must REPORT, never cancel. Restoring an action here requires a \
+         dwell distribution measured with this mod not driving -- `--without er-invasion-warp` \
+         makes that a one-command run"
+    );
+}
+
+/// The `0x16` regression, asserted against the real code rather than against its source text.
+///
+/// The source-scan test beside this one pins the shape of [`super::actions::connect_phase`]; this
+/// one runs it. The distinction earned its keep the hard way: a scan can only say the mapping
+/// mentions the right predicate, and the build that hard-locked run br-20260915-025202-c779
+/// mentioned every right thing while still classifying a live invasion as a connect in progress.
+///
+/// `ersc::Abi` is a `const` table, so the supported build's real state codes are available on the
+/// host with no game and no memory read -- including `state_in_world`, which the ABI has named all
+/// along. That name is the whole indictment of the blocklist that shipped: the number the deadline
+/// tore a player out of was not unknown, it was already written down one module over.
+#[test]
+fn the_deadline_never_classifies_a_live_invasion_as_a_connect() {
+    use er_invasion_warp_core::attempt_verdict::Phase;
+
+    let abi = &super::ersc::SUPPORTED[0];
+
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_in_world),
+        Phase::Connecting,
+        "state_in_world ({:#06x}) is the player standing in the host's world -- timing it drove \
+         OPTIONSELECT_LEAVEWORLD 1.5s into a successful invasion and hard-locked the game",
+        abi.state_in_world
+    );
+    assert_ne!(
+        super::actions::connect_phase(abi, abi.state_idle),
+        Phase::Connecting,
+        "an idle session has no attempt to call lost"
+    );
+    for settling in [
+        abi.state_cancelling,
+        crate::stall_watchdog::state::CANCEL_SETTLING,
+    ] {
+        assert_ne!(
+            super::actions::connect_phase(abi, settling),
+            Phase::Connecting,
+            "state {settling:#06x} is a cancel already unwinding; answering it with another \
+             cancel is what wedged a session for 30s"
+        );
+    }
+    assert_eq!(
+        super::actions::connect_phase(abi, abi.state_searching),
+        Phase::Searching,
+        "searching is unbounded by nature -- one measured search sat 280 seconds"
+    );
+    // And the states that are genuinely a connect in progress still are, or the feature is inert.
+    // These are ERSC's own Cancel-row set minus searching, which is the set the mapping derives.
+    for connecting in [0x0f_u32, 0x10, 0x12] {
+        assert_eq!(
+            super::actions::connect_phase(abi, connecting),
+            Phase::Connecting,
+            "state {connecting:#06x} is one ERSC draws a Cancel row for, so it is a connect the \
+             player could already have called off"
+        );
+    }
+    // Every state the success walk passes through on its way to the world is left alone. None is
+    // in the Cancel-row set, and each was measured brief: 0x13 max 116ms, 0x14 max 183ms.
+    for transient in [abi.state_offer_received, 0x14, 0x15] {
+        assert_ne!(
+            super::actions::connect_phase(abi, transient),
+            Phase::Connecting,
+            "state {transient:#06x} is a step of the successful join, not a stuck connect"
+        );
+    }
+}
+
+/// The everywhere rung must reach the caller as "add no filter", and nothing may turn it back
+/// into a location.
+///
+/// Structural, because the code it guards is `cfg(windows)` and reads live game state. That is
+/// also how the bug shipped: `advance_ring` returned `None` for "drop the filter and ask
+/// everywhere", `hunt_target` ended in `.or(Some(centre))` -- written for the unrelated case of
+/// no readable block -- and the two `None`s were indistinguishable. Run br-20260915-173522-e76b
+/// announced "looking everywhere instead" on screen and in the log, then asked Steam for the
+/// player's own tile 33 more times, every connect dying at the deadline against stale entries.
+/// A type the compiler checks replaced the `Option`; this stops the collapse coming back.
+#[test]
+fn the_everywhere_rung_cannot_be_collapsed_back_into_a_location() {
+    let source = include_str!("../lobby_publish.rs");
+    let hunt = source
+        .split_once("fn hunt_target()")
+        .expect("hunt_target exists")
+        .1;
+    let body = &hunt[..hunt
+        .find("\n    /// What one round of the widening search")
+        .expect("hunt_target is followed by the RingStep definition")];
+    assert!(
+        body.contains("RingStep::Everywhere => None"),
+        "the everywhere rung must reach the caller as None, which is what makes the query          unfiltered: {body}"
+    );
+    // The exact shape that swallowed it. `.or(` on the ring result restores a filter the rung
+    // just dropped, and does it silently -- the banner and the log still say "everywhere".
+    assert!(
+        !body.contains(".or(Some("),
+        "an `.or(Some(..))` on the ring result collapses the everywhere rung back into a tile:          {body}"
+    );
+    // And the fallback must stay distinguishable rather than being folded in with it.
+    assert!(
+        body.contains("RingStep::Unavailable => Some(centre)"),
+        "an unbuildable ring must fall back to the single tile, not widen to everywhere: {body}"
+    );
+}
+
+/// The three outcomes stay three. Collapsing `Unavailable` into `Everywhere` would widen the
+/// search whenever the ring could not be read, which is the opposite failure and just as quiet.
+#[test]
+fn the_ring_step_type_keeps_its_three_outcomes() {
+    let source = include_str!("../lobby_publish.rs");
+    let decl = source
+        .split_once("enum RingStep {")
+        .expect("RingStep exists")
+        .1;
+    let body = &decl[..decl.find("\n    }").expect("RingStep closes")];
+    for variant in ["Ask(String)", "Everywhere", "Unavailable"] {
+        assert!(body.contains(variant), "RingStep lost {variant}: {body}");
+    }
+}
+
+/// The second door onto `OPTIONSELECT_LEAVEWORLD` must be shut in `state_in_world`.
+///
+/// `connect_phase` already refuses that state for the deadline path, and the test beside this one
+/// asserts it. This is the other caller: `drop_a_match_the_engine_has_already_failed` acts on the
+/// engine reporting `lobbyState == None`, which in a Seamless invasion is not proof the attempt is
+/// dead -- Seamless owns the session and `0x16` is its word for "the invasion landed". It checked
+/// only for idle, so a live invasion fell straight through to the cancel, whose Cancel row is
+/// withdrawn at `0x16`, whose fallback is `OPTIONSELECT_LEAVEWORLD`. That hard-locked run
+/// br-20260915-025202-c779 and then br-20260915-173901-7934, the first run whose lobby query was
+/// genuinely unfiltered and so the first to reach a real host at all.
+///
+/// Structural because the function is `cfg(windows)` and reads live session memory. What is
+/// pinned is the order: the refusal has to precede the cancel, or it is decoration.
+#[test]
+fn the_orphan_drop_refuses_a_player_standing_in_the_hosts_world() {
+    let source = filter_module_code();
+    let body = source
+        .split_once("fn drop_a_match_the_engine_has_already_failed(")
+        .expect("the orphan-drop path exists")
+        .1;
+    let body = &body[..body
+        .find("\n#[cfg(windows)]\npub(crate) fn trace_join_progress")
+        .expect("it is followed by trace_join_progress")];
+    let refusal_at = body
+        .find("if state == session.abi.state_in_world {")
+        .expect("the in-world state must be refused by name, not by a set that might drift");
+    let cancel_at = body
+        .find("cancel_stalled_attempt_inner(")
+        .expect("this path drives the cancel");
+    assert!(
+        refusal_at < cancel_at,
+        "the in-world refusal must come BEFORE the cancel, or a live invasion falls through to \
+         OPTIONSELECT_LEAVEWORLD -- which hard-locked two runs"
+    );
+    // And it must return rather than fall through having only logged.
+    let arm = &body[refusal_at..cancel_at];
+    assert!(
+        arm.contains("return;"),
+        "the in-world arm must return: {arm}"
+    );
+}
+
+/// `state_in_world` is not in the set where Seamless draws its own Cancel row, which is exactly
+/// why the orphan-drop path reached the LEAVEWORLD fallback. Pinned so that if the set is ever
+/// widened to include it, the refusal above is re-examined rather than silently made redundant.
+#[test]
+fn the_cancel_row_is_not_offered_in_world() {
+    let abi = &super::ersc::SUPPORTED[0];
+    assert!(
+        !super::lock_report::cancel_row_offered(abi.state_in_world),
+        "if Seamless started drawing Cancel at {:#06x}, the fallback that hard-locks would no \
+         longer be reached and the refusal beside it deserves another look",
+        abi.state_in_world
+    );
+}
+
+/// The effects key must not be gated on the map having moved.
+///
+/// It was, and silently. `publish_current_map` returned early when the block was unchanged, and
+/// the effects write sat behind that return -- so a host who used Taunter's Tongue standing still
+/// went on advertising `none` until they walked into another block. Every window the feature
+/// exists to cover is exactly the window where nobody is walking anywhere.
+///
+/// Structural, because the function is `cfg(windows)` and talks to Steam. What it pins is the
+/// order: both pending values are decided before the return that can skip the tick.
+#[test]
+fn the_effects_key_is_decided_before_the_unchanged_map_returns() {
+    let source = include_str!("../lobby_publish.rs");
+    let body = source
+        .split_once("pub fn publish_current_map()")
+        .expect("the publish entry point exists")
+        .1;
+    let body = &body[..body
+        .find("\n    /// Write one key, read it back")
+        .expect("it is followed by write_one_key")];
+    let effects_at = body
+        .find("pending_effects()")
+        .expect("the effects value must be computed here");
+    let bail_at = body
+        .find("return;")
+        .expect("the nothing-to-say return exists");
+    assert!(
+        effects_at < bail_at,
+        "pending_effects() must be called before the early return, or a host standing still \
+         never republishes: {body}"
+    );
+    // And the return must require both to be empty. Gating on the map alone is the regression.
+    let guard = &body[..bail_at];
+    assert!(
+        guard.contains("pending_map.is_none() && effects_value.is_none()"),
+        "the tick may only be skipped when neither key has anything to say: {guard}"
+    );
+}
+
+/// The two writes must not share a skip either. A map that has not moved says nothing about
+/// whether an item was just used, and vice versa.
+#[test]
+fn the_two_keys_are_written_independently() {
+    let source = include_str!("../lobby_publish.rs");
+    let body = source
+        .split_once("pub fn publish_current_map()")
+        .expect("the publish entry point exists")
+        .1;
+    let body = &body[..body
+        .find("\n    /// Write one key, read it back")
+        .expect("it is followed by write_one_key")];
+    for key in ["LOBBY_MAP_KEY", "LOBBY_HOST_EFFECTS_KEY"] {
+        let at = body
+            .find(key)
+            .unwrap_or_else(|| panic!("{key} must be written from here: {body}"));
+        let arm = &body[..at];
+        assert!(
+            arm.rfind("if let Some(value) =").is_some(),
+            "{key} must be written under its own `if let`, not behind the other key's success"
+        );
+    }
 }

@@ -295,6 +295,17 @@ pub(crate) unsafe fn system_quit_arm_quickload_autoload(selected_slot: i32, sour
     TITLE_OWNER_PTR.store(TITLE_OWNER_SCAN_START_ADDRESS, Ordering::SeqCst);
     TITLE_OWNER_SCAN_COUNTDOWN.store(TITLE_OWNER_SCAN_COUNTDOWN_READY, Ordering::SeqCst);
     OWN_LOAD_CONTINUE_FIRED.store(false, Ordering::SeqCst);
+    // The press-any-button advance is the same shape of one-shot as the latches above, and it was
+    // the one this function forgot. `pab_advance_try` early-returns on `PAB_ADVANCE_FIRED != 0`
+    // (product_autoload_gates.rs:1264) and nothing else in the tree writes a zero back, so the boot
+    // consumed it for the whole process and every later switch reached press-any-button with nothing
+    // left to advance it -- the player pressed a button by hand. Measured in run
+    // br-20260917-134409-b1f9: `pab-advance:` appears exactly twice in 76,800 lines, both at boot.
+    // The settle counter and the job it counts for are reset with it, so the next window opens on
+    // the job the next press-any-button actually builds.
+    er_telemetry_core::counters::PAB_ADVANCE_FIRED.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::PAB_ADVANCE_SETTLE.store(0, Ordering::SeqCst);
+    er_telemetry_core::counters::PAB_ADVANCE_SETTLE_JOB.store(0, Ordering::SeqCst);
     // Re-arm the product-core-autoload continue driver for repeatable switching (2026-07-15): FULLREAD_PHASE is
     // a one-shot that reaches FULLREAD_PHASE_DONE after the first switch's Continue and then early-returns
     // (product_continue.rs:282), so the 2ND consecutive switch's return-title reaches the title but nothing

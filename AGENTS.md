@@ -40,6 +40,23 @@ cancelled through Frida, which `er_invasion_warp.dll` has never once managed. Pr
 investigate here before writing DLL code, because a hook answers in seconds what a memory scan
 cannot answer at all.
 
+**The order is Frida, then Frida, then Frida, and only then a DLL: prototype with it, run the
+experiment with it, and fix the thing with it if a hook can. Build a DLL when the mechanism is
+already known and the code is the product, never to find something out.** A build is 3 minutes of
+the user's session per attempt and it puts a polling oracle where an event belongs; the agent file
+reloads in place and costs nothing. Two tests for reaching for the wrong one:
+
+- The question is **who wrote this**, **when did it change**, or **which function ran**. Polling
+  can only sample the value afterwards and guess at the cause; `Interceptor` and a watchpoint name
+  the instruction. A rebuild is the wrong instrument here by construction, not merely a slow one.
+- The answer will arrive through a **log line you then have to read**. That is a poll wearing a
+  different hat -- and a `tail -f` of the game's log is not an oracle, it is the absence of one.
+
+Failure this was written from (2026-09-15): asked which field Seamless's Dried Fingers rule writes,
+the agent ran four build/teardown/relaunch/tail cycles and produced a diff so unsound it reported
+eight qwords moving on a host who had touched nothing. `scripts/er-frida-up.py` was two commands
+away the entire time, and the section above already said so.
+
 - **Bring it up with `python3 scripts/er-frida-up.py`.** It runs the Windows `frida-server.exe`
   INSIDE the game's pressure-vessel container via `nsenter`, which is the whole trick. Measured
   namespaces: game `mnt:[4026533261]` / `user:[4026533260]` against the host's `mnt:[4026531832]` /
@@ -58,6 +75,14 @@ cannot answer at all.
   a crashed bootstrapper can leave the process damaged, so there is no reason to do it.
   `scripts/er-frida-attach-probe.py` re-measures this in 30 seconds rather than asking anyone to
   trust the paragraph.
+- **Never arm `MemoryAccessMonitor` on a live game object.** It revokes access to a whole 4 KB page
+  and turns every access by every thread into a fault Frida must resume; on this target one was
+  not. Measured 2026-09-15: a guard page on Seamless's session killed the game with `0xc0000005`
+  at `ersc+0x89e23` -- one of ersc's own readers of that page -- while the player used an item.
+  Use `Thread.setHardwareWatchpoint` instead: four per thread, eight bytes each, no protection
+  change, and only the address asked for traps. When the field is unknown, an `Interceptor` on the
+  writer's caller is cheaper than widening the watch.
+
 - **For a read-only question with no game running**, `/proc/<pid>/mem` via
   `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
 - **Watch the event stream with the `Monitor` tool** rather than asking the user what happened.
@@ -139,6 +164,33 @@ For Elden Ring runtime validation, do not rely on slow manual/LLM-paced input ti
 
 Do not use delayed mouse/keyboard polling as the primary way to advance menus during runtime probes. The smoke driver must default to no pointer nudges. If deterministic state injection/hooks are not enough, add/extend the safe input or save-loader workspace crates.
 
+## Never instruct the user in their own game (user directive 2026-09-15)
+
+When a runtime measurement needs something to happen in game, say WHAT EVIDENCE IS NEEDED and stop.
+Do not spell out the steps, the order, or the menus. The user has played this game for years, they
+taught this repo how Seamless works, and a procedure recited back at them is both useless and
+wrong often enough to cost real time.
+
+The failure this was written from, 2026-09-15: the agent wrote "use Dried Fingers, then rehost".
+That order is impossible -- Seamless's Dried Fingers cannot be activated in a session where it has
+already been used, so a fresh session must come FIRST and the item second. The user had already
+said so twice in the same session ("I can't activate dried finger unless I have a new session with
+no prior activation"). The agent recited a sequence it had been corrected on, in the wrong order,
+to the person who corrected it.
+
+The rule, concretely:
+
+- Ask for an OUTCOME: "a fresh session with the item used in it", "a host advertising from a world
+  the item is active in". Never a button sequence, never "open X then cancel then use Y".
+- The reason the agent wants it may be stated once, briefly, because that is what lets the user
+  choose a better route than the one the agent had in mind.
+- If the agent genuinely needs a specific in-game action performed a specific way, that is the
+  agent's job to drive -- see the 2026-07-22 standing order directly below. Asking the user to
+  perform an input is already a failure; asking them to perform it in an order they have corrected
+  is that failure twice.
+- Game facts the user states are ground truth about their game and are not re-derived or
+  re-ordered. Write them down (`bd remember`) rather than paraphrasing them back later.
+
 Standing user order (2026-07-22): there is NO single input a user can perform that the agent cannot perform itself if it actually tries. The AGENT drives every required input (menu navigation, Continue, System->Quit, tab-switch, movement, anything) -- via the input-harness direct-memory native-binding injection (`inputmgr+0x90+eventId` keystate bitmap, `DLUID+0x88d`), the movement-injection probe, or synthesized OS keyboard/mouse to the ER window. A menu/input "gap" (e.g. the OptionSetting->Quit tab-switch having no reversed menu-event id) is a mechanism to SOLVE -- reverse the id, drive the cursor/mouse to the tab, or use direct input -- NEVER a reason to ask the user to drive. Asking the user to perform an in-game input is an instruction-following failure; the vanilla-like comparison run and every runtime test are agent-driven end to end.
 
 Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than the canonical cap in `.auto/runtime_timeout_cap_seconds` (the single source of truth; the contract checker asserts the policy literal equals it); the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible. To change the cap, edit `.auto/runtime_timeout_cap_seconds`, the rego literal, and the fallback/ceiling in `scripts/runtime_timeout_cap.py` together (they are all pinned to the same single value) and re-run the contract checker/test.
@@ -191,6 +243,28 @@ If and only if the agent's recent user-facing prose referred to an entity, ident
 ## Reusable Tooling / Hard-Coded Path Corrections
 
 Persistent user directive (2026-07-17): when a tool, script, helper, or documented workflow fails because of a hard-coded local path, username, machine layout, or one-off assumption, fix the reusable tool/instruction at the point of failure before continuing the one-off task. Prefer env-overridable, current-user-aware defaults (`$HOME`, discovered repo root, explicit `*_DIR`/`*_BIN` overrides, bounded known-location fallbacks) over `/home/banon`, `/home/choza`, or other user-specific literals. Do not paper over the failure by running an ad-hoc command that only works in the current session; preserve the reusable fix with validation so future identical use cases benefit.
+
+## UnitCrew's Cheat Table -- Networking Reference, Never Committed
+
+`third_party/better connections all good3.CT` is a Cheat Engine table by **UnitCrew**, kept as a
+read-only reverse-engineering reference for anything touching this mod's networking (user
+directive 2026-09-15).
+
+**It must never be checked in.** It is 8.5 MB of another author's work carrying their own embedded
+scripts and structure definitions. `.gitignore` covers `third_party/*.CT` and `third_party/*.ct`;
+that is the same carve-out the de-Arxan'd images and the Seamless archive get -- an input this repo
+reads and never redistributes.
+
+Measured contents: 8411 entries, 142 of them networking-related. It is a general Elden Ring table,
+not a Seamless-internals one -- its `Seamless Co-op` group holds no addresses, and `Current Session`
+resolves `WorldChrMan + 9C -> 580 -> 0*10 -> 10EF8`, which is the game's own session object and not
+Steam's lobby. Do not go looking there for where `ersc.dll` keeps its advertisement lobby.
+
+What it is good for: param structure names (`NetworkAreaParam`, `NetworkParam`, `NetworkMsgParam`,
+`MultiPlayCorrectionParam`), the multiplayer request entry points (`requestSOS`, `requestBlackSOS`,
+`requestForceJoinBlackSOS`, `requestKickSession`, `requestLeaveSession`), and `WorldChrMan`-rooted
+pointer paths into session state. It is XML: entries are `<Description>"name"</Description>` with
+`<Address>` and `<Offset>` siblings, and a large Ascii85 logo blob at the top to skip.
 
 ## Ghidra Runtime Dump: First-Pass RE Source
 
@@ -301,6 +375,11 @@ The shapes that mean you stopped too early, all of them observed:
   I'll ...", "let me now ...". If you know the command, run it.
 - Offering work you are already authorised to do: "say the word and I'll ...", "want me to ...".
   The standing orders in this file already say yes; asking again is the round trip.
+- Parking that work behind a condition instead of asking for it: "relaunching is the next step
+  whenever you want it", "I can rebuild when you're ready", "just let me know", "on standby". It
+  asks nothing, so it does not read as a question, and the only reply it admits is "yes, go on" --
+  the answer to that sentence on 2026-09-15 was "I always want". Take the action; if something
+  genuinely blocks it, say what blocks it in one line.
 - A diagnosis with no edit. The finding is not the deliverable.
 
 A turn MAY legitimately end on the user, and these are the only cases:

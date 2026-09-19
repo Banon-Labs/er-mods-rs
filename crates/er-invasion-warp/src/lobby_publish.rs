@@ -10,7 +10,8 @@
 //! closes. Every rejection costs a full match negotiation and cancel.
 //!
 //! Narrowing the query removes the sampling entirely. Seamless already does exactly this -- it
-//! attaches five filters to its lobby-list request, every one of them a key some host published:
+//! attaches five filters to its lobby-list request, every one of them a key some host published.
+//! Measured on 1.9.9:
 //!
 //! ```text
 //!   AddRequestLobbyListStringFilter("lobby_breakin_lobby_ykssr_199_6",       "true")
@@ -19,6 +20,16 @@
 //!   AddRequestLobbyListNumericalFilter("ykssr_dlc", 1)
 //!   AddRequestLobbyListStringFilter("lobby_key", "<sha256>")
 //! ```
+//!
+//! Three of those five key names do not exist on the installed 2.0.1 build. It hashes its key
+//! names: a host's nine published keys were read back live on 2026-09-15 and only `lobby_key` and
+//! `ykssr_dlc` are plain, with `lobby_type` absent entirely and the value
+//! `yknx3_seamless_master_lobby` carried under a 64-character hex key instead. This module already
+//! paid for treating the list above as current -- its `SetLobbyData` observer matched
+//! `key == "lobby_type"`, so it latched no advertisement lobby at all and a host published nothing
+//! while reporting no refusals. Match the value, never the key. The block is kept because the
+//! shape of the search is unchanged and it is what this module's own filter imitates; the key
+//! names in it are historical.
 //!
 //! None of them carries the host's location -- that is the gap this module fills, and the reason a
 //! host must run this DLL for it to work at all: only a lobby's owner may call `SetLobbyData`, so
@@ -32,8 +43,16 @@
 //!
 //! * a vanilla Seamless invader never filters on our key, so publishing it changes nothing for
 //!   them -- they still match this host exactly as before; and
-//! * `lobby_key` and `lobby_type`, the two keys that decide who can see whom at all, are never
-//!   written or filtered on here. Those stay Seamless's alone.
+//! * `lobby_type` is never written or filtered on here, and `lobby_key` is never written except
+//!   through the opt-in pool substitution -- which is the feature, is gated on the user's own
+//!   `dll_users_only`, and fails closed without it.
+//!
+//! `lobby_key` is now read, and filtered on by a query of our own. [`seamless_match_key`] hands it
+//! to `lobby_preflight::send_query`, which adds it to the sweep's own lobby query so the sweep
+//! counts the population Seamless's search can actually return. That narrows nobody's results but
+//! this player's, and not narrowing them was a bug: without the filter the sweep counted the whole
+//! Seamless population and told the player "Found a host in X -- invading" about worlds their game
+//! could never reach. Reported on 2026-09-17 after thirty-two such matches, none of which connected.
 //!
 //! So a host adopting this loses no reach. The cost falls entirely on an INVADER who chooses to
 //! filter, and it is theirs to choose: filtering narrows their own results to hosts running this
@@ -80,6 +99,31 @@ use er_invasion_warp_core::invasion_warp::BlockKey;
 /// shows up in someone else's capture it should be obvious where it came from. Seamless's own keys
 /// are `lobby_*` / `ykssr_*` / `matchmaking_*`; nothing of ours may look like one of those.
 pub const LOBBY_MAP_KEY: &str = "er_invasion_warp_map";
+
+/// The second key this host publishes: which multiplayer effects are active on it.
+///
+/// Where `LOBBY_MAP_KEY` says where a host is, this says what invading them would be like --
+/// whether they are running the item that raises the invader count, which is the difference
+/// between a world an invader can get into and one they cannot.
+///
+/// It is a separate key rather than a field appended to the map value because the two have
+/// different lifetimes. The map changes when the host walks through a loading screen; this
+/// changes when they use an item, which can happen without moving. One value per fact also keeps
+/// a Steam string filter able to ask for either independently -- a filter tests one key for
+/// equality, so a combined value could only ever be matched whole.
+///
+/// The value is a comma-separated list of the effect names that are active, or `none`. A name
+/// rather than a raw id, because the id is a fact about this game build and the lobby outlives
+/// it: a reader on a different build must not have to know our param table to understand the
+/// advertisement.
+pub const LOBBY_HOST_EFFECTS_KEY: &str = "er_invasion_warp_effects";
+
+/// Its value when nothing this module knows about is active.
+///
+/// Published rather than omitted. An absent key and a host with no effects are the same silence
+/// otherwise, and the difference matters to a reader: absent means "this host is not running the
+/// DLL, or is running a build older than this key", while `none` means "asked and answered".
+pub const LOBBY_HOST_EFFECTS_NONE: &str = "none";
 
 /// `ISteamMatchmaking::SetLobbyData` -- vtable slot 20.
 ///
@@ -176,6 +220,10 @@ pub const FRIENDS_LOCAL_PERSONA_NAME: &str = "SteamAPI_ISteamFriends_GetPersonaN
 /// our publish target turns "the offset is probably the advertisement lobby" into a fact checked on
 /// every write -- and if the offset is ever wrong, or Seamless reorders its lobbies in a future
 /// version, publishing refuses instead of writing somewhere nobody reads.
+/// Historical. Seamless 1.9.9 filed the marker under this name; 2.0.0 hashes its key names, so
+/// the marker now arrives under a 64-character hex key that differs per build. Nothing matches on
+/// this any more -- the value is what identifies the advertisement, and the key that carried it is
+/// captured from the write itself. Kept because it is what a reader of older notes will look for.
 pub const ADVERTISEMENT_MARKER_KEY: &str = "lobby_type\0";
 /// The value [`ADVERTISEMENT_MARKER_KEY`] carries on the advertisement lobby.
 pub const ADVERTISEMENT_MARKER_VALUE: &str = "yknx3_seamless_master_lobby";
@@ -320,15 +368,15 @@ pub fn hunt_refusal(
 #[cfg(windows)]
 mod live {
     use super::{
-        ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_KEY, ADVERTISEMENT_MARKER_VALUE,
-        FRIENDS_ACCESSOR, FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME,
-        FRIENDS_REQUEST_USER_INFORMATION, GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_MAP_KEY,
+        ADD_STRING_FILTER_SLOT, ADVERTISEMENT_MARKER_VALUE, FRIENDS_ACCESSOR,
+        FRIENDS_LOCAL_PERSONA_NAME, FRIENDS_PERSONA_NAME, FRIENDS_REQUEST_USER_INFORMATION,
+        GET_LOBBY_DATA_SLOT, GET_LOBBY_OWNER_SLOT, LOBBY_HOST_EFFECTS_KEY, LOBBY_MAP_KEY,
         MATCHMAKING_ACCESSOR, REQUEST_LOBBY_LIST_SLOT, SET_LOBBY_DATA_SLOT, USER_ACCESSOR,
-        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, pending_publish,
+        USER_GET_STEAM_ID_SLOT, hunt_filter_value, hunt_refusal, map_value, pending_publish,
     };
     use er_invasion_warp_core::invasion_warp::BlockKey;
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -394,6 +442,51 @@ mod live {
     static LAST_PUBLISHED: Mutex<Option<String>> = Mutex::new(None);
     static PUBLISHES: AtomicUsize = AtomicUsize::new(0);
     static REFUSALS: AtomicUsize = AtomicUsize::new(0);
+    /// Latches the "no advertisement lobby" line, which the tick would otherwise repeat forever.
+    static NO_ADVERTISEMENT_SAID: AtomicBool = AtomicBool::new(false);
+
+    /// What this host has advertised, and how often it could not.
+    ///
+    /// `(published, refused)`. Both numbers already existed and neither reached any output, so
+    /// "am I broadcasting my location to invaders right now" had no answer short of reading the
+    /// source: every failure path in `publish_current_map` is a deliberate silent no-op, which
+    /// makes "not hosting" and "hosting but the advertisement was never found" identical from
+    /// outside. Asked on 2026-09-15 and unanswerable; the counters go on the heartbeat now.
+    ///
+    /// `published` zero while hosting means invaders filtering on location cannot see this host.
+    #[must_use]
+    pub fn tallies() -> (usize, usize) {
+        (
+            PUBLISHES.load(Ordering::SeqCst),
+            REFUSALS.load(Ordering::SeqCst),
+        )
+    }
+
+    /// The key Seamless filed its advertisement marker under on this build, once it has written
+    /// one.
+    ///
+    /// Exposed because the pre-flight query has to ask for the same pair Seamless advertises with,
+    /// and 2.0.x hashes its key names per build -- so the name cannot be a constant and cannot be
+    /// carried in a note. Measured 2026-09-16 against 31 live advertisements: 30 of them filed the
+    /// marker under `700f7f50..76` and one older build still used the plain `lobby_type`, which is
+    /// also why the observed key beats any list.
+    ///
+    /// `None` until Seamless declares an advertisement in this process. A caller with nothing here
+    /// must query without the pair rather than guess at it.
+    pub fn advertisement_key() -> Option<Vec<u8>> {
+        ADVERTISEMENT_KEY
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// The matchmaking interface, for a caller that issues its own query.
+    ///
+    /// The same process-wide singleton `SetLobbyData` goes through, so a filter added against it is
+    /// on the accumulator Steam consumes at the next `RequestLobbyList`.
+    pub fn matchmaking_interface() -> Option<usize> {
+        matchmaking()
+    }
 
     fn matchmaking() -> Option<usize> {
         let cached = MATCHMAKING.load(Ordering::SeqCst);
@@ -428,10 +521,41 @@ mod live {
         (slot != 0).then(|| unsafe { core::mem::transmute::<usize, SetLobbyDataFn>(slot) })
     }
 
+    /// The last block the game task saw, so a reader on another thread has one at all.
+    ///
+    /// `current_block_id` calls a game function that answers on the game task and did not answer
+    /// inside the lobby-query detour: run br-20260917-000642-f680 logged the heartbeat reading
+    /// `block=0x3c343500` every 600 ticks while the query on Steam's thread decided
+    /// `decision=no_centre -- no marked block and no readable current block gave a value, so the
+    /// query goes out unfiltered by accident`. The ladder therefore never narrowed to anywhere,
+    /// which is the whole of "I don't get any banners for any location".
+    ///
+    /// Zero means "never read", which is not a block id the engine uses, so there is no value to
+    /// confuse with an unset one.
+    static LAST_BLOCK: AtomicU32 = AtomicU32::new(0);
+
+    /// Record the block for readers that cannot ask the engine themselves. Game task only.
+    pub fn note_current_block() {
+        let Ok(base) = er_game_base::mem::game_module_base() else {
+            return;
+        };
+        // SAFETY: game task thread, which is the contract `current_block_id` states.
+        if let Some(raw) = unsafe { er_invasion_warp_core::warp::current_block_id(base) } {
+            LAST_BLOCK.store(raw, Ordering::SeqCst);
+        }
+    }
+
     fn current_block() -> Option<BlockKey> {
-        let base = er_game_base::mem::game_module_base().ok()?;
-        let raw = unsafe { er_invasion_warp_core::warp::current_block_id(base) }?;
-        Some(BlockKey::from_raw(raw))
+        // Ask the engine first: on the game task this is current, and the cache is only ever a
+        // frame behind it anyway.
+        if let Ok(base) = er_game_base::mem::game_module_base()
+            && let Some(raw) = unsafe { er_invasion_warp_core::warp::current_block_id(base) }
+        {
+            LAST_BLOCK.store(raw, Ordering::SeqCst);
+            return Some(BlockKey::from_raw(raw));
+        }
+        let cached = LAST_BLOCK.load(Ordering::SeqCst);
+        (cached != 0).then(|| BlockKey::from_raw(cached))
     }
 
     /// Do we own this lobby? Only an owner's `SetLobbyData` survives the server.
@@ -597,9 +721,9 @@ mod live {
     ///
     /// `SetLobbyData` returning `true` proved nothing: the non-owner write returned true and
     /// vanished. This is the direct measurement of the effect rather than the call.
-    fn published_value(iface: usize, lobby: u64) -> Option<String> {
+    fn published_value(iface: usize, lobby: u64, key_name: &str) -> Option<String> {
         let read = get_lobby_data(iface)?;
-        let key = format!("{LOBBY_MAP_KEY}\0");
+        let key = format!("{key_name}\0");
         let got = unsafe { read(iface, lobby, key.as_ptr()) };
         // Steam's return is a foreign pointer for exactly the same reason its arguments are, and
         // `is_null` is exactly the guard that let `0x011000010e05acda` into `strlen` on the
@@ -624,7 +748,18 @@ mod live {
         let Some(read) = get_lobby_data(iface) else {
             return false;
         };
-        let got = unsafe { read(iface, lobby, ADVERTISEMENT_MARKER_KEY.as_ptr()) };
+        // The key the marker was actually written under, not the constant: on Seamless 2.0.0
+        // those differ, and asking for the constant returns an empty string, which would refuse a
+        // lobby this module had already identified correctly.
+        let observed = ADVERTISEMENT_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(mut key_owned) = observed else {
+            return false;
+        };
+        key_owned.push(0);
+        let got = unsafe { read(iface, lobby, key_owned.as_ptr()) };
         // Same foreign-pointer rule as `published_value` above: fault-safe read, not a null check.
         let value = unsafe { er_game_base::mem::safe_read_cstr(got as usize, MAX_LOBBY_VALUE_LEN) };
         value.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes())
@@ -643,8 +778,27 @@ mod live {
     /// Every failure path is a silent no-op on purpose. Not being findable by location is a missing
     /// convenience; a DLL that panics or spams because Steam was not ready would be a broken game.
     pub fn publish_current_map() {
-        let Some(value) = pending_publish(current_block(), last_published().as_deref()) else {
+        // Both keys are decided before the early return, because they change at different moments
+        // and the map is the one that moves least. This used to read only the map value and
+        // return when it was unchanged, which put every lobby check -- and the effects write
+        // behind them -- behind a loading screen: a host who used the Dried Fingers standing
+        // still kept advertising `none` until they walked into another block. That is the whole window
+        // the feature exists to cover, and the doc on `publish_host_effects` claimed it was
+        // covered while this return swallowed it.
+        let pending_map = pending_publish(current_block(), last_published().as_deref());
+        let effects_value = pending_effects();
+        if pending_map.is_none() && effects_value.is_none() {
+            // Nothing to say: the block is unreadable or unchanged, and the effects are what was
+            // published last. Silent on purpose and every tick, so it cannot be logged here --
+            // the counters and the lines below are what tell the difference from outside.
             return;
+        }
+        // For the "no advertisement" line below, which needs something to name. The map value is
+        // the more useful of the two there: it says where the host nobody can see is standing.
+        let value = match (pending_map.clone(), current_block()) {
+            (Some(pending), _) => pending,
+            (None, Some(block)) => map_value(block),
+            (None, None) => "an unreadable block".to_owned(),
         };
         let Some(iface) = matchmaking() else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
@@ -655,6 +809,21 @@ mod live {
         // key was never on the lobby invaders query. `None` here means Seamless has not declared
         // an advertisement yet, which is the ordinary state until the world is opened.
         let Some(lobby) = advertisement_lobby() else {
+            // Said once, because until 2026-09-15 this was indistinguishable from not hosting at
+            // all: a host with an open world, Seamless sitting in a lobby, and
+            // advert[published=0 refused=0] -- which reads as "nothing has happened yet" when what
+            // actually happened is that the advertisement this module watches for was never seen,
+            // so no invader filtering on location can ever match this host.
+            if NO_ADVERTISEMENT_SAID.swap(true, Ordering::SeqCst) {
+                return;
+            }
+            crate::standalone_log(format_args!(
+                "lobby-publish: not advertising {value} -- Seamless has not declared an \
+                 advertisement lobby where this module watches for one. Before the world is open \
+                 that is the ordinary state; with the world open and other players able to join, \
+                 it means no invader filtering on location can see this host, and the observer on \
+                 SetLobbyData never caught the creation this session."
+            ));
             return;
         };
         // Refuse rather than write somewhere nobody queries. The struct offset that produced this
@@ -687,11 +856,47 @@ mod live {
             }
             return;
         }
+        // Two independent writes past one set of lobby checks. They share the checks because
+        // every one of those is a fact about the lobby rather than about a value, and a second
+        // copy would be a second place for them to drift; they do not share a skip, because a map
+        // that has not moved says nothing about whether an item was just used.
+        if let Some(value) = pending_map
+            && write_one_key(iface, lobby, LOBBY_MAP_KEY, &value)
+        {
+            *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+        }
+        if let Some(value) = effects_value
+            && write_one_key(iface, lobby, LOBBY_HOST_EFFECTS_KEY, &value)
+        {
+            *LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner()) = Some(value);
+        }
+    }
+
+    /// The effects value to publish, or `None` when it is what the lobby already carries.
+    ///
+    /// Asked every tick, which is two fault-closed reads and a bit test -- next to the block read
+    /// this function already does, that is not worth a cheaper schedule. Nothing else can detect
+    /// the change: the rule toggles the instant the item is used, with no loading screen and no
+    /// other event to hang a publish on.
+    fn pending_effects() -> Option<String> {
+        // `None` here is "the session could not be read", which is not the same as "no rules are
+        // on" and must not overwrite the key with `none`. See `host_effects::active_effects_value`.
+        let value = crate::host_effects::active_effects_value()?;
+        let last = LAST_EFFECTS.lock().unwrap_or_else(|e| e.into_inner());
+        (last.as_deref() != Some(value.as_str())).then_some(value)
+    }
+
+    /// Write one key, read it back, and count the result. `true` when the lobby now holds `value`.
+    ///
+    /// Read-back is not belt and braces. `SetLobbyData` returning `true` proved nothing here: the
+    /// non-owner write returned true and evaporated at the server, so a counter built on the
+    /// return value reported publishes that never happened.
+    fn write_one_key(iface: usize, lobby: u64, key_name: &str, value: &str) -> bool {
         let Some(write) = set_lobby_data(iface) else {
             REFUSALS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return false;
         };
-        let key = format!("{LOBBY_MAP_KEY}\0");
+        let key = format!("{key_name}\0");
         let payload = format!("{value}\0");
         // Our own write goes through the same vtable slot we observe, so silence the observer for
         // its duration -- otherwise publishing could be mistaken for Seamless declaring a lobby.
@@ -702,29 +907,33 @@ mod live {
             // Steam refused. Do not record it as published, or a transient failure would be
             // remembered as success and never retried.
             REFUSALS.fetch_add(1, Ordering::SeqCst);
-            return;
+            return false;
         }
-        // Read it back. `ok` is what the call said; this is what the lobby has. The non-owner
-        // write said true and left nothing behind, so the return value alone is not evidence and
-        // a counter built on it reports publishes that never happened.
-        match published_value(iface, lobby) {
-            Some(ref got) if got == &value => {
-                *LAST_PUBLISHED.lock().unwrap_or_else(|e| e.into_inner()) = Some(value.clone());
+        match published_value(iface, lobby, key_name) {
+            Some(ref got) if got == value => {
                 let n = PUBLISHES.fetch_add(1, Ordering::SeqCst) + 1;
                 crate::standalone_log(format_args!(
-                    "lobby-publish: {LOBBY_MAP_KEY} = {value} on lobby {lobby:#x} (#{n}, read back)"
+                    "lobby-publish: {key_name} = {value} on lobby {lobby:#x} (#{n}, read back)"
                 ));
+                true
             }
             other => {
                 REFUSALS.fetch_add(1, Ordering::SeqCst);
                 crate::standalone_log(format_args!(
-                    "lobby-publish: REFUSED -- wrote {LOBBY_MAP_KEY} = {value} to lobby \
+                    "lobby-publish: REFUSED -- wrote {key_name} = {value} to lobby \
                      {lobby:#x} and Steam accepted it, but reading it back gives {other:?}. The \
                      write did not stick; this host is NOT findable by location."
                 ));
+                false
             }
         }
     }
+
+    /// The effects value last written, so an unchanged answer costs no Steam call.
+    ///
+    /// Separate from `LAST_PUBLISHED` because the two change at different moments: the map value
+    /// moves when the host walks through a loading screen, this one when they use an item.
+    static LAST_EFFECTS: Mutex<Option<String>> = Mutex::new(None);
 
     fn last_published() -> Option<String> {
         LAST_PUBLISHED
@@ -766,6 +975,13 @@ mod live {
     /// the advertisement, by writing the marker to it; watching that write is definitional rather
     /// than inferential, and it needs no offset, no ownership reasoning, and no candidate probing.
     static ADVERTISEMENT_LOBBY: AtomicU64 = AtomicU64::new(0);
+    /// The key the marker arrived under, kept so the read-back can ask for the same one.
+    ///
+    /// Seamless 2.0.0 hashes its lobby-data key names, so the constant this module used to read
+    /// with (`lobby_type`) returns nothing there and the verification would refuse a lobby it had
+    /// just correctly identified. Captured from the write rather than assumed, which also means a
+    /// build that hashes it differently needs no change here.
+    static ADVERTISEMENT_KEY: Mutex<Option<Vec<u8>>> = Mutex::new(None);
     /// Suppresses our own `SetLobbyData` calls in the observer, so publishing our key can never be
     /// mistaken for Seamless declaring an advertisement.
     static IN_OUR_OWN_WRITE: AtomicBool = AtomicBool::new(false);
@@ -786,6 +1002,49 @@ mod live {
     static MATCHMAKING_DECLINE_LOGGED: AtomicBool = AtomicBool::new(false);
     static SET_HOOK_LIVE: AtomicUsize = AtomicUsize::new(0);
 
+    /// How many of Seamless's own lobby writes to print before going quiet.
+    ///
+    /// Seven is what a host's creation burst was measured at, so this covers one whole
+    /// advertisement and then stops rather than following the session forever.
+    const OBSERVED_WRITE_BUDGET: usize = 12;
+    /// How many have been printed.
+    static OBSERVED_WRITES: AtomicUsize = AtomicUsize::new(0);
+
+    /// Render bytes Seamless wrote, exactly as they are.
+    fn show(bytes: Option<&[u8]>) -> String {
+        let Some(bytes) = bytes else {
+            return "<unreadable>".to_owned();
+        };
+        // These are Seamless's bytes and the point of the line is to show what they are. A write
+        // that is not valid UTF-8 is itself the finding, so it must be printed rather than
+        // dropped, which is what strict decoding would do at the moment it matters most.
+        // UTF-8 Lossy: shown as written, never rejected.
+        String::from_utf8_lossy(bytes).into_owned()
+    }
+
+    /// Print the key and value Seamless just wrote, for as long as the budget lasts.
+    ///
+    /// The observer matched on one exact pair and said nothing about anything else, so a session
+    /// where the pair never arrived was indistinguishable from a session where Seamless never
+    /// wrote at all -- and both end as `advert[published=0 refused=0]`, which reads as "nothing
+    /// has happened yet". Measured 2026-09-15 on a host with an open world and a co-op partner
+    /// connected: no advertisement lobby was ever latched, and the installed `ersc.dll` contains
+    /// neither `lobby_type` nor `yknx3_seamless_master_lobby` as plain strings, so the pair this
+    /// module waits for cannot be confirmed from the binary either. What Seamless actually writes
+    /// is therefore the one missing fact, and only the hook can supply it.
+    fn report_observed_write(lobby: u64, key: Option<&[u8]>, value: usize) {
+        if OBSERVED_WRITES.fetch_add(1, Ordering::SeqCst) >= OBSERVED_WRITE_BUDGET {
+            return;
+        }
+        let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) };
+        let shown_key = show(key);
+        let shown_value = show(value_bytes.as_deref());
+        crate::standalone_log(format_args!(
+            "lobby-publish: observed Seamless write lobby={lobby:#x} key={shown_key:?} \
+             value={shown_value:?}"
+        ));
+    }
+
     /// Watch Seamless declare its advertisement lobby. Observation only: every call is passed
     /// straight through, nothing is altered, and our own writes are ignored.
     unsafe extern "system" fn set_lobby_data_hook(
@@ -805,13 +1064,31 @@ mod live {
         // half of the same bug.
         if !IN_OUR_OWN_WRITE.load(Ordering::SeqCst) {
             let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) };
-            if key_bytes.as_deref()
-                == Some(ADVERTISEMENT_MARKER_KEY.trim_end_matches('\0').as_bytes())
+            report_observed_write(lobby as u64, key_bytes.as_deref(), value);
+            // Matched on the value alone, because the key is not stable across Seamless builds.
+            //
+            // This tested `key == "lobby_type"` until 2026-09-15, and on the installed 2.0.0 build
+            // that key does not exist: Seamless hashes most of its lobby-data key names, and the
+            // marker arrives as
+            //   key="700f7f504eb977a3c7899037923afe28083a7361b5fde7b098a76d8666bb0376"
+            //   value="yknx3_seamless_master_lobby"
+            // captured live from this hook. The old test therefore never fired, no advertisement
+            // lobby was ever latched, and a host with an open world published nothing at all while
+            // reporting advert[published=0 refused=0] -- which reads as "not hosting yet".
+            //
+            // The value is the half worth matching anyway: it is Seamless's own name for what the
+            // lobby is, while the key is just where it filed it. A build that hashes the value too
+            // would break this again, and would be caught the same way -- the observed-write lines
+            // above print every pair.
             {
                 let value_bytes =
                     unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) };
                 if value_bytes.as_deref() == Some(ADVERTISEMENT_MARKER_VALUE.as_bytes()) {
                     let lobby = lobby as u64;
+                    if let Some(bytes) = key_bytes.as_deref() {
+                        *ADVERTISEMENT_KEY.lock().unwrap_or_else(|e| e.into_inner()) =
+                            Some(bytes.to_vec());
+                    }
                     let previous = ADVERTISEMENT_LOBBY.swap(lobby, Ordering::SeqCst);
                     if previous != lobby {
                         // A new advertisement lobby means whatever we published before is on a
@@ -896,6 +1173,59 @@ mod live {
             ));
         }
         std::ffi::CString::new(pooled).ok()
+    }
+
+    /// Seamless's own `lobby_key` for this session, learned without touching `ersc.dll`.
+    ///
+    /// # Why this is not read from Seamless's builder
+    ///
+    /// The value is computed inside `ersc.dll` at `ersc+0xad6e0`, and detouring it works exactly
+    /// once: run `br-20260917-222254-be6f` armed that hook and the game died 33 seconds later with
+    /// `STATUS_ILLEGAL_INSTRUCTION` at `eldenring.exe+0x10043`, Seamless's anti-tamper fault site.
+    /// So the key is taken from where Seamless hands it to Steam instead, through the two
+    /// `lsteamclient` vtable detours this module already installs and which have never faulted.
+    ///
+    /// Two sources, in order, because they fill at different moments:
+    ///
+    /// 1. [`VANILLA_LOBBY_KEY`], recorded by [`pooled_key_for`] on the way through either
+    ///    `SetLobbyData` (publishing, once at lobby creation) or
+    ///    `AddRequestLobbyListStringFilter` (searching, every time Seamless queries). The search
+    ///    half is what makes this usable by an invader rather than only by a host.
+    /// 2. The value currently published on the advertisement lobby, read straight back out of
+    ///    Steam. This covers the case the first cannot: a lobby created before our observers were
+    ///    installed, which leaves nothing recorded and a live key sitting on the lobby.
+    ///
+    /// The answer is the value a query of ours must filter on, so the pool substitution is already
+    /// applied -- source 1 is Seamless's untouched key and gets the transform here, source 2 is
+    /// read back from the lobby and therefore carries it already. `add_string_filter_hook` leaves
+    /// our own queries alone for that reason; see [`own_query_in_flight`].
+    #[must_use]
+    pub fn seamless_match_key() -> Option<String> {
+        let recorded = VANILLA_LOBBY_KEY
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(vanilla) = recorded {
+            return Some(key_for_our_own_query(&vanilla));
+        }
+        let iface = matchmaking()?;
+        let lobby = advertisement_lobby()?;
+        let published = published_value(iface, lobby, LOBBY_KEY_NAME)?;
+        // An absent key reads back as the empty string, and filtering on it would ask Steam for a
+        // pool nobody is in -- which is the one answer here that must never be invented.
+        (!published.is_empty()).then_some(published)
+    }
+
+    /// Put Seamless's untouched key into whichever pool this player's own searches are in.
+    ///
+    /// Identical to what [`pooled_key_for`] does to Seamless's filter on its way past, so the two
+    /// searches cannot end up asking about different populations.
+    fn key_for_our_own_query(vanilla: &str) -> String {
+        crate::local_invasion_filter::current_config_snapshot()
+            .and_then(|config| {
+                er_invasion_warp_core::lobby_pool::pooled_lobby_key(config.dll_users_only, vanilla)
+            })
+            .unwrap_or_else(|| vanilla.to_owned())
     }
 
     /// Move an existing advertisement into or out of the DLL pool when the option is toggled.
@@ -986,7 +1316,12 @@ mod live {
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
-        let substituted = pooled_key_for(key, value);
+        // Our own queries carry the finished value already -- `seamless_match_key` applied the
+        // pool transform when it handed the key over. Substituting again would hash an
+        // already-hashed key and put our search in a pool of one.
+        let substituted = (!own_query_in_flight())
+            .then(|| pooled_key_for(key, value))
+            .flatten();
         let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
         let orig = ORIG_ADD_STRING_FILTER.load(Ordering::SeqCst);
         if orig == 0 {
@@ -1145,10 +1480,43 @@ mod live {
         c: usize,
         d: usize,
     ) -> usize {
+        // Our own query, on our own thread, carrying the filters it was built with.
+        //
+        // This detour is installed at the method's entry rather than on the vtable pointer, so it
+        // catches every caller of `RequestLobbyList` in the process -- the flat export
+        // `lobby_preflight` calls included. Without this check the existence query would go out
+        // carrying `er_invasion_warp_map != ""` and `er_invasion_warp_map == <some tile>` at once,
+        // which measures the tile and reports it as the answer to a question about everywhere. It
+        // is not an ERSC frame either, so the callback scope below must not be entered for it.
+        if own_query_in_flight() {
+            let orig = ORIG_REQUEST_LOBBY_LIST.load(Ordering::SeqCst);
+            if orig == 0 {
+                return 0;
+            }
+            return unsafe {
+                core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, b, c, d)
+            };
+        }
         // ERSC calls this slot, so a frame of ours reached from here is a frame ERSC entered. The
         // scope tells `ersc_action` to decline for as long as it lives, which keeps this module
         // from calling back into ersc.dll with whatever state that call left behind.
         let _ersc = crate::local_invasion_filter::lock_report::enter_ersc_callback();
+        // Filters accumulate on the interface singleton and the next request consumes every one of
+        // them, whoever wrote it. Two threads staging at once do not produce two narrowed queries;
+        // they produce one carrying both sets and one carrying none. Held across the staging and
+        // the request it belongs to, on both sides of that race.
+        let _staging = lock_query_staging();
+        // Said on the first call, because "the detour is live" and "the detour never ran" are
+        // indistinguishable without it. Run br-20260916-014906-00bd reported
+        // `oracle_invasion_warp_hunt_hooked = true` with `hunt_filters = 0` and no refusal line,
+        // which could mean Seamless never asks Steam for a lobby list during an invasion search,
+        // or that it asks and `hunt_target` declines without a word. Those want opposite fixes.
+        let hits = REQUESTS_SEEN.fetch_add(1, Ordering::SeqCst) + 1;
+        if hits == 1 {
+            crate::standalone_log(format_args!(
+                "hunt: RequestLobbyList reached our detour for the first time -- so Seamless does                  ask Steam through this slot, and anything the ladder decides can reach the query."
+            ));
+        }
         if let Some(value) = hunt_target()
             && let Some(add) = add_string_filter(iface)
         {
@@ -1164,9 +1532,27 @@ mod live {
             };
             let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
             if n == 1 {
+                // The flag is printed at the decision, not only at config load, because the two
+                // disagreed and nothing could say which config this read.
+                //
+                // Run br-20260916-083935-5990: `config loaded ... search_by_location=false
+                // ... blocks=0` on its only config-load line, and then this filter went out
+                // anyway, narrowing the query to `m60_52_53_00`. Both gates below it return
+                // `None` on `enabled == false`, so the snapshot this path saw cannot have been
+                // the one that was logged -- and with no flag here there is no way to tell a
+                // stale snapshot from a reload nobody printed. That run then reported "3 connects
+                // in a row have died at the deadline with hunt on", which is the cost: the filter
+                // restricts results to hosts running this DLL, so no join can land.
+                let flag = crate::local_invasion_filter::current_config_snapshot().map_or(
+                    "<no snapshot>",
+                    |config| if config.hunt { "true" } else { "false" },
+                );
                 crate::standalone_log(format_args!(
-                    "hunt: asking Steam for hosts at {value} only (#{n}) -- hosts without this \
-                         DLL do not publish the key and will not be returned"
+                    "hunt: asking Steam for hosts at {value} only (#{n}), \
+                     search_by_location={flag} at this call -- hosts without this DLL do not \
+                     publish the key and will not be returned. If that flag reads false, this \
+                     filter should not have gone out and the query was narrowed against the \
+                     user's settings."
                 ));
             }
         }
@@ -1177,6 +1563,51 @@ mod live {
         unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, b, c, d) }
     }
 
+    /// Held from the first filter written onto the matchmaking interface until the request that
+    /// consumes them.
+    static QUERY_STAGING: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        /// Set while this thread is building and sending a query of this mod's own.
+        static OWN_QUERY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn lock_query_staging() -> std::sync::MutexGuard<'static, ()> {
+        match QUERY_STAGING.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
+    /// Whether this thread is inside a query of our own.
+    #[must_use]
+    pub fn own_query_in_flight() -> bool {
+        OWN_QUERY.with(std::cell::Cell::get)
+    }
+
+    /// Claim the matchmaking interface for a query of our own, for as long as the guard lives.
+    ///
+    /// Two things at once, because they are the two halves of the same hazard: the staging lock
+    /// keeps Seamless's request from consuming filters we wrote, and the thread flag keeps our own
+    /// request from being narrowed by our own detour.
+    #[must_use]
+    pub fn stage_own_query() -> OwnQuery {
+        let lock = lock_query_staging();
+        OWN_QUERY.with(|flag| flag.set(true));
+        OwnQuery { _lock: lock }
+    }
+
+    /// The guard [`stage_own_query`] hands back. Dropping it releases both halves.
+    pub struct OwnQuery {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for OwnQuery {
+        fn drop(&mut self) {
+            OWN_QUERY.with(|flag| flag.set(false));
+        }
+    }
+
     fn add_string_filter(iface: usize) -> Option<AddStringFilterFn> {
         let vtable = unsafe { er_game_base::mem::safe_read_usize(iface) }?;
         let slot = unsafe {
@@ -1185,8 +1616,127 @@ mod live {
         (slot != 0).then(|| unsafe { core::mem::transmute::<usize, AddStringFilterFn>(slot) })
     }
 
-    /// The one location to ask for, or `None` to leave the query alone.
+    /// The ring this search is walking, and where it has got to.
+    ///
+    /// Keyed by the tile it was anchored at, so walking into a new tile restarts the search there
+    /// rather than continuing a ring drawn around somewhere the player has left.
+    static SEARCH: Mutex<Option<(u32, er_invasion_warp_core::search_ring::SearchRing)>> =
+        Mutex::new(None);
+
+    /// Whether the "asking for everywhere" line has been said for the current ring.
+    ///
+    /// The escalation is re-derived on every query round, so without this the same sentence is
+    /// written to the log roughly every fifteen seconds for as long as the search runs -- which
+    /// is what run br-20260915-173121-1941 did, burying the one line that mattered under copies
+    /// of itself. Cleared whenever the ring yields a step, so a ring that starts moving again can
+    /// report its next exhaustion.
+    static EVERYWHERE_SAID: AtomicU8 = AtomicU8::new(0);
+
+    /// How many times `RequestLobbyList` has reached our detour, filtered or not.
+    static REQUESTS_SEEN: AtomicUsize = AtomicUsize::new(0);
+
+    /// Whether the "nothing to ask for" line has been said.
+    static HUNT_NO_CENTRE_SAID: AtomicU8 = AtomicU8::new(0);
+
+    /// Whether the pre-flight skip has been explained.
+    static PREFLIGHT_SKIP_SAID: AtomicU8 = AtomicU8::new(0);
+
+    /// The location this query round should ask for, or `None` to leave the query alone.
+    ///
+    /// `None` carries two different meanings and both are correct here: hunt is off or cannot
+    /// express what was asked (the refusal path below says which), or the ring is exhausted and
+    /// the player asked to search everywhere once it was. The second is the ladder's last rung --
+    /// an unfiltered query returns the whole population again, vanilla hosts included, and the
+    /// reject filter takes over deciding where you land.
+    static NEAR_AND_FAR_UNFILTERED_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    /// Whether the sweep's hit has been reported.
+    static SWEEP_HIT_SAID: AtomicUsize = AtomicUsize::new(0);
+
     fn hunt_target() -> Option<String> {
+        // `Both near and far` asks Steam for everyone, so it gets no location filter at all.
+        //
+        // The row's whole contract is that the search stops being near: it hands off to the
+        // Challenger's Lynchpin and lets Seamless's own matchmaking run. Narrowing that query to a
+        // map tile is the opposite of it, and the captured filters showed exactly that going out --
+        // `er_invasion_warp_map=m60_52_53_00` beside Seamless's own four keys, on a search that
+        // then found nobody in ninety seconds.
+        //
+        // `Nearby only` still narrows, because narrowing is what that row is for.
+        // Which branch decided is reported, because two of them produce an unfiltered query for
+        // opposite reasons and the log could not tell them apart.
+        //
+        // Run br-20260916-100817-3fe0 printed "no location to ask for -- ... the query goes out
+        // unfiltered", which is the `no_centre` branch, not this one. So the query was unfiltered by
+        // accident rather than by the `Both near and far` rule, and `Nearby only` would take the
+        // same path and silently lose the block filtering that row exists for. A reason is not
+        // interchangeable with the outcome it happens to share.
+        let reach_is_near_and_far = crate::local_invasion_filter::finger_reach_is_near_and_far();
+        // The neighbourhood sweep asked every nearby place directly, so its answer outranks the
+        // ring's rotation.
+        //
+        // `Both near and far` used to return here unconditionally, unfiltered from its first
+        // round, on the reasoning that the row's contract is to stop being near. That reading
+        // deleted the near half: the row is two phases, and the player watched the first one
+        // never happen and the second one never announce itself. "Once I exhaust all nearby
+        // locations when doing near+far, I don't transition into a seamless invasion scheme."
+        // Both halves are now real, and the sweep is what separates them.
+        match crate::lobby_preflight::nearby() {
+            crate::lobby_preflight::Nearby::Found(block) => {
+                if SWEEP_HIT_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "hunt: decision=sweep_hit -- a nearby place answered with a host in it, \
+                         so this query asks for that one rather than continuing the rotation. \
+                         Printed once."
+                    ));
+                }
+                return Some(map_value(BlockKey::from_raw(block)));
+            }
+            // The far half. Every nearby place was asked and none of them had anybody, so the
+            // location filter comes off for good: the detour adds nothing, the query goes out
+            // exactly as Seamless built it, and the whole population answers it. `Nearby only`
+            // does not take this branch -- staying near is the entire point of that row.
+            crate::lobby_preflight::Nearby::Empty(asked) if reach_is_near_and_far => {
+                if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "hunt: decision=near_and_far_after_sweep -- all {asked} nearby place(s) \
+                         answered zero, so the near half of `Both near and far` is over and this \
+                         query goes out with no filter of ours at all. Printed once."
+                    ));
+                }
+                return None;
+            }
+            _ => {}
+        }
+        // Nobody anywhere publishes a block id, so narrowing to one can only return nothing.
+        //
+        // The ring is up to 49 queries at radius three and every one of them is guaranteed empty
+        // in that case. `lobby_preflight` answers it with a single query built on
+        // `k_ELobbyComparisonNotEqual` against the empty string, and its header carries the two
+        // controls that make a zero mean "the set is empty" rather than "the filter matches
+        // nothing". `Unknown` deliberately does not take this branch: a search armed a frame
+        // before the answer lands must not skip its own ring on no evidence.
+        //
+        // `Nearby only` is excluded for the same reason it is excluded from the sweep-exhausted
+        // branch above: an unfiltered query is not a cheaper way to search nearby, it is a search
+        // of everywhere. Measured on run `br-20260917-183537-0445` -- a Bloody Finger pressed with
+        // `Nearby only` from block `0x3d302d00` took this branch and Seamless matched
+        // `0x0a000000`, a different map, which is what the player saw. That row keeps its filter
+        // and falls through to the narrowing path below; the query it produces returns nothing,
+        // which is the truthful answer to "is anybody hosting nearby" when nobody publishes at all.
+        if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes
+            && !crate::local_invasion_filter::finger_reach_is_nearby_only()
+        {
+            if PREFLIGHT_SKIP_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "hunt: decision=nobody_publishes -- the pre-flight query found no host \
+                     anywhere carrying `{LOBBY_MAP_KEY}`, so the ring would be empty at every \
+                     step. This query goes out with Seamless's own shape and no location filter. \
+                     `Nearby only` does not reach here. Printed once."
+                ));
+            }
+            return None;
+        }
         let config = crate::local_invasion_filter::current_config_snapshot()?;
         let marked: Vec<u32> = config.allowed_blocks.iter().copied().collect();
         // Exclusions bind hunt as well as the reject filter. Reading only the marked list let the
@@ -1198,7 +1748,268 @@ mod live {
             }
             return None;
         }
-        hunt_filter_value(config.hunt, &marked, &excluded, current_block())
+        let Some(centre) = hunt_filter_value(config.hunt, &marked, &excluded, current_block())
+        else {
+            // The refusal above explains every case it recognises; this is what is left, and it
+            // used to be a bare `?` that left the query unfiltered without a word.
+            if HUNT_NO_CENTRE_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "hunt: decision=no_centre -- hunt is on and nothing refused it, but no marked \
+                     block and no readable current block gave a value, so the query goes out \
+                     unfiltered by accident. `Nearby only` reaching this is a bug: that row is \
+                     supposed to narrow. Printed once."
+                ));
+            }
+            return None;
+        };
+        if config.prefilter_radius == 0 {
+            return Some(centre);
+        }
+        let Some(here) = current_block() else {
+            // No readable block means no ring to draw; the single-tile value still stands.
+            return Some(centre);
+        };
+        match peek_ring(
+            here,
+            config.prefilter_radius,
+            config.search_everywhere_when_exhausted,
+        ) {
+            RingStep::Ask(value) => Some(value),
+            // The ladder's last rung. Returning `None` here is the whole mechanism: the caller
+            // adds no string filter, so the query goes out unfiltered and the entire population
+            // comes back.
+            RingStep::Everywhere => None,
+            // The ring could not be built or read. That is not the player asking for everywhere,
+            // so it falls back to the single tile rather than widening to a population nobody
+            // asked for.
+            RingStep::Unavailable => Some(centre),
+        }
+    }
+
+    /// What one round of the widening search should ask Steam for.
+    ///
+    /// This exists because the two ways of not naming a tile are opposites and were both spelled
+    /// `None`. `advance_ring` returned `None` to mean "drop the filter, ask everywhere", and
+    /// `hunt_target` ended in `.or(Some(centre))` -- written for the case where no ring could be
+    /// built, and swallowing the deliberate one as well. So the everywhere rung announced itself
+    /// on screen and in the log and then put the filter straight back on the player's own tile:
+    /// run br-20260915-173522-e76b said "looking everywhere instead" and went on asking for
+    /// `m11_05_00_00` for 33 consecutive connects, every one of them dying at the deadline
+    /// against a pool of stale entries. An enum cannot be collapsed by an `.or`.
+    #[derive(Clone)]
+    enum RingStep {
+        /// Ask for this location.
+        Ask(String),
+        /// Add no filter at all -- the ring is spent and the player opted into everywhere.
+        Everywhere,
+        /// No ring could be built or read; the caller decides what to fall back to.
+        Unavailable,
+    }
+
+    /// Take the next tile of the widening search, announcing each step.
+    ///
+    /// Returns `None` only when the ring is spent and the player opted into searching everywhere;
+    /// every other path yields a tile. A spent ring with that option off keeps asking for the last
+    /// tile rather than silently reverting to an unfiltered query, because reverting would widen
+    /// the search to a population the player did not ask for.
+    fn advance_ring(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> RingStep {
+        /// One rung, taken while the ring's lock is held and acted on after it is dropped.
+        enum Taken {
+            Step(er_invasion_warp_core::search_ring::Step),
+            Spent(usize),
+            Stuck,
+        }
+        // The lock is scoped, and that scope is load-bearing. Everything below it calls into the
+        // game -- a place name reads the engine's message repository, the banner draws on the
+        // game's own announcement surface -- and this used to run with `SEARCH` still held. That
+        // was survivable only while one thread ever took it. It stopped being survivable the
+        // moment the popup detour began restarting the ladder from the menu thread: the game task
+        // held `SEARCH` inside a game call the menu thread had to service, and the menu thread was
+        // sitting on `SEARCH.lock()`. Hard lock, reported on the first Nearby Only press.
+        let taken = {
+            let Ok(mut guard) = SEARCH.lock() else {
+                return RingStep::Unavailable;
+            };
+            let restart = guard
+                .as_ref()
+                .is_none_or(|(anchor, _)| *anchor != here.raw());
+            if restart {
+                *guard = Some((
+                    here.raw(),
+                    er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
+                ));
+            }
+            let Some((_, ring)) = guard.as_mut() else {
+                return RingStep::Unavailable;
+            };
+            match ring.advance() {
+                Some(step) => Taken::Step(step),
+                // `nearby` separates the two ways a ring runs out, and they are not the same
+                // news. A spent 48-tile ring means the neighbourhood is empty. A ring of one
+                // tile means the player is somewhere with no grid neighbours at all -- a legacy
+                // dungeon, whose block id encodes a dungeon and a floor rather than a position
+                // -- so the radius they set could never have applied and the search widened on
+                // its first round. Run br-20260915-173121-1941 was the second case, in
+                // `m11_05_00_00`, and the log's single undifferentiated sentence is why it read
+                // as the escalation never happening.
+                None if everywhere => Taken::Spent(ring.len().saturating_sub(1)),
+                None => {
+                    // Nearby-only, and the neighbourhood is spent. Going round again keeps the
+                    // search inside the radius the player asked for and keeps it audible; the old
+                    // behaviour re-asked for the same tile forever, so the banner fell silent and
+                    // a search still grinding away looked exactly like one that had died.
+                    ring.rewind();
+                    match ring.advance() {
+                        Some(step) => Taken::Step(step),
+                        None => Taken::Stuck,
+                    }
+                }
+            }
+        };
+        let step = match taken {
+            Taken::Stuck => return RingStep::Ask(map_value(here)),
+            Taken::Spent(nearby) => {
+                if EVERYWHERE_SAID.swap(1, Ordering::SeqCst) == 0 {
+                    crate::standalone_log(format_args!(
+                        "prefilter: the ring is spent ({nearby} nearby location(s) tried) -- \
+                         dropping the location filter and asking for everywhere. Every query \
+                         round from here asks the same unfiltered question, so this is said once."
+                    ));
+                }
+                let notice = crate::local_invasion_filter::current_config_snapshot()
+                    .is_none_or(|config| config.reject_notice);
+                // `mod_only` is `hunt`: the widened query drops the location key and keeps the
+                // one only this build's hosts publish, so "everywhere" still means "everyone
+                // running this mod" and the banner has to say so.
+                let mod_only = crate::local_invasion_filter::current_config_snapshot()
+                    .is_some_and(|config| config.hunt);
+                crate::local_invasion_filter::banner::announce_search_everywhere(
+                    notice, nearby, mod_only,
+                );
+                return RingStep::Everywhere;
+            }
+            Taken::Step(step) => step,
+        };
+        // A step means the ring is moving again, so the next exhaustion is fresh news.
+        EVERYWHERE_SAID.store(0, Ordering::SeqCst);
+        // Counted out loud on purpose. A rotation that says nothing makes "no invasions found"
+        // ambiguous: the player cannot tell an empty ring from one with tiles left to try.
+        crate::standalone_log(format_args!(
+            "prefilter: asking for {} ({} of {})",
+            map_value(step.block),
+            step.ordinal,
+            step.total
+        ));
+        // The log is for us; this is for the player. Gated on the same option as every other
+        // banner, so somebody who turned notices off does not start getting them because they
+        // widened their search.
+        let notice = crate::local_invasion_filter::current_config_snapshot()
+            .is_none_or(|config| config.reject_notice);
+        crate::local_invasion_filter::banner::announce_prefilter_step(
+            notice,
+            step.block.raw(),
+            step.ordinal,
+            step.total,
+        );
+        RingStep::Ask(map_value(step.block))
+    }
+
+    /// Where the ladder points, with the tile it was anchored at.
+    ///
+    /// The Steam query and the attempt loop want opposite things from the ring, and until now both
+    /// called `advance`: the query runs several times per attempt, so the search widened at the
+    /// rate Steam happened to be asked rather than at the rate attempts failed. This holds the
+    /// answer so the query can read it, and leaves moving it to `advance_search_place`.
+    ///
+    /// `Everywhere` has to survive in here rather than be re-derived from the ring, because
+    /// `SearchRing::exhausted` is already true the moment the last tile is handed out -- the ring
+    /// alone cannot tell "asking for the final tile" from "past the end, asking for everywhere".
+    static CURRENT_RUNG: Mutex<Option<(u32, RingStep)>> = Mutex::new(None);
+
+    /// Take the next place and remember it, so later queries ask for it without moving on.
+    fn take_next_place(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> RingStep {
+        let step = advance_ring(here, radius, everywhere);
+        if !matches!(step, RingStep::Unavailable)
+            && let Ok(mut guard) = CURRENT_RUNG.lock()
+        {
+            *guard = Some((here.raw(), step.clone()));
+        }
+        step
+    }
+
+    /// Where this query round should ask, without moving the ladder on.
+    ///
+    /// Takes the first rung itself when nothing has been taken, so a fresh search opens filtered
+    /// to where the player stands. A different anchor means they walked into a new tile, which is
+    /// a new search: continuing the old ring would keep asking about a neighbourhood they left.
+    fn peek_ring(
+        here: er_invasion_warp_core::invasion_warp::BlockKey,
+        radius: u8,
+        everywhere: bool,
+    ) -> RingStep {
+        if let Ok(guard) = CURRENT_RUNG.lock()
+            && let Some((anchor, step)) = guard.as_ref()
+            && *anchor == here.raw()
+        {
+            return step.clone();
+        }
+        take_next_place(here, radius, everywhere)
+    }
+
+    /// Move the search to the next place, because the attempt at this one found nobody.
+    ///
+    /// Called when an attempt ends, which is what makes the ladder visible: one attempt ends, one
+    /// rung moves, one banner names where the search went. The player saw a single notice per use
+    /// of the item and nothing for the forty-six restarts that followed, and this is why -- the
+    /// rung only ever moved inside a Steam detour that was not firing during the search.
+    ///
+    /// Silent when hunt is off, when no block is readable, or when the radius is zero: all three
+    /// mean there is no ladder to climb.
+    pub fn advance_search_place() {
+        let Some(config) = crate::local_invasion_filter::current_config_snapshot() else {
+            return;
+        };
+        if !config.hunt || config.prefilter_radius == 0 {
+            return;
+        }
+        let Some(here) = current_block() else {
+            return;
+        };
+        take_next_place(
+            here,
+            config.prefilter_radius,
+            config.search_everywhere_when_exhausted,
+        );
+    }
+
+    /// Begin the ladder again at the player's own tile, for a search that has just been armed.
+    ///
+    /// Without this, using the item a second time resumes the ring wherever the last search
+    /// abandoned it: the player would be told a search was starting and then watch it ask about
+    /// somewhere twenty tiles away.
+    pub fn restart_search_ladder() {
+        if let Ok(mut guard) = CURRENT_RUNG.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = SEARCH.lock()
+            && let Some((_, ring)) = guard.as_mut()
+        {
+            ring.rewind();
+        }
+        EVERYWHERE_SAID.store(0, Ordering::SeqCst);
+        // A new search gets to report its own decisions. Without this the second use of the item
+        // runs a whole search whose log says nothing, because every line it would write was
+        // already written by the first one.
+        NEAR_AND_FAR_UNFILTERED_SAID.store(0, Ordering::SeqCst);
+        SWEEP_HIT_SAID.store(0, Ordering::SeqCst);
     }
 
     /// Install the query-narrowing hook. Idempotent; only ever called when hunt is configured on.
@@ -1262,14 +2073,46 @@ mod live {
             FILTERS_ADDED.load(Ordering::SeqCst),
         )
     }
+
+    /// `(the detour is live, queries Seamless actually sent)`.
+    ///
+    /// Deliberately not the same pair as [`hunt_tally`], whose second number counts the queries
+    /// this module narrowed. A search running with the ladder off narrows nothing and would read
+    /// zero there while Seamless asks Steam perfectly well, so one cannot stand in for the other.
+    ///
+    /// What this pair is for: deciding whether a session sitting at `state_searching` is a search
+    /// at all. `ersc+0x25850` is nine instructions -- take the session lock, return unless the
+    /// state reads idle, store `0x0e`, unlock -- so the state is a request, not a search, and only
+    /// a query going out says the request was picked up. The first element is what makes a zero
+    /// readable: with the detour not live, zero means nobody is counting.
+    #[must_use]
+    pub fn hunt_requests() -> (bool, usize) {
+        (
+            HUNT_HOOK_LIVE.load(Ordering::SeqCst) != 0,
+            REQUESTS_SEEN.load(Ordering::SeqCst),
+        )
+    }
 }
 
 #[cfg(windows)]
 pub use live::{
-    advertisement_lobby, hunt_tally, install_advertisement_observer, install_hunt_hook,
-    install_pool_filter_hook, persona_name, publish_current_map, reapply_pool_if_toggled,
-    report_persona_plumbing_once, tally,
+    LOBBY_KEY_NAME, advance_search_place, advertisement_key, advertisement_lobby, hunt_requests,
+    hunt_tally, install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
+    matchmaking_interface, note_current_block, persona_name, publish_current_map,
+    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder,
+    seamless_match_key, stage_own_query, tallies as publish_tallies, tally,
 };
+
+/// Host-target stand-in, so `local_invasion_filter` compiles under `cargo test` on Linux.
+///
+/// `false` for the detour is the honest answer off Windows and the one that makes the caller safe:
+/// its contract is that a zero count means nothing when nobody is counting, so every judgement
+/// that depends on this declines rather than acting on a count that was never taken.
+#[cfg(not(windows))]
+#[must_use]
+pub fn hunt_requests() -> (bool, usize) {
+    (false, 0)
+}
 
 #[cfg(test)]
 mod tests {

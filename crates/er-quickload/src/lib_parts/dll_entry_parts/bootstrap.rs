@@ -191,6 +191,12 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         append_crash_log: crate::telemetry::append_crash_log,
         game_main_window: game_main_window_handle_usize,
         os_native_picker_active: crate::experiments::os_native_picker_active,
+        // The Seamless flavor of the extension filter. Without this the seam falls to
+        // `QuitMenuHost::defaults()`, whose `default_seamless` answers false, so the System >
+        // Quit browse surface offered `.sl2` alone and a Seamless `.co2` container was dropped
+        // from the listing silently. `SavePickerHost` above already wires the same fn.
+        save_picker_seamless_mode_after_settle:
+            crate::experiments::save_picker_seamless_mode_after_settle,
         windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
         system_dialog_from_action_obj: system_dialog_from_action_obj_usize,
         // Three fields below belong to the cloned rows. With those off the struct update at the

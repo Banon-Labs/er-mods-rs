@@ -20,31 +20,31 @@
 #![cfg_attr(not(windows), allow(dead_code))]
 
 /// `BYTE[256]` -- the DIK table filled by a keyboard `GetDeviceState`.
-pub(crate) const KEYBOARD_STATE_BYTES: usize = 256;
+pub const KEYBOARD_STATE_BYTES: usize = 256;
 
 /// Is this state buffer the keyboard's DIK table?
 ///
 /// Exact, not `>=`: `DIJOYSTATE2` is 272 bytes and would pass a lower bound while containing
 /// axis and POV data at the offsets we would read as arrow keys.
-pub(crate) fn is_keyboard_state(size: u32) -> bool {
+pub fn is_keyboard_state(size: u32) -> bool {
     size as usize == KEYBOARD_STATE_BYTES
 }
 
 /// `DIMOUSESTATE` -- three `LONG` axes then `BYTE rgbButtons[4]`.
-pub(crate) const MOUSE_STATE_BYTES: usize = 16;
+pub const MOUSE_STATE_BYTES: usize = 16;
 
 /// `DIMOUSESTATE2` -- the same axes then `BYTE rgbButtons[8]`.
-pub(crate) const MOUSE_STATE2_BYTES: usize = 20;
+pub const MOUSE_STATE2_BYTES: usize = 20;
 
 /// Offset of `rgbButtons[0]` (left button) in both mouse state structures: it follows the three
 /// 4-byte axes, which is the one field both layouts share.
-pub(crate) const MOUSE_BUTTON0_OFFSET: usize = 12;
+pub const MOUSE_BUTTON0_OFFSET: usize = 12;
 
 /// Is this state buffer a mouse read?
 ///
 /// Exact sizes again, for the same reason: a lower bound would let `DIJOYSTATE`'s axis bytes be
 /// rewritten as if they were mouse buttons.
-pub(crate) fn is_mouse_state(size: u32) -> bool {
+pub fn is_mouse_state(size: u32) -> bool {
     matches!(size as usize, MOUSE_STATE_BYTES | MOUSE_STATE2_BYTES)
 }
 

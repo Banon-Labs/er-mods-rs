@@ -7,9 +7,9 @@ Two roles. They need different things, and the host's side is the easy one.
 **Configure nothing.** Load the DLL and play.
 
 The DLL publishes your current map onto your Steam lobby every tick, and that path reads no
-config at all -- it is not gated on `enabled`, not gated on `hunt`, and it does not need the
-`er-invasion-warp-core.toml` file to exist. A config file will appear next to the DLL on first run;
-you can ignore it.
+config at all -- it is not gated on `enabled`, not gated on `search_by_location`, and it does not
+need the `er-invasion-warp.toml` file to exist. A config file will appear next to the DLL on first
+run; you can ignore it.
 
 If your loader is me3, add the DLL as a native alongside Seamless:
 
@@ -75,31 +75,36 @@ line says which check failed and why -- no guessing required.
 
 ## If you are the INVADER -- invading someone at the place you are standing
 
-This is the path that is **proven working against real hosts** (2026-08-06). Edit
-`er-invasion-warp-core.toml` in your `ELDEN RING\Game` folder and change exactly two lines:
+Edit `er-invasion-warp.toml` in your `ELDEN RING\Game` folder, or press F4 in game and click the
+same rows:
 
 ```toml
 [local_invasion]
-enabled = true      # master switch -- OFF by default, because this cancels real matches
-mode = "area"       # this place, or anywhere sharing its name
+enabled            = true   # master switch -- off by default
+search_by_location = true   # ask Steam for one place instead of taking whoever answers
+search_radius      = 0      # 0 = exactly where you stand; 1..3 widen in rings of map tiles
 ```
 
-Leave `hunt = false`. See the note below for why.
+Then walk to the place you want to invade and search the normal Seamless way. Where you are
+standing is the target; there is nothing to mark or type, and your friend configures nothing about
+her location either -- the host half publishes it automatically.
 
-Two optional extras, both off by default:
+**The cost, and it is the whole reason this is off by default.** The query filters on a key only
+this DLL publishes, so while `search_by_location` is on you will not see hosts who are not running
+it. If nothing answers, that is what it means. Widen `search_radius`, or switch it off to meet the
+ordinary population again.
+
+Two optional extras:
 
 ```toml
-reject_notice   = true    # put each rejection on screen: "Rejected m60_42_36_00 (elsewhere)"
-dll_users_only  = false   # see the warning below before turning this on
+reject_notice              = true    # status on the game's own banner: which place is being asked
+                                     # for, and where you landed
+only_players_with_this_mod = false   # see the warning below before turning this on
 ```
 
-`reject_notice` is worth turning on the first time you use the mod. It names WHY a match was
-refused, and one of the reasons -- `(open your map)` -- is a mistake that otherwise looks exactly
-like "nobody is around": until you open the world map once per session, no destination has a name,
-so every name-based judgement fails closed and you silently reject everyone.
-
-It writes to the game's **own auto-closing announcement line** -- the one that says "Grace
-discovered". It appears, scrolls, and expires on its own. No dialog and no button.
+`reject_notice` writes to the game's **own auto-closing announcement line** -- the one that says
+"Grace discovered". It appears, scrolls, and expires on its own. No dialog and no button. The name
+is older than what it does: this build refuses nothing, so there is no rejection to announce.
 
 > **If you are on a build before 2026-08-06, leave this OFF.** Earlier builds routed this through
 > `showPopupMenu`, which is a blocking modal: you got a dialog to dismiss for *every* rejection,
@@ -107,25 +112,20 @@ discovered". It appears, scrolls, and expires on its own. No dialog and no butto
 > long enough for the mod to cancel the attempt. It defaults to `false`, so you are only exposed if
 > you turned it on deliberately.
 
-Then, in game:
+Marking is optional and only narrows what the query asks for: `Insert` on a spot makes it the one
+location `search_by_location` aims at, and `Delete` excludes a place. Mark more than one and the
+search says so and stays out of the way -- a Steam filter tests one value and has no `OR`.
 
-1. **Walk to the place you want to invade.** Where you are standing IS the target -- there is
-   nothing to mark or type. The filter compares every incoming match against your own location.
-2. **Open your world map once.** `mode = "area"` reads place names off the map's own rows; before
-   you have opened it no location has a name and every name-based judgement fails closed. Once per
-   session is enough. (`mode = "exact"` never needs the map, but it compares raw blocks, so a large
-   area split across several blocks can reject someone standing near you.)
-3. **Search for invasions** the normal Seamless way.
-4. **Expect it to take several tries, and let it.** Each match at the wrong place is cancelled and
-   the search restarts by itself. A real run took five matches to land: four elsewhere, refused,
-   then one at the right block. Cancelling is safe -- the session returns to idle and searching
-   continues.
-5. **To stop, press Seamless's own "Cancel search."** Your cancel beats the loop; it will not
-   restart behind you.
+### The match-time reject filter is gone (2026-09-15)
 
-Marking is optional and only WIDENS what is allowed: `Insert` on a spot adds it to
-`allowed_blocks`, so it is accepted from then on wherever you later stand. `Delete` excludes a
-place, and an exclusion beats everything.
+This document used to tell you to set `mode = "area"`, open your world map once, and let the search
+grind through four wrong matches to reach the right one. That filter ran at
+`SetMultiplayJoinData` -- after the connection to the host already existed -- so its only available
+move was to tear down an invasion that had already been negotiated. Every failure the feature ever
+produced came from that one property. It was deleted, and `mode` along with the named-location
+lists is inert in this build: set it to anything and nothing changes about who you meet.
+
+Narrowing the query costs nothing; narrowing the answer cost a connection every time.
 
 ### What this guarantees, and what it does not
 
@@ -133,37 +133,22 @@ It guarantees **location, not identity.** The accept reason is that the destinat
 location. If a stranger is standing where your friend is, you will invade the stranger and the
 result is identical. Location-targeted, not person-targeted.
 
-### Why `hunt` stays off
-
-`hunt = true` narrows the Steam query itself, so the right host arrives on the first try instead
-of the fifth. Two reasons it is not the recommended path:
-
-* It filters on a key only this DLL publishes, so while it is on you will **not** see hosts who
-  are not running the DLL -- and almost nobody is.
-* As of 2026-08-06 the two halves are proven separately but never joined: a host on a second
-  machine was captured publishing the correct block (`er_invasion_warp_map = m60_43_34_00`) onto
-  the lobby invaders query, and the filter is known to reach the wire -- but nobody has yet run a
-  query *filtered* on that key and had that host come back.
-
-The reject loop needs none of it. It reads the destination Seamless pushes to *you*, so it works
-against completely vanilla hosts who have never heard of this DLL.
-
 ## The two switches are independent, which gives you three modes
 
-`enabled` filters by LOCATION. `dll_users_only` changes WHO IS IN YOUR POOL. They do not gate each
-other, so:
+`search_by_location` narrows the query to a PLACE. `only_players_with_this_mod` changes WHO IS IN
+YOUR POOL. They do not gate each other, so:
 
-| `enabled` | `dll_users_only` | what you get |
+| `search_by_location` | `only_players_with_this_mod` | what you get |
 |---|---|---|
-| `true` | `false` | Filter by location, meet everybody. The default use, and the one proven live. |
+| `true` | `false` | Aim at one place. Everyone there who is running this DLL. |
 | `false` | `true` | **Invade anywhere exactly as unmodded -- but only ever meet other DLL users.** A private global community with ordinary invasion inside it. |
 | `true` | `true` | Only DLL users, and only at the place you are standing. |
 | `false` | `false` | The DLL does nothing to matchmaking. |
 
-The middle row costs you nothing in gameplay terms: no rejections, no grind, no waiting for the
-right location. It only narrows the population.
+The middle row costs you nothing in gameplay terms: no waiting for the right location. It only
+narrows the population.
 
-Whichever you pick, `dll_users_only` is **symmetric and absolute**. While it is on, vanilla players
+Whichever you pick, `only_players_with_this_mod` is **symmetric and absolute**. While it is on, vanilla players
 cannot see you and you cannot see them, for hosting as much as for invading -- because Seamless
 finds worlds with a key we rewrite, and one value drives both the search and the advertisement.
 
@@ -171,7 +156,7 @@ finds worlds with a key we rewrite, and one value drives both the search and the
 
 Toggled mid-session on a real Seamless search, with nobody else in the world running this DLL:
 
-| `dll_users_only` | searches | no match | matched |
+| `only_players_with_this_mod` | searches | no match | matched |
 |---|---|---|---|
 | `false` (before) | 4 | 0 | **3** |
 | `true` | 5 | **6** | 0 |
@@ -192,7 +177,12 @@ frame-based, so running the game faster does not speed it up.
 
 ## Who actually needs the DLL
 
-**Only the invader.** Measured 2026-08-06: every host rejected and the one accepted were ordinary
-Seamless players -- twelve queries, five distinct lobbies, not one carrying our key. Host-side
-publishing is not on the critical path for location-targeted invasion; it is an optimization for
-cutting down the number of tries.
+**Both of you, now.** That changed with the filter deletion. The 2026-08-06 measurement behind the
+old answer -- twelve queries, five distinct lobbies, not one carrying our key, and an ordinary
+Seamless player successfully invaded -- was a measurement of the reject loop, which read the
+destination Seamless pushed to *you* and so worked against hosts who had never heard of this DLL.
+Narrowing the query instead means asking Steam for a key only this DLL publishes, so a host without
+it is not in the result set at all.
+
+`only_players_with_this_mod` is the separate, stronger switch: `search_by_location` limits you to
+DLL users *at one place*, while that one limits you to DLL users everywhere, for hosting as well.

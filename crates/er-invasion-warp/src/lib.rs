@@ -31,7 +31,10 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+pub mod can_use_goods_gate;
 pub mod drive;
+pub mod host_effects;
+pub mod lobby_preflight;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
 pub mod lynchpin_use;
@@ -41,11 +44,21 @@ pub mod map_gfx;
 pub mod map_hooks;
 #[cfg(windows)]
 mod map_live_pins;
+pub mod map_piece_live;
 pub mod map_seams;
+mod overlay;
 pub mod place_name;
 pub mod restart_backoff;
 mod seamless_probe;
+pub mod settings_panel;
+// Public on the rlib for the same reason `map_seams` and `place_name` are: its `state` constants
+// and the watchdog's diagnostic accessors are a documented protocol vocabulary, pinned against the
+// live `Abi` by `the_state_codes_match_the_supported_abi`. `TIMED_STATES` has been deliberately
+// empty since 2026-09-13 -- every entry it held was v1.9.9 numbering and two of them are not
+// statically recoverable -- so nothing in this DLL reads the constants today, and a private module
+// makes that safety decision look like dead code. See bd `er-effects-rs-zoft`.
 pub mod stall_watchdog;
+pub mod vanilla_invasion_items;
 
 use std::path::{Path, PathBuf};
 
@@ -162,6 +175,13 @@ fn spawn_catalog_task() {
         .spawn(|| {
             // Bounded (2026-08-29): the unbounded form of this loop starved the wineserver and
             // hung a boot. er_game_base::wait backs off in user space and gives up.
+            // The settings panel joins whatever imgui the process already has rather than
+            // installing a second `Present` hook. It runs here, on this spawned thread, and not
+            // in `DllMain`: hudhook's install takes locks and enumerates modules, and the guest
+            // probe resolves an export out of another DLL -- none of which may happen under the
+            // loader lock. Installing it from `DllMain` deadlocked the boot on 2026-09-15, with
+            // the process alive and burning CPU and no window ever appearing.
+            crate::overlay::install_from_installer_thread();
             let Some(task) =
                 er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
             else {
@@ -177,6 +197,8 @@ fn spawn_catalog_task() {
             // Same ownership rule as the warp driver: one instance for the process, touched only
             // by this single-threaded task.
             let mut mark_keys = crate::local_invasion_filter::MarkKeys::new();
+            // Same ownership rule again: one latch for the process, polled only by this task.
+            let mut settings_key = crate::settings_panel::SettingsKey::new();
             crate::local_invasion_filter::ensure_config_file();
             let mut frame: u64 = 0;
             let handle = task.run_recurring(
@@ -208,6 +230,11 @@ fn spawn_catalog_task() {
                     unsafe {
                         warp_drive.tick(standalone_log, standalone_publish_warp_json);
                     }
+                    // The settings panel's game-thread half: poll its key, apply whatever was
+                    // clicked last frame in one read-modify-write, and republish the rows. The
+                    // renderer touches no config lock and writes no file -- it runs inside
+                    // `Present`, where an `fs::write` would stall the swapchain.
+                    crate::settings_panel::tick(&mut settings_key);
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
@@ -253,6 +280,21 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context; every read is fault-closed and the one
                     // detour is installed on a byte-verified prologue.
                     unsafe { crate::lynchpin_use::tick() };
+                    // Name the next place the search is asking about, at one a second.
+                    //
+                    // Driven from here rather than from the lobby-query detour, which is where the
+                    // banner used to be reached from and why only the first tile was ever named:
+                    // Seamless does not issue that query, so the detour fires once or not at all.
+                    // The ring is known when the search is armed, so reciting it needs a tick and
+                    // nothing else. Self-gating -- an empty queue costs one lock and returns.
+                    // Send or collect the one query that says whether narrowing to a location can
+                    // find anybody at all. Self-gating: idle until a search arms it, and it keeps
+                    // its answer rather than re-asking, so the ordinary tick costs one atomic load.
+                    crate::lobby_preflight::tick();
+                    crate::local_invasion_filter::search_banner::pump_and_announce(
+                        crate::local_invasion_filter::current_config_snapshot()
+                            .is_some_and(|config| config.reject_notice),
+                    );
                     // Advertise this host's current map on its own Steam lobby, so an invader can
                     // ask for a location instead of sampling and rejecting. Gated internally on the
                     // block having changed, so a host standing still costs one string compare.
@@ -265,6 +307,11 @@ fn spawn_catalog_task() {
                     // No-ops harmlessly when this player is not hosting, when Steam is not ready, or
                     // when the block cannot be read. Not being findable by location is a missing
                     // convenience; a DLL that faulted here would be a broken game.
+                    // Record where the player is for readers that run on another thread. The
+                    // lobby-query detour runs on Steam's thread, where the engine's own map-id
+                    // getter answers nothing, so without this the ladder has no centre to ask for
+                    // and every query goes out unfiltered by accident.
+                    crate::lobby_publish::note_current_block();
                     crate::lobby_publish::publish_current_map();
                     // Keep the advertised pool matching the configured one; Seamless never
                     // rebuilds its advertisement, so a toggle has to be applied by us.
@@ -279,6 +326,16 @@ fn spawn_catalog_task() {
                     // struct offset that pointed at the wrong lobby in every run.
                     // `steam_hooks = false` withholds all three -- see the key's docs. Read from
                     // the same snapshot as `map_pins` so one config read serves both gates.
+                    // Said here because this is where both switches are in hand at once, and a
+                    // radius that can never be consulted is otherwise indistinguishable from a
+                    // search that simply never widens.
+                    if let Some(config) = config_snapshot.as_ref() {
+                        crate::local_invasion_filter::warn_if_radius_is_inert(
+                            config.hunt,
+                            config.steam_hooks,
+                            config.prefilter_radius,
+                        );
+                    }
                     if config_snapshot
                         .as_ref()
                         .map(|config| config.steam_hooks)
@@ -385,6 +442,7 @@ pub unsafe extern "system" fn DllMain(
                  dies with no PANIC line after this point, it did not panic."
             ));
 
+            crate::overlay::remember_module(module_base);
             let installed = install_standalone_host();
             append_log(
                 &log_dir(),
@@ -425,6 +483,52 @@ pub extern "C" fn er_invasion_warp_host_stub() -> i32 {
 #[unsafe(no_mangle)]
 pub extern "C" fn er_invasion_warp_request_invade() -> i32 {
     i32::from(local_invasion_filter::request_invade())
+}
+
+/// Use one held item, by the id the menu spells, on this DLL's own game thread next tick.
+///
+/// # Why an export
+///
+/// AGENTS.md's 2026-07-22 order is that the agent drives every required input, and reaching the
+/// Festering Bloody Finger through the real menus is an inventory route whose row count nothing
+/// here can know. The engine's own `Use` command is four stores into
+/// `CSMenuMan->menuData->menuGaitemUseState` plus the `ChrIns+0x168` repeat count, which
+/// `lynchpin_use` already drives for the Challenger's Lynchpin; this is the same driver with the
+/// item id as a parameter.
+///
+/// The id is not resolved here. The inventory lookup reads lists the game is free to move, so it
+/// happens on the game task like every other read in this module -- this only records what was
+/// asked for. Returns 1 when the request was recorded.
+///
+/// `crate::vanilla_invasion_items::with_category` turns a goods row id into this id: the
+/// Festering Bloody Finger is row 111, so `0x4000006f`.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_use_item(item_id: u32) -> i32 {
+    lynchpin_use::request_use_item_offthread(item_id);
+    1
+}
+
+/// Answer the next bounds popup with a chosen range instead of the row that was pressed.
+///
+/// `0` clears it and gives the popup back to the player, `1` is `Nearby only`, `2` is
+/// `Both near and far`.
+///
+/// # Why a test hook exists at all
+///
+/// The popup answers row 0 under every agent-driven input tried so far -- reproduced three times,
+/// always `isBreakInMultiRegion=0`, with a D-pad Down after the animation, the same Down during it,
+/// and a full left-stick down. Proving the `Both near and far` branch should not wait on solving
+/// menu navigation, and driving a cursor that cannot be read back is exactly how this repo once
+/// moved a `GridControl` nobody was watching.
+///
+/// It is inert unless set, so a normal session is untouched and the player's press still decides.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_force_search_range(range: u32) -> i32 {
+    vanilla_invasion_items::FORCED_SEARCH_RANGE
+        .store(range as usize, core::sync::atomic::Ordering::SeqCst);
+    1
 }
 
 /// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring

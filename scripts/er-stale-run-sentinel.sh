@@ -239,6 +239,13 @@ classify_path() {
   if [[ $# -gt 0 ]]; then
     mode="explicit"
   fi
+  # `closure` is a mode, not a path: the caller passes the literal path `-` and the python block
+  # prints the live run's crate closure instead of a verdict. Kept inside this function so the
+  # profile discovery, the loaded-DLL read and the cargo metadata walk have exactly one
+  # implementation.
+  if [[ "$path" == "-" ]]; then
+    mode="closure"
+  fi
   python3 - "$REPO_ROOT" "$path" "$mode" "$@" <<'PY'
 import glob
 import json
@@ -528,6 +535,22 @@ def main():
 
     per_dll = {p: forward({p}) for p in loaded_pkgs}
     closure = set().union(*per_dll.values())
+
+    # `closure` mode: print the repo-relative directory of every crate the live run's DLLs compile
+    # in, one per line, and exit. It exists so a PreToolUse policy can be as precise as this
+    # classifier without shelling out per edited path -- the gap
+    # .cupcake/policies/claude/no_source_edit_during_live_run.rego used to paper over by denying
+    # every `crates/` edit. That over-broad deny refused edits to a crate this very classifier
+    # reports skip for, which is a guard blocking work its own invariant permits.
+    if MODE == "closure":
+        for name in sorted(closure):
+            d = pkg_dir.get(name)
+            if not d:
+                continue
+            rel = os.path.relpath(d, REPO_ROOT)
+            if not rel.startswith(".."):
+                print(rel)
+        sys.exit(0)
 
     # Deepest owning crate wins, so a nested crate is attributed to itself rather than its parent.
     owner = None
@@ -843,6 +866,7 @@ TOML
 case "${1:-hook}" in
   check) shift; cmd_check "${1:-}" ;;
   classify) shift; classify_path "$@" ;;
+  closure) shift; classify_path - "$@" ;;
   teardown) if teardown; then echo "[er-sentinel] teardown: verified clean"; else
       echo "[er-sentinel] teardown FAILED" >&2; exit 1; fi ;;
   status) live="$(list_live)"; if [[ -z "$live" ]]; then echo "[er-sentinel] no live run"; else

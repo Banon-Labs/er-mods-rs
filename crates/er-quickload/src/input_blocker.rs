@@ -1,5 +1,5 @@
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use bitflags::bitflags;
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
@@ -13,10 +13,27 @@ pub use er_telemetry_core::counters::DINPUT_INJECTED_KEY_STAMPS;
 /// (i.e. whether native ER reads keyboard input via DInput at all). If the keyboard counter stays 0
 /// while the harness holds, ER does not read keyboard via DInput on native -> our `set_injected_key`
 /// stamp never reaches the game and a different injection path (WM_KEYDOWN / RawInput) is required.
+///
+/// # Answered on the native Linux build, 2026-09-16
+///
+/// It does read it. Run br-20260916-074718-82a9, a native Steam install, ended with
+/// `oracle_dinput_kb_hook_fires = 17118` and `oracle_dinput_injected_key_stamps = 32`, so the game
+/// calls the keyboard `GetDeviceState` constantly and our scancode reaches the buffer it reads.
+///
+/// That is worth stating because it rules the channel out as a suspect: a held `DIK_W` (0x11) moved
+/// the player exactly `0.000` on that run while the harness reported `delivered=true`, the product
+/// export was confirmed reached by an `Interceptor` (`calls: 1, lastDik: 17`), and these counters
+/// showed the stamp landing. Whatever swallows that press is downstream of the stamp, not the
+/// absence of a DInput read, so do not go looking for `WM_KEYDOWN` or RawInput on the strength of a
+/// dead keypress alone -- check these two counters first.
 pub use er_telemetry_core::counters::DINPUT_KB_HOOK_FIRES;
 pub(crate) use er_telemetry_core::counters::DINPUT_SUPPRESSED_ARROW_KEYS;
 pub(crate) use er_telemetry_core::counters::INJECTED_KEY;
 pub(crate) use er_telemetry_core::counters::SUPPRESS_ARROW_KEYS;
+pub use er_telemetry_core::counters::{
+    INJECTED_PAD_BUTTONS, INJECTED_PAD_THUMB_LX, INJECTED_PAD_THUMB_LY, XINPUT_HOOK_FIRES,
+    XINPUT_INJECTED_PAD_STAMPS,
+};
 
 #[derive(Default)]
 pub struct InputBlocker {
@@ -55,6 +72,9 @@ impl InputBlocker {
             return Ok(());
         }
         unsafe { install_dinput_hooks()? };
+        // A failure here is not fatal: the keyboard path still works, and a machine with no pad
+        // never loads the module at all.
+        unsafe { install_xinput_hook() };
         self.hooks_installed.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -76,6 +96,20 @@ impl InputBlocker {
 
     /// Inject a keyboard key (DInput DIK scancode) into the blocked keyboard state each poll until
     /// cleared (0 = none). User input remains suppressed.
+    /// Hold a pad state for the game's next `XInputGetState`, or clear it with all zeroes.
+    pub fn set_injected_pad(&self, buttons: u16, thumb_lx: i16, thumb_ly: i16) {
+        // Installed here, not in `install_hooks`, because the game loads its XInput module long
+        // after the blocker's hooks go in: on run br-20260916-081331-8453 the eager install found no
+        // `xinput1_4.dll` and silently did nothing, and the entry's `e9 d1 ec 74 02` -- a Wine
+        // forwarding thunk, not a detour -- made it look installed. This runs on every hold, is a
+        // cheap atomic load once the hook is in, and cannot install twice.
+        // SAFETY: resolves a loaded module by name and fails closed when it is absent.
+        unsafe { install_xinput_hook() };
+        INJECTED_PAD_BUTTONS.store(u32::from(buttons), Ordering::Relaxed);
+        INJECTED_PAD_THUMB_LX.store(i32::from(thumb_lx), Ordering::Relaxed);
+        INJECTED_PAD_THUMB_LY.store(i32::from(thumb_ly), Ordering::Relaxed);
+    }
+
     pub fn set_injected_key(&self, dik: u8) {
         INJECTED_KEY.store(dik, Ordering::Relaxed);
     }
@@ -310,4 +344,138 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         )?
     };
     Ok(())
+}
+
+// -------------------------------------------------------------------------------------------
+// XInput, which is the stage this machine's ELDEN RING actually acts on
+// -------------------------------------------------------------------------------------------
+
+/// Field offsets inside `XINPUT_STATE`, which is 16 bytes: a packet number, then the
+/// `XINPUT_GAMEPAD` -- a button mask, two trigger bytes, then four stick axes as signed 16-bit
+/// values in the order `sThumbLX`, `sThumbLY`, `sThumbRX`, `sThumbRY`.
+const XINPUT_STATE_PACKET_OFFSET: usize = 0x00;
+const XINPUT_STATE_BUTTONS_OFFSET: usize = 0x04;
+const XINPUT_STATE_THUMB_LX_OFFSET: usize = 0x08;
+const XINPUT_STATE_THUMB_LY_OFFSET: usize = 0x0a;
+
+type XInputGetStateFn = unsafe extern "system" fn(u32, *mut u8) -> u32;
+static ORIG_XINPUT_GET_STATE: AtomicUsize = AtomicUsize::new(0);
+
+/// Add the harness's pad state to what the pad actually reported.
+///
+/// # Why this exists beside the DirectInput stamp
+///
+/// Both are needed because they are different stages and the game acts on whichever device is live.
+/// On run br-20260916-074718-82a9 the keyboard stamp was provably reaching the game --
+/// `DINPUT_KB_HOOK_FIRES` 21342, `DINPUT_INJECTED_KEY_STAMPS` 35, the product export confirmed
+/// reached by an `Interceptor` -- and a held `DIK_W` moved the character exactly 0.000. An
+/// `XInputGetState` counter on the same run read 590 polls in six seconds, all on slot 0, every one
+/// returning `ERROR_SUCCESS`: a pad is connected and ER is reading it about 98 times a second.
+///
+/// The original runs first and its answer is kept; this only ORs in what was asked for, so a real
+/// pad in a real hand keeps working while an injection window is open. The packet number is bumped
+/// whenever anything was added, because a consumer that skips unchanged packets would otherwise
+/// never see the injected frame.
+unsafe extern "system" fn xinput_get_state_detour(user_index: u32, state: *mut u8) -> u32 {
+    let orig = ORIG_XINPUT_GET_STATE.load(Ordering::Relaxed);
+    if orig == 0 {
+        return 0x48f; // ERROR_DEVICE_NOT_CONNECTED
+    }
+    // SAFETY: the trampoline MinHook returned, with both arguments untouched.
+    let result =
+        unsafe { core::mem::transmute::<usize, XInputGetStateFn>(orig)(user_index, state) };
+    XINPUT_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
+    if result != 0 || state.is_null() {
+        return result;
+    }
+    let buttons = INJECTED_PAD_BUTTONS.load(Ordering::Relaxed) as u16;
+    let thumb_lx = INJECTED_PAD_THUMB_LX.load(Ordering::Relaxed) as i16;
+    let thumb_ly = INJECTED_PAD_THUMB_LY.load(Ordering::Relaxed) as i16;
+    if buttons == 0 && thumb_lx == 0 && thumb_ly == 0 {
+        return result;
+    }
+    // SAFETY: the 16-byte structure the caller passed and the original just filled.
+    unsafe {
+        let reported = state.add(XINPUT_STATE_BUTTONS_OFFSET).cast::<u16>();
+        reported.write_unaligned(reported.read_unaligned() | buttons);
+        if thumb_lx != 0 {
+            state
+                .add(XINPUT_STATE_THUMB_LX_OFFSET)
+                .cast::<i16>()
+                .write_unaligned(thumb_lx);
+        }
+        if thumb_ly != 0 {
+            state
+                .add(XINPUT_STATE_THUMB_LY_OFFSET)
+                .cast::<i16>()
+                .write_unaligned(thumb_ly);
+        }
+        let packet = state.add(XINPUT_STATE_PACKET_OFFSET).cast::<u32>();
+        packet.write_unaligned(packet.read_unaligned().wrapping_add(1));
+    }
+    XINPUT_INJECTED_PAD_STAMPS.fetch_add(1, Ordering::Relaxed);
+    result
+}
+
+/// Detour `XInputGetState` in whichever XInput module the game loaded.
+///
+/// # Safety
+///
+/// Runs in the target process once XInput is loaded. A missing module is not an error: a machine
+/// with no pad never loads one, and the keyboard path covers that case.
+unsafe fn install_xinput_hook() {
+    if ORIG_XINPUT_GET_STATE.load(Ordering::Relaxed) != 0 {
+        return;
+    }
+    for name in [
+        s!("xinput1_4.dll"),
+        s!("xinput1_3.dll"),
+        s!("xinput9_1_0.dll"),
+    ] {
+        let Ok(module) = (unsafe { GetModuleHandleA(name) }) else {
+            continue;
+        };
+        let Some(exported) = (unsafe { GetProcAddress(module, s!("XInputGetState")) }) else {
+            continue;
+        };
+        // Follow a Wine forwarding thunk before hooking.
+        //
+        // On this prefix the export does not begin a function: it reads `e9 d1 ec 74 02`, a
+        // five-byte relative jump into the module's real implementation. Detouring that address
+        // means overwriting the jump itself, and the install silently fails to take -- measured on
+        // run br-20260916-081922-9b62, where `XINPUT_HOOK_FIRES` stayed 0 while
+        // `DINPUT_KB_HOOK_FIRES` climbed to 310 on the same snapshot, so the counters were live and
+        // this detour simply never ran. It also made the entry look already hooked, which is how a
+        // Wine thunk gets mistaken for somebody else's trampoline.
+        const JMP_REL32: u8 = 0xe9;
+        const JMP_REL32_LEN: usize = 5;
+        let mut target = exported as usize;
+        // SAFETY: reading the first bytes of a resolved export in a loaded module.
+        if unsafe { *(target as *const u8) } == JMP_REL32 {
+            // SAFETY: as above; the displacement is the four bytes after the opcode.
+            let displacement = unsafe { *((target + 1) as *const i32) };
+            target = (target + JMP_REL32_LEN).wrapping_add_signed(displacement as isize);
+        }
+        let target = target as *mut core::ffi::c_void;
+        let hook = match unsafe {
+            er_hook::MhHook::new(target, xinput_get_state_detour as *mut core::ffi::c_void)
+        } {
+            Ok(hook) => hook,
+            Err(_) => continue,
+        };
+        ORIG_XINPUT_GET_STATE.store(hook.trampoline() as usize, Ordering::Relaxed);
+        if unsafe { hook.queue_enable() }.is_err()
+            || !matches!(
+                unsafe { er_hook::MH_ApplyQueued() },
+                er_hook::MH_STATUS::MH_OK
+            )
+        {
+            ORIG_XINPUT_GET_STATE.store(0, Ordering::Relaxed);
+            continue;
+        }
+        // No log line: this module has none, and `XINPUT_HOOK_FIRES` climbing from zero is the
+        // same report without inventing a logger here. A zero counter beside a loaded
+        // `xinput1_4.dll` is the shape that means this install failed.
+        return;
+    }
 }

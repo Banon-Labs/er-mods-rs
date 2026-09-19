@@ -745,3 +745,16 @@ pub const TITLE_TOP_DIALOG_IS_IN_STATE_RVA: usize = 0x749b20;
 /// through -- is a dialog that is not ready to be pressed. Owned here for the same reason as the
 /// predicate above.
 pub const TITLE_STATE_DESC_LOOP_RVA: usize = 0x2a8f9e8;
+
+/// `CS::EquipGameData::GetItemIdByQuickSlotIndex(egd, int *out, uint index) -> int*`
+///
+/// The quickbar read-back, an out-parameter getter whose whole body is
+/// `if (index < 10) *out = entries[index + 0x16]; else *out = -1;` -- so it answers for the ten
+/// quickbar positions and refuses the pouch. What it hands back is the category-tagged item id,
+/// not a bare param id.
+///
+/// Declared here because two crates reach it and `scripts/check-rva-alias-drift.py` counts a
+/// second literal as drift. `er-build-import-runtime` calls it to read the quickbar back after an
+/// import; `er-invasion-warp` calls it to find which slot holds an invasion finger. Neither
+/// depends on the other, so the shared floor they both already depend on is this crate.
+pub const GET_ITEM_ID_BY_QUICK_SLOT_INDEX_RVA: usize = 0x247ee0;

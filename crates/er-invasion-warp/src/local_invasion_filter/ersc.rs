@@ -105,6 +105,9 @@ pub struct Abi {
     /// never altered: publishing a key of our own would change what every other Seamless
     /// client matches, which is not ours to do.
     pub build_lobby_key_rva: usize,
+    /// Seamless's item handler -- see [`V201_ITEM_HANDLER_RVA`]. Never called by this module; its
+    /// address is used as a search needle to find the owner object without opening a dialog.
+    pub item_handler_rva: usize,
     pub show_prologue: &'static [u8],
     /// Also the one-shot version DISCRIMINATOR -- see [`SUPPORTED`].
     pub invade_prologue: &'static [u8],
@@ -203,6 +206,7 @@ pub const SUPPORTED: &[Abi] = &[Abi {
     cancel_action_rva: V201_CANCEL_ACTION_RVA,
     leave_world_action_rva: V201_LEAVE_WORLD_ACTION_RVA,
     build_lobby_key_rva: V201_BUILD_LOBBY_KEY_RVA,
+    item_handler_rva: V201_ITEM_HANDLER_RVA,
     show_prologue: V201_SHOW_PROLOGUE,
     invade_prologue: V201_INVADE_PROLOGUE,
     cancel_prologue: V201_CANCEL_PROLOGUE,
@@ -240,6 +244,27 @@ pub const V201_CANCEL_ACTION_RVA: usize = 0x2_58d0;
 /// which is the invariant the cancel-row refusal exists to protect.
 pub const V201_LEAVE_WORLD_ACTION_RVA: usize = 0x2_59d0;
 pub const V201_BUILD_LOBBY_KEY_RVA: usize = 0xa_d6e0;
+/// Seamless's own item handler, and the only reliable way to find its owner object.
+///
+/// # Why an address nothing calls is worth pinning
+///
+/// This module learns the owner from `show`, which runs only when Seamless opens one of its
+/// dialogs, which needs one of its items consumed. A run that never gets there logs
+/// `ersc_session=SessionNotIdentified` on every heartbeat and can drive nothing -- and the
+/// fallback scan crosses only `ersc.dll`'s own writable sections, where the object is not.
+///
+/// This address is a needle instead. The handler is registered at `ersc+0x7c423` as a heap
+/// closure, allocated `0x40` bytes at `ersc+0x7c444` and filled in as `{vtable 0x1801dabf0,
+/// captured object, this function, .., pointer to itself}` -- so the function pointer sits one
+/// qword after the captured object, and nothing else in the process writes that value. The
+/// handler's own first instructions say what the captured object is for: `owner = [captured +
+/// 0x58]`, then `session = [owner + 0x58]`, both of them [`NEXT_OBJECT_OFFSET`].
+///
+/// Measured live on run `br-20260917-024109-9973` across 1019 regions and 4285 MB: exactly one
+/// hit, resolving `captured 0x469af3a0 -> owner 0x469ad518 -> session 0x469ac930` reading state
+/// `0x1` idle. The pair cross-checks against a different process -- run `br-20260916-100817-3fe0`
+/// recorded `OSM=0x469ad518` and `session=0x469ac930` from `show` itself.
+pub const V201_ITEM_HANDLER_RVA: usize = 0x9_2820;
 pub const V201_SESSION_STATE_OFFSET: usize = 0x150;
 pub const V201_SESSION_GUARD_OFFSET: usize = 0x14c;
 

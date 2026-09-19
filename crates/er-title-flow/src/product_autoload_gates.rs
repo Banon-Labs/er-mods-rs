@@ -1264,6 +1264,19 @@ pub unsafe fn pab_advance_try(step: usize) {
     if !pab_advance_enabled() || PAB_ADVANCE_FIRED.load(Ordering::SeqCst) != 0 {
         return;
     }
+    // A press-any-button screen and a local player cannot coexist: the title tears the world down
+    // before it builds that job. Until this check the one-shot above was the only thing that ever
+    // stopped this function, and `system_quit_repro_guards` clears that one-shot on purpose when a
+    // character switch arms -- so a switch that reaches a world without passing press-any-button
+    // left the gate live in a loaded world for the rest of the process. The detour it hangs off is
+    // the menu pump (`PAB_NODE_UPDATE_RVA` is also `MENU_WINDOW_JOB_RUN_RVA`), which hands it a
+    // different in-image menu job on every pass, so the window never settled and never latched:
+    // run `br-20260917-183537-0445` measured 21,824 restarts and 8.3 MB of log in four minutes,
+    // from +87s when a `ProfileSelectSlotActivate` switch re-armed it. The state answers this
+    // question; the one-shot only ever answered "has it fired yet".
+    if unsafe { PlayerIns::local_player_mut() }.is_ok() {
+        return;
+    }
     if step <= PAB_MIN_HEAP_PTR {
         return;
     }
@@ -1282,11 +1295,35 @@ pub unsafe fn pab_advance_try(step: usize) {
     }
     let count = unsafe { safe_read_i32(job + PAB_JOB_PRESS_COUNT_1E8_OFFSET) }.unwrap_or(-1) as u32;
     let keycode = unsafe { safe_read_i32(job + PAB_JOB_KEYCODE_180_OFFSET) }.unwrap_or(-1) as u32;
-    let settle = PAB_ADVANCE_SETTLE.fetch_add(1, Ordering::SeqCst) + 1;
+    // The settle window belongs to one job. Opening it on job A and firing into job B is not a
+    // settle at all -- nothing watched B for a single frame -- and the vtable check above cannot
+    // catch it, because both are real in-image menu jobs. Restart the count whenever the job under
+    // `step+0x130` changes, so the frames always describe the object the write will land in.
+    let settle_job = PAB_ADVANCE_SETTLE_JOB.swap(job, Ordering::SeqCst);
+    let moved = settle_job != 0 && settle_job != job;
+    let settle = if settle_job == job {
+        PAB_ADVANCE_SETTLE.fetch_add(1, Ordering::SeqCst) + 1
+    } else {
+        PAB_ADVANCE_SETTLE.store(1, Ordering::SeqCst);
+        1
+    };
     if settle == 1 {
-        append_autoload_debug(format_args!(
-            "pab-advance: press-any-button job READY step=0x{step:x} job=0x{job:x} vt=0x{vt:x} [+0x1e8]count={count} [+0x180]keycode=0x{keycode:x} -- settling {PAB_ADVANCE_SETTLE_FRAMES} frames"
-        ));
+        // Bounded the way `reload-drain-b80` is, and for the same reason: when a window re-opens
+        // once per pump pass, an unbounded line per arm is a line per pass, and after the first few
+        // the count is the whole diagnostic. `PAB_ADVANCE_ARMS` keeps counting when the printing
+        // stops, so the arm number in the last line still says how many there have been. No gate
+        // should be able to write 21,824 lines whatever the state it finds itself in.
+        let arms = PAB_ADVANCE_ARMS.fetch_add(1, Ordering::SeqCst) + 1;
+        if pab_advance_arm_should_log(arms) {
+            if moved {
+                append_autoload_debug(format_args!(
+                    "pab-advance: the settle window moved to another job, restarting it -- was 0x{settle_job:x}, now 0x{job:x} at step=0x{step:x} [+0x180]keycode=0x{keycode:x}. The old count described an object this write would not have touched"
+                ));
+            }
+            append_autoload_debug(format_args!(
+                "pab-advance: press-any-button job READY step=0x{step:x} job=0x{job:x} vt=0x{vt:x} [+0x1e8]count={count} [+0x180]keycode=0x{keycode:x} -- settling {PAB_ADVANCE_SETTLE_FRAMES} frames, arm #{arms}"
+            ));
+        }
     }
     if settle < PAB_ADVANCE_SETTLE_FRAMES {
         return;

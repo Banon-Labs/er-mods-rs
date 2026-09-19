@@ -94,3 +94,47 @@ test_allow_bash_while_live if {
 		"signals": {"live_er_run": LIVE},
 	})
 }
+
+# --- closure scoping: only crates the live run actually loaded -----------------
+#
+# Added 2026-09-16 after the guard refused an edit its own PostToolUse classifier
+# reports as skipped. The run was launched `--without er-invasion-warp`, so
+# `scripts/er-stale-run-sentinel.sh classify crates/er-invasion-warp/src/...` said
+# `SKIP crate-builds-no-loaded-dll`, and this policy denied the edit anyway because
+# it matched on the `crates/` directory alone. The signal now carries the sentinel's
+# `closure` output so both ends decide on the same set.
+
+LIVE_WITH_CLOSURE := concat("\n", [
+	LIVE,
+	"CLOSURE crates/er-quickload",
+	"CLOSURE crates/er-game-base",
+	"CLOSURE crates/er-invasion-warp-core",
+])
+
+test_deny_crate_that_feeds_a_loaded_dll if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", LIVE_WITH_CLOSURE))
+}
+
+test_allow_crate_the_run_did_not_load if {
+	not denied(edit_event("crates/er-invasion-warp/src/local_invasion_filter.rs", LIVE_WITH_CLOSURE))
+}
+
+# `er-invasion-warp-core` is in the closure and `er-invasion-warp` is not. A name
+# match would confuse the two; the directory separator is what keeps them apart.
+test_deny_the_core_crate_that_is_in_the_closure if {
+	denied(edit_event("crates/er-invasion-warp-core/src/local_invasion.rs", LIVE_WITH_CLOSURE))
+}
+
+test_deny_absolute_path_inside_a_closure_crate if {
+	denied(edit_event("/home/banon/projects/er-mods-rs/crates/er-game-base/src/mem.rs", LIVE_WITH_CLOSURE))
+}
+
+# Fail closed: a live run whose closure could not be computed is the case the coarse
+# rule was right about, so an empty closure denies exactly as before.
+test_deny_when_the_closure_is_empty if {
+	denied(edit_event("crates/er-invasion-warp/src/local_invasion_filter.rs", LIVE))
+}
+
+test_scripts_stay_editable_with_a_closure if {
+	not denied(edit_event("scripts/er-stale-run-sentinel.sh", LIVE_WITH_CLOSURE))
+}

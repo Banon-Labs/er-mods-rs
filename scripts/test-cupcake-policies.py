@@ -292,6 +292,47 @@ def run_runtime_evidence_signal_checks() -> None:
         )
 
 
+def run_signal_executable_checks() -> None:
+    """Every script in `.cupcake/signals/` must be executable, with a shebang.
+
+    A signal placed in that directory is auto-discovered and run as the command
+    `./.cupcake/signals/<name>.sh` -- directly, not through `bash`. Without the executable bit the
+    kernel refuses the exec and cupcake records exit code 126, and a signal that exits non-zero is
+    not delivered to the policy as its output at all: the string is replaced by a failure record,
+    `{"error", "exit_code", "output", "success"}`. Every string comparison the policy makes against
+    a word is then undefined, the rule body fails, and the decision set comes back empty. Cupcake
+    reports a clean allow and exits 0.
+
+    So one missing `chmod +x` turns a guard off in production while `opa test` stays green, and
+    nothing anywhere says so. Measured 2026-09-16 on `frida_evidence.sh`, which shipped without the
+    bit: `cupcake eval` allowed a `crates/**/*.rs` edit carrying no measurement at all, which is the
+    single thing that policy exists to refuse.
+
+    Fixing the one file does not close the class. This does.
+    """
+    signals = sorted((REPO_ROOT / ".cupcake" / "signals").glob("*.sh"))
+    if not signals:
+        raise AssertionError(
+            ".cupcake/signals/ holds no *.sh at all. Either the directory moved or this gate is "
+            "watching the wrong place; an empty walk makes every signal innocent."
+        )
+    for script in signals:
+        rel = script.relative_to(REPO_ROOT)
+        if not os.access(script, os.X_OK):
+            raise AssertionError(
+                f"{rel} is not executable. Cupcake auto-discovers it and execs it directly, so "
+                "the kernel refuses with exit code 126, cupcake replaces its output with a "
+                "failure record, and every policy reading it silently allows. Run "
+                f"`chmod +x {rel}`."
+            )
+        first = script.read_text(encoding="utf-8", errors="replace").splitlines()[:1]
+        if not first or not first[0].startswith("#!"):
+            raise AssertionError(
+                f"{rel} has no shebang. Exec'd directly, it is the interpreter line that decides "
+                "what runs it; without one the exec fails the same way a missing bit does."
+            )
+
+
 def run_orphaned_rego_suites() -> None:
     if not shutil.which("opa"):
         print("skip: orphaned rego suites (no opa on PATH)")
@@ -339,6 +380,10 @@ def main() -> int:
     # Flushed, and first: buffered output does not survive SIGKILL, and this notice is worth
     # nothing if the cap eats it.
     print(FOREGROUND_CAP_NOTICE, flush=True)
+    # First and cheapest: a signal that cannot be exec'd turns its policies off in production while
+    # every other gate here stays green, so there is no point spending 237 CPU-seconds before
+    # asking whether the signals can run at all.
+    run_signal_executable_checks()
     run_orphaned_rego_suites()
     run_runtime_evidence_signal_checks()
     cases = [
@@ -1436,21 +1481,28 @@ def main() -> int:
         # the word "python" from the interpreter's own invocation). This repo
         # deliberately writes refusal logic and safety docs that name the
         # forbidden binary, so that text has to stay editable.
+        # Written as a shell heredoc into a file rather than as a python program.
+        #
+        # It used to be `python3 - <<'PY' ... p.write_text(...)`, and that stopped being a
+        # legitimate shape on 2026-09-16 when `no_python_file_write` began refusing inline python
+        # that writes files -- so this case asserted `allow` against a command the rulebook now
+        # denies for a reason that has nothing to do with what it is testing, and
+        # `stage / policy` went red. The subject here was never python: it is whether a command
+        # naming the forbidden binary inside ordinary prose is mistaken for an attempt to
+        # launch it. A heredoc into a file is what the python guard itself points at as the
+        # visible-in-the-command way to write one, so the same text reaches the launch guard with
+        # nothing else for any other policy to object to.
         PolicyCase(
-            "allow-python-heredoc-editing-docstring-naming-eac-launcher",
-            "python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            "p = Path('scripts/frida-dump-module.py')\n"
-            "s = p.read_text(encoding='utf-8')\n"
-            'old = """* Offline `eldenring.exe` ONLY. Refuses'
-            " `start_protected_game.exe` / EAC, like the sibling\n"
-            "  `frida-nudge.py`.\n"
+            "allow-heredoc-writing-docstring-naming-eac-launcher",
+            "cat > scripts/frida-dump-module.py <<'EOF'\n"
+            '"""Dump a module out of the running game.\n'
+            "\n"
+            "* Offline `eldenring.exe` ONLY. Refuses `start_protected_game.exe` / EAC, like the\n"
+            "  sibling `frida-nudge.py`.\n"
             '"""\n'
-            "assert old in s\n"
-            "p.write_text(s.replace(old, ''), encoding='utf-8')\n"
-            "PY",
+            "EOF",
             True,
-            extra_tool_input={"description": "Drop the EAC refusal line from the docstring"},
+            extra_tool_input={"description": "Rewrite the docstring that names the EAC launcher"},
         ),
         # ... but the exemption must not become a launch bypass. A pipe on the
         # heredoc REDIRECTION line feeds the program's output to a shell, so a
@@ -1792,14 +1844,25 @@ def main() -> int:
         # policy survives cupcake's WASM runtime, which is the half that went inert for 36 days
         # once already. The allow case is the load-bearing one: this guard refuses a write, so a
         # false positive costs an author an edit they cannot make.
+        # Aimed at a `.py` file, not at Rust under `crates/`.
+        #
+        # The caps guard scans `.rs`, `.py`, `.sh` and `.bash` alike, so the subject is unchanged --
+        # but `no_rust_edit_without_frida_proof` denies every `.rs` under `crates/` whenever the
+        # last Frida measurement has been spent by a commit, and then that refusal is the one
+        # cupcake returns. The expected text goes missing and this case fails for a reason that has
+        # nothing to do with capitals. It also fails asymmetrically: after a local Frida run it
+        # passes, and in continuous integration -- which never runs Frida and so never holds a
+        # measurement -- it can never pass. A policy test must not depend on which of two guards
+        # fires first, and a file the other guard does not look at is how this one stops depending
+        # on it.
         PolicyCase(
             "deny-write-shouted-word-into-a-comment",
             "",
             False,
             "shouted word going into a comment",
             {
-                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
-                "content": "// this is NOT the same pointer\nfn f() {}\n",
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# this is NOT the same pointer\ndef f():\n    pass\n",
             },
             include_timeout=False,
             tool_name="Write",
@@ -1810,8 +1873,13 @@ def main() -> int:
             True,
             None,
             {
-                "file_path": str(REPO_ROOT / "crates" / "er-quickload" / "src" / "probe.rs"),
-                "content": "// the x86 `NOT` instruction, quoted\nfn f() {}\n",
+                # A `.py` file for the same reason as the deny case above: an `allow` expectation
+                # against Rust under `crates/` is really an expectation that no second guard denies
+                # it either, and `no_rust_edit_without_frida_proof` always does once a commit has
+                # spent the measurement. This case is the load-bearing one of the pair -- it proves
+                # backticks rescue a mnemonic -- so it must fail only when backticks stop working.
+                "file_path": str(REPO_ROOT / "scripts" / "probe-example.py"),
+                "content": "# the x86 `NOT` instruction, quoted\ndef f():\n    pass\n",
             },
             include_timeout=False,
             tool_name="Write",

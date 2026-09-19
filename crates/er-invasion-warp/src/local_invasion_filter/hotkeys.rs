@@ -40,36 +40,6 @@ fn enable_toggle_key_in_force() -> i32 {
         config.enable_toggle_key
     })
 }
-/// The three warp keys, read from the config every poll, for the same reason and with the same
-/// fallback as [`mark_keys_in_force`].
-///
-/// These are the pair's sharper case. `VK_F7` was not merely unavailable on a compact keyboard, it
-/// was also another mod's default in the same me3 profile, so one press reached both features and a
-/// live session warped when the player meant the other thing -- with no config key on either side
-/// to move.
-#[cfg(windows)]
-pub fn warp_keys_in_force() -> (i32, i32, i32) {
-    current_config().map_or(
-        (
-            er_invasion_warp_core::keybind::VK_F7,
-            er_invasion_warp_core::keybind::VK_F8,
-            er_invasion_warp_core::keybind::VK_F9,
-        ),
-        |config| {
-            (
-                config.warp_nearest_key,
-                config.warp_next_key,
-                config.warp_other_area_key,
-            )
-        },
-    )
-}
-
-/// `VK_SHIFT`: held, the mark keys act on the location's name instead of its exact block --
-/// "everywhere that shares this name" rather than "this tile".
-#[cfg(windows)]
-const VK_SHIFT: i32 = 0x10;
-
 #[cfg(windows)]
 const KEY_DOWN_MASK: i16 = -0x8000;
 #[cfg(windows)]
@@ -159,12 +129,15 @@ impl MarkKeys {
         if !mark && !unmark {
             return;
         }
-        let by_name = (unsafe { GetAsyncKeyState(VK_SHIFT) } & KEY_DOWN_MASK) != 0;
+        // Shift used to select a by-name mark here, writing `named_location_text_ids`. That list
+        // was only ever read by the match-time filter, which was deleted, so the modifier was
+        // removed with it on 2026-09-15 rather than left as a keypress that writes a list nobody
+        // reads.
         if mark {
-            apply_mark(true, by_name);
+            apply_mark(true);
         }
         if unmark {
-            apply_mark(false, by_name);
+            apply_mark(false);
         }
     }
 
@@ -194,6 +167,12 @@ fn apply_enable_toggle() {
     let mut config = hot.current().clone();
     config.enabled = !config.enabled;
     let now_on = config.enabled;
+    // Switching the filter off is the player saying "stop". It used to change only the verdict
+    // applied to the next match, leaving the auto re-search loop armed -- so the searches kept
+    // coming after the switch said they would not.
+    if !now_on {
+        super::stand_down_hunt("you switched the filter off");
+    }
 
     match hot.save(&path, &config) {
         Ok(true) => crate::standalone_log(format_args!(
@@ -216,9 +195,9 @@ fn apply_enable_toggle() {
     }
 }
 
-/// Add or remove the player's current location, by block or by name, and write the file.
+/// Add or remove the player's current location and write the file.
 #[cfg(windows)]
-fn apply_mark(adding: bool, by_name: bool) {
+fn apply_mark(adding: bool) {
     let Some(anchor) = current_anchor() else {
         crate::standalone_log(format_args!(
             "local-invasion: cannot mark -- the player's location is not readable right now"
@@ -233,23 +212,7 @@ fn apply_mark(adding: bool, by_name: bool) {
     let _ = hot.reload_if_changed(&path);
     let mut config = hot.current().clone();
 
-    let changed = if by_name {
-        let count = if adding {
-            config.mark_place_names(&anchor)
-        } else {
-            config.unmark_place_names(&anchor)
-        };
-        if count == 0 && adding && anchor.named_location_count() == 0 {
-            crate::standalone_log(format_args!(
-                "local-invasion: {:#010x} has no place name on record, so there is nothing to mark \
-                 by name. Open the world map once this session -- that is where the names are read \
-                 from.",
-                anchor.block
-            ));
-            return;
-        }
-        count > 0
-    } else if adding {
+    let changed = if adding {
         config.mark_block(anchor.block)
     } else {
         config.unmark_block(anchor.block)
@@ -257,23 +220,20 @@ fn apply_mark(adding: bool, by_name: bool) {
 
     if !changed {
         crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- already in that state, file untouched",
+            "local-invasion: {} {:#010x} -- already in that state, file untouched",
             if adding { "mark" } else { "un-mark" },
-            anchor.block,
-            if by_name { " by name" } else { "" }
+            anchor.block
         ));
         return;
     }
 
     match hot.save(&path, &config) {
         Ok(true) => crate::standalone_log(format_args!(
-            "local-invasion: {} {:#010x}{} -- now {} chosen, {} excluded, {} name(s){}",
+            "local-invasion: {} {:#010x} -- now {} chosen, {} excluded{}",
             if adding { "MARKED" } else { "EXCLUDED" },
             anchor.block,
-            if by_name { " by name" } else { "" },
             config.allowed_blocks.len(),
             config.blocked_blocks.len(),
-            config.named_location_text_ids.len(),
             if config.enabled {
                 ""
             } else {

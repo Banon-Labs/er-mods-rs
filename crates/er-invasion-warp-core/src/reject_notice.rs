@@ -87,6 +87,10 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
         RejectReason::CandidateUnnamed => "open your map",
         RejectReason::NothingToMatchAgainst => "open your map",
         RejectReason::ExcludedByUser => "you excluded it",
+        // Not a rejection, and the banner has to stop saying it is: the player pressed the switch,
+        // so the one fact they cannot already see is that the request landed rather than being
+        // swallowed.
+        RejectReason::PlayerStopped => "you stopped it",
     }
 }
 
@@ -100,9 +104,42 @@ pub const fn reason_phrase(reason: RejectReason) -> &'static str {
 enum Announced {
     Rejected(u32, RejectReason),
     Succeeded(u32),
+    /// The place the neighbourhood sweep stopped on, because somebody is hosting there.
+    ///
+    /// Kept apart from `Succeeded`, which means an invasion landed. This one means the search has
+    /// decided where to go and nothing has been joined yet, and sharing a variant would make the
+    /// later success at the same block read as a repeat of the find and be swallowed.
+    FoundHost(u32),
     /// A destination the mod did not judge -- the filter's master switch is off, so this is the
     /// server's choice reported as-is.
     Arrived(u32),
+    /// A connection that outlived every recorded success, carrying which attempt it was.
+    ///
+    /// The ordinal is what makes two failures in a row two pieces of news. A payload-free variant
+    /// would make the second one a repeat of the first and swallow it, which is the opposite of
+    /// what a player retrying a failing hunt needs to see.
+    Failed(u32),
+    /// Which step of the widening search is being asked for, by ordinal.
+    ///
+    /// Keyed by ordinal rather than by tile so a ring that comes back round to a tile it has
+    /// already tried still counts as news: the number is what tells the player the search is
+    /// moving, and suppressing a repeat would make a stalled rotation look like a working one.
+    Searching(usize),
+    /// The search was armed and then dropped before a single query could go out.
+    ///
+    /// Payload-free on purpose: the reason is always the same shape -- Seamless has no live
+    /// session to search from -- and repeating it once per game tick would paint the banner
+    /// several times a second.
+    CannotSearch,
+    /// The ring is spent and the search has dropped the location filter.
+    ///
+    /// Payload-free, unlike [`Self::Searching`], because this rung does not move: every round
+    /// after it asks the same unfiltered question. Announcing it once is the whole point -- the
+    /// log repeated the same sentence on every query round and the banner said nothing at all,
+    /// so from the player's seat a search that had already widened looked identical to one still
+    /// grinding through nearby tiles. Reported 2026-09-15 as "I have not observed it going from
+    /// searching nearby to searching everywhere"; it had been searching everywhere for minutes.
+    SearchingEverywhere,
 }
 
 /// Tracks what was last announced so repeats can be suppressed.
@@ -115,6 +152,133 @@ pub struct RejectNotice {
 }
 
 impl RejectNotice {
+    /// Announce which place the widening search is asking for, and how far through it is.
+    ///
+    /// `place` is the name when one is known and `None` when it is not. A tile id is deliberately
+    /// not used as a substitute: `m60_51_36_00` tells a player nothing, and a banner that shows it
+    /// is worse than one that just counts. The count alone is still useful -- it is what separates
+    /// "nobody is nearby" from "we have three tiles left to ask about".
+    ///
+    /// Returns `None` when this exact step was the last thing announced, so a query loop that
+    /// re-asks for the same tile does not repaint the banner every frame.
+    pub fn observe_prefilter_step(
+        &mut self,
+        enabled: bool,
+        ordinal: usize,
+        total: usize,
+        place: Option<&str>,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::Searching(ordinal));
+        self.last_announced = Some(Announced::Searching(ordinal));
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // The first step is the player's own tile, and saying "1 of 9 nearby" about where they are
+        // standing reads as a failure before anything has failed.
+        if ordinal == 1 {
+            return Some(match place {
+                Some(name) => format!("Searching for an invasion in {name}"),
+                None => "Searching for an invasion where you are".to_string(),
+            });
+        }
+        let nearby = total.saturating_sub(1);
+        Some(match place {
+            Some(name) => format!(
+                "No invasion where you are -- searching {} of {nearby} nearby locations ({name})",
+                ordinal - 1
+            ),
+            None => format!(
+                "No invasion where you are -- searching {} of {nearby} nearby locations",
+                ordinal - 1
+            ),
+        })
+    }
+
+    /// Announce that the widening search has run out of nearby places and dropped the filter.
+    ///
+    /// Returns `None` on a repeat, which is the common case by a wide margin: the everywhere rung
+    /// is re-derived on every query round, so this is asked roughly every fifteen seconds for as
+    /// long as the search runs.
+    ///
+    /// `nearby` is how many places were tried before giving up, and it is worth carrying because
+    /// the two cases read completely differently to a player. Forty-eight tried and empty is a
+    /// quiet neighbourhood; one tried is a legacy dungeon, where a block id encodes a dungeon and
+    /// a floor rather than a grid position, so there are no neighbours to ask about and the radius
+    /// the player set could never have applied.
+    /// Say that an armed search was dropped before it could ask anybody, and why.
+    ///
+    /// # The silence this replaces
+    ///
+    /// Run br-20260916-040126-e719 put "Searching for an invasion in Foot of the Forge" on screen
+    /// and then said nothing for the rest of the run. The search had already been dropped: the
+    /// object `ersc.dll` points at as its session had an uninitialised `CRITICAL_SECTION` at
+    /// `+0x100`, so there was no lock to take and no query could ever go out. The player watched a
+    /// banner that named a place, believed a search was running, and waited.
+    ///
+    /// A refusal that reaches only the log is indistinguishable, from the chair, from a search
+    /// that is quietly working. This is the same refusal said out loud.
+    #[must_use]
+    pub fn observe_cannot_search(&mut self, enabled: bool) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::CannotSearch);
+        self.last_announced = Some(Announced::CannotSearch);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // Two wordings were wrong here before this one, in opposite ways.
+        //
+        // "Seamless has no session to search from" named an object the player cannot see and
+        // cannot act on. Replacing it with "Seamless is not connected yet" was worse: it asserts a
+        // cause this module has not established, and "yet" hands the player a job. Their answer
+        // was the correct one -- "why not? The user isn't going to do anything to connect it."
+        //
+        // What is measured is only this: the search did not start. Why Seamless's own networking
+        // is silent is an open question with a real measurement behind it and no answer yet: zero
+        // calls on all 38 slots of ersc's matchmaking interface over 120s in-world with the hooks
+        // proven live, 331 of 344 runs never declaring a lobby, our own DLL set and the autoload
+        // both ruled out by their controls, and Steam logged on throughout. A banner may not turn
+        // that into a cause, and it may not ask for something only this mod can do.
+        Some("No invasion started".to_string())
+    }
+
+    pub fn observe_search_everywhere(
+        &mut self,
+        enabled: bool,
+        nearby: usize,
+        mod_only: bool,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
+        self.last_announced = Some(Announced::SearchingEverywhere);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // "Everywhere" is a lie while hunt is on, and it is the lie the player acts on.
+        //
+        // Dropping the location filter leaves the hunt filter, which asks Steam for a key only
+        // hosts running this build publish. Measured 2026-09-15, run br-20260915-161554-f2a2:
+        // every match found that way reached state `0x12` and died at the connect deadline,
+        // because the entries were stale -- nobody else was running it. Turning hunt off in the
+        // same session, with no restart, landed an invasion within 27 seconds.
+        //
+        // So the widened search is not a search of everywhere. It is a search of everyone running
+        // this mod, which on most evenings is nobody, and a banner that says otherwise sends the
+        // player off to wait for an invasion that cannot arrive.
+        let reach = if mod_only {
+            " -- but still only hosts running this mod"
+        } else {
+            ""
+        };
+        Some(match nearby {
+            0 => format!("No nearby locations to search here -- looking everywhere instead{reach}"),
+            1 => format!("No invasion where you are -- looking everywhere instead{reach}"),
+            n => {
+                format!("No invasion in {n} nearby locations -- looking everywhere instead{reach}")
+            }
+        })
+    }
+
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -187,6 +351,78 @@ impl RejectNotice {
     ///
     /// Same shape as [`Self::observe`]: state advances even when the notice is disabled, and the
     /// place name is resolved by the caller so this type stays testable off the game.
+    /// Say the sweep found somebody, and where.
+    ///
+    /// The line this replaces was not a line: `sweep_tick`'s `Outcome::Found` wrote to the debug
+    /// file and nothing else, while the banner carried on reciting the rest of the ring at one
+    /// place per 100ms. So the moment the search stopped asking was the moment the screen started
+    /// lying -- naming places it would never query, for as long as the queue lasted. The caller
+    /// clears that queue and calls this instead.
+    pub fn observe_found_host(
+        &mut self,
+        enabled: bool,
+        block: u32,
+        place: Option<&str>,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::FoundHost(block));
+        self.last_announced = Some(Announced::FoundHost(block));
+        // Finding somebody ends the run of rejections it followed, exactly as a success does.
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // The word is "asking", not "invading", because finding a host is not arriving in their
+        // world. The sweep reads a lobby Steam published; joining it is Seamless's own connect,
+        // which can and does fail afterwards -- run `br-20260917-224518-f81b` restarted the same
+        // search fifteen times without one connect landing. The old wording promised the arrival
+        // and the player got the promise twice with no invasion behind it: "Found a host in
+        // Highroad Cross -- invading" and "but I did not invade. Seamless produces a message when
+        // I'm invading" (2026-09-17). Seamless's own invasion message is the only line entitled to
+        // claim the arrival, so this one stops at the request it actually made.
+        Some(match place {
+            Some(place) if !place.is_empty() => {
+                format!("Found a host in {place} -- asking Seamless to join")
+            }
+            // Before the world map has been read nothing has a name, so the id is the fallback --
+            // the same trade every other line here makes, for the same reason.
+            _ => format!(
+                "Found a host in {} -- asking Seamless to join",
+                BlockKey::from_raw(block)
+            ),
+        })
+    }
+
+    /// Say that nobody anywhere is publishing a place, so there is nothing to search near or far.
+    ///
+    /// Distinct from [`Self::observe_search_everywhere`], whose text is "No nearby locations to
+    /// search here" and "No invasion in N nearby locations" -- both of which claim the
+    /// neighbourhood was asked. On this path it was not: one pre-flight query established that no
+    /// host anywhere carries a block id, so every one of those queries is known empty before it is
+    /// sent, and a banner that recites 48 places it is skipping describes a search nobody is doing.
+    /// `nearby_only` is the row the player pressed, and it changes both halves of the sentence.
+    /// "nearby or far" claims a reach that row does not have, and "invading as usual" promises an
+    /// invasion it will not get: with nobody publishing a block id anywhere, a search that keeps
+    /// its location filter returns nothing, which is the correct outcome and not a failure.
+    /// Measured on run `br-20260917-183537-0445`, where this line was shown for a `Nearby only`
+    /// finger and the invasion that followed landed in a different map.
+    pub fn observe_nothing_to_search(
+        &mut self,
+        enabled: bool,
+        nearby_only: bool,
+    ) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::SearchingEverywhere);
+        self.last_announced = Some(Announced::SearchingEverywhere);
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        Some(if nearby_only {
+            "Nobody is hosting nearby -- nothing to invade".to_string()
+        } else {
+            "Nobody is hosting nearby or far -- invading as usual".to_string()
+        })
+    }
+
     pub fn observe_success(
         &mut self,
         enabled: bool,
@@ -253,6 +489,30 @@ impl RejectNotice {
         Some(text)
     }
 
+    /// Feed an attempt the deadline called lost. Returns the text to display, or `None`.
+    ///
+    /// `attempt` distinguishes one failed hunt from the next; see [`Announced::Failed`]. The caller
+    /// owns the count because this type deliberately accumulates nothing across attempts.
+    ///
+    /// No place and no host: join data never arrived, so there is no destination to name. Saying
+    /// where would mean naming the last place the player *was* told about, which reads as a
+    /// rejection from somewhere they never reached.
+    pub fn observe_failure(&mut self, enabled: bool, attempt: u32) -> Option<String> {
+        let repeat = self.last_announced == Some(Announced::Failed(attempt));
+        self.last_announced = Some(Announced::Failed(attempt));
+        // A failure ends the run of rejections it followed, exactly as a success does; the count
+        // belongs to that run.
+        self.suppressed = 0;
+        if repeat || !enabled {
+            return None;
+        }
+        // Worded as the outcome first, like the other three, so the banner reads as one surface
+        // reporting four results rather than four unrelated messages. "No connection" rather than
+        // "timed out" on purpose: Seamless's timeout has not fired yet, and claiming it had would
+        // be reporting something this mod did not observe.
+        Some("Invasion failed -- no connection".to_string())
+    }
+
     /// How many rejections have been suppressed since the last announcement.
     #[must_use]
     pub const fn suppressed(&self) -> usize {
@@ -272,6 +532,78 @@ impl RejectNotice {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The first step is where the player is standing, and must not read as a failure.
+    #[test]
+    fn the_first_step_does_not_announce_a_failure_before_anything_failed() {
+        let mut notice = RejectNotice::default();
+        let said = notice
+            .observe_prefilter_step(true, 1, 9, Some("Liurnia Lake Shore"))
+            .expect("the first step is news");
+        assert!(said.contains("Liurnia Lake Shore"));
+        assert!(
+            !said.contains("No invasion"),
+            "step one is the search starting, not a place that came back empty: {said}"
+        );
+    }
+
+    /// From the second step on, the count is what resolves the ambiguity.
+    #[test]
+    fn a_later_step_counts_the_nearby_locations_excluding_the_centre() {
+        let mut notice = RejectNotice::default();
+        notice.observe_prefilter_step(true, 1, 9, None);
+        let said = notice
+            .observe_prefilter_step(true, 4, 9, Some("Stormhill"))
+            .expect("a new ordinal is news");
+        assert!(
+            said.contains("3 of 8"),
+            "the centre is not a nearby location: {said}"
+        );
+        assert!(said.contains("Stormhill"));
+    }
+
+    /// A tile id is never shown in place of a name.
+    ///
+    /// `m60_51_36_00` tells a player nothing, so the banner counts instead. The count alone still
+    /// separates "nobody is nearby" from "three tiles left to ask about", which is the whole
+    /// reason the rotation announces itself.
+    #[test]
+    fn a_missing_name_leaves_the_count_rather_than_showing_a_tile_id() {
+        let mut notice = RejectNotice::default();
+        notice.observe_prefilter_step(true, 1, 9, None);
+        let said = notice
+            .observe_prefilter_step(true, 2, 9, None)
+            .expect("a new ordinal is news");
+        assert!(said.contains("1 of 8"));
+        assert!(
+            !said.contains("m60"),
+            "no tile id may reach a player: {said}"
+        );
+    }
+
+    /// Re-asking for the same step does not repaint the banner every frame.
+    #[test]
+    fn the_same_step_twice_is_announced_once() {
+        let mut notice = RejectNotice::default();
+        assert!(notice.observe_prefilter_step(true, 2, 9, None).is_some());
+        assert!(notice.observe_prefilter_step(true, 2, 9, None).is_none());
+        assert!(
+            notice.observe_prefilter_step(true, 3, 9, None).is_some(),
+            "moving on is news again"
+        );
+    }
+
+    /// With the notice switched off the search still advances, silently.
+    #[test]
+    fn a_disabled_notice_announces_nothing_but_still_tracks_the_step() {
+        let mut notice = RejectNotice::default();
+        assert_eq!(notice.observe_prefilter_step(false, 2, 9, None), None);
+        assert_eq!(
+            notice.observe_prefilter_step(true, 2, 9, None),
+            None,
+            "the step was still recorded, so re-announcing it would be a repeat"
+        );
+    }
 
     const LIMGRAVE: u32 = 0x3c2a_2400; // m60_42_36_00
 
@@ -753,5 +1085,92 @@ mod tests {
             notice.observe_arrival(true, LIMGRAVE, None, None).is_none(),
             "turning the notice on must not replay an arrival from minutes ago"
         );
+    }
+    /// The rung that was invisible. Announced once, then suppressed -- it is re-derived on every
+    /// query round, and repainting the banner every fifteen seconds is what the shared latch
+    /// exists to prevent.
+    #[test]
+    fn widening_to_everywhere_is_announced_once_and_then_suppressed() {
+        let mut notice = RejectNotice::new();
+        assert_eq!(
+            notice.observe_search_everywhere(true, 48, false).as_deref(),
+            Some("No invasion in 48 nearby locations -- looking everywhere instead")
+        );
+        assert_eq!(notice.observe_search_everywhere(true, 48, false), None);
+        assert_eq!(notice.observe_search_everywhere(true, 48, false), None);
+    }
+
+    /// A ring of one is a legacy dungeon, where the radius could never have applied. Saying
+    /// "no invasion in 0 nearby locations" there would be arithmetic rather than English.
+    #[test]
+    fn a_ring_with_no_neighbours_says_so_instead_of_counting_zero() {
+        let mut notice = RejectNotice::new();
+        let text = notice
+            .observe_search_everywhere(true, 0, false)
+            .expect("the first escalation is news");
+        assert!(
+            text.contains("No nearby locations to search here"),
+            "{text}"
+        );
+        assert!(!text.contains('0'), "{text}");
+    }
+
+    /// A step between two exhaustions makes the second one news again, the same way two failed
+    /// connections in a row are two pieces of news rather than one repeated.
+    #[test]
+    fn a_step_between_two_exhaustions_unsuppresses_the_second() {
+        let mut notice = RejectNotice::new();
+        assert!(notice.observe_search_everywhere(true, 8, false).is_some());
+        assert!(
+            notice
+                .observe_prefilter_step(true, 2, 9, Some("Limgrave"))
+                .is_some()
+        );
+        assert!(notice.observe_search_everywhere(true, 8, false).is_some());
+    }
+
+    /// Gated on the same option as every other banner: somebody who turned notices off does not
+    /// start getting them because their search widened.
+    #[test]
+    fn the_widened_search_banner_respects_the_notice_switch() {
+        let mut notice = RejectNotice::new();
+        assert_eq!(notice.observe_search_everywhere(false, 48, false), None);
+    }
+
+    /// `Nearby only` may not be told an invasion is coming. Nobody publishing a block id anywhere
+    /// means the nearby ring is empty, and for a row with no far half that is the end of the
+    /// search, not a handoff to an unfiltered one. Run `br-20260917-183537-0445` showed the old
+    /// wording -- "nearby or far -- invading as usual" -- to a `Nearby only` finger, and the
+    /// invasion that followed landed in block `0x0a000000` from an anchor of `0x3d302d00`.
+    #[test]
+    fn nearby_only_is_not_promised_an_invasion_it_will_not_get() {
+        let mut notice = RejectNotice::new();
+        let said = notice
+            .observe_nothing_to_search(true, true)
+            .expect("the first notice is always shown");
+        assert!(
+            said.contains("nearby"),
+            "the row searched nearby, so the notice must say so: {said}"
+        );
+        assert!(
+            !said.contains("far"),
+            "`Nearby only` never asked about far: {said}"
+        );
+        assert!(
+            !said.contains("invading"),
+            "nothing is being invaded, and saying so is the defect: {said}"
+        );
+    }
+
+    /// The other row keeps its wording, because for it the sentence is true: `Both near and far`
+    /// really does hand over to an unfiltered Seamless search once the near half is exhausted.
+    #[test]
+    fn near_and_far_still_says_it_is_invading_as_usual() {
+        let mut notice = RejectNotice::new();
+        let said = notice
+            .observe_nothing_to_search(true, false)
+            .expect("the first notice is always shown");
+        assert!(said.contains("far"), "{said}");
+        assert!(said.contains("invading"), "{said}");
     }
 }

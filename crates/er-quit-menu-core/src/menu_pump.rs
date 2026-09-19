@@ -241,6 +241,32 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
     let owner = live_menu_window(raw_owner);
     if raw_owner != 0 && owner == 0 {
         note_dead_owner(filename, raw_owner);
+        // And then actually leave the tracker alone, which is what that line has always claimed to
+        // do and what the code below stopped doing the moment it fell through to the `match`.
+        //
+        // `raw_owner == 0` means the job no longer names a window: the picker really did close, and
+        // the owner-cleared arm below is right to restore the System windows. `raw_owner != 0 &&
+        // owner == 0` means the job still names a window that failed `live_menu_window`'s vtable
+        // screen on this frame, which is a different fact and was being treated as the first one --
+        // so one unreadable frame stamped the tracker with zero and ran the whole close path under
+        // a picker that was still on screen.
+        //
+        // What that cost, on run `br-20260917-192652-b918`: the log has `restore real windows
+        // source=standalone-profile-owner-cleared profile=0x0` followed by more of the picker's own
+        // `stats-text: summary row=... foreign_rows=64` lines, so the picker outlived its own
+        // teardown. `system_quit_profile_load_job_run_hook`'s block gate is `profile_window != 0 &&
+        // REAL_WINDOWS_HIDDEN != 0`, and `restore_real_system_windows` ends in
+        // `reset_profile_select_state`, which clears both. The player's next pick then ran the
+        // native load job unblocked: `system_quit_profile_load_activate_count = 0` against
+        // `system_quit_profile_load_job_run_last_profile_id = 7`. The character was swapped in place
+        // with no return-title and no save-safe switch, which is why the user read it as the build
+        // importer's behaviour rather than a save load, and why the portrait semaphore caught
+        // `target_slot=7 record(map=0xb0a0000) vs loaded(map=0x3d302d00)` -- the right character in
+        // the previous character's map.
+        //
+        // The two arms above this one store a possibly-zero `owner` into their own trackers for the
+        // same reason, so returning here fixes all three rather than just the picker's.
+        return;
     }
     match filename {
         INGAME_TOP_RESOURCE_NAME => {
@@ -252,28 +278,49 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
                 .store(owner, Ordering::SeqCst);
         }
         PROFILE_SELECT_RESOURCE_NAME | PICKER_PROFILE_SELECT_RESOURCE_NAME => {
-            er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW
-                .store(owner, Ordering::SeqCst);
             er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
                 .fetch_add(1, Ordering::SeqCst);
             let Ok(base) = game_module_base() else {
                 return;
             };
             if owner == 0 {
-                // The picker renders its browse rows by writing them into the live
-                // `CS::ProfileSummary`, so the window going away is the moment the game's own
-                // records have to come back. Nothing else in a shell is that moment: the open-path
-                // restores only cover re-entry, and a player who closes the picker and quits to the
-                // title otherwise reaches a `Load Game` list of folder names.
-                unsafe { system_quit_save_swap_restore_profile_summary("profile-owner-cleared") };
-                unsafe {
-                    system_windows::restore_real_system_windows(
-                        base,
-                        "standalone-profile-owner-cleared",
-                        &SystemWindowHooks::NONE,
-                    )
-                };
-            } else {
+                // A zero here is not the picker closing, and treating it as one is what let a save
+                // slot behave like the build importer.
+                //
+                // This function runs from `MenuWindowJob::Run` for the ProfileSelect job, so the
+                // job exists on every frame that reaches this line -- the picker is up by
+                // construction. `job+0x130` reading zero on such a frame is the pointer being
+                // unreadable for that frame, not the window being gone.
+                //
+                // Measured across runs br-20260917-192652-b918 and br-20260917-195407-9165: both
+                // logged `restore real windows source=standalone-profile-owner-cleared profile=0x0`
+                // with the picker's own `stats-text: summary row=... foreign_rows=64` lines
+                // continuing afterwards, and neither logged `not a live MenuWindow`. That second
+                // absence is what identifies the case: `note_dead_owner` fires only for
+                // `raw_owner != 0 && owner == 0`, so a silent zero means `raw_owner` itself was
+                // zero. The vtable screen was never involved.
+                //
+                // The damage is downstream. `restore_real_system_windows` ends in
+                // `reset_profile_select_state`, which clears `REAL_WINDOWS_HIDDEN`, and the store
+                // that used to sit above put zero in the window tracker -- together those are both
+                // terms of `system_quit_profile_load_job_run_hook`'s block gate. With the gate open
+                // the player's pick ran the native load job:
+                // `system_quit_profile_load_activate_count = 0` against
+                // `system_quit_profile_load_job_run_last_profile_id = 7`, a character swapped in
+                // place with no return-title and no save-safe switch.
+                //
+                // Nothing is lost by not restoring here. A picker that genuinely leaves is caught
+                // by `profile_rows_system_quit_menu`'s `restore-real-profile-left-list`, which asks
+                // whether the window is still in `SYSTEM_QUIT_TOP_HIDE_LIST` -- a membership test
+                // that does not depend on this pointer -- and by
+                // `restore-real-profile-closed-without-load` beside it. Both call the restore
+                // through the real hook set, so the `CS::ProfileSummary` records come back there
+                // too, which is what the branch this replaces was protecting.
+                return;
+            }
+            er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW
+                .store(owner, Ordering::SeqCst);
+            {
                 unsafe {
                     system_windows::hide_real_system_windows(
                         base,

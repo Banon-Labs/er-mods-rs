@@ -36,6 +36,7 @@ Then, from any script:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import pathlib
 import shutil
@@ -235,7 +236,89 @@ def ensure_binary() -> pathlib.Path:
     return server
 
 
-def start(force: bool = False) -> int:
+def clear_staged_agent() -> bool:
+    """Delete the agent DLL a dead server left staged in the prefix, so the next attach can stage.
+
+    Measured 2026-09-16, and it cost three attaches to recognise. `frida-server.exe` unpacks its
+    injector payload to `%TEMP%/re.frida.server/x86_64/frida-agent.dll` and, on this Wine target,
+    refuses to overwrite one a previous server left behind:
+
+        frida.PermissionDeniedError: error opening file
+        "C:\\users\\steamuser\\AppData\\Local\\Temp\\re.frida.server\\x86_64\\frida-agent.dll":
+        File exists
+
+    Deleting the tree by hand is not enough either -- a server already running does not re-stage,
+    and the next attach fails the other way round with `unable to find DLL at ...`. Both halves
+    have to happen together, which is why this lives inside the restart rather than beside it.
+    """
+    staged = (
+        prefix()
+        / "drive_c/users/steamuser/AppData/Local/Temp/re.frida.server"
+    )
+    if not staged.exists():
+        return False
+    shutil.rmtree(staged, ignore_errors=True)
+    return not staged.exists()
+
+
+def world_is_up() -> tuple[bool, str]:
+    """Whether the newest run has a player in a world yet, from its own telemetry.
+
+    The launcher returns as soon as the DLL logs that it loaded, which is a minute or more before
+    a world exists, and a frida-server started into that window puts an injector into a process
+    still building its own address space.
+
+    `oracle_player_present` is the product's own read of `WorldChrMan`, written by `er_quickload`
+    into the run's artifact directory, so this costs a file read and depends on no game hook of
+    this script's own. No telemetry file at all answers "unknown", which is treated as not ready.
+    """
+    # No game is the clearest not-ready there is, and it has to be checked before the files: a
+    # previous run's telemetry keeps saying a player was present long after that process died, so
+    # reading it first let the gate pass with nothing running at all.
+    if game_pid() is None:
+        return False, "no eldenring.exe is running"
+    runs = sorted(
+        (pathlib.Path.home() / ".cache" / "er-me3-runs").glob("br-*"),
+        key=lambda d: d.stat().st_mtime,
+        reverse=True,
+    )
+    for run in runs[:2]:
+        telemetry = run / "er-quickload-telemetry.json"
+        if not telemetry.exists():
+            continue
+        try:
+            data = json.loads(telemetry.read_text(encoding="utf-8", errors="replace"))
+        except (ValueError, OSError):
+            continue
+        if data.get("oracle_player_present"):
+            return True, f"{run.name}: a player is in a world"
+        return False, (
+            f"{run.name}: oracle_player_present is "
+            f"{data.get('oracle_player_present')!r}, step={data.get('oracle_system_step_label')!r}"
+        )
+    return False, "no run telemetry to read -- cannot tell whether a world exists"
+
+
+def start(force: bool = False, allow_early: bool = False) -> int:
+    # Refuse to start while the game is still booting.
+    #
+    # 2026-09-16: a server was started seconds after a launch, the drive that followed reported
+    # "input is not reaching the game", and the process was gone by the next check -- user's
+    # reading, "you definitely crashed the game by attaching frida too early". Injecting into a
+    # process that is still mapping its own modules is the one attach this repo never had a reason
+    # to make: every question these agents ask is about a world that does not exist yet.
+    #
+    # `--allow-early` exists for the boot itself being the subject.
+    if not allow_early:
+        ready, detail = world_is_up()
+        if not ready:
+            print(
+                f"REFUSING to start frida-server: the game is not in a world yet ({detail}). "
+                "Attaching during boot has killed the process. Wait for the world, or pass "
+                "--allow-early when the boot itself is what you are measuring.",
+                file=sys.stderr,
+            )
+            return 4
     # An open port is not proof of a usable server. Measured 2026-09-08: a server started before
     # `scripts/er-teardown.py` killed the prefix keeps its listening socket, accepts the connection,
     # and then hangs forever inside `enumerate_processes` -- so a watcher started against it sits
@@ -249,12 +332,16 @@ def start(force: bool = False) -> int:
         # previous container's namespace (mnt:[4026533261]) while the game had moved to a new one
         # (mnt:[4026533335]), so every enumerate hung and `--force` appeared to do nothing.
         stop()
+        if clear_staged_agent():
+            print("cleared the agent DLL a previous server left staged in the prefix")
     elif listening():
         if server_sees_the_prefix():
             print(f"frida-server already listening on 127.0.0.1:{PORT} and answering")
             return 0
         print("frida-server is listening but not answering; replacing it", flush=True)
         stop()
+        if clear_staged_agent():
+            print("cleared the agent DLL a previous server left staged in the prefix")
     wine = wine_binary()
     if wine is None:
         print("no Proton wine binary found under Steam", file=sys.stderr)
@@ -330,8 +417,10 @@ def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
 
     def ask() -> None:
         try:
-            import frida
-
+            frida = import_frida()
+            if frida is None:
+                answered.append(False)
+                return
             dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
             dev.enumerate_processes()
             answered.append(True)
@@ -344,14 +433,32 @@ def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
     return bool(answered) and answered[0]
 
 
+
+def import_frida():
+    """Import the real frida package, or say plainly that it is not installed here.
+
+    `scripts/frida/` holds the agent `.js` files and has no `__init__.py`, so under a bare
+    `python3` it is picked up as a namespace package for the name `frida` and the import
+    succeeds with an empty module. Every later attribute access then fails as
+    `module 'frida' has no attribute 'get_device_manager'`, which reads as an api change
+    rather than as a missing dependency. Returns `None` when frida is unavailable.
+    """
+    try:
+        import frida
+    except ImportError:
+        return None
+    if not hasattr(frida, "get_device_manager"):
+        return None
+    return frida
+
+
 def status() -> int:
     up = listening()
     print(f"127.0.0.1:{PORT} {'OPEN' if up else 'closed'}")
     if not up:
         return 1
-    try:
-        import frida
-    except ImportError:
+    frida = import_frida()
+    if frida is None:
         print("frida python not importable here; run under `uv run --with frida`")
         return 0
     device = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
@@ -421,6 +528,10 @@ def selftest() -> int:
         ("the cache directory is user-owned, not a repo path", "er-mods-rs" not in str(CACHE)),
         ("--force stops the old server before starting a new one", "stop()" in force_branch),
         (
+            "--force clears the agent DLL a dead server left staged",
+            "clear_staged_agent()" in force_branch,
+        ),
+        (
             "the server is stopped by comm, never a broad pkill -f pattern",
             # Built from pieces so the check does not match its own source text -- a literal here
             # made the assertion fail against a file that was already correct.
@@ -471,6 +582,12 @@ def main() -> int:
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--force", action="store_true", help="replace a running server outright")
+    parser.add_argument(
+        "--allow-early",
+        action="store_true",
+        help="start even though no world exists yet. Only for measuring the boot itself: "
+        "attaching during boot has killed the game.",
+    )
     args = parser.parse_args()
     if args.selftest:
         return selftest()
@@ -478,7 +595,7 @@ def main() -> int:
         return status()
     if args.stop:
         return stop()
-    return start(force=args.force)
+    return start(force=args.force, allow_early=args.allow_early)
 
 
 if __name__ == "__main__":

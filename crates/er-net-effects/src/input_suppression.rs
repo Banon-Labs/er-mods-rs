@@ -10,9 +10,11 @@ use er_hook::{MH_STATUS, UnionFn, register_shared_hook_with_budget};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
 use windows::core::{GUID, s};
 
+use er_dinput_suppress_core::dinput_state;
+
 use crate::{
     bindings::{self, CURSOR_SLOT_MASK},
-    dinput_state, effects,
+    effects,
     hold_repeat::HoldRepeat,
     log::net_effects_log,
     selector_gate::{self, SelectorKey},
@@ -24,17 +26,9 @@ use crate::{
 static SELECTOR_OPEN: AtomicBool = AtomicBool::new(false);
 static HOOKS_INSTALLED: AtomicBool = AtomicBool::new(false);
 static DINPUT_KB_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
-static DINPUT_MOUSE_GET_STATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_KB_ALSO_MOUSE: AtomicBool = AtomicBool::new(false);
 static DINPUT_KB_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
-static DINPUT_MOUSE_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_SUPPRESSED_ARROW_KEYS: AtomicUsize = AtomicUsize::new(0);
-/// Set while the mouse pointer sits inside the overlay's minimize/maximize button.
-static POINTER_OVER_OVERLAY: AtomicBool = AtomicBool::new(false);
-/// Mouse reads whose left button was blanked because the pointer was over that button. Elden
-/// Ring polls the mouse through DirectInput, so without this a click on the overlay is also a
-/// weapon swing.
-static DINPUT_SUPPRESSED_MOUSE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_PREVIOUS_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_QUEUED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
 static DINPUT_REPEATED_SELECTOR_KEYS: AtomicUsize = AtomicUsize::new(0);
@@ -114,16 +108,16 @@ pub(crate) fn dinput_kb_hook_fires() -> usize {
 }
 
 pub(crate) fn dinput_mouse_hook_fires() -> usize {
-    DINPUT_MOUSE_HOOK_FIRES.load(Ordering::Relaxed)
+    er_dinput_suppress_core::mouse_hook_fires()
 }
 
 pub(crate) fn dinput_suppressed_mouse_clicks() -> usize {
-    DINPUT_SUPPRESSED_MOUSE_CLICKS.load(Ordering::Relaxed)
+    er_dinput_suppress_core::suppressed_mouse_clicks()
 }
 
 /// Tell the DirectInput hooks whether the pointer is currently over the overlay's button.
 pub(crate) fn set_pointer_over_overlay(over: bool) {
-    POINTER_OVER_OVERLAY.store(over, Ordering::Relaxed);
+    er_dinput_suppress_core::set_pointer_over_overlay(over);
 }
 
 pub(crate) fn dinput_suppressed_arrow_keys() -> usize {
@@ -215,47 +209,9 @@ unsafe extern "system" fn dinput_kb_get_state_hook(
         DINPUT_NON_KEYBOARD_READS.fetch_add(1, Ordering::Relaxed);
         // Same vtable entry, so the mouse arrives here too and needs the same click blanking as
         // the dedicated mouse hook below.
-        blank_overlay_mouse_click(hr, size, data);
+        unsafe { er_dinput_suppress_core::blank_overlay_mouse_click(hr, size, data) };
     }
     raw
-}
-
-/// The mouse detour, in the same union shape and for the same reason as the keyboard one above.
-unsafe extern "system" fn dinput_mouse_get_state_hook(
-    device: usize,
-    size: usize,
-    data: usize,
-    unused: usize,
-) -> usize {
-    DINPUT_MOUSE_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
-    let next = DINPUT_MOUSE_GET_STATE_ORIG.load(Ordering::Relaxed);
-    if next == 0 {
-        return 0;
-    }
-    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
-    let raw = unsafe { call(device, size, data, unused) };
-    blank_overlay_mouse_click(raw as i32, size as u32, data as *mut u8);
-    raw
-}
-
-/// Blank the left mouse button in a DirectInput mouse read while the pointer is over the
-/// overlay's minimize/maximize button.
-///
-/// The click still reaches imgui -- hudhook feeds that from the window procedure, which this
-/// never touches -- so the button works while the swing it would otherwise trigger does not.
-fn blank_overlay_mouse_click(hr: i32, size: u32, data: *mut u8) {
-    if hr < 0 || data.is_null() || !POINTER_OVER_OVERLAY.load(Ordering::Relaxed) {
-        return;
-    }
-    if !dinput_state::is_mouse_state(size) {
-        return;
-    }
-    let button = unsafe { data.add(dinput_state::MOUSE_BUTTON0_OFFSET) };
-    if unsafe { *button } & 0x80 == 0 {
-        return;
-    }
-    unsafe { *button = 0 };
-    DINPUT_SUPPRESSED_MOUSE_CLICKS.fetch_add(1, Ordering::Relaxed);
 }
 
 fn dinput_key_down(size: u32, data: *mut u8, offset: usize) -> bool {
@@ -467,21 +423,21 @@ unsafe fn install_dinput_hooks() -> Result<(), MH_STATUS> {
         "input-suppression: keyboard GetDeviceState detour at 0x{keyboard_addr:x} via {kb_route:?}"
     ));
 
+    // The mouse entry belongs to `er-dinput-suppress-core`, which every overlay in the process
+    // links for its own rect -- including guests, which own no `MessageFilter` and could not keep
+    // a click off the game any other way. When both devices share one vtable entry this module's
+    // keyboard detour sees the mouse reads too and runs the same blanking directly, so the shared
+    // case is covered whether or not the core's own registration resolves.
     if keyboard_addr == mouse_addr {
         DINPUT_KB_ALSO_MOUSE.store(true, Ordering::Relaxed);
-    } else {
-        let mouse_route = unsafe {
-            register_shared_hook_with_budget(
-                mouse_addr,
-                dinput_mouse_get_state_hook,
-                &DINPUT_MOUSE_GET_STATE_ORIG,
-                FRAME_DRIVEN_RESOLVE_TRIES,
-                FRAME_DRIVEN_RESOLVE_SLEEP_MS,
-            )?
-        };
-        net_effects_log(format_args!(
-            "input-suppression: mouse GetDeviceState detour at 0x{mouse_addr:x} via {mouse_route:?}"
-        ));
+    }
+    match unsafe { er_dinput_suppress_core::install_mouse_suppression() } {
+        Ok(addr) => net_effects_log(format_args!(
+            "input-suppression: mouse GetDeviceState detour at 0x{addr:x} via er-dinput-suppress-core"
+        )),
+        Err(status) => net_effects_log(format_args!(
+            "input-suppression: shared mouse suppression install failed: {status:?}"
+        )),
     }
 
     // The registrar owns both detours for the life of the process; nothing uninstalls them.

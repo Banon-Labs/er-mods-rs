@@ -175,12 +175,55 @@ _check_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
 # stage still calls this file bare and still takes the exclusive lock, because at that point its
 # verdict does cover everything.
 if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && command -v flock >/dev/null 2>&1; then
-	exec 9>"$_check_lock" || true
+	# `<>` and not `>`: opening for write TRUNCATES, so a refusing run used to blank the
+	# holder's pid a line before reading it, and every refusal said "pid unknown". The holder
+	# record is the only thing that distinguishes a live run from a descriptor some unrelated
+	# process inherited and never closed, which is what a Proton game tree does to fd 9.
+	exec 9<>"$_check_lock" || true
 	_check_lock_mode=-x
 	[[ -n $_check_stage ]] && _check_lock_mode=-s
 	if ! flock -n $_check_lock_mode 9; then
 		_holder=$(cat "$_check_lock" 2>/dev/null || true)
-		echo "check.sh: REFUSED -- another run already holds $_check_lock (pid ${_holder:-unknown})." >&2
+		# A lock nobody is running is not contention, it is a leaked descriptor. Measured
+		# 2026-09-15: `fuser` on this file named wineserver, winedevice.exe and rpcss.exe -- the
+		# launched game's Proton tree, holding fd 9 it inherited from a check.sh that exited long
+		# before. The refusal is correct about the flock and wrong about what it means, and no
+		# amount of waiting clears it, so a push stays blocked until somebody reaches for
+		# ER_CHECK_FORCE=1 and thereby disarms the guard for the case it is actually for.
+		#
+		# Breaking it is safe precisely because of the holder record above: a live run always
+		# writes its pid, so an empty record or a dead one means no run is behind this lock.
+		_holder_live=0
+		[[ -n $_holder && -r /proc/$_holder/cmdline ]] && _holder_live=1
+		# A /proc scan rather than a process-name search tool: the name-matching tools are
+		# blocked repo-wide because they false-negative on this box's Windows-side processes,
+		# and reading cmdline directly is what the sanctioned helpers do anyway.
+		_other_check=0
+		for _c in /proc/[0-9]*/cmdline; do
+			[[ -r $_c ]] || continue
+			[[ ${_c%/cmdline} == /proc/$$ ]] && continue
+			if tr '\0' ' ' <"$_c" 2>/dev/null | grep -q 'scripts/check\.sh'; then
+				_other_check=1
+				break
+			fi
+		done
+		if [[ $_holder_live == 0 && $_other_check == 0 ]]; then
+			echo "check.sh: the lock is stale -- ${_holder:-no pid recorded} and no check.sh is running." >&2
+			echo "  Breaking it. A descriptor inherited by an unrelated process (the launched" >&2
+			echo "  game's Proton tree does this) keeps an flock alive after its owner exits." >&2
+			rm -f "$_check_lock"
+			exec 9<>"$_check_lock" || true
+		fi
+	fi
+	if ! flock -n $_check_lock_mode 9; then
+		_holder=$(cat "$_check_lock" 2>/dev/null || true)
+		_holder_what="no pid recorded"
+		if [[ -n $_holder ]] && [[ -r /proc/$_holder/cmdline ]]; then
+			_holder_what="alive: $(tr '\0' ' ' </proc/"$_holder"/cmdline)"
+		elif [[ -n $_holder ]]; then
+			_holder_what="pid $_holder is GONE -- the lock is held by a descriptor some other process inherited and never closed"
+		fi
+		echo "check.sh: REFUSED -- another run already holds $_check_lock (${_holder_what})." >&2
 		echo "  A whole-suite run holds it exclusively; a single --stage run holds it shared, so" >&2
 		echo "  the refusal you are reading is either a whole-suite run against yours, or yours" >&2
 		echo "  against a whole-suite run. Two --stage runs never collide." >&2
@@ -189,7 +232,10 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "${ER_CHECK_LOCK_HELD:-}" != "1" ]] && com
 		echo "  Wait for that run and read ITS result, or override with ER_CHECK_FORCE=1." >&2
 		exit 2
 	fi
-	echo "$$" >&9
+	# Through the path, not through fd 9: fd 9 is positioned at offset 0 and never seeks, so a
+	# re-entrant write would interleave. A fresh `>` truncates and writes while we hold the
+	# lock on the inode, which flock is unaffected by.
+	echo "$$" > "$_check_lock"
 	# ...and a step of this suite may re-enter this preamble. test-check-sh-accumulates.py lifts
 	# it verbatim and drives it over synthetic suites -- deliberately, because testing a copy
 	# would prove nothing about the file that runs. Those children are not a second run competing
@@ -2054,6 +2100,23 @@ shellcheck "$repo_root/scripts/git-strip-path-from-history.sh"
 # design; run it by hand, and it refuses if a real run is live.
 bash "$repo_root/scripts/er-stale-run-sentinel.sh" --selftest
 
+# The Frida evidence gate, which refuses a Rust edit under crates/ until a session has attached and
+# reported back (.cupcake/policies/claude/no_rust_edit_without_frida_proof.rego). Three steps,
+# because the gate has three parts that can each fail silently:
+#
+# The verdict reader decides what `PROVEN` means -- an absent log, a session that received nothing,
+# and a record older than `HEAD` all have to keep reading `UNPROVEN`, or the gate hands out
+# permission it never measured.
+python3 "$repo_root/scripts/er-frida-evidence.py" --selftest
+# The watcher's own assertions, including the one that its waits are events rather than sleeps.
+python3 "$repo_root/scripts/er-frida-watch.py" --selftest
+# The join between them, which neither selftest can see: a real watch's message count reaching the
+# log without anyone typing it. Drives run() against a stubbed device and ends the watch four ways
+# -- detach, silent detach, terminate, interrupt -- so a recorder moved into a branch that never
+# runs fails here instead of quietly leaving every future edit ungated. No game, no Frida, no
+# network.
+python3 "$repo_root/scripts/test-frida-evidence-wiring.py"
+
 # Launch REACHABILITY gate (2026-08-04). A launch takes the user's screen and yields one recording;
 # spending it on a predicate that cannot fire returns a clean-looking run that proves nothing. The
 # selftest runs first and includes the concrete regression -- the `requestCode latches 2` terminator
@@ -2129,6 +2192,14 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 # tests sat inert. The load-bearing one now is `selector_gate`: it decides whether this DLL may
 # take the player's arrow keys away from the game, which is not a claim to leave to review.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
+
+# er-dinput-suppress-core: the DirectInput buffer-shape predicates and the left-button blanking
+# every overlay in the process shares. Host-buildable on purpose -- the sizes are the part that is
+# expensive to get wrong, and getting them wrong is silent: a mouse read misread as a keyboard one
+# reported "every arrow released" and re-armed a held key on every poll. The blanking tests pin the
+# two directions that matter, that a click outside a panel still reaches the game and that a
+# 256-byte DIK table arriving through a shared vtable is left untouched.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
 
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without

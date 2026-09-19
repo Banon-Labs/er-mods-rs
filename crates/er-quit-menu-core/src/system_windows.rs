@@ -514,6 +514,9 @@ pub fn note_profile_select_finalized(window: usize) {
         .is_ok()
     {
         PROFILE_SELECT_FINALIZED_PENDING.store(window, Ordering::SeqCst);
+        // Whatever a resubmit owned, it owned the window that closed before it ran. This one is a
+        // later window, so its close is the user's again and the restore paths may act on it.
+        crate::save_picker_menu::clear_save_picker_resubmit_owns_close();
         // A cancel/path-label refresh may have queued a records-changed rebuild immediately before
         // outer Back finalized this exact dialog. It is obsolete now and would target freed memory.
         let _ = SAVE_PICKER_REBUILD_PENDING_DIALOG.compare_exchange(
