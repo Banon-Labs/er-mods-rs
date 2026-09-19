@@ -172,7 +172,7 @@ impl Picker {
         }
         // A run of headers at the end of a jump would leave the cursor on one; walk back.
         while position >= 0 && !matches!(self.rows[position as usize], Row::Entry(_)) {
-            position -= step.max(-1).min(1);
+            position -= step.clamp(-1, 1);
             if position < 0 || position as usize >= self.rows.len() {
                 return;
             }
