@@ -26,6 +26,7 @@ mod catalog;
 mod install;
 mod picker;
 mod selection;
+mod tui;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -53,6 +54,8 @@ OPTIONS:
 
     --no-seamless         Leave Seamless Co-op out of the profile even though it is
                           installed. Mods that need it will stay inert.
+    --plain               Use the numbered-list picker instead of the full-screen one,
+                          for a terminal the full-screen one does not suit.
 
     --select <names>      Comma-separated mods, by name or by label. Skips the picker.
     --defaults            Install the recommended set without the picker.
@@ -71,6 +74,7 @@ struct Args {
     profile: Option<PathBuf>,
     select: Option<String>,
     no_seamless: bool,
+    plain: bool,
     defaults: bool,
     none: bool,
     list: bool,
@@ -98,6 +102,7 @@ impl Args {
                 "--profile" => parsed.profile = Some(PathBuf::from(value()?)),
                 "--select" => parsed.select = Some(value()?),
                 "--no-seamless" => parsed.no_seamless = true,
+                "--plain" => parsed.plain = true,
                 "--defaults" => parsed.defaults = true,
                 "--none" => parsed.none = true,
                 "--list" => parsed.list = true,
@@ -233,7 +238,12 @@ fn run() -> Result<ExitCode, String> {
         resolve_selection(list)?
     } else {
         let mut state = picker::Picker::new();
-        match picker::run(&mut state).map_err(|err| format!("reading input: {err}"))? {
+        let driven = if args.plain {
+            picker::run_plain(&mut state)
+        } else {
+            picker::run(&mut state)
+        };
+        match driven.map_err(|err| format!("reading input: {err}"))? {
             Some(chosen) => chosen,
             None => {
                 println!("Nothing installed.");
