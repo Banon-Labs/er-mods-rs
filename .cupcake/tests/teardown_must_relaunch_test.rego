@@ -59,6 +59,23 @@ test_allow_teardown_alone_with_redirects if {
 	not denied("python3 scripts/er-teardown.py > /dev/null 2>&1")
 }
 
+# `--reason` records why the run ended, in the run's own outcome record. It adds evidence and no
+# work, so a deliberate ending may say what it was. Refusing it taught the agent to drop the flag
+# to get past the guard, which cost the outcome line the only thing it had to say.
+test_allow_teardown_alone_with_a_reason if {
+	not denied("python3 scripts/er-teardown.py --reason band-tables-measured")
+}
+
+test_allow_teardown_alone_with_a_joined_reason if {
+	not denied("python3 scripts/er-teardown.py --reason=band-tables-measured > /dev/null 2>&1")
+}
+
+# ...but the value is only excused as the flag's operand. A reason does not turn a chained command
+# into a standalone teardown, and a bare word that is not a reason is still trailing work.
+test_deny_teardown_with_a_reason_then_more_work if {
+	denied("python3 scripts/er-teardown.py --reason measured; bash scripts/er-build-dlls.sh er-save-game-row")
+}
+
 # ...but riding along with other work is still the accident this rule exists for.
 test_deny_teardown_then_second_command if {
 	denied("python3 scripts/er-teardown.py > /dev/null 2>&1; bash scripts/er-build-dlls.sh er-save-game-row")
@@ -103,6 +120,27 @@ test_allow_lookalike_script if {
 
 test_allow_unrelated_command if {
 	not denied("bash scripts/er-build-dlls.sh er-save-game-row")
+}
+
+test_allow_read_only_python_extraction_without_teardown if {
+	not denied(`python3 - <<'PY'
+from pathlib import Path
+ranges = [
+ ('driver.rs', Path('crates/er-npc-possess/src/possess/driver.rs'), [(240,310),(1125,1245),(1645,1815)]),
+ ('game.rs', Path('crates/er-npc-possess/src/possess/game.rs'), [(760,845),(1088,1125),(1228,1255),(1436,1504)]),
+ ('netdamage.rs', Path('crates/er-npc-possess/src/possess/netdamage.rs'), [(1,118),(330,445),(470,560)]),
+ ('layout.rs', Path('crates/er-npc-possess/src/possess/layout.rs'), [(68,140),(470,505),(1160,1195),(1218,1260)]),
+]
+for title,path,spans in ranges:
+ print('\\n##', title)
+ lines=path.read_text().splitlines()
+ for a,b in spans:
+  print(f'-- {a}-{b}')
+  for i in range(a,min(b,len(lines))+1):
+   s=lines[i-1]
+   if any(tok in s for tok in ['INVINC','teamType','request_move','SetHP','Packet15','Receive','set_invincible','set_alpha','set_no_attack','set_body_scale','set_camera_override','players_in_world','last_received_damage_packet','packet15_receive','TEAM_TYPE','TINT_ALPHA','SCALE_SIZE','camOverride','remote player','mode','Incoming','PvP DAMAGE','request_move','body is stretched','hurtbox','collision','PlayerIns','ChrIns','co-locate','camera', 'Charmed', 'SetStamina']):
+    print(f'{i}: {s}')
+PY`)
 }
 
 test_allow_other_events if {

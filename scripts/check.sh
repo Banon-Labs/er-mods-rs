@@ -152,6 +152,45 @@ if [[ "${ER_CHECK_FORCE:-}" != "1" && "$repo_root" == */.claude/worktrees/agent-
 	exit 2
 fi
 
+# Third refusal, same reasoning as the second and added for the same reason: a green from a quiet
+# tree is the only green that means anything, and a running game is the least quiet this box gets.
+#
+# The whole suite pins every core for ten minutes. The user asked, 2026-09-18, "why would I ever
+# want to run check.sh manually? And why would I want to allow you to run it ever?" -- while a
+# suite the agent had started in the background was doing exactly that under a game the agent had
+# also launched for them. It is the third time in the file's history that this cost a session: the
+# other two are recorded in the two refusals above.
+#
+# Nobody needs the whole suite by hand. The pre-push hook runs it, and so does CI, on a box with
+# no game on it. What a person or an agent wants mid-work is the stage their edit touched, which
+# is seconds -- so the refusal names that rather than just saying no.
+#
+# A single stage is exempt: it takes a shared lock, costs seconds, and is the thing this refusal
+# is steering toward. `--list-stages` and `--help` never reach here; both exit during argument
+# parsing above.
+#
+# The detector is `er-teardown.py --status`, the one every launch script uses, so "live" means what
+# it means everywhere else in the repo rather than a second opinion invented here -- and raw pgrep
+# is both guard-denied and blind to the Proton container stack. Its live line reads
+# `game health: pid=2014928 threads=125 cpu_ticks_in_3000ms=651 -> running` and its idle one reads
+# `game health: no eldenring.exe`, so `pid=` is what tells them apart; matching the word
+# `eldenring.exe` would match the idle line too and the refusal would fire with no game running.
+# It samples cpu ticks over 3s, which is the whole cost of this check and is invisible against a
+# ten-minute suite.
+if [[ "${ER_CHECK_FORCE:-}" != "1" && -z "${_check_stage:-}" ]] &&
+	python3 "$repo_root/scripts/er-teardown.py" --status 2>/dev/null | grep -q "game health: pid="; then
+	echo "check.sh: REFUSED -- Elden Ring is running." >&2
+	echo "  The whole suite pins every core for ~10 minutes, and its own verdict is worthless on a" >&2
+	echo "  contended box: steps come back INCONCLUSIVE and NOT RUN, which is what the concurrent-" >&2
+	echo "  run refusal below exists for. Under a live game it also costs the frames." >&2
+	echo "  Run the stage your edit touched instead -- seconds, and allowed while a game is up:" >&2
+	echo "    bash scripts/check.sh --list-stages" >&2
+	echo "    bash scripts/check.sh --stage <name>" >&2
+	echo "  The whole suite is the pre-push hook's job and CI's, on a box with no game on it." >&2
+	echo "  Deliberate override: ER_CHECK_FORCE=1 bash scripts/check.sh" >&2
+	exit 2
+fi
+
 # Machine-wide, not $repo_root-relative: every agent worktree is a separate checkout, so a lock
 # under the repo would be per-worktree and would therefore never see the contention it exists to
 # prevent. XDG_RUNTIME_DIR is per-user and tmpfs-backed; /tmp is the fallback. If flock is absent

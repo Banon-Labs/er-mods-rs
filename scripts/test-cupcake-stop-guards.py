@@ -112,6 +112,12 @@ CASES = [
         "user pushback met with an admission and a menu instead of the corrective action",
     ),
     Case(
+        "stall_after_instruction_violation_question.jsonl",
+        "ended the turn with an admission",
+        "the user asked a question-shaped correction after an explicit instruction was violated; "
+        "answering the question and asking for access is still pausing instead of corrective action",
+    ),
+    Case(
         "proof_without_observation.jsonl",
         "cited nothing that observed it in the game",
         "the turn calls a runtime feature proven off a load and an address translation -- neither is "

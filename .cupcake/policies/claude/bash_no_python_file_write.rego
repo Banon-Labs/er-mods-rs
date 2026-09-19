@@ -84,6 +84,23 @@ python_file_write_detected if {
 	not runs_a_committed_script
 }
 
+# A `.py` FILE invocation whose path is not a committed, reviewed script
+# carries no `open(..., 'w')` text of its own on THIS command line -- that
+# text lives inside the file being run, not in the command that runs it -- so
+# `writes_a_file` alone can never see it. Guard gap measured 2026-09-17: a
+# throwaway file written to the session scratchpad with a `cat > ... <<'EOF'`
+# heredoc (allowed on purpose -- shell redirection stays visible in the
+# command) and then run as a SEPARATE `python3 /tmp/.../patch.py` call sailed
+# through, because that second call is a one-line script invocation with no
+# inline write text to match. Cupcake evaluates each Bash call independently,
+# so the only way to catch call two is to distrust script-file execution
+# itself unless the path is one this repo has already reviewed and committed.
+python_file_write_detected if {
+	invokes_python
+	runs_a_python_script_file
+	not runs_a_committed_script
+}
+
 # ---------------------------------------------------------------------------
 # Committed-script exemption.
 #
@@ -98,11 +115,44 @@ python_file_write_detected if {
 # program anywhere in the command disqualifies it, because those are exactly the
 # forms that carry an inline program.
 # ---------------------------------------------------------------------------
-runs_a_committed_script if {
+
+# Any python invocation whose argument is a `.py` FILE PATH -- as opposed to
+# inline code (`-c`), a heredoc, or stdin (`python3 -`) -- committed or not.
+#
+# The trailing context is "anything that is not a path character", NOT
+# whitespace-or-end. A separator may abut the path with no space in front of
+# it, and the narrower spelling missed every one of them. Measured 2026-09-17
+# against the live policy, one command after the location fix landed:
+# `python3 /tmp/.../patch.py` denied, `python3 /tmp/.../patch.py; echo
+# "exit=$?"` ALLOWED -- the semicolon is not whitespace, so the path never
+# matched and the script-file rule never fired. The `; echo "exit=$?"` suffix
+# is not exotic either: another guard in this directory asks for a build's exit
+# code to be read that way, so the bypass shape is one the harness encourages.
+script_file_pattern := `python[0-9.]*[[:space:]]+[^[:space:]-][^[:space:]]*\.py($|[^[:alnum:]_.-])`
+
+runs_a_python_script_file if {
 	not contains(command, "<<")
 	not regex.match(`(^|[[:space:]])-c($|[[:space:]])`, command)
 	not regex.match(python_token_pattern_followed_by_stdin, command)
-	regex.match(`python[0-9.]*[[:space:]]+[^[:space:]-][^[:space:]]*\.py($|[[:space:]])`, command)
+	regex.match(script_file_pattern, command)
+}
+
+# The exemption itself, narrowed to match what the block message has always
+# promised ("A committed `python3 scripts/<name>.py` is also allowed"): the
+# path must be a repo-relative file under the repo's tracked `scripts/`
+# directory tree -- `scripts/<name>.py`, `scripts/<subdir>/<name>.py` -- and
+# nothing else. NOT an absolute path (`/tmp/...`, `/home/...`), NOT a
+# home-relative path (`~/...`), and NOT a `..` escape out of the tree: none of
+# those name a file this repo has committed or reviewed, no matter how closely
+# they resemble `scripts/<name>.py` in shape. The old regex checked only the
+# `.py` suffix and the absence of a leading dash, so `/tmp/.../patch.py` and
+# `~/scratch/patch.py` both satisfied it -- the bypass this rewrite closes.
+committed_script_path_pattern := `python[0-9.]*[[:space:]]+(\./)?scripts/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.py($|[^[:alnum:]_.-])`
+
+runs_a_committed_script if {
+	runs_a_python_script_file
+	not contains(command, "..")
+	regex.match(committed_script_path_pattern, command)
 }
 
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"

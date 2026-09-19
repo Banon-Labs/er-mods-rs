@@ -52,10 +52,10 @@
 #     calm-context "shall I?" from tripping the guard. To widen arm 2 to every hand-back regardless of
 #     friction, drop the `friction != ""` conjunct from `handed_back` (expect more false positives).
 #
-#     The signal emits ONE facts line -- STALLFACTS|friction=..|admission=..|handback=..|blame=..|
-#     acted=0|1|blocked=0|1|question=0|1|owned=0|1 -- so the OBSERVATION lives in the shell and the
-#     RULE lives here, where it is unit-testable against the verbatim corpus. Empty signal (nothing
-#     observed) -> no halt.
+#     The signal emits one facts line -- STALLFACTS|friction=..|admission=..|handback=..|blame=..|
+#     acted=0|1|blocked=0|1|question=0|1|owned=0|1|mustact=0|1 -- so the observation lives in the shell
+#     and the rule lives here, where it is unit-testable against the verbatim corpus. Empty signal
+#     (nothing observed) -> no halt.
 #
 #     KNOWN GAP: an INTERRUPTED turn fires no Stop event, so a stall the user cuts short is not caught.
 #     The sibling pairs (no_authority_agreement + _reminder, idle_hold + _reminder) close that with a
@@ -103,13 +103,14 @@ halt contains decision if {
 	}
 }
 
-# The confess-and-stop conjunction. `acted`/`blocked`/`question` are the three ways out.
+# The confess-and-stop conjunction. `acted`/`blocked` are always ways out. `question` is a way out
+# only when the prompt did not explicitly demand corrective action.
 stalled if {
 	friction != ""
 	admission != ""
 	acted == "0"
 	blocked == "0"
-	question == "0"
+	question_barrier_clear
 }
 
 # The hand-back conjunction. `acted` is deliberately absent (see the metadata), and `blocked` does not
@@ -171,6 +172,14 @@ blocked := object.get(fact, "blocked", "0")
 question := object.get(fact, "question", "0")
 
 owned := object.get(fact, "owned", "0")
+
+mustact := object.get(fact, "mustact", "0")
+
+question_barrier_clear if {
+	question == "0"
+} else if {
+	mustact == "1"
+}
 
 raw := trim(matched_facts, " \t\r\n")
 

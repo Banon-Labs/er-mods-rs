@@ -20,7 +20,7 @@ import data.cupcake.policies.claude.no_stall_on_friction as guard
 # Build the signal's facts line from a partial object, so each case states only what matters.
 # Defaults match the signal's own: no phrase found, no exemption earned.
 facts(f) := sprintf(
-	"STALLFACTS|friction=%s|admission=%s|handback=%s|blame=%s|acted=%s|blocked=%s|question=%s|owned=%s",
+	"STALLFACTS|friction=%s|admission=%s|handback=%s|blame=%s|acted=%s|blocked=%s|question=%s|owned=%s|mustact=%s",
 	[
 		object.get(f, "friction", ""),
 		object.get(f, "admission", ""),
@@ -30,6 +30,7 @@ facts(f) := sprintf(
 		object.get(f, "blocked", "0"),
 		object.get(f, "question", "0"),
 		object.get(f, "owned", "0"),
+		object.get(f, "mustact", "0"),
 	],
 )
 
@@ -160,6 +161,17 @@ test_allow_text_only_answer_to_a_question_asked_under_friction if {
 		"admission": "I don't actually know",
 		"question": "1",
 	})) == 0
+}
+
+# A question-shaped correction is different when the user names a violated instruction or an agent
+# pause in front of a known fix. Answering that question and stopping is still the defect.
+test_deny_question_shaped_correction_requires_action if {
+	"ER-EFFECTS-NO-STALL-ON-FRICTION" in halted_on({
+		"friction": "I told you",
+		"admission": "the instruction I violated",
+		"question": "1",
+		"mustact": "1",
+	})
 }
 
 # A genuine wait on something only the user can supply -- "invade now and I'll read the log". A real

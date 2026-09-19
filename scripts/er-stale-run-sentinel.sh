@@ -122,23 +122,50 @@ SENTINEL_LOG="${ER_SENTINEL_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/er-mods-r
 # therefore compared against its 15-character truncation as well.
 GAME_COMMS=("eldenring.exe" "me3" "start_protected_game.exe")
 
+# The game processes proper. `me3` is the launcher, and it outlives the game it launched: after a
+# clean exit its process stays resident with nothing under it. Counting that husk as a live run is
+# what this list separates out.
+GAME_ONLY_COMMS=("eldenring.exe" "start_protected_game.exe")
+
 list_live() {
-  python3 - "${GAME_COMMS[@]}" <<'PY'
+  python3 - "${#GAME_ONLY_COMMS[@]}" "${GAME_ONLY_COMMS[@]}" "${GAME_COMMS[@]}" <<'PY'
 import os, sys, glob
 
 # TASK_COMM_LEN - 1. A name longer than this is stored truncated, so match both forms.
 COMM_MAX = 15
-names = set()
-for raw in sys.argv[1:]:
-    names.add(raw)
-    names.add(raw[:COMM_MAX])
+
+
+def spellings(raw):
+    return {raw, raw[:COMM_MAX]}
+
+
+split = int(sys.argv[1]) + 2
+game_only = {s for raw in sys.argv[2:split] for s in spellings(raw)}
+names = {s for raw in sys.argv[split:] for s in spellings(raw)}
+
+found = []
 for d in glob.glob('/proc/[0-9]*'):
     try:
         comm = open(os.path.join(d, 'comm')).read().strip()
     except OSError:
         continue
     if comm in names:
-        print(os.path.basename(d), comm)
+        found.append((os.path.basename(d), comm))
+
+# A run is live only while a game process is. `me3` alone is a launcher that has outlived its
+# game, and reporting it as live blocks every source edit for the rest of the session over a run
+# that ended -- measured 2026-09-17, where `me3` pid 29536 was still resident after
+# `er-teardown.py --status` read `outcome=clean-exit api=ExitProcess code=0x0` and the game was
+# gone. The sentinel's own invariant is about the DLLs a run has loaded, and a husk has none.
+#
+# The window this gives up is the few seconds between `me3` starting and the game appearing, when
+# an edit would not be caught. That sequence does not occur here: a launch is one command that
+# pairs teardown and relaunch, and nothing edits source inside it.
+if not any(comm in game_only for _, comm in found):
+    found = []
+
+for pid, comm in found:
+    print(pid, comm)
 PY
 }
 

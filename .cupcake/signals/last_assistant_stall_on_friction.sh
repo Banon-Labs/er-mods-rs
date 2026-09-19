@@ -7,7 +7,7 @@
 # observation. Keeping the conjunction in rego is deliberate: it makes the rule unit-testable against
 # the verbatim corpus instead of hiding it in shell regexes.
 #
-#   STALLFACTS|friction=<phrase>|admission=<phrase>|handback=<phrase>|blame=<phrase>|acted=<0|1>|blocked=<0|1>|question=<0|1>|owned=<0|1>
+#   STALLFACTS|friction=<phrase>|admission=<phrase>|handback=<phrase>|blame=<phrase>|acted=<0|1>|blocked=<0|1>|question=<0|1>|owned=<0|1>|mustact=<0|1>
 #
 # Emitted only when friction or blame was detected; a clean turn emits empty (fail-open).
 #
@@ -29,9 +29,11 @@
 #   blocked    -- the turn stated a real dependency on a user action and committed to acting on its
 #                 result ("invade now and I'll read the log"). A genuine wait, not a stall.
 #   question   -- the friction-carrying prompt asked a question ("?" or an interrogative opener). A
-#                 turn that merely answers what was asked must never be caught by this guard.
+#                 turn that merely answers what was asked must usually not be caught by this guard.
 #   owned      -- the turn named its own triggering action ("my edit", "because I", "I tripped it").
 #                 Blame is only a defect when the agent's own hand in the outcome goes unmentioned.
+#   mustact    -- the prompt is question-shaped, but it names a violated instruction or an agent pause
+#                 in front of a known fix. Answering alone is the defect.
 #
 # Why a whole-turn SCAN: mirrors last_assistant_authority_agreement / last_assistant_idle_hold -- a
 # slip in an early message of a multi-message turn must not be masked by a later clean block. "Last
@@ -161,6 +163,8 @@ FRICTION_RES = [
     re.compile(r"\b(?:most\s+)?harmful\b|\bunacceptable\b|\bdisappointing\b", re.IGNORECASE),
     re.compile(r"\bwhy\s+(?:the\s+hell|would\s+you|did\s+you|do\s+you\s+keep)\b", re.IGNORECASE),
     re.compile(r"\bread\s+the\s+(?:instructions?|directives?|rules?|agents)\b", re.IGNORECASE),
+    re.compile(r"\bafter\s+i\s+told\s+you\b", re.IGNORECASE),
+    re.compile(r"\bactual\s+state\s+now\s*:\s+you'?re\s+paus", re.IGNORECASE),
     # Sarcasm carried by emphasis markers around a pronoun/praise word: "I'm happy for *you*".
     re.compile(r"[*_]\s*(?:you|your|great|nice|wonderful|lovely|fantastic|brilliant)\s*[*_]",
                re.IGNORECASE),
@@ -184,6 +188,8 @@ ADMISSION_RES = [
     re.compile(r"\bi\s+(?:don'?t|do\s+not)\s+(?:actually\s+)?know\b", re.IGNORECASE),
     re.compile(r"\b(?:no|zero)\s+evidence\b|\bwithout\s+evidence\b", re.IGNORECASE),
     re.compile(r"\bi\s+should(?:n'?t|\s+not)\s+have\b", re.IGNORECASE),
+    re.compile(r"\bi\s+(?:violated|ignored|missed|failed)\s+(?:the\s+)?(?:instruction|directive|order|rule)s?\b", re.IGNORECASE),
+    re.compile(r"\b(?:the\s+)?(?:instruction|directive|order|rule)\s+i\s+(?:violated|ignored|missed|failed)\b", re.IGNORECASE),
     # Concession-closure: agreeing and stopping, with no contrition word anywhere. Observed stall #3.
     re.compile(r"\bthat'?s\s+the\s+whole\s+\w+", re.IGNORECASE),
     re.compile(r"\bthat'?s\s+(?:all|it)\b(?!\s+\w+ing)", re.IGNORECASE),
@@ -259,6 +265,15 @@ QUESTION_OPENER_RE = re.compile(
     re.IGNORECASE,
 )
 
+MUST_ACT_PROMPT_RE = re.compile(
+    r"\bafter\s+i\s+told\s+you\b"
+    r"|\bactual\s+state\s+now\s*:\s+you'?re\s+paus"
+    r"|\bpaus(?:ing|e|ed)\s+(?:at|instead|rather)\b"
+    r"|\b(?:violated|ignored|missed|failed)\s+(?:the\s+)?(?:instruction|directive|order|rule)s?\b"
+    r"|\bfix(?:ing)?\s+issues?\s+that\s+you'?re\s+(?:completely\s+)?aware\s+of\b",
+    re.IGNORECASE,
+)
+
 
 def first_match(text, regexes):
     for rx in regexes:
@@ -284,6 +299,7 @@ handback = first_match(scrubbed, HANDBACK_RES)
 blocked = bool(first_match(scrubbed, BLOCKED_RES))
 owned = bool(first_match(scrubbed, OWNED_RES))
 question = bool("?" in prompt or QUESTION_OPENER_RE.search(prompt or ""))
+mustact = bool(MUST_ACT_PROMPT_RE.search(prompt or ""))
 
 sys.stdout.write(
     "STALLFACTS"
@@ -294,6 +310,7 @@ sys.stdout.write(
     "|acted=" + ("1" if acted else "0") +
     "|blocked=" + ("1" if blocked else "0") +
     "|question=" + ("1" if question else "0") +
-    "|owned=" + ("1" if owned else "0")
+    "|owned=" + ("1" if owned else "0") +
+    "|mustact=" + ("1" if mustact else "0")
 )
 PY
