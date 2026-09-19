@@ -72,7 +72,113 @@ const MENU_EVENT_SCAN_COUNT = 128;
 // Keystate bitmap, one byte per event id, the other half of the same pair.
 const MENU_KEYSTATE_OFFSET = 0x90;
 
+// `GameDataMan`, 1.16.2 `0x3d5df38` -> 1.17 `0x3d61f98`, 642/642 references agreeing.
+const GAME_DATA_MAN_RVA = 0x3d61f98;
+
+// `GameDataMan + 0x8` -> `PlayerGameData`, and `PlayerGameData + 0x2b0` -> `EquipGameData`, which
+// is embedded rather than pointed to.
+const PLAYER_GAME_DATA_OFFSET = 0x8;
+const EQUIP_GAME_DATA_OFFSET = 0x2b0;
+
+// `CS::EquipGameData::GetParamIdInSlot(egd, ChrAsmSlot) -> int`, the game's own read-back oracle
+// for what is in a slot. 1.16.2 `0x1402470e0`, and the rva is below the `0xafefe9` boundary, so
+// 1.17.0 and the installed 1.17.1 are both the same address -- confirmed unique by
+// `map-rvas-1162-to-1170.py` on a 40-byte signature.
+const GET_PARAM_ID_IN_SLOT_RVA = 0x2470e0;
+
+// `ChrAsm` inside `EquipGameData`. See `armamentState` for how this is derived.
+const CHR_ASM_OFFSET = 0x6c;
+
+// The cycle positions themselves, inside `ChrAsm`.
+//
+// `ChrAsm` opens with two unnamed ints, then `equipment: ChrAsmEquipment`, which is `arm_style`
+// followed by six `u32` slot indices. Ghidra proves the indexing independently: the 1.16.2 dump
+// names `getSelectedWeaponSlotIndex(armStyle*, n)` at `0x1404c4b50`, and its whole body is
+// `if (5 < n) DLPanic("..\\Source\\Game\\Chr\\CSChrArmStyle.cpp", ...); return armStyle[n + 1];`
+// -- six indices, based at `arm_style`, which is exactly the upstream layout.
+//
+//   ChrAsm + 0x00  unnamed
+//   ChrAsm + 0x04  unnamed
+//   ChrAsm + 0x08  arm_style          <- `getSelectedWeaponSlotIndex`'s base
+//   ChrAsm + 0x0c  left_weapon_slot   <- n = 0
+//   ChrAsm + 0x10  right_weapon_slot  <- n = 1, the number D-pad Right increments
+//   ChrAsm + 0x14  left_arrow_slot, and so on to 0x20
+//
+// The first version of this read `+0x00` and `+0x04`, which are the two unnamed ints and not the
+// cycle at all -- a reading that would have reported "frozen" for a cycle moving perfectly.
+const ARM_STYLE_OFFSET = CHR_ASM_OFFSET + 0x08;
+const LEFT_WEAPON_SLOT_OFFSET = CHR_ASM_OFFSET + 0x0c;
+const RIGHT_WEAPON_SLOT_OFFSET = CHR_ASM_OFFSET + 0x10;
+
+// The `ChrAsmSlot` values that answer this question.
+//
+// Negative slots are SELECTORS, not indices: the game resolves the player's current cycle position
+// into a concrete index, `-1` giving `sel * 2 + 1`. The weapon block interleaves the hands
+// (0 = Left 1, 1 = Right 1, 2 = Left 2, 3 = Right 2, 4 = Left 3, 5 = Right 3), so odd is the right
+// hand and `-1` is "whatever the right hand currently has cycled in".
+//
+// That distinction is the whole measurement. Asking `-1` says whether the CYCLE moved; asking 1, 3
+// and 5 says whether there was anywhere for it to move TO. A press that changes neither, with only
+// one of the three right-hand slots occupied, is the game declining to cycle rather than the press
+// being eaten -- and those want completely different fixes.
+const SLOTS = [
+  { slot: -1, name: 'right-active (cycle position)' },
+  { slot: 1, name: 'Right 1' },
+  { slot: 3, name: 'Right 2' },
+  { slot: 5, name: 'Right 3' },
+  { slot: -2, name: 'left-active (cycle position)' },
+];
+
 const base = Process.getModuleByName('eldenring.exe').base;
+
+const getParamIdInSlot = new NativeFunction(
+  base.add(GET_PARAM_ID_IN_SLOT_RVA),
+  'int',
+  ['pointer', 'int'],
+  'win64',
+);
+
+// The right-hand armament state as the game itself reports it, or `null` before a character
+// exists. A pure read-back through the engine's own getter -- nothing is written.
+function armamentState () {
+  let equip;
+  try {
+    const manager = base.add(GAME_DATA_MAN_RVA).readPointer();
+    if (manager.isNull()) return null;
+    const pgd = manager.add(PLAYER_GAME_DATA_OFFSET).readPointer();
+    if (pgd.isNull()) return null;
+    equip = pgd.add(EQUIP_GAME_DATA_OFFSET);
+  } catch (error) {
+    return null;
+  }
+  const state = {};
+  for (const entry of SLOTS) {
+    try {
+      state[entry.name] = getParamIdInSlot(equip, entry.slot);
+    } catch (error) {
+      state[entry.name] = 'unreadable';
+    }
+  }
+  // The two integers `ChrAsm` opens with, which are what a D-pad cycle moves. Reading them turns
+  // one unanswered question into two answerable ones: an index that moves while the slot contents
+  // do not is the cycle working and the equipment failing to follow, and an index that does not
+  // move is the press never reaching the cycle at all. Those want opposite fixes, and the slot
+  // read alone cannot tell them apart.
+  //
+  // Offsets derived from `../fromsoftware-rs`'s `#[repr(C)] EquipGameData` rather than guessed:
+  // vftable 0x00, `equipment_item_idx_list: [u32; 22]` 0x08..0x60, `unk60: usize` 0x60,
+  // `unk68: u32` 0x68, so `chr_asm` lands at 0x6c.
+  try {
+    state.armStyle = equip.add(ARM_STYLE_OFFSET).readU32();
+    state.leftWeaponSlot = equip.add(LEFT_WEAPON_SLOT_OFFSET).readU32();
+    state.rightWeaponSlot = equip.add(RIGHT_WEAPON_SLOT_OFFSET).readU32();
+  } catch (error) {
+    state.armStyle = 'unreadable';
+    state.leftWeaponSlot = 'unreadable';
+    state.rightWeaponSlot = 'unreadable';
+  }
+  return state;
+}
 
 // Read the menu event ids that are live right now, or `null` if the manager is not up.
 //
@@ -115,6 +221,15 @@ const counts = {
 // would hide that.
 const devices = new Map();
 
+// A press whose armament reading is still owed a follow-up, and how many polls to let pass first.
+//
+// The engine does not cycle the weapon on the same frame the bit rises, so the "after" sample has
+// to be taken later or every working switch would read as a dead one. Counted in polls rather than
+// milliseconds because polls are the thing that actually advances the input pipeline -- a wall
+// clock would sample early on a stutter and late on a fast frame.
+let pendingCompare = null;
+const COMPARE_AFTER_POLLS = 30;
+
 function deviceState (device) {
   const key = device.toString();
   let state = devices.get(key);
@@ -152,8 +267,38 @@ Interceptor.attach(poll, {
       return;
     }
     counts.polls++;
+    // Armed from here rather than at load, because `GameDataMan` is null until a character exists
+    // and an agent that reloads mid-session would otherwise never get its watchpoint.
+    watchRightWeaponSlot();
     const state = deviceState(device);
     state.polls++;
+    // The owed follow-up. This is the line that answers the user's question -- whether the right
+    // hand actually changed weapon -- and it is the only one of these that is a direct measurement
+    // of the thing they are looking at rather than of the input in front of it.
+    if (pendingCompare !== null && counts.polls - pendingCompare.at >= COMPARE_AFTER_POLLS) {
+      const owed = pendingCompare;
+      pendingCompare = null;
+      const after = armamentState();
+      const changed = [];
+      if (owed.before !== null && after !== null) {
+        for (const key of Object.keys(after)) {
+          if (after[key] !== owed.before[key]) {
+            changed.push({ slot: key, from: owed.before[key], to: after[key] });
+          }
+        }
+      }
+      send({
+        tag: 'armament-after',
+        n: owed.n,
+        polls: counts.polls - owed.at,
+        before: owed.before,
+        after: after,
+        changed: changed,
+        verdict: changed.length === 0
+          ? 'nothing moved -- the engine did not cycle the right hand on this press'
+          : 'the right hand cycled, so the switch itself works',
+      });
+    }
     if (buttons !== 0 && !state.everNonZero) {
       state.everNonZero = true;
       counts.everNonZero++;
@@ -173,7 +318,12 @@ Interceptor.attach(poll, {
     if ((rose & DPAD_LEFT) !== 0) counts.dpadLeftEdges++;
     if ((rose & DPAD_RIGHT) === 0) return;
     counts.dpadRightEdges++;
-    const menu = liveMenuEvents();
+    // The armament state at the instant of the press, and again shortly after. A cycle that is
+    // going to happen has not happened yet on the rising edge -- the press is still travelling --
+    // so a single sample here would report "unchanged" for a switch that works perfectly.
+    // `pendingCompare` is picked up by a later poll and reports the delta.
+    const before = armamentState();
+    pendingCompare = { at: counts.polls, before: before, n: counts.dpadRightEdges };
     send({
       tag: 'dpad-right',
       n: counts.dpadRightEdges,
@@ -181,10 +331,81 @@ Interceptor.attach(poll, {
       buttons: '0x' + buttons.toString(16),
       held: names(buttons),
       stickX: stickX,
-      menuEvents: menu,
-      note: 'The driver reported D-pad Right rising on this device. Anything that swallows the press from here on is inside the game, not in front of it. `menuEvents` is what CSMenuMan holds at that instant: entries here while the player is in the world mean the press is being read as menu input.',
+      menuEvents: liveMenuEvents(),
+      armamentBefore: before,
+      note: 'D-pad Right rose. `armamentBefore` is what the engine says is in each right-hand slot at that instant, read through its own GetParamIdInSlot. The follow-up `armament-after` line says whether any of it moved.',
     });
   },
+});
+
+// A hardware watchpoint on `right_weapon_slot` itself, which is the only instrument that answers
+// "what writes this" rather than "what does it hold now".
+//
+// Four bytes, one address, no protection change -- deliberately NOT `MemoryAccessMonitor`, which
+// revokes a whole 4 KB page and turns every access by every thread into a fault. On this target
+// that killed the game once already: a guard page on Seamless's session produced `0xc0000005` at
+// `ersc+0x89e23` while the player used an item.
+//
+// What each outcome means, and they are opposites:
+//
+//   a write arrives on a D-pad Right press  -> the local cycle path runs and something later
+//                                              overwrites or ignores it
+//   no write at all while the press repeats -> the press never reaches the cycle, and the address
+//                                              of the last writer is irrelevant because there is none
+const WATCH_SLOT = 0;
+let watching = null;
+
+function watchRightWeaponSlot () {
+  if (watching !== null) return watching;
+  let equip;
+  try {
+    const manager = base.add(GAME_DATA_MAN_RVA).readPointer();
+    if (manager.isNull()) return null;
+    const pgd = manager.add(PLAYER_GAME_DATA_OFFSET).readPointer();
+    if (pgd.isNull()) return null;
+    equip = pgd.add(EQUIP_GAME_DATA_OFFSET);
+  } catch (error) {
+    return null;
+  }
+  const address = equip.add(RIGHT_WEAPON_SLOT_OFFSET);
+  // The game thread is the one that would cycle it, and a watchpoint is per-thread. Arming every
+  // thread would spend the four available slots on threads that never touch equipment; the poll's
+  // own thread and the main thread are where a player-driven write can come from.
+  const armed = [];
+  for (const thread of Process.enumerateThreads()) {
+    try {
+      Thread.setHardwareWatchpoint(thread.id, address, 4, 'w');
+      armed.push(thread.id);
+    } catch (error) {
+      continue;
+    }
+  }
+  watching = { address: address.toString(), threads: armed };
+  send({
+    tag: 'watchpoint',
+    slot: WATCH_SLOT,
+    address: address.toString(),
+    threads: armed.length,
+    note: 'Write watchpoint on ChrAsm.right_weapon_slot. A press that produces no watchpoint hit never reached the cycle at all.',
+  });
+  return watching;
+}
+
+Process.setExceptionHandler(function (details) {
+  if (details.type !== 'breakpoint' && details.type !== 'single-step' && details.type !== 'access-violation') {
+    return false;
+  }
+  if (watching === null) return false;
+  send({
+    tag: 'slot-written',
+    by: details.address.toString(),
+    symbol: DebugSymbol.fromAddress(details.address).toString(),
+    type: details.type,
+    note: 'Something wrote ChrAsm.right_weapon_slot. This address is the writer.',
+  });
+  // Resume: the write is the game's own and must complete. Returning true tells Frida the
+  // exception is handled and execution continues from where it stopped.
+  return true;
 });
 
 send({
