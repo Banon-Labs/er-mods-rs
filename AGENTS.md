@@ -644,11 +644,20 @@ This repo must be a sibling of a `fromsoftware-rs` checkout (the root crate uses
 # Give a worktree subagent the SCOPED list instead, naming its crates and the
 # gates its edit actually touches:
 #   cargo test -p <crate>
+#   cargo clippy -p <crate> --all-targets          # `cargo test` never invokes clippy, and
+#                                                  # the workspace denies warnings
 #   cargo fmt -p <crate> -- --check
 #   python3 scripts/check-comment-caps.py <files it touched>
 #   python3 scripts/check-no-lossy-utf8.py
 #   python3 scripts/check-shared-hook-rvas.py      # whenever a detour moves
 #   python3 scripts/check-me3-dll-conflicts.py     # whenever the conflict table moves
+#   python3 scripts/check-stages.py --selftest     # whenever a scripts/*.py gate is added
+# THE MODE MATTERS AS MUCH AS THE NAME. check.sh runs most gates twice -- `--selftest` first,
+# then the gate itself -- and the selftest is the half that proves the gate can still fail.
+# Running only the plain form passes while a gate is broken. Both halves of PR #456's red CI
+# were gates that had been run in the wrong mode: `check-stages.py --check` instead of
+# `--selftest` (which knows every path a stage reads must be declared by that stage), and
+# `cargo test` instead of `cargo clippy` (which denied a `max().min()` as a clamp pattern).
 # The whole-workspace verdict is the orchestrator's, run once at integration.
 bash scripts/check.sh
 
