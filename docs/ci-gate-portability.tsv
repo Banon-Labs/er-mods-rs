@@ -152,6 +152,7 @@ portable	-	check-fresh-run-logs.py --selftest	source/AST/text analysis only	runt
 portable	-	check-fresh-run-logs.py	source/AST/text analysis only	runtime-tools
 portable	-	test-pr-refactor-scope.sh	source/AST/text analysis only	suite
 partial	build-artifact	test-dll-byte-identical.py	'ok (list tests only)' -- the comparator tests are the part that is skipped	cargo-build
+portable	-	test-release-workflow.py --selftest	source/AST/text analysis only	product
 portable	-	test-release-workflow.py	source/AST/text analysis only	product
 portable	-	check-rust-file-sizes.py	source/AST/text analysis only	lint
 portable	-	check-experiments-rustfmt.py	source/AST/text analysis only	lint

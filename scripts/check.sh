@@ -1547,6 +1547,7 @@ python3 "$repo_root/scripts/check-fresh-run-logs.py"
 # untested is decorative.
 bash "$repo_root/scripts/test-pr-refactor-scope.sh"
 python3 "$repo_root/scripts/test-dll-byte-identical.py"
+python3 "$repo_root/scripts/test-release-workflow.py" --selftest
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
@@ -2544,7 +2545,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 # their machine; local/CI parity is the whole reason this file exists.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
-	-p er-soulsformats -p er-param-inspect
+	-p er-soulsformats -p er-param-inspect -p er-installer
+# er-installer is here rather than in a batch of its own because it is host-only by
+# construction: the conflict rules, the picker state machine, the screen layout and the profile
+# writer are all decidable without a game, a Windows target or a terminal. What its tests are
+# really holding is the rule that the out-of-box selection can be loaded together -- the catalog
+# gate proves that from the tables, and these prove the code that reads them agrees.
+#
+# They run without `ER_INSTALLER_EMBED_DIR`, so this build carries no DLL payload and finishes
+# in a second. The tests that touch the payload branch on whether one is present and assert the
+# other half when it is not, so the suite is correct either way rather than silently covering
+# one path. scripts/build-installer-release.py is what proves a release build carries all 31,
+# by running `--selfcheck` against the binary it is about to ship.
 # The two things `scripts/check-er-flver.sh` covered that nothing else did (moved here 2026-08-31,
 # and that script deleted). It was gate-shaped, ran nowhere, and could not have gated anywhere: it
 # had `set -u` but no `set -e`, piped every command into `tail`, and ended on an unconditional
