@@ -403,6 +403,19 @@ fn run() -> Result<ExitCode, String> {
             configs.join(", ")
         );
     }
+
+    // Files an earlier install left behind that this profile does not list. Reported, never
+    // deleted: they belong to the player's game directory, they do not load, and a tool that
+    // quietly removes files there has substituted its tidiness for their intent.
+    let orphans = install::orphaned_artifacts(&chosen, &install_dir);
+    if !orphans.is_empty() {
+        println!(
+            "\n{} file(s) from an earlier install are still in that folder and are NOT in this \
+             profile, so they will not load: {}. Delete them if you want the folder to match.",
+            orphans.len(),
+            orphans.join(", ")
+        );
+    }
     println!(
         "\nLaunch it with:\n  {}",
         install::launch_command(&game.game_dir, &written)

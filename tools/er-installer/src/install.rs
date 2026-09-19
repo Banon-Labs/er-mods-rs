@@ -224,6 +224,22 @@ pub fn install_artifacts(
     Ok(installed)
 }
 
+/// Mod DLLs left in `dest` by an earlier install that this profile does not list.
+///
+/// They do not load -- ME3 reads the profile, not the directory -- so this is not a fault and
+/// nothing is deleted here. It is reported because the directory otherwise contradicts the
+/// profile, and that contradiction misleads: installing nine mods and then reinstalling five
+/// leaves nine files beside a profile naming five, which reads as the installer having dropped
+/// four. It did exactly that on 2026-09-19 to the person who wrote it.
+pub fn orphaned_artifacts(chosen: &[&'static Mod], dest: &Path) -> Vec<&'static str> {
+    let kept: Vec<&str> = chosen.iter().map(|entry| entry.artifact).collect();
+    crate::catalog::CATALOG
+        .iter()
+        .map(|entry| entry.artifact)
+        .filter(|artifact| !kept.contains(artifact) && dest.join(artifact).is_file())
+        .collect()
+}
+
 /// The Steam root above a game directory, when the game lives under a Steam library.
 ///
 /// `me3 launch --auto-detect` locates the executable through Steam on its own, and on a native
@@ -489,6 +505,40 @@ mod tests {
             not_embedded(&all).len(),
             crate::catalog::CATALOG.len() - count
         );
+    }
+
+    #[test]
+    fn a_smaller_reinstall_reports_what_the_larger_one_left() {
+        let dest = temp_dir("orphans");
+        let product = crate::selection::by_package("er-quickload").unwrap();
+        let icons = crate::selection::by_package("er-armament-icons").unwrap();
+        let logging = crate::selection::by_package("er-crash-logging").unwrap();
+        for entry in [product, icons, logging] {
+            fs::write(dest.join(entry.artifact), b"stub").unwrap();
+        }
+
+        // The second install keeps only one of the three.
+        let orphans = orphaned_artifacts(&[logging], &dest);
+        assert_eq!(orphans.len(), 2, "got {orphans:?}");
+        assert!(orphans.contains(&product.artifact));
+        assert!(orphans.contains(&icons.artifact));
+        assert!(
+            !orphans.contains(&logging.artifact),
+            "a kept mod is not an orphan"
+        );
+
+        // Nothing is deleted -- all three files are still there.
+        for entry in [product, icons, logging] {
+            assert!(
+                dest.join(entry.artifact).is_file(),
+                "{} was removed",
+                entry.artifact
+            );
+        }
+
+        // Installing the same set again leaves nothing behind.
+        assert!(orphaned_artifacts(&[product, icons, logging], &dest).is_empty());
+        fs::remove_dir_all(&dest).unwrap();
     }
 
     #[test]
