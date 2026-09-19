@@ -76,6 +76,12 @@ blurb = "Draws a save picker at boot so you choose a character before the title 
 category = "menus-and-saves"
 audience = "player"
 default = false
+# Not a conflict, which is why it is this field and not a [[conflict]] row: `save-picker` is in
+# er-quickload's default feature set, and the standalone shell checks for the product with
+# `GetModuleHandleA("er_quickload.dll")` and stands down before installing its host. Co-loading
+# them is safe and adds nothing, so the picker says so rather than refusing -- refusing would
+# be a lie about the danger, and silence would let someone tick a row that does nothing.
+included_in = "er-quickload"
 
 [er-build-import]
 label = "Build import from URL"

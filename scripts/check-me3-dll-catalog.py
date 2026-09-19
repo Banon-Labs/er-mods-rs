@@ -64,7 +64,7 @@ VALID_CATEGORIES = {
 VALID_AUDIENCES = {"player", "diagnostic"}
 
 REQUIRED_FIELDS = {"label", "blurb", "category", "audience", "default"}
-OPTIONAL_FIELDS = {"needs_seamless", "config"}
+OPTIONAL_FIELDS = {"needs_seamless", "config", "included_in"}
 
 MAX_LABEL = 48
 MAX_BLURB = 200
@@ -172,6 +172,26 @@ def check(
         ):
             problems.append(f"{package}: `config` must be a non-empty string when present.")
 
+        # `included_in` says a bigger mod already carries this one, so ticking both adds
+        # nothing. It is only ever true when the smaller mod stands down at runtime; a pair
+        # that actually collides belongs in the conflict table, and claiming both would tell
+        # the player two different things about the same combination.
+        if "included_in" in entry:
+            host = entry["included_in"]
+            if host not in catalog:
+                problems.append(
+                    f"{package}: included_in names {host!r}, which is not in this catalog."
+                )
+            elif host == package:
+                problems.append(f"{package}: included_in names itself.")
+            elif frozenset((package, host)) in {
+                frozenset((row["a"], row["b"])) for row in conflicts.get("conflict", [])
+            }:
+                problems.append(
+                    f"{package}: included_in names {host!r}, but the two are also declared a "
+                    "conflict. A pair is either safe-and-redundant or unsafe, not both."
+                )
+
     opt_in_only = set(conflicts.get("opt_in_only", {}))
     for package in sorted(opt_in_only & set(catalog)):
         if catalog[package].get("default") is True:
@@ -267,6 +287,24 @@ def selftest() -> int:
             sound,
             {"conflict": [], "opt_in_only": {"er-beta": "reason"}},
             "opposite answers",
+        ),
+        (
+            "included_in naming a stranger is caught",
+            {**sound, "er-alpha": entry(included_in="er-nowhere")},
+            base_conflicts,
+            "not in this catalog",
+        ),
+        (
+            "included_in naming itself is caught",
+            {**sound, "er-alpha": entry(included_in="er-alpha")},
+            base_conflicts,
+            "names itself",
+        ),
+        (
+            "included_in on a declared conflict is caught",
+            {**sound, "er-alpha": entry(included_in="er-beta")},
+            {"conflict": [{"a": "er-alpha", "b": "er-beta"}], "opt_in_only": {}},
+            "not both",
         ),
         (
             "conflicting default set is caught",

@@ -133,6 +133,14 @@ impl Picker {
         selection::in_display_order(&chosen)
     }
 
+    /// Is this package ticked? By package name, since `included_in` names one.
+    fn is_ticked(&self, package: &str) -> bool {
+        CATALOG
+            .iter()
+            .position(|entry| entry.package == package)
+            .is_some_and(|index| self.ticked[index])
+    }
+
     fn entry_at(&self, row: usize) -> Option<usize> {
         match self.rows.get(row) {
             Some(Row::Entry(index)) => Some(*index),
@@ -406,6 +414,15 @@ impl Picker {
                 if entry.opt_in_only {
                     notes.push("changes things");
                 }
+                // Only worth saying while the bigger mod is actually ticked. Shown always, it
+                // would read as a warning against a row that is perfectly good on its own.
+                let included_note;
+                if let Some(host) = entry.included_in
+                    && self.is_ticked(host)
+                {
+                    included_note = format!("already in {}", Self::label_for(host));
+                    notes.push(&included_note);
+                }
                 let note = if notes.is_empty() {
                     String::new()
                 } else {
@@ -533,15 +550,32 @@ impl Picker {
             Key::Left => self.jump_section(false),
             Key::Space => {
                 let candidate = self.current();
-                if let (Toggle::Blocked(clashes), Some(candidate)) =
-                    (self.toggle_current(), candidate)
-                {
-                    let mut lines: Vec<String> = clashes
-                        .iter()
-                        .map(|conflict| self.describe(candidate, conflict))
-                        .collect();
-                    lines.push("Untick the other one first.".to_string());
-                    self.message = Some(lines.join(" "));
+                match (self.toggle_current(), candidate) {
+                    (Toggle::Blocked(clashes), Some(candidate)) => {
+                        let mut lines: Vec<String> = clashes
+                            .iter()
+                            .map(|conflict| self.describe(candidate, conflict))
+                            .collect();
+                        lines.push("Untick the other one first.".to_string());
+                        self.message = Some(lines.join(" "));
+                    }
+                    // Ticking something the chosen set already carries. Not refused -- the
+                    // smaller shell stands down when it finds the bigger one, so the profile is
+                    // sound -- but a row that does nothing should say it does nothing.
+                    (Toggle::Enabled, Some(candidate)) => {
+                        if let Some(host) = candidate.included_in
+                            && self.is_ticked(host)
+                        {
+                            self.message = Some(format!(
+                                "{} is already part of {}, so this adds nothing. It is harmless \
+                                 -- it stands down when it finds the bigger mod -- but you can \
+                                 leave it unticked.",
+                                candidate.label,
+                                Self::label_for(host)
+                            ));
+                        }
+                    }
+                    _ => {}
                 }
             }
             Key::Enter => return Step::Install,
@@ -903,6 +937,87 @@ mod tests {
             !message.contains("er-quickload"),
             "package name leaked: {message}"
         );
+    }
+
+    #[test]
+    fn ticking_something_already_included_says_so_without_refusing_it() {
+        let included = CATALOG
+            .iter()
+            .find(|entry| entry.included_in.is_some())
+            .expect("the catalog records at least one included-in relation");
+        let host = included.included_in.unwrap();
+
+        let mut picker = plain_picker();
+        picker.clear();
+        cursor_onto(&mut picker, host);
+        picker.handle(Key::Space, 10);
+        cursor_onto(&mut picker, included.package);
+        picker.handle(Key::Space, 10);
+
+        let chosen: Vec<_> = picker.chosen().iter().map(|e| e.package).collect();
+        assert!(
+            chosen.contains(&included.package),
+            "a redundant mod must still be tickable -- it is safe, only pointless"
+        );
+        let message = picker
+            .message
+            .clone()
+            .expect("it should say it adds nothing");
+        assert!(message.contains("adds nothing"), "message was: {message}");
+        assert!(
+            message.contains(Picker::label_for(host)),
+            "message was: {message}"
+        );
+    }
+
+    #[test]
+    fn a_row_is_only_marked_included_while_its_host_is_ticked() {
+        let included = CATALOG
+            .iter()
+            .find(|entry| entry.included_in.is_some())
+            .expect("the catalog records at least one included-in relation");
+        let host = included.included_in.unwrap();
+
+        let mut picker = plain_picker();
+        picker.clear();
+        let alone = picker.render(WIDTH, 60);
+        let row_alone = alone
+            .lines()
+            .find(|line| line.contains(included.label))
+            .expect("the row is drawn");
+        assert!(
+            !row_alone.contains("already in"),
+            "a mod good on its own was marked redundant: {row_alone}"
+        );
+
+        cursor_onto(&mut picker, host);
+        picker.handle(Key::Space, 10);
+        let together = picker.render(WIDTH, 60);
+        let row_together = together
+            .lines()
+            .find(|line| line.contains(included.label))
+            .expect("the row is drawn");
+        assert!(
+            row_together.contains("already in"),
+            "the overlap was not shown: {row_together}"
+        );
+    }
+
+    #[test]
+    fn an_included_pair_is_not_also_a_conflict() {
+        // The two answers are mutually exclusive: safe-and-redundant, or unsafe. The catalog
+        // gate checks the tables; this checks the code that reads them agrees.
+        for entry in CATALOG {
+            let Some(host) = entry.included_in else {
+                continue;
+            };
+            let host_mod = selection::by_package(host).expect("included_in names a real mod");
+            assert!(
+                selection::conflicts_within(&[entry, host_mod]).is_empty(),
+                "{} is both included in and conflicting with {host}",
+                entry.package
+            );
+        }
     }
 
     #[test]

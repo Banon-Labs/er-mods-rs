@@ -118,6 +118,10 @@ pub struct Mod {
     pub needs_seamless: bool,
     /// Recorded in the conflict table as something a player must ask for by name.
     pub opt_in_only: bool,
+    /// A bigger mod that already carries this one, when there is one. Ticking both is safe --
+    /// the smaller shell detects the bigger and stands down -- and adds nothing, so the picker
+    /// says so instead of refusing.
+    pub included_in: Option<&'static str>,
     /// The file in the game directory this mod reads, when it has one.
     pub config: Option<&'static str>,
 }
@@ -166,8 +170,9 @@ def render(
                 f"{package}: in the catalog but not a shipped shell. "
                 "Run scripts/check-me3-dll-catalog.py for the full picture."
             )
-        config = (
-            f"Some({rust_str(entry['config'])})" if entry.get("config") else "None"
+        config = f"Some({rust_str(entry['config'])})" if entry.get("config") else "None"
+        included_in = (
+            f"Some({rust_str(entry['included_in'])})" if entry.get("included_in") else "None"
         )
         lines += [
             "    Mod {",
@@ -180,6 +185,7 @@ def render(
             f"        default_on: {str(bool(entry['default'])).lower()},",
             f"        needs_seamless: {str(bool(entry.get('needs_seamless', False))).lower()},",
             f"        opt_in_only: {str(package in opt_in_only).lower()},",
+            f"        included_in: {included_in},",
             f"        config: {config},",
             "    },",
         ]
@@ -216,6 +222,7 @@ def selftest() -> int:
             "audience": "player",
             "default": True,
             "config": "alpha.toml",
+            "included_in": "er-beta",
         },
         "er-beta": {
             "label": "Beta",
@@ -238,6 +245,8 @@ def selftest() -> int:
         ("backslash \\\\ survive", "backslashes inside a blurb are escaped"),
         ('config: Some("alpha.toml")', "a present config becomes Some(..)"),
         ("config: None", "an absent config becomes None"),
+        ('included_in: Some("er-beta")', "a present included_in becomes Some(..)"),
+        ("included_in: None", "an absent included_in becomes None"),
         ("opt_in_only: true", "opt_in_only is carried over from the conflict table"),
         ("default_on: true", "the default tick is carried over"),
         ("whichever loads second wins", "the kind is rendered into a sentence"),
