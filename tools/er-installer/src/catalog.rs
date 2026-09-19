@@ -324,7 +324,7 @@ pub const CATALOG: &[Mod] = &[
         package: "er-quit-load-character",
         artifact: "er_quit_load_character.dll",
         label: "Load Character rows only",
-        blurb: "Just the two character rows on the System > Quit tab. Redundant if you already picked Quit-menu rows, which arms the same rows.",
+        blurb: "Just the two character rows on the System > Quit tab. Each row shows that character's name, rune level, max weapon level and attributes, read from your save.",
         category: "menus-and-saves",
         audience: "player",
         default_on: false,

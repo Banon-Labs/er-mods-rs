@@ -171,34 +171,133 @@ pub unsafe fn save_flow_window_run() {
 /// One-shot latch for the line above.
 static SAVE_FLOW_PUMP_REACHED: AtomicUsize = AtomicUsize::new(0);
 
-/// Detect a destination browser that closed by Back or Escape, and undo what its opening did.
+/// Hide the real System windows the moment the last of the three is known, rather than waiting for
+/// another `05_010` tick.
 ///
-/// Every other way out of the picker discharges itself: a picked file, a failed submit, a failed
-/// resubmit. Back and Escape do not -- the game tears its own `05_010` window down and nothing in
-/// this crate hears about it. On run br-20260912-203713-3e2e that left two things wrong at once and
-/// the second is the one the player feels: `SAVE_PICKER_MODE_ACTIVE` stayed 1, so the pump kept
-/// syncing a scrollbar on the dead dialog (32,768 skips and climbing against `0x1cbe64080`), and the
-/// System windows stayed hidden, so the pause menu could not be reopened at all -- there is no
-/// restore line anywhere after the `hid_top=true hid_option=true` that opened it.
+/// # The race this closes
 ///
-/// The edge is the window itself, not a latch someone has to remember to set: a live `MenuWindow`'s
-/// first qword is a game vtable, and a torn-down one is not, which is the same screen
-/// [`live_menu_window`] already applies to an owning window. The product reaches the same state
-/// through its own finalizer detour (`take_finalized_profile_select`); a shell installs none, so it
-/// asks the window directly.
+/// [`system_windows::hide_real_system_windows`] reads `02_000_IngameTop` and `02_040_OptionSetting`
+/// out of two trackers, and those trackers are stamped only when this pump ticks each of those
+/// windows by name. The ProfileSelect arm calls the hide on its own tick, so when the picker ticks
+/// first the hide runs with `top=0 option=0`, hides nothing, and the pane keeps the draw bit -- it
+/// is drawn in front of the picker until some later `05_010` tick happens to arrive after both
+/// trackers have filled in.
+///
+/// Measured on run br-20260919-194750-5d82: four consecutive
+/// `real-system-window hide ... top=0x0 option=0x0 hid_top=false hid_option=false` lines, then one
+/// `top=0x32803080 option=0x1b7f53880 ... hid_top=true hid_option=true`, with
+/// `profile-select-z: ... carries the draw bit while ProfileSelect is running -- the pane is in
+/// front of the picker` naming the visible symptom. The player reported it as the z-ordering being
+/// wrong, separately from the picker not closing.
+///
+/// Calling the hide from the other two arms makes whichever window ticks last the trigger, so the
+/// pane goes on the tick its own address becomes known instead of one or more frames later. The
+/// hide is self-gating -- it returns early when no ProfileSelect is tracked or the windows are
+/// already hidden -- so this cannot hide anything the picker did not open, and cannot hide twice.
+///
+/// # Safety
+///
+/// Menu-pump context, as its caller.
+unsafe fn hide_real_windows_once_all_known(source: &str) {
+    if er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst) == 0
+        || er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    if let Ok(base) = game_module_base() {
+        unsafe { system_windows::hide_real_system_windows(base, source) };
+    }
+}
+
+/// Detect a `05_010_ProfileSelect` window that closed by Back or Escape, and undo what its opening
+/// did.
+///
+/// Every other way out discharges itself: a picked file, a picked character, a failed submit, a
+/// failed resubmit. Back and Escape do not -- the game tears its own `05_010` window down and
+/// nothing in this crate hears about it. On run br-20260912-203713-3e2e that left two things wrong
+/// at once and the second is the one the player feels: `SAVE_PICKER_MODE_ACTIVE` stayed 1, so the
+/// pump kept syncing a scrollbar on the dead dialog (32,768 skips and climbing against
+/// `0x1cbe64080`), and the System windows stayed hidden, so the pause menu could not be reopened at
+/// all -- there is no restore line anywhere after the `hid_top=true hid_option=true` that opened it.
+///
+/// # Why it is not gated on the destination browser any more
+///
+/// It used to return early unless `SAVE_PICKER_MODE_ACTIVE` was set, which is the **Load Character
+/// from File** browser's latch -- so a plain **Load Character** open, which sets no such latch, had
+/// no Back/Escape handler at all. `hide_real_system_windows` still ran for it (the pane sits in
+/// front of the picker and has to go), and the only two restores that could have answered were the
+/// product's: `take_finalized_profile_select`, which needs a finalizer detour a shell does not
+/// install, and `restore-real-profile-left-list`, which runs from a game-task tick a shell does not
+/// have -- the standalone arm logs `game_task=not-required`. The comment in
+/// `profile_select_window_run` naming those two as the safety net describes `er-quickload`, not this
+/// crate; neither symbol exists here.
+///
+/// Measured on run br-20260919-194404-bbfd, reported by the player as being stuck in the menu with
+/// only Escape as a way out and the z-order wrong on the next open: line 332
+/// `real-system-window hide ... hid_top=true hid_option=true`, and no restore line in the remaining
+/// 19 lines of the log.
+///
+/// The condition is therefore "we hid the real windows for a ProfileSelect that is now gone", which
+/// covers both openers. The edge is the window itself, not a latch someone has to remember to set:
+/// a live `MenuWindow`'s first qword is a game vtable, and a torn-down one is not, which is the same
+/// screen [`live_menu_window`] already applies to an owning window.
 ///
 /// # Safety
 ///
 /// Menu-pump context.
+/// Why the closer declined on this tick, at a bounded rate, per distinct reason.
+///
+/// [`note_picker_window_closed`] used to log only when it fired. That made its silence ambiguous in
+/// the one direction that matters: a Back press it failed to notice produced exactly the same empty
+/// log as a Back press that never happened, so "no run logged a Back press" got reported to the
+/// player as a fact about their driving rather than as a hole in this instrument. AGENTS.md already
+/// names that shape -- an instrument that reports an absence it cannot detect is worse than no
+/// instrument. A run can now be read either way round: a decline line naming the reason means the
+/// tick was seen and rejected, and no line at all means this detour is not running.
+///
+/// Bounded per reason rather than globally: `still live` fires on every frame the picker is up and
+/// would otherwise bury the two reasons worth reading.
+fn note_closer_declined(reason: &'static str, window: usize) {
+    static DECLINES: [AtomicUsize; 3] = [
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    ];
+    let slot = match reason.as_bytes().first() {
+        Some(b'n') if reason.contains("picker") => 0,
+        Some(b'n') => 1,
+        _ => 2,
+    };
+    let n = DECLINES[slot].fetch_add(1, Ordering::SeqCst) + 1;
+    if n <= 2 || n.is_power_of_two() {
+        append_autoload_debug(format_args!(
+            "profile-select-closer: declined -- {reason} (window=0x{window:x} count={n})"
+        ));
+    }
+}
+
 unsafe fn note_picker_window_closed() {
-    if er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+    // Either opener: the file browser announces itself with the mode latch, and a plain Load
+    // Character press is known only by the hide it caused. `restore_real_system_windows` returns
+    // early when nothing is hidden, so asking both questions cannot restore twice.
+    let mode_active =
+        er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) != 0;
+    let windows_hidden =
+        er_telemetry_core::counters::SYSTEM_QUIT_REAL_WINDOWS_HIDDEN.load(Ordering::SeqCst) != 0;
+    if !mode_active && !windows_hidden {
+        note_closer_declined("no picker of ours is open", 0);
         return;
     }
     let window =
         er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_SELECT_WINDOW.load(Ordering::SeqCst);
     // Not yet stamped is not the same as closed: the window is tracked on its first `Run`, and
     // between the submit and that frame there is nothing to test.
-    if window == 0 || live_menu_window(window) != 0 {
+    if window == 0 {
+        note_closer_declined("no ProfileSelect window tracked yet", 0);
+        return;
+    }
+    if live_menu_window(window) != 0 {
+        note_closer_declined("the ProfileSelect window is still live", window);
         return;
     }
     er_telemetry_core::counters::SAVE_PICKER_MODE_ACTIVE.store(0, Ordering::SeqCst);
@@ -213,7 +312,7 @@ unsafe fn note_picker_window_closed() {
     // anywhere in its log; the save that followed wrote the browse labels into the container.
     unsafe { system_quit_save_swap_restore_profile_summary("dest-picker-window-gone") };
     append_autoload_debug(format_args!(
-        "save-dest-picker: the browser window 0x{window:x} is gone (back/escape); cleared the picker state and restoring the System windows it hid"
+        "profile-select-closed: the 05_010 window 0x{window:x} is gone (back/escape); cleared the picker state and restoring the System windows it hid"
     ));
     if let Ok(base) = game_module_base() {
         unsafe {
@@ -272,10 +371,12 @@ unsafe fn profile_select_window_run(job: usize, filename: &str) {
         INGAME_TOP_RESOURCE_NAME => {
             er_telemetry_core::counters::SYSTEM_QUIT_INGAME_TOP_WINDOW
                 .store(owner, Ordering::SeqCst);
+            unsafe { hide_real_windows_once_all_known("ingame-top-tick") };
         }
         OPTION_SETTING_RESOURCE_NAME | OPTION_SETTING_TRIAL_RESOURCE_NAME => {
             er_telemetry_core::counters::SYSTEM_QUIT_OPTION_SETTING_WINDOW
                 .store(owner, Ordering::SeqCst);
+            unsafe { hide_real_windows_once_all_known("option-setting-tick") };
         }
         PROFILE_SELECT_RESOURCE_NAME | PICKER_PROFILE_SELECT_RESOURCE_NAME => {
             er_telemetry_core::counters::PROFILE_SELECT_WINDOW_RUN_TICKS
@@ -381,8 +482,20 @@ unsafe extern "system" fn quit_menu_window_job_run_hook(
     // `SAVE_FLOW_STAGE_DEST_BROWSE` and every later press read the stage as busy and was ignored.
     if SAVE_FLOW_ROW_ARMED.load(Ordering::SeqCst) != 0 {
         unsafe { save_flow_window_run() };
-        unsafe { note_picker_window_closed() };
     }
+    // Outside the Save Game latch above, because the window it watches is opened by three rows and
+    // only one of them sets that latch. A profile arming **Load Character** alone leaves
+    // `SAVE_FLOW_ROW_ARMED` at zero, so this never ran for it: the picker hid the System windows,
+    // Back tore the window down, and nothing was listening -- the player was left in a menu state
+    // that only Escape could leave. Measured on run br-20260919-195240-fab8, which the player drove
+    // through exactly that sequence: one `real-system-window hide ... hid_top=true hid_option=true`
+    // and, across the whole log, not one `profile-select-closer:` line -- not even a decline, which
+    // is what identifies "never called" rather than "called and declined".
+    //
+    // Safe to call on every tick: the closer's own first two guards are the mode latch and
+    // `SYSTEM_QUIT_REAL_WINDOWS_HIDDEN`, so a pump tick with no picker of ours open declines
+    // immediately, and `restore_real_system_windows` early-returns when nothing is hidden.
+    unsafe { note_picker_window_closed() };
 
     let filename_ptr =
         unsafe { safe_read_usize(job + MENU_WINDOW_JOB_RESOURCE_NAME_60_OFFSET) }.unwrap_or(0);

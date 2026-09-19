@@ -51,6 +51,14 @@
 pub mod host;
 pub use host::*;
 
+// Deliberately outside the `#[cfg(windows)]` modules below: a pure serve-or-not decision about the
+// `05_010_ProfileSelect` chrome, whose tests run on the host. Its two siblings in `er-quickload`
+// and `er-quit-rows` sit outside their own windows halves for the same reason.
+pub mod profile_select_chrome_gate;
+// The save decode that lets a product-less shell fill the rows the chrome makes room for, so the
+// gate above answers yes instead of turning the styling off.
+pub mod standalone_character_rows;
+
 // S7 decision-core modules moved from the product DLL. Product callsites keep
 // stable shim names until the hooked surfaces move in S8.
 pub mod profile_rows;
