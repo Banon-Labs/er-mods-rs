@@ -76,17 +76,22 @@ blurb = "Draws a save picker at boot so you choose a character before the title 
 category = "menus-and-saves"
 audience = "player"
 default = false
-# Both of these have `save-picker` in their default feature set and both call
-# `er_save_picker_core::overlay::arm_boot_picker`, so ticking this beside either puts two
-# copies of one feature in the game.
+# `er-quickload` carries this: its defaults include `autoload`, and `arm_boot_picker` is
+# reached whenever that is on.
 #
-# The shell does try to stand down -- `GetModuleHandleA("er_quickload.dll")` -- but that runs
-# inside `DllMain`, so it only sees a product that has already attached, and ME3 attaches in
-# profile order. Against `er-quit-rows` it does not even try: the probe names the product and
-# that shell is a different file. Neither is a crash, which is why these are `included_in`
-# rather than `[[conflict]]` rows; both are still refused, because nobody wants one feature
-# installed twice and which copy wins is decided by a list order the player never sees.
-included_in = ["er-quickload", "er-quit-rows"]
+# `er-quit-rows` is deliberately NOT listed, though it links the same crate and was listed
+# here for an hour on 2026-09-19. Its `boot_arm_missing_save_picker_in_game` opens with
+# `if !cfg!(feature = "autoload") { return false; }`, and `autoload` is not in its default
+# set -- so the shipped build never arms the boot picker, whatever its own `save-picker`
+# feature suggests. That feature name is misleading: it has zero `cfg` sites in either crate
+# and forwards nothing.
+#
+# The shell does try to stand down against the product -- `GetModuleHandleA("er_quickload.dll")`
+# -- but that runs inside `DllMain`, so it only sees a module that has already attached, and
+# ME3 attaches in profile order. Not a crash, which is why this is `included_in` rather than a
+# `[[conflict]]` row; still refused, because nobody wants one feature installed twice and
+# which copy wins is decided by a list order the player never sees.
+included_in = ["er-quickload"]
 
 [er-build-import]
 label = "Build import from URL"

@@ -415,7 +415,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: &["er-quickload", "er-quit-rows"],
+        included_in: &["er-quickload"],
         config: None,
     },
     Mod {
