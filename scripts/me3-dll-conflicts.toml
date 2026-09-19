@@ -1049,13 +1049,27 @@ evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-rows/src/lib.rs"
 # The rule, and it is not invented here -- it is read back off the four pairs already declared
 # above: two shells that both call `er_quit_menu_core::row_cloner::arm` AND supply the same
 # `QuitRowActions` flow cannot share a process. Measured flows per shell, from the `Some(...)`
-# sites in each crate:
+# sites each crate's DEFAULT build compiles -- which is the build every shipped artifact is,
+# since `scripts/er-build-dlls.sh` passes neither `--features` nor `--no-default-features`:
 #
-#   er-quickload            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow
-#   er-quit-rows            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow
+#   er-quickload            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow,
+#                           save_game_as_start_flow, save_game_request_save_only,
+#                           note_drive_strip_click_event
+#   er-quit-rows            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow,
+#                           save_game_request_save_only, note_drive_strip_click_event
 #   er-quit-menu            open_profile_load_dialog, open_save_picker_menu
 #   er-quit-load-character  open_profile_load_dialog
-#   er-save-game-row        save_game_start_flow
+#   er-save-game-row        save_game_as_start_flow, save_game_request_save_only
+#
+# The last row was wrong here until 2026-09-19, and so was the flow named in the er-quickload X
+# er-save-game-row conclusion below. `er-save-game-row` supplies `save_game_start_flow` only
+# under `--features hijack-quit-row`, and its manifest reads `default = []`, so no shipped
+# artifact carries that spelling; the default build clones a row and supplies
+# `save_game_as_start_flow` instead. The gate matched the feature-gated name because it read
+# crate text without regard for `cfg`, and it could not have matched the right one either --
+# neither `save_game_as_start_flow` nor `save_game_request_save_only` was in its field list.
+# Both halves are fixed in `scripts/check-quit-row-flow-overlap.py`: the field list is now
+# parsed out of `QuitRowActions` itself, and each crate is read as its default feature closure.
 #
 # Every pair already declared shares at least one flow, and every pair that shares a flow was
 # declared except these four. `er-quit-menu` X `er-save-game-row` and `er-quit-load-character` X
@@ -1103,21 +1117,25 @@ quit-menu-shell-wins-the-row-election-and-no-ops-the-product-switch-2026-09-17""
 a = "er-quickload"
 b = "er-save-game-row"
 kind = "duplicate-owner"
-reason = """Both supply `save_game_start_flow`, and the two spellings of that feature cannot \
-coexist on one tab. `RowSet::ALL` says so in its own doc comment: a host that supplies \
-`save_game_start_flow` already puts the `Save Game` words on the native first row, so cloning the \
-row as well gives the tab two rows reading `Save Game` behind one flow, and `arm` clears \
-`save_game_as` rather than let a host ask for both.
+reason = """Both supply `save_game_as_start_flow` and `save_game_request_save_only`, and the two \
+spellings of the Save Game row cannot coexist on one tab. `RowSet::ALL` says so in its own doc \
+comment: a host that supplies `save_game_start_flow` already puts the `Save Game` words on the \
+native first row, so cloning the row as well gives the tab two rows reading `Save Game` behind one \
+flow, and `arm` clears `save_game_as` rather than let a host ask for both.
 
-`arm` can only clear it within one host. The product supplies the flow and takes the native first \
-row over; `er-save-game-row` clones `save_game_as: true` in a separate copy of the core's statics, \
-so neither call sees the other's choice and the clearing never happens. Derived from that \
+`arm` can only clear it within one host. The product supplies both spellings and takes the native \
+first row over; `er-save-game-row` clones `save_game_as: true` in a separate copy of the core's \
+statics, so neither call sees the other's choice and the clearing never happens. Derived from that \
 documented invariant plus the per-cdylib static measured on br-20260917-205031-edd3, not \
 separately reproduced."""
 evidence = """crates/er-quit-menu-core/src/row_cloner.rs `RowSet::ALL` doc comment (\"two rows \
 reading `Save Game` behind one flow\"); crates/er-save-game-row/src/lib.rs:104 \
-`arm(RowSet { save_game_as: true, ..NONE }, ..)`; crates/er-quickload/src/experiments/\
-startup_hooks/diagnostics/layout_global_hooks.rs `save_game_start_flow: Some(..)`"""
+`arm(RowSet { save_game_as: true, ..NONE }, ..)` with `save_game_as_start_flow: Some(..)` and \
+`save_game_request_save_only: Some(..)` beside it, both in the crate's default build -- \
+`hijack-quit-row` is off by default and is the only build supplying `save_game_start_flow`; \
+crates/er-quickload/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs \
+`save_game_as_start_flow: Some(..)` and `save_game_request_save_only: Some(..)` under \
+`cfg(feature = \"quit-rows\")`, which `er-quickload`'s `default` turns on"""
 
 [[conflict]]
 a = "er-quit-menu"
