@@ -363,12 +363,21 @@ if (game === null) {
   // binding drives, so the check runs on the game's own clock with no timer involved and a restore
   // lands before the frame that would have read the dead row.
   //
-  // A session ended while this was armed on 2026-09-19 and no cause was ever established: the game
-  // ran about eight minutes with the hook in place, restored the row, let the player switch
-  // weapons, and then terminated. `er-crash-log.txt` recorded no fault. That is an unexplained
-  // exit, and it is not a reason to give up the only anchor that answers the question -- a hook
-  // deleted on suspicion measures nothing at all. If it happens twice with this armed and not
-  // otherwise, that is evidence; once is a coincidence with a bad feeling attached.
+  // Two sessions ended while this was armed on 2026-09-19, at about eight and eleven minutes, and
+  // it was nearly deleted twice over it. Both were the game shutting itself down, not a fault:
+  // `er-quickload-crash-log.txt` for `br-20260919-034556-4b2e` records
+  //
+  //   [+661234ms] process-exit via ExitProcess code=0x0 handle=0x0 callers=[...]
+  //
+  // with `throw_records=0 fault_records=0 fatal_reported=0` in the breadcrumb beside it. The first
+  // session left no fault record either, which was read at the time as a process lost inside a
+  // trampoline -- where the faulting frame is not one the game's handler can unwind -- because a
+  // clean `ExitProcess` line had not been looked for. It was there.
+  //
+  // So the standard this comment used to carry, twice-with-it-armed, was met by count and refuted
+  // by the record. Count nothing: read `er-quickload-crash-log.txt` for the `process-exit` line,
+  // and if the exit was `ExitProcess code=0x0` the hook is not implicated no matter how many times
+  // it happens.
   Interceptor.attach(game.base.add(FRAME_UPDATE_RVA), {
     onEnter() {
       counts.frames += 1;
