@@ -2733,10 +2733,12 @@ python3 "$repo_root/scripts/check-constant-feature-gates.py"
 
 # ...and the configuration those gates describe has to keep compiling, or the counts above become
 # a record of attributes nobody builds. This is the trim the rows came off for: the autoload, the
-# save picker, the loading cover, the portraits and the menu trace, with no cloned rows.
+# loading cover, the portraits and the menu trace, with no cloned rows. The save picker used to be
+# named here too; it was a feature that gated nothing and was deleted on 2026-09-19, and the
+# picker's own code is in this build either way.
 cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
   --target x86_64-pc-windows-msvc --no-default-features \
-  --features autoload,save-picker,loading-cover,portrait,menu-trace
+  --features autoload,loading-cover,portrait,menu-trace
 
 # ...and the other direction, which is the one an installer sells: the System>Quit rows with no
 # boot autoload behind them. It did not build until 2026-09-13 -- the safe-input confirm driver
