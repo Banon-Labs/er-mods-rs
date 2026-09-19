@@ -66,6 +66,7 @@ PROBES: dict[str, str] = {
     "is_string": 'cond:is_string("a")',
     "json.marshal": 'str:json.marshal({"a": [1, "b"]})',
     "lower": 'str:lower("AB")',
+    "max": "str:format_int(max([1, 3, 2]), 10)",
     "object.get": 'str:object.get({"k": "v"}, "k", "d")',
     "regex.find_all_string_submatch_n": 'str:concat("", regex.find_all_string_submatch_n("a(b)", "ab", 1)[0])',
     "regex.find_n": 'str:concat("", regex.find_n("a", "aa", 2))',
@@ -120,8 +121,24 @@ def builtins_used(names: set[str]) -> dict[str, set[str]]:
     return used
 
 
+# The package every probe is written into, and it is not a name of this probe's own choosing.
+#
+# `.cupcake/system/evaluate.rego` stopped using `walk(data.cupcake.policies, ...)` on 2026-09-18 --
+# the dynamic walk crashed the WASM runtime on long Bash payloads -- and became an explicit
+# dispatcher that collects `halt` from one named package per line. A generated package it does not
+# name contributes nothing, so probes written under `cupcake.policies.claude.wasmprobe_<slug>` were
+# invisible to the aggregator and not one of them fired, control included. That reads as a runtime
+# implementing no builtins at all, which is what this gate reported: 24 of them at once.
+#
+# Borrowing a package the dispatcher already lists puts the probe back on the real evaluation path.
+# It is safe to reuse precisely because the policy directory built below is empty apart from the
+# generated files, so nothing else claims the name -- and one probe per run follows from it, which
+# is why `run_probes` evaluates them one at a time rather than all at once.
+PROBE_PACKAGE = "cupcake.policies.claude.idle_hold"
+
+
 def probe_policy(name: str, recipe: str) -> tuple[str, str]:
-    """Build a throwaway Stop policy that halts iff `name` executes. Returns (package_slug, source)."""
+    """Build a throwaway Stop policy that halts iff `name` executes. Returns (rule_id, source)."""
     slug = re.sub(r"[^a-z0-9]", "_", name.lower())
     rule_id = f"WASMPROBE-{slug.upper()}"
     kind, _, expr = recipe.partition(":")
@@ -137,7 +154,7 @@ def probe_policy(name: str, recipe: str) -> tuple[str, str]:
 # custom:
 #   routing:
 #     required_events: ["Stop"]
-package cupcake.policies.claude.wasmprobe_{slug}
+package {PROBE_PACKAGE}
 
 import rego.v1
 
@@ -177,13 +194,6 @@ def run_probes(targets: dict[str, str]) -> set[str]:
         shutil.copy(CUPCAKE_DIR / "system" / "evaluate.rego", root / "system" / "evaluate.rego")
         (root / "rulebook.yml").write_text("signals: {}\nbuiltins: {}\n", encoding="utf-8")
 
-        expected: set[str] = set()
-        for name, recipe in sorted(targets.items()):
-            rule_id, src = probe_policy(name, recipe)
-            slug = re.sub(r"[^a-z0-9]", "_", name.lower())
-            (root / "policies" / "claude" / f"wasmprobe_{slug}.rego").write_text(src, encoding="utf-8")
-            expected.add(rule_id)
-
         event = json.dumps(
             {
                 "session_id": "wasm-builtin-probe",
@@ -193,16 +203,29 @@ def run_probes(targets: dict[str, str]) -> set[str]:
                 "stop_hook_active": False,
             }
         )
-        out = subprocess.run(
-            [
-                "cupcake", "eval",
-                "--harness", "claude",
-                "--policy-dir", str(root),
-                "--global-config", str(global_root),
-            ],
-            input=event, capture_output=True, text=True, timeout=25,
-        )
-        return {rule_id for rule_id in expected if f"{rule_id}|" in out.stdout}
+
+        # One evaluation per builtin, because every probe has to occupy the same package: the
+        # explicit dispatcher only collects packages it names, and `PROBE_PACKAGE` is the one it
+        # names that this can borrow. Writing all of them at once would leave a directory of files
+        # declaring one package, whose rules merge -- so a single supported builtin would halt and
+        # every probe in the batch would read as fired.
+        probe = root / "policies" / "claude" / "wasmprobe.rego"
+        fired: set[str] = set()
+        for name, recipe in sorted(targets.items()):
+            rule_id, src = probe_policy(name, recipe)
+            probe.write_text(src, encoding="utf-8")
+            out = subprocess.run(
+                [
+                    "cupcake", "eval",
+                    "--harness", "claude",
+                    "--policy-dir", str(root),
+                    "--global-config", str(global_root),
+                ],
+                input=event, capture_output=True, text=True, timeout=25,
+            )
+            if f"{rule_id}|" in out.stdout:
+                fired.add(rule_id)
+        return fired
 
 
 def check() -> int:
