@@ -37,6 +37,29 @@ const MODULE = 'eldenring.exe';
 // (`0xafefe9`), so this address is the running build's.
 const DESERIALIZE_RVA = 0x242ee0;
 
+// The only code in the game that writes this table, and the one this agent was missing.
+//
+// Measured 2026-09-19 on the 1.17 dump: of the 45 functions that reference the `CSPcKeyConfig`
+// singleton across 98 references, exactly two compute `cfg + 0x440` -- `FUN_14023f220`, which bulk
+// copies 26 rows of five dwords each FROM a serialized stream INTO the table, and `FUN_14023f280`,
+// which copies the same 26 rows back OUT. Every other one of the 45 reaches a row through
+// `GetAssign` at rva 0x242ab0, which returns a copy on the caller's stack and so cannot write
+// anything at all.
+//
+// Action 0x0f is index 15, inside the 26 rows both functions cover. So the row is never edited in
+// place during play: a stored configuration carrying `-1` is loaded over the live table wholesale.
+// The hook on `DESERIALIZE_RVA` above would have sat silent through exactly that event, which is
+// the failure this pairing exists to prevent -- an agent hooked next to the writer reports the
+// same nothing as an agent hooked on dead code.
+//
+// Both rvas are below the 1.17.0 -> 1.17.1 boundary `0xafefe9`, so the installed build shares them.
+const SAVE_LOAD_APPLY_RVA = 0x23f220;
+
+// The serializer. It is hooked because it names the moment the damage became durable: a `-1` read
+// out of the table here is a `-1` about to be written down, and the call that does it is upstream
+// of every later session that loads it back.
+const SAVE_LOAD_STORE_RVA = 0x23f280;
+
 // The funnel, and the reason this agent does not rest on the candidate above. Every path in this
 // module that changes bindings ends by rebuilding the pad manager from the table: the deserializer
 // calls it, load-defaults (rva 0x243030) calls it, restore-defaults (0x243330) calls it. Hooking
@@ -53,6 +76,9 @@ const ROW_STRIDE = 0x14;
 
 // Switch right armament. Default pad code 2003.
 const WATCHED_ACTION = 0x0f;
+
+// What a row with no button on it holds. The symptom is this value in the pad field.
+const UNBOUND = -1;
 
 const game = Process.findModuleByName(MODULE);
 if (game === null) {
@@ -140,6 +166,57 @@ if (game === null) {
         at: this.who.at,
         pad_before: this.before,
         pad_after: after,
+      });
+    },
+  });
+
+  // The writer itself. Every call is reported whether or not the row moved, because a load that
+  // installs the correct value is the control case: it dates the moment the stored configuration
+  // was still good, and without it a session with no report cannot be told from a session where
+  // the load never ran.
+  counts.applies = 0;
+  Interceptor.attach(game.base.add(SAVE_LOAD_APPLY_RVA), {
+    onEnter() {
+      this.before = padCode();
+      this.who = callerOf(this.context);
+    },
+    onLeave() {
+      counts.applies += 1;
+      const after = padCode();
+      if (this.before !== after) counts.flips += 1;
+      send({
+        tag: 'save-load-apply',
+        n: counts.applies,
+        caller: this.who.module,
+        at: this.who.at,
+        pad_before: this.before,
+        pad_after: after,
+        // The whole point of this hook: a load that brought the dead value in with it.
+        installed_unbound: after === UNBOUND,
+        flipped: this.before !== after,
+      });
+    },
+  });
+
+  // The serializer, reported only when it is about to write the dead value down. A store of the
+  // correct value is the normal case and says nothing.
+  counts.stores = 0;
+  Interceptor.attach(game.base.add(SAVE_LOAD_STORE_RVA), {
+    onEnter() {
+      counts.stores += 1;
+      const pad = padCode();
+      if (pad !== UNBOUND) return;
+      send({
+        tag: 'save-load-store-unbound',
+        n: counts.stores,
+        caller: callerOf(this.context),
+        pad: pad,
+        // Where the stack was when the damage was committed to storage. This is the call chain
+        // that makes the next session start broken, so it is worth the cost here and nowhere else.
+        stack: Thread.backtrace(this.context, Backtracer.ACCURATE)
+          .slice(0, 12)
+          .map(DebugSymbol.fromAddress)
+          .map(String),
       });
     },
   });
