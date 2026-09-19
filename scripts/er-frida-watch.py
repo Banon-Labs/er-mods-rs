@@ -50,6 +50,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import er_run_lib
 
 PORT = 27042
+DEFAULT_ENDPOINT = f"127.0.0.1:{PORT}"
 DEFAULT_AGENT = pathlib.Path(__file__).resolve().parent / "frida" / "ersc-session.js"
 DEFAULT_LOG = pathlib.Path(
     os.environ.get("ER_FRIDA_LOG", pathlib.Path.home() / ".cache" / "er-frida" / "hits.jsonl")
@@ -120,10 +121,10 @@ def blocking_slice(watch: er_run_lib.DirectoryWatch, seconds: float) -> None:
     er_run_lib.wait_for_exit(os.getpid(), seconds)
 
 
-def device():
+def device(endpoint: str = DEFAULT_ENDPOINT):
     import frida
 
-    return frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
+    return frida.get_device_manager().add_remote_device(endpoint)
 
 
 def find_game(dev, name: str = "eldenring.exe"):
@@ -179,50 +180,117 @@ def find_game_bounded(dev, timeout_seconds: float = 6.0):
     return result[0]
 
 
-def run(agent_path: pathlib.Path, log_path: pathlib.Path) -> int:
+def find_pid_bounded(dev, pid: int, timeout_seconds: float = 6.0):
+    """Return a Windows process by pid with the same stale-server bound as `find_game_bounded`."""
+    import threading
+
+    result: list = []
+
+    def ask() -> None:
+        try:
+            for process in dev.enumerate_processes():
+                if process.pid == pid:
+                    result.append(process)
+                    return
+            result.append(None)
+        except Exception as exc:
+            result.append(exc)
+
+    worker = threading.Thread(target=ask, daemon=True)
+    worker.start()
+    worker.join(timeout_seconds)
+    if not result:
+        raise TimeoutError("enumerate_processes did not answer")
+    if isinstance(result[0], Exception):
+        raise result[0]
+    return result[0]
+
+
+def agent_prelude(role: str, endpoint: str, pid: int, config: dict | None = None) -> str:
+    expected = {"role": role, "endpoint": endpoint, "windows_pid": pid}
+    encoded_expected = json.dumps(expected, sort_keys=True)
+    encoded_config = json.dumps(config or {}, sort_keys=True)
+    return f"""globalThis.__ER_FRIDA_EXPECTED = {encoded_expected};
+globalThis.__ER_FRIDA_CONFIG = {encoded_config};
+if (Process.id !== globalThis.__ER_FRIDA_EXPECTED.windows_pid) {{
+  send({{family: "startup", tag: "identity.mismatch", expected: globalThis.__ER_FRIDA_EXPECTED, process_id: Process.id}});
+  throw new Error("attached to the wrong process");
+}}
+send({{family: "startup", tag: "identity", expected: globalThis.__ER_FRIDA_EXPECTED, process_id: Process.id, config: globalThis.__ER_FRIDA_CONFIG}});
+"""
+
+
+def run(
+    agent_path: pathlib.Path,
+    log_path: pathlib.Path,
+    endpoint: str = DEFAULT_ENDPOINT,
+    windows_pid: int | None = None,
+    role: str = "default",
+    config: dict | None = None,
+) -> int:
     # Say something immediately. An empty log used to be ambiguous between "still waiting" and
     # "hung on the first call", and on 2026-09-08 it was the second: the watcher sat mute for a
     # whole run against a server whose prefix had been torn down, and the run reached the player
     # with nothing attached while the log said nothing at all.
-    print(f"watcher starting: agent={agent_path.name} port={PORT}", flush=True)
-    dev = device()
+    print(f"watcher starting: agent={agent_path.name} endpoint={endpoint} role={role}", flush=True)
+    dev = device(endpoint)
     print("connected to the wine-side server", flush=True)
     started = time.monotonic()
     deadline = started + WAIT_FOR_GAME_SECONDS
-    pid = None
-    announced = 0.0
-    # The wait between enumerations blocks on the game directory rather than on a clock: every
-    # launch writes there -- me3's staging, the DLLs' own logs -- long before a process exists, so
-    # this wakes as the launch happens instead of up to a second after it.
-    with er_run_lib.DirectoryWatch(er_run_lib.game_dir()) as launch_watch:
-        while pid is None:
-            try:
-                pid = find_game_bounded(dev)
-            except TimeoutError:
-                # The server answers its socket but not its calls, which is what a stale prefix
-                # looks like. That is fatal here rather than something to keep retrying: retrying
-                # is how the silence lasted a whole run.
-                print(
-                    "the frida server accepted the connection but did not answer "
-                    "enumerate_processes -- its prefix is stale. Restart it with "
-                    "`python3 scripts/er-frida-up.py --force`.",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return 2
-            if pid is not None:
-                break
-            waited = time.monotonic() - started
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            if waited - announced >= PROGRESS_EVERY_SECONDS:
-                announced = waited
-                print(f"still waiting for eldenring.exe ({waited:.0f}s)", flush=True)
-            blocking_slice(launch_watch, min(WATCH_SLICE_SECONDS, remaining))
-    if pid is None:
-        print("no eldenring.exe appeared in the prefix", file=sys.stderr)
-        return 1
+    pid = windows_pid
+    if pid is not None:
+        try:
+            process = find_pid_bounded(dev, pid)
+        except TimeoutError:
+            print(
+                "the frida server accepted the connection but did not answer "
+                "enumerate_processes -- its prefix is stale. Restart it with "
+                "`python3 scripts/er-frida-up.py --force`.",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 2
+        if process is None or process.name.lower() != "eldenring.exe":
+            print(
+                f"windows pid {pid} is not eldenring.exe on {endpoint}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return 1
+    else:
+        announced = 0.0
+        # The wait between enumerations blocks on the game directory rather than on a clock: every
+        # launch writes there -- me3's staging, the DLLs' own logs -- long before a process exists,
+        # so this wakes as the launch happens instead of up to a second after it.
+        with er_run_lib.DirectoryWatch(er_run_lib.game_dir()) as launch_watch:
+            while pid is None:
+                try:
+                    pid = find_game_bounded(dev)
+                except TimeoutError:
+                    # The server answers its socket but not its calls, which is what a stale prefix
+                    # looks like. That is fatal here rather than something to keep retrying:
+                    # retrying is how the silence lasted a whole run.
+                    print(
+                        "the frida server accepted the connection but did not answer "
+                        "enumerate_processes -- its prefix is stale. Restart it with "
+                        "`python3 scripts/er-frida-up.py --force`.",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                    return 2
+                if pid is not None:
+                    break
+                waited = time.monotonic() - started
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                if waited - announced >= PROGRESS_EVERY_SECONDS:
+                    announced = waited
+                    print(f"still waiting for eldenring.exe ({waited:.0f}s)", flush=True)
+                blocking_slice(launch_watch, min(WATCH_SLICE_SECONDS, remaining))
+        if pid is None:
+            print("no eldenring.exe appeared in the prefix", file=sys.stderr)
+            return 1
 
     # One watcher at a time, because a second one silently breaks the first's hooks.
     #
@@ -268,7 +336,7 @@ def run(agent_path: pathlib.Path, log_path: pathlib.Path) -> int:
 
     def on_message(message, _data):
         seen["messages"] += 1
-        record = {"at": time.time(), "message": message}
+        record = {"at": time.time(), "role": role, "endpoint": endpoint, "pid": pid, "message": message}
         log.write(json.dumps(record) + "\n")
         payload = message.get("payload", message)
         print(f"AGENT {payload}", flush=True)
@@ -281,7 +349,7 @@ def run(agent_path: pathlib.Path, log_path: pathlib.Path) -> int:
             nonlocal script, stamp
             if script is not None:
                 script.unload()
-            source = agent_path.read_text(encoding="utf-8")
+            source = agent_prelude(role, endpoint, pid, config) + "\n" + agent_path.read_text(encoding="utf-8")
             script = session.create_script(source)
             script.on("message", on_message)
             script.load()
@@ -436,11 +504,25 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", type=pathlib.Path, default=DEFAULT_AGENT)
     parser.add_argument("--log", type=pathlib.Path, default=DEFAULT_LOG)
+    parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
+    parser.add_argument("--pid", type=int, help="Windows pid to attach. Omitting it keeps legacy first-game behavior.")
+    parser.add_argument("--role", default="default", help="Role label written into every event.")
+    parser.add_argument("--config-json", help="JSON object exposed to the agent as globalThis.__ER_FRIDA_CONFIG")
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
     if args.selftest:
         return selftest()
-    return run(args.agent, args.log)
+    config = None
+    if args.config_json:
+        try:
+            config = json.loads(args.config_json)
+        except json.JSONDecodeError as exc:
+            print(f"--config-json is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(config, dict):
+            print("--config-json must be a JSON object", file=sys.stderr)
+            return 1
+    return run(args.agent, args.log, endpoint=args.endpoint, windows_pid=args.pid, role=args.role, config=config)
 
 
 if __name__ == "__main__":

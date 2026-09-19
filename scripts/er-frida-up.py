@@ -53,7 +53,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import er_run_lib
 
 FRIDA_VERSION = "17.17.0"
-PORT = 27042
+DEFAULT_PORT = 27042
+PORT = DEFAULT_PORT
 STEAM_APP_ID = "1245620"
 # Where the downloaded server is cached between runs. Not in the repo: it is a 65 MB third-party
 # binary, the same category as the deobfuscated game images.
@@ -116,6 +117,13 @@ def game_pid() -> int | None:
     return None
 
 
+def linux_pid_is_game(pid: int) -> bool:
+    try:
+        return pathlib.Path(f"/proc/{pid}/comm").read_text(encoding="utf-8").strip() == "eldenring.exe"
+    except OSError:
+        return False
+
+
 def container_prefix(pid: int) -> list[str]:
     """The `nsenter` prefix that puts a command inside the game's container, or `[]`.
 
@@ -153,11 +161,11 @@ def wine_binary() -> pathlib.Path | None:
     return None
 
 
-def listening() -> bool:
+def listening(port: int = PORT) -> bool:
     with socket.socket() as probe:
         probe.settimeout(2)
         try:
-            probe.connect(("127.0.0.1", PORT))
+            probe.connect(("127.0.0.1", port))
             return True
         except OSError:
             return False
@@ -299,7 +307,15 @@ def world_is_up() -> tuple[bool, str]:
     return False, "no run telemetry to read -- cannot tell whether a world exists"
 
 
-def start(force: bool = False, allow_early: bool = False) -> int:
+def start(
+    force: bool = False,
+    allow_early: bool = False,
+    role: str | None = None,
+    linux_pid: int | None = None,
+    port: int = PORT,
+    log_path: pathlib.Path | None = None,
+    pidfile: pathlib.Path | None = None,
+) -> int:
     # Refuse to start while the game is still booting.
     #
     # 2026-09-16: a server was started seconds after a launch, the drive that followed reported
@@ -324,6 +340,9 @@ def start(force: bool = False, allow_early: bool = False) -> int:
     # and then hangs forever inside `enumerate_processes` -- so a watcher started against it sits
     # mute rather than failing, which is exactly how a run reached the player with nothing attached.
     # The server's view is per-wineserver, so a teardown invalidates it and it has to be replaced.
+    if linux_pid is not None and not linux_pid_is_game(linux_pid):
+        print(f"linux pid {linux_pid} is not eldenring.exe", file=sys.stderr)
+        return 1
     if force:
         # `--force` has to stop the old server, not merely skip the reuse check. Without this the
         # replacement starts, fails with `Unable to start: Error binding to address 127.0.0.1:27042`
@@ -331,15 +350,15 @@ def start(force: bool = False, allow_early: bool = False) -> int:
         # answering. Measured 2026-09-08: after a relaunch the old server was still alive in the
         # previous container's namespace (mnt:[4026533261]) while the game had moved to a new one
         # (mnt:[4026533335]), so every enumerate hung and `--force` appeared to do nothing.
-        stop()
+        stop(pidfile=pidfile, port=port)
         if clear_staged_agent():
             print("cleared the agent DLL a previous server left staged in the prefix")
-    elif listening():
-        if server_sees_the_prefix():
-            print(f"frida-server already listening on 127.0.0.1:{PORT} and answering")
+    elif listening(port):
+        if server_sees_the_prefix(port):
+            print(f"frida-server already listening on 127.0.0.1:{port} and answering")
             return 0
         print("frida-server is listening but not answering; replacing it", flush=True)
-        stop()
+        stop(pidfile=pidfile, port=port)
         if clear_staged_agent():
             print("cleared the agent DLL a previous server left staged in the prefix")
     wine = wine_binary()
@@ -356,15 +375,20 @@ def start(force: bool = False, allow_early: bool = False) -> int:
     env["WINEPREFIX"] = str(prefix())
     # The server is a console app that needs neither; suppressing them keeps the log readable.
     env["WINEDLLOVERRIDES"] = "mscoree=d;mshtml=d"
-    log = CACHE / "frida-server.log"
-    pid = game_pid()
+    if log_path is None:
+        suffix = "frida-server.log" if role is None else f"frida-server-{role}.log"
+        log_path = CACHE / suffix
+    pid = linux_pid if linux_pid is not None else game_pid()
     command = [str(wine), str(staged)]
+    if port != DEFAULT_PORT:
+        command.extend(["-l", f"127.0.0.1:{port}"])
     if pid is not None:
         command = container_prefix(pid) + command
         print(f"starting frida-server inside the game's container (pid {pid})", flush=True)
     else:
         print("no eldenring.exe yet; starting frida-server on the host namespace", flush=True)
-    with open(log, "wb") as handle:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "wb") as handle:
         server = subprocess.Popen(
             command,
             env=env,
@@ -372,14 +396,30 @@ def start(force: bool = False, allow_early: bool = False) -> int:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-    if wait_for_port(server):
-        print(f"frida-server up on 127.0.0.1:{PORT} (log {log})")
+    if pidfile is not None:
+        pidfile.parent.mkdir(parents=True, exist_ok=True)
+        pidfile.write_text(
+            json.dumps(
+                {
+                    "role": role,
+                    "linux_pid": pid,
+                    "starter_pid": server.pid,
+                    "port": port,
+                    "log": str(log_path),
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    if wait_for_port(server, port):
+        print(f"frida-server up on 127.0.0.1:{port} (log {log_path})")
         return 0
-    print(f"frida-server did not open {PORT}; see {log}", file=sys.stderr)
+    print(f"frida-server did not open {port}; see {log_path}", file=sys.stderr)
     return 1
 
 
-def wait_for_port(server: subprocess.Popen) -> bool:
+def wait_for_port(server: subprocess.Popen, port: int = PORT) -> bool:
     """Wait for the server to open `PORT`, or to die trying.
 
     Readiness is the connect probe, because a listening socket is the only thing that proves the
@@ -390,11 +430,11 @@ def wait_for_port(server: subprocess.Popen) -> bool:
     """
     deadline = time.monotonic() + SERVER_START_BUDGET_SECONDS
     while True:
-        if listening():
+        if listening(port):
             return True
         if server.poll() is not None:
             print(
-                f"frida-server exited with {server.returncode} before opening {PORT}",
+                f"frida-server exited with {server.returncode} before opening {port}",
                 file=sys.stderr,
             )
             return False
@@ -404,7 +444,7 @@ def wait_for_port(server: subprocess.Popen) -> bool:
         er_run_lib.wait_for_exit(server.pid, min(SERVER_PROBE_SLICE_SECONDS, remaining))
 
 
-def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
+def server_sees_the_prefix(port: int = PORT, timeout_seconds: float = 6.0) -> bool:
     """Whether the server can still enumerate its prefix, within a bound.
 
     `enumerate_processes` has no timeout of its own and blocks indefinitely against a server whose
@@ -421,7 +461,7 @@ def server_sees_the_prefix(timeout_seconds: float = 6.0) -> bool:
             if frida is None:
                 answered.append(False)
                 return
-            dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
+            dev = frida.get_device_manager().add_remote_device(f"127.0.0.1:{port}")
             dev.enumerate_processes()
             answered.append(True)
         except Exception:
@@ -452,16 +492,16 @@ def import_frida():
     return frida
 
 
-def status() -> int:
-    up = listening()
-    print(f"127.0.0.1:{PORT} {'OPEN' if up else 'closed'}")
+def status(port: int = PORT) -> int:
+    up = listening(port)
+    print(f"127.0.0.1:{port} {'OPEN' if up else 'closed'}")
     if not up:
         return 1
     frida = import_frida()
     if frida is None:
         print("frida python not importable here; run under `uv run --with frida`")
         return 0
-    device = frida.get_device_manager().add_remote_device(f"127.0.0.1:{PORT}")
+    device = frida.get_device_manager().add_remote_device(f"127.0.0.1:{port}")
     processes = device.enumerate_processes()
     print(f"{len(processes)} process(es) visible in the prefix")
     for process in processes:
@@ -492,8 +532,8 @@ def frida_server_pids() -> list[int]:
     return pids
 
 
-def stop() -> int:
-    """Kill every frida-server and wait for each one to actually go.
+def stop(pidfile: pathlib.Path | None = None, port: int = PORT) -> int:
+    """Stop either one recorded server starter or the legacy global server set.
 
     The wait is a pidfd, not a delay. What a caller needs from this function is that the port has
     been released, and the event that releases it is the holder dying -- so `--force` starting its
@@ -503,15 +543,24 @@ def stop() -> int:
     is how `--force` came to look like it did nothing at all.
     """
     killed = []
-    for pid in frida_server_pids():
+    if pidfile is not None and pidfile.exists():
         try:
-            os.kill(pid, signal.SIGKILL)
-            killed.append(pid)
-        except OSError:
-            continue
+            record = json.loads(pidfile.read_text(encoding="utf-8"))
+            starter_pid = int(record["starter_pid"])
+            os.killpg(starter_pid, signal.SIGKILL)
+            killed.append(starter_pid)
+        except (KeyError, ValueError, OSError, json.JSONDecodeError):
+            killed = []
+    else:
+        for pid in frida_server_pids():
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.append(pid)
+            except OSError:
+                continue
     for pid in killed:
         er_run_lib.wait_for_exit(pid, SERVER_EXIT_WAIT_SECONDS)
-    print(f"stopped {killed or 'nothing'}; 127.0.0.1:{PORT} {'still OPEN' if listening() else 'closed'}")
+    print(f"stopped {killed or 'nothing'}; 127.0.0.1:{port} {'still OPEN' if listening(port) else 'closed'}")
     return 0
 
 
@@ -526,7 +575,7 @@ def selftest() -> int:
         ("the game's wine prefix exists", prefix().is_dir()),
         ("the download url names the pinned version", FRIDA_VERSION in DOWNLOAD),
         ("the cache directory is user-owned, not a repo path", "er-mods-rs" not in str(CACHE)),
-        ("--force stops the old server before starting a new one", "stop()" in force_branch),
+        ("--force stops the old server before starting a new one", "stop(" in force_branch),
         (
             "--force clears the agent DLL a dead server left staged",
             "clear_staged_agent()" in force_branch,
@@ -582,6 +631,11 @@ def main() -> int:
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--selftest", action="store_true")
     parser.add_argument("--force", action="store_true", help="replace a running server outright")
+    parser.add_argument("--role", help="Role label for logs and pidfile records, e.g. host or peer")
+    parser.add_argument("--linux-pid", type=int, help="Linux pid of the target eldenring.exe")
+    parser.add_argument("--port", type=int, default=PORT, help="TCP port for frida-server")
+    parser.add_argument("--log", type=pathlib.Path, help="Role-specific frida-server log path")
+    parser.add_argument("--pidfile", type=pathlib.Path, help="Role-specific starter pid record")
     parser.add_argument(
         "--allow-early",
         action="store_true",
@@ -592,10 +646,18 @@ def main() -> int:
     if args.selftest:
         return selftest()
     if args.status:
-        return status()
+        return status(port=args.port)
     if args.stop:
-        return stop()
-    return start(force=args.force, allow_early=args.allow_early)
+        return stop(pidfile=args.pidfile, port=args.port)
+    return start(
+        force=args.force,
+        allow_early=args.allow_early,
+        role=args.role,
+        linux_pid=args.linux_pid,
+        port=args.port,
+        log_path=args.log,
+        pidfile=args.pidfile,
+    )
 
 
 if __name__ == "__main__":
