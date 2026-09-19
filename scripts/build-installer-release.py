@@ -4,11 +4,20 @@
 Layout, which is also what `install::find_dll_source` looks for:
 
     er-mods-<commit>/
-      er-installer.exe      run this
+      er-installer.exe      run this on Windows
+      er-installer          run this on Linux
       README.txt
       dlls/
         er_quickload.dll
         ... one per shipped shell
+
+Both hosts, one download
+------------------------
+me3 runs natively on Linux, where the game is a Proton process -- so the natives stay PE for
+everyone and only the installer differs. The Linux build is an ELF from the host toolchain,
+the Windows one a PE from cargo-xwin, and the zip records the executable bit on the ELF
+because Python does not do that by default and a downloaded installer nobody can run is a
+download that failed quietly.
 
 The zip is refused rather than shipped incomplete. A download missing one DLL produces an
 installer that offers a mod and then cannot install it, which is a worse failure than not
@@ -29,6 +38,7 @@ Usage:
 Build the payload first; this packages, it does not compile:
     scripts/er-build-dlls.sh --all
     cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer
+    cargo build --release -p er-installer
 """
 
 from __future__ import annotations
@@ -44,8 +54,14 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DLL_LIST = REPO_ROOT / "scripts" / "me3-dll-list.py"
 TARGET_DIR = REPO_ROOT / "target" / "x86_64-pc-windows-msvc" / "release"
+HOST_TARGET_DIR = REPO_ROOT / "target" / "release"
 DEFAULT_OUT_DIR = REPO_ROOT / "target" / "deliverables"
 INSTALLER_EXE = "er-installer.exe"
+INSTALLER_ELF = "er-installer"
+
+# `rwxr-xr-x` in the high half of a zip entry's external attributes, which is where Info-ZIP and
+# every Linux unzip look for a Unix mode. Without it the ELF unpacks unreadable as a program.
+EXECUTABLE_ZIP_ATTR = (0o100755 & 0xFFFF) << 16
 
 # Refused by name. `ersc.dll` is Seamless Co-op; the rest are save containers.
 FORBIDDEN_NAMES = {"ersc.dll", "ER0000.sl2", "ER0000.co2"}
@@ -91,13 +107,18 @@ Elden Ring mods -- pick what you want, and this writes the me3 profile for them.
 
 WHAT TO DO
   1. Install me3 if you have not: https://github.com/garyttierney/me3
-  2. Run er-installer.exe.
+  2. Windows: run er-installer.exe
+     Linux:   run ./er-installer      (same program; me3 runs natively on Linux)
   3. Tick what you want and press a.
+
+The mods themselves are Windows DLLs on both systems -- on Linux the game is a Proton
+process, so only the installer differs.
 
 It finds the game on its own when Steam is somewhere usual. If it cannot, pass the folder
 holding eldenring.exe:
 
     er-installer.exe --game-dir "C:\\...\\steamapps\\common\\ELDEN RING\\Game"
+    ./er-installer --game-dir "$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game"
 
 Some pairs of mods destroy each other when loaded together -- usually by one of them silently
 doing nothing rather than by crashing. The installer knows which pairs those are and refuses
@@ -119,7 +140,7 @@ Built from commit {commit}.
 """
 
 
-def stage(out_dir: Path, source: Path, commit: str) -> tuple[Path, list[str]]:
+def stage(out_dir: Path, source: Path, host_source: Path, commit: str) -> tuple[Path, list[str]]:
     """Copy the payload into `out_dir/<name>`, returning that directory and its file list."""
     name = f"er-mods-{commit}"
     root = out_dir / name
@@ -127,17 +148,23 @@ def stage(out_dir: Path, source: Path, commit: str) -> tuple[Path, list[str]]:
     dll_dir.mkdir(parents=True, exist_ok=True)
 
     wanted = shipped_artifacts()
-    missing = [artifact for artifact in wanted if not (source / artifact).is_file()]
+    missing = [f"{source}/{artifact}" for artifact in wanted if not (source / artifact).is_file()]
     exe = source / INSTALLER_EXE
+    elf = host_source / INSTALLER_ELF
     if not exe.is_file():
-        missing.append(INSTALLER_EXE)
+        missing.append(str(exe))
+    # The Linux installer is not optional. me3 runs natively on Linux, and shipping only the
+    # Windows build would leave every Linux player with a zip they cannot start.
+    if not elf.is_file():
+        missing.append(str(elf))
     if missing:
         raise SystemExit(
-            f"not in {source}:\n"
+            "missing from the build tree:\n"
             + "".join(f"  {item}\n" for item in missing)
             + "\nBuild the payload first:\n"
             "  scripts/er-build-dlls.sh --all\n"
-            "  cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer"
+            "  cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer\n"
+            "  cargo build --release -p er-installer"
         )
 
     staged: list[str] = []
@@ -150,6 +177,10 @@ def stage(out_dir: Path, source: Path, commit: str) -> tuple[Path, list[str]]:
 
     (root / INSTALLER_EXE).write_bytes(exe.read_bytes())
     staged.append(INSTALLER_EXE)
+    linux_installer = root / INSTALLER_ELF
+    linux_installer.write_bytes(elf.read_bytes())
+    linux_installer.chmod(0o755)
+    staged.append(INSTALLER_ELF)
     (root / "README.txt").write_text(README.format(commit=commit), encoding="utf-8")
     staged.append("README.txt")
     return root, staged
@@ -165,7 +196,12 @@ def write_zip(root: Path, out_dir: Path) -> Path:
             reason = forbidden_reason(path.name)
             if reason:
                 raise SystemExit(f"refusing to package: {reason}")
-            zf.write(path, str(Path(root.name) / relative))
+            arcname = str(Path(root.name) / relative)
+            info = zipfile.ZipInfo.from_file(path, arcname)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            if path.name == INSTALLER_ELF:
+                info.external_attr = EXECUTABLE_ZIP_ATTR
+            zf.writestr(info, path.read_bytes())
     return archive
 
 
@@ -194,17 +230,68 @@ def selftest() -> int:
             print(f"SELFTEST FAIL: a shipped artifact is on the refusal list: {artifact}")
             failures += 1
 
+    failures += _selftest_package(wanted)
+
     if failures:
         print(f"selftest: {failures} case(s) failed")
         return 1
-    print(f"selftest: {len(cases) + 1} cases passed, {len(wanted)} artifacts in the payload")
+    print(f"selftest: {len(cases) + 4} cases passed, {len(wanted)} artifacts in the payload")
     return 0
+
+
+def _selftest_package(wanted: list[str]) -> int:
+    """Stage and zip a payload of stubs, and check what a player would actually unpack."""
+    import tempfile
+
+    failures = 0
+    with tempfile.TemporaryDirectory(prefix="er-installer-release-") as tmp:
+        tmp = Path(tmp)
+        source, host_source, out_dir = tmp / "win", tmp / "host", tmp / "out"
+        source.mkdir()
+        host_source.mkdir()
+        for artifact in wanted:
+            (source / artifact).write_bytes(b"stub")
+        (source / INSTALLER_EXE).write_bytes(b"stub")
+
+        # The Linux build absent must refuse, not quietly ship a Windows-only zip.
+        try:
+            stage(out_dir, source, host_source, "selftest")
+        except SystemExit as refusal:
+            if INSTALLER_ELF not in str(refusal):
+                print(f"SELFTEST FAIL: refusal did not name the missing Linux build: {refusal}")
+                failures += 1
+        else:
+            print("SELFTEST FAIL: a missing Linux installer was packaged anyway")
+            failures += 1
+
+        (host_source / INSTALLER_ELF).write_bytes(b"stub")
+        root, staged = stage(out_dir, source, host_source, "selftest")
+        if INSTALLER_ELF not in staged or INSTALLER_EXE not in staged:
+            print(f"SELFTEST FAIL: both installers should be staged, got {staged[-3:]}")
+            failures += 1
+
+        archive = write_zip(root, out_dir)
+        with zipfile.ZipFile(archive) as zf:
+            entry = next(
+                (i for i in zf.infolist() if i.filename.endswith(f"/{INSTALLER_ELF}")), None
+            )
+            if entry is None:
+                print("SELFTEST FAIL: the Linux installer is not in the zip")
+                failures += 1
+            elif not (entry.external_attr >> 16) & 0o111:
+                print(
+                    "SELFTEST FAIL: the Linux installer unpacks without its executable bit "
+                    f"(mode {(entry.external_attr >> 16):o})"
+                )
+                failures += 1
+    return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--source", type=Path, default=TARGET_DIR)
+    parser.add_argument("--host-source", type=Path, default=HOST_TARGET_DIR)
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
@@ -213,7 +300,7 @@ def main() -> int:
 
     commit = git_commit()
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    root, staged = stage(args.out_dir, args.source, commit)
+    root, staged = stage(args.out_dir, args.source, args.host_source, commit)
     archive = write_zip(root, args.out_dir)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 
