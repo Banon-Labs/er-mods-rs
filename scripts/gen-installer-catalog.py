@@ -116,8 +116,14 @@ pub struct Mod {
     pub default_on: bool,
     /// Inert, or refusing to arm, unless Seamless Co-op is loaded.
     pub needs_seamless: bool,
-    /// Recorded in the conflict table as something a player must ask for by name.
-    pub opt_in_only: bool,
+    /// Why this one is never ticked for you, in a phrase that fits on its row.
+    ///
+    /// `Some` for exactly the mods listed in `[opt_in_only]` in the conflict table, which is
+    /// where a mod that changes params or drives input by mere presence records that it has
+    /// to be asked for by name. `check-me3-dll-catalog.py` refuses either half without the
+    /// other, so this carries the flag and the reason in one field rather than a bool that
+    /// can only say a mod changes something.
+    pub caution: Option<&'static str>,
     /// Bigger mods that already carry this one. Empty for most. Ticking this beside any of
     /// them puts two copies of one feature in the game, so the picker refuses the pair.
     pub included_in: &'static [&'static str],
@@ -170,6 +176,16 @@ def render(
                 "Run scripts/check-me3-dll-catalog.py for the full picture."
             )
         config = f"Some({rust_str(entry['config'])})" if entry.get("config") else "None"
+        # `check-me3-dll-catalog.py` is the gate for this, but a missing caution would be
+        # emitted here as a plain `None` -- a row that says nothing about a mod the player has
+        # to consent to, in a file that looks complete. Refuse rather than generate it.
+        if package in opt_in_only and not entry.get("caution"):
+            raise SystemExit(
+                f"{package}: in [opt_in_only] in me3-dll-conflicts.toml with no `caution` in "
+                "me3-dll-catalog.toml. The picker row would say the mod is off by default and "
+                "not why. Run scripts/check-me3-dll-catalog.py."
+            )
+        caution = f"Some({rust_str(entry['caution'])})" if entry.get("caution") else "None"
         included_in = "&[{}]".format(
             ", ".join(rust_str(host) for host in entry.get("included_in", []))
         )
@@ -183,7 +199,7 @@ def render(
             f"        audience: {rust_str(entry['audience'])},",
             f"        default_on: {str(bool(entry['default'])).lower()},",
             f"        needs_seamless: {str(bool(entry.get('needs_seamless', False))).lower()},",
-            f"        opt_in_only: {str(package in opt_in_only).lower()},",
+            f"        caution: {caution},",
             f"        included_in: {included_in},",
             f"        config: {config},",
             "    },",
@@ -229,6 +245,7 @@ def selftest() -> int:
             "category": "diagnostics",
             "audience": "diagnostic",
             "default": False,
+            "caution": "takes the controls",
         },
     }
     conflicts = {
@@ -246,7 +263,8 @@ def selftest() -> int:
         ("config: None", "an absent config becomes None"),
         ('included_in: &["er-beta"]', "a present included_in becomes a slice"),
         ("included_in: &[]", "an absent included_in becomes an empty slice"),
-        ("opt_in_only: true", "opt_in_only is carried over from the conflict table"),
+        ('caution: Some("takes the controls")', "a present caution becomes Some(..)"),
+        ("caution: None", "an absent caution becomes None"),
         ("default_on: true", "the default tick is carried over"),
         ("whichever loads second wins", "the kind is rendered into a sentence"),
     ]
@@ -256,18 +274,26 @@ def selftest() -> int:
             print(f"SELFTEST FAIL {name}: {needle!r} not in generated output")
             failures += 1
 
-    try:
-        render(catalog, {"conflict": [{"a": "er-alpha", "b": "er-beta", "kind": "novel"}]}, pairs)
-    except SystemExit:
-        pass
-    else:
-        print("SELFTEST FAIL: an unknown conflict kind was not refused")
+    refusals = [
+        (
+            "an unknown conflict kind",
+            {"conflict": [{"a": "er-alpha", "b": "er-beta", "kind": "novel"}]},
+        ),
+        # `er-alpha` is the entry with no caution, so listing it here is the forgotten half.
+        ("an opt-in mod with no caution", {"conflict": [], "opt_in_only": {"er-alpha": "r"}}),
+    ]
+    for name, table in refusals:
+        try:
+            render(catalog, table, pairs)
+        except SystemExit:
+            continue
+        print(f"SELFTEST FAIL: {name} was not refused")
         failures += 1
 
     if failures:
         print(f"selftest: {failures} case(s) failed")
         return 1
-    print(f"selftest: {len(checks) + 1} cases passed")
+    print(f"selftest: {len(checks) + len(refusals)} cases passed")
     return 0
 
 

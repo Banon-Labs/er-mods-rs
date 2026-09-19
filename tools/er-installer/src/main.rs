@@ -168,6 +168,9 @@ fn print_list() {
             if entry.needs_seamless {
                 println!("    Needs Seamless Co-op to do anything.");
             }
+            if let Some(caution) = entry.caution {
+                println!("    Never installed unless you ask for it: {caution}.");
+            }
             if let Some(config) = entry.config {
                 println!("    Settings: {config} in the game folder.");
             }

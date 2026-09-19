@@ -10,7 +10,7 @@ and if that set cannot be loaded together the very first profile a user produces
 before the game starts. That set is computable here, from the same `[[conflict]]` table the
 installer consults, so it is checked here rather than discovered by a player.
 
-Six assertions:
+Seven assertions:
 
 1. **Coverage, both ways.** Every package in `me3-dll-list.py` has exactly one catalog
    entry, and every catalog entry names a shipped package. A rename breaks the build rather
@@ -26,7 +26,11 @@ Six assertions:
 5. **Consent agrees with the conflict table.** A package in that table's `[opt_in_only]`
    has already been found to change params or drive input by mere presence. It may not be
    ticked here. Two tables disagreeing about consent is the bug.
-6. **The default set loads.** No two `default = true` packages appear as a `[[conflict]]`
+6. **Every opt-in mod says what it costs.** `[opt_in_only]` means the player has to ask for
+   this one, so the row owes them the reason in a phrase that fits beside the label -- and a
+   package outside that table may not carry one. The picker showed the same "(changes
+   things)" for all five until 2026-09-19, which is the same as showing nothing.
+7. **The default set loads.** No two `default = true` packages appear as a `[[conflict]]`
    pair. `[[shared]]` pairs are fine and deliberately not checked: they are the declared,
    mechanism-backed sharing that licenses two DLLs to detour one prologue.
 
@@ -64,10 +68,14 @@ VALID_CATEGORIES = {
 VALID_AUDIENCES = {"player", "diagnostic"}
 
 REQUIRED_FIELDS = {"label", "blurb", "category", "audience", "default"}
-OPTIONAL_FIELDS = {"needs_seamless", "config", "included_in"}
+OPTIONAL_FIELDS = {"needs_seamless", "config", "included_in", "caution"}
 
 MAX_LABEL = 48
 MAX_BLURB = 200
+# The caution shares a picker row with an arrow, a tick box, a label of up to MAX_LABEL, and
+# sometimes a second note -- so it has to be a phrase, not a sentence. 40 leaves the longest
+# label a row that still fits the 80 columns a terminal opens at.
+MAX_CAUTION = 40
 
 
 def shipped_packages() -> list[str]:
@@ -209,6 +217,38 @@ def check(
                 "default here. Those are the two opposite answers to the same consent question."
             )
 
+    # A caution is the row's answer to "why is this one not ticked for me". Required exactly
+    # where [opt_in_only] says the mod must be asked for by name, and refused everywhere else
+    # so it cannot become a general-purpose warning field that dilutes the five real ones.
+    for package in sorted(set(catalog) & shipped_set):
+        entry = catalog[package]
+        if not isinstance(entry, dict):
+            continue
+        caution = entry.get("caution")
+        if package in opt_in_only:
+            if not isinstance(caution, str) or not caution.strip():
+                problems.append(
+                    f"{package}: listed in [opt_in_only] but has no `caution`. The picker has "
+                    "to say which consequence it is asking the player about; a row that only "
+                    "says a mod changes something tells nobody anything."
+                )
+            elif len(caution) > MAX_CAUTION:
+                problems.append(
+                    f"{package}: caution is {len(caution)} characters, over the {MAX_CAUTION} "
+                    "that fit beside a label on a picker row."
+                )
+            elif caution.endswith("."):
+                problems.append(
+                    f"{package}: caution ends with a full stop. It is drawn inside brackets "
+                    "beside other notes, not as a sentence of its own."
+                )
+        elif caution is not None:
+            problems.append(
+                f"{package}: has a `caution` but is not in [opt_in_only] in "
+                "me3-dll-conflicts.toml. A mod worth warning about is one that must be asked "
+                "for by name, so record it there first."
+            )
+
     ticked = {p for p, e in catalog.items() if isinstance(e, dict) and e.get("default") is True}
     for a, b in conflict_pairs(conflicts):
         if a in ticked and b in ticked:
@@ -296,6 +336,36 @@ def selftest() -> int:
             sound,
             {"conflict": [], "opt_in_only": {"er-beta": "reason"}},
             "opposite answers",
+        ),
+        (
+            "an opt-in-only mod with no caution is caught",
+            {**sound, "er-alpha": entry()},
+            {"conflict": [], "opt_in_only": {"er-alpha": "reason"}},
+            "has no `caution`",
+        ),
+        (
+            "an opt-in-only mod with a caution passes",
+            {**sound, "er-alpha": entry(caution="takes the controls")},
+            {"conflict": [], "opt_in_only": {"er-alpha": "reason"}},
+            "",
+        ),
+        (
+            "an over-long caution is caught",
+            {**sound, "er-alpha": entry(caution="x" * (MAX_CAUTION + 1))},
+            {"conflict": [], "opt_in_only": {"er-alpha": "reason"}},
+            "fit beside a label",
+        ),
+        (
+            "a caution written as a sentence is caught",
+            {**sound, "er-alpha": entry(caution="it takes the controls.")},
+            {"conflict": [], "opt_in_only": {"er-alpha": "reason"}},
+            "ends with a full stop",
+        ),
+        (
+            "a caution on a mod nobody asked to opt into is caught",
+            {**sound, "er-alpha": entry(caution="takes the controls")},
+            base_conflicts,
+            "record it there first",
         ),
         (
             "included_in naming a stranger is caught",
