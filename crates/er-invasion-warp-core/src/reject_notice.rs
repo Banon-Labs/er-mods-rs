@@ -486,10 +486,23 @@ impl RejectNotice {
         place: Option<&str>,
         host: Option<&str>,
     ) -> Option<String> {
-        let repeat = self.last_announced == Some(Announced::Arrived(block));
+        // An arrival is never suppressed as a repeat, and that is the one place this type treats
+        // the three kinds differently.
+        //
+        // The repeat rule exists for the search-side lines, which Seamless drives: it retries the
+        // same wrong destination roughly every twenty seconds, and saying so each time turns the
+        // banner into wallpaper inside a minute. An arrival is not a retry. It is fed exactly once
+        // per landed match, from the join-data hook, so two in a row are two invasions -- and
+        // suppressing the second told the player nothing had happened while they were being pulled
+        // into somebody's world.
+        //
+        // Reported live 2026-09-18 on run `br-20260919-003230-d6e8`: four matches landed, at
+        // `0x0b050000`, `0x3c332400`, `0x0b050000` and `0x0b050000`. The last two were consecutive
+        // arrivals in the same block, so both were swallowed -- "I got an invasion, but my banner
+        // didn't update".
         self.last_announced = Some(Announced::Arrived(block));
         self.suppressed = 0;
-        if repeat || !enabled {
+        if !enabled {
             return None;
         }
         // The place and the player, and nothing else. This is the last line of the search and the
@@ -1135,15 +1148,40 @@ mod tests {
         assert!(text.contains("m60_42_36_00"), "{text}");
     }
 
+    /// Two invasions into the same place are two lines, not one.
+    ///
+    /// This asserted the opposite until 2026-09-18, and the opposite is what the player hit: the
+    /// repeat rule belongs to the search-side lines, which Seamless retries at the same wrong
+    /// destination every twenty seconds. An arrival is fed once per landed match, so a repeated
+    /// block is a second invasion -- and the player was pulled into a host's world with the banner
+    /// still showing the last one.
     #[test]
-    fn the_same_arrival_twice_stays_quiet_but_a_new_one_speaks() {
+    fn every_arrival_speaks_even_into_the_same_place_twice() {
         let mut notice = RejectNotice::new();
         assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_some());
-        assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_none());
+        assert!(
+            notice.observe_arrival(true, LIMGRAVE, None, None).is_some(),
+            "the second invasion into the same block is still an invasion"
+        );
         assert!(
             notice
                 .observe_arrival(true, ELSEWHERE, None, None)
                 .is_some()
+        );
+    }
+
+    /// The search-side lines keep the rule the arrival gave up, because they are the ones Seamless
+    /// repeats. Asserted here so the change above cannot quietly spread to them.
+    #[test]
+    fn a_repeated_rejection_is_still_suppressed() {
+        let mut notice = RejectNotice::new();
+        let reject = |notice: &mut RejectNotice| {
+            notice.observe(true, LIMGRAVE, RejectReason::WrongBlock, None, None)
+        };
+        assert!(reject(&mut notice).is_some());
+        assert!(
+            reject(&mut notice).is_none(),
+            "Seamless retries the same wrong destination every twenty seconds"
         );
     }
 
@@ -1164,17 +1202,29 @@ mod tests {
         );
     }
 
+    /// A disabled notice paints nothing and still advances the latch the other two kinds read.
+    ///
+    /// This used to assert a second thing as well -- that turning the notice on could not replay
+    /// an arrival from minutes ago -- and that guard was aimed at something the caller cannot do.
+    /// `observe_arrival` is fed once per landed match from the join-data hook, so feeding the same
+    /// block again is a second invasion rather than a replay of the first, and treating it as a
+    /// replay is what left a player mid-invasion looking at the previous banner.
     #[test]
-    fn a_disabled_notice_still_advances_on_arrival() {
+    fn a_disabled_notice_paints_nothing_and_still_advances() {
         let mut notice = RejectNotice::new();
         assert!(
             notice
                 .observe_arrival(false, LIMGRAVE, None, None)
-                .is_none()
+                .is_none(),
+            "the switch is off, so nothing paints"
         );
+        // The latch moved even though nothing painted, which is what keeps the search-side lines
+        // judging against what actually happened rather than against the last thing they said.
         assert!(
-            notice.observe_arrival(true, LIMGRAVE, None, None).is_none(),
-            "turning the notice on must not replay an arrival from minutes ago"
+            notice
+                .observe(true, LIMGRAVE, RejectReason::WrongBlock, None, None)
+                .is_some(),
+            "a rejection after an arrival is news, whatever the arrival did on screen"
         );
     }
     /// The rung that was invisible. Announced once, then suppressed -- it is re-derived on every
