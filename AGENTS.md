@@ -102,6 +102,19 @@ away the entire time, and the section above already said so.
     threads printed `threadsArmed: 0` while the player pressed the button, which reads as "nothing
     writes this field" when it means "nothing is watching". An instrument that reports an absence
     it cannot detect is worse than no instrument.
+  - **A watchpoint outlives the agent that set it, so NEVER hard-kill a watcher holding one.** It
+    lives in the thread's debug registers, not in the script. Once the agent is gone nothing
+    services the exception, and the next write to that address kills the game leaving NOTHING in
+    the crash log -- an unhandled hardware-debug exception is not a fault `er-crash-logging` can
+    catch, so it reads as a spontaneous crash. Measured 2026-09-19: a watcher with 116 armed
+    threads was launched as `timeout 900 uv run ... er-frida-watch.py`, hit that cap at 18:38:50,
+    and the game's last log write is 18:38:49 -- one line after a healthy heartbeat at tick 67200,
+    with the player touching nothing. Both halves are required: the agent exports `dispose` and
+    unsets every slot there (Frida calls it on unload, covering a clean detach, a reload in place
+    and the watcher's own `SIGTERM`), and the CALLER does not wrap the watcher in `timeout` or any
+    other hard kill. `er-frida-watch.py` already ends on detach and handles `SIGTERM` itself; an
+    outer cap only bypasses the thing that would have cleaned up. Nothing in-process survives
+    `SIGKILL`, so there is no code fix for the second half -- only not doing it.
 
 - **For a read-only question with no game running**, `/proc/<pid>/mem` via
   `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
