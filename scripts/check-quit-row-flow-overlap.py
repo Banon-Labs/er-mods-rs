@@ -19,9 +19,12 @@ product opens the picker -- the shell had opened it in its own. The row looked a
 forwarded to the game, and the player got an in-world load instead of the save-safe switch. No
 crash, no logged error, the wrong load.
 
-So the hazard needs two hosts offering the same flow. Shells whose rows and flows are disjoint
-(`er-quit-menu` X `er-save-game-row`, `er-quit-load-character` X `er-save-game-row`) are
-deliberately not conflicts, and this gate must not demand that they be.
+So the hazard this gate looks for needs two hosts offering the same flow. Shells whose rows and
+flows are disjoint (`er-quit-menu` X `er-save-game-row`, `er-quit-load-character` X
+`er-save-game-row`) do not trip it, and it must not demand that they be declared. They are
+declared in that table anyway, on a second mechanism this gate cannot see: both hosts derive the
+same six-cell `02_040` Quit grid, and both install the row-populate detours with a bare
+`MhHook`. Do not read a silent pass here as a pair being co-loadable -- read the table.
 
 What this catches that the conflict gate cannot
 -----------------------------------------------
