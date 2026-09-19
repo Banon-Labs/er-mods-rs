@@ -224,6 +224,50 @@ pub fn install_artifacts(
     Ok(installed)
 }
 
+/// The Steam root above a game directory, when the game lives under a Steam library.
+///
+/// `me3 launch --auto-detect` locates the executable through Steam on its own, and on a native
+/// Linux Steam install that can fail outright -- measured 2026-09-19 on a real launch:
+/// `error=Steam was used to locate the game executable and no game installation was found`,
+/// against a game this installer had just found and written mods into. Passing the root it
+/// already knows removes the guess.
+///
+/// Derived by walking up from `<root>/steamapps/common/ELDEN RING/Game`, so a game outside a
+/// Steam library returns `None` and the caller simply omits the flag.
+pub fn steam_root(game_dir: &Path) -> Option<PathBuf> {
+    let mut ancestors = game_dir.ancestors();
+    ancestors.find(|path| {
+        path.file_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
+    })?;
+    game_dir
+        .ancestors()
+        .find(|path| {
+            path.file_name()
+                .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
+        })
+        .and_then(|steamapps| steamapps.parent())
+        .map(Path::to_path_buf)
+}
+
+/// The command that launches a profile, spelled the way me3 actually accepts it here.
+///
+/// `--auto-detect` plus a profile is not enough: it asks Steam where the game is and can come
+/// back empty. `-g eldenring` names the game, `-e` names the executable, and `--steam-dir` --
+/// which is a global option, before the `launch` subcommand, not after it -- names the library.
+pub fn launch_command(game_dir: &Path, profile: &Path) -> String {
+    let mut command = String::from("me3");
+    if let Some(root) = steam_root(game_dir) {
+        command.push_str(&format!(" --steam-dir \"{}\"", display_path(&root)));
+    }
+    command.push_str(&format!(
+        " launch -p \"{}\" -g eldenring -e \"{}\"",
+        display_path(profile),
+        display_path(&game_dir.join(GAME_EXE))
+    ));
+    command
+}
+
 /// Render a path for an ME3 profile. Windows verbatim prefixes (`\\?\`) come back from
 /// `canonicalize` and ME3 does not want them, so they are stripped here rather than written
 /// into a profile a user may later read or edit.
@@ -444,6 +488,54 @@ mod tests {
         assert_eq!(
             not_embedded(&all).len(),
             crate::catalog::CATALOG.len() - count
+        );
+    }
+
+    #[test]
+    fn the_steam_root_is_derived_from_a_library_path() {
+        let game =
+            PathBuf::from("/home/someone/.local/share/Steam/steamapps/common/ELDEN RING/Game");
+        assert_eq!(
+            steam_root(&game),
+            Some(PathBuf::from("/home/someone/.local/share/Steam"))
+        );
+        // A game outside a Steam library yields nothing, and the flag is then omitted.
+        assert_eq!(steam_root(Path::new("/games/elden-ring/Game")), None);
+    }
+
+    #[test]
+    fn the_launch_command_names_the_game_the_exe_and_the_library() {
+        let game =
+            PathBuf::from("/home/someone/.local/share/Steam/steamapps/common/ELDEN RING/Game");
+        let profile = game.join("er-mods/er-mods.me3");
+        let command = launch_command(&game, &profile);
+
+        // `--steam-dir` is a global option and must precede the subcommand; me3 rejects it after.
+        let steam_at = command.find("--steam-dir").expect("the library is named");
+        let launch_at = command.find(" launch ").expect("the subcommand is there");
+        assert!(
+            steam_at < launch_at,
+            "--steam-dir came after launch: {command}"
+        );
+
+        assert!(command.contains("-g eldenring"), "{command}");
+        assert!(command.contains("eldenring.exe"), "{command}");
+        assert!(
+            command.contains(&profile.display().to_string()),
+            "{command}"
+        );
+        // The form that failed on a real launch, against a game this tool had just found.
+        assert!(!command.contains("--auto-detect"), "{command}");
+    }
+
+    #[test]
+    fn a_game_outside_steam_still_gets_a_usable_command() {
+        let game = PathBuf::from("/games/elden-ring/Game");
+        let command = launch_command(&game, &game.join("er-mods.me3"));
+        assert!(!command.contains("--steam-dir"), "{command}");
+        assert!(
+            command.contains("-g eldenring") && command.contains("-e "),
+            "{command}"
         );
     }
 

@@ -404,8 +404,8 @@ fn run() -> Result<ExitCode, String> {
         );
     }
     println!(
-        "\nLaunch it with:\n  me3 launch --auto-detect -p \"{}\"",
-        written.display()
+        "\nLaunch it with:\n  {}",
+        install::launch_command(&game.game_dir, &written)
     );
     Ok(ExitCode::SUCCESS)
 }
