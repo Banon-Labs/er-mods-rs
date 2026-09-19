@@ -76,12 +76,17 @@ blurb = "Draws a save picker at boot so you choose a character before the title 
 category = "menus-and-saves"
 audience = "player"
 default = false
-# Not a conflict, which is why it is this field and not a [[conflict]] row: `save-picker` is in
-# er-quickload's default feature set, and the standalone shell checks for the product with
-# `GetModuleHandleA("er_quickload.dll")` and stands down before installing its host. Co-loading
-# them is safe and adds nothing, so the picker says so rather than refusing -- refusing would
-# be a lie about the danger, and silence would let someone tick a row that does nothing.
-included_in = "er-quickload"
+# Both of these have `save-picker` in their default feature set and both call
+# `er_save_picker_core::overlay::arm_boot_picker`, so ticking this beside either puts two
+# copies of one feature in the game.
+#
+# The shell does try to stand down -- `GetModuleHandleA("er_quickload.dll")` -- but that runs
+# inside `DllMain`, so it only sees a product that has already attached, and ME3 attaches in
+# profile order. Against `er-quit-rows` it does not even try: the probe names the product and
+# that shell is a different file. Neither is a crash, which is why these are `included_in`
+# rather than `[[conflict]]` rows; both are still refused, because nobody wants one feature
+# installed twice and which copy wins is decided by a list order the player never sees.
+included_in = ["er-quickload", "er-quit-rows"]
 
 [er-build-import]
 label = "Build import from URL"

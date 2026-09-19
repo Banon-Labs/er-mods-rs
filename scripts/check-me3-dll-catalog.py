@@ -177,20 +177,29 @@ def check(
         # that actually collides belongs in the conflict table, and claiming both would tell
         # the player two different things about the same combination.
         if "included_in" in entry:
-            host = entry["included_in"]
-            if host not in catalog:
-                problems.append(
-                    f"{package}: included_in names {host!r}, which is not in this catalog."
-                )
-            elif host == package:
-                problems.append(f"{package}: included_in names itself.")
-            elif frozenset((package, host)) in {
+            hosts = entry["included_in"]
+            declared = {
                 frozenset((row["a"], row["b"])) for row in conflicts.get("conflict", [])
-            }:
+            }
+            if not isinstance(hosts, list) or not hosts:
                 problems.append(
-                    f"{package}: included_in names {host!r}, but the two are also declared a "
-                    "conflict. A pair is either safe-and-redundant or unsafe, not both."
+                    f"{package}: `included_in` must be a non-empty list. A feature can live in "
+                    "more than one bigger mod -- the boot save picker is in two."
                 )
+            else:
+                for host in hosts:
+                    if host not in catalog:
+                        problems.append(
+                            f"{package}: included_in names {host!r}, not in this catalog."
+                        )
+                    elif host == package:
+                        problems.append(f"{package}: included_in names itself.")
+                    elif frozenset((package, host)) in declared:
+                        problems.append(
+                            f"{package}: included_in names {host!r}, but the two are also "
+                            "declared a conflict. A pair is either the same feature twice or "
+                            "mutually destructive, not both."
+                        )
 
     opt_in_only = set(conflicts.get("opt_in_only", {}))
     for package in sorted(opt_in_only & set(catalog)):
@@ -290,19 +299,19 @@ def selftest() -> int:
         ),
         (
             "included_in naming a stranger is caught",
-            {**sound, "er-alpha": entry(included_in="er-nowhere")},
+            {**sound, "er-alpha": entry(included_in=["er-nowhere"])},
             base_conflicts,
             "not in this catalog",
         ),
         (
             "included_in naming itself is caught",
-            {**sound, "er-alpha": entry(included_in="er-alpha")},
+            {**sound, "er-alpha": entry(included_in=["er-alpha"])},
             base_conflicts,
             "names itself",
         ),
         (
             "included_in on a declared conflict is caught",
-            {**sound, "er-alpha": entry(included_in="er-beta")},
+            {**sound, "er-alpha": entry(included_in=["er-beta"])},
             {"conflict": [{"a": "er-alpha", "b": "er-beta"}], "opt_in_only": {}},
             "not both",
         ),

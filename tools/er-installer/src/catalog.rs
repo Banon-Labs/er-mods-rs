@@ -27,10 +27,9 @@ pub struct Mod {
     pub needs_seamless: bool,
     /// Recorded in the conflict table as something a player must ask for by name.
     pub opt_in_only: bool,
-    /// A bigger mod that already carries this one, when there is one. Ticking both is safe --
-    /// the smaller shell detects the bigger and stands down -- and adds nothing, so the picker
-    /// says so instead of refusing.
-    pub included_in: Option<&'static str>,
+    /// Bigger mods that already carry this one. Empty for most. Ticking this beside any of
+    /// them puts two copies of one feature in the game, so the picker refuses the pair.
+    pub included_in: &'static [&'static str],
     /// The file in the game directory this mod reads, when it has one.
     pub config: Option<&'static str>,
 }
@@ -65,7 +64,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -78,7 +77,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -91,7 +90,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-quickload.toml"),
     },
     Mod {
@@ -104,7 +103,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -117,7 +116,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -130,7 +129,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -143,7 +142,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: true,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -156,7 +155,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -169,7 +168,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-enemynpc-effects.toml"),
     },
     Mod {
@@ -182,7 +181,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -195,7 +194,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -208,7 +207,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: true,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -221,7 +220,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-invasion-path.toml"),
     },
     Mod {
@@ -234,7 +233,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: true,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-invasion-warp.toml"),
     },
     Mod {
@@ -247,7 +246,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-inventory-sort.toml"),
     },
     Mod {
@@ -260,7 +259,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -273,7 +272,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -286,7 +285,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-npc-possess.toml"),
     },
     Mod {
@@ -299,7 +298,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-player-name-filter.toml"),
     },
     Mod {
@@ -312,7 +311,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-quickload.toml"),
     },
     Mod {
@@ -325,7 +324,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: true,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -338,7 +337,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -351,7 +350,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -364,7 +363,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: Some("er-refill-all.toml"),
     },
     Mod {
@@ -377,7 +376,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -390,7 +389,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -403,7 +402,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: true,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -416,7 +415,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: Some("er-quickload"),
+        included_in: &["er-quickload", "er-quit-rows"],
         config: None,
     },
     Mod {
@@ -429,7 +428,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: true,
         needs_seamless: true,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -442,7 +441,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: false,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
     Mod {
@@ -455,7 +454,7 @@ pub const CATALOG: &[Mod] = &[
         default_on: false,
         needs_seamless: false,
         opt_in_only: true,
-        included_in: None,
+        included_in: &[],
         config: None,
     },
 ];

@@ -118,10 +118,9 @@ pub struct Mod {
     pub needs_seamless: bool,
     /// Recorded in the conflict table as something a player must ask for by name.
     pub opt_in_only: bool,
-    /// A bigger mod that already carries this one, when there is one. Ticking both is safe --
-    /// the smaller shell detects the bigger and stands down -- and adds nothing, so the picker
-    /// says so instead of refusing.
-    pub included_in: Option<&'static str>,
+    /// Bigger mods that already carry this one. Empty for most. Ticking this beside any of
+    /// them puts two copies of one feature in the game, so the picker refuses the pair.
+    pub included_in: &'static [&'static str],
     /// The file in the game directory this mod reads, when it has one.
     pub config: Option<&'static str>,
 }
@@ -171,8 +170,8 @@ def render(
                 "Run scripts/check-me3-dll-catalog.py for the full picture."
             )
         config = f"Some({rust_str(entry['config'])})" if entry.get("config") else "None"
-        included_in = (
-            f"Some({rust_str(entry['included_in'])})" if entry.get("included_in") else "None"
+        included_in = "&[{}]".format(
+            ", ".join(rust_str(host) for host in entry.get("included_in", []))
         )
         lines += [
             "    Mod {",
@@ -222,7 +221,7 @@ def selftest() -> int:
             "audience": "player",
             "default": True,
             "config": "alpha.toml",
-            "included_in": "er-beta",
+            "included_in": ["er-beta"],
         },
         "er-beta": {
             "label": "Beta",
@@ -245,8 +244,8 @@ def selftest() -> int:
         ("backslash \\\\ survive", "backslashes inside a blurb are escaped"),
         ('config: Some("alpha.toml")', "a present config becomes Some(..)"),
         ("config: None", "an absent config becomes None"),
-        ('included_in: Some("er-beta")', "a present included_in becomes Some(..)"),
-        ("included_in: None", "an absent included_in becomes None"),
+        ('included_in: &["er-beta"]', "a present included_in becomes a slice"),
+        ("included_in: &[]", "an absent included_in becomes an empty slice"),
         ("opt_in_only: true", "opt_in_only is carried over from the conflict table"),
         ("default_on: true", "the default tick is carried over"),
         ("whichever loads second wins", "the kind is rendered into a sentence"),

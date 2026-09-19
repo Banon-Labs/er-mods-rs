@@ -67,11 +67,11 @@ pub fn conflicts_within(chosen: &[&'static Mod]) -> Vec<&'static Conflict> {
 /// mapping). Nobody wants both halves of one feature anyway, so the honest answer is to refuse
 /// the pair and say which mod already does it.
 pub fn redundant_with(candidate: &Mod, chosen: &[&'static Mod]) -> Option<&'static str> {
-    let host = candidate.included_in?;
-    chosen
+    candidate
+        .included_in
         .iter()
-        .any(|entry| entry.package == host)
-        .then_some(host)
+        .copied()
+        .find(|host| chosen.iter().any(|entry| entry.package == *host))
 }
 
 /// Every pair within `chosen` where one contains the other, as (contained, container).

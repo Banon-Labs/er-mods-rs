@@ -428,8 +428,11 @@ impl Picker {
                 // Only worth saying while the bigger mod is actually ticked. Shown always, it
                 // would read as a warning against a row that is perfectly good on its own.
                 let included_note;
-                if let Some(host) = entry.included_in
-                    && self.is_ticked(host)
+                if let Some(host) = entry
+                    .included_in
+                    .iter()
+                    .copied()
+                    .find(|host| self.is_ticked(host))
                 {
                     included_note = format!("already in {}", Self::label_for(host));
                     notes.push(&included_note);
@@ -949,9 +952,9 @@ mod tests {
     fn ticking_something_already_included_is_refused_and_names_the_host() {
         let included = CATALOG
             .iter()
-            .find(|entry| entry.included_in.is_some())
+            .find(|entry| !entry.included_in.is_empty())
             .expect("the catalog records at least one included-in relation");
-        let host = included.included_in.unwrap();
+        let host = included.included_in[0];
 
         let mut picker = plain_picker();
         picker.clear();
@@ -981,7 +984,7 @@ mod tests {
     fn the_contained_mod_is_still_tickable_on_its_own() {
         let included = CATALOG
             .iter()
-            .find(|entry| entry.included_in.is_some())
+            .find(|entry| !entry.included_in.is_empty())
             .expect("the catalog records at least one included-in relation");
         let mut picker = plain_picker();
         picker.clear();
@@ -1005,9 +1008,9 @@ mod tests {
     fn a_row_is_only_marked_included_while_its_host_is_ticked() {
         let included = CATALOG
             .iter()
-            .find(|entry| entry.included_in.is_some())
+            .find(|entry| !entry.included_in.is_empty())
             .expect("the catalog records at least one included-in relation");
-        let host = included.included_in.unwrap();
+        let host = included.included_in[0];
 
         let mut picker = plain_picker();
         picker.clear();
@@ -1039,15 +1042,14 @@ mod tests {
         // The two answers are mutually exclusive: safe-and-redundant, or unsafe. The catalog
         // gate checks the tables; this checks the code that reads them agrees.
         for entry in CATALOG {
-            let Some(host) = entry.included_in else {
-                continue;
-            };
-            let host_mod = selection::by_package(host).expect("included_in names a real mod");
-            assert!(
-                selection::conflicts_within(&[entry, host_mod]).is_empty(),
-                "{} is both included in and conflicting with {host}",
-                entry.package
-            );
+            for host in entry.included_in {
+                let host_mod = selection::by_package(host).expect("included_in names a real mod");
+                assert!(
+                    selection::conflicts_within(&[entry, host_mod]).is_empty(),
+                    "{} is both included in and conflicting with {host}",
+                    entry.package
+                );
+            }
         }
     }
 
