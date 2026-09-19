@@ -1208,17 +1208,41 @@ mod live {
         if let Some(band) = crate::invade_difficulty::band_for(original) {
             if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
                 crate::standalone_log(format_args!(
-                    "invade-bracket: asking for {band} instead of {original} -- the far half of \
-                     `Both near and far`, aimed at {}. Seamless matches this value for equality, \
-                     so this is the whole of what the setting does: only hosts in that bracket can \
-                     answer any query from here on. Printed once per change.",
+                    "invade-bracket: asking for {band} instead of {original} -- aimed at {}. \
+                     Seamless matches this value for equality, so this is the whole of what the \
+                     setting does: only hosts in that bracket can answer any query this search \
+                     sends, near half included. Printed once per change.",
                     crate::invade_difficulty::current().describe()
                 ));
             }
+            crate::invade_below_penalty::observe_band(&band, original);
             return std::ffi::CString::new(band).ok();
         }
         if let Some(band) = targeted {
             if band == original {
+                return None;
+            }
+            // A located host below the player is a host this search declines, not one it aims at.
+            //
+            // Every other path in this file refuses to look downward -- `band_ladder::climbed` only
+            // adds, and `BracketChoice::band_for` clamps each axis to the player's own -- and this
+            // arm was the one place that did not, because a band read off somebody's lobby was
+            // treated as a fact rather than as a destination. It is both. Invading beneath your own
+            // band puts you on somebody weaker who never agreed to it, and the sweep will offer
+            // that host again on the next tick if the search is still looking.
+            if let (Some((want_level, want_weapon)), Some((own_level, own_weapon))) = (
+                er_invasion_warp_core::band_ladder::split_band(&band),
+                er_invasion_warp_core::band_ladder::split_band(original),
+            ) && (want_level < own_level || want_weapon < own_weapon)
+            {
+                if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                    crate::standalone_log(format_args!(
+                        "band-ladder: the host this search located publishes {band}, which is below \
+                         this character's own {original} on at least one axis, so the query is left \
+                         as Seamless built it. Aiming down would put this player on somebody weaker \
+                         who never agreed to it. Printed once per rung."
+                    ));
+                }
                 return None;
             }
             if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
@@ -1229,6 +1253,7 @@ mod live {
                      not guessed. Printed once per rung."
                 ));
             }
+            crate::invade_below_penalty::observe_band(&band, original);
             return std::ffi::CString::new(band).ok();
         }
         let climbed = er_invasion_warp_core::band_ladder::climbed(original, rung)?;
@@ -1241,6 +1266,7 @@ mod live {
                  the first at `2_2` found the host. Printed once per rung."
             ));
         }
+        crate::invade_below_penalty::observe_band(&climbed, original);
         std::ffi::CString::new(climbed).ok()
     }
 
@@ -2269,6 +2295,9 @@ mod live {
         // invasion -- the ring, at a band the player never climbed to -- and the only thing on
         // screen would be a neighbourhood that has apparently emptied.
         crate::invade_difficulty::leave_far_half();
+        // A tripwire that outlived its search would penalise the next invasion for a query this
+        // one sent.
+        crate::invade_below_penalty::forget();
         if let Ok(mut guard) = CURRENT_RUNG.lock() {
             *guard = None;
         }

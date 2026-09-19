@@ -2273,6 +2273,9 @@ pub fn judge_incoming_match(join_data: usize) {
     // What remains is the report. Where the server just sent you is worth saying, and this is the
     // first instant it is knowable on this machine.
     banner::announce_arrival(config.reject_notice, destination);
+    // The first instant a landed match is knowable, which is also the only place the penalty can
+    // be armed from: it fires on the search that found this one, not on anything about the match.
+    crate::invade_below_penalty::on_match_landed();
     crate::standalone_log(format_args!(
         "local-invasion: match to {destination:#010x} accepted -- this build does not reject a \
          connected invasion by location; the prefilter narrows the query instead. Anchor \

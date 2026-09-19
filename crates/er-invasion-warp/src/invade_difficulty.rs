@@ -218,13 +218,35 @@ pub fn in_far_half() -> bool {
 
 /// The band this query should ask for instead of `own`, or `None` to send Seamless's own value.
 ///
-/// The one place the two halves of the decision meet, so nothing else has to know both. `None` for
-/// a search still in its near half, for a selection that resolves to the player's own bracket, and
-/// for a value that is not band-shaped.
+/// # Why this binds to the whole search and not only to the far half
+///
+/// It was gated on [`in_far_half`] until 2026-09-18, on the reasoning that the near half is the
+/// ring at the player's own band and the bracket belongs to the handover. Reported the same
+/// evening: "it was my feature not working" -- the player had `RL71-100` selected and invaded
+/// `RL20` characters anyway.
+///
+/// Run `br-20260919-004438-566d` timed it. They cancelled their first search (line 609), picked
+/// `RL71-100` (631, 636), started a second one (644) and landed a match (663), with no
+/// `the near half is over` line between the last two -- so that search never reached its far half
+/// and the gate here returned `None` for every query it sent. The panel went on showing the pick.
+///
+/// Measured on the wire rather than read off the source, because a gate can have a caller nobody
+/// remembered: `scripts/frida/near-half-ignores-the-bracket.js` picked bands 3 and 1 through the
+/// crate's own export, started a plain search, and the only band that left the process was `1_0`
+/// -- the character's own -- against a pick of `3_1`.
+///
+/// The near/far split decides where a search looks, which is the row the finger asks for. The
+/// bracket decides who it may find, and the player named that. A setting that silently applies to
+/// part of a search is worse than one that does not exist, because the panel keeps promising it.
+///
+/// This does not make the bracket a second widening axis. `failed_cycle`'s rule -- a failed cycle
+/// may step the place or climb the band, never both -- governs the ladder, which is a guess this
+/// module walks while nobody has been found. A pick is not a guess: it does not move on a failed
+/// cycle and it takes no rung from anything.
+///
+/// `None` for a selection that resolves to the player's own bracket, and for a value that is not
+/// band-shaped.
 #[must_use]
 pub fn band_for(own: &str) -> Option<String> {
-    if !in_far_half() {
-        return None;
-    }
     current().band_for(own)
 }

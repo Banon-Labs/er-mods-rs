@@ -35,6 +35,10 @@ pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
+/// Deathblight on this character if a search ever asks below its own bracket. A tripwire behind
+/// three clamps, asked for by the player in exactly those terms. Host-buildable apart from its
+/// `tick`, so the arming decision stays covered by `cargo test` off the target.
+pub mod invade_below_penalty;
 /// The bracket the far half of `Both near and far` asks for. Windows-only because it is state the
 /// running search reads on the Steam callback thread; the arithmetic it applies is in
 /// `er-invasion-warp-core` and is tested on the host.
@@ -243,6 +247,11 @@ fn spawn_catalog_task() {
                     // renderer touches no config lock and writes no file -- it runs inside
                     // `Present`, where an `fs::write` would stall the swapchain.
                     crate::settings_panel::tick(&mut settings_key);
+                    // The under-bracket penalty, which is inert until a query has gone out asking
+                    // below this character's own band and a match has landed on it. Driven from
+                    // the game task because it applies a `SpEffect` to the local player, and the
+                    // task is the thread that owns `WorldChrMan`.
+                    crate::invade_below_penalty::tick();
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
