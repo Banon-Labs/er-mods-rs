@@ -112,6 +112,12 @@ CASES = [
         "user pushback met with an admission and a menu instead of the corrective action",
     ),
     Case(
+        "stall_after_instruction_violation_question.jsonl",
+        "ended the turn with an admission",
+        "the user asked a question-shaped correction after an explicit instruction was violated; "
+        "answering the question and asking for access is still pausing instead of corrective action",
+    ),
+    Case(
         "proof_without_observation.jsonl",
         "cited nothing that observed it in the game",
         "the turn calls a runtime feature proven off a load and an address translation -- neither is "
@@ -477,6 +483,15 @@ CASES = [
         None,
         "the bisect that cannot take its next half until a live run reports, said in one line -- "
         "must NOT halt, or the blocker sentence AGENTS.md asks for becomes unspeakable",
+    ),
+    Case(
+        "diagnosis_fixed_then_reported.jsonl",
+        None,
+        "the write, its green selftest, and only then a closing line naming what had been broken -- "
+        "must NOT halt. `fixed` is positional and a closer has nothing after it, so this turn "
+        "scored fixed=0 however much it wrote, and the guard charged it twice on 2026-09-19 for "
+        "work it had already done. The unordered `edited` is what tells it apart from the turn "
+        "that named a defect and changed nothing",
     ),
     Case(
         "clean.jsonl",

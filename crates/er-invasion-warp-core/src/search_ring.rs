@@ -110,6 +110,92 @@ pub fn is_overworld(block: BlockKey) -> bool {
     matches!(block.area(), 60 | 61)
 }
 
+/// How many places one ring may hold once legacy dungeons are in it.
+///
+/// `search_banner::MAX_QUEUED` is the same number for the same reason: the recital names one place
+/// per tick and the sweep asks Steam once per place, so a list nobody can sit through describes a
+/// search nobody can watch. Three rings of tiles is 49 places on its own, and the dungeons
+/// projected into them would push it well past that.
+pub const MAX_PLACES: usize = 64;
+
+/// Every place a search anchored at `centre` should ask about, legacy dungeons included.
+///
+/// [`ring`] can only do arithmetic, and a legacy dungeon's block id is not a position: its bytes
+/// encode a dungeon and a floor, so stepping them lands somewhere unrelated. Answering with the
+/// centre alone is correct for what that function knows, and it is also why a player standing in
+/// a legacy dungeon gets one place queried and none recited. Measured on run
+/// `br-20260918-192951-e31c`, in block `0x15010000`: `the ring of 1 nearby place(s)` and
+/// `prefilter: asking for m21_01_00_00 (1 of 1)`, at radius 3 as well as at radius 1 -- the
+/// radius could not apply. The player's words were "when I invade nearby only, I don't cycle
+/// through any of the associated locations in this region".
+///
+/// The world map holds what the arithmetic lacks. `CS::WorldMapLegacyConverter` carries one entry
+/// per legacy block naming the overworld tile that block projects into, because the map has to
+/// draw those dungeons whether or not anyone has walked into them. The same run read 245 distinct
+/// blocks out of it. With that table a dungeon does have a position, and its neighbourhood is the
+/// ordinary grid ring about its projection.
+///
+/// The list is the player's own block first, then each tile of that ring, and after each tile the
+/// legacy blocks projecting into it. A player in a legacy dungeon therefore asks about that
+/// dungeon, the tiles around where it sits on the map, and the other dungeons sitting in those
+/// tiles, which is what "the locations in this region" means to somebody reading the banner.
+///
+/// An empty `legacy` table degrades to exactly [`ring`]. That is what the host-side build gets,
+/// and any session whose world map has not been constructed yet.
+#[must_use]
+pub fn ring_with_legacy(
+    centre: BlockKey,
+    radius: u8,
+    legacy: &[crate::legacy_map_regions::LegacyMapRegion],
+) -> Vec<BlockKey> {
+    // Where on the grid this search is anchored. An overworld centre is its own anchor; a legacy
+    // dungeon borrows the tile its world-map projection lands in.
+    let anchor = if is_overworld(centre) {
+        Some(centre)
+    } else {
+        legacy
+            .iter()
+            .find(|region| region.block.raw() == centre.raw())
+            .map(|region| region.override_block)
+            .filter(|block| is_overworld(*block))
+    };
+    // No projection for this block means the table has not been read yet, or the block is an
+    // interior the world map does not place. Either way there is no neighbourhood to name, and the
+    // centre alone is the honest answer rather than a guess at a grid position.
+    let Some(anchor) = anchor else {
+        return vec![centre];
+    };
+    let mut out = Vec::new();
+    // The player's own block leads, tile or not. Somebody hosting in the same dungeon is the
+    // nearest host there is, and the ring about the projection would otherwise reach the tile that
+    // dungeon sits under before reaching the dungeon.
+    push_place(&mut out, centre);
+    for tile in ring(anchor, radius) {
+        push_place(&mut out, tile);
+        for region in legacy
+            .iter()
+            .filter(|region| region.override_block.raw() == tile.raw())
+        {
+            push_place(&mut out, region.block);
+        }
+    }
+    out
+}
+
+/// Append a place unless it is already listed or the list is full.
+///
+/// Duplicates are not hypothetical here: a legacy centre is also one of the dungeons projecting
+/// into its own anchor tile, so it would be asked about twice and named twice.
+fn push_place(out: &mut Vec<BlockKey>, block: BlockKey) {
+    if out.len() >= MAX_PLACES {
+        return;
+    }
+    if out.iter().any(|seen| seen.raw() == block.raw()) {
+        return;
+    }
+    out.push(block);
+}
+
 /// A search that widens on its own, and can say where it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchRing {
@@ -123,6 +209,21 @@ impl SearchRing {
     pub fn new(centre: BlockKey, radius: u8) -> Self {
         Self {
             tiles: ring(centre, radius),
+            next: 0,
+        }
+    }
+
+    /// Start a search over a list of places somebody else worked out.
+    ///
+    /// [`Self::new`] can only build a grid ring, so a caller holding the world map's legacy table
+    /// -- which is the only thing that gives a dungeon a position -- had no way to hand its
+    /// [`ring_with_legacy`] list over. The recital and the sweep share that list through
+    /// `search_banner::nearby_ring`; this is how the query-side ladder walks the same one, so all
+    /// three describe the same search.
+    #[must_use]
+    pub fn from_places(places: Vec<BlockKey>) -> Self {
+        Self {
+            tiles: places,
             next: 0,
         }
     }
@@ -294,6 +395,95 @@ mod tests {
         let stormveil = BlockKey::from_parts(10, 0, 0, 0);
         assert!(!is_overworld(stormveil));
         assert_eq!(ring(stormveil, 3), vec![stormveil]);
+    }
+
+    /// One legacy dungeon and the overworld tile the world map puts it in.
+    fn projected(block: BlockKey, into: BlockKey) -> crate::legacy_map_regions::LegacyMapRegion {
+        crate::legacy_map_regions::LegacyMapRegion {
+            block,
+            override_block: into,
+            center: [0.0, 0.0, 0.0],
+        }
+    }
+
+    /// The defect this whole function exists for: a search anchored in a legacy dungeon used to
+    /// hold exactly one place, at any radius, so `Nearby only` had nothing to rotate through.
+    #[test]
+    fn a_legacy_block_searches_the_region_its_projection_lands_in() {
+        let dungeon = BlockKey::from_parts(21, 1, 0, 0);
+        let tile = overworld(48, 45);
+        let table = [projected(dungeon, tile)];
+
+        assert_eq!(
+            ring(dungeon, 1),
+            vec![dungeon],
+            "the arithmetic alone still answers with the block itself"
+        );
+
+        let places = ring_with_legacy(dungeon, 1, &table);
+        assert_eq!(places[0], dungeon, "the player's own block is asked first");
+        assert!(
+            places.contains(&tile),
+            "the tile the dungeon projects into is in the region"
+        );
+        assert_eq!(
+            places.len(),
+            1 + ring(tile, 1).len(),
+            "the dungeon plus the whole grid ring about its projection"
+        );
+    }
+
+    /// Other dungeons in the same tile are the near neighbours that matter underground: a grid
+    /// step away is a different place on the surface, not a different floor of this one.
+    #[test]
+    fn the_dungeons_sharing_a_tile_are_part_of_the_region() {
+        let here = BlockKey::from_parts(21, 1, 0, 0);
+        let sibling = BlockKey::from_parts(21, 2, 0, 0);
+        let elsewhere = BlockKey::from_parts(12, 0, 0, 0);
+        let tile = overworld(48, 45);
+        let table = [
+            projected(here, tile),
+            projected(sibling, tile),
+            projected(elsewhere, overworld(10, 10)),
+        ];
+
+        let places = ring_with_legacy(here, 0, &table);
+        assert_eq!(
+            places,
+            vec![here, tile, sibling],
+            "own block, its tile, then the other dungeons in that tile -- and nothing from a tile \
+             the radius does not reach"
+        );
+    }
+
+    /// A player on the surface gets the dungeons under their feet, which the grid alone never
+    /// names: an overworld tile and the legacy blocks projecting into it are the same place.
+    #[test]
+    fn an_overworld_search_reaches_the_dungeons_in_its_tiles() {
+        let tile = overworld(48, 45);
+        let dungeon = BlockKey::from_parts(21, 1, 0, 0);
+        let table = [projected(dungeon, tile)];
+
+        assert!(!ring(tile, 0).contains(&dungeon));
+        assert_eq!(ring_with_legacy(tile, 0, &table), vec![tile, dungeon]);
+    }
+
+    /// No table means no projection, and a guess at one would be a query aimed at another dungeon.
+    #[test]
+    fn without_the_table_a_legacy_block_is_still_alone() {
+        let dungeon = BlockKey::from_parts(21, 1, 0, 0);
+        assert_eq!(ring_with_legacy(dungeon, 3, &[]), vec![dungeon]);
+    }
+
+    /// The cap binds, because the recital names one place per tick and the sweep sends one query
+    /// each. The live table holds 245 blocks; three rings of tiles is 49 before any of them.
+    #[test]
+    fn the_place_list_is_capped() {
+        let tile = overworld(48, 45);
+        let table: Vec<_> = (0..200u8)
+            .map(|n| projected(BlockKey::from_parts(21, n, 0, 0), tile))
+            .collect();
+        assert_eq!(ring_with_legacy(tile, 3, &table).len(), MAX_PLACES);
     }
 
     /// The count the banner shows is the ring's own, and it reaches the end exactly once.

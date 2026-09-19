@@ -72,6 +72,9 @@ const GOODS_TAG = 0x40000000;
 
 let pinnedItemId = 0;
 let answered = 0;
+// `goodsId -> the flags byte before this agent cleared `disableOffline`, so `restoreFingers` can
+// put the param row back and leave the matchmaking pool where it found it.
+const goodsFlagsWas = {};
 let onlineModeWas = null;
 
 function holdOnlineMode (raise) {
@@ -252,6 +255,20 @@ rpc.exports = {
   },
 
   // Clear `disableOffline` so `CanUseGoods` stops refusing the vanilla fingers.
+  // Clearing `disableOffline` here writes a byte into a live `EquipParamGoods` row, and Seamless
+  // hashes the loaded param tables into `lobby_key`, which Steam compares with
+  // `k_ELobbyComparisonEqual`. So these three bytes silently move this client into a matchmaking
+  // pool of one: measured 2026-09-18, a drive through here sent
+  // `f89c2a507f99a522...` while the same build, same save and same config sent
+  // `34154670c4dbf536...` when the player drove the item by hand -- and the hand-driven run landed
+  // an invasion the driven ones could not, against a host publishing that same `34154670...`.
+  // An entire evening went into blaming `map_pins`, other shells and Seamless's own re-derive
+  // timer for a divergence this function was causing.
+  //
+  // `er_invasion_warp.dll` solves it without writing anything -- it answers `CanUseGoods` from a
+  // detour and logs `no param byte written ... lobby_key is untouched`. Until this agent does the
+  // same, the write is at least undone by `restoreFingers`, which the driver calls before it
+  // returns, so the pool is only wrong for the seconds the drive is in flight.
   enableFingers (ids) {
     const fn = new NativeFunction(EQUIP_PARAM_GOODS_GET_ENTRY, 'pointer', ['pointer', 'int']);
     const out = Memory.alloc(16);
@@ -263,9 +280,31 @@ rpc.exports = {
         if (row.isNull()) { done[id] = 'no row'; continue; }
         const at = row.add(GOODS_FLAGS);
         const before = at.readU8();
+        if (!(id in goodsFlagsWas)) goodsFlagsWas[id] = before;
         at.writeU8(before & ~DISABLE_OFFLINE_BIT);
         done[id] = { before, after: at.readU8() };
       } catch (e) { done[id] = 'faulted: ' + e.message; }
+    }
+    return done;
+  },
+
+  // Put every byte `enableFingers` cleared back, so the param fingerprint -- and with it the
+  // matchmaking pool -- is the one the rest of the world is in once the drive is over.
+  restoreFingers () {
+    const fn = new NativeFunction(EQUIP_PARAM_GOODS_GET_ENTRY, 'pointer', ['pointer', 'int']);
+    const out = Memory.alloc(16);
+    const done = {};
+    for (const id of Object.keys(goodsFlagsWas)) {
+      const was = goodsFlagsWas[id];
+      try {
+        fn(out, parseInt(id, 10));
+        const row = out.add(8).readPointer();
+        if (row.isNull()) { done[id] = 'no row'; continue; }
+        const at = row.add(GOODS_FLAGS);
+        at.writeU8(was);
+        done[id] = { restored: at.readU8(), wanted: was };
+      } catch (e) { done[id] = 'faulted: ' + e.message; }
+      delete goodsFlagsWas[id];
     }
     return done;
   },

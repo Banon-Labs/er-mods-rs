@@ -545,7 +545,12 @@ mod live {
         }
     }
 
-    fn current_block() -> Option<BlockKey> {
+    /// The tile the player is standing in, engine-first with the per-tick cache behind it.
+    ///
+    /// Public because `lobby_preflight` draws the neighbourhood ring around it while nothing is
+    /// searching, and the alternative -- reading the engine getter there too -- would give the two
+    /// modules separate answers on the frame the player crosses a boundary.
+    pub fn current_block() -> Option<BlockKey> {
         // Ask the engine first: on the game task this is current, and the cache is only ever a
         // frame behind it anyway.
         if let Ok(base) = er_game_base::mem::game_module_base()
@@ -1117,6 +1122,162 @@ mod live {
         unsafe { core::mem::transmute::<usize, er_hook::UnionFn>(orig)(iface, lobby, key, value) }
     }
 
+    /// How far above the player's own matchmaking band the search is currently asking.
+    ///
+    /// Two `u32` halves packed into one atomic so a filter call on Seamless's thread and an
+    /// advance on the game task can never read a level step paired with the wrong weapon step.
+    static BAND_RUNG: AtomicUsize = AtomicUsize::new(0);
+
+    /// The rung the ladder is on.
+    #[must_use]
+    pub fn band_rung() -> er_invasion_warp_core::band_ladder::Rung {
+        let packed = BAND_RUNG.load(Ordering::SeqCst);
+        er_invasion_warp_core::band_ladder::Rung {
+            level_steps: u32::try_from(packed >> 32).unwrap_or(0),
+            weapon_steps: u32::try_from(packed & 0xFFFF_FFFF).unwrap_or(0),
+        }
+    }
+
+    fn store_band_rung(rung: er_invasion_warp_core::band_ladder::Rung) {
+        let packed = (rung.level_steps as usize) << 32 | (rung.weapon_steps as usize);
+        BAND_RUNG.store(packed, Ordering::SeqCst);
+    }
+
+    /// Climb one rung, and say which one and whether the ladder started over.
+    ///
+    /// The ladder wraps rather than stopping at its top rung: a search held open past the last
+    /// rung used to keep asking the band furthest from the player and never look at their own
+    /// again. The second element is true on the lap boundary, so the caller can say which of the
+    /// two happened instead of printing "climbing" for a step back down to the bottom.
+    pub fn climb_band() -> (er_invasion_warp_core::band_ladder::Rung, bool) {
+        let (next, restarted) = band_rung().next_or_restart();
+        store_band_rung(next);
+        (next, restarted)
+    }
+
+    /// Return to the player's own band, for a search that has been stood down.
+    ///
+    /// A rung outlives no search. Carrying one into the next invasion would start a fresh search
+    /// somewhere the player never climbed to, and they would have no way to tell.
+    pub fn reset_band() {
+        store_band_rung(er_invasion_warp_core::band_ladder::Rung::own());
+    }
+
+    /// Seamless's band value for this filter call, climbed to the current rung.
+    ///
+    /// Reads the key only to refuse our own two -- `er_invasion_warp_map` values such as
+    /// `m61_48_45_00` are not band-shaped anyway, and refusing them by name costs nothing and
+    /// removes the possibility of a coincidence.
+    fn band_ladder_value(key: usize, value: usize) -> Option<std::ffi::CString> {
+        let rung = band_rung();
+        // A host the sweep has identified publishes its own band, and that value outranks the
+        // ladder. The ladder is a walk through bands nobody has been seen in; once a specific host
+        // is the target, the band to ask for is not a guess -- it was read off their lobby by the
+        // same query that found them.
+        //
+        // Measured 2026-09-18 on run `br-20260918-231013-c51f`: every field on the wire matched the
+        // friend's lobby except this one. Block `m32_02_00_00`, availability `true`, pool
+        // `34154670...` all agreed, and the band went out as `0_0` against his published `2_1`, so
+        // the one host the search had positively located was five failed cycles away -- about a
+        // minute and a quarter of the item being held, for a value already in memory.
+        let targeted = crate::lobby_preflight::found_host_band();
+        // The far half reaches here with the rung back at the player's own band and the sweep
+        // cleared -- `hand_off_to_seamless` does both -- so without this test the difficulty could
+        // never rewrite anything. It is the one part of the overlay that survives the handover.
+        let difficulty = crate::invade_difficulty::in_far_half();
+        if rung.is_own() && targeted.is_none() && !difficulty {
+            return None;
+        }
+        let key_bytes = unsafe { er_game_base::mem::safe_read_cstr(key, MAX_LOBBY_KEY_LEN) }?;
+        if key_bytes == LOBBY_MAP_KEY.as_bytes() || key_bytes == LOBBY_HOST_EFFECTS_KEY.as_bytes() {
+            return None;
+        }
+        let value_bytes = unsafe { er_game_base::mem::safe_read_cstr(value, MAX_LOBBY_VALUE_LEN) }?;
+        let original = std::str::from_utf8(&value_bytes).ok()?;
+        // The shape test still gates the rewrite, so a key that is not the band field is left alone
+        // whether a host has been found or not.
+        if !er_invasion_warp_core::band_ladder::looks_like_band(original) {
+            return None;
+        }
+        // Ahead of the located host and ahead of the ladder, because it is the only one of the
+        // three the player said out loud. The other two are inferences this module drew -- a host
+        // the sweep saw, a band nobody has been seen in -- and both are about finding somebody at
+        // all; this is about which fight. In practice they do not compete: the handover clears the
+        // sweep and resets the rung, so in the far half `targeted` is `None` and `rung` is the
+        // player's own.
+        if let Some(band) = crate::invade_difficulty::band_for(original) {
+            if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "invade-bracket: asking for {band} instead of {original} -- aimed at {}. \
+                     Seamless matches this value for equality, so this is the whole of what the \
+                     setting does: only hosts in that bracket can answer any query this search \
+                     sends, near half included. Printed once per change.",
+                    crate::invade_difficulty::current().describe()
+                ));
+            }
+            crate::invade_below_penalty::observe_band(&band, original);
+            return std::ffi::CString::new(band).ok();
+        }
+        if let Some(band) = targeted {
+            if band == original {
+                return None;
+            }
+            // A located host below the player is a host this search declines, not one it aims at.
+            //
+            // Every other path in this file refuses to look downward -- `band_ladder::climbed` only
+            // adds, and `BracketChoice::band_for` clamps each axis to the player's own -- and this
+            // arm was the one place that did not, because a band read off somebody's lobby was
+            // treated as a fact rather than as a destination. It is both. Invading beneath your own
+            // band puts you on somebody weaker who never agreed to it, and the sweep will offer
+            // that host again on the next tick if the search is still looking.
+            if let (Some((want_level, want_weapon)), Some((own_level, own_weapon))) = (
+                er_invasion_warp_core::band_ladder::split_band(&band),
+                er_invasion_warp_core::band_ladder::split_band(original),
+            ) && (want_level < own_level || want_weapon < own_weapon)
+            {
+                if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                    crate::standalone_log(format_args!(
+                        "band-ladder: the host this search located publishes {band}, which is below \
+                         this character's own {original} on at least one axis, so the query is left \
+                         as Seamless built it. Aiming down would put this player on somebody weaker \
+                         who never agreed to it. Printed once per rung."
+                    ));
+                }
+                return None;
+            }
+            if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+                crate::standalone_log(format_args!(
+                    "band-ladder: asking for {band} instead of {original} -- not a rung, but the \
+                     band the host this search is pointed at publishes on their own lobby. The \
+                     ladder walks bands nobody has been seen in; a located host's band is read, \
+                     not guessed. Printed once per rung."
+                ));
+            }
+            crate::invade_below_penalty::observe_band(&band, original);
+            return std::ffi::CString::new(band).ok();
+        }
+        let climbed = er_invasion_warp_core::band_ladder::climbed(original, rung)?;
+        if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
+            crate::standalone_log(format_args!(
+                "band-ladder: asking for {climbed} instead of {original} -- the nearby ring at \
+                 this player's own band answered nothing, so the search is climbing. Seamless \
+                 matches this value for equality, so a host one band away cannot be returned by \
+                 any query at all; measured 2026-09-17, six searches at `2_1` found nobody and \
+                 the first at `2_2` found the host. Printed once per rung."
+            ));
+        }
+        crate::invade_below_penalty::observe_band(&climbed, original);
+        std::ffi::CString::new(climbed).ok()
+    }
+
+    /// One line per rung rather than one per query, which is five a search.
+    static BAND_CLIMB_SAID: AtomicBool = AtomicBool::new(false);
+
+    /// Let the next rung announce itself.
+    pub fn allow_band_climb_notice() {
+        BAND_CLIMB_SAID.store(false, Ordering::SeqCst);
+    }
+
     /// Seamless's own key for the value that decides which pool a lobby belongs to.
     pub const LOBBY_KEY_NAME: &str = "lobby_key";
 
@@ -1323,6 +1484,15 @@ mod live {
             .then(|| pooled_key_for(key, value))
             .flatten();
         let value = substituted.as_ref().map_or(value, |s| s.as_ptr() as usize);
+        // The band ladder. Seamless matches its `<level band>_<weapon band>` value for equality,
+        // so a host one band away answers no query this game sends; once the nearby ring at the
+        // player's own band is spent, `band_ladder` climbs and this is where the climb reaches
+        // Steam. Recognised by the value's shape rather than the key, because 2.0.x hashes key
+        // names per build.
+        let climbed = (!own_query_in_flight())
+            .then(|| band_ladder_value(key, value))
+            .flatten();
+        let value = climbed.as_ref().map_or(value, |s| s.as_ptr() as usize);
         let orig = ORIG_ADD_STRING_FILTER.load(Ordering::SeqCst);
         if orig == 0 {
             return 0;
@@ -1531,6 +1701,19 @@ mod live {
                 )
             };
             let n = FILTERS_ADDED.fetch_add(1, Ordering::SeqCst) + 1;
+            // On change rather than once, for the reason recorded at [`HUNT_DECISION_SAID`]: this
+            // line is the only place the log says a location filter went onto a real query, and a
+            // once-only version of it cannot tell a row change that took effect from one that did
+            // not. The tile is in the key, so every tile the rotation asks for is named.
+            {
+                let reach = crate::local_invasion_filter::finger_reach();
+                say_hunt_decision(&format!(
+                    "hunt: filter=on reach={reach} target={value} (query #{n}) -- this query is \
+                     narrowed to one place, so only hosts running this DLL can answer it. If the \
+                     row now in force is `Both near and far`, this line is the bug rather than the \
+                     report of it."
+                ));
+            }
             if n == 1 {
                 // The flag is printed at the decision, not only at config load, because the two
                 // disagreed and nothing could say which config this read.
@@ -1635,12 +1818,6 @@ mod live {
     /// How many times `RequestLobbyList` has reached our detour, filtered or not.
     static REQUESTS_SEEN: AtomicUsize = AtomicUsize::new(0);
 
-    /// Whether the "nothing to ask for" line has been said.
-    static HUNT_NO_CENTRE_SAID: AtomicU8 = AtomicU8::new(0);
-
-    /// Whether the pre-flight skip has been explained.
-    static PREFLIGHT_SKIP_SAID: AtomicU8 = AtomicU8::new(0);
-
     /// The location this query round should ask for, or `None` to leave the query alone.
     ///
     /// `None` carries two different meanings and both are correct here: hunt is off or cannot
@@ -1652,6 +1829,35 @@ mod live {
 
     /// Whether the sweep's hit has been reported.
     static SWEEP_HIT_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    /// The last hunt decision written to the log, so a change is one line and a repeat is none.
+    ///
+    /// Every decision below used to be a print-once latch, which is why the log cannot answer the
+    /// question it exists to answer. Run `br-20260918-170827-5e73` is the whole argument: the
+    /// player searched `Nearby only`, this detour logged `asking Steam for hosts at m60_45_38_00
+    /// only (#1)`, the player then switched to `Both near and far` -- and from that point the
+    /// session carries exactly one further decision line, ever. Whether the location filter kept
+    /// going out after the row changed is precisely what the player is asking, and a spent latch
+    /// cannot answer it either way. The player, 2026-09-18: "If I'm invading nearby and then I
+    /// attempt to invade near+far, it doesn't change my search to not look by block-id, there is
+    /// some switch that isn't getting toggled."
+    ///
+    /// Keyed on the rendered line, so the same decision repeating stays silent and a decision that
+    /// moves -- another row, another tile, a filter that should have come off and did not -- lands
+    /// in the log on the query it happens on.
+    static HUNT_DECISION_SAID: Mutex<Option<String>> = Mutex::new(None);
+
+    /// Write a hunt decision to the log when it differs from the one before it.
+    fn say_hunt_decision(line: &str) {
+        let Ok(mut said) = HUNT_DECISION_SAID.lock() else {
+            return;
+        };
+        if said.as_deref() == Some(line) {
+            return;
+        }
+        *said = Some(line.to_owned());
+        crate::standalone_log(format_args!("{line}"));
+    }
 
     fn hunt_target() -> Option<String> {
         // `Both near and far` asks Steam for everyone, so it gets no location filter at all.
@@ -1671,6 +1877,65 @@ mod live {
         // accident rather than by the `Both near and far` rule, and `Nearby only` would take the
         // same path and silently lose the block filtering that row exists for. A reason is not
         // interchangeable with the outcome it happens to share.
+        // `search_by_location` decides whether this detour may narrow the query at all, and it is
+        // read here rather than fifty lines down where `hunt_refusal` reads it. Every branch below
+        // can return a location, and two of them return one before that check is ever reached, so
+        // a setting the player had turned off narrowed their real invasion search anyway.
+        //
+        // What that cost, measured on run `br-20260917-230843-fc3b` with
+        // `scripts/er-lobby-search-proof.py`, which sends the queries itself and reads every key
+        // of every lobby that comes back:
+        //
+        // ```text
+        // unfiltered control                 matching=50
+        // seamless shape                     matching=50
+        // exists: any block id at all        matching=1
+        // nearby m61_48_45_00 (+ block key)  matching=1     <- the only nonzero tile of nine
+        // ```
+        //
+        // Fifty hosts were reachable and one of them published `er_invasion_warp_map`, because that
+        // key exists only on hosts running this DLL. So the filter this branch installs removed 49
+        // of 50 hosts from the player's search. The config file on disk said
+        // `search_by_location = false` and the load line agreed, and 14 queries went out narrowed
+        // to one tile regardless. What the player saw was `Found a host in Highroad Cross` and
+        // then no invasion, repeating: Seamless reached state `0x12`, sat about 15 seconds, and
+        // went back to searching.
+        //
+        // The param-pool explanation this repo had been carrying is ruled out by the same
+        // measurement: all 21 advertisement lobbies published
+        // `lobby_key = 34154670c4dbf5367ce52ead9513b62d00bf1e719f2f87107ae061666896ef59`, which is
+        // this player's own key. They were in the same pool the whole time, and unreachable only
+        // because of this filter.
+        //
+        // The finger decides, and nothing else does (user directive 2026-09-17: "We should not be
+        // using a file, we should exclusively be using the finger to determine search by location
+        // or not"). The player picks a reach in the bounds popup when they use the item; that
+        // choice is the whole question, and consulting a config file on top of it can only
+        // disagree with what they just clicked.
+        //
+        // `config.hunt` was the wrong instrument and could not have been the right one.
+        // `apply_finger_override` sets `config.hunt = true` on every snapshot taken while a finger
+        // is in play, so by the time this reads it the flag says what the override said, never what
+        // the player set -- measured on run `br-20260917-231157-07d1`, where the file on disk and
+        // the config-load line both read `search_by_location=false` and this detour still logged
+        // `search_by_location=true at this call`. A gate whose input is written by the thing it is
+        // meant to gate is not a gate.
+        //
+        // `FINGER_REACH_NONE` means no finger started this search -- a Seamless search of the
+        // player's own, or one this module never saw begin. Narrowing that is reaching into a
+        // search nobody asked this mod about.
+        let reach = crate::local_invasion_filter::finger_reach();
+        if reach == crate::local_invasion_filter::FINGER_REACH_NONE {
+            say_hunt_decision(&format!(
+                "hunt: decision=no_finger -- no invasion finger asked for this search, so the \
+                 query goes out exactly as Seamless built it. Narrowing it would filter on \
+                 `{LOBBY_MAP_KEY}`, a key only this DLL publishes: on run \
+                 br-20260917-230843-fc3b that filter took a reachable population of 50 hosts down \
+                 to 1, which is every host not running this mod removed from a search nobody \
+                 pointed anywhere."
+            ));
+            return None;
+        }
         let reach_is_near_and_far = crate::local_invasion_filter::finger_reach_is_near_and_far();
         // The neighbourhood sweep asked every nearby place directly, so its answer outranks the
         // ring's rotation.
@@ -1683,27 +1948,24 @@ mod live {
         // Both halves are now real, and the sweep is what separates them.
         match crate::lobby_preflight::nearby() {
             crate::lobby_preflight::Nearby::Found(block) => {
-                if SWEEP_HIT_SAID.swap(1, Ordering::SeqCst) == 0 {
-                    crate::standalone_log(format_args!(
-                        "hunt: decision=sweep_hit -- a nearby place answered with a host in it, \
-                         so this query asks for that one rather than continuing the rotation. \
-                         Printed once."
-                    ));
-                }
-                return Some(map_value(BlockKey::from_raw(block)));
+                let target = map_value(BlockKey::from_raw(block));
+                say_hunt_decision(&format!(
+                    "hunt: decision=sweep_hit reach={reach} target={target} -- a nearby place \
+                     answered with a host in it, so this query asks for that one rather than \
+                     continuing the rotation."
+                ));
+                return Some(target);
             }
             // The far half. Every nearby place was asked and none of them had anybody, so the
             // location filter comes off for good: the detour adds nothing, the query goes out
             // exactly as Seamless built it, and the whole population answers it. `Nearby only`
             // does not take this branch -- staying near is the entire point of that row.
             crate::lobby_preflight::Nearby::Empty(asked) if reach_is_near_and_far => {
-                if NEAR_AND_FAR_UNFILTERED_SAID.swap(1, Ordering::SeqCst) == 0 {
-                    crate::standalone_log(format_args!(
-                        "hunt: decision=near_and_far_after_sweep -- all {asked} nearby place(s) \
-                         answered zero, so the near half of `Both near and far` is over and this \
-                         query goes out with no filter of ours at all. Printed once."
-                    ));
-                }
+                say_hunt_decision(&format!(
+                    "hunt: decision=near_and_far_after_sweep -- all {asked} nearby place(s) \
+                     answered zero, so the near half of `Both near and far` is over and this \
+                     query goes out with no filter of ours at all."
+                ));
                 return None;
             }
             _ => {}
@@ -1717,24 +1979,41 @@ mod live {
         // nothing". `Unknown` deliberately does not take this branch: a search armed a frame
         // before the answer lands must not skip its own ring on no evidence.
         //
-        // `Nearby only` is excluded for the same reason it is excluded from the sweep-exhausted
-        // branch above: an unfiltered query is not a cheaper way to search nearby, it is a search
-        // of everywhere. Measured on run `br-20260917-183537-0445` -- a Bloody Finger pressed with
-        // `Nearby only` from block `0x3d302d00` took this branch and Seamless matched
-        // `0x0a000000`, a different map, which is what the player saw. That row keeps its filter
-        // and falls through to the narrowing path below; the query it produces returns nothing,
-        // which is the truthful answer to "is anybody hosting nearby" when nobody publishes at all.
-        if crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes
-            && !crate::local_invasion_filter::finger_reach_is_nearby_only()
+        // `Both near and far` only, and the row is checked before the verdict because it decides
+        // the question rather than answering it. This is that row's far half arriving on the first
+        // query instead of after the ring: the pre-flight has already proven the ring has no step
+        // that can match anything, so walking all 49 of them would spend twenty-five minutes
+        // proving it again.
+        //
+        // `Nearby only` does not take it, and the reason is the player's rather than this
+        // module's. Directive 2026-09-17, reported as a regression against the shipped build:
+        // "I hit all 48 locations before invading in seamless, and this should never happen."
+        // That row is to climb its ladder for nearby hosts and nothing else. Run
+        // `br-20260918-022155-8700` is the report: the log's one decision line reads
+        // `decision=nobody_publishes` with `Nearby only` included, and the query that followed
+        // carried no key of ours at all.
+        //
+        // The argument for including it was not wrong on the facts, and it is kept here so that
+        // nobody re-derives it and reinstates the behaviour. `LOBBY_MAP_KEY` is published by hosts
+        // running this DLL and by nobody else, so a query narrowed on it answers "is a host
+        // running this mod nearby" and not "is anybody hosting nearby"; once the pre-flight says
+        // nobody anywhere publishes the key, the ring is provably empty rather than merely
+        // unanswered, and run `br-20260917-235507-1c27` spent ten queries and sixteen cycles on a
+        // population already known to be empty. All of that is true and none of it reaches the
+        // point: a player who chose to stay near is owed an honest empty answer inside the radius
+        // they asked for, not a wider search they declined. The ring rewinds and goes round again
+        // -- `advance_ring`'s `None =>` arm when `everywhere` is false -- and that is what
+        // exhausting the ladder means for that row.
+        if reach_is_near_and_far
+            && crate::lobby_preflight::verdict() == crate::lobby_preflight::Verdict::NobodyPublishes
         {
-            if PREFLIGHT_SKIP_SAID.swap(1, Ordering::SeqCst) == 0 {
-                crate::standalone_log(format_args!(
-                    "hunt: decision=nobody_publishes -- the pre-flight query found no host \
-                     anywhere carrying `{LOBBY_MAP_KEY}`, so the ring would be empty at every \
-                     step. This query goes out with Seamless's own shape and no location filter. \
-                     `Nearby only` does not reach here. Printed once."
-                ));
-            }
+            say_hunt_decision(&format!(
+                "hunt: decision=nobody_publishes -- the pre-flight query found no host anywhere \
+                 carrying `{LOBBY_MAP_KEY}`, so the ring would be empty at every step. This query \
+                 goes out with Seamless's own shape and no location filter. `Both near and far` \
+                 only: this is that row's far half arriving early, and the row that asked to stay \
+                 near does not take it."
+            ));
             return None;
         }
         let config = crate::local_invasion_filter::current_config_snapshot()?;
@@ -1742,24 +2021,30 @@ mod live {
         // Exclusions bind hunt as well as the reject filter. Reading only the marked list let the
         // two halves aim at opposite places while sharing one config snapshot.
         let excluded: Vec<u32> = config.blocked_blocks.iter().copied().collect();
-        if let Some(why) = hunt_refusal(config.hunt, &marked, &excluded, current_block()) {
+        // `true`, not `config.hunt`, for the reason given at the top of this function: the finger
+        // has already decided, the check above enforced it, and the flag these two used to read is
+        // written by `apply_finger_override` rather than by the player. Passing it here would ask
+        // the same question twice and take the less trustworthy answer the second time. The marked
+        // and excluded block lists are still the player's, and still bind.
+        let finger_asked_to_narrow = true;
+        if let Some(why) = hunt_refusal(finger_asked_to_narrow, &marked, &excluded, current_block())
+        {
             if HUNT_REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
                 crate::standalone_log(format_args!("{why}"));
             }
             return None;
         }
-        let Some(centre) = hunt_filter_value(config.hunt, &marked, &excluded, current_block())
+        let Some(centre) =
+            hunt_filter_value(finger_asked_to_narrow, &marked, &excluded, current_block())
         else {
             // The refusal above explains every case it recognises; this is what is left, and it
             // used to be a bare `?` that left the query unfiltered without a word.
-            if HUNT_NO_CENTRE_SAID.swap(1, Ordering::SeqCst) == 0 {
-                crate::standalone_log(format_args!(
-                    "hunt: decision=no_centre -- hunt is on and nothing refused it, but no marked \
-                     block and no readable current block gave a value, so the query goes out \
-                     unfiltered by accident. `Nearby only` reaching this is a bug: that row is \
-                     supposed to narrow. Printed once."
-                ));
-            }
+            say_hunt_decision(
+                "hunt: decision=no_centre -- hunt is on and nothing refused it, but no marked \
+                 block and no readable current block gave a value, so the query goes out \
+                 unfiltered by accident. `Nearby only` reaching this is a bug: that row is \
+                 supposed to narrow.",
+            );
             return None;
         };
         if config.prefilter_radius == 0 {
@@ -1772,7 +2057,7 @@ mod live {
         match peek_ring(
             here,
             config.prefilter_radius,
-            config.search_everywhere_when_exhausted,
+            crate::local_invasion_filter::may_widen_to_anywhere(),
         ) {
             RingStep::Ask(value) => Some(value),
             // The ladder's last rung. Returning `None` here is the whole mechanism: the caller
@@ -1838,9 +2123,18 @@ mod live {
                 .as_ref()
                 .is_none_or(|(anchor, _)| *anchor != here.raw());
             if restart {
+                // Built from the same list the recital and the sweep walk, rather than from grid
+                // arithmetic of its own. In a legacy dungeon that arithmetic yields one place, so
+                // this ladder had nothing to advance through and every query named the block the
+                // player was standing in.
                 *guard = Some((
                     here.raw(),
-                    er_invasion_warp_core::search_ring::SearchRing::new(here, radius),
+                    er_invasion_warp_core::search_ring::SearchRing::from_places(
+                        crate::local_invasion_filter::search_banner::nearby_ring_blocks(
+                            here.raw(),
+                            radius,
+                        ),
+                    ),
                 ));
             }
             let Some((_, ring)) = guard.as_mut() else {
@@ -1986,7 +2280,7 @@ mod live {
         take_next_place(
             here,
             config.prefilter_radius,
-            config.search_everywhere_when_exhausted,
+            crate::local_invasion_filter::may_widen_to_anywhere(),
         );
     }
 
@@ -1996,6 +2290,14 @@ mod live {
     /// abandoned it: the player would be told a search was starting and then watch it ask about
     /// somewhere twenty tiles away.
     pub fn restart_search_ladder() {
+        // A new search opens in its near half, whatever the last one ended in. A far-half latch
+        // left standing would put the difficulty's bracket on the very first query of the next
+        // invasion -- the ring, at a band the player never climbed to -- and the only thing on
+        // screen would be a neighbourhood that has apparently emptied.
+        crate::invade_difficulty::leave_far_half();
+        // A tripwire that outlived its search would penalise the next invasion for a query this
+        // one sent.
+        crate::invade_below_penalty::forget();
         if let Ok(mut guard) = CURRENT_RUNG.lock() {
             *guard = None;
         }
@@ -2096,10 +2398,11 @@ mod live {
 
 #[cfg(windows)]
 pub use live::{
-    LOBBY_KEY_NAME, advance_search_place, advertisement_key, advertisement_lobby, hunt_requests,
-    hunt_tally, install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
+    LOBBY_KEY_NAME, advance_search_place, advertisement_key, advertisement_lobby,
+    allow_band_climb_notice, band_rung, climb_band, current_block, hunt_requests, hunt_tally,
+    install_advertisement_observer, install_hunt_hook, install_pool_filter_hook,
     matchmaking_interface, note_current_block, persona_name, publish_current_map,
-    reapply_pool_if_toggled, report_persona_plumbing_once, restart_search_ladder,
+    reapply_pool_if_toggled, report_persona_plumbing_once, reset_band, restart_search_ladder,
     seamless_match_key, stage_own_query, tallies as publish_tallies, tally,
 };
 

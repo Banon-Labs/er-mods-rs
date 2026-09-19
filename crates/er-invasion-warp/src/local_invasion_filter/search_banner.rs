@@ -206,23 +206,43 @@ pub(crate) fn captured_menu_object() -> Option<usize> {
 /// The ring a nearby search covers, centred on the block the player is standing in, in the order
 /// it is recited and asked about.
 ///
-/// The ring comes from `er_invasion_warp_core::search_ring`, the same arithmetic the query-side
-/// ladder walks, so the recital and the search cannot describe different sets of places. A block
-/// that is not on the overworld grid yields a ring of one, which is correct rather than degenerate:
-/// a legacy dungeon's block and region bytes encode a dungeon and a floor, and stepping them lands
-/// somewhere unrelated.
+/// The ring comes from `er_invasion_warp_core::search_ring`, the same list the query-side ladder
+/// walks, so the recital and the search cannot describe different sets of places.
+///
+/// A legacy dungeon's block and region bytes encode a dungeon and a floor rather than a position,
+/// so the grid arithmetic in `search_ring::ring` can only answer with the block itself there. That
+/// is what a player in one used to get: `the ring of 1 nearby place(s)` and one query, at radius 3
+/// as readily as at radius 1 (run `br-20260918-192951-e31c`, block `0x15010000`). The world map's
+/// own legacy table is what turns that block back into a position, so it is read here and handed
+/// to `ring_with_legacy`; when it is not available yet the result is exactly the old arithmetic.
 ///
 /// Separate from queueing it because two things want the same list and they must not compute it
 /// twice: the banner recites it, and [`crate::lobby_preflight::arm_sweep`] asks Steam about every
 /// entry. A banner naming places the sweep never asked about would be a screen reporting a search
 /// that is not the one running.
 pub(crate) fn nearby_ring(centre: u32, radius: u8) -> Vec<u32> {
-    use er_invasion_warp_core::invasion_warp::BlockKey;
-
-    er_invasion_warp_core::search_ring::ring(BlockKey::from_raw(centre), radius)
+    nearby_ring_blocks(centre, radius)
         .iter()
         .map(|block| block.raw())
         .collect()
+}
+
+/// The same list as [`nearby_ring`], as block keys, for the query-side ladder to walk.
+///
+/// `lobby_publish::advance_ring` builds a `SearchRing` and therefore wants the keys rather than the
+/// raw words. Sharing one function is what keeps the three views of a search -- what is recited,
+/// what the sweep asks Steam, and what the query filters on -- from drifting apart.
+pub(crate) fn nearby_ring_blocks(
+    centre: u32,
+    radius: u8,
+) -> Vec<er_invasion_warp_core::invasion_warp::BlockKey> {
+    use er_invasion_warp_core::invasion_warp::BlockKey;
+
+    er_invasion_warp_core::search_ring::ring_with_legacy(
+        BlockKey::from_raw(centre),
+        radius,
+        &crate::map_hooks::legacy_regions_for_search(),
+    )
 }
 
 /// Name the next place, if one is due. Call once per game tick.

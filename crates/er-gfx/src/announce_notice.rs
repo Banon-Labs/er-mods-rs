@@ -1,4 +1,7 @@
-//! Centre the text on the game's auto-closing announcement banner.
+//! Centre the text on the game's auto-closing announcement banner, and let it draw two lines.
+//!
+//! Two edits to one movie, applied together by [`with_two_line_notice`]. The centring came first
+//! and is described below; [`make_notice_two_line`] carries the second one's own derivation.
 //!
 //! # Which movie this is, and how that was established rather than guessed
 //!
@@ -60,6 +63,69 @@ pub const EDIT_TEXT_HAS_LAYOUT: u8 = 0x20;
 /// centring meaningful — an auto-sized box has no spare width to centre within.
 pub const EDIT_TEXT_AUTO_SIZE: u8 = 0x40;
 
+/// `flags1` bit that lets the field lay out more than one line, so a `\n` in the text breaks it.
+///
+/// Clear on the vanilla field, which is why a banner could only ever be one line no matter what
+/// the DLL wrote into it.
+pub const EDIT_TEXT_MULTILINE: u8 = 0x20;
+/// `flags1` bit that breaks a long line at the field's own width.
+///
+/// [`make_notice_two_line`] leaves it clear, and that is the whole reason a two-line banner does
+/// not change how a long one-line banner behaves. `FeSystemAnnounceView` scrolls text that
+/// overflows the field -- it owns `systemAnnounceScrollBufferTimer` and the overflow measurement
+/// the DLL's blank-banner oracle reads -- so a wrapping field would replace the game's own scroll
+/// with a silent second line for every long vanilla notice. With wrap off, only an explicit `\n`
+/// breaks a line and everything else behaves as it did.
+pub const EDIT_TEXT_WORD_WRAP: u8 = 0x40;
+
+/// The vanilla `flags1` of [`NOTICE_TEXT_CHARACTER_ID`]: `HasText | ReadOnly | HasTextColor`.
+///
+/// The edit refuses anything else, so a movie that already carries a multi-line field -- or a
+/// different movie whose char 6 happens to be an edit text -- is left alone.
+pub const NOTICE_TEXT_VANILLA_FLAGS1: u8 = 0x8c;
+
+/// The sprite whose single placement draws the banner's background panel.
+///
+/// `DefineSprite 5` holds one `PlaceObject2` of `DefineSprite 4`, which in turn holds the
+/// `MENU_FL_Dialog` image at half scale. Sprite 5's placement is where the panel's on-screen size
+/// is decided, and it is the only thing that has to move when the text field grows.
+pub const NOTICE_BAR_SPRITE_ID: u16 = 5;
+/// The character [`NOTICE_BAR_SPRITE_ID`] places: the panel, pre-scaled to half size.
+pub const NOTICE_BAR_CHARACTER_ID: u16 = 4;
+
+/// Half the panel's height in [`NOTICE_BAR_SPRITE_ID`]'s own coordinates, before its scale.
+///
+/// `MENU_FL_Dialog` is 646x102 px (`DefineExternalImage2` character 3) and `DefineSprite 4` places
+/// it at scale `0.5`, translated `(-161.5, -25.5)` px -- so inside sprite 4 it spans `-25.5..25.5`
+/// and is centred on the origin. That is what makes the panel's height a pure function of sprite
+/// 5's `scale_y`, and what lets this edit re-derive the scale from a target height.
+const BAR_HALF_HEIGHT_PX: f64 = 25.5;
+
+/// The vanilla vertical terms of sprite 5's placement, which the edit refuses to overwrite blind.
+///
+/// `scale_y` is 16.16 fixed point: `70669 / 65536 = 1.0783233642578125`, so the panel is
+/// `2 * 25.5 * 1.07832 = 54.994` px tall, centred on `translate_y = 27` twips (1.35 px). Read out
+/// of the vanilla movie with `scripts/gfx_display_list.py`.
+const BAR_VANILLA_SCALE_Y: i32 = 70_669;
+const BAR_VANILLA_TRANSLATE_Y_TWIPS: i32 = 27;
+
+/// The vanilla vertical bounds of the text field, likewise refused if they have moved.
+const NOTICE_TEXT_VANILLA_Y_MIN: i32 = -40;
+const NOTICE_TEXT_VANILLA_Y_MAX: i32 = 680;
+
+/// How far the field and the panel grow, in twips: one line of `MenuFont_01` at this field's size.
+///
+/// Measured from the font rather than guessed. `font/eu_std/font.gfx` declares `MenuFont_01` as
+/// `DefineFont3` id 1 ("Agmena W1G For Bandai") with `ascent = 20800`, `descent = 8540` and
+/// `leading = 8860` on a `1024 * 20` unit em square, and the field's `font_height` is 480 twips
+/// (24 px). A line therefore advances
+/// `(20800 + 8540 + 8860) / 20480 * 24 = 44.77` px, which rounds up to the 45 px here.
+///
+/// It is the advance and not the glyph box on purpose: the vanilla 36 px field already holds one
+/// line's glyphs (`ascent + descent` is 34.38 px) with a little slack, so adding exactly one line
+/// advance keeps that slack and cannot clip the descenders of the second line.
+const SECOND_LINE_TWIPS: i32 = 900;
+
 /// Why the notice text could not be centred. Every variant means the movie was left alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NoticeError {
@@ -75,6 +141,15 @@ pub enum NoticeError {
     AutoSized,
     /// The field was not left-aligned, so this is not the movie this edit was measured against.
     NotLeftAligned { found: u8 },
+    /// The field's `flags1` are not the ones the two-line edit was measured against.
+    NotVanillaTextFlags { found: u8 },
+    /// The field's vertical bounds have moved, so growing them by a measured amount is guesswork.
+    NotVanillaTextBounds { y_min: i32, y_max: i32 },
+    /// No `DefineSprite` [`NOTICE_BAR_SPRITE_ID`] placing [`NOTICE_BAR_CHARACTER_ID`] with a
+    /// scale matrix, so the panel behind the text cannot be grown with it.
+    BarPlacementMissing,
+    /// The panel's placement is not the one this edit measured, so its height is unknown.
+    NotVanillaBar { scale_y: i32, translate_y: i32 },
 }
 
 impl core::fmt::Display for NoticeError {
@@ -101,6 +176,32 @@ impl core::fmt::Display for NoticeError {
                 f,
                 "DefineEditText {NOTICE_TEXT_CHARACTER_ID} has align {found}, expected \
                  {ALIGN_LEFT} (left); refusing to overwrite an alignment this edit did not measure"
+            ),
+            Self::NotVanillaTextFlags { found } => write!(
+                f,
+                "DefineEditText {NOTICE_TEXT_CHARACTER_ID} has flags1 {found:#04x}, expected \
+                 {NOTICE_TEXT_VANILLA_FLAGS1:#04x}; this field is not the one the two-line \
+                 geometry was measured against"
+            ),
+            Self::NotVanillaTextBounds { y_min, y_max } => write!(
+                f,
+                "DefineEditText {NOTICE_TEXT_CHARACTER_ID} spans {y_min}..{y_max} twips, expected \
+                 {NOTICE_TEXT_VANILLA_Y_MIN}..{NOTICE_TEXT_VANILLA_Y_MAX}; growing a box whose \
+                 height is not the measured one would put the second line anywhere"
+            ),
+            Self::BarPlacementMissing => write!(
+                f,
+                "no scaled placement of character {NOTICE_BAR_CHARACTER_ID} inside DefineSprite \
+                 {NOTICE_BAR_SPRITE_ID}; the panel behind the text cannot be grown to match it"
+            ),
+            Self::NotVanillaBar {
+                scale_y,
+                translate_y,
+            } => write!(
+                f,
+                "the panel is placed with scale_y {scale_y} at translate_y {translate_y}, expected \
+                 {BAR_VANILLA_SCALE_Y} at {BAR_VANILLA_TRANSLATE_Y_TWIPS}; refusing to resize a \
+                 panel whose current height this edit did not measure"
             ),
         }
     }
@@ -152,6 +253,170 @@ pub fn center_notice_text(movie: &mut Movie) -> Result<(), NoticeError> {
 pub fn with_centered_notice_text(bytes: &[u8]) -> Result<Vec<u8>, NoticeError> {
     let mut movie = Movie::parse(bytes).map_err(NoticeError::Parse)?;
     center_notice_text(&mut movie)?;
+    movie.write().map_err(NoticeError::Write)
+}
+
+/// Let the banner draw two lines, and grow the panel behind it so the second one lands on it.
+///
+/// # Why a one-line field could not just be written to with a `\n`
+///
+/// `CS::FeSystemAnnounceView` hands its text to the widget through a plain variable set
+/// (`FUN_14074a000` -> `FUN_140d842a0` -> the movie view's `SetVariable` slot), so the string
+/// reaches a Scaleform `TextField` unfiltered and a `\n` in it is already a line break as far as
+/// the text engine is concerned. What the vanilla field refuses is the LAYOUT: [`EDIT_TEXT_MULTILINE`]
+/// is clear, so there is only ever one line box to put glyphs in.
+///
+/// # And why the panel has to move with it
+///
+/// Two lines of `MenuFont_01` at this field's 24 px do not fit the vanilla banner, and the
+/// shortfall is not marginal. The panel is 54.99 px tall and the field 36 px; a second line adds
+/// 44.77 px of advance (see [`SECOND_LINE_TWIPS`]), so a field grown alone would hang its second
+/// line most of the way off the bottom of the art. The panel is therefore grown by exactly the
+/// same amount, downward, with its top edge held: every one-line notice -- this mod's and the
+/// game's own -- keeps the pixel position it has today, and the change is only visible as empty
+/// panel below a short message.
+///
+/// The panel is authored to be stretched, which is what makes this a resize rather than a rebuild:
+/// `MENU_FL_Dialog` carries a [`Tag::DefineScalingGrid`] and is the same image every message box
+/// in the game stretches to its own size.
+///
+/// # Errors
+///
+/// See [`NoticeError`]. Every variant means the movie was left exactly as it arrived, which leaves
+/// a working one-line banner rather than a broken two-line one.
+pub fn make_notice_two_line(movie: &mut Movie) -> Result<(), NoticeError> {
+    let field = movie
+        .tags
+        .iter_mut()
+        .find_map(|tag| match tag {
+            Tag::DefineEditText {
+                character_id,
+                bounds,
+                flags1,
+                ..
+            } if *character_id == NOTICE_TEXT_CHARACTER_ID => Some((bounds, flags1)),
+            _ => None,
+        })
+        .ok_or(NoticeError::TextFieldMissing)?;
+    let (bounds, flags1) = field;
+    if *flags1 != NOTICE_TEXT_VANILLA_FLAGS1 {
+        return Err(NoticeError::NotVanillaTextFlags { found: *flags1 });
+    }
+    if bounds.y_min != NOTICE_TEXT_VANILLA_Y_MIN || bounds.y_max != NOTICE_TEXT_VANILLA_Y_MAX {
+        return Err(NoticeError::NotVanillaTextBounds {
+            y_min: bounds.y_min,
+            y_max: bounds.y_max,
+        });
+    }
+    let grown_y_max = NOTICE_TEXT_VANILLA_Y_MAX + SECOND_LINE_TWIPS;
+    // The panel first, so a refusal there leaves the field untouched too. Both halves of this edit
+    // are one change, and half of it is worse than none: a grown field with the vanilla panel is
+    // the overflowing banner the panel resize exists to prevent.
+    let (bar_scale_y, bar_translate_y, bar_nbits) = grown_bar_placement()?;
+    let bar = movie
+        .tags
+        .iter_mut()
+        .find_map(|tag| match tag {
+            Tag::DefineSprite { id, tags, .. } if *id == NOTICE_BAR_SPRITE_ID => Some(tags),
+            _ => None,
+        })
+        .ok_or(NoticeError::BarPlacementMissing)?
+        .iter_mut()
+        .find_map(|tag| match tag {
+            Tag::PlaceObject2 {
+                character_id: Some(NOTICE_BAR_CHARACTER_ID),
+                matrix: Some(matrix),
+                ..
+            } if matrix.has_scale => Some(matrix),
+            _ => None,
+        })
+        .ok_or(NoticeError::BarPlacementMissing)?;
+    if bar.scale_y != BAR_VANILLA_SCALE_Y || bar.translate_y != BAR_VANILLA_TRANSLATE_Y_TWIPS {
+        return Err(NoticeError::NotVanillaBar {
+            scale_y: bar.scale_y,
+            translate_y: bar.translate_y,
+        });
+    }
+    bar.scale_y = bar_scale_y;
+    bar.translate_y = bar_translate_y;
+    bar.scale_nbits = bar
+        .scale_nbits
+        .max(crate::min_signed_nbits(&[bar.scale_x, bar.scale_y]));
+    bar.translate_nbits = bar.translate_nbits.max(bar_nbits);
+    // The field, now that the panel has agreed to hold it.
+    let field = movie
+        .tags
+        .iter_mut()
+        .find_map(|tag| match tag {
+            Tag::DefineEditText {
+                character_id,
+                bounds,
+                flags1,
+                ..
+            } if *character_id == NOTICE_TEXT_CHARACTER_ID => Some((bounds, flags1)),
+            _ => None,
+        })
+        .ok_or(NoticeError::TextFieldMissing)?;
+    let (bounds, flags1) = field;
+    bounds.y_max = grown_y_max;
+    bounds.nbits = bounds.nbits.max(crate::min_signed_nbits(&[
+        bounds.x_min,
+        bounds.x_max,
+        bounds.y_min,
+        bounds.y_max,
+    ]));
+    *flags1 |= EDIT_TEXT_MULTILINE;
+    Ok(())
+}
+
+/// The panel's `scale_y`, `translate_y` and translate bit width once it has grown by one line.
+///
+/// Held apart from the edit so the arithmetic can be read on its own, and asserted by
+/// `the_grown_panel_keeps_its_top_edge`:
+///
+/// ```text
+///   vanilla half-height  25.5 * 70669/65536            = 27.4972 px
+///   vanilla top          1.35 - 27.4972                = -26.1472 px
+///   vanilla bottom       1.35 + 27.4972                =  28.8472 px
+///   grown bottom         28.8472 + 45                  =  73.8472 px
+///   grown half-height    (73.8472 + 26.1472) / 2       =  49.9972 px
+///   grown centre         -26.1472 + 49.9972            =  23.85 px  -> 477 twips
+///   grown scale_y        49.9972 / 25.5 * 65536        =  128495
+/// ```
+fn grown_bar_placement() -> Result<(i32, i32, u32), NoticeError> {
+    const FIXED_ONE: f64 = 65_536.0;
+
+    let vanilla_half = BAR_HALF_HEIGHT_PX * f64::from(BAR_VANILLA_SCALE_Y) / FIXED_ONE;
+    let vanilla_centre =
+        f64::from(BAR_VANILLA_TRANSLATE_Y_TWIPS) / f64::from(crate::TWIPS_PER_PIXEL);
+    let top = vanilla_centre - vanilla_half;
+    let bottom = vanilla_centre
+        + vanilla_half
+        + f64::from(SECOND_LINE_TWIPS) / f64::from(crate::TWIPS_PER_PIXEL);
+    let grown_half = (bottom - top) / 2.0;
+    let centre = top + grown_half;
+    let scale_y = (grown_half / BAR_HALF_HEIGHT_PX * FIXED_ONE).round() as i32;
+    let translate_y = (centre * f64::from(crate::TWIPS_PER_PIXEL)).round() as i32;
+    Ok((
+        scale_y,
+        translate_y,
+        crate::min_signed_nbits(&[translate_y]),
+    ))
+}
+
+/// Parse `bytes`, centre the notice text, let it draw two lines, and serialise the result.
+///
+/// The two edits are applied together because they are one surface: [`center_notice_text`] decides
+/// where a line sits across the panel and [`make_notice_two_line`] decides how many there may be,
+/// and a movie carrying one without the other is a banner nobody measured.
+///
+/// # Errors
+///
+/// See [`NoticeError`]. On any error the caller should serve the original bytes unchanged.
+pub fn with_two_line_notice(bytes: &[u8]) -> Result<Vec<u8>, NoticeError> {
+    let mut movie = Movie::parse(bytes).map_err(NoticeError::Parse)?;
+    center_notice_text(&mut movie)?;
+    make_notice_two_line(&mut movie)?;
     movie.write().map_err(NoticeError::Write)
 }
 

@@ -10,7 +10,7 @@
 //! arrival notice is written would read as the mod having rejected the invasion it just let
 //! through.
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{NOTICE_FAILED, REJECT_NOTICE};
 
@@ -44,8 +44,65 @@ pub(super) fn announce_arrival(_enabled: bool, _destination: u32) {}
 ///
 /// Shares the one notice latch with the verdict banners, so the surface never contradicts itself
 /// about what it last said.
+/// Set when a match lands, cleared when a new search begins.
+///
+/// While it is set the search-side banners paint nothing. They exist to narrate a search, and once
+/// the match is made there is no search left to narrate: the world is fading out, the player is on
+/// their way into somebody else's game, and a line about which of 49 places is being asked for is
+/// describing something that stopped happening. It stays set through the whole invasion, so the
+/// last thing on screen remains where they went and who they are fighting.
+#[cfg(windows)]
+static QUIET_UNTIL_NEW_SEARCH: AtomicBool = AtomicBool::new(false);
+
+/// Whether the search-side banners should paint at all.
+///
+/// The arrival banner deliberately does not consult this: it is what sets it, and it is the line
+/// the quiet exists to protect.
+#[cfg(windows)]
+fn search_banners_are_quiet() -> bool {
+    QUIET_UNTIL_NEW_SEARCH.load(Ordering::SeqCst)
+}
+
+/// Let the search narrate itself again, for a search that is genuinely starting.
+///
+/// Called where a search is armed rather than where an invasion ends, because those are not the
+/// same moment: the player may leave a host's world and stand around for a while, and a banner
+/// that returned the instant the invasion ended would be narrating a search nobody has asked for
+/// yet.
+#[cfg(windows)]
+pub(crate) fn allow_search_banners() {
+    QUIET_UNTIL_NEW_SEARCH.store(false, Ordering::SeqCst);
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub(crate) fn allow_search_banners() {}
+
+/// Forget what was last said, so the next search is announced from its first place.
+///
+/// The latch that suppresses a repeat is keyed on the ordinal, not on the search, so a player who
+/// calls a search off during its first place and then starts another one would have that new
+/// search's `1 of N` swallowed as a repeat -- silence at exactly the moment they are checking
+/// whether the item did anything. A search that has ended has nothing left to repeat.
+#[cfg(windows)]
+pub(crate) fn forget_last_announcement() {
+    let mut guard = match REJECT_NOTICE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.reset();
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub(crate) fn forget_last_announcement() {}
+
 #[cfg(windows)]
 pub(super) fn announce_arrival(enabled: bool, destination: u32) {
+    // The search is over the moment this paints. Clearing the queue first means the paced recital
+    // of nearby places cannot land on top of the answer, which is the one line worth reading.
+    super::search_banner::clear();
+    QUIET_UNTIL_NEW_SEARCH.store(true, Ordering::SeqCst);
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
@@ -159,6 +216,9 @@ pub(super) fn announce_success(enabled: bool, destination: u32) {
 /// rotation would otherwise hide.
 #[cfg(windows)]
 pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize, total: usize) {
+    if search_banners_are_quiet() {
+        return;
+    }
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
@@ -195,6 +255,9 @@ pub(crate) fn announce_prefilter_step(enabled: bool, block: u32, ordinal: usize,
 /// roughly every fifteen seconds.
 #[cfg(windows)]
 pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only: bool) {
+    if search_banners_are_quiet() {
+        return;
+    }
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
@@ -226,6 +289,9 @@ pub(crate) fn announce_search_everywhere(enabled: bool, nearby: usize, mod_only:
 /// just decided not to ask about, on top of the answer.
 #[cfg(windows)]
 pub(crate) fn announce_found_host(enabled: bool, block: u32) {
+    if search_banners_are_quiet() {
+        return;
+    }
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,
@@ -244,6 +310,9 @@ pub(crate) fn announce_found_host(enabled: bool, block: u32) {
 /// everywhere at once.
 #[cfg(windows)]
 pub(crate) fn announce_nothing_to_search(enabled: bool, nearby_only: bool) {
+    if search_banners_are_quiet() {
+        return;
+    }
     let announcement = {
         let mut guard = match REJECT_NOTICE.lock() {
             Ok(guard) => guard,

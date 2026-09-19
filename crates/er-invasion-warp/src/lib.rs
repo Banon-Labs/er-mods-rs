@@ -31,9 +31,19 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 pub mod announce;
+pub mod break_in_region_gate;
 pub mod can_use_goods_gate;
 pub mod drive;
 pub mod host_effects;
+/// Deathblight on this character if a search ever asks below its own bracket. A tripwire behind
+/// three clamps, asked for by the player in exactly those terms. Host-buildable apart from its
+/// `tick`, so the arming decision stays covered by `cargo test` off the target.
+pub mod invade_below_penalty;
+/// The bracket the far half of `Both near and far` asks for. Windows-only because it is state the
+/// running search reads on the Steam callback thread; the arithmetic it applies is in
+/// `er-invasion-warp-core` and is tested on the host.
+#[cfg(windows)]
+pub mod invade_difficulty;
 pub mod lobby_preflight;
 pub mod lobby_publish;
 pub mod local_invasion_filter;
@@ -46,6 +56,8 @@ pub mod map_hooks;
 mod map_live_pins;
 pub mod map_piece_live;
 pub mod map_seams;
+pub mod multiplayer_menu_row;
+pub mod null_network_message;
 mod overlay;
 pub mod place_name;
 pub mod restart_backoff;
@@ -235,6 +247,11 @@ fn spawn_catalog_task() {
                     // renderer touches no config lock and writes no file -- it runs inside
                     // `Present`, where an `fs::write` would stall the swapchain.
                     crate::settings_panel::tick(&mut settings_key);
+                    // The under-bracket penalty, which is inert until a query has gone out asking
+                    // below this character's own band and a match has landed on it. Driven from
+                    // the game task because it applies a `SpEffect` to the local player, and the
+                    // task is the thread that owns `WorldChrMan`.
+                    crate::invade_below_penalty::tick();
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
@@ -280,6 +297,19 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context; every read is fault-closed and the one
                     // detour is installed on a byte-verified prologue.
                     unsafe { crate::lynchpin_use::tick() };
+                    // The Escape menu's Multiplayer row, which Seamless leaves greyed because the
+                    // vanilla online flag is clear and the vanilla session is empty. One predicate
+                    // decides it and this answers that predicate's refusals; nothing about the
+                    // player's online state changes.
+                    //
+                    // Armed from the tick rather than from `DllMain` for the same reason every
+                    // other detour here is: MinHook must not run under the loader lock. Idempotent
+                    // after the first success, and it re-arms quietly until then because the game
+                    // module may not be mapped on the first tick.
+                    //
+                    // SAFETY: same game-task context; installs one detour on a byte-verified
+                    // prologue through the shared union.
+                    unsafe { crate::multiplayer_menu_row::install() };
                     // Name the next place the search is asking about, at one a second.
                     //
                     // Driven from here rather than from the lobby-query detour, which is where the
@@ -528,6 +558,34 @@ pub extern "C" fn er_invasion_warp_use_item(item_id: u32) -> i32 {
 pub extern "C" fn er_invasion_warp_force_search_range(range: u32) -> i32 {
     vanilla_invasion_items::FORCED_SEARCH_RANGE
         .store(range as usize, core::sync::atomic::Ordering::SeqCst);
+    1
+}
+
+/// Pick the brackets the far half invades into, from outside.
+///
+/// Each argument is a band index plus one, so `0` means "leave that axis at the player's own" --
+/// the same encoding the panel's first dropdown entry uses.
+///
+/// # Why this is an export and not an env var
+///
+/// The picker's only front end is the settings panel, deliberately: it is held in memory so
+/// nothing can go stale in a file. That also leaves no way to drive it for a runtime proof, and the
+/// branch that needs proving is the one nothing else exercises -- the far half of
+/// `Both near and far` asking for a bracket above the player's own. Same problem and same answer
+/// as [`er_invasion_warp_force_search_range`] directly above, which exists because the bounds
+/// popup's cursor could not be driven either.
+///
+/// It sets the same values the panel sets, through the same two functions, so a proof driven
+/// through here exercises the shipping path rather than a parallel one. It changes no behaviour on
+/// its own: a session nobody calls it in has nothing picked, which rewrites nothing.
+///
+/// Returns 1 always -- a band past the end of either list is dropped by `pick_level` and
+/// `pick_weapon` rather than refused here, and the log names what ended up in force.
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_invasion_warp_pick_brackets(level: u32, weapon: u32) -> i32 {
+    invade_difficulty::pick_level(level.checked_sub(1));
+    invade_difficulty::pick_weapon(weapon.checked_sub(1));
     1
 }
 

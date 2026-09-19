@@ -123,6 +123,17 @@ pub mod menu_object;
 mod menu_seams;
 pub use map_pins_view::{log_pin_tier_tally, pin_appearance_for, pin_choice_signature};
 pub(crate) mod differential_scan;
+/// What a search cycle that connected to nobody widens next, lifted out at the size limit.
+mod failed_cycle;
+/// The finger's reach, and the config overlay that choice forces. Split out only because this
+/// file crossed the hard size limit; the names are re-exported so callers keep their spelling.
+mod finger_reach;
+use finger_reach::apply_finger_override;
+pub(crate) use finger_reach::{
+    FINGER_REACH_NEAR_AND_FAR, FINGER_REACH_NEARBY, FINGER_REACH_NONE, finger_reach,
+    finger_reach_is_near_and_far, finger_reach_is_nearby_only, may_climb_band,
+    may_widen_to_anywhere, set_finger_reach,
+};
 /// Join outcomes: the dead match the engine has already failed, and the progress read behind it.
 mod join_outcome;
 /// The per-frame session field-write tracer, lifted out when this file hit its size limit.
@@ -509,7 +520,8 @@ fn refresh_config() {
             }
             crate::standalone_log(format_args!(
                 "local-invasion: config loaded enabled={} search_by_location={} \
-                 search_radius={} widen_to_anywhere={} only_players_with_this_mod={} \
+                 search_radius={} reach={} may_widen_to_anywhere={} may_climb_band={} \
+                 only_players_with_this_mod={} \
                  reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  blocks={} \
@@ -517,7 +529,14 @@ fn refresh_config() {
                 outcome.config.enabled,
                 outcome.config.hunt,
                 outcome.config.prefilter_radius,
-                outcome.config.search_everywhere_when_exhausted,
+                // The reach, and the two rungs derived from it, rather than the file keys that used
+                // to decide them. Printed together because the whole point of deleting those keys is
+                // that these three always agree: a reader who sees `reach=1` with
+                // `may_widen_to_anywhere=true` is looking at a build where the promise `Nearby only`
+                // makes has been broken again.
+                finger_reach(),
+                may_widen_to_anywhere(),
+                may_climb_band(),
                 // Every option that changes behaviour must appear here. These three were missing,
                 // and the gap cost a live A/B on 2026-08-06: the file was edited mid-session to turn
                 // `dll_users_only` on, this line duly reprinted -- proving the reload had happened --
@@ -610,11 +629,22 @@ fn warn_about_key_collisions(config: &LocalInvasionConfig) {
 #[cfg(windows)]
 pub(crate) fn stand_down_hunt(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
-    // The finger's override lives exactly as long as its search does.
-    set_finger_reach(FINGER_REACH_NONE);
-    // So does the neighbourhood it measured. A sweep left behind would let the next search read
-    // an answer about somewhere the player has walked away from.
-    crate::lobby_preflight::clear_sweep();
+    // A search the player stopped is not a search in its far half. The difficulty itself survives
+    // -- it is their standing choice, not a property of this search -- but the latch that says the
+    // near half is over must not outlive the search that ended it.
+    crate::invade_difficulty::leave_far_half();
+    // The recital of the places it was asking about goes now. This function's own log line
+    // promises "nothing here will start another search until you ask for one", and a screen still
+    // naming one location a second is the player's only evidence about whether that is true --
+    // reported 2026-09-17 for the finger's own call-off prompt as "this doesn't seem to cancel my
+    // seamless searching or the banner from reading back or appearing", and every other caller
+    // here means exactly the same thing by "stop".
+    //
+    // The latch goes with it. It suppresses a repeat by ordinal rather than by search, so a
+    // search called off during its first place would have the next search's `1 of N` swallowed --
+    // silence at the moment the player is checking whether the item did anything at all.
+    search_banner::clear();
+    banner::forget_last_announcement();
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -629,6 +659,21 @@ pub(crate) fn stand_down_hunt(reason: &str) {
         ));
     }
     cancel_live_search_for_player(reason);
+    // The finger's override lives exactly as long as its search does -- and the search outlives
+    // this function by the length of its own unwind, which is why these two lines are below the
+    // cancel rather than above it.
+    //
+    // Above it they were a hole with the same shape as the bug they sat beside. `FINGER_REACH_NONE`
+    // makes `lobby_publish::hunt_target` answer `no_finger`, so the query stops being narrowed, and
+    // it takes `apply_finger_override`'s forced `enabled` with it, so the reject filter stops
+    // judging what comes back -- while the search the player just stopped is still running. A query
+    // going out in that window is the whole population, unjudged, which is the search they
+    // declined. Retiring after the cancel means the narrowing is the last thing to go.
+    //
+    // The neighbourhood the sweep measured goes with it: a sweep left behind would let the next
+    // search read an answer about somewhere the player has walked away from.
+    set_finger_reach(FINGER_REACH_NONE);
+    crate::lobby_preflight::clear_sweep();
 }
 
 /// Give the running search back to Seamless, unfiltered and unjudged, and stop touching it.
@@ -661,7 +706,16 @@ pub(crate) fn stand_down_hunt(reason: &str) {
 pub(crate) fn hand_off_to_seamless(reason: &str) {
     let was_armed = AUTO_SEARCH_ARMED.swap(false, Ordering::SeqCst);
     set_finger_reach(FINGER_REACH_NONE);
-    crate::lobby_preflight::clear_sweep();
+    // The one thing that does not retire with the rest of the overlay. Everything above and below
+    // this line hands the search back to Seamless untouched; the difficulty is the player's
+    // standing instruction about which bracket that handed-back search should ask for, and the far
+    // half is the only place it applies. Set before the band ladder is reset, so no query can go
+    // out between the two reading a rung of one search and the bracket of none.
+    crate::invade_difficulty::enter_far_half();
+    // The search is over rather than widening, so the band ladder goes back to the player's own
+    // band with it. A rung that outlived its search would start the next invasion somewhere the
+    // player never climbed to, with nothing on screen to say so.
+    crate::lobby_preflight::end_search();
     PENDING_REINVADE.store(false, Ordering::SeqCst);
     if let Ok(mut backoff) = RESTART_BACKOFF.lock() {
         backoff.stand_down();
@@ -747,19 +801,6 @@ pub(crate) fn current_config() -> Option<LocalInvasionConfig> {
     Some(apply_finger_override(config))
 }
 
-/// Which reach a vanilla invasion finger asked for, or `FINGER_REACH_NONE`.
-///
-/// An in-memory override rather than a write to the player's file, for two reasons the user gave
-/// directly: using an item must not edit their settings, and it must not hinge on what those
-/// settings happen to be. A finger whose behaviour depends on `search_by_location` being on is a
-/// finger that does nothing for most players, silently -- which is exactly the failure the config
-/// line above already warns about for a bare `search_radius`.
-static FINGER_REACH: AtomicUsize = AtomicUsize::new(FINGER_REACH_NONE);
-pub(crate) const FINGER_REACH_NONE: usize = 0;
-pub(crate) const FINGER_REACH_NEARBY: usize = 1;
-pub(crate) const FINGER_REACH_NEAR_AND_FAR: usize = 2;
-
-/// Whether the finger's popup chose `Both near and far`, which must not narrow the lobby query.
 /// Whether Seamless has a session object the module could drive through.
 ///
 /// The near+far handoff cannot reach Seamless without one: the option-menu object is found by
@@ -782,57 +823,6 @@ pub(crate) fn session_is_resolvable() -> bool {
 #[cfg(not(windows))]
 pub(crate) fn session_is_resolvable() -> bool {
     false
-}
-
-pub(crate) fn finger_reach_is_near_and_far() -> bool {
-    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEAR_AND_FAR
-}
-
-/// Whether the finger's popup chose `Nearby only`, which must never produce an unfiltered query.
-///
-/// This is not the negation of [`finger_reach_is_near_and_far`]: `FINGER_REACH_NONE` is a third
-/// state and it means no finger started this search at all, so the map-pin and config-driven paths
-/// keep whatever behaviour they had. Only the row that promised the player "nearby" is bound by it.
-///
-/// The hole it closes, measured live on run `br-20260917-183537-0445`: the player used a Bloody
-/// Finger with `Nearby only` while standing in block `0x3d302d00`, the pre-flight found no host
-/// anywhere publishing a block id, and `hunt_target`'s `NobodyPublishes` short-circuit returned
-/// `None` -- no filter -- so Seamless matched `0x0a000000` and the invasion landed in a different
-/// map. That short-circuit is a real optimisation for `Both near and far`, whose second phase is
-/// meant to be unfiltered; for `Nearby only` there is no second phase to widen into, and an
-/// unfiltered query is not a faster way to search nearby, it is a different search.
-pub(crate) fn finger_reach_is_nearby_only() -> bool {
-    FINGER_REACH.load(Ordering::SeqCst) == FINGER_REACH_NEARBY
-}
-
-/// Record what the finger's popup chose. Cleared by [`stand_down_hunt`] with everything else.
-pub(crate) fn set_finger_reach(reach: usize) {
-    FINGER_REACH.store(reach, Ordering::SeqCst);
-}
-
-/// Overlay the finger's choice on the loaded config, for as long as its search is running.
-///
-/// The three switches are forced together because they are one mechanism: the widening search runs
-/// inside the lobby-query detour, so it needs `steam_hooks`; the tile it starts from comes from
-/// `hunt_filter_value`, which answers `None` while `hunt` is off; and the filter judges nothing at
-/// all while `enabled` is false. Setting the radius without them is the silent no-op this module
-/// already logs a warning about.
-fn apply_finger_override(mut config: LocalInvasionConfig) -> LocalInvasionConfig {
-    let reach = FINGER_REACH.load(Ordering::SeqCst);
-    if reach == FINGER_REACH_NONE {
-        return config;
-    }
-    config.enabled = true;
-    config.hunt = true;
-    config.steam_hooks = true;
-    // The player's own radius still decides how wide "nearby" is; the choice only decides whether
-    // the search may stop being nearby. A file with no radius set would otherwise make `Nearby
-    // only` a single-tile search, which is an empty search.
-    if config.prefilter_radius == 0 {
-        config.prefilter_radius = 1;
-    }
-    config.search_everywhere_when_exhausted = reach == FINGER_REACH_NEAR_AND_FAR;
-    config
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1926,6 +1916,16 @@ fn log_transition(abi: &ersc::Abi, previous: usize, state: u32, driven_by: Optio
             None => String::new(),
         },
     ));
+    failed_cycle::advance_place_on_failed_cycle(abi, previous, state);
+    failed_cycle::climb_band_on_failed_cycle(abi, previous, state);
+    // A search starting from idle is the moment the player is looking for somebody again, and the
+    // only moment the search banners are allowed to speak after a match. Idle is the discriminator
+    // that matters: every other arrival at `SEARCHING` is a failed cycle restarting mid-search, and
+    // letting those lift the quiet would put the place recital back on screen during the invasion
+    // it was silenced for.
+    if state == abi.state_searching && previous as u32 == abi.state_idle {
+        banner::allow_search_banners();
+    }
 }
 
 /// Ticks per second over a dwell, or `None` when the interval is too short to divide meaningfully.
@@ -2153,6 +2153,9 @@ pub fn judge_incoming_match(join_data: usize) {
     // What remains is the report. Where the server just sent you is worth saying, and this is the
     // first instant it is knowable on this machine.
     banner::announce_arrival(config.reject_notice, destination);
+    // The first instant a landed match is knowable, which is also the only place the penalty can
+    // be armed from: it fires on the search that found this one, not on anything about the match.
+    crate::invade_below_penalty::on_match_landed();
     crate::standalone_log(format_args!(
         "local-invasion: match to {destination:#010x} accepted -- this build does not reject a \
          connected invasion by location; the prefilter narrows the query instead. Anchor \

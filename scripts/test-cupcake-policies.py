@@ -701,10 +701,20 @@ def main() -> int:
             False,
             "Do not push directly to main",
         ),
+        # The ten cases below were written as `allow-*` against `git_block_main_push`, whose job is
+        # narrower than the rule now in force: it asks which ref a push targets, and lets a feature
+        # branch, a worktree, a rename refspec and a deletion through. `git_block_any_push` asks
+        # nothing -- no push this agent makes is allowed, so every one of those exceptions is now
+        # unreachable from the agent's path and the cases assert the deny instead.
+        #
+        # Renamed rather than deleted. Each still names the shape it was written for, so the
+        # coverage `git_block_main_push` has for that shape is still located from here, and a later
+        # session can see that the narrow guard's exceptions were superseded rather than lost.
         PolicyCase(
-            "allow-git-push-feature-branch",
+            "any-push-guard-denies-feature-branch-push",
             "git push -u origin guard/no-direct-main-push",
-            True,
+            False,
+            "The agent does not push",
         ),
         PolicyCase("deny-stale-origin-main-rebase", "git rebase origin/main", False, "origin/main is stale or could not be verified", extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "b" * 40}}),
         PolicyCase("allow-fresh-origin-main-rebase", "git rebase origin/main", True, extra_event={"signals": {"origin_main_oids": "a" * 40 + " " + "a" * 40}}),
@@ -736,9 +746,10 @@ def main() -> int:
             },
         ),
         PolicyCase(
-            "allow-git-c-push-feature-from-nonmain-worktree-main-session",
+            "any-push-guard-denies-git-c-push-from-nonmain-worktree",
             "git -C /home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate push -u origin feature/portrait-stats-crate",
-            True,
+            False,
+            "The agent does not push",
             extra_event={
                 "signals": {
                     "current_branch": "main\n",
@@ -763,9 +774,10 @@ def main() -> int:
         # so it cannot update remote main -- but it matched neither earlier
         # exception's parser and was denied from a session sitting on main.
         PolicyCase(
-            "allow-git-push-refspec-rename-from-main-session",
+            "any-push-guard-denies-refspec-rename",
             "git push origin origin/refactor/drop-dead-gates:refs/heads/split/drop-dead-gates",
-            True,
+            False,
+            "The agent does not push",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         # ... and every main destination stays denied through it. push_targets_main
@@ -801,21 +813,24 @@ def main() -> int:
         # These cases have to run here and not only under `opa test`: a green
         # interpreter suite says nothing about the runtime that ships.
         PolicyCase(
-            "allow-git-push-deletion-refspec-from-main-session",
+            "any-push-guard-denies-deletion-refspec",
             "git push origin :refs/heads/split/a",
-            True,
+            False,
+            "The agent does not push",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         PolicyCase(
-            "allow-git-push-delete-option-from-main-session",
+            "any-push-guard-denies-delete-option",
             "git push origin --delete refactor/experiments-split",
-            True,
+            False,
+            "The agent does not push",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         PolicyCase(
-            "allow-git-push-delete-multiple-branches-from-main-session",
+            "any-push-guard-denies-delete-of-multiple-branches",
             "git push origin --delete stale/one stale/two",
-            True,
+            False,
+            "The agent does not push",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         # Every main spelling stays denied through the new exception, and the last
@@ -927,9 +942,10 @@ def main() -> int:
         # ... and the refspec-rename exception still works through a wrapper,
         # which is what makes the decomposition symmetric rather than just stricter.
         PolicyCase(
-            "allow-wrapped-refspec-rename-from-main-session",
+            "any-push-guard-denies-wrapped-refspec-rename",
             "bash -c 'git push origin origin/a:refs/heads/split/a'",
-            True,
+            False,
+            "The agent does not push",
             extra_event={"signals": {"current_branch": "main\n"}},
         ),
         PolicyCase(
@@ -1047,9 +1063,10 @@ def main() -> int:
         # Neutralising a quoted span blanks its command-position characters
         # rather than deleting it, so a quoted operand still parses.
         PolicyCase(
-            "allow-git-c-push-with-quoted-worktree-path-from-main-session",
+            "any-push-guard-denies-git-c-push-with-quoted-worktree-path",
             'git -C "/home/banon/projects/er-mods-rs/.worktrees/portrait-stats-crate" push -u origin feature/portrait-stats-crate',
-            True,
+            False,
+            "The agent does not push",
             extra_event={
                 "signals": {
                     "current_branch": "main\n",
@@ -1946,16 +1963,37 @@ def main() -> int:
         ),
         # `UNKNOWN` is not `MISSING`, and a redirect the signal cannot resolve produces it.
         PolicyCase(
-            "allow-push-whose-target-the-signal-could-not-resolve",
+            "any-push-guard-denies-push-whose-target-the-signal-could-not-resolve",
             "(cd /other/worktree && git push)",
-            True,
+            False,
+            "The agent does not push",
             extra_env=(("CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE", "UNKNOWN"),),
         ),
         PolicyCase(
-            "allow-push-when-no-crate-changed-in-the-pushed-checkout",
+            "any-push-guard-denies-push-when-no-crate-changed-in-the-pushed-checkout",
             "cd /other/worktree && git push -u origin HEAD",
-            True,
+            False,
+            "The agent does not push",
             extra_env=(("CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE", "NOTRUNTIME"),),
+        ),
+        # `no_whole_check_sh`. Its own `opa test` suite is 21 green assertions, and the header of
+        # this file already says why that is not enough: `opa test` links RE2 natively while the
+        # engine that ships evaluates policies as wasm, and one rule here was green in the
+        # interpreter while crashing every policy in production. These two are the ends of the
+        # range -- the command denied, and the same words allowed when a commit message merely
+        # names them. The second is the one that has to keep passing: `require_scoped_cargo`
+        # records a guard that blocked the edit removing it, and a guard on this script that
+        # cannot be described in the commit that removes it is unwritable in the repo it guards.
+        PolicyCase(
+            "check-sh-guard-denies-a-stage-run",
+            "bash scripts/check.sh --stage lint",
+            False,
+            "The agent does not run scripts/check.sh",
+        ),
+        PolicyCase(
+            "allow-commit-message-naming-the-check-script",
+            'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
+            True,
         ),
     ])
 

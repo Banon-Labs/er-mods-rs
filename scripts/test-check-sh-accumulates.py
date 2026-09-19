@@ -278,6 +278,14 @@ def main() -> int:
                 # hold it, so there is no branch here: a failure would mean the two cases below
                 # were measuring nothing.
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                # The holder record, written because a real run writes one and check.sh now reads
+                # it. Its stale-lock breaker treats an empty record as a descriptor some unrelated
+                # process inherited -- the Proton tree does exactly that to fd 9 -- and deletes the
+                # lock rather than refusing. A fake holder with no pid is indistinguishable from
+                # that leak, so without this line the second case below measured the breaker
+                # working, and read as the refusal being gone.
+                os.write(fd, f"{os.getpid()}\n".encode())
+                os.fsync(fd)
                 nested = dict(os.environ, ER_CHECK_LOCK_HELD="1")
                 _, out = run_fixture(
                     f"{PASSING}\n{MARKER}\n{END}", env=nested, lock_dir=lock_dir

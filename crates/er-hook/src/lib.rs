@@ -396,6 +396,35 @@ pub unsafe fn register_union_hook_runtime_derived(
     unsafe { register_union_hook_resolved(target, handler, orig_slot) }
 }
 
+/// Register a four-argument handler on a game function entry, following an Arxan stub if the
+/// running process has left one there.
+///
+/// [`register_union_hook_runtime_derived`] audits the entry and stops there, which is right for an
+/// address a scan found inside `.text` and wrong for one Arxan has stubbed: the entry then opens
+/// `jmp rel32`, MinHook writes its five bytes over that jump, and the detour catches nothing while
+/// reporting itself installed. That silence is what [`register_union_hook7_runtime_derived`]
+/// already removes for a seven-argument target, and arity is the only reason this is a second
+/// function rather than the same one -- a four-argument target reached through a seven-argument
+/// dispatcher gets garbage where its stack arguments would be.
+///
+/// # Safety
+/// Same contract as [`register_union_hook_runtime_derived`]: `handler` must be a valid [`UnionFn`]
+/// matching the target's ABI, `orig_slot` must be the static the handler reads to call its
+/// original through [`UnionFn`] (it may be the next handler in the chain rather than the game
+/// trampoline), and `entry` must have been derived from the running image.
+#[cfg(windows)]
+pub unsafe fn register_union_hook_runtime_derived_following_arxan(
+    entry: usize,
+    handler: UnionFn,
+    orig_slot: &'static AtomicUsize,
+) -> Result<(), MH_STATUS> {
+    let what = format!("register_union_hook_runtime_derived_following_arxan 0x{entry:x}");
+    let Some(target) = detour_target_following_arxan(entry, &what) else {
+        return Err(MH_STATUS::MH_ERROR_UNSUPPORTED_FUNCTION);
+    };
+    unsafe { register_union_hook_resolved(target, handler, orig_slot) }
+}
+
 /// Register a seven-argument handler on a game function entry, following an Arxan stub if the
 /// running process has left one there.
 ///
@@ -1288,7 +1317,7 @@ unsafe extern "system" {
     pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_QueueDisableHook(pTarget: *mut c_void) -> MH_STATUS;
 
-    // The four that FREEZE. Renamed rather than exported, so nothing can reach MinHook's
+    // The four that freeze. Renamed rather than exported, so nothing can reach MinHook's
     // thread-suspending entry points without passing through the guard below. See
     // [`freeze_guard`] for what that guard is for; the wrappers keep the original names and
     // signatures, so every existing call site is unchanged.
@@ -1336,7 +1365,7 @@ pub unsafe fn MH_Uninitialize() -> MH_STATUS {
 ///
 /// MinHook's `Freeze()` takes a `CreateToolhelp32Snapshot` and calls `SuspendThread` on every
 /// other thread in the process before it writes a detour, then resumes them. That is correct for
-/// one MinHook. This workspace ships twenty-one cdylibs, each of which statically links its OWN
+/// one MinHook. This workspace ships twenty-one cdylibs, each of which statically links its own
 /// MinHook instance -- deliberately, since the hook union owns exactly one instance per DLL -- so
 /// there are twenty-one independent freezers with twenty-one independent locks, and MinHook's own
 /// critical section serialises none of them against each other. Each shell then installs its hooks
@@ -1839,7 +1868,7 @@ pub fn patch_3byte_stub(
     // is `0x48`, `0x40`, `0x40` and `0x4c` at the four live call sites -- REX prefixes, which open
     // a large fraction of the image, so on a build that moved the function the check passes by
     // coincidence far more often than it fails and three bytes go into unrelated code. Measured
-    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are MID-FUNCTION.
+    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are mid-function.
     if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
         return false;
     }

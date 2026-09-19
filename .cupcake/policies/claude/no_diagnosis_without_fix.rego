@@ -17,6 +17,10 @@
 #                    "worth fixing", "the fix is").
 #       fixed     -- an Edit / Write / MultiEdit / NotebookEdit tool_use came LATER in the same turn
 #                    than that sentence. Reads do not count: reading is how a diagnosis is built.
+#       edited    -- the same write anywhere in the turn, ordering ignored. Read alongside `fixed`
+#                    because a diagnosis in the CLOSING message has nothing after it, so `fixed` is
+#                    structurally 0 there and the positional test alone convicts a turn that made
+#                    the edit and then said what it had fixed.
 #       asked     -- the opening user prompt asked a question. Answering is the deliverable and must
 #                    never be gagged; this exemption is deliberately broad.
 #       blocked   -- the turn stated a real dependency (sudo, a live game, an approval, waiting on
@@ -282,10 +286,19 @@ field(name) := value if {
 	value := substring(part, count(name) + 1, -1)
 }
 
+# `fixed` is positional -- an edit LATER in the turn than the diagnosis sentence -- which is right
+# for a diagnosis made mid-turn and unreachable for one made in the closing message, because
+# nothing can come after a closer. So a turn that made the edit and then reported the defect it had
+# just fixed scored `fixed=0` and was halted for work it had done; measured twice on 2026-09-19,
+# once on a turn that wrote a new script and once on a turn that edited AGENTS.md. `edited` is the
+# same fact without the ordering, and it is what the promissory arm beside this one already reads
+# for exactly this reason. Requiring both keeps the shape the rule exists to refuse -- a turn that
+# named a defect and changed nothing at all -- and stops convicting a truthful report.
 offending := clause if {
 	clause := field("diagnosis")
 	clause != ""
 	field("fixed") == "0"
+	edited == "0"
 	field("asked") == "0"
 	field("blocked") == "0"
 }

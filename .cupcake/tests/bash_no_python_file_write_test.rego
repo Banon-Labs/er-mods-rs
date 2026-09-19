@@ -77,6 +77,80 @@ test_committed_script_plus_inline_write_is_denied if {
 	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
 }
 
+# --- the committed-script exemption is scoped to scripts/, not any .py path -
+#
+# Guard gap measured 2026-09-17: the old exemption regex checked only the
+# `.py` suffix, so a script run from outside the repo's tracked `scripts/`
+# tree was waved through exactly like a reviewed file. Neither denied command
+# below carries an inline `open(..., 'w')` on its own line -- that text lives
+# inside the file being run -- which is precisely why the fix has to distrust
+# the invocation itself rather than widen the text scan.
+
+test_tmp_scratchpad_script_is_denied if {
+	cmd := "python3 /tmp/claude-1000/-home-banon-projects-er-mods-rs/scratchpad/patch_actions.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+# A separator abutting the path is still the same invocation.
+#
+# Measured against the live policy 2026-09-17, immediately after the location
+# fix above landed: the bare form denied and this one did not, because the
+# trailing context was whitespace-or-end and `;` is neither. The suffix is one
+# the harness actively encourages -- another guard here asks for a command's
+# exit code to be read as `; echo "exit=$?"` -- so this was the shape most
+# likely to be typed, not an exotic one.
+test_tmp_script_with_abutting_separator_is_denied if {
+	some cmd in [
+		`python3 /tmp/x/patch.py; echo "exit=$?"`,
+		"python3 /tmp/x/patch.py&& echo hi",
+		"python3 /tmp/x/patch.py|tee log",
+		"(python3 /tmp/x/patch.py)",
+	]
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+# The same abutting separator on a committed script must still be exempt, or
+# widening the trailing class above would deny every legitimate scoped gate.
+test_committed_script_with_abutting_separator_is_allowed if {
+	some cmd in [
+		`python3 scripts/check-comment-caps.py; echo "exit=$?"`,
+		"python3 scripts/er-teardown.py > /dev/null 2>&1; python3 scripts/er-run-branch.py",
+	]
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_home_scratch_script_is_denied if {
+	cmd := "python3 ~/scratch/patch.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_absolute_scripts_lookalike_path_is_denied if {
+	# Starts with "scripts/" only after an absolute prefix -- still not
+	# repo-relative, so it must not borrow the exemption.
+	cmd := "python3 /home/banon/scripts/patch.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_dotdot_escape_from_scripts_is_denied if {
+	cmd := "python3 scripts/../../../tmp/patch.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_uv_run_tmp_script_is_denied if {
+	cmd := "uv run --with capstone python3 /tmp/scratch/patch.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+test_relative_scripts_dir_script_is_allowed if {
+	cmd := "python3 ./scripts/foo.py"
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_nested_scripts_subdir_script_is_allowed if {
+	cmd := "python3 scripts/ghidra/mcp_query.py getContext"
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
 # --- not a python command at all ------------------------------------------
 
 test_non_python_command_is_allowed if {

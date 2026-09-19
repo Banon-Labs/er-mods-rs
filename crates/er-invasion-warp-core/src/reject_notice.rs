@@ -15,6 +15,21 @@
 //! rejections at that same place stay silent. Moving to a different wrong place is genuinely new
 //! information and is announced again, including a return to somewhere announced earlier — the
 //! player's question is "where am I being sent right now", not "where have I ever been sent".
+//!
+//! # Two lines, and the second one is the place
+//!
+//! Every message here is built as `outcome` then `\n` then `where` — "No invasion found (3/48
+//! locations)" over "Stormveil Castle" — which is the shape the player asked for on 2026-09-17:
+//! "see if you can make the banner multi-line, so each key point can be on its own line".
+//! `observe_arrival` is the one that puts a person on the second line instead of a place, because
+//! its first line is already the place and the host is its other half.
+//!
+//! The surface only draws two of them. `er_gfx::announce_notice::make_notice_two_line` grows the
+//! banner's text field by exactly one line of `MenuFont_01` and the panel behind it by the same
+//! amount, so a third line would be laid out past the art and clipped;
+//! `no_message_is_more_than_the_two_lines_the_banner_can_draw` is what holds every builder here to
+//! that. A message whose second half is unknown — no place name before the world map has been read
+//! — is one line rather than a line and a blank.
 
 use core::fmt::Write as _;
 
@@ -28,12 +43,16 @@ use crate::local_invasion::RejectReason;
 /// the player cannot get anywhere else. Cut the name instead, visibly.
 pub const HOST_NAME_MAX_CHARS: usize = 20;
 
-/// Append ` -- <host>` when the host is known.
+/// Append `<separator><host>` when the host is known.
 ///
 /// Separate from the three builders so all of them read the same, and so the truncation rule lives
 /// in one place. A `None` host leaves the line exactly as it was before this existed, which is what
 /// every test written before the host was reachable still asserts.
-fn append_host(text: &mut String, host: Option<&str>) {
+///
+/// `separator` is the caller's because the host is not always the same kind of fact. Beside a
+/// place it is the second half of one line -- "Limgrave -- Paperplane" -- and the arrival banner,
+/// whose whole content is the place and the person, gives each of them a line of its own.
+fn append_host(text: &mut String, host: Option<&str>, separator: &str) {
     let Some(host) = host else {
         return;
     };
@@ -41,7 +60,7 @@ fn append_host(text: &mut String, host: Option<&str>) {
     if host.is_empty() {
         return;
     }
-    let _ = write!(text, " -- ");
+    text.push_str(separator);
     for (index, character) in host.chars().enumerate() {
         if index == HOST_NAME_MAX_CHARS {
             text.push('\u{2026}');
@@ -157,7 +176,16 @@ impl RejectNotice {
     /// `place` is the name when one is known and `None` when it is not. A tile id is deliberately
     /// not used as a substitute: `m60_51_36_00` tells a player nothing, and a banner that shows it
     /// is worse than one that just counts. The count alone is still useful -- it is what separates
-    /// "nobody is nearby" from "we have three tiles left to ask about".
+    /// "nobody is nearby" from "we have three tiles left to ask about". That is also why an
+    /// unknown place is one line rather than a line and a blank one: there is no second key point
+    /// to give.
+    ///
+    /// The two-line shape is the player's own, given as an example on 2026-09-17:
+    ///
+    /// ```text
+    /// No invasion found (3/48 locations)
+    /// Stormveil Castle
+    /// ```
     ///
     /// Returns `None` when this exact step was the last thing announced, so a query loop that
     /// re-asks for the same tile does not repaint the banner every frame.
@@ -178,20 +206,15 @@ impl RejectNotice {
         // standing reads as a failure before anything has failed.
         if ordinal == 1 {
             return Some(match place {
-                Some(name) => format!("Searching for an invasion in {name}"),
+                Some(name) => format!("Searching for an invasion\n{name}"),
                 None => "Searching for an invasion where you are".to_string(),
             });
         }
         let nearby = total.saturating_sub(1);
+        let progress = format!("No invasion found ({}/{nearby} locations)", ordinal - 1);
         Some(match place {
-            Some(name) => format!(
-                "No invasion where you are -- searching {} of {nearby} nearby locations ({name})",
-                ordinal - 1
-            ),
-            None => format!(
-                "No invasion where you are -- searching {} of {nearby} nearby locations",
-                ordinal - 1
-            ),
+            Some(name) => format!("{progress}\n{name}"),
+            None => progress,
         })
     }
 
@@ -324,20 +347,14 @@ impl RejectNotice {
         // lookup task, not a notification. The id remains the fallback rather than being dropped,
         // because it is the only thing available before the map has been opened, and a rejection
         // with no place at all would be strictly worse than an unfriendly one.
+        let _ = writeln!(text, "Rejected ({})", reason_phrase(reason));
         match place {
-            Some(place) if !place.is_empty() => {
-                let _ = write!(text, "Rejected {place} ({})", reason_phrase(reason));
-            }
+            Some(place) if !place.is_empty() => text.push_str(place),
             _ => {
-                let _ = write!(
-                    text,
-                    "Rejected {} ({})",
-                    BlockKey::from_raw(block),
-                    reason_phrase(reason)
-                );
+                let _ = write!(text, "{}", BlockKey::from_raw(block));
             }
         }
-        append_host(&mut text, host);
+        append_host(&mut text, host, " -- ");
         Some(text)
     }
 
@@ -381,12 +398,12 @@ impl RejectNotice {
         // claim the arrival, so this one stops at the request it actually made.
         Some(match place {
             Some(place) if !place.is_empty() => {
-                format!("Found a host in {place} -- asking Seamless to join")
+                format!("Found a host -- asking Seamless to join\n{place}")
             }
             // Before the world map has been read nothing has a name, so the id is the fallback --
             // the same trade every other line here makes, for the same reason.
             _ => format!(
-                "Found a host in {} -- asking Seamless to join",
+                "Found a host -- asking Seamless to join\n{}",
                 BlockKey::from_raw(block)
             ),
         })
@@ -440,17 +457,16 @@ impl RejectNotice {
         let mut text = String::new();
         // Says the outcome first and the place second, exactly like the rejection line, so the two
         // read as the same banner reporting opposite results rather than as two unrelated messages.
+        text.push_str("Invasion successful\n");
         match place {
-            Some(place) if !place.is_empty() => {
-                let _ = write!(text, "Invasion successful: {place}");
-            }
+            Some(place) if !place.is_empty() => text.push_str(place),
             // Before the world map has been read nothing has a name, so the id is the fallback --
             // the same trade the rejection line makes, for the same reason.
             _ => {
-                let _ = write!(text, "Invasion successful: {}", BlockKey::from_raw(block));
+                let _ = write!(text, "{}", BlockKey::from_raw(block));
             }
         }
-        append_host(&mut text, host);
+        append_host(&mut text, host, " -- ");
         Some(text)
     }
 
@@ -470,22 +486,37 @@ impl RejectNotice {
         place: Option<&str>,
         host: Option<&str>,
     ) -> Option<String> {
-        let repeat = self.last_announced == Some(Announced::Arrived(block));
+        // An arrival is never suppressed as a repeat, and that is the one place this type treats
+        // the three kinds differently.
+        //
+        // The repeat rule exists for the search-side lines, which Seamless drives: it retries the
+        // same wrong destination roughly every twenty seconds, and saying so each time turns the
+        // banner into wallpaper inside a minute. An arrival is not a retry. It is fed exactly once
+        // per landed match, from the join-data hook, so two in a row are two invasions -- and
+        // suppressing the second told the player nothing had happened while they were being pulled
+        // into somebody's world.
+        //
+        // Reported live 2026-09-18 on run `br-20260919-003230-d6e8`: four matches landed, at
+        // `0x0b050000`, `0x3c332400`, `0x0b050000` and `0x0b050000`. The last two were consecutive
+        // arrivals in the same block, so both were swallowed -- "I got an invasion, but my banner
+        // didn't update".
         self.last_announced = Some(Announced::Arrived(block));
         self.suppressed = 0;
-        if repeat || !enabled {
+        if !enabled {
             return None;
         }
+        // The place and the player, and nothing else. This is the last line of the search and the
+        // only one that names a person, so the verb in front of it was doing no work -- by the
+        // time it paints, the fade to the host's world has already started and the player can see
+        // perfectly well that they are invading. What they cannot see is who, or where.
         let mut text = String::new();
         match place {
-            Some(place) if !place.is_empty() => {
-                let _ = write!(text, "Invading {place}");
-            }
+            Some(place) if !place.is_empty() => text.push_str(place),
             _ => {
-                let _ = write!(text, "Invading {}", BlockKey::from_raw(block));
+                let _ = write!(text, "{}", BlockKey::from_raw(block));
             }
         }
-        append_host(&mut text, host);
+        append_host(&mut text, host, "\n");
         Some(text)
     }
 
@@ -533,6 +564,66 @@ impl RejectNotice {
 mod tests {
     use super::*;
 
+    /// Every message here is at most two lines, and the place is always the last of them.
+    ///
+    /// The banner's field is grown to hold exactly two lines of `MenuFont_01`
+    /// (`er_gfx::announce_notice::make_notice_two_line`), so a third would be laid out below the
+    /// panel and clipped. The order matters as much as the count: the user asked for the outcome
+    /// first and the location under it -- "No invasion found (N/M locations)" then "Name of
+    /// Location" -- so a builder that put the place first would read as a different surface.
+    #[test]
+    fn no_message_is_more_than_the_two_lines_the_banner_can_draw() {
+        const PLACE: &str = "Stormveil Castle";
+        const HOST: &str = "Paperplane";
+
+        let mut notice = RejectNotice::default();
+        let mut said = vec![
+            notice.observe_prefilter_step(true, 1, 9, Some(PLACE)),
+            notice.observe_prefilter_step(true, 4, 9, Some(PLACE)),
+            notice.observe_prefilter_step(true, 5, 9, None),
+        ];
+        notice.reset();
+        said.push(notice.observe(
+            true,
+            LIMGRAVE,
+            RejectReason::WrongBlock,
+            Some(PLACE),
+            Some(HOST),
+        ));
+        notice.reset();
+        said.push(notice.observe_found_host(true, LIMGRAVE, Some(PLACE)));
+        notice.reset();
+        said.push(notice.observe_success(true, LIMGRAVE, Some(PLACE), Some(HOST)));
+        notice.reset();
+        said.push(notice.observe_arrival(true, LIMGRAVE, Some(PLACE), Some(HOST)));
+        notice.reset();
+        said.push(notice.observe_cannot_search(true));
+        notice.reset();
+        said.push(notice.observe_search_everywhere(true, 48, false));
+        notice.reset();
+        said.push(notice.observe_nothing_to_search(true, true));
+        notice.reset();
+        said.push(notice.observe_failure(true, 1));
+
+        for text in said.into_iter().flatten() {
+            let lines: Vec<&str> = text.lines().collect();
+            assert!(
+                (1..=2).contains(&lines.len()),
+                "the banner draws two lines and clips a third: {text:?}"
+            );
+            if lines.len() == 2 {
+                assert!(
+                    !lines[1].is_empty(),
+                    "a trailing newline is a blank second line, not a second line: {text:?}"
+                );
+                assert!(
+                    lines[1].starts_with(PLACE) || lines[1].starts_with(HOST),
+                    "the second line is the place (or, on the arrival banner, the host): {text:?}"
+                );
+            }
+        }
+    }
+
     /// The first step is where the player is standing, and must not read as a failure.
     #[test]
     fn the_first_step_does_not_announce_a_failure_before_anything_failed() {
@@ -556,10 +647,14 @@ mod tests {
             .observe_prefilter_step(true, 4, 9, Some("Stormhill"))
             .expect("a new ordinal is news");
         assert!(
-            said.contains("3 of 8"),
+            said.contains("(3/8 locations)"),
             "the centre is not a nearby location: {said}"
         );
-        assert!(said.contains("Stormhill"));
+        assert_eq!(
+            said.lines().nth(1),
+            Some("Stormhill"),
+            "the place gets its own line: {said}"
+        );
     }
 
     /// A tile id is never shown in place of a name.
@@ -574,10 +669,15 @@ mod tests {
         let said = notice
             .observe_prefilter_step(true, 2, 9, None)
             .expect("a new ordinal is news");
-        assert!(said.contains("1 of 8"));
+        assert!(said.contains("(1/8 locations)"));
         assert!(
             !said.contains("m60"),
             "no tile id may reach a player: {said}"
+        );
+        assert_eq!(
+            said.lines().count(),
+            1,
+            "with no name there is no second line to write: {said}"
         );
     }
 
@@ -637,16 +737,20 @@ mod tests {
         }
     }
 
-    /// An unknown host leaves the line byte-identical to what it was before hosts were reachable.
+    /// An unknown host leaves the place standing alone, with no verb in front of it.
+    ///
+    /// The wording lost its "Invading " prefix on 2026-09-17: by the time this paints the world is
+    /// already fading out, so the only two things the player cannot see for themselves are where
+    /// they are going and who is there.
     #[test]
-    fn an_unknown_host_changes_nothing() {
+    fn an_unknown_host_leaves_the_place_alone() {
         assert_eq!(
             RejectNotice::default().observe_arrival(true, LIMGRAVE, Some("Limgrave"), None),
-            Some("Invading Limgrave".to_owned())
+            Some("Limgrave".to_owned())
         );
         assert_eq!(
             RejectNotice::default().observe_arrival(true, LIMGRAVE, Some("Limgrave"), Some("  ")),
-            Some("Invading Limgrave".to_owned()),
+            Some("Limgrave".to_owned()),
             "a blank name is not a name"
         );
     }
@@ -663,11 +767,11 @@ mod tests {
                 Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
             )
             .expect("a first arrival speaks");
-        assert!(text.starts_with("Invading Limgrave -- "), "{text}");
+        assert!(text.starts_with("Limgrave\n"), "{text}");
         assert!(text.ends_with('\u{2026}'), "the cut is visible: {text}");
         let name = text
-            .split_once(" -- ")
-            .expect("the separator is there: {text}")
+            .split_once('\n')
+            .expect("the arrival banner puts the host on its own line: {text}")
             .1;
         assert_eq!(
             name.chars().filter(|c| *c == 'a').count(),
@@ -1044,15 +1148,40 @@ mod tests {
         assert!(text.contains("m60_42_36_00"), "{text}");
     }
 
+    /// Two invasions into the same place are two lines, not one.
+    ///
+    /// This asserted the opposite until 2026-09-18, and the opposite is what the player hit: the
+    /// repeat rule belongs to the search-side lines, which Seamless retries at the same wrong
+    /// destination every twenty seconds. An arrival is fed once per landed match, so a repeated
+    /// block is a second invasion -- and the player was pulled into a host's world with the banner
+    /// still showing the last one.
     #[test]
-    fn the_same_arrival_twice_stays_quiet_but_a_new_one_speaks() {
+    fn every_arrival_speaks_even_into_the_same_place_twice() {
         let mut notice = RejectNotice::new();
         assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_some());
-        assert!(notice.observe_arrival(true, LIMGRAVE, None, None).is_none());
+        assert!(
+            notice.observe_arrival(true, LIMGRAVE, None, None).is_some(),
+            "the second invasion into the same block is still an invasion"
+        );
         assert!(
             notice
                 .observe_arrival(true, ELSEWHERE, None, None)
                 .is_some()
+        );
+    }
+
+    /// The search-side lines keep the rule the arrival gave up, because they are the ones Seamless
+    /// repeats. Asserted here so the change above cannot quietly spread to them.
+    #[test]
+    fn a_repeated_rejection_is_still_suppressed() {
+        let mut notice = RejectNotice::new();
+        let reject = |notice: &mut RejectNotice| {
+            notice.observe(true, LIMGRAVE, RejectReason::WrongBlock, None, None)
+        };
+        assert!(reject(&mut notice).is_some());
+        assert!(
+            reject(&mut notice).is_none(),
+            "Seamless retries the same wrong destination every twenty seconds"
         );
     }
 
@@ -1073,17 +1202,29 @@ mod tests {
         );
     }
 
+    /// A disabled notice paints nothing and still advances the latch the other two kinds read.
+    ///
+    /// This used to assert a second thing as well -- that turning the notice on could not replay
+    /// an arrival from minutes ago -- and that guard was aimed at something the caller cannot do.
+    /// `observe_arrival` is fed once per landed match from the join-data hook, so feeding the same
+    /// block again is a second invasion rather than a replay of the first, and treating it as a
+    /// replay is what left a player mid-invasion looking at the previous banner.
     #[test]
-    fn a_disabled_notice_still_advances_on_arrival() {
+    fn a_disabled_notice_paints_nothing_and_still_advances() {
         let mut notice = RejectNotice::new();
         assert!(
             notice
                 .observe_arrival(false, LIMGRAVE, None, None)
-                .is_none()
+                .is_none(),
+            "the switch is off, so nothing paints"
         );
+        // The latch moved even though nothing painted, which is what keeps the search-side lines
+        // judging against what actually happened rather than against the last thing they said.
         assert!(
-            notice.observe_arrival(true, LIMGRAVE, None, None).is_none(),
-            "turning the notice on must not replay an arrival from minutes ago"
+            notice
+                .observe(true, LIMGRAVE, RejectReason::WrongBlock, None, None)
+                .is_some(),
+            "a rejection after an arrival is news, whatever the arrival did on screen"
         );
     }
     /// The rung that was invisible. Announced once, then suppressed -- it is re-derived on every

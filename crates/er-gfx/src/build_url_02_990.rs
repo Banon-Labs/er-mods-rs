@@ -44,7 +44,9 @@
 
 use crate::announce_notice::ALIGN_CENTER;
 use crate::text_input_02_990::is_known_vanilla;
-use crate::{EditTextLayout, GfxError, Matrix, Movie, Rect, TWIPS_PER_PIXEL, Tag};
+use crate::{
+    EditTextLayout, GfxError, Matrix, Movie, Rect, TWIPS_PER_PIXEL, Tag, min_signed_nbits,
+};
 use er_game_base::fnv1a::fnv1a64;
 
 /// Derived-movie fingerprint for the July extraction corpus input
@@ -273,23 +275,6 @@ pub fn build_url_window_position() -> (f32, f32) {
         STAGE_WIDTH_PX * 0.5 - composition_center_x,
         STAGE_HEIGHT_PX * 0.5 - composition_center_y,
     )
-}
-
-/// Narrowest signed bit width that can hold every value, as a `RECT`/`MATRIX` `Nbits`.
-///
-/// The codec reproduces a source's `Nbits` verbatim rather than recomputing it (the exporter is not
-/// minimal), which is exactly right for tags this derivation does not touch -- and exactly wrong
-/// for the ones it does: leaving a widened translate at the source's 11 bits silently truncates it
-/// on write. Every field this module edits gets its width recomputed here.
-fn min_signed_nbits(values: &[i32]) -> u32 {
-    values
-        .iter()
-        .map(|&value| {
-            let magnitude = if value < 0 { !value } else { value } as u32;
-            u32::BITS - magnitude.leading_zeros() + 1
-        })
-        .max()
-        .unwrap_or(1)
 }
 
 /// Scale a `MATRIX`'s horizontal terms by `scale`, widening the stored bit widths to fit.

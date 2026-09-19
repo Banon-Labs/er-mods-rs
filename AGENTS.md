@@ -79,9 +79,75 @@ away the entire time, and the section above already said so.
   and turns every access by every thread into a fault Frida must resume; on this target one was
   not. Measured 2026-09-15: a guard page on Seamless's session killed the game with `0xc0000005`
   at `ersc+0x89e23` -- one of ersc's own readers of that page -- while the player used an item.
-  Use `Thread.setHardwareWatchpoint` instead: four per thread, eight bytes each, no protection
-  change, and only the address asked for traps. When the field is unknown, an `Interceptor` on the
-  writer's caller is cheaper than widening the watch.
+  Use a hardware watchpoint instead: four per thread, eight bytes each, no protection change, and
+  only the address asked for traps. When the field is unknown, an `Interceptor` on the writer's
+  caller is cheaper than widening the watch.
+  - **It is a method on a THREAD OBJECT, not on `Thread`.** This line said
+    `Thread.setHardwareWatchpoint` until 2026-09-19 and that spelling does not exist: on Frida
+    17.17.0 `Object.getOwnPropertyNames(Thread)` is `length, name, prototype, _backtrace, sleep,
+    backtrace`, and the call raises `TypeError: not a function`. The real one comes off
+    `Process.enumerateThreads()`, whose entries carry `setHardwareBreakpoint`,
+    `unsetHardwareBreakpoint`, `setHardwareWatchpoint`, `unsetHardwareWatchpoint`, with the slot id
+    (0..3) first:
+
+    ```js
+    for (const thread of Process.enumerateThreads()) {
+      thread.setHardwareWatchpoint(0, address, 4, 'w');   // slot, address, size, 'r'|'w'|'rw'
+    }
+    Process.setExceptionHandler(function (details) { /* details.address is the writer */ });
+    ```
+
+    Measured the same day: 116 of 116 threads armed with the correct spelling, 0 of 116 with the
+    old one. **Count the successes and report the failures** -- an agent that only counted armed
+    threads printed `threadsArmed: 0` while the player pressed the button, which reads as "nothing
+    writes this field" when it means "nothing is watching". An instrument that reports an absence
+    it cannot detect is worse than no instrument.
+  - **Arm ONE thread -- the one that would do the write. Arming every thread kills the game.**
+    This is the mistake to avoid, and it is not an argument against watchpoints: four registers per
+    thread is cheap, but `Process.enumerateThreads()` on this target returns 115+, and putting a
+    debug register on all of them means every thread traps into a handler whose resume has to be
+    correct, which it only has to get wrong once. Measured 2026-09-19 on two consecutive sessions:
+    115 and 116 threads armed, both games dead, the second **24.6 seconds after arming** with the
+    watcher still alive and attached, and no crash record either time. Inside an `Interceptor`,
+    `Process.getCurrentThreadId()` is the thread that just ran the function you care about, and it
+    is usually the only one worth asking. If the writer turns out to be a different thread, that is
+    a second, narrower question -- not a reason to widen the watch to the whole process.
+  - **A watchpoint that catches nothing has told you nothing. Rule out the near end first.** Zero
+    writes means either the writer is broken or the chain that would reach it never began, and the
+    instrument cannot tell those apart -- so an agent that reads it as the first spends a session
+    under the wrong half of the question. Measured 2026-09-19: a player's right-hand weapon stopped
+    switching, `ChrAsm.right_weapon_slot` never moved, a single-thread write watchpoint on it saw
+    nothing, and the cause was that the d-pad direction had no button bound to it at all
+    (`CSPcKeyConfig+0x440` action `0x0f` held `-1` against a default of `2003`). Before arming
+    anything for an input that "does nothing", diff the player's binding table against the game's
+    own defaults: `python3 scripts/er-keybind-repair.py --diff --pad-only` is one read of a live
+    process, needs no server and no hook, and it answers in a line what the watchpoint cannot
+    answer at all. The same shape generalises -- confirm the press becomes a logical event before
+    asking which instruction wrote a field. `CSMenuMan+0x90` does NOT answer that: it is a
+    shown-menu-window bitmap, so a world action leaves no trace there and an empty diff of it is
+    not evidence.
+  - **A watchpoint outlives the agent that set it, so NEVER hard-kill a watcher holding one.** It
+    lives in the thread's debug registers, not in the script. Once the agent is gone nothing
+    services the exception, and the next write to that address kills the game leaving NOTHING in
+    the crash log -- an unhandled hardware-debug exception is not a fault `er-crash-logging` can
+    catch, so it reads as a spontaneous crash. Measured 2026-09-19: a watcher with 116 armed
+    threads was launched as `timeout 900 uv run ... er-frida-watch.py`, hit that cap at 18:38:50,
+    and the game's last log write is 18:38:49 -- one line after a healthy heartbeat at tick 67200,
+    with the player touching nothing. Both halves are required: the agent exports `dispose` and
+    unsets every slot there (Frida calls it on unload, covering a clean detach, a reload in place
+    and the watcher's own `SIGTERM`), and the CALLER does not wrap the watcher in `timeout` or any
+    other hard kill. `er-frida-watch.py` already ends on detach and handles `SIGTERM` itself; an
+    outer cap only bypasses the thing that would have cleaned up. Nothing in-process survives
+    `SIGKILL`, so there is no code fix for the second half -- only not doing it.
+  - **Give the watcher its own background task. Never chain it after anything.** The hard kill does
+    not only arrive as an explicit `timeout`: a command that waits for something and THEN starts the
+    watcher is one command, so the harness's own cap applies to the whole chain and lands on the
+    watcher at the end of it. Measured 2026-09-19, minutes after the rule above was written: an
+    `until` loop waiting for `oracle_player_present` followed by `er-frida-up.py` followed by
+    `er-frida-watch.py` was killed with `SIGTERM` at the two-minute cap, seconds after the probe
+    attached. That game survived only because the watchpoint had not armed yet -- it arms on the
+    first pad poll. Wait in one backgrounded command that EXITS when the condition is true, then
+    start the watcher as a second, separate background task with no cap on it.
 
 - **For a read-only question with no game running**, `/proc/<pid>/mem` via
   `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
@@ -272,6 +338,7 @@ pointer paths into session state. It is XML: entries are `<Description>"name"</D
 
 - **A 1.17 GHIDRA DUMP NOW EXISTS AND IS SERVED ON `localhost:8767` (2026-08-30).** This supersedes every "there is no Ghidra project for 1.17, read the flat image directly" instruction anywhere in this file, in `bd`, or in an agent brief. Bring it up with `bash scripts/ghidra/mcp-up-1170.sh` (project `$HOME/ghidra_maporch/proj1170`, program `ermaporch1170`, imported from `/home/banon/pc_eldenring_runtime.1.17.0.exe.gzf` via `scripts/ghidra/import-runtime-gzf.sh`). **1.16.2 stays up on :8765 at the same time** -- that is the point, because "where did this function go" is a two-image question. Do **not** use :8766; it is an unrelated live `DarkSoulsII.exe` daemon and taking it collides with a user session. **The 1.17 shift is ZERO**, measured: `getFunctionByAddress("14074a970")` returns a function whose entry *is* `14074a970`, the address byte-proven out of `eldenring-deobf-1.17.bin`. So dump VA == deobf VA on 1.17.0 -- but **that dump is 1.17.0 and the installed game is 1.17.1**, so an address :8767 hands you is a RUNTIME address only below rva `0xafefe9`; at or above it the running game has that function `0x70` higher. Put it through `scripts/map-rvas-1170-to-1171.py` before using it against the live process. **BUT IT HAS NO NAMES**: the 1.17 dump carries zero curated symbols (`searchFunctionsByName` totalCount, 1.16.2 vs 1.17 -- Scadutree 5/0, CSFeManImp 3/0, MoveMap 23/0, FreeList 6/0, TitleTopDialog 1/0). Everything is `FUN_<addr>`. **Names, types and RTTI live only on 1.16.2 and must still be carried across by pairing** -- the 1.17 dump gives you STRUCTURE, not semantics. That structure is still the prize, because unlike `.pdata` it is not blind to leaves: `.pdata` declares nothing for 5.55 MB of `.text` across 146,715 holes, while Ghidra's analysis finds 366,673 functions in 1.17 against 367,183 in 1.16.2 -- so both call graphs are now available and pairing can use call-graph topology instead of byte signatures.
 - **THE INSTALLED GAME IS 1.17.1 SINCE 2026-09-08; THE 1.16.2 DUMP IS STILL THE ONLY *NAMED* ONE.** Read `docs/er-1.17-migration.md` before trusting any address in this file. `eldenring.exe` is PE FileVersion **2.7.1.0**. The step from 2.7.0.0 is ONE CONSTANT and needs no signature hunt: one function at rva `0xafeea0` grew by `0x70`, so **every function entry at or above `0xafefe9` moved `+0x70` and everything below it did not move at all** -- read exhaustively out of both de-Arxan'd images' `.pdata`, all 174,389 entries above the boundary, none left over. Nothing outside the primary `.text` moved: the section table is identical, so `.rdata` vtables and `.data` globals keep their addresses, and the shift MUST be bounded to `.text` or it moves all of them. Carry an address with `scripts/map-rvas-1170-to-1171.py` (`--selftest` re-derives the model), and see `eldenring-deobf-1.17.1.bin`. So every RVA below, every `bd` memory that carries one, and every symbol the MCP returns describes the PREVIOUS build. `er-hook` refuses to install a game-image detour on an unrecognised build rather than corrupt it, so a stale address now shows up as a `HOOK REFUSED` log line instead of a crash. A **de-Arxan'd image exists for each 1.17 build**: `eldenring-deobf-1.17.bin` is 1.17.0 and `eldenring-deobf-1.17.1.bin` is the INSTALLED 1.17.1 (both generated by `scripts/dearxan-deobfuscate.rs`; the 1.17.0 one was verified byte-identical to live memory at three known sites, and 1.17.1 decrypted 1347 regions from 1597 stubs, the same shape, so no new obfuscation technique); `eldenring-deobf.bin` is still 1.16.2 on purpose, because the prologue-generating build scripts and their gates are ground-truthed against it. To carry a 1.16.2 address forward, use `scripts/map-rvas-1162-to-1170.py` (masks displacements and immediates, so it survives the struct-offset drift that defeats `dump-deobf-shift.py`) and then READ the 1.17 function before hooking it.
+  - **An rva in `crates/er-game-base/src/rva.rs` is 1.16.2 BY DESIGN and is translated at use. It is not stale. Do not "fix" one.** `er_game_base::mem::game_data_addr` carries it to the running build through `game_build::resolve_game_address` against `docs/recon/rva-map-1162-to-1170.data.tsv`. Computing `game_base + <rva from that file>` by hand skips that layer and lands on whatever now occupies the 1.16.2 slot -- RTTI strings, an image pointer, a zero -- which looks exactly like a rotten constant and is merely an untranslated one. This has now cost two sessions one day apart: bd `rva-rs-worldchrman-and-fieldarea-globals-are-stale-1162-2026-09-18` for `WORLD_CHR_MAN_GLOBAL_RVA` via Frida, and 2026-09-19 for `CS_PC_KEY_CONFIG_SINGLETON_RVA` via `/proc/<pid>/mem`, where `0x143d5dea8` reads `00 00 00 00 ... .?AVMTIn` while the map's recorded `0x3d61f08` is the live singleton. The check before filing any such constant is one command, and it answers outright: `grep <rva> docs/recon/rva-map-1162-to-117*.tsv`. A Frida agent wanting the live address should either map it first or take it from the 1.17.1 disassembly.
 - **THE NAMED DUMP IS 1.16.2, AND ITS `.gzf` NO LONGER EXISTS ON THIS MACHINE.** The named dump MUST be 1.16.2, NOT 1.16.1 (a 1.16.1 dump gives drifted addresses that crash-hook -- see bd `armament-icons-cachemiss-hooks-crash-1162-address-drift`). It survives ONLY as the already-imported project `ermaporch1162` @ `$HOME/ghidra_maporch/proj1162`, served on :8765. **Do not go looking for `pc_eldenring_runtime.1.16.2.exe.gzf`** -- this line used to name it at `/mnt/c/Users/choza/...`, a WSL2 path that does not exist here: there is no `/mnt/c` at all, and `/mnt/win-c` is an empty unmounted point, so a search there returns nothing and reads as "the dump is missing" rather than "you looked on a machine that is gone". Verified 2026-08-31: the only `.gzf` files under `$HOME` are `pc_eldenring_runtime.1.16.1.exe.gzf` (1.5 GB, in `projects/reverse/ghidra-projects/`) and `pc_eldenring_runtime.1.17.0.exe.gzf` (4.1 GB). Losing `proj1162` loses the only named ELDEN RING image this workspace has; it cannot be re-imported from anything local. It **requires Ghidra 12.1.2** (x86 language V4.7+ -- 12.1 fails, bd `1162-gzf-needs-ghidra-1212-not-121-2026-07-20`). The 12.1.2 install lives at `$HOME/tools/ghidra_12.1.2_PUBLIC`; the previously-documented `/mnt/d/ghidra/ghidra_12.1.2_PUBLIC` **no longer exists** (`/mnt/d` is unmounted), so set `GHIDRA_INSTALL_DIR` or rely on `scripts/ghidra/mcp-up-1162.sh`, which resolves env-first then falls back through `$HOME/tools` -> `/mnt/d` -> `/opt`.
 - **The MCP daemon on `localhost:8765` serves 1.16.2.** Bring it up / validate with `bash scripts/ghidra/mcp-up-1162.sh` (pins 12.1.2 + `ermaporch1162`). Query lock-free with `python3 scripts/ghidra/mcp_query.py <method>` -- daemon methods are **camelCase**: `getContext`, `getDecompiledCode`, `decompileFunctionByName`, `disassembleFunction`, `getFunctionByAddress`, `getXrefsTo/From`, `searchFunctionsByName`, `getStructure`, ... (NOT snake_case `get_program_info`). The Pi `ghidra` MCP bridge forwards to :8765, so its tools also serve 1.16.2. To switch the daemon: `scripts/ghidra/mcp-ghidra-daemon.sh stop` (frees :8765) then `mcp-up-1162.sh`.
 - **SUPERSEDED FOR 1.16.2 (2026-07-28) -- THE SHIFT IS ZERO; DO NOT RUN `dump-deobf-shift.py`.** For the 1.16.2 dump now served by the MCP, the dump VA, the `eldenring-deobf.bin` VA, and the **live runtime** VA are all **identical** (image base `0x140000000`, shift `0`). Byte-verified independently on 30+ functions spanning `0x14025xxxx`-`0x14266xxxx`, plus a live capture: a runtime stack walk out of the game's save-write path resolved all 8 frames through the 1.16.2 MCP `getFunctionByAddress` onto clean functions (`TryWrite`, `WriteBytes`, `ThreadFunction(DLThread*)`, ...) with no adjustment. Practical consequences, in order of how badly each bites:

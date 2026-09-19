@@ -1858,13 +1858,98 @@ fn both_off_switches_stand_the_hunt_down() {
         "AUTO_SEARCH_ARMED.swap(false",
         "PENDING_REINVADE.store(false",
         "backoff.stand_down()",
+        // The two surfaces, not just the machinery. A search the player stopped that goes on
+        // naming one location a second is indistinguishable, from the chair, from one that never
+        // stopped -- which is the report this line was added for on 2026-09-17.
+        "search_banner::clear()",
+        "banner::forget_last_announcement()",
     ] {
         assert!(
             body.contains(cleared),
             "standing down must clear `{cleared}` -- leaving any one of them set restarts the \
-             search the player just stopped"
+             search the player just stopped, or leaves the screen claiming it is still running"
         );
     }
+}
+
+/// A cancel the player asked for must leave the loop disarmed, and `cancel_match` armed it.
+///
+/// `cancel_match` has exactly one caller -- `cancel_live_search_for_player`, which passes
+/// `RejectReason::PlayerStopped` -- so its unconditional re-arm, written for the rejection case it
+/// no longer serves, fired only on the player's own stop. Run `br-20260918-032135-4b68` measured
+/// what that cost: `auto re-search stood down` and `cancelled rejected match (#1) -- the search
+/// restarts automatically` four lines apart, an invade driven two milliseconds after the session
+/// reached idle, and `hunt: decision=no_finger` on the query that followed, because
+/// `stand_down_hunt` had already retired the finger. A `Nearby only` call-off invaded a host from
+/// the whole Seamless population, unnarrowed and unjudged.
+///
+/// Asserted from the source because both flags are process-global statics and the drive behind
+/// them is an `ersc.dll` call, neither of which a host test can observe.
+#[test]
+fn the_players_own_cancel_does_not_restart_the_search() {
+    let code = product_code();
+    let body = code
+        .split_once("fn cancel_match(")
+        .expect("the cancel action is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    let stopped_at = body.find("RejectReason::PlayerStopped").expect(
+        "the player's own stop must be told apart from a rejected destination by name -- the \
+         reason is already a parameter, and ignoring it is the whole defect",
+    );
+    let armed_at = body.find("AUTO_SEARCH_ARMED.store(true").expect(
+        "a rejected destination must still continue the hunt: cancelling a match this filter \
+         declined is the hunt, and removing that would end it on the first rejection",
+    );
+    assert!(
+        stopped_at < armed_at,
+        "the player's stop must be answered BEFORE the re-arm, or standing the hunt down and then \
+         cancelling the live search puts the loop straight back up:\n{body}"
+    );
+    let branch = &body[stopped_at..armed_at];
+    for cleared in [
+        "AUTO_SEARCH_ARMED.store(false",
+        "PENDING_REINVADE.store(false",
+        "return true",
+    ] {
+        assert!(
+            branch.contains(cleared),
+            "the player-stopped branch must contain `{cleared}` -- disarming is not enough on its \
+             own, because `stand_down_hunt` runs before the cancel is driven and anything that \
+             armed the loop in between would outlive the stop:\n{branch}"
+        );
+    }
+}
+
+/// The finger's narrowing is the last thing a stand-down retires, after the search it narrowed.
+///
+/// Retiring it first opens a window with the same shape as the bug beside it: `FINGER_REACH_NONE`
+/// makes `hunt_target` answer `no_finger` and takes `apply_finger_override`'s forced `enabled`
+/// with it, so a query going out while the stopped search is still unwinding reaches the whole
+/// population with nothing judging what comes back. That is the search the player declined.
+#[test]
+fn the_finger_override_outlives_the_search_it_narrowed() {
+    let code = product_code();
+    let body = code
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    let cancel_at = body
+        .find("cancel_live_search_for_player(")
+        .expect("standing down must cancel the search that is running right now");
+    let retire_at = body
+        .find("set_finger_reach(FINGER_REACH_NONE)")
+        .expect("standing down must retire the finger's override");
+    assert!(
+        cancel_at < retire_at,
+        "the cancel must come BEFORE the override is retired -- reversed, the narrowing and the \
+         reject filter come off a search that is still live:\n{body}"
+    );
 }
 
 #[test]
@@ -2192,4 +2277,134 @@ fn the_two_keys_are_written_independently() {
             "{key} must be written under its own `if let`, not behind the other key's success"
         );
     }
+}
+
+/// The bracket picker is never a config key, on either side of the file.
+///
+/// The whole reason it is in memory is the bug that shipped as `widen_to_anywhere`: a key that
+/// could be set could disagree with the row the player picked, and on 2026-09-18 a file still
+/// carrying one from a previous week dropped them into two strangers' worlds. Both keys were
+/// deleted. Nothing here may quietly reintroduce the shape by giving the picker a line in the
+/// TOML, so this asserts the absence in the parser, the struct and the shipped template at once.
+#[test]
+fn the_invade_bracket_never_reaches_the_config_file() {
+    // Assembled rather than written out, for the reason this module's docs give: a needle spelled
+    // in full would be found by a test that scans a file containing itself.
+    let key: String = ["invade", "difficulty"].join("_");
+    for (what, source) in [
+        (
+            "the parser",
+            include_str!("../../../er-invasion-warp-core/src/local_invasion_config.rs"),
+        ),
+        (
+            "the config struct",
+            include_str!("../../../er-invasion-warp-core/src/local_invasion.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains(&key),
+            "{what} names `{key}` -- a difficulty with a line in the file can go stale in one, and \
+             that is the exact failure `widen_to_anywhere` was deleted for"
+        );
+    }
+}
+
+/// A click on either bracket row costs no write, and both are taken before the config lock.
+///
+/// Every other row on the panel goes through reload-clone-mutate-save. These two must not: they
+/// are not config keys, so a save carrying one would either drop it silently or invent a line for
+/// it.
+#[test]
+fn the_bracket_rows_are_applied_before_the_config_is_touched() {
+    let panel = include_str!("../settings_panel.rs");
+    let body = panel
+        .split_once("fn apply_pending_edits()")
+        .expect("the panel drains its edits here")
+        .1;
+    let body = body.split_once("\n}").expect("a function body").0;
+    let lock_at = body
+        .find("CONFIG.lock()")
+        .expect("every other row is applied under the config lock");
+    for axis in ["pick_level(", "pick_weapon("] {
+        let at = body
+            .find(axis)
+            .unwrap_or_else(|| panic!("{axis} must be applied at all:\n{body}"));
+        assert!(
+            at < lock_at,
+            "{axis} must be taken out of the drained edits before the config is locked -- behind \
+             the lock it rides a read-modify-write that has no field to put it in:\n{body}"
+        );
+    }
+}
+
+/// The player's own bracket is read from memory, not latched off the wire.
+///
+/// The panel greys out everything below it on the frame it opens, which is typically long before
+/// any query has gone out -- so a band learned from a search arrives too late to grey anything.
+/// The pointer chain must also go through `game_data_addr`: the rva is a 1.16.2 one, every `.data`
+/// global moved on 1.17, and a raw `base + rva` read lands on a pointer into the image. Measured
+/// 2026-09-18 by `scripts/frida/own-bracket-from-pgd.js`, which faulted on exactly that before it
+/// was given the mapped address.
+#[test]
+fn the_players_own_bracket_is_read_through_the_rva_translation() {
+    let source = include_str!("../invade_difficulty.rs");
+    let body = source
+        .split_once("pub fn own_bands()")
+        .expect("the own-bracket read is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        body.contains("game_data_addr("),
+        "the global must be translated for the running build, not read at its 1.16.2 rva:\n{body}"
+    );
+    assert!(
+        body.contains("MAX_RUNE_LEVEL") && body.contains("MAX_WEAPON_UPGRADE"),
+        "an implausible read must be refused rather than turned into a confident wrong bracket:\n\
+         {body}"
+    );
+}
+
+/// The far-half latch dies with the search that set it.
+///
+/// Left standing, it puts the difficulty's bracket on the opening query of the next invasion --
+/// the ring, at a band the player never climbed to -- and the only thing on screen would be a
+/// neighbourhood that has apparently emptied. Both endings have to clear it: the player stopping
+/// the search, and a fresh search arming.
+#[test]
+fn the_far_half_latch_is_cleared_by_every_ending() {
+    let leave = ["leave", "far", "half"].join("_");
+    let enter = ["enter", "far", "half"].join("_");
+    let stand_down = product_code();
+    let body = stand_down
+        .split_once("pub(crate) fn stand_down_hunt(")
+        .expect("the stand-down is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
+    assert!(
+        body.contains(&leave),
+        "standing down must leave the far half, or the difficulty outlives the search:\n{body}"
+    );
+    let publish = include_str!("../lobby_publish.rs");
+    let ladder = publish
+        .split_once("pub fn restart_search_ladder()")
+        .expect("a new search restarts the ladder")
+        .1
+        .split_once("\n    }")
+        .expect("a function body")
+        .0;
+    assert!(
+        ladder.contains(&leave),
+        "arming a new search must leave the far half:\n{ladder}"
+    );
+    // And exactly one place may enter it: the handover is the near/far boundary, and a second
+    // entry point would be a second definition of where the far half begins.
+    let entries = FILTER_SOURCE.matches(&enter).count();
+    assert_eq!(
+        entries, 1,
+        "the far half must be entered from the handover and nowhere else"
+    );
 }

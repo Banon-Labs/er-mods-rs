@@ -128,13 +128,15 @@ pub struct LocalInvasionConfig {
     /// tile per round is already a long search; the cap exists so a mistyped radius cannot become
     /// a rotation nobody can sit through.
     pub prefilter_radius: u8,
-    /// After every tile in the ring has been asked for and answered nothing, drop the filter.
-    ///
-    /// Off by default, because it is a different bargain rather than more of the same one: with no
-    /// filter the query returns the whole population again, vanilla hosts included, and where you
-    /// land is then decided by the reject filter rather than by Steam. It is the rung a player
-    /// takes deliberately when they would rather invade somewhere than nowhere.
-    pub search_everywhere_when_exhausted: bool,
+    // Widening used to live here, as `search_everywhere_when_exhausted` and
+    // `widen_band_when_nearby_exhausted`. Both are deleted rather than defaulted off, because a
+    // field that exists can be set: while they were configurable a file saying
+    // `widen_to_anywhere = true` turned a `Nearby only` search into a whole-population one, and on
+    // 2026-09-18 that put the player in two strangers' worlds in other regions when they had asked
+    // to invade next door. Which rung a search may take is settled by the row the player picked in
+    // the bounds popup and by nothing else, so it is read from the reach -- see
+    // `local_invasion_filter::may_widen_to_anywhere` and `may_climb_band` -- and no file key,
+    // settings-panel row or struct field is left that could disagree with it.
     /// Match only other players running this DLL with this option on.
     ///
     /// Rewrites Seamless's `lobby_key` into a pool of our own (see
@@ -282,7 +284,6 @@ impl Default for LocalInvasionConfig {
             // all. Losing reach is not something to inherit from a default.
             hunt: false,
             prefilter_radius: 0,
-            search_everywhere_when_exhausted: false,
             // OFF: it hides the entire vanilla population in both directions.
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.

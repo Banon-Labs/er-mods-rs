@@ -67,6 +67,12 @@ pub use host::*;
 
 pub mod aip;
 pub mod attempt_verdict;
+pub mod band_ladder;
+/// How far above their own bracket the far half of `Both near and far` asks. Not re-exported at
+/// the crate root: its `MAX_LEVEL_BAND` and `MAX_WEAPON_BAND` are ceilings on Seamless's own band
+/// field and would sit one glob away from `band_ladder`'s `MAX_WEAPON_BAND`, which counts steps
+/// above the player instead. Two different numbers under one name is how the wrong one gets used.
+pub mod invade_difficulty;
 pub use aip::*;
 
 pub mod invasion_warp;
@@ -90,6 +96,12 @@ pub mod legacy_map_regions;
 pub mod lobby_pool;
 pub mod local_invasion;
 pub mod local_invasion_config;
+
+/// Which play region a position belongs to, read out of `CSPlayRegionPointMan`. This is what
+/// `Nearby only` means: vanilla scopes an invasion by `playRegionId`, so the near pool is the blocks
+/// the player's own region contains, not a ring of tiles around them. Not re-exported -- it carries
+/// its own point type, the same reason [`legacy_map_regions`] is not.
+pub mod play_regions;
 
 /// What destination a seamless invasion actually chose, read out of `CSGameMan` after the fact.
 /// Not re-exported: it carries its own reading type, and Seamless's placement path has nothing

@@ -48,6 +48,32 @@ pub const BASE_DELAY_MS: u64 = 1_000;
 /// a backed-off retry from an ordinary one.
 pub const MAX_DELAY_MS: u64 = 8_000;
 
+/// The idle window every ended attempt gets, whether or not it failed fast.
+///
+/// This module used to return `0` for any attempt that lasted longer than [`FAST_FAIL_MS`], which
+/// is every ordinary one -- the no-match cycle is about fifteen seconds. Measured on run
+/// `br-20260917-234208-1e25`, the consequence was two bugs wearing one face:
+///
+/// ```text
+/// session state 0x23 CANCELLING -> 0x24        held 1 ticks / 42ms
+/// session state 0x24 -> 0x01 IDLE              held 1 ticks / 42ms
+/// session state 0x01 IDLE -> 0x0e SEARCHING    held 0 ticks / 2ms (driven by us: restart search)
+/// ```
+///
+/// Idle lasted two milliseconds. The player could not stop the hunt -- a cancel they drove, or one
+/// driven for them, was overwritten before the next frame -- and the neighbourhood sweep, which
+/// only runs while the session is idle, never got a tick, so the search stayed aimed at whichever
+/// tile it started on. The report that found it: "she just re-opened her world, but I don't think
+/// I can stop my initial search and it's not hitting her". Both halves of that sentence are this
+/// constant being zero.
+///
+/// Two seconds is chosen against the thing it has to fit inside rather than picked round: the
+/// cycle it sits in is ~15 s, so this is an eighth of it and cannot become the slowest step, and
+/// it is long enough for the sweep to advance several places per pass. The sweep keeps its queue
+/// across windows, so the ring is walked a slice at a time rather than needing one idle stretch
+/// long enough for all 49.
+pub const IDLE_WINDOW_MS: u64 = 2_000;
+
 /// Tracks how the recent attempts have been going, and how long to wait before the next one.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RestartBackoff {
@@ -97,9 +123,11 @@ impl RestartBackoff {
             return 0;
         };
         if elapsed >= FAST_FAIL_MS {
+            // A healthy attempt clears the penalty, but it does not earn an instant restart: see
+            // `IDLE_WINDOW_MS` for the two-millisecond idle this used to produce and what it broke.
             self.consecutive = 0;
-            self.hold_until_ms = None;
-            return 0;
+            self.hold_until_ms = Some(now_ms.saturating_add(IDLE_WINDOW_MS));
+            return IDLE_WINDOW_MS;
         }
         // Saturating shift: `consecutive` is bounded below anyway, but a delay that wrapped to a
         // small number would silently restore the spin this module exists to prevent.
@@ -146,7 +174,7 @@ mod tests {
     /// no matter how many of them happen, or this would slow down the ordinary hunt it is meant
     /// to leave alone.
     #[test]
-    fn an_ordinary_fifteen_second_cycle_is_never_delayed() {
+    fn an_ordinary_fifteen_second_cycle_is_never_penalised() {
         let mut backoff = RestartBackoff::new();
         let mut now = 0;
         for _ in 0..20 {
@@ -154,12 +182,34 @@ mod tests {
             now += 15_000;
             assert_eq!(
                 backoff.attempt_ended(now),
-                0,
-                "a full search is not a failure"
+                IDLE_WINDOW_MS,
+                "a full search is not a failure, so it earns the plain idle window and no penalty"
             );
+            // The window is a hold, not a penalty: it does not escalate and it does elapse.
+            assert!(!backoff.may_restart(now), "the window has not passed yet");
+            now += IDLE_WINDOW_MS;
             assert!(backoff.may_restart(now));
         }
         assert_eq!(backoff.consecutive(), 0);
+    }
+
+    /// The window is what lets a player stop the hunt, so it must actually hold the restart.
+    ///
+    /// Run `br-20260917-234208-1e25` cancelled a stuck search and the loop drove a new one two
+    /// milliseconds later, which is both "I cannot stop my initial search" and a neighbourhood
+    /// sweep that never gets a tick to re-aim with.
+    #[test]
+    fn a_cancelled_search_leaves_a_window_a_player_can_act_in() {
+        let mut backoff = RestartBackoff::new();
+        backoff.attempt_started(0);
+        assert_eq!(backoff.attempt_ended(15_000), IDLE_WINDOW_MS);
+        assert!(!backoff.may_restart(15_000), "restarted in the same frame");
+        assert!(
+            !backoff.may_restart(15_002),
+            "restarted two milliseconds later"
+        );
+        assert!(!backoff.may_restart(15_000 + IDLE_WINDOW_MS - 1));
+        assert!(backoff.may_restart(15_000 + IDLE_WINDOW_MS));
     }
 
     /// The measured failure. The live spin ran a whole cycle in ~200ms; the delay must escalate.
@@ -215,9 +265,11 @@ mod tests {
         backoff.attempt_started(now);
         backoff.attempt_made_progress(); // reached the handshake
         now += 15_000;
-        assert_eq!(backoff.attempt_ended(now), 0);
+        // Back to the plain idle window rather than to zero: the penalty is gone, and what is left
+        // is the window every ended attempt gets so the sweep can re-aim and a cancel can stick.
+        assert_eq!(backoff.attempt_ended(now), IDLE_WINDOW_MS);
         assert_eq!(backoff.consecutive(), 0);
-        assert!(backoff.may_restart(now));
+        assert!(backoff.may_restart(now + IDLE_WINDOW_MS));
     }
 
     /// The hold must actually hold, and then release -- a delay that never expires would stop the

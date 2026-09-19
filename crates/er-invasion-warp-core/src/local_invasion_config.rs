@@ -84,12 +84,21 @@ search_by_location = false
 # so in its log rather than leaving you to work it out.
 search_radius = 0
 
-# When the rings are spent, drop the filter and ask for everywhere.
+# How far a search may reach is not set here. It is the row you pick when the finger asks:
 #
-# Off, the search keeps asking for the last tile rather than quietly reverting to an unfiltered
-# query -- widening to a population you did not ask for is the thing hunt exists to avoid. On,
-# it is the last rung of the ladder: everywhere, once nearby has been exhausted.
-widen_to_anywhere = false
+#   Nearby only        asks your own tile, then the ring around it, then one matchmaking band
+#                      higher, and keeps climbing bands. It never drops the location filter, so it
+#                      can end in nobody found -- which is what you asked for by picking it.
+#   Both near and far  does all of the above first, and only once the ring has been asked at your
+#                      own band and answered nothing does it drop the location filter and ask the
+#                      whole population.
+#
+# There were two keys here, `widen_to_anywhere` and `widen_band_when_nearby_exhausted`, and they
+# are gone. A key that can be set can disagree with the row, and on 2026-09-18 one did: a file
+# saying `widen_to_anywhere = true` turned a nearby invasion into a whole-population one and
+# dropped the player into two strangers' worlds in other regions. Nothing in a file can do that
+# any more. An old file naming either key still loads -- the line is reported and skipped, not
+# treated as an error -- so you do not have to edit a config you wrote last week.
 
 # Announce what the search is doing on the game's own message banner.
 #
@@ -220,6 +229,10 @@ enable_toggle_key = "F3"
 # The file is REGENERATED from the shipped template on every save, so comments you add yourself
 # do not survive a change made in game. Your values do.
 settings_key = "F4"
+
+# There is no setting for what closes the "Attempting to invade another world." popup, and that is
+# deliberate: the mod reads the key you have bound to the game's own menu back-out, out of the
+# game's own key config, every time it checks. Rebind it in Key Bindings and this follows.
 
 # Locations you excluded. An exclusion is the strongest thing you can say about a place: it stops
 # the search from asking for that location even when it is the one you marked.
@@ -419,13 +432,21 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("search_radius must be a whole number, got {value:?}"),
                 }),
             },
-            "widen_to_anywhere" => match parse_bool(value) {
-                Some(v) => config.search_everywhere_when_exhausted = v,
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!("widen_to_anywhere must be true or false, got {value:?}"),
-                }),
-            },
+            // Retired 2026-09-18, and reported rather than rejected. How far a search may reach is
+            // the row the player picked in the bounds popup; a file that could contradict it did,
+            // turning a `Nearby only` invasion into a whole-population one. An unknown-key error
+            // would be worse than useless here -- it would tell a player whose file predates this
+            // that their config is broken, when the truth is that the setting stopped existing and
+            // their searches now do what the row says. Nothing is assigned: the value is read past
+            // and discarded.
+            "widen_to_anywhere" | "widen_band_when_nearby_exhausted" => issues.push(ConfigIssue {
+                line: line_no,
+                message: format!(
+                    "{key} no longer exists and this line does nothing -- how far a search reaches \
+                     is the row the finger asks for, `Nearby only` or `Both near and far`. Delete \
+                     the line when convenient."
+                ),
+            }),
             "mark_key" => {
                 config.mark_key =
                     key_setting("mark_key", value, fallback.mark_key, line_no, &mut issues);
@@ -569,12 +590,6 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             }
             "search_radius" => {
                 out.push_str(&format!("search_radius = {}\n", config.prefilter_radius));
-            }
-            "widen_to_anywhere" => {
-                out.push_str(&format!(
-                    "widen_to_anywhere = {}\n",
-                    config.search_everywhere_when_exhausted
-                ));
             }
             "ersc_observers" => {
                 out.push_str(&format!("ersc_observers = {}\n", config.ersc_observers));
@@ -819,8 +834,43 @@ dll_users_only = true\n";
             "the retired `hunt` must not still set anything"
         );
         assert_eq!(parsed.config.prefilter_radius, 0);
-        assert!(!parsed.config.search_everywhere_when_exhausted);
         assert!(!parsed.config.dll_users_only);
+    }
+
+    /// The two widening keys are reported and assign nothing.
+    ///
+    /// They are tested apart from the rename above because they are retired for a different reason
+    /// and with a different answer. The rename's old spellings are unknown keys; these two were
+    /// real settings that had to stop existing, because a file could use them to contradict the row
+    /// the player picked in the bounds popup -- and on 2026-09-18 a file did, turning a `Nearby
+    /// only` invasion into a whole-population one twice in one evening. What this asserts is that
+    /// the line is now inert: it is complained about so the player can delete it, and it changes
+    /// nothing about how far the search reaches.
+    #[test]
+    fn the_retired_widening_keys_assign_nothing() {
+        let file = "\
+enabled = true\n\
+widen_to_anywhere = true\n\
+widen_band_when_nearby_exhausted = false\n\
+search_radius = 2\n";
+        let parsed = parse_local_invasion_config(file);
+        assert_eq!(
+            parsed.issues.len(),
+            2,
+            "both retired widening keys should be reported, got {:?}",
+            parsed.issues
+        );
+        for issue in &parsed.issues {
+            assert!(
+                issue.message.contains("no longer exists"),
+                "the complaint should say the key is gone, got {:?}",
+                issue.message
+            );
+        }
+        // The rest of the file still parses, so one dead line does not cost the player their
+        // radius. A retired key that broke the keys around it would be worse than the bug.
+        assert_eq!(parsed.config.prefilter_radius, 2);
+        assert!(parsed.config.enabled);
     }
 
     /// The new names parse too, and to the same fields.
@@ -830,7 +880,6 @@ dll_users_only = true\n";
 enabled = true\n\
 search_by_location = true\n\
 search_radius = 3\n\
-widen_to_anywhere = true\n\
 only_players_with_this_mod = true\n";
         let parsed = parse_local_invasion_config(new);
         let (config, issues) = (parsed.config, parsed.issues);
@@ -840,7 +889,6 @@ only_players_with_this_mod = true\n";
         );
         assert!(config.hunt);
         assert_eq!(config.prefilter_radius, 3);
-        assert!(config.search_everywhere_when_exhausted);
         assert!(config.dll_users_only);
     }
 

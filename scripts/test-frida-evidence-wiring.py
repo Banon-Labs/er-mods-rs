@@ -166,7 +166,11 @@ def one_watch(tmp: pathlib.Path, agent: pathlib.Path, messages: int, ending: str
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
     session = FakeSession()
-    watch.device = lambda: FakeDevice(session, 388)
+    # The stub mirrors `watch.device`'s real signature rather than taking nothing. It took nothing
+    # until the watcher learned to connect to a chosen endpoint, and the mismatch surfaced as
+    # `TypeError: takes 0 positional arguments but 1 was given` from inside `run` -- a failure in
+    # the fake, reported as a failure of the thing under test.
+    watch.device = lambda endpoint=watch.DEFAULT_ENDPOINT: FakeDevice(session, 388)
     failures: list = []
     driver = threading.Thread(target=drive, args=(session, messages, ending, failures), daemon=True)
     driver.start()

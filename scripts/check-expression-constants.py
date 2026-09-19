@@ -97,6 +97,8 @@ UNRESOLVABLE: dict[str, str] = {
     "PGD_EQUIP_GAME_DATA_OFFSET": "offset_of!(PlayerGameData, equipment): not modelled",
     "PGD_FACE_DATA_OFFSET": "offset_of!(PlayerGameData, face_data): not modelled",
     "PGD_STAT_END_OFFSET": "offset_of!(PlayerGameData, base_hero_point): not modelled",
+    "LEVEL_OFFSET": "offset_of!(PlayerGameData, level): not modelled",
+    "WEAPON_OFFSET": "offset_of!(PlayerGameData, matching_weapon_level): not modelled",
     "INVENTORY_OFFSET": "offset_of!(EquipGameData, equip_inventory_data): not modelled",
     "GAME_MAN_SAVE_SLOT_OFFSET": "offset_of!(GameMan, save_slot): GameMan is not modelled",
     "GAME_MAN_SAVE_STATE_OFFSET": "offset_of!(GameMan, save_state): not modelled",

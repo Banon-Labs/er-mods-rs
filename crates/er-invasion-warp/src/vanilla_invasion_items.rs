@@ -68,10 +68,11 @@ pub const BOTH_NEAR_AND_FAR_MSG: u32 = 20_000_016;
 /// game's dialog with `Nearby Only (default)` and `Both near and far`, and this mod adapts to
 /// those names rather than adding a vocabulary of its own beside them.
 ///
-/// They already correspond to configuration this crate has -- `prefilter_radius` and
-/// `search_everywhere_when_exhausted` on [`LocalInvasionConfig`]. What changes here is only where
-/// the choice comes from: today it is an edit to the config file, and it should be the button the
-/// player just pressed.
+/// This pair is now the only thing that decides how far a search may reach. There were two config
+/// keys beside it, `widen_to_anywhere` and `widen_band_when_nearby_exhausted`, and they are deleted:
+/// a key that can be set can disagree with the button, and on 2026-09-18 one did, turning a
+/// `Nearby only` invasion into a whole-population one. `prefilter_radius` survives because it says
+/// how wide near is, not whether the search may stop being near.
 ///
 /// [`LocalInvasionConfig`]: er_invasion_warp_core::local_invasion::LocalInvasionConfig
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,6 +365,75 @@ const START_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapS
 static ORIG_START_INVASION: core::sync::atomic::AtomicUsize =
     core::sync::atomic::AtomicUsize::new(0);
 
+/// `CS::CSPlayerMenuCtrl::ConfirmCancelInvasionSearch` -- the yes/no a finger raises once a
+/// search of its own is already running.
+///
+/// # Why a second seam, and how the game chooses between them
+///
+/// The step machine (1.16.2 `0x1407c24f0`) asks the game's own `BreakInManager` before it routes
+/// a finger's press, once per finger type:
+///
+/// ```text
+///   case INVADE_BLOODY_FINGER:   active = IsSearchActive_RedInvasionA(netMan->breakInManager);
+///   case INVADE_WORLD_RECUSANT:  active = IsSearchActive_RedIvasionB(...);
+///   case INVADE_WORLD_FESTERING: active = IsSearchActive_RedInvasionALimited(...);
+///     if (!active) { StartInvasionFromBoundsPopup(ctrl, ..); return; }   // 0x1407c1dd0
+///     ConfirmCancelInvasionSearch(ctrl, ..);                             // 0x1407c1f90
+/// ```
+///
+/// So the second press of a finger never reaches [`START_VANILLA_INVASION`] at all -- it lands
+/// here, on the prompt `GoodsDialog` 20000011 spells `Cancel invasion of other world?`. Nothing in
+/// this crate was watching it, which is the whole of the reported bug: "it allows me to then use
+/// it again to toggle it off. This doesn't seem to cancel my seamless searching or the banner from
+/// reading back or appearing." Vanilla's own search was called off; ours kept running and the
+/// place recital kept reciting, because neither had been told.
+///
+/// # The prologue cannot tell the two apart, so something else has to
+///
+/// These two functions are near-identical twins -- the same opening `0x46` bytes, byte for byte,
+/// in both builds -- so the signature that guards every other seam here is a drift check and
+/// nothing more. What identifies them is the address, and the address comes from the
+/// 1.16.2 -> 1.17 map. A row that pointed this seam at its twin would put the call-off handler on
+/// the start path, where its gate fires on the first row the player ever presses and stands the
+/// search down a frame after arming it: a silent, total failure of the feature.
+///
+/// [`the_cancel_seam_is_not_its_twin`] closes that off with the one byte sequence the twins do not
+/// share. `c6 43 3d` (`mov byte [rbx+0x3d], imm8`, the `isBreakInMultiRegion` write) sits at
+/// `+0x87` and `+0xa7` of the start handler and nowhere at all in this one, in 1.16.2 and in
+/// 1.17.1 alike.
+#[cfg(windows)]
+const CANCEL_VANILLA_INVASION: crate::map_seams::MapSeam = crate::map_seams::MapSeam {
+    name: "CS::CSPlayerMenuCtrl::ConfirmCancelInvasionSearch",
+    rva: 0x007c_1f90,
+    prologue: &[0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20],
+    arg_count: 3,
+};
+
+/// The trampoline for [`CANCEL_VANILLA_INVASION`], once its detour is in.
+#[cfg(windows)]
+static ORIG_CANCEL_INVASION: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+
+/// `mov byte [rbx+0x3d], imm8` -- the `isBreakInMultiRegion` write, present only in the twin.
+#[cfg(windows)]
+// AOB signature: searched for inside an already-resolved function body, never written over one.
+// These three bytes are the opcode and modrm of `mov byte [rbx+0x3d], imm8` with the immediate
+// deliberately left off, so the pattern matches both stores the start handler makes (`+0x87` and
+// `+0xa7`) whatever value each writes. `the_cancel_seam_is_not_its_twin` scans the seam's `.pdata`
+// extent for it to tell two functions apart whose opening `0x46` bytes are byte-identical in both
+// builds. An assembled instruction is the wrong shape for that: a prologue is a fixed sequence at
+// a known entry, and this is a truncated one hunted at an unknown offset.
+const IS_BREAK_IN_MULTI_REGION_WRITE: [u8; 3] = [0xc6, 0x43, 0x3d];
+
+/// How far into the resolved function the twin test reads: this seam's own `.pdata` extent.
+///
+/// `verify-rva-map-1170.py` reports `PDATA:0xae/0xae` for this pair and `PDATA:0xd2/0xd2` for the
+/// twin, so a window of `0xae` stays inside the function being tested and still reaches both of
+/// the twin's writes -- the first is at `+0x87`, measured at that offset in `eldenring-deobf.bin`,
+/// `eldenring-deobf-1.17.bin` and `eldenring-deobf-1.17.1.bin` alike, with none in this one.
+#[cfg(windows)]
+const TWIN_TEST_WINDOW: usize = 0xae;
+
 /// A range to answer the bounds popup with, regardless of the row pressed. Zero is the resting
 /// value and means the player's own press decides.
 #[cfg(windows)]
@@ -395,6 +465,219 @@ const CTRL_SELECTED_GOODS: usize = 0x8;
 const CTRL_STEP_OFFSET: usize = 0x10;
 #[cfg(windows)]
 const CTRL_STEP_CHOSE_ROW: [i32; 2] = [3, 4];
+/// The step the ctrl holds for as long as the bounds popup is on screen with no row pressed.
+///
+/// Measured live on run `br-20260918-041114-10d1` through a Frida hook on this same handler: with
+/// the popup up, the ctrl tick reported `step=2` at every 900-call heartbeat, indefinitely, and
+/// never any other value.
+#[cfg(windows)]
+const CTRL_STEP_BOUNDS_POPUP_OPEN: i32 = 2;
+/// `CSMenuManImp + 0x90` -- `field99_0x90`, the shown-menu-window flags, one byte per window.
+///
+/// Not a keystate array and not indexed by an input event id, which is the correction this whole
+/// block exists to record. Ghidra's curated `CSMenuManImp` declares it `byte[70]`, sitting between
+/// `windowJob` at `+0x88` and the next field at `+0xd6`, and both readers in the 1.17 image index
+/// it by a menu-window index they first resolve from a menu KIND:
+///
+/// ```text
+///   getShownMenuFlags 0x1407664f0:  idx = FUN_140767df0(scratch, kind); if (idx < 0x47)
+///                                   flags |= ... (field99_0x90[idx] & 1)
+///   FUN_1407c3210:                  idx = FUN_140768c70(scratch, 2 / 0x1c / 0x1f / 0x20);
+///                                   ... (field99_0x90[idx] & 3) == 3
+/// ```
+///
+/// Every read tests `& 1` or `& 3`, and the bound is the array's own length. So an index is a
+/// window, not a button, and a bit is a window's state.
+#[cfg(windows)]
+const SHOWN_MENU_WINDOW_FLAGS_OFFSET: usize = 0x90;
+/// How many windows that array holds -- `byte[70]` in the curated `CSMenuManImp`, and `< 0x47` in
+/// every one of the game's own bounds checks.
+///
+/// The previous walk here read `0x80` entries, so `0x46` bytes of it were fields past the end of
+/// the array being reported as menu events.
+#[cfg(windows)]
+const SHOWN_MENU_WINDOW_COUNT: usize = 0x46;
+/// The last window census reported, so a change is one line and a quiet frame is none.
+#[cfg(windows)]
+static SHOWN_MENU_WINDOWS_SAID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+/// `GLOBAL_CSPcKeyConfig` -- the singleton holding what the player has each action bound to.
+///
+/// Read out of the game's own menu-input layer rather than picked: `FUN_140756e50` loads
+/// `qword ptr [0x143d61f08]`, null-checks it against the `FD4Singleton` assert, and passes it
+/// straight to [the action lookup](`KEY_CONFIG_ACTION_TABLE_OFFSET`).
+///
+/// The shared 1.16.2 constant, not the 1.17 literal this used to spell. Both named the same
+/// object -- measured on run `br-20260919-053046-86c0` with
+/// `scripts/frida/keyconfig-two-spellings-agree.js`, the local literal and the translated shared
+/// constant both read `0x3ec4680` and hand back the same row -- so this is a deduplication and
+/// not a change of address. It is worth making because a name declared twice with two values
+/// resolves to neither: `scripts/audit-1170-readiness.py` dropped `CS_PC_KEY_CONFIG_GLOBAL_RVA`
+/// entirely while `er-input-harness` spelled it `0x3d5dea8` and this file spelled it `0x3d61f08`,
+/// so the constant went unchecked by the audit built to check it.
+#[cfg(windows)]
+const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
+/// Where the rebindable-action table starts inside `CSPcKeyConfig`, and how a row is addressed.
+///
+/// `FUN_140242ab0(cfg, out, action, deviceKind)` is the whole definition:
+///
+/// ```text
+///   if (action < 0x36) { row = cfg + action * 0x14 + 0x440; FUN_140242b00(row, out, kind); }
+///   else                 FUN_140242a90(out);            // unbound
+/// ```
+#[cfg(windows)]
+const KEY_CONFIG_ACTION_TABLE_OFFSET: usize = 0x440;
+#[cfg(windows)]
+const KEY_CONFIG_ACTION_STRIDE: usize = 0x14;
+/// The action row the game's menu back-out lives in.
+///
+/// Identified from the table's own contents, not from a name -- the 1.17 dump carries none for
+/// this layer. `FUN_140242b00` splits a row by device: kind 0 reads word 0, kind 1 reads words
+/// 1-2, kind 2 reads words 3-4. Word 3 of rows `0x2c`/`0x2d` is `9`/`10`, which is exactly what
+/// `FUN_140756e50` compares its kind-2 answer against, so word 0 is the pad button and word 1 the
+/// keyboard key.
+///
+/// Word 1 turns out to be a DirectInput scancode biased by [`KEYBOARD_CODE_DIK_BIAS`], which seven
+/// rows of the live table prove at once: rows `0x01`-`0x04` hold `0x11`/`0x1f`/`0x1e`/`0x20`
+/// (`W`/`S`/`A`/`D`, the movement block), row `0x18` holds `0x01` (`Escape`, beside the pad's
+/// start button), row `0x34` holds `0x1c` (`Enter`) and row `0x35` holds `0x0e` (`Backspace`).
+/// Under that decode row `0x25` holds `0x10` -- `Q` -- and row `0x22` holds `0x12` -- `E`. The
+/// player, 2026-09-18: "I can press q to go back from a menu normally". Rows `0x22` and `0x25`
+/// are also the pair the menu-input query family asks about together (`FUN_14075dd40` takes
+/// `0x22`, `FUN_14075dcc0` takes `0x25`, adjacent records in one descriptor array).
+#[cfg(windows)]
+const MENU_BACK_ACTION: usize = 0x25;
+/// Word 0 of a row: the pad button code, in the game's own `2000`..`2013` numbering.
+#[cfg(windows)]
+const KEY_CONFIG_PAD_CODE_OFFSET: usize = 0x0;
+/// Word 1 of a row: the keyboard key.
+#[cfg(windows)]
+const KEY_CONFIG_KEYBOARD_CODE_OFFSET: usize = 0x4;
+/// What word 1 adds to a DirectInput scancode. See [`MENU_BACK_ACTION`] for the seven rows that
+/// pin it.
+#[cfg(windows)]
+const KEYBOARD_CODE_DIK_BIAS: i32 = 0x45;
+/// What the game writes into a row's word for a device the action is not bound on.
+#[cfg(windows)]
+const KEY_CONFIG_UNBOUND: i32 = -1;
+/// Bit `0x80` of a DirectInput scancode means the `0xe0`-prefixed key of that number.
+#[cfg(windows)]
+const DIK_EXTENDED_BIT: u32 = 0x80;
+/// The `0xe0` prefix spelled the way `MapVirtualKeyW` wants a scancode carrying one.
+#[cfg(windows)]
+const SCANCODE_EXTENDED_PREFIX: u32 = 0xe000;
+/// `MAPVK_VSC_TO_VK_EX` -- scancode to virtual key, keeping left and right apart.
+#[cfg(windows)]
+const MAPVK_VSC_TO_VK_EX: u32 = 3;
+
+/// What the player's key config currently binds the menu back-out to: `(pad code, keyboard key)`.
+#[cfg(windows)]
+fn menu_back_binding() -> Option<(i32, i32)> {
+    let base = er_game_base::mem::game_module_base().ok()?;
+    let config = er_game_base::mem::read_global_ptr(
+        base,
+        CS_PC_KEY_CONFIG_GLOBAL_RVA,
+        "GLOBAL_CSPcKeyConfig",
+    );
+    if config == 0 {
+        return None;
+    }
+    let row = config.checked_add(
+        KEY_CONFIG_ACTION_TABLE_OFFSET + MENU_BACK_ACTION * KEY_CONFIG_ACTION_STRIDE,
+    )?;
+    // SAFETY: both reads are bounds-checked `safe_read_i32`, at a row the game's own lookup
+    // addresses the same way, in a singleton that has just been null-checked.
+    let pad = unsafe { er_game_base::mem::safe_read_i32(row + KEY_CONFIG_PAD_CODE_OFFSET) }?;
+    let key = unsafe { er_game_base::mem::safe_read_i32(row + KEY_CONFIG_KEYBOARD_CODE_OFFSET) }?;
+    Some((pad, key))
+}
+
+/// Turn a key-config keyboard word into the virtual key `GetAsyncKeyState` answers for.
+///
+/// The layout the player is typing on does the translating, not a table of ours: a scancode names
+/// a physical key and `MapVirtualKeyW` asks the active layout what that key produces, so `Q` on
+/// azerty resolves to `A` without this code knowing azerty exists.
+#[cfg(windows)]
+fn virtual_key_for(keyboard_code: i32) -> Option<i32> {
+    let scancode = u32::try_from(keyboard_code.checked_sub(KEYBOARD_CODE_DIK_BIAS)?).ok()?;
+    if scancode == 0 || scancode > u32::from(u8::MAX) {
+        return None;
+    }
+    let scancode = if scancode & DIK_EXTENDED_BIT == 0 {
+        scancode
+    } else {
+        SCANCODE_EXTENDED_PREFIX | (scancode & !DIK_EXTENDED_BIT)
+    };
+    // SAFETY: a `user32` call taking two integers and returning one, with no pointer anywhere.
+    let virtual_key = unsafe { MapVirtualKeyW(scancode, MAPVK_VSC_TO_VK_EX) };
+    i32::try_from(virtual_key).ok().filter(|key| *key != 0)
+}
+
+/// The key this player backs out of menus with, asked of the game on every poll.
+///
+/// Not a constant and no longer a setting of ours, and the four builds it took to get here are the
+/// argument. The first closed on `Escape` alone; this player uses `Q`. The second added `Q` beside
+/// `Escape`, and the answer was "Just so you're aware, user's can rebind keys and gamepad
+/// buttons", which no list of constants satisfies however long. The third put the key in
+/// `er-invasion-warp.toml`, and the answer to that was "That's a terrible solution. The game
+/// already allows users to configure buttons ... the game should just track what keys are used and
+/// we don't have to in a config."
+///
+/// It does track them, in [`CS_PC_KEY_CONFIG_GLOBAL_RVA`], and this reads the same row the game's
+/// own menu-input layer reads. Rebind the back-out in Key Bindings and the next poll sees the new
+/// key; there is nothing to keep in sync and nothing for a player to edit.
+///
+/// The fallback is only for a frame where the singleton is not up yet or the row reads unbound.
+/// Losing that read should cost a player nothing, and `Q` is what this build's own table holds.
+#[cfg(windows)]
+fn cancel_key_in_force() -> i32 {
+    menu_back_binding()
+        .filter(|(_, key)| *key != KEY_CONFIG_UNBOUND)
+        .and_then(|(_, key)| virtual_key_for(key))
+        .unwrap_or(er_invasion_warp_core::keybind::VK_Q)
+}
+/// `XINPUT_GAMEPAD_B` -- the pad half, and not a guess at all: `B` is the game's own cancel.
+#[cfg(windows)]
+const XINPUT_GAMEPAD_B: u16 = 0x2000;
+/// The pad slot read. A second pad answers on another slot, and a run where the player's pad is
+/// not slot 0 should read no buttons rather than quietly read somebody else's.
+#[cfg(windows)]
+const XINPUT_PLAYER_SLOT: u32 = 0;
+/// `XINPUT_STATE` is `DWORD dwPacketNumber` then `XINPUT_GAMEPAD`, whose first field is
+/// `WORD wButtons`, so the buttons sit at `+4` and the whole struct is 16 bytes.
+#[cfg(windows)]
+const XINPUT_STATE_SIZE: usize = 16;
+#[cfg(windows)]
+const XINPUT_BUTTONS_OFFSET: usize = 4;
+/// Bit 15 of a `GetAsyncKeyState` answer: down right now.
+///
+/// Only this bit is read. Bit 0 is "pressed since the last call" and it is consumed by whoever
+/// reads it, so touching it here would eat the edge `local_invasion_filter::hotkeys` is watching
+/// for on its own keys -- and eating a player's keypress to detect a keypress is a bug wearing an
+/// oracle's coat.
+#[cfg(windows)]
+const KEY_DOWN_MASK: i16 = -0x8000;
+/// How far the cancel census sweeps. The Win32 virtual-key space is `0x01`..=`0xfe`.
+#[cfg(windows)]
+const VK_CENSUS_MAX: i32 = 0xfe;
+/// Whether the cancel input was already down on the previous frame, so the store happens on the
+/// edge and not on the level.
+///
+/// The handler runs once a frame for as long as the dialog is up, so a level test fires for every
+/// frame the button is held -- dozens of writes for one press, into a ctrl that left the popup on
+/// the second of them.
+#[cfg(windows)]
+static CANCEL_WAS_DOWN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Whether the cancel input has been seen released since this popup opened.
+///
+/// An edge detector alone is not enough when the press that opened the dialog is still down on the
+/// frame it first ticks: a latch starting at "not down" reads frame one as a rising edge and
+/// closes a popup the player never saw.
+#[cfg(windows)]
+static CANCEL_RELEASED_SINCE_OPEN: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+/// The last cancel-census line, so a press is one line and a quiet frame is none.
+#[cfg(windows)]
+static PRESSED_INPUTS_SAID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 #[cfg(windows)]
 const MULTI_REGION_OFF: u8 = 0;
 /// Said once when a popup that is not a finger's reaches the takeover, so a menu that trips the
@@ -441,10 +724,33 @@ unsafe extern "system" fn start_invasion_entry(
     if orig == 0 {
         return 0;
     }
+    // Everything about the back-out is decided ahead of the original, because the back-out is an
+    // argument to it and not a repair afterwards -- see [`player_backed_out`] for the run where
+    // the repair lost to the original's own return value three times inside one popup.
+    //
+    // SAFETY: one dword inside the ctrl this handler was called with, fault-closed.
+    let popup_is_up = unsafe { er_game_base::mem::safe_read_i32(ctrl + CTRL_STEP_OFFSET) }
+        == Some(CTRL_STEP_BOUNDS_POPUP_OPEN);
+    let backing_out = popup_is_up && cancelled & 0xff == 0 && {
+        report_shown_menu_windows(cancelled);
+        report_pressed_cancel_inputs();
+        player_backed_out()
+    };
+    let cancelled = if backing_out { 1 } else { cancelled };
     // SAFETY: the trampoline stored for this exact target, called with its own arguments.
     let answer = unsafe {
         core::mem::transmute::<usize, er_hook::UnionFn>(orig)(ctrl, cancelled, popup, spare)
     };
+    if backing_out {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: you cancelled at the invasion-bounds popup, so the game's own \
+             back-out arm ran -- this handler was given cancelled=1 and it answered {answer}, the \
+             same call and the same answer vanilla makes when its own press term fires. That term \
+             cannot fire here: it looks up menu entry id 0xf and no menu owner in the process \
+             carries one, measured on run br-20260918-051844-3aec."
+        ));
+        return answer;
+    }
     if cancelled & 0xff != 0 {
         return answer;
     }
@@ -457,6 +763,79 @@ unsafe extern "system" fn start_invasion_entry(
     let Some(step) = (unsafe { er_game_base::mem::safe_read_i32(ctrl + CTRL_STEP_OFFSET) }) else {
         return answer;
     };
+    // The popup is up and nobody has pressed a row. Report what the menu system is showing,
+    // because the one thing this dialog cannot currently do is close.
+    //
+    // The player, 2026-09-17: the bounds popup "cannot be backed out of with normal means" -- and
+    // the game formats a `Back` key guide for it (`GRHK:110000` in the msgbox-builder line), so a
+    // back-out is advertised and does nothing.
+    //
+    // # The trigger that used to be here, and the static reading that removed it
+    //
+    // A first pass read `CSMenuMan + 0x90 + 0x2b` and treated bit 2 as the player's `Back`, on the
+    // strength of two live samples in which that byte was the only one in the span to move, `0x03
+    // -> 0x07`. It closed the popup by writing step 5. The player, one build later: "the menu pops
+    // up and then closes automatically."
+    //
+    // It is not a keystate. `field99_0x90` is `byte[70]` on the curated `CSMenuManImp`, and both of
+    // the 1.17 image's readers index it by a menu-window index resolved from a menu kind, bounded
+    // `< 0x47`, testing `& 1` or `& 3` -- see [`SHOWN_MENU_WINDOW_FLAGS_OFFSET`]. Index `0x2b` is a
+    // window and bit 2 is one of that window's flags, which the menu system raises by itself a
+    // frame or two after this dialog appears. Run `br-20260918-050115-c1ba` is that failure in the
+    // log: three raises at `+65378ms`, `+66286ms`, `+69167ms`, each followed within a frame by the
+    // census reporting `0x2b=0x03 -> 0x2b=0x07` and this module announcing a `Back` nobody pressed.
+    //
+    // # Where the real back-out lives, measured since
+    //
+    // The `dl` this detour receives as `cancelled` is not computed where the earlier note said. The
+    // ctrl tick `FUN_1407c2ae0` takes `(ctrl, param_2)` and, at step 2, calls
+    // `FUN_1407c3210(ctrl, param_2)`, whose whole body is
+    //
+    // ```text
+    //   return backOut | shownWindowKind2 | shownWindowKind1c | (shownKind1f && shownKind20);
+    // ```
+    //
+    // with `backOut` being the tick's own `param_2` passed through. So the three window terms are
+    // vanilla's "another menu came up, abandon this" and `param_2` is the press. `param_2` in turn
+    // is `A || B` from `FUN_140660f70`: `A = owner[0x1c5] >> 1 & 1`, `B = FUN_1404fa370(owner +
+    // 0x178, 0xf)` -- a pending-event lookup that walks the list at `source + 0x8` for a child
+    // whose `+0x156` is the event id. That corrects the earlier note claiming `0x14066161b` "is not
+    // the frame that feeds this ctrl": it is, through the switch arm at case `0x15`/`0x16`.
+    //
+    // # Why the mod supplies the close instead of making vanilla's fire
+    //
+    // Both halves of `param_2` were measured live on run `br-20260918-051844-3aec`, through a Frida
+    // hook on predicate B, which is handed the owner every frame. With the popup on screen for
+    // about 2,000 sampled frames, the owner belonging to this ctrl -- matched by `owner + 0x6a0` --
+    // never changed once: its flag byte read `0x8` every frame, so `A`'s bit 1 is clear, and its
+    // entry list held `0x131` four times, `0x143`, `0x116`, `0x93` and eight zeroes, fixed.
+    //
+    // Then the decisive one. Across all 55 menu owners the process holds, the entry ids present are
+    //
+    // ```text
+    //   0x0 0x8 0x47 0x78 0x8f 0x93 0x10b 0x116 0x130 0x131
+    //   0x143 0x187 0x18f 0x19c 0x19d 0x1a3 0x1a4 0x1a9 0x1fb
+    // ```
+    //
+    // and `0xf` is on none of them. Predicate B looks up an entry that is not registered anywhere in
+    // the process, so it cannot answer yes for any owner, ever. The press is not being dropped:
+    // there is nothing for it to set. That also retires the older reading that Back "fires
+    // 0x12f/0x130/0x131/0x19c/0x1a4" -- those are these same steady registrations, present every
+    // frame whether or not anybody presses.
+    //
+    // So vanilla's back-out cannot run here, and this mod is what put the dialog on screen
+    // (`crate::can_use_goods_gate` forces `CS::CanUseGoods` true for the three fingers inside a
+    // Seamless session, and without it the raiser skips the dialog entirely). The mod owes the way
+    // out, and [`player_backed_out`] is it: the player's own cancel, read off a real keystate, fed
+    // to the original as the `cancelled` argument vanilla's own press term would have set.
+    if step == CTRL_STEP_BOUNDS_POPUP_OPEN {
+        return answer;
+    }
+    // The controller is not showing the popup, so the next one that opens needs its own release
+    // before a press counts. Without this reset the arming survives from one dialog to the next and
+    // the second popup closes on the button still down from the first.
+    #[cfg(windows)]
+    CANCEL_RELEASED_SINCE_OPEN.store(false, core::sync::atomic::Ordering::SeqCst);
     if !CTRL_STEP_CHOSE_ROW.contains(&step) {
         return answer;
     }
@@ -622,11 +1001,13 @@ unsafe extern "system" fn start_invasion_entry(
     // option-menu object to drive Seamless through` followed by `requested=false`, with the
     // override left in force behind it.
     if !requested {
+        // The recital goes with it, inside `stand_down_hunt` since 2026-09-17 -- every caller of
+        // that function means stop, and each of them was clearing the queue separately or, in
+        // three cases, not at all.
         crate::local_invasion_filter::stand_down_hunt(
             "the finger's search could not start, so its override is retired rather than left \
              armed with nothing running behind it",
         );
-        crate::local_invasion_filter::search_banner::clear();
     }
     let driven = false;
     // Only claim a search that started.
@@ -650,6 +1031,298 @@ unsafe extern "system" fn start_invasion_entry(
          selectedGoodsItemId={selected:#x}"
     ));
     answer
+}
+
+/// Log which menu windows the front end has up while the bounds popup waits, on change only.
+///
+/// # What this is for
+///
+/// Two of the four terms that make the popup close are in this array, and the census is how a run
+/// says which. `FUN_1407c3210` -- the function whose return value arrives at this module as
+/// `cancelled` -- ORs the tick's own back-out argument with three shown-window tests, so a window
+/// coming up is a legitimate reason for this dialog to tear itself down and is worth telling apart
+/// from a press in the log.
+///
+/// # What it is not, and the build that proved it
+///
+/// It is not a keystate census and it cannot name the player's `Back`. An earlier form of this
+/// function walked the same bytes calling them menu events, and the module closed the popup on
+/// bit 2 of index `0x2b`. `field99_0x90` is `byte[70]` indexed by a menu-window index; that bit
+/// belongs to a window, the menu system sets it a frame or two after this dialog appears, and the
+/// popup closed itself on every raise. Run `br-20260918-050115-c1ba` carries all three.
+///
+/// The walk is bounded to the array's own length now. The previous one ran `0x80` entries and so
+/// reported `0x46` bytes of unrelated `CSMenuManImp` fields as if they were part of it.
+///
+/// # Safety
+///
+/// Game menu thread, and every read is fault-closed: an unresolved global or an unmapped page
+/// yields `None` and the sample is skipped rather than faulting. It writes nothing.
+#[cfg(windows)]
+fn report_shown_menu_windows(cancelled: usize) {
+    let Ok(module_base) = er_game_base::mem::game_module_base() else {
+        return;
+    };
+    // SAFETY: fault-closed read of a data global whose address is translated for the running build.
+    let Some(manager) = (unsafe {
+        er_game_base::mem::safe_read_usize(er_game_base::mem::game_data_addr(
+            module_base,
+            er_game_base::rva::CS_MENU_MAN_GLOBAL_RVA,
+            "CS_MENU_MAN_GLOBAL_RVA",
+        ))
+    })
+    .filter(|&pointer| pointer > 0x10000) else {
+        return;
+    };
+    let mut shown: Vec<String> = Vec::new();
+    for window in 0..SHOWN_MENU_WINDOW_COUNT {
+        // SAFETY: one byte inside the manager's own shown-window array, fault-closed, and the walk
+        // stops at the length Ghidra declares and the game's own bounds checks use.
+        let Some(flags) = (unsafe {
+            er_game_base::mem::safe_read_u8(manager + SHOWN_MENU_WINDOW_FLAGS_OFFSET + window)
+        }) else {
+            return;
+        };
+        if flags != 0 {
+            shown.push(format!("{window:#04x}={flags:#04x}"));
+        }
+    }
+    let now = if shown.is_empty() {
+        format!("dl={cancelled:#x} windows=none")
+    } else {
+        format!("dl={cancelled:#x} windows={}", shown.join(","))
+    };
+    let Ok(mut said) = SHOWN_MENU_WINDOWS_SAID.lock() else {
+        return;
+    };
+    if said.as_deref() == Some(now.as_str()) {
+        return;
+    }
+    let before = said.clone().unwrap_or_else(|| "nothing yet".to_owned());
+    *said = Some(now.clone());
+    crate::standalone_log(format_args!(
+        "vanilla-fingers: the bounds popup is open and the menu state changed {before} -> {now} \
+         (`CSMenuManImp+0x90`, one byte per menu window, and the `dl` this handler was passed). A \
+         window appearing is one of the four terms that close this dialog; the player's Back is \
+         the `dl` term and it has never yet been anything but zero."
+    ));
+}
+
+/// Host-side stub: there is no menu manager to read off the target.
+#[cfg(not(windows))]
+fn report_shown_menu_windows(_cancelled: usize) {}
+
+#[cfg(windows)]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn GetAsyncKeyState(vkey: i32) -> i16;
+    fn MapVirtualKeyW(code: u32, map_type: u32) -> u32;
+}
+
+/// Whether one virtual key is down right now, asking only for the bit that is not consumed.
+#[cfg(windows)]
+fn key_is_down(vkey: i32) -> bool {
+    // SAFETY: a `user32` call taking one integer and returning one, with no pointer anywhere.
+    (unsafe { GetAsyncKeyState(vkey) } & KEY_DOWN_MASK) != 0
+}
+
+/// The slot-0 pad's button mask, or `None` when no pad answers.
+///
+/// `XInputGetState` is resolved from a module the game has already loaded rather than
+/// `LoadLibrary`d, so a profile where the player is on keyboard adds nothing to the process and
+/// simply reads `None`. The game loads `xinput1_4.dll` on this build -- measured 2026-09-17 by
+/// resolving the export off the live process -- and the older names are tried after it because a
+/// resolution that fails is cheaper than an assumption that does not.
+#[cfg(windows)]
+fn pad_buttons() -> Option<u16> {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
+    use windows::core::s;
+
+    static CACHED: AtomicUsize = AtomicUsize::new(0);
+    const MISSING: usize = usize::MAX;
+
+    let resolved = match CACHED.load(Ordering::SeqCst) {
+        0 => {
+            // SAFETY: resolving one export from modules that may or may not be loaded.
+            let found = unsafe {
+                [
+                    s!("xinput1_4.dll"),
+                    s!("xinput1_3.dll"),
+                    s!("xinput9_1_0.dll"),
+                ]
+                .into_iter()
+                .find_map(|name| {
+                    GetModuleHandleA(name)
+                        .ok()
+                        .and_then(|module| GetProcAddress(module, s!("XInputGetState")))
+                })
+                .map_or(0, |address| address as usize)
+            };
+            CACHED.store(if found == 0 { MISSING } else { found }, Ordering::SeqCst);
+            found
+        }
+        MISSING => 0,
+        address => address,
+    };
+    if resolved == 0 {
+        return None;
+    }
+    let mut state = [0u8; XINPUT_STATE_SIZE];
+    // SAFETY: the resolved `XInputGetState`, called with its own signature and a buffer of exactly
+    // the size the struct it fills declares.
+    let status = unsafe {
+        core::mem::transmute::<usize, unsafe extern "system" fn(u32, *mut u8) -> u32>(resolved)(
+            XINPUT_PLAYER_SLOT,
+            state.as_mut_ptr(),
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    Some(u16::from_le_bytes([
+        state[XINPUT_BUTTONS_OFFSET],
+        state[XINPUT_BUTTONS_OFFSET + 1],
+    ]))
+}
+
+/// Whether the player is holding a cancel right now, on either input the game itself accepts.
+#[cfg(windows)]
+fn cancel_is_down() -> bool {
+    key_is_down(cancel_key_in_force())
+        || pad_buttons().is_some_and(|mask| mask & XINPUT_GAMEPAD_B != 0)
+}
+
+/// Name every key and pad button held while the bounds popup waits, on change only.
+///
+/// # What this is for
+///
+/// One value: whichever key the player's cancel actually is, against the
+/// [`cancel_key_in_force`] this code closes on. It has already earned its place once -- the first
+/// build here closed on `Escape` alone, and this census is what turned "I can't close it with Q"
+/// into `keys=0x51` on `br-20260918-161158-02c4`, a number rather than an argument. It is also how
+/// a wrong [`MENU_BACK_ACTION`] would show itself: the key the player holds appears here beside
+/// the key the game's config says that action is bound to, and the two disagreeing is the whole
+/// diagnosis.
+///
+/// The pad half needs no such census -- `B` is the game's own cancel -- but it is printed beside
+/// the keys so a run says which device the player is actually on.
+///
+/// # Safety
+///
+/// `GetAsyncKeyState` takes and returns an integer. Bit 0 is deliberately never read: it is the
+/// consumed "pressed since the last call" bit, and `local_invasion_filter::hotkeys` is polling its
+/// own keys through the same call.
+#[cfg(windows)]
+fn report_pressed_cancel_inputs() {
+    let cancel = cancel_key_in_force();
+    let mut held: Vec<String> = Vec::new();
+    for vkey in 1..=VK_CENSUS_MAX {
+        if key_is_down(vkey) {
+            held.push(format!("{vkey:#04x}"));
+        }
+    }
+    let pad = pad_buttons().map_or_else(|| "no pad".to_owned(), |mask| format!("{mask:#06x}"));
+    let now = if held.is_empty() {
+        format!("keys=none pad={pad}")
+    } else {
+        format!("keys={} pad={pad}", held.join(","))
+    };
+    let Ok(mut said) = PRESSED_INPUTS_SAID.lock() else {
+        return;
+    };
+    if said.as_deref() == Some(now.as_str()) {
+        return;
+    }
+    *said = Some(now.clone());
+    let bound = menu_back_binding().map_or_else(
+        || "unreadable, so the fallback is in force".to_owned(),
+        |(pad_code, keyboard_code)| format!("pad code {pad_code}, keyboard word {keyboard_code}"),
+    );
+    crate::standalone_log(format_args!(
+        "vanilla-fingers: the bounds popup is open and what you are holding changed to {now}. Your \
+         menu back-out is {} ({:#04x}), read from the game's own key config at action \
+         {MENU_BACK_ACTION:#04x} ({bound}), and pad B ({XINPUT_GAMEPAD_B:#06x}) closes it too. \
+         Rebind it in Key Bindings and this follows on the next frame.",
+        er_invasion_warp_core::keybind::key_name(cancel),
+        cancel,
+    ));
+}
+
+/// Host-side stub: there is no keyboard or pad attached to a test binary.
+#[cfg(not(windows))]
+fn report_pressed_cancel_inputs() {}
+
+/// Give the bounds popup the back-out the game advertises and, in this session, cannot deliver.
+///
+/// # What the player loses without this
+///
+/// The dialog is inescapable. Reported 2026-09-17, twice: it "cannot be backed out of with normal
+/// means", then "I also can't close it myself". The game formats a `Back` key guide for it --
+/// `GRHK:110000` in the msgbox-builder line -- so the prompt offers an exit that does nothing.
+///
+/// # Why the mod owes it
+///
+/// This mod is what puts the dialog on screen: `crate::can_use_goods_gate` forces `CS::CanUseGoods`
+/// true for the three invasion fingers inside a Seamless session, and without that the raiser skips
+/// the popup entirely. And vanilla's own back-out cannot fire here, which is measured rather than
+/// assumed -- `dl`'s press term is `A || B`, `A` is a flag bit at `owner + 0x1c5` that stayed clear
+/// for ~2,000 frames, and `B` looks up menu entry id `0xf`, which exists on none of the 55 menu
+/// owners the live process holds. Nothing outside can make that arm fire.
+///
+/// # Why this only answers, and never writes the step itself
+///
+/// It used to write step 5 into the ctrl straight after the original returned, which is where
+/// `0x1407c2c64`'s `movl $0x5, 0x10(%rcx)` puts it. Run `br-20260918-170827-5e73` is that idea
+/// failing three times inside one popup: pad `B` was held, the write fired and logged, and the
+/// next frame's census reported the dialog still open at step 2.
+///
+/// The reason is the function's own shape. It is
+///
+/// ```text
+///   if (cancelled) { ctrl[0x10] = 5; return 1; }
+///   ... read the pressed row; if none, return 0 ...
+/// ```
+///
+/// so the back-out is not only a store, it is also the `1` the caller gets back. Running the
+/// original with `cancelled = 0` takes the row path, which answers `0` for "nothing happened", and
+/// patching the step behind it leaves the tick holding that `0` to return upward. The answer and
+/// the field have to move together, so the way to move them together is to let the game move both:
+/// this decides whether the player backed out, and the detour hands `cancelled = 1` to the
+/// original. Nothing writes the step but the game's own instruction.
+///
+/// # Why the release latch
+///
+/// A bare edge detector is not enough. The previous attempt at this trigger read a menu-window flag
+/// that rises by itself a frame or two after the dialog appears, and the popup closed on every
+/// raise -- "the menu pops up and then closes automatically". A real keystate cannot do that, but
+/// the press that confirmed the item can still be down on the frame the dialog first ticks, so a
+/// press only counts once a release has been seen while this popup was up.
+///
+/// Consumes the press when it answers `true`, so one push is one back-out.
+#[cfg(windows)]
+fn player_backed_out() -> bool {
+    use core::sync::atomic::Ordering;
+
+    let down = cancel_is_down();
+    let was_down = CANCEL_WAS_DOWN.swap(down, Ordering::SeqCst);
+    // A release, at any point while the dialog is up, is what arms the detector.
+    if !down {
+        CANCEL_RELEASED_SINCE_OPEN.store(true, Ordering::SeqCst);
+        return false;
+    }
+    // Still the press that raised the popup: it has never been let go, so this is not a new one.
+    if was_down || !CANCEL_RELEASED_SINCE_OPEN.load(Ordering::SeqCst) {
+        return false;
+    }
+    CANCEL_RELEASED_SINCE_OPEN.store(false, Ordering::SeqCst);
+    true
+}
+
+/// Host-side stub: there is no input to read.
+#[cfg(not(windows))]
+fn player_backed_out() -> bool {
+    false
 }
 
 /// Arm the detour that takes the bounds popup's answer.
@@ -724,6 +1397,236 @@ pub unsafe fn install_bounds_popup_takeover() -> bool {
         }
     }
 }
+
+/// Take the player's `Yes` on `Cancel invasion of other world?` and stop the search this mod is
+/// actually running.
+///
+/// The original runs first, for the same reason it does on the start path: it reads the pressed
+/// row out of the popup and advances the menu's own step machine, and vanilla's own search is
+/// vanilla's to call off.
+///
+/// What it cannot call off is ours. The vanilla `BreakInManager` search and the Seamless search
+/// this crate drives are two different searches that the same item starts, so cancelling one left
+/// the other running, the sweep armed, the finger override in force and the place recital cycling
+/// its ring -- the screen still naming locations for a search the player had just stopped.
+///
+/// # What the gate is, and why it is not the reach
+///
+/// `cancelled` is the popup's own back-out, so it passes straight through: the player declined to
+/// cancel and the search must survive. Past that, the step and the item are the same pair the
+/// start path uses -- the original advances the step only on `Yes`, and a goods id cannot be
+/// produced by accident since only the three fingers route this dialog.
+///
+/// There is deliberately no test on [`crate::local_invasion_filter::finger_reach`]. A search that
+/// has already handed its far half to Seamless holds `FINGER_REACH_NONE` while still very much
+/// running, and the player pressing `Yes` means stop either way. Everything below is a no-op when
+/// there was nothing to stop: `stand_down_hunt` logs only when the loop was armed, `end_search`
+/// forgets a sweep that may not exist, and `cancel_live_search_for_player` declines an idle
+/// session.
+///
+/// # Safety
+///
+/// Called by MinHook in place of the game's function, on the game's own menu thread.
+#[cfg(windows)]
+unsafe extern "system" fn cancel_invasion_entry(
+    ctrl: usize,
+    cancelled: usize,
+    popup: usize,
+    spare: usize,
+) -> usize {
+    use core::sync::atomic::Ordering;
+
+    let orig = ORIG_CANCEL_INVASION.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    // SAFETY: the trampoline stored for this exact target, called with its own arguments.
+    let answer = unsafe {
+        core::mem::transmute::<usize, er_hook::UnionFn>(orig)(ctrl, cancelled, popup, spare)
+    };
+    if cancelled & 0xff != 0 {
+        return answer;
+    }
+    // SAFETY: one dword inside the object the game just finished writing, fault-closed.
+    let Some(step) = (unsafe { er_game_base::mem::safe_read_i32(ctrl + CTRL_STEP_OFFSET) }) else {
+        return answer;
+    };
+    if !CTRL_STEP_CHOSE_ROW.contains(&step) {
+        return answer;
+    }
+    // SAFETY: one dword inside the same object, fault-closed.
+    let selected = unsafe { er_game_base::mem::safe_read_i32(ctrl + CTRL_SELECTED_GOODS) }
+        .map(|item| item as u32);
+    let Some(selected) = selected.filter(|item| routes_the_range_popup(*item)) else {
+        return answer;
+    };
+    // `stand_down_hunt` retires the whole search, the place recital and the banner's repeat latch
+    // included, so the line painted below cannot land under another place name.
+    crate::local_invasion_filter::stand_down_hunt(
+        "you used the finger again and confirmed the invasion search should be called off",
+    );
+    // The search is over rather than widening, so the band ladder goes back with it. A rung left
+    // standing would start the next invasion at a band the player never climbed to.
+    crate::lobby_preflight::end_search();
+    announce_search_called_off();
+    crate::standalone_log(format_args!(
+        "vanilla-fingers: the player called the invasion search off from the finger's own cancel \
+         prompt (step={step}, selectedGoodsItemId={selected:#x}). The re-search loop, the finger's \
+         range override, the nearby sweep, the band ladder and the place recital are all retired, \
+         and Seamless's own search is cancelled where its state still offers a Cancel row."
+    ));
+    answer
+}
+
+/// Whether the address this seam resolves to is the call-off handler and not its start-path twin.
+///
+/// The one check that does not trust the address map. See [`CANCEL_VANILLA_INVASION`] for what a
+/// swapped row would cost; the byte sequence is the `isBreakInMultiRegion` write, which the start
+/// handler performs twice and this one never.
+///
+/// # Safety
+///
+/// Game task thread. Reads a window of the running image through the fault-closed reader.
+#[cfg(windows)]
+unsafe fn the_cancel_seam_is_not_its_twin(address: usize) -> bool {
+    let mut body = [0_u8; TWIN_TEST_WINDOW];
+    // SAFETY: a read of mapped executable bytes through the fault-closed reader.
+    if !unsafe { er_game_base::mem::read_bytes(address, &mut body) } {
+        return false;
+    }
+    !body
+        .windows(IS_BREAK_IN_MULTI_REGION_WRITE.len())
+        .any(|window| window == IS_BREAK_IN_MULTI_REGION_WRITE)
+}
+
+/// Arm the detour that takes the finger's own call-off prompt.
+///
+/// Idempotent and fail-closed, like its sibling: a build whose bytes do not match the recorded
+/// prologue is refused, and so is an address that reads as the start-path twin.
+///
+/// # Safety
+///
+/// Game task thread, after the module base resolves.
+#[cfg(windows)]
+pub unsafe fn install_cancel_prompt_takeover() -> bool {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static REFUSAL_SAID: AtomicUsize = AtomicUsize::new(0);
+
+    if ORIG_CANCEL_INVASION.load(Ordering::SeqCst) != 0 {
+        return true;
+    }
+    // SAFETY: game task thread; the seam checks its own prologue and refuses otherwise.
+    let address = match unsafe { crate::map_seams::verify_seam(&CANCEL_VANILLA_INVASION) } {
+        Ok(address) => address,
+        Err(error) => {
+            if REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+                crate::standalone_log(format_args!(
+                    "vanilla-fingers: refused {} -- {error}. Using a finger a second time still \
+                     calls vanilla's own search off, but this mod's search keeps running behind \
+                     it and the place recital keeps reciting. Printed once.",
+                    CANCEL_VANILLA_INVASION.name
+                ));
+            }
+            return false;
+        }
+    };
+    // `verify_seam` hands back the unresolved 1.16.2 address, which is what MinHook is given and
+    // what it resolves itself. The twin test has to read the bytes that will actually be patched,
+    // so it asks the same resolver for the same answer -- a second call, and a quiet one: the
+    // translation ledger logs an address once.
+    let resolved =
+        er_game_base::game_build::resolve_detour_address(address, CANCEL_VANILLA_INVASION.name)
+            .unwrap_or(address);
+    // SAFETY: game task thread; the reader is fault-closed and the window is bounded.
+    if !unsafe { the_cancel_seam_is_not_its_twin(resolved) } {
+        if REFUSAL_SAID.swap(1, Ordering::SeqCst) == 0 {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: refused {} @0x{resolved:x} -- the body writes \
+                 `isBreakInMultiRegion`, which only the start-path twin does, so the address map \
+                 has pointed this seam at {}. Installing here would stand every search down one \
+                 frame after arming it. Printed once.",
+                CANCEL_VANILLA_INVASION.name, START_VANILLA_INVASION.name
+            ));
+        }
+        return false;
+    }
+    let hook = match unsafe {
+        er_hook::MhHook::new(
+            address as *mut core::ffi::c_void,
+            cancel_invasion_entry as *mut core::ffi::c_void,
+        )
+    } {
+        Ok(hook) => hook,
+        Err(status) => {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: failed to create the cancel-prompt detour @0x{address:x} -- \
+                 {status:?}. The address resolved and its prologue matched."
+            ));
+            return false;
+        }
+    };
+    ORIG_CANCEL_INVASION.store(hook.trampoline() as usize, Ordering::SeqCst);
+    // SAFETY: the hook was created above; enabling is MinHook's own queued path.
+    if unsafe { hook.queue_enable() }.is_err() {
+        ORIG_CANCEL_INVASION.store(0, Ordering::SeqCst);
+        return false;
+    }
+    // SAFETY: applies the queue this function just added to.
+    match unsafe { er_hook::MH_ApplyQueued() } {
+        er_hook::MH_STATUS::MH_OK => {
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: armed the cancel-prompt takeover on {} @0x{address:x}. Using a \
+                 finger a second time now stops this mod's search as well as vanilla's.",
+                CANCEL_VANILLA_INVASION.name
+            ));
+            true
+        }
+        status => {
+            ORIG_CANCEL_INVASION.store(0, Ordering::SeqCst);
+            crate::standalone_log(format_args!(
+                "vanilla-fingers: MH_ApplyQueued refused the cancel-prompt detour -- {status:?}"
+            ));
+            false
+        }
+    }
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+pub fn install_cancel_prompt_takeover() -> bool {
+    false
+}
+
+/// Say on screen that the search the player just called off has stopped.
+///
+/// Without it the last search banner sits on screen through its own fade, still naming a place,
+/// for a search that no longer exists -- which reads as the cancel having failed. That is the same
+/// complaint the recital half of this fix answers, one surface further along.
+#[cfg(windows)]
+fn announce_search_called_off() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static CALLED_OFF_BANNER_FAILED: AtomicUsize = AtomicUsize::new(0);
+
+    let text = "Invasion search called off";
+    // SAFETY: the game's menu thread with the menu up, the same surface `announce_search` uses --
+    // the prompt the player just answered is still the thing on screen.
+    if unsafe { crate::announce::show(text) } {
+        return;
+    }
+    if CALLED_OFF_BANNER_FAILED.swap(1, Ordering::SeqCst) == 0 {
+        crate::standalone_log(format_args!(
+            "vanilla-fingers: could not show the called-off banner (\"{text}\") -- the message \
+             functions did not verify, or the menu is not up. The search is still stopped; only \
+             the on-screen notice is missing. Printed once."
+        ));
+    }
+}
+
+/// Host-side stub.
+#[cfg(not(windows))]
+fn announce_search_called_off() {}
 
 /// Say on screen that the search has started, in our own words.
 ///

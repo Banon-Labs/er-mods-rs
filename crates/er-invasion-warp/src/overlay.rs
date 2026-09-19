@@ -53,18 +53,31 @@ pub(crate) struct SettingRow {
     pub(crate) key: &'static str,
     pub(crate) value: String,
     pub(crate) control: RowControl,
-    /// Shown under the row when it cannot be edited, so a row that does nothing says why instead
-    /// of looking broken.
-    pub(crate) note: Option<&'static str>,
+    /// Shown beside the row, so a row that does nothing says why instead of looking broken.
+    ///
+    /// Owned rather than `&'static str` since the bracket rows describe what is actually picked
+    /// (`RL126-150 at +21 and up`), which is not a string that can be written at compile time.
+    pub(crate) note: Option<String>,
 }
 
 /// How a row responds to a click.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RowControl {
     /// A `bool`: clicking flips it.
     Toggle(bool),
     /// An enum with a fixed set of values: clicking advances to the next one.
     Cycle,
+    /// A list to pick from, with a prefix of it greyed out.
+    ///
+    /// `first_enabled` is where the selectable entries start, which is how the bracket rows refuse
+    /// to offer anything below the player's own without having to know what a bracket is. Greying
+    /// rather than omitting, because a list that silently dropped its first five rows would make
+    /// the player's own position in it unreadable.
+    Choose {
+        options: Vec<String>,
+        selected: usize,
+        first_enabled: usize,
+    },
     /// Read-only in the panel -- a key binding, a list, or a setting the mod does not implement.
     ReadOnly,
 }
@@ -80,6 +93,8 @@ pub(crate) enum SettingEdit {
     /// written, and hard-coding it meant the next one -- `prefilter_radius`, which steps 0..3 --
     /// could not be added to the panel at all without touching the renderer.
     Cycle(&'static str),
+    /// Set the row this key names to the entry at this index.
+    Choose(&'static str, usize),
 }
 
 /// The rows the game task most recently published. Replaced whole, never edited in place.
@@ -219,7 +234,7 @@ fn draw(ui: &Ui) {
             ui.separator();
             for row in &view.rows {
                 let label = format!("{} = {}", row.key, row.value);
-                match row.control {
+                match &row.control {
                     RowControl::Toggle(_) => {
                         if ui.button(&label) {
                             record(SettingEdit::Toggle(row.key));
@@ -230,9 +245,34 @@ fn draw(ui: &Ui) {
                             record(SettingEdit::Cycle(row.key));
                         }
                     }
+                    RowControl::Choose {
+                        options,
+                        selected,
+                        first_enabled,
+                    } => {
+                        let preview = options.get(*selected).map_or("", String::as_str);
+                        if let Some(open) = ui.begin_combo(row.key, preview) {
+                            for (at, option) in options.iter().enumerate() {
+                                // Drawn and refused, not omitted. A player who cannot see the
+                                // brackets beneath them cannot see where they are in the list.
+                                if at < *first_enabled {
+                                    ui.text_disabled(option);
+                                    continue;
+                                }
+                                if ui
+                                    .selectable_config(option)
+                                    .selected(at == *selected)
+                                    .build()
+                                {
+                                    record(SettingEdit::Choose(row.key, at));
+                                }
+                            }
+                            open.end();
+                        }
+                    }
                     RowControl::ReadOnly => ui.text_disabled(&label),
                 }
-                if let Some(note) = row.note {
+                if let Some(note) = &row.note {
                     ui.same_line();
                     ui.text_disabled(note);
                 }

@@ -66,6 +66,28 @@ test_allow_when_the_turn_edited_a_file if {
 	count(halts) == 0
 }
 
+# A diagnosis in the CLOSING message can have no tool call after it, so `fixed` is structurally 0
+# there however much the turn wrote. Before 2026-09-19 that halted a turn which had written a new
+# script, run its selftest and committed it, and then closed by saying what had been broken -- the
+# report the rule wants. The unordered `edited` is what separates it from the turn that changed
+# nothing.
+test_allow_when_the_edit_came_before_the_closing_diagnosis if {
+	halts := guard.halt with input as stop_event(full_facts(
+		"The cause was an unbound pad binding, not the invasion.",
+		"0", "0", "0", "", "1",
+	))
+	count(halts) == 0
+}
+
+# The shape the rule exists to refuse must still halt: same closing sentence, nothing written.
+test_halt_when_the_closing_diagnosis_wrote_nothing if {
+	halts := guard.halt with input as stop_event(full_facts(
+		"The cause was an unbound pad binding, not the invasion.",
+		"0", "0", "0", "", "0",
+	))
+	"ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX" in rule_ids(halts)
+}
+
 # Answering a question is the deliverable. This exemption is broad on purpose and must stay so:
 # gagging an explanation the user asked for is a worse failure than missing a stall.
 test_allow_when_the_user_asked if {

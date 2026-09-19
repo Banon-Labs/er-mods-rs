@@ -326,12 +326,15 @@ unsafe fn swap_notice(file: usize, input: &[u8]) {
     NOTICE_SEEN.fetch_add(1, Ordering::SeqCst);
     let edited = match EDITED_NOTICE.get() {
         Some(cached) => cached,
-        None => match er_gfx::announce_notice::with_centered_notice_text(input) {
+        None => match er_gfx::announce_notice::with_two_line_notice(input) {
             Ok(bytes) => {
                 crate::standalone_log(format_args!(
-                    "map-gfx: derived the announcement movie with its text CENTRED (in={} out={}) \
+                    "map-gfx: derived the announcement movie centred and two-line (in={} out={}) \
                      -- the notice field ships left-aligned in a box far wider than any line we \
-                     write, which is why a short message sat against the edge",
+                     write, which is why a short message sat against the edge, and single-line, \
+                     which is why a newline in a banner did nothing. The panel behind it grew by \
+                     one line of MenuFont_01 so the second line lands on it; its top edge did not \
+                     move, so every one-line notice is where it was.",
                     input.len(),
                     bytes.len()
                 ));
@@ -339,8 +342,9 @@ unsafe fn swap_notice(file: usize, input: &[u8]) {
             }
             Err(error) => {
                 crate::standalone_log(format_args!(
-                    "map-gfx: notice text NOT centred ({error}); serving the game's own movie, so \
-                     the banner still works and is merely left-aligned"
+                    "map-gfx: notice movie left alone ({error}); serving the game's own, so the \
+                     banner still works -- left-aligned, and one line, which means a banner \
+                     written with a newline in it will show that line running together."
                 ));
                 return;
             }

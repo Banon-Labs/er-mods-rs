@@ -26,12 +26,12 @@ package cupcake.policies.claude.teardown_must_relaunch
 
 import rego.v1
 
-command := object.get(input.tool_input, "command", "")
+tool_command := object.get(input.tool_input, "command", "")
 
 # Whitespace-normalized, so a command written across lines matches the same way in
 # the live engine (which collapses whitespace) and under `opa test` (which does not).
-norm_command := concat(" ", [word |
-	some word in split(replace(replace(replace(command, "\t", " "), "\r", " "), "\n", " "), " ")
+norm_command_for(cmd) := concat(" ", [word |
+	some word in split(replace(replace(replace(cmd, "\t", " "), "\r", " "), "\n", " "), " ")
 	word != ""
 ])
 
@@ -60,48 +60,96 @@ norm_command := concat(" ", [word |
 
 # Separators become spaces too, so a token that ends a statement (`er-teardown.py;`) is the same
 # token as one that does not, and a quoted or parenthesised invocation still tokenises.
-separated := replace(replace(replace(replace(replace(replace(replace(replace(
-	norm_command,
-	";", " "), "|", " "), "&", " "), "(", " "), ")", " "), "`", " "), "'", " "), `"`, " ")
-
-tokens := [tok |
+tokens_for(cmd) := [tok |
+	separated := replace(
+		replace(
+			replace(
+				replace(
+					replace(
+						replace(
+							replace(
+								replace(
+									norm_command_for(cmd),
+									";", " ",
+								),
+								"|", " ",
+							),
+							"&", " ",
+						),
+						"(", " ",
+					),
+					")", " ",
+				),
+				"`", " ",
+			),
+			"'", " ",
+		),
+		`"`, " ",
+	)
 	some tok in split(separated, " ")
 	tok != ""
 ]
 
-# The last path component of a token, so `scripts/er-teardown.py` and
-# `/home/x/repo/scripts/er-teardown.py` are both the teardown while `er-teardown-report.py` --
-# a different script whose name merely starts the same way -- is not.
-script_name(tok) := parts[count(parts) - 1] if {
-	parts := split(tok, "/")
+# Whether a token names one of the scripts this guard understands.
+#
+# This used to split every token and index the last path component. The live Cupcake WASM
+# evaluator aborted in that helper on a long read-only Python extraction command that named no
+# teardown script at all, turning a guard into a policy-engine crash. The guard only needs exact
+# basename matching for two known script names, so avoid array indexing entirely.
+token_names_teardown(tok) if {
+	tok == "er-teardown.py"
 }
 
-invokes(script) if {
-	some tok in tokens
-	script_name(tok) == script
+token_names_teardown(tok) if {
+	endswith(tok, "/er-teardown.py")
+}
+
+token_names_run_branch(tok) if {
+	tok == "er-run-branch.py"
+}
+
+token_names_run_branch(tok) if {
+	endswith(tok, "/er-run-branch.py")
+}
+
+invokes_teardown if {
+	cmd := tool_command()
+	contains(cmd, "er-teardown.py")
+	some tok in tokens_for(cmd)
+	token_names_teardown(tok)
+}
+
+invokes_run_branch if {
+	cmd := tool_command()
+	contains(cmd, "er-run-branch.py")
+	some tok in tokens_for(cmd)
+	token_names_run_branch(tok)
 }
 
 # Any invocation of the teardown script, with or without a path prefix.
 runs_teardown if {
-	invokes("er-teardown.py")
+	invokes_teardown
 }
 
 # Read-only: reports what is running and kills nothing. `--status` has to be the teardown's own
 # next word, not merely present somewhere in the command.
 status_only if {
+	cmd := tool_command()
+	contains(cmd, "er-teardown.py")
+	tokens := tokens_for(cmd)
 	some i
-	script_name(tokens[i]) == "er-teardown.py"
+	token_names_teardown(tokens[i])
 	tokens[i + 1] == "--status"
 }
 
 # The relaunch that has to ride along. `er-run-branch.py` is the sanctioned
 # launcher in this repo; `~/Elden/launch.sh` is the user's own and is accepted too.
 relaunches if {
-	invokes("er-run-branch.py")
+	invokes_run_branch
 }
 
 relaunches if {
-	contains(norm_command, "Elden/launch.sh")
+	contains(norm_command_for(tool_command()), "Elden/launch.sh")
 }
 
 # `er-run-gamescope.sh` is a launcher too: it calls `er-run-branch.py` inside gamescope's nested
@@ -110,7 +158,7 @@ relaunches if {
 # recognise -- a correct rule applied to a launcher that had not been told to it, which leaves
 # the user with no game exactly like the case the rule exists to prevent.
 relaunches if {
-	contains(norm_command, "er-run-gamescope.sh")
+	contains(norm_command_for(tool_command()), "er-run-gamescope.sh")
 }
 
 # A dry run stages and launches nothing, so pairing a teardown with one would
@@ -118,10 +166,13 @@ relaunches if {
 #
 # Asked per SEGMENT, because `--dry-run` only excuses nothing when it belongs to the launch: a
 # teardown chained with a real launch and some other command's `--dry-run` is still a relaunch.
-command_segments := split(replace(replace(norm_command, "|", ";"), "&", ";"), ";")
+command_segments_for(cmd) := split(replace(replace(norm_command_for(cmd), "|", ";"), "&", ";"), ";")
 
 dry_run if {
-	some segment in command_segments
+	cmd := tool_command()
+	contains(cmd, "er-run-branch.py")
+	contains(cmd, "--dry-run")
+	some segment in command_segments_for(cmd)
 	contains(segment, "er-run-branch.py")
 	contains(segment, "--dry-run")
 }
@@ -138,8 +189,8 @@ dry_run if {
 # `>/dev/null`-style redirections are allowed because they suppress output rather
 # than add work; a `;`, `|`, `&` or `&&` that introduces another command is not.
 #
-# Read off `norm_command`, which is split on whitespace ONLY. That is what makes the rule
-# correct: a separator stays glued to its token, so `er-teardown.py;` is not the bare script
+# Read off `norm_command_for(tool_command())`, which is split on whitespace ONLY. That is what makes the
+# rule correct: a separator stays glued to its token, so `er-teardown.py;` is not the bare script
 # name and a chained command cannot pass as one that stands alone.
 interpreter_word(tok) if {
 	tok in {"python", "python3"}
@@ -154,15 +205,44 @@ redirect_word(tok) if {
 	startswith(tok, "/dev/")
 }
 
+# `--reason <why>`, which records why the run ended in the run's own outcome record.
+#
+# Allowed on a standalone teardown because it adds evidence, not work. Without it the only
+# expressible form of "this run is finished" was the one that says nothing about why, so the
+# outcome line read `reason=agent-teardown` for every deliberate ending -- and this guard was
+# teaching the agent to drop the flag to get past it. Both spellings, since `--reason=why` is one
+# token and `--reason why` is two.
+reason_word(_, tok) if {
+	tok == "--reason"
+}
+
+reason_word(_, tok) if {
+	startswith(tok, "--reason=")
+}
+
+# The value that follows a separate `--reason`. Indexed rather than matched, because the value is
+# arbitrary text and nothing about the word itself says it belongs to the flag.
+reason_value_at(words, i) if {
+	i > 0
+	words[i - 1] == "--reason"
+}
+
 teardown_alone if {
-	rest := [tok |
-		some tok in split(norm_command, " ")
+	cmd := tool_command()
+	contains(cmd, "er-teardown.py")
+	words := [tok |
+		some tok in split(norm_command_for(cmd), " ")
 		tok != ""
-		not interpreter_word(tok)
-		not redirect_word(tok)
+	]
+	rest := [words[i] |
+		some i, _ in words
+		not interpreter_word(words[i])
+		not redirect_word(words[i])
+		not reason_word(words, words[i])
+		not reason_value_at(words, i)
 	]
 	count(rest) == 1
-	script_name(rest[0]) == "er-teardown.py"
+	token_names_teardown(rest[0])
 }
 
 block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 scripts/er-teardown.py > /dev/null 2>&1; python3 scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status` is read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game."
@@ -178,7 +258,7 @@ deny contains decision if {
 	decision := {
 		"rule_id": "ER-EFFECTS-TEARDOWN-MUST-RELAUNCH",
 		"severity": "HIGH",
-		"reason": concat("", [block_reason, "\n\nSource: ", command]),
+		"reason": concat("", [block_reason, "\n\nSource: ", tool_command()]),
 	}
 }
 
@@ -193,6 +273,6 @@ deny contains decision if {
 	decision := {
 		"rule_id": "ER-EFFECTS-TEARDOWN-MUST-RELAUNCH",
 		"severity": "HIGH",
-		"reason": concat("", [block_reason, "\n\nSource: ", command]),
+		"reason": concat("", [block_reason, "\n\nSource: ", tool_command()]),
 	}
 }
