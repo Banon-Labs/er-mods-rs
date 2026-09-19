@@ -55,6 +55,7 @@ pub mod map_hooks;
 #[cfg(windows)]
 mod map_live_pins;
 pub mod map_piece_live;
+pub mod map_pin_toggle;
 pub mod map_seams;
 pub mod multiplayer_menu_row;
 pub mod null_network_message;
@@ -255,25 +256,33 @@ fn spawn_catalog_task() {
                     // SAFETY: same game-task context, and the installer is idempotent. The
                     // world-map observer is installed from the task rather than DllMain because
                     // MinHook must not run under the loader lock.
-                    // `map_pins = false` withholds both map hooks -- see the key's docs on
-                    // `LocalInvasionConfig`. Read per tick rather than latched at attach because
-                    // the config is hot-reloaded; the installers are idempotent, so flipping the
-                    // key on mid-session arms them and flipping it off simply stops re-arming
-                    // (a hook already installed stays installed, which the log makes visible).
+                    // Read once per tick, because the config is hot-reloaded and several gates
+                    // below ask it different questions.
                     let config_snapshot = crate::local_invasion_filter::current_config_snapshot();
-                    let map_pins = config_snapshot
-                        .as_ref()
-                        .map(|config| config.map_pins)
-                        .unwrap_or(true);
-                    if map_pins {
-                        unsafe { crate::map_hooks::install_map_observers() };
-                    }
+                    // The map hooks arm unconditionally.
+                    //
+                    // They used to be gated on `map_pins` in the TOML, and that key is gone: the
+                    // switch is the world map's own Map Functions row now, read per tick by
+                    // `map_pin_toggle`. A config gate could not have become that switch even if
+                    // it were kept -- the pins are appended inside the `WorldMapViewModel`
+                    // constructor, which runs at world load and nowhere else, so withholding the
+                    // install decides the whole session rather than the moment. The row instead
+                    // repaints rows that already exist, which is why injecting always and
+                    // switching visibility is the shape that can answer a player mid-game.
+                    unsafe { crate::map_hooks::install_map_observers() };
+                    // Stop the game building its own map markers, so the row that now switches
+                    // our pins has nothing else left to switch. Independent of the three above:
+                    // a refusal here costs the removal and leaves everything else working.
+                    unsafe { crate::map_pin_toggle::install_native_marker_suppressor() };
+                    // And apply the row to the live pins. Cheap when nothing moved: one read of
+                    // `WorldMapViewModel+0x3c5` against a latch.
+                    unsafe { crate::map_pin_toggle::tick() };
                     // SAFETY: same game-task context; also idempotent. This one arms as early
                     // as the task runs on purpose: it swaps the world-map movie as Scaleform
                     // parses it, so arming after that parse means the red pin icon simply never
                     // appears. The pins read the outcome rather than assuming it, so a late or
                     // failed arm costs the red icon and never leaves a pin iconless.
-                    if map_pins && let Ok(base) = er_game_base::mem::game_module_base() {
+                    if let Ok(base) = er_game_base::mem::game_module_base() {
                         unsafe { crate::map_gfx::install_world_map_gfx_hook(base) };
                     }
                     // The local invasion filter: installs its single game-side detour (idempotent),
@@ -355,7 +364,7 @@ fn spawn_catalog_task() {
                     // until this observer has seen the declaration, rather than guessing from a
                     // struct offset that pointed at the wrong lobby in every run.
                     // `steam_hooks = false` withholds all three -- see the key's docs. Read from
-                    // the same snapshot as `map_pins` so one config read serves both gates.
+                    // the tick's single config snapshot, above.
                     // Said here because this is where both switches are in hand at once, and a
                     // radius that can never be consulted is otherwise indistinguishable from a
                     // search that simply never widens.
