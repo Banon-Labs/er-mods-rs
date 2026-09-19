@@ -297,7 +297,6 @@ fn read_bool(config: &LocalInvasionConfig, key: &str) -> bool {
         "enabled" => config.enabled,
         "search_by_location" => config.hunt,
         "reject_notice" => config.reject_notice,
-        "map_pins" => config.map_pins,
         "only_players_with_this_mod" => config.dll_users_only,
         _ => false,
     }
@@ -309,7 +308,6 @@ fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
         "enabled" => config.enabled = !config.enabled,
         "search_by_location" => config.hunt = !config.hunt,
         "reject_notice" => config.reject_notice = !config.reject_notice,
-        "map_pins" => config.map_pins = !config.map_pins,
         "only_players_with_this_mod" => config.dll_users_only = !config.dll_users_only,
         _ => return false,
     }
@@ -322,8 +320,8 @@ fn toggle_bool(config: &mut LocalInvasionConfig, key: &str) -> bool {
 /// with the reason -- a settings screen that silently omits a setting a player set is
 /// indistinguishable from one that lost it.
 ///
-/// What it deliberately does not show, since 2026-09-15: the hook switches (`steam_hooks`,
-/// `map_pins`, the four `ersc_*`). Those install or withhold detours so a crash can be attributed
+/// What it deliberately does not show, since 2026-09-15: the hook switches (`steam_hooks` and
+/// the four `ersc_*`). Those install or withhold detours so a crash can be attributed
 /// to one hook, they are still read out of the file, and every one of them is a way to break the
 /// mod rather than to configure it -- `steam_hooks = false` silently takes `search_by_location`,
 /// `search_radius` and the pool filter with it. A player scrolling a settings panel has no way to

@@ -181,6 +181,7 @@
 0x762d50	0x763ba0	GR_SYSTEM_MESSAGE_RVA
 0x7633d0	0x764220	MSG_REPOSITORY_GET_AND_FORMAT_RVA
 0x7638b0	0x764700	MSG_REPOSITORY_FORMAT_RVA
+0x76e310	0x76f190	crates/er-invasion-warp/src/null_network_message.rs:75
 0x772a80	0x773900	UPDATE_PLAYER_COMPONENTS_RVA
 0x786430	0x7872b0	SET_ITEM_REPLENISH_STATE_RVA
 0x787c30	0x788ab0	EQUIP_ITEM_TO_CHR_ASM_SLOT_RVA
@@ -232,8 +233,8 @@
 0x7b10f0	0x7b1f70	SYSTEM_QUIT_MSGBOX_FINALIZE_RVA
 0x7b1900	0x7b2780	SYSTEM_QUIT_MSGBOX_ADD_NO_RVA
 0x7b1c70	0x7b2af0	SYSTEM_QUIT_MSGBOX_ADD_YES_RVA
-0x7c1dd0	0x7c2c50	crates/er-invasion-warp/src/vanilla_invasion_items.rs:357
-0x7c1f90	0x7c2e10	crates/er-invasion-warp/src/vanilla_invasion_items.rs:406
+0x7c1dd0	0x7c2c50	crates/er-invasion-warp/src/vanilla_invasion_items.rs:358
+0x7c1f90	0x7c2e10	crates/er-invasion-warp/src/vanilla_invasion_items.rs:407
 0x7c5c40	0x7c6ac0	MENU_PLAYER_CHR_STATUS_SOURCE_RVA
 0x7c6f40	0x7c7dc0	MENU_PLAYER_CHR_STATUS_BUILD_RVA
 0x7ee1f0	0x7ef070	POPUP_SUBMIT_TOP_JOB_RVA
@@ -285,6 +286,7 @@
 0x876140	0x877130	crates/er-invasion-warp/src/map_seams.rs:292
 0x8855b0	0x8865a0	crates/er-invasion-warp/src/map_seams.rs:91
 0x885ed0	0x886ec0	crates/er-invasion-warp/src/map_seams.rs:208
+0x887580	0x888570	crates/er-invasion-warp/src/map_seams.rs:339
 0x888aa0	0x889a90	crates/er-invasion-warp/src/map_seams.rs:242
 0x88b7b0	0x88c7a0	crates/er-invasion-warp/src/map_seams.rs:219
 0x88bac0	0x88cab0	crates/er-invasion-warp/src/map_seams.rs:232
@@ -337,6 +339,7 @@
 0x9b6140	0x9b7390	POLICY_TOS_SELECTOR_WRAPPER_RVA
 0x9b6b30	0x9b7d80	POLICY_TOS_FLAG_SETTER_RVA
 0x9b72b0	0x9b8500	POLICY_TOS_STATUS_PREDICATE_RVA
+0x9c6730	0x9c7980	crates/er-invasion-warp/src/map_seams.rs:319
 0xaebdc0	0xaed0d0	REQUEST_MOVE_MAP_RVA
 0xaec050	0xaed360	MMS_STEP_FINISH_RVA
 0xaec120	0xaed430	MMS_STEP_INIT_RVA

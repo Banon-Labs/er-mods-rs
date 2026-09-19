@@ -119,13 +119,13 @@ reject_notice = false
 # crash.
 # ----------------------------------------------------------------------------------------------
 
-# Draw invasion pins on the world map.
+# The invasion pins are switched in game, not here.
 #
-# On by default -- the pins are the feature. Turning it off withholds the WorldMapViewModel
-# constructor observer and the world-map GFx hook, and nothing else: the local-invasion filter,
-# the warp keys and the lobby pool all still run. That makes the map path isolable on its own,
-# which is what a crash that follows opening the map needs in order to be attributed.
-map_pins = true
+# Open the world map, open its Map Functions menu, and turn on the row the game calls
+# Multiplayer Status Display. That row used to draw the game's own markers; this DLL stops those
+# being built, so the row now shows and hides the invasion pins instead, immediately and without
+# leaving the game. There is nothing to write in this file, and a `map_pins` line left over from
+# an older version is read and ignored rather than treated as an error.
 
 # Install the three Steam-matchmaking detours (location publishing, hunt mode, pool filter).
 #
@@ -364,13 +364,13 @@ pub fn parse_local_invasion_config_with_fallback(
                     message: format!("steam_hooks must be true or false, got {value:?}"),
                 }),
             },
-            "map_pins" => match parse_bool(value) {
-                Some(v) => config.map_pins = v,
-                None => issues.push(ConfigIssue {
-                    line: line_no,
-                    message: format!("map_pins must be true or false, got {value:?}"),
-                }),
-            },
+            // Retired: the pins are switched by the world map's own Map Functions row now.
+            //
+            // Accepted and ignored rather than reported, because a player upgrading the DLL has
+            // this line in the file they already have, and telling them a setting they never
+            // touched is now an error would be a worse answer than silently doing the right
+            // thing. The writer no longer emits it, so the line disappears on the next save.
+            "map_pins" => {}
             "ersc_observers" => match parse_bool(value) {
                 Some(v) => config.ersc_observers = v,
                 None => issues.push(ConfigIssue {
@@ -581,9 +581,6 @@ pub fn render_local_invasion_config(config: &LocalInvasionConfig) -> String {
             // nothing said. Any key the writer does not name is a key the writer destroys.
             "reject_notice" => {
                 out.push_str(&format!("reject_notice = {}\n", config.reject_notice));
-            }
-            "map_pins" => {
-                out.push_str(&format!("map_pins = {}\n", config.map_pins));
             }
             "steam_hooks" => {
                 out.push_str(&format!("steam_hooks = {}\n", config.steam_hooks));
@@ -1127,7 +1124,7 @@ only_players_with_this_mod = true\n";
 
     /// The switch key survives a write, and the switch itself survives being written by a mark.
     ///
-    /// Both halves are the same hazard the `reject_notice` / `map_pins` comment in the writer
+    /// Both halves are the same hazard the `reject_notice` comment in the writer
     /// records: a key the writer does not name is a key the writer destroys, and every in-game
     /// keypress rewrites this file. A dropped `enable_toggle_key` would silently return the
     /// player to F3 after they rebound it; a dropped `enabled` would switch the filter back on

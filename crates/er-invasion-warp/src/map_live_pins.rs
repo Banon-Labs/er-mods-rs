@@ -628,6 +628,85 @@ unsafe fn hide_injected_row_for_param_index(
     false
 }
 
+/// Show or hide every invasion pin on the live map, by its layer mask.
+///
+/// This is how the map's own Map Functions row reaches the screen -- see
+/// [`crate::map_pin_toggle`] for why the switch is a mask write rather than an injection gate.
+/// `Ok(n)` is the number of rows repainted; `Err` carries the reason nothing was written, which
+/// the caller logs and retries rather than latching.
+///
+/// # The two masks are not symmetrical
+///
+/// Hiding is one value for every row, because zero fails `UpdateVisible`'s per-layer bit test for
+/// all three layers. Showing is per row, read back from that row's own synthetic param row at
+/// `param+0x1E`. A pin's coordinate is only meaningful in the converter that produced it, so a
+/// blanket `0b111` would draw pins on layers where their position means nothing -- the param row
+/// already holds the one mask the injection decided was right, and reading it back cannot drift
+/// from that decision the way a mask remembered here would.
+///
+/// # Safety
+///
+/// Game task thread. Gated exactly as [`restyle_live_pins`] is, and for the same reason: a
+/// recorded row address is not permission to write to it.
+#[cfg(windows)]
+pub unsafe fn set_pin_rows_visible(visible: bool) -> Result<usize, &'static str> {
+    use er_invasion_warp_core::param_row::{PARAM_CATEGORY_BITS_OFFSET, SYNTHETIC_PARAM_ROW_LEN};
+
+    let Some(view_model) = authoritative_view_model() else {
+        return Err("CSPopupMenu+0x250 is null -- there is no world map right now");
+    };
+    if view_model != LIVE_VIEW_MODEL.load(Ordering::SeqCst) {
+        return Err(
+            "the live ViewModel is not the one the injection wrote into, so the recorded span \
+             describes a freed buffer",
+        );
+    }
+    let span_begin = LIVE_SPAN_BEGIN.load(Ordering::SeqCst);
+    let span_end = LIVE_SPAN_END.load(Ordering::SeqCst);
+    if span_begin == 0 || span_end <= span_begin {
+        return Err("no injected span was recorded, so nothing of ours is on this map");
+    }
+    let Some(geometry) = (unsafe { read_pin_list(view_model) }) else {
+        return Err("the pin row list is unreadable through the live ViewModel");
+    };
+    if !geometry.is_plausible() || geometry.begin != LIVE_LIST_BEGIN.load(Ordering::SeqCst) {
+        return Err("the pin row list moved or stopped being plausible since the injection");
+    }
+    if span_begin < geometry.begin || span_end > geometry.end {
+        return Err("the injected span no longer lies inside the live pin row list");
+    }
+    let Some(slab) = param_slab_bounds() else {
+        return Err("the synthetic param slab bounds are not published");
+    };
+
+    let mut repainted = 0usize;
+    for row in (span_begin..span_end).step_by(PIN_ROW_STRIDE) {
+        // The full ownership test, not span membership: a span outlives its ViewModel and the
+        // freed block comes back at the same size class with its pages still mapped.
+        let Some(param_index) = row_is_verifiably_ours(row, slab) else {
+            continue;
+        };
+        let mask = if visible {
+            let param = slab.0 + param_index * SYNTHETIC_PARAM_ROW_LEN;
+            // SAFETY: the slab is ours, leaked, never freed, and `row_is_verifiably_ours` proved
+            // this index lies inside it.
+            u32::from(unsafe { *((param + PARAM_CATEGORY_BITS_OFFSET) as *const u8) })
+        } else {
+            crate::map_pin_toggle::HIDDEN_LAYER_MASK
+        };
+        // SAFETY: `row` points into our own span, carries our param pointer at the exact slab
+        // stride and our stamp. The field is a plain scalar the engine only reads.
+        unsafe { *((row + ROW_LAYER_MASK_OFFSET) as *mut u32) = mask };
+        repainted += 1;
+    }
+    Ok(repainted)
+}
+
+#[cfg(not(windows))]
+pub unsafe fn set_pin_rows_visible(_visible: bool) -> Result<usize, &'static str> {
+    Err("not a windows build")
+}
+
 /// Rows the shipped list held before our span began.
 fn existing_row_count(geometry: &PinListGeometry) -> usize {
     let span_begin = LIVE_SPAN_BEGIN.load(Ordering::SeqCst);

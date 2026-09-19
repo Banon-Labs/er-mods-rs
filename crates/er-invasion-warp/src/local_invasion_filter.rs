@@ -522,7 +522,7 @@ fn refresh_config() {
                 "local-invasion: config loaded enabled={} search_by_location={} \
                  search_radius={} reach={} may_widen_to_anywhere={} may_climb_band={} \
                  only_players_with_this_mod={} \
-                 reject_notice={} map_pins={} steam_hooks={} ersc_observers={} \
+                 reject_notice={} steam_hooks={} ersc_observers={} \
                  ersc_show_observer={} ersc_lobby_key_observer={} ersc_invade_observer={} \
                  blocks={} \
                  excluded={} mark={} unmark={} enable_toggle={} settings={}",
@@ -545,7 +545,6 @@ fn refresh_config() {
                 // "The config reloaded" is not the question anyone has; "what is in force now" is.
                 outcome.config.dll_users_only,
                 outcome.config.reject_notice,
-                outcome.config.map_pins,
                 // The four ersc_* switches are the ones that decide whether this DLL DETOURS
                 // Seamless at all, and MinHook's patch into it faulted at 0x140010043. They
                 // default off and the filter now resolves the session by scanning ersc's writable
