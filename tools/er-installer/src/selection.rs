@@ -49,6 +49,39 @@ pub fn conflicts_within(chosen: &[&'static Mod]) -> Vec<&'static Conflict> {
         .collect()
 }
 
+/// A mod in `chosen` that already contains `candidate`, if there is one.
+///
+/// # Why this is a refusal and not a note
+///
+/// It first shipped as a note, on the strength of `er-save-picker` checking
+/// `GetModuleHandleA("er_quickload.dll")` and standing down when it finds the product. That
+/// check runs inside `DllMain` at process attach, so it can only see a module that has already
+/// loaded -- and ME3 attaches `[[natives]]` in the order the profile lists them, which this
+/// tool decides. Measured 2026-09-19: the profile writer sorted by display label, so `Boot save
+/// picker` landed above `Quickload (full suite)` and the generated profile defeated the guard in
+/// every install. Both would have armed the boot flow.
+///
+/// Reordering the profile would fix that one pair and leave the shape: an attach-time module
+/// probe is not a co-load mechanism the way `er-hook`'s union is (resolves an export at call
+/// time and chains) or `row_registry`'s election is (runs at arm time through a named shared
+/// mapping). Nobody wants both halves of one feature anyway, so the honest answer is to refuse
+/// the pair and say which mod already does it.
+pub fn redundant_with(candidate: &Mod, chosen: &[&'static Mod]) -> Option<&'static str> {
+    let host = candidate.included_in?;
+    chosen
+        .iter()
+        .any(|entry| entry.package == host)
+        .then_some(host)
+}
+
+/// Every pair within `chosen` where one contains the other, as (contained, container).
+pub fn redundancies_within(chosen: &[&'static Mod]) -> Vec<(&'static Mod, &'static str)> {
+    chosen
+        .iter()
+        .filter_map(|entry| redundant_with(entry, chosen).map(|host| (*entry, host)))
+        .collect()
+}
+
 /// What `candidate` would collide with if it were added to `chosen`.
 pub fn conflicts_with(candidate: &Mod, chosen: &[&'static Mod]) -> Vec<&'static Conflict> {
     CONFLICTS

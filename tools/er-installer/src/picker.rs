@@ -33,6 +33,8 @@ pub enum Toggle {
     Disabled,
     /// Refused: ticking this would have produced a selection that cannot load.
     Blocked(Vec<&'static Conflict>),
+    /// Refused: a mod already ticked contains this one. Carries that mod's package name.
+    Redundant(&'static str),
     OutOfRange,
 }
 
@@ -248,6 +250,12 @@ impl Picker {
         if !clashes.is_empty() {
             return Toggle::Blocked(clashes);
         }
+        // A mod contained in one already ticked. Refused rather than noted, because the guard
+        // that would have made it harmless is load-order dependent and this tool decides the
+        // order -- see `selection::redundant_with`.
+        if let Some(host) = selection::redundant_with(&CATALOG[index], &chosen) {
+            return Toggle::Redundant(host);
+        }
         self.ticked[index] = true;
         Toggle::Enabled
     }
@@ -275,10 +283,13 @@ impl Picker {
             .collect();
         for index in order {
             let chosen = self.chosen();
-            if selection::conflicts_with(&CATALOG[index], &chosen).is_empty() {
-                self.ticked[index] = true;
+            let entry = &CATALOG[index];
+            let blocked = !selection::conflicts_with(entry, &chosen).is_empty()
+                || selection::redundant_with(entry, &chosen).is_some();
+            if blocked {
+                skipped.push(entry);
             } else {
-                skipped.push(&CATALOG[index]);
+                self.ticked[index] = true;
             }
         }
         skipped
@@ -559,21 +570,16 @@ impl Picker {
                         lines.push("Untick the other one first.".to_string());
                         self.message = Some(lines.join(" "));
                     }
-                    // Ticking something the chosen set already carries. Not refused -- the
-                    // smaller shell stands down when it finds the bigger one, so the profile is
-                    // sound -- but a row that does nothing should say it does nothing.
-                    (Toggle::Enabled, Some(candidate)) => {
-                        if let Some(host) = candidate.included_in
-                            && self.is_ticked(host)
-                        {
-                            self.message = Some(format!(
-                                "{} is already part of {}, so this adds nothing. It is harmless \
-                                 -- it stands down when it finds the bigger mod -- but you can \
-                                 leave it unticked.",
-                                candidate.label,
-                                Self::label_for(host)
-                            ));
-                        }
+                    (Toggle::Redundant(host), Some(candidate)) => {
+                        self.message = Some(format!(
+                            "{} already does this -- {} is part of it. Loading both puts two \
+                             copies of one feature in the game, and which of them ends up \
+                             running depends on load order. Untick {} if you want this one on \
+                             its own.",
+                            Self::label_for(host),
+                            candidate.label,
+                            Self::label_for(host)
+                        ));
                     }
                     _ => {}
                 }
@@ -940,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn ticking_something_already_included_says_so_without_refusing_it() {
+    fn ticking_something_already_included_is_refused_and_names_the_host() {
         let included = CATALOG
             .iter()
             .find(|entry| entry.included_in.is_some())
@@ -955,18 +961,43 @@ mod tests {
         picker.handle(Key::Space, 10);
 
         let chosen: Vec<_> = picker.chosen().iter().map(|e| e.package).collect();
-        assert!(
-            chosen.contains(&included.package),
-            "a redundant mod must still be tickable -- it is safe, only pointless"
+        assert_eq!(
+            chosen,
+            vec![host],
+            "the contained mod was ticked beside the one that already has it"
         );
-        let message = picker
-            .message
-            .clone()
-            .expect("it should say it adds nothing");
-        assert!(message.contains("adds nothing"), "message was: {message}");
+        let message = picker.message.clone().expect("a refusal should say so");
+        assert!(
+            message.contains("already does this"),
+            "message was: {message}"
+        );
         assert!(
             message.contains(Picker::label_for(host)),
             "message was: {message}"
+        );
+    }
+
+    #[test]
+    fn the_contained_mod_is_still_tickable_on_its_own() {
+        let included = CATALOG
+            .iter()
+            .find(|entry| entry.included_in.is_some())
+            .expect("the catalog records at least one included-in relation");
+        let mut picker = plain_picker();
+        picker.clear();
+        cursor_onto(&mut picker, included.package);
+        assert!(matches!(picker.toggle_current(), Toggle::Enabled));
+        assert_eq!(picker.chosen().len(), 1);
+    }
+
+    #[test]
+    fn select_all_never_installs_one_feature_twice() {
+        let mut picker = plain_picker();
+        picker.select_all_compatible();
+        let chosen = picker.chosen();
+        assert!(
+            selection::redundancies_within(&chosen).is_empty(),
+            "select-all produced a set carrying one feature twice"
         );
     }
 

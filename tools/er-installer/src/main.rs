@@ -223,14 +223,25 @@ fn selfcheck() -> ExitCode {
 
 fn report_conflicts(chosen: &[&'static Mod]) -> bool {
     let clashes = selection::conflicts_within(chosen);
-    if clashes.is_empty() {
+    let redundant = selection::redundancies_within(chosen);
+    if clashes.is_empty() && redundant.is_empty() {
         return false;
     }
-    eprintln!("That set cannot be loaded together:\n");
+    eprintln!("That set cannot be installed as it stands:\n");
     for conflict in clashes {
         let a = selection::by_package(conflict.a).map_or(conflict.a, |e| e.label);
         let b = selection::by_package(conflict.b).map_or(conflict.b, |e| e.label);
         eprintln!("  {a} and {b}: {}.", conflict.explanation);
+    }
+    // Reported beside the conflicts rather than in a section of its own: from where the user
+    // stands both are "pick one of these two", and the difference in mechanism is ours.
+    for (entry, host) in redundant {
+        let host_label = selection::by_package(host).map_or(host, |e| e.label);
+        eprintln!(
+            "  {host_label} already does what {} does, so pick one of them -- loading both \
+             puts two copies of one feature in the game.",
+            entry.label
+        );
     }
     eprintln!("\nDrop one of each pair and try again.");
     true
