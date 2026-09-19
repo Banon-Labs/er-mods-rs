@@ -445,17 +445,31 @@ function watchRightWeaponSlot () {
   // "nothing is watching". A silent instrument that reports an absence is worse than no instrument,
   // because the absence looks like a finding.
   const refused = [];
-  const threads = Process.enumerateThreads();
-  for (const thread of threads) {
-    try {
-      // A method on the thread object, NOT the static `Thread.setHardwareWatchpoint` that this
-      // repo's notes name -- that spelling is `TypeError: not a function` on Frida 17.17.0, and
-      // because the first version counted only successes it reported zero armed threads as though
-      // that were a measurement. The slot id is the first argument: four per thread, 0..3.
-      thread.setHardwareWatchpoint(WATCH_SLOT, address, 4, 'w');
-      armed.push(thread.id);
-    } catch (error) {
-      if (refused.length < 3) refused.push(String(error));
+  // ONE thread: the one this poll is running on.
+  //
+  // The version before this armed every thread `Process.enumerateThreads()` returned -- 115 and 116
+  // on two runs -- and both games died, the second within 25 seconds of arming, leaving no crash
+  // record. Arming the whole process is the defect, not the watchpoint: it puts a debug register on
+  // 115 threads that have no business touching equipment, so every one of them traps into a handler
+  // whose resume has to be right, and it only has to be wrong once.
+  //
+  // This thread is the right one to ask, and it is the only one asked. A player-driven cycle is
+  // dispatched from the thread that reads the pad, so a write from here is the write in question; a
+  // write from somewhere else is a different question, and widening the watch to go looking for it
+  // is what killed two sessions.
+  const threads = [Process.getCurrentThreadId()];
+  for (const id of threads) {
+    for (const thread of Process.enumerateThreads()) {
+      if (thread.id !== id) continue;
+      try {
+        // A method on the thread object, NOT the static `Thread.setHardwareWatchpoint` that this
+        // repo's notes name -- that spelling is `TypeError: not a function` on Frida 17.17.0. The
+        // slot id is the first argument: four per thread, 0..3.
+        thread.setHardwareWatchpoint(WATCH_SLOT, address, 4, 'w');
+        armed.push(thread.id);
+      } catch (error) {
+        if (refused.length < 3) refused.push(String(error));
+      }
     }
   }
   watching = armed.length === 0 ? null : { address: address.toString(), threads: armed };

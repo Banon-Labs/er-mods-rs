@@ -102,6 +102,16 @@ away the entire time, and the section above already said so.
     threads printed `threadsArmed: 0` while the player pressed the button, which reads as "nothing
     writes this field" when it means "nothing is watching". An instrument that reports an absence
     it cannot detect is worse than no instrument.
+  - **Arm ONE thread -- the one that would do the write. Arming every thread kills the game.**
+    This is the mistake to avoid, and it is not an argument against watchpoints: four registers per
+    thread is cheap, but `Process.enumerateThreads()` on this target returns 115+, and putting a
+    debug register on all of them means every thread traps into a handler whose resume has to be
+    correct, which it only has to get wrong once. Measured 2026-09-19 on two consecutive sessions:
+    115 and 116 threads armed, both games dead, the second **24.6 seconds after arming** with the
+    watcher still alive and attached, and no crash record either time. Inside an `Interceptor`,
+    `Process.getCurrentThreadId()` is the thread that just ran the function you care about, and it
+    is usually the only one worth asking. If the writer turns out to be a different thread, that is
+    a second, narrower question -- not a reason to widen the watch to the whole process.
   - **A watchpoint outlives the agent that set it, so NEVER hard-kill a watcher holding one.** It
     lives in the thread's debug registers, not in the script. Once the agent is gone nothing
     services the exception, and the next write to that address kills the game leaving NOTHING in
@@ -115,6 +125,15 @@ away the entire time, and the section above already said so.
     other hard kill. `er-frida-watch.py` already ends on detach and handles `SIGTERM` itself; an
     outer cap only bypasses the thing that would have cleaned up. Nothing in-process survives
     `SIGKILL`, so there is no code fix for the second half -- only not doing it.
+  - **Give the watcher its own background task. Never chain it after anything.** The hard kill does
+    not only arrive as an explicit `timeout`: a command that waits for something and THEN starts the
+    watcher is one command, so the harness's own cap applies to the whole chain and lands on the
+    watcher at the end of it. Measured 2026-09-19, minutes after the rule above was written: an
+    `until` loop waiting for `oracle_player_present` followed by `er-frida-up.py` followed by
+    `er-frida-watch.py` was killed with `SIGTERM` at the two-minute cap, seconds after the probe
+    attached. That game survived only because the watchpoint had not armed yet -- it arms on the
+    first pad poll. Wait in one backgrounded command that EXITS when the condition is true, then
+    start the watcher as a second, separate background task with no cap on it.
 
 - **For a read-only question with no game running**, `/proc/<pid>/mem` via
   `scripts/er-live-fields.py` is still the cheapest answer and needs no server at all.
