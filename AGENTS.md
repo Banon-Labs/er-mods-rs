@@ -112,6 +112,20 @@ away the entire time, and the section above already said so.
     `Process.getCurrentThreadId()` is the thread that just ran the function you care about, and it
     is usually the only one worth asking. If the writer turns out to be a different thread, that is
     a second, narrower question -- not a reason to widen the watch to the whole process.
+  - **A watchpoint that catches nothing has told you nothing. Rule out the near end first.** Zero
+    writes means either the writer is broken or the chain that would reach it never began, and the
+    instrument cannot tell those apart -- so an agent that reads it as the first spends a session
+    under the wrong half of the question. Measured 2026-09-19: a player's right-hand weapon stopped
+    switching, `ChrAsm.right_weapon_slot` never moved, a single-thread write watchpoint on it saw
+    nothing, and the cause was that the d-pad direction had no button bound to it at all
+    (`CSPcKeyConfig+0x440` action `0x0f` held `-1` against a default of `2003`). Before arming
+    anything for an input that "does nothing", diff the player's binding table against the game's
+    own defaults: `python3 scripts/er-keybind-repair.py --diff --pad-only` is one read of a live
+    process, needs no server and no hook, and it answers in a line what the watchpoint cannot
+    answer at all. The same shape generalises -- confirm the press becomes a logical event before
+    asking which instruction wrote a field. `CSMenuMan+0x90` does NOT answer that: it is a
+    shown-menu-window bitmap, so a world action leaves no trace there and an empty diff of it is
+    not evidence.
   - **A watchpoint outlives the agent that set it, so NEVER hard-kill a watcher holding one.** It
     lives in the thread's debug registers, not in the script. Once the agent is gone nothing
     services the exception, and the next write to that address kills the game leaving NOTHING in
