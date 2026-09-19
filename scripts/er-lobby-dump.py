@@ -8,7 +8,7 @@
 
 `scripts/er-pool-check.py` answers one question -- same pool or not -- and prints only
 `lobby_key`. When the answer is "different", the next question is what the host publishes for
-every OTHER field as well: the band pair, the advertised-availability flag, the master-lobby
+every other field as well: the band pair, the advertised-availability flag, the master-lobby
 marker, the DLC number. Aiming a forced query at a host needs all of them, and reading them one
 `--lobby` flag at a time was costing a Frida attach per field.
 

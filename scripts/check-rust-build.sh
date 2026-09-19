@@ -266,6 +266,11 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	# System>Quit rows, so it carries the same 45 windows-only lib tests under the same
 	# `#[cfg(windows)] mod` tree; its 19 host-portable ones run from check.sh.
 	#
+	# er-invasion-warp joined on 2026-09-19. Its single windows-only lib test asserts that the
+	# `ShowNetworkMessage` seam is too wide for the four-argument union dispatcher, which is a
+	# claim about a `#[cfg(windows)]` const; on the host the whole module compiles away and the
+	# assertion has never been built.
+	#
 	# er-quit-menu-core is the one that shows why crate-level bookkeeping is not enough:
 	# check.sh has run it on the host for weeks, printing "ok. 43 passed", while 30 tests
 	# next to them had never been built. scripts/check-test-target-coverage.py holds this
@@ -274,7 +279,7 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 		cargo xwin test --lib \
 		-p er-quickload -p er-profile-summary-core \
 		-p er-quit-menu-core -p er-quit-load-character -p er-quit-rows \
-		-p er-invasion-path -p er-invasion-warp-core \
+		-p er-invasion-path -p er-invasion-warp -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 

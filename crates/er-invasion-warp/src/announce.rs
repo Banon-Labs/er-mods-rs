@@ -7,9 +7,9 @@
 //!
 //! This is the surface that says "Grace discovered" — it appears, scrolls, expires, and never
 //! waits for input. It replaces a deleted `system_message` module, which used `showPopupMenu` and
-//! therefore produced a BLOCKING MODAL WITH AN OK BUTTON: the user got a dialog they had to dismiss
-//! for every rejection, showing squares and then nothing, while the unattended dialog held the
-//! Seamless session open long enough to trip the stall watchdog. `showPopupMenu` is named a popup
+//! therefore produced a blocking modal with an `OK` button: the user got a dialog they had to
+//! dismiss for every rejection, showing squares and then nothing, while the unattended dialog held
+//! the Seamless session open long enough to trip the stall watchdog. `showPopupMenu` is a popup
 //! *menu* and behaves like one; that it was chosen at all was a failure to read.
 //!
 //! # Why this surface can do what a modal cannot

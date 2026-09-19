@@ -1317,7 +1317,7 @@ unsafe extern "system" {
     pub fn MH_QueueEnableHook(pTarget: *mut c_void) -> MH_STATUS;
     pub fn MH_QueueDisableHook(pTarget: *mut c_void) -> MH_STATUS;
 
-    // The four that FREEZE. Renamed rather than exported, so nothing can reach MinHook's
+    // The four that freeze. Renamed rather than exported, so nothing can reach MinHook's
     // thread-suspending entry points without passing through the guard below. See
     // [`freeze_guard`] for what that guard is for; the wrappers keep the original names and
     // signatures, so every existing call site is unchanged.
@@ -1365,7 +1365,7 @@ pub unsafe fn MH_Uninitialize() -> MH_STATUS {
 ///
 /// MinHook's `Freeze()` takes a `CreateToolhelp32Snapshot` and calls `SuspendThread` on every
 /// other thread in the process before it writes a detour, then resumes them. That is correct for
-/// one MinHook. This workspace ships twenty-one cdylibs, each of which statically links its OWN
+/// one MinHook. This workspace ships twenty-one cdylibs, each of which statically links its own
 /// MinHook instance -- deliberately, since the hook union owns exactly one instance per DLL -- so
 /// there are twenty-one independent freezers with twenty-one independent locks, and MinHook's own
 /// critical section serialises none of them against each other. Each shell then installs its hooks
@@ -1868,7 +1868,7 @@ pub fn patch_3byte_stub(
     // is `0x48`, `0x40`, `0x40` and `0x4c` at the four live call sites -- REX prefixes, which open
     // a large fraction of the image, so on a build that moved the function the check passes by
     // coincidence far more often than it fails and three bytes go into unrelated code. Measured
-    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are MID-FUNCTION.
+    // 2026-08-30: at their stale 1.16.2 RVAs on 1.17, all four targets are mid-function.
     if !detour_site::write_site_is_sound(address, STUB_LEN as u32, label) {
         return false;
     }

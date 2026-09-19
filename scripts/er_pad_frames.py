@@ -67,7 +67,7 @@ class Pad:
     def release(self) -> None:
         self._script.exports_sync.release()
 
-    # Releasing on construction only helps the NEXT driver. A driver killed or raising mid-hold
+    # Releasing on construction only helps the next driver. A driver killed or raising mid-hold
     # leaves the mask asserted until something else builds a `Pad`, and in the meantime the player
     # has a game that answers no input -- on 2026-09-18 that cost a relaunch mid-session. Used as
     # a context manager the release happens on every exit path, including an exception.

@@ -177,8 +177,19 @@ fi
 # `eldenring.exe` would match the idle line too and the refusal would fire with no game running.
 # It samples cpu ticks over 3s, which is the whole cost of this check and is invisible against a
 # ten-minute suite.
-if [[ "${ER_CHECK_FORCE:-}" != "1" && -z "${_check_stage:-}" ]] &&
-	python3 "$repo_root/scripts/er-teardown.py" --status 2>/dev/null | grep -q "game health: pid="; then
+#
+# The detector's output is captured into a variable rather than piped straight into the `if`, and
+# that shape is load-bearing: `_check_step_pattern` matches any line beginning with `python3`, so
+# a line that ran the detector directly was counted as a gate step by `ci-gate-portability.py` and
+# `check-stages.py`, which then demanded a ledger row and a stage for a preflight that is neither.
+# Assigning first keeps `python3` off the start of the line. `|| true` because the refusal is about
+# what the detector saw, not whether it succeeded -- a detector that failed to run has not found a
+# game, and turning its exit code into a refusal would block the suite whenever it broke.
+_check_live_game=""
+if [[ "${ER_CHECK_FORCE:-}" != "1" && -z "${_check_stage:-}" ]]; then
+	_check_live_game=$(python3 "$repo_root/scripts/er-teardown.py" --status 2>/dev/null || true)
+fi
+if [[ "$_check_live_game" == *"game health: pid="* ]]; then
 	echo "check.sh: REFUSED -- Elden Ring is running." >&2
 	echo "  The whole suite pins every core for ~10 minutes, and its own verdict is worthless on a" >&2
 	echo "  contended box: steps come back INCONCLUSIVE and NOT RUN, which is what the concurrent-" >&2
