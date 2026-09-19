@@ -130,10 +130,10 @@ pub fn walk_points(
         let Some(raw) = read(node) else {
             continue;
         };
-        if !raw.is_nil {
-            if let Some(point) = raw.point {
-                out.push(point);
-            }
+        if !raw.is_nil
+            && let Some(point) = raw.point
+        {
+            out.push(point);
         }
         stack.push(raw.left);
         stack.push(raw.right);
@@ -269,10 +269,21 @@ mod native {
     /// is null -- which it is until the first world load, exactly as the game's own callers assume.
     #[must_use]
     pub unsafe fn live_points() -> Vec<RegionPoint> {
-        let Ok(base) = er_game_base::mem::game_module_base() else {
+        // Resolved, not added. Every rva in this workspace is a 1.16.2 rva and the installed game
+        // is 1.17.1, and this global moved: measured live on run `br-20260919-050342-85b3` with
+        // `scripts/frida/play-region-global-is-stale.js`, the unresolved `0x143d6e388` reads null
+        // while the mapped `0x143d723f8` holds a manager at `0x135f5d00` whose `+0x8` map head is
+        // `0x1395fcc0`. So this function has returned an empty list on every 1.17 run, and the
+        // null guard below reported that as "no regions loaded yet" -- a wrong address wearing the
+        // shape of a legitimate early return. `game_rva_named` translates it against
+        // `docs/recon/rva-map-1162-to-1170.data.tsv` and refuses when no mapping is recorded, so
+        // an unrecognised build gives an empty list by saying so rather than by reading rubbish.
+        let Ok(global) = er_game_base::mem::game_rva_named(
+            er_game_base::rva::PLAY_REGION_POINT_MAN_GLOBAL_RVA as u32,
+            "PLAY_REGION_POINT_MAN_GLOBAL_RVA",
+        ) else {
             return Vec::new();
         };
-        let global = base + er_game_base::rva::PLAY_REGION_POINT_MAN_GLOBAL_RVA;
         let Some(manager) = (unsafe { er_game_base::mem::safe_read_usize(global) }) else {
             return Vec::new();
         };
