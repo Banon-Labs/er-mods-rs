@@ -658,6 +658,14 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 /// available, which is what makes this runnable from a pipe and from a test.
 pub fn run(picker: &mut Picker) -> io::Result<Option<Vec<&'static Mod>>> {
     let Some(_raw) = tui::RawMode::enter() else {
+        // Say which picker this is. Falling back silently leaves someone who has seen the
+        // full-screen one thinking it broke, when the cause is that this run has no terminal
+        // to drive -- input is piped, or the terminal refused raw mode.
+        println!(
+            "\n(Numbered list: this run has no interactive terminal, so the full-screen picker \
+             cannot start. Run it directly in a terminal for the arrow-key version, or pass \
+             --plain to choose this one.)"
+        );
         return run_plain(picker);
     };
     let mut stdin = io::stdin();
