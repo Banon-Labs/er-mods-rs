@@ -90,25 +90,47 @@ pub fn find_game(explicit: Option<&Path>) -> Result<GameInstall, Vec<PathBuf>> {
     Err(candidates)
 }
 
+/// Does this directory hold any of the DLLs this installer knows how to install?
+///
+/// Being a directory is not enough, and getting that wrong is not theoretical: run the Linux
+/// build straight out of `target/release` and the exe's own directory is the first candidate
+/// that exists, so discovery settled there and then reported all nine chosen mods missing --
+/// naming the wrong directory in the error, which is the shape of bug that sends someone
+/// looking for files that were never supposed to be there.
+fn holds_mod_dlls(dir: &Path) -> bool {
+    dir.is_dir()
+        && crate::catalog::CATALOG
+            .iter()
+            .any(|entry| dir.join(entry.artifact).is_file())
+}
+
 /// Where the DLLs to install are read from: alongside the installer in a release download, or
 /// out of a build tree when this is run from the repo.
+///
+/// An explicit `--dll-dir` wins unconditionally, even when it holds nothing, so the error names
+/// the directory the user chose rather than quietly searching somewhere else.
 pub fn find_dll_source(explicit: Option<&Path>) -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(path) = explicit {
-        candidates.push(path.to_path_buf());
+        return Some(path.to_path_buf());
     }
+    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
         // The release zip layout: the installer at the top, the DLLs in a folder beside it.
         candidates.push(dir.join("dlls"));
         candidates.push(dir.to_path_buf());
+        // Running the Linux build out of `target/release`, where the cross-compiled DLLs are
+        // one directory over.
+        if let Some(target) = dir.parent() {
+            candidates.push(target.join("x86_64-pc-windows-msvc/release"));
+        }
     }
     if let Ok(cwd) = std::env::current_dir() {
         candidates.push(cwd.join("target/x86_64-pc-windows-msvc/release"));
         candidates.push(cwd.join("dlls"));
     }
-    candidates.into_iter().find(|dir| dir.is_dir())
+    candidates.into_iter().find(|dir| holds_mod_dlls(dir))
 }
 
 /// A mod that was selected but whose DLL is not in the source directory.
@@ -247,6 +269,33 @@ mod tests {
         let empty = temp_dir("nogame");
         assert!(!is_game_dir(&empty));
         assert!(!is_game_dir(&empty.join("Game")));
+        fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[test]
+    fn an_empty_directory_is_not_taken_as_the_dll_source() {
+        let empty = temp_dir("emptysource");
+        assert!(
+            !holds_mod_dlls(&empty),
+            "an empty directory should be skipped"
+        );
+        let product = crate::selection::by_package("er-quickload").unwrap();
+        fs::write(empty.join(product.artifact), b"stub").unwrap();
+        assert!(
+            holds_mod_dlls(&empty),
+            "a directory with a mod DLL should be taken"
+        );
+        fs::remove_dir_all(&empty).unwrap();
+    }
+
+    #[test]
+    fn an_explicit_dll_dir_wins_even_when_it_holds_nothing() {
+        let empty = temp_dir("explicitsource");
+        let found = find_dll_source(Some(&empty)).expect("an explicit directory is always used");
+        assert_eq!(
+            found, empty,
+            "the error must name the directory the user chose"
+        );
         fs::remove_dir_all(&empty).unwrap();
     }
 
