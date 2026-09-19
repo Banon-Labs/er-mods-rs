@@ -14,6 +14,36 @@ use std::path::{Path, PathBuf};
 
 use crate::catalog::Mod;
 
+/// The DLLs baked into this executable, empty in a build that was not given any.
+///
+/// See `build.rs`: a release build embeds all of them so the download is one file, and a
+/// development build embeds none so it compiles in under a second.
+mod payload {
+    include!(concat!(env!("OUT_DIR"), "/embedded.rs"));
+}
+
+/// The bytes of one mod's DLL, if this build carries it.
+pub fn embedded(artifact: &str) -> Option<&'static [u8]> {
+    payload::EMBEDDED
+        .iter()
+        .find(|(name, _)| *name == artifact)
+        .map(|(_, bytes)| *bytes)
+}
+
+/// How many mods this executable can install without any other file.
+pub fn embedded_count() -> usize {
+    payload::EMBEDDED.len()
+}
+
+/// Which of `chosen` this build cannot supply from itself.
+pub fn not_embedded(chosen: &[&'static Mod]) -> Vec<&'static Mod> {
+    chosen
+        .iter()
+        .filter(|entry| embedded(entry.artifact).is_none())
+        .copied()
+        .collect()
+}
+
 /// What the game install looks like once it has been found.
 #[derive(Debug)]
 pub struct GameInstall {
@@ -152,25 +182,43 @@ pub fn missing_artifacts(chosen: &[&'static Mod], source: &Path) -> Vec<MissingA
         .collect()
 }
 
-/// Copy each chosen DLL into `dest`, returning the absolute path each one now lives at, in the
-/// order given. Existing files are overwritten: reinstalling is how a user updates.
-pub fn copy_artifacts(
+/// Write each chosen DLL into `dest`, returning the absolute path each one now lives at, in
+/// the order given. Existing files are overwritten: reinstalling is how a user updates.
+///
+/// A mod baked into this executable is written from there; `source` supplies anything that is
+/// not, and is `None` in a fully self-contained build. Preferring the embedded copy means a
+/// player who happens to have an unrelated `dlls` folder beside the installer still gets the
+/// versions this build was released with.
+pub fn install_artifacts(
     chosen: &[&'static Mod],
-    source: &Path,
+    source: Option<&Path>,
     dest: &Path,
 ) -> io::Result<Vec<(&'static Mod, String)>> {
     fs::create_dir_all(dest)?;
     let dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
     let mut installed = Vec::with_capacity(chosen.len());
     for entry in chosen {
-        let from = source.join(entry.artifact);
         let to = dest.join(entry.artifact);
-        fs::copy(&from, &to).map_err(|err| {
+        let context = |err: io::Error, from: &str| {
             io::Error::new(
                 err.kind(),
-                format!("copying {} to {}: {err}", from.display(), to.display()),
+                format!("writing {} from {from}: {err}", to.display()),
             )
-        })?;
+        };
+        match embedded(entry.artifact) {
+            Some(bytes) => fs::write(&to, bytes).map_err(|err| context(err, "this installer"))?,
+            None => {
+                let source = source.ok_or_else(|| {
+                    io::Error::other(format!(
+                        "{} is not built into this installer and no folder of mod files was \
+                         found. Pass --dll-dir <path>.",
+                        entry.artifact
+                    ))
+                })?;
+                let from = source.join(entry.artifact);
+                fs::copy(&from, &to).map_err(|err| context(err, &from.display().to_string()))?;
+            }
+        }
         installed.push((*entry, display_path(&to)));
     }
     Ok(installed)
@@ -319,7 +367,7 @@ mod tests {
         let product = crate::selection::by_package("er-quickload").unwrap();
         fs::write(source.join(product.artifact), b"stub").unwrap();
 
-        let installed = copy_artifacts(&[product], &source, &dest).unwrap();
+        let installed = install_artifacts(&[product], Some(&source), &dest).unwrap();
         assert_eq!(installed.len(), 1);
         let (_, path) = &installed[0];
         assert!(Path::new(path).is_absolute(), "{path} is not absolute");
@@ -339,13 +387,64 @@ mod tests {
         let dest = temp_dir("recopy-dst");
         let product = crate::selection::by_package("er-quickload").unwrap();
         fs::write(source.join(product.artifact), b"first").unwrap();
-        copy_artifacts(&[product], &source, &dest).unwrap();
+        install_artifacts(&[product], Some(&source), &dest).unwrap();
+        let first = fs::read(dest.join(product.artifact)).unwrap();
         fs::write(source.join(product.artifact), b"second").unwrap();
-        copy_artifacts(&[product], &source, &dest).unwrap();
-        assert_eq!(fs::read(dest.join(product.artifact)).unwrap(), b"second");
+        install_artifacts(&[product], Some(&source), &dest).unwrap();
+        let second = fs::read(dest.join(product.artifact)).unwrap();
+
+        if embedded(product.artifact).is_some() {
+            // A build carrying its own payload writes that, and the directory is ignored --
+            // which is the point: a stray `dlls` folder must not override a release.
+            assert_eq!(first, second);
+            assert_eq!(second, embedded(product.artifact).unwrap());
+        } else {
+            assert_eq!(second, b"second");
+        }
 
         fs::remove_dir_all(&source).unwrap();
         fs::remove_dir_all(&dest).unwrap();
+    }
+
+    #[test]
+    fn a_build_with_a_payload_needs_no_directory_at_all() {
+        let dest = temp_dir("embedded-dst");
+        let product = crate::selection::by_package("er-quickload").unwrap();
+
+        match embedded(product.artifact) {
+            Some(bytes) => {
+                let installed = install_artifacts(&[product], None, &dest).unwrap();
+                assert_eq!(installed.len(), 1);
+                assert_eq!(fs::read(dest.join(product.artifact)).unwrap(), bytes);
+            }
+            None => {
+                // A development build carries nothing, and must say so rather than write a
+                // truncated or empty DLL into someone's game directory.
+                let refusal = install_artifacts(&[product], None, &dest).unwrap_err();
+                assert!(
+                    refusal.to_string().contains("--dll-dir"),
+                    "refusal should say how to fix it: {refusal}"
+                );
+            }
+        }
+        fs::remove_dir_all(&dest).unwrap();
+    }
+
+    #[test]
+    fn the_payload_is_all_or_nothing_never_a_partial_set() {
+        // A build that carries some mods but not others would offer all of them and install
+        // only some, which is the failure `--selfcheck` exists to make impossible to ship.
+        let count = embedded_count();
+        assert!(
+            count == 0 || count == crate::catalog::CATALOG.len(),
+            "this build carries {count} of {} mods",
+            crate::catalog::CATALOG.len()
+        );
+        let all: Vec<&'static Mod> = crate::catalog::CATALOG.iter().collect();
+        assert_eq!(
+            not_embedded(&all).len(),
+            crate::catalog::CATALOG.len() - count
+        );
     }
 
     #[test]

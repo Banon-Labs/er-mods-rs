@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
-"""Assemble the thing a player downloads: the installer, and the DLLs it installs.
+"""Assemble the thing a player downloads: one executable, carrying everything it installs.
 
-Layout, which is also what `install::find_dll_source` looks for:
+Layout, and there is deliberately nothing else in it:
 
     er-mods-<commit>/
       er-installer.exe      run this on Windows
       er-installer          run this on Linux
       README.txt
-      dlls/
-        er_quickload.dll
-        ... one per shipped shell
+
+Why the mods are not files beside it
+------------------------------------
+A player finds a release page and downloads the installer. They do not clone the repo, and
+plenty of them will not unpack a folder either -- they run the executable. An installer that
+reads a `dlls` directory beside itself works on the machine that built it and fails on every
+machine that matters, so the DLLs are compiled into both binaries by `tools/er-installer/
+build.rs` and written out from there. 33 MB of payload against a 50 GB game.
 
 Both hosts, one download
 ------------------------
-me3 runs natively on Linux, where the game is a Proton process -- so the natives stay PE for
-everyone and only the installer differs. The Linux build is an ELF from the host toolchain,
-the Windows one a PE from cargo-xwin, and the zip records the executable bit on the ELF
-because Python does not do that by default and a downloaded installer nobody can run is a
-download that failed quietly.
+me3 runs natively on Linux, where the game is a Proton process -- so the mods stay PE for
+everyone and only the installer differs. The Linux build is an ELF from the host toolchain, the
+Windows one a PE from cargo-xwin, and the zip records the executable bit on the ELF because
+Python does not do that by default and a downloaded installer nobody can run is a download that
+failed quietly.
 
-The zip is refused rather than shipped incomplete. A download missing one DLL produces an
-installer that offers a mod and then cannot install it, which is a worse failure than not
-having built the zip: the user has already chosen it by then.
+The binary is asked, not assumed
+--------------------------------
+`er-installer --selfcheck` exits non-zero unless the executable carries every mod its catalog
+offers. This runs it against the actual ELF being packaged rather than trusting that the build
+command was given the right environment -- the failure it exists to catch is a release built
+without `ER_INSTALLER_EMBED_DIR`, which is a perfectly good 440 KB binary that can install
+nothing. The Windows build cannot be run here, so it is checked by size against the ELF.
 
 What may never go in, checked per file rather than trusted
 ----------------------------------------------------------
-`SeamlessCoop/ersc.dll` is another author's work and this repo does not copy, stage, archive
-or release it -- profiles reference it where the game installed it. Save files are the user's.
-Both are refused by name and by suffix on every file added, so a future edit that widens the
-glob cannot quietly include one.
+`SeamlessCoop/ersc.dll` is another author's work and this repo does not copy, stage, archive or
+release it -- profiles reference it where the game installed it. Save files are the user's.
+Both are refused by name and by suffix on every file added.
 
 Usage:
     python3 scripts/build-installer-release.py
@@ -37,8 +45,10 @@ Usage:
 
 Build the payload first; this packages, it does not compile:
     scripts/er-build-dlls.sh --all
-    cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer
-    cargo build --release -p er-installer
+    ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\
+        cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer
+    ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\
+        cargo build --release -p er-installer
 """
 
 from __future__ import annotations
@@ -59,14 +69,21 @@ DEFAULT_OUT_DIR = REPO_ROOT / "target" / "deliverables"
 INSTALLER_EXE = "er-installer.exe"
 INSTALLER_ELF = "er-installer"
 
-# `rwxr-xr-x` in the high half of a zip entry's external attributes, which is where Info-ZIP and
-# every Linux unzip look for a Unix mode. Without it the ELF unpacks unreadable as a program.
-EXECUTABLE_ZIP_ATTR = (0o100755 & 0xFFFF) << 16
-
 # Refused by name. `ersc.dll` is Seamless Co-op; the rest are save containers.
 FORBIDDEN_NAMES = {"ersc.dll", "ER0000.sl2", "ER0000.co2"}
 # Refused by suffix, so a renamed save cannot get through the name check.
 FORBIDDEN_SUFFIXES = {".sl2", ".co2", ".bak"}
+
+# `rwxr-xr-x` in the high half of a zip entry's external attributes, which is where Info-ZIP and
+# every Linux unzip look for a Unix mode. Without it the ELF unpacks unreadable as a program.
+EXECUTABLE_ZIP_ATTR = (0o100755 & 0xFFFF) << 16
+
+# The Windows build cannot be run on this host, so its payload is checked by size against the
+# ELF's. The two differ in runtime and in linker, not in the 33 MB they both carry, so anything
+# above half is carrying it and a payload-free build is under two percent.
+MIN_EXE_RATIO = 0.5
+
+SELFCHECK_TIMEOUT_SECONDS = 25
 
 
 def shipped_artifacts() -> list[str]:
@@ -109,10 +126,11 @@ WHAT TO DO
   1. Install me3 if you have not: https://github.com/garyttierney/me3
   2. Windows: run er-installer.exe
      Linux:   run ./er-installer      (same program; me3 runs natively on Linux)
-  3. Tick what you want and press a.
+  3. Move with the arrow keys, space to tick, enter to install.
 
-The mods themselves are Windows DLLs on both systems -- on Linux the game is a Proton
-process, so only the installer differs.
+This one file is everything. The mods are inside it -- there is nothing else to download and
+no folder to keep it next to. The mods themselves are Windows DLLs on both systems, because on
+Linux the game runs under Proton; only the installer differs.
 
 It finds the game on its own when Steam is somewhere usual. If it cannot, pass the folder
 holding eldenring.exe:
@@ -122,17 +140,24 @@ holding eldenring.exe:
 
 Some pairs of mods destroy each other when loaded together -- usually by one of them silently
 doing nothing rather than by crashing. The installer knows which pairs those are and refuses
-them as you tick, telling you which one to drop. `er-installer.exe --list` prints the whole
-list up front, mods and conflicting pairs both.
+them as you tick, telling you which one to drop. `er-installer --list` prints the whole list up
+front, mods and conflicting pairs both.
 
 Picking nothing is a supported answer: it writes a profile that loads no mods at all.
 
+OTHER OPTIONS
+  --dry-run       show the profile it would write, and touch nothing
+  --defaults      install the recommended set without the picker
+  --plain         a numbered list instead of the full-screen picker
+  --no-seamless   leave Seamless Co-op out of the profile
+  --selfcheck     confirm this copy carries every mod it offers
+
 SEAMLESS CO-OP
-Not included here, and never will be -- it is someone else's mod. If you have it installed,
-the profile references it where it already is. `--no-seamless` leaves it out.
+Not included here, and never will be -- it is someone else's mod. If you have it installed, the
+profile references it where it already is.
 
 WHERE THINGS GO
-  <game>/er-mods/            the DLLs you chose
+  <game>/er-mods/            the mods you chose
   <game>/er-mods/er-mods.me3 the profile
 Some mods read a settings file from the game folder; the installer names them when it finishes.
 
@@ -140,47 +165,72 @@ Built from commit {commit}.
 """
 
 
+def verify_self_contained(elf: Path, expected: int) -> None:
+    """Ask the binary itself whether it carries every mod. Refuse the release if not."""
+    try:
+        finished = subprocess.run(
+            [str(elf), "--selfcheck"],
+            capture_output=True,
+            text=True,
+            timeout=SELFCHECK_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as err:
+        raise SystemExit(f"could not run {elf} --selfcheck: {err}") from err
+    if finished.returncode != 0:
+        raise SystemExit(
+            f"{elf} is not self-contained, so a player downloading it alone would get an "
+            f"installer that can install nothing:\n\n{finished.stdout}{finished.stderr}"
+        )
+    if str(expected) not in finished.stdout:
+        raise SystemExit(
+            f"{elf} --selfcheck passed but does not mention {expected} mods -- the catalog and "
+            f"the payload disagree:\n{finished.stdout}"
+        )
+
+
+def verify_exe_payload(exe: Path, elf: Path) -> None:
+    """The Windows build cannot be run here, so check it is carrying the same payload by size."""
+    exe_size = exe.stat().st_size
+    floor = int(elf.stat().st_size * MIN_EXE_RATIO)
+    if exe_size < floor:
+        raise SystemExit(
+            f"{exe} is {exe_size:,} bytes against the Linux build's "
+            f"{elf.stat().st_size:,}. It was almost certainly built without "
+            "ER_INSTALLER_EMBED_DIR, which produces a working installer that carries no mods."
+        )
+
+
 def stage(out_dir: Path, source: Path, host_source: Path, commit: str) -> tuple[Path, list[str]]:
     """Copy the payload into `out_dir/<name>`, returning that directory and its file list."""
-    name = f"er-mods-{commit}"
-    root = out_dir / name
-    dll_dir = root / "dlls"
-    dll_dir.mkdir(parents=True, exist_ok=True)
-
-    wanted = shipped_artifacts()
-    missing = [f"{source}/{artifact}" for artifact in wanted if not (source / artifact).is_file()]
     exe = source / INSTALLER_EXE
     elf = host_source / INSTALLER_ELF
-    if not exe.is_file():
-        missing.append(str(exe))
-    # The Linux installer is not optional. me3 runs natively on Linux, and shipping only the
-    # Windows build would leave every Linux player with a zip they cannot start.
-    if not elf.is_file():
-        missing.append(str(elf))
+    missing = [str(path) for path in (exe, elf) if not path.is_file()]
     if missing:
         raise SystemExit(
             "missing from the build tree:\n"
             + "".join(f"  {item}\n" for item in missing)
             + "\nBuild the payload first:\n"
             "  scripts/er-build-dlls.sh --all\n"
-            "  cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer\n"
-            "  cargo build --release -p er-installer"
+            "  ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\\n"
+            "      cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer\n"
+            "  ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\\n"
+            "      cargo build --release -p er-installer"
         )
 
+    verify_self_contained(elf, len(shipped_artifacts()))
+    verify_exe_payload(exe, elf)
+
+    root = out_dir / f"er-mods-{commit}"
+    root.mkdir(parents=True, exist_ok=True)
     staged: list[str] = []
-    for artifact in wanted:
-        reason = forbidden_reason(artifact)
+    for name, built in ((INSTALLER_EXE, exe), (INSTALLER_ELF, elf)):
+        reason = forbidden_reason(name)
         if reason:
             raise SystemExit(f"refusing to package: {reason}")
-        (dll_dir / artifact).write_bytes((source / artifact).read_bytes())
-        staged.append(f"dlls/{artifact}")
-
-    (root / INSTALLER_EXE).write_bytes(exe.read_bytes())
-    staged.append(INSTALLER_EXE)
-    linux_installer = root / INSTALLER_ELF
-    linux_installer.write_bytes(elf.read_bytes())
-    linux_installer.chmod(0o755)
-    staged.append(INSTALLER_ELF)
+        destination = root / name
+        destination.write_bytes(built.read_bytes())
+        destination.chmod(0o755)
+        staged.append(name)
     (root / "README.txt").write_text(README.format(commit=commit), encoding="utf-8")
     staged.append("README.txt")
     return root, staged
@@ -206,6 +256,8 @@ def write_zip(root: Path, out_dir: Path) -> Path:
 
 
 def selftest() -> int:
+    import tempfile
+
     failures = 0
     cases = [
         ("ersc.dll", True, "Seamless Co-op is refused by name"),
@@ -225,49 +277,67 @@ def selftest() -> int:
     if not wanted:
         print("SELFTEST FAIL: the shipped artifact list came back empty")
         failures += 1
-    for artifact in wanted:
-        if forbidden_reason(artifact):
-            print(f"SELFTEST FAIL: a shipped artifact is on the refusal list: {artifact}")
-            failures += 1
 
-    failures += _selftest_package(wanted)
-
-    if failures:
-        print(f"selftest: {failures} case(s) failed")
-        return 1
-    print(f"selftest: {len(cases) + 4} cases passed, {len(wanted)} artifacts in the payload")
-    return 0
-
-
-def _selftest_package(wanted: list[str]) -> int:
-    """Stage and zip a payload of stubs, and check what a player would actually unpack."""
-    import tempfile
-
-    failures = 0
     with tempfile.TemporaryDirectory(prefix="er-installer-release-") as tmp:
         tmp = Path(tmp)
         source, host_source, out_dir = tmp / "win", tmp / "host", tmp / "out"
         source.mkdir()
         host_source.mkdir()
-        for artifact in wanted:
-            (source / artifact).write_bytes(b"stub")
-        (source / INSTALLER_EXE).write_bytes(b"stub")
 
-        # The Linux build absent must refuse, not quietly ship a Windows-only zip.
+        # Nothing built at all must refuse and name both binaries.
         try:
             stage(out_dir, source, host_source, "selftest")
         except SystemExit as refusal:
-            if INSTALLER_ELF not in str(refusal):
-                print(f"SELFTEST FAIL: refusal did not name the missing Linux build: {refusal}")
+            if INSTALLER_ELF not in str(refusal) or INSTALLER_EXE not in str(refusal):
+                print(f"SELFTEST FAIL: refusal did not name both builds: {refusal}")
                 failures += 1
         else:
-            print("SELFTEST FAIL: a missing Linux installer was packaged anyway")
+            print("SELFTEST FAIL: an empty build tree was packaged anyway")
             failures += 1
 
-        (host_source / INSTALLER_ELF).write_bytes(b"stub")
+        # A binary that fails its own self-check must not be shippable.
+        failing = host_source / INSTALLER_ELF
+        failing.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        failing.chmod(0o755)
+        (source / INSTALLER_EXE).write_bytes(b"stub")
+        try:
+            stage(out_dir, source, host_source, "selftest")
+        except SystemExit as refusal:
+            if "self-contained" not in str(refusal):
+                print(f"SELFTEST FAIL: a failed selfcheck gave the wrong refusal: {refusal}")
+                failures += 1
+        else:
+            print("SELFTEST FAIL: a binary carrying no mods was packaged anyway")
+            failures += 1
+
+        # A passing self-check, but a Windows build far too small to hold the payload.
+        passing = host_source / INSTALLER_ELF
+        passing.write_text(
+            f"#!/bin/sh\necho 'self-contained -- all {len(wanted)} mods are built in'\n",
+            encoding="utf-8",
+        )
+        passing.chmod(0o755)
+        # Pad the ELF so the ratio check has something to measure against.
+        with passing.open("ab") as handle:
+            handle.write(b"#" * 200_000)
+        try:
+            stage(out_dir, source, host_source, "selftest")
+        except SystemExit as refusal:
+            if "ER_INSTALLER_EMBED_DIR" not in str(refusal):
+                print(f"SELFTEST FAIL: a tiny exe gave the wrong refusal: {refusal}")
+                failures += 1
+        else:
+            print("SELFTEST FAIL: a payload-free Windows build was packaged anyway")
+            failures += 1
+
+        # Both sound: it stages two binaries and a readme, and nothing else.
+        (source / INSTALLER_EXE).write_bytes(b"#" * 200_000)
         root, staged = stage(out_dir, source, host_source, "selftest")
-        if INSTALLER_ELF not in staged or INSTALLER_EXE not in staged:
-            print(f"SELFTEST FAIL: both installers should be staged, got {staged[-3:]}")
+        if sorted(staged) != sorted([INSTALLER_EXE, INSTALLER_ELF, "README.txt"]):
+            print(f"SELFTEST FAIL: unexpected payload {staged}")
+            failures += 1
+        if any(path.is_dir() for path in root.iterdir()):
+            print("SELFTEST FAIL: the download has a folder in it; it should be flat")
             failures += 1
 
         archive = write_zip(root, out_dir)
@@ -284,7 +354,12 @@ def _selftest_package(wanted: list[str]) -> int:
                     f"(mode {(entry.external_attr >> 16):o})"
                 )
                 failures += 1
-    return failures
+
+    if failures:
+        print(f"selftest: {failures} case(s) failed")
+        return 1
+    print(f"selftest: {len(cases) + 7} cases passed, {len(wanted)} mods expected in a release")
+    return 0
 
 
 def main() -> int:
@@ -302,11 +377,17 @@ def main() -> int:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     root, staged = stage(args.out_dir, args.source, args.host_source, commit)
     archive = write_zip(root, args.out_dir)
-    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
 
     print(f"staged {len(staged)} file(s) in {root}")
-    print(f"zip    {archive}")
-    print(f"sha256 {digest}")
+    for name in staged:
+        size = (root / name).stat().st_size
+        print(f"  {name:<20} {size:>12,} bytes")
+    print(f"zip    {archive} ({archive.stat().st_size:,} bytes)")
+    print(f"sha256 {hashlib.sha256(archive.read_bytes()).hexdigest()}")
+    print(
+        "\nEither binary can be uploaded on its own -- each carries every mod it offers, "
+        "confirmed by running --selfcheck against the Linux build."
+    )
     return 0
 
 

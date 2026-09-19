@@ -61,6 +61,8 @@ OPTIONS:
     --defaults            Install the recommended set without the picker.
     --none                Write a profile that loads nothing.
     --list                Print every available mod and exit.
+    --selfcheck           Report whether this executable carries every mod it offers, and
+                          exit non-zero if it does not. No game needed.
     --dry-run             Print the profile that would be written; copy nothing.
     --version             Print the version and exit.
     -h, --help            Print this and exit.
@@ -78,6 +80,7 @@ struct Args {
     defaults: bool,
     none: bool,
     list: bool,
+    selfcheck: bool,
     dry_run: bool,
     version: bool,
     help: bool,
@@ -106,6 +109,7 @@ impl Args {
                 "--defaults" => parsed.defaults = true,
                 "--none" => parsed.none = true,
                 "--list" => parsed.list = true,
+                "--selfcheck" => parsed.selfcheck = true,
                 "--dry-run" => parsed.dry_run = true,
                 "--version" => parsed.version = true,
                 "-h" | "--help" => parsed.help = true,
@@ -184,6 +188,39 @@ fn print_list() {
     }
 }
 
+/// Does this executable carry every mod it offers?
+///
+/// A release build answers yes and needs nothing else on the machine. This exists so that
+/// question is asked of the binary that will actually be uploaded, by the packager, rather
+/// than inferred from the build command having been run with the right environment.
+fn selfcheck() -> ExitCode {
+    let all: Vec<&'static Mod> = CATALOG.iter().collect();
+    let outstanding = install::not_embedded(&all);
+    if outstanding.is_empty() {
+        println!(
+            "er-installer {VERSION}: self-contained -- all {} mods are built in, \
+             no other files needed.",
+            CATALOG.len()
+        );
+        return ExitCode::SUCCESS;
+    }
+    eprintln!(
+        "er-installer {VERSION}: carries {} of {} mods. Not shippable on its own.\n\
+         Missing:",
+        install::embedded_count(),
+        CATALOG.len()
+    );
+    for entry in outstanding {
+        eprintln!("  {} ({})", entry.artifact, entry.label);
+    }
+    eprintln!(
+        "\nBuild with the payload:\n  scripts/er-build-dlls.sh --all\n  \
+         ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\\n    \
+         cargo build --release -p er-installer"
+    );
+    ExitCode::FAILURE
+}
+
 fn report_conflicts(chosen: &[&'static Mod]) -> bool {
     let clashes = selection::conflicts_within(chosen);
     if clashes.is_empty() {
@@ -213,6 +250,9 @@ fn run() -> Result<ExitCode, String> {
     if args.list {
         print_list();
         return Ok(ExitCode::SUCCESS);
+    }
+    if args.selfcheck {
+        return Ok(selfcheck());
     }
 
     let game = install::find_game(args.game_dir.as_deref()).map_err(|tried| {
@@ -263,25 +303,36 @@ fn run() -> Result<ExitCode, String> {
         .profile
         .unwrap_or_else(|| install_dir.join("er-mods.me3"));
 
-    // An empty selection needs no DLL source at all, which is what makes "install nothing"
-    // work from a bare download.
+    // An empty selection needs no mod files at all, which is what makes "install nothing" work
+    // from a bare download. Anything this build carries needs none either: a directory is
+    // looked for only to cover what is left, which in a release build is nothing.
     let natives = if chosen.is_empty() {
         Vec::new()
     } else {
-        let source = install::find_dll_source(args.dll_dir.as_deref()).ok_or_else(|| {
-            "Could not find the mod DLLs. Put them in a `dlls` folder beside this program, \
-             or pass --dll-dir <path>."
-                .to_string()
-        })?;
-        let missing = install::missing_artifacts(&chosen, &source);
-        if !missing.is_empty() {
-            let mut message = format!("These files are not in {}:\n", source.display());
-            for item in missing {
-                message.push_str(&format!("  {} ({})\n", item.artifact, item.label));
+        let outstanding = install::not_embedded(&chosen);
+        let source = if outstanding.is_empty() {
+            None
+        } else {
+            let found = install::find_dll_source(args.dll_dir.as_deref()).ok_or_else(|| {
+                let names: Vec<&str> = outstanding.iter().map(|entry| entry.label).collect();
+                format!(
+                    "This installer does not carry {}, and no folder of mod files was found.\n\
+                     Put them in a `dlls` folder beside this program, or pass --dll-dir <path>.",
+                    names.join(", ")
+                )
+            })?;
+            let missing = install::missing_artifacts(&outstanding, &found);
+            if !missing.is_empty() {
+                let mut message = format!("These files are not in {}:\n", found.display());
+                for item in missing {
+                    message.push_str(&format!("  {} ({})\n", item.artifact, item.label));
+                }
+                message.push_str("\nNothing was installed.");
+                return Err(message);
             }
-            message.push_str("\nNothing was installed.");
-            return Err(message);
-        }
+            Some(found)
+        };
+
         if args.dry_run {
             chosen
                 .iter()
@@ -293,7 +344,7 @@ fn run() -> Result<ExitCode, String> {
                 })
                 .collect()
         } else {
-            install::copy_artifacts(&chosen, &source, &install_dir)
+            install::install_artifacts(&chosen, source.as_deref(), &install_dir)
                 .map_err(|err| format!("installing the mod files: {err}"))?
         }
     };
