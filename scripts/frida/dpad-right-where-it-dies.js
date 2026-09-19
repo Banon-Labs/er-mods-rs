@@ -484,6 +484,39 @@ function watchRightWeaponSlot () {
   return watching;
 }
 
+// Give every armed thread its debug register back.
+//
+// This is not tidiness, it is the difference between a probe and a crash. A hardware watchpoint
+// lives in the thread's debug registers, not in the agent, so it outlives the agent: once this
+// script is gone there is no exception handler left, and the next write to the watched address
+// raises a debug exception nobody services. The game dies, with nothing in the crash log, because
+// an unhandled hardware-debug exception is not a fault the crash handler can catch.
+//
+// Measured 2026-09-19, on this repo's own game: the watcher holding 116 armed threads was killed
+// by its outer `timeout` at 18:38:50 and the game's last log write is 18:38:49 -- the same second,
+// mid-sweep, with the heartbeat healthy at tick 67200 one line earlier. `bd
+// never-vtable-swap-from-frida-a-killed-watcher-freezes-the-game-2026-09-18` is the same lesson
+// through a different instrument.
+function releaseWatchpoints () {
+  if (watching === null) return;
+  const held = watching;
+  watching = null;
+  watchAttemptsLeft = 0;
+  for (const id of held.threads) {
+    for (const thread of Process.enumerateThreads()) {
+      if (thread.id !== id) continue;
+      try {
+        thread.unsetHardwareWatchpoint(WATCH_SLOT);
+      } catch (error) {
+        // A thread that has exited cannot hold a watchpoint, so there is nothing to give back.
+      }
+    }
+  }
+}
+
+// Frida calls this when the script is unloaded, which covers a clean detach and the watcher's own
+// `SIGTERM` path. It does NOT cover a `SIGKILL`, which is why the runner must never hard-kill a
+// watcher that owns debug state -- there is no in-process fix for being killed outright.
 Process.setExceptionHandler(function (details) {
   if (details.type !== 'breakpoint' && details.type !== 'single-step' && details.type !== 'access-violation') {
     return false;
@@ -518,5 +551,14 @@ rpc.exports = {
       perDevice.push({ device: device, polls: state.polls, everNonZero: state.everNonZero });
     }
     return { counts: counts, devices: perDevice };
+  },
+  // Frida calls `dispose` when the script is unloaded, which covers a clean detach, a reload in
+  // place, and the watcher's own `SIGTERM` path. Giving the debug registers back there is what
+  // stops this agent from outliving itself as an unhandled exception in the player's game.
+  //
+  // It cannot cover `SIGKILL`: nothing in-process can. That half of the fix belongs to whoever
+  // starts the watcher -- do not wrap one that owns debug state in a hard kill.
+  dispose: function () {
+    releaseWatchpoints();
   },
 };
