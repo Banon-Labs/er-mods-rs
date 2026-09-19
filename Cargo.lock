@@ -2984,6 +2984,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-installer"
+version = "0.1.0"
+
+[[package]]
 name = "er-invasion-path"
 version = "0.1.0"
 dependencies = [

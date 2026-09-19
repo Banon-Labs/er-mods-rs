@@ -2621,6 +2621,24 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 
+# The same coverage question, asked of the file that gives each shell a name a player can read.
+# A cdylib with no catalog entry is shipped and unreachable: the installer builds its rows from
+# that file and nothing else. The gate also proves the out-of-box selection is conflict-free,
+# which is the one failure a picker has no excuse for -- a first profile that cannot load.
+python3 "$repo_root/scripts/check-me3-dll-catalog.py" --selftest
+python3 "$repo_root/scripts/check-me3-dll-catalog.py"
+
+# ...and that the Rust the installer actually links still says what those two tables say. The
+# catalog is compiled in rather than parsed at runtime, so drift here is an installer shipping
+# a mod list from whenever it was last generated.
+python3 "$repo_root/scripts/gen-installer-catalog.py" --selftest
+python3 "$repo_root/scripts/gen-installer-catalog.py" --check
+
+# The release packager's refusal list, proven to refuse rather than assumed to. It is what
+# stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
+# deny list nobody exercises is a deny list that stopped matching years ago.
+python3 "$repo_root/scripts/build-installer-release.py" --selftest
+
 # ...and the table only helps if it still matches the code. This scans every cdylib for the hook
 # targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]
 # row -- then proves each [[shared]] row's mechanism, so neither side can quietly revert to a

@@ -1,0 +1,26 @@
+# The thing a player downloads: one executable that picks mods and writes the me3 profile.
+#
+# It has NO dependencies, and that is a product requirement rather than a preference. Every
+# dependency here is something a user would have to trust or a binary this would have to carry,
+# and the two tables it needs are compiled in by `scripts/gen-installer-catalog.py` rather than
+# parsed at runtime -- so there is no data file beside the exe to lose and no TOML parser inside
+# it. `src/catalog.rs` is generated; edit `scripts/me3-dll-catalog.toml` instead.
+#
+# Host-buildable and game-free on purpose: `cargo test -p er-installer` runs the conflict rules,
+# the picker state machine and the profile writer on Linux, with no game and no Windows target.
+# It cross-compiles to `x86_64-pc-windows-msvc` for shipping, through the same cargo-xwin path
+# the DLLs use.
+[package]
+name = "er-installer"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "er-installer"
+path = "src/main.rs"
+
+[dependencies]
+
+[lints]
+workspace = true
