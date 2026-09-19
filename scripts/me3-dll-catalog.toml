@@ -1,0 +1,279 @@
+# What each ME3-loadable DLL is CALLED, and what it does, in words a player can read.
+#
+# WHY THIS FILE IS SEPARATE FROM `me3-dll-conflicts.toml`
+# ------------------------------------------------------
+# The conflict table answers "can these two share a process", and every word in it is
+# reverse-engineering evidence: prologue addresses, handler symbols, the run that measured
+# the collision. This file answers "what should the row in the picker say", which is product
+# copy. Mixing them would put a label edit in the same diff as a hook-collision finding, and
+# the reviewer of one is not the reviewer of the other.
+#
+# CONSUMED BY  scripts/gen-installer-catalog.py  (emits tools/er-installer/src/catalog.rs)
+# GATED BY     scripts/check-me3-dll-catalog.py  (coverage both ways + the rules below)
+#
+# THE RULES THE GATE ENFORCES, and why each one exists
+# ----------------------------------------------------
+#  * Every shipped shell has exactly one entry, and every entry is a shipped shell. A new
+#    cdylib with no entry would be invisible in the installer -- shipped, and unreachable.
+#  * `audience = "diagnostic"` implies `default = false`. These drive input, install trace
+#    detours, or write telemetry nobody reads back; a player who ticks one has decided to.
+#  * A package listed in `[opt_in_only]` in the conflict table implies `default = false`.
+#    That table is where a mod that changes params or drives input records that it must be
+#    asked for. Two tables disagreeing about consent is the bug, so the gate refuses it.
+#  * THE DEFAULT SET MUST BE CONFLICT-FREE. This is the rule worth having: the gate builds
+#    the set of `default = true` packages and runs it through the same conflict check the
+#    installer uses. A first-run profile that cannot load is the one failure a picker has no
+#    excuse for, and it is now impossible to commit.
+#
+# FIELDS
+#   label           short name for the picker row
+#   blurb           one sentence, <= 200 chars, present tense, no addresses or crate names
+#   category        menus-and-saves | quality-of-life | multiplayer | cosmetic | diagnostics
+#   audience        player | diagnostic
+#   default         ticked on a first run
+#   needs_seamless  true when the DLL is inert or refuses without Seamless Co-op loaded
+#   config          the DLL's own file in the game directory, when it has one worth naming
+
+[er-quickload]
+label = "Quickload (full suite)"
+blurb = "Adds Load Character, Load Character from File, Load Build from URL and Generate Build Link to the System > Quit tab, plus the boot save picker and the loading-screen portrait."
+category = "menus-and-saves"
+audience = "player"
+default = true
+config = "er-quickload.toml"
+
+[er-quit-menu]
+label = "Quit-menu rows only"
+blurb = "The four cloned System > Quit rows on their own, without the rest of the Quickload suite. Pick this instead of Quickload, never alongside it."
+category = "menus-and-saves"
+audience = "player"
+default = false
+
+[er-quit-rows]
+label = "Quit-menu rows (trimmed build)"
+blurb = "A reduced build of the Quickload suite carrying the System > Quit rows and nothing else. Pick this instead of Quickload, never alongside it."
+category = "menus-and-saves"
+audience = "player"
+default = false
+
+[er-quit-load-character]
+label = "Load Character rows only"
+blurb = "Just the two character rows on the System > Quit tab. Redundant if you already picked Quit-menu rows, which arms the same rows."
+category = "menus-and-saves"
+audience = "player"
+default = false
+
+[er-save-game-row]
+label = "Save Game row"
+blurb = "Adds a Save Game row to the System > Quit tab that lets you choose where the save goes and then keeps playing, instead of saving and returning to the title."
+category = "menus-and-saves"
+audience = "player"
+default = false
+
+[er-save-picker]
+label = "Boot save picker"
+blurb = "Draws a save picker at boot so you choose a character before the title screen, instead of loading whichever save the game picked."
+category = "menus-and-saves"
+audience = "player"
+default = false
+# `er-quickload` carries this: its defaults include `autoload`, and `arm_boot_picker` is
+# reached whenever that is on.
+#
+# `er-quit-rows` is deliberately NOT listed, though it links the same crate and was listed
+# here for an hour on 2026-09-19. Its `boot_arm_missing_save_picker_in_game` opens with
+# `if !cfg!(feature = "autoload") { return false; }`, and `autoload` is not in its default
+# set -- so the shipped build never arms the boot picker, whatever its own `save-picker`
+# feature suggests. That feature name is misleading: it has zero `cfg` sites in either crate
+# and forwards nothing.
+#
+# The shell does try to stand down against the product -- `GetModuleHandleA("er_quickload.dll")`
+# -- but that runs inside `DllMain`, so it only sees a module that has already attached, and
+# ME3 attaches in profile order. Not a crash, which is why this is `included_in` rather than a
+# `[[conflict]]` row; still refused, because nobody wants one feature installed twice and
+# which copy wins is decided by a list order the player never sees.
+included_in = ["er-quickload"]
+
+[er-build-import]
+label = "Build import from URL"
+blurb = "Applies a shared build link once, when your character loads: items granted, gear worn, spells memorised, level and attributes matched."
+category = "menus-and-saves"
+audience = "player"
+default = false
+config = "er-quickload.toml"
+
+[er-save-disable]
+label = "Disable saving"
+blurb = "Blocks every write to your save while loaded. For trying something out without keeping it."
+category = "menus-and-saves"
+audience = "player"
+default = false
+
+[er-better-refills]
+label = "Better storage-box refills"
+blurb = "Tops an item back up from storage the moment you flag it for autorefill, instead of waiting for the next site of grace."
+category = "quality-of-life"
+audience = "player"
+default = true
+
+[er-refill-all]
+label = "Refill all / refill none"
+blurb = "One key in the storage box flags every refillable item at once, and cycles: press for everything refills, press again for nothing refills."
+category = "quality-of-life"
+audience = "player"
+default = true
+config = "er-refill-all.toml"
+
+[er-inventory-sort]
+label = "Inventory sort defaults"
+blurb = "Sets the equipment menu's sort order once per session so you are not re-picking it every time you open a menu."
+category = "quality-of-life"
+audience = "player"
+default = true
+config = "er-inventory-sort.toml"
+
+[er-convenient-deaths]
+label = "Convenient deaths"
+blurb = "Three conveniences around dying, each one rewritten byte of the game's own code, each skipped rather than forced if the bytes are not what it expects."
+category = "quality-of-life"
+audience = "player"
+default = true
+
+[er-death-persist]
+label = "Keep transformations through death"
+blurb = "Rock Heart, Priestess Heart and Lamenter's Mask survive dying, instead of being dropped the moment your HP reaches zero."
+category = "quality-of-life"
+audience = "player"
+default = false
+
+[er-focus-input]
+label = "Play while the window is unfocused"
+blurb = "The game keeps accepting input when its window does not hold focus, so you can read something else on another monitor without it going deaf."
+category = "quality-of-life"
+audience = "player"
+default = false
+
+[er-enemynpc-effects]
+label = "Enemy effect toggle"
+blurb = "One key puts every loaded enemy under a chosen effect and keeps new arrivals under it; press again to strip it back off."
+category = "quality-of-life"
+audience = "player"
+default = false
+config = "er-enemynpc-effects.toml"
+
+[er-npc-possess]
+label = "Become an NPC"
+blurb = "Press the hotkey and you become whatever character you are looking at."
+category = "quality-of-life"
+audience = "player"
+default = false
+config = "er-npc-possess.toml"
+
+[er-seamless-bugfixes]
+label = "Seamless Co-op crash guards"
+blurb = "Catches faults only Seamless Co-op's networking can reach, returning what the game's own code already returns for the case it failed to handle."
+category = "multiplayer"
+audience = "player"
+default = true
+needs_seamless = true
+
+[er-invasion-warp]
+label = "Invasion warp from the world map"
+blurb = "Pick your invasion spawn from the world map instead of taking whatever the game gives you. Refuses to arm against an unmeasured Seamless build rather than guess."
+category = "multiplayer"
+audience = "player"
+default = false
+needs_seamless = true
+config = "er-invasion-warp.toml"
+
+[er-invasion-path]
+label = "Path to other players"
+blurb = "Draws a walkable route along the ground to every other player in your session, bolder the closer they are, with an arrow instead when the ground cannot get you there."
+category = "multiplayer"
+audience = "player"
+default = false
+config = "er-invasion-path.toml"
+
+[er-player-name-filter]
+label = "Filter remote player names"
+blurb = "Rewrites other players' displayed names when they match a group you configure, in both the overhead tag and the places the game builds it from."
+category = "multiplayer"
+audience = "player"
+default = false
+config = "er-player-name-filter.toml"
+
+[er-net-effects]
+label = "Network effect panel"
+blurb = "An in-game panel for applying effects, with a keyboard selector, and a choice about whether each one is synced to the other players in your session."
+category = "multiplayer"
+audience = "player"
+default = false
+
+[er-armament-icons]
+label = "Ash of War badges on weapon tiles"
+blurb = "Every weapon, staff, seal and shield tile gets its skill's icon as a small corner badge, drawn from the game's own textures in the vanilla style."
+category = "cosmetic"
+audience = "player"
+default = true
+
+[er-loading-portrait]
+label = "Character portrait on the loading screen"
+blurb = "Puts your character and their stats on the loading screen. Pick this instead of Quickload, which already draws it, never alongside it."
+category = "cosmetic"
+audience = "player"
+default = false
+
+[er-build-watermark]
+label = "Build watermark"
+blurb = "A corner overlay naming every mod loaded in this profile and whether any of them is behind the branch it was built from."
+category = "cosmetic"
+audience = "player"
+default = false
+
+[mushroom-man-runtime]
+label = "Mushroom Man"
+blurb = "Replaces a helmet's rows so your character wears the mushroom head. A visible costume change to gear you may already be wearing."
+category = "cosmetic"
+audience = "player"
+default = false
+
+[er-crash-logging]
+label = "Crash logging"
+blurb = "Writes crash-like faults to a text file beside the game so a crash report has something in it. Costs nothing when nothing crashes."
+category = "diagnostics"
+audience = "player"
+default = true
+
+[er-hotkey-conflicts]
+label = "Hotkey conflict report"
+blurb = "Reports which loaded mods are bound to the same key, and whether the game already uses it, instead of leaving you to find out by pressing it."
+category = "diagnostics"
+audience = "player"
+default = true
+
+[er-telemetry]
+label = "Telemetry"
+blurb = "Writes a JSON file of game-state readings once a frame. Nothing reads it back for you; it exists so a bug report can carry numbers."
+category = "diagnostics"
+audience = "diagnostic"
+default = false
+
+[er-diag-harness]
+label = "Diagnostic trace harness"
+blurb = "Installs five trace detours that log what the menu and load paths are doing. Development tool: it costs every player a log nobody reads."
+category = "diagnostics"
+audience = "diagnostic"
+default = false
+
+[er-input-harness]
+label = "Input self-drive harness"
+blurb = "Writes the game's own input memory every frame by mere presence, so an automated run can drive menus. It will fight you for the controls."
+category = "diagnostics"
+audience = "diagnostic"
+default = false
+
+[er-reload-trace]
+label = "Reload trace"
+blurb = "Traces the character reload path for debugging. Development tool, and it drives menus of its own."
+category = "diagnostics"
+audience = "diagnostic"
+default = false

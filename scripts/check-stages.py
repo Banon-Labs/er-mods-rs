@@ -211,6 +211,12 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.py",
             "scripts/er-build-dlls.sh",
             "scripts/quickload-feature-bite.baseline.json",
+            # The two tables the installer is built from. `*.py` above covers the gates that
+            # read them but not the data itself, so a push that only edited a conflict row or a
+            # catalog label would have skipped this whole stage -- which is the one stage that
+            # proves the default selection can be loaded together.
+            "scripts/me3-dll-conflicts.toml",
+            "scripts/me3-dll-catalog.toml",
         ),
     ),
     Stage(

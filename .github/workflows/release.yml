@@ -110,6 +110,26 @@ jobs:
       - name: Build every distributable DLL
         run: bash scripts/er-build-dlls.sh --all
 
+      # The installer carries the DLLs inside itself, so it must be built AFTER them and
+      # pointed at where they landed. Most people download the installer and nothing else --
+      # no repo, no folder beside it -- so a build without ER_INSTALLER_EMBED_DIR produces a
+      # perfectly good 440 KB binary that can install nothing, and nothing about it looks
+      # wrong. The next step is what refuses to ship that.
+      #
+      # Two hosts, because me3 runs natively on Linux, where the game is a Proton process:
+      # the mods stay PE for everyone and only the installer differs.
+      - name: Build the self-contained installer for both hosts
+        env:
+          ER_INSTALLER_EMBED_DIR: ${{ github.workspace }}/target/x86_64-pc-windows-msvc/release
+        run: |
+          cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer
+          cargo build --release -p er-installer
+
+      # Ask the binary, rather than trust that the step above had the right environment. This
+      # exits non-zero unless the executable carries every mod its catalog offers.
+      - name: Prove the installer carries every mod it offers
+        run: ./target/release/er-installer --selfcheck
+
       - name: Stage release assets
         run: |
           mkdir dist
@@ -117,15 +137,27 @@ jobs:
             cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll" dist/
             cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll.provenance.json" dist/
           done < <(python3 scripts/me3-dll-list.py --pairs)
-          (cd dist && sha256sum -- *.dll > SHA256SUMS)
+          # Both installers are attached as plain files rather than inside an archive: the
+          # whole point is that one download is the whole thing, and a user who has to unpack
+          # a zip to find it has already been asked to do more than run it.
+          cp target/x86_64-pc-windows-msvc/release/er-installer.exe dist/
+          cp target/release/er-installer dist/er-installer
+          chmod +x dist/er-installer
+          (cd dist && sha256sum -- *.dll er-installer.exe er-installer > SHA256SUMS)
 
       # Attest every distributable DLL, not merely the archive/container that
       # carries it, so `gh attestation verify <downloaded-dll>` remains useful.
+      # The installers are attested for the same reason and it matters more for
+      # them: they are the files an ordinary player downloads and runs, and a
+      # 34 MB unsigned executable from the internet is exactly the thing worth
+      # being able to check the provenance of.
       - name: Attest build provenance
         uses: actions/attest@v4
         with:
           subject-path: |
             dist/*.dll
+            dist/er-installer.exe
+            dist/er-installer
             dist/SHA256SUMS
 
       # Transfer the exact staged files to the conditional versioned-release
@@ -147,11 +179,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           rolling_tag="main-${GITHUB_SHA}"
-          notes="Development build from commit ${GITHUB_SHA}. Every main build has its own immutable prerelease; use a numbered release for an immutable stable version."
+          # The asset list is 60-odd files and only two of them are for a player. Say which,
+          # and say that they are complete on their own -- someone who downloads a single
+          # 34 MB executable has a fair reason to wonder where the mods are.
+          # The prose lives in .github/release-notes-header.md rather than inline here. A
+          # heredoc cannot carry it: YAML forbids tab indentation outright, and a body
+          # indented with spaces to stay inside this block scalar arrives with that
+          # indentation intact, which renders the whole release page as a code block. A file
+          # is also the half of this that someone might want to edit without reading YAML.
+          notes_file="$(mktemp)"
+          cat .github/release-notes-header.md > "$notes_file"
+          printf '\nDevelopment build from commit %s. Every main build has its own immutable prerelease; use a numbered release for an immutable stable version.\n' \
+            "$GITHUB_SHA" >> "$notes_file"
           gh release create "$rolling_tag" dist/* \
             --target "$GITHUB_SHA" \
             --title "Main build ${GITHUB_SHA::12}" \
-            --notes "$notes" \
+            --notes-file "$notes_file" \
             --prerelease
 
   # Release Please creates the versioned release as a draft. Attach the files
