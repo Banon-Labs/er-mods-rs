@@ -552,36 +552,32 @@ pub extern "C" fn er_invasion_warp_force_search_range(range: u32) -> i32 {
     1
 }
 
-/// Select the invade difficulty from outside, as an index into
-/// `er_invasion_warp_core::invade_difficulty::InvadeDifficulty::ALL`.
+/// Pick the brackets the far half invades into, from outside.
+///
+/// Each argument is a band index plus one, so `0` means "leave that axis at the player's own" --
+/// the same encoding the panel's first dropdown entry uses.
 ///
 /// # Why this is an export and not an env var
 ///
-/// The difficulty's only front end is the settings panel, deliberately -- it is held in memory so
+/// The picker's only front end is the settings panel, deliberately: it is held in memory so
 /// nothing can go stale in a file. That also leaves no way to drive it for a runtime proof, and the
-/// branch that needs proving is the one nothing else exercises: the far half of `Both near and far`
-/// asking for a bracket above the player's own. Same problem and same answer as
-/// [`er_invasion_warp_force_search_range`] directly above, which exists because the bounds popup's
-/// cursor could not be driven either.
+/// branch that needs proving is the one nothing else exercises -- the far half of
+/// `Both near and far` asking for a bracket above the player's own. Same problem and same answer
+/// as [`er_invasion_warp_force_search_range`] directly above, which exists because the bounds
+/// popup's cursor could not be driven either.
 ///
-/// It sets the same value the panel sets, through the same function, so a proof driven through here
-/// exercises the shipping path rather than a parallel one. It changes no behaviour on its own: a
-/// session nobody calls it in reads `Default`, which rewrites nothing.
+/// It sets the same values the panel sets, through the same two functions, so a proof driven
+/// through here exercises the shipping path rather than a parallel one. It changes no behaviour on
+/// its own: a session nobody calls it in has nothing picked, which rewrites nothing.
 ///
-/// Returns the index now in force, so a caller can tell a rejected index from an accepted one
-/// without reading the log.
+/// Returns 1 always -- a band past the end of either list is dropped by `pick_level` and
+/// `pick_weapon` rather than refused here, and the log names what ended up in force.
 #[cfg(windows)]
 #[unsafe(no_mangle)]
-pub extern "C" fn er_invasion_warp_set_invade_difficulty(index: u32) -> i32 {
-    let wanted = er_invasion_warp_core::invade_difficulty::InvadeDifficulty::from_index(
-        usize::try_from(index).unwrap_or(0),
-    );
-    // Cycled rather than stored, so the one place that writes this value stays the one place. A
-    // second writer is how a panel and a driver come to disagree about what is in force.
-    while invade_difficulty::current() != wanted {
-        invade_difficulty::cycle();
-    }
-    i32::try_from(invade_difficulty::current().index()).unwrap_or(0)
+pub extern "C" fn er_invasion_warp_pick_brackets(level: u32, weapon: u32) -> i32 {
+    invade_difficulty::pick_level(level.checked_sub(1));
+    invade_difficulty::pick_weapon(weapon.checked_sub(1));
+    1
 }
 
 /// Hand this DLL Seamless's option-menu object, so it can resolve the session without detouring

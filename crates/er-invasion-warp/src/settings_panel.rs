@@ -37,12 +37,19 @@ fn settings_key_in_force() -> i32 {
     })
 }
 
-/// The one row on this panel that is not a config key.
+/// The two rows on this panel that are not config keys.
 ///
-/// Named once and used by both halves -- the row that is built and the edit that is drained -- so
-/// the panel cannot end up offering a row whose click nothing recognises. Every other row is keyed
-/// by its name in `er-invasion-warp.toml`; this one has no name there on purpose.
-const DIFFICULTY_ROW: &str = "invade_difficulty";
+/// Named once and used by both halves -- the rows that are built and the edits that are drained --
+/// so the panel cannot end up offering a row whose click nothing recognises. Every other row is
+/// keyed by its name in `er-invasion-warp.toml`; these two have no name there on purpose.
+const LEVEL_BRACKET_ROW: &str = "invade rune level";
+const WEAPON_BRACKET_ROW: &str = "invade weapon level";
+
+/// The first entry in both bracket lists, which means "leave it at mine".
+///
+/// A row rather than a separate switch: the list already has to show where the player stands, and
+/// an entry saying so is the same click as any other bracket.
+const OWN_BRACKET_LABEL: &str = "mine -- don't change it";
 
 const KEY_DOWN_MASK: i16 = -0x8000;
 
@@ -155,25 +162,26 @@ fn apply_pending_edits() {
     if edits.is_empty() {
         return;
     }
-    // Taken out before the config lock, because this one is not a config key and must never
-    // become one. It lives in memory for the life of the process -- see
-    // `crate::invade_difficulty` for the two reasons -- so it takes none of the
-    // reload-clone-mutate-save sequence below and writes nothing to the player's file.
+    // Taken out before the config lock, because these two are not config keys and must never
+    // become ones. They live in memory for the life of the process -- see
+    // `crate::invade_difficulty` for the two reasons -- so they take none of the
+    // reload-clone-mutate-save sequence below and write nothing to the player's file.
+    //
+    // Index 0 in both lists is the "your own bracket" row, so it maps to `None` rather than to
+    // band 0: a player at `RL41-70` who picks the first entry means "stop asking for anything",
+    // not "ask for RL1-20" -- which `band_for` would refuse anyway.
     let edits: Vec<SettingEdit> = edits
         .into_iter()
-        .filter(|edit| {
-            if *edit != SettingEdit::Cycle(DIFFICULTY_ROW) {
-                return true;
+        .filter(|edit| match edit {
+            SettingEdit::Choose(LEVEL_BRACKET_ROW, at) => {
+                crate::invade_difficulty::pick_level(at.checked_sub(1).map(|band| band as u32));
+                false
             }
-            let now = crate::invade_difficulty::cycle();
-            crate::standalone_log(format_args!(
-                "settings-panel: invade difficulty is now {} -- {}. Held in memory only: it is \
-                 gone at the next launch and there is no line in the config file that could \
-                 disagree with it.",
-                now.label(),
-                now.note()
-            ));
-            false
+            SettingEdit::Choose(WEAPON_BRACKET_ROW, at) => {
+                crate::invade_difficulty::pick_weapon(at.checked_sub(1).map(|band| band as u32));
+                false
+            }
+            _ => true,
         })
         .collect();
     if edits.is_empty() {
@@ -249,6 +257,16 @@ fn apply_pending_edits() {
                      error"
                 ));
             }
+            // The two bracket rows are the only `Choose` rows and they were drained above, before
+            // this lock was taken. Anything reaching here is a row the renderer drew and nothing
+            // applies, which is a build mismatch rather than a player error -- the same thing the
+            // arm above says about a cycling row.
+            SettingEdit::Choose(key, at) => {
+                crate::standalone_log(format_args!(
+                    "settings-panel: no list row named `{key}` to set to entry {at} -- the panel \
+                     and this DLL disagree about what rows exist"
+                ));
+            }
         }
     }
     if applied == 0 {
@@ -318,7 +336,9 @@ fn build_view() -> SettingsView {
                 key: "config",
                 value: "unreadable".to_owned(),
                 control: RowControl::ReadOnly,
-                note: Some("the file beside the DLL could not be read; defaults are in force"),
+                note: Some(
+                    "the file beside the DLL could not be read; defaults are in force".to_owned(),
+                ),
             }],
         };
     };
@@ -333,7 +353,8 @@ fn build_view() -> SettingsView {
             // stale and nothing lands -- which on screen is "Invasion failed -- no connection",
             // over and over, with the config line reporting everything healthy.
             Some(
-                "aim at a place instead of taking whoever answers -- needs hosts running this mod",
+                "aim at a place instead of taking whoever answers -- needs hosts running this mod"
+                    .to_owned(),
             ),
         ),
         SettingRow {
@@ -344,35 +365,29 @@ fn build_view() -> SettingsView {
             // its own: the widening search runs inside the lobby-query detour `steam_hooks`
             // installs, and its first tile comes from `hunt`. Saying so on the row is the only
             // place a player finds out before concluding the feature is broken.
-            note: Some(if config.prefilter_radius == 0 {
-                "0 = exactly where you stand; click to widen"
-            } else if config.hunt && config.steam_hooks {
-                "rings of map tiles searched outward from where you stand"
-            } else {
-                "inert -- needs search_by_location and steam_hooks on"
-            }),
+            note: Some(
+                if config.prefilter_radius == 0 {
+                    "0 = exactly where you stand; click to widen"
+                } else if config.hunt && config.steam_hooks {
+                    "rings of map tiles searched outward from where you stand"
+                } else {
+                    "inert -- needs search_by_location and steam_hooks on"
+                }
+                .to_owned(),
+            ),
         },
         // There is no widening row. How far a search reaches is the row the finger asks for --
         // `Nearby only` or `Both near and far` -- and a panel toggle that could contradict it would
         // be the same defect this panel would then be advertising as a feature.
         //
-        // This row is the other half of that rule rather than an exception to it. It does not
-        // decide how far the search reaches; it decides which bracket the far half asks for once
-        // the finger's own row has already sent it there. And it is the only row here that is not
-        // written to the file, so there is no line in a config from last week that could disagree
-        // with what it shows.
-        {
-            let difficulty = crate::invade_difficulty::current();
-            SettingRow {
-                key: DIFFICULTY_ROW,
-                value: difficulty.label().to_owned(),
-                control: RowControl::Cycle,
-                note: Some(difficulty.note()),
-            }
-        },
         toggle_row("reject_notice", config.reject_notice, None),
         toggle_row("only_players_with_this_mod", config.dll_users_only, None),
     ];
+    // The two bracket pickers, and the other half of the widening rule rather than an exception to
+    // it: they do not decide how far the search reaches, they decide which bracket the far half
+    // asks for once the finger's own row has already sent it there. Neither is written to the
+    // file, so no config from last week can disagree with what they show.
+    rows.extend(bracket_rows());
     // Both of these decide something: `search_by_location` asks Steam for the one marked
     // location, and refuses to run while that location is excluded. A third row sat here until
     // 2026-09-15 -- `named_location_text_ids`, which only `mode` ever read.
@@ -392,7 +407,7 @@ fn build_view() -> SettingsView {
             key,
             value: format!("{len} entr{}", if len == 1 { "y" } else { "ies" }),
             control: RowControl::ReadOnly,
-            note: Some(note),
+            note: Some(note.to_owned()),
         });
     }
     for (key, code) in [
@@ -405,17 +420,80 @@ fn build_view() -> SettingsView {
             key,
             value: key_name(code),
             control: RowControl::ReadOnly,
-            note: Some("rebind by editing the file"),
+            note: Some("rebind by editing the file".to_owned()),
         });
     }
     SettingsView { rows }
 }
 
-fn toggle_row(key: &'static str, value: bool, note: Option<&'static str>) -> SettingRow {
+fn toggle_row(key: &'static str, value: bool, note: Option<String>) -> SettingRow {
     SettingRow {
         key,
         value: value.to_string(),
         control: RowControl::Toggle(value),
         note,
     }
+}
+
+/// The two bracket dropdowns.
+///
+/// Both lists open with [`OWN_BRACKET_LABEL`], so index `0` is "leave it at mine" and band `b`
+/// sits at index `b + 1`. Everything below the player's own bracket is greyed rather than dropped:
+/// a list that silently lost its first five rows would make the player's own position in it
+/// unreadable, and the position is most of what the list is for.
+///
+/// When the player's own bracket cannot be read -- no character loaded, an implausible value --
+/// nothing is greyed and the row says so. Offering every bracket is a worse answer than offering
+/// the right ones; greying against a band nobody measured would be worse than both, because it
+/// would look authoritative.
+fn bracket_rows() -> Vec<SettingRow> {
+    use er_invasion_warp_core::invade_difficulty as brackets;
+
+    let own = crate::invade_difficulty::own_bands();
+    let choice = crate::invade_difficulty::current();
+    let describe = choice.describe();
+    let mut rows = Vec::with_capacity(2);
+    for (key, labels, picked, own_band, axis) in [
+        (
+            LEVEL_BRACKET_ROW,
+            brackets::level_band_labels(),
+            choice.level,
+            own.map(|(level, _)| level),
+            "rune level",
+        ),
+        (
+            WEAPON_BRACKET_ROW,
+            brackets::weapon_band_labels(),
+            choice.weapon,
+            own.map(|(_, weapon)| weapon),
+            "weapon upgrade",
+        ),
+    ] {
+        let mut options = Vec::with_capacity(labels.len() + 1);
+        options.push(OWN_BRACKET_LABEL.to_owned());
+        options.extend(labels);
+        let note = match own_band {
+            Some(band) => format!(
+                "yours is {} -- {describe}",
+                options
+                    .get(band as usize + 1)
+                    .map_or("unknown", String::as_str)
+            ),
+            None => format!("your own {axis} bracket could not be read, so nothing is greyed out"),
+        };
+        rows.push(SettingRow {
+            key,
+            value: String::new(),
+            control: RowControl::Choose {
+                selected: picked.map_or(0, |band| band as usize + 1),
+                // Band `b` is at index `b + 1`, and the player's own band is selectable -- picking
+                // it means the same as picking `mine`, which `band_for` already resolves to no
+                // rewrite at all.
+                first_enabled: own_band.map_or(0, |band| band as usize + 1),
+                options,
+            },
+            note: Some(note),
+        });
+    }
+    rows
 }

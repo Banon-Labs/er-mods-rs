@@ -1,4 +1,4 @@
-//! How far above their own matchmaking bracket a player has asked to invade.
+//! Which matchmaking bracket the far half of a search invades into.
 //!
 //! # What this is for, and where it applies
 //!
@@ -9,198 +9,199 @@
 //! what that second half does, 2026-09-18: "it essentially returns to Seamless default invasion
 //! properties, whereby I invade someone in my bracket."
 //!
-//! This is the one thing that stays attached across that handover. It takes the bracket pair
-//! Seamless computed for this character and asks for the pair `N` brackets above it instead, on
-//! both axes at once.
+//! This is the one thing that stays attached across that handover. The player names the bracket
+//! they want to be sent to, and the far half's queries ask for it instead of their own.
 //!
 //! It does nothing to the near half. A search that has not reached the handover is still asking
-//! about the neighbourhood at the player's own band, and narrowing that by difficulty as well
-//! would move two axes on one failed cycle -- the mistake `failed_cycle`'s module docs already
-//! record.
+//! about the neighbourhood at the player's own band, and narrowing that by bracket as well would
+//! move two axes on one failed cycle -- the mistake `failed_cycle`'s module docs already record.
 //!
-//! # Why a flat offset rather than another ladder
+//! # Why brackets are picked and not stepped
 //!
-//! [`crate::band_ladder`] walks upward one rung at a time because it is hunting: nobody has been
-//! seen, so it sweeps. This is the opposite act. The player has named the fight they want, and a
-//! ladder underneath that would spend most of its cycles asking for brackets they did not choose.
-//! One difficulty is one band pair, asked for as long as the far half runs.
+//! This shipped once as six named tiers -- `Default`, `Hard`, `Harder`, `Hardest`, `Insano`,
+//! `Godlike` -- each a fixed `+N` on both axes, with the top one jumping to the ceiling. Two things
+//! were wrong with it and both became visible the moment the real bracket edges were known.
+//!
+//! The names said nothing. "Insano" does not tell a player they are about to ask for `RL101-125`,
+//! and the same name meant a different fight for every character who picked it.
+//!
+//! And a fixed step leaves holes. From band 0 the reachable level bands were `0 1 2 3 4` and then
+//! `8`, because the top tier was absolute -- so `RL126-150`, `RL151-200` and `RL201-300` could not
+//! be asked for at all, while `RL301+` could. Closing that with more tiers costs three more rows
+//! and a nine-stop cycle; naming the brackets costs nothing and cannot hole.
+//!
+//! So the panel offers the brackets themselves, with everything below the player's own greyed out.
+//! There is no ceiling special case left: the last entry is just the last entry.
 //!
 //! # The encoding
 //!
 //! Seamless publishes `<level band>_<weapon band>` and filters it with `k_ELobbyComparisonEqual`,
 //! so a host one digit away is indistinguishable from an empty world. Both halves are a
-//! threshold-table lookup inside `ersc.dll` -- the band is the index of the first threshold at or
-//! above the character's value, or the table's length when the character is past every threshold.
-//! That is what makes [`MAX_LEVEL_BAND`] and [`MAX_WEAPON_BAND`] meaningful: they are table
-//! lengths, not guesses at how high anybody plays.
+//! threshold-table lookup inside `ersc.dll` at `ersc+0xa97b0` -- the band is the index of the first
+//! threshold at or above the character's value, or the table's length when the character is past
+//! every threshold.
 //!
-//! The brackets are wide, which is what makes a single step worth offering as a difficulty. One
-//! level bracket up from an `RL60` character is `RL71-100`; one weapon bracket up from `+12` is
-//! `+13` to `+20`. See the two constants for the whole ladder.
+//! Measured live 2026-09-18, run `br-20260918-235543-826e`, by
+//! `scripts/frida/seamless-band-tables.js` reading the two vectors that function looks up. The read
+//! is self-validating: on the same frame the arguments were `level = 9` and `weapon = 2`, and the
+//! query a moment later carried `0_0` under key
+//! `21c40388cba69692c865c11604f6e340fb8f0df83bebea279e802ccc0d46de8e`, which is what these tables
+//! produce. Four earlier observations reproduce as well, and a test below holds all five.
 
-/// The top level band Seamless can compute, which is the length of its level-threshold table.
+/// Seamless's level-bracket edges, from the vector at `[rcx+0x70]`.
 ///
-/// Measured live on 2026-09-18, run `br-20260918-235543-826e`, by
-/// `scripts/frida/seamless-band-tables.js` reading the vector at `[rcx+0x70]` inside `ersc+0xa97b0`
-/// on `ersc 2.0.1`. The thresholds are `[20, 40, 70, 100, 125, 150, 200, 300]`, so every rune level
-/// in the game falls in one of nine bands:
-///
-/// ```text
-/// band   0      1       2       3        4         5         6         7         8
-/// RL     1-20   21-40   41-70   71-100   101-125   126-150   151-200   201-300   301+
-/// ```
-///
-/// Eight thresholds, so eight is the ceiling: the lookup answers with the table's length for a
-/// character above every one of them, and no character can publish a higher number.
-///
-/// The read is self-validating rather than trusted. On the same frame the character's own
-/// arguments were `level = 9`, `weapon = 2`, and the query that went out a moment later carried
-/// `0_0` under key `21c40388cba69692c865c11604f6e340fb8f0df83bebea279e802ccc0d46de8e` -- which is
-/// what this table produces for that character. Four earlier observations reproduce too: `RL7 +0`
-/// gives `0_0`, `RL41` gives level band 2, `RL50 +8` and `RL60 +12` both give `2_1`.
-pub const MAX_LEVEL_BAND: u32 = 8;
+/// A character whose rune level is at or below `LEVEL_THRESHOLDS[i]`, and above the one before it,
+/// is in band `i`; a character above all of them is in band [`MAX_LEVEL_BAND`].
+pub const LEVEL_THRESHOLDS: [u32; 8] = [20, 40, 70, 100, 125, 150, 200, 300];
 
-/// The top weapon band, on the same footing as [`MAX_LEVEL_BAND`] and from the same read.
-///
-/// The vector at `[rcx+0x88]` holds `[3, 12, 20]`, so the weapon axis has four bands to the level
-/// axis's nine, and the bands are wide: every weapon from unupgraded to `+3` is one bracket.
-///
-/// ```text
-/// band     0       1        2         3
-/// upgrade  +0-+3   +4-+12   +13-+20   +21+
-/// ```
-pub const MAX_WEAPON_BAND: u32 = 3;
+/// Seamless's weapon-bracket edges, from the vector at `[rcx+0x88]`. Read the same way as
+/// [`LEVEL_THRESHOLDS`], against the character's highest weapon upgrade level.
+pub const WEAPON_THRESHOLDS: [u32; 3] = [3, 12, 20];
 
-/// Which bracket the far half of a search asks for, relative to the player's own.
-///
-/// Ordered by how far above the player the fight is, because that order is also the order the
-/// settings panel cycles through and a player reading it should not have to learn a second one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub enum InvadeDifficulty {
-    /// The player's own bracket, on both axes. Seamless's own behaviour, untouched.
-    #[default]
-    Default,
-    /// One bracket above, on level and on weapon upgrade.
-    Hard,
-    /// Two brackets above.
-    Harder,
-    /// Three brackets above.
-    Hardest,
-    /// Four brackets above.
-    Insano,
-    /// The top bracket on both axes, whatever the player's own is.
-    ///
-    /// Absolute rather than relative: [`MAX_LEVEL_BAND`] and [`MAX_WEAPON_BAND`] are where
-    /// Seamless's two threshold tables run out, so this asks for the fight the game can offer
-    /// rather than for a fixed number of steps from wherever the character happens to be.
-    Godlike,
+/// The top level band, which is the number of thresholds: a character above every one of them
+/// lands on the table's length, and nobody can publish higher.
+pub const MAX_LEVEL_BAND: u32 = LEVEL_THRESHOLDS.len() as u32;
+
+/// The top weapon band, on the same footing as [`MAX_LEVEL_BAND`].
+pub const MAX_WEAPON_BAND: u32 = WEAPON_THRESHOLDS.len() as u32;
+
+/// Seamless's own lookup, for one axis.
+fn band_of(value: u32, thresholds: &[u32]) -> u32 {
+    let at = thresholds.iter().position(|edge| *edge >= value);
+    u32::try_from(at.unwrap_or(thresholds.len())).unwrap_or(0)
 }
 
-impl InvadeDifficulty {
-    /// Every difficulty, in the order the panel cycles them.
-    pub const ALL: [Self; 6] = [
-        Self::Default,
-        Self::Hard,
-        Self::Harder,
-        Self::Hardest,
-        Self::Insano,
-        Self::Godlike,
-    ];
+/// Which level band a rune level falls in.
+#[must_use]
+pub fn level_band(rune_level: u32) -> u32 {
+    band_of(rune_level, &LEVEL_THRESHOLDS)
+}
 
-    /// What the settings panel calls this, and what the log calls it.
+/// Which weapon band an upgrade level falls in.
+#[must_use]
+pub fn weapon_band(upgrade_level: u32) -> u32 {
+    band_of(upgrade_level, &WEAPON_THRESHOLDS)
+}
+
+/// What a level band is called on the panel: the rune levels it actually covers.
+///
+/// The range and not the index, because the index is Seamless's bookkeeping and the range is what
+/// a player recognises. `RL126-150` is a fight they can picture; band 5 is not.
+#[must_use]
+pub fn level_band_label(band: u32) -> String {
+    let low = match band.checked_sub(1) {
+        None => 1,
+        Some(below) => LEVEL_THRESHOLDS
+            .get(below as usize)
+            .map_or(1, |edge| edge + 1),
+    };
+    match LEVEL_THRESHOLDS.get(band as usize) {
+        Some(high) => format!("RL{low}-{high}"),
+        None => format!("RL{low}+"),
+    }
+}
+
+/// What a weapon band is called on the panel, in upgrade levels.
+#[must_use]
+pub fn weapon_band_label(band: u32) -> String {
+    let low = match band.checked_sub(1) {
+        None => 0,
+        Some(below) => WEAPON_THRESHOLDS
+            .get(below as usize)
+            .map_or(0, |edge| edge + 1),
+    };
+    match WEAPON_THRESHOLDS.get(band as usize) {
+        Some(high) => format!("+{low} to +{high}"),
+        None => format!("+{low} and up"),
+    }
+}
+
+/// Every level band, in order, as the panel lists them.
+#[must_use]
+pub fn level_band_labels() -> Vec<String> {
+    (0..=MAX_LEVEL_BAND).map(level_band_label).collect()
+}
+
+/// Every weapon band, in order, as the panel lists them.
+#[must_use]
+pub fn weapon_band_labels() -> Vec<String> {
+    (0..=MAX_WEAPON_BAND).map(weapon_band_label).collect()
+}
+
+/// The bracket pair the player has asked the far half to invade into.
+///
+/// `None` on an axis means "whatever mine is", which is what a fresh session holds and what a
+/// player who cares about only one axis leaves the other at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BracketChoice {
+    /// The level band to ask for, or `None` for the player's own.
+    pub level: Option<u32>,
+    /// The weapon band to ask for, or `None` for the player's own.
+    pub weapon: Option<u32>,
+}
+
+impl BracketChoice {
+    /// Nothing picked on either axis: Seamless's own behaviour, untouched.
     #[must_use]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Default => "Default",
-            Self::Hard => "Hard",
-            Self::Harder => "Harder",
-            Self::Hardest => "Hardest",
-            Self::Insano => "Insano",
-            Self::Godlike => "Godlike",
+    pub const fn own() -> Self {
+        Self {
+            level: None,
+            weapon: None,
         }
     }
 
-    /// One line saying what picking this actually changes, shown beside the row.
-    ///
-    /// Each one names the far half explicitly. A player who reads "one bracket above" on a row and
-    /// then invades their neighbour at their own level has been told something untrue, and the
-    /// only place that distinction can be made is here.
+    /// Whether this asks for anything other than the player's own bracket.
     #[must_use]
-    pub const fn note(self) -> &'static str {
-        match self {
-            Self::Default => "far half asks your own bracket -- Seamless's own behaviour",
-            Self::Hard => "far half asks one bracket up, level and weapon",
-            Self::Harder => "far half asks two brackets up, level and weapon",
-            Self::Hardest => "far half asks three brackets up, level and weapon",
-            Self::Insano => "far half asks four brackets up, level and weapon",
-            Self::Godlike => "far half asks the top bracket there is, level and weapon",
-        }
-    }
-
-    /// How many brackets above the player's own this asks for, or `None` for the absolute top.
-    #[must_use]
-    pub const fn brackets_up(self) -> Option<u32> {
-        match self {
-            Self::Default => Some(0),
-            Self::Hard => Some(1),
-            Self::Harder => Some(2),
-            Self::Hardest => Some(3),
-            Self::Insano => Some(4),
-            Self::Godlike => None,
-        }
-    }
-
-    /// The next difficulty, wrapping back to [`Self::Default`] past the top.
-    ///
-    /// Wrapping rather than stopping is what makes a single button enough for the panel, the same
-    /// choice `search_radius` already made.
-    #[must_use]
-    pub fn next(self) -> Self {
-        let at = Self::ALL.iter().position(|d| *d == self).unwrap_or(0);
-        Self::ALL[(at + 1) % Self::ALL.len()]
-    }
-
-    /// Its position in [`Self::ALL`], for the atomic the running DLL keeps it in.
-    #[must_use]
-    pub fn index(self) -> usize {
-        Self::ALL.iter().position(|d| *d == self).unwrap_or(0)
-    }
-
-    /// The difficulty at `index`, falling back to [`Self::Default`] for anything out of range.
-    ///
-    /// Out of range cannot happen through [`Self::index`], and falling back rather than panicking
-    /// means a torn or stale read costs the player Seamless's own behaviour instead of the game.
-    #[must_use]
-    pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or(Self::Default)
+    pub const fn is_own(self) -> bool {
+        self.level.is_none() && self.weapon.is_none()
     }
 
     /// The band value the far half should ask for, given the one Seamless computed for this
     /// character.
     ///
-    /// `None` means ask for exactly what Seamless computed -- either because the player chose
-    /// [`Self::Default`], or because `own` is not a band value and rewriting it would be an
-    /// invention. The caller forwards Seamless's own string in both cases, so there is no path
-    /// here that can silently rewrite a field this does not understand.
+    /// `None` means send Seamless's own value -- because nothing is picked, because the pick
+    /// resolves to the character's own bracket anyway, or because `own` is not a band value and
+    /// rewriting it would be an invention.
     ///
-    /// Both axes are clamped at their ceiling. Asking for a band above the top matches nobody at
-    /// all, which on screen is indistinguishable from the difficulty being broken.
+    /// Neither axis can resolve below the player's own band, whatever is stored. The panel greys
+    /// those entries out, but a pick made at `RL40` and still held after levelling past `RL70` is
+    /// the same defect arriving by a different route, and invading beneath your own band puts you
+    /// on somebody weaker who never agreed to it.
     #[must_use]
     pub fn band_for(self, own: &str) -> Option<String> {
-        let (level, weapon) = crate::band_ladder::split_band(own)?;
-        let (level, weapon) = match self.brackets_up() {
-            Some(0) => return None,
-            Some(steps) => (
-                level.saturating_add(steps).min(MAX_LEVEL_BAND),
-                weapon.saturating_add(steps).min(MAX_WEAPON_BAND),
-            ),
-            None => (MAX_LEVEL_BAND, MAX_WEAPON_BAND),
-        };
+        let (own_level, own_weapon) = crate::band_ladder::split_band(own)?;
+        let level = self
+            .level
+            .unwrap_or(own_level)
+            .clamp(own_level, MAX_LEVEL_BAND);
+        let weapon = self
+            .weapon
+            .unwrap_or(own_weapon)
+            .clamp(own_weapon, MAX_WEAPON_BAND);
         let asked = format!("{level}_{weapon}");
-        // A difficulty that lands back on the player's own band asks Seamless for exactly what it
-        // was already going to send. Answering `None` there keeps the rewrite log honest: a line
-        // saying "asking for 6_3 instead of 6_3" reads as a change that did not happen.
+        // A pick that lands back on the player's own band asks Seamless for exactly what it was
+        // already going to send. Answering `None` there keeps the rewrite log honest: a line
+        // saying "asking for 2_1 instead of 2_1" reads as a change that did not happen.
         (asked != own).then_some(asked)
+    }
+
+    /// One line describing what is picked, for the log and for the rows' note.
+    #[must_use]
+    pub fn describe(self) -> String {
+        match (self.level, self.weapon) {
+            (None, None) => "your own bracket -- Seamless's own behaviour".to_owned(),
+            (Some(level), None) => {
+                format!("{} at your own weapon bracket", level_band_label(level))
+            }
+            (None, Some(weapon)) => {
+                format!("your own rune level at {}", weapon_band_label(weapon))
+            }
+            (Some(level), Some(weapon)) => format!(
+                "{} at {}",
+                level_band_label(level),
+                weapon_band_label(weapon)
+            ),
+        }
     }
 }
 
@@ -208,36 +209,12 @@ impl InvadeDifficulty {
 mod tests {
     use super::*;
 
-    /// Seamless's level thresholds, as read out of `[rcx+0x70]` on 2026-09-18.
-    const MEASURED_LEVEL_THRESHOLDS: [u32; 8] = [20, 40, 70, 100, 125, 150, 200, 300];
-
-    /// Seamless's weapon thresholds, from `[rcx+0x88]` in the same read.
-    const MEASURED_WEAPON_THRESHOLDS: [u32; 3] = [3, 12, 20];
-
-    /// Seamless's own lookup: the index of the first threshold at or above `value`, or the table's
-    /// length when `value` is past every one of them.
-    fn band(value: u32, thresholds: &[u32]) -> u32 {
-        let at = thresholds.iter().position(|edge| *edge >= value);
-        u32::try_from(at.unwrap_or(thresholds.len())).expect("a table of single digits")
-    }
-
-    /// The two ceilings are the two table lengths, and nothing else.
-    ///
-    /// Held as a test rather than as a comment because the constants are what `Godlike` asks for:
-    /// set either one above its table and `Godlike` names a bracket nobody can be in, which on
-    /// screen is a difficulty that silently finds no one.
-    #[test]
-    fn the_ceilings_are_the_measured_table_lengths() {
-        assert_eq!(MAX_LEVEL_BAND as usize, MEASURED_LEVEL_THRESHOLDS.len());
-        assert_eq!(MAX_WEAPON_BAND as usize, MEASURED_WEAPON_THRESHOLDS.len());
-    }
-
     /// Every band this repo has ever observed on the wire, reproduced from the measured tables.
     ///
-    /// This is what makes the read above evidence instead of a number somebody typed. The live
-    /// frame is the last row: the arguments were `RL9 +2` and the query that followed carried
-    /// `0_0` under the band key. The four before it were recorded across three earlier evenings by
-    /// entirely different means.
+    /// This is what makes the read evidence instead of a number somebody typed. The live frame is
+    /// the last row: the arguments were `RL9 +2` and the query that followed carried `0_0` under
+    /// the band key. The four before it were recorded across three earlier evenings by entirely
+    /// different means.
     ///
     /// One historical point is deliberately absent and is wrong rather than missing: bd
     /// `seamless-band-is-the-single-field-excluding-a-friend-proven-live-2026-09-18` records
@@ -252,174 +229,207 @@ mod tests {
             (60, 12, "2_1"),
             (9, 2, "0_0"),
         ] {
-            let seen = format!(
-                "{}_{}",
-                band(level, &MEASURED_LEVEL_THRESHOLDS),
-                band(weapon, &MEASURED_WEAPON_THRESHOLDS)
-            );
+            let seen = format!("{}_{}", level_band(level), weapon_band(weapon));
             assert_eq!(seen, expected, "RL{level} +{weapon}");
         }
     }
 
-    /// A character past every threshold lands on the ceiling, which is the whole basis for
-    /// `Godlike` being expressible at all.
+    /// A character past every threshold lands on the ceiling, which is what makes the last entry
+    /// in each list reachable at all.
     #[test]
     fn a_character_above_every_threshold_lands_on_the_ceiling() {
         // 713 is the highest rune level the game allows; `+25` the highest standard reinforcement.
-        assert_eq!(band(713, &MEASURED_LEVEL_THRESHOLDS), MAX_LEVEL_BAND);
-        assert_eq!(band(25, &MEASURED_WEAPON_THRESHOLDS), MAX_WEAPON_BAND);
-        assert_eq!(
-            InvadeDifficulty::Godlike.band_for("0_0").as_deref(),
-            Some("8_3")
-        );
+        assert_eq!(level_band(713), MAX_LEVEL_BAND);
+        assert_eq!(weapon_band(25), MAX_WEAPON_BAND);
     }
 
-    /// The six rows, the offsets the player was promised, and the order they cycle in.
+    /// The lists are what the panel draws, so their length and their edges are the feature.
+    ///
+    /// Spelled out rather than derived: a label reading `RL126-150` is a promise about who the
+    /// search will be sent to, and it has to match the thresholds exactly or it is a lie told in a
+    /// dropdown.
     #[test]
-    fn the_ladder_of_difficulties_is_the_one_that_was_asked_for() {
+    fn every_bracket_is_named_by_the_levels_it_actually_covers() {
         assert_eq!(
-            InvadeDifficulty::ALL.map(|d| (d.label(), d.brackets_up())),
-            [
-                ("Default", Some(0)),
-                ("Hard", Some(1)),
-                ("Harder", Some(2)),
-                ("Hardest", Some(3)),
-                ("Insano", Some(4)),
-                ("Godlike", None),
+            level_band_labels(),
+            vec![
+                "RL1-20",
+                "RL21-40",
+                "RL41-70",
+                "RL71-100",
+                "RL101-125",
+                "RL126-150",
+                "RL151-200",
+                "RL201-300",
+                "RL301+",
             ]
         );
-    }
-
-    #[test]
-    fn cycling_wraps_back_to_the_players_own_bracket() {
-        let mut seen = vec![InvadeDifficulty::Default];
-        let mut at = InvadeDifficulty::Default;
-        for _ in 0..InvadeDifficulty::ALL.len() {
-            at = at.next();
-            seen.push(at);
-        }
-        assert_eq!(seen.first(), seen.last(), "a full cycle comes back round");
-        assert_eq!(seen.len(), InvadeDifficulty::ALL.len() + 1);
-    }
-
-    /// The default changes nothing at all, which is what makes it safe to leave on.
-    #[test]
-    fn the_default_never_rewrites_the_band() {
-        for own in ["0_0", "2_1", "6_3"] {
-            assert_eq!(InvadeDifficulty::Default.band_for(own), None);
-        }
-    }
-
-    /// Both numbers move together, because a host at a higher character level usually carries a
-    /// higher weapon upgrade too.
-    #[test]
-    fn a_bracket_up_moves_both_axes() {
         assert_eq!(
-            InvadeDifficulty::Hard.band_for("1_0").as_deref(),
-            Some("2_1")
-        );
-        assert_eq!(
-            InvadeDifficulty::Harder.band_for("1_0").as_deref(),
-            Some("3_2")
-        );
-        assert_eq!(
-            InvadeDifficulty::Hardest.band_for("1_0").as_deref(),
-            Some("4_3")
+            weapon_band_labels(),
+            vec!["+0 to +3", "+4 to +12", "+13 to +20", "+21 and up"]
         );
     }
 
-    /// Neither axis is ever asked for above its ceiling. A band past the top matches nobody, and a
-    /// difficulty that matches nobody is indistinguishable from one that does not work.
-    #[test]
-    fn every_difficulty_clamps_at_the_top_band() {
-        for difficulty in InvadeDifficulty::ALL {
-            for own in ["0_0", "2_1", "5_2", "6_3"] {
-                let Some(asked) = difficulty.band_for(own) else {
-                    continue;
-                };
-                let (level, weapon) =
-                    crate::band_ladder::split_band(&asked).expect("the rewrite is a band value");
-                assert!(level <= MAX_LEVEL_BAND, "{difficulty:?} {own} -> {asked}");
-                assert!(weapon <= MAX_WEAPON_BAND, "{difficulty:?} {own} -> {asked}");
-            }
-        }
-    }
-
-    /// Godlike is absolute, so it asks for the same pair whatever the player's own bracket is.
-    #[test]
-    fn godlike_asks_for_the_top_bracket_regardless_of_the_player() {
-        let top = format!("{MAX_LEVEL_BAND}_{MAX_WEAPON_BAND}");
-        for own in ["0_0", "1_0", "2_1", "5_2"] {
-            assert_eq!(
-                InvadeDifficulty::Godlike.band_for(own).as_deref(),
-                Some(&*top)
-            );
-        }
-        // Already there: no rewrite, because asking for the band already being sent is not a
-        // change and must not be logged as one.
-        assert_eq!(InvadeDifficulty::Godlike.band_for(&top), None);
-    }
-
-    /// No difficulty ever asks below the player's own bracket, on either axis. Invading beneath
-    /// your own band puts you on somebody weaker who never agreed to it, and every row on this
-    /// list is named for being harder.
-    #[test]
-    fn no_difficulty_ever_descends() {
-        for difficulty in InvadeDifficulty::ALL {
-            for own in ["0_0", "1_0", "2_1", "5_2", "6_3"] {
-                let (own_level, own_weapon) = crate::band_ladder::split_band(own).expect("a band");
-                let Some(asked) = difficulty.band_for(own) else {
-                    continue;
-                };
-                let (level, weapon) = crate::band_ladder::split_band(&asked).expect("a band");
-                assert!(
-                    level >= own_level && weapon >= own_weapon,
-                    "{difficulty:?} turned {own} into {asked}, which is below the player"
-                );
-            }
-        }
-    }
-
-    /// A value that is not a band is forwarded untouched, whatever the difficulty.
+    /// Every label describes the band a character in it would be given, on both edges.
     ///
-    /// The far half's query carries Seamless's own keys and this runs on every string filter in
-    /// it, so a difficulty that rewrote anything band-shaped-ish would corrupt a field it has
-    /// never identified.
+    /// The off-by-one this closes is real: the low edge of band `i` is the previous threshold plus
+    /// one, and writing the previous threshold itself would put every boundary level in the row
+    /// above its own.
+    #[test]
+    fn each_label_covers_exactly_the_levels_that_map_to_its_band() {
+        for band in 0..=MAX_LEVEL_BAND {
+            let low = match band.checked_sub(1) {
+                None => 1,
+                Some(below) => LEVEL_THRESHOLDS[below as usize] + 1,
+            };
+            assert_eq!(level_band(low), band, "the low edge of {band}");
+            if let Some(high) = LEVEL_THRESHOLDS.get(band as usize) {
+                assert_eq!(level_band(*high), band, "the high edge of {band}");
+                assert_eq!(level_band(high + 1), band + 1, "one past the high edge");
+            }
+        }
+    }
+
+    /// Nothing picked rewrites nothing, which is what makes a fresh session safe.
+    #[test]
+    fn an_empty_choice_never_rewrites_the_band() {
+        for own in ["0_0", "2_1", "8_3"] {
+            assert_eq!(BracketChoice::own().band_for(own), None);
+        }
+    }
+
+    /// Each axis is picked on its own, so a player who cares only about weapon upgrade leaves the
+    /// rune level alone and still gets what they asked for.
+    #[test]
+    fn either_axis_can_be_picked_without_the_other() {
+        let level_only = BracketChoice {
+            level: Some(5),
+            weapon: None,
+        };
+        assert_eq!(level_only.band_for("2_1").as_deref(), Some("5_1"));
+        let weapon_only = BracketChoice {
+            level: None,
+            weapon: Some(3),
+        };
+        assert_eq!(weapon_only.band_for("2_1").as_deref(), Some("2_3"));
+    }
+
+    /// Every bracket at or above the player's own is reachable, which is the whole point of
+    /// replacing the fixed steps. Under those, a band-0 character could ask for 0 through 4 and
+    /// then 8, and bands 5, 6 and 7 could not be asked for at all.
+    #[test]
+    fn every_bracket_above_the_player_is_reachable_with_no_holes() {
+        let own = "0_0";
+        let reachable: Vec<u32> = (0..=MAX_LEVEL_BAND)
+            .filter_map(|band| {
+                let choice = BracketChoice {
+                    level: Some(band),
+                    weapon: None,
+                };
+                match choice.band_for(own) {
+                    // Band 0 is the player's own and rewrites nothing, which still counts as
+                    // reachable -- it is the row they are already in.
+                    None => (band == 0).then_some(band),
+                    Some(asked) => crate::band_ladder::split_band(&asked).map(|(level, _)| level),
+                }
+            })
+            .collect();
+        assert_eq!(reachable, (0..=MAX_LEVEL_BAND).collect::<Vec<_>>());
+    }
+
+    /// A pick below the player's own band is refused even when it is stored, because a character
+    /// levels up and the pick does not.
+    #[test]
+    fn a_pick_below_the_players_own_bracket_never_reaches_the_wire() {
+        let stale = BracketChoice {
+            level: Some(1),
+            weapon: Some(0),
+        };
+        // Picked at `RL21-40 +0-+3`, still held after levelling into `RL41-70` with a `+13` weapon.
+        assert_eq!(
+            stale.band_for("2_2"),
+            None,
+            "clamped back to the player's own on both axes, so nothing is asked"
+        );
+        let half_stale = BracketChoice {
+            level: Some(1),
+            weapon: Some(3),
+        };
+        assert_eq!(half_stale.band_for("2_2").as_deref(), Some("2_3"));
+    }
+
+    /// No choice ever asks below the player's own, on either axis, for any pair on either list.
+    #[test]
+    fn nothing_ever_descends() {
+        for own_level in 0..=MAX_LEVEL_BAND {
+            for own_weapon in 0..=MAX_WEAPON_BAND {
+                let own = format!("{own_level}_{own_weapon}");
+                for level in 0..=MAX_LEVEL_BAND {
+                    for weapon in 0..=MAX_WEAPON_BAND {
+                        let choice = BracketChoice {
+                            level: Some(level),
+                            weapon: Some(weapon),
+                        };
+                        let Some(asked) = choice.band_for(&own) else {
+                            continue;
+                        };
+                        let (asked_level, asked_weapon) =
+                            crate::band_ladder::split_band(&asked).expect("a band value");
+                        assert!(
+                            asked_level >= own_level && asked_weapon >= own_weapon,
+                            "{own} -> {asked}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A value that is not a band is forwarded untouched. This runs on every string filter in the
+    /// far half's query, which carries Seamless's own keys, so a rewrite of anything
+    /// band-shaped-ish would corrupt a field nothing here has identified.
     #[test]
     fn only_a_band_shaped_value_is_rewritten() {
+        let choice = BracketChoice {
+            level: Some(8),
+            weapon: Some(3),
+        };
         for value in ["", "_", "2_", "_1", "m61_48_45_00", "true", "2-1", "x_1"] {
-            for difficulty in InvadeDifficulty::ALL {
-                assert_eq!(
-                    difficulty.band_for(value),
-                    None,
-                    "{difficulty:?} rewrote {value:?}, which is not a band"
-                );
-            }
+            assert_eq!(choice.band_for(value), None, "{value} is not a band");
         }
     }
 
-    /// The atomic the DLL keeps this in stores an index, so the round trip has to be exact.
+    /// The description names both axes, because a row saying "RL126-150" while silently leaving
+    /// the weapon bracket alone would describe half of what the search will ask for.
     #[test]
-    fn every_difficulty_survives_the_index_round_trip() {
-        for difficulty in InvadeDifficulty::ALL {
-            assert_eq!(InvadeDifficulty::from_index(difficulty.index()), difficulty);
-        }
+    fn the_description_names_whichever_axes_are_picked() {
         assert_eq!(
-            InvadeDifficulty::from_index(usize::MAX),
-            InvadeDifficulty::Default,
-            "a torn or stale read costs Seamless's own behaviour, never the game"
+            BracketChoice::own().describe(),
+            "your own bracket -- Seamless's own behaviour"
         );
-    }
-
-    /// Each row says what it does to the far half specifically, because the near half is not
-    /// touched and a note that omitted that would be describing a different feature.
-    #[test]
-    fn every_row_explains_itself_and_says_which_half_it_changes() {
-        for difficulty in InvadeDifficulty::ALL {
-            assert!(
-                difficulty.note().contains("far half"),
-                "{difficulty:?} does not say which half of the search it changes"
-            );
-        }
+        assert_eq!(
+            BracketChoice {
+                level: Some(5),
+                weapon: Some(3)
+            }
+            .describe(),
+            "RL126-150 at +21 and up"
+        );
+        assert!(
+            BracketChoice {
+                level: Some(5),
+                weapon: None
+            }
+            .describe()
+            .contains("your own weapon bracket")
+        );
+        assert!(
+            BracketChoice {
+                level: None,
+                weapon: Some(3)
+            }
+            .describe()
+            .contains("your own rune level")
+        );
     }
 }

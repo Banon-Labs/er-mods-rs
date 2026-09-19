@@ -1208,11 +1208,11 @@ mod live {
         if let Some(band) = crate::invade_difficulty::band_for(original) {
             if !BAND_CLIMB_SAID.swap(true, Ordering::SeqCst) {
                 crate::standalone_log(format_args!(
-                    "invade-difficulty: asking for {band} instead of {original} -- the far half of \
-                     `Both near and far` at {}. Seamless matches this value for equality, so this \
-                     is the whole of what the setting does: only hosts in that bracket can answer \
-                     any query from here on. Printed once per change.",
-                    crate::invade_difficulty::current().label()
+                    "invade-bracket: asking for {band} instead of {original} -- the far half of \
+                     `Both near and far`, aimed at {}. Seamless matches this value for equality, \
+                     so this is the whole of what the setting does: only hosts in that bracket can \
+                     answer any query from here on. Printed once per change.",
+                    crate::invade_difficulty::current().describe()
                 ));
             }
             return std::ffi::CString::new(band).ok();

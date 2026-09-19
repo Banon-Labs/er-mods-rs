@@ -2279,15 +2279,15 @@ fn the_two_keys_are_written_independently() {
     }
 }
 
-/// The difficulty is never a config key, on either side of the file.
+/// The bracket picker is never a config key, on either side of the file.
 ///
 /// The whole reason it is in memory is the bug that shipped as `widen_to_anywhere`: a key that
 /// could be set could disagree with the row the player picked, and on 2026-09-18 a file still
 /// carrying one from a previous week dropped them into two strangers' worlds. Both keys were
-/// deleted. Nothing here may quietly reintroduce the shape by giving the difficulty a line in the
-/// TOML, so this asserts the absence in the parser, the writer and the shipped template at once.
+/// deleted. Nothing here may quietly reintroduce the shape by giving the picker a line in the
+/// TOML, so this asserts the absence in the parser, the struct and the shipped template at once.
 #[test]
-fn the_invade_difficulty_never_reaches_the_config_file() {
+fn the_invade_bracket_never_reaches_the_config_file() {
     // Assembled rather than written out, for the reason this module's docs give: a needle spelled
     // in full would be found by a test that scans a file containing itself.
     let key: String = ["invade", "difficulty"].join("_");
@@ -2309,28 +2309,60 @@ fn the_invade_difficulty_never_reaches_the_config_file() {
     }
 }
 
-/// A click on the difficulty row costs no write, and is taken before the config lock.
+/// A click on either bracket row costs no write, and both are taken before the config lock.
 ///
-/// Every other row on the panel goes through reload-clone-mutate-save. This one must not: it is
-/// not a config key, so a save carrying it would either drop it silently or invent a line for it.
+/// Every other row on the panel goes through reload-clone-mutate-save. These two must not: they
+/// are not config keys, so a save carrying one would either drop it silently or invent a line for
+/// it.
 #[test]
-fn the_difficulty_row_is_applied_before_the_config_is_touched() {
+fn the_bracket_rows_are_applied_before_the_config_is_touched() {
     let panel = include_str!("../settings_panel.rs");
     let body = panel
         .split_once("fn apply_pending_edits()")
         .expect("the panel drains its edits here")
         .1;
     let body = body.split_once("\n}").expect("a function body").0;
-    let cycle_at = body
-        .find("invade_difficulty::cycle()")
-        .expect("the difficulty row must be applied at all");
     let lock_at = body
         .find("CONFIG.lock()")
         .expect("every other row is applied under the config lock");
+    for axis in ["pick_level(", "pick_weapon("] {
+        let at = body
+            .find(axis)
+            .unwrap_or_else(|| panic!("{axis} must be applied at all:\n{body}"));
+        assert!(
+            at < lock_at,
+            "{axis} must be taken out of the drained edits before the config is locked -- behind \
+             the lock it rides a read-modify-write that has no field to put it in:\n{body}"
+        );
+    }
+}
+
+/// The player's own bracket is read from memory, not latched off the wire.
+///
+/// The panel greys out everything below it on the frame it opens, which is typically long before
+/// any query has gone out -- so a band learned from a search arrives too late to grey anything.
+/// The pointer chain must also go through `game_data_addr`: the rva is a 1.16.2 one, every `.data`
+/// global moved on 1.17, and a raw `base + rva` read lands on a pointer into the image. Measured
+/// 2026-09-18 by `scripts/frida/own-bracket-from-pgd.js`, which faulted on exactly that before it
+/// was given the mapped address.
+#[test]
+fn the_players_own_bracket_is_read_through_the_rva_translation() {
+    let source = include_str!("../invade_difficulty.rs");
+    let body = source
+        .split_once("pub fn own_bands()")
+        .expect("the own-bracket read is in this module")
+        .1
+        .split_once("\n}")
+        .expect("a function body")
+        .0;
     assert!(
-        cycle_at < lock_at,
-        "the difficulty must be taken out of the drained edits BEFORE the config is locked -- \
-         behind the lock it rides a read-modify-write that has no field to put it in:\n{body}"
+        body.contains("game_data_addr("),
+        "the global must be translated for the running build, not read at its 1.16.2 rva:\n{body}"
+    );
+    assert!(
+        body.contains("MAX_RUNE_LEVEL") && body.contains("MAX_WEAPON_UPGRADE"),
+        "an implausible read must be refused rather than turned into a confident wrong bracket:\n\
+         {body}"
     );
 }
 
