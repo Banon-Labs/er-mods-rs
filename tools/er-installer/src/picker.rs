@@ -7,12 +7,19 @@
 //! This draws a fixed screen instead: one line per mod, the description of the highlighted one
 //! only, and a cursor that moves. The information is the same and the reading is not.
 //!
-//! # A conflict is refused where it happens
+//! # A conflict is refused where it happens, and shown before it happens
 //!
 //! Ticking a box that cannot coexist with something already ticked is refused at that
 //! keystroke, and the message names the mod to untick. Collecting a whole selection and
 //! rejecting it at the end makes the user work out which of their choices was the problem,
 //! which is the same thing as not telling them.
+//!
+//! The same answer is drawn a frame earlier, as [`Blocked`]: a row the current selection rules
+//! out is dimmed, its box becomes `[-]`, and its note names the mod that shut it. Refusing only
+//! at the press means the screen offers a row it will not give you, so a reader learns the rule
+//! by being told no; this way the screen already says which rows are on the table. The press is
+//! still what enforces it -- [`Picker::toggle_current`] asks the same two questions itself --
+//! because `set_defaults` and `--select` can change the set without drawing anything.
 //!
 //! # What is pure and what is not
 //!
@@ -36,6 +43,21 @@ pub enum Toggle {
     /// Refused: a mod already ticked contains this one. Carries that mod's package name.
     Redundant(&'static str),
     OutOfRange,
+}
+
+/// Why a row cannot be ticked while the current set is what it is. Each variant carries the
+/// label of the ticked mod that rules it out, so the row and the detail pane can name it.
+///
+/// This is the same question [`Picker::toggle_current`] answers at the keystroke, asked one
+/// frame earlier so the row can be drawn greyed out rather than merely refusing when pressed.
+/// Refusing at the press is still the enforcement -- this cannot be the only guard, because a
+/// selection can also become unloadable through `set_defaults`, which draws nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Blocked {
+    /// A ticked mod this one destroys, or is destroyed by.
+    Conflicts(&'static str),
+    /// A ticked mod that already contains this one.
+    Contained(&'static str),
 }
 
 /// A line on screen: either a section title or a mod. Headers are drawn and scrolled through
@@ -135,12 +157,32 @@ impl Picker {
         selection::in_display_order(&chosen)
     }
 
-    /// Is this package ticked? By package name, since `included_in` names one.
-    fn is_ticked(&self, package: &str) -> bool {
-        CATALOG
-            .iter()
-            .position(|entry| entry.package == package)
-            .is_some_and(|index| self.ticked[index])
+    /// Which rows the current selection rules out, by `CATALOG` index, `None` where the row
+    /// can still be ticked and for every row already ticked.
+    ///
+    /// Computed once per frame rather than once per row: each answer reads the whole ticked
+    /// set, so asking row by row would walk that set as many times as there are mods to draw
+    /// one screen.
+    fn blocked_rows(&self) -> Vec<Option<Blocked>> {
+        let chosen = self.chosen();
+        (0..CATALOG.len())
+            .map(|index| {
+                if self.ticked[index] {
+                    return None;
+                }
+                let entry = &CATALOG[index];
+                if let Some(conflict) = selection::conflicts_with(entry, &chosen).first() {
+                    let other = if conflict.a == entry.package {
+                        conflict.b
+                    } else {
+                        conflict.a
+                    };
+                    return Some(Blocked::Conflicts(Self::label_for(other)));
+                }
+                selection::redundant_with(entry, &chosen)
+                    .map(|host| Blocked::Contained(Self::label_for(host)))
+            })
+            .collect()
     }
 
     fn entry_at(&self, row: usize) -> Option<usize> {
@@ -365,12 +407,13 @@ impl Picker {
         out.push_str(&self.title_bar(width, selected));
         out.push('\n');
 
+        let blocked = self.blocked_rows();
         let mut drawn = 0;
         for position in self.scroll..self.rows.len() {
             if drawn == list_height {
                 break;
             }
-            out.push_str(&self.row_line(position, width));
+            out.push_str(&self.row_line(position, width, &blocked));
             out.push('\n');
             drawn += 1;
         }
@@ -378,7 +421,7 @@ impl Picker {
             out.push('\n');
         }
 
-        out.push_str(&self.detail_pane(width));
+        out.push_str(&self.detail_pane(width, &blocked));
         out.push_str(&self.hint_line(width));
         out
     }
@@ -400,7 +443,43 @@ impl Picker {
         }
     }
 
-    fn row_line(&self, position: usize, width: usize) -> String {
+    /// The bracketed notes after a label, or an empty string. Shared by both pickers so the
+    /// line-based one cannot quietly drop a warning the full-screen one shows.
+    fn notes_for(entry: &Mod, blocked: Option<Blocked>) -> String {
+        let mut notes: Vec<&str> = Vec::new();
+        if entry.audience == "diagnostic" {
+            notes.push("dev tool");
+        }
+        if entry.needs_seamless {
+            notes.push("needs Seamless");
+        }
+        // What this mod costs, for the few that cost something. Every one of them read
+        // "changes things" until 2026-09-19, which is as much as a reader can act on as a
+        // blank row, spelled out at greater length.
+        if let Some(caution) = entry.caution {
+            notes.push(caution);
+        }
+        // Only worth saying while the other mod is actually ticked. Shown always, it would
+        // read as a warning against a row that is perfectly good on its own.
+        let blocked_note;
+        match blocked {
+            Some(Blocked::Conflicts(other)) => {
+                blocked_note = format!("not with {other}");
+                notes.push(&blocked_note);
+            }
+            Some(Blocked::Contained(host)) => {
+                blocked_note = format!("already in {host}");
+                notes.push(&blocked_note);
+            }
+            None => {}
+        }
+        if notes.is_empty() {
+            return String::new();
+        }
+        format!("  ({})", notes.join("; "))
+    }
+
+    fn row_line(&self, position: usize, width: usize, blocked: &[Option<Blocked>]) -> String {
         match self.rows[position] {
             Row::Header(title) => {
                 let text = format!("  {}", title.to_uppercase());
@@ -413,52 +492,36 @@ impl Picker {
             Row::Entry(index) => {
                 let entry = &CATALOG[index];
                 let here = position == self.cursor;
+                let blocked = blocked[index];
                 let arrow = if here { ">" } else { " " };
-                let tick = if self.ticked[index] { "x" } else { " " };
-                let mut notes: Vec<&str> = Vec::new();
-                if entry.audience == "diagnostic" {
-                    notes.push("dev tool");
-                }
-                if entry.needs_seamless {
-                    notes.push("needs Seamless");
-                }
-                if entry.opt_in_only {
-                    notes.push("changes things");
-                }
-                // Only worth saying while the bigger mod is actually ticked. Shown always, it
-                // would read as a warning against a row that is perfectly good on its own.
-                let included_note;
-                if let Some(host) = entry
-                    .included_in
-                    .iter()
-                    .copied()
-                    .find(|host| self.is_ticked(host))
-                {
-                    included_note = format!("already in {}", Self::label_for(host));
-                    notes.push(&included_note);
-                }
-                let note = if notes.is_empty() {
-                    String::new()
-                } else {
-                    format!("  ({})", notes.join("; "))
+                // A blank box reads as "not chosen yet", which is an invitation. A row the
+                // current selection rules out gets `-` instead, because that is the only part
+                // of this that survives `NO_COLOR`, a pipe and the line-based picker.
+                let tick = match (self.ticked[index], blocked.is_some()) {
+                    (true, _) => "x",
+                    (false, true) => "-",
+                    (false, false) => " ",
                 };
+                let note = Self::notes_for(entry, blocked);
                 let text = truncate(&format!("{arrow} [{tick}] {}{note}", entry.label), width);
                 if !self.colour {
                     return text;
                 }
                 let padded = format!("{text}{}", " ".repeat(width.saturating_sub(text.len())));
-                if here {
-                    format!("\x1b[7m{padded}\x1b[0m")
-                } else if self.ticked[index] {
-                    format!("\x1b[32m{text}\x1b[0m")
-                } else {
-                    text
+                match (here, blocked.is_some()) {
+                    // Dimmed under the cursor as well: the highlight says where you are, and
+                    // the row still has to say that a press will not take.
+                    (true, true) => format!("\x1b[2;7m{padded}\x1b[0m"),
+                    (true, false) => format!("\x1b[7m{padded}\x1b[0m"),
+                    (false, true) => format!("\x1b[2m{text}\x1b[0m"),
+                    (false, false) if self.ticked[index] => format!("\x1b[32m{text}\x1b[0m"),
+                    (false, false) => text,
                 }
             }
         }
     }
 
-    fn detail_pane(&self, width: usize) -> String {
+    fn detail_pane(&self, width: usize, blocked: &[Option<Blocked>]) -> String {
         let rule = "-".repeat(width);
         let mut out = if self.colour {
             format!("\x1b[2m{rule}\x1b[0m\n")
@@ -490,7 +553,22 @@ impl Picker {
             format!(" {}\n", truncate(entry.label, width - 1))
         });
 
-        let mut body = wrap(entry.blurb, width.saturating_sub(2));
+        // Why the row is greyed, before what the mod does. A reader whose cursor is on a dim
+        // row is asking that question and nothing else, and it costs a keystroke to find out
+        // if only the refusal message answers it.
+        let mut body = Vec::new();
+        if let Some(reason) = self.entry_at(self.cursor).and_then(|index| blocked[index]) {
+            let sentence = match reason {
+                Blocked::Conflicts(other) => {
+                    format!("Cannot be ticked while {other} is on: the two cannot load together.")
+                }
+                Blocked::Contained(host) => {
+                    format!("Cannot be ticked while {host} is on: it already carries this.")
+                }
+            };
+            body.extend(wrap(&sentence, width.saturating_sub(2)));
+        }
+        body.extend(wrap(entry.blurb, width.saturating_sub(2)));
         if let Some(config) = entry.config {
             body.push(format!("Settings: {config} in the game folder."));
         }
@@ -687,6 +765,7 @@ pub fn run(picker: &mut Picker) -> io::Result<Option<Vec<&'static Mod>>> {
 
 const PLAIN_HELP: &str = "\
   Type row numbers to tick or untick them (for example: 1 4 7)
+  A [-] row will not take: something already ticked rules it out, and the row says which
   a  accept and install          d  reset to the recommended set
   s  select everything possible  n  select nothing
   q  quit without installing";
@@ -747,14 +826,23 @@ impl Picker {
     fn plain_list(&self) -> String {
         let mut out = String::new();
         let mut number = 0;
+        let blocked = self.blocked_rows();
         for row in &self.rows {
             match row {
                 Row::Header(title) => out.push_str(&format!("\n  {}\n", title.to_uppercase())),
                 Row::Entry(index) => {
                     number += 1;
                     let entry = &CATALOG[*index];
-                    let tick = if self.ticked[*index] { "x" } else { " " };
-                    out.push_str(&format!("  {number:>3} [{tick}] {}\n", entry.label));
+                    let tick = match (self.ticked[*index], blocked[*index].is_some()) {
+                        (true, _) => "x",
+                        (false, true) => "-",
+                        (false, false) => " ",
+                    };
+                    // This picker has no colour to grey a row with, so the box and the notes
+                    // carry the whole message: typing that number will be refused, and here
+                    // is the row to untick first.
+                    let note = Self::notes_for(entry, blocked[*index]);
+                    out.push_str(&format!("  {number:>3} [{tick}] {}{note}\n", entry.label));
                 }
             }
         }
@@ -801,6 +889,21 @@ mod tests {
 
     fn plain_picker() -> Picker {
         Picker::new().without_colour()
+    }
+
+    /// The line this package is drawn as, without hunting for it in a frame -- a label also
+    /// appears inside other rows' notes, so searching a frame for one can find the wrong row.
+    fn row_for(picker: &Picker, package: &str) -> String {
+        let index = CATALOG
+            .iter()
+            .position(|entry| entry.package == package)
+            .expect("package is in the catalog");
+        let position = picker
+            .rows
+            .iter()
+            .position(|row| *row == Row::Entry(index))
+            .expect("row is on screen");
+        picker.row_line(position, WIDTH, &picker.blocked_rows())
     }
 
     fn cursor_onto(picker: &mut Picker, package: &str) {
@@ -1059,6 +1162,146 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_row_ruled_out_by_the_selection_is_drawn_greyed_and_names_the_blocker() {
+        let mut picker = plain_picker();
+        picker.clear();
+        let open = row_for(&picker, "er-loading-portrait");
+        assert!(
+            open.contains("[ ]"),
+            "an available row was marked shut: {open}"
+        );
+
+        cursor_onto(&mut picker, "er-quickload");
+        picker.handle(Key::Space, 10);
+        let shut = row_for(&picker, "er-loading-portrait");
+        let product = selection::by_package("er-quickload").unwrap();
+        assert!(
+            shut.contains("[-]"),
+            "the blocked row kept an open box: {shut}"
+        );
+        assert!(
+            shut.contains(&format!("not with {}", product.label)),
+            "the row did not name what blocks it: {shut}"
+        );
+
+        cursor_onto(&mut picker, "er-quickload");
+        picker.handle(Key::Space, 10);
+        let reopened = row_for(&picker, "er-loading-portrait");
+        assert!(
+            reopened.contains("[ ]"),
+            "unticking the blocker left the row shut: {reopened}"
+        );
+    }
+
+    #[test]
+    fn a_greyed_row_is_dimmed_and_an_available_one_is_not() {
+        let mut picker = Picker::new();
+        picker.colour = true;
+        picker.clear();
+        cursor_onto(&mut picker, "er-quickload");
+        picker.handle(Key::Space, 10);
+        // Off the cursor, so the highlight is not what is being measured.
+        cursor_onto(&mut picker, "er-quickload");
+
+        let shut = row_for(&picker, "er-loading-portrait");
+        assert!(shut.contains("\x1b[2m"), "the blocked row was not dimmed");
+        let open = row_for(&picker, "er-crash-logging");
+        assert!(
+            !open.contains("\x1b[2m"),
+            "an available row was dimmed: {open:?}"
+        );
+    }
+
+    #[test]
+    fn every_greyed_row_refuses_a_press_and_every_open_row_takes_one() {
+        // The point of the greying: what the screen says about a row and what a press does to
+        // it are the same answer. A row drawn open that refuses is a lie, and a row drawn shut
+        // that ticks anyway makes the greying decorative.
+        for entry in CATALOG {
+            let mut picker = plain_picker();
+            let line = row_for(&picker, entry.package);
+            cursor_onto(&mut picker, entry.package);
+            match picker.toggle_current() {
+                Toggle::Enabled => assert!(
+                    line.contains("[ ]"),
+                    "a row that ticks was not drawn open: {line}"
+                ),
+                Toggle::Disabled => assert!(
+                    line.contains("[x]"),
+                    "a row that unticks was not drawn ticked: {line}"
+                ),
+                Toggle::Blocked(_) | Toggle::Redundant(_) => assert!(
+                    line.contains("[-]"),
+                    "a row that refuses was not drawn greyed: {line}"
+                ),
+                Toggle::OutOfRange => panic!("{} has no row", entry.package),
+            }
+        }
+    }
+
+    #[test]
+    fn the_detail_pane_says_why_the_row_under_the_cursor_is_greyed() {
+        let mut picker = plain_picker();
+        picker.clear();
+        cursor_onto(&mut picker, "er-quickload");
+        picker.handle(Key::Space, 10);
+        cursor_onto(&mut picker, "er-loading-portrait");
+        // Straight to the pane: `handle` leaves a refusal message only after a press, and the
+        // reason has to be readable before anyone presses anything.
+        let pane = picker.detail_pane(WIDTH, &picker.blocked_rows());
+        let product = selection::by_package("er-quickload").unwrap();
+        assert!(
+            pane.contains(&format!("while {} is on", product.label)),
+            "the pane did not explain the greying: {pane}"
+        );
+    }
+
+    #[test]
+    fn an_opt_in_mod_names_what_it_costs_rather_than_saying_it_changes_things() {
+        let picker = plain_picker();
+        let mut seen = 0;
+        for entry in CATALOG {
+            let Some(caution) = entry.caution else {
+                continue;
+            };
+            seen += 1;
+            let line = row_for(&picker, entry.package);
+            assert!(line.contains(caution), "{} row was: {line}", entry.package);
+        }
+        assert!(seen > 0, "no mod in the catalog carries a caution at all");
+
+        let mut full = plain_picker();
+        let frame = full.render(WIDTH, 200);
+        assert!(
+            !frame.contains("changes things"),
+            "the generic note came back"
+        );
+    }
+
+    #[test]
+    fn the_plain_list_marks_a_row_the_selection_rules_out() {
+        let mut picker = plain_picker();
+        picker.clear();
+        cursor_onto(&mut picker, "er-quickload");
+        picker.handle(Key::Space, 10);
+        let product = selection::by_package("er-quickload").unwrap();
+        let portrait = selection::by_package("er-loading-portrait").unwrap();
+        let listed = picker.plain_list();
+        let line = listed
+            .lines()
+            .find(|line| line.contains(&format!("] {}", portrait.label)))
+            .expect("the portrait is listed");
+        assert!(
+            line.contains("[-]"),
+            "the blocked row kept an open box: {line}"
+        );
+        assert!(
+            line.contains(&format!("not with {}", product.label)),
+            "the row did not name what blocks it: {line}"
+        );
     }
 
     #[test]
