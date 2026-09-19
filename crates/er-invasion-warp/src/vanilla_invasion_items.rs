@@ -504,11 +504,18 @@ static SHOWN_MENU_WINDOWS_SAID: std::sync::Mutex<Option<String>> = std::sync::Mu
 ///
 /// Read out of the game's own menu-input layer rather than picked: `FUN_140756e50` loads
 /// `qword ptr [0x143d61f08]`, null-checks it against the `FD4Singleton` assert, and passes it
-/// straight to [the action lookup](`KEY_CONFIG_ACTION_TABLE_OFFSET`). The rva sits in `.data`,
-/// whose addresses the 1.17.0 -> 1.17.1 step left alone -- that patch moved `.text` entries at or
-/// above rva `0xafefe9` by `0x70` and nothing else -- so this address is the installed build's.
+/// straight to [the action lookup](`KEY_CONFIG_ACTION_TABLE_OFFSET`).
+///
+/// The shared 1.16.2 constant, not the 1.17 literal this used to spell. Both named the same
+/// object -- measured on run `br-20260919-053046-86c0` with
+/// `scripts/frida/keyconfig-two-spellings-agree.js`, the local literal and the translated shared
+/// constant both read `0x3ec4680` and hand back the same row -- so this is a deduplication and
+/// not a change of address. It is worth making because a name declared twice with two values
+/// resolves to neither: `scripts/audit-1170-readiness.py` dropped `CS_PC_KEY_CONFIG_GLOBAL_RVA`
+/// entirely while `er-input-harness` spelled it `0x3d5dea8` and this file spelled it `0x3d61f08`,
+/// so the constant went unchecked by the audit built to check it.
 #[cfg(windows)]
-const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = 0x3d6_1f08;
+const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 /// Where the rebindable-action table starts inside `CSPcKeyConfig`, and how a row is addressed.
 ///
 /// `FUN_140242ab0(cfg, out, action, deviceKind)` is the whole definition:

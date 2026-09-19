@@ -206,7 +206,10 @@ mod tests {
     #[test]
     fn the_rva_is_the_measured_one_and_below_the_1171_boundary() {
         assert_eq!(MULTIPLAYER_ROW_ENABLED_RVA, 0x913100);
-        assert!(MULTIPLAYER_ROW_ENABLED_RVA < 0xafefe9);
+        // A `const` block, because both sides are constants and `-D clippy::all` makes a runtime
+        // assertion over them an error. Checking it at compile time is what the claim wanted
+        // anyway: the boundary cannot stop holding between building this test and running it.
+        const { assert!(MULTIPLAYER_ROW_ENABLED_RVA < 0xafefe9) };
     }
 
     /// This module lifts a menu grey and nothing else. The online flag is what the game reports to
