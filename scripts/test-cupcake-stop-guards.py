@@ -485,6 +485,15 @@ CASES = [
         "must NOT halt, or the blocker sentence AGENTS.md asks for becomes unspeakable",
     ),
     Case(
+        "diagnosis_fixed_then_reported.jsonl",
+        None,
+        "the write, its green selftest, and only then a closing line naming what had been broken -- "
+        "must NOT halt. `fixed` is positional and a closer has nothing after it, so this turn "
+        "scored fixed=0 however much it wrote, and the guard charged it twice on 2026-09-19 for "
+        "work it had already done. The unordered `edited` is what tells it apart from the turn "
+        "that named a defect and changed nothing",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
