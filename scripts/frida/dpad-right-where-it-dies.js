@@ -180,6 +180,39 @@ function armamentState () {
   return state;
 }
 
+// The last snapshot taken while no D-pad direction was held, and the diff against it.
+//
+// A list of everything that is live tells you almost nothing -- the table carries ~25 entries at
+// rest, which is why the first version of this printed a wall of ids that meant nothing. What
+// answers the question is the DELTA: the id whose value changes between an idle frame and the
+// frame the button is down IS this press's logical event. If no id changes at all, the press never
+// became a logical event, and it died in the mapping between the pad device and the event table
+// rather than anywhere downstream.
+let idleSnapshot = null;
+
+function snapshotMap () {
+  const live = liveMenuEvents();
+  if (live === null) return null;
+  const map = {};
+  for (const entry of live) {
+    const key = entry.id + (entry.keystate !== undefined ? ':key' : ':val');
+    map[key] = entry.keystate !== undefined ? entry.keystate : entry.value;
+  }
+  return map;
+}
+
+function diffAgainstIdle (now) {
+  if (idleSnapshot === null || now === null) return null;
+  const changed = [];
+  const keys = new Set(Object.keys(idleSnapshot).concat(Object.keys(now)));
+  for (const key of keys) {
+    const was = idleSnapshot[key];
+    const is = now[key];
+    if (was !== is) changed.push({ id: key, idle: was === undefined ? 'absent' : was, pressed: is === undefined ? 'absent' : is });
+  }
+  return changed;
+}
+
 // Read the menu event ids that are live right now, or `null` if the manager is not up.
 //
 // Bounded and fault-closed: a null singleton before the menu system exists is the ordinary case,
@@ -310,6 +343,12 @@ Interceptor.attach(poll, {
       });
     }
     if ((buttons & DPAD_RIGHT) !== 0) counts.dpadRightFrames++;
+    // Refresh the idle baseline only while nothing is held, so the comparison is always against a
+    // genuinely quiet frame rather than against the tail of the previous press.
+    if (buttons === 0) {
+      const quiet = snapshotMap();
+      if (quiet !== null) idleSnapshot = quiet;
+    }
     const rose = buttons & ~state.previous;
     state.previous = buttons;
     if (rose === 0) return;
@@ -331,7 +370,7 @@ Interceptor.attach(poll, {
       buttons: '0x' + buttons.toString(16),
       held: names(buttons),
       stickX: stickX,
-      menuEvents: liveMenuEvents(),
+      eventDelta: diffAgainstIdle(snapshotMap()),
       armamentBefore: before,
       note: 'D-pad Right rose. `armamentBefore` is what the engine says is in each right-hand slot at that instant, read through its own GetParamIdInSlot. The follow-up `armament-after` line says whether any of it moved.',
     });
