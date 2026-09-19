@@ -2640,6 +2640,15 @@ python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 python3 "$repo_root/scripts/check-me3-dll-catalog.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-catalog.py"
 
+# ...and the one class of conflict the table cannot notice arriving: two shells that arm the
+# Quit tab and offer the same flow. `row_registry` merges the row table across DLLs, but each
+# cdylib links its own copy of the core's statics, so the loser's flow latch is invisible to the
+# winner's hook and a row looks armed while doing the wrong thing. This re-derives which shells
+# arm and which flows they supply from source, so a new shell, or a new flow on an existing one,
+# cannot land without being classified.
+python3 "$repo_root/scripts/check-quit-row-flow-overlap.py" --selftest
+python3 "$repo_root/scripts/check-quit-row-flow-overlap.py"
+
 # ...and that the Rust the installer actually links still says what those two tables say. The
 # catalog is compiled in rather than parsed at runtime, so drift here is an installer shipping
 # a mod list from whenever it was last generated.

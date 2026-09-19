@@ -510,4 +510,28 @@ pub const CONFLICTS: &[Conflict] = &[
         kind: "duplicate-owner",
         explanation: "both own the same feature, so pick whichever build of it you want, not both",
     },
+    Conflict {
+        a: "er-quickload",
+        b: "er-quit-load-character",
+        kind: "duplicate-owner",
+        explanation: "both own the same feature, so pick whichever build of it you want, not both",
+    },
+    Conflict {
+        a: "er-quickload",
+        b: "er-save-game-row",
+        kind: "duplicate-owner",
+        explanation: "both own the same feature, so pick whichever build of it you want, not both",
+    },
+    Conflict {
+        a: "er-quit-menu",
+        b: "er-quit-rows",
+        kind: "duplicate-owner",
+        explanation: "both own the same feature, so pick whichever build of it you want, not both",
+    },
+    Conflict {
+        a: "er-quit-rows",
+        b: "er-quit-load-character",
+        kind: "duplicate-owner",
+        explanation: "both own the same feature, so pick whichever build of it you want, not both",
+    },
 ];

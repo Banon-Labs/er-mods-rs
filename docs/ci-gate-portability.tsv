@@ -237,6 +237,8 @@ portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only	p
 portable	-	check-me3-dll-conflicts.py	source/AST/text analysis only	product
 portable	-	check-me3-dll-catalog.py --selftest	source/AST/text analysis only	product
 portable	-	check-me3-dll-catalog.py	source/AST/text analysis only	product
+portable	-	check-quit-row-flow-overlap.py --selftest	source/AST/text analysis only	product
+portable	-	check-quit-row-flow-overlap.py	source/AST/text analysis only	product
 portable	-	gen-installer-catalog.py --selftest	source/AST/text analysis only	product
 portable	-	gen-installer-catalog.py --check	source/AST/text analysis only	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product
