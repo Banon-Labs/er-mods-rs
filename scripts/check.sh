@@ -1112,7 +1112,7 @@ bash "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 # the agent happened to have out. See the header of scripts/test-pre-push-deletion-only.sh.
 bash "$repo_root/scripts/test-pre-push-deletion-only.sh"
 # ...and that the hook refuses when the tree those gates will read is not the state being pushed.
-# This suite reads the WORKING TREE and a push sends a COMMIT; on 2026-09-20 a push landed
+# This suite reads the working tree and a push sends a commit; on 2026-09-20 a push landed
 # mid-edit, `cargo-build` failed on a tree that never existed as a commit, and 400s of `addresses`
 # had already been spent. The silent inverse is worse: a gate green on an edit the push omits. See
 # the header of scripts/test-pre-push-dirty-tree.sh.

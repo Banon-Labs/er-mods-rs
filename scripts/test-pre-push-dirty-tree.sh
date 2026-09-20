@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Prove scripts/hooks/pre-push refuses when the gate would read a tree the push is not sending.
 #
-# The defect this pins, measured 2026-09-20. The hook selects its stages from the PUSHED REFS and
-# then runs `scripts/check.sh`, which reads the WORKING TREE. A push of
+# The defect this pins, measured 2026-09-20. The hook selects its stages from the pushed refs and
+# then runs `scripts/check.sh`, which reads the working tree. A push of
 # `phase2/one-row-shell-config-selected` went out while its author was mid-edit, between adding a
 # call and adding the function it calls. check.sh compiled that tree, `cargo-build` failed with
 # `E0425: cannot find function ... in this scope`, and the push was refused -- for a defect in
@@ -72,7 +72,7 @@ run_hook() {
 
 # --- clean tree: the refusal must not fire -------------------------------------------------
 #
-# It must not PASS either -- the hook goes on to run the real gates, which cannot work in a
+# It must not pass either -- the hook goes on to run the real gates, which cannot work in a
 # fixture. So the assertion is on the message, not on the exit status: a clean tree must never be
 # the thing that stopped the push.
 run_hook
