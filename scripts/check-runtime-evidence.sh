@@ -167,8 +167,8 @@ selftest() {
 	# `~/Elden/launch.sh` writes its logs into the game directory and nowhere else, and only the
 	# run root was read. Both count now, and the second case keeps the sha doing the deciding.
 	mkdir -p "$tmp/game"
-	printf 'build git=cafebabe5678 module=er_quit_rows.dll base=0x1 pe=0x2 (t)\nmore\n' \
-		>"$tmp/game/er-quit-rows-debug.log"
+	printf 'build git=cafebabe5678 module=er_quit_menu.dll base=0x1 pe=0x2 (t)\nmore\n' \
+		>"$tmp/game/er-quit-menu.log"
 	ER_ME3_RUN_ROOT="$tmp/nonexistent" ER_GAME_DIR="$tmp/game" \
 		expect 0 "a clean game-directory log naming the commit counts as evidence" \
 		evidence_for "cafebabe5678"

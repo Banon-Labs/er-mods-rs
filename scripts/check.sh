@@ -2601,20 +2601,19 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload -p er-title-f
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quickload \
 	--test no_message_box_is_answered
 
-# The two shells whose host-portable logic sits deliberately outside their `#[cfg(windows)]` tree,
-# so it can be decided without the game. Neither was named anywhere until 2026-09-11, and
-# `default-members = ["crates/er-quickload"]` means a bare `cargo test` never selects them:
-# 27 test functions that had never executed.
+# A shell whose host-portable logic sits deliberately outside its `#[cfg(windows)]` tree, so it can
+# be decided without the game. It was named nowhere until 2026-09-11, and
+# `default-members = ["crates/er-quickload"]` means a bare `cargo test` never selects it.
 #
-#   er-quit-rows      19 lib tests -- the menu-window install decision, the `05_010_ProfileSelect`
-#                     chrome gate, and which title window a switch may ask to close -- plus 2
-#                     integration tests in `tests/no_message_box_is_answered.rs`. Deliberately not
-#                     `--lib`: that file is the assertion that this shell never answers a
-#                     `CS::MessageBoxDialog` on the player's behalf, and `--lib` compiles none of
-#                     it. Its 45 windows-only tests are the copied product tree and run under the
-#                     `cargo xwin test --lib` line in check-rust-build.sh.
 #   er-input-harness  6 lib tests over the title-scan predicates the boot drive waits on.
-cargo test --manifest-path "$repo_root/Cargo.toml" -p er-quit-rows -p er-input-harness
+#
+# `er-quit-rows` was the other half of this line and went with the package on 2026-09-20. Its 19
+# host-portable tests covered the menu-window install decision, the `05_010_ProfileSelect` chrome
+# gate and which title window a switch may ask to close; the first is answered by
+# `er-quickload`'s own `menu_window_run_gate.rs` tests, and the last two moved into
+# `er-quit-menu-core` with the code. Its `tests/no_message_box_is_answered.rs` exists on the
+# product too and runs on the line above.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-input-harness
 
 # Rust format + Windows-target build of the injectable DLL (cross-compiled from Linux via
 # cargo-xwin). A real build (not just `cargo check`) so codegen/link regressions -- including

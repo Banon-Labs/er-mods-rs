@@ -15,7 +15,7 @@ What it waits on is the same pair of witnesses `er-frida-up.py` gates on, in the
 there; its absence during boot is not an error and not a failure -- it is the ordinary case for the
 first minute of a launch.
 
-A profile that does not carry `er-quickload` or `er-quit-rows` never writes that file at all,
+A profile that does not carry `er-quickload` never writes that file at all,
 though, and reading only it made this wait unpassable for every standalone shell however long the
 game had been in a world: the watch ran out its `--wait-seconds` and reported "no world yet", which
 sent the agent back to asking the player -- the round trip the paragraph above says this exists to

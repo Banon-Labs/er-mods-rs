@@ -3,7 +3,7 @@
 #
 # Why this exists
 # ---------------
-# With the `autoload` feature off, `er-quit-rows` no longer loads a character at boot, so getting
+# With the `autoload` feature off, a row shell no longer loads a character at boot, so getting
 # to a world is an input problem again. AGENTS.md's standing order is that the agent drives every
 # input, and the number of dialogs between the title and the menu is not fixed -- a patch notice, a
 # cloud-save notice, a network warning -- so the loop presses confirm until the menu opens rather
@@ -41,7 +41,19 @@ DRIVE="$REPO_ROOT/scripts/er-harness-drive.sh"
 game_dir() {
 	printf '%s\n' "${ER_GAME_DIR:-$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game}"
 }
-product_log() { printf '%s/er-quit-rows-debug.log\n' "$(game_dir)"; }
+# Same resolution as `scripts/er-harness-drive.sh`, and for the same reason: the fork whose log
+# this used to name was deleted on 2026-09-20, and a missing log file makes every `wait_for` below
+# time out against a run that was writing its lines somewhere else the whole time.
+product_log() {
+	if [ -n "${ER_PRODUCT_LOG:-}" ]; then
+		printf '%s\n' "$ER_PRODUCT_LOG"
+		return
+	fi
+	local dir newest
+	dir=$(game_dir)
+	newest=$(ls -t "$dir/er-quickload-autoload-debug.log" "$dir/er-quit-menu.log" 2>/dev/null | head -1)
+	printf '%s\n' "${newest:-$dir/er-quickload-autoload-debug.log}"
+}
 harness_log() { printf '%s/er-input-harness.log\n' "$(game_dir)"; }
 
 # Native signals, each one a line the product already writes. Kept together because they are the

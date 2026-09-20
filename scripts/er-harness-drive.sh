@@ -66,7 +66,21 @@ game_dir() {
 cmd_file() { printf '%s/er-harness-cmd.txt\n' "$(game_dir)"; }
 seq_file() { printf '%s/er-harness-cmd.seq\n' "$(game_dir)"; }
 harness_log() { printf '%s/er-input-harness.log\n' "$(game_dir)"; }
-product_log() { printf '%s/er-quit-rows-debug.log\n' "$(game_dir)"; }
+# The row shell's log, whichever shell the profile carries. Resolved rather than named: this read
+# `er-quit-rows-debug.log` until that fork was deleted on 2026-09-20, and a hard-coded filename
+# fails by going silent -- `grep` over a file that does not exist finds no rows and the drive
+# reports a tab it never looked at. `ER_PRODUCT_LOG` overrides; otherwise the newest of the two
+# shells' logs wins, so a profile carrying either answers.
+product_log() {
+	if [ -n "${ER_PRODUCT_LOG:-}" ]; then
+		printf '%s\n' "$ER_PRODUCT_LOG"
+		return
+	fi
+	local dir newest
+	dir=$(game_dir)
+	newest=$(ls -t "$dir/er-quickload-autoload-debug.log" "$dir/er-quit-menu.log" 2>/dev/null | head -1)
+	printf '%s\n' "${newest:-$dir/er-quickload-autoload-debug.log}"
+}
 
 next_seq() {
 	local current=0

@@ -104,14 +104,16 @@ ARM_CALLS = (
     re.compile(r"\barm::arm_standalone\s*\("),
 )
 
-# The three shells known to arm as of 2026-09-20. A scanner that finds fewer has stopped
-# matching something rather than found a simpler workspace, and says so instead of passing.
-# Raise this when a new row shell lands; lowering it is only correct alongside a deleted crate.
+# The two shells known to arm as of 2026-09-20. A scanner that finds fewer has stopped matching
+# something rather than found a simpler workspace, and says so instead of passing. Raise this when
+# a new row shell lands; lowering it is only correct alongside a deleted crate.
 #
-# It was five until 2026-09-20, when `er-quit-load-character` and `er-save-game-row` merged into
-# `er-quit-menu` -- two deleted crates, so this number comes down with them. See
-# `docs/plans/menus-and-saves-consolidation.md`, phase 2.
-MIN_ARMING_SHELLS = 3
+# It was five until 2026-09-20 and came down twice that day, both times with packages rather than
+# with detection. Phase 2 merged `er-quit-load-character` and `er-save-game-row` into
+# `er-quit-menu`; phase 3 deleted the `er-quit-rows` fork. What is left is the product and the
+# merged shell, which is the end state `docs/plans/menus-and-saves-consolidation.md` is for -- so
+# this number should not fall again, and a scanner reporting one has found a defect.
+MIN_ARMING_SHELLS = 2
 
 # Bare `cfg` idents this file decides for itself. Every shell here is a cdylib built for
 # `x86_64-pc-windows-msvc`, so `windows` holds in each of them; `test` and `doc` never do in a

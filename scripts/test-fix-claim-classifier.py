@@ -210,7 +210,7 @@ TEST_EDIT = tool("Edit", file_path=str(REPO_ROOT / "crates/er-quit-menu-core/tes
 BUILD = tool("Bash", command="cargo xwin build --release --target x86_64-pc-windows-msvc -p er-quit-menu")
 UNIT_TEST = tool("Bash", command="cargo test -p er-quit-menu-core")
 LAUNCH = tool("Bash", command="python3 scripts/er-run-branch.py --profile quicksave")
-READ_LOG = tool("Bash", command="tail -n 40 ~/.cache/er-me3-runs/br-20260911-101500-ab12/er-quit-rows-debug.log")
+READ_LOG = tool("Bash", command="tail -n 40 ~/.cache/er-me3-runs/br-20260911-101500-ab12/er-quit-menu.log")
 READ_ORACLE = tool("Read", file_path="/home/banon/.cache/er-me3-runs/br-20260911-101500-ab12/er-quickload-telemetry.json")
 TEARDOWN = tool("Bash", command="python3 scripts/er-teardown.py --status")
 HEREDOC_READ = tool(

@@ -34,17 +34,21 @@ use crate::win32::{GetModuleHandleA, GetProcAddress};
 /// matches them -- me3 loads natives from paths that differ per install, so the name is the only
 /// stable handle.
 ///
-/// There is more than one because the product's source is sometimes loaded under another artifact
-/// name. `er_quit_rows.dll` is a copy of `er-quickload` being reduced to the System>Quit rows
-/// (`scripts/me3-dll-conflicts.toml` records the pair), and it exports the same symbols, so a
-/// harness run against it resolved nothing and reported `delivered=false` for every key -- which
-/// reads as a broken input channel rather than as an absent module. Measured 2026-09-11 while
-/// driving a menu in `~/Elden/quit-rows-harness.me3`.
+/// It is a list rather than one name because the product's source has been loaded under another
+/// artifact name before, and the failure that produced was silent: `er_quit_rows.dll` was a copy of
+/// `er-quickload` exporting the same symbols, and a harness run against it resolved nothing and
+/// reported `delivered=false` for every key -- which reads as a broken input channel rather than as
+/// an absent module. Measured 2026-09-11 while driving a menu in `~/Elden/quit-rows-harness.me3`.
 ///
-/// Order matters only in that the product comes first: it is the common case, and when both are
-/// loaded the conflict table already says that is a configuration to fix rather than to choose
-/// between.
-const PRODUCT_DLL_NAMES: [&[u8]; 2] = [b"er_quickload.dll\0", b"er_quit_rows.dll\0"];
+/// That fork was deleted on 2026-09-20 and its name is gone from here with it: a name that can
+/// never be loaded is not a fallback, it is a lookup that always misses. The list shape stays,
+/// because the same thing will be true of the next shell to carry these exports -- adding a name is
+/// then a one-line change with this paragraph explaining why the list exists at all.
+///
+/// Order matters only in that the product comes first: it is the common case, and when two such
+/// modules are loaded the conflict table already says that is a configuration to fix rather than a
+/// choice to make here.
+const PRODUCT_DLL_NAMES: [&[u8]; 1] = [b"er_quickload.dll\0"];
 
 /// The first loaded candidate that exports `export`, or null when none does.
 ///

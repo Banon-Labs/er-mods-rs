@@ -255,8 +255,38 @@ no companion can find. Two ways to end it, and the first is the one to take:
    drifted files have to be reconciled in a direction nobody has chosen, and every drift is a
    potential behaviour change in the product.
 
-Before deleting, sweep the nine files that exist only in `er-quit-rows` for work that never reached
-the product:
+**Landed 2026-09-20.** The package is deleted: 136 files, and with them the four `[[conflict]]` /
+`[[shared]]` rows it held, its catalog row, its half of `check.sh`'s host-test line and of
+`check-rust-build.sh`'s `me3_shells` array, 26 entries in
+`scripts/audit-1170-gate-bypass.baseline.json` and 83 rows in `scripts/rva-alias-allowlist.txt`.
+Every deleted row is either restated in the product's own row or recorded as prose beside where it
+was, because the measurement usually outlives the package: the tracer pair, the keystate pair and
+the save-suppress pair are all `er-quickload` statements that the fork inherited by copying that
+source, and the one sentence that was about shells rather than about this package -- two Quit-grid
+derivers cannot share a process, because `quit6` fail-closes on already-derived bytes -- is kept
+against `er-quickload` + `er-quit-menu`.
+
+Two findings the deletion produced, neither of them anticipated here:
+
+* **The workspace now has exactly one hub.** `crates/er-quickload/src/mh.rs:52` is the only
+  definition of `er_effects_union_register` left; the fork was the second exporter, and
+  `er-quit-menu` is a shell over `er-quit-menu-core`, which resolves the registrar and never
+  provides one. So phase 1's runtime proof named a profile that cannot be built any more, and in a
+  product-less profile every companion still takes `HookRoute::LocalUnion`. The election itself is
+  unaffected and stays host-tested. Making the merged shell export the registrar is the fix when it
+  is wanted -- a hub is an export, not a package.
+* **`boot_view_clock.rs` moved to `er-telemetry-core`, not into `er-quickload`.** The sweep left the
+  destination open between the two. The telemetry crate already owns `BOOT_VIEW_EPOCH_SEQ` /
+  `BOOT_VIEW_EPOCH_KIND` and has described this clock from the outside at
+  `counters/loading_cover.rs:349` since 2026-08-22, and the whole reason the fork extracted it was
+  that leaving the clock inside the cover module made `loading-cover` a feature seven unrelated
+  callers depended on. Lifting it out of `boot_progress.rs` within the same crate would have kept
+  the clock in the crate whose feature set is the problem; the crate move ends it. The product
+  re-exports both readers from `boot_progress.rs`, so `crate::experiments::boot_view_epoch_ms`
+  resolves exactly as before and no caller changed.
+
+The sweep below is what the deletion commit carried. It found nine files that existed only in
+`er-quit-rows`:
 
 ```
 experiments/boot_view_clock.rs
@@ -323,12 +353,14 @@ Hard constraints on the rename, all of them measured:
 | Quit-menu rows only | the merged row; relabelled with the package in phase 5 |
 | Load Character rows only | merged into it, 2026-09-20 |
 | Save Game row | merged into it, 2026-09-20, selected in `er-quit-menu.toml` |
-| Quit-menu rows (trimmed build) | removed with the fork |
+| Quit-menu rows (trimmed build) | removed with the fork, 2026-09-20 |
 | Boot save picker | stays; `included_in` stays a refusal until its `DllMain` probe is replaced by a real election |
 | Disable saving | stays |
 
-Four player-facing rows become two. Two of the merges landed with phase 2, which took the category
-from eight packages to six and from 28 pairs to 15; the fork's removal in phase 3 takes it to 10.
+Four player-facing rows become two, and both halves have landed: phase 2's merges took the category
+from eight packages to six and from 28 pairs to 15, and phase 3's deletion took it to five packages
+and 10 pairs on 2026-09-20. The table then held 9 `[[conflict]]` and 8 `[[shared]]` rows over 28
+shipped shells, all classified.
 
 ## 5. What this plan deliberately does not do
 

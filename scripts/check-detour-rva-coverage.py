@@ -1300,8 +1300,9 @@ CONTROL_RVA = 0x11CED80
 # never written next to the installer. `game_rva(PLAYER_GAME_DATA_NAME_GETTER_RVA as u32)` binds a
 # local ten lines above the `MhHook::new(addr as *mut c_void, ...)` that consumes it.
 # Moved 2026-09-12: `quit_menu/` was demuxed into the features it held, and the player-name getter
-# went with the title visuals rather than with the rows -- the old path now exists only inside
-# `er-quit-rows`, the copy. What the control pins is the shape, not the file: `addr` is bound by a
+# went with the title visuals rather than with the rows -- the old path survived only inside the
+# `er-quit-rows` copy, which was deleted on 2026-09-20. What the control pins is the shape, not the
+# file, which is why the move did not disturb it: `addr` is bound by a
 # `let Ok(addr) = game_rva_for_hook(..) else` six lines above the `MhHook::new(addr, ..)` that uses
 # it, which is exactly what the naive matcher cannot see.
 CONTROL_INDIRECT_SITE = (
