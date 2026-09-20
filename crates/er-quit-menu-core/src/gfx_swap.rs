@@ -52,6 +52,23 @@ static BUILD_URL_02_990_EDITED: OnceLock<Vec<u8>> = OnceLock::new();
 static BUILD_URL_02_990_SERVES: AtomicUsize = AtomicUsize::new(0);
 static BUILD_URL_02_990_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
+/// Whether this process may serve the derived `05_010_ProfileSelect` movie, decided once by
+/// [`crate::profile_select_chrome_gate::profile_select_chrome_required`] and recorded here because
+/// the file-open prologue that reads it has no view of the armed row set.
+///
+/// Default `false` matters. The prologue runs from a Scaleform load and can arrive before the
+/// arming thread has answered, so the movie a host never earned is never served early by accident;
+/// the derived movie's only deadline is the first time a row opens the window, which is after the
+/// arm by construction.
+static PROFILE_05_010_EDIT_ARMED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static PROFILE_05_010_REFUSED_UNARMED: AtomicUsize = AtomicUsize::new(0);
+
+/// Record whether the `05_010_ProfileSelect` chrome was earned. Called once from the arm.
+pub fn set_profile_05_010_edit_armed(armed: bool) {
+    PROFILE_05_010_EDIT_ARMED.store(armed, Ordering::SeqCst);
+}
+
 /// How many times each derivation has been served, for the telemetry line a run reads back.
 pub fn gfx_swap_serves() -> (usize, usize, usize) {
     (
@@ -364,6 +381,18 @@ pub unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> b
 /// below goes through the fault-safe readers.
 pub unsafe fn profile_05_010_swap_to_edited(base: usize, file: usize) -> bool {
     if file == 0 || file == NOT_A_POINTER {
+        return false;
+    }
+    // Nothing in this process writes the fields the edit makes room for, so serving it would
+    // re-lay out the window -- face box hidden, ten 52px rows, name and level shifted -- and leave
+    // the space empty. The game's own presentation is the correct answer here, not a degraded one.
+    if !PROFILE_05_010_EDIT_ARMED.load(Ordering::SeqCst) {
+        let n = PROFILE_05_010_REFUSED_UNARMED.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 4 || n.is_power_of_two() {
+            append_autoload_debug(format_args!(
+                "system-quit-gfx: 05_010 stats-panel edit not armed -- no browse row and no host that dresses a character row, so this shell serves the game's own ProfileSelect (refused={n})"
+            ));
+        }
         return false;
     }
     let fail = |reason: core::fmt::Arguments<'_>| {

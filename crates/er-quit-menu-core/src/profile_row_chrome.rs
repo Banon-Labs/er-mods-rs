@@ -436,7 +436,19 @@ pub unsafe extern "system" fn profile_row_populate_hook(
             // the drive row exposes its cells. Every synthetic drive child is blanked on every
             // picker-owned row as content hygiene beside the visibility statement, so a recycled
             // drive strip cannot leak into a file or directory row.
-            if let Some(row) = picker_row {
+            // Gate on `slot_info`, not on `picker_row`. `picker_row` says only that the slot index
+            // falls in `0..PICKER_ROW_COUNT`, which is true of every ordinary character row, so
+            // gating on it sends character rows down the browse branch: their `ErCharStats` is
+            // blanked, their drive cells and current-path are written empty, and the merged header
+            // and attribute line below are never reached. Paired with `native_merged` hiding the
+            // separate `Level` caption and value, the row then shows a bare name and nothing else.
+            // `slot_info` is the real "the picker owns this row" answer, and it is what the
+            // visibility match above already keys on. Measured on run br-20260919-194138-0bc1:
+            // ten rows decoded (`dressed slot=0 header='rl60 invader, RL 60 WL 12' stats=true`),
+            // `hid 58 row field(s) ... level=false char_stats=true` on each, and not one push line
+            // -- the text had been composed and was being thrown away one branch later.
+            // `er-quickload` carries the same warning over its own copy of this hook.
+            if let (Some(_), Some(row)) = (slot_info.as_ref(), picker_row) {
                 let blank = [0u16];
                 let _ = unsafe {
                     push_stats_text_on_row(

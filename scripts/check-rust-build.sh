@@ -211,6 +211,30 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	fi
 	echo "[check-rust-build] recorded provenance for $(( ${#me3_shells[@]} + 1 )) artifacts"
 
+	# The installer, built the way a release builds it: carrying every shell just linked above.
+	# This is the only place in the suite where that combination exists, which is why it lives
+	# here rather than in a gate of its own -- `tools/er-installer/build.rs` needs the DLLs to
+	# be on disk, and they are, five lines up.
+	#
+	# The failure it catches is silent and only reaches a player: a build without
+	# ER_INSTALLER_EMBED_DIR is a working 440 KB binary that offers 31 mods and installs none of
+	# them, and nothing about it looks wrong. Without this step that would first show up in the
+	# release workflow after a merge, or not at all. `--selfcheck` asks the binary itself.
+	echo "[check-rust-build] building the self-contained installer + selfcheck"
+	ER_INSTALLER_EMBED_DIR="$repo_root/target/$target/release" \
+		cargo build --release --manifest-path "$repo_root/Cargo.toml" -p er-installer
+	if ! "$repo_root/target/release/er-installer" --selfcheck; then
+		echo "[check-rust-build] FAIL: the installer does not carry every mod it offers" >&2
+		exit 1
+	fi
+
+	# The Windows build of it, which cannot be run here -- linking it is the check. It shares
+	# the payload and the sources, so what this proves is that the kernel32 console path in
+	# `src/tui.rs` still compiles for the target a player actually runs it on.
+	ER_INSTALLER_EMBED_DIR="$repo_root/target/$target/release" \
+		cargo xwin build --release --manifest-path "$repo_root/Cargo.toml" \
+		--target "$target" -p er-installer
+
 	# LINT parity with ../fromsoftware-rs (2026-08-21). The parent project's entire
 	# strictness is `RUSTFLAGS=-Dwarnings` around `cargo clippy --all-targets`, and the
 	# user requires this workspace be at least as strict. The root `[workspace.lints]`

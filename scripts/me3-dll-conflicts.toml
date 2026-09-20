@@ -431,12 +431,38 @@ target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
 mechanism = "hook-union"
 handler_a = "title_scaleform_file_open_observer_hook"
 handler_b = "file_open_hook"
-reason = """The same union row `er-quickload` and this companion already hold, inherited by \
-copying that source: `er-quit-rows` registers the identical observer through \
-`crate::mh::register_union_hook` rather than a private `MhHook`, so whichever shell reaches the \
-prologue first creates the dispatcher and the other chains into it. Read that entry for the \
-measurement -- 113 file-open hits alone against 0 in an eleven-native profile, with every movie \
-swap silently inert -- because it is the reason both sides are union-shaped at all.
+reason = """The union row `er-quickload` and this companion already hold, inherited by copying \
+that source -- but inherited only as far as the shapes. Both sides are union-shaped: \
+`er-quit-rows` registers the identical observer through `crate::mh::register_union_hook` rather \
+than a private `MhHook`, and it exports `er_effects_union_register` from its own copy of \
+`mh.rs`, just as the product does. Read the product's entry for the measurement -- 113 file-open \
+hits alone against 0 in an eleven-native profile, with every movie swap silently inert -- because \
+it is why both sides are shaped that way at all.
+
+What was measured until 2026-09-19, and why this row was filed. Until that day the entry read \
+"whichever shell reaches the prologue first creates the dispatcher and the other chains into \
+it", and that sentence described a hub election the code did not perform. The companion reached \
+a hub by one route only: `er_hook::register_shared_hook` called `GetModuleHandleA` on the \
+literal `er_quickload.dll` (`PRODUCT_DLL_NAME`) and asked that module for \
+`er_effects_union_register`. It matched nothing else, and it was not an address-keyed lookup -- \
+an export by that name in another image was invisible to it. So in a profile carrying \
+`er_quit_rows.dll` and no product, the companion polled for a second, found no module of that \
+name, and returned `HookRoute::LocalUnion`: its own MinHook instance, beside the one \
+`er-quit-rows` created in its own image, both on `TITLE_SCALEFORM_FILE_OPEN_RVA`. That is the \
+collision this row claims to have resolved, and it has never been observed, because the pair \
+has never co-loaded -- `er-quit-rows` is a transitional shell loaded alone from \
+`~/Elden/quit-rows-trimmed.me3` while it is reduced.
+
+The row stayed `[[shared]]` because the cause was being removed rather than tolerated, and bd \
+er-effects-rs-whbn removed it. `er-hook` no longer names the hub: every loaded module is asked \
+for `er_effects_union_register` and the lowest load base among those that answer wins \
+(`er_hook::elect_union_host`, host-tested), which is the rule `row_registry` already elects the \
+row table's owner by, with the `er_quickload.dll` probe kept first so a companion built against \
+the older behaviour still resolves. `er-quit-rows` does export the registrar, so this pair now \
+has a hub without the product in the profile -- which is what a `[[shared]]` row has always \
+meant here, and what this table could not keep as a promise before. Outstanding: the two have \
+still not been run together, so the election is proven on the rule and not yet on a session \
+reporting `HookRoute::ProductUnion` with `file_open_hits > 0`.
 
 Two further addresses are shared with this companion and are not covered by the union: \
 `CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` \
@@ -444,7 +470,12 @@ Two further addresses are shared with this companion and are not covered by the 
 Neither side has been measured as the owner, and `er-quit-rows` is a transitional shell loaded \
 alone from `~/Elden/quit-rows-trimmed.me3` while it is reduced, so the pair has never actually \
 co-loaded. Measure them before that changes."""
-evidence = "crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/title_resources_stats_text.rs:110; crates/er-armament-icons/src/gfx_equip_hook.rs:85"
+evidence = """crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/\
+title_resources_stats_text.rs:109 `crate::mh::register_union_hook`; \
+crates/er-quit-rows/src/mh.rs:46 the `no_mangle` `er_effects_union_register` this crate exports \
+too; crates/er-armament-icons/src/gfx_equip_hook.rs:85 `FILE_OPEN_RVA`, :744 \
+`er_hook::register_shared_hook`; crates/er-hook/src/lib.rs:804 `PRODUCT_DLL_NAME`, :871 \
+`resolve_product_export`, :984 the `HookRoute::LocalUnion` fallback"""
 
 # RESOLVED 2026-09-12, the same way and on the same day as the `er-quit-menu` pair above.
 #
@@ -1011,3 +1042,200 @@ b = "er-quit-rows"
 kind = "duplicate-owner"
 reason = "Same two-arm problem, and `er-quit-rows` is a whole second copy of the product besides."
 evidence = "crates/er-save-game-row/src/lib.rs; crates/er-quit-rows/src/lib.rs"
+
+# THE FOUR PAIRS THAT WERE MISSING, found 2026-09-19 while a user asked why the installer let
+# them tick `Quickload` and another Quit-row mod at the same time.
+#
+# The rule, and it is not invented here -- it is read back off the four pairs already declared
+# above: two shells that both call `er_quit_menu_core::row_cloner::arm` AND supply the same
+# `QuitRowActions` flow cannot share a process. Measured flows per shell, from the `Some(...)`
+# sites in each crate:
+#
+#   er-quickload            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow
+#   er-quit-rows            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow
+#   er-quit-menu            open_profile_load_dialog, open_save_picker_menu
+#   er-quit-load-character  open_profile_load_dialog
+#   er-save-game-row        save_game_start_flow
+#
+# Every pair already declared shares at least one flow, and every pair that shares a flow was
+# declared except these four. `er-quit-menu` X `er-save-game-row` and `er-quit-load-character` X
+# `er-save-game-row` share none -- disjoint rows, disjoint flows -- so this rule does not reach
+# them. That is not the same as being co-loadable: both pairs derive the same `02_040` Quit grid
+# and both install the same bare-`MhHook` row-populate detours, which is a second mechanism this
+# rule cannot see. They are declared at the end of this file, on that evidence.
+#
+# WHY A SHARED FLOW IS THE CONDITION. `row_registry::elect` fixed the row TABLE in 2026-09-13:
+# the loser delegates through `er_quit_rows_register` and one merged table results. What it did
+# not fix, and cannot, is that each cdylib links its own copy of the core's statics. Run
+# br-20260917-205031-edd3 measured the consequence on er-quickload X er-quit-menu: the owner
+# answered the second registration `open_profile_load_dialog=offered-but-already-held`, and the
+# product's own activate hook then declined because `flow_active` is a latch in the PRODUCT's
+# copy, set only when the product opens the picker. The shell had opened it in its copy. The row
+# looked armed, the press forwarded to the game, and the player got an in-world load instead of
+# the save-safe switch -- no crash, no error, the wrong load.
+#
+# So the failure needs two hosts offering the SAME flow, which is exactly what these four are.
+# They are derived from that measured mechanism rather than each separately reproduced; the
+# mechanism is the per-cdylib static, which does not care which of the two hosts is which.
+# `scripts/check-quit-row-flow-overlap.py` re-derives the rule from source on every run, so a
+# new row shell, or a new flow on an existing one, cannot land without being classified.
+
+[[conflict]]
+a = "er-quickload"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = """Both supply `open_profile_load_dialog`, which is the flow whose cross-copy latch was \
+measured on run br-20260917-205031-edd3 for er-quickload X er-quit-menu. Whichever arms first \
+owns the slot and the other's registration comes back `offered-but-already-held`; the product's \
+`system_quit_profile_load_activate_hook` then reads `flow_active` out of its own copy of the \
+core's statics, sees false because the other host opened the picker in its copy, and forwards to \
+the game -- an in-world load of the picked slot onto the character already standing there.
+
+`er-quit-load-character` arms only the character pair, which is a SUBSET of the product's \
+`RowSet::ALL`, so there is nothing it adds and a row it takes over does the weaker thing. This \
+pair is derived from the measured mechanism rather than separately reproduced."""
+evidence = """crates/er-quit-load-character/src/lib.rs:117 `CHARACTER_ROWS` and its \
+`open_profile_load_dialog: Some(..)`; crates/er-quickload/src/experiments/startup_hooks/\
+diagnostics/layout_global_hooks.rs `row_cloner::arm(RowSet::ALL, ..)`; bd \
+quit-menu-shell-wins-the-row-election-and-no-ops-the-product-switch-2026-09-17"""
+
+[[conflict]]
+a = "er-quickload"
+b = "er-save-game-row"
+kind = "duplicate-owner"
+reason = """Both supply `save_game_start_flow`, and the two spellings of that feature cannot \
+coexist on one tab. `RowSet::ALL` says so in its own doc comment: a host that supplies \
+`save_game_start_flow` already puts the `Save Game` words on the native first row, so cloning the \
+row as well gives the tab two rows reading `Save Game` behind one flow, and `arm` clears \
+`save_game_as` rather than let a host ask for both.
+
+`arm` can only clear it within one host. The product supplies the flow and takes the native first \
+row over; `er-save-game-row` clones `save_game_as: true` in a separate copy of the core's statics, \
+so neither call sees the other's choice and the clearing never happens. Derived from that \
+documented invariant plus the per-cdylib static measured on br-20260917-205031-edd3, not \
+separately reproduced."""
+evidence = """crates/er-quit-menu-core/src/row_cloner.rs `RowSet::ALL` doc comment (\"two rows \
+reading `Save Game` behind one flow\"); crates/er-save-game-row/src/lib.rs:104 \
+`arm(RowSet { save_game_as: true, ..NONE }, ..)`; crates/er-quickload/src/experiments/\
+startup_hooks/diagnostics/layout_global_hooks.rs `save_game_start_flow: Some(..)`"""
+
+[[conflict]]
+a = "er-quit-menu"
+b = "er-quit-rows"
+kind = "duplicate-owner"
+reason = """Both arm near-`RowSet::ALL` and both supply `open_profile_load_dialog` and \
+`open_save_picker_menu`. This is the same pair as er-quickload X er-quit-menu with the product \
+swapped for the trimmed build of it -- `er-quit-rows` is a copy of the product reduced to these \
+rows, so it brings the product's flows without bringing the product.
+
+The loser's flows come back `offered-but-already-held` and its activate hook reads a `flow_active` \
+latch the winner never set. Derived from the mechanism measured on br-20260917-205031-edd3."""
+evidence = """crates/er-quit-menu/src/lib.rs:143 `RowSet::ALL`; crates/er-quit-rows/src/\
+experiments/startup_hooks/diagnostics/layout_global_hooks.rs:89 `arm(RowSet { .. ..RowSet::ALL })`; \
+both supply `open_profile_load_dialog` and `open_save_picker_menu`"""
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-quit-load-character"
+kind = "duplicate-owner"
+reason = """Both supply `open_profile_load_dialog`, and `er-quit-load-character`'s rows are a \
+subset of the near-`ALL` set `er-quit-rows` arms, so the pair can only take a row away from the \
+build that has the fuller flow behind it. Same cross-copy latch as every other pair here; derived \
+from br-20260917-205031-edd3 rather than separately reproduced."""
+evidence = """crates/er-quit-rows/src/experiments/startup_hooks/diagnostics/layout_global_hooks.rs:89; \
+crates/er-quit-load-character/src/lib.rs:117"""
+
+# THE THREE PAIRS THE FLOW RULE CANNOT SEE, read out of the source on 2026-09-19 beside the four
+# above. Two are row shells whose flows are disjoint; the third is not a row pair at all.
+#
+# WHAT TWO ROW SHELLS SHARE WHEN THEIR FLOWS DO NOT. Every standalone row host derives the
+# six-cell `02_040_optionsetting` Quit grid, and `er_gfx::options_02_040::quit6` fail-closes when
+# it is handed bytes something has already derived. The doc comment on
+# `gfx_swap::install_quit_menu_gfx_swap_hook` says exactly that, and names this table as the thing
+# that keeps one deriver per process: "two derivers of one movie is not a race to be won". Every
+# one of them also calls `profile_row_chrome::install_profile_row_populate_hooks`, which is a bare
+# `MhHook::new` on `PROFILE_ROW_POPULATE_RVA` (0x8757e0) and `PROFILE_CURRENT_ROW_POPULATE_RVA`
+# (0x951220) -- and that function's doc comment is the clearest statement of why these rows have
+# to exist: "one owner per process is a property of the conflict table, not an assumption made
+# here".
+#
+# Nothing in the core stops the second host. `FILE_OPEN_INSTALLED`, `PROFILE_ROW_POPULATE_CLAIMED`
+# and the `SERVE_*` flags are per-cdylib statics, and `er_hook::register_shared_hook` resolves a
+# union only out of `er_quickload.dll` by name (`PRODUCT_DLL_NAME`), so a profile carrying two
+# shells and no product gives each of them `HookRoute::LocalUnion` and a MinHook instance of its
+# own on the same prologue.
+#
+# Each of the three is read from the source cited beside it rather than reproduced on its own run.
+# None of these pairs has ever co-loaded, which is why no run names them.
+
+[[conflict]]
+a = "er-quit-menu"
+b = "er-save-game-row"
+kind = "duplicate-owner"
+reason = """Disjoint rows, disjoint flows, and still two owners of one movie and of one pair of \
+prologues. `er-quit-menu` arms `RowSet::ALL` -- whose `save_game_as` is false on purpose, because \
+a host that takes the native first row over must not also clone it -- and supplies \
+`open_profile_load_dialog` and `open_save_picker_menu`. `er-save-game-row` arms `save_game_as` \
+alone and supplies `save_game_as_start_flow` and `save_game_request_save_only`. Neither the row \
+table nor the action table collides, which is why the flow rule above does not reach this pair \
+and why it looked co-loadable.
+
+What collides sits under both. Each derives the six-cell `02_040` Quit grid -- `er-quit-menu` \
+through `arm::arm_standalone`, which serves `GfxServeSet::ALL_PICKER_KEYED`, and \
+`er-save-game-row` through `install_gfx_swap_hook_for` with `quit_grid: true` on top of \
+`PICKER_KEYED` -- so whichever runs second is handed already-derived bytes, `quit6` fail-closes, \
+and the tab it serves is the vanilla two-cell one with the other host's cloned rows indexed into \
+cells that do not exist. Each also installs the two row-populate detours with a bare `MhHook`, \
+and each takes its own MinHook instance on the Scaleform file-open prologue."""
+evidence = """crates/er-quit-menu/src/lib.rs:94 `install_host`, :143 \
+`row_cloner::RowSet::ALL`; crates/er-save-game-row/src/lib.rs:89 `install_host`, :104 \
+`arm(RowSet { save_game_as: true, ..NONE })`, :158 `MOVIES` with `quit_grid: true`, :199 \
+`install_profile_row_populate_hooks`; crates/er-quit-menu-core/src/arm.rs `arm_standalone` \
+(`install_quit_menu_gfx_swap_hook`, and `install_profile_row_populate_hooks` for any host that \
+opens a ProfileSelect); crates/er-quit-menu-core/src/row_cloner.rs:184 `ALL.save_game_as = \
+false`; crates/er-quit-menu-core/src/profile_row_chrome.rs:595; crates/er-hook/src/lib.rs:804 \
+`PRODUCT_DLL_NAME`"""
+
+[[conflict]]
+a = "er-quit-load-character"
+b = "er-save-game-row"
+kind = "duplicate-owner"
+reason = """The same pair with the fuller row shell swapped for the narrow one, and the same \
+answer. `er-quit-load-character` arms `CHARACTER_ROWS` -- `load_character`, plus \
+`load_character_from_file` behind a feature that is off by default -- and supplies \
+`open_profile_load_dialog`; `er-save-game-row` arms `save_game_as` and supplies the save flows. \
+No row and no flow is claimed twice.
+
+`CHARACTER_ROWS` still has `load_character` true, so `arm_standalone` takes the same two \
+branches the pair above does: it serves `GfxServeSet::ALL_PICKER_KEYED`, which derives the \
+six-cell `02_040` grid a second time in this process, and it installs the bare-`MhHook` \
+row-populate detours a second time on `0x8757e0` and `0x951220`. A narrower row set does not \
+narrow either of those -- both are properties of opening a ProfileSelect at all."""
+evidence = """crates/er-quit-load-character/src/lib.rs:95 `install_host`, :117 \
+`CHARACTER_ROWS` (`load_character: true`), :164 `arm::arm_standalone`; \
+crates/er-save-game-row/src/lib.rs:104, :158, :199; crates/er-quit-menu-core/src/arm.rs \
+`arm_standalone` (`opens_profile_select`); crates/er-quit-menu-core/src/gfx_swap.rs \
+`install_quit_menu_gfx_swap_hook` doc comment"""
+
+[[conflict]]
+a = "er-quit-rows"
+b = "er-save-disable"
+kind = "hook-collision"
+reason = """The entry this table already holds for `er-quickload` against the same shell, with \
+the same mechanism and for the reason `er-quit-rows` inherits every other one: it is a copy of \
+the product's source. Both call `er_save_suppress::install`, each from its own statically linked copy \
+of that crate, and `install` detours the two suppressor prologues with a bare `MhHook::new` -- \
+`SL_ENQUEUE_SAVE_JOB_RVA` 0xe6fb50 and `SL_POLL_SAVE_STATUS_RVA` 0xe6e430, the same \
+0x140e6fb50 / 0x140e6e430 the product's entry names. Whichever installs second overwrites the \
+other's trampoline.
+
+The second half of the product's entry carries over unchanged too: `er_save_disable` exists to \
+suppress every save write, so a run that loads it cannot produce save-path evidence at all -- and \
+`er-quit-rows` reaches `er_save_suppress` from 181 sites across seven of its modules, including \
+the arm and the bypass its own Save Game flow fires through."""
+evidence = """crates/er-quit-rows/src/lib_parts/dll_entry_parts/bootstrap.rs:509 \
+`er_save_suppress::install(false)`, :557 `install_observers_only`; \
+crates/er-quit-rows/src/experiments/lifecycle/save_flow.rs:629 `is_armed`, :630 \
+`arm_one_save_bypass`; crates/er-save-disable/src/lib.rs:204 \
+`er_save_suppress::install(census_only)`; crates/er-save-suppress/src/lib.rs:1679 `install`, \
+:1758 `MhHook::new`, :193 and :196 for the two prologues"""

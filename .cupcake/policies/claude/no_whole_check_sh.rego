@@ -166,7 +166,7 @@ deny contains decision if {
 
 	decision := {
 		"rule_id": "ER-EFFECTS-NO-CHECK-SH",
-		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific gate your edit touched instead, by its own path: `cargo test -p <crate>`, `cargo fmt -p <crate> -- --check`, `python3 scripts/check-<gate>.py`. Naming them is your work, and it is seconds.",
+		"reason": "The agent does not run scripts/check.sh. The pre-push hook runs it and CI runs it, on a box with no game on it. Run the specific gate your edit touched instead, by its own path -- and in the MODE check.sh runs it, which is where this list used to mislead: `cargo test -p <crate>` AND `cargo clippy -p <crate> --all-targets` (the workspace denies warnings, and `cargo test` never invokes clippy), `cargo fmt -p <crate> -- --check`, and `python3 scripts/check-<gate>.py --selftest` BEFORE `python3 scripts/check-<gate>.py` (most gates have both, check.sh runs both, and a gate that passes on your tree can still have a broken selftest). Touching a scripts/*.py gate also means `python3 scripts/check-stages.py --selftest`, which proves every path a gate reads is declared by its stage. Naming them is your work, and it is seconds.",
 		"severity": "HIGH",
 	}
 }
