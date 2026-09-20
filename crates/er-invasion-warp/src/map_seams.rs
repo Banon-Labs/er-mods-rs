@@ -294,6 +294,55 @@ pub const CONVERT_MSB_COORDS_TO_MAP_COORDS: MapSeam = MapSeam {
     arg_count: 3,
 };
 
+/// `FUN_1409c6730` -- the builder for the native map markers our invasion pins replace.
+///
+/// It reads `CSServerInterface->netPlayerWatcher->playRegionActivityList` and appends one
+/// `CS::WorldMapPlayRegionData` row per entry into the map menu's own `0x30`-stride list, then
+/// sizes that list's sprite pool. Those rows are the only thing the Map Functions row that
+/// [`crate::map_pin_toggle`] rides ever drew, so suppressing them is what frees the row to mean
+/// our pins instead.
+///
+/// The suppression is the absence of a trampoline entry, not a write: the list is populated here
+/// and nowhere else, so a detour that returns without entering leaves it as the menu built it --
+/// empty -- and leaves the sprite pool at zero. Nothing is written and nothing is freed, which is
+/// why a refused seam costs exactly the suppression: the player would see the vanilla markers
+/// alongside our pins rather than in place of them.
+///
+/// The prologue opens `mov rax, rsp`, so the JMP-entry hazard spelled out on
+/// [`WORLDMAP_VIEWMODEL_CTOR`] applies -- but only to a handler that wants to enter the
+/// trampoline. This one never does, which takes that hazard off the table here.
+///
+/// Read back from the running 1.17.1 process at `0x1409c7980` through Frida in run
+/// `br-20260919-063332-c93b`; the twelve bytes below are that reading, not a carry-across.
+pub const WORLDMAP_NATIVE_MARKER_BUILD: MapSeam = MapSeam {
+    name: "native map-marker builder (FUN_1409c6730)",
+    rva: 0x09c_6730,
+    prologue: &[
+        0x48, 0x8b, 0xc4, 0x55, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57,
+    ],
+    arg_count: 1,
+};
+
+/// `FUN_140887580` -- the writer behind the Map Functions row that now toggles our pins.
+///
+/// Two stores, byte-proven in `eldenring-deobf-1.17.1.bin` at `0x140888570` and read back live
+/// from the running process at the same address: `88 91 c5 03 00 00` is `mov [rcx+0x3c5], dl`,
+/// the live flag [`crate::map_pin_toggle`] reads, and `88 98 f1 0f 00 00` is
+/// `mov [rax+0xff1], bl`, the copy inside `CSMenuProfileSaveLoad` (`0xfc8 + 0x29`) that makes
+/// the row remember its position across sessions.
+///
+/// Nothing detours this. It is recorded as a seam so the startup banner reports whether the
+/// flag's owner is where this build expects, which gives the offset in
+/// [`crate::map_pin_toggle`] a checked address to stand on rather than a remembered one.
+pub const WORLDMAP_PIN_TOGGLE_SETTER: MapSeam = MapSeam {
+    name: "map pin-toggle setter (FUN_140887580)",
+    rva: 0x088_7580,
+    prologue: &[
+        0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x0f, 0xb6, 0xda, 0x88, 0x91, 0xc5,
+    ],
+    arg_count: 2,
+};
+
 /// Every seam, for the startup self-check and the log banner.
 pub const ALL_SEAMS: &[MapSeam] = &[
     WORLDMAP_VIEWMODEL_CTOR,
@@ -308,6 +357,8 @@ pub const ALL_SEAMS: &[MapSeam] = &[
     WORLDMAP_PIN_LIST_GROW,
     WORLDMAP_ROW_FILTER,
     CONVERT_MSB_COORDS_TO_MAP_COORDS,
+    WORLDMAP_NATIVE_MARKER_BUILD,
+    WORLDMAP_PIN_TOGGLE_SETTER,
 ];
 
 /// Why a seam could not be used. Every variant means "nothing was patched".
@@ -576,6 +627,8 @@ mod tests {
             (WORLDMAP_PIN_LIST_GROW, 0x1_4088_8aa0),
             (WORLDMAP_ROW_FILTER, 0x1_4088_be50),
             (CONVERT_MSB_COORDS_TO_MAP_COORDS, 0x1_4087_6140),
+            (WORLDMAP_NATIVE_MARKER_BUILD, 0x1_409c_6730),
+            (WORLDMAP_PIN_TOGGLE_SETTER, 0x1_4088_7580),
         ] {
             assert_eq!(seam.verified_va(), va, "{}", seam.name);
         }

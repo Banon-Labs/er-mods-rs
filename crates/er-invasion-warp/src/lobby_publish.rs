@@ -1557,8 +1557,8 @@ mod live {
             // absence of an install line ambiguous: it reads identically to `steam_hooks = false`.
             // Measured 2026-09-04, that ambiguity cost a whole A/B arm -- a 110s run with
             // `steam_hooks = true` produced no install line, and only reading this function showed
-            // the three detours had never armed at all, so the arm re-tested `map_pins` and said
-            // nothing about Steam. A declined install that explains itself is the difference
+            // the three detours had never armed at all, so the arm re-tested the map path and
+            // said nothing about Steam. A declined install that explains itself is the difference
             // between a null result and a wasted run.
             if !MATCHMAKING_DECLINE_LOGGED.swap(true, Ordering::SeqCst) {
                 crate::standalone_log(format_args!(
