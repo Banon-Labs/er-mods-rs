@@ -1,40 +1,48 @@
-//! Standalone ME3 shell for all four cloned System>Quit rows -- **Load Character**, **Load
-//! Character from File**, **Load Build from URL** and **Generate Build Link** -- with no product
-//! DLL in the profile.
+//! Standalone ME3 shell for the cloned System>Quit rows, with no product DLL in the profile.
+//!
+//! Which rows it arms comes from `er-quit-menu.toml` beside the game executable, not from a cargo
+//! feature and not from a constant in this file:
+//!
+//! ```toml
+//! rows = ["load-character", "load-character-from-file", "load-build-from-url", "generate-build-link"]
+//! save_game = "add-row"
+//! ```
 //!
 //! Everything the rows are made of lives in `er-quit-menu-core`, which the product DLL also links
-//! and arms. The two loads now pass the same `RowSet::ALL`; what still differs is the flow table.
-//! The product supplies its save-safe character switch, its Save Game flow and its picker; this
-//! shell supplies the two openers the feature crate already owns and leaves the rest at `None`,
-//! which the router reads as a press it must not carry out.
+//! and arms. This shell supplies the openers that crate already owns and leaves the product-only
+//! answers at `None`, which the router reads as a press it must not carry out.
 //!
-//! # Why one shell arms all four rather than two shells arming halves
+//! # Why one shell with a file, and not three cdylibs
 //!
-//! Halves were tried on 2026-09-12 and measured the same day. Each cdylib links its own copy of
-//! `er-quit-menu-core`, so `ROW_SET`, the row table and the arm latch are per DLL; both
-//! `AddCancelButton` detours sat on the hook union and both fired, and each shell cloned its pair
-//! into the same dialog and then again on the other's pass. The result was a six-cell grid holding
-//! `item_count=10`, two row tables disagreeing about which index is Return to Desktop, and every
-//! press resolving `row=AMBIGUOUS` -- so the safety gate suppressed Save Game and refused the
-//! instant quit, and what the player saw was the native Return-to-Desktop confirm behind every row.
-//! One arm in one process is the only shape that works without shared cross-DLL state.
+//! It was three: `er-quit-menu` armed `RowSet::ALL`, `er-quit-load-character` armed the character
+//! pair, `er-save-game-row` armed the Save Game row. 783 lines between them over one 27,086-line
+//! feature crate, differing only in which `RowSet` bits they passed and which `QuitMenuHost` fields
+//! they filled -- and every pair among them was a declared conflict, because each cdylib links its
+//! own copy of the core and two copies is two owners of one tab.
 //!
-//! # What this shell has to install that the product already had
+//! Halves were measured on 2026-09-12: both `AddCancelButton` detours sat on the hook union and
+//! both fired, each shell cloned its pair into the same dialog and then again on the other's pass,
+//! and the result was a six-cell grid holding `item_count=10`, two row tables disagreeing about
+//! which index is Return to Desktop, and every press resolving `row=AMBIGUOUS`. One arm in one
+//! process is the only shape that works without shared cross-DLL state.
 //!
-//! Three things, and each fails differently, so each is reported separately:
+//! A cargo feature would have merged the packages and kept the problem one layer down: the
+//! installer would ship a build per row set. A file is the one form a player can change.
+//! See `docs/plans/menus-and-saves-consolidation.md`, phase 2.
 //!
-//! * the derived six-cell `02_040_optionsetting` grid the rows are cells of, and the `02_990`
-//!   movie the link field opens, both served from the Scaleform file-open prologue;
-//! * a `MenuWindowJob::Run` detour, which is the only context in which the link field's job can be
-//!   submitted and its display objects resolved;
-//! * a `FrameBegin` task, which is the only context in which an import may touch the inventory.
+//! # What this shell installs that the product already had
 //!
-//! # Never in the same profile as `er-quit-load-character`, and never beside a `quit-rows` product
+//! `er_quit_menu_core::arm::arm_standalone` owns that list and reports each part separately,
+//! because each fails differently: the derived grid and the movies the rows stand on, a
+//! `MenuWindowJob::Run` detour, a `FrameBegin` task, the browser's own activation, and the Save
+//! Game row's text hook and stage task.
 //!
-//! Any other host that arms rows is a second cloner, for the reason above, and both derive the same
-//! movie -- `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla, so a second
-//! deriver handed already-derived bytes correctly refuses. `scripts/me3-dll-conflicts.toml` records
-//! those pairs and the profile generator refuses to emit a profile carrying both. A default
+//! # Never in the same profile as a `quit-rows` product
+//!
+//! Any other host that arms rows is a second cloner, and both derive the same movie --
+//! `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla, so a second deriver
+//! handed already-derived bytes correctly refuses. `scripts/me3-dll-conflicts.toml` records those
+//! pairs and the profile generator refuses to emit a profile carrying both. A default
 //! `er-quickload` is not one of them: it arms no rows and derives no grid since `quit-rows` came
 //! off its default features.
 //!
@@ -51,15 +59,22 @@
 
 use std::path::{Path, PathBuf};
 
+use er_quit_menu_core::row_config::{QuitRowsConfig, SaveGameShape};
+
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;
 const LOG_FILE_NAME: &str = "er-quit-menu.log";
 
+/// The player's own file, beside the game executable. Named after this DLL, the way
+/// `er-quickload.toml` is named after that one.
+const CONFIG_FILE_NAME: &str = "er-quit-menu.toml";
+
 #[cfg(windows)]
 static START: std::sync::Once = std::sync::Once::new();
 
-/// Where the standalone log lands: next to the executable, falling back to the CWD.
-fn log_dir() -> PathBuf {
+/// Where the standalone log and the config file live: next to the executable, falling back to the
+/// CWD.
+fn game_dir() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(PathBuf::from))
@@ -99,7 +114,55 @@ fn install_standalone_host() {
 }
 
 fn standalone_log(args: std::fmt::Arguments<'_>) {
-    append_log(&log_dir(), args);
+    append_log(&game_dir(), args);
+}
+
+/// Read the player's file, writing a commented default when there is none.
+///
+/// An unreadable file is not a reason to arm nothing: the defaults are the row set this DLL
+/// shipped with before the file existed, so a permissions problem costs the player their settings
+/// and not their rows. Every departure from what the file asked for is logged, because a row that
+/// silently did not appear is indistinguishable from a row that is broken.
+fn load_config(dir: &Path) -> QuitRowsConfig {
+    let path = dir.join(CONFIG_FILE_NAME);
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let boilerplate = er_quit_menu_core::row_config::boilerplate_config();
+            match std::fs::write(&path, &boilerplate) {
+                Ok(()) => append_log(
+                    dir,
+                    format_args!(
+                        "config: auto-created '{}' with the defaults",
+                        path.display()
+                    ),
+                ),
+                Err(write_error) => append_log(
+                    dir,
+                    format_args!(
+                        "config: '{}' is missing and could not be created ({write_error}); using the defaults",
+                        path.display()
+                    ),
+                ),
+            }
+            boilerplate
+        }
+        Err(error) => {
+            append_log(
+                dir,
+                format_args!(
+                    "config: '{}' could not be read ({error}); using the defaults",
+                    path.display()
+                ),
+            );
+            return QuitRowsConfig::default();
+        }
+    };
+    let config = er_quit_menu_core::row_config::parse(&contents);
+    for complaint in &config.complaints {
+        append_log(dir, format_args!("config: {complaint}"));
+    }
+    config
 }
 
 /// Open the browse picker for a **Load Character from File** press.
@@ -107,7 +170,8 @@ fn standalone_log(args: std::fmt::Arguments<'_>) {
 /// The row router answers in booleans; the picker answers in outcomes, and the two disagree about
 /// one case on purpose. `Dismissed` means a picker ran and the user backed out of it -- the press
 /// was carried out, so the row must not re-arm -- while the router only needs to know whether the
-/// press was taken.
+/// press was taken. Collapsing them here rather than widening the router keeps that distinction
+/// where the picker made it.
 ///
 /// # Safety
 ///
@@ -118,41 +182,72 @@ unsafe fn open_save_picker_for_row(action_obj: usize) -> bool {
         .request_discharged()
 }
 
-/// Arm all four cloned rows. Runs on its own thread because the game-task registration waits for
+/// What a press on each selected row reaches.
+///
+/// A flow is supplied only when its row is in the set. The pairing is the safety property the row
+/// set already carries -- an unarmed row is never cloned, so it can never be pressed -- stated
+/// again on this side so a flow pointer cannot outlive the row that justified it.
+#[cfg(windows)]
+fn row_actions(config: &QuitRowsConfig) -> er_quit_menu_core::row_cloner::QuitRowActions {
+    let rows = config.rows;
+    // Which of the two Save Game slots the flow goes in is the whole difference between the
+    // shapes: `save_game_start_flow` takes the native first row over and is what the text
+    // substitution gates on, `save_game_as_start_flow` belongs to the cloned row and leaves both
+    // vanilla rows with their own labels and their own actions.
+    let save_game_flow = rows.save_game.then_some(
+        er_quit_menu_core::save_game_row::system_quit_save_game_start_flow
+            as unsafe fn(usize) -> bool,
+    );
+    let takes_the_native_row = config.save_game == SaveGameShape::ReplaceNativeRow;
+    er_quit_menu_core::row_cloner::QuitRowActions {
+        open_profile_load_dialog: rows.load_character.then_some(
+            er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog
+                as unsafe fn(usize) -> bool,
+        ),
+        open_save_picker_menu: rows
+            .load_character_from_file
+            .then_some(open_save_picker_for_row as unsafe fn(usize) -> bool),
+        save_game_start_flow: takes_the_native_row.then_some(save_game_flow).flatten(),
+        save_game_as_start_flow: (!takes_the_native_row).then_some(save_game_flow).flatten(),
+        save_game_request_save_only: rows.save_game.then_some(
+            er_quit_menu_core::save_game_row::system_quit_save_game_request_save_only
+                as unsafe fn(),
+        ),
+        ..er_quit_menu_core::row_cloner::QuitRowActions::default()
+    }
+}
+
+/// Arm the configured rows. Runs on its own thread because the game-task registration waits for
 /// the game's task manager to exist, and waiting inside the loader lock deadlocks the process.
 #[cfg(windows)]
-fn arm_build_rows() {
+fn arm_configured_rows() {
+    let dir = game_dir();
+    let config = load_config(&dir);
+    let rows = config.rows.row_set(config.save_game);
+    append_log(
+        &dir,
+        format_args!(
+            "config: arming {:?} (save_game={}, stated_in_the_file={})",
+            config.rows.rows(),
+            config.save_game.config_name(),
+            config.rows_were_stated
+        ),
+    );
+    if config.rows.is_empty() {
+        append_log(
+            &dir,
+            format_args!(
+                "config: no rows are selected, so this DLL adds nothing to the Quit tab; list one in '{CONFIG_FILE_NAME}' to get it back"
+            ),
+        );
+        return;
+    }
     // Safety: a bootstrap thread, once per process (`START` gates the spawn), before the Quit tab
     // has built a dialog.
-    let arm = unsafe {
-        er_quit_menu_core::arm::arm_standalone(
-            // All four cloned rows, from one shell (2026-09-12).
-            //
-            // Two shells arming halves of the set was tried and measured the same day, and it is
-            // not a way to ship both halves: each cdylib links its own copy of
-            // `er-quit-menu-core`, so `ROW_SET`, the row table and the arm latch are per DLL. Both
-            // `AddCancelButton` detours sat on the hook union and both fired, so each shell cloned
-            // its own pair into the same dialog and then again on the other's pass -- a six-cell
-            // grid carrying `item_count=10`, two row tables that disagreed about which index is
-            // Return to Desktop, and therefore every press resolving to `row=AMBIGUOUS`. The safety
-            // gate did its job: Save Game was suppressed and the instant quit refused, so what the
-            // player saw was the native Return-to-Desktop confirm behind every row.
-            //
-            // One arm in one process is the fix, and it costs nothing to reach from here: both
-            // flows the character rows need already live in `er-quit-menu-core`.
-            er_quit_menu_core::row_cloner::RowSet::ALL,
-            er_quit_menu_core::row_cloner::QuitRowActions {
-                open_profile_load_dialog: Some(
-                    er_quit_menu_core::profile_load_dialog::system_quit_open_profile_load_dialog,
-                ),
-                open_save_picker_menu: Some(open_save_picker_for_row),
-                ..er_quit_menu_core::row_cloner::QuitRowActions::default()
-            },
-        )
-    };
+    let arm = unsafe { er_quit_menu_core::arm::arm_standalone(rows, row_actions(&config)) };
     if !arm.is_complete() {
         append_log(
-            &log_dir(),
+            &dir,
             format_args!(
                 "some of the rows' machinery did not install: {arm:?}; the rows may be absent or inert"
             ),
@@ -184,12 +279,12 @@ pub unsafe extern "system" fn DllMain(
             // Before the thread, so no moved code can run against an un-installed seam.
             install_standalone_host();
             append_log(
-                &log_dir(),
+                &game_dir(),
                 format_args!(
-                    "loaded module_base=0x{module_base:x}; arming all four cloned System>Quit rows"
+                    "loaded module_base=0x{module_base:x}; reading '{CONFIG_FILE_NAME}' for the rows to arm"
                 ),
             );
-            std::thread::spawn(arm_build_rows);
+            std::thread::spawn(arm_configured_rows);
         });
     }
     DLL_MAIN_SUCCESS
@@ -211,5 +306,94 @@ mod tests {
             append_crash_log: standalone_log,
             ..er_quit_menu_core::QuitMenuHost::defaults()
         })
+    }
+}
+
+// Windows-only because the row set and the action table these assert on live in
+// `er_quit_menu_core::row_cloner`, which is itself `#[cfg(windows)]`. They run under wine from the
+// `cargo xwin test --lib` list in `scripts/check-rust-build.sh`, which is where every other
+// windows-only unit test in this workspace runs.
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use er_quit_menu_core::row_config::{RowSelection, parse};
+
+    /// The row set and the action table have to agree row for row. An armed row with no action is
+    /// a row that appears and does nothing when pressed; an action beside a row that was never
+    /// armed is a pointer to a flow no press can reach.
+    ///
+    /// Asserted over every configuration the file can name rather than one of them, because the
+    /// pairing is now decided at runtime and a single example would prove only that example.
+    #[test]
+    fn every_armed_row_has_a_flow_and_no_unarmed_row_carries_one() {
+        for names in [
+            "[]",
+            "[\"load-character\"]",
+            "[\"load-character-from-file\"]",
+            "[\"load-build-from-url\", \"generate-build-link\"]",
+            "[\"save-game\"]",
+            "[\"load-character\", \"load-character-from-file\", \"load-build-from-url\", \"generate-build-link\", \"save-game\"]",
+        ] {
+            for shape in ["add-row", "replace-native-row"] {
+                let config = parse(&format!("rows = {names}\nsave_game = \"{shape}\"\n"));
+                let actions = row_actions(&config);
+                let rows = config.rows;
+                assert_eq!(
+                    actions.open_profile_load_dialog.is_some(),
+                    rows.load_character,
+                    "Load Character, rows={names} save_game={shape}"
+                );
+                assert_eq!(
+                    actions.open_save_picker_menu.is_some(),
+                    rows.load_character_from_file,
+                    "Load Character from File, rows={names} save_game={shape}"
+                );
+                assert_eq!(
+                    actions.save_game_request_save_only.is_some(),
+                    rows.save_game,
+                    "Save Game request, rows={names} save_game={shape}"
+                );
+                // Exactly one of the two Save Game slots, and only when the row was asked for.
+                assert_eq!(
+                    actions.save_game_start_flow.is_some(),
+                    rows.save_game && shape == "replace-native-row",
+                    "Save Game take-over flow, rows={names} save_game={shape}"
+                );
+                assert_eq!(
+                    actions.save_game_as_start_flow.is_some(),
+                    rows.save_game && shape == "add-row",
+                    "Save Game added-row flow, rows={names} save_game={shape}"
+                );
+                // The row-table reset and the drive-strip note belong to the product's own picker
+                // state, which a shell does not have.
+                assert!(actions.row_table_reset.is_none());
+                assert!(actions.note_drive_strip_click_event.is_none());
+            }
+        }
+    }
+
+    /// The take-over shape clones no Save Game row, so the cloner is asked for two rows on the tab
+    /// plus whatever else was selected -- not three. Getting this backwards puts two buttons
+    /// reading `Save Game` on one tab.
+    #[test]
+    fn the_two_save_game_shapes_ask_the_cloner_for_different_row_sets() {
+        let added = parse("rows = [\"save-game\"]\nsave_game = \"add-row\"\n");
+        let taken = parse("rows = [\"save-game\"]\nsave_game = \"replace-native-row\"\n");
+        assert!(added.rows.row_set(added.save_game).save_game_as);
+        assert!(!taken.rows.row_set(taken.save_game).save_game_as);
+    }
+
+    /// With no file at all this DLL arms what it armed before the file existed, so a player who
+    /// updates it and never opens the config sees the tab they already had.
+    #[test]
+    fn the_default_row_set_is_the_four_cloned_rows() {
+        let config = QuitRowsConfig::default();
+        let rows = config.rows.row_set(config.save_game);
+        assert_eq!(config.rows, RowSelection::DEFAULT);
+        assert!(rows.load_character);
+        assert!(rows.load_character_from_file);
+        assert!(rows.load_build_from_url);
+        assert!(rows.generate_build_link);
+        assert!(!rows.save_game_as);
     }
 }

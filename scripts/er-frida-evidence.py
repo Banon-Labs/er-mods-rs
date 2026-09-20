@@ -36,8 +36,10 @@ to get.
 
 Measured 2026-09-19, which is the run this section exists for. `er-save-game-row` opened its
 destination browser undressed because `gfx_swap::set_profile_05_010_edit_armed` has exactly one
-caller, in `arm::arm_standalone`, and that shell hand-rolls its arm instead. The defect was already
-measured -- by our own code, at the branch, in a live run:
+caller, in `arm::arm_standalone`, and that shell hand-rolled its arm instead. (It merged into
+`er-quit-menu` on 2026-09-20 and `arm_standalone` took over its installs; the example below names
+the crate as it was measured.) The defect was already measured -- by our own code, at the branch,
+in a live run:
 
     05_010 stats-panel edit not armed -- no browse row and no host that dresses a character row
     served 05_010_profileselect (the picker's own cache key) ... memory_replacement=false

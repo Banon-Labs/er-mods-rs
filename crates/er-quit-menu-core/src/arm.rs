@@ -14,6 +14,13 @@
 //! 3. **The game task.** A row press latches a request; the import that satisfies it mutates the
 //!    inventory and `PlayerGameData` and must run on `FrameBegin`.
 //!
+//! 4. **The browser's own activation.** While the live `05_010` window is this crate's directory
+//!    browser, a row press is a browse step; forwarding it runs vanilla's OK handler and the game
+//!    asks **Start with selected profile** over a folder.
+//! 5. **The Save Game row's text hook and stage task.** The row's words go onto the native first
+//!    row through `MsgRepository::GetAndFormat`, and the stage machine a press latches advances on
+//!    `FrameBegin`.
+//!
 //! Each is installed by its own module and reported separately, because each fails differently and
 //! a run has to be able to say which one was missing.
 //!
@@ -46,6 +53,12 @@ pub struct StandaloneArm {
     /// The profile-renderer table is guarded, so opening `05_010_ProfileSelect` cannot fault in the
     /// native refresh. `None` when no row in this set opens that window.
     pub profile_table_guard: Option<bool>,
+    /// A row press on the destination browser browses instead of running the game's own character
+    /// load confirm. `None` when this row set opens no browser.
+    pub picker_activate: Option<bool>,
+    /// The Save Game stage machine has a `FrameBegin` task to advance on. `None` when no Save Game
+    /// flow was supplied.
+    pub save_flow_task: Option<bool>,
 }
 
 impl StandaloneArm {
@@ -59,6 +72,8 @@ impl StandaloneArm {
             && self.menu_pump != Some(false)
             && self.game_task != Some(false)
             && self.profile_table_guard != Some(false)
+            && self.picker_activate != Some(false)
+            && self.save_flow_task != Some(false)
     }
 }
 
@@ -82,7 +97,15 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // make room for fields something has to fill; a host that fills none of them must leave the
     // window as the game built it. See `profile_select_chrome_gate` for what the edit changes and
     // for the run this was measured on.
-    let browse_rows_armed = rows.load_character_from_file || rows.save_game_as;
+    // Read off the actions, not off `rows` alone. The Save Game row has two spellings and only one
+    // of them is a cloned row: `save_game_as_start_flow` comes with `rows.save_game_as`, while
+    // `save_game_start_flow` takes the native first row over and clones nothing. Asking `rows` on
+    // its own answers `false` for the take-over shape, which is how `er-save-game-row` came to hand
+    // roll its own arm rather than call this function -- and then opened an undressed browser for a
+    // day because the latch below has exactly one caller and it is here.
+    let save_game_owns_native_row = actions.save_game_start_flow.is_some();
+    let save_game_armed = save_game_owns_native_row || actions.save_game_as_start_flow.is_some();
+    let browse_rows_armed = rows.load_character_from_file || rows.save_game_as || save_game_armed;
     // A shell with no product behind it decodes the game's own save for itself, so its character
     // rows carry the merged header and the attribute line rather than the game's three bare fields.
     // Installed before the gate is asked, because filling the seam is what earns the edit. A host
@@ -111,10 +134,35 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
             "system-quit-gfx: 05_010 stats-panel edit stays off (browse_rows_armed={browse_rows_armed} host_dresses_character_rows={host_dresses_character_rows}); ProfileSelect renders the game's own five-row presentation with its face boxes"
         ));
     }
+    // Which movies this row set actually opens, rather than every movie this crate can derive.
+    //
+    // The grid is the half that has to be asked about. Vanilla's Quit tab has two cells and the
+    // six-cell derivation is for cloned rows, so a host that clones none and instead replaces the
+    // native first row gets a widened grid with four empty cells -- bd
+    // `slim-quickload-still-widened-the-quit-grid-2026-09-12`. `GfxServeSet::ALL_PICKER_KEYED`,
+    // which this used to serve unconditionally, says `quit_grid: true` for every caller.
+    //
+    // The other three follow the same rule and cost nothing to get right: the link field's movie
+    // belongs to the build rows, the path editor to the browse picker, and the picker's own cache
+    // key to whichever row puts `05_010_ProfileSelect` on screen. The game's own `profile_select`
+    // key stays false here, because serving the derived layout there re-lays out the title's
+    // **Load Game** as well, and no shell's feature is character select.
+    let clones_a_row = rows.load_character
+        || rows.load_character_from_file
+        || rows.load_build_from_url
+        || rows.generate_build_link
+        || rows.save_game_as;
+    let serve = crate::gfx_swap::GfxServeSet {
+        quit_grid: clones_a_row,
+        build_url_field: rows.load_build_from_url || rows.generate_build_link,
+        path_editor_field: browse_rows_armed,
+        profile_select: false,
+        profile_select_picker_key: rows.load_character || browse_rows_armed,
+    };
     // First of the installs, because it is the only one with a deadline: the movie is served the
     // first time the Quit tab is opened, and a swap registered after that shows a vanilla two-cell
     // grid until the panel is rebuilt.
-    let gfx_served = unsafe { crate::gfx_swap::install_quit_menu_gfx_swap_hook() };
+    let gfx_served = unsafe { crate::gfx_swap::install_gfx_swap_hook_for(serve) };
     // The picker's ProfileSelect is served under a key of its own, so the derived movie -- which
     // hides the face box and compacts five 156px rows into ten 52px ones -- dresses a browse list
     // and leaves the title's Load Game the way the game ships it. Without this rebind the serve
@@ -159,17 +207,37 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
     // written for "a character row is armed" is really for "this host puts a ProfileSelect on
     // screen", and asking the narrower question left the Save Game row with an undressed picker
     // under an un-hidden pause menu on run br-20260912-201454-d12a.
-    let opens_profile_select = character_rows || crate::row_cloner::save_game_flow_is_owned();
+    //
+    // `save_game_armed`, not `row_cloner::save_game_flow_is_owned()`, which reads
+    // `save_game_start_flow` alone and so answers `false` for the added-row shape -- the shape a
+    // default `er-save-game-row` shipped and the one this function now has to serve.
+    let opens_profile_select = character_rows || save_game_armed;
     let profile_table_guard = opens_profile_select
         .then(|| unsafe { crate::profile_table_guard::install_profile_table_guard() });
+    // A row press on our own browser is a browse step -- enter a folder, switch drive, page, pick a
+    // file -- never a character load. Without this the press reaches vanilla's own OK handler and
+    // the game asks **Start with selected profile** over a folder, which is what run
+    // br-20260912-203044-5fbd put on screen. The product has its own detour on that address and
+    // chains with this one through the union; a shell has nothing else.
+    let picker_activate =
+        browse_rows_armed.then(crate::save_picker_menu::install_picker_profile_load_activate_hook);
     // One detour, two reasons to want it. The link field needs a menu pump to submit its keyboard
     // job; a character row needs the same post-run moment to hide the pause menu behind the picker
     // it just opened and to put it back when the picker closes. Neither is the product's hook --
     // this is the shell's own, chained onto the same address through the union.
     crate::menu_pump::set_character_rows_armed(character_rows);
-    crate::menu_pump::set_save_game_row_armed(crate::row_cloner::save_game_flow_is_owned());
+    crate::menu_pump::set_save_game_row_armed(save_game_armed);
     let menu_pump = (build_rows || opens_profile_select)
         .then(|| unsafe { crate::menu_pump::install_quit_menu_window_run_hook() });
+    // The Save Game row's own two installs. The text substitution puts `Save Game`, its line help
+    // and its confirm wording onto the native first row, and gates itself on
+    // `save_game_flow_is_owned` -- so installing it in the added-row shape costs a hook and changes
+    // no text, which is what keeps the two spellings off the tab at once. The task is what advances
+    // the stage machine a press latches; without it a press latches a request nothing moves.
+    let save_flow_task = save_game_armed.then(|| {
+        crate::save_game_row::install_system_quit_save_game_text_hook();
+        crate::save_flow::install_save_flow_game_task()
+    });
     // The row-populate detour is what dresses a browse row: it hides the `Level` caption and the
     // bottom `PlayTime` that would otherwise read "Level 0" and "0:00:00" about a character that
     // does not exist, repurposes the top-right `Location` for the file's last-saved time, and
@@ -189,20 +257,24 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
         menu_pump,
         game_task,
         profile_table_guard,
+        picker_activate,
+        save_flow_task,
     };
     // `not-required` rather than `None`: the line is read by a person looking for what went wrong,
-    // and a bare `None` beside three booleans reads as a failure that printed oddly.
+    // and a bare `None` beside the booleans reads as a failure that printed oddly.
     let describe = |part: Option<bool>| match part {
         Some(true) => "yes",
         Some(false) => "FAILED",
         None => "not-required",
     };
     append_autoload_debug(format_args!(
-        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} profile_table_guard={} rows={rows:?}",
+        "system-quit-dup: standalone arm complete={} gfx_served={gfx_served} rows_armed={rows_armed} menu_pump={} game_task={} profile_table_guard={} picker_activate={} save_flow_task={} serve={serve:?} rows={rows:?}",
         arm.is_complete(),
         describe(menu_pump),
         describe(game_task),
-        describe(profile_table_guard)
+        describe(profile_table_guard),
+        describe(picker_activate),
+        describe(save_flow_task)
     ));
     arm
 }

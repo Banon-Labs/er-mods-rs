@@ -18,10 +18,6 @@ members = [
   # side to move. Host-buildable and game-free: the key table, the parser and the reload
   # decision are all `cargo test`-able on Linux.
   "crates/er-hotkey-config",
-  # The Save Game row alone, with no cloned character rows behind it. Possible since the row's flow
-  # moved into `er-quit-menu-core` on 2026-09-12; before that the only build carrying all three of
-  # the row's halves was the whole product.
-  "crates/er-save-game-row",
   # Blanking the DirectInput left button while an imgui panel owns the pointer, so a click on
   # an overlay is not also a weapon swing. Extracted from `er-net-effects` because that crate
   # is `crate-type = ["cdylib"]` and cannot be depended on, and a GUEST overlay in another DLL
@@ -106,12 +102,11 @@ members = [
   # surface reads (the title Continue row, the System>Quit load rows, the ProfileSelect list,
   # the loading-screen portrait). Was four files of the er-quickload shim, one verb each.
   "crates/er-profile-summary-core",
+  # The one standalone shell for every cloned System>Quit row, with the set read from
+  # `er-quit-menu.toml` at load time. It replaced `er-quit-load-character` and `er-save-game-row`,
+  # which differed from it only in the `RowSet` they passed and were a declared conflict with it
+  # and with each other for exactly that reason.
   "crates/er-quit-menu",
-  # Standalone ME3 shell for the System>Quit **Load Character** row: the same derived Quit grid and
-  # the same row cloner as `er-quit-menu`, armed with a different `RowSet`. It ships one of the two
-  # character rows; **Load Character from File** stays with the product until its browse surface,
-  # its ingest and the save-swap ledger leave `er-quickload`.
-  "crates/er-quit-load-character",
   # World-map invasion-spawn warp targets (bd er-effects-rs-5es,
   # docs/plans/world-map-invasion-warp.md). Feature crate + thin ME3-loadable shell, same
   # split as er-loading-portrait-core / er-loading-portrait.

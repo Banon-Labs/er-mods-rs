@@ -410,7 +410,8 @@ def compute(
     # removed is not a conflict this run has. It used to be applied last, and the cost was exact:
     # `--with er-save-game-row --without er-quit-menu` reported the two shells as an unresolvable
     # pair and staged nothing, having ranked a conflict between a package that was going to load
-    # and one that was not.
+    # and one that was not. (Those two packages merged on 2026-09-20; the ordering bug they found
+    # is unchanged, and `--with er-quit-menu --without er-quickload` is the same shape today.)
     #
     # Either way it is recorded in `excluded` with the same shape as a conflict drop, so the run
     # block says which DLL was withheld. A silent omission is how an A/B turns into two runs nobody
