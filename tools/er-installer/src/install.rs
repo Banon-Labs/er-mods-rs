@@ -56,7 +56,7 @@ pub struct GameInstall {
 
 /// The file whose presence proves a directory is the game directory. The protected launcher
 /// `start_protected_game.exe` sits beside it and is deliberately not what is looked for.
-const GAME_EXE: &str = "eldenring.exe";
+pub const GAME_EXE: &str = "eldenring.exe";
 
 const SEAMLESS_RELATIVE: &str = "SeamlessCoop/ersc.dll";
 
@@ -64,7 +64,12 @@ fn is_game_dir(candidate: &Path) -> bool {
     candidate.join(GAME_EXE).is_file()
 }
 
-/// Candidate game directories, most-specific first. `explicit` comes from `--game-dir`.
+/// Candidate game directories, most-specific first. `explicit` comes from `--game-dir` or from
+/// what the player typed at the prompt.
+///
+/// Deduplicated, because the Steam records behind [`crate::steam::game_dirs`] reach the same
+/// library by more than one route and a repeated line in the "looked in" message reads as the
+/// tool having tried twice and failed twice.
 fn game_dir_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(path) = explicit {
@@ -78,70 +83,80 @@ fn game_dir_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
         candidates.push(dir.join("Game"));
         candidates.push(dir);
     }
-    for root in steam_library_roots() {
-        candidates.push(root.join("steamapps/common/ELDEN RING/Game"));
+    candidates.extend(crate::steam::game_dirs());
+    let mut unique = Vec::with_capacity(candidates.len());
+    for candidate in candidates {
+        if !unique.contains(&candidate) {
+            unique.push(candidate);
+        }
     }
-    candidates
+    unique
 }
 
-/// The player's real home directory, on whichever system is underneath.
+/// Turn what a player typed or pasted at the prompt into a path worth trying.
 ///
-/// `HOME` answers on a native Linux build and is absent from the Windows environment, so the
-/// shipped exe -- which a Linux player runs under Proton or Wine -- used to fall through to the
-/// drive letters alone and report six `C:`/`D:`/`E:` paths it had tried. Autodetect could
-/// therefore never succeed for a Proton player, whose library is only reachable on `Z:`, and
-/// every one of them had to discover `--game-dir` from a failure message.
+/// Purely textual, so it behaves the same whichever system it runs on -- a Windows path has to
+/// be cleaned up correctly by a Linux test run, and `Path::file_name` does not split `\` there.
 ///
-/// `WINEHOMEDIR` is how Wine spells that home to the Windows side, and it is an NT object path:
-/// measured on this machine as `\??\Z:\home\banon`. Stripping the `\??\` prefix leaves a path
-/// the Windows file APIs accept.
-fn player_home() -> Option<PathBuf> {
-    if let Some(home) = std::env::var_os("HOME") {
-        return Some(PathBuf::from(home));
+/// Three things arrive that a bare `PathBuf::from` would get wrong. Explorer's "Copy as path"
+/// wraps the path in double quotes, and those quotes become part of the directory name. A path
+/// typed by hand carries the spaces around it that pasting into a console leaves behind. And a
+/// player told to find the folder holding `eldenring.exe` quite reasonably sends the exe.
+pub fn clean_pasted_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .or_else(|| {
+            trimmed
+                .strip_prefix('\'')
+                .and_then(|rest| rest.strip_suffix('\''))
+        })
+        .unwrap_or(trimmed)
+        .trim();
+    if unquoted.is_empty() {
+        return None;
     }
-    wine_home_dir(std::env::var("WINEHOMEDIR").ok().as_deref())
-}
-
-/// The path half of [`player_home`], split out so it can be tested without an environment.
-fn wine_home_dir(raw: Option<&str>) -> Option<PathBuf> {
-    let raw = raw?.trim();
-    let stripped = raw.strip_prefix(r"\??\").unwrap_or(raw);
-    (!stripped.is_empty()).then(|| PathBuf::from(stripped))
-}
-
-fn steam_library_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    if let Some(home) = player_home() {
-        roots.push(home.join(".local/share/Steam"));
-        roots.push(home.join(".steam/steam"));
-    }
-    for drive in ["C:", "D:", "E:"] {
-        roots.push(PathBuf::from(format!(
-            "{drive}\\Program Files (x86)\\Steam"
-        )));
-        roots.push(PathBuf::from(format!("{drive}\\SteamLibrary")));
-    }
-    roots
+    let folder = match unquoted.rsplit_once(['/', '\\']) {
+        Some((parent, last)) if last.eq_ignore_ascii_case(GAME_EXE) && !parent.is_empty() => parent,
+        _ => unquoted,
+    };
+    Some(PathBuf::from(folder))
 }
 
 /// Find the game. Returns the candidates that were tried when none of them held the exe, so
 /// the caller can say where it looked rather than only that it failed.
 pub fn find_game(explicit: Option<&Path>) -> Result<GameInstall, Vec<PathBuf>> {
     let candidates = game_dir_candidates(explicit);
-    for candidate in &candidates {
-        if !is_game_dir(candidate) {
-            continue;
-        }
-        let game_dir = candidate
-            .canonicalize()
-            .unwrap_or_else(|_| candidate.clone());
-        let seamless = {
-            let path = game_dir.join(SEAMLESS_RELATIVE);
-            path.is_file().then_some(path)
-        };
-        return Ok(GameInstall { game_dir, seamless });
+    match candidates.iter().find(|candidate| is_game_dir(candidate)) {
+        Some(found) => Ok(accept(found)),
+        None => Err(candidates),
     }
-    Err(candidates)
+}
+
+/// Find the game in exactly one place: the directory given, or a `Game` directory inside it.
+///
+/// What the prompt uses, rather than [`find_game`], so that the answer judges what the player
+/// typed and nothing else. Falling back to the automatic search there would let a wrong answer
+/// succeed and then print a directory they had not named, under a message about the one they
+/// had -- and the automatic search has already failed by the time the prompt appears.
+pub fn game_at(directory: &Path) -> Option<GameInstall> {
+    let found = [directory.to_path_buf(), directory.join("Game")]
+        .into_iter()
+        .find(|candidate| is_game_dir(candidate))?;
+    Some(accept(&found))
+}
+
+/// Turn a directory already known to hold the game into what the rest of the tool works with.
+fn accept(game_dir: &Path) -> GameInstall {
+    let game_dir = game_dir
+        .canonicalize()
+        .unwrap_or_else(|_| game_dir.to_path_buf());
+    let seamless = {
+        let path = game_dir.join(SEAMLESS_RELATIVE);
+        path.is_file().then_some(path)
+    };
+    GameInstall { game_dir, seamless }
 }
 
 /// Does this directory hold any of the DLLs this installer knows how to install?
@@ -275,18 +290,13 @@ pub fn orphaned_artifacts(chosen: &[&'static Mod], dest: &Path) -> Vec<&'static 
 /// Derived by walking up from `<root>/steamapps/common/ELDEN RING/Game`, so a game outside a
 /// Steam library returns `None` and the caller simply omits the flag.
 pub fn steam_root(game_dir: &Path) -> Option<PathBuf> {
-    let mut ancestors = game_dir.ancestors();
-    ancestors.find(|path| {
-        path.file_name()
-            .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
-    })?;
     game_dir
         .ancestors()
         .find(|path| {
             path.file_name()
                 .is_some_and(|name| name.eq_ignore_ascii_case("steamapps"))
         })
-        .and_then(|steamapps| steamapps.parent())
+        .and_then(Path::parent)
         .map(Path::to_path_buf)
 }
 
@@ -306,6 +316,40 @@ pub fn launch_command(game_dir: &Path, profile: &Path) -> String {
         display_path(&game_dir.join(GAME_EXE))
     ));
     command
+}
+
+/// The names me3 could be installed under, on whichever system this is.
+///
+/// Windows resolves a bare command name against `PATHEXT`, and me3 ships as an exe; the two
+/// script extensions are there because a package manager that wraps it writes one of those.
+const ME3_COMMAND_NAMES: &[&str] = if cfg!(windows) {
+    &["me3.exe", "me3.cmd", "me3.bat"]
+} else {
+    &["me3"]
+};
+
+/// Whether the command printed at the end of an install can actually be run.
+///
+/// The installer copies DLLs and writes a profile; me3 is what loads them, and it is a separate
+/// download. Someone who installs the mods first and me3 never gets a working profile and a
+/// command that answers "not recognized as an internal or external command", which reads as the
+/// installer having failed. Checking costs one directory listing per `PATH` entry.
+pub fn me3_on_path() -> bool {
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    me3_among(&dirs)
+}
+
+/// The search half of [`me3_on_path`], so it can be tested against directories a test makes
+/// rather than against whatever this machine happens to have installed.
+fn me3_among(dirs: &[PathBuf]) -> bool {
+    dirs.iter().any(|dir| {
+        ME3_COMMAND_NAMES
+            .iter()
+            .any(|name| dir.join(name).is_file())
+    })
 }
 
 /// Render a path for an ME3 profile. Windows verbatim prefixes (`\\?\`) come back from
@@ -341,34 +385,71 @@ mod tests {
         dir
     }
 
-    /// The exact string Wine put in `WINEHOMEDIR`, measured on this machine 2026-09-19 with
-    /// `wine cmd /c set`. The prefix is what made the shipped exe unable to find a Proton
-    /// player's library: `HOME` is not in the Windows environment, so this is the only witness
-    /// of the real home, and it arrives as an NT object path rather than a usable one.
+    /// What Explorer's "Copy as path" puts on the clipboard: the path, in double quotes.
+    /// Pasting that straight into `PathBuf` looks for a directory whose name starts with a
+    /// quotation mark, which no machine has.
     #[test]
-    fn wine_spells_the_linux_home_as_an_nt_object_path() {
+    fn a_path_copied_out_of_explorer_keeps_its_spaces_and_loses_its_quotes() {
         assert_eq!(
-            wine_home_dir(Some(r"\??\Z:\home\banon")),
-            Some(PathBuf::from(r"Z:\home\banon"))
+            clean_pasted_path(
+                "\"C:\\Program Files (x86)\\Steam\\steamapps\\common\\ELDEN RING\\Game\""
+            ),
+            Some(PathBuf::from(
+                r"C:\Program Files (x86)\Steam\steamapps\common\ELDEN RING\Game"
+            ))
         );
     }
 
     #[test]
-    fn a_home_without_the_nt_prefix_is_taken_as_it_stands() {
+    fn surrounding_whitespace_and_single_quotes_are_taken_off_too() {
+        let expected = Some(PathBuf::from(
+            r"D:\SteamLibrary\steamapps\common\ELDEN RING\Game",
+        ));
         assert_eq!(
-            wine_home_dir(Some(r"Z:\home\banon")),
-            Some(PathBuf::from(r"Z:\home\banon"))
+            clean_pasted_path("   D:\\SteamLibrary\\steamapps\\common\\ELDEN RING\\Game  \t"),
+            expected
+        );
+        assert_eq!(
+            clean_pasted_path("'D:\\SteamLibrary\\steamapps\\common\\ELDEN RING\\Game'"),
+            expected
+        );
+    }
+
+    /// Told to name the folder holding `eldenring.exe`, a fair number of people will send the
+    /// exe. It names the same place and there is nothing ambiguous to resolve.
+    #[test]
+    fn naming_the_executable_names_the_folder_it_is_in() {
+        assert_eq!(
+            clean_pasted_path(r"C:\Games\ELDEN RING\Game\eldenring.exe"),
+            Some(PathBuf::from(r"C:\Games\ELDEN RING\Game"))
+        );
+        // Case is not significant on Windows and the player is typing, not the shell.
+        assert_eq!(
+            clean_pasted_path("/home/player/ELDEN RING/Game/EldenRing.EXE"),
+            Some(PathBuf::from("/home/player/ELDEN RING/Game"))
         );
     }
 
     #[test]
-    fn an_absent_or_empty_wine_home_is_not_a_root() {
-        assert_eq!(wine_home_dir(None), None);
-        assert_eq!(wine_home_dir(Some("")), None);
-        assert_eq!(wine_home_dir(Some("   ")), None);
-        // The prefix alone names no directory, and joining Steam paths onto it would put two
-        // candidates in the error message that could never have held the game.
-        assert_eq!(wine_home_dir(Some(r"\??\")), None);
+    fn a_quote_inside_the_path_is_left_alone() {
+        // Only a matching outer pair is stripped. A lone leading quote is a typo, and eating
+        // the rest of the path to fix it would send the search somewhere else entirely.
+        assert_eq!(
+            clean_pasted_path("\"C:\\Games\\Game"),
+            Some(PathBuf::from("\"C:\\Games\\Game"))
+        );
+    }
+
+    #[test]
+    fn an_empty_answer_is_not_a_path() {
+        assert_eq!(clean_pasted_path(""), None);
+        assert_eq!(clean_pasted_path("   "), None);
+        assert_eq!(clean_pasted_path("\"\""), None);
+        // The exe with nothing in front of it names no folder, so there is nothing to try.
+        assert_eq!(
+            clean_pasted_path("eldenring.exe"),
+            Some(PathBuf::from("eldenring.exe"))
+        );
     }
 
     #[test]
@@ -424,6 +505,28 @@ mod tests {
             candidates.len() > 2,
             "no fallback locations were offered: {candidates:?}"
         );
+    }
+
+    /// What the prompt needs and `find_game` cannot give it: a yes or no about one directory.
+    /// On a machine that has the game installed, `find_game` answers yes to any path at all,
+    /// because it falls through to the Steam search -- so a wrong answer at the prompt would
+    /// be accepted and the tool would print a folder the player never named.
+    #[test]
+    fn the_prompt_judges_only_the_directory_it_was_given() {
+        let root = temp_dir("gameat");
+        let game = root.join("Game");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(game.join(GAME_EXE), b"stub").unwrap();
+
+        assert!(game_at(&game).is_some(), "the game directory itself");
+        assert!(game_at(&root).is_some(), "the install root above it");
+
+        let nowhere = root.join("nowhere");
+        assert!(
+            game_at(&nowhere).is_none(),
+            "a directory with no game in it"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -641,6 +744,32 @@ mod tests {
             command.contains("-g eldenring") && command.contains("-e "),
             "{command}"
         );
+    }
+
+    #[test]
+    fn me3_is_found_by_the_name_this_system_would_run_it_under() {
+        let dir = temp_dir("me3");
+        let elsewhere = temp_dir("me3-elsewhere");
+        assert!(!me3_among(&[dir.clone(), elsewhere.clone()]));
+
+        fs::write(dir.join(ME3_COMMAND_NAMES[0]), b"stub").unwrap();
+        assert!(me3_among(&[elsewhere.clone(), dir.clone()]));
+        // A directory that is not on the list searched is not searched.
+        assert!(!me3_among(std::slice::from_ref(&elsewhere)));
+        assert!(!me3_among(&[]));
+
+        fs::remove_dir_all(&dir).unwrap();
+        fs::remove_dir_all(&elsewhere).unwrap();
+    }
+
+    #[test]
+    fn a_directory_called_me3_is_not_mistaken_for_the_program() {
+        // `is_file` rather than `exists`: a folder named `me3` on the path would otherwise be
+        // reported as an installed me3, and the player would be told nothing is wrong.
+        let dir = temp_dir("me3-dir");
+        fs::create_dir_all(dir.join(ME3_COMMAND_NAMES[0])).unwrap();
+        assert!(!me3_among(std::slice::from_ref(&dir)));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
