@@ -9,17 +9,19 @@
 //! Desktop row bound to a cloned row's action.
 //!
 //! The cure is the one `er-hook` already applies to detours: elect a single owner for the process
-//! and have everybody else register through it. `er-hook` elects by name, looking up
-//! `er_quickload.dll`'s `er_effects_union_register` export, which works there because one DLL is
-//! always the product. Rows have no such DLL -- a build may carry any subset of them, or none -- so
-//! this elects by arrival order instead: the first caller into [`crate::row_cloner::arm`] publishes
-//! its own `er_quit_rows_register` export into a named shared mapping, and every later caller finds
-//! that address and hands its rows and flows to the owner rather than arming a second cloner.
+//! and have everybody else register through it. `er-hook` used to elect by name, looking up
+//! `er_quickload.dll`'s `er_effects_union_register` export, which held only while one DLL was
+//! always the product; since 2026-09-19 it elects by export walk instead, on this module's own
+//! rule (`er_hook::elect_union_host`) and this module's own walk. Rows still need a second
+//! election because a build may carry any subset of them, or none, and a row host is not
+//! necessarily a hook hub: the first caller into [`crate::row_cloner::arm`] publishes its own
+//! `er_quit_rows_register` export, and every later caller finds that address and hands its rows
+//! and flows to the owner rather than arming a second cloner.
 //!
-//! The mapping is `Local\` scoped, so it is per-session rather than machine wide, and it holds
-//! exactly one `usize`: the owner's registrar address. A failure to create or map it is not fatal --
-//! the caller falls back to owning the table locally, which is the single-DLL behaviour this crate
-//! had before.
+//! The owner is found by walking the loader's module list, not through a shared mapping: see
+//! [`row_hosts`] for the run where a `Local\` section came back per-caller under Proton. A walk
+//! that finds nothing is not fatal -- the caller owns the table locally, which is the single-DLL
+//! behaviour this crate had before.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -44,8 +46,13 @@ const ARMED_EXPORT: &[u8] = b"er_quit_rows_armed\0";
 /// section per caller: run br-20260913-140957-b22b logged both DLLs claiming the table, at mapped
 /// addresses `0x4fca0000` and `0x4f520000`, so each compare-exchange saw a fresh zero. A module walk
 /// asks the loader what is actually in the process and cannot be faked by a name that does not bind.
+///
+/// The walk itself moved to [`er_hook::loaded_module_bases`] on 2026-09-19, when `er-hook` began
+/// electing its own hook-union hub by the same rule this module elects a row owner by. One PEB
+/// walk, read by both elections, rather than a second copy drifting beside the first.
 #[cfg(windows)]
 fn row_hosts() -> Vec<(usize, usize, usize)> {
+    use er_hook::loaded_module_bases;
     use windows::Win32::Foundation::HMODULE;
     use windows::Win32::System::LibraryLoader::GetProcAddress;
     use windows::core::PCSTR;
@@ -66,53 +73,6 @@ fn row_hosts() -> Vec<(usize, usize, usize)> {
     }
     hosts.sort_unstable();
     hosts
-}
-
-/// Module bases from the PEB loader's in-memory-order list.
-///
-/// `EnumProcessModules` would need another `windows` feature and a psapi round trip; the PEB list is
-/// what that call reads anyway, and Wine implements it faithfully because every Windows loader
-/// depends on it.
-#[cfg(windows)]
-fn loaded_module_bases() -> Vec<usize> {
-    #[repr(C)]
-    struct ListEntry {
-        flink: *mut ListEntry,
-        blink: *mut ListEntry,
-    }
-
-    // `InMemoryOrderLinks` sits at +0x10 of `LDR_DATA_TABLE_ENTRY`, and `DllBase` at +0x30, so from
-    // a list entry the base is at +0x20.
-    const DLL_BASE_FROM_IN_MEMORY_ORDER_LINK: usize = 0x20;
-    const PEB_LDR_OFFSET: usize = 0x18;
-    const LDR_IN_MEMORY_ORDER_LIST_OFFSET: usize = 0x20;
-
-    let mut bases = Vec::new();
-    unsafe {
-        let peb: usize;
-        std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb, options(nostack, preserves_flags));
-        if peb == 0 {
-            return bases;
-        }
-        let ldr = *((peb + PEB_LDR_OFFSET) as *const usize);
-        if ldr == 0 {
-            return bases;
-        }
-        let head = (ldr + LDR_IN_MEMORY_ORDER_LIST_OFFSET) as *mut ListEntry;
-        let mut cursor = (*head).flink;
-        // Bounded: a corrupted list must not spin the boot thread forever.
-        for _ in 0..512 {
-            if cursor.is_null() || cursor == head {
-                break;
-            }
-            let base = *((cursor as usize + DLL_BASE_FROM_IN_MEMORY_ORDER_LINK) as *const usize);
-            if base != 0 {
-                bases.push(base);
-            }
-            cursor = (*cursor).flink;
-        }
-    }
-    bases
 }
 
 #[cfg(not(windows))]

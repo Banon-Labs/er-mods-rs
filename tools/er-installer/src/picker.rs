@@ -392,8 +392,14 @@ impl Picker {
 
     /// How many lines the list gets, given the whole screen.
     fn list_height(height: usize) -> usize {
-        // Two for the header, five for the detail pane, one for the key hints.
-        height.saturating_sub(8).max(3)
+        // Two for the header, four for the detail pane, one for the key hints.
+        //
+        // The detail pane is four lines on every path: its rule, then either a label and two
+        // body lines, or three message lines, or three blanks when no row is under the cursor.
+        // This said five until 2026-09-19, so every frame came out a line short of the window --
+        // `the_title_bar_is_the_first_line_of_the_frame` measures the total against the height
+        // rather than trusting the arithmetic in this comment.
+        height.saturating_sub(7).max(3)
     }
 
     /// Draw the whole screen. Pure: same state and size, same string.
@@ -588,8 +594,15 @@ impl Picker {
     /// `q quit` sits early on purpose. The first version listed the hints in the order they
     /// felt natural and put quit last, so at 80 columns -- the width a terminal opens at --
     /// the line truncated and the one key a stuck user needs was the one not shown.
+    /// `j/k` is named beside the arrows rather than left as a hidden alias, because there is a
+    /// terminal where the arrows do not arrive at all. Measured 2026-09-19: running the Windows
+    /// exe under Wine, `SetConsoleMode` accepts `ENABLE_VIRTUAL_TERMINAL_INPUT` and returns
+    /// success, and Wine then does not translate arrow keys into the `esc [ A` bytes
+    /// `tui::decode_escape` waits for. Raw mode is genuinely on -- the screen renders and every
+    /// single-byte key works -- so nothing looks broken except that the cursor will not move, and
+    /// a player with no second way to move it has no way to discover one.
     const HINTS: &'static [&'static str] = &[
-        "up/down move",
+        "up/down or j/k move",
         "space toggle",
         "enter install",
         "q quit",
@@ -752,7 +765,7 @@ pub fn run(picker: &mut Picker) -> io::Result<Option<Vec<&'static Mod>>> {
         let frame = picker.render(width, height);
         tui::paint(&frame)?;
 
-        let Some(key) = tui::decode(&mut stdin) else {
+        let Some(key) = tui::next_key(&mut stdin) else {
             return Ok(None);
         };
         match picker.handle(key, Picker::list_height(height)) {
@@ -889,6 +902,25 @@ mod tests {
 
     fn plain_picker() -> Picker {
         Picker::new().without_colour()
+    }
+
+    /// How many columns a line occupies, ignoring `esc [ ... m` colour sequences, which the
+    /// terminal consumes without moving the cursor.
+    fn visible_columns(line: &str) -> usize {
+        let mut columns = 0;
+        let mut characters = line.chars();
+        while let Some(character) = characters.next() {
+            if character != '\u{1b}' {
+                columns += 1;
+                continue;
+            }
+            for escape in characters.by_ref() {
+                if escape.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        }
+        columns
     }
 
     /// The line this package is drawn as, without hunting for it in a frame -- a label also
@@ -1371,6 +1403,77 @@ mod tests {
                     line.chars().count()
                 );
             }
+        }
+    }
+
+    /// A frame that is taller than the window scrolls the terminal, and the top of the screen is
+    /// gone. It does not go all at once, which is what makes it read as a rendering bug: the
+    /// frame is painted from `esc [ H`, so one row too many costs one row per repaint and the
+    /// header walks off over several keystrokes.
+    ///
+    /// Checked at the size a real player was measured at, 104x76 under Wine, as well as the
+    /// small default, because the overflow depends on how the panes divide a given height.
+    #[test]
+    fn a_frame_never_runs_past_the_window() {
+        for (width, height, coloured) in [
+            (WIDTH, HEIGHT, false),
+            (104, 76, false),
+            // The size a player was measured at, with colour on, which is what a real run does.
+            (104, 76, true),
+            (80, 24, true),
+            (200, 40, true),
+        ] {
+            let mut picker = if coloured {
+                Picker::new()
+            } else {
+                plain_picker()
+            };
+            let list_height = Picker::list_height(height);
+            // Walk the cursor, because the detail pane's height depends on which row is under it
+            // and on whether that row is refused.
+            for _ in 0..CATALOG.len() + 2 {
+                let frame = picker.render(width, height);
+                let lines = frame.lines().count();
+                assert!(
+                    lines <= height,
+                    "a {width}x{height} frame came to {lines} lines, {} too many",
+                    lines - height
+                );
+                // A line wider than the window wraps, and a wrapped line costs a row exactly
+                // like an extra line does -- so the height check above passes while the screen
+                // still scrolls. Both have to hold.
+                for line in frame.lines() {
+                    let columns = visible_columns(line);
+                    assert!(
+                        columns <= width,
+                        "a line ran to {columns} columns at width {width}: {:?}",
+                        line
+                    );
+                }
+                picker.handle(Key::Down, list_height);
+            }
+        }
+    }
+
+    /// The title bar is the first line of the frame, and it stays the first line at every size.
+    /// If the header is missing from a real screen while this passes, the frame was correct and
+    /// the terminal scrolled it away -- which separates a render bug from a paint bug without
+    /// guessing.
+    #[test]
+    fn the_title_bar_is_the_first_line_of_the_frame() {
+        for (width, height) in [(WIDTH, HEIGHT), (104, 76), (80, 24)] {
+            let mut picker = plain_picker();
+            let frame = picker.render(width, height);
+            let first = frame.lines().next().unwrap_or_default();
+            assert!(
+                first.contains("ELDEN RING MODS"),
+                "at {width}x{height} the frame opens on {first:?}"
+            );
+            assert_eq!(
+                frame.lines().count(),
+                height,
+                "at {width}x{height} the frame does not fill the window exactly"
+            );
         }
     }
 

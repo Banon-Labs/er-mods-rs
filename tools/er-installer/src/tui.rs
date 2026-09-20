@@ -40,10 +40,29 @@ pub enum Key {
     Char(char),
 }
 
+/// Read one keypress from whichever source this platform delivers keys on.
+///
+/// Unix decodes bytes from the reader, where an arrow arrives as `esc [ A`. Windows ignores the
+/// reader and takes the console event queue instead, because an arrow puts no byte in the stream
+/// there -- see [`platform::read_key`]. Both return the same [`Key`], so the picker above this is
+/// one code path.
+pub fn next_key<R: Read>(reader: &mut R) -> Option<Key> {
+    #[cfg(windows)]
+    {
+        let _ = reader;
+        platform::read_key()
+    }
+    #[cfg(not(windows))]
+    {
+        decode(reader)
+    }
+}
+
 /// Decode one keypress from a byte reader, or `None` at end of input.
 ///
 /// Escape sequences are read greedily: an `esc` that is not followed by `[` or `O` is the
 /// escape key itself, which is why this takes the reader rather than a buffer.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn decode<R: Read>(reader: &mut R) -> Option<Key> {
     let first = read_byte(reader)?;
     match first {
@@ -57,6 +76,7 @@ pub fn decode<R: Read>(reader: &mut R) -> Option<Key> {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn decode_escape<R: Read>(reader: &mut R) -> Option<Key> {
     let Some(second) = read_byte(reader) else {
         return Some(Key::Escape);
@@ -98,6 +118,7 @@ fn decode_escape<R: Read>(reader: &mut R) -> Option<Key> {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn read_byte<R: Read>(reader: &mut R) -> Option<u8> {
     let mut byte = [0u8; 1];
     match reader.read(&mut byte) {
@@ -127,21 +148,33 @@ impl RawMode {
     /// have it, which the caller treats as "use the line-based picker".
     pub fn enter() -> Option<Self> {
         let restore = platform::enter_raw()?;
-        let mut out = io::stdout();
-        // Alternate screen, then hide the cursor: the picker draws its own.
-        let _ = out.write_all(b"\x1b[?1049h\x1b[?25l");
-        let _ = out.flush();
+        if escape_sequences_work() {
+            let mut out = io::stdout();
+            // Alternate screen, then hide the cursor: the picker draws its own.
+            let _ = out.write_all(b"\x1b[?1049h\x1b[?25l");
+            let _ = out.flush();
+        }
         Some(Self(restore))
     }
 }
 
 impl Drop for RawMode {
     fn drop(&mut self) {
-        let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[?25h\x1b[?1049l");
-        let _ = out.flush();
+        if escape_sequences_work() {
+            let mut out = io::stdout();
+            let _ = out.write_all(b"\x1b[?25h\x1b[?1049l");
+            let _ = out.flush();
+        }
         platform::leave_raw(&self.0);
     }
+}
+
+/// Whether the terminal reads the escape sequences this module writes, or stores them as text.
+///
+/// Only meaningful once [`RawMode::enter`] has run, because on Windows the answer is measured
+/// there and depends on the output mode it sets.
+pub fn escape_sequences_work() -> bool {
+    platform::escape_sequences_work()
 }
 
 /// Paint a whole frame: home the cursor, write it, clear whatever the last frame left below.
@@ -149,17 +182,93 @@ impl Drop for RawMode {
 /// Redrawing this way rather than clearing first is what stops the screen flickering -- a
 /// clear-then-draw leaves the terminal briefly empty and every frame blinks.
 pub fn paint(frame: &str) -> io::Result<()> {
-    let mut out = io::stdout();
+    let (width, _) = size();
     let mut buffer = String::with_capacity(frame.len() + 64);
-    buffer.push_str("\x1b[H");
-    for line in frame.lines() {
+    platform::home_cursor(&mut buffer);
+    let mut lines = frame.lines().peekable();
+    while let Some(line) = lines.next() {
         buffer.push_str(line);
-        // Clear to end of line, so a shorter line does not leave the last frame's tail behind.
-        buffer.push_str("\x1b[K\r\n");
+        // Pad to the window width rather than clearing to end of line with `esc [ K`, for the
+        // same reason: padding is plain text, and a shorter line still wipes the tail the last
+        // frame left on that row.
+        let drawn = visible_columns(line);
+        if drawn < width {
+            buffer.extend(std::iter::repeat_n(' ', width - drawn));
+        }
+        // No newline after the last line. A frame is rendered to exactly the window height, so a
+        // newline after its final row puts the cursor below the last one and the terminal scrolls
+        // to make room.
+        //
+        // On its own this did not stop the header disappearing under Wine, and for a while the
+        // comment here claimed it had. What actually scrolls that console is in
+        // [`platform::home_cursor`]: it does not interpret `esc [ H`, so it believed the cursor
+        // was walking down the buffer no matter what the frame contained.
+        if lines.peek().is_some() {
+            buffer.push_str("\r\n");
+        }
     }
-    buffer.push_str("\x1b[J");
-    out.write_all(buffer.as_bytes())?;
-    out.flush()
+    // No `esc [ J` to clear below: every row of the window is painted and padded, so there is
+    // nothing left over to clear, and one fewer sequence for a console to rewrite.
+    platform::write_frame(&buffer)
+}
+
+/// The bit a console sets for a bright foreground, which is what bold means to one.
+const FOREGROUND_INTENSITY: u16 = 0x0008;
+
+/// Turn the parameters of one `esc [ ... m` into console attribute bits.
+///
+/// Only what the picker emits is handled: reset, bold, dim, reverse, and the eight foreground
+/// colours. The colour index is the one place the two systems disagree on bit order -- a terminal
+/// counts red, green, blue up from the low bit and a console counts blue, green, red -- so `32` is
+/// green either way and `36` would come out red without the swap.
+///
+/// This lives out here rather than beside its one caller so it can be tested on either system.
+/// The console call it feeds cannot be, and the arithmetic is where a mistake would hide.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn apply_colour(parameters: &str, default: u16, current: u16) -> u16 {
+    let mut attributes = current;
+    for parameter in parameters.split(';') {
+        match parameter {
+            "" | "0" => attributes = default,
+            "1" => attributes |= FOREGROUND_INTENSITY,
+            "2" => attributes &= !FOREGROUND_INTENSITY,
+            "7" => attributes = ((attributes & 0x0f) << 4) | ((attributes & 0xf0) >> 4),
+            _ => {
+                let Some(index) = parameter
+                    .strip_prefix('3')
+                    // One digit, so a longer number is not read as its last digit -- `300` is not
+                    // a colour and must not come out as black.
+                    .filter(|digit| digit.len() == 1)
+                    .and_then(|digit| digit.parse::<u16>().ok())
+                    .filter(|index| *index <= 7)
+                else {
+                    continue;
+                };
+                let swapped = (index & 1) << 2 | (index & 2) | (index & 4) >> 2;
+                attributes = (attributes & !0x07) | swapped;
+            }
+        }
+    }
+    attributes
+}
+
+/// How many columns a string occupies, ignoring the `esc [ ... m` colour sequences in it, which
+/// a terminal consumes without moving the cursor.
+fn visible_columns(line: &str) -> usize {
+    let mut columns = 0;
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            columns += 1;
+            continue;
+        }
+        for escape in characters.by_ref() {
+            if escape.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    columns
 }
 
 #[cfg(unix)]
@@ -201,6 +310,26 @@ mod platform {
         let _ = stty(&[&restore.0]);
     }
 
+    /// Home the cursor. A Unix terminal is driven entirely by sequences, so this is one.
+    pub fn home_cursor(buffer: &mut String) {
+        buffer.push_str("\x1b[H");
+    }
+
+    /// Always, here. A terminal that reaches this code path speaks them by definition -- there is
+    /// no other way to drive it. The Windows side has to measure the answer.
+    pub fn escape_sequences_work() -> bool {
+        true
+    }
+
+    /// Write a built frame. The sequences in it are the terminal's own language, so it goes out
+    /// as it stands.
+    pub fn write_frame(text: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        out.write_all(text.as_bytes())?;
+        out.flush()
+    }
+
     pub fn size() -> Option<(usize, usize)> {
         let reported = stty(&["size"])?;
         let mut parts = reported.split_whitespace();
@@ -212,6 +341,9 @@ mod platform {
 
 #[cfg(windows)]
 mod platform {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
+
     // Declared here rather than taken from the `windows` crate: four functions and two
     // constants do not justify a dependency in a binary whose selling point is having none.
     #[link(name = "kernel32")]
@@ -220,6 +352,131 @@ mod platform {
         fn GetConsoleMode(handle: isize, mode: *mut u32) -> i32;
         fn SetConsoleMode(handle: isize, mode: u32) -> i32;
         fn GetConsoleScreenBufferInfo(handle: isize, info: *mut ScreenBufferInfo) -> i32;
+        fn SetConsoleCursorPosition(handle: isize, position: Coord) -> i32;
+        fn SetConsoleTextAttribute(handle: isize, attributes: u16) -> i32;
+        fn GetConsoleCursorInfo(handle: isize, info: *mut ConsoleCursorInfo) -> i32;
+        fn SetConsoleCursorInfo(handle: isize, info: *const ConsoleCursorInfo) -> i32;
+        fn ReadConsoleInputW(handle: isize, buffer: *mut u8, len: u32, read: *mut u32) -> i32;
+    }
+
+    /// Home the cursor the way this console can actually be homed.
+    ///
+    /// A console that interprets the escape sequences gets `esc [ H`, which is also what a real
+    /// terminal at the far end of a pipe reads. One that does not gets the API call, because the
+    /// sequence would otherwise be three characters printed into the frame -- see
+    /// [`escape_sequences_work`] for how that is told apart, and what it costs to get wrong.
+    pub fn home_cursor(buffer: &mut String) {
+        if escape_sequences_work() {
+            buffer.push_str("\x1b[H");
+            return;
+        }
+        if let Some(output) = handle(STD_OUTPUT_HANDLE) {
+            unsafe { SetConsoleCursorPosition(output, Coord { x: 0, y: 0 }) };
+        }
+    }
+
+    /// Whether this console interprets the escape sequences, measured rather than assumed.
+    ///
+    /// # What goes wrong when it is assumed
+    ///
+    /// Windows 10 and later interpret them once `ENABLE_VIRTUAL_TERMINAL_PROCESSING` is set, and
+    /// the console Wine gives a Linux player accepts that flag and does not implement it. There is
+    /// no version to ask and no error to catch: `SetConsoleMode` returns success, the mode reads
+    /// back with the bit set, and every sequence the picker writes is then stored as ordinary
+    /// characters.
+    ///
+    /// Measured 2026-09-19 under Wine at 209x75, reading `GetConsoleScreenBufferInfo` back after
+    /// each write: `esc [ H` left the cursor three columns further along instead of at the origin,
+    /// one column per byte of the sequence. The console had also counted those three columns
+    /// against the row, so a window-height frame walked its cursor to the bottom of the buffer and
+    /// the console scrolled to make room -- which is the picker's header going missing, emitted by
+    /// the console rather than asked for by the painter. That is why nothing in the frame could
+    /// account for it, and why every fix aimed at the frame failed.
+    ///
+    /// The test is the same measurement: put the cursor at the origin through the API, write
+    /// `esc [ H`, and ask where it is. Still at the origin means the sequence was read. Three
+    /// columns along means it was stored.
+    pub fn escape_sequences_work() -> bool {
+        ESCAPE_SEQUENCES_WORK.load(Ordering::Relaxed)
+    }
+
+    static ESCAPE_SEQUENCES_WORK: AtomicBool = AtomicBool::new(false);
+
+    /// The attributes the console had before the picker started, which is what `esc [ 0 m` means
+    /// on the path that has to reproduce colour through the API.
+    static DEFAULT_ATTRIBUTES: AtomicU16 = AtomicU16::new(0x07);
+
+    /// Write a built frame, in whichever language this console understands.
+    ///
+    /// A console that reads the escape sequences gets the frame as it stands. One that stores
+    /// them as characters gets the same frame with every `esc [ ... m` taken out of the text and
+    /// applied through `SetConsoleTextAttribute` instead, so a Linux player running the exe under
+    /// Wine sees the same colours rather than a screen full of bracket codes.
+    pub fn write_frame(text: &str) -> std::io::Result<()> {
+        let mut out = std::io::stdout();
+        if escape_sequences_work() {
+            out.write_all(text.as_bytes())?;
+            return out.flush();
+        }
+
+        let console = handle(STD_OUTPUT_HANDLE);
+        let default = DEFAULT_ATTRIBUTES.load(Ordering::Relaxed);
+        let mut attributes = default;
+        let mut rest = text;
+        while let Some(escape) = rest.find('\x1b') {
+            let (plain, tail) = rest.split_at(escape);
+            write_run(&mut out, console, attributes, plain)?;
+            // `esc [ <parameters> <letter>`. The picker emits nothing but colour, so a sequence
+            // ending in anything other than `m` is dropped whole rather than guessed at.
+            let after = &tail[1..];
+            let Some(end) = after.find(|character: char| character.is_ascii_alphabetic()) else {
+                rest = "";
+                break;
+            };
+            if after.as_bytes()[end] == b'm' {
+                let parameters = after[..end].trim_start_matches('[');
+                attributes = super::apply_colour(parameters, default, attributes);
+            }
+            rest = &after[end + 1..];
+        }
+        write_run(&mut out, console, attributes, rest)?;
+        if let Some(console) = console {
+            unsafe { SetConsoleTextAttribute(console, default) };
+        }
+        out.flush()
+    }
+
+    /// One stretch of text under one attribute. Flushed before the next attribute is set, because
+    /// the attribute applies from the moment it is set and buffered text would land under it.
+    fn write_run(
+        out: &mut std::io::Stdout,
+        console: Option<isize>,
+        attributes: u16,
+        text: &str,
+    ) -> std::io::Result<()> {
+        if text.is_empty() {
+            return Ok(());
+        }
+        if let Some(console) = console {
+            out.flush()?;
+            unsafe { SetConsoleTextAttribute(console, attributes) };
+        }
+        out.write_all(text.as_bytes())
+    }
+
+    /// Run the measurement above and remember it. Called once, from [`enter_raw`], because the
+    /// answer is only meaningful after the output mode has asked for the sequences.
+    fn measure_escape_sequences(output: isize) {
+        let mut info = ScreenBufferInfo::default();
+        unsafe { SetConsoleCursorPosition(output, Coord { x: 0, y: 0 }) };
+        let mut out = std::io::stdout();
+        let _ = out.write_all(b"\x1b[H");
+        let _ = out.flush();
+        if unsafe { GetConsoleScreenBufferInfo(output, &raw mut info) } == 0 {
+            return;
+        }
+        let stored_as_characters = info.cursor_position.x == 3 && info.cursor_position.y == 0;
+        ESCAPE_SEQUENCES_WORK.store(!stored_as_characters, Ordering::Relaxed);
     }
 
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
@@ -229,6 +486,8 @@ mod platform {
     const ENABLE_ECHO_INPUT: u32 = 0x0004;
     const ENABLE_VIRTUAL_TERMINAL_INPUT: u32 = 0x0200;
     const ENABLE_VIRTUAL_TERMINAL_PROCESSING: u32 = 0x0004;
+    const ENABLE_WRAP_AT_EOL_OUTPUT: u32 = 0x0002;
+
     const INVALID_HANDLE_VALUE: isize = -1;
 
     #[repr(C)]
@@ -261,6 +520,16 @@ mod platform {
     pub struct Restore {
         input: u32,
         output: u32,
+        cursor: ConsoleCursorInfo,
+    }
+
+    /// `CONSOLE_CURSOR_INFO`: how tall the cursor is drawn, as a percentage of the cell, and
+    /// whether it is drawn at all.
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct ConsoleCursorInfo {
+        size: u32,
+        visible: i32,
     }
 
     fn handle(id: u32) -> Option<isize> {
@@ -285,7 +554,15 @@ mod platform {
         let raw_input = (saved_input
             & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT))
             | ENABLE_VIRTUAL_TERMINAL_INPUT;
-        let ansi_output = saved_output | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        // Wrap at end of line off, because the picker pads every row to the full window width and
+        // with wrapping on the character in the last column advances the cursor to the next row by
+        // itself -- the `\r\n` that follows then advances it a second time, so a frame consumes
+        // twice its own height and the console scrolls under it. Measured 2026-09-19 at 209x75:
+        // 209 columns moved the cursor from `y=0` to `y=1` before a newline was written at all,
+        // and with the flag cleared the row stayed put and the padding past the margin was
+        // discarded, which is what a full-screen frame wants.
+        let ansi_output =
+            (saved_output | ENABLE_VIRTUAL_TERMINAL_PROCESSING) & !ENABLE_WRAP_AT_EOL_OUTPUT;
         if unsafe { SetConsoleMode(input, raw_input) } == 0 {
             return None;
         }
@@ -293,9 +570,30 @@ mod platform {
             unsafe { SetConsoleMode(input, saved_input) };
             return None;
         }
+        let mut info = ScreenBufferInfo::default();
+        if unsafe { GetConsoleScreenBufferInfo(output, &raw mut info) } != 0 {
+            DEFAULT_ATTRIBUTES.store(info.attributes, Ordering::Relaxed);
+        }
+        measure_escape_sequences(output);
+
+        // Hide the cursor through the API rather than with `esc [ ? 25 l`, on a console that would
+        // print that sequence instead of reading it. It is the block the picker leaves parked at
+        // the end of the last row it painted, and it moves on every keypress because every
+        // keypress repaints.
+        let mut cursor = ConsoleCursorInfo::default();
+        if !escape_sequences_work() && unsafe { GetConsoleCursorInfo(output, &raw mut cursor) } != 0
+        {
+            let hidden = ConsoleCursorInfo {
+                size: cursor.size.max(1),
+                visible: 0,
+            };
+            unsafe { SetConsoleCursorInfo(output, &raw const hidden) };
+        }
+
         Some(Restore {
             input: saved_input,
             output: saved_output,
+            cursor,
         })
     }
 
@@ -305,6 +603,83 @@ mod platform {
         }
         if let Some(output) = handle(STD_OUTPUT_HANDLE) {
             unsafe { SetConsoleMode(output, restore.output) };
+            unsafe { SetConsoleTextAttribute(output, DEFAULT_ATTRIBUTES.load(Ordering::Relaxed)) };
+            // A zero size means nothing was captured, so there is nothing to put back.
+            if restore.cursor.size > 0 {
+                unsafe { SetConsoleCursorInfo(output, &raw const restore.cursor) };
+            }
+        }
+    }
+
+    /// `INPUT_RECORD` on x86-64: a `WORD` event type, two bytes of padding, then the union whose
+    /// `KEY_EVENT_RECORD` arm is `BOOL` down, `WORD` repeat, `WORD` virtual key, `WORD` scan,
+    /// `WCHAR` char, `DWORD` control state. Twenty bytes, read at fixed offsets rather than
+    /// declared as a Rust union, because only three fields are wanted.
+    const INPUT_RECORD_BYTES: usize = 20;
+    const KEY_EVENT: u16 = 0x0001;
+
+    /// Block until the console reports a key, and return it.
+    ///
+    /// # Why this exists rather than reading bytes from stdin
+    ///
+    /// Reading stdin and decoding `esc [ A` is what the Unix side does, and on Windows it loses
+    /// every arrow key. Measured 2026-09-19 against the exe running under Wine: a picker that
+    /// rendered correctly, with raw mode genuinely on and every printable key working, would not
+    /// move its cursor, because an arrow puts no byte in the stream. The same keys arrive here
+    /// intact -- `VK_UP` (`0x26`) and `VK_DOWN` (`0x28`) as clean down/up pairs -- so the console
+    /// queue is where a Windows build has to read from.
+    ///
+    /// Never mix the two on one thread. A loop that polls the event queue and otherwise blocks in
+    /// a stdin read will block forever on the first arrow: no byte arrives to release the read, so
+    /// nothing ever drains the queue the key went into. That mistake is what made an earlier probe
+    /// report arrows as undeliverable when Wine was delivering them.
+    pub fn read_key() -> Option<crate::tui::Key> {
+        use crate::tui::Key;
+
+        let input = handle(STD_INPUT_HANDLE)?;
+        loop {
+            let mut record = [0u8; INPUT_RECORD_BYTES];
+            let mut read = 0u32;
+            if unsafe { ReadConsoleInputW(input, record.as_mut_ptr(), 1, &raw mut read) } == 0 {
+                return None;
+            }
+            if read != 1 || u16::from_le_bytes([record[0], record[1]]) != KEY_EVENT {
+                continue;
+            }
+            // Key-up is skipped: every key reports both edges, and acting on both would move the
+            // cursor two rows per press.
+            let down = u32::from_le_bytes([record[4], record[5], record[6], record[7]]) != 0;
+            if !down {
+                continue;
+            }
+            let virtual_key = u16::from_le_bytes([record[10], record[11]]);
+            let character = u16::from_le_bytes([record[14], record[15]]);
+
+            let key = match virtual_key {
+                0x26 => Key::Up,
+                0x28 => Key::Down,
+                0x25 => Key::Left,
+                0x27 => Key::Right,
+                0x21 => Key::PageUp,
+                0x22 => Key::PageDown,
+                0x24 => Key::Home,
+                0x23 => Key::End,
+                0x0d => Key::Enter,
+                0x20 => Key::Space,
+                0x1b => Key::Escape,
+                // A modifier reports a key event with no character, and `char::from_u32(0)` is
+                // `Some('\0')`, so the zero has to be rejected before the conversion rather than
+                // after it -- otherwise holding shift feeds the picker a null character.
+                _ => match character {
+                    0 => continue,
+                    0x03 => Key::Interrupt,
+                    other => match char::from_u32(u32::from(other)) {
+                        Some(found) => Key::Char(found),
+                        None => continue,
+                    },
+                },
+            };
+            return Some(key);
         }
     }
 
@@ -399,6 +774,59 @@ mod tests {
         assert!(buffer.starts_with("\x1b[H"));
         assert_eq!(buffer.matches("\x1b[K").count(), 2);
         assert!(buffer.ends_with("\x1b[J"));
+    }
+
+    /// The attributes a console starts with: grey on black, the default the picker resets to.
+    const GREY: u16 = 0x07;
+
+    #[test]
+    fn bold_and_dim_move_the_brightness_bit() {
+        assert_eq!(apply_colour("1", GREY, GREY), 0x0f);
+        assert_eq!(apply_colour("2", GREY, 0x0f), GREY);
+    }
+
+    #[test]
+    fn reverse_video_swaps_the_two_halves_of_the_attribute() {
+        // Grey on black becomes black on grey, which is what the cursor row is drawn with.
+        assert_eq!(apply_colour("7", GREY, GREY), 0x70);
+        // And it is its own inverse, so a reset is not the only way back.
+        assert_eq!(apply_colour("7", GREY, 0x70), GREY);
+    }
+
+    #[test]
+    fn the_colour_index_is_swapped_for_a_console() {
+        // A terminal counts red, green, blue up from the low bit; a console counts blue, green,
+        // red. Green is bit one in both and cyan is where the two orders visibly disagree.
+        assert_eq!(apply_colour("32", GREY, GREY) & 0x07, 0x02);
+        assert_eq!(apply_colour("36", GREY, GREY) & 0x07, 0x03);
+        assert_eq!(apply_colour("31", GREY, GREY) & 0x07, 0x04);
+        assert_eq!(apply_colour("34", GREY, GREY) & 0x07, 0x01);
+        assert_eq!(apply_colour("33", GREY, GREY) & 0x07, 0x06);
+    }
+
+    #[test]
+    fn a_reset_goes_back_to_what_the_console_started_with() {
+        assert_eq!(apply_colour("0", GREY, 0x70), GREY);
+        // `esc [ m` with no parameters is a reset too.
+        assert_eq!(apply_colour("", GREY, 0x70), GREY);
+    }
+
+    #[test]
+    fn several_parameters_apply_in_order() {
+        // The section headers are written as `esc [ 1 ; 36 m` -- bright cyan, not one or other.
+        assert_eq!(apply_colour("1;36", GREY, GREY), 0x0b);
+        // And the greyed-out cursor row as `esc [ 2 ; 7 m`.
+        assert_eq!(apply_colour("2;7", GREY, GREY), 0x70);
+    }
+
+    #[test]
+    fn a_parameter_that_is_not_understood_changes_nothing() {
+        // Underline, a background colour, and a nonsense number all leave the attribute alone
+        // rather than turning into a colour by accident.
+        assert_eq!(apply_colour("4", GREY, GREY), GREY);
+        assert_eq!(apply_colour("42", GREY, GREY), GREY);
+        assert_eq!(apply_colour("39", GREY, GREY), GREY);
+        assert_eq!(apply_colour("300", GREY, GREY), GREY);
     }
 
     #[test]

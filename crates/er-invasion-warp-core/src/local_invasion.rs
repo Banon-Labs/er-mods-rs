@@ -154,25 +154,11 @@ pub struct LocalInvasionConfig {
     /// stay silent, because Seamless retries roughly every 20 seconds and the same wrong place
     /// recurs constantly.
     pub reject_notice: bool,
-    /// Inject invasion pins into the world map.
-    ///
-    /// On by default -- the pins are the feature. It is configurable because the map path is the
-    /// crate's largest interaction with live engine memory (it appends 467 rows into the
-    /// `WorldMapViewModel`'s row buffer from that object's own constructor), and until this key
-    /// existed there was no way to run the DLL without that surgery. That made a whole class of
-    /// question unanswerable: a fault that follows opening the map could not be attributed,
-    /// because the only A/B available was "this DLL or no DLL", which changes nine other things
-    /// at the same time.
-    ///
-    /// Turning it off withholds the `WorldMapViewModel` constructor observer and the world-map
-    /// GFx hook. Everything else -- the local-invasion filter, the warp keys, the lobby pool --
-    /// is untouched, so the two halves of the A/B differ by the map path and nothing else.
-    pub map_pins: bool,
     /// Install the three Steam-matchmaking detours.
     ///
     /// On by default -- location publishing, hunt mode and the pool filter all need them. It is
-    /// configurable for the same reason as [`Self::map_pins`]: these are the only detours this
-    /// crate installs at addresses it did not derive statically. Each is read out of a live
+    /// configurable because these are the only detours this crate installs at addresses it did
+    /// not derive statically. Each is read out of a live
     /// `ISteamMatchmaking` vtable slot at runtime and handed straight to MinHook, and the
     /// installers retry every tick until a read succeeds, so whatever the slot happens to hold at
     /// that instant becomes a five-byte patch target inside `steamclient64.dll`.
@@ -191,9 +177,10 @@ pub struct LocalInvasionConfig {
     /// inside `ersc.dll`, and they were the only always-on hooks on the stack of the
     /// `0x140010043` illegal-instruction crash: the fault's frames read
     /// `ersc.dll -> er_invasion_warp -> ersc.dll -> lsteamclient.dll`, and it did not reproduce at
-    /// all in a run with this DLL excluded while the player completed a whole invasion. `map_pins`
-    /// and `steam_hooks` have each already been A/B'd off with the crash still present, so this is
-    /// what is left to isolate.
+    /// all in a run with this DLL excluded while the player completed a whole invasion. The map
+    /// path and `steam_hooks` have each already been A/B'd off with the crash still present, so
+    /// this is what is left to isolate. The map half is no longer A/B'd from here: its switch
+    /// moved into the game's own Map Functions menu, so excluding it now means excluding the DLL.
     ///
     /// Worth knowing while that A/B is open: both are installed through
     /// `er_hook::register_union_hook`, the entry point for a 1.16.2 game constant, even though
@@ -288,8 +275,6 @@ impl Default for LocalInvasionConfig {
             dll_users_only: false,
             // OFF: a notification nobody asked for is spam.
             reject_notice: false,
-            // ON: the pins are the point of the world-map half of this DLL.
-            map_pins: true,
             // ON: location publishing and hunt mode both need these detours.
             steam_hooks: true,
             // Off by default, on measured evidence rather than caution. These two detours are the

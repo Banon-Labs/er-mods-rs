@@ -758,11 +758,14 @@ fn hook_failed(target: usize, handler_addr: usize, status: MH_STATUS, what: &str
 // GFx swap it owns went silently vanilla, while the same build loaded alone reported 113 hits
 // (bd armament-icons-and-product-share-scaleform-fileopen-rva-2026-08-23).
 //
-// The product DLL publishes its union as the `er_effects_union_register` C export, so the fix is
-// for every other DLL to register through that export instead of its own instance -- one MinHook
+// A hub DLL publishes its union as the `er_effects_union_register` C export, so the fix is for
+// every other DLL to register through that export instead of its own instance -- one MinHook
 // instance owns the prologue and both handlers chain. [`register_shared_hook`] is that call: it
-// uses the product's union when the product is in the process and this DLL's own union when it is
-// not, so a standalone run of the companion behaves exactly as before.
+// uses the hub's union when one is in the process and this DLL's own union when none is, so a
+// standalone run of the companion behaves exactly as before.
+//
+// Which module is the hub was `er_quickload.dll` by name until 2026-09-19 and is now elected from
+// the exports themselves; [`elect_union_host`] carries the measurement that forced the change.
 // ============================================================================
 
 /// C-ABI shape of the product DLL's `er_effects_union_register` export
@@ -793,13 +796,22 @@ pub type UnionRegister5Fn = unsafe extern "system" fn(usize, UnionFn5, *mut usiz
 /// may be about to lose a trampoline race".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookRoute {
-    /// Chained into `er_quickload.dll`'s single union -- the product is co-loaded.
+    /// Chained into another image's single union -- some other loaded module is the hub.
+    ///
+    /// The name predates the election below, when the hub could only ever be `er_quickload.dll`.
+    /// Ten crates match on this variant, so it kept its spelling; read it as "the hub's union",
+    /// which on a profile carrying the product is still the product's.
     ProductUnion,
-    /// This DLL's own union -- the product is absent, or this is the product.
+    /// This DLL's own union -- no other module exports a registrar, or this DLL is the hub.
     LocalUnion,
 }
 
 /// The product DLL as me3 loads it, matched by base name rather than by path.
+///
+/// Probed first and unconditionally by [`resolve_union_register_export`], ahead of the election
+/// that follows it, because users install these DLLs one at a time from separate releases: an
+/// already-downloaded companion built against the name-only behaviour must keep working beside a
+/// freshly built product.
 #[cfg(windows)]
 const PRODUCT_DLL_NAME: &[u8] = b"er_quickload.dll\0";
 // Deliberately still `er_effects_`, after the 2026-08-26 rename of the crate to `er-quickload`
@@ -838,14 +850,195 @@ unsafe extern "system" {
     fn Sleep(ms: u32);
 }
 
-/// Resolve the product DLL's `er_effects_union_register` export, polling `tries` times at
-/// `sleep_ms` intervals. `None` means the product is not in this process (a standalone companion
-/// run) or this DLL *is* the product -- in both cases the caller owns the address itself.
+// ============================================================================
+// electing the hub instead of naming it (2026-09-19).
+//
+// The resolver below used to ask the loader one question -- is `er_quickload.dll` mapped -- and
+// treat the answer as the whole of it. That made a file name an undeclared ABI, and it was already
+// wrong for a shipped pair. With `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and
+// no product, `er-quit-rows` does export `er_effects_union_register` (it carries a copy of the
+// product's `mh.rs`), the companion looked only for the product, and both took their own MinHook
+// instance on `TITLE_SCALEFORM_FILE_OPEN_RVA` -- the 2026-08-23 configuration that reported
+// `file_open_observer_installed = true` beside `file_open_hits = 0` for a whole session.
+//
+// So the question is now about exports rather than about a name. Every loaded module is asked for
+// the registrar, and among the ones that answer, the lowest load base wins. The rule is
+// `er_quit_menu_core::row_registry::elect`'s, reused here for the property that makes it work
+// there: every image walks the same loader list and reaches the same winner, so the decision needs
+// no shared state, no named kernel object and no convention about load order.
+//
+// A module list is a snapshot rather than something an image can subscribe to, so two hub-capable
+// shells arriving on either side of one poll could each conclude it is the lowest base present.
+// The retry budget is what keeps that race theoretical: me3 maps every native in a profile within
+// a few milliseconds of each other, and the budget is a second. It is also why the election is
+// consulted inside the poll loop rather than once before it.
+// ============================================================================
+
+/// One module the election considers: where the loader put it, and whether it carries the
+/// registrar export being resolved.
+///
+/// Split out from the walk so [`elect_union_host`] is a pure function over a list and can be
+/// tested on the host, where there is no loader list to read and no module to export anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnionCandidate {
+    /// The module's load base, as the loader reports it.
+    pub base: usize,
+    /// Whether this module answers `GetProcAddress` for the registrar being resolved.
+    ///
+    /// Each arity is elected on its own export, so a hub that predates
+    /// `er_effects_union_register5` is simply not a candidate for the five-argument path -- which
+    /// is the whole reason the arity lives in the export name, see [`UnionRegister5Fn`].
+    pub exports_registrar: bool,
+}
+
+/// Which module owns the process's union for one registrar, from the candidate list alone.
+///
+/// `Some(base)` is another image to register through. `None` says this image owns the address
+/// itself, and it covers two facts at once on purpose: nothing in the process exports the
+/// registrar, or this image is the elected hub. Both end on the local union, and the module list
+/// cannot tell a caller more than that.
+///
+/// Self-exclusion is the `winner != self_base` clause rather than a filter over the input, and the
+/// difference is load-bearing. Dropping this image from the candidates would make the lowest-based
+/// hub elect the second-lowest while that one elected it back, so each would file its handlers in
+/// the other's table: two MinHook instances on one prologue, which is the failure this path exists
+/// to remove.
+pub fn elect_union_host(candidates: &[UnionCandidate], self_base: usize) -> Option<usize> {
+    let winner = candidates
+        .iter()
+        .filter(|candidate| candidate.exports_registrar)
+        .map(|candidate| candidate.base)
+        .min()?;
+    (winner != self_base).then_some(winner)
+}
+
+/// Module bases from the PEB loader's in-memory-order list.
+///
+/// Lifted out of `er_quit_menu_core::row_registry`, which walks the same list to elect an owner
+/// for the Quit row table and now calls this instead of keeping a second copy of the walk.
+/// `EnumProcessModules` would need another `windows` feature and a psapi round trip; the PEB list
+/// is what that call reads anyway, and Wine implements it faithfully because every Windows loader
+/// depends on it.
+///
+/// That row election first published its owner through a `Local\` file mapping, and under Proton
+/// that silently produced a separate section per caller: run br-20260913-140957-b22b logged both
+/// DLLs claiming the table, at mapped addresses `0x4fca0000` and `0x4f520000`, so each
+/// compare-exchange saw a fresh zero. A module walk asks the loader what is actually in the
+/// process and cannot be faked by a name that does not bind.
+#[cfg(windows)]
+pub fn loaded_module_bases() -> Vec<usize> {
+    #[repr(C)]
+    struct ListEntry {
+        flink: *mut ListEntry,
+        blink: *mut ListEntry,
+    }
+
+    // `InMemoryOrderLinks` sits at +0x10 of `LDR_DATA_TABLE_ENTRY`, and `DllBase` at +0x30, so from
+    // a list entry the base is at +0x20.
+    const DLL_BASE_FROM_IN_MEMORY_ORDER_LINK: usize = 0x20;
+    const PEB_LDR_OFFSET: usize = 0x18;
+    const LDR_IN_MEMORY_ORDER_LIST_OFFSET: usize = 0x20;
+
+    let mut bases = Vec::new();
+    unsafe {
+        let peb: usize;
+        std::arch::asm!("mov {}, gs:[0x60]", out(reg) peb, options(nostack, preserves_flags));
+        if peb == 0 {
+            return bases;
+        }
+        let ldr = *((peb + PEB_LDR_OFFSET) as *const usize);
+        if ldr == 0 {
+            return bases;
+        }
+        let head = (ldr + LDR_IN_MEMORY_ORDER_LIST_OFFSET) as *mut ListEntry;
+        let mut cursor = (*head).flink;
+        // Bounded: a corrupted list must not spin the boot thread forever.
+        for _ in 0..512 {
+            if cursor.is_null() || cursor == head {
+                break;
+            }
+            let base = *((cursor as usize + DLL_BASE_FROM_IN_MEMORY_ORDER_LINK) as *const usize);
+            if base != 0 {
+                bases.push(base);
+            }
+            cursor = (*cursor).flink;
+        }
+    }
+    bases
+}
+
+/// Host builds have no loader list to walk. The election rule is exercised directly instead, over
+/// candidate lists the tests write out by hand.
+#[cfg(not(windows))]
+pub fn loaded_module_bases() -> Vec<usize> {
+    Vec::new()
+}
+
+/// Every loaded module, paired with whether it exports `name`.
+#[cfg(windows)]
+fn union_candidates(name: &[u8]) -> Vec<UnionCandidate> {
+    loaded_module_bases()
+        .into_iter()
+        .map(|base| UnionCandidate {
+            base,
+            // A module handle is its load base on Windows, so the walk's output is already what
+            // `GetProcAddress` wants.
+            exports_registrar: !unsafe { GetProcAddress(base as *mut c_void, name.as_ptr()) }
+                .is_null(),
+        })
+        .collect()
+}
+
+/// What the named `er_quickload.dll` probe settled, before the election is consulted.
+#[cfg(windows)]
+enum NamedProbe {
+    /// `er_quickload.dll` is mapped, is not this image, and exports this registrar. Decisive:
+    /// the legacy answer, unchanged for every companion built before the election existed.
+    Hub(*mut c_void),
+    /// `er_quickload.dll` is mapped and is this image, so this is the product and it owns the
+    /// address locally. Decisive, and it has to be. Were the election to run here, the product
+    /// could elect another hub-capable shell whose own named probe points back at the product,
+    /// and the two would file their handlers in each other's tables.
+    ThisImage,
+    /// No `er_quickload.dll`, or one that does not export this arity. Both fall to the election:
+    /// the second case is an older product beside a newer shell, and the election can hand the
+    /// five-argument handlers a hub that the product itself cannot offer.
+    Elsewhere,
+}
+
+/// Ask the loader for `er_quickload.dll` by name and see how far that alone gets.
+#[cfg(windows)]
+fn probe_named_product(name: &[u8]) -> NamedProbe {
+    let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
+    if hmod.is_null() {
+        return NamedProbe::Elsewhere;
+    }
+    // Resolving our own export would route right back into the local union through a C-ABI round
+    // trip. Same outcome, so this is a clarity guard rather than a correctness one -- but it also
+    // means the product can call `register_shared_hook` without special-casing.
+    if hmod as usize == dll_base() {
+        return NamedProbe::ThisImage;
+    }
+    let proc = unsafe { GetProcAddress(hmod, name.as_ptr()) };
+    if proc.is_null() {
+        NamedProbe::Elsewhere
+    } else {
+        NamedProbe::Hub(proc)
+    }
+}
+
+/// Resolve the elected hub's `er_effects_union_register` export, polling `tries` times at
+/// `sleep_ms` intervals. `None` means no other loaded module exports it (a standalone companion
+/// run) or this DLL is itself the hub -- in both cases the caller owns the address.
+///
+/// The name kept `product` after the 2026-09-19 election landed: `er-reload-trace` calls it, and
+/// the hub still is the product on every profile that carries one. What changed is the question
+/// asked of the loader -- see [`elect_union_host`].
 ///
 /// Pass `tries = 1, sleep_ms = 0` for a non-blocking probe.
 #[cfg(windows)]
 pub fn resolve_product_union_register(tries: u32, sleep_ms: u32) -> Option<UnionRegisterFn> {
-    let proc = resolve_product_export(UNION_REGISTER_EXPORT, tries, sleep_ms)?;
+    let proc = resolve_union_register_export(UNION_REGISTER_EXPORT, tries, sleep_ms)?;
     // SAFETY: the export's C-ABI shape is fixed by the product DLL, and both images stay mapped
     // for the process lifetime, so the pointer stays valid.
     Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegisterFn>(proc) })
@@ -853,32 +1046,46 @@ pub fn resolve_product_union_register(tries: u32, sleep_ms: u32) -> Option<Union
 
 /// [`resolve_product_union_register`] for the five-argument export.
 ///
-/// `None` also covers a product that predates the export, which is the point of giving it its own
-/// name -- see [`UnionRegister5Fn`].
+/// `None` also covers a hub that predates the export, which is the point of giving it its own
+/// name -- see [`UnionRegister5Fn`]. The election runs over this export rather than the other, so
+/// an older `er_quickload.dll` beside a newer shell does not shadow a hub that does carry it.
 #[cfg(windows)]
 pub fn resolve_product_union_register5(tries: u32, sleep_ms: u32) -> Option<UnionRegister5Fn> {
-    let proc = resolve_product_export(UNION_REGISTER5_EXPORT, tries, sleep_ms)?;
+    let proc = resolve_union_register_export(UNION_REGISTER5_EXPORT, tries, sleep_ms)?;
     // SAFETY: as above, for the five-argument shape.
     Some(unsafe { std::mem::transmute::<*mut c_void, UnionRegister5Fn>(proc) })
 }
 
-/// The polling `GetProcAddress` both resolvers share: find `er_quickload.dll`, ask it for `name`.
+/// The polling resolve both registrars share: the named product first, then the election.
 ///
 /// Factored so the self-resolution guard and the retry budget are written once. Two copies of that
-/// guard is one copy too many: dropping it in either would send the product's own registration out
+/// guard is one copy too many: dropping it in either would send a hub's own registration out
 /// through a C-ABI round trip back into the table it was already holding the lock on.
+///
+/// One outcome reaches the budget's next attempt: nothing in the process exports this registrar
+/// yet, which is the load-order race the budget was added for. Every other outcome is already the
+/// final answer, so a hub that elects itself returns at once rather than sleeping out a second per
+/// registration it was never going to spend usefully.
 #[cfg(windows)]
-fn resolve_product_export(name: &[u8], tries: u32, sleep_ms: u32) -> Option<*mut c_void> {
+fn resolve_union_register_export(name: &[u8], tries: u32, sleep_ms: u32) -> Option<*mut c_void> {
     for attempt in 0..tries.max(1) {
-        let hmod = unsafe { GetModuleHandleA(PRODUCT_DLL_NAME.as_ptr()) };
-        // Resolving our own export would route right back into the local union through a C-ABI
-        // round trip. Same outcome, so this is a clarity guard rather than a correctness one --
-        // but it also means the product can call `register_shared_hook` without special-casing.
-        if !hmod.is_null() && hmod as usize != dll_base() {
-            let proc = unsafe { GetProcAddress(hmod, name.as_ptr()) };
-            if !proc.is_null() {
-                return Some(proc);
+        match probe_named_product(name) {
+            NamedProbe::Hub(proc) => return Some(proc),
+            NamedProbe::ThisImage => return None,
+            NamedProbe::Elsewhere => {}
+        }
+        let candidates = union_candidates(name);
+        match elect_union_host(&candidates, dll_base()) {
+            Some(base) => {
+                let proc = unsafe { GetProcAddress(base as *mut c_void, name.as_ptr()) };
+                if !proc.is_null() {
+                    return Some(proc);
+                }
             }
+            // `None` with an exporter present means this image won, so there is nothing to wait
+            // for; `None` with no exporter at all means the hub may still be loading.
+            None if candidates.iter().any(|c| c.exports_registrar) => return None,
+            None => {}
         }
         if attempt + 1 < tries.max(1) && sleep_ms > 0 {
             unsafe { Sleep(sleep_ms) };
@@ -888,7 +1095,7 @@ fn resolve_product_export(name: &[u8], tries: u32, sleep_ms: u32) -> Option<*mut
 }
 
 /// Register `handler` on `target` through whichever union owns the process's MinHook instance for
-/// it: the product DLL's when the product is co-loaded, this DLL's own otherwise.
+/// it: the elected hub's when another module exports a registrar, this DLL's own otherwise.
 ///
 /// Use this -- never a bare [`MhHook`] -- for any prologue a second ME3 DLL might also detour.
 /// `scripts/check-shared-hook-rvas.py` is the gate that finds those addresses;
@@ -923,9 +1130,13 @@ pub unsafe fn register_shared_hook(
 ///
 /// Pass `tries = 1, sleep_ms = 0` when the caller is driven by a game frame rather than by its own
 /// install thread. The default budget exists because a companion's install thread can outrun me3's
-/// `LoadLibrary` of the product; a game task tick cannot -- every native in the profile is loaded
+/// `LoadLibrary` of the hub; a game task tick cannot -- every native in the profile is loaded
 /// long before `CSTaskImp` exists -- so one probe is already the right answer there, and the
-/// polling budget would only be a stall on the game thread when the product is genuinely absent.
+/// polling budget would only be a stall on the game thread when no hub is present at all.
+///
+/// The budget carries a second job since the hub became elected rather than named: it is what
+/// keeps two hub-capable shells from each deciding, on either side of a single poll, that it holds
+/// the lowest base in the process. See [`elect_union_host`].
 ///
 /// # the single resolve, and why it happens after the branch (2026-08-30)
 ///
@@ -958,10 +1169,10 @@ pub unsafe fn register_shared_hook_with_budget(
 ) -> Result<HookRoute, MH_STATUS> {
     if let Some(register) = resolve_product_union_register(tries, sleep_ms) {
         hook_log(format_args!(
-            "HOOK SHARED (0x{target:x}): handing the UNRESOLVED address to er_quickload.dll's \
+            "HOOK SHARED (0x{target:x}): handing the UNRESOLVED address to the elected hub's \
              union, which owns the single resolve for this branch"
         ));
-        // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
+        // AtomicUsize is a repr(transparent) usize, so handing the hub a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
         let slot_ptr = orig_slot.as_ptr();
         return match unsafe { register(target, handler, slot_ptr) } {
@@ -1031,10 +1242,10 @@ pub unsafe fn register_shared_hook5_with_budget(
 ) -> Result<HookRoute, MH_STATUS> {
     if let Some(register) = resolve_product_union_register5(tries, sleep_ms) {
         hook_log(format_args!(
-            "HOOK SHARED 5-ARG (0x{target:x}): handing the UNRESOLVED address to \
-             er_quickload.dll's union, which owns the single resolve for this branch"
+            "HOOK SHARED 5-ARG (0x{target:x}): handing the UNRESOLVED address to the elected \
+             hub's union, which owns the single resolve for this branch"
         ));
-        // AtomicUsize is a repr(transparent) usize, so handing the product a `*mut usize` into our
+        // AtomicUsize is a repr(transparent) usize, so handing the hub a `*mut usize` into our
         // own static is sound; our image outlives every dispatch.
         let slot_ptr = orig_slot.as_ptr();
         return match unsafe { register(target, handler, slot_ptr) } {
@@ -1046,15 +1257,15 @@ pub unsafe fn register_shared_hook5_with_budget(
         };
     }
     if resolve_product_union_register(1, 0).is_some() {
-        // The product is here and publishes the four-argument export but not the five-argument
-        // one, so it predates this path. Worth its own line: the resulting local install is the
-        // two-instance hazard, and the fix is a matching product build rather than anything at
-        // this call site.
+        // A hub is here and publishes the four-argument export but not the five-argument one, so
+        // it predates this path. Worth its own line: the resulting local install is the
+        // two-instance hazard, and the fix is a matching hub build rather than anything at this
+        // call site.
         hook_log(format_args!(
-            "HOOK SHARED 5-ARG (0x{target:x}): er_quickload.dll is loaded but exports no \
+            "HOOK SHARED 5-ARG (0x{target:x}): a union hub is loaded but exports no \
              er_effects_union_register5, so this handler takes its own MinHook instance -- if the \
-             product also detours this prologue the two instances will corrupt each other's \
-             trampolines. Rebuild the product from the same tree as this shell."
+             hub also detours this prologue the two instances will corrupt each other's \
+             trampolines. Rebuild the hub DLL from the same tree as this shell."
         ));
     }
     // The product is absent, so this image owns the one resolve.
@@ -2606,5 +2817,129 @@ mod tests {
             "the first registrant writes the return value last"
         );
         UNION_HEADS[CHAIN_SLOT].store(0, Ordering::Release);
+    }
+
+    // ------------------------------------------------------------------ electing the hub
+    // The rule is a pure function over a candidate list precisely so it can be asserted here,
+    // on a host with no loader list, no modules and no MinHook. What stays behind `cfg(windows)`
+    // is `loaded_module_bases` and the `GetProcAddress` that fills `exports_registrar` in -- the
+    // enumeration, not the decision.
+
+    /// Three module bases spread far enough apart to read as distinct addresses, deliberately
+    /// declared out of numeric order so a test that passes by list position rather than by base
+    /// cannot hide.
+    const HIGH_BASE: usize = 0x7fff_0000;
+    const LOW_BASE: usize = 0x1800_0000;
+    const MIDDLE_BASE: usize = 0x4000_0000;
+    /// A base belonging to none of the candidates: the caller is a companion that exports nothing
+    /// and does not appear in the lists below.
+    const COMPANION_BASE: usize = 0x6000_0000;
+
+    fn hub(base: usize) -> UnionCandidate {
+        UnionCandidate {
+            base,
+            exports_registrar: true,
+        }
+    }
+
+    fn plain(base: usize) -> UnionCandidate {
+        UnionCandidate {
+            base,
+            exports_registrar: false,
+        }
+    }
+
+    /// One exporter among several modules: that one, whatever its position in the list and
+    /// whatever bases the non-exporters hold. A lower base that exports nothing must not win --
+    /// the walk hands over every loaded module, most of which are the game's own.
+    #[test]
+    fn the_single_exporter_is_the_hub_however_low_the_other_bases_are() {
+        let candidates = [plain(LOW_BASE), hub(HIGH_BASE), plain(MIDDLE_BASE)];
+
+        assert_eq!(
+            elect_union_host(&candidates, COMPANION_BASE),
+            Some(HIGH_BASE)
+        );
+    }
+
+    /// Several exporters: the lowest base wins. This is the clause that lets every image decide
+    /// alone -- a caller reaching a different answer here would file its handlers in a second
+    /// MinHook instance, which is the whole failure.
+    #[test]
+    fn several_exporters_elect_the_lowest_base() {
+        let candidates = [
+            hub(HIGH_BASE),
+            plain(0x1000_0000),
+            hub(LOW_BASE),
+            hub(MIDDLE_BASE),
+        ];
+
+        assert_eq!(
+            elect_union_host(&candidates, COMPANION_BASE),
+            Some(LOW_BASE)
+        );
+    }
+
+    /// No exporter: the caller owns the address on its own union. A standalone companion run, and
+    /// also the state a companion sees while me3 is still mapping the rest of the profile -- which
+    /// is why the resolver keeps polling on this answer rather than settling.
+    #[test]
+    fn no_exporter_leaves_the_caller_on_its_own_union() {
+        let candidates = [plain(LOW_BASE), plain(MIDDLE_BASE), plain(HIGH_BASE)];
+
+        assert_eq!(elect_union_host(&candidates, COMPANION_BASE), None);
+    }
+
+    /// An empty list is the same answer, reached without an exporter to compare against. The walk
+    /// returns this when the loader list cannot be read at all.
+    #[test]
+    fn an_empty_candidate_list_is_not_a_hub() {
+        assert_eq!(elect_union_host(&[], COMPANION_BASE), None);
+    }
+
+    /// Self-exclusion: the elected hub gets `None` for itself rather than its own export address,
+    /// so it registers straight into its local table instead of round-tripping through a C ABI
+    /// back into the lock it already holds.
+    #[test]
+    fn the_hub_does_not_elect_itself() {
+        let candidates = [hub(LOW_BASE), plain(MIDDLE_BASE), hub(HIGH_BASE)];
+
+        assert_eq!(elect_union_host(&candidates, LOW_BASE), None);
+    }
+
+    /// Self-exclusion is a test on the winner, not a filter on the input -- so an exporter that
+    /// loses the election still delegates, to the winner rather than to itself.
+    ///
+    /// Removing this image from the candidates instead would invert exactly this case: the lowest
+    /// hub would elect the next one up while that one elected the lowest back, and each would file
+    /// its handlers in the other's table. Two instances on one prologue, which is the condition
+    /// this whole path exists to prevent.
+    #[test]
+    fn an_exporter_that_loses_still_delegates_to_the_winner() {
+        let candidates = [hub(LOW_BASE), hub(HIGH_BASE)];
+
+        assert_eq!(elect_union_host(&candidates, HIGH_BASE), Some(LOW_BASE));
+    }
+
+    /// The shipped configuration the election was written for: `er_quit_rows.dll` exports the
+    /// registrar, `er_armament_icons.dll` does not, and no product is loaded. Under the old
+    /// name-only lookup the companion saw nothing and took `HookRoute::LocalUnion`, so two MinHook
+    /// instances landed on `TITLE_SCALEFORM_FILE_OPEN_RVA`.
+    #[test]
+    fn a_companion_beside_a_hub_with_no_product_finds_the_hub() {
+        let quit_rows = hub(LOW_BASE);
+        let armament_icons = plain(COMPANION_BASE);
+        let candidates = [quit_rows, armament_icons];
+
+        assert_eq!(
+            elect_union_host(&candidates, armament_icons.base),
+            Some(quit_rows.base),
+            "the companion must route to the shell that exports the registrar"
+        );
+        assert_eq!(
+            elect_union_host(&candidates, quit_rows.base),
+            None,
+            "and that shell must own the prologue itself, so exactly one instance exists"
+        );
     }
 }
