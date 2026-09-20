@@ -10,12 +10,14 @@ default is right: the edit hides the face box, shifts the name and level left an
 made puts a worse window on screen than the one the game ships.
 
 On 2026-09-19 that latch gained exactly one caller, inside `arm::arm_standalone`. Every shell that
-arms through it kept working. `er-save-game-row` hand-rolls its arm -- it installs the swap hook,
+arms through it kept working. `er-save-game-row` hand-rolled its arm -- it installed the swap hook,
 the row-populate detours and the picker cache key one by one -- so it asked for the movie and never
 answered for it. Its destination browser opened in the game's own character presentation for the
 rest of the day: no drive strip, no current-path bar, no last-saved time, and 8192 lines of
 `stats-text: ... has no ErCharStats child -- not our ProfileSelect movie; left native` while the
-player browsed.
+player browsed. That crate merged into `er-quit-menu` on 2026-09-20 and `arm_standalone` grew the
+Save Game row's own installs, so there is no hand-rolled arm left in the workspace -- which is why
+this gate has to stay: it is the thing that notices the next one.
 
 Both halves built clean, both halves logged the refusal in plain words, and nothing failed. That is
 the shape this gate closes: asking for the movie and answering for it are two calls, and a crate

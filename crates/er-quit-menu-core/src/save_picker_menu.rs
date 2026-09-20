@@ -2932,6 +2932,74 @@ static PICKER_ACTIVATE_INSTALLED: AtomicUsize = AtomicUsize::new(0);
 /// # Safety
 ///
 /// Installed by `er-hook`; the game calls it on its menu thread with a live `ProfileLoadDialog`.
+/// Whether forwarding this activation would run the game's in-world character load on behalf of a
+/// host that has no save-safe switch behind it -- which is a crash, measured, not a risk.
+///
+/// # The fault this refuses
+///
+/// Run br-20260920-170800-d70b, `er_quit_menu.dll` alone in the profile: the player opened
+/// **Load Character**, picked a slot, and the game died with `0xc0000005` reading `-1` at
+/// `eldenring.exe+0x67226a`, which is 1.16.2 `CSGaitemImp::Deserialize+0x2ea`. The instruction is
+/// a virtual call through a table indexed by a lookup result the code never checks:
+///
+/// ```text
+///   movslq %r14d,%rax          ; r14d came back -1 from the id lookup
+///   mov    0x8(%rdi,%rax,8),%rcx
+///   mov    (%rcx),%rax
+///   call   *0x30(%rax)         ; faults
+/// ```
+///
+/// The stack reaches it from the load job at `0x826d50` through `GameMan`, so this is the
+/// character load actually running: it deserialized the gaitem table against a live world whose
+/// item ids do not match, and indexed with the `-1` the lookup returned.
+///
+/// The product does not hit this because `system_quit_arm_quickload_autoload` returns to the title
+/// and tears the world down before it reloads, gaitem reset included. A standalone shell has none
+/// of that (bd er-effects-rs-ejfl), so its pick reaches the native in-world load unguarded.
+///
+/// # Why refusing, and not something cleverer
+///
+/// This crate already states the rule: a host must not offer a press that reaches a flow it cannot
+/// carry out. The row may open the window -- browsing characters is useful and safe -- but the
+/// activation behind it belongs to a switch machine that is not here yet. Giving the shell that
+/// machine is bd er-effects-rs-ye3q and phase 4 of
+/// `docs/plans/menus-and-saves-consolidation.md`; until it lands, a press that does nothing and
+/// says so is the only honest answer, because the alternative is measured to kill the process.
+///
+/// Scoped as narrowly as the evidence is, by two conditions that are both already true here rather
+/// than by a new switch:
+///
+/// * the caller is [`picker_profile_load_activate_hook`], which only
+///   [`install_picker_profile_load_activate_hook`] installs and only
+///   [`crate::arm::arm_standalone`] calls -- so a product build, which arms through
+///   [`crate::row_cloner::arm`] and answers activations from its own detour, never reaches this
+///   code at all;
+/// * `SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE` says the window on screen was opened by this host's
+///   Load Character row. That latch is per cdylib, set synchronously at the press in
+///   [`crate::profile_load_dialog`] and cleared when the window closes in
+///   [`crate::system_windows`], so the title's own character select, the browse picker and every
+///   other opener are forwarded exactly as before.
+///
+/// # Safety
+///
+/// Menu-thread activate context, with `dialog` the live `CS::ProfileLoadDialog`.
+unsafe fn standalone_character_switch_would_fault(dialog: usize) -> bool {
+    use er_telemetry_core::counters::SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE;
+
+    if SYSTEM_QUIT_PROFILE_LOAD_FLOW_ACTIVE.load(Ordering::SeqCst) == 0 {
+        return false;
+    }
+    let cursor = unsafe { safe_read_i32(dialog + er_title_flow::DIALOG_SLOT_CURSOR_B0C_OFFSET) }
+        .unwrap_or(-1);
+    append_autoload_debug(format_args!(
+        "system-quit-dup: REFUSED the slot activation on dialog=0x{dialog:x} cursor={cursor} -- \
+         this host opened ProfileSelect but has no save-safe switch, and forwarding runs the \
+         game's in-world load, which faulted in CSGaitemImp::Deserialize on run \
+         br-20260920-170800-d70b (bd er-effects-rs-ye3q)"
+    ));
+    true
+}
+
 unsafe extern "system" fn picker_profile_load_activate_hook(
     dialog: usize,
     b: usize,
@@ -2946,6 +3014,9 @@ unsafe extern "system" fn picker_profile_load_activate_hook(
     let original: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
     if SAVE_PICKER_MODE_ACTIVE.load(Ordering::SeqCst) == 0 {
+        if unsafe { standalone_character_switch_would_fault(dialog) } {
+            return 0;
+        }
         return unsafe { original(dialog, b, c, d) };
     }
     // Identity, not just the mode latch: `PROFILE_LOAD_DIALOG_VTABLE_RVA` moved on 1.17, and a

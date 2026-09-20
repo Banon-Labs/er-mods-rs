@@ -1492,6 +1492,66 @@ def _decode_extent_bounds():
 
 
 # ==========================================================================
+def _hold_quiet_tree_lock():
+    """Take `check.sh`'s own lock for the whole run, or refuse and explain.
+
+    This file's header has said "run it by hand on a quiet tree" since it was written, and a
+    sentence in a header is not a quiet tree. What it means concretely: every control here edits a
+    tracked file, runs a gate, and puts the file back. Anything that reads the working tree during
+    that window reads the mutant.
+
+    Measured 2026-09-20, and the damage outlived the run by hours. This ran in the background while
+    `scripts/er-build-dlls.sh` was recording DLL provenance, so the records it wrote hashed a tree
+    that was mid-mutation. Later `tools/er-installer/build.rs` refused to embed any of the 29 DLLs:
+
+        `STALE  er_armament_icons.dll  (er-armament-icons)`
+          `SOURCE MOVED since this DLL was built (recorded 8c3607d9e7ee, ...; 87 -> 87 files)`
+
+    -- the same file count and a different hash, on a crate the session had never touched, which
+    killed the `cargo-build` stage of a push after every other stage had gone green. The remedy was
+    `er-build-dlls.sh --all`; the cost was the run, the diagnosis and the push.
+
+    `check.sh` already owns a machine-wide lock for exactly this class of collision, so this takes
+    that one rather than inventing a second: a whole-suite run holds it exclusive, a single stage
+    holds it shared, and both now exclude this. `scripts/er-build-dlls.sh` takes it shared for the
+    same reason. The holder record is the pid, which is the shape `check.sh`'s own
+    stale-descriptor recovery reads.
+
+    Returns the open file object, which the caller keeps alive for the run's duration -- the lock
+    is released when the process exits and the descriptor closes. Returns `None` after printing the
+    refusal, which is the caller's cue to exit non-zero.
+    """
+    import fcntl
+    import os
+
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    lock_path = Path(runtime_dir) / "er-mods-rs-check-sh.lock"
+    try:
+        handle = open(lock_path, "a+", encoding="utf-8")  # `a+`, never `w`: do not truncate a
+    except OSError as exc:                                # live holder's pid before reading it.
+        print(f"prove-gate-positive-controls: cannot open {lock_path} ({exc}); refusing to mutate "
+              "tracked files without the lock that keeps a build from reading them mid-edit.")
+        return None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.seek(0)
+        holder = handle.read().strip() or "unknown"
+        handle.close()
+        print("prove-gate-positive-controls: REFUSED -- something else is reading the working tree "
+              f"(lock {lock_path} held by pid {holder}).")
+        print("  Every control here edits a tracked file and puts it back, so a build or gate "
+              "running now would hash the mutant.")
+        print("  On 2026-09-20 that poisoned all 29 DLL provenance records and failed a push.")
+        print("  Wait for it to finish, then run this again.")
+        return None
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"{os.getpid()}\n")
+    handle.flush()
+    return handle
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1505,6 +1565,11 @@ def main() -> int:
         for name, (fast, _) in sorted(CONTROLS.items()):
             print(f"  {name:<34} {'fast' if fast else 'slow'}")
         return 0
+
+    # Listing is a read. Everything below mutates tracked files, so it takes the lock first.
+    lock = _hold_quiet_tree_lock()
+    if lock is None:
+        return 1
 
     for name, (fast, fn) in sorted(CONTROLS.items()):
         if args.only and args.only not in name:

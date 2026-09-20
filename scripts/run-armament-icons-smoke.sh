@@ -255,9 +255,7 @@ if [[ "$ME3_NATIVE" == 1 ]]; then
 		ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
 		ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
 		ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
-		ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$ARTIFACT_DIR/er-quit-load-character.log" \
 		ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
-		ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$ARTIFACT_DIR/er-save-game-row.log" \
 		"$ME3" --steam-dir "$ME3_STEAM_DIR" launch -p "$PROFILE" -g eldenring -e "$GAME_DIR/eldenring.exe") >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 else
 	env \
@@ -285,9 +283,7 @@ else
 		ER_QUICKLOAD_CRASH_LOGGING_BREADCRUMB_PATH="$ARTIFACT_DIR/er-crash-breadcrumb-latest.txt" \
 		ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
 		ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
-		ER_QUICKLOAD_QUIT_LOAD_CHARACTER_LOG_PATH="$ARTIFACT_DIR/er-quit-load-character.log" \
 		ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
-		ER_QUICKLOAD_SAVE_GAME_ROW_LOG_PATH="$ARTIFACT_DIR/er-save-game-row.log" \
 		ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
 		"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 fi

@@ -20,11 +20,11 @@ forwarded to the game, and the player got an in-world load instead of the save-s
 crash, no logged error, the wrong load.
 
 So the hazard this gate looks for needs two hosts offering the same flow. Shells whose rows and
-flows are disjoint (`er-quit-menu` X `er-save-game-row`, `er-quit-load-character` X
-`er-save-game-row`) do not trip it, and it must not demand that they be declared. They are
-declared in that table anyway, on a second mechanism this gate cannot see: both hosts derive the
-same six-cell `02_040` Quit grid, and both install the row-populate detours with a bare
-`MhHook`. Do not read a silent pass here as a pair being co-loadable -- read the table.
+flows are disjoint do not trip it, and it must not demand that they be declared. Two such pairs
+were declared in that table anyway, on a second mechanism this gate cannot see: both hosts derived
+the same six-cell `02_040` Quit grid, and both installed the row-populate detours with a bare
+`MhHook`. Both packages merged into `er-quit-menu` on 2026-09-20 and the pairs went with them, but
+the lesson did not: do not read a silent pass here as a pair being co-loadable -- read the table.
 
 What this catches that the conflict gate cannot
 -----------------------------------------------
@@ -46,10 +46,12 @@ matching nothing.
 Why the scan follows `cfg`
 --------------------------
 Because the previous text grep did not, and that is the other half of the same 2026-09-19 error.
-`er-save-game-row` spells its flow two ways: a default build supplies `save_game_as_start_flow`
-from a cloned row, and a `--features hijack-quit-row` build supplies `save_game_start_flow` by
+`er-save-game-row` spelled its flow two ways: a default build supplied `save_game_as_start_flow`
+from a cloned row, and a `--features hijack-quit-row` build supplied `save_game_start_flow` by
 taking the native first row over. The grep matched the second, which is the one no shipped
-artifact contains -- `crates/er-save-game-row/Cargo.toml` has `default = []`.
+artifact contained -- that crate's `Cargo.toml` had `default = []`. It merged into `er-quit-menu`
+on 2026-09-20, which picks between the same two spellings from its config file rather than from a
+feature, so a `cfg`-aware read now sees both and the gate treats the shell as offering either.
 
 So each crate's text is read as its shipped build: the default feature closure is taken from its
 `Cargo.toml`, and any item behind a `#[cfg(..)]` that closure does not satisfy is removed before
@@ -93,19 +95,23 @@ ACTIONS_STRUCT = "QuitRowActions"
 # arming -- er-input-harness does -- is not one, which is why this looks for the call.
 #
 # There are two entry points, and the first cut of this gate knew only one. It reported three
-# arming shells when there are five: `er-quit-menu` and `er-quit-load-character` reach the row
-# cloner through `arm::arm_standalone`, so both were invisible and so were the pairs they form.
-# A gate that under-detects passes while the thing it guards is broken, which is worse than not
-# having it -- hence `MIN_ARMING_SHELLS` below.
+# arming shells when there were five: the standalone shells reach the row cloner through
+# `arm::arm_standalone`, so they were invisible and so were the pairs they formed. A gate that
+# under-detects passes while the thing it guards is broken, which is worse than not having it --
+# hence `MIN_ARMING_SHELLS` below.
 ARM_CALLS = (
     re.compile(r"\brow_cloner::arm\s*\("),
     re.compile(r"\barm::arm_standalone\s*\("),
 )
 
-# The five shells known to arm as of 2026-09-19. A scanner that finds fewer has stopped
+# The three shells known to arm as of 2026-09-20. A scanner that finds fewer has stopped
 # matching something rather than found a simpler workspace, and says so instead of passing.
 # Raise this when a new row shell lands; lowering it is only correct alongside a deleted crate.
-MIN_ARMING_SHELLS = 5
+#
+# It was five until 2026-09-20, when `er-quit-load-character` and `er-save-game-row` merged into
+# `er-quit-menu` -- two deleted crates, so this number comes down with them. See
+# `docs/plans/menus-and-saves-consolidation.md`, phase 2.
+MIN_ARMING_SHELLS = 3
 
 # Bare `cfg` idents this file decides for itself. Every shell here is a cdylib built for
 # `x86_64-pc-windows-msvc`, so `windows` holds in each of them; `test` and `doc` never do in a
@@ -642,9 +648,13 @@ def selftest() -> int:
         {"quit-rows", "save-game-row"} <= quickload,
         f"er-quickload's default closure came back as {sorted(quickload)}",
     )
+    # A crate with no `[features]` table at all reads as an empty closure, which is what the
+    # `cfg` reader needs in order to strip a feature-gated block. `er-save-game-row` used to be
+    # the example here and was deleted with the merge on 2026-09-20; `er-quit-menu` is the shell
+    # that took its rows and declares no features of its own.
     expect(
-        not default_features("er-save-game-row"),
-        "er-save-game-row has `default = []` and its closure was read as non-empty",
+        not default_features("er-quit-menu"),
+        "er-quit-menu declares no features and its closure was read as non-empty",
     )
 
     if failures:

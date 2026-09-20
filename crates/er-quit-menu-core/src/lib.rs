@@ -69,6 +69,9 @@ pub mod quit_dialog_layout;
 pub mod row_identity;
 pub mod row_text;
 pub mod rows;
+// Host-buildable on purpose: a shell's row set comes from a file a player edits, and the parse is
+// the half worth proving on a machine with no game in it.
+pub mod row_config;
 // The Save Game row's flow, its message boxes, its destination identity/commit, and the row
 // itself. Every one of them detours the game or reads its RAM (`er_game_base`, `er_hook`,
 // `er_title_flow`, the `save_dest_commit_runtime` sibling), so they build on the game target

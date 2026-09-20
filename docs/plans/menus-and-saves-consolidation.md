@@ -197,6 +197,51 @@ rows = ["load-character", "load-character-from-file", "save-game"]
 **Gate:** host tests for the config -> `RowSet` mapping, including the empty and unknown-name cases.
 **Runtime proof:** each row set armed once and pressed, against the existing measured behaviours.
 
+Landed 2026-09-20. The merged shell keeps the `er-quit-menu` name and its config file is
+`er-quit-menu.toml`, so the DLL and the file a player edits are named the same thing the way
+`er_quickload.dll` and `er-quickload.toml` are; phase 5 renames both together with everything else.
+`er-quit-load-character` and `er-save-game-row` are deleted, and with them five `[[conflict]]` rows
+whose packages no longer exist -- two of which are kept as prose in
+`scripts/me3-dll-conflicts.toml`, because what they measured is still true of any future pair.
+`er-quit-menu` inherits the two `er-save-game-row` held against `er-reload-trace` and
+`er-save-disable`: both mechanisms live in `er-quit-menu-core`, which it links.
+
+Three things moved that the phase description did not anticipate, all in
+`er_quit_menu_core::arm::arm_standalone`, because it is now the only arm path and `er-save-game-row`
+hand-rolled its own:
+
+* It installs the Save Game row's text hook and stage task, and reports them in `StandaloneArm`.
+* It installs the browser's `ProfileLoadDialog` activation. Only `er-save-game-row` did, so a
+  `load-character-from-file` press on the old `er-quit-menu` reached vanilla's own OK handler --
+  the `Start with selected profile` confirm over a folder measured on br-20260912-203044-5fbd.
+* It derives the `GfxServeSet` from the row set instead of serving `ALL_PICKER_KEYED` for every
+  caller. That is what lets `save_game = "replace-native-row"` arm `RowSet::NONE` without widening
+  the two-cell Quit grid to six (bd `slim-quickload-still-widened-the-quit-grid-2026-09-12`), and
+  it stops a character-only configuration serving the link field's movie it never opens.
+
+**Proven at runtime as far as the arm, both ends of the config space**, on the shell's own log with
+no product in the profile:
+
+| run | `er-quit-menu.toml` | what the DLL reported |
+|---|---|---|
+| br-20260920-170312-4b11 | absent | `config: auto-created ...\Game\er-quit-menu.toml with the defaults`, then `arming [LoadProfile, LoadSaveProfiles, LoadBuildFromUrl, GenerateBuildLink] (save_game=add-row, stated_in_the_file=true)` with no complaint line -- so the file it writes is a file it reads back |
+| br-20260920-170312-4b11 | (same) | `serve=GfxServeSet { quit_grid: true, build_url_field: true, path_editor_field: true, profile_select: false, profile_select_picker_key: true }` -- identical to the `ALL_PICKER_KEYED` this configuration used to get, so the four-row default did not move |
+| br-20260920-170351-44e2 | `rows = ["save-game"]`, `save_game = "replace-native-row"` | `arming [SaveGameAs] (save_game=replace-native-row)`, `serve=GfxServeSet { quit_grid: false, ... }`, `save_game_start_flow=claimed save_game_as_start_flow=absent`, `save_flow_task=yes` |
+
+Both runs reported `standalone arm complete=true ... picker_activate=yes`. The third row is the one
+the derivation was for: a host that clones nothing no longer widens the two-cell Quit grid, and its
+serve line names only `the path editor's movie + the 05_010 picker movie` where the four-row run
+also names `the six-cell Quit grid + the link field's movie`.
+
+**A row PRESS is still unproven**, which is the rest of this phase's runtime proof. It needs the
+Quit tab on screen and the agent drives every input, and `--harness-drive menureload` derails at
+`tab_to_quit`. Frida settled why on run br-20260920-165749-f063: `_SettingTabControl`'s virtual is
+pumped 234 times with its grid readable and its cursor at 0, `GridControl::Update` runs 1170 times,
+and not one cursor moves -- the consumer runs and the press never arrives, because the phase taps
+`inputmgr+0x90`, which `game_mem.rs:672` and AGENTS.md both record as a shown-menu-window bitmap
+rather than input. bd `er-effects-rs-9vyy` carries it and names the route the repo already has:
+`menu_code_pad_binding` says which pad input the game itself has bound to each menu action.
+
 ### Phase 3 -- retire the `er-quit-rows` fork
 
 `er-quit-rows` was created as "a copy of the product reduced to the Quit rows, gated not deleted"
@@ -254,7 +299,7 @@ So this happens once, in one change, with the installer regenerated in the same 
 |---|---|---|
 | `er-quickload` / `er_quickload.dll` | `er-menus-and-saves` / `er_menus_and_saves.dll` | "quickload" names one early feature of a suite that is now the Quit rows, the boot picker, the loading cover and the portrait; the catalog already files it under Menus and saves |
 | `er-quit-menu-core` | `er-quit-rows-core` | the core is named after a shell that phase 2 deletes; name it after the surface it owns |
-| `er-quit-menu`, `er-quit-load-character`, `er-save-game-row` | `er-quit-rows` / `er_quit_rows.dll` | the merged shell from phase 2 takes the name the fork vacates in phase 3, and the name is finally accurate |
+| `er-quit-menu` (the merged shell, and its `er-quit-menu.toml`) | `er-quit-rows` / `er_quit_rows.dll`, with `er-quit-rows.toml` beside it | the merged shell takes the name the fork vacates in phase 3, and the name is finally accurate. The config file is renamed in the same commit: the DLL and the file a player edits are named the same thing, and splitting the rename would leave `er_quit_rows.dll` reading `er-quit-menu.toml` |
 | `er-save-picker`, `er-save-disable`, `er-build-import` | unchanged | each says what it is |
 
 Hard constraints on the rename, all of them measured:
@@ -275,14 +320,15 @@ Hard constraints on the rename, all of them measured:
 | catalog row | fate |
 |---|---|
 | Quickload (full suite) | stays, relabelled to the new name |
-| Quit-menu rows only | merged into one row |
-| Load Character rows only | merged into one row |
+| Quit-menu rows only | the merged row; relabelled with the package in phase 5 |
+| Load Character rows only | merged into it, 2026-09-20 |
+| Save Game row | merged into it, 2026-09-20, selected in `er-quit-menu.toml` |
 | Quit-menu rows (trimmed build) | removed with the fork |
-| Save Game row | merged into one row, selected in the merged shell's config |
 | Boot save picker | stays; `included_in` stays a refusal until its `DllMain` probe is replaced by a real election |
 | Disable saving | stays |
 
-Four player-facing rows become two, and the category drops from 28 pairs to 10.
+Four player-facing rows become two. Two of the merges landed with phase 2, which took the category
+from eight packages to six and from 28 pairs to 15; the fork's removal in phase 3 takes it to 10.
 
 ## 5. What this plan deliberately does not do
 

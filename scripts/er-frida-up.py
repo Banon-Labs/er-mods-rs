@@ -284,10 +284,11 @@ def world_is_up() -> tuple[bool, str]:
     depends on no game hook of this script's own, and it carries the loading substep along with the
     verdict, so it is both cheaper and more specific.
 
-    Every other shell -- `er-save-game-row`, `er-invasion-warp`, anything that is not the product --
+    Every other shell -- `er-quit-menu`, `er-invasion-warp`, anything that is not the product --
     writes its own log and no `er-quickload-telemetry.json`, and for those the first witness has
     nothing to say at all. That made this gate unpassable for them however long the game had been in
-    a world: hit 2026-09-19 on a live `er-save-game-row` session with a player in a world, refused
+    a world: hit 2026-09-19 on a live `er-save-game-row` session with a player in a world (that
+    crate merged into `er-quit-menu` the next day), refused
     with "no run telemetry to read", leaving `--allow-early` -- a flag whose documented meaning is
     "the boot itself is what you are measuring" -- as the only way through. The second witness is
     the same predicate the first one reports, read from outside through `/proc/<pid>/mem` instead of

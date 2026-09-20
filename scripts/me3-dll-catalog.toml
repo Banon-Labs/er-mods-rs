@@ -51,10 +51,11 @@ config = "er-quickload.toml"
 
 [er-quit-menu]
 label = "Quit-menu rows only"
-blurb = "The four cloned System > Quit rows on their own, without the rest of the Quickload suite. Pick this instead of Quickload, never alongside it."
+blurb = "The cloned System > Quit rows on their own, without the rest of the Quickload suite. Its own file picks which rows you get. Pick this instead of Quickload, never alongside it."
 category = "menus-and-saves"
 audience = "player"
 default = false
+config = "er-quit-menu.toml"
 
 [er-quit-rows]
 label = "Quit-menu rows (trimmed build)"
@@ -62,22 +63,6 @@ blurb = "A reduced build of the Quickload suite carrying the System > Quit rows 
 category = "menus-and-saves"
 audience = "player"
 default = false
-
-[er-quit-load-character]
-label = "Load Character rows only"
-blurb = "Just the two character rows on the System > Quit tab. Each row shows that character's name, rune level, max weapon level and attributes, read from your save."
-category = "menus-and-saves"
-audience = "player"
-default = false
-caution = "adds nothing beside another Quit-row mod"
-
-[er-save-game-row]
-label = "Save Game row"
-blurb = "Adds a Save Game row to the System > Quit tab that lets you choose where the save goes and then keeps playing, instead of saving and returning to the title."
-category = "menus-and-saves"
-audience = "player"
-default = false
-caution = "for a profile with no other Quit-row mod"
 
 [er-save-picker]
 label = "Boot save picker"

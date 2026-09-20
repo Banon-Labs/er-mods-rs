@@ -178,6 +178,13 @@ def build_record(package: str, artifact: Path) -> dict:
         "artifact": artifact.name,
         "source_sha": sha,
         "source_file_count": count,
+        # The file list, not just its length. A mismatch used to report
+        # `344 -> 345 files` and stop there, which names the symptom and hides the cause: one
+        # file appeared somewhere under a closure that spans a dozen crates, and the only move
+        # left was a full rebuild and a hope. Measured twice on 2026-09-20, in both directions
+        # (87 -> 87 with a changed hash, then 344 -> 345), each time costing a push and a
+        # diagnosis. With the list recorded, `verify` can say which paths arrived or left.
+        "source_files": [path.relative_to(REPO_ROOT).as_posix() for path in closure_files(members)],
         "closure": members,
         "external_deps": external,
         "fingerprint": fingerprint_of(artifact),
@@ -235,6 +242,29 @@ def verify(package: str, artifact: Path) -> tuple[int, list[str]]:
             f"(recorded {str(record.get('source_sha'))[:12]}, tree is now {current_sha[:12]}; "
             f"{record.get('source_file_count')} -> {current_count} files). Rebuild."
         )
+        # ...and say which files, when the record is new enough to know. A count difference is
+        # the one thing a reader cannot act on: `344 -> 345` on a crate the branch never touched
+        # sends them hunting through a dozen crate directories. An older record has no list, and
+        # that is not a failure of its own -- it just gets the count, as before.
+        recorded_files = record.get("source_files")
+        if isinstance(recorded_files, list):
+            current_files = [
+                path.relative_to(REPO_ROOT).as_posix() for path in closure_files(members)
+            ]
+            arrived = sorted(set(current_files) - set(recorded_files))
+            left = sorted(set(recorded_files) - set(current_files))
+            for path in arrived[:10]:
+                failures.append(f"    arrived since the build: {path}")
+            for path in left[:10]:
+                failures.append(f"    gone since the build:    {path}")
+            if not arrived and not left:
+                failures.append(
+                    "    the same files, so one of them changed content rather than the set moving"
+                )
+            elif len(arrived) + len(left) > 20:
+                failures.append(
+                    f"    ...and {len(arrived) + len(left) - 20} more path(s) not listed"
+                )
 
     current_fingerprint = fingerprint_of(artifact)
     if record.get("fingerprint") != current_fingerprint:

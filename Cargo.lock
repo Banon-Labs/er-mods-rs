@@ -3187,14 +3187,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "er-quit-load-character"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-quit-menu-core",
-]
-
-[[package]]
 name = "er-quit-menu"
 version = "0.1.0"
 dependencies = [
@@ -3291,14 +3283,6 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "er-save-suppress",
-]
-
-[[package]]
-name = "er-save-game-row"
-version = "0.1.0"
-dependencies = [
- "er-game-base",
- "er-quit-menu-core",
 ]
 
 [[package]]
