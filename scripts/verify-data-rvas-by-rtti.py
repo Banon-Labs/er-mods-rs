@@ -1250,11 +1250,30 @@ def anchor_selftest(old_cm, new_cm):
     # lists, which is bookkeeping, while a surviving mutant is the matcher failing to notice a
     # wrong address. Running the weaker check first would let it return early and leave the strong
     # one unexercised.
+    # A mutation that leaves a row unchanged is not a test of anything, and scoring the result as
+    # a surviving mutant turns the audit red for a row nobody got wrong. `REVERTED` puts the
+    # 1.16.2 address back, so it is a no-op wherever the two columns already agree -- today that
+    # is `BASE_CLASS_DESCRIPTOR_TYPE_RVA_OFFSET`, whose row reads `0x0 -> 0x0` because it is a
+    # struct field offset in `er-input-harness/src/rtti.rs` that the `*RVA*` name harvest swept
+    # into an address map, and tomorrow it is any data address that genuinely did not move
+    # between the two builds. Such rows leave that mutant's set and are counted out loud: a
+    # negative control that quietly shrinks is how one goes vacuous, which is the failure this
+    # whole function exists to prevent.
     for label, mutate in (
         ("REVERTED (destination put back to the 1.16.2 address)", lambda src, dst: src),
         ("NUDGED (destination moved eight bytes)", lambda src, dst: dst + 8),
     ):
-        mutants = [(src, mutate(src, dst), const, note) for _, src, dst, const, note, _ in verified]
+        mutants = [
+            (src, mutate(src, dst), const, note)
+            for _, src, dst, const, note, _ in verified
+            if mutate(src, dst) != dst
+        ]
+        inert = len(verified) - len(mutants)
+        if inert:
+            print(f"  {label}: {inert} row(s) it cannot change, excluded")
+        if not mutants:
+            print(f"FAIL: {label} changes no row at all -- this negative control is vacuous")
+            return 1
         bad_tally, bad = run_anchors(mutants, old, new, old_cm, new_cm, quiet=True)
         missed = [row for row in bad if row[0] in VERIFIED_CODES]
         if missed:
