@@ -2633,6 +2633,15 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
 
+# Asking for the derived 05_010_ProfileSelect movie and saying whether you earn it are two calls,
+# and on 2026-09-19 a shell made the first without the second for a day. `er-save-game-row` hand
+# rolls its arm instead of going through `arm_standalone`, which is where the latch's only caller
+# lives, so its destination browser opened in the game's own character presentation -- no drive
+# strip, no path bar -- while both halves built clean and the DLL logged the refusal in words
+# nobody was reading. Confirmed against that revision: this gate exits 1 on dcffc4af's tree.
+python3 "$repo_root/scripts/check-profile-select-chrome-answered.py" --selftest
+python3 "$repo_root/scripts/check-profile-select-chrome-answered.py"
+
 # The same coverage question, asked of the file that gives each shell a name a player can read.
 # A cdylib with no catalog entry is shipped and unreachable: the installer builds its rows from
 # that file and nothing else. The gate also proves the out-of-box selection is conflict-free,

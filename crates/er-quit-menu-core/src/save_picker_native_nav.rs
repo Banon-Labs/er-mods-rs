@@ -139,6 +139,10 @@ static NAV_EDGES: AtomicUsize = AtomicUsize::new(0);
 static NAV_EDGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 /// Whether the one-shot line naming the resolved address has been written.
 static NAV_READER_ANNOUNCED: AtomicUsize = AtomicUsize::new(0);
+/// Whether the one-shot line naming which reader owns the latch has been written.
+static NAV_OWNER_ANNOUNCED: AtomicUsize = AtomicUsize::new(0);
+/// Engine edges used while the keyboard reader was live -- the pad path, for the log's rate limit.
+static NAV_ENGINE_EDGE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 /// Resolve the resolver for the running build, announcing the address once.
 ///
@@ -243,18 +247,73 @@ pub fn ensure_nav_reader() {
     }
 }
 
-/// Drain the requested directions from the edge latch.
+/// Drain the requested directions from the keyboard's device state, and from `CS::MoveDir` for
+/// whatever the keyboard is not answering for.
 ///
-/// From the keyboard's own device state once that reader is live, and from `CS::MoveDir` until
-/// then -- never from both. Two sources for one press is a double step by construction, and the
-/// two disagree about what a held key is, which is the whole reason the device reader exists.
+/// # The pad, and the fall-through that was only in the prose
+///
+/// [`crate::save_picker_dinput_nav`]'s module doc ends "a controller falls through to the
+/// `CS::MoveDir` reader and its pulse semantics". This function used to `return` the keyboard's
+/// edges the moment that reader went live, so there was no fall-through: `sample` was never
+/// called again and the engine's direction was never read. The reader goes live the first frame
+/// the game polls the DirectInput keyboard, which it does whether or not anyone is holding a pad,
+/// so on any machine with a keyboard attached a d-pad could not reach the drive strip at all.
+///
+/// Measured in the live run of 2026-09-19, pid 1828121, `er-save-game-row.log`: `drive-strip pump
+/// mouse` fourteen times, switching between four drives, against `drive-strip pump key` zero times
+/// and `save-picker-nav: native move_dir` zero times -- in a run whose list cursor moved twelve
+/// times, so directions were certainly being pressed.
+///
+/// # Why two sources here are not a double step
+///
+/// The engine's latch is drained on every call whether or not its edges are used, so a direction
+/// the keyboard already answered for cannot leave a stale edge to be replayed a tick later. What
+/// is then discarded is only the part the keyboard owns -- an edge it just reported, or a
+/// direction it is still holding, which is what an auto-repeat looks like from here. A pad press
+/// is neither, so it is the one thing that survives.
 pub fn take_nav_edges_for(mask: usize) -> usize {
     crate::save_picker_dinput_nav::ensure_dinput_nav_reader();
-    if crate::save_picker_dinput_nav::dinput_nav_reader_live() {
-        return crate::save_picker_dinput_nav::dinput_take_nav_edges_for(mask);
-    }
+    let keyboard_live = crate::save_picker_dinput_nav::dinput_nav_reader_live();
+    announce_nav_owner(keyboard_live);
+    let from_keyboard = if keyboard_live {
+        crate::save_picker_dinput_nav::dinput_take_nav_edges_for(mask)
+    } else {
+        0
+    };
     sample();
-    NAV_EDGES.fetch_and(!mask, Ordering::SeqCst) & mask
+    let drained = NAV_EDGES.fetch_and(!mask, Ordering::SeqCst) & mask;
+    let keyboard_owns = if keyboard_live {
+        from_keyboard | crate::save_picker_dinput_nav::dinput_nav_held()
+    } else {
+        0
+    };
+    let from_engine = crate::save_picker_nav_ownership::engine_edges_the_keyboard_does_not_own(
+        drained,
+        keyboard_owns,
+    );
+    if from_engine != 0 && keyboard_live {
+        let count = NAV_ENGINE_EDGE_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+        if count <= 10 || count.is_multiple_of(25) {
+            append_autoload_debug(format_args!(
+                "save-picker-nav: engine edge #{count} 0x{from_engine:x} taken while the keyboard reader is live and holding 0x{keyboard_owns:x} -- a device the keyboard hook cannot see, so a pad"
+            ));
+        }
+    }
+    from_keyboard | from_engine
+}
+
+/// Say once which reader owns the latch.
+///
+/// The gap this closes is why the pad defect survived a whole run: the log named both readers as
+/// they installed and then never said which of them was answering, so a log with no direction
+/// lines in it could not be told from the log of a player who pressed nothing.
+fn announce_nav_owner(keyboard_live: bool) {
+    if !keyboard_live || NAV_OWNER_ANNOUNCED.swap(1, Ordering::SeqCst) != 0 {
+        return;
+    }
+    append_autoload_debug(format_args!(
+        "save-picker-nav: the DirectInput keyboard reader is live and owns keyboard edges; CS::MoveDir still answers for every direction it is not holding, which is how a pad reaches the drive strip"
+    ));
 }
 
 /// Directions asserted right now, consuming nothing.
@@ -263,11 +322,18 @@ pub fn take_nav_edges_for(mask: usize) -> usize {
 /// resolved direction for the frame, so it pulses with the auto-repeat and reads as released
 /// between repeats -- which is why the pump's wrap rule, that only accepts a wrap while the
 /// direction is held, could almost never accept one in a shell that had only the fallback.
+///
+/// Both, unioned, for the same reason [`take_nav_edges_for`] consults both: the keyboard reader
+/// goes live on any machine with a keyboard attached, and returning only its answer reported a pad
+/// as holding nothing. Where the keyboard is the device, its bit is already set on every tick the
+/// key is down and the engine's pulse adds nothing that is not true.
 pub fn nav_held() -> usize {
-    if crate::save_picker_dinput_nav::dinput_nav_reader_live() {
-        return crate::save_picker_dinput_nav::dinput_nav_held();
-    }
-    NAV_HELD.load(Ordering::SeqCst) & NATIVE_NAV_SUPPLIED_MASK
+    let keyboard = if crate::save_picker_dinput_nav::dinput_nav_reader_live() {
+        crate::save_picker_dinput_nav::dinput_nav_held()
+    } else {
+        0
+    };
+    keyboard | (NAV_HELD.load(Ordering::SeqCst) & NATIVE_NAV_SUPPLIED_MASK)
 }
 
 #[cfg(test)]
@@ -320,6 +386,9 @@ mod native_nav_tests {
         NAV_EDGES.store(0, Ordering::SeqCst);
     }
 
+    /// The device-ownership rule these two readers meet under is tested where it can actually run:
+    /// [`crate::save_picker_nav_ownership`], outside this module's `cfg(windows)`.
+    ///
     /// `MoveDir` is written by the game through a raw pointer, so its shape is a contract.
     #[test]
     fn move_dir_is_two_packed_int32s() {

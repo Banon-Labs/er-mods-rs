@@ -24,6 +24,42 @@ count -- the point is going and looking, and a watcher that saw nothing did not 
 The log lives under `XDG_STATE_HOME` (default `~/.local/state/er-mods-rs/`), not in the repo, so the
 gate's evidence is not a file the gated Write tool can create.
 
+# The second instrument, and the blind spot it closes
+
+Frida reaches the game. It does not reach our own DLLs. A release `cdylib` in this workspace
+exports `DllMain` and nothing else, so an unexported Rust static, a `pub(crate)` seam, or the
+question "which of our functions calls which of our setters" has no address for `Interceptor` to
+attach to and no name for `DebugSymbol` to resolve. For that class of change the gate used to
+demand an instrument which physically cannot see the subject, and an agent facing it either stalls
+or reaches for the forgery routes named below -- neither of which is the behaviour this was written
+to get.
+
+Measured 2026-09-19, which is the run this section exists for. `er-save-game-row` opened its
+destination browser undressed because `gfx_swap::set_profile_05_010_edit_armed` has exactly one
+caller, in `arm::arm_standalone`, and that shell hand-rolls its arm instead. The defect was already
+measured -- by our own code, at the branch, in a live run:
+
+    05_010 stats-panel edit not armed -- no browse row and no host that dresses a character row
+    served 05_010_profileselect (the picker's own cache key) ... memory_replacement=false
+
+That is not weaker than a Frida hook. At a branch it is stronger: a hook outside the module has to
+infer which way the branch went from its effects, while the branch itself says so. So in-process
+telemetry from a live run is admitted as evidence -- under three conditions that keep it a
+measurement rather than an assertion:
+
+  * the quoted line must be present verbatim in the named log, so it comes off a run rather than
+    out of an argument;
+  * the log must be newer than the last committed Rust change, the same staleness rule Frida
+    evidence lives under;
+  * it licenses one crate -- the shell whose telemetry it is -- and not the tree.
+
+That last one makes it narrower than the Frida path, which opens every crate at once.
+
+    python3 scripts/er-frida-evidence.py --record-telemetry \
+        --crate er-save-game-row \
+        --log "$GAME/er-save-game-row.log" \
+        --line "05_010 stats-panel edit not armed"
+
 # How far that goes, honestly
 
 This heading used to read "and why it cannot be written by hand", which was false, and a false claim
@@ -59,6 +95,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import time
@@ -142,6 +179,77 @@ def record(agent: str, pid: int, messages: int, seconds: float) -> int:
     return 0
 
 
+CRATE_NAME = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+
+# Short enough to quote comfortably, long enough that no single word passes. A one-word `--line`
+# would match somewhere in almost any log, which turns the verbatim check into a formality.
+MIN_TELEMETRY_LINE = 20
+
+
+def record_telemetry(repo: pathlib.Path, crate: str, log: str, line: str) -> int:
+    """Append an in-process-telemetry record, after proving it describes a real run.
+
+    Every refusal below is the difference between a measurement and a claim, so each prints what
+    it wanted rather than a bare failure.
+    """
+    if not CRATE_NAME.match(crate):
+        print(f"refused: crate name {crate!r} is not a bare `[A-Za-z0-9_-]+` directory name")
+        return 2
+    crate_dir = repo / "crates" / crate
+    if not crate_dir.is_dir():
+        print(f"refused: {crate_dir} is not a crate in this workspace")
+        return 2
+    if len(line.strip()) < MIN_TELEMETRY_LINE:
+        print(
+            f"refused: the quoted line is {len(line.strip())} characters, "
+            f"under the {MIN_TELEMETRY_LINE} a verbatim check needs to mean anything"
+        )
+        return 2
+
+    log_file = pathlib.Path(log).expanduser()
+    try:
+        body = log_file.read_text(encoding="utf-8", errors="replace")
+    except OSError as err:
+        print(f"refused: cannot read {log_file}: {err}")
+        return 2
+    if line.strip() not in body:
+        print(f"refused: {log_file} does not contain that line, so it is not what the run said")
+        return 2
+
+    # The log has to come from a run that happened after the last committed Rust change, or it
+    # describes code that is already in. Same rule the Frida path lives under, read off the file
+    # the game wrote rather than off a timestamp handed in on the command line.
+    try:
+        written = int(log_file.stat().st_mtime)
+    except OSError as err:
+        print(f"refused: cannot stat {log_file}: {err}")
+        return 2
+    head = head_commit_time(repo)
+    if head is not None and written <= head:
+        print(
+            f"refused: {log_file} was last written before the newest committed Rust change, "
+            f"so it measured code that is already committed"
+        )
+        return 2
+
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row = {
+        "at": int(time.time()),
+        "kind": "telemetry",
+        "crate": crate,
+        "log": str(log_file),
+        # Flattened, because the verdict line this ends up in is parsed by the policy and a
+        # newline in the middle of it would split the verdict in half.
+        "line": " ".join(line.split()),
+        "written": written,
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row) + "\n")
+    print(f"frida-evidence: recorded {row}")
+    return 0
+
+
 def newest_record(path: pathlib.Path) -> dict | None:
     """The last well-formed record, or `None`.
 
@@ -173,6 +281,23 @@ def check(repo: pathlib.Path) -> int:
         print("UNPROVEN no-frida-evidence nothing has attached to the game and reported back")
         return 1
 
+    head = head_commit_time(repo)
+    if row.get("kind") == "telemetry":
+        if head is not None and int(row.get("at", 0)) <= head:
+            print(
+                "UNPROVEN spent-by-commit the last measurement predates HEAD, so it belongs to "
+                "a change that is already committed"
+            )
+            return 1
+        # `crate=` sits directly after the two fixed words because the policy anchors its match
+        # there: everything to the right of it is free text that must not be able to impersonate
+        # the field that decides which crate this opens.
+        print(
+            f"PROVEN telemetry crate={row.get('crate', '?')} "
+            f"log={row.get('log', '?')} line={row.get('line', '?')!r}"
+        )
+        return 0
+
     messages = int(row.get("messages", 0) or 0)
     if messages <= 0:
         print(
@@ -181,11 +306,10 @@ def check(repo: pathlib.Path) -> int:
         )
         return 1
 
-    head = head_commit_time(repo)
     if head is not None and int(row.get("at", 0)) <= head:
         print(
-            f"UNPROVEN spent-by-commit the last measurement predates HEAD, so it belongs to "
-            f"a change that is already committed"
+            "UNPROVEN spent-by-commit the last measurement predates HEAD, so it belongs to "
+            "a change that is already committed"
         )
         return 1
 
@@ -197,6 +321,8 @@ def check(repo: pathlib.Path) -> int:
 
 
 def selftest() -> int:
+    import contextlib
+    import io
     import tempfile
 
     failures = 0
@@ -226,6 +352,46 @@ def selftest() -> int:
             and check(empty) == 0,
         )
 
+        # --- the second instrument -------------------------------------------------------
+        #
+        # A telemetry record has to describe a real run of a real crate, so every way of
+        # handing it something else is a refusal rather than a weaker record.
+        fake_repo = pathlib.Path(tmp) / "repo"
+        (fake_repo / "crates" / "demo-crate").mkdir(parents=True)
+        run_log = fake_repo / "run.log"
+        quoted = "05_010 stats-panel edit not armed -- no browse row"
+        run_log.write_text(f"demo: attached\ndemo: {quoted}\n", encoding="utf-8")
+
+        ok(
+            "a crate this workspace does not have is refused",
+            record_telemetry(fake_repo, "not-a-crate", str(run_log), quoted) == 2,
+        )
+        ok(
+            "a one-word quote is refused",
+            record_telemetry(fake_repo, "demo-crate", str(run_log), "armed") == 2,
+        )
+        ok(
+            "a line the log does not contain is refused",
+            record_telemetry(fake_repo, "demo-crate", str(run_log), "a line nobody ever printed")
+            == 2,
+        )
+        ok(
+            "a verbatim line from a real log is recorded",
+            record_telemetry(fake_repo, "demo-crate", str(run_log), quoted) == 0,
+        )
+
+        verdict = io.StringIO()
+        with contextlib.redirect_stdout(verdict):
+            code = check(empty)
+        said = verdict.getvalue().strip()
+        ok("telemetry evidence is proven", code == 0)
+        # The policy anchors `^PROVEN telemetry crate=<name>` and reads nothing to the right of
+        # it, so this prefix is a contract between the two files rather than a format detail.
+        ok(
+            "the verdict opens with the field the policy anchors on",
+            said.startswith("PROVEN telemetry crate=demo-crate "),
+        )
+
         ok("the log lives outside the repo by default", REPO_ROOT not in state_dir().parents)
         os.environ.pop("ER_FRIDA_EVIDENCE_LOG", None)
 
@@ -236,6 +402,14 @@ def selftest() -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--record", action="store_true", help="append a record and exit")
+    parser.add_argument(
+        "--record-telemetry",
+        action="store_true",
+        help="append an in-process-telemetry record, licensing one crate",
+    )
+    parser.add_argument("--crate", default="", help="the crate the telemetry record licenses")
+    parser.add_argument("--log", default="", help="the live run's log file")
+    parser.add_argument("--line", default="", help="a line that must be in that log verbatim")
     parser.add_argument("--agent", default="", help="the agent file that ran")
     parser.add_argument("--pid", type=int, default=0)
     parser.add_argument("--messages", type=int, default=0)
@@ -248,6 +422,8 @@ def main(argv: list[str]) -> int:
         return selftest()
     if args.record:
         return record(args.agent, args.pid, args.messages, args.seconds)
+    if args.record_telemetry:
+        return record_telemetry(REPO_ROOT, args.crate, args.log, args.line)
     if args.check:
         return check(REPO_ROOT)
     parser.print_help()

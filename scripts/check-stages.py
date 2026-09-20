@@ -222,7 +222,18 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "runtime-tools",
         "the launcher, probe and telemetry tooling -- tested here, never run against the game",
-        ("scripts/*.py", "scripts/*.sh", ".auto/*", "crates/**/*", "data/*"),
+        (
+            "scripts/*.py",
+            "scripts/*.sh",
+            ".auto/*",
+            "crates/**/*",
+            "data/*",
+            # `scripts/er_run_lib.py` carries the `WorldChrMan` global its world-read witness walks,
+            # and reads this row back to prove the 1.16.2 to 1.17.0 hop that produced it. A push
+            # that regenerates the map moves the provenance of a constant this stage gates on, so
+            # the stage has to be selected for it.
+            "docs/recon/rva-map-1162-to-1170.data.tsv",
+        ),
     ),
     Stage(
         "addresses",

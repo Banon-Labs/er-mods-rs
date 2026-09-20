@@ -180,7 +180,7 @@ def comment_spans(text: str, dialect: str) -> list[tuple[int, str]]:
                 line += text.count("\n", i, j)
                 i = j
                 continue
-            if c == "#":
+            if c == "#" and not _is_shell_expansion_hash(text, i):
                 end = text.find("\n", i)
                 end = n if end < 0 else end
                 spans.append((line, text[i:end]))
@@ -188,6 +188,27 @@ def comment_spans(text: str, dialect: str) -> list[tuple[int, str]]:
                 continue
         i += 1
     return spans
+
+
+def _is_shell_expansion_hash(text: str, i: int) -> bool:
+    """Whether the `#` at `i` is part of a shell parameter expansion rather than a comment.
+
+    Two shapes, and both are the length operator: `$#` is the positional-parameter count and
+    `${#name[@]}` is an array's length. In neither does the `#` open a comment, so reading the
+    rest of the line as prose invents a finding in code the author cannot rewrite.
+
+    Measured: `scripts/open-draft-prs.sh` line 164 reads `[[ ${#BRANCHES[@]} -eq 0 ]]; then`, and
+    the gate reported `BRANCHES is emphasis, not a name` against an array it cannot rename. bd
+    `er-effects-rs-0y71`.
+
+    Deliberately narrower than the POSIX rule that a comment begins a word. Python is scanned by
+    this same branch and `x = 1#comment` is a real Python comment with no space before it, so a
+    word-boundary test would blind the gate to a whole dialect. `$` is not a Python token at all,
+    which is what makes this shape safe to exempt for both.
+    """
+    if i > 0 and text[i - 1] == "$":
+        return True
+    return i > 1 and text[i - 1] == "{" and text[i - 2] == "$"
 
 
 def _skip_rust_string(text: str, i: int) -> int:
@@ -732,6 +753,21 @@ def selftest() -> int:
         "a shebang is not prose",
         [c for _, c in prose_spans("#!/usr/bin/env bash\n# THE rest is\n", "hash")],
         ["# THE rest is"],
+    )
+    check(
+        "a shell array length is an expansion, not a comment",
+        [c for _, c in prose_spans('[[ ${#BRANCHES[@]} -eq 0 ]] || echo ok\n# THE rest\n', "hash")],
+        ["# THE rest"],
+    )
+    check(
+        "a positional-parameter count is an expansion too",
+        [c for _, c in prose_spans('[[ $# -gt 0 ]] || usage\n# THE rest\n', "hash")],
+        ["# THE rest"],
+    )
+    check(
+        "a python comment with no space before it is still a comment",
+        [c for _, c in prose_spans("x = 1# THE tail\n", "hash")],
+        ["# THE tail"],
     )
     check(
         "a first line after a shebang opens its own sentence",

@@ -19,12 +19,16 @@
 //!
 //! * every slot valid -- latch [`PROFILE_TABLE_WAS_POPULATED`] (proof the engine and `ResMan` are
 //!   up) and let the refresh run;
-//! * every slot empty, and the engine has been seen up -- re-run the native table setup
-//!   [`er_loading_portrait_core::PROFILE_TABLE_BUILDER_RVA`] and rescan. The latch matters: calling
-//!   the builder before the engine is ready faults inside the builder itself, so an empty table at
-//!   boot is left alone;
-//! * any slot still null afterwards -- skip the refresh entirely for this call, which is the only
-//!   way to stop it dereferencing the null it is about to read.
+//! * any slot null -- skip the refresh entirely for this call, which is the only way to stop it
+//!   dereferencing the null it is about to read.
+//!
+//! There used to be a third answer between those two: an all-null table re-ran the native table
+//! setup [`er_loading_portrait_core::PROFILE_TABLE_BUILDER_RVA`] and rescanned, so the refresh
+//! could run against a table this code had built. It is gone, and the measurement that removed it
+//! is in [`profile_table_guard_body`]. The short version: that builder cannot make a generation
+//! that draws unless `TitleTopDialog` is the one calling it, and calling it destroys the
+//! generation that was drawing. Skipping already prevents the access violation on its own, which
+//! is all the builder call was ever needed for.
 //!
 //! # Two installers, deliberately
 //!
@@ -42,13 +46,35 @@ use er_game_base::stack::trace_first_game_caller_rva;
 use er_loading_portrait_core::{
     PROFILE_RENDERER_REFRESH_RVA, PROFILE_SELECT_TABLE_DIAG_LAST, PROFILE_SELECT_TABLE_DIAG_ORIG,
     PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT, PROFILE_SELECT_TABLE_GUARD_SKIP_LAST,
-    PROFILE_SELECT_TABLE_REPAIR_COUNT, PROFILE_TABLE_ALL_SLOTS_MASK, PROFILE_TABLE_BUILDER_RVA,
-    PROFILE_TABLE_WAS_POPULATED, TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA,
-    TITLE_PROFILE_SLOT_COUNT, portrait_renderer_table_entry,
+    PROFILE_SELECT_TABLE_REPAIR_COUNT, PROFILE_TABLE_ALL_SLOTS_MASK, PROFILE_TABLE_WAS_POPULATED,
+    TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA, TITLE_PROFILE_SLOT_COUNT,
+    portrait_renderer_table_entry,
 };
 use er_title_flow::TITLE_OWNER_SCAN_START_ADDRESS;
 
 use crate::host::{append_autoload_debug, append_crash_log};
+
+/// Native profile refreshes entered, for the rate limit on the per-refresh line.
+static PROFILE_TABLE_REFRESH_ENTRY_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Two fields that tell a renderer bound to the title's Scaleform components from one that is not,
+/// which is the same thing as telling one that can draw a portrait from one that never will.
+///
+/// Derived 2026-09-19 by diffing a full `0xa30` renderer object that was drawing against the
+/// generation a bare call of the native table setup put in its place. A drawing renderer holds `2`
+/// at `+0x94` and a handle at `+0xa0`; a built one holds zero in both, and still did forty seconds
+/// later. `+0x48`, `+0x60` and `+0x78` separate them too; these two are the narrowest pair.
+///
+/// The obvious-looking field is the one to avoid. `+0x754` is what the refresh dereferences and
+/// what the access violation was about, so it reads like the state of the draw -- it is not. It is
+/// a request latch: the refresh sets it and `+0x755`, and the step machine clears them again, so
+/// an idle renderer that has already drawn is byte-identical there to one that was never asked.
+/// Measured through Frida on a live session, arming all ten and finding both bytes back at zero.
+const PROFILE_RENDERER_BOUND_STATE_OFFSET: usize = 0x94;
+
+/// The handle a bound renderer carries; zero on one the title never bound. See
+/// [`PROFILE_RENDERER_BOUND_STATE_OFFSET`].
+const PROFILE_RENDERER_BOUND_HANDLE_OFFSET: usize = 0xa0;
 
 /// Slot pointers read out of the renderer table, plus the masks describing them.
 struct TableScan {
@@ -108,12 +134,40 @@ pub unsafe fn profile_table_guard_body() -> bool {
     let TableScan {
         ptrs,
         valid_mask,
-        mut null_mask,
+        null_mask,
     } = scan;
     // Degraded is any null at all, including all-null. A healthy table is all ten valid, because
     // the native setup allocates all ten unconditionally.
     let degraded = null_mask != 0;
     let caller_rva = trace_first_game_caller_rva();
+    // Every entry, healthy ones included, because a healthy refresh used to log nothing at all and
+    // that is precisely the frame a portrait question needs.
+    //
+    // What it prints is the pair from [`PROFILE_RENDERER_BOUND_STATE_OFFSET`], so a reader can see
+    // at the refresh's own entry whether the renderers it is about to feed are bound to anything.
+    // A line whose slots read `bound=0 handle=0x0` describes ten portraits that will not appear no
+    // matter what the refresh does, and that is a different bug from the one this guard is named
+    // for -- it is the table having been rebuilt out from under the title.
+    let entry = PROFILE_TABLE_REFRESH_ENTRY_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
+    if entry <= 20 || entry.is_multiple_of(25) {
+        let bound = |slot: usize| {
+            unsafe { safe_read_usize(ptrs[slot] + PROFILE_RENDERER_BOUND_STATE_OFFSET) }
+                .unwrap_or(0) as u32
+        };
+        let handle = |slot: usize| {
+            unsafe { safe_read_usize(ptrs[slot] + PROFILE_RENDERER_BOUND_HANDLE_OFFSET) }
+                .unwrap_or(0)
+        };
+        append_autoload_debug(format_args!(
+            "profileselect-table-refresh #{entry}: caller_rva=0x{caller_rva:x} valid_mask=0x{valid_mask:x} null_mask=0x{null_mask:x} slot0=0x{:x}(bound={} handle=0x{:x}) slot1=0x{:x}(bound={} handle=0x{:x})",
+            ptrs[0],
+            bound(0),
+            handle(0),
+            ptrs[1],
+            bound(1),
+            handle(1)
+        ));
+    }
     let key = ((caller_rva & 0xffffff) << 20) | ((valid_mask as usize) << 10) | null_mask as usize;
     if degraded && PROFILE_SELECT_TABLE_DIAG_LAST.swap(key, Ordering::SeqCst) != key {
         append_crash_log(format_args!(
@@ -135,28 +189,40 @@ pub unsafe fn profile_table_guard_body() -> bool {
         // successfully, which is what makes the repair below safe to attempt later.
         PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
     }
-    if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK
-        && PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0
-        && let Some(build_addr) = crate::scaleform_proxy::gated_game_fn(
-            PROFILE_TABLE_BUILDER_RVA,
-            "PROFILE_TABLE_BUILDER_RVA",
-        )
-    {
-        // Safety: the native no-argument table setup, resolved from a pinned rva on a recognised
-        // build. It tears down the existing ten (a no-op on an already-null table) and constructs
-        // ten fresh renderers into the title table.
-        let build: unsafe extern "system" fn() = unsafe { core::mem::transmute(build_addr) };
-        unsafe { build() };
+    // The repair that used to live here called the native table setup on a fully-empty table. It
+    // is gone, and the reason is that it never worked -- it only looked like it did, because the
+    // table it left behind passes every check this code can make.
+    //
+    // Measured 2026-09-19 on a live title screen that was drawing its portraits correctly: one
+    // call of that builder (`scripts/frida/one-extra-table-build-blinds-the-portraits.js`)
+    // replaced the ten renderers with a generation that was still not drawing forty seconds
+    // later. Ten distinct non-null `CSEzOffscreenRend` pointers at `+0xa8`, so nothing failed to
+    // allocate; the generation simply never reached the state a drawing one is in. Diffing a full
+    // object against the generation it displaced: `+0x94` is `2` on a drawing renderer and `0` on
+    // a built one, `+0xa0` holds a handle and is `0`, and so are `+0x48`, `+0x60` and `+0x78`.
+    //
+    // `TitleTopDialog` is the builder's only caller -- one call site, `0x1409a8444` -- and it
+    // calls it inside the run of `SceneObjProxy::assignComponentWithName` binds that attach the
+    // title's Scaleform components. Each renderer's offscreen target is constructed from a
+    // per-slot name at `DAT_143b39840 + slot * 0x20`, and the builder's teardown hands the
+    // previous ten to `CSDelayDeleteMan` instead of deleting them, so a generation built while
+    // another still holds those ten names is never bound to anything and can never draw.
+    //
+    // What the user saw, which is what sent anyone looking: open the in-game Save Game menu once,
+    // back out, quit to menu, open Load Game -- ten blank portraits, and re-entering the list did
+    // not fix it. Re-issuing the game's own refresh through Frida armed all ten renderers and
+    // still drew nothing, which is what ruled out the request and pointed here.
+    //
+    // Nothing is lost by not building. The skip below is what stops `er-effects-rs-j3r` from
+    // dereferencing `[null + 0x754]`, and it stops it on its own; a portrait the builder makes in
+    // this state was never going to appear either.
+    if null_mask == PROFILE_TABLE_ALL_SLOTS_MASK {
         let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-        let rescan = unsafe { scan_table(base) };
-        null_mask = rescan.null_mask;
-        let revalid_mask = rescan.valid_mask;
-        append_crash_log(format_args!(
-            "PROFILESELECT-TABLE-REPAIR #{n}: fully-empty renderer table at native builder entry -> re-ran native table setup 0x{build_addr:x}; post-repair valid_mask=0x{revalid_mask:x} null_mask=0x{null_mask:x} (er-effects-rs-j3r)"
-        ));
-        append_autoload_debug(format_args!(
-            "profileselect-table-repair #{n}: rebuilt empty 10-slot renderer table via native setup before the native builder walked it; post-repair valid_mask=0x{revalid_mask:x} (er-effects-rs-j3r)"
-        ));
+        if n == 1 {
+            append_autoload_debug(format_args!(
+                "profileselect-table-refresh: the renderer table is empty; skipping the refresh rather than calling the native setup, which produces a generation that is never bound to the title's Scaleform components and cannot draw (er-effects-rs-j3r)"
+            ));
+        }
     }
     if null_mask != 0 {
         let n = PROFILE_SELECT_TABLE_GUARD_SKIP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
@@ -181,17 +247,14 @@ pub unsafe fn profile_table_guard_body() -> bool {
 /// neutral default does nothing (measured 2026-09-11: four presses, each
 /// `build_requested=false`, no picker).
 ///
-/// # The readiness gate, and why the product's latch is not enough here
+/// # There is no readiness gate any more, because nothing is built
 ///
-/// Calling the native setup before the engine and `ResMan` are up faults inside the builder --
-/// observed at the title on 2026-06-29. The product gates on [`PROFILE_TABLE_WAS_POPULATED`], a
-/// latch set when a fully valid table has been seen, which is a proxy for "the engine is up"
-/// borrowed from the title menu having already built one. A product-less in-world load may never
-/// have observed that, so the proxy answers no while the engine is plainly running.
-///
-/// The player being in the world is the stronger and more direct statement of the same fact: a
-/// local `PlayerIns` exists only after the world has streamed, which is strictly later than the
-/// engine coming up. Either signal opens the gate; neither alone would cover both callers.
+/// This used to weigh whether the engine was up before calling the native setup --
+/// [`PROFILE_TABLE_WAS_POPULATED`] as a proxy, with the local `PlayerIns` as the stronger signal
+/// for a product-less in-world load that had never seen a valid table. Both questions were about
+/// when the builder is safe to call, and the builder is no longer called from anywhere in this
+/// module. What remains is a single question with a single answer: an empty table may be opened
+/// against when the refresh detour is installed to skip the refresh, and may not when it is not.
 ///
 /// # Safety
 ///
@@ -211,34 +274,31 @@ pub unsafe fn ensure_profile_table_ready(base: usize) -> bool {
         ));
         return false;
     }
-    let engine_seen_up = PROFILE_TABLE_WAS_POPULATED.load(Ordering::SeqCst) != 0;
-    // Safety: the binding answers `Err` rather than faulting when no local player exists.
-    let player_in_world = unsafe { eldenring::cs::PlayerIns::local_player_mut() }.is_ok();
-    if !engine_seen_up && !player_in_world {
+    // An all-null table is safe to submit against as long as the refresh detour is installed: the
+    // detour skips the refresh rather than letting it read `[null + 0x754]`. The skip is what
+    // makes the picker openable here, and it always was -- the native setup this function used to
+    // call was never what did it.
+    //
+    // That call is gone for the reason recorded in `profile_table_guard_body` above: a generation
+    // the builder makes outside `TitleTopDialog`'s own construction sequence is never bound to the
+    // title's Scaleform components, so it cannot draw a portrait, and making one destroys the
+    // generation that was drawing. Measured live 2026-09-19 on a title screen that had portraits.
+    // Our rows here are files with no character model to draw, so the picker loses nothing it ever
+    // had.
+    //
+    // Read through `PROFILE_SELECT_TABLE_DIAG_ORIG` rather than this crate's `GUARD_INSTALLED`,
+    // because the product installs the same detour from its own `MhHook` and never raises that
+    // latch. The shared slot is non-zero once either installer has hooked, which is the question
+    // being asked.
+    if PROFILE_SELECT_TABLE_DIAG_ORIG.load(Ordering::SeqCst) != 0 {
         append_autoload_debug(format_args!(
-            "profileselect-table-guard: renderer table is empty and nothing says the engine is up (table_was_populated=false, player_in_world=false); not calling the native setup, which faults when it runs too early"
+            "profileselect-table-guard: renderer table is empty and the refresh detour is installed, so the refresh will be skipped rather than faulting; not calling the native setup, which cannot produce renderers that draw"
         ));
-        return false;
-    }
-    let Some(build_addr) = crate::scaleform_proxy::gated_game_fn(
-        PROFILE_TABLE_BUILDER_RVA,
-        "PROFILE_TABLE_BUILDER_RVA",
-    ) else {
-        return false;
-    };
-    // Safety: the native no-argument table setup, resolved from a pinned rva on a recognised build.
-    let build: unsafe extern "system" fn() = unsafe { core::mem::transmute(build_addr) };
-    unsafe { build() };
-    let n = PROFILE_SELECT_TABLE_REPAIR_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    let after = unsafe { scan_table(base) };
-    append_autoload_debug(format_args!(
-        "profileselect-table-repair #{n}: built the empty 10-slot renderer table via native setup 0x{build_addr:x} before opening ProfileSelect (engine_seen_up={engine_seen_up} player_in_world={player_in_world}); post-build valid_mask=0x{:x} null_mask=0x{:x}",
-        after.valid_mask, after.null_mask
-    ));
-    if after.null_mask == 0 {
-        PROFILE_TABLE_WAS_POPULATED.store(1, Ordering::SeqCst);
         return true;
     }
+    append_autoload_debug(format_args!(
+        "profileselect-table-guard: renderer table is empty and the refresh detour is not installed, so nothing would stop the native refresh reading [null + 0x754]; refusing to open ProfileSelect (er-effects-rs-j3r)"
+    ));
     false
 }
 

@@ -163,6 +163,17 @@ const MOVIES: er_quit_menu_core::gfx_swap::GfxServeSet = er_quit_menu_core::gfx_
 const MOVIES: er_quit_menu_core::gfx_swap::GfxServeSet =
     er_quit_menu_core::gfx_swap::GfxServeSet::PICKER_KEYED;
 
+/// Whether this shell puts the picker's own file rows on `05_010_ProfileSelect`, which is what
+/// earns the derived stats-panel movie from
+/// `er_quit_menu_core::profile_select_chrome_gate::profile_select_chrome_required`.
+///
+/// True in both shapes, and deliberately not read off the `RowSet`. `arm::arm_standalone` derives
+/// the same answer as `rows.load_character_from_file || rows.save_game_as`, which is right for a
+/// shell that adds rows and wrong here: the take-over shape arms `RowSet::NONE` and reaches the
+/// same destination browser through the vanilla row it replaces. The row set describes what was
+/// cloned; this describes what opens.
+const BROWSE_ROWS_ARMED: bool = true;
+
 /// What the armed shape is, in the log's own words. The first lines of a run have to say whether
 /// the tab has two rows or three, because every later line reads the same either way.
 #[cfg(all(windows, not(feature = "hijack-quit-row")))]
@@ -206,6 +217,27 @@ fn arm_save_game_row() {
             "the destination browser's rows are not intercepted; pressing one will run the game's own character-load confirm"
         ));
     }
+    // ...and the answer that decides whether that movie may be served at all.
+    //
+    // The file-open prologue reads a process-wide latch that defaults to refusing, because a host
+    // which re-lays out ProfileSelect and then writes nothing into the space it made is worse than
+    // one that leaves the window alone. Until this call existed only `arm::arm_standalone` set it,
+    // and this shell hand-rolls its arm instead -- so every destination browser it opened rendered
+    // in the game's own character presentation: no drive strip, no current-path bar, no last-saved
+    // time. The refusal named itself twice in the same log, as `05_010 stats-panel edit not armed`
+    // at the serve and then as 8192 `stats-text: ... has no ErCharStats child` lines while the
+    // player browsed.
+    //
+    // Before the swap hook, as the latch's own doc requires: the prologue can be reached by a
+    // Scaleform load the moment that hook is installed.
+    er_quit_menu_core::gfx_swap::set_profile_05_010_edit_armed(
+        er_quit_menu_core::profile_select_chrome_gate::profile_select_chrome_required(
+            BROWSE_ROWS_ARMED,
+            // This shell has no character rows and installs no `RowPopulateHooks`, so it has no
+            // answer about one. Its rows are files, dressed from inside `er-quit-menu-core`.
+            false,
+        ),
+    );
     // ...and the movie that detour dresses. It recognises one of our rows by an `ErCharStats` child
     // that exists only in the derived `05_010` movie, so hooking the populate without serving the
     // movie dresses nothing: run br-20260912-201935-ad27 scored every row foreign 13 times over and
