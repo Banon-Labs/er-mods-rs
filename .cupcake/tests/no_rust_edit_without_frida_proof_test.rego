@@ -381,3 +381,69 @@ test_deny_when_the_tool_name_key_is_absent if {
 
 	count(guard.deny) == 1 with input as event
 }
+
+# --- the second instrument: in-process telemetry, scoped to one crate ----------
+#
+# Frida reaches the game. It does not reach our own DLLs: a release `cdylib` here exports
+# `DllMain` and nothing else, so an unexported static or a `pub(crate)` seam has no address to
+# attach to. For that class the evidence is a line our own code printed at the branch during a
+# live run, quoted verbatim -- and because a measurement of one shell's branch says nothing about
+# any other crate, it opens only the crate whose log it came out of.
+#
+# Copied from `scripts/er-frida-evidence.py`'s own format string, and asserted there by the
+# selftest, so a change to the wording breaks both halves rather than silently widening this.
+PROVEN_TELEMETRY := "PROVEN telemetry crate=er-save-game-row log=/games/er-save-game-row.log line='05_010 stats-panel edit not armed -- no browse row'"
+
+test_allow_the_crate_the_telemetry_came_from if {
+	count(guard.deny) == 0 with input as edit_event(
+		"crates/er-save-game-row/src/lib.rs",
+		PROVEN_TELEMETRY,
+	)
+}
+
+test_allow_that_crate_by_absolute_path_too if {
+	count(guard.deny) == 0 with input as edit_event(
+		"/home/u/er-mods-rs/crates/er-save-game-row/src/lib.rs",
+		PROVEN_TELEMETRY,
+	)
+}
+
+# The scope is the whole point. One shell's branch is not evidence about another crate, and a
+# telemetry verdict that opened the tree would be strictly weaker than the Frida path it sits
+# beside rather than narrower.
+test_deny_a_different_crate_on_the_same_telemetry if {
+	denied(edit_event("crates/er-quickload/src/lib.rs", PROVEN_TELEMETRY))
+}
+
+# A neighbouring crate whose name merely starts with the licensed one. The trailing slash in the
+# path fragment is what keeps `er-save-game-row` from opening `er-save-game-row-core`.
+test_deny_a_crate_whose_name_extends_the_licensed_one if {
+	denied(edit_event("crates/er-save-game-row-core/src/lib.rs", PROVEN_TELEMETRY))
+}
+
+# A telemetry verdict that has lost its `crate=` field has no scope, so it opens nothing. It must
+# not fall through to the unscoped Frida rule, which would turn a formatting slip in the reader
+# into permission to edit the whole tree.
+test_deny_a_telemetry_verdict_with_no_crate_field if {
+	denied(edit_event("crates/er-save-game-row/src/lib.rs", "PROVEN telemetry log=/games/x.log"))
+}
+
+test_deny_a_telemetry_verdict_whose_crate_field_is_empty if {
+	denied(edit_event("crates/er-save-game-row/src/lib.rs", "PROVEN telemetry crate= log=/x.log"))
+}
+
+# Free text from a log sits to the right of the crate name, so it must not be able to impersonate
+# the field that decides scope. The match is anchored at the front of the verdict for this case.
+test_deny_when_a_second_crate_field_appears_in_the_quoted_line if {
+	denied(edit_event(
+		"crates/er-quickload/src/lib.rs",
+		"PROVEN telemetry crate=er-save-game-row log=/x.log line='... crate=er-quickload ...'",
+	))
+}
+
+# And the Frida path is unchanged: its verdict still opens every crate, because the instrument
+# reaches the game and every crate here eventually talks to the game.
+test_a_frida_verdict_still_opens_any_crate if {
+	count(guard.deny) == 0 with input as edit_event("crates/er-save-game-row/src/lib.rs", PROVEN)
+	count(guard.deny) == 0 with input as edit_event("crates/er-quickload/src/lib.rs", PROVEN)
+}

@@ -34,6 +34,15 @@
 #     is a door, and the failure this exists to stop was the agent walking through the
 #     door it argued for itself. `scripts/`, `.cupcake/`, docs and every non-Rust file
 #     stay editable, which is what makes it possible to build and fix this gate.
+#
+#     A SECOND INSTRUMENT was added 2026-09-19, and it is not one of those doors. It
+#     exempts no file: it accepts a different measurement, taken at the branch by our own
+#     DLL and quoted verbatim out of a live run's log, for the class Frida physically
+#     cannot see -- our own unexported internals in a `cdylib` that exports only `DllMain`.
+#     It is strictly narrower than the Frida path, because it opens the one crate whose
+#     log it came from rather than the whole tree. The three conditions that keep it a
+#     measurement (verbatim line, log newer than the last committed Rust change, real
+#     crate) are enforced when the record is written, by the evidence reader.
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit"]
@@ -96,11 +105,52 @@ evidence := "" if {
 # Anything that is not a `PROVEN` line leaves this undefined and the deny below fires --
 # including an empty signal, which is what a broken or timed-out reader produces. Failing
 # closed is the point: a gate that opens when its evidence reader breaks is not a gate.
+#
+# A Frida verdict opens every crate, because the instrument reaches the game and the game is what
+# all of this eventually talks to.
 proven if {
 	startswith(evidence, "PROVEN")
+	not telemetry_verdict
 }
 
-block_reason := "🧁 Cupcake blocked a Rust edit with no Frida measurement behind it. AGENTS.md: \"The order is Frida, then Frida, then Frida, and only then a DLL: prototype with it, run the experiment with it, and fix the thing with it if a hook can. Build a DLL when the mechanism is already known and the code is the product, never to find something out.\"\n\nGo and look first:\n  python3 scripts/er-frida-up.py\n  uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/<agent>.js\n\nThe watch records what it saw on exit, and `python3 scripts/er-frida-evidence.py --check` is what opens this gate. It needs a session that attached to a pid and received at least one message -- a watch that observed nothing did not look at anything. A commit spends the evidence, so the next change needs its own measurement.\n\nIf the mechanism genuinely cannot be reached from Frida, say that in one sentence and say what instrument can reach it. Do not edit around this by narrowing the change until it looks harmless.\n\nEditable without proof: `scripts/`, `.cupcake/`, docs, and every non-Rust file."
+# A telemetry verdict opens exactly one crate: the shell whose own log the quoted line came out of.
+#
+# The blind spot this closes, measured 2026-09-19. Frida reaches the GAME; it does not reach our
+# own DLLs. A release `cdylib` here exports `DllMain` and nothing else, so an unexported Rust
+# static, a `pub(crate)` seam, or "which of our functions calls which of our setters" has no
+# address to attach to and no name to resolve. `er-save-game-row` served its destination browser
+# undressed for exactly that reason -- `gfx_swap::set_profile_05_010_edit_armed` has one caller and
+# that shell does not go through it -- and the gate answered a provable defect by demanding an
+# instrument which cannot see it. An agent facing that either stalls or reaches for one of the
+# forgery routes `scripts/er-frida-evidence.py` names in its own docstring, and neither is the
+# behaviour this was written to get.
+#
+# What makes it evidence rather than an argument is enforced at record time, not here: the quoted
+# line must be present verbatim in the named log, the log must be newer than the last committed
+# Rust change, and the crate must exist. What is enforced HERE is the scope -- a measurement of one
+# shell's branch says nothing about any other crate, so it may not open one. That makes this path
+# narrower than the Frida path above, which opens the whole tree.
+proven if {
+	telemetry_verdict
+	contains(file_path, concat("", ["crates/", licensed_crate, "/"]))
+}
+
+# Keyed on the two fixed words alone, so a verdict that has lost its `crate=` field is still
+# recognised as telemetry and is refused by the rule above rather than falling through to the
+# unscoped one.
+telemetry_verdict if {
+	startswith(evidence, "PROVEN telemetry")
+}
+
+# Anchored at the front of the verdict: everything to the right of the crate name is free text
+# from a log, and free text must not be able to impersonate the field that decides scope.
+licensed_crate := name if {
+	matches := regex.find_all_string_submatch_n(`^PROVEN telemetry crate=([A-Za-z0-9_-]+)(?: |$)`, evidence, 1)
+	count(matches) == 1
+	name := matches[0][1]
+}
+
+block_reason := "🧁 Cupcake blocked a Rust edit with no Frida measurement behind it. AGENTS.md: \"The order is Frida, then Frida, then Frida, and only then a DLL: prototype with it, run the experiment with it, and fix the thing with it if a hook can. Build a DLL when the mechanism is already known and the code is the product, never to find something out.\"\n\nGo and look first:\n  python3 scripts/er-frida-up.py\n  uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/<agent>.js\n\nThe watch records what it saw on exit, and `python3 scripts/er-frida-evidence.py --check` is what opens this gate. It needs a session that attached to a pid and received at least one message -- a watch that observed nothing did not look at anything. A commit spends the evidence, so the next change needs its own measurement.\n\nIf the mechanism is inside one of OUR DLLs rather than in the game -- an unexported static, a `pub(crate)` seam, which of our functions calls which of our setters -- Frida has nothing to attach to, and the instrument that reaches it is the shell's own in-process telemetry from a live run:\n  python3 scripts/er-frida-evidence.py --record-telemetry --crate <crate> --log <the run's log> --line '<a line from it, verbatim>'\nThe line must be in that log word for word and the log must be newer than the last committed Rust change. It opens that ONE crate.\n\nIf neither instrument can reach it, say so in one sentence and say what can. Do not edit around this by narrowing the change until it looks harmless.\n\nEditable without proof: `scripts/`, `.cupcake/`, docs, and every non-Rust file."
 
 # What the refusal quotes back. The three cases are worth telling apart: a verdict line is the
 # reader answering, an absent signal is nobody having asked, and a failure record is the reader
