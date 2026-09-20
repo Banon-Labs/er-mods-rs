@@ -235,6 +235,8 @@ portable	-	check-union-hook-abi.py --selftest	source/AST/text analysis only	sour
 portable	-	check-union-hook-abi.py	source/AST/text analysis only	source
 portable	-	check-me3-dll-conflicts.py --selftest	source/AST/text analysis only	product
 portable	-	check-me3-dll-conflicts.py	source/AST/text analysis only	product
+portable	-	check-profile-select-chrome-answered.py --selftest	source/AST/text analysis only	product
+portable	-	check-profile-select-chrome-answered.py	source/AST/text analysis only	product
 portable	-	check-me3-dll-catalog.py --selftest	source/AST/text analysis only	product
 portable	-	check-me3-dll-catalog.py	source/AST/text analysis only	product
 portable	-	check-quit-row-flow-overlap.py --selftest	source/AST/text analysis only	product
