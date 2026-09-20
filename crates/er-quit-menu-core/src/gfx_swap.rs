@@ -63,6 +63,8 @@ static BUILD_URL_02_990_FAILURES: AtomicUsize = AtomicUsize::new(0);
 static PROFILE_05_010_EDIT_ARMED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 static PROFILE_05_010_REFUSED_UNARMED: AtomicUsize = AtomicUsize::new(0);
+/// Picker opens that borrowed the canonical url for their bytes, for the log's rate limit.
+static PROFILE_05_010_BORROWED_URL_OPENS: AtomicUsize = AtomicUsize::new(0);
 
 /// Record whether the `05_010_ProfileSelect` chrome was earned. Called once from the arm.
 pub fn set_profile_05_010_edit_armed(armed: bool) {
@@ -723,12 +725,28 @@ unsafe extern "system" fn quit_menu_scaleform_file_open_hook(
             PROFILE_05_010_CANONICAL_FILE.load(Ordering::SeqCst),
         ));
     }
-    if is_picker_05_010 {
+    // The picker's open is redirected to the canonical url above to get its bytes, so it is worth
+    // saying in the log whether the movie it was answered with could be the title's.
+    //
+    // It is not, and that was measured rather than argued. On 2026-09-19 this borrowed-url case
+    // was made a refusal on the theory that Scaleform keys the parsed `MovieDef` by the url and
+    // the title's Load Game would therefore draw our derivation -- alpha-0 `Icon_0`, no face box.
+    // The next run refused every picker open (`served ... memory_replacement=false`, so the
+    // derivation was installed nowhere at all) and the title's portraits were still blank. That
+    // falsifies the theory outright: whatever blanks them, it is not this edit. The refusal was
+    // reverted, because it cost the picker its drive strip and its current-path bar for nothing.
+    if is_picker_05_010 && CANONICAL_PROFILE_SELECT_URL.get().is_some() {
         let canonical = PROFILE_05_010_CANONICAL_FILE.load(Ordering::SeqCst);
         if canonical != 0 && canonical == native {
             PROFILE_05_010_SHARED_OBJECT.fetch_add(1, Ordering::SeqCst);
             append_autoload_debug(format_args!(
                 "system-quit-gfx: 05_010 picker key was answered with the title's own movie object 0x{native:x} -- a cache hit, not a fresh load, so editing it re-lays out the title's Load Game as well. Serving vanilla for this open."
+            ));
+        }
+        let n = PROFILE_05_010_BORROWED_URL_OPENS.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= 2 {
+            append_autoload_debug(format_args!(
+                "system-quit-gfx: 05_010 picker open #{n} borrowed the canonical url for its bytes (object 0x{native:x} vs canonical 0x{canonical:x}); serving the derivation here does not reach the title's Load Game -- measured 2026-09-19, refusing every one of these left the title's portraits just as blank"
             ));
         }
     }
