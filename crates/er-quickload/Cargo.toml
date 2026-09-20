@@ -28,7 +28,6 @@ crate-type = ["cdylib", "rlib"]
 # player chooses, and it has to be present for that to be possible at all.
 default = [
     "autoload",
-    "save-picker",
     "quit-rows",
     "loading-cover",
     "portrait",
@@ -53,8 +52,6 @@ quit-rows = ["save-game-row"]
 # build leaves that row exactly as the game ships it -- label and action together, which is the pair
 # that came apart on run br-20260912-185308-639d when the text moved without the flow.
 save-game-row = []
-# The in-game save-file browser the Load Character from File row opens.
-save-picker = []
 # The loading-screen cover and the title visuals.
 loading-cover = []
 # The character portraits on the loading screen and the Quit panel.

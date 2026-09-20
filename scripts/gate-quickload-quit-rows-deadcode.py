@@ -29,7 +29,7 @@ BUILD = [
     "cargo", "xwin", "check", "-p", "er-quickload",
     "--target", "x86_64-pc-windows-msvc",
     "--no-default-features",
-    "--features", "autoload,save-picker,loading-cover,portrait,menu-trace",
+    "--features", "autoload,loading-cover,portrait,menu-trace",
     "--message-format", "short",
 ]
 DEAD = re.compile(r"^(crates/\S+\.rs):(\d+):\d+: error: (?:constant|static|function|type alias|struct|enum|unused import|unused imports|.*?is never used)")
