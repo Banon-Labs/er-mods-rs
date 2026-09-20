@@ -78,3 +78,38 @@ pub const OPTIONS_02_040_QUIT6_EDITS: &[TagEdit] = &[
     },
 ];
 // 5 edits: 0 removals, 1 replacement, 4 insertions.
+
+// The seventh cell, applied on top of the six above when the Save Game row is armed as a row of
+// its own rather than as a relabel of the native first one. Measured 2026-09-20 in a live run
+// with `save-game` listed in `er-quit-menu.toml`: the shell cloned the row and reported
+// `cols=2 rows=3 navigable_cells=6 item_count=7`, so the row existed with no cell to occupy and
+// never reached the screen.
+//
+// Authored and gated exactly as edits 3 and 4 were: the matrix encoder was re-derived from the
+// four cells already in this table and made to reproduce every one of them byte-for-byte before
+// it was allowed to emit this one.
+//
+//   flags 0x26  = HasCharacter | HasMatrix | HasName, as every other cell
+//   depth 0x14  = 20, the next depth after Item_2_1 (19)
+//   char  0x81  = 129, the same Quit-tab cell component the other six place
+//   matrix      = translate-only, 14 translate bits: tx = -3979 twips (identical to Item_1_0 and
+//                 Item_2_0, so the new row is left-aligned under the same column), ty = 7800
+//                 twips -- one more 1100-twip (55 px) step down, the step that separates every
+//                 pair of rows above it.
+//
+// There is deliberately no `Item_3_1`. Seven items cannot fill a two-column grid, and of the two
+// ragged shapes available this is the one the engine already handles: the measure loop probes
+// `Item_3_1`, finds nothing, and destructs the invalid value it gets back -- the same exit it
+// takes on vanilla. The alternative, an eighth cell whose item index is past `SetItemCount`, puts
+// a component on screen that the hit test discards, and a cell that can be hovered but never
+// chosen is worse than one that is not there. The module comment in `options_02_040.rs` records
+// the three pieces of native behaviour this leans on, measured when the tab was five rows and its
+// bottom row was ragged the same way.
+pub const OPTIONS_02_040_QUIT7_EXTRA_EDITS: &[TagEdit] = &[TagEdit {
+    sprite_id: Some(138),
+    code: 26,
+    old_tag: &[0xbf, 0x06, 0x14, 0x00, 0x00, 0x00, 0x26, 0x0f, 0x00, 0x89, 0x00, 0x16, 0x00, 0x27, 0x00, 0x50, 0x6c, 0x61, 0x79, 0x65, 0x72, 0x49, 0x6e, 0x66, 0x6f, 0x00],
+    new_tag: Some(&[0xbf, 0x06, 0x13, 0x00, 0x00, 0x00, 0x26, 0x14, 0x00, 0x81, 0x00, 0x1d, 0x83, 0xab, 0xcf, 0x00, 0x49, 0x74, 0x65, 0x6d, 0x5f, 0x33, 0x5f, 0x30, 0x00]),
+    op: EditOp::InsertAfter,
+}];
+// 1 further edit: 0 removals, 0 replacements, 1 insertion.

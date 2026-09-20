@@ -9,9 +9,10 @@ mod common;
 
 use er_game_base::fnv1a::fnv1a64;
 use er_gfx::options_02_040::{
-    QUIT6_GRID_CELL_NAMES, QUIT6_WIN_FNV1A64, QUIT6_WIN_LEN, Quit6Error, VANILLA_WIN_FNV1A64,
-    VANILLA_WIN_LEN, grid_horizontal_axis_enabled, grid_item_index, grid_vertical_axis_enabled,
-    is_known_vanilla_win, measure_grid, quit6,
+    QUIT6_GRID_CELL_NAMES, QUIT6_WIN_FNV1A64, QUIT6_WIN_LEN, QUIT7_GRID_CELL_NAMES,
+    QUIT7_WIN_FNV1A64, QUIT7_WIN_LEN, Quit6Error, VANILLA_WIN_FNV1A64, VANILLA_WIN_LEN,
+    grid_horizontal_axis_enabled, grid_item_index, grid_vertical_axis_enabled,
+    is_known_vanilla_win, measure_grid, quit6, quit7,
 };
 use er_gfx::{Movie, Tag};
 
@@ -58,6 +59,59 @@ fn quit6_of_vanilla_matches_validated_fingerprint() {
     let out = quit6(&vanilla).expect("quit6 edit must apply cleanly to the known vanilla movie");
     assert_eq!(out.len(), QUIT6_WIN_LEN);
     assert_eq!(fnv1a64(&out), QUIT6_WIN_FNV1A64);
+}
+
+#[test]
+fn quit7_of_vanilla_matches_validated_fingerprint() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = quit7(&vanilla).expect("quit7 edits must apply cleanly to the known vanilla movie");
+    assert_eq!(out.len(), QUIT7_WIN_LEN);
+    assert_eq!(fnv1a64(&out), QUIT7_WIN_FNV1A64);
+}
+
+/// The seven-item shape, and the two things about it that are not true of the six-item one.
+///
+/// A fourth row is measured, so the grid the hit test walks is eight cells against seven items,
+/// and `Item_3_1` is absent on purpose -- the measure loop probes it, gets nothing, and takes the
+/// same exit it takes on vanilla. Measured 2026-09-20: a live run with `save-game` listed armed
+/// the row and logged `cols=2 rows=3 navigable_cells=6 item_count=7`, which is this movie's whole
+/// reason to exist.
+#[test]
+fn the_seven_cell_movie_measures_a_two_by_four_grid() {
+    let Some(vanilla) = read_vanilla_or_skip() else {
+        return;
+    };
+    let out = quit7(&vanilla).expect("quit7 edits must apply cleanly to the known vanilla movie");
+    let derived = Movie::parse(&out).expect("derived movie parses");
+    let names = placed_names(&derived, QUIT_GAME_SPRITE_ID);
+    for cell in QUIT7_GRID_CELL_NAMES {
+        assert!(
+            names.iter().any(|n| n == cell),
+            "missing cell {cell} in {names:?}"
+        );
+    }
+    assert!(
+        !names.iter().any(|n| n == "Item_3_1"),
+        "an eighth cell would be hoverable at item index 7, past SetItemCount's 7 items"
+    );
+
+    let (cols, rows) = measure_grid(|row, col| has_cell(&names, row, col));
+    assert_eq!((cols, rows), (2, 4));
+    assert!(
+        grid_vertical_axis_enabled(cols, rows),
+        "up/down must walk rows"
+    );
+    assert!(
+        grid_horizontal_axis_enabled(cols, rows),
+        "left/right must walk columns"
+    );
+    assert_eq!(
+        grid_item_index(3, 0, cols),
+        6,
+        "the Save Game row is the seventh item, so it must land at index 6"
+    );
 }
 
 #[test]

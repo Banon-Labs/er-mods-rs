@@ -159,6 +159,14 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
         profile_select: false,
         profile_select_picker_key: rows.load_character || browse_rows_armed,
     };
+    // Save Game as a row of its own is the seventh item on the tab, and the six-cell grid has
+    // nowhere to put it: measured 2026-09-20, a live run with `save-game` listed cloned the row
+    // and reported `cols=2 rows=3 navigable_cells=6 item_count=7`, so it existed and never
+    // reached the screen. Asking for the seventh cell before the hook is installed, because the
+    // derivation is cached the first time the movie is loaded and the flag is read there.
+    if rows.save_game_as {
+        crate::gfx_swap::serve_seventh_quit_cell();
+    }
     // First of the installs, because it is the only one with a deadline: the movie is served the
     // first time the Quit tab is opened, and a swap registered after that shows a vanilla two-cell
     // grid until the panel is rebuilt.

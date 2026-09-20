@@ -17,7 +17,8 @@ use er_game_base::fnv1a::fnv1a64;
 use er_gfx::Movie;
 use er_gfx::edit::apply_edits;
 use er_gfx::options_02_040::{
-    OPTIONS_02_040_QUIT6_EDITS, QUIT6_GRID_CELL_NAMES, QUIT6_WIN_FNV1A64, QUIT6_WIN_LEN,
+    OPTIONS_02_040_QUIT6_EDITS, OPTIONS_02_040_QUIT7_EXTRA_EDITS, QUIT6_GRID_CELL_NAMES,
+    QUIT6_WIN_FNV1A64, QUIT6_WIN_LEN, QUIT7_GRID_CELL_NAMES, QUIT7_WIN_FNV1A64, QUIT7_WIN_LEN,
     is_known_vanilla_win,
 };
 
@@ -52,6 +53,31 @@ fn main() {
         }
     );
     println!("grid cells the Quit tab measures: {QUIT6_GRID_CELL_NAMES:?}");
+
+    // The seven-cell derivation, reported the same way and for the same reason: `quit7` refuses
+    // bytes whose fingerprint disagrees with the pinned constants, so the numbers have to come
+    // from `apply_edits` directly while they are still being worked out.
+    let mut seven = Movie::parse(&vanilla).expect("parse vanilla movie");
+    let six_applied =
+        apply_edits(&mut seven, OPTIONS_02_040_QUIT6_EDITS).expect("apply quit6 edits");
+    let extra_applied = apply_edits(&mut seven, OPTIONS_02_040_QUIT7_EXTRA_EDITS)
+        .expect("apply the seventh-cell edit");
+    let seven_out = seven.write().expect("write the seven-cell movie");
+    println!(
+        "out7 len={} fnv1a64=0x{:016x} edits_applied={}",
+        seven_out.len(),
+        fnv1a64(&seven_out),
+        six_applied + extra_applied
+    );
+    println!(
+        "pinned QUIT7_WIN_LEN={QUIT7_WIN_LEN} QUIT7_WIN_FNV1A64=0x{QUIT7_WIN_FNV1A64:016x} -> {}",
+        if seven_out.len() == QUIT7_WIN_LEN && fnv1a64(&seven_out) == QUIT7_WIN_FNV1A64 {
+            "MATCH"
+        } else {
+            "DRIFT (update the constants in options_02_040.rs)"
+        }
+    );
+    println!("grid cells with Save Game armed: {QUIT7_GRID_CELL_NAMES:?}");
 
     if let Some(path) = args.next() {
         std::fs::write(&path, &out).expect("write output movie");

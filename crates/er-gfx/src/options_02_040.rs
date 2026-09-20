@@ -81,12 +81,25 @@ pub const VANILLA_WIN_LEN: usize = 44007;
 pub const VANILLA_WIN_FNV1A64: u64 = 0x570d_8549_2c03_72a0;
 pub const QUIT6_WIN_LEN: usize = 44107;
 pub const QUIT6_WIN_FNV1A64: u64 = 0x4c54_7513_773a_fd59;
+/// The seven-cell derivation: the six-cell movie plus one `PlaceObject2`, which is 25 bytes of
+/// tag -- a 6-byte long-form header and a 19-byte body. Re-derive both of these with
+/// `cargo run -p er-gfx --example make_02_040_quit6` when the edit table changes.
+pub const QUIT7_WIN_LEN: usize = 44132;
+pub const QUIT7_WIN_FNV1A64: u64 = 0x405c_1027_1564_c592;
 
 /// The six grid cell names the derived movie must expose in sprite 138, in item-index order
 /// (`row * cols + col` with the measured `cols = 2`). Asserted by the er-gfx integration test: the
 /// whole navigation/hover model of the patched Quit tab is these six strings.
 pub const QUIT6_GRID_CELL_NAMES: [&str; 6] = [
     "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1",
+];
+
+/// The same movie with a seventh cell, for the row set that also arms Save Game as a row of its
+/// own. `Item_3_0` alone: the grid measures `cols = 2, rows = 4` and the seventh item lands at
+/// `3 * 2 + 0 == 6`, while `Item_3_1` is deliberately absent -- see the provenance comment on
+/// [`OPTIONS_02_040_QUIT7_EXTRA_EDITS`] for why a missing eighth cell beats an unselectable one.
+pub const QUIT7_GRID_CELL_NAMES: [&str; 7] = [
+    "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1", "Item_3_0",
 ];
 
 pub fn is_known_vanilla_win(bytes: &[u8]) -> bool {
@@ -177,6 +190,32 @@ pub fn quit6(vanilla: &[u8]) -> Result<Vec<u8>, Quit6Error> {
     let out = movie.write().map_err(Quit6Error::Write)?;
     if is_known_vanilla_win(vanilla)
         && (out.len() != QUIT6_WIN_LEN || fnv1a64(&out) != QUIT6_WIN_FNV1A64)
+    {
+        return Err(Quit6Error::KnownInputBadOutput {
+            out_len: out.len(),
+            out_fnv1a64: fnv1a64(&out),
+        });
+    }
+    Ok(out)
+}
+
+/// The seven-cell Quit tab: [`quit6`]'s edits and one more cell, for the row set that arms Save
+/// Game as a row of its own.
+///
+/// Both edit tables are applied to one freshly parsed movie before it is written, so this is a
+/// single derivation from vanilla rather than a re-derivation of already-derived bytes -- the
+/// thing [`quit6`]'s fingerprint check exists to refuse.
+///
+/// The error type is shared with [`quit6`]: the failures are the same four, and the fingerprint
+/// carried in `KnownInputBadOutput` names the six-cell constants because that variant is
+/// constructed there. A seven-cell mismatch reports its own numbers through the same shape.
+pub fn quit7(vanilla: &[u8]) -> Result<Vec<u8>, Quit6Error> {
+    let mut movie = Movie::parse(vanilla).map_err(Quit6Error::Parse)?;
+    apply_edits(&mut movie, OPTIONS_02_040_QUIT6_EDITS).map_err(Quit6Error::Edit)?;
+    apply_edits(&mut movie, OPTIONS_02_040_QUIT7_EXTRA_EDITS).map_err(Quit6Error::Edit)?;
+    let out = movie.write().map_err(Quit6Error::Write)?;
+    if is_known_vanilla_win(vanilla)
+        && (out.len() != QUIT7_WIN_LEN || fnv1a64(&out) != QUIT7_WIN_FNV1A64)
     {
         return Err(Quit6Error::KnownInputBadOutput {
             out_len: out.len(),
