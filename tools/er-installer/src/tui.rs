@@ -40,10 +40,29 @@ pub enum Key {
     Char(char),
 }
 
+/// Read one keypress from whichever source this platform delivers keys on.
+///
+/// Unix decodes bytes from the reader, where an arrow arrives as `esc [ A`. Windows ignores the
+/// reader and takes the console event queue instead, because an arrow puts no byte in the stream
+/// there -- see [`platform::read_key`]. Both return the same [`Key`], so the picker above this is
+/// one code path.
+pub fn next_key<R: Read>(reader: &mut R) -> Option<Key> {
+    #[cfg(windows)]
+    {
+        let _ = reader;
+        platform::read_key()
+    }
+    #[cfg(not(windows))]
+    {
+        decode(reader)
+    }
+}
+
 /// Decode one keypress from a byte reader, or `None` at end of input.
 ///
 /// Escape sequences are read greedily: an `esc` that is not followed by `[` or `O` is the
 /// escape key itself, which is why this takes the reader rather than a buffer.
+#[cfg_attr(windows, allow(dead_code))]
 pub fn decode<R: Read>(reader: &mut R) -> Option<Key> {
     let first = read_byte(reader)?;
     match first {
@@ -57,6 +76,7 @@ pub fn decode<R: Read>(reader: &mut R) -> Option<Key> {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn decode_escape<R: Read>(reader: &mut R) -> Option<Key> {
     let Some(second) = read_byte(reader) else {
         return Some(Key::Escape);
@@ -98,6 +118,7 @@ fn decode_escape<R: Read>(reader: &mut R) -> Option<Key> {
     }
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn read_byte<R: Read>(reader: &mut R) -> Option<u8> {
     let mut byte = [0u8; 1];
     match reader.read(&mut byte) {
@@ -152,10 +173,23 @@ pub fn paint(frame: &str) -> io::Result<()> {
     let mut out = io::stdout();
     let mut buffer = String::with_capacity(frame.len() + 64);
     buffer.push_str("\x1b[H");
-    for line in frame.lines() {
+    let mut lines = frame.lines().peekable();
+    while let Some(line) = lines.next() {
         buffer.push_str(line);
         // Clear to end of line, so a shorter line does not leave the last frame's tail behind.
-        buffer.push_str("\x1b[K\r\n");
+        buffer.push_str("\x1b[K");
+        // No newline after the last line, and that is what keeps the top of the frame on screen.
+        //
+        // A frame is rendered to exactly the window height, so a newline after its final line
+        // puts the cursor below the last row and the terminal scrolls one line to make room. The
+        // next frame homes to `esc [ H`, draws into the scrolled view, and scrolls again -- so
+        // the top drifts off a row per repaint rather than all at once, which is why it looks
+        // like a rendering bug rather than an off-by-one. Measured 2026-09-19 under Wine at
+        // 104x76, where `GetConsoleScreenBufferInfo` reports the window size correctly and the
+        // frame is the right height; the newline was the whole defect.
+        if lines.peek().is_some() {
+            buffer.push_str("\r\n");
+        }
     }
     buffer.push_str("\x1b[J");
     out.write_all(buffer.as_bytes())?;
@@ -220,6 +254,7 @@ mod platform {
         fn GetConsoleMode(handle: isize, mode: *mut u32) -> i32;
         fn SetConsoleMode(handle: isize, mode: u32) -> i32;
         fn GetConsoleScreenBufferInfo(handle: isize, info: *mut ScreenBufferInfo) -> i32;
+        fn ReadConsoleInputW(handle: isize, buffer: *mut u8, len: u32, read: *mut u32) -> i32;
     }
 
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
@@ -305,6 +340,78 @@ mod platform {
         }
         if let Some(output) = handle(STD_OUTPUT_HANDLE) {
             unsafe { SetConsoleMode(output, restore.output) };
+        }
+    }
+
+    /// `INPUT_RECORD` on x86-64: a `WORD` event type, two bytes of padding, then the union whose
+    /// `KEY_EVENT_RECORD` arm is `BOOL` down, `WORD` repeat, `WORD` virtual key, `WORD` scan,
+    /// `WCHAR` char, `DWORD` control state. Twenty bytes, read at fixed offsets rather than
+    /// declared as a Rust union, because only three fields are wanted.
+    const INPUT_RECORD_BYTES: usize = 20;
+    const KEY_EVENT: u16 = 0x0001;
+
+    /// Block until the console reports a key, and return it.
+    ///
+    /// # Why this exists rather than reading bytes from stdin
+    ///
+    /// Reading stdin and decoding `esc [ A` is what the Unix side does, and on Windows it loses
+    /// every arrow key. Measured 2026-09-19 against the exe running under Wine: a picker that
+    /// rendered correctly, with raw mode genuinely on and every printable key working, would not
+    /// move its cursor, because an arrow puts no byte in the stream. The same keys arrive here
+    /// intact -- `VK_UP` (`0x26`) and `VK_DOWN` (`0x28`) as clean down/up pairs -- so the console
+    /// queue is where a Windows build has to read from.
+    ///
+    /// Never mix the two on one thread. A loop that polls the event queue and otherwise blocks in
+    /// a stdin read will block forever on the first arrow: no byte arrives to release the read, so
+    /// nothing ever drains the queue the key went into. That mistake is what made an earlier probe
+    /// report arrows as undeliverable when Wine was delivering them.
+    pub fn read_key() -> Option<crate::tui::Key> {
+        use crate::tui::Key;
+
+        let input = handle(STD_INPUT_HANDLE)?;
+        loop {
+            let mut record = [0u8; INPUT_RECORD_BYTES];
+            let mut read = 0u32;
+            if unsafe { ReadConsoleInputW(input, record.as_mut_ptr(), 1, &raw mut read) } == 0 {
+                return None;
+            }
+            if read != 1 || u16::from_le_bytes([record[0], record[1]]) != KEY_EVENT {
+                continue;
+            }
+            // Key-up is skipped: every key reports both edges, and acting on both would move the
+            // cursor two rows per press.
+            let down = u32::from_le_bytes([record[4], record[5], record[6], record[7]]) != 0;
+            if !down {
+                continue;
+            }
+            let virtual_key = u16::from_le_bytes([record[10], record[11]]);
+            let character = u16::from_le_bytes([record[14], record[15]]);
+
+            let key = match virtual_key {
+                0x26 => Key::Up,
+                0x28 => Key::Down,
+                0x25 => Key::Left,
+                0x27 => Key::Right,
+                0x21 => Key::PageUp,
+                0x22 => Key::PageDown,
+                0x24 => Key::Home,
+                0x23 => Key::End,
+                0x0d => Key::Enter,
+                0x20 => Key::Space,
+                0x1b => Key::Escape,
+                // A modifier reports a key event with no character, and `char::from_u32(0)` is
+                // `Some('\0')`, so the zero has to be rejected before the conversion rather than
+                // after it -- otherwise holding shift feeds the picker a null character.
+                _ => match character {
+                    0 => continue,
+                    0x03 => Key::Interrupt,
+                    other => match char::from_u32(u32::from(other)) {
+                        Some(found) => Key::Char(found),
+                        None => continue,
+                    },
+                },
+            };
+            return Some(key);
         }
     }
 
