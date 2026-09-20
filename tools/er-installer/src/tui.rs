@@ -354,6 +354,8 @@ mod platform {
         fn GetConsoleScreenBufferInfo(handle: isize, info: *mut ScreenBufferInfo) -> i32;
         fn SetConsoleCursorPosition(handle: isize, position: Coord) -> i32;
         fn SetConsoleTextAttribute(handle: isize, attributes: u16) -> i32;
+        fn GetConsoleCursorInfo(handle: isize, info: *mut ConsoleCursorInfo) -> i32;
+        fn SetConsoleCursorInfo(handle: isize, info: *const ConsoleCursorInfo) -> i32;
         fn ReadConsoleInputW(handle: isize, buffer: *mut u8, len: u32, read: *mut u32) -> i32;
     }
 
@@ -518,6 +520,16 @@ mod platform {
     pub struct Restore {
         input: u32,
         output: u32,
+        cursor: ConsoleCursorInfo,
+    }
+
+    /// `CONSOLE_CURSOR_INFO`: how tall the cursor is drawn, as a percentage of the cell, and
+    /// whether it is drawn at all.
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct ConsoleCursorInfo {
+        size: u32,
+        visible: i32,
     }
 
     fn handle(id: u32) -> Option<isize> {
@@ -563,9 +575,25 @@ mod platform {
             DEFAULT_ATTRIBUTES.store(info.attributes, Ordering::Relaxed);
         }
         measure_escape_sequences(output);
+
+        // Hide the cursor through the API rather than with `esc [ ? 25 l`, on a console that would
+        // print that sequence instead of reading it. It is the block the picker leaves parked at
+        // the end of the last row it painted, and it moves on every keypress because every
+        // keypress repaints.
+        let mut cursor = ConsoleCursorInfo::default();
+        if !escape_sequences_work() && unsafe { GetConsoleCursorInfo(output, &raw mut cursor) } != 0
+        {
+            let hidden = ConsoleCursorInfo {
+                size: cursor.size.max(1),
+                visible: 0,
+            };
+            unsafe { SetConsoleCursorInfo(output, &raw const hidden) };
+        }
+
         Some(Restore {
             input: saved_input,
             output: saved_output,
+            cursor,
         })
     }
 
@@ -576,6 +604,10 @@ mod platform {
         if let Some(output) = handle(STD_OUTPUT_HANDLE) {
             unsafe { SetConsoleMode(output, restore.output) };
             unsafe { SetConsoleTextAttribute(output, DEFAULT_ATTRIBUTES.load(Ordering::Relaxed)) };
+            // A zero size means nothing was captured, so there is nothing to put back.
+            if restore.cursor.size > 0 {
+                unsafe { SetConsoleCursorInfo(output, &raw const restore.cursor) };
+            }
         }
     }
 
