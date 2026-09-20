@@ -111,12 +111,8 @@ mod windows_probe {
             er_installer_size()
         ));
         log("");
-        log(&format!(
-            "press keys; arrows are the ones in question. q quits."
-        ));
-        log(&format!(
-            "  'console' lines come from ReadConsoleInputW, 'bytes' from reading stdin."
-        ));
+        log("press keys; arrows are the ones in question. q quits.");
+        log("  'console' lines come from ReadConsoleInputW, 'bytes' from reading stdin.");
         log("");
 
         // `--events` reads the console queue with a blocking `ReadConsoleInputW` and never touches
@@ -197,7 +193,7 @@ mod windows_probe {
             let mut byte = [0u8; 1];
             match std::io::stdin().read(&mut byte) {
                 Ok(0) => {
-                    log(&format!("bytes: end of input"));
+                    log("bytes: end of input");
                     break;
                 }
                 Ok(_) => {
