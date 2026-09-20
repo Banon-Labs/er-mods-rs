@@ -23,12 +23,15 @@
 //! no data file beside the exe to lose and no parser inside it.
 
 mod catalog;
+mod console;
 mod install;
 mod picker;
 mod selection;
+mod steam;
 mod tui;
 
-use std::path::PathBuf;
+use std::io::{self, BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use catalog::{CATALOG, CATEGORIES, Mod};
@@ -46,7 +49,8 @@ With no options it finds the game, shows a numbered list, and installs what you 
 
 OPTIONS:
     --game-dir <path>     The game's `Game` directory (the one holding eldenring.exe).
-                          Found automatically when Steam is in a usual place.
+                          Found automatically through Steam's own records, and asked for
+                          if that fails. Pass it to skip the search entirely.
     --dll-dir <path>      Where the mod DLLs are read from. Defaults to a `dlls` folder
                           beside this program, then to the program's own folder.
     --install-dir <path>  Where the chosen DLLs are copied. Defaults to <game-dir>/er-mods.
@@ -250,6 +254,109 @@ fn report_conflicts(chosen: &[&'static Mod]) -> bool {
     true
 }
 
+/// How many of the searched directories to name before the list stops being read.
+///
+/// Steam's records can produce a long list on a machine with several libraries, and a wall of
+/// paths is the same as no message at all. The first few are the ones a player recognises.
+const MAX_PATHS_LISTED: usize = 8;
+
+fn describe_search(tried: &[PathBuf]) -> String {
+    let mut message = String::from("Could not find Elden Ring. Looked in:\n");
+    for path in tried.iter().take(MAX_PATHS_LISTED) {
+        message.push_str(&format!("  {}\n", path.display()));
+    }
+    if tried.len() > MAX_PATHS_LISTED {
+        message.push_str(&format!(
+            "  ...and {} more\n",
+            tried.len() - MAX_PATHS_LISTED
+        ));
+    }
+    message
+}
+
+/// Find the game, asking the player where it is when the search comes up empty.
+///
+/// `Ok(None)` means they chose to leave rather than answer, which is not a failure and must not
+/// exit non-zero.
+///
+/// The prompt is skipped in two cases, both of which would make it a bug rather than a help.
+/// An explicit `--game-dir` that did not resolve is a mistake in a command, and the right
+/// answer is to say so and stop rather than to start a conversation. Input that is not a
+/// keyboard belongs to a script, and a question asked of a script either hangs it or is
+/// answered by whatever the pipe held next.
+fn locate_game(explicit: Option<&Path>) -> Result<Option<install::GameInstall>, String> {
+    let tried = match install::find_game(explicit) {
+        Ok(found) => return Ok(Some(found)),
+        Err(tried) => tried,
+    };
+    let searched = describe_search(&tried);
+    if explicit.is_some() {
+        return Err(format!(
+            "{searched}\nThat is not a folder holding {}. Check the path and try again.",
+            install::GAME_EXE
+        ));
+    }
+    if !console::input_is_interactive() {
+        return Err(format!(
+            "{searched}\nPass the folder holding {} with --game-dir <path>.",
+            install::GAME_EXE
+        ));
+    }
+    print!("{searched}");
+    ask_for_game_dir()
+}
+
+/// Ask for the game directory until one of the answers is a game directory.
+///
+/// Both console ways out are offered and both are honoured: ctrl-c is handled by Windows
+/// itself, and ctrl-z followed by enter closes standard input, which arrives here as the end of
+/// the iterator. Typing the word works too, because someone who does not know the key sequence
+/// should not be trapped in a loop over their own installer.
+fn ask_for_game_dir() -> Result<Option<install::GameInstall>, String> {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines();
+    println!(
+        "\nType or paste the folder that holds {}, then press enter.\n\
+         In Explorer, right-click that folder and choose \"Copy as path\" -- the quotes it \
+         adds are fine.\n\
+         To close without installing: press ctrl-c, or type quit and press enter.",
+        install::GAME_EXE
+    );
+    loop {
+        print!("\nElden Ring folder: ");
+        io::stdout()
+            .flush()
+            .map_err(|err| format!("writing to the screen: {err}"))?;
+
+        let Some(line) = lines.next() else {
+            // End of input: ctrl-z and enter, or a closed pipe. Either way, leave quietly.
+            println!();
+            return Ok(None);
+        };
+        let line = line.map_err(|err| format!("reading what you typed: {err}"))?;
+        if matches!(
+            line.trim().to_ascii_lowercase().as_str(),
+            "q" | "quit" | "exit"
+        ) {
+            return Ok(None);
+        }
+        let Some(candidate) = install::clean_pasted_path(&line) else {
+            println!("\nNothing typed. Paste the folder, or type quit to close.");
+            continue;
+        };
+        match install::game_at(&candidate) {
+            Some(found) => return Ok(Some(found)),
+            None => println!(
+                "\n{} does not hold {}, and neither does a Game folder inside it.\n\
+                 It is the folder Elden Ring is installed in, usually ending in \
+                 \\steamapps\\common\\ELDEN RING\\Game.",
+                candidate.display(),
+                install::GAME_EXE
+            ),
+        }
+    }
+}
+
 fn run() -> Result<ExitCode, String> {
     let args = Args::parse(std::env::args().skip(1)).map_err(|err| err.0)?;
 
@@ -269,14 +376,10 @@ fn run() -> Result<ExitCode, String> {
         return Ok(selfcheck());
     }
 
-    let game = install::find_game(args.game_dir.as_deref()).map_err(|tried| {
-        let mut message = String::from("Could not find Elden Ring. Looked in:\n");
-        for path in tried {
-            message.push_str(&format!("  {}\n", path.display()));
-        }
-        message.push_str("\nPass the folder holding eldenring.exe with --game-dir <path>.");
-        message
-    })?;
+    let Some(game) = locate_game(args.game_dir.as_deref())? else {
+        println!("Nothing installed.");
+        return Ok(ExitCode::SUCCESS);
+    };
     println!("Elden Ring: {}", game.game_dir.display());
     match (&game.seamless, args.no_seamless) {
         (Some(path), false) => println!("Seamless Co-op: {}", path.display()),
@@ -423,17 +526,32 @@ fn run() -> Result<ExitCode, String> {
         "\nLaunch it with:\n  {}",
         install::launch_command(&game.game_dir, &written)
     );
+    // The mods are in place either way -- me3 is what loads them, and it is a separate
+    // download. Saying so here is the difference between "install me3 and run that command"
+    // and a command that answers "not recognized", which reads as this tool having failed.
+    if !install::me3_on_path() {
+        println!(
+            "\nme3 is not installed yet, or not on your PATH, so that command will not run \
+             as it stands.\nGet it from https://github.com/garyttierney/me3 -- the mods above \
+             are already in place and do not need installing again."
+        );
+    }
     Ok(ExitCode::SUCCESS)
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let code = match run() {
         Ok(code) => code,
         Err(message) => {
             eprintln!("{message}");
             ExitCode::FAILURE
         }
-    }
+    };
+    // Last thing before the process ends, and after the error above, because on a
+    // double-clicked run the console dies with the process and takes every line of this with
+    // it. Does nothing when a shell is attached -- see `console::launched_from_explorer`.
+    console::wait_before_the_window_closes();
+    code
 }
 
 #[cfg(test)]
