@@ -27,11 +27,13 @@ shell the workspace ships. So a signature shared only across declared-conflictin
 exempt. The exemption is mechanism-backed rather than asserted, and it is narrow: with three or
 more crates on one signature, every pair has to be declared, or the group is refused as before.
 
-It exists for `er-quickload` and `er-quit-rows`, which are the same source twice -- the product and
-the copy being reduced to the System>Quit rows (bd er-effects-rs-ejfl). Their shared literals are
-the anti-anti-debug patterns, identical because one file was copied from the other. Declaring
-`PARSE_SIG_PATCH_BYTES` in both would be a false claim that the scan matches past a detour width;
-those two DLLs simply cannot be loaded together, which is already recorded and already enforced.
+It was written for `er-quickload` and `er-quit-rows`, which were the same source twice -- the
+product and a copy of it reduced to the System>Quit rows. Their shared literals were the
+anti-anti-debug patterns, identical because one file had been copied from the other, and declaring
+`PARSE_SIG_PATCH_BYTES` in both would have been a false claim that the scan matches past a detour
+width. The fork was deleted on 2026-09-20 and the exemption currently applies to no pair; it is
+kept because the next two shells to share a literal will be a declared conflict for the same
+reason, and a rule removed the day its last case clears is a rule rediscovered the hard way.
 """
 
 from __future__ import annotations

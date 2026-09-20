@@ -179,7 +179,7 @@ _RUNTIME_NOUN = re.compile(
 #
 # What is in it:
 #   er-<name>.log        the per-module log a loaded DLL writes, the `er-*.log` family the
-#                        runtime-evidence push guard already reads: er-quit-rows-debug.log,
+#                        runtime-evidence push guard already reads: er-quit-menu.log,
 #                        er-quickload-autoload-debug.log, er-invasion-warp.log, and the rest;
 #   er-<name>telemetry<name>.json  the oracle dump, er-quickload-telemetry.json and its siblings;
 #   er-<name>.jsonl      the streamed records: phases, timeseries, profile, bootstrap, input trace;

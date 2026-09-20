@@ -11,6 +11,7 @@
 //! read of the product's `EffectsState` behind its `Arc<Mutex<>>` lock, so
 //! telemetry never needs the product lock type.
 
+pub mod boot_view_clock;
 pub mod counters;
 pub mod load_count;
 pub mod log_channels;

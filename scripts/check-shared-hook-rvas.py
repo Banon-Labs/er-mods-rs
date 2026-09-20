@@ -94,14 +94,19 @@ Which module owns that instance is elected, not named (2026-09-19)
 ------------------------------------------------------------------
 `register_shared_hook` used to find the owner by one file name, `GetModuleHandleA` on
 `er_quickload.dll`. That left a `[[shared]]` row in this table asserting more than the code did:
-with `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and no product, `er-quit-rows`
-exports `er_effects_union_register` and the companion never looked for it, so both took their own
-MinHook instance on one prologue -- the configuration measured at the top of this file. `er-hook`
-now asks every loaded module for the registrar and takes the lowest load base among those that
-answer (`er_hook::elect_union_host`), keeping the `er_quickload.dll` probe first so a companion
-built against the old behaviour still resolves. A `[[shared]]` row therefore no longer depends on
-one of its two crates being the product, which is what this gate has always read those rows as
-meaning.
+with `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and no product, the fork exported
+`er_effects_union_register` and the companion never looked for it, so both took their own MinHook
+instance on one prologue -- the configuration measured at the top of this file. `er-hook` now asks
+every loaded module for the registrar and takes the lowest load base among those that answer
+(`er_hook::elect_union_host`), keeping the `er_quickload.dll` probe first so a companion built
+against the old behaviour still resolves. A `[[shared]]` row therefore no longer depends on one of
+its two crates being the product, which is what this gate has always read those rows as meaning.
+
+That row went with the fork on 2026-09-20, and so did the only second exporter: measured that day,
+`crates/er-quickload/src/mh.rs:52` is the one definition of `er_effects_union_register` left in the
+workspace, so the election currently has a single candidate to find. The rule is unaffected and
+stays host-tested; what is gone is the configuration that would have exercised it without the
+product present.
 
 Usage:
     python3 scripts/check-shared-hook-rvas.py
@@ -705,8 +710,10 @@ def selftest() -> int:
     #
     # It used to be `shared_now > legacy_shared`, comparing how many keys each produced, and that
     # comparison died the moment `er-quit-rows` and `er-quit-load-character` landed -- two shells
-    # carved out of `er-quickload` that inherit its constant spellings verbatim. Measured on this
-    # tree: the name key went from 2 shared tokens to 198, the value key from 36 addresses to 163,
+    # carved out of `er-quickload` that inherited its constant spellings verbatim. Both packages
+    # are gone now (merged 2026-09-20, the fork deleted the same day) and the comparison stays
+    # replaced: what broke it was one crate's spellings being copied into another, which is a
+    # thing any extraction does. Measured while both existed: the name key went from 2 shared tokens to 198, the value key from 36 addresses to 163,
     # and 198 > 163. Nothing regressed. The two numbers count different things: 37 of those 198
     # tokens are extra spellings of an address another token already names (four of them --
     # `SYSTEM_QUIT_PROFILE_LOAD_JOB_RUN_RVA`, `PROFILE_LOAD_JOB_RUN_RVA`, `LOAD_JOB_RUN_RVA`,

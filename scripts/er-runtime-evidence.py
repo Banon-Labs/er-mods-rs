@@ -14,7 +14,7 @@ Where a run leaves its evidence
 -------------------------------
 Every shell in this workspace opens its own log with one identity line:
 
-    build git=e0e3a2e11e80+dirty module=er_quit_rows.dll base=0x6ffff9de0000 pe=0x6aa4c5a9 (...)
+    build git=e0e3a2e11e80+dirty module=er_quit_menu.dll base=0x6ffff9de0000 pe=0x6aa4c5a9 (...)
 
 Two directories hold those logs and both count:
 
@@ -529,14 +529,14 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
 
         # The gap this file was written for: a run launched the way the user launches writes
         # into the game directory, and only the run root used to be read.
-        (game / "er-quit-rows-debug.log").write_text(
-            identity.format(sha="deadbeef1234", dirty="", module="er_quit_rows.dll", pe="6aa4c5a9"),
+        (game / "er-quit-menu.log").write_text(
+            identity.format(sha="deadbeef1234", dirty="", module="er_quit_menu.dll", pe="6aa4c5a9"),
             encoding="utf-8",
         )
         code, lines = run("deadbeef1234")
         check(code == EXIT_MATCH, "a clean game-directory log naming the commit is evidence")
         check(
-            any(line.startswith("match game-dir/er-quit-rows-debug.log") for line in lines),
+            any(line.startswith("match game-dir/er-quit-menu.log") for line in lines),
             "the match names the game-directory log it came from",
         )
         code, _ = run("deadbeef")
@@ -589,10 +589,10 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
     # removed in turn from an otherwise passing set, because a proof nobody has watched refuse
     # is not a proof.
     entry = Entry(
-        pathlib.Path("/tmp/er-quit-rows-debug.log"),
-        "game-dir/er-quit-rows-debug.log",
+        pathlib.Path("/tmp/er-quit-menu.log"),
+        "game-dir/er-quit-menu.log",
         BUILD_LINE.match(
-            "build git=deadbeef1234+dirty module=er_quit_rows.dll base=0x1 pe=0x6aa4c5a9 (t)"
+            "build git=deadbeef1234+dirty module=er_quit_menu.dll base=0x1 pe=0x6aa4c5a9 (t)"
         ),
         0,
     )
@@ -607,17 +607,17 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
     try:
         with tempfile.TemporaryDirectory() as raw:
             fake = pathlib.Path(raw)
-            (fake / "er_quit_rows.dll").write_bytes(b"not really a pe")
-            globals()["package_for"] = lambda module: "er-quit-rows"
+            (fake / "er_quit_menu.dll").write_bytes(b"not really a pe")
+            globals()["package_for"] = lambda module: "er-quit-menu"
             globals()["artifact_dir"] = lambda: fake
             globals()["pe_timestamp"] = lambda artifact: 0x6AA4C5A9
             globals()["provenance_is_fresh"] = lambda package, artifact: (True, "")
-            globals()["closure_members"] = lambda package: ["er-quit-rows", "er-quit-menu-core"]
+            globals()["closure_members"] = lambda package: ["er-quit-menu", "er-quit-menu-core"]
             globals()["dirty_crate_names"] = lambda: {"er-input-harness"}
 
             members, why = dirty_build_is_committed(entry)
             check(
-                members == ["er-quit-rows", "er-quit-menu-core"] and not why,
+                members == ["er-quit-menu", "er-quit-menu-core"] and not why,
                 "a dirty build whose own closure is committed proves the commit ran",
             )
 
@@ -659,11 +659,11 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
                 tmp2 = pathlib.Path(raw2)
                 game2 = tmp2 / "game"
                 game2.mkdir(parents=True)
-                (game2 / "er-quit-rows-debug.log").write_text(
+                (game2 / "er-quit-menu.log").write_text(
                     identity.format(
                         sha="deadbeef1234",
                         dirty="+dirty",
-                        module="er_quit_rows.dll",
+                        module="er_quit_menu.dll",
                         pe="6aa4c5a9",
                     ),
                     encoding="utf-8",
@@ -671,7 +671,7 @@ def selftest() -> int:  # noqa: C901 -- a list of cases reads better than a tabl
                 os.environ["ER_ME3_RUN_ROOT"] = str(tmp2 / "absent")
                 os.environ["ER_GAME_DIR"] = str(game2)
 
-                code, lines = run("deadbeef1234", ["crates/er-quit-rows/src/lib.rs"])
+                code, lines = run("deadbeef1234", ["crates/er-quit-menu/src/lib.rs"])
                 check(
                     code == EXIT_MATCH,
                     "a dirty log covering the changed crate is accepted as evidence",

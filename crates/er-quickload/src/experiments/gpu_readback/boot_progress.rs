@@ -157,8 +157,6 @@ pub(crate) use er_telemetry_core::counters::BOOT_VIEW_STRIP_W;
 /// Pump-relative ms at which the game swapchain was found + hooked (0 = never; pump path only).
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_SWAPCHAIN_FOUND_MS;
 pub(crate) use er_telemetry_core::counters::BOOT_VIEW_TELEMETRY_HANDOFF_STAMPS;
-/// Creep timing epoch + the epoch-ms when the milestone index last advanced.
-static BOOT_VIEW_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 /// First-load latch: the initial game boot-to-title native loading-screen counters are sticky. Do not
 /// let those stale "already reached 100%" semaphores drive the user-started load bar.
 static BOOT_VIEW_FIRST_LOAD_REQUEST_REARMED: std::sync::atomic::AtomicUsize =
@@ -1318,26 +1316,26 @@ fn boot_view_rearm_for_first_load_request_if_needed() {
     ));
 }
 
-/// Compute the current (milestone idx, displayed permille). Latches newly reached milestones into the
-/// monotonic mask, stamps idx-change time for the creep, and never lets the displayed value decrease.
-pub(crate) fn boot_view_epoch_ms() -> u64 {
-    let epoch = *BOOT_VIEW_EPOCH.get_or_init(std::time::Instant::now);
-    epoch.elapsed().as_millis().min(u64::MAX as u128) as u64
-}
-
-/// The same clock as [`boot_view_epoch_ms`], read without starting it: `None` until boot-view code
-/// has anchored the epoch.
-///
-/// The distinction is not pedantry. `boot_view_epoch_ms` anchors on first call, so a caller outside
-/// the boot view that happens to run first would silently move the origin of the clock every
-/// telemetry `*_ms` field is measured against -- rewriting the meaning of the whole run's timeline
-/// to stamp one event. Callers that only want to read the timeline (the in-game menu open stamp,
-/// the clock map) use this and simply decline to stamp while the clock does not exist yet.
-pub(crate) fn boot_view_epoch_ms_if_anchored() -> Option<u64> {
-    BOOT_VIEW_EPOCH
-        .get()
-        .map(|epoch| epoch.elapsed().as_millis().min(u64::MAX as u128) as u64)
-}
+// The clock every telemetry `*_ms` field is measured against, re-exported rather than defined.
+//
+// It moved to `er_telemetry_core::boot_view_clock` on 2026-09-20, which is where the counters it
+// stamps already live. It had been inlined here since the boot view was the only thing reading it,
+// and it stopped being that long ago: the System>Quit switch guards, the input block, the
+// own-stepper and the native loading-screen exposure all stamp against it and none of them draws a
+// cover. Keeping it in this module made `loading-cover` a feature seven unrelated callers would
+// have depended on, which is the coupling the `er-quit-rows` fork hit first -- it was the only
+// build where that feature gated anything, so it extracted the clock, and deleting the fork would
+// have deleted the extraction.
+//
+// Re-exported at this path, and not moved to a new one, because `crate::experiments::*` globs
+// through here: every `crate::experiments::boot_view_epoch_ms()` caller resolves unchanged, and the
+// move is not a rename.
+//
+// The doc comment that used to sit above these two described the milestone/permille computation
+// further down the file, not the clock. It went with the move rather than travelling with it.
+pub(crate) use er_telemetry_core::boot_view_clock::{
+    boot_view_epoch_ms, boot_view_epoch_ms_if_anchored,
+};
 
 #[cfg(feature = "quit-rows")]
 /// Reopen the first-start custom loading bar for an own-menu character switch. The original boot view

@@ -1,8 +1,8 @@
 //! Whether this process may serve the derived `05_010_ProfileSelect` movie, as a pure decision.
 //!
-//! Its own module outside the `#[cfg(windows)]` half of the crate, for the same reason its two
-//! siblings in `er-quickload` and `er-quit-rows` are: the answer decides what a user sees, it has
-//! been wrong before, and a wrong answer builds and logs exactly like a right one.
+//! Its own module outside the `#[cfg(windows)]` half of the crate, for the same reason its sibling
+//! in `er-quickload` is: the answer decides what a user sees, it has been wrong before, and a wrong
+//! answer builds and logs exactly like a right one.
 //!
 //! # What the derived movie does to the window
 //!
@@ -31,8 +31,9 @@
 //! does carry a decoder has eleven of them, including
 //! `staged merged PlayerName slot=0 header='Vagabond, RL 9 WL 25'`.
 //!
-//! `er-quickload` and `er-quit-rows` are unaffected: each hooks the row populate from its own copy
-//! and decodes the `.sl2` behind it, so each can fill what it serves.
+//! A shell that carries a decoder is unaffected: it hooks the row populate from its own copy and
+//! decodes the `.sl2` behind it, so it can fill what it serves. `er-quickload` is that shell; the
+//! `er-quit-rows` fork whose log is quoted above was another, until it was deleted on 2026-09-20.
 //!
 //! # Why a browse row is reason enough on its own
 //!

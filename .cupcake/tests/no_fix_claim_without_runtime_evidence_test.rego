@@ -75,7 +75,7 @@ test_halt_on_a_bare_past_tense_report if {
 # run wrote is what the word costs.
 test_no_halt_when_a_run_artifact_was_read if {
 	count(guard.halt) == 0 with input as stop_event(fix_facts_with(
-		"The fix works: er-quit-rows-debug.log shows the row on both loads.",
+		"The fix works: er-quit-menu.log shows the row on both loads.",
 		"evidence",
 		"1",
 	))

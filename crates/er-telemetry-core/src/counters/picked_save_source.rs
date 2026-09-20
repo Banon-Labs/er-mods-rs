@@ -123,25 +123,18 @@ pub static TITLE_OWNER_MENU_WINDOW_COUNT: AtomicUsize = AtomicUsize::new(usize::
 /// measurement.
 pub static WORLD_LOST_TO_TITLE_COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// Times a `CS::MessageBoxDialog` was built at the title after its menu had opened, with no world
-/// mounted -- the shape of a load that was refused and put a modal on screen instead.
-///
-/// This is the semaphore for "Failed to load save data. Select OK to try again.", which is
-/// otherwise invisible to every watcher here: the harness reports its Continue phase derailing on a
-/// budget, the product log reports a message box being built like any other, and nothing connects
-/// the two. Measured 2026-09-11 18:41 on `er-quit-rows`: the title reported its menu opening at
-/// `+18277ms`, and at `+18961ms` the log carried `msgbox-builder #0 ... in_world=false`, after
-/// which `GameMan+0xc30` never left the title default for the rest of the run.
-///
-/// The caller rva beside this count is the discriminator, not the count itself. A terms-of-service,
-/// connection error or patch notice is also built before any world exists, and they are told apart
-/// by which game function built them.
-pub static TITLE_LOAD_BLOCKED_BY_MODAL_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// Game-image RVA of the immediate caller that built the box counted above, or 0.
-///
-/// Recorded because "a modal blocked the load" is the symptom and the caller is the lead: the
-/// 2026-09-11 box came back through `game+0x7b1347` / `game+0x7ae13c`, which is a different family
-/// from the network-check path that produces the offline modal, and a future occurrence with a
-/// different caller is a different defect wearing the same words.
-pub static TITLE_LOAD_BLOCKED_MODAL_CALLER_RVA: AtomicUsize = AtomicUsize::new(0);
+// `TITLE_LOAD_BLOCKED_BY_MODAL_COUNT` and `TITLE_LOAD_BLOCKED_MODAL_CALLER_RVA` stood here until
+// 2026-09-20 and went with the `er-quit-rows` fork, which was their only writer -- an
+// `if is_msgbox && !in_world` at that crate's
+// `experiments/startup_hooks/loading_cover/title_scaleform_msgbox.rs:796`. The product has that
+// file at the same path and never wrote the pair, so after the deletion both read 0 forever and
+// `scripts/check-counter-writers.py` refused the push. It was right to: 0 out of a counter nothing
+// sets is indistinguishable from "the modal never appeared", which is the exact reading this pair
+// existed to make impossible.
+//
+// The measurement behind them is not lost, and it is worth re-wiring on purpose rather than
+// carrying here as a declaration nobody sets. bd er-effects-rs-e00a holds it: what the box means,
+// the two caller rvas that tell a refused load apart from a terms-of-service or connection box,
+// and the correction that the earlier version of the gate was dead in a no-autoload build. Putting
+// it back means adding the write at the product's own msgbox site and proving it on a run where
+// the box appears -- a change with its own evidence, not a side effect of a deletion.

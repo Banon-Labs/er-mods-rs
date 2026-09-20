@@ -82,7 +82,6 @@
 0x3b39848	0x3b3d858	PROFILE_OFFSCREEN_SIZE_TABLE_RVA	1/1 bracket
 0x3b48ff0	0x3b4d050	STEAM_ID_ACCESSOR_CALL_SLOT_RVA	1/1 bracket
 0x3d5b078	0x3d5f0d8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1306	12/12
-0x3d5b078	0x3d5f0d8	crates/er-quit-rows/src/experiments/trace/menu_trace_hooks.rs:1302	12/12
 0x3d5b088	0x3d5f0e8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1309	0/0 bracket+shape
 0x3d5b0f8	0x3d5f158	CSFILE_SINGLETON_RVA	1246/1249
 0x3d5dea8	0x3d61f08	CS_PC_KEY_CONFIG_SINGLETON_RVA	82/82
@@ -157,9 +156,7 @@
 0x4852f88	0x4857098	FD4_IO_WORKER_MGR_RVA	10/10
 0x4853048	0x4857158	FD4_IO_POOL_RVA	5/5
 0x485cbec	0x4860cfc	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1299	11/11
-0x485cbec	0x4860cfc	crates/er-quit-rows/src/experiments/trace/menu_trace_hooks.rs:1295	11/11
 0x485d0e8	0x48611f8	crates/er-quickload/src/experiments/trace/menu_trace_hooks.rs:1303	40/40
-0x485d0e8	0x48611f8	crates/er-quit-rows/src/experiments/trace/menu_trace_hooks.rs:1299	40/40
 0x485dc18	0x4861d28	DLUID_SINGLETON_RVA	84/84
 0x485dc20	0x4861d30	FD4_PAD_MANAGER_RVA	152/153
 #

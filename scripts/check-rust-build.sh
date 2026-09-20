@@ -137,7 +137,6 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# which is how four overridden `[lib] name`s went unchecked before.
 	me3_shells=(
 		er-armament-icons:er_armament_icons
-		er-quit-rows:er_quit_rows
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
 		er-enemynpc-effects:er_enemynpc_effects
@@ -284,9 +283,10 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	#   er-invasion-warp-core   283 / 284
 	#   er-loading-portrait-core 81 / 82
 	#
-	# er-quit-rows joined on 2026-09-11. It is er-quickload copied and reduced to the
-	# System>Quit rows, so it carries the same 45 windows-only lib tests under the same
-	# `#[cfg(windows)] mod` tree; its 19 host-portable ones run from check.sh.
+	# er-quit-rows joined on 2026-09-11 and left on 2026-09-20 with the package. It was
+	# er-quickload copied and reduced to the System>Quit rows, so it carried the same 45
+	# windows-only lib tests under the same `#[cfg(windows)] mod` tree. Nothing was lost with
+	# it: those 45 are still run here through er-quickload itself.
 	#
 	# er-invasion-warp joined on 2026-09-19. Its single windows-only lib test asserts that the
 	# `ShowNetworkMessage` seam is too wide for the four-argument union dispatcher, which is a
@@ -300,7 +300,7 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 	CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine WINEDEBUG="${WINEDEBUG:--all}" \
 		cargo xwin test --lib \
 		-p er-quickload -p er-profile-summary-core \
-		-p er-quit-menu-core -p er-quit-menu -p er-quit-rows \
+		-p er-quit-menu-core -p er-quit-menu \
 		-p er-invasion-path -p er-invasion-warp -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"

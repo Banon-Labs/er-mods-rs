@@ -334,19 +334,6 @@ pub const CATALOG: &[Mod] = &[
         config: Some("er-quit-menu.toml"),
     },
     Mod {
-        package: "er-quit-rows",
-        artifact: "er_quit_rows.dll",
-        label: "Quit-menu rows (trimmed build)",
-        blurb: "A reduced build of the Quickload suite carrying the System > Quit rows and nothing else. Pick this instead of Quickload, never alongside it.",
-        category: "menus-and-saves",
-        audience: "player",
-        default_on: false,
-        needs_seamless: false,
-        caution: None,
-        included_in: &[],
-        config: None,
-    },
-    Mod {
         package: "er-refill-all",
         artifact: "er_refill_all.dll",
         label: "Refill all / refill none",
@@ -478,24 +465,6 @@ pub const CONFLICTS: &[Conflict] = &[
     },
     Conflict {
         a: "er-quickload",
-        b: "er-quit-rows",
-        kind: "duplicate-owner",
-        explanation: "both own the same feature, so pick whichever build of it you want, not both",
-    },
-    Conflict {
-        a: "er-quit-rows",
-        b: "er-reload-trace",
-        kind: "diagnostic-drive",
-        explanation: "a development tool that drives menus the other one owns",
-    },
-    Conflict {
-        a: "er-quit-rows",
-        b: "er-input-harness",
-        kind: "drives-input",
-        explanation: "one of them takes the controls by merely being loaded, so the other cannot be trusted to respond to you",
-    },
-    Conflict {
-        a: "er-quickload",
         b: "er-build-import",
         kind: "duplicate-owner",
         explanation: "both own the same feature, so pick whichever build of it you want, not both",
@@ -511,17 +480,5 @@ pub const CONFLICTS: &[Conflict] = &[
         b: "er-reload-trace",
         kind: "diagnostic-drive",
         explanation: "a development tool that drives menus the other one owns",
-    },
-    Conflict {
-        a: "er-quit-menu",
-        b: "er-quit-rows",
-        kind: "duplicate-owner",
-        explanation: "both own the same feature, so pick whichever build of it you want, not both",
-    },
-    Conflict {
-        a: "er-quit-rows",
-        b: "er-save-disable",
-        kind: "hook-collision",
-        explanation: "both change the same piece of the game's code, and whichever loads second wins silently -- nothing crashes and nothing says so",
     },
 ];

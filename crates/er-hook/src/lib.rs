@@ -856,10 +856,18 @@ unsafe extern "system" {
 // The resolver below used to ask the loader one question -- is `er_quickload.dll` mapped -- and
 // treat the answer as the whole of it. That made a file name an undeclared ABI, and it was already
 // wrong for a shipped pair. With `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and
-// no product, `er-quit-rows` does export `er_effects_union_register` (it carries a copy of the
-// product's `mh.rs`), the companion looked only for the product, and both took their own MinHook
-// instance on `TITLE_SCALEFORM_FILE_OPEN_RVA` -- the 2026-08-23 configuration that reported
+// no product, that fork did export `er_effects_union_register` (it carried a copy of the product's
+// `mh.rs`), the companion looked only for the product, and both took their own MinHook instance on
+// `TITLE_SCALEFORM_FILE_OPEN_RVA` -- the 2026-08-23 configuration that reported
 // `file_open_observer_installed = true` beside `file_open_hits = 0` for a whole session.
+//
+// That fork was deleted on 2026-09-20 and the workspace is back to one exporter. Measured on run
+// br-20260920-211125-8c75 through Frida, reading the live module table rather than the source
+// tree: 95 modules, 95 of them readable, one answer for each registrar spelling, and it is
+// `er_quickload.dll`. So the election currently has a single candidate to find -- which changes
+// nothing about why it has to ask. The name-based lookup was wrong on the day a second exporter
+// existed, and nothing prevents the next one; what the election removes is the workspace's ability
+// to ship that configuration again without noticing.
 //
 // So the question is now about exports rather than about a name. Every loaded module is asked for
 // the registrar, and among the ones that answer, the lowest load base wins. The rule is
@@ -2921,23 +2929,31 @@ mod tests {
         assert_eq!(elect_union_host(&candidates, HIGH_BASE), Some(LOW_BASE));
     }
 
-    /// The shipped configuration the election was written for: `er_quit_rows.dll` exports the
-    /// registrar, `er_armament_icons.dll` does not, and no product is loaded. Under the old
-    /// name-only lookup the companion saw nothing and took `HookRoute::LocalUnion`, so two MinHook
-    /// instances landed on `TITLE_SCALEFORM_FILE_OPEN_RVA`.
+    /// The configuration the election was written for: a non-product shell exports the registrar,
+    /// `er_armament_icons.dll` does not, and no product is loaded. Under the old name-only lookup
+    /// the companion saw nothing and took `HookRoute::LocalUnion`, so two MinHook instances landed
+    /// on `TITLE_SCALEFORM_FILE_OPEN_RVA`.
+    ///
+    /// The shell that made it a configuration anyone could install was `er_quit_rows.dll`, deleted
+    /// 2026-09-20, and no artifact in this workspace exports the registrar today except the
+    /// product -- measured on the live module table, not read off the source tree, on run
+    /// br-20260920-211125-8c75. The test stays and no longer names that shell: the property is
+    /// about a candidate list, any future shell carrying `mh.rs` produces such a list again, and a
+    /// test deleted because its last real configuration cleared is a test rewritten after the next
+    /// incident.
     #[test]
     fn a_companion_beside_a_hub_with_no_product_finds_the_hub() {
-        let quit_rows = hub(LOW_BASE);
+        let hub_shell = hub(LOW_BASE);
         let armament_icons = plain(COMPANION_BASE);
-        let candidates = [quit_rows, armament_icons];
+        let candidates = [hub_shell, armament_icons];
 
         assert_eq!(
             elect_union_host(&candidates, armament_icons.base),
-            Some(quit_rows.base),
+            Some(hub_shell.base),
             "the companion must route to the shell that exports the registrar"
         );
         assert_eq!(
-            elect_union_host(&candidates, quit_rows.base),
+            elect_union_host(&candidates, hub_shell.base),
             None,
             "and that shell must own the prologue itself, so exactly one instance exists"
         );

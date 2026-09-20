@@ -305,7 +305,7 @@ HookSpec table, and each shell links `er-hook` statically, so whichever installs
 `jmp` where the prologue should be. The Save Game row needs that observer to see the overwrite \
 confirm's result: without it `emit_observer_installed=0`, the confirm is never built, and picking \
 an existing destination dies on `overwrite-file-confirm BUILD TIMEOUT after 180 ticks` with \
-nothing written (run br-20260913-002757-9317). Same mechanism as the er-quit-rows pair above.
+nothing written (run br-20260913-002757-9317). Same mechanism as the er-quickload pair below.
 
 Measured on `er-save-game-row`, which shipped that row alone until 2026-09-20 and has since \
 merged into this shell: the flow, the observer and the box builder are all in \
@@ -390,104 +390,58 @@ reason = """The same two-owners-of-one-mutation this table already records betwe
 This entry became true on 2026-09-11, when `er-quit-menu` stopped being a harness that armed nothing. Its `[compatible]` note predicted exactly this: "if the harness ever arms that row, this entry becomes a `duplicate-owner` conflict with `er-build-import` and with `er-quickload`"."""
 evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/game_task.rs"
 
-[[conflict]]
-a = "er-quickload"
-b = "er-quit-rows"
-kind = "duplicate-owner"
-reason = """`er-quit-rows` is a copy of `er-quickload`'s source being reduced to the System>Quit rows, so until that reduction finishes the two are duplicate owners of everything the product owns, not of one surface: the same row cloner arm, the same three routing prologues, the same row-populate and current-summary detours, the same save-redirect hooks, the same autoload phase machine and the same telemetry counters. Every static is per DLL, so co-loading gives each of those two independent copies with no shared lock.
+# THE FORK'S FOUR ROWS, DELETED 2026-09-20 WITH THE PACKAGE (phase 3 of
+# `docs/plans/menus-and-saves-consolidation.md`, bd er-effects-rs-8rho).
+#
+# `er-quit-rows` held four rows here -- `duplicate-owner` against `er-quickload`, `diagnostic-drive`
+# against `er-reload-trace`, `drives-input` against `er-input-harness`, and a `[[shared]]` union row
+# with `er-armament-icons`. Every one of them opened by saying the fork was a copy of the product's
+# source, so every one of them is a statement about `er-quickload` that this table already makes in
+# the product's own rows. Nothing was measured on the fork that is not still declared: the pair with
+# the tracer is at `er-quickload` + `er-reload-trace`, the keystate pair at `er-quickload` +
+# `er-input-harness`, and the union row at `er-quickload` + `er-armament-icons`.
+#
+# One sentence from the deleted `duplicate-owner` row is worth keeping, because it is about shells
+# rather than about that package: two shells that both arm the Quit grid cannot share a process even
+# when neither is a copy of the other, since `er_gfx::options_02_040::quit6` fail-closes when handed
+# already-derived bytes. That is why `er-quickload` + `er-quit-menu` below is not narrowable either.
+#
+# The fork's own history -- duplicated rather than extracted on 2026-09-11 by user directive, after
+# run `br-20260911-205138-default` measured the built-UP shell reaching every moved code path with a
+# surface that looked and behaved nothing like the product -- is in bd
+# `build-a-feature-dll-down-from-quickload-not-up-2026-09-11` and in the consolidation plan.
 
-It was duplicated rather than extracted on 2026-09-11 by user directive, after the opposite approach was measured and rejected. `er-quit-load-character` had been built UP from shared crates, and run `br-20260911-205138-default` reached a shell where every moved code path executed and the surface still looked and behaved nothing like the product: right rows, wrong GFX content, no styling, no inserted elements, and a save-file click that did not interact like the product's. Starting from a copy means parity is the default and only what is deleted is lost.
-
-This entry is expected to narrow as the reduction proceeds, but it must never be deleted: even fully reduced, both shells arm the same Quit grid, and `er_gfx::options_02_040::quit6` fail-closes when handed already-derived bytes."""
-evidence = "crates/er-quit-rows/src/lib.rs; crates/er-quickload/src/lib.rs; bd build-a-feature-dll-down-from-quickload-not-up-2026-09-11"
-
-[[conflict]]
-a = "er-quit-rows"
-b = "er-reload-trace"
-kind = "diagnostic-drive"
-reason = """Inherited wholesale from `er-quickload`, whose entry with this same tracer records the \
-mechanism: `er-quit-rows` is a copy of that source, so it claims the same 30 addresses the tracer \
-names as bare `rva:` fields in its `HookSpec` table -- the save dispatch family around 0x67axxx, \
-the menu wrapper trio at 0x82bxxx, the load-job and profile-close prologues, and the MoveMap \
-dispatcher. Each shell links `er-hook` statically, so each owns a separate MinHook instance and \
-whichever installs second overwrites the other's trampoline; the loser reports installed and never \
-runs, which is the failure this table exists to make visible before a run rather than after.
-
-The reduction is expected to shrink this list as whole subsystems leave `er-quit-rows`, but the \
-pair stays declared: the Quit rows themselves route through `SYSTEM_QUIT_REQUEST_LOAD_SLOT_RVA` and \
-`SYSTEM_QUIT_PROFILE_LOAD_ACTIVATE_RVA`, which the tracer also names, so no amount of trimming \
-removes the overlap."""
-evidence = "crates/er-quit-rows/src/constants/profile_render.rs; crates/er-reload-trace/src/lib.rs"
-
-[[conflict]]
-a = "er-quit-rows"
-b = "er-input-harness"
-kind = "drives-input"
-reason = """The same relationship `er-quickload` has with the harness, inherited by copying its \
-source: both resolve `FD4_PAD_MANAGER_RVA` and reach the native binding keystate bitmap through it. \
-The harness writes that bitmap to drive menus; a product shell reads it to decide whether the \
-player is holding anything. Two writers of one keystate with no shared lock is a driven input the \
-other side cannot distinguish from a user's, which is why this is declared rather than assumed \
-harmless.
-
-Loading them together is still the intended agent workflow for `er-quickload`, and the conflict \
-entry is what makes the profile generator say so out loud. For `er-quit-rows` there is no such \
-workflow yet: the shell is loaded alone from `~/Elden/quit-rows-trimmed.me3` while it is being \
-reduced."""
-evidence = "crates/er-quit-rows/src/experiments/can_move_probe.rs:172; crates/er-input-harness/src/pad_inject.rs:40"
-
-[[shared]]
-a = "er-quit-rows"
-b = "er-armament-icons"
-target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
-mechanism = "hook-union"
-handler_a = "title_scaleform_file_open_observer_hook"
-handler_b = "file_open_hook"
-reason = """The union row `er-quickload` and this companion already hold, inherited by copying \
-that source -- but inherited only as far as the shapes. Both sides are union-shaped: \
-`er-quit-rows` registers the identical observer through `crate::mh::register_union_hook` rather \
-than a private `MhHook`, and it exports `er_effects_union_register` from its own copy of \
-`mh.rs`, just as the product does. Read the product's entry for the measurement -- 113 file-open \
-hits alone against 0 in an eleven-native profile, with every movie swap silently inert -- because \
-it is why both sides are shaped that way at all.
-
-What was measured until 2026-09-19, and why this row was filed. Until that day the entry read \
-"whichever shell reaches the prologue first creates the dispatcher and the other chains into \
-it", and that sentence described a hub election the code did not perform. The companion reached \
-a hub by one route only: `er_hook::register_shared_hook` called `GetModuleHandleA` on the \
-literal `er_quickload.dll` (`PRODUCT_DLL_NAME`) and asked that module for \
-`er_effects_union_register`. It matched nothing else, and it was not an address-keyed lookup -- \
-an export by that name in another image was invisible to it. So in a profile carrying \
-`er_quit_rows.dll` and no product, the companion polled for a second, found no module of that \
-name, and returned `HookRoute::LocalUnion`: its own MinHook instance, beside the one \
-`er-quit-rows` created in its own image, both on `TITLE_SCALEFORM_FILE_OPEN_RVA`. That is the \
-collision this row claims to have resolved, and it has never been observed, because the pair \
-has never co-loaded -- `er-quit-rows` is a transitional shell loaded alone from \
-`~/Elden/quit-rows-trimmed.me3` while it is reduced.
-
-The row stayed `[[shared]]` because the cause was being removed rather than tolerated, and bd \
-er-effects-rs-whbn removed it. `er-hook` no longer names the hub: every loaded module is asked \
-for `er_effects_union_register` and the lowest load base among those that answer wins \
-(`er_hook::elect_union_host`, host-tested), which is the rule `row_registry` already elects the \
-row table's owner by, with the `er_quickload.dll` probe kept first so a companion built against \
-the older behaviour still resolves. `er-quit-rows` does export the registrar, so this pair now \
-has a hub without the product in the profile -- which is what a `[[shared]]` row has always \
-meant here, and what this table could not keep as a promise before. Outstanding: the two have \
-still not been run together, so the election is proven on the rule and not yet on a session \
-reporting `HookRoute::ProductUnion` with `file_open_hits > 0`.
-
-Two further addresses are shared with this companion and are not covered by the union: \
-`CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` \
-(0x74a2f0), which it spells `SCALEFORM_VALUE_DTOR_RVA` and `ASSIGN_COMPONENT_WITH_NAME_RVA`. \
-Neither side has been measured as the owner, and `er-quit-rows` is a transitional shell loaded \
-alone from `~/Elden/quit-rows-trimmed.me3` while it is reduced, so the pair has never actually \
-co-loaded. Measure them before that changes."""
-evidence = """crates/er-quit-rows/src/experiments/startup_hooks/loading_cover/\
-title_resources_stats_text.rs:109 `crate::mh::register_union_hook`; \
-crates/er-quit-rows/src/mh.rs:46 the `no_mangle` `er_effects_union_register` this crate exports \
-too; crates/er-armament-icons/src/gfx_equip_hook.rs:85 `FILE_OPEN_RVA`, :744 \
-`er_hook::register_shared_hook`; crates/er-hook/src/lib.rs:804 `PRODUCT_DLL_NAME`, :871 \
-`resolve_product_export`, :984 the `HookRoute::LocalUnion` fallback"""
+# AND WITH THE FORK GOES THE ONLY HUB THAT WAS NOT THE PRODUCT.
+#
+# The deleted `[[shared]]` row paired `er-quit-rows` with `er-armament-icons` on
+# `TITLE_SCALEFORM_FILE_OPEN_RVA`, and the reason it was worth having is now the reason it cannot
+# be kept: the fork exported `er_effects_union_register` from its own copy of `mh.rs`, so it was
+# the one image in this workspace other than `er-quickload` that a companion could chain into.
+# Measured 2026-09-20 after the deletion -- `crates/er-quickload/src/mh.rs:52` is the only
+# definition of that export left in the tree. `er-quit-menu` does not export it: it is a shell over
+# `er-quit-menu-core`, which RESOLVES the registrar and never provides one.
+#
+# Two consequences, and neither is caused by deleting the fork -- both were true of every profile
+# that did not carry the product:
+#
+#   * In a product-less profile every companion takes `HookRoute::LocalUnion`, which is a private
+#     MinHook instance per DLL. Two companions on one prologue is then the 2026-08-23 collision
+#     again, and no row here can say so, because the pair is only unsafe when the product is
+#     ABSENT and this table's rows fire on presence.
+#   * bd er-effects-rs-whbn's outstanding runtime proof named a profile that no longer exists
+#     ("`er_quit_rows.dll` + `er_armament_icons.dll` and no product, companion logs
+#     `HookRoute::ProductUnion`"). The election itself is unaffected and stays host-tested at
+#     `er_hook::elect_union_host`; what is gone is the second hub it had to choose between.
+#
+# The fix, when it is wanted, is for the merged shell to export the registrar the way the product
+# does -- a hub is an export, not a package. That is phase 1 follow-up work, not a row.
+#
+# One measurement in that row belonged to the companion rather than to the fork, and is therefore
+# still open against `er-quickload`: two addresses are shared with `er-armament-icons` and are NOT
+# covered by the union -- `CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and
+# `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` (0x74a2f0), which the companion spells
+# `SCALEFORM_VALUE_DTOR_RVA` and `ASSIGN_COMPONENT_WITH_NAME_RVA`. Neither side has been measured
+# as the owner. Measure them before a profile carries both.
 
 # RESOLVED 2026-09-12, the same way and on the same day as the `er-quit-menu` pair above.
 #
@@ -598,8 +552,9 @@ var, no marker file, that is its contract. While it is loaded the player is not 
 session, and the agent cannot tell its own writes from theirs, so any run used to observe a \
 user's input is invalid evidence.
 
-It already carries [[conflict]] pairs against `er-quickload` and `er-quit-rows`, and those were \
-not enough: a run that excludes both -- which every standalone-shell run does -- leaves nothing \
+It already carries a [[conflict]] pair against `er-quickload` (and held a second against the \
+retired `er-quit-rows` fork), and that was not enough: a run that excludes the product -- which \
+every standalone-shell run does -- leaves nothing \
 to rank, so the dependency closure loaded it anyway. That is the same hole `er-loading-bar` came \
 through, and the same answer. Classifying it here is the fix, because a conflict pair can only \
 fire when the other side is present and this DLL is unwanted on its own.
@@ -1064,8 +1019,6 @@ whose absence is only discovered when it is already too late to add it."""
 #   er-quickload            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow,
 #                           save_game_as_start_flow, save_game_request_save_only,
 #                           note_drive_strip_click_event
-#   er-quit-rows            open_profile_load_dialog, open_save_picker_menu, save_game_start_flow,
-#                           save_game_request_save_only, note_drive_strip_click_event
 #   er-quit-menu            every one of them, since 2026-09-20: it supplies the flow for each row
 #                           its config file selects, and the file can select all five
 #
@@ -1103,20 +1056,11 @@ whose absence is only discovered when it is already too late to add it."""
 # `scripts/check-quit-row-flow-overlap.py` re-derives the rule from source on every run, so a
 # new row shell, or a new flow on an existing one, cannot land without being classified.
 
-[[conflict]]
-a = "er-quit-menu"
-b = "er-quit-rows"
-kind = "duplicate-owner"
-reason = """Both arm near-`RowSet::ALL` and both supply `open_profile_load_dialog` and \
-`open_save_picker_menu`. This is the same pair as er-quickload X er-quit-menu with the product \
-swapped for the trimmed build of it -- `er-quit-rows` is a copy of the product reduced to these \
-rows, so it brings the product's flows without bringing the product.
-
-The loser's flows come back `offered-but-already-held` and its activate hook reads a `flow_active` \
-latch the winner never set. Derived from the mechanism measured on br-20260917-205031-edd3."""
-evidence = """crates/er-quit-menu/src/lib.rs:143 `RowSet::ALL`; crates/er-quit-rows/src/\
-experiments/startup_hooks/diagnostics/layout_global_hooks.rs:89 `arm(RowSet { .. ..RowSet::ALL })`; \
-both supply `open_profile_load_dialog` and `open_save_picker_menu`"""
+# `er-quit-menu` X `er-quit-rows` was the fourth of these and went with the package on 2026-09-20.
+# It said what the three above say -- both armed near-`RowSet::ALL`, both supplied
+# `open_profile_load_dialog` and `open_save_picker_menu`, and the loser's flows came back
+# `offered-but-already-held` while its activate hook read a `flow_active` latch the winner never
+# set -- and it is `er-quickload` X `er-quit-menu` above, with the product swapped for a copy of it.
 
 # THE THREE PAIRS THE FLOW RULE CANNOT SEE, read out of the source on 2026-09-19 beside the four
 # above. Two are row shells whose flows are disjoint; the third is not a row pair at all.
@@ -1161,25 +1105,14 @@ both supply `open_profile_load_dialog` and `open_save_picker_menu`"""
 # than serving `ALL_PICKER_KEYED` unconditionally -- so a configuration that clones no row no
 # longer widens the grid either (bd `slim-quickload-still-widened-the-quit-grid-2026-09-12`).
 
-[[conflict]]
-a = "er-quit-rows"
-b = "er-save-disable"
-kind = "hook-collision"
-reason = """The entry this table already holds for `er-quickload` against the same shell, with \
-the same mechanism and for the reason `er-quit-rows` inherits every other one: it is a copy of \
-the product's source. Both call `er_save_suppress::install`, each from its own statically linked copy \
-of that crate, and `install` detours the two suppressor prologues with a bare `MhHook::new` -- \
-`SL_ENQUEUE_SAVE_JOB_RVA` 0xe6fb50 and `SL_POLL_SAVE_STATUS_RVA` 0xe6e430, the same \
-0x140e6fb50 / 0x140e6e430 the product's entry names. Whichever installs second overwrites the \
-other's trampoline.
-
-The second half of the product's entry carries over unchanged too: `er_save_disable` exists to \
-suppress every save write, so a run that loads it cannot produce save-path evidence at all -- and \
-`er-quit-rows` reaches `er_save_suppress` from 181 sites across seven of its modules, including \
-the arm and the bypass its own Save Game flow fires through."""
-evidence = """crates/er-quit-rows/src/lib_parts/dll_entry_parts/bootstrap.rs:509 \
-`er_save_suppress::install(false)`, :557 `install_observers_only`; \
-crates/er-quit-rows/src/experiments/lifecycle/save_flow.rs:629 `is_armed`, :630 \
-`arm_one_save_bypass`; crates/er-save-disable/src/lib.rs:204 \
-`er_save_suppress::install(census_only)`; crates/er-save-suppress/src/lib.rs:1679 `install`, \
-:1758 `MhHook::new`, :193 and :196 for the two prologues"""
+# The third of the 2026-09-19 pairs was `er-quit-rows` X `er-save-disable`, deleted 2026-09-20 with
+# the package. It was the `er-quickload` entry against the same shell, inherited by copying that
+# source: both called `er_save_suppress::install` from their own statically linked copy, and
+# `install` detours `SL_ENQUEUE_SAVE_JOB_RVA` (0xe6fb50) and `SL_POLL_SAVE_STATUS_RVA` (0xe6e430)
+# with a bare `MhHook::new`, so whichever installed second overwrote the other's trampoline. Both
+# halves of that survive on the product's own row above, which is the row to read.
+#
+# What does NOT survive, and is the reason to say this out loud rather than let the pair vanish:
+# `er-quit-menu` links `er-quit-menu-core`, whose save flow reaches `er_save_suppress` too, so the
+# merged shell inherits this pair the way it inherited the `er-reload-trace` one. It is declared
+# above, at `er-quit-menu` X `er-save-disable`.

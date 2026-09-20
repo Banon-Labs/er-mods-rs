@@ -57,13 +57,6 @@ audience = "player"
 default = false
 config = "er-quit-menu.toml"
 
-[er-quit-rows]
-label = "Quit-menu rows (trimmed build)"
-blurb = "A reduced build of the Quickload suite carrying the System > Quit rows and nothing else. Pick this instead of Quickload, never alongside it."
-category = "menus-and-saves"
-audience = "player"
-default = false
-
 [er-save-picker]
 label = "Boot save picker"
 blurb = "Draws a save picker at boot so you choose a character before the title screen, instead of loading whichever save the game picked."
@@ -73,14 +66,15 @@ default = false
 # `er-quickload` carries this: its defaults include `autoload`, and `arm_boot_picker` is
 # reached whenever that is on.
 #
-# `er-quit-rows` is deliberately NOT listed, though it links the same crate and was listed
-# here for an hour on 2026-09-19. Its `boot_arm_missing_save_picker_in_game` opens with
-# `if !cfg!(feature = "autoload") { return false; }`, and `autoload` is not in its default
-# set -- so the shipped build never arms the boot picker, whatever its own `save-picker`
-# feature suggests. That feature name is misleading: it has zero `cfg` sites in either crate
-# and forwards nothing.
+# The rule that decides this row is `autoload`, not "links the picker crate", and it was worth
+# writing down: the retired `er-quit-rows` fork linked the same crate and was listed here for an
+# hour on 2026-09-19 before the reading corrected it. Its `boot_arm_missing_save_picker_in_game`
+# opened with `if !cfg!(feature = "autoload") { return false; }` and `autoload` was not in its
+# default set, so the shipped build never armed the boot picker. `er-quit-menu` is in the same
+# position and is likewise not listed: it is a shell over `er-quit-menu-core` with no boot-view
+# module of its own, so there is nothing there to arm.
 #
-# The shell does try to stand down against the product -- `GetModuleHandleA("er_quickload.dll")`
+# The picker does try to stand down against the product -- `GetModuleHandleA("er_quickload.dll")`
 # -- but that runs inside `DllMain`, so it only sees a module that has already attached, and
 # ME3 attaches in profile order. Not a crash, which is why this is `included_in` rather than a
 # `[[conflict]]` row; still refused, because nobody wants one feature installed twice and

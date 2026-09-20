@@ -84,8 +84,9 @@ REQUIRED_EDGES = {
     # `er_quit_menu_core::save_picker_menu::save_flow_menu_pump`, which every host reaches,
     # instead of from the product's own `profile_rows_system_quit_menu` handler, which a
     # standalone shell never reaches at all -- the comment left behind at that call site says so.
-    # The only caller still under an `experiments/` path is `er-quit-rows`, a different crate and
-    # outside this scan root, so an empty set is again the honest entry.
+    # The one caller left under an `experiments/` path lived in `er-quit-rows`, which was outside
+    # this scan root and was deleted with the fork on 2026-09-20, so an empty set is again the
+    # honest entry -- and now it is the only possible one.
     "save_picker_menu_pump_path_editor": set(),
 }
 

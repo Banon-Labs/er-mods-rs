@@ -289,10 +289,10 @@ def _record(
         # Two crates disagreeing on a knob's default is a real defect, not a display issue:
         # a launcher redirects one and the other silently keeps writing to GAME_DIR.
         #
-        # Unless the two can never be in one profile. `er-quickload` and `er-quit-rows` are
-        # recorded in `me3-dll-conflicts.toml` as `duplicate-owner` -- the second is a copy of the
-        # first being reduced, and the profile generator refuses to emit a profile carrying both --
-        # so no launcher ever has to satisfy the pair at once, and each wants its own log name.
+        # Unless the two can never be in one profile. `er-quickload` and `er-quit-menu` are
+        # recorded in `me3-dll-conflicts.toml` as `duplicate-owner` -- both arm the Quit grid and
+        # supply the same flows, and the profile generator refuses to emit a profile carrying both
+        # -- so no launcher ever has to satisfy the pair at once, and each wants its own log name.
         # Renaming the knob to split them would break every tool that already resolves the shell's
         # log through it.
         pair = frozenset({_crate_name(existing.source), _crate_name(relative)})
