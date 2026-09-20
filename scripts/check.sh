@@ -1547,6 +1547,7 @@ python3 "$repo_root/scripts/check-fresh-run-logs.py"
 # untested is decorative.
 bash "$repo_root/scripts/test-pr-refactor-scope.sh"
 python3 "$repo_root/scripts/test-dll-byte-identical.py"
+python3 "$repo_root/scripts/test-release-workflow.py" --selftest
 python3 "$repo_root/scripts/test-release-workflow.py"
 python3 "$repo_root/scripts/check-rust-file-sizes.py"
 python3 "$repo_root/scripts/check-experiments-rustfmt.py"
@@ -2544,7 +2545,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 # their machine; local/CI parity is the whole reason this file exists.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
-	-p er-soulsformats -p er-param-inspect
+	-p er-soulsformats -p er-param-inspect -p er-installer
+# er-installer is here rather than in a batch of its own because it is host-only by
+# construction: the conflict rules, the picker state machine, the screen layout and the profile
+# writer are all decidable without a game, a Windows target or a terminal. What its tests are
+# really holding is the rule that the out-of-box selection can be loaded together -- the catalog
+# gate proves that from the tables, and these prove the code that reads them agrees.
+#
+# They run without `ER_INSTALLER_EMBED_DIR`, so this build carries no DLL payload and finishes
+# in a second. The tests that touch the payload branch on whether one is present and assert the
+# other half when it is not, so the suite is correct either way rather than silently covering
+# one path. scripts/build-installer-release.py is what proves a release build carries all 31,
+# by running `--selfcheck` against the binary it is about to ship.
 # The two things `scripts/check-er-flver.sh` covered that nothing else did (moved here 2026-08-31,
 # and that script deleted). It was gate-shaped, ran nowhere, and could not have gated anywhere: it
 # had `set -u` but no `set -e`, piped every command into `tail`, and ended on an unconditional
@@ -2620,6 +2632,33 @@ python3 "$repo_root/scripts/check-me3-shell-coverage.py"
 # that claims both, or that claims to be unconditional without having been found compatible.
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py" --selftest
 python3 "$repo_root/scripts/check-me3-dll-conflicts.py"
+
+# The same coverage question, asked of the file that gives each shell a name a player can read.
+# A cdylib with no catalog entry is shipped and unreachable: the installer builds its rows from
+# that file and nothing else. The gate also proves the out-of-box selection is conflict-free,
+# which is the one failure a picker has no excuse for -- a first profile that cannot load.
+python3 "$repo_root/scripts/check-me3-dll-catalog.py" --selftest
+python3 "$repo_root/scripts/check-me3-dll-catalog.py"
+
+# ...and the one class of conflict the table cannot notice arriving: two shells that arm the
+# Quit tab and offer the same flow. `row_registry` merges the row table across DLLs, but each
+# cdylib links its own copy of the core's statics, so the loser's flow latch is invisible to the
+# winner's hook and a row looks armed while doing the wrong thing. This re-derives which shells
+# arm and which flows they supply from source, so a new shell, or a new flow on an existing one,
+# cannot land without being classified.
+python3 "$repo_root/scripts/check-quit-row-flow-overlap.py" --selftest
+python3 "$repo_root/scripts/check-quit-row-flow-overlap.py"
+
+# ...and that the Rust the installer actually links still says what those two tables say. The
+# catalog is compiled in rather than parsed at runtime, so drift here is an installer shipping
+# a mod list from whenever it was last generated.
+python3 "$repo_root/scripts/gen-installer-catalog.py" --selftest
+python3 "$repo_root/scripts/gen-installer-catalog.py" --check
+
+# The release packager's refusal list, proven to refuse rather than assumed to. It is what
+# stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
+# deny list nobody exercises is a deny list that stopped matching years ago.
+python3 "$repo_root/scripts/build-installer-release.py" --selftest
 
 # ...and the table only helps if it still matches the code. This scans every cdylib for the hook
 # targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]

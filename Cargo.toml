@@ -162,6 +162,10 @@ members = [
   "crates/er-flver",
   "crates/er-objectkit",
   "tools/er-param-inspect",
+  # The player-facing picker: which of the shipped DLLs to install, and the me3 profile that
+  # loads them. Zero dependencies, host-buildable, and the only crate here whose tests assert
+  # that a first-run selection can actually be loaded together.
+  "tools/er-installer",
   "tools/bevy-shader-lab",
   "tools/er-shaderlab",
   "tools/er-shader-viewer",
