@@ -77,9 +77,43 @@ impl StandaloneArm {
 ///
 /// Bootstrap thread, once per process, before the Quit tab has built a dialog.
 pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> StandaloneArm {
-    // First, because it is the only one with a deadline: the movie is served the first time the
-    // Quit tab is opened, and a swap registered after that shows a vanilla two-cell grid until the
-    // panel is rebuilt.
+    // Before the swap hook, because that hook can be reached by a Scaleform load the moment it is
+    // installed and this is the answer it reads. The `05_010` edit rewrites the window's layout to
+    // make room for fields something has to fill; a host that fills none of them must leave the
+    // window as the game built it. See `profile_select_chrome_gate` for what the edit changes and
+    // for the run this was measured on.
+    let browse_rows_armed = rows.load_character_from_file || rows.save_game_as;
+    // A shell with no product behind it decodes the game's own save for itself, so its character
+    // rows carry the merged header and the attribute line rather than the game's three bare fields.
+    // Installed before the gate is asked, because filling the seam is what earns the edit. A host
+    // that installed its own answer first keeps it -- the seam is first-caller-wins, and the
+    // product's answer knows about staged and picked saves this one deliberately does not.
+    if rows.load_character {
+        let _ = crate::profile_row_chrome::install_row_populate_hooks(
+            crate::profile_row_chrome::RowPopulateHooks {
+                character_row_facts: Some(
+                    crate::standalone_character_rows::standalone_character_row_facts,
+                ),
+                ..crate::profile_row_chrome::RowPopulateHooks::default()
+            },
+        );
+    }
+    let host_dresses_character_rows = crate::profile_row_chrome::row_populate_hooks()
+        .character_row_facts
+        .is_some();
+    let profile_chrome = crate::profile_select_chrome_gate::profile_select_chrome_required(
+        browse_rows_armed,
+        host_dresses_character_rows,
+    );
+    crate::gfx_swap::set_profile_05_010_edit_armed(profile_chrome);
+    if !profile_chrome {
+        append_autoload_debug(format_args!(
+            "system-quit-gfx: 05_010 stats-panel edit stays off (browse_rows_armed={browse_rows_armed} host_dresses_character_rows={host_dresses_character_rows}); ProfileSelect renders the game's own five-row presentation with its face boxes"
+        ));
+    }
+    // First of the installs, because it is the only one with a deadline: the movie is served the
+    // first time the Quit tab is opened, and a swap registered after that shows a vanilla two-cell
+    // grid until the panel is rebuilt.
     let gfx_served = unsafe { crate::gfx_swap::install_quit_menu_gfx_swap_hook() };
     // The picker's ProfileSelect is served under a key of its own, so the derived movie -- which
     // hides the face box and compacts five 156px rows into ten 52px ones -- dresses a browse list
