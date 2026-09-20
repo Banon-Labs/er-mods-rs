@@ -10,9 +10,18 @@ someone was the player: the agent asked them to say when they had loaded in, whi
 carrying no information and is exactly what the standing order against instructing the user in their
 own game exists to prevent. The world's arrival is observable; asking about it is not necessary.
 
-What it waits on is the same oracle `er-frida-up.py` gates on: `oracle_player_present` in the run's
-`er-quickload-telemetry.json`. That file does not exist during boot, which is not an error and not a
-failure -- it is the ordinary case for the first minute of a launch.
+What it waits on is the same pair of witnesses `er-frida-up.py` gates on, in the same order.
+`oracle_player_present` in the run's `er-quickload-telemetry.json` answers first when that file is
+there; its absence during boot is not an error and not a failure -- it is the ordinary case for the
+first minute of a launch.
+
+A profile that does not carry `er-quickload` or `er-quit-rows` never writes that file at all,
+though, and reading only it made this wait unpassable for every standalone shell however long the
+game had been in a world: the watch ran out its `--wait-seconds` and reported "no world yet", which
+sent the agent back to asking the player -- the round trip the paragraph above says this exists to
+prevent. So the second witness is a direct read of `WorldChrMan -> mainPlayerIns` through
+`/proc/<pid>/mem` (`er_run_lib.player_in_a_world`), which needs no server, no hook and no file, and
+which any profile can produce.
 
 Two properties this deliberately has:
 
@@ -65,25 +74,50 @@ def newest_run() -> pathlib.Path | None:
 
 
 def world_is_up(run: pathlib.Path) -> tuple[bool, str]:
-    """Whether the run's own telemetry says a player exists.
+    """Whether a player is in a world yet, from the run's telemetry or from the process itself.
 
-    Returns the reason as well as the verdict: "the file is not written yet" and "the file says
-    False" look identical to a caller that only gets a bool, and they mean different things about
-    how long to keep waiting.
+    Two witnesses, in the order `er-frida-up.py` uses. `oracle_player_present` is the product's own
+    read of `WorldChrMan`, written by `er_quickload` into this run's artifact directory: cheaper
+    than a memory read and more specific, because it carries the loading substep alongside the
+    verdict. A profile that writes no telemetry leaves it with nothing to say, and the live read is
+    then the witness -- the same predicate, taken from outside through `/proc/<pid>/mem`.
+
+    Returns the reason as well as the verdict, and the reason names which witness answered: "the
+    file is not written yet", "the file says False" and "the read could not be made" look identical
+    to a caller that only gets a bool, and they mean different things about how long to keep
+    waiting.
     """
+    # No game is the clearest not-ready there is, and it comes before the file: a previous run's
+    # telemetry goes on saying a player was present long after that process died, so reading it
+    # first would open the gate with nothing running at all.
+    pid = er_run_lib.game_pid()
+    if pid is None:
+        return False, "no eldenring.exe is running"
     telemetry = run / "er-quickload-telemetry.json"
-    if not telemetry.is_file():
-        return False, "no telemetry file yet -- the DLL writes it once the game is past boot"
-    try:
-        data = json.loads(telemetry.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        # Written from the game thread, so a read can land mid-write. Not an error; ask again.
-        return False, "telemetry unreadable this instant (mid-write); will ask again"
-    present = data.get("oracle_player_present")
-    if present is True:
-        return True, "oracle_player_present is True"
-    step = data.get("oracle_system_step_label", "unknown")
-    return False, f"oracle_player_present is {present!r}, step={step!r}"
+    if telemetry.is_file():
+        try:
+            data = json.loads(telemetry.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # Written from the game thread, so a read can land mid-write. Not an error; ask again.
+            return False, (
+                f"{run.name} telemetry unreadable this instant (mid-write); will ask again"
+            )
+        present = data.get("oracle_player_present")
+        if present is True:
+            return True, f"{run.name} telemetry: a player is in a world"
+        step = data.get("oracle_system_step_label", "unknown")
+        return False, (
+            f"{run.name} telemetry: oracle_player_present is {present!r}, step={step!r}"
+        )
+    present, detail = er_run_lib.player_in_a_world(pid)
+    if present:
+        return True, f"no run telemetry; a live read of pid {pid} says {detail}"
+    if present is False:
+        return False, f"no run telemetry; a live read of pid {pid} says {detail}"
+    # `None`, not `False`: the walk could not be made at all -- an unmapped address, a refused read,
+    # or a qword that is not a pointer. Folding that into "no world" is how a broken address
+    # constant would read as an empty world forever instead of as a wrong address.
+    return False, f"no run telemetry, and a live read of pid {pid} could not tell: {detail}"
 
 
 def main() -> int:
@@ -116,11 +150,14 @@ def main() -> int:
         return 1
     print(f"watching {run.name} for a world", flush=True)
 
-    # inotify on the run directory, not a timer. The thing that could change the answer is the DLL
-    # writing its telemetry, and that write is an event -- waiting on it means this wakes when the
-    # world actually appears rather than up to a poll interval later, and sits idle otherwise.
-    # `DirectoryWatch` degrades honestly: with inotify unavailable `wait()` returns at once, so the
-    # loop below still makes progress on its own deadline instead of blocking forever.
+    # inotify on the run directory, not a timer. For the telemetry witness the thing that could
+    # change the answer is the DLL writing that file, and a write is an event -- waiting on it means
+    # this wakes when the world actually appears rather than up to a poll interval later, and sits
+    # idle otherwise. The live-read witness has no such event, which is what `WATCH_SLICE_SECONDS`
+    # is for: it bounds how long one wait may sit, so a profile that writes nothing at all is still
+    # re-read on that slice rather than never. `DirectoryWatch` degrades honestly too -- with
+    # inotify unavailable `wait()` returns at once, so the loop below still makes progress on its
+    # own deadline instead of blocking forever.
     deadline = time.monotonic() + args.wait_seconds
     reason = "never checked"
     with er_run_lib.DirectoryWatch(run) as watch:
@@ -162,8 +199,100 @@ def main() -> int:
     os.execvp(watcher[0], watcher)
 
 
+def world_gate_selftest() -> list[tuple[str, bool]]:
+    """Prove the two witnesses compose in the order the wait documents.
+
+    The walk itself is exercised against a planted chain by `er_run_lib.world_read_selftest`; what
+    is left is which witness `world_is_up` believes, and that every verdict the walk can return
+    survives the trip. Both witnesses are stubbed -- a planted run directory for the first, a
+    replaced `er_run_lib.player_in_a_world` for the second -- so every combination is reachable
+    without a game and without writing into the user's own run history.
+    """
+    import tempfile
+
+    saved_pid = er_run_lib.game_pid
+    saved_walk = er_run_lib.player_in_a_world
+    results: list[tuple[str, bool]] = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            run = pathlib.Path(tmp) / "br-selftest"
+            run.mkdir()
+            er_run_lib.game_pid = lambda: 1234
+
+            er_run_lib.player_in_a_world = lambda pid: (True, "stub: a player")
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"a profile with no telemetry is answered by the live read -- {detail}",
+                    ready and "live read" in detail,
+                )
+            )
+
+            er_run_lib.player_in_a_world = lambda pid: (False, "stub: no player")
+            ready, detail = world_is_up(run)
+            results.append((f"the live read can refuse as well as pass -- {detail}", not ready))
+
+            er_run_lib.player_in_a_world = lambda pid: (None, "stub: unreadable")
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"a walk that could not be made says so, not `no world` -- {detail}",
+                    not ready and "could not tell" in detail,
+                )
+            )
+
+            telemetry = run / "er-quickload-telemetry.json"
+            telemetry.write_text('{"oracle_player_present": true}', encoding="utf-8")
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"telemetry answers before the live read -- {detail}",
+                    ready and "telemetry" in detail,
+                )
+            )
+
+            telemetry.write_text(
+                '{"oracle_player_present": false, "oracle_system_step_label": "BOOT"}',
+                encoding="utf-8",
+            )
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"telemetry that says no keeps the gate shut and names the step -- {detail}",
+                    not ready and "step=" in detail,
+                )
+            )
+
+            telemetry.write_text("{ torn", encoding="utf-8")
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"a mid-write telemetry read is retried, not fatal -- {detail}",
+                    not ready and "mid-write" in detail,
+                )
+            )
+
+            er_run_lib.game_pid = lambda: None
+            telemetry.write_text('{"oracle_player_present": true}', encoding="utf-8")
+            ready, detail = world_is_up(run)
+            results.append(
+                (
+                    f"no game outranks a previous run's telemetry -- {detail}",
+                    not ready and "no eldenring.exe" in detail,
+                )
+            )
+    finally:
+        er_run_lib.game_pid = saved_pid
+        er_run_lib.player_in_a_world = saved_walk
+    return results
+
+
 def selftest() -> int:
     source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # The walk this wait's second witness is lives in `er_run_lib`, so the structural checks on it
+    # read that file. One that only ever read this one would go green while the thing it guards sat
+    # unguarded in the other.
+    shared = pathlib.Path(er_run_lib.__file__).read_text(encoding="utf-8")
     checks = [
         ("er-frida-up.py exists beside this", (REPO / "scripts" / "er-frida-up.py").is_file()),
         ("er-frida-watch.py exists beside this", (REPO / "scripts" / "er-frida-watch.py").is_file()),
@@ -172,12 +301,33 @@ def selftest() -> int:
             "oracle_player_present" in source,
         ),
         (
-            "a missing telemetry file is not an error",
-            "no telemetry file yet" in source,
-        ),
-        (
             "a mid-write read is retried rather than failing",
             "mid-write" in source,
+        ),
+        (
+            "a profile that writes no telemetry still has a witness",
+            "er_run_lib.player_in_a_world(pid)" in source,
+        ),
+        (
+            "that witness is the same walk er-frida-up gates on, from one owner",
+            # An assignment, assembled from pieces so the needle is not in its own haystack: this
+            # file reads the constant through `er_run_lib`, and what must never appear is a second
+            # definition of it here.
+            ("WORLD_CHR_MAN" + "_GLOBAL_RVA = ") not in source
+            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D69FF8") in shared,
+        ),
+        (
+            "the live read opens the game's memory read-only, and injects nothing",
+            'open(f"/proc/{pid}/mem", "rb", 0)' in shared,
+        ),
+        (
+            "the wait never passes on how long the process has been alive",
+            # Both files, because the walk lives in one and the wait in the other. Assembled from
+            # pieces so the assertion does not match its own source text. An age fallback passes a
+            # process that has been up five minutes, which a crashed modal satisfies as readily as
+            # a world does, and bd er-effects-rs-y53v rejected that shape outright.
+            ("/proc/" + "uptime") not in source + shared
+            and ("BOOT_" + "SETTLE_SECONDS") not in source + shared,
         ),
         (
             "the wait is bounded so a capped caller gets an answer",
@@ -204,6 +354,33 @@ def selftest() -> int:
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
         failed += 0 if ok else 1
+
+    print("\n  the WorldChrMan witness, address and read path:")
+    hop, hop_detail = er_run_lib.recorded_1162_to_1170_hop()
+    if hop is None:
+        print(f"  ....  the 1.16.2 to 1.17.0 hop went unchecked -- {hop_detail}")
+    else:
+        print(f"  {'ok  ' if hop else 'FAIL'}  the map still carries the first hop -- {hop_detail}")
+        failed += 0 if hop else 1
+    for name, ok in er_run_lib.world_read_selftest():
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+        failed += 0 if ok else 1
+    for name, ok in world_gate_selftest():
+        print(f"  {'ok  ' if ok else 'FAIL'}  {name}")
+        failed += 0 if ok else 1
+
+    pid = er_run_lib.game_pid()
+    if pid is None:
+        print(
+            "  ....  no eldenring.exe is running, so the live path went unexercised: the walk "
+            "above ran against a planted chain in a child process, which proves the arithmetic "
+            "and the read but not that these offsets still name a live WorldChrMan"
+        )
+    else:
+        verdict, detail = er_run_lib.player_in_a_world(pid)
+        reading = {True: "a player is in a world", False: "no player", None: "cannot tell"}[verdict]
+        print(f"  ....  live read of pid {pid}: {reading} -- {detail}")
+
     print("selftest: " + ("PASS" if failed == 0 else f"FAIL ({failed})"))
     return 0 if failed == 0 else 1
 

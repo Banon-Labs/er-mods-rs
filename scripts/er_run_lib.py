@@ -224,6 +224,261 @@ def find_game_pids(names: tuple[str, ...] = GAME_PROCESS_NAMES) -> list[int]:
     return found
 
 
+def game_pid() -> int | None:
+    """The Linux pid of `eldenring.exe`, or `None`.
+
+    Stricter than [`find_game_pids`] on purpose. That one also matches a full command line, which
+    catches me3's launcher because its argv names the game; this one matches `comm` exactly, so the
+    pid it returns is the game process itself. Anything that will read the game's memory needs this
+    one, because a read against the launcher resolves to rubble rather than failing.
+
+    Wine reports the Windows executable name in `comm`; the `exe` symlink points at
+    wine64-preloader for every Windows process in the prefix, so `comm` is the discriminator.
+    """
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            if (entry / "comm").read_text(encoding="utf-8").strip() == "eldenring.exe":
+                return int(entry.name)
+        except OSError:
+            continue
+    return None
+
+
+# The base the game image is mapped at. Elden Ring's preferred base is honoured under Proton --
+# every `/proc/<pid>/maps` for `eldenring.exe` on this target opens with a `140000000-` span, which
+# is also the identity test `scripts/er-find-seamless-osm.py` uses to tell the game apart from the
+# me3 launcher, whose argv names `eldenring.exe` too. It is read back out of the maps rather than
+# assumed, so a build that ever did relocate answers "cannot tell" instead of reading rubble.
+GAME_PREFERRED_IMAGE_BASE = 0x140000000
+
+# `WorldChrMan`, the singleton the game builds when a world loads, as an rva into the installed
+# 1.17.1 image.
+#
+# Two hops from the 1.16.2 constant `er_game_base::rva::WORLD_CHR_MAN_GLOBAL_RVA` (`0x3d65f88`),
+# because an rva in that file is 1.16.2 by design and is translated at use rather than being stale:
+#
+#   1.16.2 -> 1.17.0   `docs/recon/rva-map-1162-to-1170.data.tsv`, row `WORLD_CHR_MAN_GLOBAL_RVA`:
+#                      `0x3d65f88` -> `0x3d69ff8` on 2325 agreeing references out of 2330. The same
+#                      pair is written out independently in
+#                      `docs/recon/npc-possess-1170-address-table.md`.
+#   1.17.0 -> 1.17.1   `python3 scripts/map-rvas-1170-to-1171.py 0x143d69ff8` answers `unchanged,
+#                      .data did not move between the two builds`. That patch grew one function
+#                      inside `.text` and left the section table alone, so no global moved.
+#
+# Then read back out of the images instead of trusted. In `eldenring-deobf-1.17.1.bin`, `0x1401bac8c`
+# is `mov rax, qword ptr [rip + 0x3baf365]`, which resolves to `0x143d69ff8`, immediately followed by
+# `mov r13, qword ptr [rax + 0x1e508]` and `test r13, r13` -- the game performing this exact walk and
+# null-check. The same three instructions sit at the same address in `eldenring-deobf.bin` reading
+# `0x143d65f88`, so the two builds are paired at one site rather than by two separate guesses. 2469
+# instructions in 1.17.1 load this global, against 2464 loading the 1.16.2 one.
+#
+# It lives here rather than in either caller because two scripts gate on it. A constant of this
+# provenance copied into a second file is a constant that goes stale in one of them silently, and
+# the failure it produces -- an address that resolves to something that is not a world -- reads as
+# an empty world forever rather than as a wrong address.
+WORLD_CHR_MAN_GLOBAL_RVA = 0x3D69FF8
+
+# `WorldChrMan::mainPlayerIns`, the local player inside that singleton. A struct offset, so nothing
+# translates it and nothing would notice the day it moves: recorded unchanged from 1.16.2 through
+# 1.17 in `docs/recon/npc-possess-1170-address-table.md`, and 410 instructions read `[reg+0x1e508]`
+# in each 1.17 image against 411 in 1.16.2.
+WORLD_CHR_MAN_MAIN_PLAYER_OFFSET = 0x1E508
+
+# What a qword has to look like to be an object pointer at all. The canonical-address split puts
+# every user-mode pointer on x86-64 below `1 << 47`, and nothing the game allocates lives in the
+# first 64 KB. A value outside this range means the address resolution is wrong, which is a
+# different answer from "no player exists" and has to stay distinguishable from it.
+MIN_OBJECT_POINTER = 0x1_0000
+MAX_OBJECT_POINTER = 1 << 47
+
+# How long the world-read selftest's own child gets to die after it is killed. A backstop on a reap,
+# not a budget: the child is a python interpreter blocked on `stdin` and it goes immediately.
+SELFTEST_CHILD_REAP_SECONDS = 5
+
+
+def game_image_base(pid: int) -> int | None:
+    """Where `eldenring.exe` is mapped in `pid`, or `None` when the image is not there.
+
+    Wine gives a PE mapping no backing filename, so the span is recognised by its address: the game
+    image is the one that starts at its preferred base. Answering `None` when that span is absent
+    keeps a read off a process whose layout this script cannot account for.
+    """
+    try:
+        maps = Path(f"/proc/{pid}/maps").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in maps.splitlines():
+        span = line.split(maxsplit=1)[0]
+        low, _, high = span.partition("-")
+        try:
+            start = int(low, 16)
+            end = int(high, 16)
+        except ValueError:
+            continue
+        if start == GAME_PREFERRED_IMAGE_BASE and end > start:
+            return start
+    return None
+
+
+def read_qword(pid: int, address: int) -> int | None:
+    """One 8-byte read out of a live process, or `None` when the address is not mapped.
+
+    The mechanism `scripts/er-live-fields.py` documents: `/proc/<pid>/mem` opened read-only and
+    seeked. Nothing is injected, no thread is suspended and no code runs inside the game, so this
+    cannot disturb a session the way an attach can. Buffering is off because a buffered reader would
+    read ahead past the requested qword into an unmapped neighbouring page and turn a good read into
+    an error.
+    """
+    if not MIN_OBJECT_POINTER <= address < MAX_OBJECT_POINTER:
+        return None
+    try:
+        with open(f"/proc/{pid}/mem", "rb", 0) as mem:
+            mem.seek(address)
+            data = mem.read(8)
+    except (OSError, ValueError, OverflowError):
+        return None
+    if not data or len(data) != 8:
+        return None
+    return int.from_bytes(data, "little")
+
+
+def player_in_a_world_at(pid: int, base: int) -> tuple[bool | None, str]:
+    """Walk `WorldChrMan -> mainPlayerIns` in `pid`, given where the image sits.
+
+    The verdict is deliberately three-valued. `True` and `False` both mean the walk completed;
+    `None` means it could not be made -- an unmapped address, a refused read, or a qword that is not
+    a pointer at all -- and that is a different refusal from "there is no player", because one says
+    the game has no world yet and the other says this script cannot see.
+
+    `base` is a parameter rather than a lookup so the selftest can point the same walk at a planted
+    chain in a child process and exercise the arithmetic, the read and all three verdicts.
+    """
+    address = base + WORLD_CHR_MAN_GLOBAL_RVA
+    world = read_qword(pid, address)
+    if world is None:
+        return None, f"WorldChrMan at 0x{address:x} could not be read in pid {pid}"
+    if world == 0:
+        return False, f"WorldChrMan at 0x{address:x} is null -- no world is loaded"
+    if not MIN_OBJECT_POINTER <= world < MAX_OBJECT_POINTER:
+        return None, (
+            f"WorldChrMan at 0x{address:x} reads 0x{world:x}, which is not an object pointer -- "
+            "the address resolution is wrong, not the world"
+        )
+    player_slot = world + WORLD_CHR_MAN_MAIN_PLAYER_OFFSET
+    player = read_qword(pid, player_slot)
+    if player is None:
+        return None, (
+            f"WorldChrMan is 0x{world:x} but its mainPlayerIns at 0x{player_slot:x} could not "
+            "be read"
+        )
+    if player == 0:
+        return False, f"WorldChrMan 0x{world:x} holds no mainPlayerIns -- no player in a world"
+    if not MIN_OBJECT_POINTER <= player < MAX_OBJECT_POINTER:
+        return None, (
+            f"mainPlayerIns at 0x{player_slot:x} reads 0x{player:x}, which is not an object pointer"
+        )
+    return True, f"WorldChrMan 0x{world:x} -> mainPlayerIns 0x{player:x}"
+
+
+def player_in_a_world(pid: int) -> tuple[bool | None, str]:
+    """The same walk, against the image base found in `pid`'s own maps."""
+    base = game_image_base(pid)
+    if base is None:
+        return None, (
+            f"pid {pid} has no game image mapped at 0x{GAME_PREFERRED_IMAGE_BASE:x}, so no "
+            "address in it can be resolved"
+        )
+    return player_in_a_world_at(pid, base)
+
+
+def recorded_1162_to_1170_hop() -> tuple[bool | None, str]:
+    """Re-read the first translation hop out of the map that produced it.
+
+    `WORLD_CHR_MAN_GLOBAL_RVA` above is the far end of a two-hop carry, and the near end is a
+    generated file that gets regenerated. If a refresh ever moves the row, this constant is wrong
+    and nothing else here would notice, so the selftests read the row back. A missing map file is
+    reported as unchecked rather than as a pass: these scripts also run from outside a checkout.
+    """
+    row_file = Path(__file__).resolve().parent.parent / "docs/recon/rva-map-1162-to-1170.data.tsv"
+    if not row_file.is_file():
+        return None, f"{row_file.name} is not here, so the 1.16.2 to 1.17.0 hop went unchecked"
+    for line in row_file.read_text(encoding="utf-8", errors="replace").splitlines():
+        fields = line.split("\t")
+        if len(fields) >= 3 and fields[2].strip() == "WORLD_CHR_MAN_GLOBAL_RVA":
+            mapped = int(fields[1].strip(), 16)
+            if mapped == WORLD_CHR_MAN_GLOBAL_RVA:
+                return True, f"{fields[0].strip()} -> 0x{mapped:x}, votes {fields[3].strip()}"
+            return False, (
+                f"the map now carries {fields[0].strip()} -> 0x{mapped:x}, not "
+                f"0x{WORLD_CHR_MAN_GLOBAL_RVA:x}"
+            )
+    return False, "the map has no WORLD_CHR_MAN_GLOBAL_RVA row any more"
+
+
+def world_read_selftest() -> list[tuple[str, bool]]:
+    """Exercise the live-read witness end to end against a planted chain in a child process.
+
+    Shared rather than duplicated: both `scripts/er-frida-up.py` and
+    `scripts/er-frida-when-world.py` gate on this walk, and a second copy of the coverage is a
+    second copy that can drift out of step with the constants above.
+
+    A child is the target rather than this process, so the real cross-process read is what runs
+    rather than a same-process shortcut that would pass for the wrong reason. The child plants three
+    `WorldChrMan` slots -- one reaching a player, one reaching a world with no player, one null --
+    and the walk is pointed at each by handing it a base that puts `WORLD_CHR_MAN_GLOBAL_RVA` on
+    that slot. That covers the arithmetic, the read, and all three verdicts.
+
+    What it cannot cover is the game: the offsets themselves are ground-truthed statically against
+    the deobfuscated images, and whether they still name a live `WorldChrMan` is only settled by a
+    read of a running `eldenring.exe`.
+    """
+    import subprocess
+    import sys
+
+    child_source = (
+        "import ctypes, struct, sys\n"
+        f"world_with = ctypes.create_string_buffer({WORLD_CHR_MAN_MAIN_PLAYER_OFFSET + 0x10})\n"
+        f"world_without = ctypes.create_string_buffer({WORLD_CHR_MAN_MAIN_PLAYER_OFFSET + 0x10})\n"
+        "player = ctypes.create_string_buffer(64)\n"
+        f"struct.pack_into('<Q', world_with, {WORLD_CHR_MAN_MAIN_PLAYER_OFFSET},"
+        " ctypes.addressof(player))\n"
+        "slots = ctypes.create_string_buffer(24)\n"
+        "struct.pack_into('<Q', slots, 0, ctypes.addressof(world_with))\n"
+        "struct.pack_into('<Q', slots, 8, ctypes.addressof(world_without))\n"
+        "struct.pack_into('<Q', slots, 16, 0)\n"
+        "print(ctypes.addressof(slots), flush=True)\n"
+        "sys.stdin.readline()\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_source],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    results: list[tuple[str, bool]] = []
+    try:
+        line = child.stdout.readline().strip() if child.stdout else ""
+        if not line.isdigit():
+            return [(f"the selftest child reported an address (got {line!r})", False)]
+        slots = int(line)
+        cases = [
+            ("a planted mainPlayerIns reads as a player in a world", slots, True),
+            ("a planted null mainPlayerIns reads as no player", slots + 8, False),
+            ("a null WorldChrMan reads as no world", slots + 16, False),
+            # Well above anything this child maps, so the read is refused rather than answered.
+            ("an unmapped WorldChrMan answers `cannot tell`, not `no player`", 1 << 46, None),
+        ]
+        for label, slot, want in cases:
+            verdict, detail = player_in_a_world_at(child.pid, slot - WORLD_CHR_MAN_GLOBAL_RVA)
+            results.append((f"{label} -- {detail}", verdict is want))
+    finally:
+        child.kill()
+        child.wait(timeout=SELFTEST_CHILD_REAP_SECONDS)
+    return results
+
+
 def wait_for_exit(pid: int, timeout: float) -> bool:
     """Block until `pid` exits or `timeout` elapses. Returns True if it exited.
 

@@ -59,6 +59,10 @@ STEAM_APP_ID = "1245620"
 # Where the downloaded server is cached between runs. Not in the repo: it is a 65 MB third-party
 # binary, the same category as the deobfuscated game images.
 CACHE = pathlib.Path(os.environ.get("ER_FRIDA_CACHE", pathlib.Path.home() / ".cache" / "er-frida"))
+# Where `scripts/er-run-branch.py` leaves a run's artifacts, one `br-*` directory per launch. Named
+# here rather than spelled inline in `world_is_up` so the selftest can point the gate at a planted
+# directory instead of writing into the user's own run history to test itself.
+RUNS_ROOT = pathlib.Path.home() / ".cache" / "er-me3-runs"
 DOWNLOAD = (
     f"https://github.com/frida/frida/releases/download/{FRIDA_VERSION}/"
     f"frida-server-{FRIDA_VERSION}-windows-x86_64.exe.xz"
@@ -89,6 +93,12 @@ SERVER_PROBE_SLICE_SECONDS = 1.0
 # kernel, which is a different problem from a stale server.
 SERVER_EXIT_WAIT_SECONDS = 5.0
 
+# The `WorldChrMan` walk this gate's second witness is -- the address constants, the
+# `/proc/<pid>/mem` read, the three-valued verdict and the planted-chain coverage for all of it --
+# lives in `er_run_lib`. `scripts/er-frida-when-world.py` gates on the same walk, and an rva of that
+# provenance written out in two files is an rva that goes stale in one of them without anyone
+# noticing: the failure it produces reads as an empty world forever rather than as a wrong address.
+
 
 def steam_root() -> pathlib.Path:
     return pathlib.Path(
@@ -103,18 +113,11 @@ def prefix() -> pathlib.Path:
 def game_pid() -> int | None:
     """The Linux pid of `eldenring.exe`, or `None`.
 
-    Wine reports the Windows executable name in `comm`; the `exe` symlink points at
-    wine64-preloader for every Windows process in the prefix, so `comm` is the discriminator.
+    A name of its own rather than a bare call, because the selftest replaces it to drive the gate
+    without a game. The lookup itself is `er_run_lib`'s, shared with everything else that has to
+    find the game process by `comm`.
     """
-    for entry in pathlib.Path("/proc").iterdir():
-        if not entry.name.isdigit():
-            continue
-        try:
-            if (entry / "comm").read_text(encoding="utf-8").strip() == "eldenring.exe":
-                return int(entry.name)
-        except OSError:
-            continue
-    return None
+    return er_run_lib.game_pid()
 
 
 def linux_pid_is_game(pid: int) -> bool:
@@ -270,23 +273,35 @@ def clear_staged_agent() -> bool:
 
 
 def world_is_up() -> tuple[bool, str]:
-    """Whether the newest run has a player in a world yet, from its own telemetry.
+    """Whether the game has a player in a world yet, from telemetry or from the process itself.
 
     The launcher returns as soon as the DLL logs that it loaded, which is a minute or more before
     a world exists, and a frida-server started into that window puts an injector into a process
     still building its own address space.
 
-    `oracle_player_present` is the product's own read of `WorldChrMan`, written by `er_quickload`
-    into the run's artifact directory, so this costs a file read and depends on no game hook of
-    this script's own. No telemetry file at all answers "unknown", which is treated as not ready.
+    Two witnesses, in that order. `oracle_player_present` is the product's own read of
+    `WorldChrMan`, written by `er_quickload` into the run's artifact directory: a file read that
+    depends on no game hook of this script's own, and it carries the loading substep along with the
+    verdict, so it is both cheaper and more specific.
+
+    Every other shell -- `er-save-game-row`, `er-invasion-warp`, anything that is not the product --
+    writes its own log and no `er-quickload-telemetry.json`, and for those the first witness has
+    nothing to say at all. That made this gate unpassable for them however long the game had been in
+    a world: hit 2026-09-19 on a live `er-save-game-row` session with a player in a world, refused
+    with "no run telemetry to read", leaving `--allow-early` -- a flag whose documented meaning is
+    "the boot itself is what you are measuring" -- as the only way through. The second witness is
+    the same predicate the first one reports, read from outside through `/proc/<pid>/mem` instead of
+    from inside the process, so it needs no server, no hook and no file, and any profile can produce
+    it.
     """
     # No game is the clearest not-ready there is, and it has to be checked before the files: a
     # previous run's telemetry keeps saying a player was present long after that process died, so
     # reading it first let the gate pass with nothing running at all.
-    if game_pid() is None:
+    pid = game_pid()
+    if pid is None:
         return False, "no eldenring.exe is running"
     runs = sorted(
-        (pathlib.Path.home() / ".cache" / "er-me3-runs").glob("br-*"),
+        RUNS_ROOT.glob("br-*"),
         key=lambda d: d.stat().st_mtime,
         reverse=True,
     )
@@ -299,12 +314,17 @@ def world_is_up() -> tuple[bool, str]:
         except (ValueError, OSError):
             continue
         if data.get("oracle_player_present"):
-            return True, f"{run.name}: a player is in a world"
+            return True, f"{run.name} telemetry: a player is in a world"
         return False, (
-            f"{run.name}: oracle_player_present is "
+            f"{run.name} telemetry: oracle_player_present is "
             f"{data.get('oracle_player_present')!r}, step={data.get('oracle_system_step_label')!r}"
         )
-    return False, "no run telemetry to read -- cannot tell whether a world exists"
+    present, detail = er_run_lib.player_in_a_world(pid)
+    if present:
+        return True, f"no run telemetry; a live read of pid {pid} says {detail}"
+    if present is False:
+        return False, f"no run telemetry; a live read of pid {pid} says {detail}"
+    return False, f"no run telemetry, and a live read of pid {pid} could not tell: {detail}"
 
 
 def start(
@@ -564,12 +584,75 @@ def stop(pidfile: pathlib.Path | None = None, port: int = PORT) -> int:
     return 0
 
 
+def world_gate_selftest() -> list[tuple[str, bool]]:
+    """Prove the two witnesses compose in the order the gate documents.
+
+    The telemetry file and the live read are each exercised on their own by
+    `er_run_lib.world_read_selftest`; what is left is which one `world_is_up` believes. Both are
+    stubbed here -- a planted run directory for the first, a replaced
+    `er_run_lib.player_in_a_world` for the second -- so every combination is reachable without a
+    game and without writing into the user's own run history.
+    """
+    import tempfile
+
+    globals_ = globals()
+    saved = {name: globals_[name] for name in ("RUNS_ROOT", "game_pid")}
+    saved_walk = er_run_lib.player_in_a_world
+    results: list[tuple[str, bool]] = []
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            globals_["RUNS_ROOT"] = pathlib.Path(tmp)
+            globals_["game_pid"] = lambda: 1234
+            er_run_lib.player_in_a_world = lambda pid: (None, "stub: unreadable")
+
+            ready, detail = world_is_up()
+            results.append((f"a profile with no telemetry falls through -- {detail}", not ready))
+            results.append(
+                ("a live read that cannot answer refuses", "could not tell" in detail)
+            )
+
+            er_run_lib.player_in_a_world = lambda pid: (True, "stub: a player")
+            ready, detail = world_is_up()
+            results.append((f"a live read alone can open the gate -- {detail}", ready))
+
+            er_run_lib.player_in_a_world = lambda pid: (False, "stub: no player")
+            ready, detail = world_is_up()
+            results.append((f"a live read alone can refuse -- {detail}", not ready))
+
+            run = pathlib.Path(tmp) / "br-selftest"
+            run.mkdir()
+            telemetry = run / "er-quickload-telemetry.json"
+            telemetry.write_text('{"oracle_player_present": true}', encoding="utf-8")
+            ready, detail = world_is_up()
+            results.append(
+                (
+                    f"telemetry answers before the live read -- {detail}",
+                    ready and "telemetry" in detail,
+                )
+            )
+
+            globals_["game_pid"] = lambda: None
+            ready, detail = world_is_up()
+            results.append((f"no game outranks both witnesses -- {detail}", not ready))
+    finally:
+        globals_.update(saved)
+        er_run_lib.player_in_a_world = saved_walk
+    return results
+
+
 def selftest() -> int:
     source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # The world walk moved into `er_run_lib`, so the structural checks on it have to follow it
+    # there. A check that only ever reads this file would go green on the move itself while the
+    # thing it guards sat unguarded in the other one.
+    shared = pathlib.Path(er_run_lib.__file__).read_text(encoding="utf-8")
     # The `--force` branch, read structurally rather than by quoting the comment inside it. The
     # quoted form asserted on prose and broke the day the prose was reworded, which is the one thing
     # a check on a file that is already correct must not do.
     force_branch = source.split("\n    if force:", 1)[-1].split("elif listening():", 1)[0]
+    # What `world_is_up` does once the telemetry witness has nothing to say, read the same
+    # structural way rather than by quoting prose that a rewording would break.
+    world_gate_tail = source.split("\ndef world_is_up(", 1)[-1].split("\ndef ", 1)[0]
     checks = [
         ("a Proton wine binary is resolvable", wine_binary() is not None),
         ("the game's wine prefix exists", prefix().is_dir()),
@@ -616,11 +699,68 @@ def selftest() -> int:
             "the fetch completes on a size, not on curl's exit code",
             "declared_size(" in pathlib.Path(__file__).read_text(encoding="utf-8"),
         ),
+        (
+            "the world gate never passes on how long the process has been alive",
+            # Both files, because the walk lives in one and the gate in the other. Built from
+            # pieces so the assertion does not match its own source text. The age fallback that
+            # used to sit in `world_is_up` passed a process that had been up five minutes, which a
+            # crashed modal satisfies as readily as a world does.
+            ("/proc/" + "uptime") not in source + shared
+            and ("BOOT_" + "SETTLE_SECONDS") not in source + shared,
+        ),
+        (
+            "the gate falls back to the live read when a profile writes no telemetry",
+            "er_run_lib.player_in_a_world(pid)" in world_gate_tail,
+        ),
+        (
+            "the live read opens the game's memory read-only, and injects nothing",
+            'open(f"/proc/{pid}/mem", "rb", 0)' in shared,
+        ),
+        (
+            "the walk and its address constants have one owner, not a copy per script",
+            # The needle is an assignment, not the name: this file still reads the constant
+            # through `er_run_lib`, and what must not come back is a second definition of it.
+            # Assembled from pieces, or the needle would be in its own haystack.
+            ("WORLD_CHR_MAN" + "_GLOBAL_RVA = ") not in source
+            and ("WORLD_CHR_MAN" + "_GLOBAL_RVA = 0x3D69FF8") in shared,
+        ),
     ]
     failed = 0
     for label, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'}  {label}")
         failed += 0 if ok else 1
+
+    print("\n  the WorldChrMan witness, address and read path:")
+    hop, hop_detail = er_run_lib.recorded_1162_to_1170_hop()
+    if hop is None:
+        print(f"  ....  the 1.16.2 to 1.17.0 hop went unchecked -- {hop_detail}")
+    else:
+        print(f"  {'ok  ' if hop else 'FAIL'}  the map still carries the first hop -- {hop_detail}")
+        failed += 0 if hop else 1
+    print(
+        f"  ....  the second hop is `.data`, which 1.17.1 did not move: "
+        f"0x{er_run_lib.GAME_PREFERRED_IMAGE_BASE + er_run_lib.WORLD_CHR_MAN_GLOBAL_RVA:x} "
+        f"+0x{er_run_lib.WORLD_CHR_MAN_MAIN_PLAYER_OFFSET:x}"
+    )
+    for label, ok in er_run_lib.world_read_selftest():
+        print(f"  {'ok  ' if ok else 'FAIL'}  {label}")
+        failed += 0 if ok else 1
+    for label, ok in world_gate_selftest():
+        print(f"  {'ok  ' if ok else 'FAIL'}  {label}")
+        failed += 0 if ok else 1
+
+    pid = game_pid()
+    if pid is None:
+        print(
+            "  ....  no eldenring.exe is running, so the live path went unexercised: the walk "
+            "above ran against a planted chain in a child process, which proves the arithmetic "
+            "and the read but not that these offsets still name a live WorldChrMan"
+        )
+    else:
+        verdict, detail = er_run_lib.player_in_a_world(pid)
+        reading = {True: "a player is in a world", False: "no player", None: "cannot tell"}[verdict]
+        print(f"  ....  live read of pid {pid}: {reading} -- {detail}")
+
     print("selftest: PASS" if not failed else f"selftest: {failed} check(s) failed")
     return 0 if not failed else 1
 
