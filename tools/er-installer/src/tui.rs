@@ -170,14 +170,20 @@ impl Drop for RawMode {
 /// Redrawing this way rather than clearing first is what stops the screen flickering -- a
 /// clear-then-draw leaves the terminal briefly empty and every frame blinks.
 pub fn paint(frame: &str) -> io::Result<()> {
+    let (width, _) = size();
     let mut out = io::stdout();
     let mut buffer = String::with_capacity(frame.len() + 64);
-    buffer.push_str("\x1b[H");
+    platform::home_cursor(&mut buffer);
     let mut lines = frame.lines().peekable();
     while let Some(line) = lines.next() {
         buffer.push_str(line);
-        // Clear to end of line, so a shorter line does not leave the last frame's tail behind.
-        buffer.push_str("\x1b[K");
+        // Pad to the window width rather than clearing to end of line with `esc [ K`, for the
+        // same reason: padding is plain text, and a shorter line still wipes the tail the last
+        // frame left on that row.
+        let drawn = visible_columns(line);
+        if drawn < width {
+            buffer.extend(std::iter::repeat_n(' ', width - drawn));
+        }
         // No newline after the last line, and that is what keeps the top of the frame on screen.
         //
         // A frame is rendered to exactly the window height, so a newline after its final line
@@ -191,9 +197,29 @@ pub fn paint(frame: &str) -> io::Result<()> {
             buffer.push_str("\r\n");
         }
     }
-    buffer.push_str("\x1b[J");
+    // No `esc [ J` to clear below: every row of the window is painted and padded, so there is
+    // nothing left over to clear, and one fewer sequence for a console to rewrite.
     out.write_all(buffer.as_bytes())?;
     out.flush()
+}
+
+/// How many columns a string occupies, ignoring the `esc [ ... m` colour sequences in it, which
+/// a terminal consumes without moving the cursor.
+fn visible_columns(line: &str) -> usize {
+    let mut columns = 0;
+    let mut characters = line.chars();
+    while let Some(character) = characters.next() {
+        if character != '\u{1b}' {
+            columns += 1;
+            continue;
+        }
+        for escape in characters.by_ref() {
+            if escape.is_ascii_alphabetic() {
+                break;
+            }
+        }
+    }
+    columns
 }
 
 #[cfg(unix)]
@@ -235,6 +261,11 @@ mod platform {
         let _ = stty(&[&restore.0]);
     }
 
+    /// Home the cursor. A Unix terminal is driven entirely by sequences, so this is one.
+    pub fn home_cursor(buffer: &mut String) {
+        buffer.push_str("\x1b[H");
+    }
+
     pub fn size() -> Option<(usize, usize)> {
         let reported = stty(&["size"])?;
         let mut parts = reported.split_whitespace();
@@ -255,6 +286,17 @@ mod platform {
         fn SetConsoleMode(handle: isize, mode: u32) -> i32;
         fn GetConsoleScreenBufferInfo(handle: isize, info: *mut ScreenBufferInfo) -> i32;
         fn ReadConsoleInputW(handle: isize, buffer: *mut u8, len: u32, read: *mut u32) -> i32;
+    }
+
+    /// Home the cursor with `esc [ H`, the same sequence the Unix side writes.
+    ///
+    /// `SetConsoleCursorPosition` was tried here and made it worse rather than better: under Wine
+    /// the console is emulated over a pty, so an API move and a stream of text end up describing
+    /// two different cursors, and the frame came out offset horizontally as well as vertically --
+    /// the top row began mid-word. Whatever is scrolling the header away, positioning through the
+    /// API is not the lever, and one path for both systems is the simpler thing to reason about.
+    pub fn home_cursor(buffer: &mut String) {
+        buffer.push_str("\x1b[H");
     }
 
     const STD_INPUT_HANDLE: u32 = -10i32 as u32;
