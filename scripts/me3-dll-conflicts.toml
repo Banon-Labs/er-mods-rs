@@ -1010,12 +1010,28 @@ byte-for-byte vanilla unless the null case occurs."""
 # GATED BY     scripts/check-me3-dll-conflicts.py
 # ---------------------------------------------------------------------------
 [always]
-# Deliberately empty since 2026-09-11. Its only member was er-lockon-filter, and that
+# Empty from 2026-09-11 to 2026-09-20. Its only member had been er-lockon-filter, and that
 # product was deleted by user directive; the research it carried is in
-# docs/recon/lockon-filter-findings.md. The mechanism is unchanged and still gated --
+# docs/recon/lockon-filter-findings.md. The mechanism was never removed and stayed gated --
 # check-me3-dll-conflicts.py and er-dll-closure.py --selftest both cover it against
-# synthetic tables, so an empty table here is a table with no members rather than a
+# synthetic tables -- so an empty table was a table with no members rather than a
 # feature nobody checks any more.
+"er-crash-logging" = """A run that faults without this DLL leaves NOTHING: the process vanishes, \
+the reaper removes the staged files, and the artifact directory holds a log that simply stops \
+mid-sentence. Every other shell installs `er_game_base::panic_report`, which catches a Rust panic \
+and not an access violation -- and an access violation is the failure these DLLs actually produce, \
+because they detour the game.
+
+Measured 2026-09-20 on run br-20260920-170445-6369: `er-quit-menu` alone in the profile, the \
+player pressed the System>Quit rows, the game died with the save picker open, and the only record \
+was `er-quit-menu.log` ending inside a live ProfileSelect. No fault address, no module, no stack, \
+nothing to map back to a function -- so the crash could not be attributed at all and the run had to \
+be repeated. The DLL was not withheld by any rule: `er-dll-closure.py` selects what the diff \
+touched, and a passive recorder is never what a diff touches.
+
+It costs nothing to carry. It is `compatible` against every entry in this table -- a first-chance \
+exception handler that installs one vectored handler and writes a file -- and it is the one package \
+whose absence is only discovered when it is already too late to add it."""
 
 # Two hosts arming the Quit tab's row router is one router too many, whichever rows each carries.
 # A host can clone nothing -- the Save Game row's take-over shape arms `RowSet::NONE` -- and still

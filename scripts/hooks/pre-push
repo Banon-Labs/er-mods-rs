@@ -90,6 +90,42 @@ if [[ ${#pushed_refs[@]} -gt 0 && ${#pushed_shas[@]} -eq 0 ]]; then
 	exit 0
 fi
 
+# IS THE TREE THE GATES WILL READ THE STATE THIS PUSH IS SENDING? `scripts/check.sh` at the bottom
+# of this file reads the WORKING TREE; the push sends a COMMIT. When they differ the verdict
+# describes something that is not being pushed, so this is asked first, before any gate has spent
+# anything.
+#
+# Measured 2026-09-20. A push of `phase2/one-row-shell-config-selected` ran while its author was
+# mid-edit, between adding a call and adding the function it calls. check.sh compiled that tree,
+# `cargo-build` failed with `E0425: cannot find function ... in this scope`, and the push was
+# refused -- for a defect in neither the commit nor the finished tree, after the other ten stages
+# had already spent 400 seconds on `addresses` alone. The inverse costs more and is silent: edit a
+# file into a passing state, push a commit without it, and the gate says green about work the
+# remote will never receive.
+#
+# It refuses rather than warns, and only where the two are comparable: the pushed tip is this
+# checkout's own `HEAD`. Pushing some other branch's tip is not a tree this checkout can speak for,
+# and the pre-existing behaviour stands there. Untracked files are not compared -- check.sh reads
+# tracked source, and a scratch file is not content the push is failing to carry.
+#
+# `--no-verify` remains the way past it, as for every other refusal here. The point is that
+# skipping the gate should be a decision, not a coincidence of when the push was typed.
+#
+# Proven by scripts/test-pre-push-dirty-tree.sh, which drives this hook with a real ref list and
+# asserts the position too: below the deletion skip, above the gate it protects.
+head_sha=$(git rev-parse HEAD 2>/dev/null || true)
+for sha in "${pushed_shas[@]:-}"; do
+	[[ -n $sha && $sha == "$head_sha" ]] || continue
+	dirty=$(git status --porcelain --untracked-files=no 2>/dev/null || true)
+	[[ -n $dirty ]] || break
+	printf 'pre-push: REFUSED -- the working tree differs from the commit being pushed (%s).\n' \
+		"$(git rev-parse --short "$sha")" >&2
+	printf '  scripts/check.sh reads the working tree, so its verdict would describe content\n' >&2
+	printf '  that is not in this push. Commit it, stash it, or push with --no-verify.\n' >&2
+	printf '%s\n' "$dirty" | sed 's/^/    /' >&2
+	exit 1
+done
+
 # DOES THE STATE BEING PUSHED COMPILE? Not "does my working tree compile" -- see the header of
 # scripts/check-committed-compiles.sh for why those are different questions, and how two commits
 # reached origin on 2026-08-31 that answered yes to the second and no to the first.

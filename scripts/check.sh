@@ -1111,6 +1111,12 @@ bash "$repo_root/scripts/test-pre-push-scrubs-git-env.sh"
 # judged the pushing checkout instead, and a branch deletion was blocked by the unrelated branch
 # the agent happened to have out. See the header of scripts/test-pre-push-deletion-only.sh.
 bash "$repo_root/scripts/test-pre-push-deletion-only.sh"
+# ...and that the hook refuses when the tree those gates will read is not the state being pushed.
+# This suite reads the WORKING TREE and a push sends a COMMIT; on 2026-09-20 a push landed
+# mid-edit, `cargo-build` failed on a tree that never existed as a commit, and 400s of `addresses`
+# had already been spent. The silent inverse is worse: a gate green on an edit the push omits. See
+# the header of scripts/test-pre-push-dirty-tree.sh.
+bash "$repo_root/scripts/test-pre-push-dirty-tree.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
 # branch that had never moved was pushed over PR #448 and took two commits off it. See the header
