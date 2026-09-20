@@ -24,23 +24,29 @@ fn main() {
 #[cfg(windows)]
 mod windows_probe {
     use std::io::{Read, Write};
+    use std::sync::{Mutex, OnceLock};
 
-    /// Everything printed also goes here, named by `ER_KEY_PROBE_LOG`.
+    /// The file every line also goes to, named by `ER_KEY_PROBE_LOG`, opened once and truncated.
     ///
-    /// Under `wineconsole` the process draws into its own window, so stdout cannot be teed and a
-    /// result that only exists on screen is lost the moment the window closes -- which is exactly
-    /// how the first run of this probe was thrown away. Appended and flushed per line so a killed
-    /// or closed window still leaves everything it had measured.
+    /// One handle for the process, so the file holds this run and not a pile of them. Flushed per
+    /// line, because under `wineconsole` the process draws into its own window -- stdout cannot be
+    /// teed, and a result that only exists on screen is lost the moment the window closes, which
+    /// is exactly how the first run of this probe was thrown away.
+    fn log_file() -> Option<&'static Mutex<std::fs::File>> {
+        static FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+        FILE.get_or_init(|| {
+            let path = std::env::var_os("ER_KEY_PROBE_LOG")?;
+            std::fs::File::create(path).ok().map(Mutex::new)
+        })
+        .as_ref()
+    }
+
     fn log(line: &str) {
         println!("{line}");
-        let Some(path) = std::env::var_os("ER_KEY_PROBE_LOG") else {
+        let Some(file) = log_file() else {
             return;
         };
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
+        if let Ok(mut file) = file.lock() {
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
         }

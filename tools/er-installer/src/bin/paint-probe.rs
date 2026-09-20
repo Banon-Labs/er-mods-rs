@@ -31,6 +31,7 @@ fn main() {
 #[cfg(windows)]
 mod probe {
     use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
 
     const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
     const ENABLE_PROCESSED_OUTPUT: u32 = 0x0001;
@@ -72,17 +73,25 @@ mod probe {
         fn SetConsoleCursorPosition(handle: isize, position: Coord) -> i32;
     }
 
-    /// Everything printed is also appended to the file named by `ER_PAINT_PROBE_LOG`, because the
-    /// probe's own output is on the screen it is busy scrolling.
+    /// The file every line goes to, named by `ER_PAINT_PROBE_LOG`, opened once and truncated.
+    ///
+    /// The probe's own output would otherwise land on the screen it is busy scrolling. One handle
+    /// for the process, so the file holds this run's measurements rather than a pile of runs that
+    /// have to be told apart by hand.
+    fn log_file() -> Option<&'static Mutex<std::fs::File>> {
+        static FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+        FILE.get_or_init(|| {
+            let path = std::env::var_os("ER_PAINT_PROBE_LOG")?;
+            std::fs::File::create(path).ok().map(Mutex::new)
+        })
+        .as_ref()
+    }
+
     fn log(line: &str) {
-        let Some(path) = std::env::var_os("ER_PAINT_PROBE_LOG") else {
+        let Some(file) = log_file() else {
             return;
         };
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-        {
+        if let Ok(mut file) = file.lock() {
             let _ = writeln!(file, "{line}");
             let _ = file.flush();
         }
