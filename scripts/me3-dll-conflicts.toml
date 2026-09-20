@@ -439,24 +439,30 @@ than a private `MhHook`, and it exports `er_effects_union_register` from its own
 hits alone against 0 in an eleven-native profile, with every movie swap silently inert -- because \
 it is why both sides are shaped that way at all.
 
-WHAT IS MEASURED TODAY. Not "whichever shell reaches the prologue first creates the dispatcher \
-and the other chains into it" -- that sentence stood here until 2026-09-19 and describes a hub \
-election this code does not perform. The companion reaches a hub by one route only: \
-`er_hook::register_shared_hook` calls `GetModuleHandleA` on the literal `er_quickload.dll` \
-(`PRODUCT_DLL_NAME`) and asks that module for `er_effects_union_register`. It matches nothing \
-else, and it is not an address-keyed lookup -- an export by that name in another image is \
-invisible to it. So in a profile carrying `er_quit_rows.dll` and no product, the companion polls \
-for a second, finds no module of that name, and returns `HookRoute::LocalUnion`: its own MinHook \
-instance, beside the one `er-quit-rows` created in its own image, both on \
-`TITLE_SCALEFORM_FILE_OPEN_RVA`. That is the collision this row claims to have resolved. It has \
-never been observed because the pair has never co-loaded -- `er-quit-rows` is a transitional \
-shell loaded alone from `~/Elden/quit-rows-trimmed.me3` while it is reduced.
+What was measured until 2026-09-19, and why this row was filed. Until that day the entry read \
+"whichever shell reaches the prologue first creates the dispatcher and the other chains into \
+it", and that sentence described a hub election the code did not perform. The companion reached \
+a hub by one route only: `er_hook::register_shared_hook` called `GetModuleHandleA` on the \
+literal `er_quickload.dll` (`PRODUCT_DLL_NAME`) and asked that module for \
+`er_effects_union_register`. It matched nothing else, and it was not an address-keyed lookup -- \
+an export by that name in another image was invisible to it. So in a profile carrying \
+`er_quit_rows.dll` and no product, the companion polled for a second, found no module of that \
+name, and returned `HookRoute::LocalUnion`: its own MinHook instance, beside the one \
+`er-quit-rows` created in its own image, both on `TITLE_SCALEFORM_FILE_OPEN_RVA`. That is the \
+collision this row claims to have resolved, and it has never been observed, because the pair \
+has never co-loaded -- `er-quit-rows` is a transitional shell loaded alone from \
+`~/Elden/quit-rows-trimmed.me3` while it is reduced.
 
-The row stays `[[shared]]` because the cause is being removed rather than tolerated. bd \
-er-effects-rs-whbn elects the process's hub by arrival order instead of by module name, the way \
-`row_registry` already elects the row table's owner; when it lands, the sentence deleted above \
-becomes true as written and this paragraph can go with it. Until then a profile wanting both \
-needs the product in it, which is the only thing that gives either side a hub to find.
+The row stayed `[[shared]]` because the cause was being removed rather than tolerated, and bd \
+er-effects-rs-whbn removed it. `er-hook` no longer names the hub: every loaded module is asked \
+for `er_effects_union_register` and the lowest load base among those that answer wins \
+(`er_hook::elect_union_host`, host-tested), which is the rule `row_registry` already elects the \
+row table's owner by, with the `er_quickload.dll` probe kept first so a companion built against \
+the older behaviour still resolves. `er-quit-rows` does export the registrar, so this pair now \
+has a hub without the product in the profile -- which is what a `[[shared]]` row has always \
+meant here, and what this table could not keep as a promise before. Outstanding: the two have \
+still not been run together, so the election is proven on the rule and not yet on a session \
+reporting `HookRoute::ProductUnion` with `file_open_hits > 0`.
 
 Two further addresses are shared with this companion and are not covered by the union: \
 `CSSCALEFORMVALUE_DTOR_RVA` (0xd7f850) and `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA` \

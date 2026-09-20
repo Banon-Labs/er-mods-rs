@@ -90,6 +90,19 @@ That is how the measured pair above was closed on 2026-08-23: the product's obse
 which resolves the product's `er_effects_union_register` export and chains into its instance
 (falling back to its own union when the product is absent). Install order no longer decides it.
 
+Which module owns that instance is elected, not named (2026-09-19)
+------------------------------------------------------------------
+`register_shared_hook` used to find the owner by one file name, `GetModuleHandleA` on
+`er_quickload.dll`. That left a `[[shared]]` row in this table asserting more than the code did:
+with `er_quit_rows.dll` and `er_armament_icons.dll` in a profile and no product, `er-quit-rows`
+exports `er_effects_union_register` and the companion never looked for it, so both took their own
+MinHook instance on one prologue -- the configuration measured at the top of this file. `er-hook`
+now asks every loaded module for the registrar and takes the lowest load base among those that
+answer (`er_hook::elect_union_host`), keeping the `er_quickload.dll` probe first so a companion
+built against the old behaviour still resolves. A `[[shared]]` row therefore no longer depends on
+one of its two crates being the product, which is what this gate has always read those rows as
+meaning.
+
 Usage:
     python3 scripts/check-shared-hook-rvas.py
     python3 scripts/check-shared-hook-rvas.py --selftest
