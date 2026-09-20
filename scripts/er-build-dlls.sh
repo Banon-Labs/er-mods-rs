@@ -31,6 +31,35 @@ REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
 . "$REPO_ROOT/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy er-build-dlls
+
+# This script hashes the working tree, so it must not run while something is editing it.
+#
+# The provenance record written below is a content hash over each package's dependency closure,
+# taken while that tree is the one being compiled. `scripts/prove-gate-positive-controls.py` edits
+# tracked files and puts them back -- that is how it proves a gate can fail -- so a run of it
+# overlapping this one makes every record here a hash of a mutant.
+#
+# Measured 2026-09-20: it did, and the records outlived the run. `tools/er-installer/build.rs` then
+# refused to embed any of the 29 DLLs -- `recorded 8c3607d9e7ee, tree is now 3cc41b24c98d;
+# 87 -> 87 files`, the same count and a different hash, on crates the session never touched --
+# which killed the `cargo-build` stage of a push after every other stage had gone green.
+#
+# Shared, not exclusive: this has to coexist with a `check.sh --stage` run, which also takes it
+# shared, and with a second build. The prover takes it exclusively, so it is the only thing
+# excluded, which is exactly the pairing that was missing. Same machine-wide lock file check.sh
+# uses -- every agent worktree is a separate checkout, and a per-checkout lock would guard nothing.
+_build_lock="${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-sh.lock"
+if command -v flock >/dev/null 2>&1; then
+	exec 8<>"$_build_lock" || true
+	if ! flock -n -s 8; then
+		printf 'er-build-dlls: REFUSED -- something holds %s exclusively.\n' "$_build_lock" >&2
+		printf '  The provenance this records is a hash of the working tree, and an exclusive\n' >&2
+		printf '  holder (scripts/prove-gate-positive-controls.py, or a whole-suite check.sh)\n' >&2
+		printf '  is either editing that tree or reading it. Wait for it, then build.\n' >&2
+		exit 1
+	fi
+fi
+
 TARGET="${ER_BUILD_TARGET:-x86_64-pc-windows-msvc}"
 PROFILE_DIR="$REPO_ROOT/target/$TARGET/release"
 
