@@ -124,16 +124,21 @@ Elden Ring mods -- pick what you want, and this writes the me3 profile for them.
 
 WHAT TO DO
   1. Install me3 if you have not: https://github.com/garyttierney/me3
-  2. Windows: run er-installer.exe
+  2. Windows: double-click er-installer.exe
      Linux:   run ./er-installer      (same program; me3 runs natively on Linux)
   3. Move with the arrow keys, space to tick, enter to install.
+
+Double-clicking it opens a window that stays open until you press a key, so you can read what
+it did. Run from a terminal instead and it does not wait.
 
 This one file is everything. The mods are inside it -- there is nothing else to download and
 no folder to keep it next to. The mods themselves are Windows DLLs on both systems, because on
 Linux the game runs under Proton; only the installer differs.
 
-It finds the game on its own when Steam is somewhere usual. If it cannot, pass the folder
-holding eldenring.exe:
+It finds the game through Steam's own records: where the registry says Steam is, every library
+in libraryfolders.vdf, and Elden Ring's install record in the library that has it. If none of
+that finds the game, it asks you to type or paste the folder -- pasting one copied with
+Explorer's "Copy as path" works, quotation marks and all. You can also name it up front:
 
     er-installer.exe --game-dir "C:\\...\\steamapps\\common\\ELDEN RING\\Game"
     ./er-installer --game-dir "$HOME/.local/share/Steam/steamapps/common/ELDEN RING/Game"
