@@ -84,10 +84,34 @@ fn game_dir_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
     candidates
 }
 
+/// The player's real home directory, on whichever system is underneath.
+///
+/// `HOME` answers on a native Linux build and is absent from the Windows environment, so the
+/// shipped exe -- which a Linux player runs under Proton or Wine -- used to fall through to the
+/// drive letters alone and report six `C:`/`D:`/`E:` paths it had tried. Autodetect could
+/// therefore never succeed for a Proton player, whose library is only reachable on `Z:`, and
+/// every one of them had to discover `--game-dir` from a failure message.
+///
+/// `WINEHOMEDIR` is how Wine spells that home to the Windows side, and it is an NT object path:
+/// measured on this machine as `\??\Z:\home\banon`. Stripping the `\??\` prefix leaves a path
+/// the Windows file APIs accept.
+fn player_home() -> Option<PathBuf> {
+    if let Some(home) = std::env::var_os("HOME") {
+        return Some(PathBuf::from(home));
+    }
+    wine_home_dir(std::env::var("WINEHOMEDIR").ok().as_deref())
+}
+
+/// The path half of [`player_home`], split out so it can be tested without an environment.
+fn wine_home_dir(raw: Option<&str>) -> Option<PathBuf> {
+    let raw = raw?.trim();
+    let stripped = raw.strip_prefix(r"\??\").unwrap_or(raw);
+    (!stripped.is_empty()).then(|| PathBuf::from(stripped))
+}
+
 fn steam_library_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(home);
+    if let Some(home) = player_home() {
         roots.push(home.join(".local/share/Steam"));
         roots.push(home.join(".steam/steam"));
     }
@@ -315,6 +339,36 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// The exact string Wine put in `WINEHOMEDIR`, measured on this machine 2026-09-19 with
+    /// `wine cmd /c set`. The prefix is what made the shipped exe unable to find a Proton
+    /// player's library: `HOME` is not in the Windows environment, so this is the only witness
+    /// of the real home, and it arrives as an NT object path rather than a usable one.
+    #[test]
+    fn wine_spells_the_linux_home_as_an_nt_object_path() {
+        assert_eq!(
+            wine_home_dir(Some(r"\??\Z:\home\banon")),
+            Some(PathBuf::from(r"Z:\home\banon"))
+        );
+    }
+
+    #[test]
+    fn a_home_without_the_nt_prefix_is_taken_as_it_stands() {
+        assert_eq!(
+            wine_home_dir(Some(r"Z:\home\banon")),
+            Some(PathBuf::from(r"Z:\home\banon"))
+        );
+    }
+
+    #[test]
+    fn an_absent_or_empty_wine_home_is_not_a_root() {
+        assert_eq!(wine_home_dir(None), None);
+        assert_eq!(wine_home_dir(Some("")), None);
+        assert_eq!(wine_home_dir(Some("   ")), None);
+        // The prefix alone names no directory, and joining Steam paths onto it would put two
+        // candidates in the error message that could never have held the game.
+        assert_eq!(wine_home_dir(Some(r"\??\")), None);
     }
 
     #[test]
