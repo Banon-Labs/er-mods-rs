@@ -828,6 +828,96 @@ const UNION_REGISTER_EXPORT: &[u8] = b"er_effects_union_register\0";
 #[cfg(windows)]
 const UNION_REGISTER5_EXPORT: &[u8] = b"er_effects_union_register5\0";
 
+/// Define the two C-ABI registrar exports that make the calling cdylib a hook union hub.
+///
+/// # Why a macro, and not two functions in this crate
+///
+/// An `unsafe(no_mangle)` definition in an rlib is retained and re-exported by every cdylib that
+/// links it. Putting the pair here directly would make every companion in the workspace advertise
+/// itself as a hub, which inverts the election rather than feeding it: a hub is the image that owns
+/// a MinHook instance the others chain onto, and eleven of them is eleven instances.
+/// `crates/er-quickload/src/mh.rs` has recorded that constraint since the extraction, which is why
+/// it kept hand-written bodies instead of moving them here.
+///
+/// A macro writes the bodies once and leaves the symbol opt-in per cdylib. Invoke it only from an
+/// image that is deliberately a hub -- today `er-quickload` and `er-quit-menu`. The second exists
+/// because a profile carrying no product had no hub at all: measured 2026-09-20 on the live module
+/// table, 103 modules readable with zero errors and exactly one exporter of each name. In such a
+/// profile every companion falls to `HookRoute::LocalUnion`, a private instance each, which is the
+/// 2026-08-23 collision shape as soon as two of them want one prologue.
+///
+/// The expansion carries no `cfg` on purpose: the caller applies it, because a host build has no
+/// `MH_*` symbols to link against and a retained `no_mangle` body would pull them in.
+///
+/// # Safety
+///
+/// The exports it defines carry the contracts on [`register_union_hook`] and
+/// [`register_union_hook5`]: `handler` must match `target`'s ABI at the arity its export names,
+/// `target` must be a real code address in this process, and `orig_slot_ptr` must point at a live,
+/// aligned `usize` cell that outlives every dispatch -- a companion `'static`.
+#[macro_export]
+macro_rules! export_union_registrar {
+    () => {
+        /// C-ABI export (2026-07-18, user-directed cross-DLL union): hand a companion's detour to
+        /// this image's single MinHook instance instead of letting it drive its own.
+        ///
+        /// `orig_slot_ptr` points at a `usize`-sized cell in the companion's image; the union
+        /// stores the trampoline, or the next chained handler, there for the companion handler to
+        /// call. The companion image stays loaded for the process lifetime, so treating it as
+        /// `'static` is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the
+        /// `MH_STATUS` code as a positive `i32` on MinHook failure.
+        ///
+        /// # Safety
+        /// See `er_hook::export_union_registrar`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "system" fn er_effects_union_register(
+            target: usize,
+            handler: $crate::UnionFn,
+            orig_slot_ptr: *mut usize,
+        ) -> i32 {
+            if orig_slot_ptr.is_null() {
+                return -1;
+            }
+            // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it
+            // soundly.
+            let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
+                unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
+            match unsafe { $crate::register_union_hook(target, handler, orig_slot) } {
+                Ok(()) => 0,
+                Err(status) => status as i32,
+            }
+        }
+
+        /// C-ABI export: the five-argument sibling of `er_effects_union_register`.
+        ///
+        /// A separate export rather than an arity argument on the one above, because a companion
+        /// resolves these by string and users install these DLLs one at a time from separate
+        /// releases. An older product would decode a five-argument handler as a `UnionFn`, install
+        /// a four-argument dispatcher, and call a handler whose fifth parameter was never written
+        /// -- for `AddCancelButton` that parameter is a function pointer the game calls. A distinct
+        /// name turns that into a null `GetProcAddress` and a logged local fallback instead.
+        ///
+        /// # Safety
+        /// See `er_hook::export_union_registrar`.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "system" fn er_effects_union_register5(
+            target: usize,
+            handler: $crate::UnionFn5,
+            orig_slot_ptr: *mut usize,
+        ) -> i32 {
+            if orig_slot_ptr.is_null() {
+                return -1;
+            }
+            let orig_slot: &'static ::core::sync::atomic::AtomicUsize =
+                unsafe { &*(orig_slot_ptr as *const ::core::sync::atomic::AtomicUsize) };
+            match unsafe { $crate::register_union_hook5(target, handler, orig_slot) } {
+                Ok(()) => 0,
+                Err(status) => status as i32,
+            }
+        }
+    };
+}
+
 /// Default poll budget for [`register_shared_hook`]: ~1s at 25ms.
 ///
 /// A budget is needed rather than a single probe because me3 loads natives in profile order and

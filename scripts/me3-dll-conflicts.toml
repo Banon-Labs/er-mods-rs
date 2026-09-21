@@ -417,9 +417,15 @@ evidence = "crates/er-build-import/src/lib.rs:23; crates/er-quit-menu-core/src/g
 # `TITLE_SCALEFORM_FILE_OPEN_RVA`, and the reason it was worth having is now the reason it cannot
 # be kept: the fork exported `er_effects_union_register` from its own copy of `mh.rs`, so it was
 # the one image in this workspace other than `er-quickload` that a companion could chain into.
-# Measured 2026-09-20 after the deletion -- `crates/er-quickload/src/mh.rs:52` is the only
-# definition of that export left in the tree. `er-quit-menu` does not export it: it is a shell over
-# `er-quit-menu-core`, which RESOLVES the registrar and never provides one.
+# Measured 2026-09-20 after the deletion, on the live module table: 103 modules readable, zero
+# errors, and `er_quickload.dll` the only answer for either registrar name.
+#
+# `er-quit-menu` is that second hub as of the same day. It defines both exports through
+# `er_hook::export_union_registrar!` -- it had none before, being a shell over `er-quit-menu-core`,
+# which resolves the registrar and never provides one. The export does not resurrect the deleted
+# row: `er-quickload` and `er-quit-menu` are a declared `duplicate-owner` pair below, so no emitted
+# profile carries both hubs. What it restores is a hub for the profiles the product is absent from,
+# which is the configuration the deleted row was measuring.
 #
 # Two consequences, and neither is caused by deleting the fork -- both were true of every profile
 # that did not carry the product:
