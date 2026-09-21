@@ -37,7 +37,6 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         "  \"game_task_ticks\": {},\n",
         state.game_task_ticks
     ));
-    body.push_str(&format!("  \"network_sync\": {},\n", state.network_sync));
     body.push_str(&format!(
         "  \"config_path\": \"{}\",\n",
         json_escape(&config.config_path.display().to_string())
@@ -50,7 +49,7 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         )
     ));
     body.push_str(&format!(
-        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_suppressed_mouse_clicks\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n  \"effect_dinput_non_keyboard_reads\": {},\n  \"effect_owned_removals\": {},\n  \"effect_unowned_removals_skipped\": {},\n  \"effect_permanent_effects\": \"{}\",\n  \"effect_duration_filtered\": {},\n  \"effect_stacked_count\": {},\n  \"effect_stack_write_failures\": {},\n  \"selector_binding_reloads\": {},\n",
+        "  \"effect_hotkey_hook_active\": {},\n  \"effect_hotkey_hook_hits\": {},\n  \"effect_hotkey_applied_actions\": {},\n  \"effect_input_suppressed_keys\": {},\n  \"effect_input_suppressed_arrow_keys\": {},\n  \"effect_dinput_kb_hook_fires\": {},\n  \"effect_dinput_mouse_hook_fires\": {},\n  \"effect_dinput_suppressed_arrow_keys\": {},\n  \"effect_dinput_suppressed_mouse_clicks\": {},\n  \"effect_dinput_queued_selector_keys\": {},\n  \"effect_dinput_repeated_selector_keys\": {},\n  \"effect_dinput_non_keyboard_reads\": {},\n  \"effect_owned_removals\": {},\n  \"effect_unowned_removals_skipped\": {},\n  \"effect_permanent_effects\": \"{}\",\n  \"effect_duration_filtered\": {},\n  \"effect_stacked_count\": {},\n  \"effect_stack_write_failures\": {},\n  \"effect_marked_count\": {},\n  \"effect_mark_write_failures\": {},\n  \"pvp_allowed_count\": {},\n  \"pvp_refusals\": {},\n  \"pvp_peers_present\": {},\n  \"selector_binding_reloads\": {},\n",
         effects::effect_hotkey_hook_active(),
         effects::effect_hotkey_hook_hits(),
         effects::effect_hotkey_applied_actions(),
@@ -69,6 +68,18 @@ fn write_telemetry(state: &NetEffectsState, player_available: bool) {
         effects::duration_filtered_effects(),
         effects::stacked_effect_count(),
         effects::stack_write_failures(),
+        // How the mark key is read from outside the game. The count answers "did the press land"
+        // without opening the marked file, and the failure count is the only thing separating a
+        // mark that was recorded from one that will be gone after the next relaunch.
+        effects::marked_effect_count(),
+        effects::mark_write_failures(),
+        // The peer restriction, in the three numbers that can disagree. The table size says
+        // the gate loaded at all; the refusal count says it fired; the peer flag says whether
+        // it could have. Zero refusals means nothing on its own -- it is the pair with the
+        // other two that separates a quiet session from a gate that never installed.
+        effects::pvp_allowed_count(),
+        effects::pvp_refusals(),
+        effects::pvp_peers_present(),
         // How many config reloads actually moved a selector key. Emitted because "the player
         // rebound a key and it did not take" and "the poller never ran" are the same silence
         // otherwise -- and this number is the one that can disagree with the config file.
