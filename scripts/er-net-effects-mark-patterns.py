@@ -19,8 +19,8 @@ clauses, and it is scored the way a filter is judged rather than the way a class
   precision  how many of the rows it catches were marked     -- see the warning below
   unreviewed how many rows it catches that carry no mark     -- rows to look at, not mistakes
 
-UNMARKED IS NOT A NEGATIVE LABEL. A marking pass is almost never exhaustive: a row with no mark
-was usually never looked at, not judged acceptable. So `precision` is a floor and nothing more --
+An unmarked row is not a row judged acceptable. A marking pass is almost never exhaustive, so a
+row carrying no mark was usually never looked at. That makes `precision` a floor and nothing more --
 it counts every unreviewed row as a false positive, which is why a good rule scores badly here
 early on. The column that means something is `unreviewed`: those rows are the queue for the next
 pass, and confirming or rejecting them is what turns the floor into a real number. Read
