@@ -662,13 +662,40 @@ impl Phase {
                 changed
             }
             Phase::TabToQuit => {
-                // The tab-switch (the D_van blocker): one TabLeft = native-binding menu-event 0x30. From
-                // the default tab 0 the prev-tab edge wraps to the last tab = Quit (index 8). RE-confirmed
-                // on the loaded dump: getShownMenuFlags reads inputmgr+0x90+0x30 & 1 -> flag 0x1000
-                // (tab-left) and +0x31 -> 0x80000 (tab-right); the OptionSetting GridControl pager consumes
-                // it (bd menu-gaps-closed-tabswitch-0x30L-0x31R / menu-eventid-set-enumerated). Not
-                // mouse-only -- the 2026-07-17 "mouse-only" verdict was an OS-layer (SendInput) artifact.
-                // Effect: the Quit tab's own rows are readable, not the tab index.
+                // The tab-switch (the D_van blocker): one TabLeft = menu code 0x30. From the
+                // default tab 0 the prev-tab edge wraps to the last tab = Quit (index 8). Effect:
+                // the Quit tab's own rows are readable, not the tab index.
+                //
+                // # Why this tap cannot work, measured rather than argued
+                //
+                // `issue_menu_taps_once` writes `inputmgr+0x90+0x30`. That is a shown-menu-window
+                // bitmap, not input -- `game_mem.rs` says so at `menu_code_pad_binding` and
+                // AGENTS.md says it of `CSMenuMan+0x90`. Frida settled it on run
+                // br-20260920-165749-f063: `_SettingTabControl`'s virtual pumped 234 times with
+                // its grid readable and its cursor at 0, `GridControl::Update` 1170 times, and
+                // `cursor_moves=0`. The consumer runs; the press never arrives.
+                //
+                // # The route, and it is a keyboard one
+                //
+                // `GridControl::Update` consults two predicates -- 1.16.2 `FUN_1407586d0`
+                // (page-left) and `FUN_140758c90` (page-right), 1.17 `0x140759520` and
+                // `0x140759ae0`. Each builds a `std::function<bool(CS::CSEzMenuViewerPad const&)>`
+                // over `{code, kind}` = `{0x30, 2}` / `{0x31, 2}` and hands it to `FUN_14075d970`,
+                // gated by the `CSMenuMan` cursor-live check at `FUN_140758050`.
+                //
+                // Hooking `GetAssign` (`0x242ab0`) in a live session on 2026-09-20 named the
+                // device: `0x30` and `0x31` are resolved at mode 1, the keyboard pair, 271 calls
+                // each, while `0x2c`/`0x2d` go to mode 2, the mouse. The binding on that build is
+                // `keyboardKeyId` 115 for tab-left and 116 for tab-right, with no modifier, and
+                // the player's table matches the default.
+                //
+                // So the press this phase needs is a keyboard key, and the channel already exists:
+                // `key_inject::hold` reaches `er_quickload_hold_dinput_key`, which stamps a DIK
+                // scancode into the DInput keyboard buffer -- the only keyboard stage ER 1.17
+                // reads. What is still missing is the translation, and it has to be read out of
+                // the game rather than transcribed here: `CS_KEYBOARD_KEY` is an enum resolved
+                // through the
+                // table at `base + 0x3c449a0`, indexed by `keyId - 0x46`.
                 //
                 // `optionsetting_tab_index` reads `option_window+0x1870+0x10[deref]+0xd4`, a 1.16.2
                 // offset chain that has drifted on 1.17 exactly as `top_menu_id` did. Measured on
@@ -743,37 +770,65 @@ impl Phase {
                 );
                 let mut any = false;
                 for (name, code) in MENU_CODES_OF_INTEREST {
-                    if let Some((primary, secondary)) =
-                        crate::game_mem::menu_code_pad_binding(*code)
-                    {
-                        any = true;
-                        harness_log!(
-                            "menu-binding: {name} code=0x{code:x} pad_primary=0x{primary:x} pad_secondary=0x{secondary:x}"
-                        );
+                    let pad = crate::game_mem::menu_code_pad_binding(*code);
+                    let keyboard = crate::game_mem::menu_code_keyboard_binding(*code);
+                    if pad.is_none() && keyboard.is_none() {
+                        continue;
                     }
+                    any = true;
+                    // Both devices, because the game does not ask about one of them. Measured
+                    // 2026-09-20: it resolves `tab_left` through the keyboard pair and `list_down`
+                    // through the mouse pair, in the same frame. Printing a single device is how
+                    // the previous shape of this line reported a bound action as unbound.
+                    harness_log!(
+                        "menu-binding: {name} code=0x{code:x} pad={} keyboard={}",
+                        match pad {
+                            Some(id) => format!("0x{id:x}"),
+                            None => "unbound".to_string(),
+                        },
+                        match keyboard {
+                            Some((key, modifier)) => format!("0x{key:x}+0x{modifier:x}"),
+                            None => "unbound".to_string(),
+                        }
+                    );
                 }
-                // The whole table, once, including the keyboard half. The named codes above are the
-                // ones a previous pass guessed at, and two of them turned out to belong to
-                // `CS::SpinCtrl` rather than to list navigation -- an error a dump would have caught
-                // for free. Dword [0] is the mode-0 (keyboard) binding, so a row whose [0] reads a
-                // recognisable DIK scancode names its own action: 0xd0 down-arrow, 0xc8 up-arrow,
-                // 0x1f S, 0x11 W, 0x1c Return, 0x01 Escape. Rows that are entirely zero are unbound
-                // and are skipped, which keeps the dump to the codes that exist.
+                // The whole table, once, every device. The named codes above are the ones a
+                // previous pass guessed at, and two of them turned out to belong to
+                // `CS::SpinCtrl` rather than to list navigation -- an error a dump would have
+                // caught for free.
+                //
+                // The field order is `padKeyId, keyboardKeyId, keyboardModify, mouseKeyId,
+                // mouseModify`, and this line named it backwards until 2026-09-20: it called
+                // `[0]` a keyboard DIK scancode when it is a `CS_PAD_KEY`, and `[3]`/`[4]` a pad
+                // pair when they are the mouse. `keyboardKeyId` is not a scancode either -- it is
+                // a game-internal enum over `0x46..=0xd5`, resolved through a table at
+                // `base + 0x3c449a0`.
+                //
+                // The default table is printed beside the player's own, because the two differing
+                // is the difference between "this build does not bind that" and "this player
+                // rebound it" -- the distinction the 2026-09-19 d-pad investigation turned on.
                 for code in 0..crate::game_mem::KEY_CONFIG_MAX_MENU_CODE {
                     let Some(row) = crate::game_mem::menu_code_binding_row(code) else {
                         continue;
                     };
+                    // An all-zero row is an action this build does not carry. The unbound sentinel
+                    // is `-1`, so a zero in one field is a real id and only the whole row being
+                    // zero means absent.
                     if row.iter().all(|dword| *dword == 0) {
                         continue;
                     }
                     any = true;
+                    let fallback = crate::game_mem::menu_code_default_binding_row(code);
+                    let drifted = fallback.is_some_and(|d| d != row);
                     harness_log!(
-                        "menu-row: code=0x{code:02x} kb=0x{:x} m1=0x{:x} m2=0x{:x} pad1=0x{:x} pad2=0x{:x}",
+                        "menu-row: code=0x{code:02x} pad=0x{:x} kb_key=0x{:x} kb_mod=0x{:x} \
+                         mouse_key=0x{:x} mouse_mod=0x{:x}{}",
                         row[0],
                         row[1],
                         row[2],
                         row[3],
-                        row[4]
+                        row[4],
+                        if drifted { " rebound-from-default" } else { "" }
                     );
                 }
                 // Say whether the press channel is even reachable before the nav phase depends on it,

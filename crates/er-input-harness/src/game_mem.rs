@@ -623,28 +623,67 @@ pub fn top_menu_id() -> i32 {
 /// the function that turns a menu code into a device binding.
 const CS_PC_KEY_CONFIG_GLOBAL_RVA: usize = er_game_base::rva::CS_PC_KEY_CONFIG_SINGLETON_RVA;
 /// The binding table inside CSPcKeyConfig: `config + 0x440 + code * 0x14`, valid for `code < 0x36`.
-/// Each 0x14-byte entry is five dwords and `FUN_140242b00` picks by mode -- mode 2, which the menu
-/// path uses, reads the PAD pair at `+0x0c` and `+0x10`.
+/// Stride, count and table offset all come off one instruction in the `GetAssign` accessor at rva
+/// `0x242ab0` -- `cmp r8d,0x35; ja fail; lea rcx,[rcx + idx*0x14 + 0x440]`.
 const KEY_CONFIG_BINDING_TABLE_OFFSET: usize = 0x440;
 const KEY_CONFIG_BINDING_STRIDE: usize = 0x14;
-const KEY_CONFIG_BINDING_PAD_PRIMARY_OFFSET: usize = 0x0c;
-const KEY_CONFIG_BINDING_PAD_SECONDARY_OFFSET: usize = 0x10;
+/// The default table, `config + 0x008`, loaded from `KeyAssignParam_TypeA` and the same shape. A
+/// row that differs from its default is a rebind, which is how a menu action ends up with no
+/// button on the device the game asks about.
+const KEY_CONFIG_DEFAULT_TABLE_OFFSET: usize = 0x008;
+/// Field offsets inside one `0x14`-byte row, per bd
+/// `er-keybinding-table-cspckeyconfig-1162-2026-08-25`:
+///
+/// ```text
+/// +0x00 padKeyId        CS_PAD_KEY
+/// +0x04 keyboardKeyId   CS_KEYBOARD_KEY
+/// +0x08 keyboardModify  CS_MODIFIER_KEY bitmask
+/// +0x0c mouseKeyId      CS_MOUSE_KEY
+/// +0x10 mouseModify     CS_MODIFIER_KEY bitmask
+/// ```
+///
+/// `FUN_140242b00` selects one device out of a row by mode: mode 0 takes `padKeyId` alone (a pad
+/// has no modifier), mode 1 the keyboard pair, mode 2 the mouse pair.
+///
+/// Until 2026-09-20 this module read `+0x0c`/`+0x10` and called them the pad pair, so every dump
+/// reported a menu action's mouse binding under the name `pad`. See [`menu_code_pad_binding`].
+const KEY_CONFIG_BINDING_PAD_OFFSET: usize = 0x00;
+const KEY_CONFIG_BINDING_KEYBOARD_KEY_OFFSET: usize = 0x04;
+const KEY_CONFIG_BINDING_KEYBOARD_MODIFY_OFFSET: usize = 0x08;
+/// The sentinel a row carries when the action has no button on that device. It is `-1`, not `0`:
+/// `0` is a real id, and reading it as absent is how a bound action reports as unbound.
+const KEY_CONFIG_BINDING_UNBOUND: i32 = -1;
 /// Highest valid menu code -- `FUN_140242ab0` returns an empty binding for anything `>= 0x36`.
 pub const KEY_CONFIG_MAX_MENU_CODE: u32 = 0x36;
 
-/// Every device binding a menu code carries: the five dwords of its `0x14`-byte entry, in order.
+/// Every device binding a menu code carries: the five dwords of its `0x14`-byte entry, in the
+/// order given on [`KEY_CONFIG_BINDING_PAD_OFFSET`] -- pad, keyboard key, keyboard modifier, mouse
+/// key, mouse modifier.
 ///
-/// `FUN_140242b00` selects a pair out of this row by mode -- mode 0 takes `[0]`, mode 1 takes
-/// `[1]`/`[2]`, mode 2 takes `[3]`/`[4]` (the pad pair the menu path asks for). Reading the whole row
-/// is what turns the table from "the pad id for a code I already identified" into "which code is
-/// menu-down": the keyboard half is dword `[0]`, and a DIK scancode is recognisable on sight
-/// (`0xd0` down-arrow, `0x1f` S, `0xc8` up-arrow, `0x11` W), so dumping all `0x36` rows names the
-/// codes instead of sweeping them.
+/// Reading the whole row is what turns the table from "one device's id for a code I already
+/// identified" into "which code is menu-down", and dumping all `0x36` rows names the codes instead
+/// of sweeping them. A row whose every field is the unbound sentinel is an action this build does
+/// not carry.
 ///
-/// The dwords are read as four separate byte-quads rather than through `read_usize`, which would
-/// pack two dwords into one value and silently truncate -- how the existing pad reader gets `[3]`
-/// right and would get `[4]` wrong if it ever read at `+0x10` with a `usize` that ran off the entry.
+/// Dword `[1]` is not a DIK scancode. `CS_KEYBOARD_KEY` is a game-internal enum over `0x46..=0xd5`
+/// that `KeyboardDevice::IsKeyDown` (1.16.2 rva `0x1f6d0f0`) resolves through a lookup table at
+/// `base + 0x3c449a0`, indexed by `keyId - 0x46`. Read that table rather than transcribing it: a
+/// copy is a second source of truth that goes stale on the next patch and names the wrong key.
+///
+/// The dwords are read as five separate byte-quads rather than through `read_usize`, which would
+/// pack two dwords into one value and silently truncate.
 pub fn menu_code_binding_row(code: u32) -> Option<[u32; 5]> {
+    menu_code_row_in(code, KEY_CONFIG_BINDING_TABLE_OFFSET)
+}
+
+/// The same row out of the default table at `config + 0x008`, so a caller can tell a rebind from a
+/// binding the game never shipped. That distinction is what the 2026-09-19 d-pad investigation
+/// turned on: action `0x0f` read `-1` against a default of `2003`, and only the pair says so.
+pub fn menu_code_default_binding_row(code: u32) -> Option<[u32; 5]> {
+    menu_code_row_in(code, KEY_CONFIG_DEFAULT_TABLE_OFFSET)
+}
+
+fn menu_code_row_in(code: u32, table_offset: usize) -> Option<[u32; 5]> {
     if code >= KEY_CONFIG_MAX_MENU_CODE {
         return None;
     }
@@ -654,8 +693,7 @@ pub fn menu_code_binding_row(code: u32) -> Option<[u32; 5]> {
         CS_PC_KEY_CONFIG_GLOBAL_RVA,
         "CS_PC_KEY_CONFIG_GLOBAL_RVA",
     )?;
-    let entry =
-        config + KEY_CONFIG_BINDING_TABLE_OFFSET + KEY_CONFIG_BINDING_STRIDE * code as usize;
+    let entry = config + table_offset + KEY_CONFIG_BINDING_STRIDE * code as usize;
     let mut row = [0u32; 5];
     for (index, slot) in row.iter_mut().enumerate() {
         *slot = unsafe { crate::win32::read_u32(entry + index * 4) }?;
@@ -663,29 +701,54 @@ pub fn menu_code_binding_row(code: u32) -> Option<[u32; 5]> {
     Some(row)
 }
 
-/// The pad binding a menu code resolves to: `(primary, secondary)` from the mode-2 pair, or `None`
-/// when the config is not up or the code is out of range.
+/// The `CS_PAD_KEY` a menu code resolves to, or `None` when the config is not up, the code is out
+/// of range, or the action has no pad button.
 ///
-/// Why read it instead of GUESSING: menu navigation reads the FD4 pad device through
+/// Why read it instead of guessing: menu navigation reads the FD4 pad device through
 /// `CS::CSEzMenuViewerPad`, and a menu code is an index into this table, not a device id. Sweeping
-/// pad ids to find the one that moves a cursor is how the previous drive ended up injecting into
-/// `inputmgr+0x90`, which is a shown-menu-window bitmap and not input at all. This table says which
-/// pad input the game itself has bound to each menu action.
-pub fn menu_code_pad_binding(code: u32) -> Option<(u32, u32)> {
-    if code >= KEY_CONFIG_MAX_MENU_CODE {
+/// pad ids to find the one that moves a cursor is how a previous drive ended up injecting into
+/// `inputmgr+0x90`, which is a shown-menu-window bitmap and not input at all.
+///
+/// # The correction this function carries
+///
+/// It used to read `+0x0c`/`+0x10` and return them as a pad pair. Those are `mouseKeyId` and
+/// `mouseModify`. The pad is one field at `+0x00` and has no modifier, so the pair was wrong in
+/// shape as well as in offset, and `Phase::DumpMenuBindings` logged every action's mouse button
+/// under the name `pad`. bd `er-effects-rs-9vyy` then read `tab_left` as having no pad binding and
+/// prescribed a hunt for one.
+///
+/// Measured live 2026-09-20 on the running game through `scripts/frida/menu-tab-binding-device.js`,
+/// current table and default table agreeing:
+///
+/// ```text
+/// 0x30 tab_left   padKeyId=3000  keyboardKeyId=115  mouse unbound
+/// 0x31 tab_right  padKeyId=3001  keyboardKeyId=116  mouse unbound
+/// 0x2c list_down  pad and keyboard unbound, mouseKeyId=9   (the wheel)
+/// 0x2d list_up    pad and keyboard unbound, mouseKeyId=10
+/// ```
+pub fn menu_code_pad_binding(code: u32) -> Option<u32> {
+    let row = menu_code_binding_row(code)?;
+    let pad = row[KEY_CONFIG_BINDING_PAD_OFFSET / 4] as i32;
+    (pad != KEY_CONFIG_BINDING_UNBOUND).then_some(pad as u32)
+}
+
+/// The `(CS_KEYBOARD_KEY, CS_MODIFIER_KEY)` a menu code resolves to, or `None` when it has no
+/// keyboard binding.
+///
+/// This is the one the tab switch needs. The same live session showed the game calling `GetAssign`
+/// for `0x30` and `0x31` at mode 1 -- the keyboard pair -- 271 times each, while it asked `0x2c`
+/// and `0x2d` at mode 2, the mouse pair. The game asks each action at the mode its row actually
+/// populates, which is what confirms the column order from outside this repo's own constants.
+pub fn menu_code_keyboard_binding(code: u32) -> Option<(u32, u32)> {
+    let row = menu_code_binding_row(code)?;
+    let key = row[KEY_CONFIG_BINDING_KEYBOARD_KEY_OFFSET / 4] as i32;
+    if key == KEY_CONFIG_BINDING_UNBOUND {
         return None;
     }
-    let base = game_base()?;
-    let config = deref_singleton(
-        base,
-        CS_PC_KEY_CONFIG_GLOBAL_RVA,
-        "CS_PC_KEY_CONFIG_GLOBAL_RVA",
-    )?;
-    let entry =
-        config + KEY_CONFIG_BINDING_TABLE_OFFSET + KEY_CONFIG_BINDING_STRIDE * code as usize;
-    let primary = unsafe { read_usize(entry + KEY_CONFIG_BINDING_PAD_PRIMARY_OFFSET) }? as u32;
-    let secondary = unsafe { read_usize(entry + KEY_CONFIG_BINDING_PAD_SECONDARY_OFFSET) }? as u32;
-    Some((primary, secondary))
+    Some((
+        key as u32,
+        row[KEY_CONFIG_BINDING_KEYBOARD_MODIFY_OFFSET / 4],
+    ))
 }
 
 /// OptionSetting composite (`window+0x1768`) and, within it, the current pane dialog (`+0xb8`) -- the
