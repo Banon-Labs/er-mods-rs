@@ -102,11 +102,16 @@ every loaded module for the registrar and takes the lowest load base among those
 against the old behaviour still resolves. A `[[shared]]` row therefore no longer depends on one of
 its two crates being the product, which is what this gate has always read those rows as meaning.
 
-That row went with the fork on 2026-09-20, and so did the only second exporter: measured that day,
-`crates/er-quickload/src/mh.rs:52` is the one definition of `er_effects_union_register` left in the
-workspace, so the election currently has a single candidate to find. The rule is unaffected and
-stays host-tested; what is gone is the configuration that would have exercised it without the
-product present.
+That row went with the fork on 2026-09-20, and so did the only second exporter: measured that day
+on the live module table, 103 modules readable with zero errors, `er_quickload.dll` was the single
+image answering for either registrar name.
+
+Later the same day `er-quit-menu` became the second hub, defining both exports through
+`er_hook::export_union_registrar!`. That does not give the election two candidates in any emitted
+profile -- the two hubs are a declared `duplicate-owner` conflict, so no generated profile carries
+both -- and it is not meant to. It gives a hub to the profiles the product is absent from, which
+is where a companion had none and fell to `HookRoute::LocalUnion`. The election rule is unaffected
+either way and stays host-tested.
 
 Usage:
     python3 scripts/check-shared-hook-rvas.py

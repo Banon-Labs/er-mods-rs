@@ -6,9 +6,12 @@
 //! every existing `crate::mh::{MhHook, MH_*, MH_STATUS, register_union_hook, ...}` reference is
 //! unchanged.
 //!
-//! The `#[no_mangle] er_effects_union_register` C export stays here (not in `er-hook`): it is a
-//! cross-DLL contract other DLLs resolve by name, and keeping it in this crate ensures only
-//! `er_quickload.dll` exports it -- exactly as before the extraction.
+//! The `er_effects_union_register` C export has its definition here rather than in `er-hook`, by invoking
+//! `er_hook::export_union_registrar!`. A `no_mangle` body in an rlib is retained by every cdylib
+//! that links it, so a definition in the shared crate would make all eleven companions advertise
+//! themselves as hubs; the macro keeps the bodies in one place and the symbol opt-in per image.
+//! The only other invoker is `er-quit-menu`, which is a hub for the profiles this DLL is absent
+//! from -- see the macro's own documentation.
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -30,76 +33,19 @@ pub use er_hook::*;
 /// type that *does* implement `Drop` and really run its destructor.
 pub fn leak_installed_hook(_hook: MhHook) {}
 
-/// C-ABI export (2026-07-18, user-directed cross-DLL union). A companion DLL loaded into the same
-/// process (the log-only `er-reload-trace`) hooks ~40 native load/menu functions that overlap
-/// this DLL's own hooks (e.g. `0xb0e180` continue-confirm, `0xb0d960` title-SetState). If the
-/// companion drove its own MinHook instance, two instances patching the same address would corrupt
-/// each other's trampolines (the exact silent race the internal union was built to fix, now across
-/// DLLs). So the companion calls this export instead: every shared address is owned by this DLL's
-/// single MinHook instance + union, and the companion's handler is chained like any internal one.
-///
-/// `orig_slot_ptr` points at a `usize`-sized cell (an `AtomicUsize`) that lives in the companion's
-/// image; the union stores the trampoline (or next chained handler) there for the companion handler
-/// to call. The companion image stays loaded for the process lifetime, so treating it as `'static`
-/// is sound. Returns `0` on success, `-1` for a null `orig_slot_ptr`, or the `MH_STATUS` code as a
-/// positive `i32` on MinHook failure.
-///
-/// # Safety
-/// `handler` must be a valid `UnionFn` matching `target`'s ABI (≤4 integer/pointer args); `target`
-/// must be a real code address in this process; `orig_slot_ptr` must point at a live, aligned
-/// `usize` cell that outlives every dispatch (a companion `'static`).
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn er_effects_union_register(
-    target: usize,
-    handler: UnionFn,
-    orig_slot_ptr: *mut usize,
-) -> i32 {
-    if orig_slot_ptr.is_null() {
-        return -1;
-    }
-    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
-    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
-    match unsafe { register_union_hook(target, handler, orig_slot) } {
-        Ok(()) => 0,
-        Err(status) => status as i32,
-    }
-}
-
-/// C-ABI export: the five-argument sibling of [`er_effects_union_register`].
-///
-/// A separate export rather than an arity argument on the one above, because a companion resolves
-/// these by string and users install these DLLs one at a time from separate releases. The full
-/// reasoning is on `er_hook::UnionRegister5Fn`; the short version is that an older product would
-/// decode a five-argument handler as a `UnionFn`, install a four-argument dispatcher, and call a
-/// handler whose fifth parameter was never written -- for `AddCancelButton` that parameter is a
-/// function pointer the game calls. A distinct name turns that into a null `GetProcAddress` and a
-/// logged local fallback instead.
-///
-/// The product's own row cloner registers through `register_union_hook5` directly, so this export
-/// exists for companions. Both paths land in the same slot table, so the address is owned by one
-/// dispatcher at one arity no matter which door a registrant came through.
-///
-/// # Safety
-/// `handler` must be a valid `UnionFn5` matching `target`'s ABI (exactly five integer/pointer
-/// arguments, no floats); `target` must be a real code address in this process; `orig_slot_ptr`
-/// must point at a live, aligned `usize` cell that outlives every dispatch (a companion
-/// `'static`).
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn er_effects_union_register5(
-    target: usize,
-    handler: UnionFn5,
-    orig_slot_ptr: *mut usize,
-) -> i32 {
-    if orig_slot_ptr.is_null() {
-        return -1;
-    }
-    // AtomicUsize is a repr(transparent) wrapper over usize, so a *mut usize aliases it soundly.
-    let orig_slot: &'static AtomicUsize = unsafe { &*(orig_slot_ptr as *const AtomicUsize) };
-    match unsafe { register_union_hook5(target, handler, orig_slot) } {
-        Ok(()) => 0,
-        Err(status) => status as i32,
-    }
-}
+// The two registrar exports, defined by the shared macro rather than written out here.
+//
+// What they are for, which the macro's own docs do not repeat: a companion loaded into the same
+// process -- the log-only `er-reload-trace` is the original one -- hooks ~40 native load and menu
+// functions that overlap this DLL's own (`0xb0e180` continue-confirm, `0xb0d960` title-SetState).
+// If it drove its own MinHook instance, two instances patching one address would corrupt each
+// other's trampolines: the silent race the internal union was built to fix, now across images. The
+// companion calls the export instead, and its handler chains like any internal one.
+//
+// This DLL's own row cloner calls `register_union_hook5` directly rather than through the export,
+// so the five-argument spelling exists for companions. Both doors land in the same slot table, so
+// an address is owned by one dispatcher at one arity whichever way a registrant came in.
+er_hook::export_union_registrar!();
 
 /// C-ABI export: hold (or release, with 0) a DirectInput keyboard scancode in front of the game.
 ///
