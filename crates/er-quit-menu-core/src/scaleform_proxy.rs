@@ -93,18 +93,6 @@ pub const GFX_TEXT_FIELD_SELECTION_END: i64 = i64::MAX;
 /// `CS::OptionSettingTopDialog`'s root `SceneObjProxy`, the parent every named child resolves from.
 pub const OPTION_SETTING_ROOT_PROXY_OFFSET: usize = 0x188;
 
-/// The product's trampoline for `assignComponentWithName`, when the product has detoured it.
-///
-/// Zero in a standalone shell, which is the whole reason this is a slot rather than a constant: a
-/// shell that never installs that detour must call the game function directly, while the product
-/// must call its own trampoline or the resolve re-enters its detour.
-static NAMED_CHILD_BIND_TRAMPOLINE: AtomicUsize = AtomicUsize::new(0);
-
-/// Publish the host's `assignComponentWithName` trampoline. Called by a host that detours it.
-pub fn set_named_child_bind_trampoline(address: usize) {
-    NAMED_CHILD_BIND_TRAMPOLINE.store(address, Ordering::SeqCst);
-}
-
 /// A verified address for `rva` on the running build, or `None`.
 ///
 /// Every direct call goes through here for the reason `er-hook` refuses an unrecognised build: a
@@ -419,17 +407,22 @@ pub unsafe fn push_stats_text_on_row(
     accepted
 }
 
-/// `SceneObjProxy::assignComponentWithName`, preferring the trampoline when this process detoured
-/// it -- calling the detour from inside it would recurse.
+/// `SceneObjProxy::assignComponentWithName`, called directly.
+///
+/// This used to prefer a trampoline the product published, because the product detoured this
+/// function and calling the detour from inside it would recurse. Nothing detours it any more --
+/// the observation moved to the fixed-arity constructor it calls, since the function is variadic
+/// and no fixed-arity detour on it can forward what a caller passed. So the direct call is the
+/// only call, and the slot that carried the trampoline is gone with its setter.
+///
+/// `name` is a format string. Every caller here passes a literal without conversions, which reads
+/// no varargs; a name assembled at runtime would need the conversions escaped.
 fn named_child_bind(base: usize) -> unsafe extern "system" fn(usize, usize, usize) -> usize {
-    let addr = match NAMED_CHILD_BIND_TRAMPOLINE.load(Ordering::SeqCst) {
-        orig if orig != NULL_POINTER => orig,
-        _ => game_data_addr(
-            base,
-            er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ),
-    };
+    let addr = game_data_addr(
+        base,
+        er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+    );
     unsafe { std::mem::transmute(addr) }
 }
 
@@ -476,16 +469,7 @@ pub unsafe fn resolve_row_child_proxy(
     row_proxy: usize,
     name: &str,
 ) -> Option<(usize, usize)> {
-    let assign = match NAMED_CHILD_BIND_TRAMPOLINE.load(Ordering::SeqCst) {
-        orig if orig != NULL_POINTER => orig,
-        _ => game_data_addr(
-            base,
-            er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ),
-    };
-    let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
-        unsafe { std::mem::transmute(assign) };
+    let assign = named_child_bind(base);
     let mut nul_name = String::with_capacity(name.len() + 1);
     nul_name.push_str(name);
     nul_name.push('\0');

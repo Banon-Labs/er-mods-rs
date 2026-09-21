@@ -130,10 +130,17 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 /// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
-/// r8="PressStart" and output `dialog+0xb78`; hook it to identify the actual bound display object(s)
-/// and hide PAB immediately after native binding.
+/// r8="PressStart" and output `dialog+0xb78`. Called from this side, never hooked: it is variadic,
+/// so no fixed-arity detour is argument-transparent on it.
 pub(crate) const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize =
     er_game_base::rva::TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA;
+/// The hook site that replaced it: the fixed-arity constructor the binder calls once the name is
+/// formatted. Same binds, same post-bind state, no varargs across the detour.
+pub(crate) const SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA: usize =
+    er_game_base::rva::SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA;
+pub(crate) use er_game_base::rva::{
+    SCENE_OBJ_NAME_INDIRECT_38_OFFSET, SCENE_OBJ_NAME_INDIRECT_TEXT_10_OFFSET,
+};
 pub(crate) static TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG: AtomicUsize =
     AtomicUsize::new(HOOK_ORIGINAL_UNSET);
 /// The hook is live. Set only after `MH_ApplyQueued` succeeds, so the oracle that reports it stays
