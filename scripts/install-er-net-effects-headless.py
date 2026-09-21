@@ -24,7 +24,8 @@ CONFIG_FILE_NAME = "er-net-effects.toml"
 MASTER_CATALOG_FILE_NAME = "er-net-effect-master-catalog.json"
 DEFAULT_CONFIG_TEXT = """# er-net-effects standalone DLL configuration.
 # Generated/updated by scripts/install-er-net-effects-headless.py.
-network_sync = true
+# There is no network_sync setting: effects always sync, and the peer-safe list
+# compiled into the DLL decides which ones may reach another player.
 overlay_visible_on_start = true
 hotkeys_file = '.er-net-effects-hotkeys.json'
 selected_effect_file = '.er-net-effects-setting.txt'

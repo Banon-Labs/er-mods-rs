@@ -140,21 +140,20 @@ mod tests {
 
     #[test]
     fn rewriting_replaces_the_line_where_it_stands_and_touches_nothing_else() {
-        let config =
-            "# a comment\nnetwork_sync = true\nstacked_effects = [1, 2]\ncatalog_dir = \"x\"\n";
+        let config = "# a comment\noverlay_visible_on_start = true\nstacked_effects = [1, 2]\ncatalog_dir = \"x\"\n";
         let out = rewrite(config, &[3]);
         assert_eq!(
             out,
-            "# a comment\nnetwork_sync = true\nstacked_effects = [3]\ncatalog_dir = \"x\"\n"
+            "# a comment\noverlay_visible_on_start = true\nstacked_effects = [3]\ncatalog_dir = \"x\"\n"
         );
     }
 
     #[test]
     fn rewriting_appends_the_key_with_its_explanation_when_it_is_absent() {
-        let config = "network_sync = true\n";
+        let config = "overlay_visible_on_start = true\n";
         let out = rewrite(config, &[491]);
         assert!(
-            out.starts_with("network_sync = true\n"),
+            out.starts_with("overlay_visible_on_start = true\n"),
             "existing keys survive"
         );
         assert!(out.contains("stacked_effects = [491]"));
@@ -166,7 +165,7 @@ mod tests {
 
     #[test]
     fn a_commented_out_key_is_not_mistaken_for_the_real_one() {
-        let config = "# stacked_effects = [9]\nnetwork_sync = true\n";
+        let config = "# stacked_effects = [9]\noverlay_visible_on_start = true\n";
         let out = rewrite(config, &[1]);
         assert!(
             out.contains("# stacked_effects = [9]"),
@@ -177,14 +176,17 @@ mod tests {
 
     #[test]
     fn a_file_with_no_trailing_newline_does_not_glue_the_key_onto_the_last_line() {
-        let out = rewrite("network_sync = true", &[5]);
-        assert!(out.contains("network_sync = true\n"));
+        let out = rewrite("overlay_visible_on_start = true", &[5]);
+        assert!(out.contains("overlay_visible_on_start = true\n"));
         assert!(out.contains("stacked_effects = [5]"));
     }
 
     #[test]
     fn crlf_files_stay_crlf() {
-        let out = rewrite("network_sync = true\r\nstacked_effects = [1]\r\n", &[2]);
+        let out = rewrite(
+            "overlay_visible_on_start = true\r\nstacked_effects = [1]\r\n",
+            &[2],
+        );
         assert!(out.contains("stacked_effects = [2]\r\n"));
         assert!(!out.contains("stacked_effects = [2]\n\r"));
     }
