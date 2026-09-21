@@ -62,6 +62,19 @@ IGNORED_FILES = {
     # process flatlining, or its leader going Z), never a timer. There is no readiness primitive
     # for "the game has stopped doing work" -- measuring whether it has is the tool.
     Path("scripts/er-wedge-stacks.py"),
+    # Boot timer, same class as the samplers above: its `time.sleep` is the sample period, and its
+    # stop condition is a real observation -- `WorldChrMan -> mainPlayerIns` becoming non-null in
+    # the game's own memory and staying that way for the dwell -- never a timer. The deadline is a
+    # backstop on how long it watches, and it tears nothing down when it fires.
+    #
+    # There is no readiness primitive to replace the sample rate. The thing being watched is a
+    # qword in another process's address space, read through `/proc/<pid>/mem`; nothing signals
+    # when it changes. `inotify` watches files, and the file this tool optionally reads alongside
+    # the walk is a convenience, not the oracle -- the comparison it serves has one half with no
+    # dlls loaded at all, which writes no file to watch. The event-driven alternative is a hook
+    # inside the game, which is precisely what this tier exists to avoid: injecting anything makes
+    # the mod-loaded and vanilla halves stop being the same measurement.
+    Path("scripts/er-boot-timer.py"),
     # Frida agent, running inside the game as JavaScript. Its `setTimeout` re-reads
     # `session+0x150` waiting for Seamless's session to fall back to `0x01` idle, which is what
     # re-arms the hunt after a match this mod did not end.

@@ -586,7 +586,35 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // non-empty name). This is the hard gate for the only save write.
         let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
         let (fp_real, level, name_len) = unsafe { char_fingerprint(base) };
-        let c30_real = c30 != FULLREAD_C30_M10_DEFAULT && c30 != GAME_MAN_C30_UNSET;
+        // `FULLREAD_C30_M10_DEFAULT` (0xa010000, `m10_01_00_00`) is the map the title-time
+        // deserialize leaves behind when it hands back an empty shell instead of a character, which
+        // is why it reads as "nothing loaded" here. It is also the Chapel of Anticipation, where
+        // every character in the game begins, so a character who has not yet left it saves on that
+        // exact map and is byte-identical to the sentinel.
+        //
+        // Measured 2026-09-21 on a character the user created minutes earlier: the container's
+        // slot 0 body carries saved map `10 01 00 00`, the full read reached
+        // `DESER slot=0 ret=0 c30=0xa010000 level=10` with the character's real 8-unit name, and
+        // the guard still refused on `c30_real=false` alone with `fp_real=true level_real=true`.
+        // The autoload armed the missing-save picker for a save that had loaded correctly.
+        //
+        // So ask the slot itself. The live `CS::ProfileSummary` record carries the map its
+        // character is saved on, and when that map is the one the deserialize produced, the value
+        // is this character's own position rather than the shell's default. Fails closed twice
+        // over: `profile_slot_fingerprint` answers `(false, -1, 0, 0)` on any unreadable record, and
+        // `slot_is_real` requires that record to hold a real character, so an empty or torn slot
+        // leaves the sentinel test exactly as it was.
+        //
+        // This is narrower than the weakening reverted below. `fp_real` and `level_real` stay
+        // required and unchanged, and the 2026-09-06 incident is still rejected: its c30 was the
+        // m10 default while the requested slot held a level-150 character whose recorded map was
+        // not m10, so the two would not agree and `c30_real` would still be false.
+        let fullread_slot = native_fullread_slot();
+        let (slot_is_real, slot_map, _slot_level, _slot_name_len) =
+            unsafe { profile_slot_fingerprint(fullread_slot) };
+        let c30_is_this_slots_own_map = slot_is_real && slot_map == c30;
+        let c30_real = c30 != GAME_MAN_C30_UNSET
+            && (c30 != FULLREAD_C30_M10_DEFAULT || c30_is_this_slots_own_map);
         // Accepted concrete source -> any real level. `c30_real` + `fp_real` are the hard
         // new-game/null blockers; the `>= 10` floor is only a heuristic for the diagnostic path
         // where nothing preselected a source, and it must not outrank a source the boot check
@@ -630,7 +658,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let commit = native_fullread_commit_enabled();
         let guard_waits = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         append_autoload_debug(format_args!(
-            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
+            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} (slot {fullread_slot} record: real={slot_is_real} map=0x{slot_map:x}, own_map={c30_is_this_slots_own_map}) fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
         ));
         if !guard_pass {
             const DIRECT_FILE_GUARD_SETTLE_TICKS: u64 = 120;

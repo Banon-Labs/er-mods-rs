@@ -1,0 +1,7 @@
+run	profile	t_process	t_world_chr_man	t_player_present	t_player_settled	t_telemetry_world	pid	launch_epoch
+autoload-1	er_quickload.dll alone, autoload slot 0	2.170	15.809	18.821	21.831	27.451	3992171	1790016901.7044084
+autoload-2	er_quickload.dll alone, autoload slot 0	2.181	16.020	19.031	22.044	27.864	3994857	1790016952.0622490
+autoload-3	er_quickload.dll alone, autoload slot 0	2.176	16.418	19.430	22.441	28.465	3996943	1790016991.9773257
+vanilla-user-driven-1	no natives at all, user driving Continue	2.177	14.587	15.588	18.590	-	3999150	1790017043.2429821
+vanilla-user-driven-2	no natives at all, user driving Continue	2.174	13.583	14.584	17.586	-	4001106	1790017091.8737664
+vanilla-user-driven-3	no natives at all, user driving Continue	2.175	14.184	15.185	18.187	-	4002251	1790017121.3532648
