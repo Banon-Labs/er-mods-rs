@@ -2,6 +2,27 @@
 
 This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
+## A command written for the user is spelled absolutely
+
+Every command example in this file, and in every Cupcake block message, is written
+repo-relative because the agent's shell is already in the repo root. **A command the
+user will read is a different artifact and must carry the full path**, because their
+shell is somewhere else and `python3 scripts/er-teardown.py` names nothing there:
+
+```bash
+python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py    # hand the user THIS
+python3 scripts/er-teardown.py                                    # run it yourself as THIS
+```
+
+"Run it from `/home/banon/projects/er-mods-rs`" is not a substitute -- it makes the
+user do the joining, and the joining is the part that was wrong. This is the same rule
+the global instructions already state for artifact paths, applied to commands: absolute,
+clickable, pasteable as-is. The habit came from somewhere executable and was fixed
+there too -- `bash_no_python_file_write.rego` used to admit ONLY the repo-relative
+spelling and deny this repo's own absolute path, so the guard taught the relative form
+and then the relative form reached the user (measured 2026-09-21, on a teardown the
+user asked for twice and could not run).
+
 ## Quick Reference
 
 ```bash

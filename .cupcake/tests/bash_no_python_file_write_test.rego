@@ -151,6 +151,44 @@ test_nested_scripts_subdir_script_is_allowed if {
 	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
 }
 
+# --- this repo's own ABSOLUTE path is the same committed file ---------------
+#
+# Added 2026-09-21. Admitting only the repo-relative spelling made the guard a
+# teacher of it, and the spelling it taught then reached a user-facing message,
+# where the user's shell is not in the repo root and the command names nothing.
+# The exemption is about WHICH FILE runs, so both spellings of the same file
+# resolve the same way; the lookalike test above still denies an absolute path
+# that lands outside this repo.
+test_repo_absolute_path_script_is_allowed if {
+	some cmd in [
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py",
+		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=band-tables-measured",
+		"python3 /home/banon/projects/er-mods-rs/scripts/ghidra/mcp_query.py getContext",
+		"uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/map-rvas-1162-to-1170.py",
+	]
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+# A worktree checkout of this repo is the same tree under a different prefix.
+test_worktree_absolute_path_script_is_allowed if {
+	cmd := "python3 /home/banon/projects/er-mods-rs/.worktrees/lab/scripts/check-comment-caps.py"
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+# ...but the repo name is the whole of what admits it, so a scratch tree that
+# merely contains a `scripts/` directory stays denied.
+test_absolute_scratch_scripts_dir_is_denied if {
+	some cmd in [
+		"python3 /tmp/claude-1000/scratchpad/scripts/patch.py",
+		"python3 /home/banon/other-repo/scripts/patch.py",
+
+		# The session scratchpad's last component ENDS in the repo name without
+		# being it, so the repo name has to be matched as a whole component.
+		"python3 /tmp/claude-1000/-home-banon-projects-er-mods-rs/scripts/patch.py",
+	]
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
 # --- not a python command at all ------------------------------------------
 
 test_non_python_command_is_allowed if {
