@@ -55,6 +55,11 @@ pub(crate) enum SelectorAction {
     /// The `[+]` button also takes a left mouse click, but that click is unreachable while the
     /// game holds the pointer -- see [`crate::selector_gate`].
     ExpandCollapse,
+    /// Write the highlighted effect into the hand-marked list, or take it back out.
+    ///
+    /// A research key, not a product one. It changes nothing about what the effect does; it
+    /// records that a human looked at this id and judged it. See [`crate::marked_effects`].
+    MarkEffect,
 }
 
 /// A fixed slot index for every binding, so a bitmask of "which selector keys were down" means the
@@ -76,9 +81,13 @@ pub(crate) mod slot {
     /// slot. The indices feed a positional bitmask, so a renumber is a real hazard even though
     /// nothing persists them.
     pub(crate) const EXPAND_COLLAPSE: usize = SHOW_HIDE_FIRST + SHOW_HIDE_MAX;
+    /// Mark the highlighted effect, appended after expand/collapse for the same reason that one
+    /// was appended after the show/hide range: a renumber changes what every bit of the
+    /// positional mask means.
+    pub(crate) const MARK_EFFECT: usize = EXPAND_COLLAPSE + 1;
     /// One past the last slot. Every mask in this crate is `usize`, so this must stay well under
     /// 64.
-    pub(crate) const COUNT: usize = EXPAND_COLLAPSE + 1;
+    pub(crate) const COUNT: usize = MARK_EFFECT + 1;
 }
 
 /// The mask of the four cursor slots -- the only keys this DLL takes from the game.
@@ -136,6 +145,12 @@ pub(crate) const SINGLE_BINDINGS: &[(&str, SelectorAction, usize, &str)] = &[
         SelectorAction::ExpandCollapse,
         slot::EXPAND_COLLAPSE,
         "alt+9",
+    ),
+    (
+        "selector_mark_key",
+        SelectorAction::MarkEffect,
+        slot::MARK_EFFECT,
+        "alt+m",
     ),
 ];
 
@@ -201,6 +216,13 @@ selector_expand_key = "alt+9"
 # Show or hide the bar. Several chords, comma-separated, because this is the ONLY way back to a
 # hidden bar and a keyboard may not have all three of these keys.
 selector_show_hide_key = "alt+0, alt+kp_0, alt+insert"
+
+# Mark the highlighted effect into er-net-effects-marked.jsonc, or take it back out.
+#
+# A note-taking key. It does not change the effect, and nothing is blocked by being marked -- the
+# file is a list to look at afterwards. It is written in the catalog format, so you can drop a
+# copy into er-net-effect-catalogs/ and scroll only what you marked.
+selector_mark_key = "alt+m"
 "#;
 
 /// Is this config key one of the binding keys?
