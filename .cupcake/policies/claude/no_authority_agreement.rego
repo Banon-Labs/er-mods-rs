@@ -6,15 +6,18 @@
 #   severity: HIGH
 #   id: ER-EFFECTS-NO-AUTHORITY-AGREEMENT
 #   description: >-
-#     User directives 2026-07-17. Category A -- authority-coded agreement ("You're right", "Correct,",
-#     "Exactly,", "Absolutely,", "That's right") -- is banned OUTRIGHT. Category B --
-#     feedback-acknowledgement / receipt-announcement prose ("Point taken", "Got it", "Understood",
-#     "Noted", "Fair point", "Makes sense", ...) -- is banned ONLY when the same turn did NOT record a
-#     beads memory (a Bash tool_use running `bd remember`): announcing that you internalized feedback is
-#     acceptable only when you actually internalized it durably. The signal returns AUTH:<phrase> for a
-#     Category-A hit and ACKUNBACKED:<phrase> for an unbacked Category-B hit; both HALT turn-end so the
-#     agent must correct. rego cannot pre-filter prose (no pre-response hook), so this is
-#     reinforce-every-turn + halt-and-correct.
+#     User directives 2026-07-17, amended 2026-09-20. Category A -- authority-coded agreement
+#     ("You're right", "Correct,", "Exactly,", "Absolutely,", "That's right") -- is banned OUTRIGHT.
+#     Category B -- feedback-acknowledgement / receipt-announcement prose ("Point taken", "Got it",
+#     "Understood", "Noted", "Fair point", "Makes sense", ...) -- is banned outright too. The signal
+#     returns AUTH:<phrase> and ACK:<phrase>; both HALT turn-end so the agent must correct. rego cannot
+#     pre-filter prose (no pre-response hook), so this is reinforce-every-turn + halt-and-correct.
+#
+#     Category B carried an exception until 2026-09-20: the prose was allowed when the same turn
+#     recorded a beads memory. User directive removed it, because it made a memory the price of
+#     replying to a correction -- so corrections became memories instead of behaviour, and the store
+#     grew by one per slip. The correct response to a correction is to apply it and say nothing about
+#     having received it.
 #   routing:
 #     required_events: ["Stop"]
 #     required_signals: ["last_assistant_authority_agreement"]
@@ -38,12 +41,12 @@ halt contains decision if {
 # Correction directive per case.
 reason_for(h) := msg if {
 	h.case == "AUTH"
-	msg := concat("", ["Banned authority-coded agreement detected in your reply: '", h.phrase, "'. Per the 2026-07-17 directive this phrasing is forbidden. Record a bd memory noting this slip, then send a corrected reply that removes the phrase and instead states the verified fact plus its proof (or simply proceeds)."])
+	msg := concat("", ["Banned authority-coded agreement detected in your reply: '", h.phrase, "'. Per the 2026-07-17 directive this phrasing is forbidden. Send a corrected reply that removes the phrase and instead states the verified fact plus its proof (or simply proceeds)."])
 }
 
 reason_for(h) := msg if {
 	h.case == "ACK"
-	msg := concat("", ["Banned feedback-acknowledgement prose detected in your reply: '", h.phrase, "' -- and this turn recorded NO beads memory. Per the 2026-07-17 directive, announcing that you received/internalized feedback is only acceptable when you actually internalized it: record a `bd remember` memory of the feedback in THIS turn (then the acknowledgement is fine), or send a corrected reply that drops the receipt-prose and simply proceeds."])
+	msg := concat("", ["Banned feedback-acknowledgement prose detected in your reply: '", h.phrase, "'. Announcing that you received or internalized feedback tells the user nothing they cannot see from what you do next. Send a corrected reply that drops the receipt-prose and simply proceeds with the corrected behaviour."])
 }
 
 # Parse the tagged signal into {case, phrase}. Untagged-but-non-empty falls back to a Category-A hit
@@ -52,8 +55,8 @@ hit := h if {
 	startswith(raw, "AUTH:")
 	h := {"case": "AUTH", "phrase": trim(trim_prefix(raw, "AUTH:"), " \t\r\n")}
 } else := h if {
-	startswith(raw, "ACKUNBACKED:")
-	h := {"case": "ACK", "phrase": trim(trim_prefix(raw, "ACKUNBACKED:"), " \t\r\n")}
+	startswith(raw, "ACK:")
+	h := {"case": "ACK", "phrase": trim(trim_prefix(raw, "ACK:"), " \t\r\n")}
 } else := h if {
 	raw != ""
 	h := {"case": "AUTH", "phrase": raw}

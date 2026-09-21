@@ -2017,7 +2017,9 @@ def main() -> int:
                 PolicyCase(
                     "allow-gh-pr-edit-heredoc-substitution-body-with-footer",
                     'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
-                    "Body text describing the change.\n\n"
+                    "## What changed\n\nA thing.\n\n"
+                    "## Why\n\nBecause.\n\n"
+                    "## Evidence\n\nNot proven: nothing was run.\n\n"
                     "\U0001f916 Written by Claude Fable 5, authorized by @chozandrias76\n"
                     'EOF\n)"',
                     True,
@@ -2026,8 +2028,13 @@ def main() -> int:
                 # command fallback must not weaken the guard).
                 PolicyCase(
                     "deny-gh-pr-edit-heredoc-substitution-body-without-footer",
+                    # Template-complete on purpose, so the only thing missing is the footer and the
+                    # denial can be attributed to the guard under test rather than to the PR body
+                    # contract, which would deny a headingless body for its own reasons.
                     'gh pr edit 19 --repo Banon-Labs/er-mods-rs --body "$(cat <<\'EOF\'\n'
-                    "Body text without attribution.\n"
+                    "## What changed\n\nA thing.\n\n"
+                    "## Why\n\nBecause.\n\n"
+                    "## Evidence\n\nNot proven: nothing was run.\n"
                     'EOF\n)"',
                     False,
                     "attribution footer",

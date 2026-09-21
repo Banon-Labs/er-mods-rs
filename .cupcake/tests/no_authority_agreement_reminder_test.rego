@@ -49,10 +49,20 @@ test_interlock_on_auth_tagged_signal if {
 	has_interlock(ctxs)
 }
 
-# Category B unbacked tagged value (ACKUNBACKED:<phrase>) trips the interlock.
-test_interlock_on_ackunbacked_tagged_signal if {
-	ctxs := guard.add_context with input as ups_event("ACKUNBACKED:Point taken")
+# Category B tagged value (ACK:<phrase>) trips the interlock.
+test_interlock_on_ack_tagged_signal if {
+	ctxs := guard.add_context with input as ups_event("ACK:Point taken")
 	has_interlock(ctxs)
+}
+
+# The standing reminder must not tell the agent to record a memory. The exception that made one the
+# price of replying to a correction was removed by user directive 2026-09-20, and a reminder that
+# still named `bd remember` would keep asking for it every turn.
+test_standing_reminder_does_not_ask_for_a_memory if {
+	ctxs := guard.add_context with input as ups_event("")
+	every ctx in ctxs {
+		not contains(ctx, "bd remember")
+	}
 }
 
 # Object-shaped signal ({output: ...}) trips the interlock too.
