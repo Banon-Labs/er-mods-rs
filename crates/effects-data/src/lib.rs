@@ -73,6 +73,14 @@ pub struct EffectMasterEntry {
     pub vfx: Vec<i32>,
     pub tags: Vec<String>,
     pub fields: BTreeMap<String, serde_json::Value>,
+    /// The game's own "who may receive this effect" flags: `effectTarget*` and `vowType*`.
+    ///
+    /// Separate from `fields` and defaulted here because the generator keeps these even when
+    /// they equal the paramdef default, which `fields` drops. It is `#[serde(default)]` so a
+    /// catalog generated before 2026-09-20 still parses -- `deny_unknown_fields` on this
+    /// struct means the reverse is not true, and a missing arm here rejects the whole file.
+    #[serde(default)]
+    pub applicability: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -247,6 +255,57 @@ pub fn embedded_effects() -> Result<EffectsFile, serde_json::Error> {
     parse_effects_json(EMBEDDED_EFFECTS_JSON)
 }
 
+/// The effects this mod may put on a player while a peer is in the session.
+///
+/// An allowlist rather than a blocklist, and the direction is the design. There are 11354
+/// rows in `SpEffectParam` and only 810 fit to travel; a blocklist would pass everything it
+/// had not heard of, which on the day the game adds rows is all of them. This way an
+/// unrecognised id is refused, which is the answer that cannot hurt somebody else's game.
+///
+/// Embedded rather than read from the game directory because it is not a user setting: a
+/// player who can delete the file could lift the restriction, and a file that can go missing
+/// turns the gate into a silent no-op on exactly the machines where nobody is watching. Ids
+/// only, no names or fields, so embedding it costs nine kilobytes rather than fourteen
+/// megabytes.
+///
+/// Regenerate with `scripts/generate-pvp-allowed.py` after the catalog generator; the rules
+/// that decide membership live there and in
+/// `scripts/generate-effect-discriminator-catalogs.py`, and a hand edit here is reverted by
+/// the next regeneration without anyone being told.
+pub const EMBEDDED_PVP_ALLOWED_JSON: &str = include_str!("../../../data/pvp-allowed-effects.json");
+
+/// Provenance of the regulation the table was derived from.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PvpAllowedSource {
+    pub param: String,
+    pub binder_version: String,
+    pub regulation_file: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PvpAllowedTable {
+    pub schema_version: u32,
+    pub kind: String,
+    pub source: PvpAllowedSource,
+    /// The tags that removed an otherwise cosmetic row from the list. Carried so a build can
+    /// report what the generator was applying, rather than only how many rows survived it.
+    pub disqualifying_tags: Vec<String>,
+    /// Sorted, unique ids. Sortedness is what lets the runtime binary-search it, and a test
+    /// below asserts it here rather than leaving the runtime to assume it.
+    pub effects: Vec<i32>,
+}
+
+pub fn parse_pvp_allowed_json(json: &str) -> Result<PvpAllowedTable, serde_json::Error> {
+    serde_json::from_str(&normalize_jsonc(json))
+}
+
+/// Parses the compile-time embedded copy of `data/pvp-allowed-effects.json`.
+pub fn embedded_pvp_allowed() -> Result<PvpAllowedTable, serde_json::Error> {
+    parse_pvp_allowed_json(EMBEDDED_PVP_ALLOWED_JSON)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,6 +461,69 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn embedded_pvp_allowlist_parses_and_is_sorted() {
+        let table = embedded_pvp_allowed().expect("embedded pvp allowlist must parse");
+
+        assert_eq!(table.kind, "pvp_allowed_effects");
+        assert_eq!(table.schema_version, 1);
+        assert!(
+            !table.effects.is_empty(),
+            "an empty allowlist refuses every effect in multiplayer while still parsing -- \
+             legal, fail-closed, and almost certainly a broken generator run"
+        );
+        assert!(
+            table.effects.len() < 2000,
+            "the allowlist is a small cosmetic subset of 11354 rows; a large one means the \
+             visuals-only predicate stopped discriminating"
+        );
+        let mut sorted = table.effects.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            table.effects, sorted,
+            "ids must be sorted and unique for a binary search"
+        );
+        assert!(
+            !table.disqualifying_tags.is_empty(),
+            "a build that records no disqualifying tags cannot say what it filtered"
+        );
+    }
+
+    #[test]
+    fn pvp_allowlist_rejects_unknown_fields() {
+        assert!(
+            parse_pvp_allowed_json(
+                r#"{"schema_version":1,"kind":"pvp_allowed_effects","source":{"param":"p",
+                    "binder_version":"1","regulation_file":"r"},"disqualifying_tags":[],
+                    "effects":[1],"extra":true}"#
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn master_entry_keeps_applicability_and_tolerates_its_absence() {
+        let with = parse_effect_master_catalog_json(
+            r#"{"schema_version":1,"kind":"k","source":{"param":"p","binder_version":"b",
+                "row_count":1,"regulation_file":"r","paramdef_file":"d","names_file":"n"},
+                "field_index":{},"effects":[{"id":7,"name":"","row_name":null,
+                "community_name":null,"curated_name":null,"vfx":[],"tags":["pvp.status_icon"],
+                "fields":{},"applicability":{"effectTargetPlayer":0}}]}"#,
+        )
+        .expect("catalog with applicability must parse");
+        assert_eq!(with.effects[0].applicability.len(), 1);
+
+        let without = parse_effect_master_catalog_json(
+            r#"{"schema_version":1,"kind":"k","source":{"param":"p","binder_version":"b",
+                "row_count":1,"regulation_file":"r","paramdef_file":"d","names_file":"n"},
+                "field_index":{},"effects":[{"id":7,"name":"","row_name":null,
+                "community_name":null,"curated_name":null,"vfx":[],"tags":[],"fields":{}}]}"#,
+        )
+        .expect("a catalog generated before applicability existed must still parse");
+        assert!(without.effects[0].applicability.is_empty());
     }
 
     #[test]

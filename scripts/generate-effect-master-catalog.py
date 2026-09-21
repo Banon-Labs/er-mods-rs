@@ -159,8 +159,11 @@ var effects = new List<MasterEffect>();
 foreach (var row in param.Rows.OrderBy(row => row.ID))
 {
     var fields = new SortedDictionary<string, object?>();
+    var applicability = new SortedDictionary<string, object?>();
     var tags = new SortedSet<string>();
     var vfx = new List<int>();
+    var iconId = 0;
+    var stateInfo = 0;
 
     foreach (var cell in row.Cells)
     {
@@ -177,8 +180,28 @@ foreach (var row in param.Rows.OrderBy(row => row.ID))
                 vfx.Add(vfxId);
             }
         }
+        // Captured here rather than read back out of `fields`, because both carry the paramdef
+        // default 0 and the default-drop below would leave them absent on exactly the rows that
+        // answer "no icon" / "no state" -- the two cases the tags at the end of the loop test.
+        if (name == "iconId")
+        {
+            TryInt(value, out iconId);
+        }
+        else if (name == "stateInfo")
+        {
+            TryInt(value, out stateInfo);
+        }
         if (IsApplicabilityField(name))
         {
+            // Kept, and kept even when it equals the paramdef default -- which is the whole point.
+            // These flags say who the GAME is willing to put this effect on, and the interesting
+            // answer is the one that differs from "anybody": a row that will not target a player
+            // is a row this mod has no business pushing at one. The default is 1, so the ordinary
+            // default-drop below would erase exactly the rows worth reading and leave a field that
+            // is zero everywhere -- which reads as "no effect targets anyone" rather than "this
+            // catalog does not carry the answer". Measured 2026-09-20: all 13 effectTarget* fields
+            // were absent from every one of the 11325 rows for that reason.
+            applicability[name] = NormalizeValue(value);
             continue;
         }
         if (!fieldDefs.TryGetValue(name, out var fieldDef))
@@ -201,6 +224,30 @@ foreach (var row in param.Rows.OrderBy(row => row.ID))
         tags.Add("presentation.vfx");
     }
 
+    // Two reasons an effect must not be pushed onto another player, each derived from the game
+    // rather than chosen by hand, so the restriction is a rule over data and not a list of ids.
+    //
+    // `pvp.status_icon` -- the row has an `iconId`, so the engine puts an entry in the target's
+    // status bar. The icon is the game's own statement that this is a state the player is owed
+    // notice of, which is the set a mod has no business handing them silently.
+    //
+    // `pvp.cures_target` -- the row's `stateInfo` is one the cure switch at 1.16.2
+    // `0x1404fc190` accepts as a curer. Its caller walks the target's active-effect list and
+    // calls `RemoveByPointer` on every entry whose own `stateInfo` the switch names, so pushing
+    // one of these at a peer takes effects off them instead of adding one. `CurerStates` is the
+    // whole `param_3` case list out of that decompile, not a sample of it.
+    // Greater than zero, not merely non-zero: the paramdef default for `iconId` is -1, so a
+    // `!= 0` test tags all 11354 rows and says nothing. Measured against the regulation, the
+    // rows carrying a real icon number 695.
+    if (iconId > 0)
+    {
+        tags.Add("pvp.status_icon");
+    }
+    if (IsCurerState(stateInfo))
+    {
+        tags.Add("pvp.cures_target");
+    }
+
     curatedNames.TryGetValue(row.ID, out var curatedName);
     communityNames.TryGetValue(row.ID, out var communityName);
     var rowName = row.Name ?? "";
@@ -214,7 +261,8 @@ foreach (var row in param.Rows.OrderBy(row => row.ID))
         EmptyToNull(curatedName),
         vfx.Distinct().OrderBy(id => id).ToArray(),
         tags.ToArray(),
-        fields));
+        fields,
+        applicability));
 }
 
 var catalog = new MasterCatalog(
@@ -268,6 +316,17 @@ static string SemanticDefaultFor(string name, string parsedDefault)
     if (defaultOneFields.Contains(name)) return "1";
     return parsedDefault;
 }
+
+// The `param_3` cases of the cure switch at 1.16.2 `0x1404fc190`, in source order. Each one is a
+// curer's `stateInfo`; the body returns which of the target's active states that curer deletes:
+// 10 -> 2, 11 -> 5, 12 -> 6, 13 -> {437,436,261,260,6,5,2}, 104 -> {107,106,105,99}, 106 -> 105,
+// 107 -> {106,105}, 118 -> 116, 198 -> {192,114,113,112,111}, 262 -> 261, 276 -> 260, 438 -> 436,
+// 439 -> 437. Re-read the decompile before editing this; a value added by guess would silently
+// widen the restriction over rows nothing in the game treats as a curer. A local function rather
+// than a field because this file's C# is top-level statements, where a field is a compile error.
+static bool IsCurerState(int stateInfo) =>
+    stateInfo is 10 or 11 or 12 or 13 or 104 or 106 or 107 or 118 or 198 or 262 or 276 or 438
+        or 439;
 
 static bool IsApplicabilityField(string name)
 {
@@ -371,7 +430,7 @@ record FieldDef(string Name, string DisplayName, string DefaultValue, string Typ
 record MasterCatalog(int schema_version, string kind, MasterCatalogSource source, Dictionary<string, FieldIndexEntry> field_index, List<MasterEffect> effects);
 record MasterCatalogSource(string param, string binder_version, int row_count, string regulation_file, string paramdef_file, string names_file);
 record FieldIndexEntry(string type, string? display_name, string[] tags);
-record MasterEffect(int id, string name, string? row_name, string? community_name, string? curated_name, int[] vfx, string[] tags, SortedDictionary<string, object?> fields);
+record MasterEffect(int id, string name, string? row_name, string? community_name, string? curated_name, int[] vfx, string[] tags, SortedDictionary<string, object?> fields, SortedDictionary<string, object?> applicability);
 """
 
 
