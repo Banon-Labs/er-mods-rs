@@ -153,7 +153,7 @@ mod runtime {
         let Ok(session) = (unsafe { CSSessionManager::instance() }) else {
             return false;
         };
-        session.players.len() > 0
+        !session.players.is_empty()
     }
 }
 
