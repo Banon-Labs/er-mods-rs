@@ -333,16 +333,15 @@ pub unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> b
             // readers before this slice is formed.
             let vanilla = unsafe { core::slice::from_raw_parts(data as *const u8, len) };
             let known = er_gfx::options_02_040::is_known_vanilla_win(vanilla);
-            // Seven rows need a fourth grid row, and six must not get one: an extra cell with no
-            // item behind it is hoverable and unselectable, which is why the cell count follows
-            // the armed row set rather than being the larger of the two unconditionally.
-            let seventh_cell = SERVE_SEVENTH_QUIT_CELL.load(Ordering::SeqCst) != 0;
-            let derived = if seventh_cell {
-                er_gfx::options_02_040::quit7(vanilla)
-            } else {
-                er_gfx::options_02_040::quit6(vanilla)
+            // The grid is sized to the rows that asked for it. A cell with no item behind it is
+            // hoverable and unselectable, and a row with no cell never reaches the screen, so
+            // this number is the one thing that must not be guessed: when no host said, fall back
+            // to the size this repo's own full row set produces rather than inventing one.
+            let items = match QUIT_GRID_ITEMS.load(Ordering::SeqCst) {
+                0 => 6,
+                asked => asked,
             };
-            match derived {
+            match er_gfx::options_02_040::quit_grid(vanilla, items) {
                 Ok(out) => {
                     let out_fnv = er_gfx::fnv1a64(&out);
                     // `in_fnv` is logged because `known_vanilla` comes back false on this path and
@@ -354,8 +353,7 @@ pub unsafe fn options_02_040_quit6_swap_to_edited(base: usize, file: usize) -> b
                     // this line is where the number to pin comes from.
                     let in_fnv = er_gfx::fnv1a64(vanilla);
                     append_autoload_debug(format_args!(
-                        "system-quit-gfx: 02_040 {} runtime edit derived in={len} in_fnv=0x{in_fnv:016x} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
-                        if seventh_cell { "quit7" } else { "quit6" },
+                        "system-quit-gfx: 02_040 quit grid items={items} runtime edit derived in={len} in_fnv=0x{in_fnv:016x} out={} known_vanilla={known} out_fnv=0x{out_fnv:016x}",
                         out.len()
                     ));
                     OPTIONS_02_040_QUIT6_EDITED.get_or_init(|| out)
@@ -564,13 +562,14 @@ impl GfxServeSet {
 /// What the installed hook serves. Bits are added, never removed: two hosts in one process each
 /// need their own movies, and the hook is installed once.
 static SERVE_QUIT_GRID: AtomicUsize = AtomicUsize::new(0);
-/// Whether the Quit grid needs a seventh cell, i.e. whether Save Game was armed as a row of its
-/// own rather than as a relabel of the native first row.
+/// How many cells the Quit grid must carry: the vanilla pair plus every row the hosts clone.
 ///
-/// Separate from [`GfxServeSet`] rather than a field on it, because this is not a different movie
-/// a host asks for -- it is the same movie with one more cell, and the hosts that build that set
-/// name it before they know the row set. Set at arm time, read once when the derivation is cached.
-static SERVE_SEVENTH_QUIT_CELL: AtomicUsize = AtomicUsize::new(0);
+/// A count rather than a flag, because the grid belongs to the process and not to either host,
+/// and because a host with rows of its own should be able to say how many it has without this
+/// crate knowing what they are. Separate from [`GfxServeSet`] because it is not a different movie
+/// a host asks for -- it is the same movie at a different size, and the hosts name that set
+/// before they know their row count. Zero means nobody asked.
+static QUIT_GRID_ITEMS: AtomicUsize = AtomicUsize::new(0);
 static SERVE_BUILD_URL_FIELD: AtomicUsize = AtomicUsize::new(0);
 static SERVE_PATH_EDITOR_FIELD: AtomicUsize = AtomicUsize::new(0);
 static SERVE_PROFILE_SELECT: AtomicUsize = AtomicUsize::new(0);
@@ -860,6 +859,20 @@ fn served_movie_list() -> String {
     names.join(" + ")
 }
 
+/// Say how many cells the Quit grid must carry, before any movie is loaded.
+///
+/// `items` counts the whole tab -- the vanilla pair plus every row the caller clones -- and is
+/// the number `er_gfx::options_02_040::quit_grid` is asked for. It rises and never falls, like
+/// the serve bits beside it: a second host with fewer rows cannot shrink the grid under the
+/// first, because the engine measures one grid for the process.
+///
+/// A count outside what `er-gfx` derives is kept anyway and refused at derivation time, where the
+/// refusal can name the size and be logged. Silently clamping here would hand a host a tab with
+/// its last rows missing and nothing to read about why.
+pub fn request_quit_grid_items(items: usize) {
+    QUIT_GRID_ITEMS.fetch_max(items, Ordering::SeqCst);
+}
+
 /// [`install_quit_menu_gfx_swap_hook`] for a host that needs only some of the movies.
 ///
 /// The serve set is additive across callers: the hook is installed once, and a second host asking
@@ -868,16 +881,6 @@ fn served_movie_list() -> String {
 /// # Safety
 ///
 /// As [`install_quit_menu_gfx_swap_hook`].
-/// Ask the Quit grid for a seventh cell, before any movie is loaded.
-///
-/// Call this when the armed row set puts Save Game on the tab as a row of its own. It is additive
-/// and idempotent like the serve bits beside it: a second host arming fewer rows cannot take the
-/// cell away from the first, because the grid the engine measures belongs to the process, not to
-/// either host.
-pub fn serve_seventh_quit_cell() {
-    SERVE_SEVENTH_QUIT_CELL.store(1, Ordering::SeqCst);
-}
-
 pub unsafe fn install_gfx_swap_hook_for(serve: GfxServeSet) -> bool {
     if serve.quit_grid {
         SERVE_QUIT_GRID.store(1, Ordering::SeqCst);

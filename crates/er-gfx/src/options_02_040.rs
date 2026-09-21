@@ -81,11 +81,49 @@ pub const VANILLA_WIN_LEN: usize = 44007;
 pub const VANILLA_WIN_FNV1A64: u64 = 0x570d_8549_2c03_72a0;
 pub const QUIT6_WIN_LEN: usize = 44107;
 pub const QUIT6_WIN_FNV1A64: u64 = 0x4c54_7513_773a_fd59;
-/// The seven-cell derivation: the six-cell movie plus one `PlaceObject2`, which is 25 bytes of
-/// tag -- a 6-byte long-form header and a 19-byte body. Re-derive both of these with
-/// `cargo run -p er-gfx --example make_02_040_quit6` when the edit table changes.
-pub const QUIT7_WIN_LEN: usize = 44132;
-pub const QUIT7_WIN_FNV1A64: u64 = 0x405c_1027_1564_c592;
+
+/// The smallest grid this module derives: the tab as FromSoft ships it, Save Game and Return to
+/// Desktop side by side, with no cell added and the movie handed back unedited.
+///
+/// A host that wants the vanilla tab should be able to ask for it by number rather than by
+/// knowing to skip the derivation, which is what makes the count a real parameter instead of a
+/// flag wearing a number's clothes.
+pub const MIN_GRID_ITEMS: usize = 2;
+
+/// The largest grid this module derives.
+///
+/// Not a limit of the engine -- its measure loop caps at [`GRID_MAX_COLS`] by [`GRID_MAX_ROWS`] --
+/// but of what anyone has seen. The lowest cell here sits at `ty = 7800` twips, and whether the
+/// native panel has room for a row below that or clips it has never been rendered. Raising this
+/// means authoring the cells, pinning their fingerprints, and looking at the result.
+pub const MAX_GRID_ITEMS: usize = 8;
+
+/// Is `items` a grid this module can derive?
+///
+/// In range is not enough: a size whose fingerprint is still a zero placeholder has never been
+/// derived against the real movie, and serving one would be handing out bytes nothing has
+/// checked. Deriving it is the work of running the example and pinning what it reports.
+pub fn grid_items_supported(items: usize) -> bool {
+    (MIN_GRID_ITEMS..=MAX_GRID_ITEMS).contains(&items)
+        && QUIT_GRID_FINGERPRINTS[items - MIN_GRID_ITEMS].0 != 0
+}
+
+/// `(len, fnv1a64)` of the derived movie for each supported item count, indexed by
+/// `items - MIN_GRID_ITEMS`.
+///
+/// Each rung costs 25 bytes of tag -- a 6-byte long-form header and a 19-byte body -- and the
+/// fingerprints are re-derived rather than predicted: run
+/// `cargo run -p er-gfx --example make_02_040_quit6 -- <vanilla.gfx>` when the edit table changes.
+pub const QUIT_GRID_FINGERPRINTS: [(usize, u64); MAX_GRID_ITEMS - MIN_GRID_ITEMS + 1] = [
+    // 2 items: the vanilla movie, unedited.
+    (VANILLA_WIN_LEN, VANILLA_WIN_FNV1A64),
+    (44032, 0x329a_253e_afa1_55de),
+    (44057, 0x23a5_1700_2aa5_6ae0),
+    (44082, 0xf972_69e5_f987_e9b6),
+    (QUIT6_WIN_LEN, QUIT6_WIN_FNV1A64),
+    (44132, 0x51c6_5a41_ac31_50ca),
+    (44157, 0x68b2_a293_5296_af9a),
+];
 
 /// The six grid cell names the derived movie must expose in sprite 138, in item-index order
 /// (`row * cols + col` with the measured `cols = 2`). Asserted by the er-gfx integration test: the
@@ -94,13 +132,23 @@ pub const QUIT6_GRID_CELL_NAMES: [&str; 6] = [
     "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1",
 ];
 
-/// The same movie with a seventh cell, for the row set that also arms Save Game as a row of its
-/// own. `Item_3_0` alone: the grid measures `cols = 2, rows = 4` and the seventh item lands at
-/// `3 * 2 + 0 == 6`, while `Item_3_1` is deliberately absent -- see the provenance comment on
-/// [`OPTIONS_02_040_QUIT7_EXTRA_EDITS`] for why a missing eighth cell beats an unselectable one.
-pub const QUIT7_GRID_CELL_NAMES: [&str; 7] = [
-    "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1", "Item_3_0",
+/// Every cell this module can place, in item-index order (`row * cols + col`, measured `cols`
+/// being 2). A grid of `n` items exposes the first `n` of these; [`quit_grid_cell_names`] is the
+/// accessor, and [`MAX_GRID_ITEMS`] is where the ladder stops.
+pub const QUIT_GRID_CELL_NAMES: [&str; MAX_GRID_ITEMS] = [
+    "Item_0_0", "Item_0_1", "Item_1_0", "Item_1_1", "Item_2_0", "Item_2_1", "Item_3_0", "Item_3_1",
 ];
+
+/// Kept as the six-cell spelling of [`QUIT_GRID_CELL_NAMES`] because the integration test and
+/// `row_cloner`'s ordering comment both name it, and because six is still what an unparameterised
+/// caller gets.
+pub const QUIT6_GRID_CELL_NAMES_LEN: usize = 6;
+
+/// The cell names a grid of `items` exposes, or `None` when that count is outside
+/// [`MIN_GRID_ITEMS`]..=[`MAX_GRID_ITEMS`].
+pub fn quit_grid_cell_names(items: usize) -> Option<&'static [&'static str]> {
+    grid_items_supported(items).then(|| &QUIT_GRID_CELL_NAMES[..items])
+}
 
 pub fn is_known_vanilla_win(bytes: &[u8]) -> bool {
     bytes.len() == VANILLA_WIN_LEN && fnv1a64(bytes) == VANILLA_WIN_FNV1A64
@@ -162,7 +210,16 @@ pub enum Quit6Error {
     Parse(GfxError),
     Edit(EditError),
     Write(GfxError),
-    KnownInputBadOutput { out_len: usize, out_fnv1a64: u64 },
+    KnownInputBadOutput {
+        out_len: usize,
+        out_fnv1a64: u64,
+    },
+    /// A grid size outside [`MIN_GRID_ITEMS`]..=[`MAX_GRID_ITEMS`], or one inside that range whose
+    /// fingerprint has not been derived yet. Refused rather than clamped: a caller that asked for
+    /// a tab this cannot build wants to hear so, not to be handed one with rows missing.
+    UnsupportedItemCount {
+        items: usize,
+    },
 }
 
 impl core::fmt::Display for Quit6Error {
@@ -176,7 +233,11 @@ impl core::fmt::Display for Quit6Error {
                 out_fnv1a64,
             } => write!(
                 f,
-                "known vanilla input but output len={out_len} fnv=0x{out_fnv1a64:016x} != expected len={QUIT6_WIN_LEN} fnv=0x{QUIT6_WIN_FNV1A64:016x}"
+                "known vanilla input but output len={out_len} fnv=0x{out_fnv1a64:016x} != the pinned fingerprint for that grid size"
+            ),
+            Quit6Error::UnsupportedItemCount { items } => write!(
+                f,
+                "a Quit grid of {items} item(s) is not derived here: supported sizes are {MIN_GRID_ITEMS}..={MAX_GRID_ITEMS}, and a size in range whose fingerprint is still unpinned is refused too"
             ),
         }
     }
@@ -184,39 +245,43 @@ impl core::fmt::Display for Quit6Error {
 
 impl std::error::Error for Quit6Error {}
 
+/// The six-cell tab, which is [`quit_grid`] at the count this repo's own row set produces.
+///
+/// Kept as a name because it is what every caller in this workspace asks for and what the
+/// fingerprint constants beside it are named after.
 pub fn quit6(vanilla: &[u8]) -> Result<Vec<u8>, Quit6Error> {
-    let mut movie = Movie::parse(vanilla).map_err(Quit6Error::Parse)?;
-    apply_edits(&mut movie, OPTIONS_02_040_QUIT6_EDITS).map_err(Quit6Error::Edit)?;
-    let out = movie.write().map_err(Quit6Error::Write)?;
-    if is_known_vanilla_win(vanilla)
-        && (out.len() != QUIT6_WIN_LEN || fnv1a64(&out) != QUIT6_WIN_FNV1A64)
-    {
-        return Err(Quit6Error::KnownInputBadOutput {
-            out_len: out.len(),
-            out_fnv1a64: fnv1a64(&out),
-        });
-    }
-    Ok(out)
+    quit_grid(vanilla, 6)
 }
 
-/// The seven-cell Quit tab: [`quit6`]'s edits and one more cell, for the row set that arms Save
-/// Game as a row of its own.
+/// The Quit tab laid out for `items` cells, which is the general form [`quit6`] is the floor of.
+///
+/// A host asks for the number of rows its own tab will carry -- the vanilla pair plus whatever it
+/// clones -- and gets a movie whose grid the engine measures to match. It does not have to know
+/// which of this repo's rows are armed, or that the cells are named `Item_<row>_<col>`, or that
+/// the second column of the last row is left out when the count is odd.
 ///
 /// Both edit tables are applied to one freshly parsed movie before it is written, so this is a
 /// single derivation from vanilla rather than a re-derivation of already-derived bytes -- the
-/// thing [`quit6`]'s fingerprint check exists to refuse.
+/// thing the fingerprint check exists to refuse.
 ///
-/// The error type is shared with [`quit6`]: the failures are the same four, and the fingerprint
-/// carried in `KnownInputBadOutput` names the six-cell constants because that variant is
-/// constructed there. A seven-cell mismatch reports its own numbers through the same shape.
-pub fn quit7(vanilla: &[u8]) -> Result<Vec<u8>, Quit6Error> {
+/// `items` outside [`MIN_GRID_ITEMS`]..=[`MAX_GRID_ITEMS`] is [`Quit6Error::UnsupportedItemCount`]
+/// rather than a clamp: a caller that asked for a grid this cannot build wants to hear so, not to
+/// be handed a smaller tab with rows missing off the bottom.
+pub fn quit_grid(vanilla: &[u8], items: usize) -> Result<Vec<u8>, Quit6Error> {
+    if !grid_items_supported(items) {
+        return Err(Quit6Error::UnsupportedItemCount { items });
+    }
+    let cells = &OPTIONS_02_040_CELL_EDITS[..items - MIN_GRID_ITEMS];
     let mut movie = Movie::parse(vanilla).map_err(Quit6Error::Parse)?;
-    apply_edits(&mut movie, OPTIONS_02_040_QUIT6_EDITS).map_err(Quit6Error::Edit)?;
-    apply_edits(&mut movie, OPTIONS_02_040_QUIT7_EXTRA_EDITS).map_err(Quit6Error::Edit)?;
+    // The shape edit belongs to the added cells, not to the tab: asking for the vanilla pair
+    // gives back the movie the game shipped, re-serialized and byte-identical to its input.
+    if !cells.is_empty() {
+        apply_edits(&mut movie, OPTIONS_02_040_SHAPE_EDIT).map_err(Quit6Error::Edit)?;
+        apply_edits(&mut movie, cells).map_err(Quit6Error::Edit)?;
+    }
     let out = movie.write().map_err(Quit6Error::Write)?;
-    if is_known_vanilla_win(vanilla)
-        && (out.len() != QUIT7_WIN_LEN || fnv1a64(&out) != QUIT7_WIN_FNV1A64)
-    {
+    let (want_len, want_fnv) = QUIT_GRID_FINGERPRINTS[items - MIN_GRID_ITEMS];
+    if is_known_vanilla_win(vanilla) && (out.len() != want_len || fnv1a64(&out) != want_fnv) {
         return Err(Quit6Error::KnownInputBadOutput {
             out_len: out.len(),
             out_fnv1a64: fnv1a64(&out),
