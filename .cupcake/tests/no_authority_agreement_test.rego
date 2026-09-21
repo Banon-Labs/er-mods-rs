@@ -34,18 +34,28 @@ test_halt_on_auth_tagged_signal if {
 	"ER-EFFECTS-NO-AUTHORITY-AGREEMENT" in rule_ids(halts)
 }
 
-# Category B unbacked tagged value (ACKUNBACKED:<phrase>) halts.
-test_halt_on_ackunbacked_tagged_signal if {
-	halts := guard.halt with input as stop_event("ACKUNBACKED:Point taken")
+# Category B tagged value (ACK:<phrase>) halts.
+test_halt_on_ack_tagged_signal if {
+	halts := guard.halt with input as stop_event("ACK:Point taken")
 	"ER-EFFECTS-NO-AUTHORITY-AGREEMENT" in rule_ids(halts)
 }
 
-# The halt reason names the acknowledgement case and cites the beads-memory remedy.
-test_ackunbacked_reason_mentions_beads_memory if {
-	halts := guard.halt with input as stop_event("ACKUNBACKED:Point taken")
+# The remedy is to drop the prose, never to record a memory. This asserted the opposite until
+# 2026-09-20, when the user removed the beads-memory exception: the escape hatch made a memory the
+# price of replying to a correction, so corrections became memories instead of behaviour.
+test_ack_reason_does_not_ask_for_a_memory if {
+	halts := guard.halt with input as stop_event("ACK:Point taken")
 	some d in halts
-	contains(d.reason, "beads memory")
-	contains(d.reason, "bd remember")
+	not contains(d.reason, "beads memory")
+	not contains(d.reason, "bd remember")
+}
+
+# The same holds for the authority-coded case, whose correction text also used to demand one.
+test_auth_reason_does_not_ask_for_a_memory if {
+	halts := guard.halt with input as stop_event("AUTH:you're right")
+	some d in halts
+	not contains(d.reason, "bd memory")
+	not contains(d.reason, "bd remember")
 }
 
 # Object-shaped signal ({output: ...}) is handled too.

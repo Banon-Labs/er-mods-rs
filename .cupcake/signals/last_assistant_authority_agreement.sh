@@ -10,12 +10,17 @@
 #   Category A -- Authority-coded agreement ("You're right", "That's right", "Correct,", "Exactly,",
 #     "Absolutely,", "Precisely,"). Banned outright. Emitted as  AUTH:<phrase>.
 #   Category B -- Feedback-acknowledgement / receipt-announcement prose ("Point taken", "Got it",
-#     "Understood", "Noted", "Fair point", "Makes sense", ...). This announces that the agent received
-#     feedback; it is only acceptable when the agent actually internalized it by recording a beads
-#     memory in the same turn (a Bash tool_use running `bd remember`). So it is banned only when the
-#     turn contains no bd-memory recording. Emitted as  ACKUNBACKED:<phrase>  (and suppressed entirely
-#     when the turn has a bd-memory write).
-# Category A always wins over Category B (checked first, regardless of any bd-memory write).
+#     "Understood", "Noted", "Fair point", "Makes sense", ...). Banned outright. Emitted as
+#     ACK:<phrase>.
+#
+#     This used to carry an exception: the prose was allowed when the same turn recorded a beads
+#     memory, on the theory that announcing you internalized feedback is fine if you actually did.
+#     User directive 2026-09-20 removed it. The exception made a memory the price of replying to a
+#     correction, so corrections turned into memories rather than into behaviour, and the store grew
+#     by a memory per slip. Applying the correction silently was always the better answer, and the
+#     repo's own rule already said so: `bd remember` is for findings "worth keeping (validated,
+#     durable, non-obvious) -- not eagerly for every intermediate hypothesis or run".
+# Category A always wins over Category B (checked first).
 # A clean turn emits empty. Consumers also treat any non-empty UNTAGGED value as a Category-A hit
 # (backward compat with crafted/bare signal values).
 #
@@ -26,8 +31,7 @@
 # signal into the UserPromptSubmit reminder (which always runs on the next prompt, even after an
 # interrupt) fixes (b). "Last completed turn" = the last non-empty run of assistant text bounded by real
 # user prompts; on UserPromptSubmit the just-submitted prompt opens a new empty run, so the prior turn is
-# still the last non-empty one -- the same value both events need. The bd-memory flag is bucketed into
-# the same turns so the Category-B exception is evaluated against the turn that produced the ack.
+# still the last non-empty one -- the same value both events need.
 #
 # Double-quoted spans are stripped before matching so quoting the ban (this file, the reminder text, or a
 # meta-discussion like `the phrase "You're right"`) does not false-trip; a real unquoted slip
@@ -71,25 +75,9 @@ def assistant_text(ev):
     return "\n".join(out)
 
 
-# A bd-memory recording = a Bash tool_use whose command runs `bd remember` (accept both the bare `bd`
-# and the local-bin path form). DOTALL so a multiline command still matches.
-BD_MEMORY_RE = re.compile(r"(?:\bbd\b|/\.local/bin/bd\b).*\bremember\b", re.IGNORECASE | re.DOTALL)
-
-
-def assistant_has_bd_memory(ev):
-    for block in ev.get("message", {}).get("content", []) or []:
-        if not isinstance(block, dict):
-            continue
-        if block.get("type") == "tool_use" and block.get("name") == "Bash":
-            cmd = (block.get("input") or {}).get("command", "")
-            if isinstance(cmd, str) and BD_MEMORY_RE.search(cmd):
-                return True
-    return False
-
-
-# Bucket assistant text and bd-memory writes into turns delimited by real user prompts; keep the last
-# bucket that has any text (its own bd flag decides the Category-B exception).
-turns = [{"text": [], "bd": False}]
+# Bucket assistant text into turns delimited by real user prompts; keep the last bucket that has any
+# text.
+turns = [{"text": []}]
 try:
     with open(files[0], encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -98,22 +86,18 @@ try:
             except ValueError:
                 continue
             if is_real_user_prompt(ev):
-                turns.append({"text": [], "bd": False})
+                turns.append({"text": []})
             elif ev.get("type") == "assistant":
                 t = assistant_text(ev)
                 if t:
                     turns[-1]["text"].append(t)
-                if assistant_has_bd_memory(ev):
-                    turns[-1]["bd"] = True
 except OSError:
     sys.exit(0)
 
 last_turn = ""
-turn_has_bd_memory = False
 for bucket in reversed(turns):
     if bucket["text"]:
         last_turn = "\n".join(bucket["text"])
-        turn_has_bd_memory = bucket["bd"]
         break
 
 # Strip double-quoted spans so quoting the ban does not count as using it (single quotes are left alone
@@ -158,8 +142,7 @@ if mA:
     sys.stdout.write("AUTH:" + phrase(mA))
     sys.exit(0)
 
-if not turn_has_bd_memory:
-    mB = ACK_ANYWHERE_RE.search(scrubbed) or ACK_SENTENCE_INITIAL_RE.search(scrubbed)
-    if mB:
-        sys.stdout.write("ACKUNBACKED:" + phrase(mB))
+mB = ACK_ANYWHERE_RE.search(scrubbed) or ACK_SENTENCE_INITIAL_RE.search(scrubbed)
+if mB:
+    sys.stdout.write("ACK:" + phrase(mB))
 PY
