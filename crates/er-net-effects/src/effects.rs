@@ -26,7 +26,7 @@ use crate::{
     config::runtime_config,
     crash_telemetry, duration_filter, input_suppression,
     log::net_effects_log,
-    present_overlay,
+    marked_effects, present_overlay,
     selector_gate::{
         self, SelectorInputState, SelectorKey, VK_ADD, VK_DOWN, VK_LEFT, VK_NUMPAD0, VK_OEM_7,
         VK_RIGHT, VK_SUBTRACT, VK_UP,
@@ -46,6 +46,8 @@ const EFFECT_HOTKEY_STACK_ADD: usize = 1 << 6;
 const EFFECT_HOTKEY_STACK_REMOVE: usize = 1 << 7;
 /// Alt+9: expand the bar from its `[+]` button to the effect list, or minimize it back.
 const EFFECT_HOTKEY_EXPAND_COLLAPSE: usize = 1 << 8;
+/// Alt+M: record the highlighted effect in the hand-marked research list, or take it back out.
+const EFFECT_HOTKEY_MARK: usize = 1 << 9;
 
 // The selector-command keys live in `selector_gate`, which owns their classification; only the
 // extra names the trigger-hotkey file can spell are declared here.
@@ -105,6 +107,17 @@ static EFFECT_HOTKEY_PENDING_RIGHT: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_SELECTOR_TOGGLE: AtomicUsize = AtomicUsize::new(0);
 static EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE: AtomicUsize = AtomicUsize::new(0);
+static EFFECT_HOTKEY_PENDING_MARK: AtomicUsize = AtomicUsize::new(0);
+/// Failed writes of the marked list. A mark that only reached memory is lost on the next
+/// relaunch, and a study whose notes silently vanish is worse than one with no notes.
+static MARK_WRITE_FAILURES: AtomicUsize = AtomicUsize::new(0);
+/// How many effects are in the hand-marked list right now.
+static MARKED_EFFECT_COUNT: AtomicUsize = AtomicUsize::new(0);
+/// Applies the peer restriction turned away. Read from telemetry, because a refusal and an
+/// effect that simply failed to take look identical from outside the process -- in both cases
+/// the effect is not on the player, and only this number separates the gate doing its job
+/// from the game rejecting the call.
+static PVP_REFUSALS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EffectCallKind {
@@ -118,11 +131,27 @@ impl EffectCallKind {
         }
     }
 
-    fn apply(self, player: &mut PlayerIns, network_sync: bool) {
+    /// Apply, unless this effect may not travel to the players currently in the session.
+    ///
+    /// Returns whether the game was actually called. The single choke point for the peer
+    /// restriction on purpose: every path that puts an effect on the player -- selector,
+    /// hotkey, stack, reapply -- ends here, so one check covers all of them and a path added
+    /// later cannot forget it.
+    fn apply(self, player: &mut PlayerIns) -> bool {
         match self {
             Self::SpEffect { id } => {
-                let dont_sync = !network_sync;
-                player.apply_speffect(id, dont_sync);
+                if crate::pvp_gate::refuses(pvp_allowed_effects(), id, peers_present()) {
+                    PVP_REFUSALS.fetch_add(1, Ordering::Relaxed);
+                    net_effects_log(format_args!(
+                        "pvp-gate: refused {id} -- not on the peer-safe list; another player \
+                         is in this session"
+                    ));
+                    return false;
+                }
+                // `dont_sync = false`: always on the wire. Which effects may get there is the
+                // question above, answered by the peer-safe list rather than by a setting.
+                player.apply_speffect(id, false);
+                true
             }
         }
     }
@@ -175,9 +204,15 @@ impl NamedEffectCall {
     }
 
     /// Apply, and take ownership of the effect so it can be taken back later.
-    fn apply_owned(&mut self, player: &mut PlayerIns, network_sync: bool) {
-        self.kind.apply(player, network_sync);
-        self.applied_by_us = true;
+    ///
+    /// Ownership is claimed only when the game was actually called. A refused apply that
+    /// still set `applied_by_us` would licence `RemoveSpEffect` for an effect this DLL never
+    /// put on -- the exact stripping bug `release_owned` exists to prevent, arriving through
+    /// the gate meant to make the mod safer.
+    fn apply_owned(&mut self, player: &mut PlayerIns) {
+        if self.kind.apply(player) {
+            self.applied_by_us = true;
+        }
     }
 
     /// Remove only what this DLL put on the player, and report whether anything was removed.
@@ -237,7 +272,6 @@ pub(crate) struct NetEffectsState {
     pub(crate) calls: Vec<NamedEffectCall>,
     pub(crate) catalogs: Vec<EffectCatalog>,
     pub(crate) load_error: Option<String>,
-    pub(crate) network_sync: bool,
     pub(crate) selected_effect_index: Option<usize>,
     pub(crate) selected_catalog_index: Option<usize>,
     effect_catalogs_signature: String,
@@ -261,6 +295,9 @@ pub(crate) struct NetEffectsState {
     pub(crate) last_driver_command: Option<String>,
     pub(crate) game_task_ticks: u64,
     pub(crate) runtime_ready: bool,
+    /// The hand-marked ids, in the order they were marked. Loaded once at startup so a mark
+    /// survives a relaunch, and rewritten on every press.
+    pub(crate) marked_ids: Vec<i32>,
 }
 
 impl NetEffectsState {
@@ -309,7 +346,6 @@ impl NetEffectsState {
             calls,
             catalogs,
             load_error,
-            network_sync: runtime_config().network_sync,
             selected_effect_index,
             selected_catalog_index,
             effect_catalogs_signature,
@@ -333,12 +369,27 @@ impl NetEffectsState {
             last_driver_command: None,
             game_task_ticks: 0,
             runtime_ready: false,
+            marked_ids: restore_marked_ids(),
         }
     }
 }
 
 fn effect_setting_path() -> PathBuf {
     runtime_config().selected_effect_file.clone()
+}
+
+fn marked_effects_path() -> PathBuf {
+    runtime_config().marked_effects_file.clone()
+}
+
+/// Read back the marks from a previous session. An absent file is an empty list, not an error:
+/// the first mark is what creates it.
+fn restore_marked_ids() -> Vec<i32> {
+    let ids = fs::read_to_string(marked_effects_path())
+        .map(|text| marked_effects::parse(&text))
+        .unwrap_or_default();
+    MARKED_EFFECT_COUNT.store(ids.len(), Ordering::Relaxed);
+    ids
 }
 
 fn effect_catalog_setting_path() -> PathBuf {
@@ -748,9 +799,77 @@ fn build_effect_catalog_state() -> (Vec<NamedEffectCall>, Vec<EffectCatalog>, Op
     if !stacked_without_catalog.is_empty() {
         net_effects_log(format_args!(
             "effect-stack: {stacked_without_catalog:?} are on the stack but in no catalog; \
-             applying them anyway (they will not appear under the selector cursor)"
+             they are reachable under the synthetic STACKED catalog"
         ));
     }
+
+    // Two catalogs nobody has to install, built from what the DLL already knows.
+    //
+    // They go first so they are one tab away rather than sixteen, and they exist for the same
+    // reason: a player can end up holding a set of ids with no place in the interface that
+    // shows them. `stacked_effects` is edited by a keypress and persisted to the toml, so it
+    // drifts from whatever catalog the ids came from; before this, taking one back off the
+    // stack meant remembering which tab it lived in, and an id from a deleted catalog could
+    // not be reached at all. The peer-safe list has never had a tab: it is compiled in.
+    //
+    // Both are rebuilt by the same signature that rebuilds the file catalogs -- it already
+    // folds in the config -- so adding to the stack updates the stacked tab in place.
+    let materialize = |id: i32,
+                       calls: &mut Vec<NamedEffectCall>,
+                       call_index_by_id: &mut HashMap<i32, usize>|
+     -> usize {
+        *call_index_by_id.entry(id).or_insert_with(|| {
+            let name = master_names
+                .as_ref()
+                .and_then(|names| names.get(&id).cloned())
+                .unwrap_or_else(|| format!("SpEffect {id}"));
+            let index = calls.len();
+            calls.push(NamedEffectCall::new(
+                name,
+                call_kind_from_spec(EffectKindSpec::SpEffect, id),
+                false,
+            ));
+            index
+        })
+    };
+
+    let mut synthetic = Vec::new();
+
+    // Everything currently on the stack, in the order the toml lists it. Deliberately not
+    // duration-filtered: the stack outranks that filter everywhere else, and a tab that hid
+    // the effect you are trying to remove would be worse than no tab.
+    if !stacked_ids_config.is_empty() {
+        let indices = stacked_ids_config
+            .iter()
+            .map(|id| materialize(*id, &mut calls, &mut call_index_by_id))
+            .collect::<Vec<_>>();
+        synthetic.push(EffectCatalog {
+            source_key: "@stacked".to_owned(),
+            name: "STACKED (yours)".to_owned(),
+            file_name: "@stacked".to_owned(),
+            call_indices: indices,
+        });
+    }
+
+    // The effects that still work with another player in the session -- see `crate::pvp_gate`.
+    // Scrolling this tab is the only way to see the restriction before it bites, rather than
+    // discovering it one refused keypress at a time.
+    let peer_safe = crate::pvp_gate::allowed().ids();
+    if !peer_safe.is_empty() {
+        let indices = peer_safe
+            .iter()
+            .map(|id| materialize(*id, &mut calls, &mut call_index_by_id))
+            .collect::<Vec<_>>();
+        synthetic.push(EffectCatalog {
+            source_key: "@online-only".to_owned(),
+            name: "ONLINE ONLY".to_owned(),
+            file_name: "@online-only".to_owned(),
+            call_indices: indices,
+        });
+    }
+
+    synthetic.append(&mut catalogs);
+    let catalogs = synthetic;
 
     if permanent_effects.filters() {
         DURATION_FILTERED_EFFECTS.store(filtered_by_duration, Ordering::Relaxed);
@@ -796,6 +915,7 @@ fn effect_hotkey_action_for_key(vk: u32, alt_down: bool) -> usize {
         Some(SelectorAction::EffectToggle) => EFFECT_HOTKEY_TOGGLE,
         Some(SelectorAction::ShowHide) => EFFECT_HOTKEY_SELECTOR_TOGGLE,
         Some(SelectorAction::ExpandCollapse) => EFFECT_HOTKEY_EXPAND_COLLAPSE,
+        Some(SelectorAction::MarkEffect) => EFFECT_HOTKEY_MARK,
         None => 0,
     }
 }
@@ -852,6 +972,9 @@ pub(crate) fn queue_effect_keyboard_vk(vk: u32, alt_down: bool) {
     }
     if action & EFFECT_HOTKEY_EXPAND_COLLAPSE != 0 {
         EFFECT_HOTKEY_PENDING_EXPAND_COLLAPSE.fetch_add(1, Ordering::SeqCst);
+    }
+    if action & EFFECT_HOTKEY_MARK != 0 {
+        EFFECT_HOTKEY_PENDING_MARK.fetch_add(1, Ordering::SeqCst);
     }
 }
 
@@ -1225,8 +1348,34 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
             ""
         }
     );
+    // Say marked on the highlighted entry as well as in the total, because the second pass
+    // through a catalog is a pass to correct the first -- and an entry whose mark is invisible
+    // gets marked twice, which unmarks it.
+    let marked_text = format!(
+        " | MARK {}{}",
+        state.marked_ids.len(),
+        if effect_id.is_some_and(|id| state.marked_ids.contains(&id)) {
+            " MARKED"
+        } else {
+            ""
+        }
+    );
+    // What the peer restriction is doing, on the highlighted entry. Without this a refusal is
+    // invisible: the row still shows, the key still presses, and the status reads `apply_failed`
+    // -- the same word the game's own rejection uses -- so the gate working and the gate being
+    // absent look identical to the person using it.
+    let pvp_text = if peers_present() {
+        match effect_id {
+            Some(id) if crate::pvp_gate::refuses(pvp_allowed_effects(), id, true) => {
+                " | PVP BLOCKED"
+            }
+            _ => " | PVP",
+        }
+    } else {
+        ""
+    };
     let mut text = format!(
-        "CAT {}/{} {} | ID {}{} | {}/{} | {} | NET {} | {}{}{}",
+        "CAT {}/{} {} | ID {}{} | {}/{} | {} |{} | {}{}{}{}",
         catalog_display_index,
         catalog_count,
         catalog_name,
@@ -1239,9 +1388,10 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
         } else {
             "OFF"
         },
-        if state.network_sync { "ON" } else { "OFF" },
+        pvp_text,
         runtime_status,
         stack_text,
+        marked_text,
         trigger_text
     );
     text = text
@@ -1288,7 +1438,6 @@ pub(crate) fn publish_effect_selector_text(state: &mut NetEffectsState) {
 /// Applied immediately as well as persisted: a key that only edits a file, and needs a relaunch
 /// to do anything, is a key nobody trusts.
 fn stack_add_selected(player: &mut PlayerIns, state: &mut NetEffectsState) {
-    let network_sync = state.network_sync;
     let Some(index) = state.selected_effect_index else {
         state.last_driver_command = Some("effect-stack: nothing highlighted to add".to_owned());
         return;
@@ -1305,7 +1454,7 @@ fn stack_add_selected(player: &mut PlayerIns, state: &mut NetEffectsState) {
     call.stacked = true;
     call.enabled = true;
     call.remove_requested = false;
-    call.apply_owned(player, network_sync);
+    call.apply_owned(player);
     call.active = call.kind.is_active(player);
     call.active_seen_since_enable = call.active;
     call.apply_failed = !call.active;
@@ -1402,6 +1551,104 @@ pub(crate) fn stacked_effect_count() -> usize {
     STACKED_EFFECT_COUNT.load(Ordering::Relaxed)
 }
 
+/// Record the highlighted effect in the hand-marked list, or take it back out.
+///
+/// Deliberately inert: it applies nothing, removes nothing and gates nothing. The key exists so
+/// that a pass through a catalog leaves a list of ids a human judged, which is the input the
+/// restricted-in-online rule has to be derived from -- see [`crate::marked_effects`].
+fn mark_selected(state: &mut NetEffectsState) {
+    let Some(index) = state.selected_effect_index else {
+        state.last_driver_command = Some("effect-mark: nothing highlighted to mark".to_owned());
+        return;
+    };
+    let Some(call) = state.calls.get(index) else {
+        return;
+    };
+    let EffectCallKind::SpEffect { id } = call.kind;
+    let name = call.name.clone();
+    let marked = marked_effects::toggle(&mut state.marked_ids, id);
+    MARKED_EFFECT_COUNT.store(state.marked_ids.len(), Ordering::Relaxed);
+    let written = write_marked_effects(state);
+    state.last_driver_command = Some(format!(
+        "effect-mark: {} {id} ({name}); {} marked{}",
+        if marked { "marked" } else { "unmarked" },
+        state.marked_ids.len(),
+        if written { "" } else { " -- file write failed" }
+    ));
+}
+
+/// Write the marked list out, names and all.
+///
+/// Through a temp file and a rename like the config write, so an interrupted write leaves the
+/// previous list rather than a truncated one. The name for each id is looked up in the loaded
+/// calls -- an id whose catalog is no longer loaded keeps its place with no name rather than
+/// being dropped, because dropping it would quietly delete a mark the file was the only record
+/// of.
+fn write_marked_effects(state: &NetEffectsState) -> bool {
+    let named = state.marked_ids.iter().map(|id| {
+        let name = state
+            .calls
+            .iter()
+            .find(|call| {
+                let EffectCallKind::SpEffect { id: call_id } = call.kind;
+                call_id == *id
+            })
+            .map_or("", |call| call.name.as_str());
+        (*id, name)
+    });
+    let path = marked_effects_path();
+    let tmp = path.with_extension("jsonc.tmp");
+    let wrote = fs::write(&tmp, marked_effects::render(named))
+        .and_then(|()| fs::rename(&tmp, &path))
+        .is_ok();
+    if !wrote {
+        MARK_WRITE_FAILURES.fetch_add(1, Ordering::SeqCst);
+        net_effects_log(format_args!(
+            "effect-mark: failed to write {} -- the mark is live but will not survive a relaunch",
+            path.display()
+        ));
+    }
+    wrote
+}
+
+pub(crate) fn marked_effect_count() -> usize {
+    MARKED_EFFECT_COUNT.load(Ordering::Relaxed)
+}
+
+pub(crate) fn mark_write_failures() -> usize {
+    MARK_WRITE_FAILURES.load(Ordering::Relaxed)
+}
+
+pub(crate) fn pvp_refusals() -> usize {
+    PVP_REFUSALS.load(Ordering::Relaxed)
+}
+
+/// How many effects stay usable with a peer present on this build.
+///
+/// Emitted beside the refusal count so a quiet session can be told apart from a broken one.
+/// The two failures are opposite and both silent: 810 allowed with no refusals is a player
+/// who only used cosmetic effects, and 0 allowed is a table that failed to parse, which
+/// refuses everything.
+pub(crate) fn pvp_allowed_count() -> usize {
+    pvp_allowed_effects().len()
+}
+
+/// Whether another real player is in the session right now, as the gate sees it.
+///
+/// Wrapped rather than called directly at the apply site so this module has one name for the
+/// question, and so telemetry reports the same answer the refusal used.
+fn peers_present() -> bool {
+    crate::pvp_gate::peers_present()
+}
+
+pub(crate) fn pvp_peers_present() -> bool {
+    peers_present()
+}
+
+fn pvp_allowed_effects() -> &'static crate::pvp_gate::AllowedEffects {
+    crate::pvp_gate::allowed()
+}
+
 pub(crate) fn stack_write_failures() -> usize {
     STACK_WRITE_FAILURES.load(Ordering::Relaxed)
 }
@@ -1416,6 +1663,7 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     let rights = EFFECT_HOTKEY_PENDING_RIGHT.swap(0, Ordering::SeqCst);
     let stack_adds = EFFECT_HOTKEY_PENDING_STACK_ADD.swap(0, Ordering::SeqCst);
     let stack_removes = EFFECT_HOTKEY_PENDING_STACK_REMOVE.swap(0, Ordering::SeqCst);
+    let marks = EFFECT_HOTKEY_PENDING_MARK.swap(0, Ordering::SeqCst);
     let arrow_total = ups + downs + lefts + rights;
     // Second reading of the same gate the hooks use, from the game thread's own state. The
     // cursor keys should not reach this queue while closed at all, so a nonzero `ignored` below
@@ -1426,17 +1674,22 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
     // they mean nothing while it is closed.
     let stack_allowed = selector_gate::should_handle_key(open, SelectorKey::StackEdit);
     let toggle_allowed = selector_gate::should_handle_key(open, SelectorKey::EffectToggle);
+    // The mark key records a judgement about the highlighted row, so it means nothing when there
+    // is no visible row to have judged.
+    let mark_allowed = selector_gate::should_handle_key(open, SelectorKey::Mark);
     let stack_total = if stack_allowed {
         stack_adds + stack_removes
     } else {
         0
     };
     let toggle_total = if toggle_allowed { toggles } else { 0 };
+    let mark_total = if mark_allowed { marks } else { 0 };
     let arrow_applied = if arrows_allowed { arrow_total } else { 0 };
-    let applied_total = toggle_total + stack_total + arrow_applied;
+    let applied_total = toggle_total + stack_total + arrow_applied + mark_total;
     let ignored = (arrow_total - arrow_applied)
         + (stack_adds + stack_removes - stack_total)
-        + (toggles - toggle_total);
+        + (toggles - toggle_total)
+        + (marks - mark_total);
     if ignored != 0 {
         record_keys_ignored_while_closed(ignored);
         state.last_driver_command = Some(format!(
@@ -1472,6 +1725,13 @@ pub(crate) fn consume_effect_hotkeys(player: &mut PlayerIns, state: &mut NetEffe
         }
         for _ in 0..stack_removes {
             stack_remove_selected(player, state);
+        }
+    }
+    if mark_allowed {
+        // After the cursor has moved, for the same reason the stack keys are: a mark pressed in
+        // the same frame as an arrow belongs to the row the arrow landed on.
+        for _ in 0..mark_total {
+            mark_selected(state);
         }
     }
     STACKED_EFFECT_COUNT.store(
@@ -1553,10 +1813,12 @@ fn apply_effect_trigger_now(
 ) {
     let count = hotkey.count.clamp(1, EFFECT_TRIGGER_COUNT_MAX);
     for _ in 0..count {
-        EffectCallKind::SpEffect {
+        // Return value dropped deliberately: a refusal is already logged and counted inside
+        // `apply`, and a trigger hotkey has no ownership to claim or withhold.
+        let _ = EffectCallKind::SpEffect {
             id: hotkey.effect_id,
         }
-        .apply(player, state.network_sync);
+        .apply(player);
     }
     let active = player
         .chr_ins
@@ -1576,12 +1838,11 @@ fn apply_effect_trigger_now(
         }
     }
     state.last_driver_command = Some(format!(
-        "effect-trigger: {} fired {} x{} ({}, network_sync={})",
+        "effect-trigger: {} fired {} x{} ({})",
         hotkey.key_name,
         hotkey.effect_id,
         count,
-        if active { "active" } else { "not active" },
-        state.network_sync
+        if active { "active" } else { "not active" }
     ));
 }
 
@@ -1712,12 +1973,11 @@ fn enable_only_call(
     index: usize,
     persist: bool,
 ) {
-    let network_sync = state.network_sync;
     for (call_index, call) in state.calls.iter_mut().enumerate() {
         if call_index == index {
             call.enabled = true;
             call.remove_requested = false;
-            call.apply_owned(player, network_sync);
+            call.apply_owned(player);
             call.active = call.kind.is_active(player);
             call.active_seen_since_enable = call.active;
             call.apply_failed = !call.active;
@@ -1752,10 +2012,7 @@ fn enable_only_call(
         }
         state.effect_setting_last_id = Some(id);
         state.effect_setting_last_modified = current_effect_setting_modified();
-        state.last_driver_command = Some(format!(
-            "effect-hotkey: selected {label} ({name}); network_sync={}",
-            state.network_sync
-        ));
+        state.last_driver_command = Some(format!("effect-hotkey: selected {label} ({name})"));
     }
 }
 
@@ -1897,10 +2154,9 @@ pub(crate) fn poll_live_effect_setting(player: &mut PlayerIns, state: &mut NetEf
     state.effect_setting_live_updates = state.effect_setting_live_updates.saturating_add(1);
     if let Some(call) = state.calls.get(index) {
         state.last_driver_command = Some(format!(
-            "effect-setting: selected {} ({}); network_sync={}",
+            "effect-setting: selected {} ({})",
             call.kind.label(),
-            call.name,
-            state.network_sync
+            call.name
         ));
     }
 }
@@ -1966,18 +2222,6 @@ fn execute_driver_command(
             sync_selector_input_gate(state);
             Ok(())
         }
-        ["network", "on"] => {
-            state.network_sync = true;
-            Ok(())
-        }
-        ["network", "off"] => {
-            state.network_sync = false;
-            Ok(())
-        }
-        ["network", "toggle"] => {
-            state.network_sync = !state.network_sync;
-            Ok(())
-        }
         ["apply_all"] => {
             apply_selected_calls(player, state);
             refresh_call_status(player, state);
@@ -2025,7 +2269,6 @@ fn set_call_enabled(
     index: usize,
     enabled: bool,
 ) -> Result<(), String> {
-    let network_sync = state.network_sync;
     let call = state
         .calls
         .get_mut(index)
@@ -2033,7 +2276,7 @@ fn set_call_enabled(
 
     call.enabled = enabled;
     if enabled {
-        call.apply_owned(player, network_sync);
+        call.apply_owned(player);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable = call.active;
         call.apply_failed = !call.active;
@@ -2074,9 +2317,8 @@ pub(crate) fn remove_requested_calls(player: &mut PlayerIns, state: &mut NetEffe
 }
 
 fn apply_selected_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
-    let network_sync = state.network_sync;
     for call in state.calls.iter_mut().filter(|call| call.enabled) {
-        call.apply_owned(player, network_sync);
+        call.apply_owned(player);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
@@ -2084,13 +2326,12 @@ fn apply_selected_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
 }
 
 fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
-    let network_sync = state.network_sync;
     for call in state
         .calls
         .iter_mut()
         .filter(|call| call.enabled && !call.active_seen_since_enable && !call.apply_failed)
     {
-        call.apply_owned(player, network_sync);
+        call.apply_owned(player);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;
@@ -2098,14 +2339,13 @@ fn apply_pending_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsSta
 }
 
 pub(crate) fn reapply_expired_enabled_calls(player: &mut PlayerIns, state: &mut NetEffectsState) {
-    let network_sync = state.network_sync;
     for (index, call) in state
         .calls
         .iter_mut()
         .enumerate()
         .filter(|(_, call)| call.enabled && !call.active && call.active_seen_since_enable)
     {
-        call.apply_owned(player, network_sync);
+        call.apply_owned(player);
         call.active = call.kind.is_active(player);
         call.active_seen_since_enable |= call.active;
         call.apply_failed = !call.active;

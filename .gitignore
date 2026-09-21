@@ -106,3 +106,8 @@ stage-results/
 # never redistributed, the same category as the de-Arxan'd images and the Seamless archive.
 third_party/*.CT
 third_party/*.ct
+
+# Bulk SpEffectVfxParam dump derived from regulation.bin. Regenerate with
+# scripts/generate-speffect-vfx-dump.py rather than committing 785 KB of
+# transformed game data -- see the game-derived-binaries rule in AGENTS.md.
+docs/recon/speffect-vfx-rows.json

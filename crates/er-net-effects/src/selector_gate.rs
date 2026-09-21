@@ -32,10 +32,11 @@
 //!
 //! **Acting** splits by what the key does:
 //!
-//! - Keys that drive the on-screen cursor -- [`SelectorKey::Arrow`] and [`SelectorKey::StackEdit`]
-//!   -- require open. A cursor nobody can see is not a thing to drive, and numpad `+` on an
-//!   invisible highlight would stack an effect the player never chose and rewrite
-//!   `er-net-effects.toml` to match.
+//! - Keys that act on the on-screen cursor -- [`SelectorKey::Arrow`], [`SelectorKey::StackEdit`]
+//!   and [`SelectorKey::Mark`] -- require open. A cursor nobody can see is not a thing to drive,
+//!   numpad `+` on an invisible highlight would stack an effect the player never chose and
+//!   rewrite `er-net-effects.toml` to match, and a mark is a record that a human read the row it
+//!   names.
 //! - Deliberate chords and player-chosen bindings stay live whether the bar is open or not:
 //!   [`SelectorKey::ShowHide`] (the only way back to a hidden bar),
 //!   [`SelectorKey::ExpandCollapse`] (the only way open -- see below),
@@ -114,6 +115,8 @@ pub(crate) enum SelectorKey {
     ///
     /// The way open, and on this game the only one. See the module note.
     ExpandCollapse,
+    /// Alt+M -- record the highlighted effect in the hand-marked list.
+    Mark,
     /// Everything else, including whatever the player bound in the effect-trigger hotkey file.
     Other,
 }
@@ -143,6 +146,7 @@ pub(crate) fn key_for_vk_in(
         Some(SelectorAction::EffectToggle) => SelectorKey::EffectToggle,
         Some(SelectorAction::ShowHide) => SelectorKey::ShowHide,
         Some(SelectorAction::ExpandCollapse) => SelectorKey::ExpandCollapse,
+        Some(SelectorAction::MarkEffect) => SelectorKey::Mark,
         None => SelectorKey::Other,
     }
 }
@@ -187,7 +191,10 @@ pub(crate) fn should_handle_key(open: bool, key: SelectorKey) -> bool {
         SelectorKey::EffectToggle | SelectorKey::Other => true,
         // These two drive the visible cursor. Off screen there is nothing to drive, and numpad +
         // would stack an effect the player cannot see and write it back to the config file.
-        SelectorKey::Arrow | SelectorKey::StackEdit => open,
+        // The mark key rides with them for the same reason: a mark recorded against an entry
+        // nobody was looking at is a data point about nothing, and the marked file's whole value
+        // is that a human read the row it names.
+        SelectorKey::Arrow | SelectorKey::StackEdit | SelectorKey::Mark => open,
     }
 }
 
@@ -264,7 +271,11 @@ mod tests {
 
     #[test]
     fn a_closed_selector_ignores_only_the_keys_that_drive_its_cursor() {
-        for key in [SelectorKey::Arrow, SelectorKey::StackEdit] {
+        for key in [
+            SelectorKey::Arrow,
+            SelectorKey::StackEdit,
+            SelectorKey::Mark,
+        ] {
             assert!(
                 !should_handle_key(false, key),
                 "a closed selector has no visible cursor for {key:?} to move"
@@ -399,6 +410,14 @@ mod tests {
     fn the_stack_keys_are_bare_numpad_plus_and_minus() {
         assert_eq!(key_for_vk(VK_ADD, false), SelectorKey::StackEdit);
         assert_eq!(key_for_vk(VK_SUBTRACT, false), SelectorKey::StackEdit);
+    }
+
+    /// The mark key needs Alt, so a bare M stays the game's -- it is the map key.
+    #[test]
+    fn the_mark_key_needs_alt() {
+        const VK_M: u32 = 0x4d;
+        assert_eq!(key_for_vk(VK_M, true), SelectorKey::Mark);
+        assert_eq!(key_for_vk(VK_M, false), SelectorKey::Other);
     }
 
     #[test]
