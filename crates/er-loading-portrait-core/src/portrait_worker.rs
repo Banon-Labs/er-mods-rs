@@ -520,10 +520,7 @@ fn consume_portrait_frame(job: PortraitFrameJob) {
             // the transient neutral/too-small frames (Bug A/B) so they never
             // reach the loading screen.
             if note_ls_portrait_capture(cw, ch, &cpx) {
-                if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                    *g = Some((cw, ch, cpx));
-                }
-                LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, Ordering::SeqCst);
+                publish_portrait_rgba(cw, ch, cpx);
                 // Publish identity tag (bd er-effects-rs-dpf6 Phase 1): record which character this
                 // head belongs to next to the bridge. The worker may not read game memory, so it
                 // copies the atomics the game thread stamped at the build kick (slot+1 key + the

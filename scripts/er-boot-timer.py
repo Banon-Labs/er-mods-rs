@@ -90,6 +90,41 @@ def telemetry_world_loaded(telemetry: dict | None) -> bool:
     )
 
 
+def resident_kb(pid: int) -> int | None:
+    """The game's resident set size, as a profile-independent measure of boot progress.
+
+    Both halves of the autoload-versus-vanilla comparison load the same game, the same archives and
+    the same menu resources, so the curve of what the process has paged in is the same work in both
+    -- unlike any oracle inside our dll, which only one half has. If the two curves are offset in
+    time, the boot itself is slower with the dll loaded, and that offset is the part of the gap that
+    has nothing to do with the autoload logic.
+    """
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text(encoding="utf-8").splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def cpu_ticks(pid: int) -> int | None:
+    """Total user + system jiffies the process has burned, across all its threads.
+
+    Separates "our code is doing work" from "our code is waiting". A stretch where the game is
+    pinned near a full core is spending the time computing; a stretch where it burns almost nothing
+    is blocked on something, and a wait is a different fix from a slow routine. `utime` and `stime`
+    are fields 14 and 15 of `/proc/<pid>/stat`, counted after the comm field, which is parenthesised
+    and may itself contain spaces -- hence the split on the last `)` rather than on whitespace.
+    """
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = raw[raw.rfind(")") + 2 :].split()
+        return int(fields[11]) + int(fields[12])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def read_telemetry(path: Path | None, epoch: float) -> dict | None:
     """The run's telemetry, or `None` when the file on disk belongs to an earlier run.
 
@@ -142,6 +177,9 @@ def watch(
     base: int | None = None
     player_since: float | None = None
     deadline = epoch + max_seconds
+    # Each entry is `[seconds since launch, resident kb, cumulative user+system jiffies]`.
+    rss_trace: list[list[float]] = []
+    record["rss_trace"] = rss_trace
     flush()
 
     while time.time() < deadline:
@@ -169,6 +207,10 @@ def watch(
                     stamp("t_player_settled")
             else:
                 player_since = None
+        if pid is not None:
+            kb = resident_kb(pid)
+            if kb is not None:
+                rss_trace.append([round(time.time() - epoch, 2), kb, cpu_ticks(pid) or 0])
         telemetry = read_telemetry(telemetry_path, epoch)
         if telemetry is not None:
             record["telemetry_present"] = True
