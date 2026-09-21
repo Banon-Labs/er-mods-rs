@@ -3,9 +3,14 @@
 
 The signal script scans the last-completed assistant turn of the session transcript and returns a
 tagged marker:
-  * AUTH:<phrase>         -- Category A authority-coded agreement (banned outright)
-  * ACKUNBACKED:<phrase>  -- Category B feedback-acknowledgement prose with no bd-memory in the turn
-  * ""                    -- clean (Category A absent; Category B absent or backed by a bd memory)
+  * AUTH:<phrase>  -- Category A authority-coded agreement
+  * ACK:<phrase>   -- Category B feedback-acknowledgement prose
+  * ""             -- clean
+
+Both classes are banned outright. Category B carried an exception until 2026-09-20 -- the prose was
+allowed when the same turn recorded a `bd remember` -- and the cases below pinned it. The user
+removed it: the exception made a memory the price of replying to a correction, so corrections
+turned into memories instead of behaviour.
 
 We drive it against crafted transcript JSONL under a temporary home so the script's
 `~/.claude/projects/<cwd-key>/*.jsonl` discovery resolves to our fixture, then assert the tag.
@@ -79,25 +84,27 @@ def expect(name: str, events: list[dict], predicate, describe: str) -> None:
 
 
 def main() -> int:
-    # (1) Ack phrase in a turn without a bd-memory recording -> ACKUNBACKED.
+    # (1) Ack phrase -> ACK.
     expect(
-        "ack-unbacked",
+        "ack",
         [user("Stop doing X."), assistant_text("Point taken. I'll adjust the approach.")],
-        lambda o: o.startswith("ACKUNBACKED:"),
-        "expected ACKUNBACKED for an unbacked acknowledgement",
+        lambda o: o.startswith("ACK:"),
+        "expected ACK for feedback-acknowledgement prose",
     )
 
-    # (2) Same ack with a bd-memory recording in the same turn -> empty (allowed).
+    # (2) The same ack beside a bd-memory recording is still ACK. This asserted empty until
+    # 2026-09-20, and it is the case the removed exception existed for: writing a memory is not a
+    # licence to announce that you received the correction.
     expect(
-        "ack-backed",
+        "ack-with-a-memory-is-still-banned",
         [
             user("Stop doing X."),
             assistant_text("Point taken. Recording it."),
             tool_result(),
             assistant_bd_remember(),
         ],
-        lambda o: o == "",
-        "expected empty when the ack turn recorded a bd memory",
+        lambda o: o.startswith("ACK:"),
+        "expected ACK even when the turn recorded a bd memory",
     )
 
     # (3) Category A authority-coded agreement -> AUTH regardless of a bd-memory recording.
@@ -118,7 +125,9 @@ def main() -> int:
         "quoted-only-ack",
         [
             user("Explain the ban."),
-            assistant_text('The phrase "Point taken" is banned unless it is backed by a recording.'),
+            assistant_text(
+                'The phrase "Point taken" is banned outright; quoting it is not using it.'
+            ),
         ],
         lambda o: o == "",
         "expected empty when the ack appears only inside double quotes",
@@ -132,8 +141,8 @@ def main() -> int:
             assistant_text("Point taken."),
             assistant_text("Here is the analysis of the offset table."),
         ],
-        lambda o: o.startswith("ACKUNBACKED:"),
-        "expected ACKUNBACKED from a whole-turn scan when the ack is not the last block",
+        lambda o: o.startswith("ACK:"),
+        "expected ACK from a whole-turn scan when the ack is not the last block",
     )
 
     # (6) Interrupted turn: a new user prompt after the ack -> the prior turn is still detected.
@@ -144,8 +153,8 @@ def main() -> int:
             assistant_text("Got it. Proceeding."),
             user("Actually, also do Y."),
         ],
-        lambda o: o.startswith("ACKUNBACKED:"),
-        "expected ACKUNBACKED on the prior (interrupted) turn",
+        lambda o: o.startswith("ACK:"),
+        "expected ACK on the prior (interrupted) turn",
     )
 
     # (7) Clean technical prose with incidental words -> empty (no false positive).
