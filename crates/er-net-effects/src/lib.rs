@@ -24,10 +24,16 @@ mod hold_repeat;
 mod input_suppression;
 #[cfg(windows)]
 mod log;
+// Ungated on purpose: pure file format for the hand-marked research list, so its tests run on
+// the host.
+mod marked_effects;
 // Ungated on purpose: pure overlay geometry, so its tests run on the host.
 mod overlay_layout;
 #[cfg(windows)]
 mod present_overlay;
+// Ungated on purpose: the three-term refusal decision is pure, so its tests run on the host.
+// The session read and the embedded table live in its `runtime` submodule, which is gated.
+mod pvp_gate;
 // Ungated on purpose: pure keyboard-gate rules, so its tests run on the host.
 mod selector_gate;
 // Ungated on purpose: pure config-list editing, so its tests run on the host.
@@ -133,8 +139,7 @@ fn install(hmodule_raw: usize) {
     log::reset_log_file();
     crash_telemetry::install_handler();
     net_effects_log(format_args!(
-        "er-net-effects attach: standalone keyboard-controlled SpEffect selector; network_sync={} config={}",
-        config::runtime_config().network_sync,
+        "er-net-effects attach: standalone keyboard-controlled SpEffect selector; config={}",
         config::runtime_config().config_path.display()
     ));
     effects::ensure_effect_hotkey_hook();

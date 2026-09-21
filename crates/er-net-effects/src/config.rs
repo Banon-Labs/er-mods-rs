@@ -18,7 +18,12 @@ const CONFIG_FILE_NAME: &str = "er-net-effects.toml";
 const DEFAULT_CONFIG_HEAD: &str = r#"# er-net-effects standalone DLL configuration.
 # The DLL is optional; include er_net_effects.dll as its own ME3 native when
 # you want keyboard-controlled network-synced SpEffect application.
-network_sync = true
+#
+# There is no `network_sync` setting. Effects always sync. Which effects may reach
+# another player is decided by the peer-safe list compiled into the DLL -- 810 purely
+# cosmetic rows, and nothing else, whenever somebody else is in your session. An
+# off switch for syncing was an off switch for that restriction, held by the one
+# person it restrains, so it is gone rather than defaulted.
 # Start with the selector overlay bar shown. Press Alt+Numpad0, Alt+0, or
 # Alt+Insert to hide/show it while in-game -- or whatever you set
 # `selector_show_hide_key` to at the bottom of this file.
@@ -39,13 +44,17 @@ command_file = "er-net-effects-command.txt"
 telemetry_file = "er-net-effects-telemetry.json"
 catalog_dir = "er-net-effect-catalogs"
 master_catalog_file = "er-net-effect-master-catalog.json"
+# Where the mark key writes the ids you marked while scrolling. A research list, not a setting:
+# the DLL never reads it back as a restriction. Written in the catalog format, so a copy dropped
+# into the catalog directory becomes a catalog of only what you marked.
+marked_effects_file = "er-net-effects-marked.jsonc"
 # Which effects the selector offers, by duration.
 #
 #   include  every effect (the default, and the behaviour before this setting existed)
 #   exclude  hide effects whose SpEffectParam duration is -1
 #   only     offer ONLY those
 #
-# A -1 duration never expires. That matters with network_sync on: the game broadcasts an effect
+# A -1 duration never expires. That matters because effects always sync: the game broadcasts one
 # when it is applied but has no message for removing one, so an effect you put on other players
 # ends for them only when its duration runs out -- and a -1 never does, leaving it on them until
 # they die or reload. 516 of the 842 entries in the shipped visuals-only catalog are -1.
@@ -59,7 +68,6 @@ stacked_effects = []
 #[derive(Clone, Debug)]
 pub(crate) struct RuntimeConfig {
     pub(crate) config_path: PathBuf,
-    pub(crate) network_sync: bool,
     pub(crate) overlay_visible_on_start: bool,
     pub(crate) hotkeys_file: PathBuf,
     pub(crate) selected_effect_file: PathBuf,
@@ -69,6 +77,8 @@ pub(crate) struct RuntimeConfig {
     pub(crate) telemetry_file: PathBuf,
     pub(crate) catalog_dir: PathBuf,
     pub(crate) master_catalog_file: PathBuf,
+    /// Where the mark key writes the hand-marked id list -- see [`crate::marked_effects`].
+    pub(crate) marked_effects_file: PathBuf,
     /// Which effects the selector offers, by duration -- see [`PermanentEffects`].
     pub(crate) permanent_effects: PermanentEffects,
     /// Effects that stay applied regardless of the selector cursor, edited in-game with
@@ -87,9 +97,6 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             config_path: PathBuf::from(CONFIG_FILE_NAME),
-            // This standalone DLL is intentionally the network-effects package;
-            // users can set `network_sync = false` to preserve local-only behavior.
-            network_sync: true,
             // Default visible because the DLL is optional and the selector UI is the primary
             // confirmation that it loaded and is listening for keyboard control.
             overlay_visible_on_start: true,
@@ -101,6 +108,7 @@ impl Default for RuntimeConfig {
             telemetry_file: PathBuf::from("er-net-effects-telemetry.json"),
             catalog_dir: PathBuf::from("er-net-effect-catalogs"),
             master_catalog_file: PathBuf::from("er-net-effect-master-catalog.json"),
+            marked_effects_file: PathBuf::from("er-net-effects-marked.jsonc"),
             // Absent from the file means every effect stays selectable, so an existing config
             // keeps behaving exactly as it did.
             permanent_effects: PermanentEffects::Include,
@@ -278,9 +286,8 @@ pub(crate) fn init_runtime_config() {
         net_effects_log(format_args!("runtime-config: {error}"));
     } else {
         net_effects_log(format_args!(
-            "runtime-config: loaded {} network_sync={} overlay_visible_on_start={} hotkeys={} catalogs={} permanent_effects={} stacked_effects={:?}",
+            "runtime-config: loaded {} overlay_visible_on_start={} hotkeys={} catalogs={} permanent_effects={} stacked_effects={:?}",
             config.config_path.display(),
-            config.network_sync,
             config.overlay_visible_on_start,
             config.hotkeys_file.display(),
             config.catalog_dir.display(),
@@ -342,10 +349,17 @@ fn load_runtime_config() -> RuntimeConfig {
         let key = key.trim();
         let value = value.trim();
         match key {
-            "network_sync" => match parse_bool(value) {
-                Some(value) => config.network_sync = value,
-                None => errors.push(format!("line {line_number}: invalid bool for network_sync")),
-            },
+            // Accepted and ignored rather than reported as unknown. Every config file written
+            // before this setting was removed carries the line, and telling those players their
+            // file is broken would be false: nothing about their setup changed except that
+            // effects now always sync, restricted to the peer-safe list when anyone else is
+            // present. The line is answered once in the log so a player who set it to `false`
+            // learns why it stopped doing anything.
+            "network_sync" => net_effects_log(format_args!(
+                "runtime-config: line {line_number}: `network_sync` was removed and is ignored. \
+                 Effects always sync; the peer-safe list decides which ones may reach another \
+                 player. Delete the line to silence this."
+            )),
             "overlay_visible_on_start" => match parse_bool(value) {
                 Some(value) => config.overlay_visible_on_start = value,
                 None => errors.push(format!(
@@ -360,6 +374,7 @@ fn load_runtime_config() -> RuntimeConfig {
             "telemetry_file" => config.telemetry_file = parse_path(value),
             "catalog_dir" => config.catalog_dir = parse_path(value),
             "master_catalog_file" => config.master_catalog_file = parse_path(value),
+            "marked_effects_file" => config.marked_effects_file = parse_path(value),
             "stacked_effects" => config.stacked_effects = stacked_config::parse_id_list(value),
             "permanent_effects" => match PermanentEffects::parse(&unquote(value)) {
                 Some(mode) => config.permanent_effects = mode,
