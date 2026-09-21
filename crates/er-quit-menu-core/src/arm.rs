@@ -38,6 +38,9 @@ use core::sync::atomic::Ordering;
 use crate::host::append_autoload_debug;
 use crate::row_cloner::{ArmError, QuitRowActions, RowSet};
 
+/// The rows the Quit tab carries before anything clones one: `Save Game` and `Return to Desktop`.
+const VANILLA_QUIT_ROWS: usize = 2;
+
 /// What a standalone arm managed to install. Every field false is a load that will show no rows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StandaloneArm {
@@ -159,6 +162,24 @@ pub unsafe fn arm_standalone(rows: RowSet, actions: QuitRowActions) -> Standalon
         profile_select: false,
         profile_select_picker_key: rows.load_character || browse_rows_armed,
     };
+    // The grid has to be sized to the tab before the movie is loaded, because the derivation is
+    // cached on first load and the count is read there. A row with no cell to occupy never
+    // reaches the screen: measured 2026-09-20, a live run with `save-game` listed cloned the row
+    // and reported `cols=2 rows=3 navigable_cells=6 item_count=7`.
+    //
+    // The vanilla pair is always on the tab and is never cloned, so it is the floor every count
+    // is built on rather than something a row set can remove.
+    let cloned_rows = [
+        rows.load_character,
+        rows.load_character_from_file,
+        rows.load_build_from_url,
+        rows.generate_build_link,
+        rows.save_game_as,
+    ]
+    .into_iter()
+    .filter(|armed| *armed)
+    .count();
+    crate::gfx_swap::request_quit_grid_items(VANILLA_QUIT_ROWS + cloned_rows);
     // First of the installs, because it is the only one with a deadline: the movie is served the
     // first time the Quit tab is opened, and a swap registered after that shows a vanilla two-cell
     // grid until the panel is rebuilt.
