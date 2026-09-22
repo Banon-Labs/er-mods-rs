@@ -567,6 +567,50 @@ def check_decisions() -> list[str]:
     return failures
 
 
+# A command long enough that the engine's wasm module runs out of linear memory. Built rather
+# than written out, because the length is the point and a literal this size would be unreadable.
+#
+# The failure it pins is the worst one this file exists for: an evaluation that runs out of
+# memory prints `{}` at exit 0, which is indistinguishable from "every policy allowed you" --
+# so the engine going down reads as permission. bd er-effects-rs-xktj recorded four of these in
+# one child session, each classified by the agent that hit it as a guard blocking artifact
+# writes, when what had actually happened is that no guard answered at all.
+#
+# 300,000 bytes is about twice the 127,735 the ceiling survives on this policy set (measured
+# 2026-09-22), so this stays a genuine abort if the engine gets more efficient, and the guard
+# keeps its meaning if it does not.
+ABORTING_COMMAND = "cat > handoffs/audit.md <<'EOF'\n" + (
+    "- `crates/er-x/src/f.rs`: the 'host' & \"invader\" pair | one line of an audit\n" * 3600
+) + "EOF"
+
+
+def check_abort_is_not_an_allow() -> list[str]:
+    """An evaluation the engine cannot finish must refuse, not fall silent."""
+    code, stdout, raw_stderr = run("default", ABORTING_COMMAND)
+    # `run` hands stderr back as bytes, because one of its other assertions is about how many
+    # of them there are.
+    stderr = raw_stderr.decode("utf-8", "replace")
+    failures: list[str] = []
+    if "aborted execution" not in stderr and "Policy evaluation failed" not in stderr:
+        # Not a failure of the shim: the engine got better, or the policy set got cheaper, and
+        # this case no longer reaches the abort it is here to describe. Say so rather than
+        # asserting on a condition that is no longer reachable.
+        print(
+            "[test-cupcake-hook-shim] note: the engine evaluated a "
+            f"{len(ABORTING_COMMAND)}-byte command without aborting; "
+            "raise ABORTING_COMMAND or retire this case"
+        )
+        return failures
+    if code != 0:
+        failures.append(f"abort case: shim exited {code}, which loses the decision on stdout")
+    if verdict(stdout) != "deny":
+        failures.append(
+            "abort case: the engine aborted and the shim did not deny -- "
+            f"got {verdict(stdout)!r}, so a wasm out-of-memory reads as an allow"
+        )
+    return failures
+
+
 def print_table() -> int:
     """Before (raw event straight to cupcake) beside after (through the shim)."""
     width = max(len(case.name) for case in DECISION_CASES)
@@ -598,7 +642,7 @@ def main() -> int:
     if args.table:
         return print_table()
 
-    failures = check_modes() + check_rewrites() + check_decisions()
+    failures = check_modes() + check_rewrites() + check_decisions() + check_abort_is_not_an_allow()
     if failures:
         for failure in failures:
             print(f"[test-cupcake-hook-shim] FAIL: {failure}")

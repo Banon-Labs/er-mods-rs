@@ -86,7 +86,7 @@ halt contains decision if {
 	# text of its own, and neutralises anchors inside quoted spans so that a
 	# commit message or a bd memory QUOTING this command is not read as running
 	# it.
-	some text in commands.executed_texts(input.tool_input.command)
+	some text in commands.input_executed_texts
 
 	# Per SEGMENT, so a destructive verb in one statement cannot borrow a guard
 	# path operand from an unrelated one: `rm -f /tmp/x && opa test .cupcake/`

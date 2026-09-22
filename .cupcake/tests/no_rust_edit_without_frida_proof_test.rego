@@ -447,3 +447,93 @@ test_a_frida_verdict_still_opens_any_crate if {
 	count(guard.deny) == 0 with input as edit_event("crates/er-save-game-row/src/lib.rs", PROVEN)
 	count(guard.deny) == 0 with input as edit_event("crates/er-quickload/src/lib.rs", PROVEN)
 }
+
+# --- the same edit, typed into the Bash tool (bd er-effects-rs-wuij) ----------
+#
+# The rule routed on the write TOOLS and denied on `tool_input.file_path`; a Bash call has
+# no such key, so the whole rule was undefined for it and every shell spelling of the edit
+# went through. The first case below is the exact loop that did it.
+
+bash_event(cmd, signal) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {"command": cmd},
+	"signals": {"frida_evidence": signal},
+}
+
+test_deny_the_sed_loop_that_rewrote_four_crate_sources if {
+	denied(bash_event(
+		"for c in er-refill-all er-enemynpc-effects er-npc-possess er-invasion-path; do sed -i 's/^const DEFAULT_CONFIG_TOML/pub(crate) const DEFAULT_CONFIG_TOML/' crates/$c/src/config.rs; done",
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_deny_heredoc_redirect_into_a_crate_source if {
+	denied(bash_event("cat > crates/er-title-flow/src/lib.rs <<'EOF'\npub fn x() {}\nEOF", UNPROVEN_NOTHING))
+}
+
+test_deny_append_redirect_with_no_space if {
+	denied(bash_event("echo 'pub fn x() {}' >>crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_tee_into_a_crate_source if {
+	denied(bash_event("echo 'pub fn x() {}' | tee crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_checkout_of_a_crate_source if {
+	denied(bash_event("git checkout -- crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_copy_onto_a_crate_source if {
+	denied(bash_event("cp -f /tmp/patched.rs crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_removal_of_a_crate_source if {
+	denied(bash_event("rm -f crates/er-title-flow/src/constants_moved.rs", UNPROVEN_NOTHING))
+}
+
+# --- and every READ of the same file stays free ------------------------------
+#
+# A gate whose purpose is to make an agent go and look must never be the thing that stops
+# it looking. This is the Bash half of the reasoning that put `Read` in `read_only_tools`.
+
+test_allow_sed_range_read if {
+	not denied(bash_event("sed -n '1,40p' crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_cat_of_a_crate_source if {
+	not denied(bash_event("cat crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_git_diff_of_a_crate_source if {
+	not denied(bash_event("git diff crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_copying_a_crate_source_somewhere_else if {
+	not denied(bash_event("cp crates/er-title-flow/src/lib.rs /tmp/before.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_a_command_that_merely_names_a_crate_source if {
+	not denied(bash_event(
+		`git commit -m "fix(title-flow): sed -i rewrote crates/er-title-flow/src/lib.rs before this"`,
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_allow_writing_a_non_rust_file_under_crates if {
+	not denied(bash_event("cat > crates/er-title-flow/Cargo.toml <<'EOF'\n[package]\nEOF", UNPROVEN_NOTHING))
+}
+
+test_allow_writing_a_rust_file_outside_crates if {
+	not denied(bash_event("sed -i 's/a/b/' build-support/prologue_build.rs", UNPROVEN_NOTHING))
+}
+
+# --- and a measurement opens the Bash spelling too, with the same scope -------
+
+test_allow_the_sed_loop_with_a_frida_verdict if {
+	not denied(bash_event("sed -i 's/a/b/' crates/er-title-flow/src/lib.rs", PROVEN))
+}
+
+test_deny_the_sed_loop_when_telemetry_licensed_a_different_crate if {
+	denied(bash_event("sed -i 's/a/b/' crates/er-title-flow/src/lib.rs", PROVEN_TELEMETRY))
+}

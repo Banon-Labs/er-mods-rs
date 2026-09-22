@@ -27,7 +27,7 @@ import data.cupcake.system.commands
 # a vendored Cupcake builtin, and its own false-positive surface -- an unanchored
 # `contains(cmd, "--no-verify")` that fires on a doc, commit message or heredoc
 # merely NAMING the flag -- is a separate defect, filed rather than changed here.
-no_verify_scan_texts := commands.executed_texts(input.tool_input.command) | {input.tool_input.command}
+no_verify_scan_texts := commands.input_executed_texts | {input.tool_input.command}
 
 # Block git commands that bypass verification hooks
 deny contains decision if {
@@ -215,7 +215,7 @@ contains_hook_disable(cmd) if {
 hooks_dir := ".git/hooks"
 
 hook_scan_statements := {statement |
-	some text in commands.executed_texts(input.tool_input.command)
+	some text in commands.input_executed_texts
 	some statement in commands.shell_statements(lower(text))
 }
 

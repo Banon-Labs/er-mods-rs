@@ -203,6 +203,10 @@ ORPHANED_REGO_SUITES = [
         ".cupcake/tests/monitor_rate_limit_test.rego",
     ],
     [
+        # `commands.rego` is listed because the policy reads the shared command-slot
+        # decomposition from it. An orphaned suite compiles only the files named here, so a
+        # missing dependency is nine `undefined function` errors rather than a failing test.
+        ".cupcake/system/commands.rego",
         ".cupcake/policies/claude/teardown_must_relaunch.rego",
         ".cupcake/tests/teardown_must_relaunch_test.rego",
     ],
@@ -466,9 +470,15 @@ def main() -> int:
         # the `///` satisfied the root-path test. Verbs are now required to stand
         # in command position; the deny cases below pin that this did not cost the
         # rule anything that actually runs.
+        # Written to `build-support/`, not `crates/`, since 2026-09-22: it is still a Rust file
+        # authored through a heredoc, which is what this case is about, and the Frida gate now
+        # sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it (bd
+        # er-effects-rs-wuij). Keeping the old path would have tested that guard instead of
+        # this one, and would have made the case's verdict depend on whether this checkout
+        # happens to carry a measurement.
         PolicyCase(
             "allow-rust-doc-comment-heredoc-with-prose-verb",
-            "cat > crates/demo/src/lib.rs <<'EOF'\n"
+            "cat > build-support/demo.rs <<'EOF'\n"
             "/// Install the detour into the game image.\n"
             "///\n"
             "/// Truncate the log first; the caller moves the old one aside.\n"
@@ -1993,6 +2003,104 @@ def main() -> int:
         PolicyCase(
             "allow-commit-message-naming-the-check-script",
             'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
+            True,
+        ),
+    ])
+
+    # --- payload versus command (bd er-effects-rs-ak3q, bd er-effects-rs-if5l) -------------
+    #
+    # Three guards matched the whole command string, so any tool taking prose that quotes
+    # another command's name tripped them. All three blocks below happened in production on
+    # 2026-09-21, and the cost was not the block: a commit message had to be reworded to say
+    # "a repo-relative teardown command" instead of naming the file, and the issue reporting
+    # it had to be filed through a body file written by a separate command in order to exist.
+    # Driven through the real engine because `opa test` and the live shim disagree about
+    # whitespace, and the shim is where the quoted-span reading actually happens.
+    cases.extend([
+        PolicyCase(
+            "allow-commit-message-naming-the-teardown-script",
+            'git commit -m "fix(guard): teardown_must_relaunch fires on scripts/er-teardown.py in prose"',
+            True,
+        ),
+        PolicyCase(
+            "allow-issue-body-naming-the-teardown-script",
+            'bd create --description "scripts/er-teardown.py must be paired with a launch"',
+            True,
+        ),
+        PolicyCase(
+            "allow-memory-body-quoting-a-python-script-run",
+            'bd remember --key trace-tsv "measured with python3 scripts/er-fd-trace.py --tsv ... 12 rows"',
+            True,
+        ),
+        PolicyCase(
+            "allow-committed-script-with-a-dotdot-operand",
+            "python3 scripts/er-frida-evidence.py --check --out ../trace.tsv",
+            True,
+        ),
+        # ...and every one of those guards still reaches a real invocation.
+        PolicyCase(
+            "deny-teardown-chained-with-other-work",
+            "python3 scripts/er-teardown.py; cargo build -p er-quickload",
+            False,
+            "teardown that does not relaunch",
+        ),
+        PolicyCase(
+            "allow-teardown-that-is-the-whole-command",
+            "python3 scripts/er-teardown.py --reason policy-regression",
+            True,
+        ),
+        PolicyCase(
+            "deny-inline-python-file-write",
+            "python3 -c \"open('notes.md','w').write('x')\"",
+            False,
+            "python file write from Bash",
+        ),
+    ])
+
+    # --- the Bash spelling of a Rust edit (bd er-effects-rs-wuij) --------------------------
+    #
+    # The Frida gate routed on the write tools and denied on `tool_input.file_path`, which a
+    # Bash call does not have, so the rule was undefined for every shell spelling of the edit.
+    # The first case is the loop that rewrote four crate sources with no measurement behind it
+    # on 2026-09-21, minutes before the Edit tool was refused for the same change.
+    #
+    # `CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE` does not reach this guard -- it reads the
+    # `frida_evidence` signal, which measures this checkout. The deny cases are safe to assert
+    # unconditionally only because a commit spends the evidence, so a tree with an unproven
+    # verdict is the normal state; the allow cases below deliberately avoid depending on the
+    # verdict at all, by naming paths the rule does not cover.
+    cases.extend([
+        PolicyCase(
+            "deny-bash-sed-in-place-on-a-crate-source",
+            "for c in er-refill-all er-npc-possess; do sed -i 's/^const A/pub(crate) const A/' crates/$c/src/config.rs; done",
+            False,
+            "no Frida measurement behind it",
+        ),
+        PolicyCase(
+            "deny-bash-heredoc-redirect-into-a-crate-source",
+            "cat > crates/er-title-flow/src/lib.rs <<'EOF'\npub fn x() {}\nEOF",
+            False,
+            "no Frida measurement behind it",
+        ),
+        PolicyCase(
+            "deny-bash-git-checkout-of-a-crate-source",
+            "git checkout -- crates/er-title-flow/src/lib.rs",
+            False,
+            "no Frida measurement behind it",
+        ),
+        PolicyCase(
+            "allow-bash-read-of-a-crate-source",
+            "sed -n '1,40p' crates/er-title-flow/src/lib.rs",
+            True,
+        ),
+        PolicyCase(
+            "allow-bash-diff-of-a-crate-source",
+            "git diff crates/er-title-flow/src/lib.rs",
+            True,
+        ),
+        PolicyCase(
+            "allow-bash-write-of-a-non-rust-file-under-crates",
+            "cat > crates/er-title-flow/Cargo.toml <<'EOF'\n[package]\nEOF",
             True,
         ),
     ])

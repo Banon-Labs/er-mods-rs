@@ -68,7 +68,7 @@ deny contains decision if {
 	}
 }
 
-executed_texts := commands.executed_texts(input.tool_input.command)
+executed_texts := commands.input_executed_texts
 
 any_executed_commit if {
 	some text in executed_texts
@@ -76,7 +76,7 @@ any_executed_commit if {
 }
 
 opaque_commit_payload if {
-	commands.unparsed_shell_payload(input.tool_input.command)
+	commands.input_unparsed_shell_payload
 	lowered := lower(input.tool_input.command)
 	contains(lowered, "git")
 	contains(lowered, "commit")
