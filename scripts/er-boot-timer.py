@@ -108,6 +108,33 @@ def resident_kb(pid: int) -> int | None:
     return None
 
 
+def io_counters(pid: int) -> tuple[int, int, int, int] | None:
+    """`(syscr, syscw, read_bytes, write_bytes)` from `/proc/<pid>/io`.
+
+    The two syscall counts and the two byte counts answer different questions and both are needed.
+    A process can issue a million writes that never reach a platter -- the page cache absorbs them,
+    `write_bytes` barely moves, and the cost was entirely in kernel transitions. It can equally
+    issue one read that costs a hundred milliseconds of actual disk. Recording both is what lets a
+    redundant-io claim say which kind it was instead of picking whichever number is larger.
+
+    `read_bytes`/`write_bytes` are what the block layer actually moved, so cached reads do not
+    appear in them and a file rewritten every frame shows up in `syscw` long before `write_bytes`.
+    """
+    try:
+        values: dict[str, int] = {}
+        for line in Path(f"/proc/{pid}/io").read_text(encoding="utf-8").splitlines():
+            name, _, value = line.partition(":")
+            values[name.strip()] = int(value)
+        return (
+            values.get("syscr", 0),
+            values.get("syscw", 0),
+            values.get("read_bytes", 0),
+            values.get("write_bytes", 0),
+        )
+    except (OSError, ValueError):
+        return None
+
+
 def cpu_ticks(pid: int) -> int | None:
     """Total user + system jiffies the process has burned, across all its threads.
 
@@ -210,7 +237,10 @@ def watch(
         if pid is not None:
             kb = resident_kb(pid)
             if kb is not None:
-                rss_trace.append([round(time.time() - epoch, 2), kb, cpu_ticks(pid) or 0])
+                io = io_counters(pid) or (0, 0, 0, 0)
+                rss_trace.append(
+                    [round(time.time() - epoch, 2), kb, cpu_ticks(pid) or 0, *io]
+                )
         telemetry = read_telemetry(telemetry_path, epoch)
         if telemetry is not None:
             record["telemetry_present"] = True
