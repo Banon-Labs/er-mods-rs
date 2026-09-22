@@ -44,15 +44,22 @@
 //! where they want them -- exiling them to the box to tidy a sort order would be a much larger
 //! change to the character than the import itself.
 //!
+//! # One entry per copy the build lists
+//!
+//! A build names copies and an inventory holds entries, and until 2026-09-22 this pass resolved
+//! every listing of an item to the lowest index holding it. A build listing seventy-five Swords of
+//! Night stamped one entry seventy-five times, left the other seventy-four where they were, and
+//! read that one entry seventy-five times in the order check -- which could then never report the
+//! build in order, so the pass never stopped. `er_build_import_core::claim` is where each listing
+//! is given an entry of its own, and its header carries the measurement.
+//!
 //! # What it will not do
 //!
-//! An entry whose store fails is reported by name rather than counted, and nothing else can go
-//! wrong: there is no transfer to be half-completed and no copy to be confused with another.
+//! An entry whose store fails is reported by name rather than counted, and no transfer can be left
+//! half-completed, because no item moves.
 
-use std::collections::BTreeMap;
-
+use er_build_import_core::claim::Claims;
 use er_build_import_core::plan::Grant;
-use er_build_import_core::sweep::identity;
 use er_game_base::rva::GET_EQUIP_INVENTORY_DATA_RVA;
 
 use crate::storage::Storage;
@@ -60,50 +67,24 @@ use crate::storage::Storage;
 /// `CS::EquipGameData::GetEquipInventoryData(egd) -> EquipInventoryData*`.
 type GetInventoryFn = unsafe extern "system" fn(usize) -> usize;
 
-/// The inventory index holding each item the build names, keyed by [`identity`].
+/// Every inventory entry a grant could be given, from one walk of the carried inventory.
 ///
-/// # Why this is not `Storage::carried_index(grant.item_id)`
+/// The rules for handing them out are [`Claims`], in the core crate beside the sweep that shares
+/// their vocabulary, where they can be held to their invariants without a game attached. This is
+/// the half that needs one: the walk, which also replaces one native call per item.
 ///
-/// Because that question is asked in the wrong vocabulary, and the wrong answer is silent.
-/// `Grant::item_id` for an armament is the base row plus its affinity and nothing else: the
-/// upgrade level is not in it, because the grant pass computes the level separately and mints at
-/// `armament_item_id(grant.item_id, level)`. So a character holding a Bone Bow at +25 holds item
-/// `40500025` while the grant that names it says `40500000`, and an inventory lookup for the
-/// grant's id finds nothing at all.
+/// # Safety
 ///
-/// The old loop answered that with `continue` -- not counted as attempted, not counted as
-/// declined, and skipped again by the order check, so the pass reported `160/160 ... in the
-/// build's order` over the subset that happened to resolve. Reported 2026-09-11: of 45 armaments
-/// in one build, 44 came out in the build's order and the Bone Bow sat at the very front of the
-/// inventory, below items the pass had never touched. It was the one the lookup missed.
-///
-/// [`identity`] is the rule the sweep already uses for "these two are the same item to a player",
-/// so folding the affinity and the level away here makes both passes agree about what they are
-/// looking at. One walk of the inventory also replaces one native call per item.
-fn entries_by_identity(storage: &Storage) -> BTreeMap<u32, i32> {
-    let mut out: BTreeMap<u32, i32> = BTreeMap::new();
-    // Safety: game thread, read only -- the caller's contract covers the walk.
-    for entry in unsafe { storage.carried_entries() } {
-        if entry.quantity <= 0 {
-            continue;
-        }
-        // The lowest index wins, which is the copy `GetItemInventoryIdx` would have named, so a
-        // build naming one of several copies still reorders the one every other pass acts on.
-        out.entry(identity(entry.item_id))
-            .and_modify(|index| *index = (*index).min(entry.index))
-            .or_insert(entry.index);
-    }
-    out
-}
-
-/// The inventory index of the entry satisfying `grant`, under any id the game files it as.
-///
-/// The grant's own id first, then its alternates, because a name resolving to several rows is the
-/// other way the character can hold the item under a number the plan does not mention.
-fn index_for(held: &BTreeMap<u32, i32>, grant: &Grant) -> Option<i32> {
-    std::iter::once(grant.item_id)
-        .chain(grant.also_known_as.iter().copied())
-        .find_map(|id| held.get(&identity(id)).copied())
+/// Game thread; the caller's contract covers the walk.
+unsafe fn read_claims(storage: &Storage) -> Claims {
+    // Safety: game thread, read only -- delegated to the caller's contract.
+    let entries = unsafe { storage.carried_entries() };
+    Claims::from_entries(
+        entries
+            .into_iter()
+            .filter(|entry| entry.quantity > 0)
+            .map(|entry| (entry.index, entry.item_id)),
+    )
 }
 
 /// What one reorder pass did.
@@ -123,7 +104,26 @@ pub struct ReorderOutcome {
     /// it used to be a bare `continue`: not attempted, not declined, and skipped again by the
     /// order check, so the pass scored itself over the items it happened to resolve and printed
     /// `160/160 ... in the build's order` while one of them sat at the front of the inventory.
+    ///
+    /// One entry per label however many times the build names it, because a build listing nine
+    /// copies of something absent is one item to go and find, not nine.
     pub not_held: Vec<String>,
+    /// Mentions of an item the character holds fewer copies of than the build lists.
+    ///
+    /// A build names copies and an inventory holds entries. The two agree for an armament, which
+    /// the grant pass mints one of per listing, and they do not for a talisman or a piece of
+    /// armour: `plan::plan` grants those a literal one each, so a build listing an item five times
+    /// leaves the character holding it once. The first mention claims that entry and the rest land
+    /// here.
+    ///
+    /// Not a failure of this pass -- there is no second entry to put anywhere -- but the only
+    /// place the shortfall is counted at all. The grant ledger cannot see it: it asks whether the
+    /// character holds at least the quantity each grant names, and one entry answers yes to every
+    /// mention of it. Measured on build `b36964c2314bc5`, 2026-09-22: 493 of 493 grants confirmed,
+    /// while that build lists 80 talismans over 72 distinct names and 80 pieces of armour over 39,
+    /// and the eviction pass then walked 426 gear entries against the 475 the build lists. The 49
+    /// absent are these.
+    pub repeats: usize,
     /// `(label, deposited, retrieved)` for any item that did not come all the way back.
     ///
     /// Always empty in a healthy run, and the one failure here that costs the player something
@@ -162,13 +162,15 @@ impl ReorderOutcome {
         }
         format!(
             "REORDER: {}/{} item(s) re-acquired into the build's order ({} had to be taken off \
-             first, {} declined, {} stranded in the box, {} the character does not hold under any \
-             id{}); the {} item(s) that could be read back are {}",
+             first, {} declined, {} stranded in the box, {} further mention(s) of an item the \
+             character holds fewer copies of than the build lists, {} the character does not hold \
+             under any id{}); the {} item(s) that could be read back are {}",
             self.restamped,
             self.attempted,
             self.unequipped,
             self.declined.len(),
             self.stranded.len(),
+            self.repeats,
             self.not_held.len(),
             if self.not_held.is_empty() {
                 String::new()
@@ -238,23 +240,19 @@ pub unsafe fn apply_build_order(
         return outcome;
     };
 
-    // One entry per distinct item id, in the order the build lists it. The build can name the same
-    // id twice -- two copies of an armament that differ only by their ash, a consumable that
-    // appears in both the tools list and the quickbar -- and recycling it twice would move it out
-    // of the order its first appearance earned.
-    let mut ordered: Vec<&Grant> = Vec::with_capacity(grants.len());
-    for grant in grants {
-        if !ordered.iter().any(|seen| seen.item_id == grant.item_id) {
-            ordered.push(grant);
-        }
-    }
-
     // Ask before moving anything. A first import onto a character who owned none of the build
     // leaves it already in order -- the grant walks the build in order and the items arrive in
     // that order -- and this pass would otherwise put every one of them through the storage box
     // to arrive at the arrangement they were already in. Two transfers per item, for nothing.
+    //
+    // Getting this answer wrong is not a wasted pass, it is a wrecked inventory. The stamps below
+    // come from `nextSortId`, above every entry the grant just minted, so a build already in order
+    // comes back out with one copy of each item pulled to the end of the list and the rest left
+    // where they were. That is what build `b36964c2314bc5` hit on 2026-09-22: 315 armaments minted
+    // in the build's order, then 165 of them restamped above the other 150. See `Claims` for the
+    // two grants that shared one entry and made this answer wrong.
     // Safety: game thread, read only.
-    let (already, checked) = unsafe { verify_order(&storage, &ordered) };
+    let (already, checked) = unsafe { verify_order(&storage, grants) };
     if already {
         outcome.already_in_order = true;
         outcome.in_order = true;
@@ -270,17 +268,23 @@ pub unsafe fn apply_build_order(
         return outcome;
     };
 
-    // One walk, and every lookup below comes out of it. See `entries_by_identity` for why asking
-    // the inventory about `grant.item_id` is the wrong question.
-    let held = entries_by_identity(&storage);
+    // One walk, and every claim below comes out of it. See `Claims` for why asking the inventory
+    // which entry holds `grant.item_id` is the wrong question.
+    // Safety: game thread, read only.
+    let mut claims = unsafe { read_claims(&storage) };
 
-    for grant in &ordered {
-        let Some(index) = index_for(&held, grant) else {
-            // The build names it and the character does not hold it, under any id it could be
-            // filed as. Counted and named rather than skipped: an item that leaves the loop
-            // without an outcome is one the order check will skip too, and the pass then prints a
-            // perfect score over the items it happened to find.
-            outcome.not_held.push(grant.label.clone());
+    for grant in grants {
+        let Some(index) = claims.claim(grant) else {
+            // Two absences with one shape, and the pass has to tell them apart: an item the
+            // character does not own under any id it could be filed as, and one they own fewer
+            // copies of than the build lists. Counted rather than skipped -- a grant that leaves
+            // the loop without an outcome is one the order check skips too, and the pass then
+            // prints a perfect score over the items it happened to find.
+            if claims.holds(grant) {
+                outcome.repeats += 1;
+            } else if !outcome.not_held.contains(&grant.label) {
+                outcome.not_held.push(grant.label.clone());
+            }
             continue;
         };
         outcome.attempted += 1;
@@ -301,7 +305,7 @@ pub unsafe fn apply_build_order(
     unsafe { storage.set_next_sort_id(next) };
 
     // Safety: game thread, read only.
-    let (in_order, checked) = unsafe { verify_order(&storage, &ordered) };
+    let (in_order, checked) = unsafe { verify_order(&storage, grants) };
     outcome.in_order = in_order;
     outcome.order_checked = checked;
     outcome
@@ -317,16 +321,17 @@ pub unsafe fn apply_build_order(
 /// # Safety
 ///
 /// Game thread.
-unsafe fn verify_order(storage: &Storage, ordered: &[&Grant]) -> (bool, usize) {
-    let held = entries_by_identity(storage);
+unsafe fn verify_order(storage: &Storage, grants: &[Grant]) -> (bool, usize) {
+    // Safety: game thread, read only -- delegated to the caller's contract.
+    let mut claims = unsafe { read_claims(storage) };
     let mut previous: Option<i32> = None;
     let mut checked = 0usize;
     let mut in_order = true;
-    for grant in ordered {
-        // The same resolution the stamping loop uses. When these two disagreed, the loop skipped
-        // an item and so did this, and the pass reported the order of what was left as the order
-        // of the whole build.
-        let Some(index) = index_for(&held, grant) else {
+    for grant in grants {
+        // The same claiming walk the stamping loop uses, over its own fresh set. When the two
+        // disagreed, the loop skipped an item and so did this, and the pass reported the order of
+        // what was left as the order of the whole build.
+        let Some(index) = claims.claim(grant) else {
             continue;
         };
         // Safety: game thread, read only.
@@ -363,62 +368,10 @@ mod tests {
         }
     }
 
-    /// The Bone Bow, measured 2026-09-11.
+    /// The claiming rules themselves are tested in `er_build_import_core::claim`, which builds on
+    /// the host. This crate is a Windows `cdylib` and its tests only ever type-check here, so what
+    /// is worth keeping in it is the reporting -- the part that decides what the player is told.
     ///
-    /// The grant names `40500000` -- base row, no affinity, no level, because the grant pass
-    /// computes the level separately. The character held `40500025`. An inventory lookup for the
-    /// grant's own id finds nothing, and the pass skipped it in silence while reporting every
-    /// other armament in the build as correctly ordered.
-    #[test]
-    fn an_armament_is_found_at_the_level_the_character_holds_it() {
-        let bone_bow_base = 40_500_000;
-        let held: BTreeMap<u32, i32> = [(identity(40_500_025), 2256)].into_iter().collect();
-        let grant = grant_of(bone_bow_base, "Bone Bow", &[]);
-        assert_eq!(index_for(&held, &grant), Some(2256));
-        // Why the old pass missed it. It asked the game, whose `GetItemIndex` matches an exact
-        // item id, and the two ids are not equal -- the character's entry is filed under
-        // `40500025` and the grant says `40500000`. Folding them through `identity` is the whole
-        // of the fix, and these two lines are the before and after of that fold.
-        assert_ne!(40_500_025, bone_bow_base);
-        assert_eq!(identity(40_500_025), bone_bow_base);
-    }
-
-    /// An affinity is folded away too, for the same reason and by the same rule.
-    #[test]
-    fn an_infused_armament_is_the_same_item_as_the_plain_one() {
-        let longsword = 1_010_000;
-        let occult_25 = longsword + 1_200 + 25;
-        let held: BTreeMap<u32, i32> = [(identity(occult_25), 7)].into_iter().collect();
-        assert_eq!(
-            index_for(&held, &grant_of(longsword, "Longsword", &[])),
-            Some(7)
-        );
-    }
-
-    /// A name that resolves to several rows is the other way the character holds an item under a
-    /// number the plan does not name.
-    #[test]
-    fn an_alternate_row_satisfies_the_grant_that_names_it() {
-        let named = 0x2000_0BB8;
-        let alternate = 0x2000_0BB9;
-        let held: BTreeMap<u32, i32> = [(identity(alternate), 11)].into_iter().collect();
-        assert_eq!(
-            index_for(&held, &grant_of(named, "Talisman", &[alternate])),
-            Some(11)
-        );
-        assert_eq!(index_for(&held, &grant_of(named, "Talisman", &[])), None);
-    }
-
-    /// An item the character genuinely does not hold is reported, not skipped.
-    #[test]
-    fn an_item_the_character_does_not_hold_has_no_index() {
-        let held: BTreeMap<u32, i32> = BTreeMap::new();
-        assert_eq!(
-            index_for(&held, &grant_of(1_010_000, "Longsword", &[])),
-            None
-        );
-    }
-
     /// The summary names what it could not find, and says those are outside its own score.
     #[test]
     fn the_summary_names_what_it_never_tried() {
@@ -433,5 +386,36 @@ mod tests {
         let summary = outcome.summary();
         assert!(summary.contains("Bone Bow"), "{summary}");
         assert!(summary.contains("NOT in the count above"), "{summary}");
+    }
+
+    /// A build asking for more copies than the character holds says so in its own clause.
+    ///
+    /// The shortfall has no other reader. The grant ledger asks whether the character holds at
+    /// least the quantity each grant names and one entry answers yes to every mention of it, so
+    /// build `b36964c2314bc5` scored 493 of 493 while 49 of the talisman and armour copies it
+    /// lists were never on the character at all.
+    #[test]
+    fn the_summary_counts_copies_the_character_does_not_have() {
+        let outcome = ReorderOutcome {
+            attempted: 426,
+            restamped: 426,
+            order_checked: 426,
+            in_order: true,
+            repeats: 49,
+            ..ReorderOutcome::default()
+        };
+        let summary = outcome.summary();
+        assert!(
+            summary.contains("49 further mention(s) of an item the character holds fewer copies"),
+            "{summary}"
+        );
+    }
+
+    /// A grant is still what the pass walks, so the helper has to build one.
+    #[test]
+    fn a_grant_carries_the_ids_the_claim_is_made_under() {
+        let grant = grant_of(1_010_000, "Longsword", &[1_011_200]);
+        assert_eq!(grant.item_id, 1_010_000);
+        assert_eq!(grant.also_known_as, vec![1_011_200]);
     }
 }

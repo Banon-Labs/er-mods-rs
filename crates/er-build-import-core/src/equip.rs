@@ -881,7 +881,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
     let active_weapons = doc.sets.active_weapons();
     let mut armaments = Vec::new();
     for slot in &doc.inventory.slots {
-        let Some(index) = slot.equip_index_in_set(active_weapons) else {
+        let Some(index) = slot.equip_index_in_active_set(active_weapons) else {
             continue;
         };
         let Some(found) = catalog.lookup(Kind::Weapon, &slot.name) else {
@@ -925,7 +925,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
         let worn: Vec<&crate::model::Slot> = list
             .slots
             .iter()
-            .filter(|slot| slot.equip_index_in_set(active_protectors).is_some())
+            .filter(|slot| slot.equip_index_in_active_set(active_protectors).is_some())
             .collect();
         // Only when the two kinds coexist. A payload whose worn row carries no cache -- anything
         // written before the planner kept one -- is left exactly as it was.
@@ -976,7 +976,7 @@ pub fn equip_plan(doc: &BuildDoc, catalog: &dyn Catalog, capacity: Capacity) -> 
     let active_talismans = doc.sets.active_talismans();
     let mut talismans = Vec::new();
     for slot in &doc.talismans.slots {
-        let Some(index) = slot.equip_index_in_set(active_talismans) else {
+        let Some(index) = slot.equip_index_in_active_set(active_talismans) else {
             continue;
         };
         let Some(found) = catalog.lookup(Kind::Talisman, &slot.name) else {

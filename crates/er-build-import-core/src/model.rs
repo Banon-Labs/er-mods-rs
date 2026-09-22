@@ -159,6 +159,53 @@ impl Slot {
             None => None,
         }
     }
+
+    /// The equip position this slot holds in the set that is currently active.
+    ///
+    /// Same answer as [`Slot::equip_index_in_set`] except where the two keys contradict each
+    /// other: a hole in `equipSet` at the active set, with `equipIndex` naming a position anyway.
+    /// `equipIndex` is defined as a cache of `equipSet[active]`, so the pair can only disagree by
+    /// the source being stale, and the cache is then the only record that the author equipped the
+    /// item at all.
+    ///
+    /// Measured on build `b36964c2314bc5`, 2026-09-22. Its one talisman set is active, and four
+    /// rows carry `equipIndex` 0, 1, 2 and 3 -- a full four-slot loadout, each position claimed
+    /// once. Two of them carry `equipSet: [3]` and `equipSet: [1]`; the other two carry
+    /// `equipSet: [null]`. Reading `equipSet` alone dropped positions 0 and 2, and the character
+    /// came into the world wearing two talismans with two slots empty.
+    ///
+    /// The mirror risk -- a row the author unequipped whose stale cache re-equips it -- is what
+    /// keeps this off the inactive sets, where `equipIndex` describes a different loadout and says
+    /// nothing about this one. Within the active set, a position claimed twice is still settled by
+    /// the caller's `Contest`.
+    ///
+    /// ```
+    /// use er_build_import_core::model;
+    /// let doc = model::parse(
+    ///     r#"{"talismans":{"slots":[
+    ///          {"name":"Ritual Shield Talisman","equipSet":[null],"equipIndex":0},
+    ///          {"name":"Great-Jar's Arsenal","equipSet":[3],"equipIndex":3}]}}"#,
+    /// )
+    /// .expect("parses");
+    /// let stale = &doc.talismans.slots[0];
+    /// assert_eq!(stale.equip_index_in_set(0), None);
+    /// assert_eq!(stale.equip_index_in_active_set(0), Some(0));
+    /// // A row whose keys agree reads the same either way, and an inactive set is untouched.
+    /// let agreeing = &doc.talismans.slots[1];
+    /// assert_eq!(agreeing.equip_index_in_active_set(0), Some(3));
+    /// assert_eq!(stale.equip_index_in_active_set(1), None);
+    /// ```
+    pub fn equip_index_in_active_set(&self, set_index: usize) -> Option<u32> {
+        self.equip_index_in_set(set_index).or_else(|| {
+            // Only a hole the array actually declares is a contradiction. An array that stops
+            // short of this set never claimed anything about it, and the row's cache belongs to
+            // whichever set is active, not to this one.
+            match self.equip_set.as_ref() {
+                Some(sets) if sets.get(set_index).is_some() => self.equip_index,
+                _ => None,
+            }
+        })
+    }
 }
 
 /// The loadout sets a build carries, one independent list per equip category.

@@ -1,4 +1,6 @@
 use super::*;
+use core::sync::atomic::AtomicUsize;
+use er_game_base::reentry::ReentryLatch;
 
 pub(crate) fn install_title_menu_resource_acquire_observer_hook() {
     if TITLE_MENU_RESOURCE_ACQUIRE_INSTALLED.load(Ordering::SeqCst) != 0
@@ -559,19 +561,86 @@ unsafe fn er_char_stats_field_name_matches(name_ptr: usize) -> bool {
     scene_obj_name(name_ptr).as_deref() == Some(b"ErCharStats")
 }
 
+/// Read the name a [`title_scene_obj_proxy_named_child_bind_hook`] call is binding.
+///
+/// The constructor is handed an object, not a `char*`, and resolves the text itself before passing
+/// it on: `p = *(name + 0x38); text = p ? p + 0x10 : name`. `FUN_140d7f9d0` then runs
+/// `strchr(text, '/')` on the result, which is what proves `text` is the `NUL`-terminated path.
+/// Repeating that indirection here is the whole difference between reading a name and reading a
+/// string header. The read fails closed, like every other foreign pointer in this file.
+fn scene_obj_bound_name_ptr(name_obj: usize) -> usize {
+    if name_obj == 0 {
+        return 0;
+    }
+    match unsafe { safe_read_usize(name_obj + SCENE_OBJ_NAME_INDIRECT_38_OFFSET) } {
+        Some(indirect) if indirect != 0 => indirect + SCENE_OBJ_NAME_INDIRECT_TEXT_10_OFFSET,
+        _ => name_obj,
+    }
+}
+
+/// Post-bind work this detour refused because the thread was already inside it.
+static NAMED_CHILD_BIND_REENTRIES: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    /// Held while this thread is inside the detour's post-bind work. That work resolves proxies of
+    /// its own (`push_stats_text_on_resolved_field` asks for a field by name), every resolve reaches
+    /// this same constructor, and a name that matches twice would recurse without a bound. The old
+    /// site avoided it by publishing its trampoline to `er-quit-menu-core`; the constructor is
+    /// reached by paths this crate does not own, so the guard belongs here.
+    static NAMED_CHILD_BIND_LATCH: ReentryLatch = const { ReentryLatch::new() };
+}
+
+/// Observe a named-child bind at `CS::SceneObjProxy::SceneObjProxy`, the fixed-arity constructor.
+///
+/// # Why not at the binder
+///
+/// This detour used to sit on `SceneObjProxy::assignComponentWithName` (1.16.2 `0x14074a2f0`),
+/// which is **variadic**: Ghidra types its fourth parameter `va_list`, its prologue homes both
+/// `r8` and `r9` (`mov [rsp+0x18],r8 ; mov [rsp+0x20],r9`), and it reads format arguments from the
+/// caller's frame at `[rsp+0x28]` onward. A detour declaring three parameters and forwarding three
+/// dropped all of them, so the game formatted the name it was about to bind out of whatever the
+/// detour had left in `r9` and on its own stack.
+///
+/// `CS::EquipDialog`'s per-slot layout loop is the caller that paid for it (1.16.2 `0x1408db4a3`):
+///
+/// ```text
+/// mov  dword ptr [rsp+0x20], esi          ; column
+/// mov  r9d, r15d                          ; row
+/// lea  r8, ["ItemList/BackItemList/Item_%d_%d"]
+/// call 0x14074a2f0
+/// call 0x140733340                        ; SetVisible(bound cell, 0 or 1)
+/// ```
+///
+/// With the indices gone the name resolved to nothing, so the `SetVisible(cell, 0)` that hides the
+/// equipment screen's surplus cells never reached one. The movie places 29 of that grid's 30 cells
+/// (`02_010_equiptop.gfx` carries every `Item_<row>_<col>` for rows 0..5 and columns 0..4 except
+/// `Item_2_4`), the unused ones are hidden by this loop, and the player was left looking at an
+/// empty framed cell they could see and never select.
+///
+/// Widening the detour to forward a fixed number of variadic slots would only have bounded that:
+/// the binder has 1297 references, so no arity chosen here is provable, and the first caller
+/// passing one more would lose it again in silence. The constructor takes four arguments and no
+/// varargs, is reached only through `FUN_14074abc0`, and receives the name already formatted --
+/// so the same binds are observed with nothing left to drop.
 pub(crate) unsafe extern "system" fn title_scene_obj_proxy_named_child_bind_hook(
-    parent: usize,
     out_proxy: usize,
-    name_ptr: usize,
+    parent: usize,
+    name_obj: usize,
+    arg4: usize,
 ) -> usize {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let orig = TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst);
     if orig == null || orig == HOOK_ORIGINAL_UNSET {
         return out_proxy;
     }
-    let f: unsafe extern "system" fn(usize, usize, usize) -> usize =
+    let f: unsafe extern "system" fn(usize, usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(orig) };
-    let ret = unsafe { f(parent, out_proxy, name_ptr) };
+    let ret = unsafe { f(out_proxy, parent, name_obj, arg4) };
+    let Some(_reentry) = ReentryLatch::enter(&NAMED_CHILD_BIND_LATCH, &NAMED_CHILD_BIND_REENTRIES)
+    else {
+        return ret;
+    };
+    let name_ptr = scene_obj_bound_name_ptr(name_obj);
     if unsafe { er_char_stats_field_name_matches(name_ptr) } {
         let base = game_module_base().unwrap_or(TITLE_OWNER_SCAN_START_ADDRESS);
         if base != TITLE_OWNER_SCAN_START_ADDRESS && stats_panel_enabled() {
@@ -675,9 +744,9 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
             return;
         }
     }
-    let Ok(addr) = game_rva_for_hook(TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA as u32) else {
+    let Ok(addr) = game_rva_for_hook(SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA as u32) else {
         append_autoload_debug(format_args!(
-            "title-cover-part-a: failed to resolve named-child bind rva 0x{TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA:x}"
+            "title-cover-part-a: failed to resolve named-child bind ctor rva 0x{SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA:x}"
         ));
         return;
     };
@@ -690,13 +759,13 @@ pub(crate) fn install_title_scene_obj_proxy_named_child_bind_hook() {
         Ok(hook) => {
             TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG
                 .store(hook.trampoline() as usize, Ordering::SeqCst);
-            // Publish it across the crate boundary too: `er-quit-menu-core`'s proxy resolves run
-            // this same binder, and calling the detour instead of the trampoline re-enters this
-            // hook. A shell with no product behind it leaves the slot at zero and calls the game
-            // function directly, which is correct there because nothing detoured it.
-            er_quit_menu_core::scaleform_proxy::set_named_child_bind_trampoline(
-                hook.trampoline() as usize
-            );
+            // No trampoline is published across the crate boundary any more. It existed because
+            // `er-quit-menu-core`'s proxy resolves call `assignComponentWithName`, which this hook
+            // used to detour, so calling the game function directly would have re-entered the
+            // detour. That function is no longer detoured by anything, so the direct call is now
+            // the correct one and the slot stays at zero -- the same state a shell with no product
+            // behind it leaves it in. Re-entry through the constructor is handled where it now
+            // happens, by `IN_NAMED_CHILD_BIND_HOOK`.
             if let Err(status) = unsafe { hook.queue_enable() } {
                 append_autoload_debug(format_args!(
                     "title-cover-part-a: queue_enable named-child bind failed: {status:?}"

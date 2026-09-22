@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,676 |
+| all `experiments/**` | 76 | 41,745 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -290,7 +290,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `startup_hooks/loading_cover/profile_table_gfx_files.rs` | 966 | Scaleform resource and profile-table families | D2 and R24 |
 | `startup_hooks/loading_cover/scaleform_descriptor_guard.rs` | 39 | Scaleform descriptor guard | R8 |
 | `startup_hooks/loading_cover/startup_modals_menu_cover.rs` | 1,228 | title-flow and product modal families | R22 |
-| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,144 | Scaleform resource, title, and product families | R22 and R24 |
+| `startup_hooks/loading_cover/title_resources_stats_text.rs` | 2,213 | Scaleform resource, title, and product families | R22 and R24 |
 | `startup_hooks/loading_cover/title_scaleform_msgbox.rs` | 830 | title message-box and Scaleform families | R22 and R24 |
 | `startup_hooks/loading_cover/window_reconfig_observer.rs` | 18 | window-observation/final-geometry family | R9 |
 | `startup_hooks/quit_menu/build_url_backdrop.rs` | 4 | product re-export facade: moved to `er_quit_menu_core::build_url_backdrop` with the link field it attests | R18 |
