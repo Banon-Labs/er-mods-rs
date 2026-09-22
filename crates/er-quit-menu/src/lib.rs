@@ -43,8 +43,22 @@
 //! `er_gfx::options_02_040::quit6` fail-closes when its input is not vanilla, so a second deriver
 //! handed already-derived bytes correctly refuses. `scripts/me3-dll-conflicts.toml` records those
 //! pairs and the profile generator refuses to emit a profile carrying both. A default
-//! `er-quickload` is not one of them: it arms no rows and derives no grid since `quit-rows` came
-//! off its default features.
+//! `er-quickload` is one of them, and this line claimed the opposite until 2026-09-20: `quit-rows`
+//! is line 31 of that crate's `default` feature list, so the stock product does arm rows and does
+//! derive the grid.
+//!
+//! # This shell is a hook union hub
+//!
+//! It defines `er_effects_union_register` and `er_effects_union_register5` through
+//! `er_hook::export_union_registrar!`, which is what lets a companion in a product-less profile
+//! find a hub at all. Before that, `er_quickload.dll` was the only image in the workspace
+//! exporting either name -- measured 2026-09-20 on the live module table, 103 modules readable,
+//! zero errors, one exporter each -- so a profile without the product left every companion on
+//! `HookRoute::LocalUnion`, a private MinHook instance apiece, and two of them wanting one
+//! prologue is the 2026-08-23 collision.
+//!
+//! No profile carries both hubs, because the pair above is a declared conflict. The export is for
+//! the profiles this shell is alone in, not for an election against the product.
 //!
 //! # What stays refused here
 //!
@@ -60,6 +74,13 @@
 use std::path::{Path, PathBuf};
 
 use er_quit_menu_core::row_config::{QuitRowsConfig, SaveGameShape};
+
+// The two registrar exports, so a companion in a product-less profile has a hub to chain onto.
+// See the module docs above for what was measured, and the macro's own for why a hub is an export
+// rather than a package. Windows-only: the macro expands to `no_mangle` bodies that reach
+// `er-hook`'s `MH_*` externs, which a host build has nothing to link them against.
+#[cfg(windows)]
+er_hook::export_union_registrar!();
 
 const DLL_PROCESS_ATTACH: u32 = 1;
 const DLL_MAIN_SUCCESS: i32 = 1;

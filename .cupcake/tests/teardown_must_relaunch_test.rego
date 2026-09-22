@@ -151,3 +151,46 @@ test_allow_other_events if {
 	}
 	not RULE in rule_ids(denials)
 }
+
+# --- a payload that NAMES the script is not an invocation of it ---------------
+#
+# Both shapes below were refused in production on 2026-09-21 (bd er-effects-rs-ak3q,
+# bd er-effects-rs-if5l). The invoked binary is `git` and `bd`; the script appears in a
+# commit message and an issue body, where it is prose. The cost was not the block: the
+# commit message had to be reworded to say "a repo-relative teardown command" rather than
+# name the file, and the issue reporting it had to be filed through a body file written by
+# a separate command, so the record this guard is not there to police came out degraded.
+
+test_allow_commit_message_naming_the_script if {
+	not denied(`git commit -m "fix(guard): teardown_must_relaunch fires on scripts/er-teardown.py in prose"`)
+}
+
+test_allow_commit_heredoc_naming_the_script if {
+	not denied(`git commit -F - <<'EOF'
+fix(guard): decide on the command, not the text
+
+scripts/er-teardown.py named in a commit message is documentation, and
+python3 scripts/er-teardown.py; cargo build in one is still documentation.
+EOF`)
+}
+
+test_allow_issue_body_naming_the_script if {
+	not denied(`bd create --description "scripts/er-teardown.py must be paired with a launch; see python3 scripts/er-teardown.py; bash scripts/er-build-dlls.sh"`)
+}
+
+test_allow_memory_body_naming_the_script if {
+	not denied(`bd remember --key teardown-guard-note "the shape that was refused was python3 scripts/er-teardown.py > /dev/null 2>&1; bash scripts/er-build-dlls.sh er-save-game-row"`)
+}
+
+# ...and the guard still reaches a real invocation inside a shell wrapper payload, which
+# is the half a naive "is the first word git" test would lose.
+test_deny_teardown_inside_a_shell_wrapper_payload if {
+	denied(`bash -c 'python3 scripts/er-teardown.py; cargo build'`)
+}
+
+# A `--status` earlier in the command does not excuse a real kill later in it. The
+# two-rule shape this replaced asked only whether SOME teardown was followed by
+# `--status`, so this chained past it.
+test_deny_status_then_a_real_teardown if {
+	denied("python3 scripts/er-teardown.py --status; python3 scripts/er-teardown.py; cargo build")
+}

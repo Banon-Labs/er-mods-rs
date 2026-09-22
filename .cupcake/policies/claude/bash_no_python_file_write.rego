@@ -27,16 +27,42 @@ package cupcake.policies.claude.bash_no_python_file_write
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 command := object.get(input.tool_input, "command", "")
 
-# A python interpreter as a command token: at command start or after a shell
-# separator, optionally path-prefixed (`/usr/bin/python3`, `./python`), and
-# terminated by a non-identifier char. `uv run ... python3` is caught by the
-# same token match because `python3` follows whitespace there too.
-python_token_pattern := "(^|[[:space:];|&('\"`])/?([[:alnum:]_.-]+/)*python[0-9.]*($|[^[:alnum:]_])"
+# The texts this command actually hands to a shell, quoted operand spans and heredoc
+# bodies anchor-neutralised, so command position survives and quoted prose has none.
+executed_texts := commands.input_executed_texts
+
+# A python interpreter in COMMAND POSITION, not merely a `python` somewhere in the text.
+#
+# The pattern this replaces anchored on "start, or after whitespace or a quote", which is
+# the thing every quoted argument in the world satisfies. Measured 2026-09-21 (bd
+# er-effects-rs-ak3q): `bd remember --key ... "measured with python3 scripts/er-fd-trace.py
+# --tsv ..."` was refused as an inline python file write. The invoked binary was `bd`, the
+# python was a quotation inside the memory being recorded, and the way past the guard was
+# to reword the memory -- degrading the record rather than the command.
+#
+# A second spelling of the same defect came with it and is also closed here: the ellipsis.
+# `runs_a_committed_script` disqualified the WHOLE command on `..` appearing anywhere,
+# meaning the `...` in that prose broke the committed-script exemption, and so did a real
+# `python3 scripts/er-fd-trace.py --out ../x.tsv`, whose `..` is in an operand and not in
+# the script path at all. The test belongs to the path.
+python_word(word) if startswith(word, "python")
+
+python_word(word) if contains(word, "/python")
+
+python_invocation(words, index) if {
+	python_word(words[index])
+	commands.word_in_command_slot(words, index)
+}
 
 invokes_python if {
-	regex.match(python_token_pattern, command)
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, _ in words
+	python_invocation(words, index)
 }
 
 # The write itself. Each pattern names a way python mutates a file on disk.
@@ -116,62 +142,110 @@ python_file_write_detected if {
 # forms that carry an inline program.
 # ---------------------------------------------------------------------------
 
-# Any python invocation whose argument is a `.py` FILE PATH -- as opposed to
-# inline code (`-c`), a heredoc, or stdin (`python3 -`) -- committed or not.
+# The `.py` path a python invocation is handed: the first word after it that is not a
+# flag. Read as tokens rather than as a pattern over the whole command, which is what
+# lets the committed-script test below ask about the PATH instead of about the command.
 #
-# The trailing context is "anything that is not a path character", NOT
-# whitespace-or-end. A separator may abut the path with no space in front of
-# it, and the narrower spelling missed every one of them. Measured 2026-09-17
-# against the live policy, one command after the location fix landed:
-# `python3 /tmp/.../patch.py` denied, `python3 /tmp/.../patch.py; echo
-# "exit=$?"` ALLOWED -- the semicolon is not whitespace, so the path never
-# matched and the script-file rule never fired. The `; echo "exit=$?"` suffix
-# is not exotic either: another guard in this directory asks for a build's exit
-# code to be read that way, so the bypass shape is one the harness encourages.
-script_file_pattern := `python[0-9.]*[[:space:]]+[^[:space:]-][^[:space:]]*\.py($|[^[:alnum:]_.-])`
+# The pattern this replaces had a trailing-context bug of its own, fixed 2026-09-17 and
+# preserved here by construction: a separator may abut the path with no space in front of
+# it (`python3 /tmp/x.py; echo "exit=$?"`), and `command_slot_words` splits the separator
+# off as a word of its own, so the path is the same token either way.
+script_operand(words, index) := words[j] if {
+	python_invocation(words, index)
+	some j
+	j > index
+	j < count(words)
+	endswith(words[j], ".py")
+	count([p |
+		some p, _ in words
+		p > index
+		p < j
+		not startswith(words[p], "-")
+	]) == 0
+}
 
 runs_a_python_script_file if {
 	not contains(command, "<<")
 	not regex.match(`(^|[[:space:]])-c($|[[:space:]])`, command)
 	not regex.match(python_token_pattern_followed_by_stdin, command)
-	regex.match(script_file_pattern, command)
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, _ in words
+	script_operand(words, index) != ""
 }
 
 # The exemption itself, narrowed to match what the block message has always
-# promised ("A committed `scripts/<name>.py` is also allowed"): the path must
-# name a file under this repo's tracked `scripts/` directory tree --
-# `scripts/<name>.py`, `scripts/<subdir>/<name>.py` -- reached either
-# repo-relatively or through this repo's own absolute path. NOT some other
-# absolute path (`/tmp/...`, `~/scratch/...`), and NOT a `..` escape out of the
-# tree: those name no file this repo has committed or reviewed, no matter how
-# closely they resemble `scripts/<name>.py` in shape. The original regex
-# checked only the `.py` suffix and the absence of a leading dash, so
-# `/tmp/.../patch.py` and `~/scratch/patch.py` both satisfied it -- the bypass
-# the narrowing closed.
+# promised ("A committed script under this repo's `scripts/` is also allowed"):
+# the path must name a file under this repo's tracked `scripts/` directory tree
+# -- `scripts/<name>.py`, `scripts/<subdir>/<name>.py` -- reached either
+# repo-relatively or through this repo's own absolute path. Not some other
+# absolute path (`/tmp/...`, `/home/banon/scripts/...`), not a home-relative
+# path (`~/...`), and not a `..` escape out of the tree: none of those name a
+# file this repo has committed or reviewed, no matter how closely they resemble
+# `scripts/<name>.py` in shape. The old regex checked only the `.py` suffix and
+# the absence of a leading dash, so `/tmp/.../patch.py` and `~/scratch/patch.py`
+# both satisfied it -- the bypass an earlier rewrite closed.
+committed_script_path(path) if {
+	startswith(path, "scripts/")
+	not contains(path, "..")
+}
+
+committed_script_path(path) if {
+	startswith(path, "./scripts/")
+	not contains(path, "..")
+}
+
+# This repo's own absolute spelling names the same committed file, added
+# 2026-09-21. The narrowing above admitted the repo-relative form alone, and a
+# guard that rewards one spelling teaches it: the agent then copies that
+# spelling into a user-facing message, where the user's shell is in some other
+# directory and `python3 scripts/er-teardown.py` names nothing -- measured on a
+# teardown the user asked for twice and could not run. A path is admitted here
+# because of the file it lands on, not because of how it was typed, so a
+# `.../er-mods-rs/.../scripts/<name>.py` prefix joins the bare and `./` forms.
+# User directive: "AGENTS.md and Cupcake block text need to be rectified."
 #
-# Why the absolute spelling is admitted, added 2026-09-21. The narrowing
-# admitted the repo-relative form ALONE, and a guard that rewards one spelling
-# teaches it. The agent then copies that spelling into a user-facing message,
-# where the user's shell is in some other directory and `python3
-# scripts/er-teardown.py` names nothing -- measured this session, on a teardown
-# the user asked for twice and could not run. A path is admitted here because
-# it lands inside this repo's `scripts/`, not because of how it was typed, so
-# the prefix `<anything>/er-mods-rs/` is accepted alongside the bare and `./`
-# forms. User directive: "AGENTS.md and Cupcake block text need to be
-# rectified."
+# `er-mods-rs` has to be a whole path component, and the session scratchpad is
+# why. It lives at `/tmp/claude-1000/-home-banon-projects-er-mods-rs/`, whose
+# last component ends in the repo name without being it; a suffix test would
+# have admitted every uncommitted scratch script filed under a `scripts/`
+# subdirectory there, re-opening the hole the narrowing closed. Splitting the
+# path on `/` is what makes the component test exact -- the same reason the
+# rules above ask about the path rather than about the command, and it needs no
+# regex in a rule that runs once per operand of every command.
 #
-# `er-mods-rs` is required to be a WHOLE path component (the `/` in front of it
-# is literal), and the session scratchpad is why. It lives at
-# `/tmp/claude-1000/-home-banon-projects-er-mods-rs/`, whose last component
-# ENDS in the repo name without being it; a suffix match would have admitted
-# every uncommitted scratch script filed under a `scripts/` subdirectory there,
-# re-opening the hole the narrowing closed.
-committed_script_path_pattern := `python[0-9.]*[[:space:]]+(\./|/[[:alnum:]_./-]*/er-mods-rs/([[:alnum:]_.-]+/)*)?scripts/[[:alnum:]_.-]+(/[[:alnum:]_.-]+)*\.py($|[^[:alnum:]_.-])`
+# The intermediate components are unconstrained so that a worktree checkout of
+# this repo (`.../er-mods-rs/.worktrees/<name>/scripts/...`) is the same tree
+# under a different prefix, which is what it is.
+committed_script_path(path) if {
+	startswith(path, "/")
+	not contains(path, "..")
+	segments := split(path, "/")
+	some repo_index
+	segments[repo_index] == "er-mods-rs"
+	some scripts_index
+	scripts_index > repo_index
+	segments[scripts_index] == "scripts"
+	scripts_index < count(segments) - 1
+}
 
 runs_a_committed_script if {
 	runs_a_python_script_file
-	not contains(command, "..")
-	regex.match(committed_script_path_pattern, command)
+	every text in executed_texts {
+		every_script_operand_is_committed(text)
+	}
+}
+
+# Every `.py` this command hands to python is a committed one. Asked over all of them
+# rather than "some", because the exemption is for the invocation and a command that runs
+# `scripts/foo.py` and `/tmp/patch.py` has not earned it.
+every_script_operand_is_committed(text) if {
+	words := commands.command_slot_words(text)
+	count([index |
+		some index, _ in words
+		path := script_operand(words, index)
+		not committed_script_path(path)
+	]) == 0
 }
 
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"

@@ -27,7 +27,7 @@ import data.cupcake.system.commands
 deny contains decision if {
     input.hook_event_name == "PreToolUse"
     input.tool_name == "Bash"
-    some text in commands.executed_texts(input.tool_input.command)
+    some text in commands.input_executed_texts
     guarded(lower(text))
     not fresh
     decision := {"rule_id": "ER-EFFECTS-REQUIRE-FRESH-ORIGIN-MAIN", "reason": "origin/main is stale or could not be verified against origin. Run `git fetch origin main`, then retry the rebase or force-push.", "severity": "HIGH"}
@@ -38,7 +38,7 @@ deny contains decision if {
 deny contains decision if {
     input.hook_event_name == "PreToolUse"
     input.tool_name == "Bash"
-    commands.unparsed_shell_payload(input.tool_input.command)
+    commands.input_unparsed_shell_payload
     lowered := lower(input.tool_input.command)
     contains(lowered, "git")
     guarded_word(lowered)

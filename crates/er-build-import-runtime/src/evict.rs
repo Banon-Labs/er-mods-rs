@@ -34,6 +34,11 @@
 //! core crate, where the property
 //! test can hold the classification to being total.
 //!
+//! Ammunition is the third, and it needs the regulation rather than the id: an arrow is an
+//! `EquipParamWeapon` row, so the nibble calls it gear, while the planner's build document keeps
+//! quivers in `items.ammo` and can name at most the four the character has nocked. The rows come
+//! from [`crate::catalog::Quivers`] through [`allowance_for`].
+//!
 //! # When the box is full, a surplus copy goes on the ground
 //!
 //! The storage box is not the only place an item can go, and for a long time this pass acted as
@@ -122,13 +127,24 @@ fn is_armament(item_id: u32) -> bool {
     Category::of(item_id) == Category::Armament
 }
 
-/// Build the allowance from the plan's grants and the instances the grant pass produced.
+/// Build the allowance from the plan's grants, the instances the grant pass produced, and the
+/// weapon rows the regulation classifies as quivers.
 ///
 /// The handles matter as much as the ids. An ash lives on the gaitem instance, so the item id
 /// cannot tell the copy this import just made from the older one it replaces, and a sweep working
 /// from ids alone will pick whichever the inventory filed lowest.
-pub fn allowance_for(grants: &[Grant], armaments: &[ArmamentOutcome]) -> Allowance {
-    Allowance::new(grants, armaments.iter().map(|arm| arm.handle))
+///
+/// `ammunition` is [`crate::catalog::Quivers::rows`], carried here rather than re-derived: a build
+/// document can name at most the four quivers the character has nocked, so counting a player's
+/// ammunition against the build's allowance sheds every stack they were not shooting. See the
+/// header of `er_build_import_core::sweep`. An empty set restores the old behaviour, which is why
+/// the caller logs how many rows it passed.
+pub fn allowance_for(
+    grants: &[Grant],
+    armaments: &[ArmamentOutcome],
+    ammunition: impl IntoIterator<Item = u32>,
+) -> Allowance {
+    Allowance::new(grants, armaments.iter().map(|arm| arm.handle)).with_ammunition(ammunition)
 }
 
 /// One inventory entry, as the classifier wants it.
@@ -393,8 +409,8 @@ impl EvictOutcome {
                  more ({} Ash(es) of War recovered first), {} refused -- \
                  {} still worn, {} the box had no room for, {} the box already holds at its \
                  maximum stack, {} the box will not take{}{}{}. {} entr(ies) were outside this \
-                 pass entirely: consumables, materials, key items and the engine's own \
-                 empty-slot rows",
+                 pass entirely: consumables, materials, key items, ammunition, and the engine's \
+                 own empty-slot rows",
                 self.left_behind,
                 self.left_behind_items,
                 if self.left_behind_unexplained == 0 {

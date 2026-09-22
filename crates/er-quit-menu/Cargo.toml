@@ -41,6 +41,13 @@ er-quit-menu-core = { path = "../er-quit-menu-core" }
 # shell's log describes exactly one run instead of accumulating across launches.
 er-game-base = { path = "../er-game-base" }
 
+# Only to define the two registrar exports that make this shell a hook union hub, through
+# `er_hook::export_union_registrar!`. Windows-only because `er-hook`'s `MH_*` externs are not
+# cfg-gated: a host link survives merely because nothing reaches them, and a retained `no_mangle`
+# body would reach them. `er-quit-menu-core` already declares this crate the same way.
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+
 # Lint parity with `../fromsoftware-rs` (root `[workspace.lints]`): stock rustc + clippy lint
 # set, denied. Zero violations on the shipping target
 # (`cargo xwin clippy --release --target x86_64-pc-windows-msvc --all-targets`) and on the host

@@ -1,0 +1,223 @@
+<<<er-quit-menu.toml>>>
+# Which rows this DLL adds to the System > Quit tab (auto-created next to the game executable).
+#
+# Delete a name to lose the row; a row that is not listed is never added, so a press can
+# never reach a flow that is not there. The rows are:
+#   "load-character", "load-character-from-file", "load-build-from-url", "generate-build-link", "save-game"
+rows = ["load-character", "load-character-from-file", "load-build-from-url", "generate-build-link"]
+
+# How the Save Game row reaches the tab, when it is listed above.
+#   "add-row"             a third row is added and both of FromSoft's rows keep their
+#                        own labels and their own actions
+#   "replace-native-row"  the first row is relabelled `Save Game` and its action is
+#                        replaced, so the tab stays at two rows
+save_game = "add-row"
+<<<end>>>
+<<<er-invasion-warp.toml>>>
+# er-invasion-warp-core -- local invasion filter.
+#
+# Seamless decides WHERE an invasion sends you, server-side, and tells the client. This filter
+# reads that destination the moment it arrives -- before you have moved -- and cancels matches that
+# are not where you want to be. Cancelling is safe: the session returns to idle and searching
+# continues. Nothing here fakes an invasion or spoofs session state.
+#
+# EDITS TAKE EFFECT IMMEDIATELY. The file is re-read about once a second while the game runs; no
+# restart. The log names what changed each time.
+
+[local_invasion]
+
+# Master switch. OFF by default -- this cancels real matches, so it has to be asked for.
+enabled = false
+
+# HUNT MODE -- ask Steam for ONE location instead of rejecting what it sends.
+#
+# The filter above DECLINES matches: it sees every host and cancels the ones you do not want, which
+# always works but can take many tries. Hunt instead narrows the QUERY, so the answer arrives right
+# the first time.
+#
+# The cost, and why this is separate and off by default: it filters on a key only this DLL
+# publishes, so while hunt is on you will NOT see hosts who are not running it. Your friend needs
+# it too. Leave it off to keep meeting everybody.
+#
+# A Steam filter tests ONE value and has no OR, so hunt uses the single marked location if you have
+# marked exactly one, or the map you are standing in if you have marked none. Several marked
+# locations cannot be expressed and hunt will say so and stay out of the way.
+search_by_location = false
+
+# Widen the query outward from where you are standing, one ring of map tiles at a time.
+#
+# 0 asks Steam for your exact tile only. 1 adds the eight tiles around it, 2 the ring beyond
+# that, and 3 is the cap the ring builder enforces. Each query round asks for the next tile in
+# turn, so the search moves instead of re-asking for a place nobody is in.
+#
+# This does nothing on its own. The widening runs inside the lobby-query detour that
+# `steam_hooks` installs, and the tile it starts from is the one `hunt` picks -- with either of
+# those off a radius is read, echoed back on the config line, and never acted on. The DLL says
+# so in its log rather than leaving you to work it out.
+search_radius = 0
+
+# How far a search may reach is not set here. It is the row you pick when the finger asks:
+#
+#   Nearby only        asks your own tile, then the ring around it, then one matchmaking band
+#                      higher, and keeps climbing bands. It never drops the location filter, so it
+#                      can end in nobody found -- which is what you asked for by picking it.
+#   Both near and far  does all of the above first, and only once the ring has been asked at your
+#                      own band and answered nothing does it drop the location filter and ask the
+#                      whole population.
+#
+# There were two keys here, `widen_to_anywhere` and `widen_band_when_nearby_exhausted`, and they
+# are gone. A key that can be set can disagree with the row, and on 2026-09-18 one did: a file
+# saying `widen_to_anywhere = true` turned a nearby invasion into a whole-population one and
+# dropped the player into two strangers' worlds in other regions. Nothing in a file can do that
+# any more. An old file naming either key still loads -- the line is reported and skipped, not
+# treated as an error -- so you do not have to edit a config you wrote last week.
+
+# Announce what the search is doing on the game's own message banner.
+#
+# The name is older than what it does. This build does not reject a connected invasion for being
+# in the wrong place -- that cost you a connection to learn something the query could have asked
+# for -- so there is no rejection to announce. What it announces now is arrival ("Invaded
+# Limgrave") and, while search_radius is widening the search, which place is being asked for
+# ("searching 3 of 9 nearby locations -- Stormhill").
+#
+# Only a CHANGE is announced. Seamless retries roughly every 20 seconds and the same line would
+# otherwise be wallpaper within a minute; silence means nothing has moved since the last notice.
+reject_notice = false
+
+# ----------------------------------------------------------------------------------------------
+# DIAGNOSTICS BELOW. These six install or withhold hooks so a crash can be attributed to one of
+# them. They are not preferences, they are not shown in the F4 panel, and every one of them is a
+# way to break the mod rather than to configure it. Leave them alone unless you are bisecting a
+# crash.
+# ----------------------------------------------------------------------------------------------
+
+# The invasion pins are switched in game, not here.
+#
+# Open the world map, open its Map Functions menu, and turn on the row the game calls
+# Multiplayer Status Display. That row used to draw the game's own markers; this DLL stops those
+# being built, so the row now shows and hides the invasion pins instead, immediately and without
+# leaving the game. There is nothing to write in this file, and a `map_pins` line left over from
+# an older version is read and ignored rather than treated as an error.
+
+# Install the three Steam-matchmaking detours (location publishing, hunt mode, pool filter).
+#
+# On by default -- those features need them. These are the only detours this DLL installs at
+# addresses it did not derive statically: each comes from a live ISteamMatchmaking vtable slot read
+# at runtime. Turning it off withholds all three and nothing else.
+steam_hooks = true
+
+# Install the two read-only observers on Seamless Co-op's own code (the menu `show` function and
+# the lobby-key builder).
+#
+# On by default -- the `show` observer is how this DLL learns the Seamless menu object's address,
+# and the lobby-key observer reports the one string that decides whether two Seamless players can
+# see each other at all. Turning it off withholds those two and nothing else: the local-invasion
+# filter still judges matches and the warp keys still work.
+#
+# OFF BY DEFAULT since 2026-09-04, because arming them kills the game in about 25 seconds. With
+# them off the same configuration ran 251s and 110s with zero fault records; with them on and
+# nothing else changed it died at 24.9s, with no input given at all. The mechanism is still
+# unidentified, so this is a mitigation and not a fix -- turning it on is opting into a crash.
+ersc_observers = false
+
+# Which half of that pair to install, when ersc_observers is on. Both on by default, so the master
+# switch alone behaves exactly as before. They exist because the master proved the PAIR is what
+# crashes and these name which one: turn the master on and exactly one of these off.
+ersc_show_observer = true
+ersc_lobby_key_observer = true
+
+# The third one, and the only one that sees the option-menu object when you invade with an ITEM --
+# `show` runs only when Seamless's own menu is built, and the item path never builds it. Without
+# this the filter judges matches correctly and then cannot cancel them, which is what run
+# br-20260908-230004-d163 did 13 times in a row.
+ersc_invade_observer = true
+
+# ----------------------------------------------------------------------------------------------
+# Back to ordinary settings.
+# ----------------------------------------------------------------------------------------------
+
+# Match ONLY other players running this DLL with this option turned on.
+#
+# Seamless finds worlds with a `lobby_key` that is a fingerprint of your game's params and Seamless
+# build -- NOT your co-op password. This rewrites that key into a pool of our own, and because one
+# value drives both the search and the advertisement, the separation is symmetric: vanilla players
+# cannot see you and you cannot see them.
+#
+# It is ABSOLUTE, not a preference. While this is on, the entire vanilla population is invisible to
+# you for hosting AND for invading -- you will only ever meet other people running this DLL with
+# this same option on. Turn it on for a session with friends, not permanently.
+only_players_with_this_mod = false
+
+# THE TWO USEFUL COMBINATIONS, since these switches are independent:
+#
+#   search_by_location = true,  only_players_with_this_mod = false
+#       aim the query at one place, and still meet everybody who is there
+#   search_by_location = false, only_players_with_this_mod = true
+#       invade anywhere as normal, but only ever meet other people running this DLL
+#
+# Both together works too: only DLL users, and only at the place you are standing.
+
+# Locations you marked, and the two lists the in-game keys write to. Both WIDEN whatever `mode`
+# allows -- a marked place is always accepted, in every mode -- so you can leave mode = "exact"
+# and just collect places as you visit them.
+#
+#   mark_key         "invade here"      -> allowed_blocks   (and clears any exclusion)
+#   unmark_key       "not here"         -> blocked_blocks   (and clears any mark)
+#
+# The world map colours its invasion pins by these two lists, and by nothing else: chosen is the
+# brightest marker, excluded the dimmest, and anything in neither list keeps the middle one. That
+# is a property of the LOCATION, so the map reads the same wherever you are standing.
+#
+# The keys rewrite this file, so marks survive a restart. Hand-edits are equally fine; the file is
+# re-read about once a second while you play.
+allowed_blocks = []
+
+# The two keys, by NAME. Insert and Delete are the defaults, but a 60% keyboard has neither -- so
+# name a key you actually have instead. Recognised:
+#
+#   Insert Delete Home End PageUp PageDown Backspace Tab Enter Escape Space
+#   Left Up Right Down PrintScreen ScrollLock Pause CapsLock
+#   F1..F24, any single letter or digit ("K", "7")
+#   punctuation by symbol or name: - = [ ] \ ; ' , . / `  (Minus, Equals, LeftBracket,
+#     RightBracket, Backslash, Semicolon, Quote, Comma, Period, Slash, Grave)
+#   keypad: KP_0..KP_9, KP_Plus, KP_Minus, KP_Multiply, KP_Divide, KP_Period
+#
+# Case and spacing do not matter. A raw virtual-key code works too ("0x2d"). A name this file does
+# not recognise is reported in the log and the previous key stays in force -- it is never silently
+# ignored, because a key that does nothing is indistinguishable from a broken feature.
+mark_key = "Insert"
+unmark_key = "Delete"
+
+# The switch for `enabled` above, by NAME, from the same list. Pressing it flips the setting
+# and saves the file, so the state survives a restart and the file always says what you are
+# actually playing in. The banner tells you which way it went.
+enable_toggle_key = "F3"
+
+# The in-game settings panel, by NAME, from the same list. It shows every key above that is a
+# setting rather than a diagnostic, and writes each change straight back here -- this file stays
+# the source of truth, and the panel re-reads it, so an edit you make by hand while the panel is
+# open still wins.
+#
+# The file is REGENERATED from the shipped template on every save, so comments you add yourself
+# do not survive a change made in game. Your values do.
+settings_key = "F4"
+
+# There is no setting for what closes the "Attempting to invade another world." popup, and that is
+# deliberate: the mod reads the key you have bound to the game's own menu back-out, out of the
+# game's own key config, every time it checks. Rebind it in Key Bindings and this follows.
+
+# Locations you excluded. An exclusion is the strongest thing you can say about a place: it stops
+# the search from asking for that location even when it is the one you marked.
+blocked_blocks = []
+<<<end>>>
+<<<er-quickload.toml#picker_block>>>
+# Folder the missing-save picker opens in. While autoupdate_preferred_picker_dir is true,
+# it is rewritten to the folder of each successfully picked save.
+# preferred_save_picker_dir = 'C:\path\to\saves'
+autoupdate_preferred_picker_dir = true
+# Open the OS file dialog instead of the in-game 05_010 browser, for BOTH the
+# "Load Character from File" row and the Save Game destination list. One key governs both.
+# Default false = the in-game browser. The OS dialog is NOT covered by the build gate
+# and can land behind an exclusive-fullscreen game; the in-game browser exists for that case.
+# os_native_save_picker = false
+<<<end>>>

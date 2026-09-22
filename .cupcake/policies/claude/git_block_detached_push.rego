@@ -55,7 +55,7 @@ deny contains decision if {
 	}
 }
 
-executed_texts := commands.executed_texts(input.tool_input.command)
+executed_texts := commands.input_executed_texts
 
 # The main-push guard's recogniser, with one addition this policy needs: `setsid` and `nohup` may
 # sit between the command anchor and `git`. That guard anchors on `git` directly, so `setsid nohup

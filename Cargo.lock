@@ -2829,6 +2829,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-config-defaults"
+version = "0.1.0"
+dependencies = [
+ "er-invasion-warp-core",
+ "er-quit-menu-core",
+ "er-save-picker-core",
+]
+
+[[package]]
 name = "er-convenient-deaths"
 version = "0.1.0"
 dependencies = [
@@ -3191,6 +3200,7 @@ name = "er-quit-menu"
 version = "0.1.0"
 dependencies = [
  "er-game-base",
+ "er-hook",
  "er-quit-menu-core",
 ]
 

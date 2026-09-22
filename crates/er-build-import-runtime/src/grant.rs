@@ -105,6 +105,31 @@ const ITEM_CATEGORY_MASK: u32 = 0xF000_0000;
 const ITEM_ROW_MASK: u32 = 0x0FFF_FFFF;
 /// The category nibble that means "armament" -- the only kind that carries a gem or a level.
 const WEAPON_CATEGORY: u32 = 0x0000_0000;
+/// The category nibble of an `EquipParamProtector` row -- the armour pieces.
+const PROTECTOR_CATEGORY: u32 = 0x1000_0000;
+/// The category nibble of an `EquipParamAccessory` row -- the talismans.
+const ACCESSORY_CATEGORY: u32 = 0x2000_0000;
+
+/// Whether the engine files a repeat of this id as an inventory entry of its own.
+///
+/// This is the negation of `IsStackable` (`0x14068ddc0`) over the categories a plan grants. That
+/// function dispatches on the category nibble alone and answers false for both nibbles below, so
+/// `AddInventoryEquip` (`0x140246480`) never runs its existing-entry lookup and reaches
+/// `EquipInventoryData::InsertItem` (`0x14024cfd0`), which calls `InsertNormalItem` with no
+/// same-id scan. N calls therefore make N entries, which is what the build's repeated listings
+/// of one armour piece mean.
+///
+/// Asking for N in a single call does not work, and that is why the count has to be carried
+/// across grants instead of folded into one quantity. `InsertItem` clamps the amount to
+/// `GetMaxQuantityForItemEntry` -> `GetMaxItemQuantity` (`0x140674680`), whose protector and
+/// accessory branches look the row up, read nothing out of it, and return a literal 1. Neither
+/// `EquipParamProtector` nor `EquipParamAccessory` declares a stack field for it to read.
+fn entry_per_copy(item_id: u32) -> bool {
+    matches!(
+        item_id & ITEM_CATEGORY_MASK,
+        PROTECTOR_CATEGORY | ACCESSORY_CATEGORY
+    )
+}
 
 type AddInventoryFn = unsafe extern "system" fn(usize, *const i32, u32, bool, bool) -> i32;
 type AddInventoryByHandleFn = unsafe extern "system" fn(usize, *mut u32, u32, bool, bool) -> i32;
@@ -491,6 +516,20 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
     // Pots are already spoken for. A number that cannot go down is not an instrument.
     let mut confirms: Vec<Requested> = Vec::with_capacity(grants.len());
 
+    // How many copies of each id the build has asked for so far.
+    //
+    // A build that lists "Royal Remains Helm" nine times produces nine grants of one, because the
+    // exporter emits one listing per physical inventory entry and the engine files armour and
+    // talismans one entry per copy (see `entry_per_copy`). Each of those grants reconciles against
+    // the live inventory, so mention two sees the copy mention one just created, computes a
+    // shortfall of zero, and reports `ALREADY HELD` -- every listing after the first suppressed by
+    // the one before it. That is where 49 copies of this build's gear were going.
+    //
+    // Comparing against the running total instead makes mention k ask for k, hold k-1, and grant
+    // exactly one. Only for the per-copy categories: a consumable must keep reconciling to its own
+    // `maxNum` target rather than accumulating a fresh target per listing.
+    let mut demanded: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+
     // Read the inventory before granting, so a grant can ask what is already held.
     //
     // A build says "this character HAS these items", not "add these items". Those read the same
@@ -605,10 +644,17 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
         } else {
             grant.also_known_as.clone()
         };
+        let target = if entry_per_copy(full_id) {
+            let running = demanded.entry(full_id).or_default();
+            *running = running.saturating_add(grant.quantity);
+            *running
+        } else {
+            grant.quantity
+        };
         confirms.push(Requested {
             item_id: full_id,
             also_known_as: also_known_as.clone(),
-            requested: grant.quantity,
+            requested: target,
             label: grant.label.clone(),
             pot_group: grant.pot_group,
         });
@@ -638,7 +684,11 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
             }
             held.unsigned_abs()
         });
-        let mut shortfall: u32 = grant.quantity.saturating_sub(held.unwrap_or(0));
+        // `target`, not `grant.quantity`: for the per-copy categories it is this id's running
+        // total across the build, and `GetQuantityByItemId` (`0x14024c1b0`) counts matching
+        // entries rather than reading one entry's quantity when `IsStackable` is false, so `held`
+        // rises by one per copy already granted and the subtraction stays at one.
+        let mut shortfall: u32 = target.saturating_sub(held.unwrap_or(0));
         // What was asked for and why, for the grants where that is a real question. A grant of one
         // needs no explanation; a grant of ninety-nine does, and the number's provenance is the
         // difference between the importer honouring the item's own limit and the importer
@@ -684,7 +734,7 @@ pub unsafe fn grant_all(module_base: usize, grants: &[Grant]) -> GrantOutcome {
                 } else {
                     format!(" (+{} id(s) under the same name)", also_known_as.len())
                 },
-                grant.quantity
+                target
             ));
             continue;
         }

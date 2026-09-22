@@ -355,13 +355,61 @@ elif [ ! -d "$cupcake_global_root/policies/claude" ]; then
 	global_problem="global config has no claude policies: $cupcake_global_root/policies/claude"
 fi
 
+# Bug 5: the engine's WASM module runs out of linear memory on an ordinary long command,
+# and an evaluation that runs out of memory is not a refusal -- it is `{}` at exit 0, which
+# is every policy in the rulebook silent at once.
+#
+# `--wasm-max-memory` defaults to 10MB and the engine's ceiling is 100MB. Measured
+# 2026-09-22 against cupcake 0.5.2 and this policy set, bisecting the length of a
+# `cat > doc.md <<'EOF' ... EOF` artifact write: the first command that aborts is 11,103
+# bytes at the default, and 127,735 bytes at the ceiling. Ten kilobytes is an ordinary
+# handoff document, a `bd create --description`, a long commit message; a hundred and
+# thirty-five is not a command anyone writes. bd er-effects-rs-xktj recorded four of
+# these aborts in one child session, each one classified by the agent that hit it as a
+# guard blocking artifact writes, when what had actually happened is that every guard
+# stopped answering.
+CUPCAKE_WASM_MAX_MEMORY="${CUPCAKE_WASM_MAX_MEMORY:-100MB}"
+
+# What the engine prints to stderr when the wasm module traps. Both lines are checked
+# because the first is the abort and the second is the failure it becomes; either alone
+# is enough to know the verdict on stdout is not a verdict.
+evaluation_aborted() {
+	grep -qE 'OPA policy aborted execution|Policy evaluation failed' "$1"
+}
+
+# The deny that replaces a non-verdict. Carries `systemMessage` as well as the PreToolUse
+# decision, because this hook also fires on PostToolUse, SessionStart, UserPromptSubmit
+# and Stop, where `permissionDecision` is ignored and the failure would otherwise be
+# silent again.
+abort_notice="cupcake could not evaluate this event: the policy engine's WASM module ran out of memory and returned no verdict. This is NOT an allow -- every guard was silent -- so the command is refused instead. Shorten the command: write a long document with the Write tool rather than a heredoc, and split a long \`--description\`/\`-m\` body into a file the command references. CUPCAKE_WASM_MAX_MEMORY is already at the engine's 100MB ceiling; bd er-effects-rs-xktj has the measurements."
+
 run_cupcake() {
-	printf '%s' "$normalized" | "$CUPCAKE_BIN" eval \
+	local err_file out rc
+	err_file="$(mktemp "${TMPDIR:-/tmp}/cupcake-hook-stderr.XXXXXX")"
+	# `rc=$?` rather than `${PIPESTATUS[1]}`: the pipeline runs inside a command
+	# substitution, so it is a subshell and PIPESTATUS in this shell describes the
+	# assignment itself. `$?` of it is the exit status of the substitution, which is
+	# the last command of the pipeline -- cupcake -- which is the value this needs.
+	out="$(printf '%s' "$normalized" | "$CUPCAKE_BIN" eval \
 		--harness claude \
 		--log-level error \
+		--wasm-max-memory "$CUPCAKE_WASM_MAX_MEMORY" \
 		--policy-dir "$repo_root/.cupcake" \
-		"$@"
-	return "${PIPESTATUS[1]}"
+		"$@" 2>"$err_file")"
+	rc=$?
+	cat "$err_file" >&2
+	if evaluation_aborted "$err_file"; then
+		rm -f "$err_file"
+		# No `"` anywhere in the notice, so it needs no JSON escaping and no python: a
+		# second interpreter here would be one more thing that can fail in the path
+		# whose whole job is to not fail open.
+		printf '{"systemMessage": "cupcake-hook: %s", "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "%s"}}' \
+			"$abort_notice" "$abort_notice"
+		return 0
+	fi
+	rm -f "$err_file"
+	printf '%s' "$out"
+	return "$rc"
 }
 
 if [ -z "$global_problem" ]; then
