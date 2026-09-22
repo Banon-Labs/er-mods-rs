@@ -181,7 +181,6 @@ test_absolute_scratch_scripts_dir_is_denied if {
 	some cmd in [
 		"python3 /tmp/claude-1000/scratchpad/scripts/patch.py",
 		"python3 /home/banon/other-repo/scripts/patch.py",
-
 		# The session scratchpad's last component ENDS in the repo name without
 		# being it, so the repo name has to be matched as a whole component.
 		"python3 /tmp/claude-1000/-home-banon-projects-er-mods-rs/scripts/patch.py",
