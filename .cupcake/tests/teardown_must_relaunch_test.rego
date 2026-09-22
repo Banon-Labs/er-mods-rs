@@ -19,10 +19,19 @@ bash_event(cmd) := {
 	"tool_input": {"command": cmd, "description": "test case"},
 }
 
+bash_event_with_evidence(cmd, evidence) := object.union(bash_event(cmd), {
+	"signals": {"frida_evidence": evidence},
+})
+
 rule_ids(denials) := {d.rule_id | some d in denials}
 
 denied(cmd) if {
 	denials := guard.deny with input as bash_event(cmd)
+	RULE in rule_ids(denials)
+}
+
+denied_with_evidence(cmd, evidence) if {
+	denials := guard.deny with input as bash_event_with_evidence(cmd, evidence)
 	RULE in rule_ids(denials)
 }
 
@@ -47,36 +56,72 @@ test_deny_teardown_with_dry_run_launch if {
 	denied("python3 scripts/er-teardown.py; python3 scripts/er-run-branch.py --dry-run --with er-save-game-row")
 }
 
-# --- a teardown that is the whole command is ALLOWED --------------------------
+# --- a teardown that does not relaunch needs measurement evidence -------------
 
-# Ending a run on purpose. The sibling guard refuses a source edit while a run is
-# live, so this has to be expressible or the two rules deadlock each other.
-test_allow_bare_teardown_alone if {
-	not denied("python3 scripts/er-teardown.py")
+# The standalone form is not a deliberate-ending exception without a proof signal: it still leaves
+# the user with no game.
+test_deny_bare_teardown_alone_without_evidence if {
+	denied("python3 scripts/er-teardown.py")
 }
 
-test_allow_teardown_alone_with_redirects if {
-	not denied("python3 scripts/er-teardown.py > /dev/null 2>&1")
+test_deny_teardown_alone_with_redirects_without_evidence if {
+	denied("python3 scripts/er-teardown.py > /dev/null 2>&1")
 }
 
-# `--reason` records why the run ended, in the run's own outcome record. It adds evidence and no
-# work, so a deliberate ending may say what it was. Refusing it taught the agent to drop the flag
-# to get past the guard, which cost the outcome line the only thing it had to say.
-test_allow_teardown_alone_with_a_reason if {
-	not denied("python3 scripts/er-teardown.py --reason band-tables-measured")
+# `--reason` records why a run ended, but it does not prove the run has paid for itself.
+test_deny_teardown_alone_with_a_reason_without_evidence if {
+	denied("python3 scripts/er-teardown.py --reason band-tables-measured")
 }
 
-test_allow_teardown_alone_with_a_joined_reason if {
-	not denied("python3 scripts/er-teardown.py --reason=band-tables-measured > /dev/null 2>&1")
+test_deny_teardown_alone_with_a_joined_reason_without_evidence if {
+	denied("python3 scripts/er-teardown.py --reason=band-tables-measured > /dev/null 2>&1")
 }
 
-# ...but the value is only excused as the flag's operand. A reason does not turn a chained command
-# into a standalone teardown, and a bare word that is not a reason is still trailing work.
+# Exact takeover gap: a bare reasoned teardown is denied until the evidence signal is proven.
+test_deny_takeover_gap_bare_reasoned_teardown_without_evidence if {
+	denied("python3 scripts/er-teardown.py --reason append-line-handle-cache-edit")
+}
+
+# A proven measurement is the checkable condition for ending an agent-owned measurement run.
+test_allow_teardown_alone_after_measurement if {
+	not denied_with_evidence(
+		"python3 scripts/er-teardown.py --reason band-tables-measured",
+		"PROVEN telemetry crate=er-game-base line='measured'",
+	)
+}
+
+test_allow_teardown_alone_with_joined_reason_after_measurement if {
+	not denied_with_evidence(
+		"python3 scripts/er-teardown.py --reason=band-tables-measured > /dev/null 2>&1",
+		"PROVEN frida pid=123 messages=1",
+	)
+}
+
+test_allow_teardown_alone_after_measurement_with_leading_cd if {
+	not denied_with_evidence(
+		"cd /home/banon/projects/er-mods-rs; python3 scripts/er-teardown.py --reason band-tables-measured",
+		"PROVEN telemetry crate=er-title-flow line='measured'",
+	)
+}
+
+test_allow_teardown_alone_after_measurement_with_hook_normalized_cd if {
+	not denied_with_evidence(
+		"cd /home/banon/projects/er-mods-rs python3 scripts/er-teardown.py --reason band-tables-measured",
+		"PROVEN telemetry crate=er-title-flow line='measured'",
+	)
+}
+
 test_deny_teardown_with_a_reason_then_more_work if {
 	denied("python3 scripts/er-teardown.py --reason measured; bash scripts/er-build-dlls.sh er-save-game-row")
 }
 
-# ...but riding along with other work is still the accident this rule exists for.
+test_deny_teardown_with_a_reason_then_more_work_even_after_measurement if {
+	denied_with_evidence(
+		"python3 scripts/er-teardown.py --reason measured; bash scripts/er-build-dlls.sh er-save-game-row",
+		"PROVEN telemetry crate=er-game-base line='measured'",
+	)
+}
+
 test_deny_teardown_then_second_command if {
 	denied("python3 scripts/er-teardown.py > /dev/null 2>&1; bash scripts/er-build-dlls.sh er-save-game-row")
 }

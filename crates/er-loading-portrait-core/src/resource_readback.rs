@@ -441,6 +441,61 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     }
 }
 
+/// What a resolve was asked for. Two callers asking different questions of the same nest -- the
+/// colour texture and its depth sibling, or a walk that excludes the SRV and one that does not --
+/// must not share an answer, so every argument that steers the walk is part of the key. `window` is
+/// [`crate::portrait_load_windows::LOADWIN_INDEX`], which makes an entry expire with the loading
+/// window it was resolved in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ResolveKey {
+    window: usize,
+    start: usize,
+    exclude_v: usize,
+    want_depth: bool,
+}
+
+/// Where a resolved candidate was found, not merely what it was. `obj + off` is the pointer slot the
+/// walk read `v` out of; re-reading it is what lets a cached answer prove the candidate is still
+/// reachable from the nest before anything is dereferenced.
+#[derive(Clone, Copy)]
+struct ResolveSite {
+    obj: usize,
+    off: usize,
+    v: usize,
+}
+
+/// Resolutions from earlier walks. Small and linear on purpose: there are a handful of distinct
+/// nests in flight during a loading window, and a fixed array cannot grow without bound across a
+/// session the way a map keyed on live addresses would.
+static RESOLVE_CACHE: std::sync::Mutex<Vec<(ResolveKey, ResolveSite)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Cached resolves served, and walks actually performed. Both ride the `portrait-scan` log line, so
+/// a run says outright whether the cache is working rather than leaving it to be inferred. Local
+/// rather than telemetry counters: the pair is a property of this one function, and the log line it
+/// annotates is emitted from here.
+static RESOLVE_CACHE_HITS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static RESOLVE_CACHE_WALKS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Entries retained. One per (nest, question) pair in flight; older ones are evicted from the front.
+const RESOLVE_CACHE_MAX: usize = 16;
+
+fn resolve_cache_get(key: ResolveKey) -> Option<ResolveSite> {
+    let cache = RESOLVE_CACHE.lock().ok()?;
+    cache.iter().find(|(k, _)| *k == key).map(|(_, site)| *site)
+}
+
+fn resolve_cache_put(key: ResolveKey, site: ResolveSite) {
+    let Ok(mut cache) = RESOLVE_CACHE.lock() else {
+        return;
+    };
+    cache.retain(|(k, _)| k.window == key.window && *k != key);
+    cache.push((key, site));
+    while cache.len() > RESOLVE_CACHE_MAX {
+        cache.remove(0);
+    }
+}
+
 /// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
 /// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
 /// single-texture nest, then the largest other texture in the offscreen nest as the content source --
@@ -512,12 +567,6 @@ pub unsafe fn find_d3d12_resource_ex(
     .iter()
     .filter_map(|n| unsafe { module_range(n) })
     .collect();
-    append_autoload_debug(format_args!(
-        "portrait-scan: start=0x{start:x} er=[0x{:x},0x{:x}) d3d_modules={}",
-        er.0,
-        er.1,
-        d3d.len()
-    ));
     if d3d.is_empty() {
         append_autoload_debug(format_args!(
             "portrait-scan: NO d3d modules resolved (GetModuleHandleA failed for d3d12core/d3d12/dxgi)"
@@ -538,6 +587,51 @@ pub unsafe fn find_d3d12_resource_ex(
                 .is_some_and(|qi| r.iter().any(|&(lo, hi)| lo + 0x1000 <= qi && qi < hi))
     };
 
+    // Answer from the previous walk's result when it still holds, because the walk is expensive in
+    // a way its shape does not show. Every `safe_read_usize` below is a `ReadProcessMemory`, which
+    // is an ntdll syscall per eight bytes, and the walk makes one per pointer slot of up to 256
+    // objects -- six to nine thousand syscalls. Measured 2026-09-21 on an autoload boot: this
+    // function logged 1702 times between +13663ms and +28342ms, once every 8.6ms, about twice per
+    // frame, and 77 of 127 sampled main-thread rips outside the game image landed in a 10KB window
+    // of `ntdll.dll` while the main thread ran at 85-98 percent of a core.
+    //
+    // The revalidation is three reads and one `QueryInterface`: the slot the candidate was found in
+    // must still hold it (reachability, which a bare pointer cache would not have), its vtable must
+    // still be a d3d12 module's, and it must still answer as the texture kind that was asked for. A
+    // resource that was freed, recreated, or resized out of range fails and falls through to the
+    // full walk. Entries are scoped to the loading window they were resolved in, so a new window
+    // resolves afresh rather than inheriting the previous character's render target.
+    let key = ResolveKey {
+        window: crate::portrait_load_windows::LOADWIN_INDEX.load(Ordering::SeqCst),
+        start,
+        exclude_v,
+        want_depth,
+    };
+    if let Some(site) = resolve_cache_get(key)
+        && (prefer_v == 0 || prefer_v == site.v)
+        && unsafe { safe_read_usize(site.obj + site.off) } == Some(site.v)
+        && unsafe { safe_read_usize(site.v) }.is_some_and(|vt| d3d_vtable_ok(vt, &d3d))
+        && let Some((res, _)) = unsafe {
+            if want_depth {
+                try_depth_texture2d(site.v)
+            } else {
+                try_texture2d(site.v)
+            }
+        }
+    {
+        RESOLVE_CACHE_HITS.fetch_add(1, Ordering::SeqCst);
+        return Some((res, site.v));
+    }
+    RESOLVE_CACHE_WALKS.fetch_add(1, Ordering::SeqCst);
+    append_autoload_debug(format_args!(
+        "portrait-scan: start=0x{start:x} er=[0x{:x},0x{:x}) d3d_modules={} walks={} hits={}",
+        er.0,
+        er.1,
+        d3d.len(),
+        RESOLVE_CACHE_WALKS.load(Ordering::SeqCst),
+        RESOLVE_CACHE_HITS.load(Ordering::SeqCst)
+    ));
+
     let mut visited: Vec<usize> = Vec::new();
     let mut queue: Vec<(usize, u32)> = vec![(start, 0)];
     let mut budget = 0u32;
@@ -545,7 +639,7 @@ pub unsafe fn find_d3d12_resource_ex(
     let mut qi_fails = 0u32; // d3d candidates that failed the ID3D12Resource TEXTURE2D QI
     // Collect the largest TEXTURE2D in the nest -- the offscreen RT, not the 1x1 null/dummy textures
     // vkd3d leaves bound on unused descriptor slots (observed: the gx sub-nest is all 1x1).
-    let mut best: Option<(ID3D12Resource, u64, usize)> = None;
+    let mut best: Option<(ID3D12Resource, u64, usize, ResolveSite)> = None;
     while let Some((obj, depth)) = queue.pop() {
         if budget >= 256 {
             break;
@@ -574,12 +668,14 @@ pub unsafe fn find_d3d12_resource_ex(
                             try_texture2d(v)
                         }
                     } {
+                        let site = ResolveSite { obj, off, v };
                         if prefer_v != 0 && v == prefer_v {
                             // Pinned candidate still reachable + valid: it wins outright.
+                            resolve_cache_put(key, site);
                             return Some((res, v));
                         }
-                        if best.as_ref().is_none_or(|&(_, a, _)| area > a) {
-                            best = Some((res, area, v));
+                        if best.as_ref().is_none_or(|&(_, a, _, _)| area > a) {
+                            best = Some((res, area, v, site));
                         }
                     } else {
                         qi_fails += 1;
@@ -591,7 +687,8 @@ pub unsafe fn find_d3d12_resource_ex(
             off += 8;
         }
     }
-    if let Some((res, area, v)) = best {
+    if let Some((res, area, v, site)) = best {
+        resolve_cache_put(key, site);
         append_autoload_debug(format_args!(
             "portrait-scan: FOUND largest TEXTURE2D at 0x{v:x} area={area} objs={budget} d3d_hits={d3d_hits} qi_fails={qi_fails}"
         ));

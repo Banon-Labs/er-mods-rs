@@ -23,6 +23,28 @@ pub use er_telemetry_core::counters::LOADING_BG_PORTRAIT_NONBLACK;
 /// so a live per-frame (throttled) readback of the built renderer's offscreen makes the displayed head
 /// update (portrait refreshes) instead of freezing on the first captured frame.
 pub use er_telemetry_core::counters::LOADING_BG_PORTRAIT_RGBA_VERSION;
+
+/// Replace the published capture and bump its version, as one step.
+///
+/// Every writer has to do both, and until 2026-09-21 one of them did not: the diagnostic-gated bake
+/// path in `dlstring_lookat_math` stored a fresh capture and left the counter where it was, so the
+/// present-overlay -- which re-uploads its source texture only when the counter moves -- went on
+/// displaying the previous head. The counter is now also what tells `portrait_onto` its cached alpha
+/// bounding box still describes the buffer in front of it, which turns a missed bump from a stale
+/// picture into a stale silhouette. Both failures are a writer forgetting a second statement, so
+/// there is no longer a way to write one without the other.
+///
+/// There is deliberately no clearing helper that bumps alongside this one. `portrait_load_windows`
+/// reads this counter's delta as the number of publishes in a loading window, so a bump on a clear
+/// would count a removal as a publish. A clear needs no bump anyway: it leaves `None` behind, and
+/// the next real publish bumps.
+pub fn publish_portrait_rgba(width: u32, height: u32, pixels: Vec<u8>) {
+    if let Ok(mut published) = LOADING_BG_PORTRAIT_RGBA.lock() {
+        *published = Some((width, height, pixels));
+    }
+    LOADING_BG_PORTRAIT_RGBA_VERSION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// One-shot log latch for the live-display-feed (built RT content -> overlay).
 pub use er_telemetry_core::counters::PROFILE_LIVE_FEED_LOGGED;
 

@@ -1,0 +1,15 @@
+run	profile	t_process	t_world_chr_man	t_player_present	t_player_settled	t_telemetry_world	pid	launch_epoch
+autoload-1	er_quickload.dll alone, autoload slot 0	2.170	15.809	18.821	21.831	27.451	3992171	1790016901.7044084
+autoload-2	er_quickload.dll alone, autoload slot 0	2.181	16.020	19.031	22.044	27.864	3994857	1790016952.0622490
+autoload-3	er_quickload.dll alone, autoload slot 0	2.176	16.418	19.430	22.441	28.465	3996943	1790016991.9773257
+vanilla-user-driven-1	no natives at all, user driving Continue	2.177	14.587	15.588	18.590	-	3999150	1790017043.2429821
+vanilla-user-driven-2	no natives at all, user driving Continue	2.174	13.583	14.584	17.586	-	4001106	1790017091.8737664
+vanilla-user-driven-3	no natives at all, user driving Continue	2.175	14.184	15.185	18.187	-	4002251	1790017121.3532648
+fillrect-autoload-1	er_quickload.dll alone, autoload slot 0, fill_rect_rgb row-copy	2.115	15.161	17.772	20.786	25.809	4163304	1790021055.725763
+fillrect-autoload-2	er_quickload.dll alone, autoload slot 0, fill_rect_rgb row-copy	2.115	15.159	17.771	20.785	25.811	-	-
+fillrect-autoload-3	er_quickload.dll alone, autoload slot 0, fill_rect_rgb row-copy	2.114	15.359	17.970	20.983	26.008	-	-
+portrait-autoload-1	+ portrait borrow and cached alpha scan	2.109	15.353	17.964	20.976	25.396	-	-
+portrait-autoload-2	+ portrait borrow and cached alpha scan	2.111	15.355	17.966	20.979	25.601	-	-
+portrait-autoload-3	+ portrait borrow and cached alpha scan	2.115	15.358	17.770	20.783	25.403	-	-
+control-native-continue-1	er_input_harness.dll alone, harness drives Continue, no cover	2.112	18.534	19.937	22.941	-	-	-
+control-native-continue-2	er_input_harness.dll alone, harness drives Continue, no cover	2.110	18.333	19.735	22.739	-	-	-

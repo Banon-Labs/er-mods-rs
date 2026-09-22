@@ -215,10 +215,28 @@ pub(crate) fn gx_cmd_queue_bucket_summary() -> String {
 /// limit@+0x20 - align4(cursor_lo@+0x28), per the FUN_141c48e80 decompile) and fold it into the
 /// cumulative + per-switch low-water. Returns the sampled remaining for the caller's own logging,
 /// or None on unreadable fields.
+/// Read one `i32` field off a live object this process is currently operating on.
+///
+/// The fault-tolerant `safe_read_i32` beside it is `ReadProcessMemory`, a kernel transition per
+/// field, and it is bought to survive a scanned or stale pointer. `queue` is neither: it is the
+/// first argument of the function this detour wraps, and the original -- which runs at the bottom
+/// of the detour -- dereferences it unconditionally.
+///
+/// The detour made four such reads per call and was called 1,516,591 times in one autoload session,
+/// so the fault tolerance alone was six million syscalls.
+///
+/// # Safety
+///
+/// `addr` must lie inside a live object. Callers pass `queue + <field offset>`; a garbage `queue`
+/// faults here exactly as it would inside the original.
+unsafe fn read_live_i32(addr: usize) -> i32 {
+    unsafe { (addr as *const i32).read_volatile() }
+}
+
 pub(crate) unsafe fn gx_cmd_arena_sample_remaining(queue: usize) -> Option<i64> {
     let arena = queue + GX_CMD_QUEUE_ARENA_OFFSET;
-    let limit = unsafe { safe_read_i32(arena + GX_CMD_ARENA_LIMIT_OFFSET) }?;
-    let cursor_lo = unsafe { safe_read_i32(arena + GX_CMD_ARENA_CURSOR_OFFSET) }?;
+    let limit = unsafe { read_live_i32(arena + GX_CMD_ARENA_LIMIT_OFFSET) };
+    let cursor_lo = unsafe { read_live_i32(arena + GX_CMD_ARENA_CURSOR_OFFSET) };
     let aligned = (cursor_lo.wrapping_add(3)) & !3;
     let remaining = i64::from(limit) - i64::from(aligned);
     let clamped = remaining.max(0) as usize;
@@ -260,8 +278,8 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     param4: u32,
     param5: u32,
 ) -> usize {
-    let count = unsafe { safe_read_i32(queue + GX_CMD_QUEUE_COUNT_OFFSET) }.unwrap_or(-1);
-    let cap = unsafe { safe_read_i32(queue + GX_CMD_QUEUE_CAP_OFFSET) }.unwrap_or(-1);
+    let count = unsafe { read_live_i32(queue + GX_CMD_QUEUE_COUNT_OFFSET) };
+    let cap = unsafe { read_live_i32(queue + GX_CMD_QUEUE_CAP_OFFSET) };
     if count >= 0 {
         GX_CMD_QUEUE_MAX_FILL.fetch_max(count as usize, Ordering::Relaxed);
         GX_CMD_QUEUE_SWITCH_MAX_FILL.fetch_max(count as usize, Ordering::Relaxed);
@@ -274,19 +292,33 @@ pub(crate) unsafe extern "system" fn gx_reserve_cmd_queue_slot_hook(
     // that reads as right: every reserve/enqueue frame would be counted as a producer and the
     // histogram would name the transport wrapper as the thing filling the queue. Resolve it, and
     // when this build has no answer, attribute nothing rather than attributing it wrongly.
-    let (producer, self_in_stack) = match er_title_flow::gx_cmd_queue_wrapper_rva_band() {
-        Some(band) => stack_producer_rva(band),
-        None => {
-            gx_cmd_queue_band_unavailable_once();
-            (0, false)
-        }
-    };
-    let key = if self_in_stack {
-        producer | GX_CMD_QUEUE_SELF_TAG
-    } else {
-        producer
-    };
-    gx_cmd_queue_hist_bump(key);
+    // Attribute producers only in the regime the attribution is for. `stack_producer_rva` walks the
+    // thread's frames, and this detour sits on `reserve_command_queue_slot`, which runs thousands
+    // of times a frame -- one autoload session took `oracle_gx_cmdqueue_reserves` to 1,516,591, so
+    // an unconditional walk is one and a half million stack traces to answer a question about a
+    // queue that spends nearly all of them nowhere near its 192-slot edge.
+    //
+    // `GX_CMD_QUEUE_PEAK_LOG_MIN` is the same occupancy the peak dump below already treats as the
+    // start of the interesting band, and the histogram is only ever read out by that dump and by
+    // the near-full line, both of which fire above it. What this gives up is baseline attribution
+    // far from the edge, which no consumer prints; what it keeps is exactly the producers that
+    // carried the queue from there to the edge, which is the accumulating producer the doc above
+    // promises to name.
+    if count >= 0 && count as usize >= GX_CMD_QUEUE_PEAK_LOG_MIN {
+        let (producer, self_in_stack) = match er_title_flow::gx_cmd_queue_wrapper_rva_band() {
+            Some(band) => stack_producer_rva(band),
+            None => {
+                gx_cmd_queue_band_unavailable_once();
+                (0, false)
+            }
+        };
+        let key = if self_in_stack {
+            producer | GX_CMD_QUEUE_SELF_TAG
+        } else {
+            producer
+        };
+        gx_cmd_queue_hist_bump(key);
+    }
     let arena_remaining = unsafe { gx_cmd_arena_sample_remaining(queue) };
     // Peak-frame bucket snapshot: the growth only materializes in teardown/reload frames (run 10e),
     // so capture the bucket composition as the per-switch high-water climbs, not just near cap.

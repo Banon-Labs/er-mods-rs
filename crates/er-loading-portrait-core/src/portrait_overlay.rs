@@ -102,6 +102,28 @@ pub fn portrait_overlay_active() -> bool {
         .unwrap_or(false)
 }
 
+/// The alpha bounding box and transparency census of one published capture, held so the strided scan
+/// that derives them runs once per capture rather than once per composited frame.
+///
+/// `version` is the value [`LOADING_BG_PORTRAIT_RGBA_VERSION`] had when the scan was taken; the dims
+/// are carried beside it so a capture published at a new size can never match on the counter alone.
+#[derive(Clone, Copy)]
+struct PortraitAlphaScan {
+    version: usize,
+    sw: usize,
+    sh: usize,
+    minx: usize,
+    miny: usize,
+    maxx: usize,
+    maxy: usize,
+    any: bool,
+    counted: usize,
+    transparent: usize,
+}
+
+static PORTRAIT_ALPHA_SCAN: std::sync::Mutex<Option<PortraitAlphaScan>> =
+    std::sync::Mutex::new(None);
+
 /// Composite the captured character portrait onto the overlay's full-frame RGBA buffer (`w`x`h`). Reads the
 /// alpha-keyed head from LOADING_BG_PORTRAIT_RGBA and nearest-neighbour scale-blits it (alpha-over) into an
 /// upper-left rect sized to the screen, so the background/black shows through the keyed-out head silhouette.
@@ -110,10 +132,19 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     if w == 0 || h == 0 {
         return false;
     }
-    let Some((sw, sh, spx)) = LOADING_BG_PORTRAIT_RGBA.lock().ok().and_then(|g| g.clone()) else {
+    // Borrowed, never cloned. This used to `.clone()` the published capture out of the mutex so the
+    // lock could be dropped before the blit -- a full copy of the source buffer on the game's own
+    // main thread, once per composited frame. Sampled at 25ms across one run, `memcpy` held that
+    // thread for 129 of the 144 ticks it spent anywhere in this DLL: 3.23s of 3.60s. Everything
+    // below only reads the pixels, and the publisher is the portrait worker, so holding the guard
+    // for the composite costs that worker a wait it can afford and costs the frame nothing.
+    let Ok(guard) = LOADING_BG_PORTRAIT_RGBA.lock() else {
         return false;
     };
-    let (sw, sh) = (sw as usize, sh as usize);
+    let Some((sw, sh, spx)) = guard.as_ref() else {
+        return false;
+    };
+    let (sw, sh) = (*sw as usize, *sh as usize);
     if sw == 0 || sh == 0 || spx.len() < sw * sh * 4 {
         return false;
     }
@@ -129,38 +160,80 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     // to well within that margin.
     const ATHRESH: u8 = 8;
     const STRIDE: usize = 3;
-    let (mut minx, mut miny, mut maxx, mut maxy) = (sw, sh, 0usize, 0usize);
-    let mut any = false;
-    let (mut counted, mut transparent) = (0usize, 0usize);
-    let mut y = 0;
-    while y < sh {
-        let row = y * sw;
-        let mut x = 0;
-        while x < sw {
-            let a = spx[(row + x) * 4 + 3];
-            counted += 1;
-            if a < PORTRAIT_ALPHA_OPAQUE_MIN {
-                transparent += 1;
+    // Once per published capture, not once per frame. The scan is a pure function of the buffer,
+    // and the buffer is only ever replaced whole -- `LOADING_BG_PORTRAIT_RGBA_VERSION` is bumped at
+    // every replacement -- so its answer cannot change between two frames that see the same version.
+    // Re-deriving it per frame walked a 1-in-9 sample across every cache line of the source, which
+    // on a 1542x1542 capture reads the whole 9.5 MB again to recompute numbers already in hand.
+    let version = LOADING_BG_PORTRAIT_RGBA_VERSION.load(Ordering::SeqCst);
+    let cached = PORTRAIT_ALPHA_SCAN
+        .lock()
+        .ok()
+        .and_then(|g| *g)
+        .filter(|scan| scan.version == version && scan.sw == sw && scan.sh == sh);
+    let scan = match cached {
+        Some(scan) => scan,
+        None => {
+            let (mut minx, mut miny, mut maxx, mut maxy) = (sw, sh, 0usize, 0usize);
+            let mut any = false;
+            let (mut counted, mut transparent) = (0usize, 0usize);
+            let mut y = 0;
+            while y < sh {
+                let row = y * sw;
+                let mut x = 0;
+                while x < sw {
+                    let a = spx[(row + x) * 4 + 3];
+                    counted += 1;
+                    if a < PORTRAIT_ALPHA_OPAQUE_MIN {
+                        transparent += 1;
+                    }
+                    if a > ATHRESH {
+                        any = true;
+                        if x < minx {
+                            minx = x;
+                        }
+                        if x > maxx {
+                            maxx = x;
+                        }
+                        if y < miny {
+                            miny = y;
+                        }
+                        if y > maxy {
+                            maxy = y;
+                        }
+                    }
+                    x += STRIDE;
+                }
+                y += STRIDE;
             }
-            if a > ATHRESH {
-                any = true;
-                if x < minx {
-                    minx = x;
-                }
-                if x > maxx {
-                    maxx = x;
-                }
-                if y < miny {
-                    miny = y;
-                }
-                if y > maxy {
-                    maxy = y;
-                }
+            let scan = PortraitAlphaScan {
+                version,
+                sw,
+                sh,
+                minx,
+                miny,
+                maxx,
+                maxy,
+                any,
+                counted,
+                transparent,
+            };
+            if let Ok(mut g) = PORTRAIT_ALPHA_SCAN.lock() {
+                *g = Some(scan);
             }
-            x += STRIDE;
+            scan
         }
-        y += STRIDE;
-    }
+    };
+    let PortraitAlphaScan {
+        minx,
+        miny,
+        maxx,
+        maxy,
+        any,
+        counted,
+        transparent,
+        ..
+    } = scan;
     if !any || maxx < minx || maxy < miny {
         return false;
     }
@@ -529,9 +602,8 @@ mod tests {
         let (w, h) = (16usize, 12usize);
 
         // UNMASKED: a fully opaque capture must not draw and must not seed the envelope.
-        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-            *g = Some(red_source(false));
-        }
+        let (sw, sh, spx) = red_source(false);
+        publish_portrait_rgba(sw, sh, spx);
         let refused_before = PORTRAIT_DRAW_REFUSED_UNMASKED.load(Ordering::SeqCst);
         let seeded_before = PORTRAIT_CROP_SEED_FRAMES.load(Ordering::SeqCst);
         let hits_before = PORTRAIT_ONTO_DRAW_HITS.load(Ordering::SeqCst);
@@ -561,9 +633,8 @@ mod tests {
         );
 
         // KEYED: the same head with a real alpha cut composites normally.
-        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-            *g = Some(red_source(true));
-        }
+        let (sw, sh, spx) = red_source(true);
+        publish_portrait_rgba(sw, sh, spx);
         assert!(
             portrait_onto(&mut buf, w, h),
             "a depth-keyed capture must still be composited"
@@ -618,9 +689,8 @@ mod tests {
         let _serial = PORTRAIT_GLOBALS.lock().unwrap_or_else(|e| e.into_inner());
         let (w, h) = (16usize, 12usize);
         reset_crop_envelope();
-        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-            *g = Some(red_source(true));
-        }
+        let (sw, sh, spx) = red_source(true);
+        publish_portrait_rgba(sw, sh, spx);
         let mut buf = vec![0u8; w * h * 4];
         let _ = take_crop_log();
         let frames = PORTRAIT_CROP_SEED_N + 5;
@@ -663,9 +733,8 @@ mod tests {
         reset_crop_envelope();
         let _ = take_crop_log();
         assert!(portrait_onto(&mut buf, w, h), "keyed source must composite");
-        if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-            *g = Some(tall_source());
-        }
+        let (sw, sh, spx) = tall_source();
+        publish_portrait_rgba(sw, sh, spx);
         assert!(
             portrait_onto(&mut buf, w, h),
             "taller source must composite"

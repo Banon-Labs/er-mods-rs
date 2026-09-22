@@ -257,6 +257,11 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.tsv",
             "scripts/check.sh",
             "scripts/audit-1170-gate-bypass.baseline.json",
+            # `audit-1170-coverage-inventory.py --selftest` reads this script to learn which
+            # `target/` subdirectory holds builds of other commits, so that it compares this
+            # tree's ledger against a build of this tree. A rename of that directory is a change
+            # to what this stage checks, so the push that makes it has to select the stage.
+            "scripts/check-committed-compiles.sh",
         ),
     ),
     Stage(

@@ -126,7 +126,7 @@ const LOADWIN_CLOSED: usize = 0;
 const LOADWIN_OPEN: usize = 1;
 
 static LOADWIN_STATE: AtomicUsize = AtomicUsize::new(LOADWIN_CLOSED);
-static LOADWIN_INDEX: AtomicUsize = AtomicUsize::new(0);
+pub(crate) static LOADWIN_INDEX: AtomicUsize = AtomicUsize::new(0);
 static LOADWIN_OPEN_MS: AtomicUsize = AtomicUsize::new(0);
 // Cumulative-counter baselines snapshotted at window open.
 static LOADWIN_BASE_ONTO_DRAWS: AtomicUsize = AtomicUsize::new(0);

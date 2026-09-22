@@ -133,16 +133,32 @@ def forward_closure(package: str, crates_dir: Path = CRATES_DIR) -> tuple[list[s
     return sorted(members), sorted(external)
 
 
-def closure_files(members: list[str]) -> list[Path]:
-    """Every working-tree file under the closure's crate dirs: tracked plus untracked-non-ignored.
+def provenance_eligible_source(path: str) -> bool:
+    """Whether a crate-tree file is product source for provenance purposes."""
+    name = Path(path).name
+    if name.startswith("_expr_mutant_") and name.endswith(".rs"):
+        return False
+    return True
 
-    Build output is excluded by git's own ignore rules, which is exactly the boundary wanted --
-    the hash must cover what cargo compiles, not what cargo produced.
+
+def closure_files(members: list[str]) -> list[Path]:
+    """Every product source file under the closure's crate dirs.
+
+    Tracked files plus untracked-non-ignored files are included because Cargo compiles the working
+    tree, not Git. The one excluded shape is `check-expression-constants.py`'s live positive-control
+    scratch file, `_expr_mutant_<pid>.rs`: it is planted under `er-game-base/src` so the scanner can
+    prove it still goes red, but it is not referenced by the crate module tree and is not compiled
+    into any DLL. Recording it in provenance makes a just-built DLL stale the moment the selftest's
+    `finally` block deletes its own litter.
     """
     prefixes = [f"crates/{member}" for member in members]
     tracked = git("ls-files", "--", *prefixes).splitlines()
     untracked = git("ls-files", "--others", "--exclude-standard", "--", *prefixes).splitlines()
-    paths = {line.strip() for line in (*tracked, *untracked) if line.strip()}
+    paths = {
+        line.strip()
+        for line in (*tracked, *untracked)
+        if line.strip() and provenance_eligible_source(line.strip())
+    }
     return sorted(REPO_ROOT / path for path in paths)
 
 
@@ -302,6 +318,15 @@ def selftest() -> int:
 
     small, _ = forward_closure("er-crash-logging")
     check(len(small) < len(members), "a leaf shell has a smaller closure than the product")
+
+    check(
+        not provenance_eligible_source("crates/er-game-base/src/_expr_mutant_123.rs"),
+        "expression-constant positive-control scratch files are excluded from provenance",
+    )
+    check(
+        provenance_eligible_source("crates/er-game-base/src/rva.rs"),
+        "normal Rust source remains provenance-eligible",
+    )
 
     sha_a, count_a = source_sha(small)
     sha_b, count_b = source_sha(small)

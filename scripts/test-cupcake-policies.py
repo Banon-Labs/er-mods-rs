@@ -2,10 +2,12 @@
 """Regression tests for repo-local Cupcake policy decisions."""
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
 import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -78,6 +80,48 @@ WORKTREE_FIXTURE = (
     "branch refs/heads/feature/portrait-stats-crate\n"
 )
 
+# The `frida_evidence` fixtures, for the same reason the four signal overrides above exist: a case
+# whose verdict comes from a live measurement of this machine is not a test, it is a reading of
+# whoever last ran a Frida session here.
+#
+# That is not hypothetical. `allow-teardown-that-is-the-whole-command` passed on a developer box
+# and failed on a GitHub runner, because `teardown_must_relaunch` began consulting this signal and
+# the two hosts disagree about it: `.cupcake/signals/frida_evidence.sh` runs
+# `scripts/er-frida-evidence.py --check`, which reads a log under `XDG_STATE_HOME`, and a runner
+# has never written one. Reproduced with `XDG_STATE_HOME` pointed at an empty directory.
+#
+# Pinned through `ER_FRIDA_EVIDENCE_LOG`, the reader's own log-path override, rather than by
+# teaching the signal a `CUPCAKE_..._OVERRIDE` word. That script documents itself as the one signal
+# here that fails closed, because "a broken evidence reader must not quietly hand out permission to
+# edit" -- and an env var that makes it print `PROVEN` is exactly that hole. Pointing it at a log
+# keeps the verdict coming from the real reader, so these cases exercise it end to end instead of
+# stubbing it out.
+_FRIDA_FIXTURE_DIR = Path(tempfile.mkdtemp(prefix="cupcake-policy-regression-frida-"))
+atexit.register(shutil.rmtree, _FRIDA_FIXTURE_DIR, True)
+
+# Never created. `newest_record` takes the `OSError` as "no log", so the reader prints
+# `UNPROVEN no-frida-evidence` on every host, which is the fail-closed verdict every case gets
+# unless it asks for another one.
+FRIDA_EVIDENCE_ABSENT = _FRIDA_FIXTURE_DIR / "absent.jsonl"
+
+# A telemetry row dated far enough ahead that `head_commit_time` can never spend it. Without that
+# the verdict would depend on when this checkout last committed a Rust change, which is the same
+# host-dependence in a different coat.
+FRIDA_EVIDENCE_PROVEN = _FRIDA_FIXTURE_DIR / "proven.jsonl"
+FRIDA_EVIDENCE_PROVEN.write_text(
+    json.dumps(
+        {
+            "at": 2**40,
+            "kind": "telemetry",
+            "crate": "er-policy-regression",
+            "log": "/dev/null",
+            "line": "[policy-regression] a measurement that is not this machine's",
+        }
+    )
+    + "\n",
+    encoding="utf-8",
+)
+
 
 def run_case(case: PolicyCase) -> None:
     tool_input: dict[str, object] = {"command": case.command}
@@ -147,6 +191,15 @@ def run_case(case: PolicyCase) -> None:
     # what these fixtures are -- synthetic command strings that push nothing. It can never deny,
     # so it cannot mask a different guard's refusal, and it does not assert a run happened.
     env["CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE"] = "NOTRUNTIME"
+
+    # And the fifth host-dependent verdict, pinned for the reason the four above are. This one
+    # arrived late: `CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE` does not reach the guards that read
+    # `frida_evidence`, so until this line they read whatever Frida history this machine happened
+    # to hold, and a case about `teardown_must_relaunch` went green here and red on a runner.
+    # Absent by default is the fail-closed direction: it can only ever withhold the exception, so
+    # it cannot mask a guard that should have denied. A case that wants the other verdict names a
+    # log through `extra_env`, which is applied below and wins.
+    env["ER_FRIDA_EVIDENCE_LOG"] = str(FRIDA_EVIDENCE_ABSENT)
 
     env.update(dict(case.extra_env))
 
@@ -2044,10 +2097,24 @@ def main() -> int:
             False,
             "teardown that does not relaunch",
         ),
+        # Being the whole command stopped being enough. This case used to assert the opposite --
+        # `allow-teardown-that-is-the-whole-command`, no signal, allow -- and that expectation is
+        # the stale half: `teardown_must_relaunch` now excuses a standalone teardown only after a
+        # measurement, so the same string the old case allowed is what the policy's own
+        # `test_deny_teardown_alone_with_a_reason_without_evidence` requires it to deny. Both
+        # directions are asserted here because only the pair can tell "the exception works" apart
+        # from "the exception never fires".
         PolicyCase(
-            "allow-teardown-that-is-the-whole-command",
+            "deny-teardown-alone-without-measurement",
+            "python3 scripts/er-teardown.py --reason policy-regression",
+            False,
+            "teardown that does not relaunch",
+        ),
+        PolicyCase(
+            "allow-teardown-alone-after-measurement",
             "python3 scripts/er-teardown.py --reason policy-regression",
             True,
+            extra_env=(("ER_FRIDA_EVIDENCE_LOG", str(FRIDA_EVIDENCE_PROVEN)),),
         ),
         PolicyCase(
             "deny-inline-python-file-write",
@@ -2065,10 +2132,13 @@ def main() -> int:
     # on 2026-09-21, minutes before the Edit tool was refused for the same change.
     #
     # `CUPCAKE_RUNTIME_EVIDENCE_OVERRIDE` does not reach this guard -- it reads the
-    # `frida_evidence` signal, which measures this checkout. The deny cases are safe to assert
-    # unconditionally only because a commit spends the evidence, so a tree with an unproven
-    # verdict is the normal state; the allow cases below deliberately avoid depending on the
-    # verdict at all, by naming paths the rule does not cover.
+    # `frida_evidence` signal. That signal used to measure whatever Frida history this machine
+    # held, and this block was safe only by accident: the deny cases happen to want the verdict a
+    # freshly committed tree already has, and the allow cases below deliberately avoid depending
+    # on the verdict at all, by naming paths the rule does not cover. Neither is load-bearing any
+    # more. `run_case` now pins the verdict absent for every case through `ER_FRIDA_EVIDENCE_LOG`,
+    # so these assert against a fixed reading rather than a lucky one -- see the fixtures beside
+    # `WORKTREE_FIXTURE`, and the runner-only failure that forced them.
     cases.extend([
         PolicyCase(
             "deny-bash-sed-in-place-on-a-crate-source",

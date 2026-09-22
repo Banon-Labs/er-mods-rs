@@ -862,9 +862,10 @@ def main() -> int:
 
     require(
         "commit-after-confirm" in experiments
-        and "continue_confirm starts the native world stream but does not reliably consume GameMan+0xb78" in experiments
-        and "native-fullread: continue_confirm returned + req_slot disarmed" in experiments,
-        "native fullread commit path must disarm GameMan+0xb78 after continue_confirm to prevent post-world second-deserialize CSGaitem crashes",
+        and "continue_confirm starts the native world stream but does not reliably consume" in experiments
+        and "GameMan::requestedSaveSlotLoadIndex" in experiments
+        and "native-fullread: continue_confirm returned + requestedSaveSlotLoadIndex disarmed" in experiments,
+        "native fullread commit path must disarm GameMan::requestedSaveSlotLoadIndex after continue_confirm to prevent post-world second-deserialize CSGaitem crashes",
         failures,
     )
     require(
@@ -990,7 +991,9 @@ def main() -> int:
         and "TITLE_OWNER_SCAN_VTABLE_HITS" in experiments
         and "TITLE_OWNER_SCAN_TABLE_REJECTS" in experiments
         and "TITLE_OWNER_SCAN_STATE_REJECTS" in experiments
-        and "PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);\n        if tick % OWN_STEPPER_LOG_INTERVAL" in experiments
+        and "PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst)" in experiments
+        and "PRODUCT_CORE_LOGGED_BLOCKER.swap(blocker, Ordering::SeqCst)" in experiments
+        and "tick % OWN_STEPPER_LOG_INTERVAL" in experiments
         and "product_core_owner_ticks" in telemetry_src
         and "product_core_last_owner" in telemetry_src
         and "product_core_last_title_in_loop" in telemetry_src
@@ -1046,12 +1049,12 @@ def main() -> int:
         and "oracle_menu_item_update_hits" in telemetry_src
         and "oracle_menu_continue_candidate_item" in telemetry_src
         and "oracle_menu_continue_candidate_accept_changes" in telemetry_src
-        and "oracle_title_native_ready_hits" in telemetry_src
-        and "oracle_title_native_ready_last_masked" in telemetry_src
-        and "oracle_title_langselect_ready_last_masked" in telemetry_src
         and "title_owner_scan_attempts" in telemetry_src
         and "title_owner_scan_vtable_hits" in telemetry_src
+        and "title_owner_scan_table_rejects" in telemetry_src
+        and "title_owner_scan_state_rejects" in telemetry_src
         and "title_owner_scan_last_candidate" in telemetry_src
+        and "title_owner_scan_last_table" in telemetry_src
         and "title_owner_scan_attempts" in watcher
         and "product_core_owner_ticks" in watcher
         and "product_core_last_owner" in watcher
@@ -1074,10 +1077,12 @@ def main() -> int:
         and "menu_item_update_hits" in watcher
         and "menu_continue_candidate_item" in watcher
         and "menu_continue_candidate_last_accept" in watcher
-        and "title_native_ready_last_masked" in watcher
-        and "title_native_ready_last_ret" in watcher
-        and "title_langselect_ready_last_masked" in watcher
-        and "title_langselect_ready_last_ret" in watcher
+        and "title_owner_scan_attempts" in telemetry_src
+        and "title_owner_scan_vtable_hits" in telemetry_src
+        and "title_owner_scan_table_rejects" in telemetry_src
+        and "title_owner_scan_state_rejects" in telemetry_src
+        and "title_owner_scan_last_candidate" in telemetry_src
+        and "title_owner_scan_last_table" in telemetry_src
         and "product_core_ready_blocker" in telemetry_src
         and "product_core_autoload_ticks" in telemetry_src,
         "DLL telemetry must expose product-core autoload tick/readiness blocker and title-owner scan evidence",

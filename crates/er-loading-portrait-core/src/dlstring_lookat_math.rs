@@ -1026,6 +1026,31 @@ unsafe fn sample_portrait_gxtexture(base: usize, slot: i32) -> usize {
         .unwrap_or(0)
 }
 
+/// Bare name of the marker whose presence in the game directory turns the portrait capture dumps on.
+const PORTRAIT_DUMP_MARKER_FILE_NAME: &str = "er-quickload-portrait-dump.txt";
+
+/// Whether an agent has asked for the raw portrait captures on this machine.
+///
+/// These dumps are whole render targets written to the game directory, and they are one-shot per
+/// process rather than per session, which reads as cheap and is not: measured on one autoload, slots
+/// 102 and 103 wrote 16.5 MB each and slots 0 and 110 a further 256 KB, so a launch nobody was
+/// diagnosing still put 33 MB on the user's disk. `/proc/<pid>/io` for that run shows the whole 33.5
+/// MB landing in a single two-second window, and it is the largest thing this dll writes by two
+/// orders of magnitude.
+///
+/// What the dumps answer -- which texture in the nest is the portrait, and at what resolution -- the
+/// telemetry already answers on every run without touching the disk (`cap_max_side`, `pub_max_side`,
+/// and the `portrait-dump` log line's own dimensions). So the bytes are for the case where someone
+/// wants the actual pixels to convert with `erpx2png`, which is a deliberate act and can afford a
+/// marker file.
+///
+/// Same shape as the autoload debug log's own gate: a marker file beside the log, probed once and
+/// cached, so the steady state costs nothing per call.
+fn portrait_dump_enabled(dir: &std::path::Path) -> bool {
+    static CACHED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| dir.join(PORTRAIT_DUMP_MARKER_FILE_NAME).exists())
+}
+
 /// Per-frame: keep the spared profile renderer drawing and capture the portrait once its model
 /// finishes loading. After Continue the menu-owned offscreen-draw MenuJob stops, so we drive the
 /// spared renderer's offscreen render ourselves each frame (`FUN_140bb8d90`); the global ResMan task
@@ -1041,6 +1066,9 @@ pub fn dump_portrait_rgba(slot: i32, width: u32, height: u32, px: &[u8]) {
         .ok()
         .and_then(|p| PathBuf::from(p).parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
+    if !portrait_dump_enabled(&dir) {
+        return;
+    }
     let name = if slot >= 0 {
         format!("portrait-capture-slot{slot}.bin")
     } else {
@@ -1179,9 +1207,7 @@ pub fn maybe_capture_portrait_gxtexture(base: usize, slot: i32) {
             }
             // Readiness gate: hold back neutral/too-small transient captures (Bug A/B).
             if masked && note_ls_portrait_capture(w, h, &px) {
-                if let Ok(mut g) = LOADING_BG_PORTRAIT_RGBA.lock() {
-                    *g = Some((w, h, px));
-                }
+                publish_portrait_rgba(w, h, px);
                 // Identity tag rides with every bridge write (bd er-effects-rs-dpf6 Phase 1). This
                 // diagnostic-gated path runs on the game thread, so hash the slot record directly.
                 LS_PORTRAIT_PUBLISHED_SLOT.store(

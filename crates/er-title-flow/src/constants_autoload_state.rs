@@ -33,22 +33,23 @@ pub const NATIVE_LOAD_LOG_INTERVAL: u64 = 120;
 
 /// === native full-save-read observe chain (native-full-save-read-slot-resolve-chain-observe-recipe-2026). ===
 /// The slot-resolve global the menu cursor / Continue selection writes: resolver 0x1406793c0 returns
-/// *(u32*)(GameMan+0xb78). Step 1 of the recipe sets GameMan+0xb78=slot before set_save_slot so the
-/// native chain resolves our slot. (Same offset as GAME_MAN_REQUESTED_SLOT_B78_OFFSET; named per the
-/// recipe for the full-read chain.)
-pub const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize =
-    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+/// `GameMan::requestedSaveSlotLoadIndex`. Step 1 of the recipe sets that field before set_save_slot
+/// so the native chain resolves our slot.
+pub const GAME_MAN_SLOT_SELECT_B78_OFFSET: usize = GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET;
 pub const GAME_MAN_SAVE_STATE_OPENING: i32 = 1;
 pub const GAME_MAN_SAVE_STATE_READING: i32 = 2;
-/// GameMan+0xc30 m10 new-game default (golden-oracle-baseline). c30 == this == failure (the char did
-/// not deserialize). The step-6 guard requires c30 != this before the (gated) continue_confirm.
+/// `GameMan::stayInMultipleAreaBlockId` m10 new-game default (golden-oracle-baseline). The loaded
+/// map equaling this usually means the character did not deserialize. The step-6 guard requires a
+/// different map unless the selected slot itself saved at m10.
 pub const FULLREAD_C30_M10_DEFAULT: i32 = 0xa010000;
 /// Minimum real character level (a new-game default is <10; the golden Banon is 150). The step-6
 /// guard requires the live PlayerGameData level >= this and a non-empty name (via char_fingerprint).
 pub const FULLREAD_MIN_REAL_LEVEL: u32 = 10;
-/// Poll arg (0) for the b80 poll 0x140679180 and the lane driver 0x140679510 in the drain phase.
+/// Poll arg (0) for the `GameMan::saveState` poll 0x140679180 and the lane driver 0x140679510 in
+/// the drain phase.
 pub const FULLREAD_POLL_ARG: u8 = 0;
-/// Drain-phase budget: max frames to tick lane+poll waiting for b80==3 before timeout (no write).
+/// Drain-phase budget: max frames to tick lane+poll waiting for resident saveState before timeout
+/// (no write).
 pub const FULLREAD_DRAIN_MAX: u64 = 1200;
 /// Throttle interval for the full-read chain per-frame logging (frames).
 pub const FULLREAD_LOG_INTERVAL: u64 = 30;
@@ -94,7 +95,7 @@ pub static LOADED_PEAK_NAME: std::sync::Mutex<String> = std::sync::Mutex::new(St
 /// open status byte to [iodev+0x40] @0x140e6eb56 -- the device-ready flag the async
 /// router 0x140e6eb80 tests (jne bound real-read 0x140e6f430 / else cold empty-noop
 /// 0x140e6f5b0). The menu-free cold path skips this, so [iodev+0x40]==0 and the cold
-/// async full read no-ops empty (b80 2->0, never resident=3). Calling it before the
+/// async full read no-ops empty (saveState 2->0, never resident=3). Calling it before the
 /// submit routes the read through the bound branch. Internally gated by 0x14240acd0(
 /// [0x143d872e0]) which needs the IO worker registry [0x144843038+0x18]!=0. Decoded in
 /// bd b80-mount-routine-0x140e6e8d0-recipe-and-guard-open-question-2026-06-21.
@@ -184,7 +185,7 @@ pub const IO_WORKER_REGISTRY_RVA: usize = 0x4843038;
 pub const IO_WORKER_REGISTRY_COUNT_18_OFFSET: usize = 0x18;
 /// The FD4 IO worker manager singleton (abs 0x144852f88) the read job is posted to. The
 /// enqueue 0x14240e420 immediately DISCARDS the request (no-op completion 0x14240a000,
-/// status 0xe, b80 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
+/// status 0xe, saveState 2->0 in one frame) when [worker+0x19]!=0 (the worker no-accept/shutdown
 /// byte) @0x14240e472. Prime suspect for the read-completes-empty wall (b80-device-mount-
 /// refuted-...).
 /// Correction (2026-08-01): this is `SaveLoad2::SLSystemImpl*`, not an FD4 IO worker

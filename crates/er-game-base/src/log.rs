@@ -49,6 +49,12 @@ pub const PREVIOUS_RUN_SUFFIX: &str = ".prev";
 /// at most), touched only on the first write to each path.
 static FRESHENED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
+/// Appending handles kept by [`append_line`] after the first write to each path.
+static APPEND_LINE_HANDLES: Mutex<Vec<(PathBuf, fs::File)>> = Mutex::new(Vec::new());
+
+/// Serializes the slow path that opens a cached [`append_line`] handle.
+static APPEND_LINE_OPEN: Mutex<()> = Mutex::new(());
+
 std::thread_local! {
     /// True while this thread is inside [`begin_fresh_run`].
     static FRESHENING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -193,11 +199,37 @@ pub fn open_fresh_run_append(path: &Path) -> Option<fs::File> {
 }
 
 /// Append one line to `path`, creating it if absent and truncating it once per
-/// process. Opens/appends/closes per call (simple, low-frequency callers). For hot
-/// paths prefer a caller-owned persistent handle over [`open_fresh_run_append`].
+/// process. Keeps one handle per path after the first write, so high-frequency
+/// shared log sinks do not pay an open and close for every line.
 pub fn append_line(path: &std::path::Path, args: std::fmt::Arguments<'_>) {
-    if let Some(mut file) = open_fresh_run_append(path) {
+    if write_through_append_line_handle(path, args) {
+        return;
+    }
+    let _opening = APPEND_LINE_OPEN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if write_through_append_line_handle(path, args) {
+        return;
+    }
+    let Some(mut file) = open_fresh_run_append(path) else {
+        return;
+    };
+    let _ = writeln!(file, "{args}");
+    APPEND_LINE_HANDLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push((path.to_path_buf(), file));
+}
+
+fn write_through_append_line_handle(path: &std::path::Path, args: std::fmt::Arguments<'_>) -> bool {
+    let mut handles = APPEND_LINE_HANDLES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some((_path, file)) = handles.iter_mut().find(|(seen, _file)| seen == path) {
         let _ = writeln!(file, "{args}");
+        true
+    } else {
+        false
     }
 }
 

@@ -662,27 +662,70 @@ GAME_ADDRESS_CONTROLS = [
 ]
 
 
+def scratch_target_prefix():
+    """The `target/` subdirectory `check-committed-compiles.sh` compiles other commits into.
+
+    Read out of that script rather than copied, so a rename there lands here as a red gate
+    naming the missing default instead of silently re-admitting a foreign build.
+    """
+    path = os.path.join(REPO, "scripts", "check-committed-compiles.sh")
+    names = set(re.findall(r"\$repo_root/target/([A-Za-z0-9_-]+)", open(path, encoding="utf-8").read()))
+    common = {name for name in names if all(other.startswith(name) for other in names)}
+    return sorted(common)[0] if len(common) == 1 else None
+
+
 def selftest(maps):
     """The tables this reproduces must equal the ones the release build actually generated."""
     failures = []
     import glob
-    generated = sorted(glob.glob(os.path.join(REPO, "target", "**", "address_map_1170.rs"), recursive=True),
-                       key=os.path.getmtime)
+    # ...by a build of this tree, and only of this tree. `scripts/check-committed-compiles.sh`
+    # compiles other commits -- the pushed tips, and in `--selftest` the two historical failures
+    # 15b32ab0 and 11af0c60 -- with `CARGO_TARGET_DIR` pointed at `target/committed-compiles`, and
+    # er-game-base's build.rs writes that commit's ledger there under a fresh mtime. Those two
+    # commits generate 499 call rows against this tree's 608, so whichever of them ran last before
+    # this step became "the newest generated table" and both comparisons went red on a tree where
+    # nothing was wrong. It is a cross-stage race, so it reads as intermittent: the same command
+    # run by hand afterwards compares against the real build and passes.
+    #
+    # The mtime guard below cannot see it. A build of a four-week-old commit made a minute ago is
+    # newer than every map file, which is the only question that guard asks.
+    scratch = scratch_target_prefix()
+    if scratch is None:
+        failures.append("cannot read the committed-compiles target directory out of "
+                        "scripts/check-committed-compiles.sh; a build of another commit would be "
+                        "compared against this tree's ledger")
+    generated = [path for path in glob.glob(os.path.join(REPO, "target", "**", "address_map_1170.rs"),
+                                            recursive=True)
+                 if scratch is None
+                 or not os.path.relpath(path, os.path.join(REPO, "target")).split(os.sep)[0].startswith(scratch)]
+    generated.sort(key=os.path.getmtime)
     # Only a build newer than every map file proves anything. The maps are edited constantly while
     # the migration is in progress, and comparing against a table generated before the last TSV
     # edit reports a difference that is real and means nothing about this script.
     newest_map = max((os.path.getmtime(os.path.join(RECON, f)) for f in os.listdir(RECON)
                       if f.startswith("rva-")), default=0)
+    # A skip here used to print one `selftest SKIP:` line and then `selftest: 0 failure(s)`, which
+    # is what an agent reads, so the gate reported green to everyone who ran it by hand and red
+    # only inside the fan-out, where a concurrent build had refreshed the table. An absence the
+    # summary line does not carry is an absence nobody sees. It is spelled the way the other
+    # skip-aware gates in this suite spell one -- `skipped:` and then `NOT A PASS` -- and the
+    # summary line repeats it, because the summary is the line that gets quoted.
+    skipped = None
     if not generated:
         failures.append("no generated address_map_1170.rs to compare against; build er-game-base first")
     elif os.path.getmtime(generated[-1]) < newest_map:
-        print("selftest SKIP: the newest generated address_map_1170.rs predates the map files; "
-              "rebuild er-game-base to compare")
+        skipped = ("the newest generated address_map_1170.rs predates the map files, so it was "
+                   "built from an older ledger and any difference would say nothing about this "
+                   "script; rebuild er-game-base to compare")
+        print(f"skipped: {skipped}")
+        print("  NOT A PASS: the reproduced CALL and DETOUR tables were not compared against the "
+              "generated ones.")
         generated = []
-    else:
-        pass
 
     if generated:
+        # Named on every run, so that a comparison having happened is something the output says
+        # rather than something inferred from a missing line.
+        print(f"selftest: comparing against {os.path.relpath(generated[-1], REPO)}")
         text = open(generated[-1], encoding="utf-8").read()
 
         def grab(name):
@@ -756,7 +799,8 @@ def selftest(maps):
             failures.append(f"{hex(rva)} ({why}) is a REAL game address and the exclusions ate it")
     for line in failures:
         print(f"selftest FAIL: {line}")
-    print(f"selftest: {len(failures)} failure(s)")
+    tail = "" if skipped is None else " -- NOT A PASS, the generated-table comparison was skipped"
+    print(f"selftest: {len(failures)} failure(s){tail}")
     return 1 if failures else 0
 
 
