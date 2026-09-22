@@ -150,6 +150,23 @@ front, mods and conflicting pairs both.
 
 Picking nothing is a supported answer: it writes a profile that loads no mods at all.
 
+SETTINGS
+Several of these mods read a settings file of their own from the game folder. After the mods
+are installed you are walked through those settings, one file at a time: the keys, what each
+one does in the words its author wrote, and what it is set to now. Enter changes the
+highlighted one, `n` moves to the next file, `q` stops asking.
+
+A file that is already in your game folder is never replaced -- only the keys you actually
+change are touched, and every comment in it stays. A mod with no file yet gets the one that mod
+itself would write, comments and all, so it is there to read and edit before you first launch.
+
+  --keep-configs     touch no settings file at all. This is the one for reinstalling the mods
+                     after an update: every setting stays exactly as it is, including the ones
+                     you changed from inside the game.
+  --default-configs  ask nothing. Write the file for a mod that has none, leave the rest alone.
+  --configure        ask, on a run that would not have -- one that chose its mods with
+                     --select or --defaults.
+
 OTHER OPTIONS
   --dry-run       show the profile it would write, and touch nothing
   --defaults      install the recommended set without the picker
@@ -164,7 +181,7 @@ profile references it where it already is.
 WHERE THINGS GO
   <game>/er-mods/            the mods you chose
   <game>/er-mods/er-mods.me3 the profile
-Some mods read a settings file from the game folder; the installer names them when it finishes.
+  <game>/er-*.toml           the settings files, named when the installer finishes
 
 Built from commit {commit}.
 """

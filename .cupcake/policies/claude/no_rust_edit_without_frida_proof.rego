@@ -43,13 +43,25 @@
 #     log it came from rather than the whole tree. The three conditions that keep it a
 #     measurement (verbatim line, log newer than the last committed Rust change, real
 #     crate) are enforced when the record is written, by the evidence reader.
+#     A THIRD INSTRUMENT is not what arrived 2026-09-22 -- the Bash tool did. The rule
+#     routed on the write TOOLS and denied on `tool_input.file_path`, and a Bash call
+#     carries no such key, so the rule was undefined for it and the gate never saw the
+#     edit. Measured (bd er-effects-rs-wuij): a `for c in ...; do sed -i ... crates/$c/src/config.rs;
+#     done` rewrote four crate sources with no measurement behind it, and the very next
+#     Edit-tool call adding a `pub fn` to the four `lib.rs` files beside them was refused.
+#     Same change, same files, two different answers, decided by which tool typed it. The
+#     description above says every carve-out is a door and the failure it exists to stop
+#     was the agent walking through the door it argued for itself; this one nobody argued
+#     for.
 #   routing:
 #     required_events: ["PreToolUse"]
-#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit"]
+#     required_tools: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
 #     required_signals: ["frida_evidence"]
 package cupcake.policies.claude.no_rust_edit_without_frida_proof
 
 import rego.v1
+
+import data.cupcake.system.commands
 
 # Defaulted at both levels for the same reason the signal below is: `input.tool_input` read
 # directly is undefined when the key is absent, and an undefined term anywhere in the deny body
@@ -109,6 +121,10 @@ evidence := "" if {
 # A Frida verdict opens every crate, because the instrument reaches the game and the game is what
 # all of this eventually talks to.
 proven if {
+	proven_for(file_path)
+}
+
+proven_for(_) if {
 	startswith(evidence, "PROVEN")
 	not telemetry_verdict
 }
@@ -130,9 +146,9 @@ proven if {
 # Rust change, and the crate must exist. What is enforced HERE is the scope -- a measurement of one
 # shell's branch says nothing about any other crate, so it may not open one. That makes this path
 # narrower than the Frida path above, which opens the whole tree.
-proven if {
+proven_for(path) if {
 	telemetry_verdict
-	contains(file_path, concat("", ["crates/", licensed_crate, "/"]))
+	contains(path, concat("", ["crates/", licensed_crate, "/"]))
 }
 
 # Keyed on the two fixed words alone, so a verdict that has lost its `crate=` field is still
@@ -186,6 +202,169 @@ read_only_tools := {"Read", "Grep", "Glob", "NotebookRead", "WebFetch", "WebSear
 
 tool_name := object.get(input, "tool_name", "")
 
+# ---------------------------------------------------------------------------
+# THE SAME GATE FROM THE BASH TOOL (2026-09-22, bd er-effects-rs-wuij)
+#
+# Everything above reads `tool_input.file_path`, which a Bash call does not have. What
+# follows asks the same question of a command's text: does this command WRITE a
+# `crates/**/*.rs` path? It is deliberately written to catch the write verbs and to leave
+# every read alone, because a gate whose purpose is to make an agent go and look must never
+# be the thing that stops it looking -- the same reasoning that put `Read` in the list above.
+#
+# RESIDUE, stated rather than hidden. Three write paths are invisible here and none is
+# closed by pretending otherwise:
+#   * `git apply <patch>` and `patch < <diff>`, where the target path lives in the patch
+#     file and not in the command;
+#   * `cargo fmt` / `cargo clippy --fix`, which rewrite sources while naming none;
+#   * a committed `python3 scripts/<name>.py` that writes a crate source, which the
+#     sibling `bash_no_python_file_write` exempts by design.
+# The first two are mechanical transformations rather than the guessed change this gate
+# exists to stop. The third is a reviewed script, which is the same argument.
+
+# Words of one segment. Tabs folded first, because a segment arrives as raw shell text and
+# `split` on a single space would otherwise weld a tab-separated pair into one word.
+segment_words(segment) := [word |
+	some word in split(replace(segment, "\t", " "), " ")
+	word != ""
+]
+
+# The program this segment runs: the first word that is not a wrapper. A segment carries no
+# separators -- `shell_segments` has already split on them -- so "first non-wrapper" and "in
+# a command slot" are the same word, and this takes the cheaper of the two readings.
+#
+# Cheaper is load-bearing, not a preference. The first draft asked
+# `word_in_command_slot(words, index)` for every index, and that predicate counts the words
+# before `index`, so the rule was quadratic in the length of a segment. A 3.5 KB command
+# whose heredoc body is one segment of ~400 words exhausted the engine's wasm memory and
+# aborted the whole evaluation -- which is not a refusal but `{}` at exit 0, every policy
+# silent at once. Measured 2026-09-22, while adding the tests below.
+program_index(words) := index if {
+	indexes := [j |
+		some j, _ in words
+		not commands.command_slot_wrapper_at(words, j)
+	]
+	count(indexes) > 0
+	index := min(indexes)
+}
+
+program_is(words, name) if {
+	index := program_index(words)
+	words[index] == name
+}
+
+program_is(words, name) if {
+	index := program_index(words)
+	endswith(words[index], concat("", ["/", name]))
+}
+
+# The subcommand, for the programs whose verb is their second word: `git checkout` writes
+# and `git diff` does not, and the difference is not visible in the program alone.
+subcommand(words) := words[index] if {
+	start := program_index(words)
+	indexes := [j |
+		some j, word in words
+		j > start
+		not startswith(word, "-")
+	]
+	count(indexes) > 0
+	index := min(indexes)
+}
+
+# The last operand, which is where `cp`, `mv` and `ln` put the file they overwrite. It is
+# what tells `cp crates/a.rs /tmp/b.rs` (a read of the crate) from `cp /tmp/b.rs
+# crates/a.rs` (a write of it).
+last_operand_index(words) := index if {
+	start := program_index(words)
+	indexes := [j |
+		some j, word in words
+		j > start
+		not startswith(word, "-")
+	]
+	count(indexes) > 0
+	index := max(indexes)
+}
+
+# A Rust source under `crates/`, with any leading redirect character stripped so `>file`
+# and `> file` are the same target.
+crate_rust_path(word) := path if {
+	path := trim_left(word, ">|")
+	endswith(path, ".rs")
+	contains(path, "crates/")
+}
+
+redirect_token(word) if {
+	startswith(word, ">")
+}
+
+redirect_token(word) if {
+	endswith(word, ">")
+}
+
+redirect_token(word) if {
+	endswith(word, ">>")
+}
+
+# Shell redirection into the path, in either spelling.
+segment_writes(words, index) if {
+	startswith(words[index], ">")
+}
+
+segment_writes(words, index) if {
+	index > 0
+	redirect_token(words[index - 1])
+}
+
+# Programs whose whole job is to write the file they are handed.
+segment_writes(words, _) if {
+	some name in {"tee", "patch", "truncate", "install", "dd", "shred"}
+	program_is(words, name)
+}
+
+# In-place editors, which read like a filter until the flag is there.
+segment_writes(words, _) if {
+	some name in {"sed", "perl", "ruby"}
+	program_is(words, name)
+	some word in words
+	startswith(word, "-i")
+}
+
+segment_writes(words, _) if {
+	some name in {"sed", "perl"}
+	program_is(words, name)
+	some word in words
+	word == "--in-place"
+}
+
+# Copy and move write their LAST operand and read the rest.
+segment_writes(words, index) if {
+	some name in {"cp", "mv", "ln", "rsync"}
+	program_is(words, name)
+	index == last_operand_index(words)
+}
+
+# Removal destroys every operand it is given.
+segment_writes(words, index) if {
+	program_is(words, "rm")
+	index > program_index(words)
+}
+
+# `git` by subcommand: `checkout`, `restore`, `apply`, `rm`, `mv`, `clean` and `stash`
+# rewrite the working tree; `diff`, `log`, `show`, `grep` and `blame` read it.
+segment_writes(words, _) if {
+	program_is(words, "git")
+	subcommand(words) in {"apply", "checkout", "restore", "clean", "stash", "rm", "mv"}
+}
+
+# Every `crates/**/*.rs` path this command would write.
+written_crate_paths contains path if {
+	some text in commands.input_executed_texts
+	some segment in commands.shell_segments(text)
+	words := segment_words(segment)
+	some index, word in words
+	path := crate_rust_path(word)
+	segment_writes(words, index)
+}
+
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	not read_only_tools[tool_name]
@@ -199,6 +378,25 @@ deny contains decision if {
 			block_reason,
 			"\n\nTarget: ",
 			file_path,
+			"\nEvidence reader said: ",
+			said,
+		]),
+	}
+}
+
+deny contains decision if {
+	input.hook_event_name == "PreToolUse"
+	tool_name == "Bash"
+	some path in written_crate_paths
+	not proven_for(path)
+
+	decision := {
+		"rule_id": "ER-EFFECTS-NO-RUST-EDIT-WITHOUT-FRIDA-PROOF",
+		"severity": "HIGH",
+		"reason": concat("", [
+			block_reason,
+			"\n\nThis is the Bash spelling of the same edit. A `sed -i`, a `> file`, a `tee`, a `cp` or a `git checkout --` writes the file exactly as the Edit tool does, and until 2026-09-22 this rule could not see any of them because it read `tool_input.file_path` and a Bash call has none.\n\nTarget: ",
+			path,
 			"\nEvidence reader said: ",
 			said,
 		]),

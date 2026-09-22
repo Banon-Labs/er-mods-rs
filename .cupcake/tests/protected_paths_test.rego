@@ -727,10 +727,16 @@ delivered_cases := [
 		"expect": "deny",
 		"rule": "BUILTIN-PROTECTED-PATHS-PARENT",
 	},
+	# Written to `build-support/`, not `crates/`, since 2026-09-22. It is still a Rust file
+	# authored through a heredoc, which is the whole of what this case is about, and the Frida
+	# gate now sees the Bash spelling of a `crates/**/*.rs` write and correctly refuses it (bd
+	# er-effects-rs-wuij). Keeping the old path would have made this case assert that guard
+	# instead of this one, and would have tied its verdict to whether this checkout happens to
+	# carry a measurement.
 	{
 		"name": "delivered-rust-doc-heredoc-with-prose-verb",
-		"command": "cat > crates/demo/src/lib.rs <<'EOF' /// Install the detour into the game image. pub fn install_hook() {} EOF",
-		"affected": ["/home/banon/projects/er-mods-rs/crates/demo/src/lib.rs", "/"],
+		"command": "cat > build-support/demo.rs <<'EOF' /// Install the detour into the game image. pub fn install_hook() {} EOF",
+		"affected": ["/home/banon/projects/er-mods-rs/build-support/demo.rs", "/"],
 		"expect": "allow",
 		"rule": "",
 	},

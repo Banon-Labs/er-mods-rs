@@ -217,6 +217,13 @@ STAGES: tuple[Stage, ...] = (
             # proves the default selection can be loaded together.
             "scripts/me3-dll-conflicts.toml",
             "scripts/me3-dll-catalog.toml",
+            # The installer's settings walkthrough, and the two halves it is generated from. The
+            # collector crate produces the shipped text of the settings files whose content is
+            # computed in Rust, and the tracked file is what `gen-installer-settings.py --check`
+            # reads -- so a push that edited either without this would skip the gate that proves
+            # the installer still offers the defaults those mods ship.
+            "tools/er-config-defaults/**/*",
+            "tools/er-installer/config-defaults.txt",
         ),
     ),
     Stage(

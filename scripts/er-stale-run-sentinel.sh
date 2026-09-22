@@ -317,6 +317,19 @@ def emit(verdict, branch, detail, profiles):
     raise SystemExit(0)
 
 
+def inert_top_level_of(target):
+    """The `INERT_TOP_LEVEL` directory this path is under, or None.
+
+    Pure string work, deliberately: it is asked before the crate map exists so that every
+    branch which could fall back to a teardown can answer for an inert path first.
+    """
+    rel = os.path.relpath(target, REPO_ROOT)
+    if rel.startswith(".."):
+        return None
+    top = rel.split(os.sep, 1)[0]
+    return top if top in INERT_TOP_LEVEL else None
+
+
 def proc_comm(pid):
     try:
         with open(f"/proc/{pid}/comm") as fh:
@@ -501,7 +514,32 @@ def main():
     if stems is None:
         emit("TEARDOWN", "fallback-profile-unreadable", why, profiles)
 
+    # A profile that parses and lists zero natives has been determined, and determined to be
+    # safe: the run loads nothing this workspace builds, so no edit to this tree can stale a
+    # byte of it. Rule 3 in the header ("the loaded-DLL set cannot be determined -> fallback:
+    # tear down") is right for a profile that cannot be read, and this is the opposite case.
+    #
+    # Measured 2026-09-21 (bd er-effects-rs-kvqp): two runs of ~/Elden/vanilla-nomods.me3 were
+    # torn down under `fallback-no-workspace-dll-loaded` with an empty DLL list, and the empty
+    # list is what gave the verdict away -- `loads no DLL this workspace builds: ` with nothing
+    # after the colon reads as indeterminate and was in fact fully determined.
+    if not stems:
+        if MODE == "closure":
+            # An empty closure is the right answer for a run that loads nothing, and it is the
+            # answer `live_er_run.sh` already reads as "no crate is at stake".
+            sys.exit(0)
+        emit("SKIP", "no-natives-in-profile", "live profile loads no native DLL at all", profiles)
+
+    # Which inert top-level directory this path is under, if any. Read here as pure string
+    # work so the branches below can answer for it before any of them can fall back to a
+    # teardown -- an inert directory is inert whatever the profile and whatever cargo says.
+    inert_top = inert_top_level_of(target)
+
     meta, why = workspace_metadata()
+    if meta is None and inert_top is not None:
+        # Nothing under an inert directory compiles, so a crate map this branch cannot read
+        # changes nothing about the answer. The cross-check below is what a readable map buys.
+        emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL (crate map unavailable: {why})", profiles)
     if meta is None:
         emit("TEARDOWN", "fallback-crate-map-unavailable", why, profiles)
 
@@ -520,6 +558,31 @@ def main():
         }
     if not pkg_dir:
         emit("TEARDOWN", "fallback-crate-map-unavailable", "no workspace packages", profiles)
+
+    # The inert-directory answer, asked as soon as the crate map exists and before any branch
+    # that reasons about the live profile. It used to sit below the owner check, after three
+    # fallbacks, and on 2026-09-21 writing docs/recon/boot-timing-2026-09-21.tsv tore down the
+    # run those measurements came from -- under `fallback-no-workspace-dll-loaded`, a branch
+    # about the profile that had nothing to say about the path (bd er-effects-rs-kvqp). The
+    # Rust-edit guard's own refusal text already advertises these directories as editable
+    # mid-run, so the two were contradicting each other.
+    #
+    # The cross-check is unchanged: if a workspace crate has moved under this directory it is
+    # no longer inert and must not be skipped wholesale.
+    if inert_top is not None:
+        crate_under = [
+            n for n, d in pkg_dir.items()
+            if d == os.path.join(REPO_ROOT, inert_top)
+            or d.startswith(os.path.join(REPO_ROOT, inert_top) + os.sep)
+        ]
+        if crate_under:
+            emit(
+                "TEARDOWN",
+                "fallback-inert-dir-holds-crates",
+                f"{inert_top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
+                profiles,
+            )
+        emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL", profiles)
 
     dir_to_pkg = {v: k for k, v in pkg_dir.items()}
     deps = {}
@@ -607,26 +670,13 @@ def main():
             profiles,
         )
 
-    rel = os.path.relpath(target, REPO_ROOT)
-    top = rel.split(os.sep, 1)[0]
-    if top in INERT_TOP_LEVEL:
-        # Cross-check the allowlist against reality: if a workspace crate has moved under this
-        # directory, it is no longer inert and must not be skipped wholesale.
-        crate_under = [n for n, d in pkg_dir.items() if d == os.path.join(REPO_ROOT, top)
-                       or d.startswith(os.path.join(REPO_ROOT, top) + os.sep)]
-        if crate_under:
-            emit(
-                "TEARDOWN",
-                "fallback-inert-dir-holds-crates",
-                f"{top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
-                profiles,
-            )
-        emit("SKIP", "inert-directory", f"{top}/ compiles into no DLL", profiles)
-
+    # The inert-directory branch used to stand here and now runs as soon as the crate map
+    # exists, several fallbacks earlier -- see the comment beside it for the teardown that
+    # move prevents.
     emit(
         "TEARDOWN",
         "fallback-unclassified",
-        f"{rel} is repo source but belongs to no crate and no inert directory",
+        f"{os.path.relpath(target, REPO_ROOT)} is repo source but belongs to no crate and no inert directory",
         profiles,
     )
 
@@ -819,14 +869,16 @@ TOML
   expect_verdict "$REPO_ROOT/scripts/er-launch-gate.py" TEARDOWN "unparseable profile -> fail safe" "$badprof"
   # Fail-safe: the profile does not exist.
   expect_verdict "$REPO_ROOT/scripts/er-launch-gate.py" TEARDOWN "missing profile -> fail safe" "$tmpdir/absent.me3"
-  # Fail-safe: the run loads nothing this workspace builds.
+  # Fail-safe: the run loads nothing this workspace builds. Asked about a path that is neither
+  # a crate nor inert, because an inert path now answers before this branch is reached -- see
+  # the two cases under "must NOT tear down" that pin exactly that.
   local otherprof="$tmpdir/other.me3"
   cat >"$otherprof" <<'TOML'
 profileVersion = "v1"
 [[natives]]
 path = '/nonexistent/SeamlessCoop/ersc.dll'
 TOML
-  expect_verdict "$REPO_ROOT/scripts/er-launch-gate.py" TEARDOWN "no workspace DLL loaded -> fail safe" "$otherprof"
+  expect_verdict "$REPO_ROOT/data/effects.json" TEARDOWN "no workspace DLL loaded -> fail safe" "$otherprof"
 
   echo "  -- must NOT tear down --"
   # The five real false teardowns from 2026-08-04, each of which cost a user-driven invasion.
@@ -836,6 +888,26 @@ TOML
   expect_verdict "$REPO_ROOT/.cupcake/policies/claude/idle_hold.rego" SKIP ".cupcake policy (not code)"
   expect_verdict "$REPO_ROOT/.cupcake/tests/idle_hold_test.rego" SKIP ".cupcake policy test"
   expect_verdict "$REPO_ROOT/docs/plans/world-map-invasion-warp.md" SKIP "docs/"
+  # bd er-effects-rs-kvqp, both halves, measured on this machine 2026-09-21.
+  #
+  # A profile that parses and lists zero natives is determined, and determined to be safe: the
+  # run loads nothing this workspace builds, so no edit here can stale a byte of it. Two runs
+  # of ~/Elden/vanilla-nomods.me3 were torn down under `fallback-no-workspace-dll-loaded` with
+  # an empty DLL list, and the empty list is what gives it away -- "loads no DLL this workspace
+  # builds: " with nothing after the colon reads as indeterminate and was fully determined.
+  local nonativeprof="$tmpdir/no-natives.me3"
+  cat >"$nonativeprof" <<'TOML'
+profileVersion = "v1"
+[[supports]]
+game = "eldenring"
+TOML
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" SKIP "profile with zero natives" "$nonativeprof"
+  expect_verdict "$REPO_ROOT/docs/recon/boot-timing.tsv" SKIP "docs/ under a zero-native profile" "$nonativeprof"
+  # ...and an inert path answers before any branch that reasons about the profile. The first
+  # teardown in that log was a `.tsv` of measurements under docs/, which killed the run the
+  # measurements came from.
+  expect_verdict "$REPO_ROOT/docs/recon/boot-timing.tsv" SKIP "docs/ under a foreign-DLL profile" "$otherprof"
+  expect_verdict "$REPO_ROOT/scripts/er-launch-gate.py" SKIP "scripts/ under a foreign-DLL profile" "$otherprof"
   expect_verdict "$REPO_ROOT/.beads/issues.jsonl" SKIP ".beads/ issue data"
   expect_verdict "$REPO_ROOT/.github/workflows/ci.yml" SKIP ".github/ workflow file"
   expect_verdict "$REPO_ROOT/.claude/settings.json" SKIP ".claude/ settings"

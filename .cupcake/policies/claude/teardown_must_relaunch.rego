@@ -27,7 +27,25 @@ package cupcake.policies.claude.teardown_must_relaunch
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 tool_command := object.get(input.tool_input, "command", "")
+
+# The texts this command actually hands to a shell, quoted operand spans and heredoc
+# bodies anchor-neutralised. Read instead of the raw command for the reason
+# `no_whole_check_sh` records at length: matching the whole command string asks whether
+# two tokens are CO-PRESENT, not whether either one runs.
+#
+# That is not a theoretical distinction here. Measured 2026-09-21 (bd er-effects-rs-ak3q,
+# bd er-effects-rs-if5l): `git commit -F - <<EOF ... EOF` was refused because the commit
+# message described this guard and named the script, and `bd create --description "..."`
+# was refused because the issue text did. The issue reporting the second one had to be
+# filed through a body file written by a separate command in order to exist at all, and the
+# commit message had to be reworded to say "a repo-relative teardown command" instead of
+# naming the file. Rewording a commit message or an issue body to appease a matcher
+# degrades the record this guard is not there to police, and the invoked binary in both
+# cases was `git` and `bd`.
+executed_texts := commands.input_executed_texts
 
 # Whitespace-normalized, so a command written across lines matches the same way in
 # the live engine (which collapses whitespace) and under `opa test` (which does not).
@@ -59,38 +77,6 @@ norm_command_for(cmd) := concat(" ", [word |
 # never as evidence -- `scripts/test-cupcake-policies.py` drives the real runtime and is what
 # caught this.
 
-# Separators become spaces too, so a token that ends a statement (`er-teardown.py;`) is the same
-# token as one that does not, and a quoted or parenthesised invocation still tokenises.
-tokens_for(cmd) := [tok |
-	separated := replace(
-		replace(
-			replace(
-				replace(
-					replace(
-						replace(
-							replace(
-								replace(
-									norm_command_for(cmd),
-									";", " ",
-								),
-								"|", " ",
-							),
-							"&", " ",
-						),
-						"(", " ",
-					),
-					")", " ",
-				),
-				"`", " ",
-			),
-			"'", " ",
-		),
-		`"`, " ",
-	)
-	some tok in split(separated, " ")
-	tok != ""
-]
-
 # Whether a token names one of the scripts this guard understands.
 #
 # This used to split every token and index the last path component. The live Cupcake WASM
@@ -113,53 +99,81 @@ token_names_run_branch(tok) if {
 	endswith(tok, "/er-run-branch.py")
 }
 
-invokes_teardown if {
-	cmd := tool_command()
-	contains(cmd, "er-teardown.py")
-	some tok in tokens_for(cmd)
-	token_names_teardown(tok)
+# `~/Elden/launch.sh` is the user's own launcher; `er-run-gamescope.sh` calls
+# `er-run-branch.py` inside gamescope's nested X server, which is what lets the game boot
+# while the host Xwayland sits at its client ceiling. Added 2026-09-15, after the guard
+# refused a teardown paired with a real relaunch it could not recognise -- a correct rule
+# applied to a launcher that had not been told to it, which leaves the user with no game
+# exactly like the case the rule exists to prevent.
+token_names_user_launcher(tok) if {
+	endswith(tok, "Elden/launch.sh")
+}
+
+token_names_user_launcher(tok) if {
+	tok == "er-run-gamescope.sh"
+}
+
+token_names_user_launcher(tok) if {
+	endswith(tok, "/er-run-gamescope.sh")
+}
+
+# A teardown that will actually kill something: the script stands in a command slot, and
+# its own next word is not `--status`.
+#
+# Folding `--status` in here rather than testing it as a separate `status_only` closes a
+# hole the two-rule shape had: `er-teardown.py --status; er-teardown.py` satisfied "some
+# teardown is followed by --status" and the real kill chained behind it went unexamined.
+killing_teardown if {
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, word in words
+	token_names_teardown(word)
+	commands.word_in_command_slot(words, index)
+	next_word(words, index) != "--status"
+}
+
+# The word after `index`, or the empty string when the invocation ends the text. Spelled
+# with `else` because a bare `words[index + 1]` is undefined past the end, and an undefined
+# term takes the whole rule with it -- here that would mean a teardown written as the last
+# word of a command was not a teardown at all.
+next_word(words, index) := word if {
+	index + 1 < count(words)
+	word := words[index + 1]
+} else := ""
+
+# Any invocation of the teardown script, with or without a path prefix, `--status` included.
+runs_teardown if {
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, word in words
+	token_names_teardown(word)
+	commands.word_in_command_slot(words, index)
 }
 
 invokes_run_branch if {
-	cmd := tool_command()
-	contains(cmd, "er-run-branch.py")
-	some tok in tokens_for(cmd)
-	token_names_run_branch(tok)
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, word in words
+	token_names_run_branch(word)
+	commands.word_in_command_slot(words, index)
 }
 
-# Any invocation of the teardown script, with or without a path prefix.
-runs_teardown if {
-	invokes_teardown
-}
-
-# Read-only: reports what is running and kills nothing. `--status` has to be the teardown's own
-# next word, not merely present somewhere in the command.
-status_only if {
-	cmd := tool_command()
-	contains(cmd, "er-teardown.py")
-	tokens := tokens_for(cmd)
-	some i
-	token_names_teardown(tokens[i])
-	tokens[i + 1] == "--status"
+invokes_user_launcher if {
+	some text in executed_texts
+	words := commands.command_slot_words(text)
+	some index, word in words
+	token_names_user_launcher(word)
+	commands.word_in_command_slot(words, index)
 }
 
 # The relaunch that has to ride along. `er-run-branch.py` is the sanctioned
-# launcher in this repo; `~/Elden/launch.sh` is the user's own and is accepted too.
+# launcher in this repo; `~/Elden/launch.sh` and `er-run-gamescope.sh` are accepted too.
 relaunches if {
 	invokes_run_branch
 }
 
 relaunches if {
-	contains(norm_command_for(tool_command()), "Elden/launch.sh")
-}
-
-# `er-run-gamescope.sh` is a launcher too: it calls `er-run-branch.py` inside gamescope's nested
-# X server, which is what lets the game boot while the host Xwayland sits at its client ceiling.
-# Added 2026-09-15, after the guard refused a teardown paired with a real relaunch it could not
-# recognise -- a correct rule applied to a launcher that had not been told to it, which leaves
-# the user with no game exactly like the case the rule exists to prevent.
-relaunches if {
-	contains(norm_command_for(tool_command()), "er-run-gamescope.sh")
+	invokes_user_launcher
 }
 
 # A dry run stages and launches nothing, so pairing a teardown with one would
@@ -167,13 +181,9 @@ relaunches if {
 #
 # Asked per SEGMENT, because `--dry-run` only excuses nothing when it belongs to the launch: a
 # teardown chained with a real launch and some other command's `--dry-run` is still a relaunch.
-command_segments_for(cmd) := split(replace(replace(norm_command_for(cmd), "|", ";"), "&", ";"), ";")
-
 dry_run if {
-	cmd := tool_command()
-	contains(cmd, "er-run-branch.py")
-	contains(cmd, "--dry-run")
-	some segment in command_segments_for(cmd)
+	some text in executed_texts
+	some segment in commands.shell_segments(text)
 	contains(segment, "er-run-branch.py")
 	contains(segment, "--dry-run")
 }
@@ -222,6 +232,12 @@ cd_segment(segment) if {
 	words[0] == "cd"
 }
 
+# Asked of one segment, which is what survived the two rewrites this rule was caught between.
+# `main` sharpened the old whole-command `teardown_alone` to open on `runs_teardown`, so a script
+# named only in a commit message or an issue body could not satisfy it. That sharpening now lives
+# one level up, in the `killing_teardown` this policy denies on, so the exception never sees a
+# command whose teardown is prose. What is left for the exception to decide is narrower, and
+# unchanged by either side: that this segment's only unexcused word is the script itself.
 teardown_segment_alone(segment) if {
 	contains(segment, "er-teardown.py")
 	words := [tok |
@@ -280,8 +296,7 @@ block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `script
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
-	runs_teardown
-	not status_only
+	killing_teardown
 	not teardown_alone_after_measurement
 	not relaunches
 
@@ -295,8 +310,7 @@ deny contains decision if {
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
-	runs_teardown
-	not status_only
+	killing_teardown
 	relaunches
 	dry_run
 

@@ -243,6 +243,8 @@ portable	-	check-quit-row-flow-overlap.py --selftest	source/AST/text analysis on
 portable	-	check-quit-row-flow-overlap.py	source/AST/text analysis only	product
 portable	-	gen-installer-catalog.py --selftest	source/AST/text analysis only	product
 portable	-	gen-installer-catalog.py --check	source/AST/text analysis only	product
+portable	-	gen-installer-settings.py --selftest	source/AST/text analysis only	product
+portable	-	gen-installer-settings.py --check	source/AST/text analysis only	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product
 portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses
