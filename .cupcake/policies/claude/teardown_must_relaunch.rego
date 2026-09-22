@@ -22,6 +22,7 @@
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
+#     required_signals: ["frida_evidence"]
 package cupcake.policies.claude.teardown_must_relaunch
 
 import rego.v1
@@ -177,65 +178,60 @@ dry_run if {
 	contains(segment, "--dry-run")
 }
 
-# A teardown that is the WHOLE command, ending a run on purpose.
-#
-# The harm this rule exists to stop was a teardown that rode along with OTHER work
-# -- `er-teardown.py; er-build-dlls.sh ...` read as launch hygiene and was a kill.
-# A teardown alone is the honest form of "this run is finished", and forbidding it
-# deadlocked the very workflow the sibling guard demands: a source edit is refused
-# while a run is live, so ending that run has to be expressible without also
-# relaunching a build that is about to be replaced.
-#
-# `>/dev/null`-style redirections are allowed because they suppress output rather
-# than add work; a `;`, `|`, `&` or `&&` that introduces another command is not.
-#
-# Read off `norm_command_for(tool_command())`, which is split on whitespace ONLY. That is what makes the
-# rule correct: a separator stays glued to its token, so `er-teardown.py;` is not the bare script
-# name and a chained command cannot pass as one that stands alone.
-interpreter_word(tok) if {
-	tok in {"python", "python3"}
+signals := object.get(input, "signals", {})
+raw_evidence := object.get(signals, "frida_evidence", "")
+
+evidence := raw_evidence if {
+	is_string(raw_evidence)
 }
 
-# `>`, `2>&1`, `>/dev/null` and the `/dev/null` operand of a detached `>`.
-redirect_word(tok) if {
-	contains(tok, ">")
+evidence := "" if {
+	not is_string(raw_evidence)
 }
 
-redirect_word(tok) if {
-	startswith(tok, "/dev/")
+measurement_proven if {
+	startswith(evidence, "PROVEN")
 }
 
-# `--reason <why>`, which records why the run ended in the run's own outcome record.
-#
-# Allowed on a standalone teardown because it adds evidence, not work. Without it the only
-# expressible form of "this run is finished" was the one that says nothing about why, so the
-# outcome line read `reason=agent-teardown` for every deliberate ending -- and this guard was
-# teaching the agent to drop the flag to get past it. Both spellings, since `--reason=why` is one
-# token and `--reason why` is two.
-reason_word(_, tok) if {
-	tok == "--reason"
+# A standalone teardown is allowed only after the run has produced the measurement that justified
+# having the game up. That is the workflow the live-source-edit guard demands: measure, end the
+# agent-owned run, edit. Without the evidence signal this remains blocked, so a run the user is
+# inspecting cannot be killed just because the command is bare.
+standalone_segments_for(cmd) := split(replace(norm_command_for(cmd), "|", ";"), ";")
+
+teardown_alone_after_measurement if {
+	measurement_proven
+	segments := [segment |
+		some segment in standalone_segments_for(tool_command())
+		norm_command_for(segment) != ""
+	]
+	non_cd := [segment |
+		some segment in segments
+		not cd_segment(segment)
+	]
+	count(non_cd) == 1
+	teardown_segment_alone(non_cd[0])
 }
 
-reason_word(_, tok) if {
-	startswith(tok, "--reason=")
-}
-
-# The value that follows a separate `--reason`. Indexed rather than matched, because the value is
-# arbitrary text and nothing about the word itself says it belongs to the flag.
-reason_value_at(words, i) if {
-	i > 0
-	words[i - 1] == "--reason"
-}
-
-teardown_alone if {
-	cmd := tool_command()
-	contains(cmd, "er-teardown.py")
+cd_segment(segment) if {
 	words := [tok |
-		some tok in split(norm_command_for(cmd), " ")
+		some tok in split(norm_command_for(segment), " ")
+		tok != ""
+	]
+	count(words) == 2
+	words[0] == "cd"
+}
+
+teardown_segment_alone(segment) if {
+	contains(segment, "er-teardown.py")
+	words := [tok |
+		some tok in split(norm_command_for(segment), " ")
 		tok != ""
 	]
 	rest := [words[i] |
 		some i, _ in words
+		not cd_word(words[i])
+		not cd_value_at(words, i)
 		not interpreter_word(words[i])
 		not redirect_word(words[i])
 		not reason_word(words, words[i])
@@ -245,6 +241,40 @@ teardown_alone if {
 	token_names_teardown(rest[0])
 }
 
+cd_word(tok) if {
+	tok == "cd"
+}
+
+cd_value_at(words, i) if {
+	i > 0
+	words[i - 1] == "cd"
+}
+
+interpreter_word(tok) if {
+	tok in {"python", "python3"}
+}
+
+redirect_word(tok) if {
+	contains(tok, ">")
+}
+
+redirect_word(tok) if {
+	startswith(tok, "/dev/")
+}
+
+reason_word(_, tok) if {
+	tok == "--reason"
+}
+
+reason_word(_, tok) if {
+	startswith(tok, "--reason=")
+}
+
+reason_value_at(words, i) if {
+	i > 0
+	words[i - 1] == "--reason"
+}
+
 block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 scripts/er-teardown.py > /dev/null 2>&1; python3 scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status` is read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game."
 
 deny contains decision if {
@@ -252,7 +282,7 @@ deny contains decision if {
 	input.tool_name == "Bash"
 	runs_teardown
 	not status_only
-	not teardown_alone
+	not teardown_alone_after_measurement
 	not relaunches
 
 	decision := {
