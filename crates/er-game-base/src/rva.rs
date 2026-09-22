@@ -739,8 +739,33 @@ pub const GFX_TEXT_FIELD_SET_SELECTION_RVA: usize = 0x1198e50;
 pub const PROFILE_SETTEXT_RVA: usize = 0x74a000;
 
 /// `CS::SceneObjProxy::assignComponentWithName`, the named-child binder every proxy resolve goes
-/// through.
+/// through. Callable from this side; not a hook site, because it is **variadic** -- Ghidra types
+/// its fourth parameter `va_list`, its prologue homes both `r8` and `r9`
+/// (`mov [rsp+0x18],r8 ; mov [rsp+0x20],r9`), and it reads format arguments out of the caller's
+/// frame from `[rsp+0x28]` onward. A detour here cannot be argument-transparent without knowing
+/// every caller's arity, and there are 1297 references to it. Hook
+/// [`SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA`] instead. Calling it with a literal name is fine: a format
+/// with no conversions reads no varargs.
 pub const TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA: usize = 0x74a2f0;
+
+/// `CS::SceneObjProxy::SceneObjProxy(this /rcx/, src /rdx/, name /r8/, r9)` -- the constructor
+/// `assignComponentWithName` calls once it has formatted the name, and the argument-transparent
+/// place to observe a named-child bind.
+///
+/// Fixed arity: one home (`48 89 4c 24 08 57 48 83 ec 30 48 c7 44 24 20 fe ff ff ff`), byte-identical
+/// in `eldenring-deobf.bin` at this rva and in `eldenring-deobf-1.17.1.bin` at `0x74b610`, which is
+/// the pair `docs/recon/rva-map-1162-to-1170.functions.tsv` already records. One call site,
+/// `FUN_14074abc0+0x24`, so hooking it observes the same binds the variadic entry would.
+///
+/// `name` is not a `char*`: the constructor resolves it as `p = *(name + 0x38); text = p ? p + 0x10
+/// : name` before handing it to `FUN_140d7f9d0`, which does `strchr(text, '/')` -- so `text` is the
+/// `NUL`-terminated path, and that indirection is what a reader here must repeat.
+pub const SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA: usize = 0x74a7c0;
+
+/// Within the name object handed to [`SCENE_OBJ_PROXY_CTOR_NAME_BIND_RVA`]: a non-zero pointer
+/// here means the text lives at `*(name + 0x38) + 0x10` rather than at `name` itself.
+pub const SCENE_OBJ_NAME_INDIRECT_38_OFFSET: usize = 0x38;
+pub const SCENE_OBJ_NAME_INDIRECT_TEXT_10_OFFSET: usize = 0x10;
 
 /// Lower-level GFx display-info setters for a `CSScaleformValue`'s position(x,y) and scale(x,y).
 /// Dump `0x140d83ed0` / `0x140d84140` -> deobf and live `0x140d83e20` / `0x140d84090`. The scale

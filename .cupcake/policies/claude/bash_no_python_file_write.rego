@@ -175,15 +175,16 @@ runs_a_python_script_file if {
 }
 
 # The exemption itself, narrowed to match what the block message has always
-# promised ("A committed `python3 scripts/<name>.py` is also allowed"): the
-# path must be a repo-relative file under the repo's tracked `scripts/`
-# directory tree -- `scripts/<name>.py`, `scripts/<subdir>/<name>.py` -- and
-# nothing else. NOT an absolute path (`/tmp/...`, `/home/...`), NOT a
-# home-relative path (`~/...`), and NOT a `..` escape out of the tree: none of
-# those name a file this repo has committed or reviewed, no matter how closely
-# they resemble `scripts/<name>.py` in shape. The old regex checked only the
-# `.py` suffix and the absence of a leading dash, so `/tmp/.../patch.py` and
-# `~/scratch/patch.py` both satisfied it -- the bypass an earlier rewrite closed.
+# promised ("A committed script under this repo's `scripts/` is also allowed"):
+# the path must name a file under this repo's tracked `scripts/` directory tree
+# -- `scripts/<name>.py`, `scripts/<subdir>/<name>.py` -- reached either
+# repo-relatively or through this repo's own absolute path. Not some other
+# absolute path (`/tmp/...`, `/home/banon/scripts/...`), not a home-relative
+# path (`~/...`), and not a `..` escape out of the tree: none of those name a
+# file this repo has committed or reviewed, no matter how closely they resemble
+# `scripts/<name>.py` in shape. The old regex checked only the `.py` suffix and
+# the absence of a leading dash, so `/tmp/.../patch.py` and `~/scratch/patch.py`
+# both satisfied it -- the bypass an earlier rewrite closed.
 committed_script_path(path) if {
 	startswith(path, "scripts/")
 	not contains(path, "..")
@@ -192,6 +193,40 @@ committed_script_path(path) if {
 committed_script_path(path) if {
 	startswith(path, "./scripts/")
 	not contains(path, "..")
+}
+
+# This repo's own absolute spelling names the same committed file, added
+# 2026-09-21. The narrowing above admitted the repo-relative form alone, and a
+# guard that rewards one spelling teaches it: the agent then copies that
+# spelling into a user-facing message, where the user's shell is in some other
+# directory and `python3 scripts/er-teardown.py` names nothing -- measured on a
+# teardown the user asked for twice and could not run. A path is admitted here
+# because of the file it lands on, not because of how it was typed, so a
+# `.../er-mods-rs/.../scripts/<name>.py` prefix joins the bare and `./` forms.
+# User directive: "AGENTS.md and Cupcake block text need to be rectified."
+#
+# `er-mods-rs` has to be a whole path component, and the session scratchpad is
+# why. It lives at `/tmp/claude-1000/-home-banon-projects-er-mods-rs/`, whose
+# last component ends in the repo name without being it; a suffix test would
+# have admitted every uncommitted scratch script filed under a `scripts/`
+# subdirectory there, re-opening the hole the narrowing closed. Splitting the
+# path on `/` is what makes the component test exact -- the same reason the
+# rules above ask about the path rather than about the command, and it needs no
+# regex in a rule that runs once per operand of every command.
+#
+# The intermediate components are unconstrained so that a worktree checkout of
+# this repo (`.../er-mods-rs/.worktrees/<name>/scripts/...`) is the same tree
+# under a different prefix, which is what it is.
+committed_script_path(path) if {
+	startswith(path, "/")
+	not contains(path, "..")
+	segments := split(path, "/")
+	some repo_index
+	segments[repo_index] == "er-mods-rs"
+	some scripts_index
+	scripts_index > repo_index
+	segments[scripts_index] == "scripts"
+	scripts_index < count(segments) - 1
 }
 
 runs_a_committed_script if {
@@ -215,7 +250,7 @@ every_script_operand_is_committed(text) if {
 
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"
 
-block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed `python3 scripts/<name>.py` is also allowed; an inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
+block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py`; an inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
