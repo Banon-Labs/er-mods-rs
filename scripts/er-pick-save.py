@@ -56,6 +56,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 ORACLE_SCRIPT = REPO_ROOT / "scripts" / "save-slot-oracle.py"
 SAVE_REDIRECT_LIB = REPO_ROOT / "crates" / "er-save-redirect" / "src" / "lib.rs"
 STAGE_DIR_MARKER = "er-quickload-save-redirect-stage"
+# The same subtree under the name the DLL used before it was renamed. Both are private copies the
+# save redirect writes, never sources, and both are still on disk: `save-files/25r/` carries an
+# `er-effects-save-redirect-stage/eldenring/<steamid>/ER0000.co2` from 2026-08-22. Skipping only
+# the current spelling let that copy into the draw, and on 2026-09-22 it was the only candidate
+# `er-pick-save.py --slot 0 --root save-files/25r` returned -- so er-run-branch.py, which filters
+# the draw down to the configured `save_file`, refused a launch saying the real ER0000.sl2 beside
+# it held no occupied character.
+LEGACY_STAGE_DIR_MARKER = "er-effects-save-redirect-stage"
 
 # How many decoded launch-gate identities to keep. Entries are keyed by container state, so a stale
 # one can never be returned -- this only stops the file growing without bound across sessions.
@@ -151,7 +159,7 @@ def eligible_saves(root: Path, container: str, expected_bytes: int) -> list[Path
     for path in sorted(root.rglob("ER0000.*")):
         if path.suffix.lower() not in suffixes:
             continue
-        if STAGE_DIR_MARKER in path.parts:
+        if STAGE_DIR_MARKER in path.parts or LEGACY_STAGE_DIR_MARKER in path.parts:
             continue
         try:
             if path.stat().st_size != expected_bytes:
