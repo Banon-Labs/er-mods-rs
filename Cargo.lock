@@ -3191,6 +3191,7 @@ name = "er-quit-menu"
 version = "0.1.0"
 dependencies = [
  "er-game-base",
+ "er-hook",
  "er-quit-menu-core",
 ]
 
