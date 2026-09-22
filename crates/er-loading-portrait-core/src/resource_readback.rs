@@ -441,28 +441,6 @@ unsafe fn try_depth_texture2d(ptr: usize) -> Option<(ID3D12Resource, u64)> {
     }
 }
 
-/// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
-/// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
-/// single-texture nest, then the largest other texture in the offscreen nest as the content source --
-/// deterministic where plain "largest texture" is ambiguous between two same-size textures.
-/// `prefer_v` (0 = none): a previously pinned candidate -- if the scan reaches it and it still QIs as a
-/// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
-/// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
-///
-/// # Safety
-///
-/// The address argument carries no precondition: every pointer hop is a fault-tolerant
-/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
-///
-/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
-/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
-/// has already freed is an access violation this crate cannot catch. Call only while the
-/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
-/// across menu->world teardown. Render thread only: the resolve caches and the shared
-/// `RB_*` D3D12 objects are used without locking.
-///
-/// `exclude_v` and `prefer_v` are compared as raw candidate pointers only and are never
-/// dereferenced without the same QI validation, so a stale pin is a miss, not a fault.
 /// What a resolve was asked for. Two callers asking different questions of the same nest -- the
 /// colour texture and its depth sibling, or a walk that excludes the SRV and one that does not --
 /// must not share an answer, so every argument that steers the walk is part of the key. `window` is
@@ -518,6 +496,28 @@ fn resolve_cache_put(key: ResolveKey, site: ResolveSite) {
     }
 }
 
+/// Like `find_d3d12_resource` but (a) returns the candidate object pointer alongside the resource, and
+/// (b) skips any candidate whose pointer == `exclude_v`. Lets the RT->SRV copy pick the SRV from its own
+/// single-texture nest, then the largest other texture in the offscreen nest as the content source --
+/// deterministic where plain "largest texture" is ambiguous between two same-size textures.
+/// `prefer_v` (0 = none): a previously pinned candidate -- if the scan reaches it and it still QIs as a
+/// valid texture, it wins immediately over the largest-candidate heuristic, so the resolved content source
+/// cannot flip between same-size RTs frame-to-frame (the cross-slot portrait-swap bug).
+///
+/// # Safety
+///
+/// The address argument carries no precondition: every pointer hop is a fault-tolerant
+/// `safe_read_*`, so 0, garbage, or a freed address yields `None` instead of a fault.
+///
+/// The caller owns lifetime. The walk finishes with a real `QueryInterface` on a
+/// candidate whose vtable lives in a d3d12 module, and a QI against an object the game
+/// has already freed is an access violation this crate cannot catch. Call only while the
+/// renderer that owns this nest is still live (the draw tick's model/vtable gate), never
+/// across menu->world teardown. Render thread only: the resolve caches and the shared
+/// `RB_*` D3D12 objects are used without locking.
+///
+/// `exclude_v` and `prefer_v` are compared as raw candidate pointers only and are never
+/// dereferenced without the same QI validation, so a stale pin is a miss, not a fault.
 pub unsafe fn find_d3d12_resource_ex(
     start: usize,
     exclude_v: usize,
@@ -608,6 +608,7 @@ pub unsafe fn find_d3d12_resource_ex(
         want_depth,
     };
     if let Some(site) = resolve_cache_get(key)
+        && (prefer_v == 0 || prefer_v == site.v)
         && unsafe { safe_read_usize(site.obj + site.off) } == Some(site.v)
         && unsafe { safe_read_usize(site.v) }.is_some_and(|vt| d3d_vtable_ok(vt, &d3d))
         && let Some((res, _)) = unsafe {
@@ -618,10 +619,8 @@ pub unsafe fn find_d3d12_resource_ex(
             }
         }
     {
-        if prefer_v == 0 || prefer_v == site.v {
-            RESOLVE_CACHE_HITS.fetch_add(1, Ordering::SeqCst);
-            return Some((res, site.v));
-        }
+        RESOLVE_CACHE_HITS.fetch_add(1, Ordering::SeqCst);
+        return Some((res, site.v));
     }
     RESOLVE_CACHE_WALKS.fetch_add(1, Ordering::SeqCst);
     append_autoload_debug(format_args!(
