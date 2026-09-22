@@ -166,7 +166,7 @@ pub fn world_simulating() -> bool {
 // at +0xb80 (0 idle -> non-0 busy) and the NowLoading latch. A driven Continue "took effect" once
 // one of these trips within the frame budget -- else the harness is derailed (bd harness-drive-
 // semaphore-gated-teardown-on-miss). GameMan singleton RVA 0x3d69918
-// (profile_rows_system_quit_menu.rs), b80 = GAME_MAN_SAVE_STATE_B80_OFFSET; NowLoading singleton
+// (profile_rows_system_quit_menu.rs), saveState = GAME_MAN_SAVE_STATE_B80_OFFSET; NowLoading singleton
 // 0x3d60ec8, flag +0xED (CSNowLoadingHelperImp.load_done).
 //
 // This was called `GAME_MAN_LOAD_FSM_B80_OFFSET` / `load_fsm()` until 2026-08-31. The field is
@@ -192,26 +192,31 @@ pub fn save_state() -> i32 {
     unsafe { read_usize(gm + GAME_MAN_SAVE_STATE_B80_OFFSET) }.map_or(-1, |v| (v & 0xff) as i32)
 }
 
-/// `GameMan::savedMap` (+0xc30, i32): the `BlockId` of the map the mounted character is in.
-/// Same field the product calls `GAME_MAN_SAVED_MAP_C30_OFFSET`.
-const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = 0xc30;
+/// `GameMan::stayInMultipleAreaBlockId` (+0xc30, i32): during the load window, the `BlockId` of
+/// the map the mounted character is in. Same field the product calls
+/// `GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET`.
+const GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET: usize = 0xc30;
 /// The map id `GameMan` holds when no character is mounted -- `m10_01_00_00`, the new-game default,
 /// which is also what the title sits on. `er_title_flow::FULLREAD_C30_M10_DEFAULT` and
 /// `er_quit_rows::orphan_title_window::C30_TITLE_DEFAULT` are the same number.
 const GAME_MAN_SAVED_MAP_TITLE_DEFAULT: i32 = 0x0a01_0000;
-/// `GameMan::savedMap` (+0xc30), or -1 when it cannot be read.
-pub fn saved_map() -> i32 {
+/// `GameMan::stayInMultipleAreaBlockId` (+0xc30), or -1 when it cannot be read.
+pub fn stay_in_multiple_area_block_id() -> i32 {
     let Some(base) = game_base() else {
         return -1;
     };
     let Some(gm) = deref_singleton(base, GAME_MAN_SINGLETON_RVA, "GAME_MAN_SINGLETON_RVA") else {
         return -1;
     };
-    unsafe { read_usize(gm + GAME_MAN_SAVED_MAP_C30_OFFSET) }
+    unsafe { read_usize(gm + GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET) }
         .map_or(-1, |v| (v & 0xffff_ffff) as u32 as i32)
 }
 
-/// True once `GameMan::savedMap` names a real map, i.e. a character's world is being mounted.
+pub fn saved_map() -> i32 {
+    stay_in_multiple_area_block_id()
+}
+
+/// True once `GameMan::stayInMultipleAreaBlockId` names a real map, i.e. a character's world is being mounted.
 ///
 /// The semaphore that replaced `save_state > 0` as the Continue effect check (bd er-effects-rs-9gxt).
 /// `save_state` is the shared save/load device, and the title builds its own profile list by reading
@@ -220,7 +225,7 @@ pub fn saved_map() -> i32 {
 /// the title menu for 152 seconds with `world_sim=0`. This field moves only when a world mounts:
 /// the product's own load log records the transition as `c30 0xa010000->0x1c000000`.
 pub fn world_map_mounted() -> bool {
-    let map = saved_map();
+    let map = stay_in_multiple_area_block_id();
     map != GAME_MAN_SAVED_MAP_TITLE_DEFAULT && map != -1 && map != 0
 }
 

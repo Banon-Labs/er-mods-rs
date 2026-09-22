@@ -506,7 +506,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
     if phase == FULLREAD_PHASE_SUBMIT {
         // Switch-SAFETY (System->Quit->Load-Profile): for the in-world character switch (not a boot
         // autoload), the return-title chain we submitted is still tearing down the old world. Firing
-        // the Continue-load now sets GameMan saveState/b80=2 and DoSaveStuff deserializes the picked
+        // the Continue-load now sets `GameMan::saveState=2` and DoSaveStuff deserializes the picked
         // slot into the still-live world -> crash in CSGaitemImp::Deserialize (live 0x67141a). Defer
         // until the old world is actually gone (local player absent), so the load runs at a clean
         // title exactly like the boot autoload does. The boot path has no System-Quit phase, and at a
@@ -531,11 +531,12 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             }
             return;
         }
-        let b80_before = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
-        if b80_before != OWN_STEPPER_B80_IDLE {
+        let save_state_before = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
+        if save_state_before != OWN_STEPPER_B80_IDLE {
             if tick % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: waiting for native preview/load b80={b80_before} to become idle before Continue row fire -- no SetState5"
+                    "product-core-autoload: waiting for native preview/load saveState={}({save_state_before}) to become idle before Continue row fire -- no SetState5",
+                    er_title_flow::game_man_save_state_name(save_state_before),
                 ));
             }
             return;
@@ -630,7 +631,10 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             };
             match node {
                 Some(node) => {
-                    unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
+                    unsafe {
+                        *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *mut i32) =
+                            slot
+                    };
                     unsafe { fire_product_title_load_action(node, base, tick, slot) };
                 }
                 None => {
@@ -644,7 +648,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             }
             return;
         };
-        unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
+        unsafe { *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *mut i32) = slot };
         let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
             std::mem::transmute(
                 match crate::experiments::gated_game_fn(
@@ -666,13 +670,13 @@ pub(crate) unsafe fn product_continue_autoload_tick(
         else {
             return;
         };
-        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
-        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-        let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
-        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        let save_state = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
+        let save_slot = read_i32(GAME_MAN_SAVE_SLOT_AC0_OFFSET);
+        let requested_slot = read_i32(GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET);
+        let loaded_map = read_i32(GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET);
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
         append_autoload_debug(format_args!(
-            "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) b78={b78} ac0={ac0} c30=0x{c30:x} b80={b80} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
+            "product-core-autoload: *** SUBMITTED native Continue MenuWindowJob result mode={result_mode} submit=0x{:x}(result=0x{:x}, result_vt=0x{:x}, item=0x{:x}, functor=0x{:x}, docall=0x{:x}) after set_save_slot({slot}) requestedSaveSlotLoadIndex={requested_slot} saveSlot={save_slot} stayInMultipleAreaBlockId=0x{loaded_map:x} saveState={}({save_state}) fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) dialog=0x{:x} menu_latch={} tick={tick} -- no input/direct_load/direct_build/raw deserialize/direct_confirm ***",
             er_game_base::mem::game_data_addr(
                 base,
                 MENU_WINDOW_CLOSE_WITH_FAILED_RVA,
@@ -683,6 +687,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             action.item,
             action.functor,
             action.do_call,
+            er_title_flow::game_man_save_state_name(save_state),
             ready.title_dialog,
             ready.menu_opened_latch
         ));
@@ -690,7 +695,7 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             "T_native_continue_action",
             tick,
             format_args!(
-                "slot={slot} item=0x{:x} result=0x{:x} b80={b80}",
+                "slot={slot} item=0x{:x} result=0x{:x} saveState={save_state}",
                 action.item, action.result
             ),
         );
@@ -701,36 +706,40 @@ pub(crate) unsafe fn product_continue_autoload_tick(
 
     if phase == FULLREAD_PHASE_GUARD {
         let expected = OWN_STEPPER_EXPECTED_SLOT.load(Ordering::SeqCst);
-        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
-        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
-        let latched = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
+        let save_slot = read_i32(GAME_MAN_SAVE_SLOT_AC0_OFFSET);
+        let loaded_map = read_i32(GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET);
+        let save_state = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
+        let latched_loaded_map = OWN_STEPPER_MOUNT_C30.load(Ordering::SeqCst);
         let deser_ok = OWN_STEPPER_DESER_FIRED.load(Ordering::SeqCst) == OWN_STEPPER_DESER_FIRED_OK;
         let (fp_real, fp_level, fp_name_len) = unsafe { char_fingerprint(base) };
-        let slot_identity = unsafe { requested_slot_identity(expected, c30) };
+        let slot_identity = unsafe { requested_slot_identity(expected, loaded_map) };
         let waits = FULLREAD_DRAIN_WAITS.fetch_add(OWN_STEPPER_CALL_INC, Ordering::SeqCst) as u64;
-        let c30_available =
-            c30 == latched && c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
-        let c30_sane = c30_available && (c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
-        let c30_loaded = c30 != GAME_MAN_C30_UNSET && c30 != PRODUCT_CONTINUE_C30_ZERO;
-        let c30_loaded_sane = c30_loaded && (c30 != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
+        let loaded_map_available = loaded_map == latched_loaded_map
+            && loaded_map != GAME_MAN_C30_UNSET
+            && loaded_map != PRODUCT_CONTINUE_C30_ZERO;
+        let loaded_map_sane =
+            loaded_map_available && (loaded_map != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
+        let loaded_map_loaded =
+            loaded_map != GAME_MAN_C30_UNSET && loaded_map != PRODUCT_CONTINUE_C30_ZERO;
+        let loaded_map_loaded_sane =
+            loaded_map_loaded && (loaded_map != GAME_MAN_NEWGAME_DEFAULT_MAP || fp_real);
         let new_game_flag =
             unsafe { safe_read_usize(owner + TITLE_OWNER_NEW_GAME_FLAG_284_OFFSET) }
                 .map(|v| v as u8)
                 .unwrap_or(PRODUCT_CONTINUE_NEW_GAME_BLOCKED);
         let commit = native_fullread_commit_enabled();
-        let b80_idle = b80 == OWN_STEPPER_B80_IDLE;
-        let b80_modal_wait = b80 == PRODUCT_CONTINUE_B80_MODAL_WAIT;
+        let save_state_idle = save_state == OWN_STEPPER_B80_IDLE;
+        let save_state_modal_wait = save_state == PRODUCT_CONTINUE_B80_MODAL_WAIT;
         let native_confirmed =
             OWN_STEPPER_CONFIRMED.load(Ordering::SeqCst) != TITLE_OWNER_SCAN_START_ADDRESS;
         let modal_disable_ready = commit
             && !native_confirmed
-            && b80_modal_wait
+            && save_state_modal_wait
             && fp_real
             && slot_identity.matches
-            && ac0 == expected
+            && save_slot == expected
             && expected != OWN_STEPPER_SLOT_NONE
-            && c30_loaded_sane
+            && loaded_map_loaded_sane
             && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
         if modal_disable_ready {
             let shim = &raw mut OWN_STEPPER_SHIM;
@@ -748,16 +757,19 @@ pub(crate) unsafe fn product_continue_autoload_tick(
                 )
             };
             append_autoload_debug(format_args!(
-                "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true(profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={}) b80={b80} owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)",
+                "product-core-autoload: MODAL-CONFIRM-DISABLED loaded evidence saveSlot={save_slot} expected={expected} stayInMultipleAreaBlockId=0x{loaded_map:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true(profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={}) saveState={}({save_state}) owner+0x284={new_game_flag} -> continue_confirm shim=0x{shim_ptr:x} owner=0x{owner:x} (no confirm input)",
                 slot_identity.profile_summary,
                 slot_identity.profile_map,
                 slot_identity.profile_level,
-                slot_identity.profile_name_len
+                slot_identity.profile_name_len,
+                er_title_flow::game_man_save_state_name(save_state),
             ));
             timeline_event(
                 "T_modal_confirm_disabled",
                 tick,
-                format_args!("ac0={ac0} c30=0x{c30:x} b80={b80}"),
+                format_args!(
+                    "saveSlot={save_slot} stayInMultipleAreaBlockId=0x{loaded_map:x} saveState={save_state}"
+                ),
             );
             unsafe { confirm(shim_ptr) };
             OWN_STEPPER_CONFIRMED.store(OWN_STEPPER_CALL_INC, Ordering::SeqCst);
@@ -772,34 +784,36 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             && native_confirmed
             && fp_real
             && slot_identity.matches
-            && ac0 == expected
+            && save_slot == expected
             && expected != OWN_STEPPER_SLOT_NONE
-            && (c30_sane || c30_loaded_sane)
-            && (b80_idle || modal_disable_ready)
+            && (loaded_map_sane || loaded_map_loaded_sane)
+            && (save_state_idle || modal_disable_ready)
             && new_game_flag == FULLREAD_OWNER_NEW_GAME_OK;
         if waits % PRODUCT_CONTINUE_WAIT_LOG_TICKS == null as u64 || proceed {
             append_autoload_debug(format_args!(
-                "product-core-autoload: Continue post-click GUARD waits={waits} commit={commit} deser_ok={deser_ok} native_confirmed={native_confirmed} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} b80={b80} proceed={proceed} -- waiting for requested-slot native b80/c30 writer + native continue_confirm/SetState5",
+                "product-core-autoload: Continue post-click GUARD waits={waits} commit={commit} deser_ok={deser_ok} native_confirmed={native_confirmed} saveSlot={save_slot} expected={expected} stayInMultipleAreaBlockId=0x{loaded_map:x} latched=0x{latched_loaded_map:x} loaded_map_sane={loaded_map_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} saveState={}({save_state}) proceed={proceed} -- waiting for requested-slot native saveState/loaded-map writer + native continue_confirm/SetState5",
                 slot_identity.matches,
                 slot_identity.profile_summary,
                 slot_identity.profile_map,
                 slot_identity.profile_level,
                 slot_identity.profile_name_len,
                 slot_identity.pgd_level,
-                slot_identity.pgd_name_len
+                slot_identity.pgd_name_len,
+                er_title_flow::game_man_save_state_name(save_state),
             ));
         }
         if !proceed {
             if waits >= FULLREAD_DRAIN_MAX {
                 append_autoload_debug(format_args!(
-                    "product-core-autoload: Continue post-click GUARD timeout waits={waits} commit={commit} deser_ok={deser_ok} ac0={ac0} expected={expected} c30=0x{c30:x} latched=0x{latched:x} c30_sane={c30_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} b80={b80} -- DONE (NO SetState5)",
+                    "product-core-autoload: Continue post-click GUARD timeout waits={waits} commit={commit} deser_ok={deser_ok} saveSlot={save_slot} expected={expected} stayInMultipleAreaBlockId=0x{loaded_map:x} latched=0x{latched_loaded_map:x} loaded_map_sane={loaded_map_sane} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity={} profile=0x{:x} profile_map=0x{:x} profile_level={} profile_name_len={} pgd_level={} pgd_name_len={} owner+0x284={new_game_flag} saveState={}({save_state}) -- DONE (NO SetState5)",
                     slot_identity.matches,
                     slot_identity.profile_summary,
                     slot_identity.profile_map,
                     slot_identity.profile_level,
                     slot_identity.profile_name_len,
                     slot_identity.pgd_level,
-                    slot_identity.pgd_name_len
+                    slot_identity.pgd_name_len,
+                    er_title_flow::game_man_save_state_name(save_state),
                 ));
                 FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
                 OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
@@ -807,9 +821,14 @@ pub(crate) unsafe fn product_continue_autoload_tick(
             return;
         }
         append_autoload_debug(format_args!(
-            "product-core-autoload: STAGE2-MOUNT-COMMIT native Continue row guard pass ac0={ac0} expected={expected} c30=0x{c30:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true owner+0x284={new_game_flag} b80={b80} -- native continue_confirm/SetState5 already fired"
+            "product-core-autoload: STAGE2-MOUNT-COMMIT native Continue row guard pass saveSlot={save_slot} expected={expected} stayInMultipleAreaBlockId=0x{loaded_map:x} fp_real={fp_real}(level={fp_level} name_len={fp_name_len}) slot_identity=true owner+0x284={new_game_flag} saveState={}({save_state}) -- native continue_confirm/SetState5 already fired",
+            er_title_flow::game_man_save_state_name(save_state),
         ));
-        timeline_event("T_playgame", tick, format_args!("ac0={ac0} c30=0x{c30:x}"));
+        timeline_event(
+            "T_playgame",
+            tick,
+            format_args!("saveSlot={save_slot} stayInMultipleAreaBlockId=0x{loaded_map:x}"),
+        );
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
         OWN_STEPPER_PHASE.store(OWN_STEPPER_PHASE_DONE, Ordering::SeqCst);
     }

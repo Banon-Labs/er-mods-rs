@@ -106,17 +106,20 @@ pub const WORLD_CHR_MAN_WORLD_STABLE_VALUE: i32 = 2;
 /// Sem-traced to test whether the online flags re-enable during the reload's in-world window.
 pub const GAME_MAN_IS_IN_ONLINE_MODE_BC8_OFFSET: usize = 0xBC8;
 pub const GAME_MAN_SERVER_CONNECTION_ENABLED_BC9_OFFSET: usize = 0xBC9;
-/// `GameMan::saveState` (b80) state names for the loading-bar / logs, as the load lane walks
-/// them; the save lane shares the slot and stamps 1. See the
-/// `GAME_MAN_SAVE_STATE_*` / `FULLREAD_B80_RESIDENT` constants (constants::autoload_state).
-pub fn save_state_b80_name(v: i32) -> &'static str {
+/// `GameMan::saveState` state names for the loading-bar / logs, as the load lane walks
+/// them; the save lane shares the slot and stamps 1. See the `GAME_MAN_SAVE_STATE_*` constants.
+pub fn game_man_save_state_name(v: i32) -> &'static str {
     match v {
         GAME_MAN_SAVE_STATE_IDLE => "IDLE",
         GAME_MAN_SAVE_STATE_OPENING => "OPENING",
         GAME_MAN_SAVE_STATE_READING => "READING",
-        FULLREAD_B80_RESIDENT => "LOADED",
+        GAME_MAN_SAVE_STATE_RESIDENT => "LOADED",
         _ => "?",
     }
+}
+
+pub fn save_state_b80_name(v: i32) -> &'static str {
+    game_man_save_state_name(v)
 }
 pub use er_telemetry_core::counters::SWITCH_ORACLE_MENU_JOB_PRESENT;
 /// Last sampled player/menu/loading-screen handoff gates for visible loading-bar sub-milestones.

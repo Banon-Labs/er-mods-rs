@@ -236,16 +236,19 @@ pub const MEMBERFUNCJOB_VTABLE_RVA: usize = 0x2b265d0;
 pub const DIALOG_ROW_REGISTRY_A48_OFFSET: usize =
     core::mem::offset_of!(TitleTopDialogLayout, row_registry);
 
-/// GameMan+0xb80 (== GameMan.save_state == save_state) FSM values. The full-save read walks
-/// idle(0) -> opening(1) -> reading(2) -> resident(3); a healthy load then drains resident -> idle as
-/// the deserialize consumes the 0x280000 buffer. `save_state_b80_name` (constants::return_title)
-/// gives the display names. The finalize case-7 gate (FUN_14067a170 == save_state==0) waits on b80
-/// reaching idle; on the warm reload it is stuck at resident because the deserialize never consumes it.
+/// `GameMan::saveState` FSM values. The full-save read walks idle(0) -> opening(1) ->
+/// reading(2) -> resident(3); a healthy load then drains resident -> idle as the deserialize
+/// consumes the 0x280000 buffer. `game_man_save_state_name` (constants::return_title)
+/// gives the display names. The finalize case-7 gate (FUN_14067a170 == saveState==0) waits on
+/// `saveState` reaching idle; on the warm reload it is stuck at resident because the deserialize
+/// never consumes it.
 pub const GAME_MAN_SAVE_STATE_IDLE: i32 = 0;
 
-/// GameMan+0xb80 == 3 == resident (the full-save read drained into the 0x280000 buffer). The drain
-/// phase ticks the lane + poll each frame until b80 reaches this.
-pub const FULLREAD_B80_RESIDENT: i32 = 3;
+/// `GameMan::saveState == 3`: the full-save read drained into the 0x280000 buffer. The drain
+/// phase ticks the lane + poll each frame until `saveState` reaches this.
+pub const GAME_MAN_SAVE_STATE_RESIDENT: i32 = 3;
+
+pub const FULLREAD_B80_RESIDENT: i32 = GAME_MAN_SAVE_STATE_RESIDENT;
 
 /// Full-read chain phase machine states (one step per frame).
 pub const FULLREAD_PHASE_SUBMIT: usize = 0;
@@ -270,17 +273,21 @@ pub const GAME_MAN_FLAG_B73_PROBE_OFFSET: usize =
 pub const GAME_MAN_FLAG_B75_PROBE_OFFSET: usize =
     GAME_MAN_ARM_FLAG_B72_OFFSET + core::mem::offset_of!(GameManAutoloadFlagCluster, probe_b75);
 
-/// `requested_save_slot_load_index`: bound to upstream (compiler-verified equal to our offset).
+/// `GameMan::requestedSaveSlotLoadIndex`: bound to upstream (compiler-verified equal to our offset).
+#[cfg(windows)]
+pub const GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET: usize =
+    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+
 #[cfg(windows)]
 pub const GAME_MAN_REQUESTED_SLOT_B78_OFFSET: usize =
-    core::mem::offset_of!(GameMan, requested_save_slot_load_index);
+    GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET;
 
 #[cfg(windows)]
 pub const GAME_MAN_FLAG_BC4_OFFSET: usize =
     core::mem::offset_of!(GameMan, is_in_online_mode) - core::mem::size_of::<u32>();
 
 /// Submit-gate diagnostics (b80-submit-kick-exact-false-gate-decoded-2026). The b72
-/// autoload initiator 0x14067b750 sets GameMan+0xb80=1 only if the async submit
+/// autoload initiator 0x14067b750 sets `GameMan::saveState=1` only if the async submit
 /// 0x140e6ec70 returns true; the submit body 0x140e6f940 bails false if the IO device
 /// has a stale request in-flight ([iodev+0x10]!=0) or a stale request handle
 /// ([iodev+0x20]!=0). The IO device global is abs 0x144589390 (RVA 0x4589390); we read
@@ -412,7 +419,7 @@ pub const ONLINE_DISABLE_ORIGINAL: [u8; 3] = [0x48, 0x8b, 0x05];
 
 /// Sign-in force (cold save-load gate). The SaveLoad2 storage-select op ctor (deobf 0x14240f1b0)
 /// creates its runnable only if the sign-in check returns true and the user index is <= 3; cold
-/// (no signed-in user) both fail, so the op is null and the load FSM parks (the b80 wall). Patch
+/// (no signed-in user) both fail, so the op is null and the load FSM parks at the saveState wall. Patch
 /// both gate fns to pass so the cold menu-free path loads as if signed in as user 0. Addresses
 /// ground-truthed against the deobf/live binary (the Ghidra dump's FUN_1424129a0 / FUN_14240f480
 /// are shifted; live entries below). Scoped to the cold-mount attempt, not attach.
@@ -570,9 +577,12 @@ pub const FD4_FILECAP_FLAGS_89_OFFSET: usize = 0x89;
 // and `dlc_roots_self_heal.rs` reads the one remaining declaration. One address, one literal --
 // the invariant `scripts/check-rva-alias-drift.py` exists to hold.
 
-/// GameMan `save_slot` (compiler-verified equal to the upstream typed field).
+/// `GameMan::saveSlot` (compiler-verified equal to the upstream typed field).
 #[cfg(windows)]
-pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
+pub const GAME_MAN_SAVE_SLOT_AC0_OFFSET: usize = core::mem::offset_of!(GameMan, save_slot);
+
+#[cfg(windows)]
+pub const FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET: usize = GAME_MAN_SAVE_SLOT_AC0_OFFSET;
 
 /// `CS::GameMan::saveState` -- the one-slot ARBITER over the single SL device, off the GameMan
 /// singleton `0x143d69918`. Not a load flag, in either direction.
@@ -1203,10 +1213,10 @@ pub const OWN_STEPPER_PHASE_S2_INVOKE: usize = OwnStepperPhase::S2Invoke as usiz
 pub const OWN_STEPPER_PHASE_S2_ACTIVATE: usize = OwnStepperPhase::S2Activate as usize;
 
 /// Phase 8 (S2 MOUNT_POLL): pass-through each frame so the native pump ticks the selector;
-/// watch for the mount (ac0==N + io18/io20 set->clear; c30 leaving the new-game default).
+/// watch for the mount (saveSlot==N + io18/io20 set->clear; loaded map leaving the new-game default).
 pub const OWN_STEPPER_PHASE_S2_MOUNT_POLL: usize = OwnStepperPhase::S2MountPoll as usize;
 
-/// Phase 9 (S2 confirm): guard (ac0==N && c30==latched-mount && io consumed) then
+/// Phase 9 (S2 confirm): guard (saveSlot==N && loaded map==latched mount && io consumed) then
 /// continue_confirm -> SetState(5) so the native pump streams the real world. The only
 /// save-write-risking step; gated entirely by a verified real mount (fail-closed otherwise).
 pub const OWN_STEPPER_PHASE_S2_CONFIRM: usize = OwnStepperPhase::S2Confirm as usize;
@@ -1547,10 +1557,13 @@ pub const TITLE_SET_STATE_RVA: usize = 0xb0d960;
 /// literal; the ctor store `movl $-1,0xc30(%rsi)` at `0x14067628d` (1.17 `0x1406770dd`) is pinned
 /// in `scripts/check-object-field-offsets-1170.py`.
 #[cfg(windows)]
-pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize =
+pub const GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET: usize =
     core::mem::offset_of!(GameMan, stay_in_multiplay_area_saved_rotation)
         + core::mem::size_of::<F32Vector4>()
         + core::mem::size_of::<F32Vector4>();
+
+#[cfg(windows)]
+pub const GAME_MAN_SAVED_MAP_C30_OFFSET: usize = GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET;
 
 /// Unnamed native Quit Game / return-title job-chain predicate field.
 /// Ghidra labels this `GameMan::field143_0xbc4`; known writes are 1 -> 2 -> 3, and
@@ -1795,6 +1808,18 @@ pub static PRODUCT_CORE_LAST_RETURN_TITLE_JOB_PREDICATE_BC4: AtomicUsize =
 pub static PRODUCT_CORE_LAST_PHASE: AtomicUsize = AtomicUsize::new(OWN_STEPPER_PHASE_MENU);
 
 pub static PRODUCT_CORE_LAST_BLOCKER: AtomicUsize = AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
+
+/// The blocker value the readiness gate has already written a log line for.
+///
+/// `PRODUCT_CORE_LAST_BLOCKER` is recomputed every tick but only printed every
+/// `OWN_STEPPER_LOG_INTERVAL` ticks, which samples the gate far too coarsely to say when it
+/// cleared. Measured 2026-09-21 on the boot-timing baseline (bd er-effects-rs-uxct): the gate
+/// printed at tick 60 and tick 120, the full read submitted between tick 120 and tick 180, and the
+/// log therefore cannot say which of the eleven terms was last to become true, nor how long the
+/// autoload spent waiting on it. Comparing against this makes the gate log a transition record --
+/// one line each time the outstanding term changes -- which is a handful of lines per boot instead
+/// of a sample every four seconds.
+pub static PRODUCT_CORE_LOGGED_BLOCKER: AtomicUsize = AtomicUsize::new(PRODUCT_CORE_BLOCKER_UNSEEN);
 
 pub static TITLE_OWNER_SCAN_LAST_CANDIDATE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);

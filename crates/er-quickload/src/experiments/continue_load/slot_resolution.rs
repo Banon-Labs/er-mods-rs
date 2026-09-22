@@ -69,30 +69,33 @@ pub(crate) fn native_fullread_slot() -> i32 {
     FULLREAD_DEFAULT_SLOT
 }
 /// Terminal non-commit disarm for the full-read chain (bd er-effects-rs-ns4n). Submit arms the
-/// native slot-request register (GameMan+0xb78, `requested_save_slot_load_index`) so the native
-/// chain resolves our slot. On every done exit, including the commit handoff, the register must be
+/// native slot-request register (`GameMan::requestedSaveSlotLoadIndex`) so the native chain resolves
+/// our slot. On every done exit, including the commit handoff, the register must be
 /// returned to the no-request sentinel: the in-game save manager services any >=0 request on the
 /// first frames after world arrival, which runs a second full deserialize into the already-live
 /// world and exhausts the CSGaitemImp free queue -- the gaitemInsTable[-1] AV at live 0x67141a
 /// (6/6 picker-boot crashes 2026-07-07; explicit save_file repro 2026-07-08, ~25s in, immediately
 /// after save_state 1->2). Earlier code assumed continue_confirm consumed the pending request, but
-/// runtime gm-snap proved req_slot survived as 0 until the crash, so commit must disarm too.
+/// runtime gm-snap proved requestedSaveSlotLoadIndex survived as 0 until the crash, so commit must
+/// disarm too.
 unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     if gm == NULL {
         return;
     }
-    let prev = unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *const i32) };
+    let prev =
+        unsafe { *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *const i32) };
     if prev == OWN_STEPPER_SLOT_NONE {
         return;
     }
     unsafe {
-        *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = OWN_STEPPER_SLOT_NONE;
+        *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *mut i32) =
+            OWN_STEPPER_SLOT_NONE;
     }
     FULLREAD_REQ_DISARM_COUNT.fetch_add(1, Ordering::SeqCst);
     FULLREAD_REQ_DISARM_LAST_PREV_SLOT.store(prev as u32 as usize, Ordering::SeqCst);
     append_autoload_debug(format_args!(
-        "native-fullread: DISARM req_slot {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
+        "native-fullread: DISARM requestedSaveSlotLoadIndex {prev} -> {OWN_STEPPER_SLOT_NONE} ({reason}) -- no pending native load request may survive a non-commit exit"
     ));
 }
 /// Observe-only native full-save-read tick, reached through the er-title-flow seam. Runs
@@ -102,18 +105,21 @@ unsafe fn fullread_disarm_slot_request(gm: usize, reason: &str) {
 /// [dialog+0xa48] registry, Load-Game node/action chain),
 /// it runs the full-save-read load chain as a per-frame phase
 /// machine at the live menu (where the FD4 IO worker pool 0x144853048 is live so the submit drains):
-///   SUBMIT: set GameMan+0xb78=slot (step 1, new), set_save_slot 0x14067a810 (step 2 -> GameMan+0xac0),
-///           submit full read 0x14067b1a0 (step 3, type-0xa).
-///   DRAIN:  tick lane 0x140679510 + poll 0x140679180 each frame until GameMan+0xb80==3 (step 4).
-///   DESER:  deserialize 0x14067b290(slot) once at b80==3 (step 5 -> GameMan+0xc30 = real map).
-///   GUARD:  c30 != 0xa010000 (m10 default) and char fingerprint present (level>=10 + name) (step 6).
+///   SUBMIT: set `GameMan::requestedSaveSlotLoadIndex` (step 1), set_save_slot 0x14067a810
+///           (step 2 -> `GameMan::saveSlot`), submit full read 0x14067b1a0 (step 3, type-0xa).
+///   DRAIN:  tick lane 0x140679510 + poll 0x140679180 each frame until `GameMan::saveState==3`
+///           (step 4).
+///   DESER:  deserialize 0x14067b290(slot) once at resident saveState (step 5 ->
+///           `GameMan::stayInMultipleAreaBlockId` = real map).
+///   GUARD:  loaded map != 0xa010000 (m10 default) and char fingerprint present (level>=10 + name) (step 6).
 ///   Confirm (step 7, the sole save write): Only if the guard passes and native_fullread_commit_enabled():
 ///           continue_confirm 0x140b0e180(rcx=shim{[owner]=live_title_owner});
 ///           it takes the non-NewGame branch when owner+0x284!=1, sets owner+0xbc=c30 + SetState5
 ///           (AUTOSAVES). Without the
 ///           commit sub-gate, stops at guard (verify-ONLY: log only, no continue_confirm/NO SetState5).
 /// Reuses cold_char_mount_drive's submit/lane/poll/deser calls (exact RVAs) but builds/pumps no
-/// selector step (probe-12 crash) and forces no SetState for boot. Logs b80/c30/level each frame.
+/// selector step (probe-12 crash) and forces no SetState for boot. Logs saveState/loaded-map/level
+/// each frame.
 /// Record that the title-time save deserialize `0x14067b290` is about to be called.
 ///
 /// `0x14067b290` has exactly one caller in the image -- `CS::MoveMapStep::DoSaveStuff`, reachable
@@ -142,7 +148,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     if system_quit_slot < TITLE_PROFILE_SLOT_COUNT {
         if phase != FULLREAD_PHASE_DONE {
             append_autoload_debug(format_args!(
-                "native-fullread: STAND-DOWN for System->Quit selected slot {system_quit_slot}; native b78/MoveMapStep path owns this switch (phase={phase})"
+                "native-fullread: STAND-DOWN for System->Quit selected slot {system_quit_slot}; native requestedSaveSlotLoadIndex/MoveMapStep path owns this switch (phase={phase})"
             ));
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
         }
@@ -183,14 +189,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     // the native pump streams the world).
     if phase == FULLREAD_PHASE_DONE {
         if n % FULLREAD_LOG_INTERVAL == NULL as u64 {
-            let c30 = if gm != NULL {
-                unsafe { *((gm + GAME_MAN_SAVED_MAP_C30_OFFSET) as *const i32) }
+            let loaded_map = if gm != NULL {
+                unsafe {
+                    *((gm + GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET) as *const i32)
+                }
             } else {
                 GAME_MAN_C30_UNSET
             };
             let (_fp_real, level, _name_len) = unsafe { char_fingerprint(base) };
             append_autoload_debug(format_args!(
-                "native-fullread: DONE -- observing native pump (#{n}) c30=0x{c30:x} level={level}"
+                "native-fullread: DONE -- observing native pump (#{n}) stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}"
             ));
         }
         return;
@@ -260,10 +268,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             };
             let _ = unsafe { mark(summary, slot) };
         }
-        // Step 1 (new): set the slot-resolve global GameMan+0xb78=slot (resolver 0x1406793c0 returns
-        // *(u32*)(gm+0xb78)) so the native chain resolves our slot. Save-safe (an in-memory selector).
-        unsafe { *((gm + GAME_MAN_SLOT_SELECT_B78_OFFSET) as *mut i32) = slot };
-        // Step 2: set_save_slot 0x14067a810(slot) -> GameMan+0xac0=slot.
+        // Step 1: set `GameMan::requestedSaveSlotLoadIndex`; resolver 0x1406793c0 returns this
+        // field so the native chain resolves our slot. Save-safe (an in-memory selector).
+        unsafe { *((gm + GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET) as *mut i32) = slot };
+        // Step 2: set_save_slot 0x14067a810(slot) -> `GameMan::saveSlot=slot`.
         let set_save_slot: unsafe extern "system" fn(i32) = unsafe {
             std::mem::transmute(
                 match crate::experiments::gated_game_fn(
@@ -276,8 +284,8 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             )
         };
         unsafe { set_save_slot(slot) };
-        // Step 3: submit the full read 0x14067b1a0(slot) (type-0xa; sets GameMan+0xb80=2, the
-        // deserialize arm). At the live menu the FD4 IO worker pool is live so this drains.
+        // Step 3: submit the full read 0x14067b1a0(slot) (type-0xa; sets `GameMan::saveState=2`,
+        // the deserialize arm). At the live menu the FD4 IO worker pool is live so this drains.
         let submit: unsafe extern "system" fn(i32) -> i32 = unsafe {
             std::mem::transmute(
                 match crate::experiments::gated_game_fn(
@@ -292,11 +300,11 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // Not `submit(slot)`: the argument is a flag the game always passes as 0, and the slot
         // was already set by `set_save_slot` above. See `B80_FULL_LOAD_SUBMIT_FLAG`.
         let sret = unsafe { submit(B80_FULL_LOAD_SUBMIT_FLAG) };
-        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
-        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
-        let b78 = read_i32(GAME_MAN_SLOT_SELECT_B78_OFFSET);
+        let save_state = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
+        let save_slot = read_i32(GAME_MAN_SAVE_SLOT_AC0_OFFSET);
+        let requested_slot = read_i32(GAME_MAN_REQUESTED_SAVE_SLOT_LOAD_INDEX_B78_OFFSET);
         append_autoload_debug(format_args!(
-            "native-fullread: SUBMIT slot={slot} b78={b78} (0x{:x} write) set_save_slot 0x{:x} ac0={ac0} submit 0x{:x} ret={sret} b80={b80} -> DRAIN",
+            "native-fullread: SUBMIT slot={slot} requestedSaveSlotLoadIndex={requested_slot} (0x{:x} write) set_save_slot 0x{:x} saveSlot={save_slot} submit 0x{:x} ret={sret} saveState={}({save_state}) -> DRAIN",
             base,
             er_game_base::mem::game_data_addr(
                 base,
@@ -307,12 +315,13 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 base,
                 B80_FULL_LOAD_INITIATOR_RVA,
                 "B80_FULL_LOAD_INITIATOR_RVA"
-            )
+            ),
+            er_title_flow::game_man_save_state_name(save_state),
         ));
         timeline_event(
             "T_fullread_submit",
             n,
-            format_args!("slot={slot} b80={b80}"),
+            format_args!("slot={slot} saveState={save_state}"),
         );
         FULLREAD_DRAIN_WAITS.store(NULL, Ordering::SeqCst);
         FULLREAD_PHASE.store(FULLREAD_PHASE_DRAIN, Ordering::SeqCst);
@@ -320,8 +329,9 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
 
     if phase == FULLREAD_PHASE_DRAIN {
-        // Step 4: tick lane 0x140679510 (b80==1/2 IO tick) + poll 0x140679180 each frame until
-        // GameMan+0xb80==3 (resident, the 0x280000 buffer drained). Reuses cold_char_mount's calls.
+        // Step 4: tick lane 0x140679510 (saveState==1/2 IO tick) + poll 0x140679180 each frame
+        // until `GameMan::saveState==3` (resident, the 0x280000 buffer drained). Reuses
+        // cold_char_mount's calls.
         let lane: unsafe extern "system" fn() -> i32 = unsafe {
             std::mem::transmute(
                 match crate::experiments::gated_game_fn(
@@ -343,23 +353,24 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             )
         };
         let _ = unsafe { poll(FULLREAD_POLL_ARG, FULLREAD_POLL_ARG) };
-        let b80 = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
-        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        let save_state = read_i32(GAME_MAN_SAVE_STATE_B80_OFFSET);
+        let loaded_map = read_i32(GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET);
         let w = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         if w % FULLREAD_LOG_INTERVAL == NULL as u64 {
             let (_fp, level, _nl) = unsafe { char_fingerprint(base) };
             append_autoload_debug(format_args!(
-                "native-fullread: DRAIN waits={w} b80={b80} c30=0x{c30:x} level={level}"
+                "native-fullread: DRAIN waits={w} saveState={}({save_state}) stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}",
+                er_title_flow::game_man_save_state_name(save_state),
             ));
         }
-        if b80 == FULLREAD_B80_RESIDENT {
+        if save_state == GAME_MAN_SAVE_STATE_RESIDENT {
             append_autoload_debug(format_args!(
-                "native-fullread: b80 reached RESIDENT(3) after {w} drain ticks -- the LIVE worker pool DRAINED the full read -> DESER"
+                "native-fullread: saveState reached RESIDENT(3) after {w} drain ticks -- the LIVE worker pool DRAINED the full read -> DESER"
             ));
             FULLREAD_PHASE.store(FULLREAD_PHASE_DESER, Ordering::SeqCst);
         } else if w >= FULLREAD_DRAIN_MAX {
             append_autoload_debug(format_args!(
-                "native-fullread: b80 STUCK at {b80} after {w} drain ticks (full read never resident) -- TIMEOUT (no write) -> DONE"
+                "native-fullread: saveState STUCK at {save_state} after {w} drain ticks (full read never resident) -- TIMEOUT (no write) -> DONE"
             ));
             unsafe { fullread_disarm_slot_request(gm, "drain-timeout") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -448,7 +459,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 er_telemetry_core::counters::SYSTEM_QUIT_FRESH_DESER_DONE_SLOT
                     .store(picked + 1, Ordering::SeqCst);
                 append_autoload_debug(format_args!(
-                    "native-fullread: DESER-path FEED of picked slot {picked} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
+                    "native-fullread: DESER-path FEED of picked slot {picked} OK -- loaded map now real, gaitem reset; GUARD->COMMIT continue_confirm streams (FRESH_DESER_DONE=1, no double-feed)"
                 ));
                 1
             } else {
@@ -484,7 +495,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             unsafe { own_load_reset_gaitem_singleton(base) };
             if unsafe { own_load_feed_deserialize(base, gm, slot) } {
                 append_autoload_debug(format_args!(
-                    "native-fullread: DESER-path FEED of BOOT slot {slot} OK -- c30 now real, gaitem reset; GUARD->COMMIT continue_confirm streams the character"
+                    "native-fullread: DESER-path FEED of BOOT slot {slot} OK -- loaded map now real, gaitem reset; GUARD->COMMIT continue_confirm streams the character"
                 ));
                 1
             } else {
@@ -494,7 +505,8 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 0
             }
         } else {
-            // Step 5: deserialize 0x14067b290(slot) once at b80==3 -> writes GameMan+0xc30 = real map.
+            // Step 5: deserialize 0x14067b290(slot) once at resident saveState -> writes
+            // `GameMan::stayInMultipleAreaBlockId` = real map.
             let deser: unsafe extern "system" fn(i32) -> i32 = unsafe {
                 std::mem::transmute(
                     match crate::experiments::gated_game_fn(
@@ -544,16 +556,16 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
                 ));
             }
         }
-        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
-        let ac0 = read_i32(FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET);
+        let loaded_map = read_i32(GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET);
+        let save_slot = read_i32(GAME_MAN_SAVE_SLOT_AC0_OFFSET);
         let (_fp, level, _nl) = unsafe { char_fingerprint(base) };
         append_autoload_debug(format_args!(
-            "native-fullread: DESER slot={slot} ret={dret} c30=0x{c30:x} ac0={ac0} level={level} -> GUARD"
+            "native-fullread: DESER slot={slot} ret={dret} stayInMultipleAreaBlockId=0x{loaded_map:x} saveSlot={save_slot} level={level} -> GUARD"
         ));
         timeline_event(
             "T_fullread_deser",
             n,
-            format_args!("c30=0x{c30:x} level={level}"),
+            format_args!("stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}"),
         );
         FULLREAD_DRAIN_WAITS.store(NULL, Ordering::SeqCst);
         FULLREAD_PHASE.store(FULLREAD_PHASE_GUARD, Ordering::SeqCst);
@@ -582,9 +594,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
     }
 
     if phase == FULLREAD_PHASE_GUARD {
-        // Step 6: Guard. c30 != 0xa010000 (m10 default) and char fingerprint present (level>=10 +
-        // non-empty name). This is the hard gate for the only save write.
-        let c30 = read_i32(GAME_MAN_SAVED_MAP_C30_OFFSET);
+        // Step 6: Guard. The loaded map must not be the m10 default shell unless the selected slot
+        // really saved there, and the character fingerprint must be present. This is the hard gate
+        // for the only save write.
+        let loaded_map = read_i32(GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET);
         let (fp_real, level, name_len) = unsafe { char_fingerprint(base) };
         // `FULLREAD_C30_M10_DEFAULT` (0xa010000, `m10_01_00_00`) is the map the title-time
         // deserialize leaves behind when it hands back an empty shell instead of a character, which
@@ -612,10 +625,10 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         let fullread_slot = native_fullread_slot();
         let (slot_is_real, slot_map, _slot_level, _slot_name_len) =
             unsafe { profile_slot_fingerprint(fullread_slot) };
-        let c30_is_this_slots_own_map = slot_is_real && slot_map == c30;
-        let c30_real = c30 != GAME_MAN_C30_UNSET
-            && (c30 != FULLREAD_C30_M10_DEFAULT || c30_is_this_slots_own_map);
-        // Accepted concrete source -> any real level. `c30_real` + `fp_real` are the hard
+        let loaded_map_is_this_slots_own_map = slot_is_real && slot_map == loaded_map;
+        let loaded_map_real = loaded_map != GAME_MAN_C30_UNSET
+            && (loaded_map != FULLREAD_C30_M10_DEFAULT || loaded_map_is_this_slots_own_map);
+        // Accepted concrete source -> any real level. `loaded_map_real` + `fp_real` are the hard
         // new-game/null blockers; the `>= 10` floor is only a heuristic for the diagnostic path
         // where nothing preselected a source, and it must not outrank a source the boot check
         // already validated.
@@ -654,24 +667,24 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         //
         // This guard is the hard gate for the only save write in the chain. It does not get
         // weakened to make a path pass; a path that cannot satisfy it has not loaded a character.
-        let guard_pass = c30_real && fp_real && level_real;
+        let guard_pass = loaded_map_real && fp_real && level_real;
         let commit = native_fullread_commit_enabled();
         let guard_waits = FULLREAD_DRAIN_WAITS.fetch_add(WAIT_INC, Ordering::SeqCst) as u64;
         append_autoload_debug(format_args!(
-            "native-fullread: GUARD waits={guard_waits} c30=0x{c30:x} c30_real={c30_real} (slot {fullread_slot} record: real={slot_is_real} map=0x{slot_map:x}, own_map={c30_is_this_slots_own_map}) fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
+            "native-fullread: GUARD waits={guard_waits} stayInMultipleAreaBlockId=0x{loaded_map:x} loaded_map_real={loaded_map_real} (slot {fullread_slot} record: real={slot_is_real} map=0x{slot_map:x}, own_map={loaded_map_is_this_slots_own_map}) fp_real={fp_real} level={level} level_real={level_real} name_len={name_len} -> guard_pass={guard_pass} commit_gate={commit}"
         ));
         if !guard_pass {
             const DIRECT_FILE_GUARD_SETTLE_TICKS: u64 = 120;
             if direct_save_file_source_active() && guard_waits < DIRECT_FILE_GUARD_SETTLE_TICKS {
                 if guard_waits % FULLREAD_LOG_INTERVAL == NULL as u64 {
                     append_autoload_debug(format_args!(
-                        "native-fullread: GUARD settling direct-file source waits={guard_waits}/{DIRECT_FILE_GUARD_SETTLE_TICKS} c30=0x{c30:x} level={level} name_len={name_len} -- native profile/c30 writers can lag DESER by several frames; holding req_slot and rechecking"
+                        "native-fullread: GUARD settling direct-file source waits={guard_waits}/{DIRECT_FILE_GUARD_SETTLE_TICKS} stayInMultipleAreaBlockId=0x{loaded_map:x} level={level} name_len={name_len} -- native profile/loaded-map writers can lag DESER by several frames; holding requestedSaveSlotLoadIndex and rechecking"
                     ));
                 }
                 return;
             }
             append_autoload_debug(format_args!(
-                "native-fullread: GUARD FAIL (c30=0x{c30:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
+                "native-fullread: GUARD FAIL (stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}) -- NO continue_confirm, NO SetState5, NO save write -> DONE (save-safe)"
             ));
             unsafe { fullread_disarm_slot_request(gm, "guard-fail") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -693,7 +706,7 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
         // Verify-only by default -- stop here (log only, no continue_confirm/NO SetState5).
         if !commit {
             append_autoload_debug(format_args!(
-                "native-fullread: GUARD PASS (c30=0x{c30:x} level={level}) but VERIFY-ONLY (commit sub-gate OFF) -- NO continue_confirm, NO SetState5 -> DONE (save-safe). Set ER_QUICKLOAD_FULLREAD_COMMIT=1 / er-quickload-fullread-commit.txt to commit."
+                "native-fullread: GUARD PASS (stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}) but VERIFY-ONLY (commit sub-gate OFF) -- NO continue_confirm, NO SetState5 -> DONE (save-safe). Set ER_QUICKLOAD_FULLREAD_COMMIT=1 / er-quickload-fullread-commit.txt to commit."
             ));
             unsafe { fullread_disarm_slot_request(gm, "verify-only") };
             FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
@@ -745,23 +758,23 @@ pub(crate) unsafe fn native_fullread_tick(owner: usize, base: usize, n: u64) {
             )
         };
         append_autoload_debug(format_args!(
-            "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) c30=0x{c30:x} level={level} owner+0x284={new_game_flag} -- SetState5 (AUTOSAVES) ***",
+            "native-fullread: *** COMMIT continue_confirm 0x{:x}(shim=0x{shim_ptr:x} owner=0x{owner_obj:x}) stayInMultipleAreaBlockId=0x{loaded_map:x} level={level} owner+0x284={new_game_flag} -- SetState5 (AUTOSAVES) ***",
             er_game_base::mem::game_data_addr(base, CONTINUE_CONFIRM_RVA, "CONTINUE_CONFIRM_RVA")
         ));
         timeline_event(
             "T_fullread_confirm",
             n,
-            format_args!("c30=0x{c30:x} level={level}"),
+            format_args!("stayInMultipleAreaBlockId=0x{loaded_map:x} level={level}"),
         );
         unsafe { confirm(shim_ptr) };
-        // continue_confirm starts the native world stream but does not reliably consume GameMan+0xb78.
-        // If req_slot survives into the first post-world save state, DoSaveStuff runs a second
+        // continue_confirm starts the native world stream but does not reliably consume
+        // `GameMan::requestedSaveSlotLoadIndex`. If the requested slot survives into the first post-world save state, DoSaveStuff runs a second
         // full-deserialize into the already-live PlayerGameData and crashes in CSGaitemImp::Deserialize
         // (live 0x14067141a, gaitemInsTable[-1]). Disarm immediately after the confirmed handoff;
-        // GameMan+0xac0 still carries the selected save slot for the normal loaded-world state.
+        // `GameMan::saveSlot` still carries the selected save slot for the normal loaded-world state.
         unsafe { fullread_disarm_slot_request(gm, "commit-after-confirm") };
         append_autoload_debug(format_args!(
-            "native-fullread: continue_confirm returned + req_slot disarmed -- native pump now streams the real world (#{n}) -> DONE"
+            "native-fullread: continue_confirm returned + requestedSaveSlotLoadIndex disarmed -- native pump now streams the real world (#{n}) -> DONE"
         ));
         FULLREAD_PHASE.store(FULLREAD_PHASE_DONE, Ordering::SeqCst);
     }
@@ -796,7 +809,7 @@ pub(crate) unsafe fn resolve_active_load_slot(configured: i32) -> i32 {
     }
     unsafe { best_active_slot() }
 }
-pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSlotIdentity {
+pub(crate) unsafe fn requested_slot_identity(slot: i32, loaded_map: i32) -> RequestedSlotIdentity {
     const NULL: usize = TITLE_OWNER_SCAN_START_ADDRESS;
     const BAD_I32: i32 = -1;
     const ZERO_U32: u32 = 0;
@@ -844,7 +857,7 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
     result.profile_name_len = profile_name_len;
     result.pgd_level = pgd_level;
     result.pgd_name_len = pgd_name_len;
-    result.matches = profile_map == c30
+    result.matches = profile_map == loaded_map
         && profile_level == pgd_level
         && profile_name_len == pgd_name_len
         && !profile_name_empty
@@ -856,7 +869,7 @@ pub(crate) unsafe fn requested_slot_identity(slot: i32, c30: i32) -> RequestedSl
 // PlayerGameData layout and GameDataMan host seam. Preserve the historical flat product name.
 pub(crate) use er_loading_portrait_core::char_fingerprint;
 /// Read the load-correctness invariants at the in-world transition and log a single greppable
-/// `LOAD-CORRECTNESS` record: GameMan c30/ac0/name_is_empty + the CS::PlayerGameData
+/// `LOAD-CORRECTNESS` record: GameMan loaded-map/save-slot/name-is-empty + the CS::PlayerGameData
 /// (`[base+0x4588268]`) character fingerprint (name, level, runes, rune-memory, chr_type,
 /// 8-stat block). A native-menu load and a DLL-driven load produce comparable records;
 /// correctness == field-for-field match (name non-empty, level/runes/stats equal). Pure reads,
@@ -885,10 +898,10 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
             .map(|v| v as u32)
             .unwrap_or(ZERO_U32)
     };
-    let (c30, ac0, name_empty) = if gm != NULL {
+    let (loaded_map, save_slot, name_empty) = if gm != NULL {
         (
-            ri32(gm + GAME_MAN_SAVED_MAP_C30_OFFSET),
-            ri32(gm + FORCE_PLAY_GAME_GM_SLOT_AC0_OFFSET),
+            ri32(gm + GAME_MAN_STAY_IN_MULTIPLE_AREA_BLOCK_ID_C30_OFFSET),
+            ri32(gm + GAME_MAN_SAVE_SLOT_AC0_OFFSET),
             unsafe { safe_read_usize(gm + GAME_MAN_NAME_IS_EMPTY_E70_OFFSET) }
                 .map(|v| v as u8)
                 .unwrap_or(NAME_UNKNOWN),
@@ -905,7 +918,7 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
     };
     if pgd == NULL {
         append_autoload_debug(format_args!(
-            "LOAD-CORRECTNESS frame={frame} pgd=NULL gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty}"
+            "LOAD-CORRECTNESS frame={frame} pgd=NULL gm_stayInMultipleAreaBlockId=0x{loaded_map:x} gm_saveSlot={save_slot} name_empty={name_empty}"
         ));
         return;
     }
@@ -934,7 +947,7 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
         s += IDX_STEP;
     }
     append_autoload_debug(format_args!(
-        "LOAD-CORRECTNESS frame={frame} gm_c30=0x{c30:x} gm_ac0={ac0} name_empty={name_empty} pgd=0x{pgd:x} chr_type={chr_type} name={name:?} level={level} runes={runes} rune_mem={rune_mem} stats={stats:?}"
+        "LOAD-CORRECTNESS frame={frame} gm_stayInMultipleAreaBlockId=0x{loaded_map:x} gm_saveSlot={save_slot} name_empty={name_empty} pgd=0x{pgd:x} chr_type={chr_type} name={name:?} level={level} runes={runes} rune_mem={rune_mem} stats={stats:?}"
     ));
     // Latch the peak-load semaphore: a real character (present PlayerGameData, level>=1, non-empty
     // name) confirmed in the world. Latched so a later quit-to-title -- which tears the char down and
@@ -944,7 +957,7 @@ pub(crate) unsafe fn dump_load_correctness(_base: usize, frame: u64) {
         LOADED_PEAK_SEEN_COUNT.fetch_add(1, Ordering::SeqCst);
         if (level as usize) >= LOADED_PEAK_LEVEL.load(Ordering::SeqCst) {
             LOADED_PEAK_LEVEL.store(level as usize, Ordering::SeqCst);
-            LOADED_PEAK_C30.store(c30, Ordering::SeqCst);
+            LOADED_PEAK_C30.store(loaded_map, Ordering::SeqCst);
             LOADED_PEAK_NAME_LEN.store(nlen, Ordering::SeqCst);
             if let Ok(mut latched) = LOADED_PEAK_NAME.lock() {
                 latched.clear();
