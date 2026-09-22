@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -67,6 +68,17 @@ MILESTONES = (
     "t_player_settled",
     "t_telemetry_world",
 )
+
+DEBUG_EVENT_PREFIXES = {
+    "runtime_config": "runtime-config: loaded",
+    "default_save": "save-override: DEFAULT-USER-SAVE",
+    "missing_save_picker": "save-override: no usable autoload save",
+    "loadgame_scan_census": "loadgame-scan: census",
+    "loadgame_scan_done": "loadgame-scan: done",
+    "native_fullread_submit": "native-fullread: SUBMIT",
+    "native_fullread_commit": "native-fullread: *** COMMIT",
+}
+DEBUG_LOG_LINE_RE = re.compile(r"^\[\+(\d+)ms\].*? dll:[0-9a-fA-F]+ (.*)$")
 
 
 def telemetry_world_loaded(telemetry: dict | None) -> bool:
@@ -152,6 +164,45 @@ def cpu_ticks(pid: int) -> int | None:
         return None
 
 
+def read_debug_events(path: Path | None, epoch: float) -> dict[str, dict[str, object]]:
+    """Compact event-boundary summary from the product debug log for this launch.
+
+    Final world timings alone say the load was slower; they do not say whether the delay moved
+    before the native submit, during the drain, or after the commit. The debug log is the only
+    cheap source for those internal boundaries, so each timing artifact records counts plus
+    first/last log milliseconds for the small set of events that explain boot-time regressions.
+    """
+    if path is None:
+        return {}
+    try:
+        if path.stat().st_mtime < epoch:
+            return {}
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return {}
+    events: dict[str, dict[str, object]] = {}
+    for line in lines:
+        match = DEBUG_LOG_LINE_RE.match(line)
+        if not match:
+            continue
+        ms = int(match.group(1))
+        message = match.group(2)
+        if message.startswith("repeat: "):
+            message = message.removeprefix("repeat: ")
+        for name, prefix in DEBUG_EVENT_PREFIXES.items():
+            if not message.startswith(prefix):
+                continue
+            event = events.setdefault(
+                name,
+                {"count": 0, "first_ms": ms, "last_ms": ms, "first": message, "last": message},
+            )
+            event["count"] = int(event["count"]) + 1
+            event["last_ms"] = ms
+            event["last"] = message
+            break
+    return events
+
+
 def read_telemetry(path: Path | None, epoch: float) -> dict | None:
     """The run's telemetry, or `None` when the file on disk belongs to an earlier run.
 
@@ -177,6 +228,7 @@ def watch(
     label: str,
     out_path: Path | None,
     telemetry_path: Path | None,
+    debug_log_path: Path | None,
     dwell: float,
     max_seconds: float,
 ) -> dict:
@@ -192,6 +244,10 @@ def watch(
     }
 
     def flush() -> None:
+        if debug_log_path is not None:
+            events = read_debug_events(debug_log_path, epoch)
+            if events:
+                record["debug_events"] = events
         if out_path is not None:
             out_path.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
 
@@ -268,6 +324,7 @@ def selftest() -> int:
         label="selftest-no-window",
         out_path=None,
         telemetry_path=None,
+        debug_log_path=None,
         dwell=0.1,
         max_seconds=0.0,
     )
@@ -343,6 +400,32 @@ def selftest() -> int:
     )
     stale.unlink(missing_ok=True)
 
+    sample_events = read_debug_events(
+        None,
+        0.0,
+    )
+    checks.append(("debug event reader accepts a missing path", sample_events == {}))
+    sample_log = Path(__file__).resolve().parent.parent / "target" / "er-boot-timer-selftest-debug.log"
+    sample_log.write_text(
+        "\n".join(
+            [
+                "[+11964ms] 2026-09-21 dll:d05eb5fb loadgame-scan: done hits=0 rows_walked=2 found_member_node=0x0 found_item=0x0",
+                "[+11965ms] 2026-09-21 dll:d05eb5fb native-fullread: SUBMIT slot=0 b78=0 -> DRAIN",
+                "[+12982ms] 2026-09-21 dll:d05eb5fb native-fullread: *** COMMIT continue_confirm 0x140b0f890",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    events = read_debug_events(sample_log, sample_log.stat().st_mtime - 1.0)
+    checks.append(
+        (
+            "debug event reader records native full-read boundaries",
+            events.get("native_fullread_submit", {}).get("first_ms") == 11965
+            and events.get("native_fullread_commit", {}).get("first_ms") == 12982,
+        )
+    )
+    sample_log.unlink(missing_ok=True)
+
     for label, ok in er_run_lib.world_read_selftest():
         checks.append((f"er_run_lib: {label}", ok))
 
@@ -376,6 +459,10 @@ def main() -> int:
     parser.add_argument(
         "--telemetry", help="er-quickload-telemetry.json, when the profile writes one"
     )
+    parser.add_argument(
+        "--debug-log",
+        help="er-quickload-autoload-debug.log. Defaults to a sibling of --telemetry when present.",
+    )
     parser.add_argument("--dwell", type=float, default=DEFAULT_DWELL_SECONDS)
     parser.add_argument(
         "--max-seconds",
@@ -396,11 +483,17 @@ def main() -> int:
     if epoch is None:
         epoch = float(Path(args.epoch_file).read_text(encoding="utf-8").strip())
 
+    telemetry_path = Path(args.telemetry) if args.telemetry else None
+    debug_log_path = Path(args.debug_log) if args.debug_log else None
+    if debug_log_path is None and telemetry_path is not None:
+        debug_log_path = telemetry_path.with_name("er-quickload-autoload-debug.log")
+
     record = watch(
         epoch=epoch,
         label=args.label,
         out_path=Path(args.out) if args.out else None,
-        telemetry_path=Path(args.telemetry) if args.telemetry else None,
+        telemetry_path=telemetry_path,
+        debug_log_path=debug_log_path,
         dwell=args.dwell,
         max_seconds=args.max_seconds,
     )

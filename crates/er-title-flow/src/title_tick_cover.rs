@@ -2844,6 +2844,21 @@ pub unsafe fn product_core_autoload_tick(module_base: usize, slot: i32, tick: u6
             };
         PRODUCT_CORE_READY_BLOCKS.fetch_add(1, Ordering::SeqCst);
         PRODUCT_CORE_LAST_BLOCKER.store(blocker, Ordering::SeqCst);
+        // Log the moment the outstanding term changes, not every `OWN_STEPPER_LOG_INTERVAL` ticks.
+        //
+        // The interval sample below cannot answer which of the eleven terms holds the autoload up,
+        // because it fires four seconds apart and the whole wait is a handful of seconds. Measured
+        // on the boot-timing baseline (bd er-effects-rs-uxct): the gate printed at tick 60 and
+        // tick 120, the full read submitted somewhere between tick 120 and tick 180, and the two
+        // samples straddle the transition without naming it. A transition record answers it
+        // directly and costs a line per change -- around ten a boot, against a sample every four
+        // seconds that mostly repeats itself.
+        let previously_logged = PRODUCT_CORE_LOGGED_BLOCKER.swap(blocker, Ordering::SeqCst);
+        if previously_logged != blocker {
+            append_autoload_debug(format_args!(
+                "product-core-autoload: readiness blocker {previously_logged} -> {blocker} at tick={tick} (blocker ids: 3 title-owner-state, 4 title-table, 5 session, 6 game-data-man, 7 profile-summary, 8 iodev, 9 heap, 10 title-dialog, 11 press-start, 12 title-state, 13 unknown)"
+            ));
+        }
         if tick % OWN_STEPPER_LOG_INTERVAL == null as u64 {
             append_autoload_debug(format_args!(
                 "product-core-autoload: waiting for core readiness owner=0x{owner:x} state={committed}/{requested} table=0x{table:x} session=0x{session:x} gm=0x{gm:x} return_title_bc4=0x{return_title_job_predicate_bc4:x} gdm=0x{game_data_man:x} profile=0x{profile_summary:x} iodev=0x{iodev:x} heap=0x{heap_allocator:x} title_loop={title_loop} title_textfadeout={title_textfadeout} menu_latch={menu_opened_latch} press_start_proxy=0x{press_start_proxy:x} press_start_vt=0x{press_start_vt:x} press_start_ctx=0x{press_start_context:x} slot={slot} tick={tick}"
