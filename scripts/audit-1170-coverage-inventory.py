@@ -662,12 +662,43 @@ GAME_ADDRESS_CONTROLS = [
 ]
 
 
+def scratch_target_prefix():
+    """The `target/` subdirectory `check-committed-compiles.sh` compiles other commits into.
+
+    Read out of that script rather than copied, so a rename there lands here as a red gate
+    naming the missing default instead of silently re-admitting a foreign build.
+    """
+    path = os.path.join(REPO, "scripts", "check-committed-compiles.sh")
+    names = set(re.findall(r"\$repo_root/target/([A-Za-z0-9_-]+)", open(path, encoding="utf-8").read()))
+    common = {name for name in names if all(other.startswith(name) for other in names)}
+    return sorted(common)[0] if len(common) == 1 else None
+
+
 def selftest(maps):
     """The tables this reproduces must equal the ones the release build actually generated."""
     failures = []
     import glob
-    generated = sorted(glob.glob(os.path.join(REPO, "target", "**", "address_map_1170.rs"), recursive=True),
-                       key=os.path.getmtime)
+    # ...by a build of this tree, and only of this tree. `scripts/check-committed-compiles.sh`
+    # compiles other commits -- the pushed tips, and in `--selftest` the two historical failures
+    # 15b32ab0 and 11af0c60 -- with `CARGO_TARGET_DIR` pointed at `target/committed-compiles`, and
+    # er-game-base's build.rs writes that commit's ledger there under a fresh mtime. Those two
+    # commits generate 499 call rows against this tree's 608, so whichever of them ran last before
+    # this step became "the newest generated table" and both comparisons went red on a tree where
+    # nothing was wrong. It is a cross-stage race, so it reads as intermittent: the same command
+    # run by hand afterwards compares against the real build and passes.
+    #
+    # The mtime guard below cannot see it. A build of a four-week-old commit made a minute ago is
+    # newer than every map file, which is the only question that guard asks.
+    scratch = scratch_target_prefix()
+    if scratch is None:
+        failures.append("cannot read the committed-compiles target directory out of "
+                        "scripts/check-committed-compiles.sh; a build of another commit would be "
+                        "compared against this tree's ledger")
+    generated = [path for path in glob.glob(os.path.join(REPO, "target", "**", "address_map_1170.rs"),
+                                            recursive=True)
+                 if scratch is None
+                 or not os.path.relpath(path, os.path.join(REPO, "target")).split(os.sep)[0].startswith(scratch)]
+    generated.sort(key=os.path.getmtime)
     # Only a build newer than every map file proves anything. The maps are edited constantly while
     # the migration is in progress, and comparing against a table generated before the last TSV
     # edit reports a difference that is real and means nothing about this script.
