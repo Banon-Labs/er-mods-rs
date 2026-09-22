@@ -37,6 +37,24 @@
 //! entitles it to ninety-nine, which may arrive as a single stack. An entry whose quantity runs
 //! past what is left of its budget is kept in part and surplus for the remainder, because holding
 //! six of something a build asks five of is exactly the state this module exists to forbid.
+//!
+//! # What a build cannot ask for, it cannot shed
+//!
+//! The invariant above is sound only over items the document can enumerate, and ammunition is the
+//! one gear category it cannot. The planner keeps quivers in `items.ammo`, keyed by the four equip
+//! positions, and serves them from a store beside its weapons, so a build's `inventory` never
+//! names an arrow -- the most any build can ask for is the two arrows and two bolts the character
+//! has nocked. Counted against that allowance every other quiver the player owns is surplus, and
+//! the sweep sheds a whole stock of ammunition as though it were the previous build still in the
+//! pockets.
+//!
+//! So ammunition is [`Untouchable::Ammunition`], on the same footing as a consumable: the pass has
+//! no business with a category the build has no way to speak about. The rows come from the caller
+//! ([`Allowance::with_ammunition`]) because which `EquipParamWeapon` rows are quivers is a fact
+//! about the installed regulation, not about an item id.
+//!
+//! Measured on build `b36964c2314bc5`, 2026-09-22: 68 of 68 surplus entries were quivers, and
+//! 5785 arrows and bolts went on the ground -- every stack the character was not shooting.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -98,6 +116,10 @@ impl Category {
     /// A build is a statement about what the character wears and fights with, so armaments,
     /// armour and talismans it does not name are the previous build still in the pockets.
     /// Everything else is the player's own belongings and an import has no opinion about it.
+    ///
+    /// Ammunition is the exception this nibble cannot see: an arrow is an `EquipParamWeapon` row
+    /// and answers `true` here, but a build cannot enumerate quivers. [`Allowance::is_ammunition`]
+    /// is the second test, and it needs the regulation rather than the id.
     #[must_use]
     pub fn is_gear(self) -> bool {
         matches!(self, Self::Armament | Self::Protector | Self::Accessory)
@@ -227,6 +249,12 @@ pub enum Untouchable {
     /// Not one of the three gear categories: a consumable, a crafting material, a key item, a
     /// spell, or an Ash of War carried as an item.
     NotGear,
+    /// An arrow or a bolt.
+    ///
+    /// A gear category by its nibble and a belonging in every other respect: see the module
+    /// header. A build document can name at most the four quivers the character has nocked, so
+    /// counting a player's ammunition against that allowance sheds all of it.
+    Ammunition,
     /// An id the engine uses to spell an empty position. See [`is_engine_placeholder`].
     EnginePlaceholder,
     /// The entry holds nothing, so there is nothing to move and nothing to count.
@@ -243,6 +271,10 @@ impl Untouchable {
     pub fn explain(self) -> &'static str {
         match self {
             Self::NotGear => "not an armament, a piece of armour or a talisman",
+            Self::Ammunition => {
+                "ammunition, which a build document has no way to ask for beyond the four quivers \
+                 the character has nocked"
+            }
             Self::EnginePlaceholder => "the engine's own id for an empty position, not an item",
             Self::EmptyStack => "the entry holds nothing",
         }
@@ -356,6 +388,7 @@ struct Budget {
 pub struct Allowance {
     budgets: Vec<Budget>,
     pinned: BTreeSet<u32>,
+    ammunition: BTreeSet<u32>,
 }
 
 impl Allowance {
@@ -378,7 +411,51 @@ impl Allowance {
         Self {
             budgets,
             pinned: pinned.into_iter().filter(|handle| *handle != 0).collect(),
+            ammunition: BTreeSet::new(),
         }
+    }
+
+    /// Record which `EquipParamWeapon` rows are quivers, so the pass can leave them alone.
+    ///
+    /// Row ids, untagged, as the param table numbers them -- the same values
+    /// `er_build_import_runtime::catalog::Quivers::rows` reads off `weaponCategory` 13 and 14.
+    /// [`identity`] strips the category nibble, the affinity and the upgrade level off a held
+    /// item before the lookup, and ammunition carries none of the last two, so an arrow's
+    /// identity is its row.
+    ///
+    /// Absent by default, and the default is the old behaviour: an allowance built by a caller
+    /// that cannot read the weapon table sweeps ammunition exactly as it did before. That is the
+    /// wrong answer, but it is the answer a host test with no game attached can give, and a
+    /// classification that guessed at the row set from the id alone would be a list of item
+    /// numbers in a module whose whole point is not having one.
+    #[must_use]
+    pub fn with_ammunition(mut self, rows: impl IntoIterator<Item = u32>) -> Self {
+        self.ammunition = rows.into_iter().collect();
+        self
+    }
+
+    /// Whether this item id names a quiver.
+    ///
+    /// ```
+    /// use er_build_import_core::sweep::Allowance;
+    /// // Bone Arrow (Fletched), as the inventory carries it.
+    /// let allowance = Allowance::default().with_ammunition([50_030_000]);
+    /// assert!(allowance.is_ammunition(0x02FB_65B0));
+    /// // A Longsword is not one, whatever the row set says.
+    /// assert!(!allowance.is_ammunition(0x0000_2710));
+    /// ```
+    #[must_use]
+    pub fn is_ammunition(&self, item_id: u32) -> bool {
+        Category::of(item_id) == Category::Armament && self.ammunition.contains(&identity(item_id))
+    }
+
+    /// How many ammunition rows the allowance was told about.
+    ///
+    /// Zero means the caller could not read the weapon table, not that the game has no arrows --
+    /// the distinction a report has to draw before it blames a build for what it shed.
+    #[must_use]
+    pub fn ammunition_rows(&self) -> usize {
+        self.ammunition.len()
     }
 
     /// Whether this exact instance is one the import produced.
@@ -505,8 +582,9 @@ impl SweepCounts {
 
 /// Decide what has to leave the character for the build to be the whole of what it holds.
 ///
-/// Every entry gets exactly one [`Disposition`]. Entries outside the gear categories, engine
-/// placeholders and empty stacks are answered first and never reach the allowance; of the rest,
+/// Every entry gets exactly one [`Disposition`]. Entries outside the gear categories, ammunition,
+/// engine placeholders and empty stacks are answered first and never reach the allowance; of the
+/// rest,
 /// the instances this import produced are pinned, and the remainder are assigned to the build's
 /// budgets by a maximum matching, so an entry is surplus only when no arrangement of the
 /// allowance covers it.
@@ -522,6 +600,8 @@ pub fn plan_sweep(entries: &[Held], allowance: &Allowance) -> SweepPlan {
     for (index, entry) in entries.iter().enumerate() {
         if !Category::of(entry.item_id).is_gear() {
             dispositions[index] = Disposition::Untouchable(Untouchable::NotGear);
+        } else if allowance.is_ammunition(entry.item_id) {
+            dispositions[index] = Disposition::Untouchable(Untouchable::Ammunition);
         } else if is_engine_placeholder(entry.item_id) {
             dispositions[index] = Disposition::Untouchable(Untouchable::EnginePlaceholder);
         } else if entry.quantity <= 0 {
@@ -984,6 +1064,38 @@ mod tests {
             plan.disposition(0),
             Some(Disposition::Surplus { keep: 40, shed: 59 })
         );
+    }
+
+    /// A quiver the build does not name is left alone, because no build can name it.
+    ///
+    /// The regression this closes, measured on build `b36964c2314bc5` 2026-09-22: the character's
+    /// whole stock of ammunition -- 68 entries, 5785 arrows and bolts, none of them nocked -- was
+    /// classified surplus and put on the ground.
+    #[test]
+    fn a_quiver_the_build_does_not_name_is_untouchable() {
+        // Bone Arrow (Fletched) and Ballista Bolt, as the inventory carries them.
+        let entries = [
+            Held::stack(0, 0x02FB_65B0, 99),
+            Held::stack(0, 0x0328_B740, 20),
+        ];
+        let allowance = Allowance::default().with_ammunition([50_030_000, 53_000_000]);
+        let plan = plan_sweep(&entries, &allowance);
+        assert_eq!(plan.counts().surplus, 0);
+        assert_eq!(
+            plan.disposition(0),
+            Some(Disposition::Untouchable(Untouchable::Ammunition))
+        );
+        assert!(survivors(&entries, &allowance).is_empty());
+    }
+
+    /// An armament is still swept while ammunition is exempt: the carve-out is the row set, not
+    /// the category nibble the two share.
+    #[test]
+    fn the_ammunition_carve_out_does_not_spare_a_weapon() {
+        let longsword = 0x0000_2710;
+        let entries = [Held::one(0, longsword)];
+        let allowance = Allowance::default().with_ammunition([50_030_000]);
+        assert_eq!(survivors(&entries, &allowance), vec![0]);
     }
 
     /// The invariant, as a fixpoint: applying the plan leaves nothing for a second pass to do.

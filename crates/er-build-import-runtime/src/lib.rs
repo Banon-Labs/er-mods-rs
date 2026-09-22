@@ -638,7 +638,7 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
     let msg = catalog::msg_repository()?;
 
     // Safety: params_ready() proved the tables are streamed and `msg` came from the singleton.
-    let (catalog, stats) = unsafe { catalog::build_from_game(msg, module_base) };
+    let (catalog, stats, quivers) = unsafe { catalog::build_from_game(msg, module_base) };
     log_line(&format!(
         "[build-import] catalog: {} named, {} unnamed, {} goods rows are spells, \
          {} ashes have no gem that draws an icon (their badge renders the `ICON` placeholder)",
@@ -897,6 +897,19 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
                 "[build-import]   STRANDED {label:?}: {deposited} went into the storage box and                  {retrieved} came back. The rest is in the box and can be collected at any grace"
             ));
         }
+        // The one place a copy the character never got is counted. The grant ledger cannot see it:
+        // `plan::plan` grants a talisman and a piece of armour a literal one each however many
+        // times the build lists them, and the grant check then asks whether the character holds at
+        // least that one, so every repeat answers yes. Measured on build `b36964c2314bc5`,
+        // 2026-09-22: 493 of 493 grants confirmed, while the build lists 80 talismans over 72
+        // distinct names and 80 pieces of armour over 39 and the eviction pass walked 426 gear
+        // entries against the 475 the build lists.
+        if reordered.repeats > 0 {
+            log_line(&format!(
+                "[build-import] REORDER SHORTFALL: the build lists {} more cop(ies) of gear than                  the character holds entries for. Armaments are minted one per listing, talismans                  and armour are granted one each however many times the build names them, so a                  build listing a talisman five times leaves the character holding it once",
+                reordered.repeats
+            ));
+        }
         report.reordered = (reordered.restamped, reordered.attempted);
 
         let vacancies = equips.vacancies();
@@ -933,10 +946,30 @@ unsafe fn import_now(doc: &BuildDoc) -> Option<Report> {
         // The classification itself is host-tested against the invariant over generated
         // inventories, so the runtime half below is the part that moves things and says what it
         // failed to move.
-        let allowance = evict::allowance_for(&planned.grants, &outcome.armaments);
+        //
+        // The quiver rows are the third thing it needs, and they are the fix for the one report
+        // that named this pass as the defect: a build document keeps ammunition in `items.ammo`,
+        // four equip positions and no inventory list, so counting a player's arrows against the
+        // build's allowance sheds every stack they were not shooting. Measured on build
+        // `b36964c2314bc5`, 2026-09-22: 68 of 68 surplus entries were quivers and 5785 arrows and
+        // bolts went on the ground. A zero row count here means the weapon table did not read and
+        // the sweep is back to shedding them, so it is in the log beside the verdict.
+        let ammunition = quivers.rows();
+        let allowance = evict::allowance_for(
+            &planned.grants,
+            &outcome.armaments,
+            ammunition.iter().copied(),
+        );
         // Safety: game thread, character in the world, and the vacate above has run.
         let evicted = unsafe { evict::unlisted_gear(module_base, egd, &allowance) };
         log_line(&format!("[build-import] {}", evicted.summary()));
+        log_line(&format!(
+            "[build-import] EVICT SPARES AMMUNITION: {} EquipParamWeapon row(s) are quivers and \
+             are outside this pass -- a build names at most the four it has nocked, so counting \
+             the rest against its allowance would put them on the ground. A zero here is the \
+             weapon table failing to read, not a character with no arrows",
+            allowance.ammunition_rows()
+        ));
         // First, and one line each however many there are. This is the list the complaint is
         // about -- gear the build does not name that is still on the character -- and it is the
         // one thing in this report that must never be capped, sampled, or folded into a count.

@@ -450,11 +450,17 @@ fn spell_row_ids() -> BTreeSet<u32> {
 
 /// Build the catalog from the running game.
 ///
+/// The [`Quivers`] table comes back with the catalog rather than staying inside it. Two passes
+/// need to know which weapon rows are ammunition and neither can ask an item id: the catalog
+/// splits `Kind::Ammo` out of `Kind::Weapon`, and the eviction sweep leaves quivers alone because
+/// a build document cannot enumerate them. Reading the weapon table twice for the same answer is
+/// how those two would drift apart.
+///
 /// # Safety
 ///
 /// `msg` must be a live `MsgRepositoryImp*`, `module_base` the loaded image base, and the
 /// game must be far enough along that the message repository and param tables are populated.
-pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, BuildStats) {
+pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, BuildStats, Quivers) {
     let spells = spell_row_ids();
     let pots = PotGroups::read();
     let max_held = MaxHeld::read();
@@ -507,7 +513,7 @@ pub unsafe fn build_from_game(msg: usize, module_base: usize) -> (MapCatalog, Bu
     // Safety: the caller's contract carries through unchanged.
     unsafe { insert_ashes_of_war(&mut catalog, &mut stats, msg, module_base) };
 
-    (catalog, stats)
+    (catalog, stats, quivers)
 }
 
 /// Add every ash of war, keyed by skill name and valued by gem id.
