@@ -195,3 +195,51 @@ test_append_mode_is_a_write if {
 	cmd := `python3 -c "open('a.log','a').write('x')"`
 	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
 }
+
+# --- a payload that QUOTES a python command is not one ---------------------
+#
+# Measured in production 2026-09-21 (bd er-effects-rs-ak3q). The invoked binary is `bd`
+# and `git`; the python is a quotation inside the memory or the commit message being
+# recorded. The old anchor was "start, or after whitespace or a quote", which every
+# quoted argument satisfies, and the ellipsis in the prose then broke the
+# committed-script exemption on top of it.
+
+test_bd_memory_quoting_a_python_command_is_allowed if {
+	cmd := `bd remember --key trace-tsv "measured with python3 scripts/er-fd-trace.py --tsv ... which printed 12 rows"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_commit_message_quoting_a_python_write_is_allowed if {
+	cmd := `git commit -m "docs: record that python3 -c \"open(p,'w').write(s)\" is the shape we refuse"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_issue_body_quoting_a_python_script_is_allowed if {
+	cmd := `bd create --description "the repro is python3 /tmp/patch.py, which writes crates/ sources"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+# --- `..` belongs to the path, not to the command --------------------------
+
+test_committed_script_with_a_dotdot_operand_is_allowed if {
+	cmd := "python3 scripts/er-fd-trace.py --out ../trace.tsv"
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+test_committed_script_with_an_ellipsis_in_a_quoted_argument_is_allowed if {
+	cmd := `python3 scripts/er-frida-evidence.py --record-telemetry --line "gfx_swap: armed ... released"`
+	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+}
+
+# ...while a `..` escape in the SCRIPT PATH is still not a committed script.
+test_dotdot_escape_in_the_script_path_is_denied if {
+	cmd := "python3 scripts/../../elsewhere/patch.py"
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+# A real invocation inside a shell wrapper payload is still caught: the payload is a
+# text of its own, where the python IS in command position.
+test_python_write_inside_a_shell_wrapper_payload_is_denied if {
+	cmd := `bash -c "python3 -c \"open('a','w').write('x')\""`
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}

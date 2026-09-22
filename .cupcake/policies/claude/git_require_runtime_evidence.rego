@@ -86,7 +86,7 @@ deny contains decision if {
 	}
 }
 
-executed_texts := commands.executed_texts(input.tool_input.command)
+executed_texts := commands.input_executed_texts
 
 any_executed_push if {
 	some text in executed_texts
