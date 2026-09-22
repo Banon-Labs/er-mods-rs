@@ -2551,12 +2551,18 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 # their machine; local/CI parity is the whole reason this file exists.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
-	-p er-soulsformats -p er-param-inspect -p er-installer
+	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults
 # er-installer is here rather than in a batch of its own because it is host-only by
 # construction: the conflict rules, the picker state machine, the screen layout and the profile
 # writer are all decidable without a game, a Windows target or a terminal. What its tests are
 # really holding is the rule that the out-of-box selection can be loaded together -- the catalog
-# gate proves that from the tables, and these prove the code that reads them agrees.
+# gate proves that from the tables, and these prove the code that reads them agrees. Its settings
+# tests hold a second rule: that editing a settings file rewrites the one key asked for and moves
+# no other byte, over all 118 settings the nine mods read.
+#
+# er-config-defaults is beside it because it is the other half of that: two tests asserting the
+# settings texts it prints are framed unambiguously and carry at least one assignment each. A
+# block that came back empty would reach the installer as a mod with no settings.
 #
 # They run without `ER_INSTALLER_EMBED_DIR`, so this build carries no DLL payload and finishes
 # in a second. The tests that touch the payload branch on whether one is present and assert the
@@ -2668,6 +2674,14 @@ python3 "$repo_root/scripts/check-quit-row-flow-overlap.py"
 # a mod list from whenever it was last generated.
 python3 "$repo_root/scripts/gen-installer-catalog.py" --selftest
 python3 "$repo_root/scripts/gen-installer-catalog.py" --check
+
+# ...and the settings the installer offers during that install, which are read out of each mod
+# DLL's own boilerplate rather than written down a second time. Drift here is worse than a stale
+# mod list: the walkthrough would tell a player what their game is configured to while naming a
+# default that mod stopped shipping. The selftest covers the parser on fixtures; --check proves
+# the linked Rust still matches the nine files as they stand.
+python3 "$repo_root/scripts/gen-installer-settings.py" --selftest
+python3 "$repo_root/scripts/gen-installer-settings.py" --check
 
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a

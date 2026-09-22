@@ -27,6 +27,8 @@ mod console;
 mod install;
 mod picker;
 mod selection;
+mod settings;
+mod settings_schema;
 mod steam;
 mod tui;
 
@@ -61,6 +63,17 @@ OPTIONS:
     --plain               Use the numbered-list picker instead of the full-screen one,
                           for a terminal the full-screen one does not suit.
 
+  Settings. Several mods read a file of their own in the game folder. An existing one
+  is never replaced: only the keys you change in it are touched, comments and all.
+    --configure           Go through those settings after picking the mods. This is
+                          what an interactive run does anyway; pass it to get the
+                          questions on a run that chose its mods with --select or
+                          --defaults.
+    --default-configs     Ask nothing. Write the mod's own settings file where there
+                          is not one yet, and leave every existing file alone.
+    --keep-configs        Touch no settings file at all, not even a missing one. For
+                          reinstalling the DLLs while every setting stays as it is.
+
     --select <names>      Comma-separated mods, by name or by label. Skips the picker.
     --defaults            Install the recommended set without the picker.
     --none                Write a profile that loads nothing.
@@ -82,6 +95,9 @@ struct Args {
     no_seamless: bool,
     plain: bool,
     defaults: bool,
+    configure: bool,
+    default_configs: bool,
+    keep_configs: bool,
     none: bool,
     list: bool,
     selfcheck: bool,
@@ -111,6 +127,9 @@ impl Args {
                 "--no-seamless" => parsed.no_seamless = true,
                 "--plain" => parsed.plain = true,
                 "--defaults" => parsed.defaults = true,
+                "--configure" => parsed.configure = true,
+                "--default-configs" => parsed.default_configs = true,
+                "--keep-configs" => parsed.keep_configs = true,
                 "--none" => parsed.none = true,
                 "--list" => parsed.list = true,
                 "--selfcheck" => parsed.selfcheck = true,
@@ -130,7 +149,46 @@ impl Args {
                 "--select, --defaults and --none each choose the whole set; pass one.".to_string(),
             ));
         }
+        // Each of these says something different about the settings files, and a run given two
+        // of them has not said which. Refusing beats picking one: the difference between them is
+        // whether a file the player has already edited gets opened.
+        let configs = [
+            parsed.configure,
+            parsed.default_configs,
+            parsed.keep_configs,
+        ];
+        if configs.iter().filter(|set| **set).count() > 1 {
+            return Err(ArgError(
+                "--configure, --default-configs and --keep-configs each decide what happens to \
+                 the settings files; pass one."
+                    .to_string(),
+            ));
+        }
         Ok(parsed)
+    }
+
+    /// What this run does with the settings files.
+    ///
+    /// The default is to ask, which is what an interactive install should do -- but only when
+    /// the mods were picked interactively too. A run that was told its mods on the command line
+    /// is being scripted, and stopping it to ask about 118 settings would hang it, so it gets
+    /// the write-what-is-missing behaviour instead. `--configure` is how such a run opts back in.
+    fn config_mode(&self) -> settings::Mode {
+        if self.keep_configs {
+            return settings::Mode::Keep;
+        }
+        if self.configure {
+            return settings::Mode::Ask;
+        }
+        if self.default_configs {
+            return settings::Mode::Defaults;
+        }
+        let picked_on_the_command_line = self.select.is_some() || self.defaults || self.none;
+        if picked_on_the_command_line {
+            settings::Mode::Defaults
+        } else {
+            settings::Mode::Ask
+        }
     }
 }
 
@@ -413,6 +471,9 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::FAILURE);
     }
 
+    // Read before the two `unwrap_or_else` calls below consume their fields out of `args`.
+    let config_mode = args.config_mode();
+
     let install_dir = args
         .install_dir
         .unwrap_or_else(|| game.game_dir.join("er-mods"));
@@ -502,12 +563,40 @@ fn run() -> Result<ExitCode, String> {
         install_dir.display()
     );
     println!("Profile: {}", written.display());
-    let configs: Vec<&str> = chosen.iter().filter_map(|entry| entry.config).collect();
-    if !configs.is_empty() {
+
+    // The settings files, after the profile is on disk. Deliberately in that order: the mods are
+    // installed either way, so a settings step that is interrupted, refused by the filesystem or
+    // quit out of leaves a working install rather than half of one.
+    let mode = config_mode;
+    let outcomes = settings::run(
+        mode,
+        &chosen,
+        &game.game_dir,
+        console::input_is_interactive(),
+    )
+    .map_err(|err| {
+        format!(
+            "writing a settings file in {}: {err}",
+            game.game_dir.display()
+        )
+    })?;
+    if !outcomes.is_empty() {
+        // The directory once, then the names. Every one of these files lives beside the game
+        // executable, so a full path per line would repeat the same 60 characters nine times --
+        // and a bare list of names would leave a player guessing which folder holds them.
         println!(
-            "Settings files to look at in the game folder: {}",
-            configs.join(", ")
+            "\nSettings files, in {}:",
+            install::display_path(&game.game_dir)
         );
+        for outcome in &outcomes {
+            println!("  {:<28} {}", outcome.file, outcome.action.describe());
+        }
+        if mode == settings::Mode::Keep {
+            println!(
+                "  (--keep-configs: nothing was opened. A mod with no file writes its own, \
+                 with comments, the first time you launch.)"
+            );
+        }
     }
 
     // Files an earlier install left behind that this profile does not list. Reported, never

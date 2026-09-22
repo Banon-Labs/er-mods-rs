@@ -1,0 +1,36 @@
+# The two settings files whose shipped text is COMPUTED rather than written down.
+#
+# Seven of the nine `er-*.toml` files a mod reads are a raw string literal in the crate that
+# writes them, so `scripts/gen-installer-settings.py` reads them straight out of the source.
+# Two are not: `er-quit-menu.toml` interpolates its own accepted row names and its default
+# selection, and `er-quickload.toml` interpolates the save-picker block that
+# `er-save-picker-core` builds. A text scraper cannot evaluate either, and guessing at the
+# interpolated halves would put a second spelling of the shipped defaults in this repo -- which
+# is the one outcome the installer walkthrough must not have, because it offers those defaults
+# to a player as the values their game will use.
+#
+# So this binary asks the crates. It links the same functions the DLLs call and prints what they
+# return, which makes the answer the shipped bytes by construction rather than by agreement.
+#
+# Host-buildable and game-free: all three dependencies compile on Linux with their
+# windows-gated halves cfg'd out.
+[package]
+name = "er-config-defaults"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "er-config-defaults"
+path = "src/main.rs"
+
+[dependencies]
+# `default-features = false` for the picker: the boot-flow and OS-dialog features pull the
+# drawn overlay and the common-file-dialog in, and nothing here needs either -- the config
+# boilerplate is plain text. The quit-menu crate takes it the same way for the same reason.
+er-save-picker-core = { path = "../../crates/er-save-picker-core", default-features = false }
+er-quit-menu-core = { path = "../../crates/er-quit-menu-core" }
+er-invasion-warp-core = { path = "../../crates/er-invasion-warp-core" }
