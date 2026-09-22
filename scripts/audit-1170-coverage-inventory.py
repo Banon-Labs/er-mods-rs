@@ -704,16 +704,28 @@ def selftest(maps):
     # edit reports a difference that is real and means nothing about this script.
     newest_map = max((os.path.getmtime(os.path.join(RECON, f)) for f in os.listdir(RECON)
                       if f.startswith("rva-")), default=0)
+    # A skip here used to print one `selftest SKIP:` line and then `selftest: 0 failure(s)`, which
+    # is what an agent reads, so the gate reported green to everyone who ran it by hand and red
+    # only inside the fan-out, where a concurrent build had refreshed the table. An absence the
+    # summary line does not carry is an absence nobody sees. It is spelled the way the other
+    # skip-aware gates in this suite spell one -- `skipped:` and then `NOT A PASS` -- and the
+    # summary line repeats it, because the summary is the line that gets quoted.
+    skipped = None
     if not generated:
         failures.append("no generated address_map_1170.rs to compare against; build er-game-base first")
     elif os.path.getmtime(generated[-1]) < newest_map:
-        print("selftest SKIP: the newest generated address_map_1170.rs predates the map files; "
-              "rebuild er-game-base to compare")
+        skipped = ("the newest generated address_map_1170.rs predates the map files, so it was "
+                   "built from an older ledger and any difference would say nothing about this "
+                   "script; rebuild er-game-base to compare")
+        print(f"skipped: {skipped}")
+        print("  NOT A PASS: the reproduced CALL and DETOUR tables were not compared against the "
+              "generated ones.")
         generated = []
-    else:
-        pass
 
     if generated:
+        # Named on every run, so that a comparison having happened is something the output says
+        # rather than something inferred from a missing line.
+        print(f"selftest: comparing against {os.path.relpath(generated[-1], REPO)}")
         text = open(generated[-1], encoding="utf-8").read()
 
         def grab(name):
@@ -787,7 +799,8 @@ def selftest(maps):
             failures.append(f"{hex(rva)} ({why}) is a REAL game address and the exclusions ate it")
     for line in failures:
         print(f"selftest FAIL: {line}")
-    print(f"selftest: {len(failures)} failure(s)")
+    tail = "" if skipped is None else " -- NOT A PASS, the generated-table comparison was skipped"
+    print(f"selftest: {len(failures)} failure(s){tail}")
     return 1 if failures else 0
 
 
