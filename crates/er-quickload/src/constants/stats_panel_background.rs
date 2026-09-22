@@ -129,6 +129,7 @@ pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_VALUE: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
 pub(crate) static TITLE_PRESS_START_GFX_FORCE_FALSE_LAST_REQUESTED: AtomicUsize =
     AtomicUsize::new(TITLE_OWNER_SCAN_START_ADDRESS);
+#[cfg(feature = "quit-rows")]
 /// Named child SceneObjProxy binder (`live/deobf 0x14074a2f0`). TitleTopDialog ctor calls it with
 /// r8="PressStart" and output `dialog+0xb78`. Called from this side, never hooked: it is variadic,
 /// so no fixed-arity detour is argument-transparent on it.

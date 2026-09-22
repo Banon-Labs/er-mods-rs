@@ -2,7 +2,7 @@
   "gated": {
     "autoload": 31,
     "menu-trace": 2,
-    "quit-rows": 119,
+    "quit-rows": 120,
     "save-game-row": 4
   },
   "ungated": {
