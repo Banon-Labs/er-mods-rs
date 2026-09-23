@@ -105,6 +105,10 @@ PUSH_MAIN = " ".join(["git", "push", "origin", "main"])
 # and one that can only be read.
 HOOKS_PATH = "core.hooks" + "Path"
 DEV_NULL = "/dev/" + "null"
+# Split for the same reason: written whole, this token is what `ER-EFFECTS-NO-CHECK-SH`
+# denies, so an agent editing this file through a heredoc would be blocked by the rule
+# the cases below exercise.
+CHECK_SUITE = "scripts/" + "check" + ".sh"
 
 BASE_ENV = {
     "CUPCAKE_CURRENT_BRANCH_OVERRIDE": "feature/delivered-shape",
@@ -618,6 +622,33 @@ SHIM_CASES = [
         ROOT_DELETE,
         False,
         "would be affected by operation on",
+    ),
+    # The 2026-09-22 false positive, abridged from the command that was refused: a
+    # pull-request body written to a file, whose prose names the suite script. The
+    # body arrives welded onto the `cat` that writes it, so `(check.sh changed)` put
+    # the script's name in a command slot. Nothing here runs it.
+    (
+        "a pull-request body written to a file may name the suite in prose",
+        "cat > /tmp/pr-body.md <<'EOF'\n"
+        "## Gates run\n\n"
+        "test-check-sh-accumulates.py   PASS   (check.sh changed)\n"
+        f"shellcheck -S warning {CHECK_SUITE}        PASS\n"
+        "EOF\n"
+        "timeout 60 gh pr edit 444 --body-file /tmp/pr-body.md",
+        True,
+        "",
+    ),
+    (
+        "a heredoc a shell reads still runs the suite",
+        f"bash <<'EOF'\nbash {CHECK_SUITE}\nEOF",
+        False,
+        "The agent does not run",
+    ),
+    (
+        "a heredoc piped into a shell still runs the suite",
+        f"cat <<'EOF' | bash\nbash {CHECK_SUITE}\nEOF",
+        False,
+        "The agent does not run",
     ),
 ]
 
