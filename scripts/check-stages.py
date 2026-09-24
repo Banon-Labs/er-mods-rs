@@ -223,13 +223,7 @@ STAGES: tuple[Stage, ...] = (
             # reads -- so a push that edited either without this would skip the gate that proves
             # the installer still offers the defaults those mods ship.
             "tools/er-config-defaults/**/*",
-            # The whole installer crate, not just the one generated table that used to be named
-            # here. `build-installer-release.py` is a gate of this stage and reads the crate
-            # itself -- `build.rs` is where `ER_INSTALLER_EMBED_DIR` is resolved, which is what
-            # decides whether the packaged binaries carry any mods at all -- so declaring only
-            # `config-defaults.txt` let a push that changed the embedding skip the stage that
-            # proves the release still installs something.
-            "tools/er-installer/**/*",
+            "tools/er-installer/config-defaults.txt",
         ),
     ),
     Stage(
@@ -263,6 +257,11 @@ STAGES: tuple[Stage, ...] = (
             "scripts/*.tsv",
             "scripts/check.sh",
             "scripts/audit-1170-gate-bypass.baseline.json",
+            # `audit-1170-coverage-inventory.py --selftest` reads this script to learn which
+            # `target/` subdirectory holds builds of other commits, so that it compares this
+            # tree's ledger against a build of this tree. A rename of that directory is a change
+            # to what this stage checks, so the push that makes it has to select the stage.
+            "scripts/check-committed-compiles.sh",
         ),
     ),
     Stage(
