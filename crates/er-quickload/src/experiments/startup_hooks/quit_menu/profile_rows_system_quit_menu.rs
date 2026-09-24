@@ -707,27 +707,23 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;
     }
-    let null = TITLE_OWNER_SCAN_START_ADDRESS;
-    // Prefer the hooked ORIG trampoline so the resolve is not double-instrumented (as in
-    // push_stats_text_on_row); else the game function, resolved for the running build.
-    //
-    // The fallback arm used to be a bare `base + RVA`. It is reached exactly when the detour is
-    // not installed -- which on a moved build is the likeliest state, because an unmapped hook
-    // target is refused -- so the one path that runs without the hook was the one path that never
-    // asked where the function went. `CS::SceneObjProxy` named-child bind moved on 1.17
-    // (0x74a2f0 -> 0x74b140, byte-checked: 1.16.2 @0x74a2f0 and 1.17 @0x74b140 are the same
-    // prologue `4c 89 44 24 18 4c 89 4c 24 20 55 53 56 57 41 56`, while 1.17 @0x74a2f0 is
-    // mid-instruction), so the fallback pointed into unrelated code. `gated_game_fn` refuses
-    // instead, and the pane-visibility oracle simply does not sample.
-    let assign_addr = match TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG.load(Ordering::SeqCst) {
-        orig if orig != null && orig != HOOK_ORIGINAL_UNSET => orig,
-        _ => match crate::experiments::gated_game_fn(
-            TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
-            "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
-        ) {
-            Some(address) => address,
-            None => return,
-        },
+    // Always the binder itself, never a stored trampoline. This used to prefer
+    // `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`, which stopped holding the binder when PR #475
+    // moved the loading_cover detour onto the fixed-arity `CS::SceneObjProxy::SceneObjProxy`: it
+    // holds that constructor's trampoline, four parameters with the first two the other way round,
+    // so the three-argument transmute below resolved a name that was not a string. Opening System
+    // then died at `0xc0000005` reading `0xffffffffffffffff`, `er_quickload.dll+0xc359c` ->
+    // `eldenring.exe+0x74b66a` -> the game's `strchr(text, '/')` (run br-20260924-005955-a1fb,
+    // 2026-09-23; er-quit-menu-core's `scaleform_proxy.rs` lost its slot in #475 and this site was
+    // missed). `gated_game_fn` refuses an unmapped address rather than guessing, so where the bind
+    // has moved and not been re-measured this oracle does not sample -- which is what a bare
+    // `base + RVA` got wrong on 1.17, pointing into unrelated code (`0x74a2f0` -> `0x74b140`).
+    let assign_addr = match crate::experiments::gated_game_fn(
+        TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
+        "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
+    ) {
+        Some(address) => address,
+        None => return,
     };
     let assign: unsafe extern "system" fn(usize, usize, usize) -> usize =
         unsafe { std::mem::transmute(assign_addr) };

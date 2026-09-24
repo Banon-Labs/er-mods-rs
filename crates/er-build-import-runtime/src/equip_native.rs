@@ -1181,7 +1181,41 @@ pub unsafe fn equip_all(
             unsafe { get_handle(inventory, handle.as_mut_ptr(), item_idx as u32) };
             // Safety: the native dispatcher for quick/pouch/rune, resolved for this build.
             unsafe { (quick.set_quick)(egd, index, handle.as_ptr(), item_idx as u32) };
-            // Safety: same context; a read of the position that was just written.
+            // The dispatcher fills the slot and nothing else, and a filled slot the player cannot
+            // see is what that leaves behind. `EquipItemData::selectedQuickSlot` (`+0xa0`) is the
+            // position the pouch widget draws, the write does not touch it, and `FUN_140249a90` is
+            // what reconciles the two. While that field holds `-1`,
+            // `GetSelectedQuickslotItemIndex` returns `-1` and the widget draws nothing however
+            // full the array is.
+            //
+            // Measured on run `br-20260924-010423-e16d`, 2026-09-23, reading the live field out of
+            // `/proc/<pid>/mem` across an import (`scripts/er-quickbar-state.py`):
+            //
+            //     18:04:35   quick filled 0   selectedQuickSlot  0
+            //     18:04:39   quick filled 0   selectedQuickSlot -1
+            //     18:05:08   quick filled 6   selectedQuickSlot -1
+            //
+            // The middle sample is `vacate_all` emptying the bar through `UnequipItem`, which
+            // calls the reconcile itself, so `-1` is correct there. The last is this loop writing
+            // six positions and never putting the selection back. `RemoveItem` calls the reconcile
+            // too, which is why taking the first item off and re-equipping it by hand cleared the
+            // symptom: that ran what this pass skipped. The slot it reappears in is always the
+            // first, because the reconcile takes `FUN_14024f7e0(eid, -1)` ->
+            // `FUN_1402501a0(eid, 9)`, which scans forward from slot 9 and wraps onto slot 0.
+            //
+            // `EquipItemToChrAsmSlot` calls the reconcile after this same dispatcher on this same
+            // branch, and the broadcast after that, so the change reaches the rest of the engine
+            // the way a menu equip does.
+            //
+            // Safety: the post-write reconcile, resolved for this build, on the game thread.
+            unsafe { refresh(egd) };
+            if main_player != 0 {
+                // Safety: a live `PlayerIns`, read once above out of the `WorldChrMan` singleton.
+                unsafe { broadcast(main_player) };
+            }
+            // Safety: same context; a read of the position that was just written. The reconcile
+            // above moves only the selection, never `ChrAsmEquipEntries`, so this still reads what
+            // the dispatcher wrote.
             let actual = unsafe { read_quick_position(quick, egd, position.kind, index) };
             outcome.dispatch.push((slot, placed_id, item_idx, actual));
             let result = verdict(&mut outcome, position.kind, slot, placed, actual);
