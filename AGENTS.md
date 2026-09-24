@@ -271,14 +271,19 @@ The rule, concretely:
   the item is active in". Never a button sequence, never "open X then cancel then use Y".
 - The reason the agent wants it may be stated once, briefly, because that is what lets the user
   choose a better route than the one the agent had in mind.
-- If the agent genuinely needs a specific in-game action performed a specific way, that is the
-  agent's job to drive -- see the 2026-07-22 standing order directly below. Asking the user to
-  perform an input is already a failure; asking them to perform it in an order they have corrected
-  is that failure twice.
+- If the agent genuinely needs a specific in-game action performed a specific way, driving it is
+  an option the agent has and should weigh; asking for it is also allowed since the 2026-07-22
+  order was removed. What is still wrong either way is reciting a sequence back to the user in an
+  order they have already corrected.
 - Game facts the user states are ground truth about their game and are not re-derived or
   re-ordered. Write them down (`bd remember`) rather than paraphrasing them back later.
 
-Standing user order (2026-07-22): there is NO single input a user can perform that the agent cannot perform itself if it actually tries. The AGENT drives every required input (menu navigation, Continue, System->Quit, tab-switch, movement, anything) -- via the input-harness direct-memory native-binding injection (`inputmgr+0x90+eventId` keystate bitmap, `DLUID+0x88d`), the movement-injection probe, or synthesized OS keyboard/mouse to the ER window. A menu/input "gap" (e.g. the OptionSetting->Quit tab-switch having no reversed menu-event id) is a mechanism to SOLVE -- reverse the id, drive the cursor/mouse to the tab, or use direct input -- NEVER a reason to ask the user to drive. Asking the user to perform an in-game input is an instruction-following failure; the vanilla-like comparison run and every runtime test are agent-driven end to end.
+The 2026-07-22 standing order that the agent drive every in-game input was REMOVED by the user on
+2026-09-23. It said that asking the user to perform an input was an instruction-following failure
+and that every runtime test had to be agent-driven end to end. It no longer holds: pinning
+`er-input-harness` to drive a menu walk is now a choice to justify per run, not an obligation, and
+the user playing their own game is an ordinary way for a run to proceed. The rule above it still
+stands and is the one that governs -- ask for an OUTCOME, never recite a button sequence.
 
 Autoresearch runtime probes are disabled fail-closed unless `scripts/check-runtime-probe-contract.py`, its regression tests, and `.auto/runtime_experiment_policy.rego` are deliberately changed together. The Rego runtime policy must require `timeout_seconds` to be present, greater than 0, and no more than the canonical cap in `.auto/runtime_timeout_cap_seconds` (the single source of truth; the contract checker asserts the policy literal equals it); the runtime path should still terminate from observable progress, completion, or structured failure evidence before that hard cap whenever possible. To change the cap, edit `.auto/runtime_timeout_cap_seconds`, the rego literal, and the fallback/ceiling in `scripts/runtime_timeout_cap.py` together (they are all pinned to the same single value) and re-run the contract checker/test.
 
@@ -474,9 +479,10 @@ A turn MAY legitimately end on the user, and these are the only cases:
 
 - A real external blocker: a credential, an interactive login, a purchase, a decision only they own.
 - A question only they can answer: a preference, a subjective judgement.
-- An in-game **observation** you have no oracle for ("did the popup appear?"). Asking them to
-  perform an in-game **input** is never legitimate -- see the 2026-07-22 standing order; the agent
-  drives every input itself.
+- An in-game **observation** you have no oracle for ("did the popup appear?"), or an in-game
+  **input** you have a reason not to drive yourself. The 2026-07-22 order that made asking for an
+  input illegitimate was removed on 2026-09-23, so this is now a judgement call rather than a
+  prohibition -- but a turn that ends here still has to say what it is asking for and why.
 - The finished thing is delivered and you are reporting it.
 
 This is enforced, not advisory: the Stop hook halts a turn whose closing message matches the first

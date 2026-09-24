@@ -45,10 +45,18 @@ Usage:
 
 Build the payload first; this packages, it does not compile:
     scripts/er-build-dlls.sh --all
-    ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\
+    ER_INSTALLER_EMBED_DIR=$PWD/target/x86_64-pc-windows-msvc/release \\
         cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer
-    ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\
+    ER_INSTALLER_EMBED_DIR=$PWD/target/x86_64-pc-windows-msvc/release \\
         cargo build --release -p er-installer
+
+That variable must be an absolute path. `tools/er-installer/build.rs` runs with cargo's own working
+directory, which is the crate directory and not the workspace root, so a relative path resolves
+against `tools/er-installer/` and finds nothing there. The build then fails with a list of DLL
+names under "Build them first" -- which reads as a missing payload and is really a mislaid one,
+because the payload it is looking past is sitting in the workspace `target/`. Measured 2026-09-23:
+the relative spelling this block used to print failed both host builds while every DLL it named
+was on disk, and the packaging step then shipped the previous run's binaries without complaint.
 """
 
 from __future__ import annotations
@@ -231,11 +239,12 @@ def stage(out_dir: Path, source: Path, host_source: Path, commit: str) -> tuple[
         raise SystemExit(
             "missing from the build tree:\n"
             + "".join(f"  {item}\n" for item in missing)
-            + "\nBuild the payload first:\n"
+            + "\nBuild the payload first (the embed dir must be absolute -- build.rs runs in the\n"
+            "crate directory, so a relative path resolves against tools/er-installer/):\n"
             "  scripts/er-build-dlls.sh --all\n"
-            "  ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\\n"
+            "  ER_INSTALLER_EMBED_DIR=$PWD/target/x86_64-pc-windows-msvc/release \\\n"
             "      cargo xwin build --release --target x86_64-pc-windows-msvc -p er-installer\n"
-            "  ER_INSTALLER_EMBED_DIR=target/x86_64-pc-windows-msvc/release \\\n"
+            "  ER_INSTALLER_EMBED_DIR=$PWD/target/x86_64-pc-windows-msvc/release \\\n"
             "      cargo build --release -p er-installer"
         )
 
