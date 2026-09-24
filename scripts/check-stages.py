@@ -223,7 +223,13 @@ STAGES: tuple[Stage, ...] = (
             # reads -- so a push that edited either without this would skip the gate that proves
             # the installer still offers the defaults those mods ship.
             "tools/er-config-defaults/**/*",
-            "tools/er-installer/config-defaults.txt",
+            # The whole installer crate, not just the one generated table that used to be named
+            # here. `build-installer-release.py` is a gate of this stage and reads the crate
+            # itself -- `build.rs` is where `ER_INSTALLER_EMBED_DIR` is resolved, which is what
+            # decides whether the packaged binaries carry any mods at all -- so declaring only
+            # `config-defaults.txt` let a push that changed the embedding skip the stage that
+            # proves the release still installs something.
+            "tools/er-installer/**/*",
         ),
     ),
     Stage(

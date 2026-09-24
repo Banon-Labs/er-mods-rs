@@ -707,32 +707,17 @@ pub(crate) unsafe fn sample_optionsetting_pane_visibility(base: usize, option_wi
     if option_window == 0 || option_window < OPTIONSETTING_WINDOW_MIN_PTR {
         return;
     }
-    // Always the binder itself, never a stored trampoline.
-    //
-    // This used to prefer `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`, on the reasoning that a
-    // hooked resolve should not be double-instrumented. That static stopped holding the binder
-    // when PR #475 moved the loading_cover detour off the variadic named-child bind and onto the
-    // fixed-arity `CS::SceneObjProxy::SceneObjProxy`: it now holds the CONSTRUCTOR's trampoline,
-    // which takes four parameters and orders its first two the other way round. Transmuting it to
-    // the three-argument binder shape below therefore called a constructor with an unset fourth
-    // argument and swapped operands, and what it resolved as a name was not a string at all.
-    // er-quit-menu-core's `scaleform_proxy.rs` lost its trampoline slot in the same PR for the
-    // same reason; this site was missed.
-    //
-    // Measured 2026-09-23 on run br-20260924-005955-a1fb, the first crash log to catch it: opening
-    // System killed the game with `0xc0000005` reading `0xffffffffffffffff`, on a stack of
-    // `er_quickload.dll+0xc359c` -> `eldenring.exe+0x74b66a` (inside the constructor, whose entry
-    // is `0x74b610`) -> the game's own `strchr(text, '/')` path reader, with `rdx` holding `0x2f`
-    // and `r10` `0x2f2f` -- a `/` and a `//` being searched for down a pointer built out of
-    // nothing.
-    //
-    // `gated_game_fn` refuses an address with no verified mapping rather than guessing, so on a
-    // build where the binder has moved and not been re-measured this oracle simply does not
-    // sample. That is the right outcome: a bare `base + RVA` fallback is what pointed into
-    // unrelated code when the bind moved on 1.17 (`0x74a2f0` -> `0x74b140`, byte-checked -- 1.16.2
-    // `@0x74a2f0` and 1.17 `@0x74b140` share the prologue
-    // `4c 89 44 24 18 4c 89 4c 24 20 55 53 56 57 41 56`, while 1.17 `@0x74a2f0` is
-    // mid-instruction).
+    // Always the binder itself, never a stored trampoline. This used to prefer
+    // `TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_ORIG`, which stopped holding the binder when PR #475
+    // moved the loading_cover detour onto the fixed-arity `CS::SceneObjProxy::SceneObjProxy`: it
+    // holds that constructor's trampoline, four parameters with the first two the other way round,
+    // so the three-argument transmute below resolved a name that was not a string. Opening System
+    // then died at `0xc0000005` reading `0xffffffffffffffff`, `er_quickload.dll+0xc359c` ->
+    // `eldenring.exe+0x74b66a` -> the game's `strchr(text, '/')` (run br-20260924-005955-a1fb,
+    // 2026-09-23; er-quit-menu-core's `scaleform_proxy.rs` lost its slot in #475 and this site was
+    // missed). `gated_game_fn` refuses an unmapped address rather than guessing, so where the bind
+    // has moved and not been re-measured this oracle does not sample -- which is what a bare
+    // `base + RVA` got wrong on 1.17, pointing into unrelated code (`0x74a2f0` -> `0x74b140`).
     let assign_addr = match crate::experiments::gated_game_fn(
         TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA,
         "TITLE_SCENE_OBJ_PROXY_NAMED_CHILD_BIND_RVA",
