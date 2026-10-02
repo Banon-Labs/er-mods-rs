@@ -164,6 +164,12 @@ def rows(p, fields=None, strict=True):
 GAME_FMG = {'EquipParamWeapon': 'WeaponName', 'EquipParamProtector': 'ProtectorName',
             'EquipParamAccessory': 'AccessoryName', 'EquipParamGoods': 'GoodsName',
             'EquipParamGem': 'GemName', 'SwordArtsParam': 'ArtsName'}
+# Params whose text id is a field of the row rather than the row id. A skill's name is
+# ArtsName[SwordArtsParam.textId]: `CSFeManImp::UpdatePlayerComponents` (1.16.2 0x140772a80)
+# looks the row up through 0x140d50d00, reads +0xc and hands it to the ArtsName getter
+# 0x140d0ff70 (bundles 42, 331, 431). Ten rows differ from their id, e.g. 4990 Kick -> 503 and
+# 5510 -> 4030 Scattershot Throw, where ArtsName[5510] is an unused `Scattershot (Claws)`.
+GAME_TEXT_FIELD = {'SwordArtsParam': 'textId'}
 _ITEM_NAME = None
 _WARNED = set()
 
@@ -199,7 +205,12 @@ def row_names(stem):
                   file=sys.stderr)
         if state == 'missing':
             return out
-    for i, nm in names.game_names(fmg).items():
+    game = names.game_names(fmg)
+    field = GAME_TEXT_FIELD.get(stem)
+    if field:
+        text_ids = {r['id']: r[field] for r in rows(param_bytes(load(), stem), [field], strict=False)[0]}
+        game = {i: game[t] for i, t in text_ids.items() if t in game}
+    for i, nm in game.items():
         if not out.get(i):
             out[i] = nm
     return out
