@@ -157,11 +157,13 @@ def rows(p, fields=None, strict=True):
 
 # Params whose row ids are the ids of a game message file. Smithbox's list trails the game: on
 # 1.17.1 it had no name for 390 weapon rows the game names (Reverse-Bladed Sword 64530000, Royal
-# Soldier Straight Sword, every Inseparable Sword affinity). `EquipParamGem` and `Magic` are left
-# out because their ids do not line up with GemName and MagicName.
+# Soldier Straight Sword, every Inseparable Sword affinity). GemName agrees with Smithbox on all
+# 116 ids both name (`scripts/er-name-sources.py`). `Magic` is left out: MagicName is empty, a
+# spell's text is the GoodsName of the spell good at the same id, and id 8000 there is the
+# Stonesword Key, so a plain id lookup would mislabel it.
 GAME_FMG = {'EquipParamWeapon': 'WeaponName', 'EquipParamProtector': 'ProtectorName',
             'EquipParamAccessory': 'AccessoryName', 'EquipParamGoods': 'GoodsName',
-            'SwordArtsParam': 'ArtsName'}
+            'EquipParamGem': 'GemName', 'SwordArtsParam': 'ArtsName'}
 _ITEM_NAME = None
 _WARNED = set()
 
