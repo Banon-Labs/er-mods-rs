@@ -1993,11 +1993,21 @@ def main():
     wid = rc.reg.find_weapon(a.weapon)
     rows = weapon_reach(rc, wid, a.grip)
     if a.json:
-        print(json.dumps({'weapon': wid, 'name': rc.reg.weapon_names.get(wid), 'attacks': rows},
+        print(json.dumps(_json_keys({'weapon': wid, 'name': rc.reg.weapon_names.get(wid), 'attacks': rows}),
                          indent=1, default=str))
     else:
         print_weapon(rc, wid, rows)
     return 0
+
+
+def _json_keys(x):
+    """`x` with every dict key JSON can hold: `window_contacts` is keyed by (start, end) windows."""
+    if isinstance(x, dict):
+        return {(k if isinstance(k, (str, int, float, bool)) or k is None else '-'.join(map(str, k))
+                 if isinstance(k, tuple) else str(k)): _json_keys(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_json_keys(v) for v in x]
+    return x
 
 
 if __name__ == '__main__':
