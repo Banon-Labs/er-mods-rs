@@ -41,7 +41,7 @@ package cupcake.policies.claude.no_grep_for_build_errors
 
 import rego.v1
 
-command := object.get(input.tool_input, "command", "")
+import data.cupcake.system.commands
 
 # Commands whose exit code IS the verdict. `scripts/...` covers this repo's own build wrappers
 # (er-build-dlls.sh, check.sh, check-rust-build.sh, ...), which are `set -e` and propagate.
@@ -67,7 +67,15 @@ build_verb_pattern := concat("", [
 # between the pipe and the matcher. Without it that spelling walks straight past this guard, which
 # is the whole failure mode -- a build whose errors go to stderr is exactly the one that gets piped
 # that way.
-adjudicating_matcher_pattern := "\\|&?[[:space:]]*(/?([[:alnum:]_.-]+/)*)?(grep|egrep|fgrep|rg|ag|ack)($|[[:space:]])"
+#
+# The optional `;` after it is the newline of a pipe continued onto the next line, as production
+# delivers it: `scripts/cupcake-hook.sh` rewrites every unquoted newline to `; ` before the engine
+# sees the command, so `cargo build |<newline>grep error` arrives as `cargo build |; grep error`.
+# A `;` straight after a pipe is a syntax error in any other spelling, so reading it as the
+# continuation cannot misread a real command.
+pipe_pattern := `\|&?[[:space:]]*;?[[:space:]]*`
+
+adjudicating_matcher_pattern := concat("", [pipe_pattern, "(/?([[:alnum:]_.-]+/)*)?(grep|egrep|fgrep|rg|ag|ack)($|[[:space:]])"])
 
 # The matcher must consume the build's own output: the build verb and the matcher sit in the same
 # pipeline, verb first. Plumbing inside that pipeline still counts -- `cargo build 2>&1 | tee log |
@@ -77,23 +85,34 @@ adjudicating_matcher_pattern := "\\|&?[[:space:]]*(/?([[:alnum:]_.-]+/)*)?(grep|
 # "X, Y"; cargo fmt -p er-r3-view && python3 scripts/check-comment-caps.py ...` was denied: the
 # grep read a source file before anything ran, and the `cargo fmt` after it was piped nowhere.
 #
-# Pipelines are split on `;`, `&&`, `||`, a lone `&` and newlines. A newline that only continues a
-# pipeline -- a trailing backslash or a trailing `|` -- is folded first, so a build split over two
-# lines stays one pipeline. A separator inside a quoted string can over-split, which only ever
-# loses a match; it cannot invent one.
-folded_command := regex.replace(
-	regex.replace(command, "\\\\\\n", " "),
-	"(\\|&?)[[:space:]]*\\n",
-	"$1 ",
-)
+# "Same pipeline" is spelled as what may stand between the verb and the matcher: a run of tokens
+# none of which ends a pipeline. The tokens are an ordinary character (anything but `;` `&` `|`, a
+# newline or a backslash), a backslash escape -- which takes a line-continuing backslash-newline
+# with it -- an inner pipe (`|` or `|&`, then whitespace that may include a newline, then a
+# character that is not another separator, so `||` never passes as two pipes), and the redirect
+# spellings that carry an `&` without ending anything (`2>&1`, `>&2`, `&>log`). So `;`, `&&`,
+# `||`, a lone `&` and an unescaped newline all end the pipeline, while a build continued over two
+# lines by a trailing backslash or a trailing `|` stays one. A separator inside a quoted string can
+# end it early, which only ever loses a match; it cannot invent one.
+#
+# The previous version split the command into pipelines with `regex.split` after folding with
+# `regex.replace`. Both are host-dispatched in OPA's wasm target and Cupcake's runtime implements
+# neither, so in production the split came back undefined and this guard never fired at all, while
+# `opa test` -- which runs the interpreter -- passed every case. `scripts/check-cupcake-wasm-builtins.py`
+# refuses them for that reason. One `regex.match` per executed text needs neither.
+pipeline_body_pattern := concat("", [`([^;&|\n\\]|\\(.|\n)|`, pipe_pattern, `[^;&|[:space:]]|[<>]&|&>)*`])
 
-pipelines := regex.split("&&|\\|\\||;|\\n|(^|[^>|&])&([^>&]|$)", folded_command)
+build_then_matcher_pattern := concat("", [build_verb_pattern, pipeline_body_pattern, adjudicating_matcher_pattern])
 
-build_then_matcher_pattern := concat("", [build_verb_pattern, ".*", adjudicating_matcher_pattern])
-
+# Matched against the shared decomposition rather than the raw command: each text a shell runs, a
+# `bash -c '...'` payload as a text of its own, with the separators inside quoted operands and data
+# heredoc bodies blanked. So a commit message, a `bd remember` body or a test script written
+# through `cat > f <<'EOF'` that quotes `cargo check | grep error` is prose, not a pipeline. That
+# one was measured: the hook driver that proves this file through `scripts/cupcake-hook.sh` was
+# itself denied while being written, because its quoted test cases are build-into-grep pipelines.
 greps_a_build if {
-	some pipeline in pipelines
-	regex.match(build_then_matcher_pattern, pipeline)
+	some text in commands.input_executed_texts
+	regex.match(build_then_matcher_pattern, text)
 }
 
 deny contains decision if {

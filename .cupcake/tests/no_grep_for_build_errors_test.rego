@@ -144,3 +144,34 @@ test_build_continued_onto_a_new_line_is_still_denied if {
 	denied("cargo build 2>&1 \\\n  | grep error")
 	denied("echo a && cargo build 2>&1 | tee log | grep error; echo done")
 }
+
+# --- 2026-10-02: a build-into-grep that is only quoted is prose ---------------------------------
+#
+# The hook driver that proved this policy through `scripts/cupcake-hook.sh` was denied while being
+# written: `cat > cases.sh <<'EOF'` whose body quotes the deny cases. Quoted operands and data
+# heredoc bodies are read through the shared decomposition, so their separators are not pipes.
+
+test_quoted_build_into_grep_is_allowed if {
+	not denied("git commit -m \"guard: deny cargo check 2>&1 | grep error\"")
+	not denied("echo 'cargo build | grep error' >> notes.txt")
+}
+
+test_data_heredoc_quoting_build_into_grep_is_allowed if {
+	not denied("cat > cases.sh <<'EOF'\nrun deny \"cargo check -p x 2>&1 | grep -E 'error'\"\nEOF\nbash cases.sh")
+}
+
+test_shell_read_heredoc_build_into_grep_is_still_denied if {
+	denied("bash <<'EOF'\ncargo check -p x 2>&1 | grep error\nEOF")
+}
+
+# `scripts/cupcake-hook.sh` turns every unquoted newline into `; `, so a pipe continued onto the
+# next line reaches the policy as `|;`. Measured through the hook on 2026-10-02: without this the
+# trailing-pipe case above passed under the interpreter and was allowed in production.
+test_pipe_continuation_as_the_hook_delivers_it_is_denied if {
+	denied("cargo build 2>&1 |;   grep error")
+	denied("cargo build 2>&1 | tee log |;   grep error")
+}
+
+test_or_after_the_build_is_still_not_a_pipe if {
+	not denied("cargo build ||; grep -n error build.log")
+}
