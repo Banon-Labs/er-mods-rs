@@ -413,8 +413,92 @@ def table_registered_sites(crate_dir: Path, handler: str) -> list[str]:
     return found
 
 
-def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
-    """Where `handler` is union-registered, and where it is bare-hooked, as file:line lists."""
+# The dependency tables a manifest can carry a `path =` entry in. Target-specific tables
+# (`[target.'cfg(windows)'.dependencies]`) are read too, because a Windows-only shell keeps its
+# whole hook stack there.
+DEPENDENCY_TABLES = ("dependencies", "build-dependencies")
+
+
+def path_dependency_dirs(crate_dir: Path, root: Path = REPO_ROOT) -> list[Path]:
+    """`crate_dir` followed by every workspace crate it reaches through `path =` dependencies.
+
+    Why a shell's handler has to be searched past its own directory: `er-quickload` and
+    `er-quit-menu` are thin cdylibs whose `quit_menu_window_job_run_hook` is defined and
+    union-registered in their shared path dependency `er-quit-menu-core`. Scanning only the
+    shell's directory reported "never reaches a union registrar" for a handler that plainly
+    does -- a false red on a `[[shared]]` row that is true.
+
+    Transitive, breadth-first, each crate once. Only directories inside `root` with a
+    `Cargo.toml` count, and anything under `third_party` is skipped: an out-of-tree sibling such
+    as `fromsoftware-rs` is not this workspace's code, and a vendored crate is not ours to prove.
+    A manifest that cannot be read or parsed contributes no dependencies rather than stopping the
+    gate, since the shell itself is still scanned.
+    """
+    root = root.resolve()
+    start = crate_dir.resolve()
+    ordered: list[Path] = [start]
+    seen = {start}
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        try:
+            data = tomllib.loads((current / "Cargo.toml").read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        tables = [data.get(name, {}) for name in DEPENDENCY_TABLES]
+        for target in data.get("target", {}).values():
+            if isinstance(target, dict):
+                tables += [target.get(name, {}) for name in DEPENDENCY_TABLES]
+        for table in tables:
+            if not isinstance(table, dict):
+                continue
+            for spec in table.values():
+                if not isinstance(spec, dict) or not isinstance(spec.get("path"), str):
+                    continue
+                dependency = (current / spec["path"]).resolve()
+                if dependency in seen or not (dependency / "Cargo.toml").is_file():
+                    continue
+                try:
+                    inside = dependency.relative_to(root)
+                except ValueError:
+                    continue
+                if "third_party" in inside.parts:
+                    continue
+                seen.add(dependency)
+                ordered.append(dependency)
+                queue.append(dependency)
+    return ordered
+
+
+def handler_sites(
+    crate_dir: Path, handler: str, root: Path = REPO_ROOT
+) -> tuple[list[str], list[str]]:
+    """Where `handler` is union-registered, and where it is bare-hooked, as file:line lists --
+    across the shell crate and every workspace crate it depends on by path.
+
+    A bare-hook site for the handler in any of those crates is still a failure: a dependency that
+    installs the handler on a private MinHook puts that private instance into the shell's DLL just
+    as surely as the shell's own code would.
+    """
+    dirs = path_dependency_dirs(crate_dir, root)
+    unioned: list[str] = []
+    bare: list[str] = []
+    for directory in dirs:
+        found_unioned, found_bare = _proximity_sites(directory, handler)
+        unioned += found_unioned
+        bare += found_bare
+    # Last resort, and only when the proximity rule found the handler neither way in any crate: a
+    # table-driven registrant in a crate that provably owns no private MinHook instance. Consulted
+    # after every crate's scan so a handler with a real bare-hook site keeps that finding, and
+    # judged per crate, because the inference rests on that one crate having no bare hook.
+    if not unioned and not bare:
+        for directory in dirs:
+            unioned += table_registered_sites(directory, handler)
+    return unioned, bare
+
+
+def _proximity_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
+    """Where `handler` is union-registered, and where it is bare-hooked, within one crate."""
     unioned: list[str] = []
     bare: list[str] = []
     symbol = re.compile(rf"\b{re.escape(handler)}\b")
@@ -442,11 +526,6 @@ def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
                 unioned.append(where)
             if BARE_HOOK.search(window):
                 bare.append(where)
-    # Last resort, and only when the proximity rule found the handler neither way: a table-driven
-    # registrant in a crate that provably owns no private MinHook instance. Consulted after the
-    # loop so a handler with a real bare-hook site keeps that finding.
-    if not unioned and not bare:
-        unioned += table_registered_sites(crate_dir, handler)
     return unioned, bare
 
 
@@ -609,6 +688,59 @@ def selftest() -> int:
             "...and ONE bare hook anywhere in the crate withdraws it",
             not withdrawn and not still_bare,
         )
+
+    # A handler that lives in a path dependency (2026-10-02). `er-quickload` and `er-quit-menu`
+    # take `quit_menu_window_job_run_hook` from `er-quit-menu-core`, so a scan of the shell's own
+    # directory found nothing and two true `[[shared]]` rows failed.
+    with tempfile.TemporaryDirectory() as raw:
+        workspace = Path(raw)
+        shell = workspace / "crates" / "shell"
+        core = workspace / "crates" / "core"
+        inner = workspace / "crates" / "inner"
+        vendored = workspace / "third_party" / "vendored"
+        for crate in (shell, core, inner, vendored):
+            (crate / "src").mkdir(parents=True)
+        (shell / "Cargo.toml").write_text(
+            '[package]\nname = "shell"\n\n'
+            "[target.'cfg(windows)'.dependencies]\n"
+            'core = { path = "../core" }\n'
+            'vendored = { path = "../../third_party/vendored" }\n',
+            encoding="utf-8",
+        )
+        (shell / "src" / "lib.rs").write_text("pub use core::go;\n", encoding="utf-8")
+        (core / "Cargo.toml").write_text(
+            '[package]\nname = "core"\n\n[dependencies]\ninner = { path = "../inner" }\n',
+            encoding="utf-8",
+        )
+        (inner / "Cargo.toml").write_text('[package]\nname = "inner"\n', encoding="utf-8")
+        (vendored / "Cargo.toml").write_text('[package]\nname = "vendored"\n', encoding="utf-8")
+        (core / "src" / "lib.rs").write_text(
+            "pub fn go() {\n    er_hook::register_shared_hook(\n        addr,\n"
+            "        dep_detour,\n        &ORIG,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        reached = path_dependency_dirs(shell, workspace)
+        case(
+            "path dependencies are followed transitively, and third_party is skipped",
+            reached == [shell.resolve(), core.resolve(), inner.resolve()],
+        )
+        # Non-vacuity: the shell's own directory must not already see the handler.
+        shell_only, _ = _proximity_sites(shell, "dep_detour")
+        case("...and the shell's own directory alone cannot see the handler", shell_only == [])
+        unioned, bare = handler_sites(shell, "dep_detour", workspace)
+        case("a handler union-registered in a path dependency passes", bool(unioned) and not bare)
+        (inner / "src" / "lib.rs").write_text(
+            "fn go() {\n    let h = MhHook::new(\n        addr,\n"
+            "        dep_detour as *mut c_void,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        unioned, bare = handler_sites(shell, "dep_detour", workspace)
+        case("a handler bare-hooked in a transitive dependency still fails", bool(bare))
+        (vendored / "src" / "lib.rs").write_text(
+            "fn go() { register_union_hook(addr, vendored_detour, &ORIG); }\n", encoding="utf-8"
+        )
+        unioned, _ = handler_sites(shell, "vendored_detour", workspace)
+        case("a third_party crate is never credited with a registration", unioned == [])
 
     # ------------------------------------------------------------------ The value key
     # the control this fix exists for, and the one address in this tree that proves it. 0xb0d400
