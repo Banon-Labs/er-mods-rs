@@ -73,6 +73,7 @@ all_denials contains decision if { some decision in data.cupcake.policies.claude
 all_denials contains decision if { some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny }
 all_denials contains decision if { some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny }
 all_denials contains decision if { some decision in data.cupcake.policies.claude.no_whole_check_sh.deny }
+all_denials contains decision if { some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny }
 all_denials contains decision if { some decision in data.cupcake.policies.claude.require_scoped_cargo.deny }
 all_denials contains decision if { some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny }
 
