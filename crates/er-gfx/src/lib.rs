@@ -57,6 +57,7 @@ pub mod profile_05_010_protocol;
 pub mod raster;
 pub mod text_input_02_990;
 pub mod title_05_010;
+pub mod ttf;
 pub mod world_map_pin;
 
 /// The repository's one Rust FNV-1a implementation, re-exported because several crates fingerprint
