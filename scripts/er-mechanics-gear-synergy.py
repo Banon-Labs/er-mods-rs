@@ -454,29 +454,96 @@ def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
             'gear': rows[:top]}
 
 
-def powerstance(d, wid):
-    """The weapons `wid` powerstances with (in the left hand) and the dual moves a same-weapon
-    pair gets, each with its first hit (real frame) and summed physical motion value."""
-    psg = _mod('er_mechanics_powerstance_guard', 'er-mechanics-powerstance-guard.py')
-    mv = _mod('er_mechanics_moveset', 'er-mechanics-moveset.py')
-    reg = d.reg
-    partners = [d.weapon_name(o) for o in AFF.base_weapons(d)
-                if o in reg.weapon and psg.can_powerstance(reg, wid, o)]
-    if not partners:
-        return None
-    moves = []
+#: Dual moves whose first hit counts from the button press, so one weapon's frame compares with
+#: another's. The later L1s count from their own clip and the jump L1 from its landing.
+RANKED_DUAL_SLOTS = ('dual_1', 'dual_dash', 'dual_roll', 'dual_crouch', 'dual_bstep')
+_DUAL_POP = {}
+
+
+def _dual_moves(mv, reg, wid):
+    out = []
     for s in mv.dual_attacks(reg, wid):
         hits = s['hits']
         if hits:
-            moves.append({'slot': s['slot'], 'label': s['label'], 'anim': s['anim'],
-                          'first_hit': min(h['frames'][0] for h in hits),
-                          'mv_phys': sum(h['mv_phys'] for h in hits), 'hits': len(hits)})
-    return {'partners': partners, 'moves': moves}
+            out.append({'slot': s['slot'], 'label': s['label'], 'anim': s['anim'],
+                        'first_hit': min(h['frames'][0] for h in hits),
+                        'mv_phys': sum(h['mv_phys'] for h in hits), 'hits': len(hits)})
+    return out
+
+
+def _dual_population(d, psg, mv):
+    """{dual slot: [first hit of every base weapon that powerstances with itself]}."""
+    if not _DUAL_POP:
+        for o in AFF.base_weapons(d):
+            if o not in d.reg.weapon or not psg.can_powerstance(d.reg, o, o):
+                continue
+            try:
+                moves = _dual_moves(mv, d.reg, o)
+            except Exception:                           # weapon rows the attack module cannot read
+                continue
+            for m in moves:
+                _DUAL_POP.setdefault(m['slot'], []).append(m['first_hit'])
+    return _DUAL_POP
+
+
+def motion_category_name(value):
+    """Smithbox's `WEPMOTION_CATEGORY` name, the category powerstance pairs on (37 Great Spear)."""
+    path = os.path.join(os.path.dirname(PR.PARAMDEF_DIR), 'Param Enums', 'WEPMOTION_CATEGORY.json')
+    with open(path) as fh:
+        opts = json.load(fh)['Options']
+    return next((o['Names'][0]['Text'] for o in opts if o['Key'] == str(value)), None)
+
+
+def powerstance(d, wid):
+    """The weapons `wid` powerstances with (in the left hand), the dual moves a same-weapon pair
+    gets with their first hit (real frame) and summed physical motion value, each ranked against
+    the same move of every weapon that powerstances with itself, and the page line for the move
+    that ranks best."""
+    psg = _mod('er_mechanics_powerstance_guard', 'er-mechanics-powerstance-guard.py')
+    mv = _mod('er_mechanics_moveset', 'er-mechanics-moveset.py')
+    card = _mod('er_mechanics_weapon_card', 'er-mechanics-weapon-card.py')
+    reg = d.reg
+    partner_ids = [o for o in AFF.base_weapons(d) if o in reg.weapon and psg.can_powerstance(reg, wid, o)]
+    if not partner_ids:
+        return None
+    pop = _dual_population(d, psg, mv)
+    moves = _dual_moves(mv, reg, wid)
+    for m in moves:
+        if m['slot'] in RANKED_DUAL_SLOTS and pop.get(m['slot']):
+            m['rank'] = card.rank(pop[m['slot']], m['first_hit'], 'low')
+            m['rank_text'] = card.rank_text(m['rank'], 'fastest')
+    ranked = [m for m in moves if 'rank' in m]
+    best = min(ranked, key=lambda m: m['rank'][0] / m['rank'][2]) if ranked else None
+    name = d.weapon_name(wid)
+    cats = {reg.weapon[o]['wepmotionCategory'] for o in partner_ids}
+    cls = motion_category_name(cats.pop()) if len(cats) == 1 else None
+    others = len(partner_ids) - (wid in partner_ids)
+    kind = f'{cls.lower()}s' if cls else 'weapons'
+    head = f'A second {cls.lower()}' if cls else 'A powerstance partner'
+    line = f'Powerstance with another {name} or any of {others} other {kind}'
+    if best:
+        line += (f" adds a {best['label']} that hits on frame {best['first_hit']:g} "
+                 f"({best['rank_text']}).")
+    return {'partners': [d.weapon_name(o) for o in partner_ids], 'moves': moves,
+            'heading': head, 'text': line}
 
 
 def build():
     d = AFF.Data()
     return d, Population(d), Gear(d), AR.Tables()
+
+
+def main_text_runs(weapon):
+    """The plain-text report runs to the end (it read a removed field once and only --json was tested)."""
+    import contextlib
+    import io
+    argv = sys.argv
+    sys.argv = [argv[0], weapon, '--top', '3']
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return main() == 0
+    finally:
+        sys.argv = argv
 
 
 def selftest():
@@ -506,6 +573,11 @@ def selftest():
     assert "Lord of Blood's Exultation" in rob, rob
     assert lance['powerstance'] and 'Lance' in lance['powerstance']['partners']
     assert any(m['slot'] == 'dual_crouch' and m['anim'].endswith('034310') for m in lance['powerstance']['moves'])
+    ps = lance['powerstance']
+    assert ps['heading'] == 'A second great spear', ps['heading']
+    assert ps['text'].startswith('Powerstance with another Lance or any of 9 other great spears adds a ') \
+        and ' fastest of ' in ps['text'], ps['text']
+    assert main_text_runs('Lance')
     print(f"selftest ok: Lance top {[r['name'] for r in lance['gear'][:6]]}")
     return 0
 
@@ -531,12 +603,13 @@ def main():
     if ps:
         print(f"  powerstance with {len(ps['partners'])} weapons: {', '.join(ps['partners'])}")
         for m in ps['moves']:
-            print(f"    {m['label']:<12} {m['anim']}  first hit f{m['first_hit']:.0f}  {m['hits']} hits  MV {m['mv_phys']}")
+            print(f"    {m['label']:<12} {m['anim']}  first hit f{m['first_hit']:.0f}  {m['hits']} hits  "
+                  f"MV {m['mv_phys']}  {m.get('rank_text', '')}")
+        print(f"  {ps['heading']}: {ps['text']}")
     for r in out['gear']:
         ch = ', '.join(f"{c['channel']} {c['engagement']:.2f}x{c['gain']:+.3f}" for c in r['channels'])
-        aff = f" [{r['affinity']}]" if r['affinity'] else ''
         cost = f" cost {r['survivability_cost']:.3f}" if r['survivability_cost'] else ''
-        print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8}{aff} {ch}{cost} {'; '.join(r['other_costs'])}")
+        print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8} {ch}{cost} {'; '.join(r['other_costs'])}")
     return 0
 
 
