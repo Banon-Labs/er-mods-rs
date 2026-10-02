@@ -8,27 +8,43 @@ the exporter drops.
 
     python3 scripts/er-item-name.py WeaponName 16110000 16110200 16110217
     python3 scripts/er-item-name.py --list-fmg
+    python3 scripts/er-item-name.py --refresh      # re-read the installed game's archives
+    python3 scripts/er-item-name.py --selftest
 
-Reads the local extraction corpus (`ER_MSG_CORPUS_ROOT`, or the recursive Witchy extraction under
-~/er-extract), never the packed archives -- the shipped `item.msgbnd.dcx` is Oodle/KRAK compressed
-and needs a library this repository does not carry.
+The corpus is the cache `--refresh` writes, unpacked straight out of the installed game's
+`Data*.bdt` by `er-shaderlab extract` (the SoulsFormats bridge under wine, which loads the game's
+own Oodle library), so it is the text of the build on disk. The cache records the archives' sizes
+and mtimes; `cache_state()` reports it stale once a patch changes them. `ER_MSG_CORPUS_ROOT`
+points at another extraction instead.
+
+`game_names(stem)` is what other scripts call: every id the game names, merged base -> dlc01 ->
+dlc02, without the `[ERROR]` and dummy placeholders the files carry for unused ids.
 """
 
 import argparse
+import json
 import os
+import shutil
 import struct
+import subprocess
 import sys
+import tempfile
 
-DEFAULT_CORPUS = os.environ.get(
-    "ER_MSG_CORPUS_ROOT",
-    os.path.expanduser(
-        "~/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713/sharded/msg/engus"
-    ),
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+GAME_DIR = os.environ.get(
+    "ER_GAME_DIR", os.path.expanduser("~/.local/share/Steam/steamapps/common/ELDEN RING/Game")
 )
+CACHE = os.path.expanduser(os.environ.get("ER_MSG_CACHE", "~/.cache/er-mods-rs/msg/engus"))
+DEFAULT_CORPUS = os.environ.get("ER_MSG_CORPUS_ROOT", CACHE)
+SHADERLAB = os.path.join(ROOT, "target", "debug", "er-shaderlab")
+# One extraction of an item bundle measured 22.7 s, nearly all of it wine and Oodle start-up.
+EXTRACT_TIMEOUT_S = 30
 
 # The DLC message files the game falls back to, in the order `GetWeaponName` and its siblings try
 # them: base first, then dlc01, then dlc02.
 BND_DIRS = ("item-msgbnd-dcx", "item_dlc01-msgbnd-dcx", "item_dlc02-msgbnd-dcx")
+# Archive member prefix the bridge flattens into each extracted file name.
+MEMBER_PREFIX = "N__GR_data_INTERROOT_win64_msg_engUS_"
 
 
 def read_fmg(path):
@@ -88,6 +104,122 @@ def load(corpus, stem):
     return tables
 
 
+def is_placeholder(text):
+    """Ids the game keeps for unused rows: empty, `[ERROR]...`, or a dummy."""
+    return not text or text.startswith("[ERROR]") or "dummy" in text.lower()
+
+
+def game_names(stem, corpus=None):
+    """{id: name} for every id the game names in `stem`, later bundles winning."""
+    out = {}
+    for _, table in load(corpus or DEFAULT_CORPUS, stem):
+        out.update({row: text for row, text in table.items() if not is_placeholder(text)})
+    return out
+
+
+def archive_stamp(game_dir=GAME_DIR):
+    """Size and mtime of every archive header: a patch that rewrites the text changes them."""
+    stamp = {}
+    for name in sorted(os.listdir(game_dir)):
+        if name.endswith(".bhd"):
+            st = os.stat(os.path.join(game_dir, name))
+            stamp[name] = [st.st_size, int(st.st_mtime)]
+    return stamp
+
+
+def cache_state(corpus=DEFAULT_CORPUS, game_dir=GAME_DIR):
+    """'ok', 'missing' or 'stale' for the cache; an explicit `ER_MSG_CORPUS_ROOT` is taken as ok."""
+    if corpus != CACHE:
+        return "ok" if os.path.isdir(corpus) else "missing"
+    try:
+        recorded = json.load(open(os.path.join(corpus, "stamp.json")))
+    except (OSError, ValueError):
+        return "missing"
+    try:
+        return "ok" if recorded == archive_stamp(game_dir) else "stale"
+    except OSError:
+        return "ok"
+
+
+def refresh(cache=CACHE, game_dir=GAME_DIR):
+    """Unpack the three item bundles out of the installed archives into `cache`."""
+    if not os.path.exists(SHADERLAB):
+        raise SystemExit(f"{SHADERLAB} is not built: cargo build -p er-shaderlab")
+    env = dict(os.environ, CARGO_MANIFEST_DIR=os.path.join(ROOT, "tools", "er-shaderlab"),
+               ER_GAME_DIR=game_dir)
+    parent = os.path.dirname(cache.rstrip("/"))
+    os.makedirs(parent, exist_ok=True)
+    staging = tempfile.mkdtemp(prefix="msg-", dir=parent)
+    try:
+        for directory in BND_DIRS:
+            bundle = directory.replace("-msgbnd-dcx", ".msgbnd.dcx")
+            out = os.path.join(staging, "raw", directory)
+            os.makedirs(out)
+            run = subprocess.run([SHADERLAB, "extract", f"/msg/engus/{bundle}", out], env=env,
+                                 capture_output=True, text=True, timeout=EXTRACT_TIMEOUT_S)
+            if run.returncode != 0:
+                raise SystemExit(f"extract {bundle} failed ({run.returncode}):\n{run.stderr[-2000:]}")
+            dest = os.path.join(staging, "corpus", directory)
+            os.makedirs(dest)
+            for name in os.listdir(out):
+                if name.startswith(MEMBER_PREFIX) and name.endswith(".fmg"):
+                    shutil.move(os.path.join(out, name), os.path.join(dest, name[len(MEMBER_PREFIX):]))
+        with open(os.path.join(staging, "corpus", "stamp.json"), "w") as fh:
+            json.dump(archive_stamp(game_dir), fh)
+        if os.path.isdir(cache):
+            shutil.rmtree(cache)
+        os.makedirs(os.path.dirname(cache.rstrip("/")), exist_ok=True)
+        shutil.move(os.path.join(staging, "corpus"), cache)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return cache
+
+
+def _fmg_bytes(groups):
+    """A version-2 wide FMG holding `groups` ([(first_id, [text or None, ...])]), for the selftest."""
+    texts = [t for _, rows in groups for t in rows]
+    groups_start, offsets_start = 0x28, 0x28 + 0x10 * len(groups)
+    strings_start = offsets_start + 8 * len(texts)
+    head = bytearray(b"\x00\x00\x02\x00" + b"\x00" * 4 + b"\x01" + b"\x00" * 3)
+    head += struct.pack("<ii", len(groups), len(texts)) + b"\x00" * 4 + struct.pack("<q", offsets_start)
+    head += b"\x00" * (groups_start - len(head))
+    slot = 0
+    for first, rows in groups:
+        head += struct.pack("<iiii", slot, first, first + len(rows) - 1, 0)
+        slot += len(rows)
+    blob, offsets = bytearray(), []
+    for text in texts:
+        if text is None:
+            offsets.append(0)
+            continue
+        offsets.append(strings_start + len(blob))
+        blob += text.encode("utf-16-le") + b"\x00\x00"
+    return bytes(head) + b"".join(struct.pack("<q", o) for o in offsets) + bytes(blob)
+
+
+def selftest():
+    corpus = tempfile.mkdtemp(prefix="fmg-selftest-")
+    try:
+        files = {
+            ("item-msgbnd-dcx", "WeaponName"): [(100, ["Dagger", "[ERROR]", None]), (500, ["DLC dummy"])],
+            ("item_dlc02-msgbnd-dcx", "WeaponName_dlc02"): [(100, ["Dagger (patched)"]), (900, ["New Blade"])],
+        }
+        for (directory, stem), groups in files.items():
+            os.makedirs(os.path.join(corpus, directory), exist_ok=True)
+            with open(os.path.join(corpus, directory, stem + ".fmg"), "wb") as fh:
+                fh.write(_fmg_bytes(groups))
+        raw = read_fmg(os.path.join(corpus, "item-msgbnd-dcx", "WeaponName.fmg"))
+        assert raw == {100: "Dagger", 101: "[ERROR]", 102: None, 500: "DLC dummy"}, raw
+        names = game_names("WeaponName", corpus)
+        assert names == {100: "Dagger (patched)", 900: "New Blade"}, names
+        assert cache_state(corpus) == "ok"
+        assert cache_state(os.path.join(corpus, "absent")) == "missing"
+    finally:
+        shutil.rmtree(corpus)
+    print("selftest ok")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("fmg", nargs="?", default="WeaponName",
@@ -95,8 +227,16 @@ def main():
     parser.add_argument("ids", nargs="*", type=int)
     parser.add_argument("--corpus", default=DEFAULT_CORPUS)
     parser.add_argument("--list-fmg", action="store_true", help="list the FMGs in the corpus and exit")
+    parser.add_argument("--refresh", action="store_true",
+                        help="unpack the item text out of the installed game into the cache and exit")
+    parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args()
 
+    if args.selftest:
+        return selftest()
+    if args.refresh:
+        print(f"wrote {refresh()}")
+        return 0
     if args.list_fmg:
         for directory in BND_DIRS:
             path = os.path.join(args.corpus, directory)

@@ -155,7 +155,55 @@ def rows(p, fields=None, strict=True):
     return out, pt, size
 
 
+# Params whose row ids are the ids of a game message file. Smithbox's list trails the game: on
+# 1.17.1 it had no name for 390 weapon rows the game names (Reverse-Bladed Sword 64530000, Royal
+# Soldier Straight Sword, every Inseparable Sword affinity). `EquipParamGem` and `Magic` are left
+# out because their ids do not line up with GemName and MagicName.
+GAME_FMG = {'EquipParamWeapon': 'WeaponName', 'EquipParamProtector': 'ProtectorName',
+            'EquipParamAccessory': 'AccessoryName', 'EquipParamGoods': 'GoodsName',
+            'SwordArtsParam': 'ArtsName'}
+_ITEM_NAME = None
+_WARNED = set()
+
+
+def _item_name():
+    global _ITEM_NAME
+    if _ITEM_NAME is None:
+        spec = importlib.util.spec_from_file_location('er_item_name', os.path.join(_HERE, 'er-item-name.py'))
+        _ITEM_NAME = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ITEM_NAME)
+    return _ITEM_NAME
+
+
 def row_names(stem):
+    """Smithbox's row names, with every id it leaves unnamed filled from the game's own text.
+
+    Where both name an id, Smithbox's spelling is kept: the two differ only in accents and case
+    (`Misericorde` / `Miséricorde`), and callers look weapons up by the plain spelling. The game
+    text comes from `er-item-name.py --refresh`; when that cache is missing or older than the
+    installed archives this says so once on stderr and returns Smithbox's names alone.
+    """
+    out = _smithbox_names(stem)
+    fmg = GAME_FMG.get(stem)
+    if fmg is None:
+        return out
+    names = _item_name()
+    state = names.cache_state()
+    if state != 'ok':
+        if state not in _WARNED:
+            _WARNED.add(state)
+            print(f'er-param-read: game item text is {state}; names come from Smithbox alone, which '
+                  f'lacks rows added since its last update. Run: python3 {_HERE}/er-item-name.py --refresh',
+                  file=sys.stderr)
+        if state == 'missing':
+            return out
+    for i, nm in names.game_names(fmg).items():
+        if not out.get(i):
+            out[i] = nm
+    return out
+
+
+def _smithbox_names(stem):
     import json
     path = os.path.join(ROWNAME_DIR, stem + '.json')
     if not os.path.exists(path):
