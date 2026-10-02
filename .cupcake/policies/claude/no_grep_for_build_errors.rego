@@ -43,10 +43,22 @@ import rego.v1
 
 command := object.get(input.tool_input, "command", "")
 
-# Commands whose exit code IS the verdict. Matched as a token at a statement start or after a shell
-# separator so `mycargo` / `not-make` never match. `scripts/...` covers this repo's own build
-# wrappers (er-build-dlls.sh, check.sh, check-rust-build.sh, ...), which are `set -e` and propagate.
-build_verb_pattern := "(^|[[:space:];|&('\"`])(/?([[:alnum:]_.-]+/)*)?(cargo|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/[[:alnum:]_./-]*(build|check|test)[[:alnum:]_./-]*)($|[^[:alnum:]_-])"
+# Commands whose exit code IS the verdict. `scripts/...` covers this repo's own build wrappers
+# (er-build-dlls.sh, check.sh, check-rust-build.sh, ...), which are `set -e` and propagate.
+#
+# The verb only counts in command position: at the start, after a shell separator (`;` `&` `|` `(`
+# backtick, newline, `$(`), or at the start of a `-c '...'` script, optionally behind `VAR=value`
+# assignments and a launcher (`timeout 28`, `env`, `bash`, `python3`, `uv run`, ...). An earlier
+# version also accepted any whitespace or quote before the verb, so a file NAMED as an argument
+# counted as running it: `grep -n x scripts/check-me3-dll-conflicts.py Cargo.toml | head` and a
+# `python3 -c` reading `'scripts/check-me3-dll-conflicts.py'` were both denied on 2026-10-02
+# while building nothing.
+build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|timeout[[:space:]]+[0-9.]+[smhd]?)[[:space:]]+)*"
+
+build_verb_pattern := concat("", [
+	build_command_position,
+	"(/?([[:alnum:]_.-]+/)*)?(cargo|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/[[:alnum:]_./-]*(build|check|test)[[:alnum:]_./-]*)($|[^[:alnum:]_-])",
+])
 
 # Matchers that ADJUDICATE. head/tail/sed/awk/wc/jq/python are deliberately absent: they excerpt or
 # reshape, they do not decide whether the build passed.
