@@ -122,3 +122,25 @@ test_cargo_check_into_grep_is_still_denied if {
 	denied("echo start; scripts/check-rust-build.sh | grep FAIL")
 	denied("python3 scripts/check-me3-dll-conflicts.py | grep FAIL")
 }
+
+# --- 2026-10-02 false positive: a grep in a sibling command does not read the build ------------
+#
+# The grep below reads a source file in its own `;`-separated command, before `cargo fmt` runs, and
+# `cargo fmt` is piped nowhere. The guard used to match a build verb and a matcher anywhere in the
+# whole line, so this was denied.
+
+test_grep_in_earlier_sibling_command_is_allowed if {
+	not denied("cd /home/banon/projects/er-mods-rs; sed -i 's/in this profile to see the X\"/in this profile to see the board\"/' crates/er-r3-view/src/imp.rs; grep -rn \"the X\\|an X\\| X \" crates/er-r3-view/src/imp.rs | grep -v \"X, Y\"; cargo fmt -p er-r3-view && python3 scripts/check-comment-caps.py crates/er-r3-view/src/board.rs")
+}
+
+test_grep_after_the_build_in_a_sibling_command_is_allowed if {
+	not denied("cargo build 2>&1 | tee build.log; grep -n error build.log")
+	not denied("cargo check && grep -n version Cargo.toml")
+	not denied("cargo build & grep -rn TODO src")
+}
+
+test_build_continued_onto_a_new_line_is_still_denied if {
+	denied("cargo build 2>&1 |\n  grep error")
+	denied("cargo build 2>&1 \\\n  | grep error")
+	denied("echo a && cargo build 2>&1 | tee log | grep error; echo done")
+}

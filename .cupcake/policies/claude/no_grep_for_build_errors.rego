@@ -69,12 +69,31 @@ build_verb_pattern := concat("", [
 # that way.
 adjudicating_matcher_pattern := "\\|&?[[:space:]]*(/?([[:alnum:]_.-]+/)*)?(grep|egrep|fgrep|rg|ag|ack)($|[[:space:]])"
 
-# The pipeline must both start from a build verb and route it into a matcher. Checking the whole
-# command (rather than per-segment) is deliberate: `cargo build 2>&1 | tee log | grep error` and
-# `cargo build |& grep -c error` are the same mistake with more plumbing.
+# The matcher must consume the build's own output: the build verb and the matcher sit in the same
+# pipeline, verb first. Plumbing inside that pipeline still counts -- `cargo build 2>&1 | tee log |
+# grep error` and `cargo build |& grep -c error` are the same mistake -- but a grep in a sibling
+# command does not. An earlier version matched the verb and the matcher anywhere in the whole
+# command line, so on 2026-10-02 `sed -i ... src/imp.rs; grep -rn "the X" src/imp.rs | grep -v
+# "X, Y"; cargo fmt -p er-r3-view && python3 scripts/check-comment-caps.py ...` was denied: the
+# grep read a source file before anything ran, and the `cargo fmt` after it was piped nowhere.
+#
+# Pipelines are split on `;`, `&&`, `||`, a lone `&` and newlines. A newline that only continues a
+# pipeline -- a trailing backslash or a trailing `|` -- is folded first, so a build split over two
+# lines stays one pipeline. A separator inside a quoted string can over-split, which only ever
+# loses a match; it cannot invent one.
+folded_command := regex.replace(
+	regex.replace(command, "\\\\\\n", " "),
+	"(\\|&?)[[:space:]]*\\n",
+	"$1 ",
+)
+
+pipelines := regex.split("&&|\\|\\||;|\\n|(^|[^>|&])&([^>&]|$)", folded_command)
+
+build_then_matcher_pattern := concat("", [build_verb_pattern, ".*", adjudicating_matcher_pattern])
+
 greps_a_build if {
-	regex.match(build_verb_pattern, command)
-	regex.match(adjudicating_matcher_pattern, command)
+	some pipeline in pipelines
+	regex.match(build_then_matcher_pattern, pipeline)
 }
 
 deny contains decision if {
