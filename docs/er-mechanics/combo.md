@@ -899,6 +899,26 @@ Cleaver" --json`):
   rows' `buff.def`). Uplifting Aromatic's one-hit x0.1 guard (maxNum 10) covers every one of 5
   hits but only 10 of 16..22, which is the INFERRED cause (the per-source split was not printed).
 
+Full re-rank under the default (`--rl 150 --one-handed --setup --setup-lefts all --json --jobs 4`,
+411 rows, 128,219 pairs, `er-builds-setup-rank.py`; MEASURED 2026-10-01):
+
+| # | setup | score | before (5 hits, one bar) |
+|---|---|---|---|
+| 1 | Dane's Footwork + Hand Axe Keen / Royal Knight's Resolve | 881.3 | 897.5 (3rd) |
+| 2 | Banished Knight's Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 878.0 | 899.7 (1st) |
+| 3 | Halberd + Iron Cleaver Heavy / Royal Knight's Resolve | 876.9 | 898.5 (2nd) |
+| 4 | Milady + Hand Axe Keen / Royal Knight's Resolve | 823.7 | 838.5 |
+| 5 | Dryleaf Arts + Hand Axe Keen / Royal Knight's Resolve | 805.5 | 819.9 |
+| 6 | Nightrider Flail + Hand Axe Keen / Royal Knight's Resolve | 803.8 | 813.4 |
+
+- Kept left buff: Royal Knight's Resolve 410 of 411 (unchanged); right hand keeps its 162 row on
+  410. Kept left: Hand Axe 346, Greataxe 19, Wakizashi 15, Dagger 11, Forked Hatchet 8.
+- Scores fall 10..20 points (the recasts and drinks the schedule now charges) and the top three
+  reorder within 3 points; nothing else moves.
+- Corpus (Spearman of gain against pair counts): per right, any off-hand -0.039 -> -0.075; per
+  right, hatchet 0.008 -> -0.007; per pair 0.015 -> 0.014; within right (21) 0.061 -> 0.061.
+  Still no agreement with what the corpus pairs.
+
 The flag stays off by default.
 
 ## 12. The hit-to-reaction delay (static RE, 1.16.2, 2026-09-30)
