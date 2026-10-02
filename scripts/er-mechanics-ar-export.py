@@ -125,6 +125,7 @@ def skill_hits(weapon, skill, affinity='Standard'):
             'fp': levers.A.skill_fp(L.t, sid),
             'commitment': commitment(levers.A, L.t, wid, sid, hits),
             'hits': [{'frame': h.get('frame'), 'from_weapon': h['from_weapon'], 'count': h.get('count', 1),
+                      'disable_2h': h['disable_2h'],
                       'real_frame': _plus(real_frame(levers.A, L.t, sid, h), offset(h)),
                       'mv': {k: v for k, v in h['mv'].items() if v}, 'flat': {k: v for k, v in h['flat'].items() if v},
                       'poise': h.get('poise')} for h in hits]}
@@ -256,7 +257,30 @@ def selftest():
         raise SystemExit(f'node failed: {res.stderr[-2000:]}')
     r = json.loads(res.stdout)
     assert r['nbad'] == 0, r
-    print(f"selftest ok: er-ar-calc.js matches er-mechanics-ar.py on {r['n']} cases")
+    # Skill hits: Charge Forth's rows disable the two-handed bonus, so its two-handed hits must
+    # equal the one-handed ones, and both must match er-mechanics-ashes.hit_attack.
+    data = export(tables, 'Lance', '')
+    skill = data['skill']
+    assert skill['hits'] and all(h['disable_2h'] for h in skill['hits']), skill['hits']
+    levers = _levers()[1]
+    st = {'str': 78, 'dex': 14, 'int': 7, 'fth': 8, 'arc': 9}
+    hits = []
+    for two in (False, True):
+        _, ref, _ = levers.cast('Lance', 'Heavy', skill['id'], st, two)
+        hits.append({'two': two, 'ref': [sum(h['attack'].values()) for h in ref]})
+    prog = (f"const E=require({json.dumps(JS)});const k=JSON.parse(require('fs').readFileSync(0,'utf8'));"
+            "console.log(JSON.stringify(k.cases.map(c=>k.hits.map(h=>E.skillHitAttack(k.c,k.row,k.st,c.two,h)))));")
+    res = subprocess.run(['node', '-e', prog], input=json.dumps({
+        'cases': hits, 'hits': skill['hits'], 'c': data['constants'], 'st': st,
+        'row': data['affinities']['Heavy']['levels'][-1]}), capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
+    if res.returncode != 0:
+        raise SystemExit(f'node failed: {res.stderr[-2000:]}')
+    got = json.loads(res.stdout)
+    for case, js in zip(hits, got):
+        assert all(abs(a - b) < 0.05 for a, b in zip(case['ref'], js)), (case, js)
+    assert got[0] == got[1], got
+    print(f"selftest ok: er-ar-calc.js matches er-mechanics-ar.py on {r['n']} cases, "
+          f"and Charge Forth's {len(skill['hits'])} hits one- and two-handed")
     return 0
 
 

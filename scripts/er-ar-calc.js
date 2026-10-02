@@ -65,6 +65,16 @@
     return { damage, status, total };
   }
 
-  root.ErAr = { calcCorrect, statMultiplier, elementMultiplier, attackRating, STATS };
+  // One skill hit's attack before defense, from an exported hit (`er-mechanics-ar-export.py
+  // --skill`). A hit whose AtkParam row sets `isDisableBothHandsAtkBonus` takes no STR x1.5.
+  function skillHitAttack(c, row, stats, twoHanded, hit) {
+    const r = attackRating(c, row, stats, twoHanded && !hit.disable_2h);
+    let atk = 0;
+    for (const [el, v] of Object.entries(r.damage)) atk += v * (hit.mv[el] || 0) / 100;
+    for (const v of Object.values(hit.flat || {})) atk += v;
+    return atk;
+  }
+
+  root.ErAr = { calcCorrect, statMultiplier, elementMultiplier, attackRating, skillHitAttack, STATS };
   if (typeof module !== 'undefined') module.exports = root.ErAr;
 })(typeof window !== 'undefined' ? window : globalThis);

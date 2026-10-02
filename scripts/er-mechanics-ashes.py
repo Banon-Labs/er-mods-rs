@@ -792,6 +792,7 @@ def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None):
         out.append({'kind': kind, 'frame': frame, 'atk_row': row['atk_row'], 'atk_name': row['atk_name'],
                     'mv': row['mv'], 'flat': row['flat'] if row['add_base_atk'] else {},
                     'from_weapon': row.get('from_weapon', True),
+                    'disable_2h': row.get('disable_2h', False),
                     'attack': {el: round(v, 2) for el, v in attack.items()},
                     'final_rate_id': row.get('final_rate_id', -1), **extra})
 
