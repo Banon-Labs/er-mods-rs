@@ -80,7 +80,9 @@ stamina drained, the share one attack breaks from full stamina, the share it bou
 HP, and the guard-pressure factor `er-builds-pvp.py --sort score` multiplies in.
 `Blockers.own_guard` is the defensive side: how much of the corpus's opening hit a guard stops,
 with a repel the configuration's own R1 can punish credited; `Blockers.best_left_shield` picks
-the left-hand shield of a one-handed configuration from the shields the corpus carries.
+the left-hand shield of a one-handed configuration from the shields the corpus carries, and
+`Blockers.carried_left_shield` weighs it by the share of the corpus's one-handers of that weapon
+class that carry a shield at all (`Blockers.carry_rates`, `MEASURED`).
 
     python3 scripts/er-mechanics-powerstance-guard.py blockers --rl 140-160
     python3 scripts/er-mechanics-powerstance-guard.py pressure Giant-Crusher --grip both --rl 140-160
@@ -225,7 +227,9 @@ GUARD_REGEN_PER_FRAME = BASE_STAMINA_REGEN_PER_S * GUARD_REGEN_RATE / 30.0
 REPELLED_ATTACKER_FREE = 22
 #: A repel's punish in the score: a blocker whose own R1 lands inside that window (its guard
 #: reaction's R1 frame plus its R1's first hit frame below `REPELLED_ATTACKER_FREE`) is taken to
-#: land one hit worth as much as the attacker's (`INFERRED` weight).
+#: land one hit worth as much as the attacker's (`INFERRED` weight). Adoption cannot pin it:
+#: `scripts/er-builds-guard-adoption.py` (RL 150, 2026-10-01) found every punish weight from 0 to
+#: 1 indistinguishable on the within-class percentile coefficient and the grip test.
 SCORE_REPEL_PUNISH = 1.0
 
 GUARD_FIELDS = ['guardBaseRepel', 'attackBaseRepel', 'staminaGuardDef', 'physGuardCutRate',
@@ -631,8 +635,14 @@ PERCENTILES = (10, 25, 50, 75, 90)
 #: The share of an attacker's hits that meet a raised guard when the defender has one up.
 SCORE_GUARD_BLOCK_RATE = 0.25
 #: How much a guard that stops the corpus's opening hit completely is worth to the weapon's own
-#: score, relative to a guard that stops nothing.
+#: score, relative to a guard that stops nothing. `INFERRED`: the adoption calibration
+#: (`scripts/er-builds-guard-adoption.py`, RL 150, 2026-10-01) cannot pin it. With the carry rate
+#: below every weight from 0 to 0.4 scores the same within its bootstrap CI; it only excluded 0.4
+#: under the older assumption that every one-hander carries its best shield.
 SCORE_GUARD_OWN_WEIGHT = 0.1
+#: Pseudo-builds a weapon class's shield-carry rate is shrunk toward the pooled rate with
+#: (`Blockers.carry_rates`). The strength is `INFERRED`; the rates themselves are `MEASURED`.
+CARRY_PRIOR_BUILDS = 10
 
 
 def plain_name(name):
@@ -1056,6 +1066,47 @@ class Blockers:
                 best = (v, g)
         return best
 
+    def carry_rates(self):
+        """({right-hand `wepType`: p}, pooled p) over the corpus's one-handing builds (`is2h`
+        unset): p is the share with a shield in the active left hand (`kind` 'shield'), by the
+        weapon class of the active right hand (None when it does not resolve), shrunk toward the
+        pooled share with `CARRY_PRIOR_BUILDS` pseudo-builds. `MEASURED`; RL 140-160 pools 121 of
+        797 (15.2%) and runs from 4% (katana) to 34% (greatsword)."""
+        if getattr(self, '_carry', None) is None:
+            unmatched = collections.Counter(self.unmatched)
+            counts = collections.defaultdict(lambda: [0, 0])
+            for b, kind in zip(self._builds, self.kind):
+                if b.get('is2h'):
+                    continue
+                slot = _active_slots(b).get(0)
+                wid = self._weapon_id(slot) if slot else None
+                wt = self.reg.weapon[wid]['wepType'] if wid is not None else None
+                counts[wt][0] += kind == 'shield'
+                counts[wt][1] += 1
+            self.unmatched = unmatched  # a read of the right hands, not a second guard lookup
+            k = sum(c[0] for c in counts.values())
+            n = sum(c[1] for c in counts.values())
+            pooled = k / n if n else 0.0
+            self._carry = ({wt: (c[0] + CARRY_PRIOR_BUILDS * pooled) / (c[1] + CARRY_PRIOR_BUILDS)
+                            for wt, c in counts.items()}, pooled)
+        return self._carry
+
+    def carry_rate(self, wep_type):
+        """`carry_rates` for a right hand of `wep_type`, the pooled share for a class the corpus
+        does not one-hand."""
+        rates, pooled = self.carry_rates()
+        return rates.get(wep_type, pooled)
+
+    def carried_left_shield(self, stats, opening, wep_type, startup=None, stamina=None):
+        """(own guard, shield dict, p) of a one-handed configuration whose right hand is of
+        `wep_type`: `best_left_shield`'s own guard times p = `carry_rate(wep_type)`. A one-hander
+        without a shield cannot guard (`GUARD_LEFT_ONE_HAND`), which `one_hand_guard_mean` counts
+        as 0 too, so this is the expected own guard of that class's builds if they carried the
+        best shield whenever they carry one."""
+        own, shield = self.best_left_shield(stats, opening, startup, stamina)
+        p = self.carry_rate(wep_type)
+        return own * p, shield, p
+
 
 def guard_score_factor(pressure, own=None, own_ref=None, own_weight=SCORE_GUARD_OWN_WEIGHT):
     """The score multiplier: `pressure['factor']` x (1 + `own_weight` x (own - own_ref)).
@@ -1349,12 +1400,15 @@ def corpus_main(a):
         own, left = bl.own_guard(shield_guard(reg, wid, level, two_handed=True), opening,
                                  startup=startup), None
     else:
-        own, left = bl.best_left_shield(stats, opening, startup)
+        own, left, carry = bl.carried_left_shield(stats, opening, reg.weapon[wid]['wepType'], startup)
     print(f'{reg.name(wid)} +{level} {"2H" if two else "1H"}; {bl.n} PvP builds of RL {lo}-{hi}, '
           f'{100 * bl.can.mean():.0f}% can raise a guard; AR '
           + ', '.join(f'{k} {v:.0f}' for k, v in ar.items() if v))
-    print(f'own guard{" (left " + left["name"] + " +" + str(left["level"]) + ")" if left else ""}: '
-          f'{own:.3f} of the corpus opening hit stopped, repel punish credited '
+    left_note = ''
+    if left:
+        left_note = (f' (left {left["name"]} +{left["level"]} carried by {100 * carry:.1f}% of the '
+                     f'class\'s one-handers, {own / carry if carry else 0.0:.3f} when carried)')
+    print(f'own guard{left_note}: {own:.3f} of the corpus opening hit stopped, repel punish credited '
           f'(one-handers\' own guards: {ref:.3f})')
     print(f"{'slot':18}{'stam':>6}{'drain%':>7}{'break%':>7}{'bounce%':>8}{'pun%':>6}{'chip':>6}"
           f"{'chip%':>6}{'value':>7}{'factor':>7}")
@@ -1533,6 +1587,30 @@ def selftest():
     src = 'block_hit / HKS guard hand'
     check('kinds: shield, bare hand, left dagger, two-handed greatsword', bl.kind,
           ['shield', 'bare left hand', 'left weapon', 'two-handed weapon'], src)
+
+    #    d. The shield-carry rate: per right-hand class, shrunk toward the pooled share.
+    cb = Blockers(reg, [build('Brass Shield'), build('Brass Shield'), build(None, right='Dagger'),
+                        build('Dagger', right='Dagger'), build('Brass Shield', True, right='Greatsword')])
+    ls_t = reg.weapon[reg.find_weapon('Longsword')]['wepType']
+    dg_t = reg.weapon[reg.find_weapon('Dagger')]['wepType']
+    rates, pooled = cb.carry_rates()
+    src = 'definition: (shields + CARRY_PRIOR_BUILDS x pooled) / (builds + CARRY_PRIOR_BUILDS)'
+    check('pooled carry rate skips the two-handed build (2 of 4)', pooled, 0.5, src)
+    check('Longsword class 2 of 2 shrinks to 7/12, Dagger class 0 of 2 to 5/12',
+          (round(rates[ls_t], 9), round(rates[dg_t], 9)), (round(7 / 12, 9), round(5 / 12, 9)), src)
+    check('a class the corpus does not one-hand gets the pooled rate', cb.carry_rate(-1), 0.5, src)
+    cop = cb.opening_hits(cb._builds)
+    best_own, best_g = cb.best_left_shield({'str': 40, 'dex': 20, 'int': 9, 'fth': 9}, cop)
+    c_own, c_g, c_p = cb.carried_left_shield({'str': 40, 'dex': 20, 'int': 9, 'fth': 9}, cop, dg_t)
+    check('carried own guard = best shield own guard x the class rate',
+          (c_g is best_g, round(c_own, 9)), (True, round(best_own * 5 / 12, 9)), src)
+    check('carry_rates leaves the unmatched-name count alone', sum(cb.unmatched.values()), 0, src)
+    if os.path.exists(mirror):
+        corpus_bl = Blockers(reg, blocker_corpus(mirror, 140, 160))
+        rates, pooled = corpus_bl.carry_rates()
+        src = 'MEASURED corpus: er-builds-guard-adoption.py 2026-10-01, 121 of 797, Wilson 95%'
+        check('RL 140-160 pooled shield-carry rate inside [0.129, 0.178]', 0.129 <= pooled <= 0.178, True, src)
+        check('every class rate between 0 and 1', all(0.0 <= v <= 1.0 for v in rates.values()), True, src)
     gs2 = [r for r in ATK.weapon_attacks(reg, 4000000, 'both', 25) if r['slot'] == '2h_r1_1'][0]
     ar = {'physical': 500.0}
     p = bl.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}])

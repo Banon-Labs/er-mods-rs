@@ -2320,18 +2320,21 @@ def main() -> int:
         # The configuration's own guard against the corpus's opening hits, with a repel its own R1 #1
         # punishes credited (`Blockers.own_guard`): a two-handed row guards with its weapon, a
         # one-handed row with the corpus shield it meets the stats for that stops the most
-        # (`Blockers.best_left_shield`); a one-handed row with a weapon in the left hand
-        # (`--paired-offhand`, `--paired-loop`) cannot guard and gets 0 there.
+        # (`Blockers.best_left_shield`), times the share of the corpus's one-handers of its
+        # weapon class that carry a shield at all (`Blockers.carried_left_shield`, `MEASURED`);
+        # a one-handed row with a weapon in the left hand (`--paired-offhand`, `--paired-loop`)
+        # cannot guard and gets 0 there.
         r1 = next((x for x in attacks if x["slot"] in ("r1_1", "2h_r1_1")), None)
         r1_start = (r1.get("hit_windows") or [[None]])[0][0] if r1 else None
-        guard_left = None
+        guard_left = carry = None
         if row["two"]:
             own = blockers.own_guard(GUARD.shield_guard(gtab, wid, level, two_handed=True), opening,
                                      startup=r1_start)
         else:
-            own, left_g = blockers.best_left_shield(b["stats"], opening, r1_start)
+            own, left_g, carry = blockers.carried_left_shield(b["stats"], opening,
+                                                              tables.weapons[base_id]["wepType"], r1_start)
             guard_left = left_g and {"name": left_g["name"], "weapon": left_g["weapon"], "level": left_g["level"],
-                                     "own": round(own, 4)}
+                                     "own": round(own / carry, 4) if carry else 0.0}
         guard_parts, guard_memo = {}, {}
 
         def regard(k, rate):
@@ -2511,6 +2514,7 @@ def main() -> int:
                   "best_slot": best_slot(slots), "skill": skill, "crit": crit, "moveset": moveset,
                   "skill_term": None, "buff": _buff_summary(buff),
                   "guard": {"own": round(own, 4), "own_ref": round(own_ref, 4), "left": guard_left,
+                            "carry": None if carry is None else round(carry, 4),
                             "left_weapon": neutral_frames is not None},
                   "kind": row.get("kind"), "weight": row.get("weight")}
         item = None

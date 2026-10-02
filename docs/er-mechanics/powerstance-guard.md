@@ -380,7 +380,8 @@ them in the background.
 - `Blockers(reg, builds, curve)`: `.guard_of(build)`, `.meets(wid, stats, two)`,
   `.distribution()`, `.slot_pressure(parts, block_rate, cycle)`, `.opening_hits(builds)`,
   `.startups()`, `.own_guard(guard, opening, stamina, startup)`, `.one_hand_guard_mean(opening)`,
-  `.shield_options()`, `.best_left_shield(stats, opening, startup)`.
+  `.shield_options()`, `.best_left_shield(stats, opening, startup)`, `.carry_rates()`,
+  `.carry_rate(wep_type)`, `.carried_left_shield(stats, opening, wep_type, startup)`.
 - `guard_score_factor(pressure, own, own_ref)`.
 
 ## 6. Selftest
@@ -404,6 +405,8 @@ them in the background.
 | 88 weapon rows at guardCutCancelRate -50, 168 nonzero attack rows; Shotel R1 into Brass passes 50% (gcc 0.5); repel chip 0.5 | regulation |
 | guard reaction table at 0x143b340b0 (1.16.2) and 0x143b380c0 (1.17.1); `DAMAGE_LEVEL_REMAP` equals frame-advantage's | EXE images (`ER_DEOBF_1162`, `ER_DEOBF_1171`), `er-mechanics-frame-advantage.py` |
 | no regen inside a short cycle, less drain over a long one; a punishable repel raises own guard; x4 drains more than x1 | definition / sanity only |
+| synthetic carry rates: the pooled share skips two-handers, 2 of 2 shrinks to 7/12 and 0 of 2 to 5/12 with a 0.5 pool, an unseen class gets the pool, carried own guard = best shield's x p | definition |
+| RL 140-160 pooled shield-carry rate inside 12.9-17.8% | MEASURED corpus (calibration, 121 of 797) |
 
 ## 7. Not established
 
@@ -550,16 +553,42 @@ defender has one. Nothing in the corpus measures it.
   a repel, plus `SCORE_REPEL_PUNISH` on a repel the configuration's own R1 #1 punishes (the rule
   above). It can exceed 1.
 - A two-handed configuration guards with its own weapon (HKS, above).
-- A one-handed configuration guards with its left hand, which the sweep does not choose. It
-  takes the corpus shield (`shield_options`: every one-handed shield the window carries, at the
-  highest level seen) whose requirements it meets one-handed and whose `own_guard` is highest
-  (`best_left_shield`). A one-handed row that pairs a weapon in the left hand
+- A one-handed configuration guards with its left hand, which the sweep does not choose. The
+  shield is the corpus shield (`shield_options`: every one-handed shield the window carries, at
+  the highest level seen) whose requirements it meets one-handed and whose `own_guard` is highest
+  (`best_left_shield`), and its own guard is that shield's times p, the share of the window's
+  one-handing builds whose right hand is of the same `wepType` and who carry a shield in the
+  active left hand at all (`carried_left_shield`, `carry_rates`; MEASURED). p is shrunk toward the
+  pooled share with 10 pseudo-builds (the strength is INFERRED). At RL 140-160 the pool is 121 of
+  797 (15.2%, 95% CI 12.9-17.8%); the raw class shares run from 4% (katana, 28 builds) through
+  16% (straight sword, 38) and 20% (colossal sword, 113) to 34% (greatsword, 56). A one-hander without a shield cannot guard and counts as 0 in the reference too, so
+  this is the class's expected own guard. A one-handed row that pairs a weapon in the left hand
   (`--paired-offhand`, `--paired-loop`, `--setup`) cannot guard, so its own guard is 0.
 - The reference is `one_hand_guard_mean`, the one-handing builds' own guards, each with its own
   R1 as the punish: 0.098. It is low because 670 of the 798 one-handing builds (84%, the 2
   unmatched names counted as no guard) cannot guard at all.
 - The term is `1 + SCORE_GUARD_OWN_WEIGHT * (own - one_hand_guard_mean)`, with weight 0.1
   (INFERRED). Before 2026-10-01 a one-handed configuration got 1 here, so a shield never counted.
+
+### Calibration against adoption (`scripts/er-builds-guard-adoption.py`, RL 150, 2026-10-01)
+
+The first version of the term gave every one-handed row its best shield outright. Rescoring that
+ranking post hoc (it reproduces the stored scores to 4.5e-6) against corpus adoption, with the
+within-class percentile coefficient and a grip test (Spearman of log 1H/2H score against the
+corpus one-handed share, 51 weapons), paired bootstrap of 2000:
+
+- The best-shield assumption overstated the one-handed own guard about sixfold (15% carry, and
+  the top-50 one-handed weapons are carried with a shield in 25 of their 168 corpus builds). It
+  moved the one-handed rows in the top 50 from 15 to 34; with the carry rate it is 19.
+- `SCORE_GUARD_OWN_WEIGHT` is not pinned. With the carry rate every weight from 0 to 0.4 gives a
+  percentile coefficient of 0.55-0.57 with overlapping CIs (0.511 before the guard model). Under
+  best shield 0.4 was significantly worse than 0 (-0.128, CI -0.256 to -0.023 at P = 0), which
+  is the only weight the data excludes, and it excludes it under the assumption replaced here.
+- `SCORE_REPEL_PUNISH` is not pinned: every P from 0 to 1 is indistinguishable in both modes.
+- The grip test is about +0.2 (CI -0.1 to +0.5) for every candidate: adoption cannot tell the
+  guard variants apart on grip.
+
+So both weights stay at 0.1 and 1 as INFERRED choices; the carry rate is the measured part.
 
 ### Examples (RL 140-160, attacker +25 Standard unless named, CLI damage without PvP weapon rate or grease)
 
@@ -568,23 +597,25 @@ defender has one. Nothing in the corpus measures it.
 | Giant-Crusher 2H R1 #1 (STR 66) | 158 | 88% | 55% | 0% | 0% | 31% | 0.92 | 1.040 |
 | Giant-Crusher 2H charged R2 #1 | 369 | 99% | 98% | 0% | 0% | 31% | 0.99 | 1.048 |
 | Heavy Greatsword 2H R1 #1 (STR 60) | 121 | 76% | 28% | 0% | 0% | 31% | 0.86 | 1.023 |
-| Keen Dagger 1H R1 #1 (DEX 60) | 38 | 26% | 0% | 20% | 12% | 31% | 0.44 | 1.021 |
-| Keen Dagger 1H charged R2 #1 | 77 | 49% | 3% | 0% | 0% | 31% | 0.72 | 1.048 |
+| Keen Dagger 1H R1 #1 (STR 12, DEX 60) | 38 | 26% | 0% | 20% | 12% | 31% | 0.44 | 0.947 |
+| Keen Dagger 1H charged R2 #1 | 77 | 49% | 3% | 0% | 0% | 31% | 0.72 | 0.972 |
 
 Own guard: 2H Giant-Crusher 0.585, 2H Heavy Greatsword 0.469; the Keen Dagger's left hand is
-Serpent Crest Shield +25 at 0.868 (against the 0.098 reference). The dagger R1's value fell from
-0.53 to 0.44 because 12% of the window now punishes its repel, and its factor rose from 0.957 to
-1.021 because the shield it can carry now counts.
+Serpent Crest Shield +25 at 0.868 when carried, and 9.7% of the window's one-handed daggers carry a
+shield, so its own guard is 0.084 (against the 0.098 reference). The dagger R1's value fell from
+0.53 to 0.44 because 12% of the window now punishes its repel. With the best shield taken as
+carried its factor was 1.021; with the carry rate it is 0.947, an own-guard term of 0.9986: a
+dagger guards slightly less than the average one-hander.
 
 ### Not established here
 
 - `SCORE_GUARD_BLOCK_RATE` and `SCORE_GUARD_OWN_WEIGHT`. Both are modelling weights, not
-  measurements.
+  measurements, and adoption does not pin the own weight (calibration above).
 - Whether the planner's `is2h` is the stance a build fights and guards in.
 - `SCORE_REPEL_PUNISH`, and which repel (small or large) the attacker plays; the small one's
   f22 is used, so the punish share is the lower of the two.
-- That a one-handed configuration carries the best corpus shield it can wield. It is the
-  configuration's own choice, not a measured habit (a third of Strength PvP builds carry one).
+- Which shield a one-handed configuration carries when it carries one: the best corpus shield it
+  can wield is assumed; only how often it carries one is measured (`carry_rates`).
 - What a guard break is worth beyond one landed hit. The guard-break clip's gates are known
   (roll f43, R1 f55); its punish was not measured.
 - The guard counter (an R2 out of a small or middle guard reaction) and an exchange where the
