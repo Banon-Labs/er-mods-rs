@@ -51,6 +51,12 @@ halted_on(f) := ids if {
 	ids := rule_ids(halts)
 }
 
+# Same, with the signal's `blamectx` field appended.
+halted_on_ctx(f, ctx) := ids if {
+	halts := guard.halt with input as stop_event(concat("", [facts(f), "|blamectx=", ctx]))
+	ids := rule_ids(halts)
+}
+
 # --- (a) MUST DENY: the verbatim corpus --------------------------------------------------------
 
 # Corpus #1. User: "You need to shut up when you have no idea what you're talking about".
@@ -125,7 +131,47 @@ test_deny_blame_deflection_guard_blocked_without_ownership if {
 	})
 }
 
+# bd er-effects-rs-454a: a bare mechanism-as-actor sentence still halts with its context attached.
+test_deny_bare_guard_refused_with_context if {
+	"ER-EFFECTS-NO-BLAME-DEFLECTION" in halted_on_ctx(
+		{"blame": "The guard refused"},
+		"The guard refused",
+	)
+}
+
+# Two phrases, the first owned and the second bare: the bare one still halts.
+test_deny_second_blame_phrase_unowned if {
+	"ER-EFFECTS-NO-BLAME-DEFLECTION" in halted_on_ctx(
+		{"blame": "the hook refused"},
+		"I wrote the fix with a heredoc, so the hook refused ~~ Later on. The sentinel killed",
+	)
+}
+
+# A first person that is not a cause ("I think") does not own the outcome.
+test_deny_first_person_without_causal_verb if {
+	"ER-EFFECTS-NO-BLAME-DEFLECTION" in halted_on_ctx(
+		{"blame": "the guard blocked"},
+		"I think the guard blocked",
+	)
+}
+
 # --- (b) MUST ALLOW: the shapes this guard must never gag ---------------------------------------
+
+# bd er-effects-rs-454a, first hit: the cause is the previous sentence, first person.
+test_allow_cause_in_previous_sentence if {
+	count(halted_on_ctx(
+		{"blame": "The guard refused"},
+		"My brief told the trades agent to keep scripts in the scratchpad, against edit_no_tmp_scripts_guard.rego. The guard refused",
+	)) == 0
+}
+
+# bd er-effects-rs-454a, second hit: the cause opens the same sentence.
+test_allow_cause_earlier_in_same_sentence if {
+	count(halted_on_ctx(
+		{"blame": "the hook refused"},
+		"I wrote the merge fix with a python heredoc, which breaks this repo's rule; the hook refused",
+	)) == 0
+}
 
 # Corpus #2 -- the one that was CORRECT. User: "Well then its a shit thing that you stoped that
 # subagent that was half way done". The assistant admitted it and then RESUMED the workflow in the
