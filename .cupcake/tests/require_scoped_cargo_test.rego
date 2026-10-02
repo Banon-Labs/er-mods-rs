@@ -157,7 +157,109 @@ test_deny_bd_chained_with_real_cargo if {
 	denied_cargo("$HOME/.local/bin/bd remember --key k \"note\" && cargo test")
 }
 
-# ...and an unquoted token in a bd command is a real build, not prose.
-test_deny_bd_with_unquoted_cargo if {
-	denied_cargo("$HOME/.local/bin/bd close x --reason cargo test")
+# --- (e) command position only (2026-10-02) ----------------------------------
+#
+# A `git commit -m "..."` whose message described a `cargo build` was denied: the
+# guard read words inside quoted arguments as commands. Only a cargo a shell would
+# run counts now.
+
+test_allow_git_commit_message_naming_cargo_build if {
+	allowed("git commit -m \"fix: cargo build now passes\"")
+}
+
+# The text exemption this replaced gave up on a message holding a parenthesis.
+test_allow_git_commit_message_with_parens_naming_cargo_build if {
+	allowed("git commit -m \"fix(cupcake): a bare cargo build (no -p) is still denied\"")
+}
+
+test_allow_echo_single_quoted_cargo_build if {
+	allowed("echo 'cargo build'")
+}
+
+test_allow_echo_double_quoted_cargo_build_with_separators if {
+	allowed("echo \"step one; cargo build --release && done\"")
+}
+
+test_allow_unquoted_operand_cargo_build if {
+	allowed("echo cargo build")
+}
+
+# A commit message written through a heredoc, raw (as opa test sees it) and in the
+# `; `-joined shape scripts/cupcake-hook.sh delivers to the engine.
+test_allow_git_commit_heredoc_naming_cargo_build if {
+	allowed("git commit -F - <<'EOF'\nfix: guard\n\ncargo build --release no longer trips it\nEOF")
+}
+
+test_allow_git_commit_heredoc_shim_shape_naming_cargo_build if {
+	allowed("git commit -F - <<'EOF'; fix: guard; ; cargo build --release no longer trips it; EOF")
+}
+
+test_allow_cat_heredoc_into_file_naming_cargo_build if {
+	allowed("cat > /tmp/msg <<'EOF'; cargo build; cargo test --workspace; EOF")
+}
+
+# A heredoc a shell reads is a program.
+test_deny_heredoc_fed_to_bash if {
+	denied_cargo("bash <<'EOF'; cargo build; EOF")
+}
+
+# A build after the heredoc terminator is outside the body.
+test_deny_cargo_after_heredoc_terminator if {
+	denied_cargo("cat > /tmp/msg <<'EOF'; text; EOF; cargo build")
+}
+
+# A real build chained after a commit message that names one is still a build.
+test_deny_git_commit_then_bare_cargo_build if {
+	denied_cargo("git commit -m \"fix: cargo build now passes\" && cargo build --release")
+}
+
+test_deny_cargo_in_double_quoted_bash_c if {
+	denied_cargo("bash -c \"cd /tmp && cargo build\"")
+}
+
+test_deny_cargo_in_command_substitution if {
+	denied_cargo("echo \"$(cargo build)\"")
+}
+
+test_deny_cargo_after_env_assignment if {
+	denied_cargo("RUSTFLAGS=-Dwarnings cargo clippy --all-targets")
+}
+
+test_deny_cargo_after_cd_and_timeout if {
+	denied_cargo("cd /repo && timeout 30 cargo test")
+}
+
+test_deny_cargo_in_subshell if {
+	denied_cargo("(cd /repo && cargo check)")
+}
+
+test_deny_workspace_flag_closing_a_subshell if {
+	denied_cargo("(cargo test -p er-gfx --workspace)")
+}
+
+test_deny_cargo_in_brace_group if {
+	denied_cargo("{ cargo build; }")
+}
+
+test_deny_cargo_with_toolchain if {
+	denied_cargo("cargo +nightly build")
+}
+
+test_deny_quoted_program_name if {
+	denied_cargo("\"cargo\" build")
+}
+
+# The scope is per invocation: a `-p` on one cargo does not cover another.
+test_deny_second_unscoped_invocation if {
+	denied_cargo("cargo test -p er-gfx && cargo build")
+}
+
+# A `--all` after `--` belongs to the test binary, not to cargo.
+test_allow_all_after_dashdash if {
+	allowed("cargo test -p er-gfx -- --all")
+}
+
+# ...and an unquoted token in a bd command is an operand of bd, not a program.
+test_allow_bd_with_unquoted_cargo_operand if {
+	allowed("$HOME/.local/bin/bd close x --reason cargo test")
 }
