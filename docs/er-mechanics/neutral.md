@@ -201,7 +201,8 @@ x0.953-0.979, the same range.
 
 The default stays `r1`: the corpus neither confirms nor refutes the family pool, and it needs a
 prior ranking (a second pass). The flag is the more faithful model of what the pool throws; use
-it when that matters more than comparability with earlier runs.
+it when that matters more than comparability with earlier runs. A full RL 150 run with it and
+`--trades priced` together is in exchange.md section 2a.
 
 ## 7. Not established
 

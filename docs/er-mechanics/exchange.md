@@ -131,6 +131,28 @@ The default stays `zero`: the selftests pass, but the corpus comparison neither 
 refutes pricing, and the opponent damage it needs is only real with `--opponents-from` (a second
 pass). A default run is byte-identical with and without this code.
 
+**Full run, both flags (MEASURED 2026-10-01).** `er-builds-pvp.py --rl 150 --sort score --json
+--jobs 4 --opponents-from <the 2026-10-01 RL 150 ranking> --opponent-pool families --trades
+priced` against the same command with neither flag at the previous branch head (822 rows each;
+37 minutes for the new run and 52 for the reference, on a box at load 30). The jump-family fix of ashes-of-war.md section 16c is in
+the new run only, and moved no chosen skill on a five-weapon check.
+
+- Spearman 0.998; |rank change| median 8, p90 23, max 73; top 20 keeps 18, top 30 keeps 26.
+- Scores x0.961 median (p10 0.919, p90 0.992); base (moveset) scores x0.953.
+- Adoption rho, all weapons .4633 -> .4614 (d -.0019, CI [-.0079, +.0040]); adopted .2593 ->
+  .2527 (d -.0066, CI [-.0217, +.0082]). Not supported, not refuted; the defaults stay `r1` and
+  `zero`.
+- Mean rank change by class: colossal swords +22.5, colossal weapons +19.0, claws +15.3, spears
+  +6.2, fists +6.1, halberds +4.8; flails -25.2, curved greatswords -16.5, daggers -16.0, katanas
+  -8.8, reapers -8.3, greatswords -7.0, thrusting swords -5.9.
+- Risers: Grafted Blade Greatsword 2H 239 -> 174, Bloodhound Claws 2H 224 -> 159, Troll's Hammer
+  2H 218 -> 155, Gazing Finger 2H 135 -> 81, Anvil Hammer 2H 149 -> 95, Shadow Sunflower Blossom
+  2H 27 -> 12, Fire Knight's Greatsword 2H 25 -> 15, Giant-Crusher 2H 30 -> 21. Fallers: Shamshir
+  1H 367 -> 440, Flail 1H 159 -> 207, Bloodhound's Fang 1H 173 -> 217, Gargoyle's Black Halberd
+  2H 465 -> 508, Misericorde 2H 196 -> 229. The top 2 hold (Dane's Footwork 2H, Dryleaf Arts 2H).
+
+Outputs: `/tmp/claude-1000/-home-banon-projects-er-mods-rs/d2b82757-dbef-4576-8664-fb4d80352bf7/scratchpad/next/full/{ab-ref,full-new}.json`.
+
 Also reported: `trade_through` = of the exchanges the opponent strikes first, the share the slot
 keeps swinging through; `interrupts` = of the exchanges it strikes first, the share it staggers.
 
