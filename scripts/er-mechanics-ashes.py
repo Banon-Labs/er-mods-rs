@@ -2391,12 +2391,19 @@ PAIRED_STRINGS = None
 
 def _opener_row(slots, key, fallback, chain=None):
     """One `Opponents` row from a ranking slot: the opener `key` and, when `chain` names a
-    true-combo follow-up of it, that hit (gap `follow_up_gap`). None when the slot has no hit."""
+    true-combo follow-up of it, that hit (gap `follow_up_gap`). None when the slot has no hit.
+
+    A jump opener (`jump_entry`, synthesized by `er-builds-pvp.jump_openers`) keeps the landed
+    clip's `front_contact`, which counts from the landing clip, not the jump input. Its start is
+    the `neutral_in` strike instead (from the input, 22 f on Alabaster Lord's Sword 2H against the
+    landed clip's 17.5), else its first hit from the input."""
     s = slots.get(key)
     if not s or s.get('startup') is None:
         return None
     fc = s.get('front_contact') or {}
     at = fc.get(ENGAGE_DISTANCE_M, fc.get(str(ENGAGE_DISTANCE_M))) if isinstance(fc, dict) else None
+    if 'jump_entry' in s:
+        at = (s.get('neutral_in') or {}).get('strike')
     start = at if at is not None else s['startup']
     reach = s.get('reach') or fallback['reach']
     advance = max(0.0, reach - (s.get('weapon_reach') or reach))
@@ -2416,16 +2423,19 @@ def _opener_row(slots, key, fallback, chain=None):
 
 
 def opponents_from_results(pool_raw, results, fallback=OPPONENT_FALLBACK, openers=None, timing='react',
-                           react=True):
+                           react=True, slots_fn=None):
     """`Opponents` for the exchange pool (`er-mechanics-exchange.opponent_pool`): each pool build's
     weapon and grip looked up in the ranking's own rows (`er-builds-pvp` results; `dmg` is the
     sweep build's corpus-mean damage, standing in for that player's own).
 
     `openers` `r1`: R1 #1 as the exchange throws it and its R1 #2 when R1 #1 lists it in `combos`
     (section 14a). `families` (the default, `OPPONENT_OPENERS`): every moveset family's best
-    engagement at that family's use share, the opener with its first chained follow-up. A key
-    the ranking has no row for takes `fallback` (no follow-up). Returns (Opponents, matched share,
-    pool-weighted means)."""
+    engagement at that family's use share, the opener with its first chained follow-up, the shares
+    renormalised over the openers that resolve. `slots_fn(row)` gives a row's slots with the
+    synthesized jump openers (`er-builds-pvp.jump_openers`); without it the stored slots alone,
+    which have none, so the jump family drops out (er-effects-rs-8uha). A key the ranking has no
+    row for takes `fallback` (no follow-up). Returns (Opponents, matched share, pool-weighted
+    means)."""
     openers = openers or OPPONENT_OPENERS
     by = {}
     # The off-hand L1 a dodge skill leaves the stagger before and a roll does not
@@ -2439,11 +2449,14 @@ def opponents_from_results(pool_raw, results, fallback=OPPONENT_FALLBACK, opener
         key = f"{plain(r['weapon'])}|{'2h' if r['two'] else '1h'}"
         rows = []
         if openers == 'families':
+            fam_slots = slots_fn(r) if slots_fn else slots
             for fam in ((r.get('moveset') or {}).get('families') or {}).values():
                 links = fam.get('links') or []
-                row = _opener_row(slots, fam.get('opener'), fallback, links[0] if links else None)
+                row = _opener_row(fam_slots, fam.get('opener'), fallback, links[0] if links else None)
                 if row and fam.get('share'):
                     rows.append((fam['share'], {**row, 'opener': fam.get('opener')}))
+            total = sum(share for share, _ in rows)
+            rows = [(share / total, row) for share, row in rows] if total else []
         if not rows:
             s = slots.get('r1_1') or {}
             chain = 'r1_2' if any((c.get('next') or '').removeprefix('2h_') == 'r1_2'
@@ -3789,6 +3802,27 @@ def selftest():
           'EXE 0x140673f70')
     check('wepType->flag: Greatsword is colossal', WEP_TYPE_MOUNT_FLAG[t.reg.weapon[greatsword]['wepType']],
           'SwordGigantic', 'EXE 0x140d29e00 + COMMUNITY class')
+    # er-effects-rs-8uha: the jump family's opener is synthesized, so the stored slots alone drop
+    # it; the shares that remain are renormalised, and a supplied jump opener starts at its
+    # `neutral_in` strike from the jump input, not the landed clip's 2.5 m contact.
+    fam_row = {'weapon': 'A', 'two': False,
+               'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 0.4},
+                                        'jump': {'opener': 'jump_r1_f', 'share': 0.4},
+                                        'move': {'opener': 'run_r1', 'share': 0.2}}},
+               'slots': {'r1_1': {'startup': 14.0, 'front_contact': {'2.5': 16.0}, 'dmg': 300.0, 'next': 30.0}}}
+    jump = {'jump_r1_f': {'startup': 20.0, 'jump_entry': 6.0, 'front_contact': {'2.5': 17.5}, 'dmg': 500.0,
+                          'next': 50.0, 'neutral_in': {'strike': 22.0}}}
+    row_b = {'weapon': 'B', 'two': False, 'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 1.0}}},
+             'slots': fam_row['slots']}
+    pool_raw = {'builds': [['A|1h', 50.0], ['B|1h', 50.0]]}
+    alone, _, _ = opponents_from_results(pool_raw, [fam_row, row_b], openers='families')
+    both, _, _ = opponents_from_results(pool_raw, [fam_row, row_b], openers='families',
+                                        slots_fn=lambda r: {**r['slots'], **(jump if r['weapon'] == 'A' else {})})
+    check('families without the jump openers: A keeps its whole build on R1 (renormalised), as B does',
+          [round(float(x), 6) for x in alone.w], [0.5, 0.5], 'er-effects-rs-8uha')
+    check('families with them: A throws R1 and the jump at a quarter each, the jump from its input strike '
+          '(22, not 17.5)', ([round(float(x), 6) for x in both.w], [float(x) for x in both.startup]),
+          ([0.25, 0.25, 0.5], [16.0, 22.0, 16.0]), 'er-effects-rs-8uha, er-builds-pvp.jump_openers')
     tae_ok = skill_tae(t, lion) is not None
     if not tae_ok:
         print('SKIP TAE checks: ER_PLAYER_TAE_DIR not found')

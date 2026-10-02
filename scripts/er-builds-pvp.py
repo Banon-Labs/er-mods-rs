@@ -2468,8 +2468,10 @@ def main() -> int:
         opp_pool = pool.raw if pool is not None else \
             EXCH.opponent_pool(reg, a.mirror, a.rl - a.window, a.rl + a.window)
         opp_rows = results if opp_rows_from is None else opp_rows_from
-        opponents, _, _ = mech.ash.opponents_from_results(opp_pool, opp_rows, openers=a.opponent_openers,
-                                                          timing=a.dodge_timing, react=mech.react)
+        # The jump family's openers are synthesized, not stored (er-effects-rs-8uha).
+        opponents, _, _ = mech.ash.opponents_from_results(
+            opp_pool, opp_rows, openers=a.opponent_openers, timing=a.dodge_timing, react=mech.react,
+            slots_fn=lambda r: {**(r.get("slots") or {}), **jump_openers(r.get("slots") or {})})
         # A dodge skill reruns its opener's neutral contest with the dodge in the kit.
         opponents.npool = mech.npool
         if not need:

@@ -428,6 +428,16 @@ same time, so its absolute scores are about 0.4x the 2026-09-29 run's).
 These numbers still carry the sweep's exchange and reaction-dodge factors counted from the landed
 clip (6c), which flatter the jump by the 6-frame takeoff.
 
+### 6e. The jump openers as an opponent throws them (2026-10-01)
+
+The families are also what the opponents throw: the skill term's dodge table
+(`er-mechanics-ashes.opponents_from_results`, ashes-of-war.md section 16c) and, with
+`--opponent-pool families`, the exchange and neutral contests (neutral.md section 6). Both read
+the jump openers through `er-builds-pvp.jump_openers`, which computes each one's `neutral_in`
+(strike at 2.5 m counted from the jump input, travel-inclusive reach, hyperarmor windows moved to
+the same clock) whether or not a neutral pool is given. Before 2026-10-01 the dodge table looked
+the jump openers up in the stored slots, found none, and dropped the family (er-effects-rs-8uha).
+
 ## 7. Relative speed within a class (2026-09-30)
 
 The rule under test: the fastest weapon of a class is often the one ranked highest, more so when

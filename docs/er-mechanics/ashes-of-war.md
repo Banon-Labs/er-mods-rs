@@ -6,7 +6,7 @@ named Ghidra dump on :8765, shift 0 against `eldenring-deobf.bin`) or a value in
 consistent with the data, consuming code not traced; **COMMUNITY** = outside claim (Smithbox row
 names, wiki); **MEASURED** = counted in the planner corpus. Nothing was launched.
 
-Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 58/58.
+Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 96/96.
 
 ## 0. In plain words
 
@@ -509,7 +509,8 @@ startup and recovery scoring.
 
 ## 11. Selftest
 
-`python3 scripts/er-mechanics-ashes.py --selftest`: 78 passed, 0 failed.
+`python3 /home/banon/projects/er-mods-rs/scripts/er-mechanics-ashes.py --selftest`: 96 passed, 0
+failed (2026-10-01; the table lists the original checks).
 
 | check | reference |
 |---|---|
@@ -1313,6 +1314,25 @@ after it, which is shorter than any dodge's R1 cancel plus a strike. So from its
 distances the step buys nothing measurable here, and the section 16 validation does not move with
 this gap. What it does in play that this does not model (approach from outside reach, spacing,
 tracking) is still open.
+
+**Correction (2026-10-01, er-effects-rs-8uha).** Until this date the `families` table had no jump
+openers. `_opener_row` looked each family's opener up in the ranking row's stored slots, and the
+jump openers (`jump_r1_f`, `jump_r2_f`, ...) are synthesized by `er-builds-pvp.jump_openers`, never
+stored. So the jump family, the largest at 28.8% mean use share on the RL 150 ranking, was dropped
+from every row, and the remaining shares were not renormalised (median retained share 0.707, min
+0): a weapon whose players jump more counted for less as an opponent. Every result in this section
+and in 16d was measured without it. Now `opponents_from_results` takes `slots_fn` (the ranking
+passes the stored slots plus `jump_openers`), renormalises each key's shares over the openers that
+resolve, and a jump opener starts at its `neutral_in` strike, counted from the jump input (22 f on
+Alabaster Lord's Sword 2H), not at the landed clip's 2.5 m contact (17.5 f), which would make
+every jump 4.5 frames too fast.
+
+MEASURED on the RL 150 ranking (`er-opponent-family-pool-probe.py`, 945 pool builds): the table
+grows from 868 to 1151 rows, the jump openers take 26.8% of its weight (0 before), and its
+weighted means move from strike 14.96 f, reach 4.11 m, hit 425.7 to 16.85 f, 4.42 m, 428.2. The
+opponents now open slower and from farther away, so a dodge has more to read and a punish has
+farther to go. On a five-weapon run (Giant-Crusher, Uchigatana, Dagger, Lance, Great Stars, both
+grips) no row's best skill option or score moves; only options that are not chosen change.
 
 ### 16d. Validation and the whole ranking (MEASURED 2026-09-30)
 

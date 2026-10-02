@@ -176,6 +176,16 @@ for r in res[:40]:
 info['library_max_abs'] = max(chk)
 info['library_cover'] = {'r1_fallback': round(LIB.cover['r1_fallback'], 4),
                          'dropped': {k: round(v, 4) for k, v in LIB.cover['dropped'].items()}}
+# The skill term's dodge table (`er-mechanics-ashes.opponents_from_results`) from the stored slots
+# alone, as before er-effects-rs-8uha, and with the synthesized jump openers.
+ASH = load('er-mechanics-ashes')
+for nm, fn in (('opponents_stored', None),
+               ('opponents_jumps', lambda r: {**r['slots'], **pvp.jump_openers(r['slots'])})):
+    o, _, means = ASH.opponents_from_results(raw, res, openers='families', slots_fn=fn)
+    jw = sum(w for w, row in zip(o.w, o.rows) if str(row.get('opener', '')).startswith('jump'))
+    info[nm] = {'rows': len(o.rows), 'jump_share': round(float(jw), 3),
+                'startup': round(float((o.w * o.startup).sum()), 2), 'hp': round(o.mean_hp, 1),
+                'reach': round(float((o.w * o.reach).sum()), 2), 'follow': round(means['follow'], 3)}
 emit({'info': info})
 
 FPS, CW = pvp.SCORE_FPS, pvp.SCORE_CRIT_WEIGHT
