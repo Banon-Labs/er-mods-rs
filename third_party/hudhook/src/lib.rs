@@ -142,6 +142,16 @@ pub(crate) mod renderer;
 
 pub use renderer::msg_filter::MessageFilter;
 
+/// Local patch (er-mods-rs, 2026-10-02): a per-frame hook that runs after
+/// [`ImguiRenderLoop::before_render`] and before the frame starts, with the
+/// font atlas rebuilt and re-uploaded afterwards if the hook left it unbuilt.
+///
+/// Upstream builds the atlas exactly once, after `initialize`, so a font added
+/// later is never rasterized. This lets the module that owns the render loop
+/// accept fonts from other modules at any time. A rebuild uploads a new
+/// texture and leaves the previous one allocated.
+pub use renderer::set_before_frame_hook;
+
 pub mod util;
 
 // Global state objects.
