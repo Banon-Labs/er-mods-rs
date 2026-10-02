@@ -82,6 +82,44 @@ class AshScorer(OPT.Scorer):
         return self.cache[key]
 
 
+#: The groups a cast's hits are split into for `contributions`, by `skill_hits` kind.
+HIT_GROUPS = (('weapon', 'melee'), ('bullet', 'bullet'))
+STEP = 10
+
+
+def contributions(scorer, stats, step=STEP):
+    """For each group of the skill's hits that exists: hits per cast, damage per cast after PvP
+    defense, and per damage stat what `step` more points of it add to that damage.
+
+    Weapon hits are the skill's melee hits, which take the weapon's attack times their motion
+    value (`hit_attack`); bullets take their own flat attack and the scaling of their attack
+    element row. A stat that adds nothing to a group is reported with 0, so the page can say so."""
+    def by_group(st):
+        hits = scorer.hits(st)
+        out = {}
+        for name, kind in HIT_GROUPS:
+            sel = [h for h in hits if h['kind'] == kind]
+            if sel:
+                out[name] = (A.pvp_damage(scorer.levers.t, scorer.wid, sel, scorer.defender, OPT.DEF),
+                             sum(h.get('count', 1) for h in sel))
+        return out
+    base = by_group(stats)
+    raised = {k: by_group(dict(stats, **{k: min(OPT.STAT_CAP, stats[k] + step)})) for k in DAMAGE_STATS}
+    out = []
+    for name, _ in HIT_GROUPS:
+        if name not in base:
+            continue
+        dmg, n = base[name]
+        rows = []
+        for k in DAMAGE_STATS:
+            gain = raised[k][name][0] - dmg
+            rows.append({'stat': k, 'value': stats[k], 'gain': round(gain, 1),
+                         'pct': round(100.0 * gain / dmg, 2) if dmg else 0.0})
+        rows.sort(key=lambda r: -r['gain'])
+        out.append({'group': name, 'hits': n, 'damage': round(dmg, 1), 'step': step, 'stats': rows})
+    return out
+
+
 def skill_affinities(levers, weapon, sid):
     """The affinities `sid` can be fired at on `weapon` (`mountable_skills` at the top level)."""
     t = levers.t
@@ -123,7 +161,7 @@ def optimal(weapon, skill=None, rl=RL, two_handed=False, levers=None):
             left -= add
         dmg = scorer.score(st)
         if best is None or dmg > best['skill_damage']:
-            best = {'class': cls, 'stats': st, 'skill_damage': dmg}
+            best = {'class': cls, 'stats': st, 'skill_damage': dmg, 'scorer': scorer}
     floors = {k: max(fl[k], b.model.class_base(best['class'])[1][k]) for k in OPT.SURVIVAL}
     weapon_spread = {k: wb['stats'][k] for k in OPT.STATS}
     return {
@@ -133,6 +171,7 @@ def optimal(weapon, skill=None, rl=RL, two_handed=False, levers=None):
         'grease_element': grease[0] if grease else None, 'grease_flat': grease[1] if grease else 0,
         'class': best['class'], 'stats': best['stats'], 'survival_floors': floors,
         'skill_damage': round(best['skill_damage'], 1),
+        'contributions': contributions(best['scorer'], best['stats']),
         'weapon_build': {'class': wb['class'], 'stats': weapon_spread, 'damage_per_hit': round(wb['score'], 1)},
         'defender_builds': dfn['n'],
     }
@@ -150,6 +189,15 @@ def selftest():
     assert r['skill'] == 'Charge Forth' and r['skill_damage'] > 0, r
     w = r['weapon_build']['stats']
     assert abs(st['str'] - w['str']) <= 3, (st, w)
+    # Five weapon hits and no bullet; on Heavy only Strength scales them.
+    groups = {g['group']: g for g in r['contributions']}
+    assert set(groups) == {'weapon'} and groups['weapon']['hits'] == 5, r['contributions']
+    assert abs(sum(g['damage'] for g in groups.values()) - r['skill_damage']) < 0.5, r
+    gains = {s['stat']: s['gain'] for s in groups['weapon']['stats']}
+    assert gains['str'] > 0 and all(v <= 0.05 for k, v in gains.items() if k != 'str'), gains
+    # A skill with a bullet gets a bullet group.
+    lc = optimal('Claymore', 'Lightning Slash', levers=lv)
+    assert 'bullet' in {g['group'] for g in lc['contributions']}, lc['contributions']
     print(f"selftest ok: Lance / {r['skill']} at RL {RL}: {r['affinity']}"
           f"{' + ' + r['grease'] if r['grease'] else ''}, {r['class']}, "
           + ' '.join(f'{k}={st[k]}' for k in OPT.STATS) + f", {r['skill_damage']} per cast")
@@ -180,6 +228,9 @@ def main():
     print(f"  survival floors from PvP builds: " + ' '.join(f'{k}={v}' for k, v in r['survival_floors'].items()))
     print(f"  {r['skill_damage']} damage per cast on the median of {r['defender_builds']} defenders")
     print(f"  weapon's own best spread: " + ' '.join(f'{k}={v}' for k, v in r['weapon_build']['stats'].items()))
+    for g in r['contributions']:
+        print(f"  {g['group']}: {g['hits']} hits, {g['damage']} per cast; +{g['step']} points: "
+              + ', '.join(f"{s['stat']} +{s['gain']} ({s['pct']}%)" for s in g['stats']))
     return 0
 
 
