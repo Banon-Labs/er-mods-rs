@@ -101,6 +101,15 @@ test_allow_python_reading_the_file if {
 	allowed(`python3 -c "print(open('scripts/er-builds-pvp.py').read()[:200])"`)
 }
 
+# The false positive reported 2026-10-01: a process filter that names the run in a string.
+test_allow_process_filter_naming_the_run if {
+	allowed(`ps -u x -o args= | python3 -c "import sys; [print(l) for l in sys.stdin if 'python3 scripts/er-builds-pvp.py' in l]"`)
+}
+
+test_deny_bash_lc if {
+	denied(`bash -lc "python3 scripts/er-builds-pvp.py --rl 150 --json"`)
+}
+
 test_deny_uv_run if {
 	denied("uv run --with numpy python3 scripts/er-builds-pvp.py --rl 150 --json")
 }

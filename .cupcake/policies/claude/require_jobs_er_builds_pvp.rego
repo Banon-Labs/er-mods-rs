@@ -55,9 +55,18 @@ unquoted_command := concat(" ", [single_parts[idx] |
 # run. The trailing class keeps `er-builds-pvp.pyc` and `.py.bak` from matching.
 pvp_pattern := "((^|[[:space:];|&('\"`/])python[0-9.]*[[:space:]]+(-[A-Za-z]+[[:space:]]+)*|(^|[;|&][[:space:]]*))([^[:space:];|&('\"`]*/)?er-builds-pvp\\.py($|[^[:alnum:]_.-])"
 
+# Matched outside quotes, so a filter such as `ps ... | python3 -c "... 'python3
+# scripts/er-builds-pvp.py' in l"` is a string and not a run.
 pvp_invoked if {
-	regex.match(pvp_pattern, norm_command)
+	regex.match(pvp_pattern, unquoted_command)
 }
+
+# Quoted text is a run when it is the script of a shell `-c`.
+pvp_invoked if {
+	regex.match(shell_c_pattern, norm_command)
+}
+
+shell_c_pattern := "(^|[[:space:];|&(])(ba|z|da)?sh[[:space:]]+-[a-z]*c[[:space:]]+['\"][^'\"]*python[0-9.]*[[:space:]]+(-[A-Za-z]+[[:space:]]+)*([^[:space:];|&('\"`]*/)?er-builds-pvp\\.py($|[^[:alnum:]_.-])"
 
 # `--jobs N` or `--jobs=N` with a positive integer. Argparse also accepts the unambiguous
 # prefix `--job`/`--jo`; those are refused on purpose so the count is always spelled out.
