@@ -259,6 +259,32 @@ it. No consumer of stateInfo 48/49 (the branchswords' labels) was found.
   - Godskin at 32 heals 3% + 30 once, and its `accumuVal -999` resets the counter.
   - Whether stage rows 1-3 (spCategory 120) and stage 4 (spCategory 20) are active together past
     60 is not established. The script applies only the stage passed as `successive_stage`.
+  - **What one landed hit adds (VERIFIED, 2026-10-02).** Every hit record that lands adds its
+    rows' `accumuVal` once, so each hitbox of a multi-hit swing counts. Backhand Blade's 2H R1 #1
+    is two hit records (AtkParam 6400200 on index 0, 6400203 on index 1), both carrying
+    `spEffectId0` 6902 (+6): +12 when both land. The chain, `1.16.2 / 1.17.1`:
+    - `CalculateDamage2` `0x1404483b0 / 0x140448910` runs per landed hit and walks the 13
+      SpEffect slots of the AttackDamageInfo (`mov ebx,0xd` `0x1404489eb / 0x140448f4b`). Slots
+      0-4 are `AtkParam.spEffectId0..4` (`FUN_140d24440` reads `paramRow + 0x18 + 4i`,
+      `0x140d24506 / 0x140d25c86`; all -1 when `disableHitSpEffect`).
+    - A slot whose row has `effectTargetAttacker` (`+0x160` bit 1, `0x140448aed / 0x14044904d`)
+      is applied to the attacker (`FUN_1403e8b70` -> `Apply` `0x1404fa8e0` -> `FUN_1404fd090`).
+    - The 314 rows are zero-duration, so `FUN_1404ff010` sets `controlFlags & 2` on them, and
+      `FUN_140500510 / 0x1405012e0` refuses to reuse such an entry: a second hit, even in the
+      same frame, makes a new entry rather than refreshing the first.
+    - Each frame `FUN_1404fae40` ticks every entry and then calls `FUN_1404fe4e0`, which adds
+      `FUN_1404f70e0 / 0x1404f7eb0` (the sum of `accumuVal` `+0x184` over entries with stateInfo
+      314 `+0x156` activated this update) to every accumulator whose host is present. An
+      unconditional new entry starts in state 2, is activated on its first tick and removed on
+      the next (`FUN_140500be0`): one count per entry.
+    - The host's own `accumuVal` (-1) is added on every `ActivateInterval` (`0x1405011c0`); the
+      counter is clamped at 0 (`FUN_1404fe170`) and has no upper clamp.
+    - Each accumulator has one fire slot (`FUN_1404fe450`), written by every host whose threshold
+      the counter meets; which stage row ends up applied when several are met depends on the host
+      order in the entry list, which was not traced.
+  - `scripts/er-mechanics-talisman-affinity.py` turns this into per-weapon numbers: counter gain
+    per slot and per R1 string, gain per second, and the cold-start time to the first threshold
+    (section 5).
 
 ### 3c. Defender-side gates
 
@@ -356,6 +382,14 @@ python3 scripts/er-mechanics-talismans.py --corpus                  # section 7
 python3 scripts/er-mechanics-talismans.py --markdown                # section 6
 python3 scripts/er-mechanics-talismans.py --selftest
 ```
+
+The weapon side of each condition (the mechanics half of `scripts/er-builds-embed.py pairs`) is
+`scripts/er-mechanics-talisman-affinity.py`: per base weapon and talisman, the share of the
+moveset and default skill a subcategory gate matches, successive-counter gain and rate, pierce
+share for Spear Talisman, the statuses the weapon builds for the exultations, whether the
+weapon's TimeAct applies a presence gate (Rellana's Cameo), and element share for the scorpion
+charms. `--weapon "<name>"` prints one weapon, `--json --out <file>` writes the matrix,
+`--selftest` byte-checks the counter chain in both images.
 
 - The module docstring documents `multipliers(t, talismans, ctx)` and
   `defender_modifiers(t, talismans, incoming)`.
