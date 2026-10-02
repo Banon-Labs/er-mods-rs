@@ -8,7 +8,7 @@
 A twin is a weapon a player could swap in without changing how they build or how they play:
 
 * moveset: every attack slot, one- and two-handed, has the same animation, physical motion
-  value, hit windows and hit count (`er-mechanics-attacks.py weapon_attacks`);
+  value, hit windows, hit count and extra hitboxes (`er-mechanics-attacks.py weapon_attacks`);
 * build rules, from `EquipParamWeapon`: it takes ashes of war the same way (`gemMountType`), it
   can be infused the same way (`disableGemAttr`), and it upgrades the same way
   (`reinforceTypeId`: smithing against somber stones).
@@ -41,7 +41,8 @@ def moveset(reg, wid):
     out = {}
     for grip in ('one', 'both'):
         for a in ATT.weapon_attacks(reg, wid, grip):
-            out[a['slot']] = (a['anim'], a['mv_phys'], json.dumps(a['hit_windows']), a['hits'])
+            extra = [(o['frames'], o['mv_phys']) for o in a.get('other_hitboxes', [])]
+            out[a['slot']] = (a['anim'], a['mv_phys'], json.dumps(a['hit_windows']), a['hits'], json.dumps(extra))
     return out
 
 
