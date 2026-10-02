@@ -13,9 +13,11 @@ A twin is a weapon a player could swap in without changing how they build or how
   can be infused the same way (`disableGemAttr`), and it upgrades the same way
   (`reinforceTypeId`: smithing against somber stones).
 
-Candidates are the weapons of the same class (`wepType`). Every candidate is printed with the
-share of the moveset it matches and each build rule it breaks, so a near miss says why it is
-not a twin rather than disappearing.
+Only comparable weapons are considered: the same class (`wepType`) and the same build rules. A
+weapon that breaks a build rule is not compared at all, however much of the moveset it shares:
+Bloodfiend's Sacred Spear swings exactly like Lance but cannot be infused, so a player choosing
+Lance never weighs it. Each comparable weapon is printed with the share of the moveset it
+matches; the ones that match all of it are twins.
 """
 import argparse
 import importlib.util
@@ -54,23 +56,26 @@ def build_fields(reg):
     return reg._twin_fields
 
 
-def twins(reg, wid):
+def comparable(reg, wid, oid):
+    """Same class and every `BUILD_RULES` field equal: a weapon a player choosing `wid` weighs."""
     fields = build_fields(reg)
-    w = {**reg.weapon[wid], **fields[wid]}
+    return (reg.weapon[oid]['wepType'] == reg.weapon[wid]['wepType']
+            and all(fields[oid][k] == fields[wid][k] for k in BUILD_RULES))
+
+
+def twins(reg, wid):
+    """Every comparable weapon with its moveset match, twins (a full match) first."""
     mine = moveset(reg, wid)
     rows = []
-    for oid, o in sorted(reg.weapon.items()):
-        if oid == wid or oid % 10000 or o['wepType'] != w['wepType'] or not reg.weapon_names.get(oid):
+    for oid in sorted(reg.weapon):
+        if oid == wid or oid % 10000 or not reg.weapon_names.get(oid) or not comparable(reg, wid, oid):
             continue
-        o = {**o, **fields[oid]}
         theirs = moveset(reg, oid)
         slots = sorted(set(mine) | set(theirs))
         same = sum(1 for s in slots if mine.get(s) is not None and mine.get(s) == theirs.get(s))
-        broken = {k: (w[k], o[k], why) for k, why in BUILD_RULES.items() if w[k] != o[k]}
         rows.append({'id': oid, 'name': reg.weapon_names[oid], 'moveset_match': same, 'slots': len(slots),
-                     'build_rules_broken': {k: {'this': a, 'other': b, 'meaning': m} for k, (a, b, m) in broken.items()},
-                     'twin': same == len(slots) and not broken})
-    rows.sort(key=lambda r: (-r['twin'], -r['moveset_match'] / max(r['slots'], 1), len(r['build_rules_broken'])))
+                     'twin': same == len(slots)})
+    rows.sort(key=lambda r: (-r['twin'], -r['moveset_match'] / max(r['slots'], 1)))
     return rows
 
 
@@ -78,14 +83,13 @@ def selftest():
     reg = ATT.Regulation()
     bhb = twins(reg, reg.find_weapon('Backhand Blade'))
     assert [r['name'] for r in bhb if r['twin']] == ['Reverse-Bladed Sword'], bhb
-    curse = next(r for r in bhb if r['name'] == "Curseblade's Cirque")
-    assert not curse['twin'] and curse['build_rules_broken'], curse
+    assert "Curseblade's Cirque" not in [r['name'] for r in bhb], bhb      # somber, no ashes
     lance = twins(reg, reg.find_weapon('Lance'))
-    blood = next(r for r in lance if r['name'] == "Bloodfiend's Sacred Spear")
-    assert blood['moveset_match'] == blood['slots'], blood
-    assert not blood['twin'] and 'disableGemAttr' in blood['build_rules_broken'], blood
-    print("selftest ok: Backhand Blade's twin is Reverse-Bladed Sword; Bloodfiend's Sacred Spear shares "
-          "Lance's whole moveset but is not its twin (" + ', '.join(blood['build_rules_broken']) + ')')
+    names = [r['name'] for r in lance]
+    # Same 30 attacks as Lance, but neither can be infused: not comparable, so not listed.
+    assert "Bloodfiend's Sacred Spear" not in names and "Mohgwyn's Sacred Spear" not in names, names
+    assert not any(r['twin'] for r in lance), lance
+    print(f"selftest ok: Backhand Blade's twin is Reverse-Bladed Sword; Lance has no twin, comparable {names}")
     return 0
 
 
@@ -107,8 +111,7 @@ def main():
         return 0
     print(f"{reg.weapon_names.get(wid)} ({wid}): twins {[r['name'] for r in rows if r['twin']] or 'none'}")
     for r in rows:
-        why = '; '.join(f"{v['meaning']} ({k} {v['this']} vs {v['other']})" for k, v in r['build_rules_broken'].items())
-        print(f"  {'TWIN ' if r['twin'] else '     '}{r['name']:<32} moveset {r['moveset_match']}/{r['slots']}  {why}")
+        print(f"  {'TWIN ' if r['twin'] else '     '}{r['name']:<32} moveset {r['moveset_match']}/{r['slots']}")
     return 0
 
 
