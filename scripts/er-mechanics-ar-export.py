@@ -267,6 +267,9 @@ def main():
                     help="add the skill's hits; with no name, the weapon's own skill")
     ap.add_argument('--ashes', action='store_true',
                     help='add every skill the weapon can fire, with its affinities, hits and commitment')
+    ap.add_argument('--optimal-stats', action='store_true',
+                    help="add the RL 150 stats that hit hardest with the skill, one- and two-handed "
+                         "(er-mechanics-ash-stats.py)")
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
@@ -277,6 +280,11 @@ def main():
     data = export(tables, a.weapon, a.skill)
     if a.ashes:
         data['ashes'] = ash_options(tables, a.weapon)
+    if a.optimal_stats:
+        ash_stats = _load('er_mechanics_ash_stats', 'er-mechanics-ash-stats.py')
+        levers = _levers()[1]
+        data['optimal'] = {grip: ash_stats.optimal(a.weapon, a.skill or None, two_handed=two, levers=levers)
+                           for grip, two in (('1h', False), ('2h', True))}
     json.dump(data, sys.stdout, separators=(',', ':'))
     return 0
 

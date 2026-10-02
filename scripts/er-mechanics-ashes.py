@@ -209,7 +209,8 @@ class AshTables:
                                                'finalDamageRateId', 'overwriteAttackElementCorrectId',
                                                'spEffectId0', 'spEffectId1', 'spEffectId2',
                                                'spEffectId3', 'spEffectId4', 'hitSourceType',
-                                               'subCategory1', 'subCategory2', 'knockbackDist'])
+                                               'subCategory1', 'subCategory2', 'knockbackDist',
+                                               'spEffectAtkPowerCorrectRate_byPoint'])
         self.final_rate = table('FinalDamageRateParam')
         # Knockback on a player defender (section 15, per-hit landing).
         self.knockback = table('KnockBackParam')
