@@ -265,6 +265,60 @@ def main() -> int:
     if got.get("friction") != "" or got.get("blame") in ("", None):
         raise AssertionError(f"blame-without-friction: expected blame with empty friction, got {out!r}")
 
+    # bd er-effects-rs-454a: the phrase travels with the sentence before it and its own sentence up
+    # to the phrase, so the policy can see a first-person cause that precedes the mechanism.
+    expect_facts(
+        "blamectx-carries-previous-sentence",
+        [
+            user("Status?"),
+            assistant_text(
+                "Earlier note. My brief told the trades agent to keep scripts in the scratchpad, "
+                "against the tmp-scripts rule. The guard refused that as designed, and I redid it."
+            ),
+        ],
+        blame="The guard refused",
+        blamectx=(
+            "My brief told the trades agent to keep scripts in the scratchpad, against the "
+            "tmp-scripts rule. The guard refused"
+        ),
+    )
+
+    # Two phrases -> two contexts, joined by the separator the policy splits on.
+    expect_facts(
+        "blamectx-one-per-phrase",
+        [
+            user("Status?"),
+            assistant_text("I wrote it badly, so the hook refused it. Then the sentinel killed the run."),
+        ],
+        blamectx="I wrote it badly, so the hook refused ~~ I wrote it badly, so the hook refused it. "
+        "Then the sentinel killed",
+    )
+
+    # Mid-turn narration followed by a tool call is not the closing message, so it is not read.
+    expect_clean(
+        "blame-mid-turn-narration-not-read",
+        [
+            user("Status?"),
+            assistant_text("The guard refused the write; redoing it with Edit."),
+            assistant_tool("Edit"),
+            tool_result(),
+            assistant_text("Done; the row is updated."),
+        ],
+    )
+
+    # The same phrase in the closing message is still read.
+    expect_facts(
+        "blame-in-closing-message-read",
+        [
+            user("Status?"),
+            assistant_tool("Edit"),
+            tool_result(),
+            assistant_text("The guard refused it."),
+        ],
+        blame="The guard refused",
+        blamectx="The guard refused",
+    )
+
     # --- turn boundaries --------------------------------------------------------------------------
 
     # A slip in a non-final block of the turn must not be masked by a later clean block.
@@ -309,7 +363,7 @@ def main() -> int:
         acted="0",
     )
 
-    print("stall-on-friction signal tests passed (15 cases)")
+    print("stall-on-friction signal tests passed (19 cases)")
     return 0
 
 

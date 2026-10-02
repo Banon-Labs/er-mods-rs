@@ -494,6 +494,20 @@ CASES = [
         "that named a defect and changed nothing",
     ),
     Case(
+        "blame_deflection_bare.jsonl",
+        "attributed an outcome to a mechanism",
+        "'The hook refused the first write.' with no hand of the agent's anywhere -- the mechanism "
+        "stands alone as the actor, which ER-EFFECTS-NO-BLAME-DEFLECTION exists to halt",
+    ),
+    Case(
+        "blame_deflection_cause_first.jsonl",
+        None,
+        "'My first attempt used a python heredoc, ... The hook refused that write' -- the agent's "
+        "own action is the sentence before the mechanism, so it is an account, not a deflection "
+        "(bd er-effects-rs-454a). None of the signal's turn-wide ownership shapes match it, so "
+        "only the local first-person-cause check in the policy lets it through. It must NOT halt",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
