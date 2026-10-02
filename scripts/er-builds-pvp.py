@@ -2505,7 +2505,8 @@ def main() -> int:
             # The right grease's recasts take that share of the fight, as a left buff's do (with
             # `--setup` the loop charged it already, only where the right hand kept the grease).
             moveset["score"] *= grease_tf
-            moveset["grease_time_factor"] = round(grease_tf, 5)
+            # Unrounded: the adoption scripts multiply it back in to reproduce the stored score.
+            moveset["grease_time_factor"] = grease_tf
         moveset["base_score"] = moveset["score"]
         if loop:
             moveset["paired_loop"] = loop

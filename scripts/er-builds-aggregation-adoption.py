@@ -103,7 +103,8 @@ def rescore(results: list[dict], agg: tuple[str, float]) -> list[dict]:
             ms = mv.moveset_score(r["slots"], pvp.slot_score, pvp.entry_frames, exp=x)
         else:
             ms = mv.moveset_score(r["slots"], pvp.slot_score, pvp.entry_frames, agg=agg)
-        base = ms["score"]
+        # The ranking charges the right hand's grease recasts after the moveset (`grease_time_factor`).
+        base = ms["score"] * r["moveset"].get("grease_time_factor", 1.0)
         final = skill_final(r, base)
         rr = dict(r)
         rr["moveset"] = {**r["moveset"], "base_score": base, "score": final}
@@ -162,7 +163,8 @@ def score_powerstance(row: dict, agg: tuple | None) -> dict:
     slots = dict(row["dual_slots"])
     kw = {"exp": agg[1]} if agg and agg[0] == "family" else {"agg": agg} if agg else {}
     ms = mv.moveset_score(slots, pvp.slot_score, mv._entry_fn(pvp), families=fam, **kw)
-    return {"base": ms["score"], "score": skill_final(row, ms["score"]), "best": ms["best_opener"],
+    base = ms["score"] * row["moveset"].get("grease_time_factor", 1.0)
+    return {"base": base, "score": skill_final(row, base), "best": ms["best_opener"],
             "families": {n: (f["opener"], round(f["score"], 1)) for n, f in ms["families"].items()}}
 
 
@@ -277,8 +279,9 @@ def main() -> int:
         pool = exch.Pool(exch.opponent_pool(pvp.ATK.Regulation(None), a.mirror, rl - a.window, rl + a.window))
         npool = neut.NeutralPool(pool, neut.pool_reaches(pool.raw))
         results = [{**r, "slots": {**r["slots"], **pvp.jump_openers(r["slots"], npool)}} for r in results]
-    repro = {"base": sa.check_baseline(pvp, mv, ash, results)["base"], "final": check_final(results)}
-    if repro["base"] > sa.REPRO_TOL or repro["final"] > sa.REPRO_TOL:
+    base_check = sa.check_baseline(pvp, mv, ash, results)
+    repro = {"base": base_check["base"], "final": check_final(results)}
+    if not base_check["ok_base"] or repro["final"] > sa.REPRO_TOL:
         raise SystemExit(f"baseline does not reproduce the stored scores: {repro}")
     stored = evaluate(results, a.mirror, rl, a.window, a.boot)
     base_rank = ranks(results)

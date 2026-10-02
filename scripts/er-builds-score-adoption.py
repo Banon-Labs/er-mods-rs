@@ -51,6 +51,9 @@ BOOT = 2000
 SEED = 20260929
 #: Relative tolerance for the baseline to reproduce the stored scores.
 REPRO_TOL = 1e-6
+#: Rankings before 2026-10-01 stored `grease_time_factor` rounded to 5 decimals, so a row that
+#: carries one may miss by up to half that digit over the factor on top of `REPRO_TOL`.
+GREASE_FACTOR_ROUNDING = 0.5e-5
 
 _MODS: dict = {}
 
@@ -203,6 +206,8 @@ def row_score(pvp, mv, ash, r: dict, variant: str | None) -> tuple[float, float]
             mv.chain_links = keep
     else:
         base = mv.moveset_score(r["slots"], fn, pvp.entry_frames)["score"]
+    # The ranking charges the right hand's grease recasts after the moveset (`grease_time_factor`).
+    base *= r["moveset"].get("grease_time_factor", 1.0)
     return base, skill_final(pvp, ash, r, base, variant)
 
 
@@ -214,18 +219,25 @@ def weapon_scores(mv, rows: dict, shares: dict) -> dict:
     return {w: mv.grip_blend(g, shares.get(w)) or 0.0 for w, g in by.items()}
 
 
+def repro_tol(r: dict) -> float:
+    """`REPRO_TOL` plus the rounding a stored `grease_time_factor` may carry (`GREASE_FACTOR_ROUNDING`)."""
+    f = r["moveset"].get("grease_time_factor")
+    return REPRO_TOL + (GREASE_FACTOR_ROUNDING / f if f else 0.0)
+
+
 def check_baseline(pvp, mv, ash, results: list[dict]) -> dict:
-    worst_base = worst_final = 0.0
+    """Worst relative error of the recomputed base and final scores, and `ok_base` / `ok_final`
+    when every row is inside its `repro_tol`."""
+    worst = {"base": 0.0, "final": 0.0}
+    ok = {"base": True, "final": True}
     for r in results:
         m = r["moveset"]
         base, final = row_score(pvp, mv, ash, r, None)
         for want, got, which in ((m.get("base_score", m["score"]), base, "base"), (m["score"], final, "final")):
             err = abs(got - want) / max(abs(want), 1e-9)
-            if which == "base":
-                worst_base = max(worst_base, err)
-            else:
-                worst_final = max(worst_final, err)
-    return {"base": worst_base, "final": worst_final}
+            ok[which] = ok[which] and err <= repro_tol(r)
+            worst[which] = max(worst[which], err)
+    return {**worst, "ok_base": ok["base"], "ok_final": ok["final"]}
 
 
 # --------------------------------------------------------------------------------------------
@@ -345,6 +357,12 @@ def selftest() -> int:
         {"p": 0.5, "share": 1.0, "score": 900.0, "dmg": 500.0, "roll": 40, "next": 40, "stagger": 0.0,
          "parryable": False}]}, "crit": None}, 700.0, None) - (700.0 + ash.SKILL_WEIGHT * 0.5 * 200.0)) < 1e-9,
           "skill term rebuilt as base + SKILL_WEIGHT x p x share x gain")
+    greased = {"slots": {"r1_1": slot}, "moveset": {"grease_time_factor": 0.9}}
+    plain = {"slots": {"r1_1": slot}, "moveset": {}}
+    check(abs(row_score(pvp, mv, ash, greased, None)[0] - 0.9 * row_score(pvp, mv, ash, plain, None)[0]) < 1e-9,
+          "the baseline charges the stored grease_time_factor, as the ranking does")
+    check(repro_tol(plain) == REPRO_TOL and abs(repro_tol(greased) - (REPRO_TOL + 0.5e-5 / 0.9)) < 1e-15,
+          "a stored grease factor widens the tolerance by its rounding over the factor")
     print("selftest " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
 
@@ -373,7 +391,7 @@ def main() -> int:
     data = json.load(a.pvp.open())
     results, rl = data["results"], data["rl"]
     repro = None if a.full_only else check_baseline(pvp, mv, ash, results)
-    if repro and (repro["base"] > REPRO_TOL or repro["final"] > REPRO_TOL):
+    if repro and not (repro["ok_base"] and repro["ok_final"]):
         raise SystemExit(f"baseline does not reproduce the stored scores: {repro}")
     shares = mv.grip_shares(a.mirror, rl - a.window, rl + a.window)
     adoption = shares["_adoption"]
