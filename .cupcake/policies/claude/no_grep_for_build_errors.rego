@@ -23,11 +23,15 @@
 #     remembered -- an advisory note would only fire if it were recalled at the right moment, and
 #     this one would not have been.
 #
-#     WHAT IS BLOCKED: a build-ish command (cargo, rustc, opa, make, ninja, cmake, go, npm/pnpm/yarn,
-#     pytest, tsc, or one of this repo's own build scripts) piped into grep/rg/egrep/fgrep/ag/ack.
+#     WHAT IS BLOCKED: a build-ish command (a compiling/verdict cargo subcommand -- build, check,
+#     clippy, test, bench, doc, run, nextest, rustc, miri, fix, fmt, install, the built-in aliases
+#     b/c/t/r/d, `cargo xwin ...` -- or rustc, opa, make, ninja, cmake, go, npm/pnpm/yarn, pytest,
+#     tsc, or one of this repo's own build scripts) piped into grep/rg/egrep/fgrep/ag/ack.
 #     WHAT IS NOT: piping into head/tail/sed/awk/wc/jq/sort/uniq/cut/tr/less/python, which shape or
 #     excerpt output rather than adjudicating it; grep ANYWHERE else, including over a build LOG FILE
-#     already on disk, which is reading evidence after the exit code has already been believed; and
+#     already on disk, which is reading evidence after the exit code has already been believed; a
+#     build word that is only an argument or pattern of another program (`pgrep -f 'cargo|rustc' |
+#     grep -v pgrep`, `ps aux | grep cargo`); informational cargo (`cargo tree | grep serde`); and
 #     any pipeline whose matcher is not deciding pass/fail because the exit code was captured first.
 #
 #     THE HAPPY PATH is simply to run the command and let a non-zero exit speak, then read the tail
@@ -62,11 +66,24 @@ import data.cupcake.system.commands
 # delimited word anywhere in the name still caught `er-build-import*`. In this repo `build` in the
 # middle of a script name is almost always a character build: `compare-build-armament-slots.py`,
 # `decode-build-link.py`, `find-build-item.py`.
-build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|timeout[[:space:]]+[0-9.]+[smhd]?)[[:space:]]+)*"
+#
+# Assignments and launchers may interleave (`env RUSTFLAGS=-Dwarnings cargo clippy`), and the shell
+# keywords that stand in front of a command (`if`, `!`, `do`, `then`, `{`, ...) and the `npx`/`bunx`
+# runners count as launchers, so `if ! cargo check | grep -q error; then` and the body of a
+# `for ...; do cargo test ...; done` loop still resolve to the build behind them.
+build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*(([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*|sudo|doas|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|npx|bunx|timeout[[:space:]]+[0-9.]+[smhd]?|if|elif|while|until|do|then|else|!|\\{)[[:space:]]+)*"
+
+# `cargo` counts only with a verdict subcommand later in the same stage: `cargo tree | grep serde`,
+# `cargo metadata | grep` and `cargo --version | grep` read information, not a pass/fail. The
+# built-in aliases (`cargo c` is `cargo check`, `b` build, `t` test, `r` run, `d` doc) are the same
+# verdict in fewer keystrokes, and `cargo xwin build` is covered because `build` is a later word.
+cargo_verdict_pattern := "cargo([[:space:]]+[^;&|[:space:]]+)*[[:space:]]+(build|check|clippy|test|bench|doc|run|nextest|rustc|miri|fix|fmt|install|b|c|t|r|d)"
 
 build_verb_pattern := concat("", [
 	build_command_position,
-	"(/?([[:alnum:]_.-]+/)*)?(cargo|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/([[:alnum:]_.-]+/)*((build|check|test)([-_.][[:alnum:]_.-]*)?|[[:alnum:]_.-]*[-_](build|check|test)(\\.[[:alnum:]]+)?|er-build-dlls\\.sh))($|[^[:alnum:]_-])",
+	"(/?([[:alnum:]_.-]+/)*)?(",
+	cargo_verdict_pattern,
+	"|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/([[:alnum:]_.-]+/)*((build|check|test)([-_.][[:alnum:]_.-]*)?|[[:alnum:]_.-]*[-_](build|check|test)(\\.[[:alnum:]]+)?|er-build-dlls\\.sh))($|[^[:alnum:]_-])",
 ])
 
 # Matchers that ADJUDICATE. head/tail/sed/awk/wc/jq/python are deliberately absent: they excerpt or
@@ -122,6 +139,43 @@ build_then_matcher_pattern := concat("", [build_verb_pattern, pipeline_body_patt
 greps_a_build if {
 	some text in commands.input_executed_texts
 	regex.match(build_then_matcher_pattern, text)
+}
+
+# A compound command piped as a whole. `(cargo build; echo done) | grep error`, `{ cargo build; }
+# 2>&1 | grep error` and `for c in a b; do cargo test -p $c; done 2>&1 | grep FAILED` put a `;`
+# between the build and the pipe, so the same-pipeline pattern above stops at it. When a stage that
+# opens with the close of a compound command feeds a matcher, and a build stands in command position
+# anywhere in the same executed text, that denies. It is the old co-presence reading, kept only for
+# this shape and only in the deny direction.
+#
+# Built only from `replace`, `split`, `count` and `regex.match`, which Cupcake's wasm runtime runs
+# (`scripts/check-cupcake-wasm-builtins.py`).
+greps_a_build if {
+	some text in commands.input_executed_texts
+	regex.match(build_verb_pattern, text)
+	some statement in commands.shell_statements(pipeline_text(text))
+	stages := split(statement, "|")
+	some close_at, stage in stages
+	closes_compound(stage)
+	some match_at, later in stages
+	match_at > close_at
+	regex.match(stage_matcher_pattern, later)
+}
+
+# `&` spelled inside a redirection is not "run in the background", but shell_statements cuts at
+# every `&`: without this, `done 2>&1 | grep error` falls apart into `done 2>` and `1 | grep error`.
+# `|&` is bash's `2>&1 |`, so it becomes a plain pipe.
+pipeline_text(text) := replace(replace(replace(replace(text, "|&", "|"), ">&", "> "), "<&", "< "), "&>", " >")
+
+stage_matcher_pattern := "^[[:space:]]*(/?([[:alnum:]_.-]+/)*)?(grep|egrep|fgrep|rg|ag|ack)($|[[:space:]])"
+
+# More `)` than `(` (a balanced `$(...)` in the stage is not a close), or a `}`, `done`, `fi` or
+# `esac` keyword as the first word.
+closes_compound(stage) if count(split(stage, ")")) > count(split(stage, "("))
+
+closes_compound(stage) if {
+	words := [word | some word in split(trim_space(stage), " "); word != ""]
+	words[0] in {"}", "done", "fi", "esac"}
 }
 
 deny contains decision if {

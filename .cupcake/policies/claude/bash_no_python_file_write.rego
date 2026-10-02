@@ -23,6 +23,7 @@
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
+#     required_signals: ["python_script_writes"]
 package cupcake.policies.claude.bash_no_python_file_write
 
 import rego.v1
@@ -107,7 +108,7 @@ writes_a_file if {
 python_file_write_detected if {
 	invokes_python
 	writes_a_file
-	not runs_a_committed_script
+	not runs_only_admitted_scripts
 }
 
 # A `.py` FILE invocation whose path is not a committed, reviewed script
@@ -124,7 +125,7 @@ python_file_write_detected if {
 python_file_write_detected if {
 	invokes_python
 	runs_a_python_script_file
-	not runs_a_committed_script
+	not runs_only_admitted_scripts
 }
 
 # ---------------------------------------------------------------------------
@@ -150,12 +151,18 @@ python_file_write_detected if {
 # preserved here by construction: a separator may abut the path with no space in front of
 # it (`python3 /tmp/x.py; echo "exit=$?"`), and `command_slot_words` splits the separator
 # off as a word of its own, so the path is the same token either way.
-script_operand(words, index) := words[j] if {
+#
+# A closing subshell paren stays attached to the word (`(python3 /tmp/x/patch.py)` yields
+# `/tmp/x/patch.py)`), so it is trimmed before the suffix test. Without that the subshell
+# form named no script at all and ran uninspected; the test that listed it used `some`
+# over its cases, which passed on the three that did deny (found 2026-09-29).
+script_operand(words, index) := operand if {
 	python_invocation(words, index)
 	some j
 	j > index
 	j < count(words)
-	endswith(words[j], ".py")
+	operand := trim_right(words[j], ")")
+	endswith(operand, ".py")
 	count([p |
 		some p, _ in words
 		p > index
@@ -229,28 +236,78 @@ committed_script_path(path) if {
 	scripts_index < count(segments) - 1
 }
 
-runs_a_committed_script if {
+runs_only_admitted_scripts if {
 	runs_a_python_script_file
 	every text in executed_texts {
-		every_script_operand_is_committed(text)
+		every_script_operand_is_admitted(text)
 	}
 }
 
-# Every `.py` this command hands to python is a committed one. Asked over all of them
-# rather than "some", because the exemption is for the invocation and a command that runs
+# Every `.py` this command hands to python is admitted. Asked over all of them rather than
+# "some", because the exemption is for the invocation and a command that runs
 # `scripts/foo.py` and `/tmp/patch.py` has not earned it.
-every_script_operand_is_committed(text) if {
+every_script_operand_is_admitted(text) if {
 	words := commands.command_slot_words(text)
 	count([index |
 		some index, _ in words
 		path := script_operand(words, index)
-		not committed_script_path(path)
+		not script_operand_admitted(path)
 	]) == 0
 }
 
+script_operand_admitted(path) if committed_script_path(path)
+
+script_operand_admitted(path) if vetted_read_only(path)
+
+# ---------------------------------------------------------------------------
+# A scratch script that only reads, added 2026-09-29.
+#
+# The rule above refuses every uncommitted script file because the command line cannot
+# show what the file does. That also refused this, which writes nothing:
+#
+#   timeout 29 python3 <scratchpad>/analyse.py <scratchpad> 2>&1 | cut -c1-260
+#
+# analyse.py loads two JSON files with `json.load(open(path))`, loads a committed tool as a
+# library, and prints. Refusing it did not stop an edit; it only pushed a read-only
+# analysis into a `python3 - <<'PY'` heredoc, which this guard allows when the body has no
+# write in it -- the same program, now pasted instead of named.
+#
+# So the guard now asks what the file does. `.cupcake/signals/python_script_writes.sh`
+# (judgement and selftest in `scripts/cupcake_python_script_writes.py`) reads each script
+# the pending command names and prints `READONLY <operand>` when nothing in it writes. An
+# operand is admitted here only on that exact line. Fail-closed by construction: `WRITES`,
+# `UNKNOWN`, no output, a timeout (key absent), cupcake's failure record for a non-zero
+# exit, and `opa test`, which supplies no signals, all leave the refusal as it was. The
+# signal itself fails closed on a variable it cannot resolve from the same command, a
+# relative path, a write-capable tool in the command, or the script path appearing twice.
+#
+# The operand is compared with its surrounding quotes removed, because
+# `command_slot_words` keeps them (`"$S/sim.py"`) and the signal's shell tokenizer does not.
+# ---------------------------------------------------------------------------
+
+python_script_writes_signal := s if {
+	s := input.signals.python_script_writes
+	is_string(s)
+} else := s if {
+	s := input.signals.python_script_writes.output
+	is_string(s)
+} else := ""
+
+vetted_read_only_operands contains operand if {
+	some line in split(python_script_writes_signal, "\n")
+	trimmed := trim(line, " \t\r")
+	startswith(trimmed, "READONLY ")
+	operand := trim_prefix(trimmed, "READONLY ")
+	operand != ""
+}
+
+unquoted(word) := trim(word, "\"'")
+
+vetted_read_only(path) if unquoted(path) in vetted_read_only_operands
+
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"
 
-block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py`; an inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
+block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py`. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
