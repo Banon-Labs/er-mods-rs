@@ -501,9 +501,8 @@ def _turn_integral(turns, disabled, a0, a1, windows):
 DEFAULT_TURN_DEG_PER_S = 720.0
 
 
-def turn_details(events, hit_start, windows, hit_end=None):
-    """TAE 224 windows, Disable-Turning windows, the turn budget before the first hit and the
-    turn available while the hitbox is live (`hit_start` to `hit_end`)."""
+def turn_windows(events):
+    """(TAE 224 windows, Disable-Turning windows) of one clip, as `turn_details` reads them."""
     turns, disabled = [], []
     for e in events:
         if e.type == TAE_SET_TURN_SPEED:
@@ -516,6 +515,22 @@ def turn_details(events, hit_start, windows, hit_end=None):
             gated = struct.unpack_from('<H', e.params, JUMP_TABLE_STATE_GATE_OFFSET)[0]
             if jid == JT_DISABLE_TURNING and not gated:
                 disabled.append((e.start, e.end))
+    return turns, disabled
+
+
+def turn_rate_at(t, turns, disabled, lock='locked'):
+    """Degrees a second the character can turn at clip time t: 0 under Disable Turning, else the
+    last usable 224 event, else `DEFAULT_TURN_DEG_PER_S` (the rule `_turn_integral` sums)."""
+    if any(s <= t < e for s, e in disabled):
+        return 0.0
+    usable = [w for w in turns if w['start'] <= t < w['end'] and (lock == 'locked' or not w['lock_on_only'])]
+    return usable[-1]['deg_per_s'] if usable else DEFAULT_TURN_DEG_PER_S
+
+
+def turn_details(events, hit_start, windows, hit_end=None):
+    """TAE 224 windows, Disable-Turning windows, the turn budget before the first hit and the
+    turn available while the hitbox is live (`hit_start` to `hit_end`)."""
+    turns, disabled = turn_windows(events)
     budget, free = _turn_integral(turns, disabled, 0.0, hit_start or 0.0, windows)
     late_start = _clip_time_before(hit_start or 0.0, TURN_LATE_FRAMES / TAE_FPS, windows)
     late, _ = _turn_integral(turns, disabled, late_start, hit_start or 0.0, windows)

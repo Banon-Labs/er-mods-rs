@@ -24,6 +24,13 @@ that judge resolves through `PlayerIns::ResolveBehaviorId` exactly as an ordinar
 - VERIFIED (regulation): the only ThrowParam rows with `AtkChrId == DefChrId == 0` are
   10000000 and 30000000. Backstab: facings within +-135 deg, range 1.8 m. Riposte: facings
   more than 90 deg apart (Min 90 > Max -90 wraps), range 1.5 m.
+- VERIFIED (EXE, 1.16.2): a backstab is started under the stricter `_start` columns, not the ones
+  above. `FUN_140485cf0` passes `IsBackStab` as the attempt flag to `FUN_140482860`, which hands it
+  to `ThrowPoseChecks` 0x140485720, and every getter (`GetDiffAngMin` and the rest) returns the
+  `_start` field when the flag is set: range 1.7 m, facings within +-35 deg, the victim within 70
+  deg of the attacker's facing, height +0.40 / -0.55 m. The +-135 deg set applies once the throw is
+  under way. Who can be thrown at all (`IsImmuneToThrow`, TAE JumpTables 67/68/94, HKS act 103) and
+  the race against a skill's recovery are in `scripts/er-mechanics-backstab.py`.
 - VERIFIED (EXE, `CSThrowNode::ValidateThrowForHKSSpEffects` 0x140485990 / 0x140485ef0):
   throwType 1 requires `IsBackStab` (0x140d51900 / 0x140d536b0) or a defender SpEffect with
   `throwCondition` 10; 20..25 require the defender to carry `throwCondition` 10..15; 10 and 11
