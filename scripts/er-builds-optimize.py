@@ -632,13 +632,14 @@ _SWEEP: dict = {}
 
 
 def _snapshots(tables, weapon_id, aff, level, two, floor, need, rls, defender,
-               objective="ar", grease=None) -> dict:
+               objective="ar", grease=None, base=None) -> dict:
     """Optimise one affinity for every RL in `rls` from a single greedy walk.
 
     The walk from the floors to the highest RL passes through every lower RL's point count, so
-    each RL takes the state the walk held there and then runs its own swap pass."""
+    each RL takes the state the walk held there and then runs its own swap pass. `base` is a
+    starting class's level-1 stats; without it every stat starts at 10, the Wretch."""
     scorer = Scorer(tables, weapon_id, aff, level, two, objective, defender, grease)
-    start = {k: max(10, floor.get(k, 0), need.get(k, 0)) for k in STATS}
+    start = {k: max((base or {}).get(k, 10), floor.get(k, 0), need.get(k, 0)) for k in STATS}
     scorer.floor = dict(start)
     used = sum(start.values()) - LEVEL_OFFSET
     out = {}
@@ -770,8 +771,9 @@ def _grease_one(job):
     buff = [a for a in affs if t.weapons[ids[a]].get("isEnhance")]
     level = t.max_level(t.weapons[weapon_id]["reinforceTypeId"])
     rows = []
-    cand: dict = {}  # rl -> list of (damage, affinity, grease element or None, stats)
+    cand: dict = {}  # rl -> list of (damage, affinity, grease element or None, stats, class)
     needs: dict = {}
+    classes = _SWEEP.get("classes") or [(SWEEP_CLASS, None)]
     for aff in affs:
         need = needs[aff] = requirements(t, weapon_id, aff, level, two)
         by_floor: dict = {}
@@ -785,17 +787,19 @@ def _grease_one(job):
             greases = [None] + greases
         for floor_key, group in by_floor.items():
             for g in greases:
-                snaps = _snapshots(t, weapon_id, aff, level, two, dict(floor_key), need, group, dfn, "damage", g)
-                for rl, (st, dmg) in snaps.items():
-                    cand.setdefault(rl, []).append((dmg, aff, g[0] if g else None, st))
+                for cls, base in classes:
+                    snaps = _snapshots(t, weapon_id, aff, level, two, dict(floor_key), need, group, dfn, "damage", g,
+                                       base)
+                    for rl, (st, dmg) in snaps.items():
+                        cand.setdefault(rl, []).append((dmg, aff, g[0] if g else None, st, cls))
     for rl, cs in sorted(cand.items()):
         e = max((c for c in cs if c[2] is None), key=lambda c: c[0], default=None)
         b = max((c for c in cs if c[2] is not None), key=lambda c: c[0], default=None)
         q = max((c for c in cs if c[1] == QUALITY and c[2] is not None), key=lambda c: c[0], default=None)
         row = {"weapon": t.names.get(weapon_id), "two": two, "rl": rl, "kind": kind,
-               "elemental": {"dmg": e[0], "aff": e[1], "stats": e[3]} if e else None,
-               "greased": {"dmg": b[0], "aff": b[1], "grease": b[2], "stats": b[3]} if b else None,
-               "quality": ({"dmg": q[0], "grease": q[2], "stats": q[3]} if q else None)}
+               "elemental": {"dmg": e[0], "aff": e[1], "stats": e[3], "class": e[4]} if e else None,
+               "greased": {"dmg": b[0], "aff": b[1], "grease": b[2], "stats": b[3], "class": b[4]} if b else None,
+               "quality": ({"dmg": q[0], "grease": q[2], "stats": q[3], "class": q[4]} if q else None)}
         # The weight charge of the configuration `er-builds-pvp.build_for` picks (highest damage).
         win = max((c for c in (e, b, q) if c), key=lambda c: c[0])
         row["weight"] = _row_weight_charge(t, weapon_id, win[1], level, two, needs[win[1]], rl, dfn,
@@ -825,11 +829,15 @@ def _row_weight_charge(t, weapon_id, aff, level, two, need, rl, dfn, grease, end
 
 
 def grease_sweep(tables, rows_by_rl, rls, grips, jobs, amount, defender, out_path, min_peers,
-                 source: str = "pvp", roll: str = "medium", charge: bool = True):
+                 source: str = "pvp", roll: str = "medium", charge: bool = True, every_class: bool = False):
     import multiprocessing as mp
     fl, load = sweep_corpus_stats(rows_by_rl, rls, min_peers, source)
+    classes = None
+    if every_class:
+        model = RES.Model()
+        classes = [(cls, model.class_base(cls)[1]) for cls in RES.CLASS_ROWS]
     _SWEEP.update(tables=tables, rls=rls, defender=defender, amount=amount, floors=fl, other_load=load,
-                  roll=roll, real=_real_weapon_ids(), weight_charge=charge)
+                  roll=roll, real=_real_weapon_ids(), weight_charge=charge, classes=classes)
     weapon_ids = sorted(i for i in tables.weapons if i % 10000 == 0 and tables.names.get(i))
     work = [(w, two) for w in weapon_ids for two in grips]
     with mp.get_context("fork").Pool(jobs) as pool:
@@ -958,6 +966,8 @@ def main() -> int:
     ap.add_argument("--grease-sweep", metavar="LO-HI", help="150-200: buffable affinity + grease vs best ungreasable affinity")
     ap.add_argument("--grease", choices=list(GREASES) + ["none"], default="dlc-drawstring",
                     help="grease a STR/DEX build is scored with on a greasable affinity (default: DLC drawstring, +135)")
+    ap.add_argument("--every-class", action="store_true",
+                    help=f"grease sweep: start each build from every class and keep the best, not only {SWEEP_CLASS}")
     ap.add_argument("--rl-step", type=int, default=5)
     ap.add_argument("--grip", choices=["1h", "2h", "both"], default="both")
     ap.add_argument("--jobs", type=int, default=16)
@@ -998,9 +1008,9 @@ def main() -> int:
         dfn = bracket_defender(corpus_rows(a.mirror, lo - a.window, hi + a.window))
         grips = {"1h": [False], "2h": [True], "both": [False, True]}[a.grip]
         amount = GREASES[a.grease]
-        out = a.out or CACHE / f"grease-sweep-{a.grease}-{lo}-{hi}.jsonl"
+        out = a.out or CACHE / f"grease-sweep-{a.grease}-{lo}-{hi}{'-every-class' if a.every_class else ''}.jsonl"
         res = grease_sweep(tables, rows_by_rl, rls, grips, a.jobs, amount, dfn, out, a.min_peers,
-                           a.floors, a.roll, not a.no_weight_charge)
+                           a.floors, a.roll, not a.no_weight_charge, a.every_class)
         from collections import Counter
         kinds = Counter(r.get("kind", "greasable") for r in res)
         print("rows by kind: " + ", ".join(f"{k} {v} ({len({r['weapon'] for r in res if r.get('kind') == k})} weapons)"
