@@ -30,8 +30,14 @@ takes them, so it says nothing about this one and is not listed.
 
 Gear benefit is the damage multiplier minus one (x1.2 -> 0.2), the player-damage correction
 included. Rows behind an HP threshold, a timer, a kill, a flask or another weapon-independent gate
-are not synergy: every weapon gets them equally. Neither are critical-damage rows (Dagger
-Talisman): every weapon's critical gains the same share.
+are not synergy: every weapon gets them equally.
+
+Critical-damage rows (`throwAttackParamChange`, the Dagger Talisman's x1.17) are not scored
+either, but they get their own block, "critical gear", on a weapon whose critical is higher than
+normal: its throwAtkRate (the (throwAtkRate + 100) * 0.01 crit factor, Misericorde 40 against a
+Longsword's 0) above the median of every base weapon that can crit (enableThrow), with its rank
+among them. A weapon at or below the median prints nothing; --json carries the figure, the rank
+and the gear under `critical` either way.
 
 Weapons also pair with each other: a second weapon the behavior script lets the first
 powerstance with (`er-mechanics-powerstance-guard.can_powerstance`) unlocks the dual L1 moves,
@@ -151,7 +157,7 @@ class Gear:
         return out
 
     def _item(self, kind, speffects, presence):
-        benefits, cost, other = [], {'damage_taken': 1.0, 'max_hp': 1.0}, []
+        benefits, cost, other, critical = [], {'damage_taken': 1.0, 'max_hp': 1.0}, [], []
         # A presence gate on a row holds for the rows it links to: Lord of Blood's Exultation
         # waits on stateInfo 379 in 321600 and does its damage in 321601, the buff 321600 cycles.
         inherited = {s.id: set() for s in speffects}
@@ -181,7 +187,9 @@ class Gear:
                 if si == AFF.COUNTER_BOOST_STATE_INFO:
                     benefits.append({'channel': 'pierce', 'gain': gain, 'mult': mult, 'row': s.id})
                 elif f.get('throwAttackParamChange'):
-                    pass                                # every weapon's criticals gain the same share
+                    # Crit-only (`er-mechanics-crits`): reported in its own block, not scored.
+                    if gain > 0:
+                        critical.append({'gain': gain, 'mult': mult, 'row': s.id})
                 elif s.id in TAL.STAGE_OF:
                     if TAL.STAGE_OF[s.id] == 1:
                         benefits.append({'channel': 'successive', 'gain': gain, 'mult': mult, 'row': s.id})
@@ -208,7 +216,8 @@ class Gear:
                         other.append(f'{lab} x{f[k]:.3g}')
                 if any(f.get(k, 0) < 0 for k in RESIST):
                     other.append('lower status resistance')
-        return {'kind': kind, 'benefits': benefits, 'cost': cost, 'other_costs': sorted(set(other))}
+        return {'kind': kind, 'benefits': benefits, 'cost': cost, 'other_costs': sorted(set(other)),
+                'critical': critical}
 
 
 def survivability_cost(item):
@@ -225,6 +234,12 @@ class Population:
         self.slot_q = {}
         self.status = {}
         self.succ = []
+        files = PR.load()
+        self.can_crit = {r['id'] for r in PR.rows(PR.param_bytes(files, 'EquipParamWeapon'), ['enableThrow'],
+                                                  strict=False)[0] if r['enableThrow']}
+        #: throwAtkRate of every base weapon that can crit: the population "higher than normal" is
+        #: read against. Bows, catalysts, shields, torches and whips have enableThrow 0.
+        self.crit = [d.wep[w]['throwAtkRate'] for w in AFF.base_weapons(d) if w in self.can_crit]
         for wid in AFF.base_weapons(d):
             for st, v in innate_row_statuses(d, wid).items():
                 self.status.setdefault(st, []).append(v)
@@ -433,6 +448,36 @@ def describe(parts, affinity, item, wv):
     return line + '.'
 
 
+def critical(d, pop, gear, wid):
+    """The weapon's critical figure against every base weapon that can crit, and, when it is above
+    the median, the gear whose crit-only rows raise critical damage.
+
+    The figure is the weapon's throwAtkRate, which `er-mechanics-crits` reads as the
+    (throwAtkRate + 100) * 0.01 factor on backstabs and ripostes. A crit-only gear row gains the
+    same share on every weapon, but its value in damage scales with that factor, so it is worth
+    pointing out only on a weapon whose factor is above normal."""
+    import statistics
+    card = _mod('er_mechanics_weapon_card', 'er-mechanics-weapon-card.py')
+    rate = d.wep[wid]['throwAtkRate']
+    median = statistics.median(pop.crit)
+    r = card.rank(pop.crit, rate, 'high')
+    out = {'throwAtkRate': rate, 'multiplier': round((rate + 100) * 0.01, 3), 'can_crit': wid in pop.can_crit,
+           'median_throwAtkRate': median, 'rank': list(r), 'rank_text': card.rank_text(r, 'highest'),
+           'above_normal': wid in pop.can_crit and rate > median, 'gear': []}
+    if not out['above_normal']:
+        return out
+    for name, item in gear.items.items():
+        for c in item['critical']:
+            out['gear'].append({'name': name, 'kind': item['kind'], 'gain': round(c['gain'], 4), 'row': c['row'],
+                                'survivability_cost': round(survivability_cost(item), 4),
+                                'other_costs': item['other_costs']})
+    out['gear'].sort(key=lambda g: -g['gain'])
+    out['why'] = (f"{d.weapon_name(wid)}'s critical multiplier is x{out['multiplier']:.2f} "
+                  f"(throwAtkRate {rate}), {out['rank_text']} weapons that can crit; "
+                  f"the median is x{(median + 100) * 0.01:.2f}")
+    return out
+
+
 def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
     wid = d.find_weapon(weapon)
     prof = AFF.weapon_profile(d, wid)
@@ -451,7 +496,7 @@ def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
     rows.sort(key=lambda r: -r['score'])
     return {'weapon': d.weapon_name(wid), 'id': wid, 'powerstance': powerstance(d, wid),
             'vector': {k: round(x, 3) for k, x in wv.items() if not k.startswith('_')},
-            'gear': rows[:top]}
+            'gear': rows[:top], 'critical': critical(d, pop, gear, wid)}
 
 
 #: Dual moves whose first hit counts from the button press, so one weapon's frame compares with
@@ -577,7 +622,14 @@ def selftest():
     assert ps['heading'] == 'A second great spear', ps['heading']
     assert ps['text'].startswith('Powerstance with another Lance or any of 9 other great spears adds a ') \
         and ' fastest of ' in ps['text'], ps['text']
-    assert main_text_runs('Lance')
+    assert any(c['row'] == 320900 for c in gi['Dagger Talisman']['critical']), gi['Dagger Talisman']
+    assert not lance['critical']['above_normal'] and not lance['critical']['gear'], lance['critical']
+    mis = rank(d, pop, gear, tables, 'Misericorde', top=3)['critical']
+    longsword = rank(d, pop, gear, tables, 'Longsword', top=3)['critical']
+    assert mis['throwAtkRate'] > longsword['throwAtkRate'], (mis, longsword)
+    assert mis['above_normal'] and not longsword['above_normal'], (mis, longsword)
+    assert 'Dagger Talisman' in {g['name'] for g in mis['gear']}, mis
+    assert main_text_runs('Lance') and main_text_runs('Misericorde')
     print(f"selftest ok: Lance top {[r['name'] for r in lance['gear'][:6]]}")
     return 0
 
@@ -610,6 +662,13 @@ def main():
         ch = ', '.join(f"{c['channel']} {c['engagement']:.2f}x{c['gain']:+.3f}" for c in r['channels'])
         cost = f" cost {r['survivability_cost']:.3f}" if r['survivability_cost'] else ''
         print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8} {ch}{cost} {'; '.join(r['other_costs'])}")
+    crit = out['critical']
+    if crit['above_normal']:
+        print(f"  critical gear: {crit['why']}.")
+        for g in crit['gear']:
+            cost = f" cost {g['survivability_cost']:.3f}" if g['survivability_cost'] else ''
+            print(f"    {g['name']:<34} {g['kind']:<8} +{g['gain'] * 100:.0f}% critical damage (row {g['row']})"
+                  f"{cost} {'; '.join(g['other_costs'])}".rstrip())
     return 0
 
 
