@@ -2,7 +2,11 @@
 """Probe: the neutral contest (`er-mechanics-neutral.neutral_exchange`) against the R1-only
 opponent pool versus a pool that throws each weapon's moveset family openers at their use share.
 
-    python3 scripts/er-opponent-family-pool-probe.py <ranking.json> [limit] > out.jsonl
+    python3 scripts/er-opponent-family-pool-probe.py <ranking.json> [limit] [slim-prefix] > out.jsonl
+
+With `slim-prefix`, also writes `<prefix>-r1.json` and `<prefix>-fam.json`: the ranking's rows with
+only `moveset.score`, the stored score scaled by the re-derived one, for
+`er-builds-sweep-compare.py`.
 
 Read-only. The family pool is built from a stored `er-builds-pvp.py --sort score --json` ranking:
 each exchange-pool build's weapon and grip is looked up in it, and every family's best opener
@@ -35,6 +39,7 @@ pvp = load('er-builds-pvp')
 EX, NEUT = pvp.EXCH, pvp.NEUT
 SRC = sys.argv[1]
 LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+SLIM = sys.argv[3] if len(sys.argv) > 3 else None
 raw = EX.opponent_pool(None, EX.CACHE / 'builds.jsonl', 140, 160)
 pool = EX.Pool(raw)
 npool = NEUT.NeutralPool(pool, NEUT.pool_reaches(raw))
@@ -159,9 +164,22 @@ for r in res[:20]:
         a = NEUT.neutral_exchange(npool, *inp)['f_neutral']
         chk.append(abs(a - wneutral(R1, *inp)[0]))
 info['validation_max_abs'] = max(chk)
+# The library's weighted pool (`NeutralPool.from_results`) against this probe's own.
+LIB = NEUT.NeutralPool.from_results(pool, NEUT.pool_reaches(raw), res,
+                                    lambda r: {**r['slots'], **pvp.jump_openers(r['slots'])})
+chk = []
+for r in res[:40]:
+    for f in ((r.get('moveset') or {}).get('families') or {}).values():
+        inp = opener_inputs(r, f['opener'])
+        if inp:
+            chk.append(abs(NEUT.neutral_exchange(LIB, *inp)['f_neutral'] - wneutral(FAM, *inp)[0]))
+info['library_max_abs'] = max(chk)
+info['library_cover'] = {'r1_fallback': round(LIB.cover['r1_fallback'], 4),
+                         'dropped': {k: round(v, 4) for k, v in LIB.cover['dropped'].items()}}
 emit({'info': info})
 
 FPS, CW = pvp.SCORE_FPS, pvp.SCORE_CRIT_WEIGHT
+slim = {'r1': [], 'fam': []}
 for r in (res[:LIMIT] if LIMIT else res):
     fams = (r.get('moveset') or {}).get('families') or {}
     sc = {'r1': [], 'fam': []}
@@ -194,4 +212,14 @@ for r in (res[:LIMIT] if LIMIT else res):
         m[nm] = sum(x * x for x in v) / sum(v) if v else 0.0
     emit({'weapon': r['weapon'], 'two': r['two'], 'stored': r['moveset']['score'], **m, 'per': per,
           'depth': {fn: f.get('depth') for fn, f in fams.items()}})
+    for nm in slim:
+        # The stored score (skill term included) moved by the base score's ratio.
+        ratio = m[nm] / m['r1'] if m['r1'] else 1.0
+        slim[nm].append({'weapon': r['weapon'], 'two': r['two'],
+                         'moveset': {'score': (r['moveset']['score'] or 0.0) * ratio}})
+if SLIM:
+    rl = json.load(open(SRC)).get('rl', 150)
+    for nm, rows in slim.items():
+        with open(f'{SLIM}-{nm}.json', 'w') as fh:
+            json.dump({'rl': rl, 'results': rows}, fh)
 emit({'done_s': round(time.time() - t0, 1)})

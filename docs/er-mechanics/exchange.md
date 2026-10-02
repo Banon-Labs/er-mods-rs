@@ -4,7 +4,7 @@ Labels as in the other files here: **VERIFIED** = regulation value or traced EXE
 **MEASURED** = computed by the commands below from the regulation and the corpus mirror,
 **INFERRED** = a modelling choice or an untraced consumer. Nothing was launched.
 
-Tool: `scripts/er-mechanics-exchange.py` (`--selftest` passes 30/30). `er-builds-pvp.py` shows
+Tool: `scripts/er-mechanics-exchange.py` (`--selftest` passes 31/31 with the de-Arxan'd images present). `er-builds-pvp.py` shows
 startup (first active frame), hyperarmor and stamina per slot, and its `--sort score` reads none
 of them. This module turns the three into factors measured against the attacks the RL window's
 PvP builds actually carry.
@@ -30,6 +30,14 @@ a real opponent throws is not in the corpus; R1 #1 is the one every moveset has 
 Most carried: Icon Shield 1H 37, Greatsword 1H 32, Greatsword 2H 30, Zweihander 1H 24, Fire
 Knight's Greatsword 1H 20, Milady 1H 16, Great Katana 2H 15, Lance 1H 15, Misericorde 1H 15.
 Uniques and shields are in the pool: it is who you fight, not what the grease sweep can build.
+
+`Pool` also carries, per row, `dmg`: the hit that opponent lands on the scored player, the
+`r1_1` `dmg` of the ranking row for its weapon and grip (`Pool.set_damage`, read from
+`--opponents-from` the way `er-mechanics-ashes.opponents_from_results` reads it), else
+`OPPONENT_HP_FALLBACK` 388. And per entry a weight, None for the plain pool. `Pool.weighted`
+builds a pool whose rows are (profile, opener) pairs and whose entries split each build over the
+openers it throws (`--opponent-pool families`, neutral.md section 6); `exchange()` then takes
+weighted means.
 
 Per pool attack (same expressions as `er-builds-pvp.slot_hit`):
 - first hit frame: the main judge's first window, or an earlier separate sweep hit (real frames,

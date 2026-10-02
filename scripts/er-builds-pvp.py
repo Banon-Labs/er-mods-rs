@@ -1085,10 +1085,10 @@ def jump_openers(slots: dict, npool=None) -> dict:
     included) and its first hit counted from the jump input, the landed clip's delay from first
     hit to the 2.5 m contact and its hyperarmor windows moved to the same clock (`INFERRED`: the
     landed clip's timing relative to its first hit holds in the air). Without `npool` the openers
-    are what the moveset module makes of them anyway."""
+    carry the same `neutral_in` (what an opponent pool throws, `NEUT.NeutralPool.from_results`)
+    but no contest, so the moveset scores them as it did before; when the landed slot has no
+    `neutral_in` they are what the moveset module makes of them."""
     synth = {k: v for k, v in MOVESET.with_jumps(slots, entry_frames).items() if k not in slots}
-    if npool is None:
-        return synth
     out = {}
     for k, s in synth.items():
         base_key = k.rsplit("_", 1)[0]
@@ -1100,8 +1100,9 @@ def jump_openers(slots: dict, npool=None) -> dict:
             delay = max(0.0, ni["strike"] - entry - base["startup"])
             shift = s["startup"] - base["startup"] - entry
             hyper = [(a + shift, b + shift, bonus, m) for a, b, bonus, m in ni["hyper"]]
-            s["neutral"] = NEUT.neutral_exchange(npool, s["startup"] + delay, s["reach"], ni["poise"], hyper,
-                                                 ni["active"])
+            if npool is not None:
+                s["neutral"] = NEUT.neutral_exchange(npool, s["startup"] + delay, s["reach"], ni["poise"], hyper,
+                                                     ni["active"])
             s["neutral_in"] = {**ni, "strike": s["startup"] + delay, "reach": s["reach"], "hyper": hyper}
         out[k] = s
     return out
@@ -2041,6 +2042,11 @@ def main() -> int:
     ap.add_argument("--opponents-from", type=Path,
                     help="a full --sort score --json ranking to read the opponents' attacks from "
                     "(for a --weapon run, which otherwise has only its own rows)")
+    ap.add_argument("--opponent-pool", choices=("r1", "families"), default="r1",
+                    help="what the exchange and neutral contests throw at every scored attack: R1 #1 "
+                         "per pool build, or (needs --opponents-from) each build's moveset family "
+                         "openers at their use share read from that ranking "
+                         "(NEUT.NeutralPool.from_results, docs/er-mechanics/neutral.md section 6)")
     ap.add_argument("--measure-all", action="store_true",
                     help="land, react and reach every mountable skill, not only the ones that can win")
     ap.add_argument("--build-aff", help="with --weapon: build this affinity instead of the sweep's")
@@ -2156,14 +2162,33 @@ def main() -> int:
         SUSTAIN = sustain
         print(f"# sustain {a.sustain}: {sum(1 for d in regen if d['rows'])} of {len(regen)} defenders heal over "
               f"time; fixed-fight factor {fixed:.5f}", file=sys.stderr)
+    opp_rows_from = json.loads(a.opponents_from.read_text())["results"] if a.opponents_from else None
+    if a.opponent_pool == "families" and opp_rows_from is None:
+        ap.error("--opponent-pool families reads the openers from a ranking: give --opponents-from")
     if pool is not None:
         # The evading dodger's punish is an R1 (ashes-of-war.md section 16a): the pool's own R1 #1
         # strike frames, one per build.
         mech.strikes = pool.startup[pool.build_prof]
-        mech.pool = pool
-        if not a.no_neutral:
+        if opp_rows_from is not None:
+            # Each opponent's hit, from the ranking the opponents are read from.
+            pool.set_damage(opp_rows_from)
+        if a.opponent_pool == "families":
+            # Two passes, as the skill term's opponents: the families of a ranking scored against
+            # R1 #1 become what every slot is contested against (neutral.md section 4).
+            fam = NEUT.NeutralPool.from_results(pool, NEUT.pool_reaches(pool.raw), opp_rows_from,
+                                                lambda r: {**r["slots"], **jump_openers(r["slots"])})
+            print(f"# opponent pool: families from {a.opponents_from}; R1 #1 fallback "
+                  f"{fam.cover['r1_fallback']:.3f} of builds, dropped "
+                  f"{ {k: round(v, 3) for k, v in fam.cover['dropped'].items()} }, openers "
+                  f"{ {k: round(v, 3) for k, v in sorted(fam.cover['openers'].items(), key=lambda x: -x[1])} }",
+                  file=sys.stderr)
+            pool = fam.pool
+            if not a.no_neutral:
+                mech.npool = fam
+        elif not a.no_neutral:
             # The neutral game (docs/er-mechanics/neutral.md): the pool's R1 reach per build.
             mech.npool = NEUT.NeutralPool(pool, NEUT.pool_reaches(pool.raw))
+        mech.pool = pool
     flat = OPT.GREASES[a.grease]
     talismans = [n.strip() for n in (a.talismans or "").split(",") if n.strip()]
     if a.spear_talisman and talismans and "Spear Talisman" not in talismans:
@@ -2442,9 +2467,7 @@ def main() -> int:
     if pending:
         opp_pool = pool.raw if pool is not None else \
             EXCH.opponent_pool(reg, a.mirror, a.rl - a.window, a.rl + a.window)
-        opp_rows = results
-        if a.opponents_from:
-            opp_rows = json.loads(a.opponents_from.read_text())["results"]
+        opp_rows = results if opp_rows_from is None else opp_rows_from
         opponents, _, _ = mech.ash.opponents_from_results(opp_pool, opp_rows, openers=a.opponent_openers,
                                                           timing=a.dodge_timing, react=mech.react)
         # A dodge skill reruns its opener's neutral contest with the dodge in the kit.

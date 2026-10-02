@@ -4,7 +4,7 @@ Labels as in the other files here: **VERIFIED** = regulation value or traced EXE
 **MEASURED** = computed by the commands below from game files, **COMMUNITY** = the Smithbox
 decompile of `c0000.hks`, **INFERRED** = a modelling choice. Nothing was launched.
 
-Tool: `scripts/er-mechanics-neutral.py` (`--selftest` passes 11/11). It is read by
+Tool: `scripts/er-mechanics-neutral.py` (`--selftest` passes 14/14). It is read by
 `er-builds-pvp.py` (every slot and every skill option) and by `er-mechanics-ashes.py` (the dodge
 and defensive-buff utilities, ashes-of-war.md section 17).
 
@@ -148,12 +148,64 @@ Escaping with it (running away, drinking, leaving a stagger) is measured in dise
 leaves 0.5-1.6 m more room than the roll, not enough to drink against a sprinting chaser, and it
 leaves a first stagger 1-5 frames before a roll can.
 
-## 6. Not established
+## 6. What the pool throws (`--opponent-pool families`)
+
+By default every pool build throws its R1 #1 (exchange.md section 1). `--opponent-pool families`
+(it needs `--opponents-from`, a stored `--sort score --json` ranking) has each build throw what
+that ranking says its weapon and grip are used for instead: every moveset family's best opener
+(`moveset.families[*].opener`, moveset.md) at that family's use share
+(`NeutralPool.from_results`). Two passes, the same shape as the skill term's opponents: a ranking
+scored against R1 #1 supplies the openers for the next one.
+
+- **Per opener**, from the ranking row's own slot: `neutral_in` (strike frame 2.5 m ahead from the
+  opener's own input, entry and R2 lead-in included; world reach; PvP poise; TAE 795 windows on the
+  same clock; live frames) and `dmg`. The jump openers are synthesized by
+  `er-builds-pvp.jump_openers`, whose strike counts from the jump input (22 f on Alabaster Lord's
+  Sword 2H), not the landed clip's 17.5 f contact.
+- **Shares** are renormalised over the openers that resolve. A build whose weapon has no row, or no
+  resolving opener, keeps its R1 #1. Each build keeps its own armor poise over all its openers.
+- **Weights.** `er-mechanics-exchange.Pool` now carries a weight per entry and `exchange()` and
+  `neutral_exchange` take weighted means (`Pool.mean`; plain `np.mean` when the weights are None, so
+  the R1 pool scores bit for bit as before). The family pool replaces the R1 one for the slots'
+  exchange and neutral contests, `skill_exchange`, `skill_neutral` and the dodge-skill rerun
+  (ashes-of-war.md section 17). The reaction-dodge whiff punish (`mech.strikes`) keeps the pool's
+  R1 #1, the fastest punish.
+
+MEASURED on the RL 150 ranking of 2026-10-01 (822 rows), `scripts/er-opponent-family-pool-probe.py`
+(the library pool matches the probe's own to 1.3e-15 in `f_neutral`):
+
+| pool | rows | strike frame | world reach | PvP poise | rows with hyperarmor |
+|---|---|---|---|---|---|
+| R1 #1 | 310 | 16.6 f | 3.65 m | 259 | 30.5% |
+| families | 1132 | 20.5 f | 4.37 m | 318 | 30.7% |
+
+Opener shares: R1 #1 .288, R2 #1 .265, forward jump R1 .204, crouch R1 .128, forward jump R2 .068,
+running R2 .032, running R1 .015, charged R2 .001. 4.7% of builds (44 of 945) keep R1 #1 (no
+row), and 1.1% of the share is dropped (running openers with no `neutral_in`).
+
+Re-deriving every family score with the new contest (base score, skill term not rerun): Spearman
+0.998, top 20 keeps 19, |rank change| median 6, p90 23, max 63; scores fall 3% (median x0.970,
+p10 0.953, p90 0.989) because the family pool reaches farther and breaks poise harder. Long, slow,
+poise-heavy openers lose most (Freyja's Greatsword 1H 78 -> 100, Crescent Moon Axe 2H 95 -> 116,
+Omen Cleaver 1H 85 -> 106); fast short weapons rise (Veteran's Prosthesis 2H 110 -> 67, Bloodhound
+Claws 2H 122 -> 83, Spiked Caestus 2H 100 -> 68). Adoption (`er-builds-sweep-compare.py`, the
+stored score moved by the base score's ratio): all weapons rho .4601 -> .4556, d -.0045, CI
+[-.0099, +.0008]; adopted .2638 -> .2621, CI [-.0119, +.0084]; the top 30 keeps 26. A real run on
+five weapons (`--weapon` Giant-Crusher, Uchigatana, Dagger, Lance, Great Stars) moves base scores
+x0.953-0.979, the same range.
+
+The default stays `r1`: the corpus neither confirms nor refutes the family pool, and it needs a
+prior ranking (a second pass). The flag is the more faithful model of what the pool throws; use
+it when that matters more than comparability with earlier runs.
+
+## 7. Not established
 
 - Feints, spacing inside the other's reach, chasing a retreating player (equal run speeds cancel),
   more than one engagement.
 - That locked-on back and side movement is at run speed (no clip).
-- That the pool throws only its R1 #1 in the committed exchange (exchange.md's premise).
+- What a corpus player actually throws: the family pool takes the ranking's own use shares, not
+  recorded button use. Skills and powerstance openers are not in it (the corpus records neither
+  the build's ash nor a powerstance pair).
 - The contact at full reach, taken as the 2.5 m contact.
 
 ## Commands

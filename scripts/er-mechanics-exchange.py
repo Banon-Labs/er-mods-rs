@@ -299,7 +299,9 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     mtime."""
     st = mirror.stat()
     stamp = [POOL_VERSION, st.st_size, int(st.st_mtime), rl_lo, rl_hi, OPPONENT_SLOT, _source_stamp()]
-    path = CACHE / f"exchange-pool-{rl_lo}-{rl_hi}.json"
+    # The stamp is in the name too, so checkouts of different sources (a worktree beside the main
+    # tree, an A/B against a ref) keep their own file instead of rebuilding each other's.
+    path = CACHE / f"exchange-pool-{rl_lo}-{rl_hi}-{stamp[-1]}.json"
     if cache and path.exists():
         got = json.loads(path.read_text())
         if got.get("stamp") == stamp:
@@ -350,11 +352,27 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     return pool
 
 
+#: The damage of one opponent hit when the ranking has no row for its weapon and grip: the
+#: pool-weighted mean of the RL 150 ranking's R1 #1 `dmg` (`er-mechanics-ashes.OPPONENT_FALLBACK`
+#: 'hp', `MEASURED` 2026-09-29; its selftest checks the two agree).
+OPPONENT_HP_FALLBACK = 388.0
+
+
+def profile_key(weapon: str, two: bool) -> str:
+    """The pool's profile key of a ranking row's weapon and grip."""
+    return f"{plain_name(weapon)}|{'2h' if two else '1h'}"
+
+
 class Pool:
     """`opponent_pool` as arrays: one entry per distinct profile, builds indexed into them.
 
     `sa_rate=False` divides every opponent's saRate back out, to compare with results made
-    before `er-builds-pvp.py` applied it."""
+    before `er-builds-pvp.py` applied it.
+
+    Every row also carries `dmg`, the hit it lands on the scored player (`set_damage` reads it from
+    a ranking, else `OPPONENT_HP_FALLBACK`), and every entry a `weight` (None: the builds count
+    equally, as `opponent_pool` lists them). `weighted` builds a pool whose rows are (profile,
+    opener) pairs and whose entries split each build over the openers it throws."""
 
     def __init__(self, pool: dict, sa_rate: bool = True):
         self.raw = pool
@@ -365,12 +383,52 @@ class Pool:
         self.poise_dealt = np.array([p["poise"] / (1.0 if sa_rate else p.get("sa_rate") or 1.0)
                                      for p in prof], float)
         self.hyper = [p["hyper"] for p in prof]
+        self.dmg = np.full(len(self.keys), OPPONENT_HP_FALLBACK)
         self.build_prof = np.array([idx[k] for k, _ in pool["builds"]], int)
         self.build_poise = np.array([p for _, p in pool["builds"]], float)
+        self.weight = None
         self.my_poise = np.sort(np.array(pool["poise"], float))
         self.n = len(self.build_prof)
         self.bar = pool["bar"]
         self.ref_per_bar = pool["ref_per_bar"]
+
+    def set_damage(self, results: list, fallback: float = OPPONENT_HP_FALLBACK) -> float:
+        """`dmg` per profile from an `er-builds-pvp` ranking: its row's `OPPONENT_SLOT` `dmg` (the
+        sweep build's corpus-mean damage standing in for that player's own, as
+        `er-mechanics-ashes.opponents_from_results` reads it), else `fallback`. Returns the share
+        of entries matched."""
+        by = {}
+        for r in results:
+            d = ((r.get("slots") or {}).get(OPPONENT_SLOT) or {}).get("dmg")
+            if d:
+                by[profile_key(r["weapon"], r["two"])] = float(d)
+        # Pool keys are regulation names, already without accents.
+        self.dmg = np.array([by.get(k, fallback) for k in self.keys], float)
+        hit = np.array([k in by for k in self.keys])
+        return self.mean(hit[self.build_prof])
+
+    @classmethod
+    def weighted(cls, base: "Pool", keys: list, rows: list, entries: list) -> "Pool":
+        """A pool of (profile, opener) rows: `rows` [{'startup', 'poise', 'hyper', 'dmg'}] in `keys`
+        order, `entries` [(row index, the build's menu poise, weight)]. The weights are normalised;
+        the corpus poise, stamina bar and raw pool are `base`'s."""
+        p = cls.__new__(cls)
+        p.raw, p.keys = base.raw, list(keys)
+        p.startup = np.array([r["startup"] for r in rows], float)
+        p.poise_dealt = np.array([r["poise"] for r in rows], float)
+        p.hyper = [list(r["hyper"]) for r in rows]
+        p.dmg = np.array([r["dmg"] for r in rows], float)
+        p.build_prof = np.array([e[0] for e in entries], int)
+        p.build_poise = np.array([e[1] for e in entries], float)
+        w = np.array([e[2] for e in entries], float)
+        p.weight = w / w.sum()
+        p.my_poise, p.n, p.bar, p.ref_per_bar = base.my_poise, len(entries), base.bar, base.ref_per_bar
+        return p
+
+    def mean(self, x) -> float:
+        """The mean of one value per entry: plain over the builds, or by `weight`."""
+        x = np.asarray(x, float)
+        return float(np.mean(x)) if self.weight is None else float(np.dot(self.weight, x))
 
     def startup_percentiles(self, qs=(10, 25, 50, 75, 90)) -> dict:
         s = self.startup[self.build_prof]
@@ -405,9 +463,9 @@ def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple])
     room = dealt - np.array([b for b, _ in mine])
     p_break_me = np.searchsorted(pool.my_poise, room, side="right") / len(pool.my_poise)
     f_b, s_b = first[pool.build_prof], second[pool.build_prof]
-    win = float(np.mean(f_b & breaks_them))
-    loss = float(np.mean(np.where(s_b, p_break_me[pool.build_prof], 0.0)))
-    p_first, p_second = float(np.mean(f_b)), float(np.mean(s_b))
+    win = pool.mean(f_b & breaks_them)
+    loss = pool.mean(np.where(s_b, p_break_me[pool.build_prof], 0.0))
+    p_first, p_second = pool.mean(f_b), pool.mean(s_b)
     trade = 1.0 - win - loss
     net, naive = win - loss, p_first - p_second
     f_ex = 1.0 + EXCHANGE_WEIGHT * net
@@ -703,6 +761,12 @@ def selftest() -> int:
     check(e["p_same"] == 0.5 and e["trade"] >= 0.5, "same first frame is a trade")
     check(exchange(syn, 5.0, 100.0, [])["f_exchange"] > exchange(syn, 15.0, 100.0, [])["f_exchange"]
           > exchange(syn, 30.0, 100.0, [])["f_exchange"], "earlier startup scores higher")
+    rows = [{"startup": 10.0, "poise": 60.0, "hyper": [], "dmg": 300.0},
+            {"startup": 20.0, "poise": 300.0, "hyper": [(5.0, 25.0, 100.0, 0.45)], "dmg": 600.0}]
+    heavy = Pool.weighted(syn, ["fast", "slow"], rows, [(0, 80.0, 1.0), (1, 80.0, 3.0)])
+    e = exchange(heavy, 5.0, 100.0, [])
+    check(abs(e["win"] - 0.25) < 1e-12 and abs(e["trade"] - 0.75) < 1e-12,
+          f"entry weights: the slow build thrown three times as often trades 3/4 of the time ({e['trade']})")
     s_lo = stamina_factor_swings(syn, 40.0)["f_stamina_swings"]
     s_hi = stamina_factor_swings(syn, 15.0)["f_stamina_swings"]
     check(s_lo < 1.0 < s_hi and s_hi <= STAMINA_CLAMP[1],
