@@ -468,8 +468,9 @@ for atk in ATK.weapon_attacks(reg, wid, "both" if row["two"] else "one", level):
   windows and extra hitboxes, then gauge and proc as above. `interval` switches on refill.
 - `hits_to_proc(per_hit, resistance, interval, recover)`, `proc_effect(t, speffect_id, max_hp)`.
 - `corpus_rows(path, rl, window, pvp_only)`, `corpus_defender(rows, q)`, `quantiles(vals)`.
-  Rows also carry `tools` (quick item names, None when the build lists none) and `talismans`.
-- `Defenders(t, rows, extra_resist)` (with `median_hp`, `fight_engagements`),
+  Rows also carry `tools` (quick item names, None when the build lists none), `talismans`,
+  `tags` and `flasks` (the planner's `items.flasks`).
+- `Defenders(t, rows, extra_resist)` (with `median_hp`, `fight_engagements`, `fight_hits`),
   `status_expected(t, ws, attack, dfs, grease, gap, react, stagger, chain, engagements, eng_s)`,
   `simulate(...)`, `engagement_lengths(chain)`, `combo_land(combo, stagger)`,
   `talisman_resist(names)`, `status_talismans()`, `bolus_share(t, rows)`, `goods_ready(level)`,
@@ -506,16 +507,27 @@ landed hits from real fights (a damage-hook log of invasions, or frame-counted f
 nothing. The simulator (`simulate`) refuses those hits and starts the next proc from a full gauge
 once the entry expires.
 
-**Fight length (MEASURED input, INFERRED rule).** `Defenders.fight_engagements` = the corpus
-median max HP / `FIGHT_REF_DAMAGE` rounded up: 1946 / 471.5 = 5 engagements (471.5 is the median
-`dmg` of the best slot of 324 weapons in the previous ranking). A proc is credited from its hit to
-the first of its expiry, the carrier's cure and the last hit of the fifth engagement. Flasks and
-the status damage itself are left out, so this is a short fight.
+**Fight length (MEASURED inputs, INFERRED rule; schedule since 2026-10-01).**
+`Defenders.fight_engagements` = the corpus median max HP / `FIGHT_REF_DAMAGE` rounded up: 1946 /
+471.5 = 5 engagements (471.5 is the median `dmg` of the best slot of 324 weapons in the previous
+ranking). That is one HP bar with no flask, and it stays as the default of this module's own
+commands. The ranking replaces it with the landed-hit schedule of buffs.md section 10
+(`er-mechanics-buffs.fight_hits`, set on `Defenders.fight_hits` by
+`er-builds-pvp.Mechanics.set_fight`): per fight point, the hits to empty HP plus the crimson
+flasks drunk (none in a duel, 10 in an invasion or gank), at most what the point's length leaves
+room for at one won engagement in two. At RL 150 the default mix is 5 engagements on a quarter of
+the points and 16..22 on the rest (mean 16.5). A proc is credited from its hit to the first of its
+expiry, the carrier's cure and the last hit of the fight's last engagement. The status damage
+itself is still left out of the kill.
 
 **Per landed hit.** Every (defender group, carrier or not, engagement length) is simulated over
-the fight; `hp_per_hit` = credited proc HP / landed hits (fight engagements x mean engagement
-length), over all 1074 defenders. `engagements_to_proc` (carrier / non-carrier) and `proc_share`
-are the same simulation without a fight end.
+the fight; with a schedule, over each distinct engagement count, weighted by the points that
+carry it. `hp_per_hit` = credited proc HP / landed hits (fight engagements x mean engagement
+length), pooled over the counts and over all 1074 defenders. `fight_engagements` in the output
+is the schedule's mean. `engagements_to_proc` (carrier / non-carrier) and `proc_share` are the
+same simulation without a fight end. A longer fight credits more of a long DoT (rot, poison):
+the Rotten Greataxe's rot (table below) rises from 0.7 HP per hit at 5 engagements to 25.5 at
+10 and 54.8 at 20, so the schedule moves the status term as much as the buff term.
 
 **Defender spread (MEASURED).** Every PvP build of the window is a defender, grouped by (planner
 resistance of the status's group, bolus carry): 1074 builds at RL 150. The planner's resistance

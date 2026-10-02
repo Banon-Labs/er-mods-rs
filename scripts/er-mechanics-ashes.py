@@ -1165,6 +1165,21 @@ def fp_uses(fp_bar, cost):
     return n + (1 if AshTables.has_enough_fp(rest, cost) else 0)
 
 
+def _hits_cap(engagements):
+    """Casts a free skill (no FP limit) is taken to have: one per landed hit, the most any point
+    of a schedule (`er-mechanics-buffs.fight_hits`) lands, so no point is capped by it."""
+    if isinstance(engagements, (tuple, list)):
+        return float(max(engagements, default=ENGAGEMENTS_DEFAULT))
+    return float(engagements)
+
+
+def _use_share(uses, engagements):
+    """Share of the fight's landed hits `uses` casts cover, capped at 1: the mean over a
+    schedule's points of min(1, uses / hits), or that of one count."""
+    hs = engagements if isinstance(engagements, (tuple, list)) else (engagements,)
+    return sum(min(1.0, uses / max(h, 1)) for h in hs) / len(hs)
+
+
 def anim_recovery(t, weapon_id, sword_arts_id, anim, after=0.0):
     """{action: first real frame it can start} for one skill animation, the way attacks.md
     section 4 reads a slot: `recovery_windows` over the skill TimeAct's JumpTable events, TAE 608
@@ -2028,7 +2043,7 @@ def skill_buff_alternatives(t, weapon_id, choice, level=0, fp_bar=FP_BAR_DEFAULT
         roots = [s['id'] for s in skill_buffs(t, prof) if s.get('effect') == 'buff']
         if roots:
             uses = fp_uses(fp_bar, skill_fp(t, sid))
-            casts = float(uses if uses is not None else engagements)
+            casts = float(uses if uses is not None else _hits_cap(engagements))
             out.append((p, tuple((r, 1.0, casts) for r in roots)))
     return out
 
@@ -2879,7 +2894,7 @@ def buff_option(t, sword_arts_id, weapon_id, buffed_score, best_score, eng, opp,
         fight_seconds = FIGHT_SECONDS
     durs = [_buff_duration(t, r) for r in roots]
     dur = -1.0 if -1.0 in durs else max(durs, default=0.0)
-    casts = float(uses) if uses is not None else float(engagements)
+    casts = float(uses) if uses is not None else _hits_cap(engagements)
     plan = BUFFS.recast_plan(dur, fight_seconds, uses=casts, cast_frames=cast_frames or 0.0,
                              hits=engagements)
     recasts, uptime, tf = plan['recasts'], plan['uptime'], plan['time_factor']
@@ -3051,7 +3066,7 @@ def skill_term(t, weapon_id, choice, ctx, level, best_score, fp_bar=FP_BAR_DEFAU
             top = max(variants, key=worth)
             value_corpus += p * worth(top)
             if o['buff_roots']:
-                casts = float(o['uses'] if o['uses'] is not None else engagements)
+                casts = float(o['uses'] if o['uses'] is not None else _hits_cap(engagements))
                 buffs.append((p, tuple((root, 1.0, casts) for root in o['buff_roots'])))
             o = top
         opts.append({**o, 'p': p})
@@ -3132,7 +3147,7 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
                 cast = f['first'] + rec if rec is not None else cast
         if roots:
             uses = fp_uses(fp_bar, fp)
-            casts = float(uses if uses is not None else engagements)
+            casts = float(uses if uses is not None else _hits_cap(engagements))
             buffed = buff_fn(base, tuple(roots), casts)
             b = buff_option(t, sid, weapon_id, buffed, best_score, engagement, opponents, uses, cast,
                             engagements, roots=roots) if buffed else None
@@ -3151,7 +3166,7 @@ def _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, eng
     if o is None:
         return None
     uses = fp_uses(fp_bar, o['fp'])
-    share = 1.0 if uses is None else min(1.0, uses / max(engagements, 1))
+    share = 1.0 if uses is None else _use_share(uses, engagements)
     o.update(uses=uses, share=share, score=None, gain=0.0, _slot=None, reach_measured=False)
     ends = [f for f in (o['roll'], o['next']) if f]
     # A skill whose TimeAct has no FP-charging animation has no identified opening

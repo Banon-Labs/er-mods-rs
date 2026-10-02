@@ -375,11 +375,18 @@ Duels, Co-op/Gank, 2v2 or Ladder. Result: 368 builds.
   `FUN_1404f6e30`), which may skip R1.
 - **Not modelled.** Bloodsucking Cracked Tear's HP drain, Winged Crystal Tear's weight reader, and
   the `stateInfo 42` (Uplifting Aromatic) and `290` (Windy) behaviours.
-- **Section 10's fight model.** 5 landed hits 5 s apart (`er-mechanics-status.py`, spacing
-  INFERRED) inside a 3 to 5 minute fight (user, 2026-10-01). Every buff is applied before the
-  first hit and recast by section 10's rule. The cast frames charged are stand-ins for items
-  (the bolus goods frame) and spells (60 frames); a consumable's use limit is its `maxNum`; and
-  the punish window a recast opens is not charged.
+- **Section 10's fight model.** A 3 to 5 minute fight (user, 2026-10-01) whose landed hits are
+  derived per fight point from HP and flasks, bounded by the clock (`fight_hits`, section 10).
+  Engagements are 5 s apart and the attacker wins half of them (both INFERRED); a crimson drink
+  is taken to heal in full (`FLASK_ETA` 1, INFERRED); duels drink no crimson flask and invasions
+  and ganks drink all of them (COMMUNITY etiquette, applied by planner tag). No measured hits per
+  fight exists (fight footage or a damage-hook log would give one). Every buff is applied before
+  the first hit and recast by section 10's rule. The cast frames charged are stand-ins for items
+  (the bolus goods frame) and spells (60 frames); a cerulean drink is charged the crimson drink's
+  54 frames (its own clip, behind `Event_ItemDrinkingMP`, is not traced); a consumable's use
+  limit is its `maxNum`; cerulean flasks fund only the `--setup` left-hand skill, not kit spells
+  or the right-hand skill term (one shared FP budget across them is not modelled); and the punish
+  window a recast opens is not charged.
 - **The 0-duration rows a buff cycles.** Royal Knight's Resolve's 1701 cycles 1704 and
   Determination's 1691 cycles 1694: `*AttackRate` 0.75 on every element, duration 0. Smithbox
   names them "Critical Damage Debuff", so they are taken to apply to critical hits only and are
@@ -459,6 +466,9 @@ The self-test checks:
 - the fight range and recasts: a 60 s buff in a 180-300 s fight gets 2 to 4 recasts, a next-hit
   buff one per landed hit, the use limits, the recast time factor in `post`, and the engagement
   spacing staying 5 s.
+- the landed-hit schedule: 5 hits with no flask, 13 with 5, 16..22 with 10 (the time bound at
+  180 s), 18 / 24 / 30 from the clock alone at 180 / 240 / 300 s, the tag mix, a next-hit buff
+  recast per point, and the cerulean drinks a cast count needs.
 
 ## 10. Expected factors over the corpus (the ranking's buff term)
 
@@ -490,14 +500,69 @@ Resolve cost nothing. Now two things are kept apart:
 
 | quantity | value | read by |
 |---|---|---|
-| landed hits `hits` | 5 at RL 150 (`Defenders.fight_engagements`, HP-based) | one-hit buffs, the engagement count |
-| engagement spacing `ENGAGEMENT_SECONDS` | 5 s (INFERRED) | status decay between hits, the spacing a visible skill buff must outlast, sustain pacing, per-opening credit |
-| fight length `FIGHT_SECONDS` | 180..300 s, sampled every 10 s (13 points, equal weights) | buff duration, uptime, recasts, recast time cost, nothing else |
+| landed hits `hits` | a schedule, one count per fight point (`fight_hits`, below); 5 everywhere in a duel | one-hit buffs, the engagement count, the status sims |
+| engagement spacing `ENGAGEMENT_SECONDS` | 5 s (INFERRED) | status decay between hits, the spacing a visible skill buff must outlast, sustain pacing, per-opening credit, the hits' time bound |
+| fight length `FIGHT_SECONDS` | 180..300 s, sampled every 10 s (13 points, equal weights) | buff duration, uptime, recasts, recast time cost, the hits' time bound |
 
 A recast count is a step function of the fight length (ceil(fight / duration) - 1), so uptime,
 recasts and the time factor are each the mean over the 13 points, not the value at 240 s.
 `er-builds-pvp.py --fight-seconds MIN MAX` and `er-mechanics-buffs.py --fight-seconds MIN MAX`
 change the range; `--engagement-seconds` no longer touches it.
+
+**Landed hits per fight point (`fight_hits`, `fight_mix`; `er-builds-pvp.Mechanics.set_fight`,
+2026-10-01).** Until 2026-10-01 the count was fixed at 5: one HP bar, no flask
+(`Defenders.fight_engagements` = ceil(1945.84 / 471.5)). Five hits 5 s apart is about 50 s of
+fighting, which contradicts a 3 to 5 minute fight. The count is now the smaller of two bounds at
+each fight point `f`, at least 1:
+
+    to kill  = ceil((HP + k x 810 x eta) / d)
+    by time  = floor((f - k x 54 / 30) / S x w)
+    hits(f)  = max(1, min(to kill, by time))
+
+| symbol | value | status |
+|---|---|---|
+| HP | the window's median max HP, 1945.84 at RL 150 | MEASURED (`corpus_rows`) |
+| 810 | Crimson Tears +12 heal (goods 1025 -> SpEffect 501012) | VERIFIED regulation |
+| k | crimson flasks the defender drinks: 0 in a duel, the window's median `items.flasks.crimson` (10) in an invasion or gank | COMMUNITY etiquette, MEASURED count |
+| eta | share of a drink that heals net, `FLASK_ETA` 1 | INFERRED (the disengage race gives traded / denied drinks per escape; a fight's escape mix is not modelled) |
+| d | reference landed hit `FIGHT_REF_DAMAGE` 471.5 | MEASURED |
+| 54 | frames a drink takes (first cancel frame of the 55-frame crimson clip) | TAE (clip mapping INFERRED, disengage.md section 3) |
+| S | `ENGAGEMENT_SECONDS` 5 | INFERRED |
+| w | share of engagements the attacker wins, `FIGHT_WIN_SHARE` 0.5 | INFERRED (symmetric fight) |
+
+| fight kind | k | hits over 180..300 s |
+|---|---|---|
+| duel | 0 | 5 at every point (the time bound is 18..30) |
+| 5 flasks | 5 | 13 |
+| invasion / gank | 10 | 16, 17, 18, 19, 20, 21 at 180..230 s, then 22 (the kill) |
+
+The time bound is the same fight read off the clock: with no flask the clock allows 18 / 24 / 30
+hits at 180 / 240 / 300 s, so a no-flask kill is over long before 3 minutes, and the two agree
+only when flasks are drunk. With all 10 the kill needs 22 hits plus 18 s of drinking, which fits
+from 230 s on; a shorter point ends on time below the kill (INFERRED reading).
+
+The default (`--flasks corpus`) mixes the kinds by the window's planner tags (`tag_shares`): tag
+mentions of Duels against Invasions + Co-op/Gank (190 / 556 at RL 150, a row tagged both counts
+in each; 2v2, Ladder, Fishing and untagged rows are left out). The duel share 0.255 rounds to a
+quarter, so the 13 duel points and three copies of the 13 invasion points make 52 fight points,
+and every reader's plain mean over the points is the share-weighted mean (`fight_mix`). Mean
+landed hits: 16.5 (duel 5, invasion 20.4). `--flasks duel|invasion|N` takes one kind,
+`--flask-eta` sets eta, and `--fight-hits N` pins every point to N (5 reproduces the fixed count,
+status sims included). The status sims take the same schedule (`Defenders.fight_hits`): each
+distinct count is simulated and weighted by its points (status.md section 9).
+
+**Cerulean flasks on a skill recast (`SetupBuffs.skill`, `drinks_needed`).** A left-hand skill
+buff (`--setup`) used to be recast at most as often as one FP bar pays for (`fp_uses`). The
+attacker also carries cerulean flasks: 4 at +12 on the planner default (`items.flasks.cerulean`
+median 4), each 220 FP (goods 1075 -> SpEffect 501062 `changeMpEstusFlaskPoint` -220, VERIFIED
+regulation). The budget is now one bar plus 4 x 220, and each drink a cast count needs (the
+fewest d with `fp_uses(bar + d x 220, cost)` reaching it) costs its frames too:
+`time factor = 1 - (recasts x cast + drinks x 54) / 30 / fight`. The 54 frames are the crimson
+drink's: the cerulean flask is `goodsUseAnim` 19, which `c0000.hks` `ExecItem` sends to
+`Event_ItemDrinkingMP` (`ITEM_DRINK_MP` 19 in `common_define.hks`; crimson is `ITEM_DRINK` 10 ->
+`Event_ItemDrinking`), and the clip behind that event is not traced (INFERRED). Duel etiquette
+allows cerulean, so it applies in every fight kind. `--cerulean-flasks N` sets the count (0 = one
+bar). Kit spells and the right-hand skill term still read one bar.
 
 **Recasts (`recast_plan`, `source_plans`, `source_recast`).** Every buff is applied before the
 first hit, free (INFERRED). After that every timed buff is recast as often as keeps it on the
@@ -511,18 +576,19 @@ time factor `1 - recasts x cast / fight`. The same rule now runs every buff kind
 | crystal tear | 1 (one physick charge, COMMUNITY): never recast | - | same |
 | great rune | none needed (permanent) | - | same |
 | skill buff (option, ashes-of-war.md 16b) | `fp_uses` of the FP bar | its opening's first roll frame (`anim_recovery`) | `er-mechanics-ashes.buff_option` |
-| left-hand weapon buff (`--setup`) | skill: `fp_uses`; grease: `maxNum` | skill: as above; grease: `cure_frame` | `er-builds-pvp.SetupBuffs.effect` |
+| left-hand weapon buff (`--setup`) | skill: `fp_uses` of one bar plus the cerulean flasks (above); grease: `maxNum` | skill: as above, plus 54 frames per cerulean drink; grease: `cure_frame` | `er-builds-pvp.SetupBuffs.effect` |
 | right-hand grease (sweep) | `maxNum` | `cure_frame` | `er-builds-pvp.Mechanics.grease_plan`, every greased row (it was always-on before) |
 
 A next-hit row (`deleteCriteriaDamage` 1, `stateInfo` 384/385) keeps its per-hit rule: one cast
-per landed hit, `hits` - 1 recasts, whatever the fight length (so Royal Knight's Resolve's 4
-recasts cost 4 casts out of 180-300 s, a smaller share than they did of 25 s). A row's uptime is
-then:
+per landed hit, that point's `hits` - 1 recasts. With the schedule above that is 4 recasts in a
+duel and 15..21 in an invasion, so a per-hit buff's cost now grows with the fight the way a timed
+buff's does (with hits fixed at 5 it was 4 recasts whatever the fight, almost free over 180-300
+s). A row's uptime is then:
 
 | row | uptime | example (180-300 s) |
 |---|---|---|
 | duration -1 | 1 | great runes |
-| one-hit | (1 + recasts) / hits | Uplifting Aromatic's x0.1 guard: 5/5 (it was 1/5); Royal Knight's Resolve: 5/5 |
+| one-hit | (1 + recasts) / that point's hits | Uplifting Aromatic's x0.1 guard: 5/5 in a duel, 10/16..10/22 in an invasion (maxNum 10); Royal Knight's Resolve: full while the FP lasts |
 | under 2 s, or 0 | 0 | Thorny Cracked Tear's 1.5 s tiers; what keeps them alive is not traced |
 | otherwise | (1 + recasts) x duration / fight, capped at 1, mean over the points | a 180 s tear: 0.769 (one charge); a 25 s Drawstring grease: 1 (9 recasts) |
 
@@ -547,6 +613,13 @@ to 0. Royal Knight's Resolve goes from 131 to 410, because a next-hit buff's rec
 landed-hit count (still 5), not the fight length: its 4 recasts at 29 frames cost 15% of a 25 s
 fight and 1.7% of a 180-300 s one. That is an artifact of keeping 5 landed hits in a 3 to 5
 minute fight, not a finding; the hits per fight is the measurement it needs.
+
+With the landed-hit schedule and cerulean-funded recasts (above; combo.md section 11a), Royal
+Knight's Resolve stays first on the Halberd + Iron Cleaver setup (456.3 against Determination
+425.2 and Cragblade 401.1; 464.2 / 431.1 / 385.0 with `--fight-hits 5 --cerulean-flasks 0`, the
+old numbers reproduced), now paying 15.5 recasts and their drinks (time factor 0.928). With one
+FP bar only it leads Cragblade by 8.5 (409.6 / 401.1). The defender factor on a standard hit
+moves 0.8487 -> 0.8855.
 
 **The weapon-buff slot (VERIFIED, params).** The buff ashes store their effect in `spCategory`
 162 (right hand) and 163 (left), the same two categories as the greases. The replay then does

@@ -49,7 +49,9 @@ Per slot, from the sibling mechanics modules (their functions, not a copy of the
   or frost before the next engagement; anyone else keeps the gauge, which refills over
   `ENGAGEMENT_SECONDS`. While a proc is live the next row of that status is refused, so nothing
   builds and nothing refreshes. A proc is credited up to its expiry, the carrier's cure or the end
-  of a `fight_engagements` fight. Its `hp_per_hit` (credited proc HP over the fight / landed hits)
+  of the fight, whose engagements are the landed-hit schedule (`Mechanics.set_fight`: one count
+  per fight point, the HP and flasks to empty at most what the fight length leaves room for, the
+  fight kinds mixed by planner tag). Its `hp_per_hit` (credited proc HP over the fight / landed hits)
   enters the score. The greases this sweep uses carry no status.
 * `--talismans` with an exultation: the slot's damage is scaled by the share of its hits inside
   the buff its own procs start (`exultation_factor`); nothing an attacker wears raises build-up.
@@ -568,11 +570,10 @@ class Mechanics:
         self.buf_m.item_cast_frames = float(self.st.cure_frame())
         self.att_kits = self.buf.corpus_kits(self.buf_m, str(mirror), (lo, hi), SCORE_BUFF_ARCHETYPE, "offense-last")
         self.def_kits = self.buf.corpus_kits(self.buf_m, str(mirror), (lo, hi), None, "defense-last")
-        # The fight the buffs have to cover: `fight_seconds` is the sample points of the 3 to 5
-        # minute range (`er-mechanics-buffs.FIGHT_SECONDS`, `--fight-seconds`), which only buff
-        # uptime and recasts read; `hits` is the landed-hit count, `ENGAGEMENT_SECONDS` apart.
-        self.fight = {"fight_seconds": self.buf.FIGHT_SECONDS, "hits": self.st_dfs.fight_engagements}
-        self.def_buffs = self.buf_m.expected_defense(self.def_kits, **self.fight)
+        # The fight (`set_fight`): its sample points and the landed hits at each, from the
+        # window's rows (tags, flask split, median HP).
+        self.fight_rows = rows
+        self.set_fight()
         # Section 16 of ashes-of-war.md: the reaction dodge on every attack (`react`, with the
         # pool's R1 strike frames `strikes` for the whiff punish once `main` has the pool), and the
         # buff ashes scored as buffs in the option pool (`buff_options`; the corpus-weighted skill
@@ -589,13 +590,67 @@ class Mechanics:
         self.npool = None
         self.neut = NEUT
 
+    def set_fight(self, fight_seconds=None, flasks="corpus", eta=None, pinned=None, cerulean="corpus") -> None:
+        """The fight every buff, recast and status reader takes (buffs.md section 10).
+
+        `fight_seconds` is the sample points of the 3 to 5 minute range
+        (`er-mechanics-buffs.fight_points`, `--fight-seconds`); `hits` the landed hits at each,
+        `er-mechanics-buffs.fight_hits` from the window's median HP, the reference landed hit
+        (`er-mechanics-status.FIGHT_REF_DAMAGE`) and the defender's crimson flasks:
+
+            duel      0 flasks (duel etiquette)
+            invasion  every crimson flask the window carries (median `items.flasks.crimson`, 10)
+            corpus    both, mixed by the window's planner tags (`tag_shares`, `fight_mix`)
+            N         N flasks
+
+        `pinned` sets every point to that many hits (the old fixed count is 5). `cerulean` is the
+        attacker's cerulean flasks for skill recasts (`SetupBuffs.skill`): `corpus` takes the
+        window's median. The status sims take the same schedule (`Defenders.fight_hits`)."""
+        b = self.buf
+        rows = self.fight_rows
+        fs = tuple(fight_seconds) if fight_seconds is not None else tuple(b.FIGHT_SECONDS)
+
+        def median(key, fallback):
+            v = sorted(int(r["flasks"][key]) for r in rows if (r.get("flasks") or {}).get(key) is not None)
+            return v[len(v) // 2] if v else fallback
+
+        crimson = median("crimson", b.CORPUS_CRIMSON)
+        eta = b.FLASK_ETA if eta is None else eta
+        eng = self.st.ENGAGEMENT_SECONDS
+
+        def sched(k):
+            return b.fight_hits(fs, self.st_dfs.median_hp, self.st.FIGHT_REF_DAMAGE, k, b.FLASK_HEAL_HP, eta, eng)
+
+        shares = b.tag_shares(rows)
+        if pinned:
+            points, hits, kind = fs, (int(pinned),) * len(fs), f"pinned {int(pinned)}"
+        elif flasks == "corpus":
+            points, hits = b.fight_mix([(shares["duel"], fs, sched(0)), (shares["flasks"], fs, sched(crimson))])
+            kind = (f"corpus mix: duel {shares['duel']:.3f} (0 flasks), invasion/gank {shares['flasks']:.3f} "
+                    f"({crimson} flasks), tag mentions {shares['mentions'][0]} / {shares['mentions'][1]}")
+        elif flasks == "duel":
+            points, hits, kind = fs, sched(0), "duel (0 flasks)"
+        elif flasks == "invasion":
+            points, hits, kind = fs, sched(crimson), f"invasion ({crimson} flasks)"
+        else:
+            points, hits, kind = fs, sched(int(flasks)), f"{int(flasks)} flasks"
+        self.fight = {"fight_seconds": points, "hits": hits}
+        self.fight_kind = {"kind": kind, "eta": eta, "crimson": crimson, "shares": shares,
+                           "hits_mean": b.hits_mean(hits), "hits_min": min(hits), "hits_max": max(hits)}
+        self.cerulean = median("cerulean", b.CORPUS_CERULEAN) if cerulean == "corpus" else int(cerulean)
+        self.fight_kind["cerulean"] = self.cerulean
+        self.st_dfs.fight_hits = hits
+        self.def_buffs = self.buf_m.expected_defense(self.def_kits, **self.fight)
+        self.ash.FIGHT_SECONDS = points
+        self.__dict__.pop("_grease_plans", None)
+
     def grease_plan(self, tier: str, element: str) -> dict:
         """The right hand's grease of `element` (`OPT.GREASE_NAMES[tier]`) over the fight: its
         category-162 row's duration, recast as every buff is (`er-mechanics-buffs.recast_plan`) at
         most `maxNum` times (`Buffs.source_recast`), each use costing the item clip's goods frame.
         {'uptime', 'recasts', 'time_factor'}, cached."""
         cache = self.__dict__.setdefault("_grease_plans", {})
-        key = (tier, element, self.fight["fight_seconds"])
+        key = (tier, element, self.fight["fight_seconds"], self.fight["hits"])
         if key not in cache:
             name = OPT.GREASE_NAMES[tier][element]
             ents, _ = self.buf_m.resolve([name])
@@ -1180,9 +1235,11 @@ class SetupBuffs:
     Uptime: the first application is before the fight and free (buffs.md section 10). A buff
     that does not cover the fight is either left to lapse or recast by the rule every buff shares
     (`er-mechanics-buffs.recast_plan` over the fight lengths `fight_s`, the 180..300 s sample
-    points: ceil(fight / duration) - 1 recasts, or once per landed hit for a next-hit row, at most
-    what one FP bar pays for, or a grease's `maxNum`), each recast costing its cast's frames of
-    the fight (time factor 1 - recasts x cast / fight). A skill's cast is its opening animation's
+    points: ceil(fight / duration) - 1 recasts, or once per landed hit of that point's schedule
+    (`Mechanics.set_fight`) for a next-hit row, at most what one FP bar and the attacker's
+    cerulean flasks pay for, or a grease's `maxNum`), each recast costing its cast's frames of
+    the fight and each cerulean drink its drink frames (time factor 1 - (recasts x cast + drinks x
+    drink) / fight). A skill's cast is its opening animation's
     first roll frame (`er-mechanics-ashes.anim_recovery`); a grease's is the item-use frame to its
     SpEffect (`er-mechanics-status.cure_frame`, the bolus animation standing in, `INFERRED`). The
     grip change a left skill needs is not counted, nor is the cast's punish exposure."""
@@ -1230,8 +1287,15 @@ class SetupBuffs:
                 if rows:
                     op = ash.main_anim(prof)
                     cast = ash.anim_recovery(t, wid, sid, op).get("dodge") if op is not None else None
+                    # The FP budget: one bar, then each cerulean flask the attacker carries
+                    # (`Mechanics.cerulean`, `CERULEAN_FP` each). `paid[d]` is the casts d drinks
+                    # pay for; each drink a recast needs costs `FLASK_DRINK_FRAMES` of the fight.
+                    cost, buf = ash.skill_fp(t, sid), self.mech.buf
+                    paid = tuple(ash.fp_uses(self.mech.fp_bar + d * buf.CERULEAN_FP, cost)
+                                 for d in range(self.mech.cerulean + 1))
+                    refill = (paid, buf.FLASK_DRINK_FRAMES) if cost > 0 and self.mech.cerulean else None
                     opt = {"kind": "skill", "name": t.arts_name(sid), "sid": sid, "rows": rows, "cast": cast,
-                           "uses": ash.fp_uses(self.mech.fp_bar, ash.skill_fp(t, sid)),
+                           "uses": paid[-1], "refill": refill,
                            "rows_right": self._rows(roots, RIGHT_WEAPON_BUFF_CAT)}
             except (SystemExit, KeyError, StopIteration, TypeError, ValueError):
                 opt = None
@@ -1267,16 +1331,18 @@ class SetupBuffs:
             dur = -1.0 if -1.0 in durs else max(durs)
             # Uptime by `Buffs.uptime`, the rule the buff kits use: a timed row covers duration /
             # fight per cast, a next-hit row (stateInfo 384/385: Royal Knight's Resolve 1703,
-            # Determination 1693) one of the fight's `hits` landed hits per cast. Recasts: as many
-            # as reach full uptime, at most what one FP bar pays for after the free first cast.
-            # The recasts are `er-mechanics-buffs.recast_plan`'s, averaged over the fight lengths.
+            # Determination 1693) one of that fight point's landed hits per cast. Recasts: as many
+            # as reach full uptime, at most what one FP bar and the cerulean flasks pay for after
+            # the free first cast, each drink charged its frames (`refill`). The recasts are
+            # `er-mechanics-buffs.recast_plan`'s, averaged over the fight points.
             hits = self.mech.fight["hits"]
             one_hit = any(self.buf.one_hit(i) for i in key)
             lapse = self.mech.buf.recast_plan(dur, self.fight_s, uses=1, hits=hits, one_hit=one_hit)
             ups = [(lapse["uptime"], 0, 1.0)]
             if ups[0][0] < 1.0:
                 plan = self.mech.buf.recast_plan(dur, self.fight_s, uses=opt.get("uses"),
-                                                 cast_frames=opt.get("cast") or 0.0, hits=hits, one_hit=one_hit)
+                                                 cast_frames=opt.get("cast") or 0.0, hits=hits, one_hit=one_hit,
+                                                 refill=opt.get("refill"))
                 if plan["recasts"] > 0:
                     ups.append((plan["uptime"], round(plan["recasts"], 4), plan["time_factor"]))
             self._eff[key] = {**hand, "duration": dur, "uptimes": ups}
@@ -1796,6 +1862,27 @@ def selftest() -> int:
     check(st.ENGAGEMENT_SECONDS == 5.0 and buf.ENGAGEMENT_SECONDS == 5.0
           and buf.fight_points(100.0, 200.0) != fights and st.ENGAGEMENT_SECONDS == 5.0,
           "the engagement spacing (5 s) is a separate constant from the fight length")
+    # Landed hits per fight point (`Mechanics.set_fight`): a duel drinks no crimson flask, so 5
+    # at every point; an invasion every flask, so the kill needs 22 and the clock holds the
+    # short points below it; the corpus default mixes both by the window's tags; the status sims
+    # read the same schedule.
+    mech.set_fight(flasks="duel")
+    duel = mech.fight["hits"]
+    mech.set_fight(flasks="invasion")
+    inv = mech.fight["hits"]
+    mech.set_fight()
+    mix = mech.fight
+    sh = mech.fight_kind["shares"]
+    check(set(duel) == {5} and max(inv) == 22 and min(inv) < 22 and mech.fight_kind["crimson"] == 10,
+          f"duel 5 hits everywhere, invasion {min(inv)}..{max(inv)} with {mech.fight_kind['crimson']} flasks")
+    check(0.0 < sh["duel"] < 0.5 and len(mix["fight_seconds"]) == len(mix["hits"]) > len(fights)
+          and mech.st_dfs.fight_hits == mix["hits"] and mech.cerulean == 4,
+          f"corpus mix: duel share {sh['duel']:.3f} over {len(mix['hits'])} points, the status sims on the same "
+          f"schedule, 4 cerulean flasks")
+    mech.set_fight(pinned=5)
+    check(set(mech.fight["hits"]) == {5} and mech.st_dfs.fight_hits == mech.fight["hits"],
+          "--fight-hits 5 pins every point, status sims included")
+    mech.set_fight()
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -1967,8 +2054,22 @@ def main() -> int:
     ap.add_argument("--fight-seconds", type=float, nargs=2, metavar=("MIN", "MAX"), default=None,
                     help="fight length range, seconds, that buff uptime and recasts are averaged over "
                          "(default 180 300, er-mechanics-buffs.FIGHT_SECONDS_RANGE; sampled every "
-                         "FIGHT_SAMPLE_STEP_S, equal weights). The landed-hit count and engagement spacing "
-                         "do not change with it")
+                         "FIGHT_SAMPLE_STEP_S, equal weights). The landed hits at each point follow it "
+                         "through their time bound (--flasks)")
+    ap.add_argument("--flasks", default="corpus", metavar="KIND",
+                    help="crimson flasks the defender drinks, for the landed hits per fight point "
+                         "(er-mechanics-buffs.fight_hits; Mechanics.set_fight): duel = 0, invasion = every "
+                         "crimson flask the window carries, corpus (default) = both mixed by the window's "
+                         "planner tags (Duels vs Invasions + Co-op/Gank), or a number")
+    ap.add_argument("--flask-eta", type=float, default=None, metavar="ETA",
+                    help="share of a crimson drink that heals net (default er-mechanics-buffs.FLASK_ETA, 1, INFERRED)")
+    ap.add_argument("--fight-hits", type=int, default=None, metavar="N",
+                    help="pin the landed hits to N at every fight point, buffs and status sims alike "
+                         "(5 = the fixed count before 2026-10-01)")
+    ap.add_argument("--cerulean-flasks", default="corpus", metavar="N",
+                    help="cerulean flasks (220 FP each at +12) the attacker spends on --setup left-hand skill "
+                         "recasts, each drink charged FLASK_DRINK_FRAMES; corpus (default) = the window's "
+                         "median, 0 = one FP bar")
     ap.add_argument("--fight-window", type=float, metavar="S",
                     help="stamina budget window, seconds (default er-mechanics-exchange.FIGHT_WINDOW_S, INFERRED)")
     ap.add_argument("--multi-hit-escape", action="store_true",
@@ -2023,18 +2124,25 @@ def main() -> int:
         # Every reader of the engagement spacing takes it from here, before the workers fork.
         mech.st.ENGAGEMENT_SECONDS = a.engagement_seconds
         mech.ash.ENGAGEMENT_SECONDS = a.engagement_seconds
-    if a.fight_seconds is not None:
-        # Only the buffs read the fight length; the same before the workers fork.
-        mech.fight["fight_seconds"] = mech.buf.fight_points(*a.fight_seconds)
-        mech.def_buffs = mech.buf_m.expected_defense(mech.def_kits, **mech.fight)
-        mech.ash.FIGHT_SECONDS = mech.fight["fight_seconds"]
+    # The fight's points and landed hits, after the engagement spacing it reads; the same before
+    # the workers fork.
+    if a.flasks not in ("corpus", "duel", "invasion") and not a.flasks.isdigit():
+        ap.error("--flasks is corpus, duel, invasion or a number")
+    if a.cerulean_flasks != "corpus" and not a.cerulean_flasks.isdigit():
+        ap.error("--cerulean-flasks is corpus or a number")
+    mech.set_fight(mech.buf.fight_points(*a.fight_seconds) if a.fight_seconds is not None else None,
+                   flasks=a.flasks, eta=a.flask_eta, pinned=a.fight_hits, cerulean=a.cerulean_flasks)
+    fk = mech.fight_kind
+    print(f"# fight: {fk['kind']}; landed hits {fk['hits_min']}..{fk['hits_max']} (mean {fk['hits_mean']:.2f}) "
+          f"over {len(mech.fight['fight_seconds'])} points; attacker cerulean flasks {fk['cerulean']}",
+          file=sys.stderr)
     if a.fight_window is not None:
         EXCH.FIGHT_WINDOW_S = a.fight_window
     mech.ash.DISENGAGE = a.disengage
     if a.sustain:
         global SUSTAIN
         regen = mech.buf.corpus_regen(mech.buf_m, str(a.mirror), (a.rl - a.window, a.rl + a.window))
-        eng_s, n_fight = mech.st.ENGAGEMENT_SECONDS, mech.st_dfs.fight_engagements
+        eng_s, n_fight = mech.st.ENGAGEMENT_SECONDS, round(mech.buf.hits_mean(mech.fight["hits"]))
         fixed = mech.buf.sustain_factor(mech.buf_m, regen, lambda n: n * eng_s, engagements=n_fight)
         memo: dict = {}
 
@@ -2353,7 +2461,7 @@ def main() -> int:
 
     if a.json:
         print(json.dumps({"rl": a.rl, "defenders": defenders.n, "distribution": defenders.distribution(),
-                          "results": results}, indent=1))
+                          "fight": mech.fight_kind, "results": results}, indent=1))
         return 0
     print(f"RL {a.rl}: scored against {defenders.n} PvP builds of RL {a.rl - a.window}-{a.rl + a.window} "
           f"(dmg = mean over them, med = their median defender); PvP rates applied; frames at 30 fps; "
@@ -2408,7 +2516,8 @@ def main() -> int:
               f"reach m (i = class median, no pose); adv/advS = frame advantage when poise holds / breaks; "
               f"status = engagements to the first proc on a non-carrier (an engagement = the first hit plus its true "
               f"combos; {mech.st_dfs.n} builds, gauge refill between engagements, one proc live at a time); "
-              f"stHP = expected status HP per landed hit in a fight of {mech.st_dfs.fight_engagements} engagements, in the score; "
+              f"stHP = expected status HP per landed hit over the fight schedule "
+              f"(mean {mech.fight_kind['hits_mean']:.1f} engagements), in the score; "
               f"carP% = share of bolus carriers it procs within one engagement; "
               f"skill = the weapon's own skill, best single hit vs the median defender; "
               f"base = moveset score before the skill term, sk+ = SKILL_WEIGHT x the best skill it can "

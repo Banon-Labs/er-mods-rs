@@ -54,7 +54,7 @@ Library interface for `scripts/er-builds-pvp.py` (and anything else):
         # status (`EXCLUSIVE_CATEGORY_MIN`), a DoT cut at the cure or the fight end; returns
         # {status: {'hp_per_hit', 'engagements_to_proc', 'proc_share', 'procs_per_hit', ...}}
 """
-import argparse, importlib.util, json, math, os, statistics, struct, sys
+import argparse, collections, importlib.util, json, math, os, statistics, struct, sys
 from pathlib import Path
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -465,10 +465,12 @@ def corpus_rows(path=CORPUS, rl=150, window=10, pvp_only=True):
         # carries (717 of the 1074 RL 150 PvP builds, `MEASURED`), so `tools` is None there.
         tools = ((b.get('items') or {}).get('tools') or {}).get('slots') or []
         talismans = (b.get('talismans') or {}).get('slots') or []
+        # The planner's flask split, `items.flasks` {level, crimson, cerulean}, or None.
+        flasks = (b.get('items') or {}).get('flasks') or None
         out.append({'stats': st, 'resist': {g: res[g] for g in GROUPS}, 'hp': c['maxHealth'],
                     'two_handed': bool(b.get('is2h')), 'right': right, 'tags': b.get('tags') or [],
                     'tools': {s['name'] for s in tools} if tools else None,
-                    'talismans': sorted({s['name'] for s in talismans})})
+                    'talismans': sorted({s['name'] for s in talismans}), 'flasks': flasks})
     return out
 
 
@@ -686,8 +688,13 @@ class Defenders:
         self.n = len(rows)
         self.share = bolus_share(t, rows)
         self.median_hp = quantiles([r['hp'] for r in rows], (0.5,)).get(0.5, 0.0)
-        #: Engagements in a fight: the median defender's HP over `FIGHT_REF_DAMAGE`, rounded up.
+        #: Engagements to empty one HP bar: the median defender's HP over `FIGHT_REF_DAMAGE`,
+        #: rounded up, no flask drunk.
         self.fight_engagements = max(1, math.ceil(self.median_hp / FIGHT_REF_DAMAGE))
+        #: Engagements a fight runs, the `status_expected` default: a count, or a schedule over
+        #: fight points (`er-mechanics-buffs.fight_hits`) that the ranking sets once it has
+        #: derived one. Until then, the one-bar count.
+        self.fight_hits = self.fight_engagements
         self.groups = {}
         for s in NAMES:
             grp, bol, acc = GROUP_OF[s], t.bolus.get(s), {}
@@ -798,7 +805,10 @@ def status_expected(t, ws, attack, dfs, grease=None, gap=None, react=(0, 0), sta
     when the defender can escape the next hit; `gap` stands in for a link without one. `react` is
     the defender's damage level with poise intact and broken, `stagger` the share that breaks: the
     carrier's cure lands `cure_ready` + `DOT_CURE_DELAY` frames after the engagement's last hit.
-    A fight is `engagements` (default `dfs.fight_engagements`) engagements `eng_s` seconds apart.
+    A fight is `engagements` (default `dfs.fight_hits`) engagements `eng_s` seconds apart; a
+    sequence is a schedule (one count per fight point), and each distinct count is simulated and
+    weighted by how many points carry it, so `hp_per_hit` pools every point's procs over every
+    point's landed hits.
     Per defender group, carriers (the group's carry share) and non-carriers are each run through
     `simulate` for every engagement length. Returns per status: `hp_per_hit` (credited proc HP
     over the fight / landed hits in it, all defenders), `procs_per_hit`, `hits_per_engagement`,
@@ -809,7 +819,13 @@ def status_expected(t, ws, attack, dfs, grease=None, gap=None, react=(0, 0), sta
     chain = list(chain or [])
     lengths = engagement_lengths(chain)
     mean_len = sum(n * w for n, w in lengths)
-    n_f = engagements or dfs.fight_engagements
+    sched = engagements or getattr(dfs, 'fight_hits', None) or dfs.fight_engagements
+    if isinstance(sched, (tuple, list)):
+        counts = collections.Counter(int(n) for n in sched)
+        regimes = [(n, c / len(sched)) for n, c in sorted(counts.items())]
+    else:
+        regimes = [(int(sched), 1.0)]
+    n_f = sum(n * w for n, w in regimes)
     cure_at = (1.0 - stagger) * cure_ready(react[0]) + stagger * cure_ready(react[1])
     cure_s = (cure_at + DOT_CURE_DELAY) / FPS
     per_use = [use_buildup(t, ws, attack, grease)] + [use_buildup(t, ws, c['attack'], grease) for c in chain]
@@ -845,12 +861,13 @@ def status_expected(t, ws, attack, dfs, grease=None, gap=None, react=(0, 0), sta
                 weight[mode] += w * cnt
                 for n_hits, p_len in lengths:
                     b, g = tuple(builds[:n_hits]), tuple(gaps[:n_hits - 1])
-                    end = (n_f - 1) * eng_s + sum(g) / FPS
                     k = w * p_len
-                    pr, cr, _ = simulate(b, g, r, recover, lock, mode == 'carrier', n_f, eng_s, end, dot,
-                                         ticks, iv, cure_s)
-                    credited += k * per_tick * cr
-                    procs += k * cnt * pr
+                    for n_e, w_e in regimes:
+                        end = (n_e - 1) * eng_s + sum(g) / FPS
+                        pr, cr, _ = simulate(b, g, r, recover, lock, mode == 'carrier', n_e, eng_s, end, dot,
+                                             ticks, iv, cure_s)
+                        credited += w_e * k * per_tick * cr
+                        procs += w_e * k * cnt * pr
                     _, _, first = simulate(b, g, r, recover, lock, mode == 'carrier', ENGAGEMENT_LIMIT,
                                            eng_s, None, dot, ticks, iv, cure_s)
                     if first:
@@ -1265,6 +1282,13 @@ def selftest(t):
     check('Preserving Boluses cut the credited rot', carried['proc_hp_credited'] < none['proc_hp_credited'], True)
     check('a short fight cuts the credited rot', none['proc_hp_credited'] < none['proc_hp'], True)
     check('a longer fight credits more of it', long['proc_hp_credited'] > none['proc_hp_credited'], True)
+    # A schedule (one count per fight point) pools every point's procs over every point's hits.
+    short = status_expected(t, rot_ws, unc, Defenders(t, [bare]), chain=rot_chain, engagements=5)['scarlet_rot']
+    mix = status_expected(t, rot_ws, unc, Defenders(t, [bare]), chain=rot_chain,
+                          engagements=(5, 18, 18, 18))['scarlet_rot']
+    pooled = (0.25 * 5 * short['hp_per_hit'] + 0.75 * 18 * long['hp_per_hit']) / (0.25 * 5 + 0.75 * 18)
+    check('a schedule 5 / 18 / 18 / 18: pooled HP per hit, mean engagements 14.75',
+          (round(mix['hp_per_hit'], 6), mix['fight_engagements']), (round(pooled, 6), 14.75))
     check('a whole 90-tick DoT, then a new proc only once it has expired (t = 90 s)',
           simulate((400,), (), 300, 4.0, 90.0, False, 19, 5.0, 93.0, True, 90, 1.0)[:2], (2, 94))
     print(f'{n - bad}/{n} passed')

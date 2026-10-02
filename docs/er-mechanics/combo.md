@@ -741,9 +741,10 @@ stick of section 10f is therefore a two-hand buff by the data, not a body buff.
 - Uptime `er-mechanics-buffs.recast_plan` (fight 180..300 s since 2026-10-01, mean over 13
   points; it was 25 s = 5 engagements x 5 s, buffs.md section 10): first cast free; a buff that
   lapses is either left to lapse or recast (timed: ceil(fight / duration) - 1; next-hit: once per
-  landed hit), capped by one FP bar (a grease: its `maxNum`), each recast costing its cast frames
-  of the fight. The right hand's grease is recast and charged the same way, only where the right
-  hand keeps it (`Mechanics.grease_plan`).
+  landed hit of that fight point, buffs.md section 10's schedule), capped by one FP bar plus the
+  attacker's cerulean flasks (a grease: its `maxNum`), each recast costing its cast frames of the
+  fight and each cerulean drink 54 frames. The right hand's grease is recast and charged the same
+  way, only where the right hand keeps it (`Mechanics.grease_plan`).
 - Choice: the (affinity, option) whose L1 #1 is worth most (damage + status HP, x time factor).
 - Right hand: the sweep's grease, or the chosen skill's 162 row in its place (`spill`: every
   right slot re-hit with it, status rerun), whichever scores the moveset higher. Also tried: the
@@ -865,6 +866,38 @@ Why it went this way, and what it does and does not test:
   now recast before each hit (buffs.md section 10: defender factor 0.917 -> 0.849). That is
   roughly uniform across weapons; it lowers every absolute score and the no-left baseline.
 - Not charged: the cast's punish window (the next gap), the grip change a left skill needs.
+
+### Landed hits per fight point and cerulean flasks (2026-10-01, later the same day)
+
+The 5-hit artifact above is gone: `hits` is now buffs.md section 10's schedule (HP plus the
+crimson flasks drunk, held to what each fight length leaves room for), mixed by planner tag
+(duel 0.255 with 5 hits everywhere, invasion/gank 0.745 with 16..22; 52 points, mean 16.5), and a
+left skill's recasts are funded by one FP bar plus the attacker's 4 cerulean flasks (220 FP each),
+each drink charged 54 frames. Halberd 1H (Heavy, lightning grease) + Iron Cleaver Heavy, L1 #1
+value per left option (`--rl 150 --weapon Halberd --one-handed --setup --setup-lefts "Iron
+Cleaver" --json`):
+
+| run | Royal Knight's Resolve | Determination | Cragblade | Braggart's Roar | kept (uptime, recasts, time factor) | setup score |
+|---|---|---|---|---|---|---|
+| `--fight-hits 5 --cerulean-flasks 0` (the old model) | **464.2** | 431.1 | 385.0 | 366.5 | RKR (1.0, 4, 0.9835) | 898.5 |
+| default (corpus mix, 4 cerulean) | **456.3** | 425.2 | 401.1 | 381.8 | RKR (1.0, 15.54, 0.9279) | 876.9 |
+| `--flasks invasion` (16..22 hits, 4 cerulean) | **453.2** | 422.7 | 406.4 | 386.9 | RKR (1.0, 19.38, 0.9093) | 868.9 |
+| default mix, `--cerulean-flasks 0` (one FP bar) | **409.6** | 401.0 | 401.1 | 381.8 | RKR | 791.5 |
+
+- The pinned row reproduces the 5-hit numbers above exactly (VERIFIED repro: same values to the
+  tenth).
+- Royal Knight's Resolve stays first, now for a stated reason: the cerulean flasks pay for one
+  recast per landed hit (15.5 on average), and the drinks plus 29-frame casts cost 7% of the
+  fight (time factor 0.928, against 0.984 at 5 hits). Its lead over Cragblade shrinks from 79 to
+  55.
+- Without cerulean on recasts its lead is 8.5 points, held up by the duel quarter of the points
+  (5 hits, where one bar is enough); the scratchpad dig's no-cerulean runs had Cragblade first from
+  18 hits on. So the order hinges on one unmeasured habit: whether players drink cerulean flasks
+  to keep a per-hit weapon buff up through a long fight.
+- Cragblade rises (385.0 -> 401.1 / 406.4) without any change to its own uptime: the defender
+  factor on a standard hit goes 0.8487 -> 0.8855 (default) / 0.8978 (invasion) (MEASURED, the
+  rows' `buff.def`). Uplifting Aromatic's one-hit x0.1 guard (maxNum 10) covers every one of 5
+  hits but only 10 of 16..22, which is the INFERRED cause (the per-source split was not printed).
 
 The flag stays off by default.
 
