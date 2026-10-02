@@ -6,7 +6,7 @@ named Ghidra dump on :8765, shift 0 against `eldenring-deobf.bin`) or a value in
 consistent with the data, consuming code not traced; **COMMUNITY** = outside claim (Smithbox row
 names, wiki); **MEASURED** = counted in the planner corpus. Nothing was launched.
 
-Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 96/96.
+Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 97/97.
 
 ## 0. In plain words
 

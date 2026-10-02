@@ -352,6 +352,11 @@ def opponent_pool(reg, mirror: Path = CACHE / "builds.jsonl", rl_lo: int = 140, 
     return pool
 
 
+#: The bound on the priced net (`priced_net`) when trades are priced (`Pool.trade_clamp`):
+#: `INFERRED`, kept at 1 so the contest factor keeps the 1 -+ `EXCHANGE_WEIGHT` span it has
+#: unpriced and pricing cannot double the contest's weight against the other factors. It binds on
+#: 398 of 2371 family contests of the RL 150 ranking (exchange.md section 2a).
+TRADE_CLAMP = 1.0
 #: The damage of one opponent hit when the ranking has no row for its weapon and grip: the
 #: pool-weighted mean of the RL 150 ranking's R1 #1 `dmg` (`er-mechanics-ashes.OPPONENT_FALLBACK`
 #: 'hp', `MEASURED` 2026-09-29; its selftest checks the two agree).
@@ -387,6 +392,9 @@ class Pool:
         self.build_prof = np.array([idx[k] for k, _ in pool["builds"]], int)
         self.build_poise = np.array([p for _, p in pool["builds"]], float)
         self.weight = None
+        # None: a trade counts 0 in the contest (the default); a number: trades are priced by
+        # damage (`priced_net`) and the priced net is bounded by it.
+        self.trade_clamp = None
         self.my_poise = np.sort(np.array(pool["poise"], float))
         self.n = len(self.build_prof)
         self.bar = pool["bar"]
@@ -422,6 +430,7 @@ class Pool:
         p.build_poise = np.array([e[1] for e in entries], float)
         w = np.array([e[2] for e in entries], float)
         p.weight = w / w.sum()
+        p.trade_clamp = getattr(base, "trade_clamp", None)
         p.my_poise, p.n, p.bar, p.ref_per_bar = base.my_poise, len(entries), base.bar, base.ref_per_bar
         return p
 
@@ -447,8 +456,31 @@ def _window_at(windows, frame):
 # --------------------------------------------------------------------------------------------
 # one slot
 
-def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple]) -> dict:
-    """Outcome shares of the simultaneous exchange of one attack against the pool."""
+def priced_net(pool, win_b, loss_b, dmg: float) -> float:
+    """The contest's net with trades priced by damage (exchange.md section 2a): per entry k,
+    `hp_k = (win_k + trade_k) x dmg - (loss_k + trade_k) x D_k` over the pair's mean hit
+    `(dmg + D_k) / 2`, then the pool mean. Equal hits give `win - loss` exactly; a trade is worth
+    what my hit outdamages theirs by."""
+    d_k = pool.dmg[pool.build_prof]
+    win_b, loss_b = np.asarray(win_b, float), np.asarray(loss_b, float)
+    trade_b = 1.0 - win_b - loss_b
+    hp = (win_b + trade_b) * dmg - (loss_b + trade_b) * d_k
+    return pool.mean(hp / ((dmg + d_k) / 2.0))
+
+
+def contest_factor(pool, win_b, loss_b, dmg: float | None) -> tuple[float, float | None]:
+    """(factor, priced net or None): `1 + EXCHANGE_WEIGHT x net`, the net priced and bounded by
+    `pool.trade_clamp` when that is set and the attack's `dmg` is known, else `win - loss`."""
+    clamp = getattr(pool, "trade_clamp", None)
+    if clamp is None or not dmg:
+        return 1.0 + EXCHANGE_WEIGHT * (pool.mean(win_b) - pool.mean(loss_b)), None
+    net = priced_net(pool, win_b, loss_b, float(dmg))
+    return 1.0 + EXCHANGE_WEIGHT * max(-clamp, min(clamp, net)), net
+
+
+def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple], dmg: float | None = None) -> dict:
+    """Outcome shares of the simultaneous exchange of one attack against the pool. `dmg` is the
+    attack's own hit, read only when the pool prices trades (`Pool.trade_clamp`)."""
     first = pool.startup > startup      # per profile: I hit first
     second = pool.startup < startup
     # I hit first at `startup`: the opponent's window at that frame decides.
@@ -463,15 +495,18 @@ def exchange(pool: Pool, startup: float, poise_dealt: float, hyper: list[tuple])
     room = dealt - np.array([b for b, _ in mine])
     p_break_me = np.searchsorted(pool.my_poise, room, side="right") / len(pool.my_poise)
     f_b, s_b = first[pool.build_prof], second[pool.build_prof]
-    win = pool.mean(f_b & breaks_them)
-    loss = pool.mean(np.where(s_b, p_break_me[pool.build_prof], 0.0))
+    win_b, loss_b = f_b & breaks_them, np.where(s_b, p_break_me[pool.build_prof], 0.0)
+    win, loss = pool.mean(win_b), pool.mean(loss_b)
     p_first, p_second = pool.mean(f_b), pool.mean(s_b)
     trade = 1.0 - win - loss
     net, naive = win - loss, p_first - p_second
-    f_ex = 1.0 + EXCHANGE_WEIGHT * net
+    f_ex, net_hp = contest_factor(pool, win_b, loss_b, dmg)
+    if net_hp is None:
+        f_ex = 1.0 + EXCHANGE_WEIGHT * net
     f_st = 1.0 + EXCHANGE_WEIGHT * naive
+    priced = {} if net_hp is None else {"net_hp": net_hp}
     return {"p_first": p_first, "p_second": p_second, "p_same": 1.0 - p_first - p_second,
-            "win": win, "loss": loss, "trade": trade, "net": net,
+            "win": win, "loss": loss, "trade": trade, "net": net, **priced,
             # Of the exchanges the opponent strikes first, the share I keep swinging through.
             "trade_through": (1.0 - loss / p_second) if p_second else None,
             # Of the exchanges I strike first, the share my hit interrupts.
@@ -721,7 +756,7 @@ def slot_exchange(pool: Pool, reg, weapon_id: int, atk: dict, hit: dict, entry: 
     else:
         delay = None if _has_contact(hit.get("front_contact")) else _fallback_delay(weapon_id, atk["slot"])
         start, source = strike_frame(hit, lead, delay)
-        ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry))
+        ex = exchange(pool, start + entry, hit["poise"], hyper_windows(atk, lead + entry), hit.get("dmg"))
         ex["strike_frame"], ex["strike_source"] = start + entry, source
     return {**ex, **st, "factor": ex["f_exchange"] * st["f_stamina"]}
 
@@ -767,6 +802,24 @@ def selftest() -> int:
     e = exchange(heavy, 5.0, 100.0, [])
     check(abs(e["win"] - 0.25) < 1e-12 and abs(e["trade"] - 0.75) < 1e-12,
           f"entry weights: the slow build thrown three times as often trades 3/4 of the time ({e['trade']})")
+    # Priced trades, by hand: against `heavy` at frame 5 with 100 poise and a 600 hit, the fast
+    # build (D 300, weight 1/4) is a win, (600 + 0) / 450; the slow one (D 600, 3/4) a trade,
+    # (600 - 600) / 600. Net 1/4 x 4/3 = 1/3 against 1/4 unpriced.
+    heavy.trade_clamp = 1.0
+    p = exchange(heavy, 5.0, 100.0, [], 600.0)
+    check(abs(p["net_hp"] - 1.0 / 3.0) < 1e-12 and abs(p["f_exchange"] - (1 + EXCHANGE_WEIGHT / 3.0)) < 1e-12
+          and abs(p["f_startup"] * p["f_hyper"] - p["f_exchange"]) < 1e-12,
+          f"priced trades: net 1/3 ({p['net_hp']:.4f}), f_startup x f_hyper still f_exchange")
+    small = exchange(heavy, 5.0, 100.0, [], 150.0)
+    check(small["net_hp"] < 0 < p["net_hp"] and small["win"] == p["win"],
+          f"the same outcomes with a 150 hit lose the trades ({small['net_hp']:.3f})")
+    big = exchange(heavy, 5.0, 100.0, [], 5000.0)
+    check(big["net_hp"] > 1.0 and big["f_exchange"] == 1.0 + EXCHANGE_WEIGHT,
+          f"the priced net is bounded by the clamp ({big['net_hp']:.3f} -> {big['f_exchange']})")
+    heavy.trade_clamp = None
+    check(exchange(heavy, 5.0, 100.0, [], 600.0)["f_exchange"] == 1.0 + EXCHANGE_WEIGHT * 0.25
+          and "net_hp" not in exchange(heavy, 5.0, 100.0, [], 600.0),
+          "unpriced (the default) a trade counts 0, whatever the damage")
     s_lo = stamina_factor_swings(syn, 40.0)["f_stamina_swings"]
     s_hi = stamina_factor_swings(syn, 15.0)["f_stamina_swings"]
     check(s_lo < 1.0 < s_hi and s_hi <= STAMINA_CLAMP[1],

@@ -2532,8 +2532,8 @@ def utility_value(t, sword_arts_id, weapon_id, eng, opp):
             fwd = min(prof['moves'], key=lambda m: m['path'][-1][1])
             tool = n.tool_from_motion(fwd)
             args = (npool, ni['strike'], ni['reach'], ni['poise'], ni['hyper'], ni.get('active') or 3.0)
-            with_roll = n.neutral_exchange(*args, tools=n.DEFAULT_TOOLS)
-            with_step = n.neutral_exchange(*args, tools=tuple(n.DEFAULT_TOOLS) + (tool,))
+            with_roll = n.neutral_exchange(*args, tools=n.DEFAULT_TOOLS, dmg=eng.get('dmg'))
+            with_step = n.neutral_exchange(*args, tools=tuple(n.DEFAULT_TOOLS) + (tool,), dmg=eng.get('dmg'))
             gain = (1.0 - REACT_SHARE) * hp_me * (with_step['f_neutral'] - with_roll['f_neutral'])
             out.update(hp=out['hp'] + gain, neutral_gain_hp=gain,
                        neutral={'roll': with_roll['f_neutral'], 'step': with_step['f_neutral'],
@@ -3812,6 +3812,9 @@ def selftest():
                'slots': {'r1_1': {'startup': 14.0, 'front_contact': {'2.5': 16.0}, 'dmg': 300.0, 'next': 30.0}}}
     jump = {'jump_r1_f': {'startup': 20.0, 'jump_entry': 6.0, 'front_contact': {'2.5': 17.5}, 'dmg': 500.0,
                           'next': 50.0, 'neutral_in': {'strike': 22.0}}}
+    check("the exchange pool's damage fallback is this module's opponent fallback hit",
+          _load('er_mechanics_exchange', 'er-mechanics-exchange.py').OPPONENT_HP_FALLBACK, OPPONENT_FALLBACK['hp'],
+          'er-mechanics-exchange.OPPONENT_HP_FALLBACK')
     row_b = {'weapon': 'B', 'two': False, 'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 1.0}}},
              'slots': fam_row['slots']}
     pool_raw = {'builds': [['A|1h', 50.0], ['B|1h', 50.0]]}

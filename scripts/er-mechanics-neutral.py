@@ -300,15 +300,15 @@ def _window_at(windows, frame):
 
 def neutral_exchange(npool: NeutralPool, strike: float, reach: float, poise: float, hyper: list,
                      active: float = 3.0, tools=DEFAULT_TOOLS, weight: float | None = None,
-                     k: float | None = None) -> dict:
+                     k: float | None = None, dmg: float | None = None) -> dict:
     """The exchange of one attack against the pool, started from the neutral game (module
     docstring). `strike` is the attack's strike frame 2.5 m ahead (`er-mechanics-exchange`
     `strike_frame`), `reach` its world reach, `poise` its PvP poise damage (menu x saRate),
     `hyper` its TAE 795 windows [(start, end, bonus, multiplier)] from its own start, `active`
     its live frames, `tools` the dodges the attacker may close with, `k` the attacker's frames a
-    metre when he closes slower than a run (a held crouch, `er-mechanics-timing-mixup`). Returns
-    the outcome shares, `f_neutral`, and the shares of the pool it outreaches and that must
-    approach it."""
+    metre when he closes slower than a run (a held crouch, `er-mechanics-timing-mixup`), `dmg` its
+    own hit, read only when the pool prices trades (`trade_clamp`). Returns the outcome shares,
+    `f_neutral`, and the shares of the pool it outreaches and that must approach it."""
     ex = _mod("er-mechanics-exchange")
     p = npool.pool
     w = ex.EXCHANGE_WEIGHT if weight is None else weight
@@ -335,13 +335,22 @@ def neutral_exchange(npool: NeutralPool, strike: float, reach: float, poise: flo
     f_b, s_b = first[p.build_prof], second[p.build_prof]
     # A hit that lands on a player whose own hit whiffed has nothing to trade against.
     whiff_b, iwhiff_b = (they_miss & ~i_miss)[p.build_prof], (i_miss & ~they_miss)[p.build_prof]
-    win = p.mean(f_b & (breaks_them | whiff_b))
-    loss = p.mean(np.where(s_b, np.where(iwhiff_b, 1.0, p_break_me[p.build_prof]), 0.0))
+    win_b = f_b & (breaks_them | whiff_b)
+    loss_b = np.where(s_b, np.where(iwhiff_b, 1.0, p_break_me[p.build_prof]), 0.0)
+    win, loss = p.mean(win_b), p.mean(loss_b)
     outreach = p.mean((npool.reach < reach)[p.build_prof])
-    return {"win": win, "loss": loss, "trade": 1.0 - win - loss, "net": win - loss,
+    f = 1.0 + w * (win - loss)
+    priced = {}
+    clamp = getattr(p, "trade_clamp", None)
+    if clamp is not None and dmg:
+        # Trades priced by damage (`er-mechanics-exchange.priced_net`, exchange.md section 2a).
+        net_hp = ex.priced_net(p, win_b, loss_b, float(dmg))
+        f = 1.0 + w * max(-clamp, min(clamp, net_hp))
+        priced = {"net_hp": net_hp}
+    return {"win": win, "loss": loss, "trade": 1.0 - win - loss, "net": win - loss, **priced,
             "p_first": p.mean(f_b), "p_second": p.mean(s_b),
             "outreach": outreach, "dodge_in": p.mean((my_ifr > 0)[p.build_prof]),
-            "f_neutral": 1.0 + w * (win - loss), "strike": strike, "reach": reach,
+            "f_neutral": f, "strike": strike, "reach": reach,
             "tools": [x if isinstance(x, str) else x.get("anim") for x in tools]}
 
 
@@ -358,7 +367,7 @@ def slot_neutral(npool: NeutralPool, slot: dict, atk: dict | None, entry: float 
     lead = (atk or {}).get("release_lead_in") or 0.0
     hyper = _mod("er-mechanics-exchange").hyper_windows(atk or {}, lead + entry)
     return neutral_exchange(npool, strike, reach, slot.get("poise") or 0.0, hyper,
-                            slot.get("active") or 3.0, tools, k=k)
+                            slot.get("active") or 3.0, tools, k=k, dmg=slot.get("dmg"))
 
 
 # --------------------------------------------------------------------------------------------
@@ -459,6 +468,14 @@ def selftest() -> int:
     check(abs(cov["r1_fallback"] - 0.5) < 1e-12 and abs(cov["dropped"]["move"] - 0.2) < 1e-12
           and abs(cov["openers"]["jump_r1_f"] - 0.25) < 1e-12 and sorted(fam.pool.dmg) == [300.0, 388.0, 500.0],
           f"coverage: B falls back, the run R1 is dropped, rows carry their own dmg ({cov})")
+    # Priced trades on the first synthetic pool (both builds hit for 400): an 800 hit that beats
+    # the short build and loses to the long one is net (800 / 600 - 400 / 600) / 2 = 1/3, not 0.
+    p.trade_clamp = 1.0
+    pr = neutral_exchange(npool, 16.0, 4.0, 100.0, [], dmg=800.0)
+    check(abs(pr["net_hp"] - 1.0 / 3.0) < 1e-12 and abs(pr["f_neutral"] - (1.0 + 0.25 / 3.0)) < 1e-12
+          and neutral_exchange(npool, 16.0, 4.0, 100.0, [])["f_neutral"] == 1.0,
+          f"priced trades: net 1/3 with an 800 hit ({pr['net_hp']:.4f}); no damage given, unpriced")
+    p.trade_clamp = None
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 

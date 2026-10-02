@@ -4,7 +4,7 @@ Labels as in the other files here: **VERIFIED** = regulation value or traced EXE
 **MEASURED** = computed by the commands below from the regulation and the corpus mirror,
 **INFERRED** = a modelling choice or an untraced consumer. Nothing was launched.
 
-Tool: `scripts/er-mechanics-exchange.py` (`--selftest` passes 31/31 with the de-Arxan'd images present). `er-builds-pvp.py` shows
+Tool: `scripts/er-mechanics-exchange.py` (`--selftest` passes 35/35 with the de-Arxan'd images present, 30/30 without). `er-builds-pvp.py` shows
 startup (first active frame), hyperarmor and stamina per slot, and its `--sort score` reads none
 of them. This module turns the three into factors measured against the attacks the RL window's
 PvP builds actually carry.
@@ -82,8 +82,54 @@ f_hyper    = f_exchange / f_startup                       what poise and hyperar
 
 `f_startup x f_hyper = f_exchange` exactly (selftest), so the score multiplies `f_exchange` once.
 `EXCHANGE_WEIGHT` 0.25 gives the factor the span of the existing frame-advantage factor
-(`SCORE_ADV_WEIGHT` at +-30 frames). A trade counts 0 in `net` (INFERRED: its value depends on
-both hits' damage, and the opponent's damage would need the opponent's AR).
+(`SCORE_ADV_WEIGHT` at +-30 frames). By default a trade counts 0 in `net`; `--trades priced`
+prices it (section 2a).
+
+### 2a. Priced trades (`--trades priced`, `priced_net`)
+
+A trade is two hits landing, so what it is worth depends on whose hit is bigger. The opponent's
+hit is the pool row's `dmg` (section 1: the ranking's own corpus-mean damage of that weapon and
+grip, so a hit on a corpus-typical armor set, the same footing as the scored slot's `dmg`). Per
+pool entry k:
+
+```
+trade_k = 1 - win_k - loss_k
+hp_k    = (win_k + trade_k) x D_me - (loss_k + trade_k) x D_k
+net_hp  = mean_k [ hp_k / ((D_me + D_k) / 2) ]       = win - loss exactly when D_me = D_k
+f       = 1 + EXCHANGE_WEIGHT x clamp(net_hp, -TRADE_CLAMP, TRADE_CLAMP)
+```
+
+The same expression replaces `win - loss` in `f_exchange` here and in `f_neutral`
+(neutral.md section 3), for slots, jump openers, skill options and the dodge-skill rerun.
+`f_startup` is unchanged, so `f_hyper = f_exchange / f_startup` now carries the trade price too.
+Without `--opponents-from` every `D_k` is 388 (`OPPONENT_HP_FALLBACK`).
+
+**The clamp, `TRADE_CLAMP` = 1 (INFERRED, decided on the measurement below).** On the RL 150
+ranking (822 rows, `scripts/er-builds-trade-dig.py`, the stored slots re-scored) the priced net of
+the scored neutral contests has p1/p10/p50/p90/p99 = -1.35 / -1.07 / -0.49 / +0.65 / +1.06, min
+-1.47, max +1.27; the clamp binds on 398 of 2371 contests, 338 of them on the losing side (a
+light hit trading into a heavy one). Clamped and unclamped rank alike: |rank change| between them
+median 0, p90 1, max 21, and adoption rho .4620 against .4622 (CI of each against unpriced
+[-.0036, +.0076] / [-.0036, +.0079]). So the corpus cannot choose. The clamp is kept because it
+leaves the contest factor the span it had unpriced, 1 -+ 0.25, the span the other factors were
+weighed against; unclamped, pricing would also raise the contest's weight (to about 0.63 - 1.32)
+under cover of a correctness fix.
+
+Measured effect, clamp 1, against unpriced:
+- trade share of the neutral contest median 0.13 (p10/p90 0.09 / 0.40); of the 2.5 m exchange
+  0.33 (0.12 / 0.63);
+- |rank change| median 5, p90 20, max 67; top 20 keeps 17, top 30 keeps 26;
+- adoption rho, all weapons .4601 -> .4620 (d +.0019, CI [-.0036, +.0076]), adopted .2638 ->
+  .2627 (CI [-.0135, +.0125]): neither confirmed nor refuted;
+- by class, mean rank change: colossal weapons +21.5, colossal swords +17.7, great hammers +8.5,
+  twinblades +5.6, greataxes +4.1; daggers -16.4, flails -15.7, thrusting swords -9.6, heavy
+  thrusting -8.5. A hyperarmor heavy trades a 600-700 hit for a ~390 one (Troll's Hammer 2H R1 net
+  +0.68 -> +1.01); a dagger trades 253 for 390 (-0.51 -> -0.73). Giant-Crusher 2H 32 -> 22,
+  Great Club 2H 85 -> 52, Moonveil 1H 33 -> 53, Dagger 2H 114 -> 148.
+
+The default stays `zero`: the selftests pass, but the corpus comparison neither supports nor
+refutes pricing, and the opponent damage it needs is only real with `--opponents-from` (a second
+pass). A default run is byte-identical with and without this code.
 
 Also reported: `trade_through` = of the exchanges the opponent strikes first, the share the slot
 keeps swinging through; `interrupts` = of the exchanges it strikes first, the share it staggers.
@@ -307,8 +353,11 @@ a few places.
   the model's "both always" is right (VERIFIED 2026-10-01, bd
   `pvp-sarate-gate-all-session-players-pass-2026-09-30`). Still INFERRED: that the host's id 1
   reaches the guest's copy of the host's player data.
-- The opponent's attack is R1 #1 only; no corpus source says which attacks players throw.
-- Trades count 0; a damage-weighted trade value needs the opponent build's AR.
+- The opponent's attack is R1 #1 by default; `--opponent-pool families` throws the ranking's own
+  family openers (neutral.md section 6), but no corpus source says which attacks players throw.
+- Trades count 0 by default; `--trades priced` (section 2a) prices them with the ranking's
+  corpus-mean damage of the opponent's weapon, not that build's own AR, and against corpus-typical
+  armor on both sides.
 - The attacker's armor poise is the corpus distribution, not the sweep build's (the sweep builds
   carry no armor).
 - Rolling and backstep attacks: neutral exchange (invincibility not modelled). Crouch and running attacks are exchanged from standing.

@@ -670,7 +670,7 @@ class Mechanics:
             ci = None
         if not ci:
             return None
-        ex = EXCH.exchange(self.pool, ci["strike"], ci["poise"], ci["hyper"])
+        ex = EXCH.exchange(self.pool, ci["strike"], ci["poise"], ci["hyper"], option.get("dmg"))
         ex["strike_frame"], ex["strike_source"] = ci["strike"], "skill contact at 2.5 m"
         atk = {"slot": "skill", "stamina_cost": ci["stamina"], "hit_windows": [(ci["strike"], ci["strike"])],
                "tae_entry": ci["tae_entry"], "cancel_frame": option.get("cancel_frame") or {}}
@@ -753,7 +753,7 @@ class Mechanics:
         if ex.get("strike_frame") is None or not slot.get("reach"):
             return None
         return self.neut.neutral_exchange(self.npool, ex["strike_frame"], slot["reach"], ex.get("poise") or 0.0,
-                                          ex.get("hyper") or [])
+                                          ex.get("hyper") or [], dmg=option.get("dmg") or slot.get("dmg"))
 
     def skill_slot_extra(self, option: dict, crit: dict | None, own, own_ref, base_id: int | None = None,
                          f_weight: float = 1.0) -> dict:
@@ -1102,7 +1102,7 @@ def jump_openers(slots: dict, npool=None) -> dict:
             hyper = [(a + shift, b + shift, bonus, m) for a, b, bonus, m in ni["hyper"]]
             if npool is not None:
                 s["neutral"] = NEUT.neutral_exchange(npool, s["startup"] + delay, s["reach"], ni["poise"], hyper,
-                                                     ni["active"])
+                                                     ni["active"], dmg=s.get("dmg"))
             s["neutral_in"] = {**ni, "strike": s["startup"] + delay, "reach": s["reach"], "hyper": hyper}
         out[k] = s
     return out
@@ -2042,6 +2042,12 @@ def main() -> int:
     ap.add_argument("--opponents-from", type=Path,
                     help="a full --sort score --json ranking to read the opponents' attacks from "
                     "(for a --weapon run, which otherwise has only its own rows)")
+    ap.add_argument("--trades", choices=("zero", "priced"), default="zero",
+                    help="what a trade (both hits land) is worth in the exchange and neutral contests: "
+                         "zero, or priced by the two hits' damage, the opponent's read from --opponents-from "
+                         "(else 388 for every one; EXCH.priced_net, docs/er-mechanics/exchange.md section 2a)")
+    ap.add_argument("--trade-clamp", type=float, default=None, metavar="C",
+                    help="with --trades priced: bound on the priced net (default EXCH.TRADE_CLAMP; inf: none)")
     ap.add_argument("--opponent-pool", choices=("r1", "families"), default="r1",
                     help="what the exchange and neutral contests throw at every scored attack: R1 #1 "
                          "per pool build, or (needs --opponents-from) each build's moveset family "
@@ -2172,6 +2178,8 @@ def main() -> int:
         if opp_rows_from is not None:
             # Each opponent's hit, from the ranking the opponents are read from.
             pool.set_damage(opp_rows_from)
+        if a.trades == "priced":
+            pool.trade_clamp = EXCH.TRADE_CLAMP if a.trade_clamp is None else a.trade_clamp
         if a.opponent_pool == "families":
             # Two passes, as the skill term's opponents: the families of a ranking scored against
             # R1 #1 become what every slot is contested against (neutral.md section 4).

@@ -4,7 +4,7 @@ Labels as in the other files here: **VERIFIED** = regulation value or traced EXE
 **MEASURED** = computed by the commands below from game files, **COMMUNITY** = the Smithbox
 decompile of `c0000.hks`, **INFERRED** = a modelling choice. Nothing was launched.
 
-Tool: `scripts/er-mechanics-neutral.py` (`--selftest` passes 14/14). It is read by
+Tool: `scripts/er-mechanics-neutral.py` (`--selftest` passes 15/15). It is read by
 `er-builds-pvp.py` (every slot and every skill option) and by `er-mechanics-ashes.py` (the dodge
 and defensive-buff utilities, ashes-of-war.md section 17).
 
@@ -87,6 +87,11 @@ build `b`:
   hit whiffed into i-frames always wins.
 
       f_neutral = 1 + EXCHANGE_WEIGHT x (P(win) - P(loss))      EXCHANGE_WEIGHT 0.25 (exchange.md)
+
+  With `--trades priced` the net is the damage-weighted one of exchange.md section 2a instead
+  (each pool entry's trade worth the difference of the two hits over their mean, bounded at
+  -+1), computed per entry before the pool mean. The scored attack's own `dmg` is passed in
+  (`dmg=`), the opponent's is the pool row's.
 
 - **Where it enters the score.** `f_neutral` replaces `f_exchange` as the contest in
   `er-builds-pvp.slot_score` (the committed share of the hit's worth, section 16a of
