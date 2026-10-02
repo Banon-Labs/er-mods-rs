@@ -103,19 +103,71 @@ def export(tables, weapon, skill=None):
     return data
 
 
-def skill_hits(weapon, skill):
-    levers = _load('er_mechanics_ash_levers', 'er-mechanics-ash-levers.py')
-    L = levers.Levers()
+_LEVERS = None
+
+
+def _levers():
+    global _LEVERS
+    if _LEVERS is None:
+        mod = _load('er_mechanics_ash_levers', 'er-mechanics-ash-levers.py')
+        _LEVERS = (mod, mod.Levers())
+    return _LEVERS
+
+
+def skill_hits(weapon, skill, affinity='Standard'):
+    levers, L = _levers()
     wid = L.t.find_weapon(weapon)
-    sid = L.t.find_arts(skill) if skill else L.t.reg.weapon[wid]['swordArtsParamId']
-    _, hits, _ = L.cast(weapon, 'Standard', sid, {s: 99 for s in AR.STATS}, False)
+    sid = skill if isinstance(skill, int) else (
+        L.t.find_arts(skill) if skill else L.t.reg.weapon[wid]['swordArtsParamId'])
+    _, hits, _ = L.cast(weapon, affinity, sid, {s: 99 for s in AR.STATS}, False)
+    offset = hit_offsets(levers.A, L.t, wid, sid, hits)
     return {'name': L.t.arts_name(sid) if hasattr(L.t, 'arts_name') else skill, 'id': sid,
             'fp': levers.A.skill_fp(L.t, sid),
             'commitment': commitment(levers.A, L.t, wid, sid, hits),
             'hits': [{'frame': h.get('frame'), 'from_weapon': h['from_weapon'], 'count': h.get('count', 1),
-                      'real_frame': real_frame(levers.A, L.t, sid, h),
+                      'real_frame': _plus(real_frame(levers.A, L.t, sid, h), offset(h)),
                       'mv': {k: v for k, v in h['mv'].items() if v}, 'flat': {k: v for k, v in h['flat'].items() if v},
                       'poise': h.get('poise')} for h in hits]}
+
+
+def ash_options(tables, weapon):
+    """Every skill `weapon` can fire, with the affinities each allows, its hits and its commitment.
+
+    An ash decides the affinities the weapon can take (`can_mount` per affinity at the top
+    upgrade level), so each option carries its own list; the weapon's own skill without an ash
+    is `Standard` only. A skill with no hit, or whose roll frame is not found, is listed under
+    `unranked` with the reason: neither its damage nor what a miss costs can be put on the page."""
+    levers, L = _levers()
+    t = L.t
+    wid = t.find_weapon(weapon)
+    level = tables.max_level(t.reg.weapon[wid]['reinforceTypeId'])
+    own = t.reg.weapon[wid]['swordArtsParamId']
+    gems = t.ash_gems()
+    allowed = {}
+    for i, aff in enumerate(AR.AFFINITIES):
+        for sid in levers.A.mountable_skills(t, wid, i, level):
+            if sid == own and sid not in gems:
+                continue
+            allowed.setdefault(sid, []).append(aff)
+    if own in t.arts:
+        allowed.setdefault(own, ['Standard'])
+    ranked, unranked = [], []
+    for sid, affs in sorted(allowed.items()):
+        name = t.arts_name(sid)
+        try:
+            s = skill_hits(weapon, sid, affs[0])
+        except (KeyError, ValueError, StopIteration, SystemExit, TypeError) as e:
+            unranked.append({'name': name, 'id': sid, 'why': f'{type(e).__name__}: {e}'[:120]})
+            continue
+        c = s['commitment']
+        if not s['hits']:
+            unranked.append({'name': name, 'id': sid, 'why': 'no hit'})
+        elif not c or c['locked_if_first_misses'] is None:
+            unranked.append({'name': name, 'id': sid, 'why': 'no roll frame found'})
+        else:
+            s['affinities'] = affs
+            ranked.append(s)
+    return {'options': ranked, 'unranked': unranked}
 
 
 def real_frame(A, t, sid, hit):
@@ -124,6 +176,33 @@ def real_frame(A, t, sid, hit):
     if not events or hit.get('frame') is None:
         return None
     return A.ATK.real_frame(A.ATK.clip_to_real(events)(hit['frame'] / A.TAE_FPS))
+
+
+def _plus(frame, offset):
+    return None if frame is None else round(frame + offset, 1)
+
+
+def hit_offsets(A, t, wid, sid, hits):
+    """hit -> real frames from the press to the start of the animation holding it.
+
+    `real_frame` counts from the start of the hit's own animation. A hit in the opening starts
+    after any wind-up (`skill_commit` 'first_offset' when the first hit is in the opening); a hit
+    in the follow-up that holds the last hit starts at the hand-over ('lead': Ground Slam's
+    landing after the leap); any other animation starts at 'first_offset'."""
+    if not hits:
+        return lambda h: 0.0
+    prof = A.skill_profile(t, sid, wid)
+    opening = A.main_anim(prof)
+    c = A.skill_commit(t, wid, sid, prof, hits)
+
+    def offset(h):
+        anim = h.get('anim', opening)
+        if anim == opening:
+            return c['first_offset'] if hits[0].get('anim', opening) == opening else 0.0
+        if anim == c['anim']:
+            return c['lead']
+        return c['first_offset']
+    return offset
 
 
 def commitment(A, t, wid, sid, hits):
@@ -141,7 +220,7 @@ def commitment(A, t, wid, sid, hits):
     to_real = A.ATK.clip_to_real(events) if events else None
     armor = [[A.ATK.real_frame(to_real(x['frames'][0] / A.TAE_FPS)), A.ATK.real_frame(to_real(x['frames'][1] / A.TAE_FPS))]
              for x in prof['anims'].get(opening, []) if x['kind'] == 'hyperarmor'] if to_real else []
-    first = real_frame(A, t, sid, hits[0])
+    first = _plus(real_frame(A, t, sid, hits[0]), hit_offsets(A, t, wid, sid, hits)(hits[0]))
     last = c['hit_windows'][0][0] if c.get('hit_windows') else None
     roll = c.get('roll')
     return {'first_hit': first, 'last_hit': last, 'roll': roll, 'next_attack': c.get('next'),
@@ -186,13 +265,19 @@ def main():
     ap.add_argument('weapon', nargs='?')
     ap.add_argument('--skill', nargs='?', const='', default=None,
                     help="add the skill's hits; with no name, the weapon's own skill")
+    ap.add_argument('--ashes', action='store_true',
+                    help='add every skill the weapon can fire, with its affinities, hits and commitment')
     ap.add_argument('--selftest', action='store_true')
     a = ap.parse_args()
     if a.selftest:
         return selftest()
     if not a.weapon:
         ap.error('weapon required')
-    json.dump(export(AR.Tables(), a.weapon, a.skill), sys.stdout, separators=(',', ':'))
+    tables = AR.Tables()
+    data = export(tables, a.weapon, a.skill)
+    if a.ashes:
+        data['ashes'] = ash_options(tables, a.weapon)
+    json.dump(data, sys.stdout, separators=(',', ':'))
     return 0
 
 
