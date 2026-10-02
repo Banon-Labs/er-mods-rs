@@ -79,6 +79,45 @@ def twins(reg, wid):
     return rows
 
 
+# Where this weapon is better than a comparable one, field by field. Lower is better for a
+# requirement, the weight and the stamina multiplier; higher is better for a scaling rate.
+# Base attack is left out: it is the +0 value before scaling and upgrades, which no player sees.
+STAT_LABEL = {'Strength': 'STR', 'Agility': 'DEX', 'Magic': 'INT', 'Faith': 'FTH', 'Luck': 'ARC'}
+LOWER_BETTER = {'weight': 'weight', 'staminaConsumptionRate': 'stamina use x',
+                **{f'proper{k}': f'{v} requirement' for k, v in STAT_LABEL.items()}}
+HIGHER_BETTER = {f'correct{k}': f'{v} scaling' for k, v in STAT_LABEL.items()}
+
+
+def advantages(reg, wid, oid):
+    """What `wid` has over comparable `oid`: lower costs, more scaling, and attacks that hit
+    sooner or harder in a slot whose hit structure is the same. A slot whose hits differ in
+    number is left out: neither side is better there by a single number."""
+    rows = {r['id']: r for r in ATT.PR.rows(ATT.PR.param_bytes(ATT.PR.load(), 'EquipParamWeapon'),
+                                            list(LOWER_BETTER) + list(HIGHER_BETTER), strict=False)[0]
+            if r['id'] in (wid, oid)}
+    me, other = rows[wid], rows[oid]
+    out = []
+    for f, label in LOWER_BETTER.items():
+        if me[f] < other[f]:
+            out.append({'what': label, 'this': round(me[f], 3), 'other': round(other[f], 3)})
+    for f, label in HIGHER_BETTER.items():
+        if me[f] > other[f]:
+            out.append({'what': label, 'this': me[f], 'other': other[f]})
+    for grip in ('one', 'both'):
+        mine = {a['slot']: a for a in ATT.weapon_attacks(reg, wid, grip)}
+        theirs = {a['slot']: a for a in ATT.weapon_attacks(reg, oid, grip)}
+        for slot, a in mine.items():
+            b = theirs.get(slot)
+            if not b or a['hits'] != b['hits'] or a.get('other_hitboxes') or b.get('other_hitboxes'):
+                continue
+            if a['hit_windows'] and b['hit_windows'] and a['hit_windows'][0][0] < b['hit_windows'][0][0]:
+                out.append({'what': f'{a["label"]} first hit frame', 'this': a['hit_windows'][0][0],
+                            'other': b['hit_windows'][0][0]})
+            if a['mv_phys'] > b['mv_phys']:
+                out.append({'what': f'{a["label"]} motion value', 'this': a['mv_phys'], 'other': b['mv_phys']})
+    return out
+
+
 def selftest():
     reg = ATT.Regulation()
     bhb = twins(reg, reg.find_weapon('Backhand Blade'))
@@ -89,6 +128,10 @@ def selftest():
     # Same 30 attacks as Lance, but neither can be infused: not comparable, so not listed.
     assert "Bloodfiend's Sacred Spear" not in names and "Mohgwyn's Sacred Spear" not in names, names
     assert not any(r['twin'] for r in lance), lance
+    lw, mw = reg.find_weapon('Lance'), reg.find_weapon("Messmer Soldier's Spear")
+    assert {'what': 'DEX requirement', 'this': 14, 'other': 16} in advantages(reg, lw, mw)
+    assert any(a['what'] == 'R2 #1 first hit frame' for a in advantages(reg, mw, lw))
+    assert not any(a['what'].startswith('R2 #1') for a in advantages(reg, lw, mw))
     print(f"selftest ok: Backhand Blade's twin is Reverse-Bladed Sword; Lance has no twin, comparable {names}")
     return 0
 
@@ -107,11 +150,15 @@ def main():
     wid = reg.find_weapon(a.weapon)
     rows = twins(reg, wid)
     if a.json:
-        print(json.dumps({'weapon': wid, 'name': reg.weapon_names.get(wid), 'candidates': rows}, indent=1))
+        for r in rows:
+            r['advantages'] = advantages(reg, wid, r['id'])
+        print(json.dumps({'weapon': wid, 'name': reg.weapon_names.get(wid), 'comparable': rows}, indent=1))
         return 0
     print(f"{reg.weapon_names.get(wid)} ({wid}): twins {[r['name'] for r in rows if r['twin']] or 'none'}")
     for r in rows:
         print(f"  {'TWIN ' if r['twin'] else '     '}{r['name']:<32} moveset {r['moveset_match']}/{r['slots']}")
+        for adv in advantages(reg, wid, r['id']):
+            print(f"        better: {adv['what']} {adv['this']} vs {adv['other']}")
     return 0
 
 
