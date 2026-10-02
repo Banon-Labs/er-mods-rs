@@ -710,7 +710,10 @@ class Buffs:
           `pvp_rate[e]` attacker `atkPlayerDmgCorrectRate` product when `pvp`, else
                         `atkEnemyDmgCorrectRate`.
         `status` sums build-up adds. `stats` are attribute adds, which change AR through scaling:
-        feed them to `er-mechanics-ar.py`.
+        feed them to `er-mechanics-ar.py`. `stamina_rate` is the `staminaAttackRate` product, the
+        multiplier `FUN_14068aa80` puts on a guarded hit's stamina damage (info+0x28); that it
+        passes the same hand gate is `INFERRED` from the right/left row pairs (Royal Knight's
+        Resolve 1701 `wepParamChange` 1, 1703 2).
 
         Every attacker column passes the same gate, `IsApplicableForCategory`: the hand rule on
         `wepParamChange`, then the sub-category mask. `sub_categories` is the attack's
@@ -729,6 +732,7 @@ class Buffs:
         stats = dict.fromkeys(STATS, 0)
         status = dict.fromkeys(STATUS, 0)
         ar_sub = atk_sub = 1.0
+        stamina_rate = 1.0
         used = []
         subs = set(sub_categories)
         for r, src in rows:
@@ -743,6 +747,7 @@ class Buffs:
             if need and not need & subs:
                 continue
             used.append((r['id'], src))
+            stamina_rate *= float(r['staminaAttackRate'])
             for e in ELEMENTS:
                 col = (PVP_ATK if pvp else PVE_ATK)[e]
                 pvpr[e] = f32(pvpr[e] * f32(r[col]))
@@ -779,7 +784,7 @@ class Buffs:
         atk['physical'] = f32(atk['physical'] * atk_sub)
         atk = {e: int(f32(v * 100.0)) / 100.0 for e, v in atk.items()}
         return {'ar_rate': ar, 'flat_add': flat, 'pvp_rate': pvpr, 'atk_rate': atk,
-                'status': status, 'stats': stats, 'entries': used,
+                'status': status, 'stats': stats, 'entries': used, 'stamina_rate': stamina_rate,
                 'refused': list(self.last_refused), 'unknown': unknown}
 
     def defense_context(self, active, pvp=False, phys_type='standard', hp_ratio=1.0,
@@ -916,7 +921,8 @@ class Buffs:
         and replayed through the same stacking. Per element: `pre` multiplies the weapon part of
         the AR, `post` the damage after defense (`atkPlayerDmgCorrectRate` x `*AttackRate`),
         `flat` is added after the AR multipliers; each row contributes 1 + uptime x (factor - 1).
-        `stats` are uptime-weighted attribute adds.
+        `stats` are uptime-weighted attribute adds. `stamina` is the same uptime-weighted product
+        of `staminaAttackRate` (a guarded hit's stamina damage, `attack_context`).
 
         Weapon-buff rows (`WEAPON_BUFF_CATS`) from the kit are dropped by default: the grease
         sweep owns that slot. A skill's own weapon-buff row is dropped when
@@ -961,6 +967,7 @@ class Buffs:
         post = dict.fromkeys(ELEMENT_KEYS, 1.0)
         flat = dict.fromkeys(ELEMENT_KEYS, 0.0)
         stats = dict.fromkeys(STATS, 0.0)
+        stamina = 1.0
         used = []
         for sid, src in kept:
             w = weight.get(src, (1.0, False))[0]
@@ -971,6 +978,7 @@ class Buffs:
                                     sub_categories=sub_categories, apply_stack=False)
             if not f['entries']:
                 continue                              # the hand / sub-category gate refused it
+            stamina *= 1.0 + u * (f['stamina_rate'] - 1.0)
             for e in ELEMENT_KEYS:
                 pre[e] *= 1.0 + u * (f['ar_rate'][e] - 1.0)
                 post[e] *= 1.0 + u * (f['pvp_rate'][e] * f['atk_rate'][e] - 1.0)
@@ -980,6 +988,7 @@ class Buffs:
             used.append((sid, src, round(u, 4)))
         post = {e: v * time_factor for e, v in post.items()}
         out = {'pre': pre, 'post': post, 'flat': flat, 'stats': stats, 'entries': used,
+               'stamina': stamina,
                'dropped': dropped, 'unknown': unknown, 'time_factor': time_factor,
                'recasts': {s: sum(n for _, n in p[2]) / len(p[2]) for s, p in plans.items()}}
         self._kit_cache[key] = out
@@ -994,10 +1003,11 @@ class Buffs:
         holds one skill, so each kit is scored once per alternative with that skill's `extra`,
         weighted by p, and once with none for the rest of the mass. `joint` is the mean of
         pre x post, the single factor on an element's damage when the defense curve is taken as
-        linear. `time_factor` (already in `post`) and `recasts_by_source` are the kit means."""
+        linear. `time_factor` (already in `post`), `stamina` (`kit_factors`) and
+        `recasts_by_source` are the kit means."""
         acc = {k: dict.fromkeys(ELEMENT_KEYS, 0.0) for k in ('pre', 'post', 'joint', 'flat')}
         by_src, total = {}, 0.0
-        tf_acc, rc_src = 0.0, {}
+        tf_acc, rc_src, st_acc = 0.0, {}, 0.0
         rest = max(0.0, 1.0 - sum(p for p, _ in alternatives))
         branches = [(p, tuple(x)) for p, x in alternatives if p > 0] + ([(rest, ())] if rest > 0 else [])
         for k in kits:
@@ -1017,11 +1027,13 @@ class Buffs:
                     for src, n in f['recasts'].items():
                         rc_src[src] = rc_src.get(src, 0.0) + w * n
                     tf_acc += w * f['time_factor']
+                    st_acc += w * f['stamina']
                     total += w
         out = {k: {e: v / total for e, v in d.items()} for k, d in acc.items()} if total else \
             {k: dict.fromkeys(ELEMENT_KEYS, 1.0 if k != 'flat' else 0.0) for k in acc}
         out['kits'] = total
         out['time_factor'] = tf_acc / total if total else 1.0
+        out['stamina'] = st_acc / total if total else 1.0
         out['recasts_by_source'] = {s: v / total for s, v in sorted(rc_src.items(), key=lambda kv: -kv[1])} \
             if total else {}
         out['uptime_by_source'] = {s: v / total for s, v in sorted(by_src.items(), key=lambda kv: -kv[1])} \
@@ -1505,6 +1517,11 @@ def _t_context(m, check):
     check("Scholar's Shield on guard", round(d['cut']['magic'], 4), 0.3)
     a = m.attack_context(['Spiked Cracked Tear', 'Spiked Cracked Tear'], sub_categories=(100,))
     check('same tear twice is one entry', round(a['atk_rate']['physical'], 4), 1.15)
+    # staminaAttackRate (guarded stamina damage, info+0x28): Royal Knight's Resolve's right-hand
+    # row 1701 is 4.0 and its left-hand row 1703 does not reach a right-hand hit.
+    check("RKR 1701 staminaAttackRate, right hand", m.attack_context([1701])['stamina_rate'], 4.0)
+    check("RKR 1703 refused on the right hand", m.attack_context([1703])['stamina_rate'], 1.0)
+    check("Determination 1693 on the left hand", m.attack_context([1693], hand='left')['stamina_rate'], 3.0)
 
 
 def _t_expected(m, check):

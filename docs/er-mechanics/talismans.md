@@ -49,7 +49,7 @@ builds wear them (section 7):
 | Axe Talisman | x1.10 post-defense | charged R2 (100), both grips | VERIFIED |
 | Curved Sword Talisman | x1.20 post-defense | guard counters (103) | VERIFIED |
 | Dagger Talisman | x1.16 (1.17 in the param, truncated) | criticals | VERIFIED |
-| Hammer Talisman | stamina damage x1.4 | every weapon hit | VERIFIED; that it drains a blocker is INFERRED |
+| Hammer Talisman | a blocker's stamina loss x1.4 (on ADI+0x28, before the guard boost) | every weapon hit into a guard | VERIFIED |
 | Twinblade Talisman | x1.45 | the last R1 of a chain (104: r1_3 on 105 weapons, r1_4 on 178, ...) | VERIFIED |
 | Blade of Mercy | x1.12 for 20 s | after landing a critical | VERIFIED |
 | Rellana's Cameo | x1.45 for 10 s | stance attacks after holding the stance (stance weapons only) | VERIFIED TAE |
@@ -695,11 +695,22 @@ Things the corpus shows against the mechanics:
 
 ## 8. Not established
 
+Settled 2026-10-01 (guard dig, powerstance-guard.md section 3):
+
+- **Hammer Talisman.** The stamina damage it scales is `AttackDamageInfo+0x28`, which the ADI
+  builder `FUN_140d24b10` fills from attacker vcall +0x368 -> `FUN_14068aa80`; that value times
+  the info+0x1fc factor is the incoming side of `CalculateGuardStaminaDepletion`. So x1.4 lands on
+  the whole pre-guard stamina number, before the blocker's guard boost. `ADI+0x100`, which this
+  section used to name, is the poise value (`FUN_14068ad90`, read by `ApplySuperArmorDamage`).
+- **Guard regen.** Every `GuardOn`/`GuardStart` clip sets TAE 225 `SetSPRegenRatePercent` to 20
+  for its whole length, so a raised guard regenerates 20% of the normal rate, turtle-talisman adds
+  included, and 0% through a guard reaction's first 10/27/49 frames.
+
+Still open:
+
 - **Critical flag.** What sets `AttackInfo+0x109`, the critical flag the accumulator reads.
 - **Other damage factors.** The factors `ADI+0x1e8..` and `FUN_1403e9bb0` beside `*AttackRate`
   in `CalculateDamage`.
-- **Hammer Talisman.** That `ADI+0x100` (the stamina damage it scales) feeds guard stamina loss;
-  vcall `FUN_1403e6dc0` was not read.
 - **Winged Sword stages past 60.** Whether stage rows 1-3 and stage 4 are active together past a
   counter of 60, and whether spCategory 120 makes them overwrite each other.
 - **Godfrey Icon's 330901.** Its subcategory 38 appears on no `AtkParam_Pc` row. Which weapon's a525
@@ -714,8 +725,6 @@ Things the corpus shows against the mechanics:
 - **Frame counts.** Every TAE frame count (roll and backstep i-frames, Rellana, Lord's Bestowal)
   comes from the 2026-07-13 extraction, which predates 1.17; they need a 1.17.1 re-read.
 - **Headshots.** The headshot part multiplier value, and the meaning of part id 0x1f.
-- **Guard regen.** The guard-state `SPRegenRatePercent`, which scales turtle-talisman regen while
-  blocking.
 - **FP side.** The FP collectors for Blessed Blue Dew and Cerulean Seed.
 - **`effectTarget*` bits.** Their consumer.
 - **`accessoryGroup`.** Where the one-per-group equip rule is enforced (carried over from

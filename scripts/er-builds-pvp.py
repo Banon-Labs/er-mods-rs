@@ -76,8 +76,11 @@ true-combo follow-ups, and the families are combined with use shares proportiona
             * coverage (`er-mechanics-reach.coverage_factor`: swing arc plus late turn, `INFERRED` weights)
             * (1 + SCORE_ADV_WEIGHT * clamp(expected advantage, +-SCORE_ADV_SPAN) / SCORE_ADV_SPAN)
             * (1 + SCORE_STAGGER_WEIGHT * stagger share)
-            * guard factor (`er-mechanics-powerstance-guard.guard_score_factor`: chip and guard
-              break against the window's blockers, and a 2H weapon's own guard)
+            * guard factor (`er-mechanics-powerstance-guard.guard_score_factor`: chip, stamina
+              drain net of guard regen over the slot's cycle, guard break and repel punish against
+              the window's blockers, with the attacker's staminaAttackRate from talismans and
+              buffs; and the configuration's own guard: a 2H weapon's, a 1H row's best corpus
+              shield, 0 with a weapon in the left hand)
             * f_exchange * f_stamina (`er-mechanics-exchange.slot_exchange`, below)
 
 `crit HP` and `parry HP` are per exchange (`er-mechanics-crits.weapon_crit`): the weapon's riposte
@@ -524,7 +527,11 @@ def slot_hit(pvp, reg, weapon_id, attack, ar_by, defenders, grease=None, spear=F
         for k in ("startup", "next", "roll"):
             if out[k] is not None:
                 out[k] = round(out[k] + lead, 1)
-    out["guard_part"] = {"hit": attack, "scaled": scaled, "fr": fr, "post": post, "n": n}
+    # The attacker's staminaAttackRate on a guarded hit (info+0x28, `FUN_14068aa80`): the worn
+    # talismans' (Hammer Talisman) times the buff kits' uptime-weighted product.
+    stamina_rate = (tm["stamina_damage"] if tm else 1.0) * (buff.get("stamina", 1.0) if buff else 1.0)
+    out["guard_part"] = {"hit": {**attack, "weapon": weapon_id}, "scaled": scaled, "fr": fr, "post": post,
+                         "n": n, "stamina_rate": stamina_rate}
     return out
 
 
@@ -695,7 +702,7 @@ class Mechanics:
         e = self.buf_m.expected_attack(self.att_kits, two, ratio, alternatives=alts,
                                        drop_skill_weapon_buffs=greased, **self.fight)
         return {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": self.def_buffs["factor"],
-                "alternatives": alts}
+                "stamina": e["stamina"], "alternatives": alts}
 
     def skill_buff(self, weapon: str, aff: str, level: int, stats: dict, two: bool, roots: tuple,
                    casts: float) -> dict:
@@ -709,7 +716,7 @@ class Mechanics:
         slot = any(self.buf_m.sp[i]["spCategory"] in self.buf.WEAPON_BUFF_CATS
                    for r in roots for i in self.buf_m.skill_rows(r))
         return {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": self.def_buffs["factor"],
-                "alternatives": [], "weapon_slot": slot}
+                "stamina": e["stamina"], "alternatives": [], "weapon_slot": slot}
 
     def skill_term(self, weapon: str, aff: str, level: int, stats: dict, two: bool, base_id: int,
                    choice: list, base_score: float, defenders, reg, buff: dict | None, slot_extra,
@@ -1040,7 +1047,8 @@ def slot_score(s: dict, entry: float = 0.0) -> dict | None:
 
 
 def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slots, main_dmg, ar_by,
-                     defenders, grease, spear, talismans, pair_fn=None, opening=None, grease_tf=1.0):
+                     defenders, grease, spear, talismans, pair_fn=None, opening=None, grease_tf=1.0,
+                     regard=None):
     """`er-mechanics-ashes.skill_term`'s `buff_fn` for one row (ashes-of-war.md section 16b): the
     moveset score with a skill's buff rows held. Every slot's main hitbox is hit again with the
     build's buff factors plus that skill's (`Mechanics.skill_buff`), and without the sweep's grease
@@ -1048,7 +1056,9 @@ def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slo
     other hitboxes are taken to scale the same, `INFERRED`) and the moveset scored again.
     `pair_fn` and `opening` are the row's `--paired-offhand` step, so the buffed moveset is scored
     the way the row's own was (the off-hand L1 itself is not buffed). A grease that stays on pays
-    its uses' time (`grease_tf`, `Mechanics.grease_plan`), as the row's own score does."""
+    its uses' time (`grease_tf`, `Mechanics.grease_plan`), as the row's own score does.
+    `regard(slot key, staminaAttackRate)` re-measures a slot's guard pressure under the skill's
+    stamina multiplier (Royal Knight's Resolve x4 on its next hit); None keeps the row's."""
     cache = {}
 
     def fn(_option, roots, casts):
@@ -1066,8 +1076,11 @@ def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slo
             if not main_dmg.get(k):
                 buffed[k] = s
                 continue
-            r = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, g, spear, talismans, buff=bf)["dmg"] / main_dmg[k]
+            h = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, g, spear, talismans, buff=bf)
+            r = h["dmg"] / main_dmg[k]
             new = {**s, "dmg": s["dmg"] * r, "med": s["med"] * r, "ctr": s["ctr"] * r}
+            if regard is not None:
+                new["guard"] = regard(k, h["guard_part"]["stamina_rate"])
             new["score"] = slot_score(new, entry_frames(k))
             buffed[k] = new
         if pair_fn is not None:
@@ -1365,7 +1378,7 @@ class SetupBuffs:
                 status_row = c
         return {"pre": ctx["ar_rate"], "flat": ctx["flat_add"],
                 "post": {e: ctx["pvp_rate"][e] * ctx["atk_rate"][e] for e in ELEMENTS},
-                "status_row": status_row, "gated": bool(passed)}
+                "stamina": ctx["stamina_rate"], "status_row": status_row, "gated": bool(passed)}
 
     def right_uptime(self, element: str) -> float:
         """Uptime of the right hand's grease of `element`, recast over the fight
@@ -1381,20 +1394,22 @@ class SetupBuffs:
             e = m.buf_m.expected_attack(m.att_kits, False, None, alternatives=[], drop_skill_weapon_buffs=False,
                                         **m.fight)
             self._body = {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": m.def_buffs["factor"],
-                          "alternatives": []}
+                          "stamina": e["stamina"], "alternatives": []}
         return self._body
 
     @staticmethod
     def buff_dict(base: dict | None, eff: dict | None, up: float, defense: dict) -> dict | None:
         """`slot_hit` `buff` for one off-hand hit: `base` (the body kits, or None) with the option
-        `eff` held `up` of the fight."""
+        `eff` held `up` of the fight. `stamina` is the `staminaAttackRate` product a guarded hit's
+        stamina damage takes (Determination 3, Royal Knight's Resolve 4, `slot_hit`)."""
         if eff is None:
             return base
         b = base or {"pre": dict.fromkeys(ELEMENTS, 1.0), "post": dict.fromkeys(ELEMENTS, 1.0),
-                     "flat": dict.fromkeys(ELEMENTS, 0.0), "def": defense, "alternatives": []}
+                     "flat": dict.fromkeys(ELEMENTS, 0.0), "def": defense, "stamina": 1.0, "alternatives": []}
         return {**b, "pre": {e: b["pre"][e] * (1.0 + up * (eff["pre"][e] - 1.0)) for e in ELEMENTS},
                 "post": {e: b["post"][e] * (1.0 + up * (eff["post"][e] - 1.0)) for e in ELEMENTS},
-                "flat": {e: b["flat"][e] + up * eff["flat"][e] for e in ELEMENTS}}
+                "flat": {e: b["flat"][e] + up * eff["flat"][e] for e in ELEMENTS},
+                "stamina": b.get("stamina", 1.0) * (1.0 + up * (eff.get("stamina", 1.0) - 1.0))}
 
     def status(self, name: str, aff: str, level: int, stats: dict, l1: dict, status_row, up: float,
                gap, react, stagger: float) -> dict:
@@ -1551,7 +1566,7 @@ def paired_loop(combo, model, lefts: dict, base_id: int, slots: dict, stats: dic
                 return h
 
             def pf(s, lid=lid, hit_fn=hit_fn, c=info):
-                return combo.paired_slots(model, base_id, lid, s, hit_fn, catch=c)
+                return left_weapon_guard(combo.paired_slots(model, base_id, lid, s, hit_fn, catch=c), s)
             ms = pf(right)
             if ms is right:
                 continue
@@ -1609,6 +1624,16 @@ def apply_relative_speed(results: list[dict], tables, tau: float, measure: str =
         r["moveset"]["f_speed"] = f
         r["moveset"]["speed_measure"] = measure
         r["moveset"]["score"] = r["moveset"]["score"] * f
+
+
+def left_weapon_guard(paired: dict, slots: dict) -> dict:
+    """`paired` (`er-mechanics-combo.paired_slots` of `slots`) with every slot's own guard at 0:
+    a left hand holding an off-hand weapon (the only kind `paired_slots` pairs) cannot raise a
+    guard one-handed (`er-mechanics-powerstance-guard.GUARD_LEFT_ONE_HAND`), so the one-handed
+    row's left shield (`best_left_shield`) is gone. `slots` itself when nothing was paired."""
+    if paired is slots:
+        return slots
+    return {k: ({**v, "guard_own": 0.0} if v.get("guard_own") is not None else v) for k, v in paired.items()}
 
 
 def best_slot(slots: dict) -> str | None:
@@ -1846,6 +1871,21 @@ def selftest() -> int:
           "a left weapon buff held half the fight adds half of each factor and half its flat attack")
     check(SetupBuffs.buff_dict({"pre": ones}, None, 1.0, {}) == {"pre": ones},
           "no left weapon buff leaves the body-kit buff as it is")
+    # A guarded hit's stamina damage takes the attacker's staminaAttackRate (info+0x28,
+    # docs/er-mechanics/powerstance-guard.md section 3): Determination 3.0 held half the fight is
+    # 2.0, and Hammer Talisman's 1.4 reaches the guard part through the talisman list.
+    bd = SetupBuffs.buff_dict(None, {**eff, "stamina": 3.0}, 0.5, {"standard": 1.0})
+    check(abs(bd["stamina"] - 2.0) < 1e-9, "a left Determination held half the fight doubles the guard stamina rate")
+    gp = slot_hit(pvp, reg, gs_base, r1, ar_by, d2, talismans=["Hammer Talisman"])["guard_part"]
+    check(abs(gp["stamina_rate"] - 1.4) < 1e-6 and gp["hit"]["weapon"] == gs_base,
+          f"Hammer Talisman carries x1.4 into the guard part ({gp['stamina_rate']:.4f}) with the weapon id")
+    check(abs(slot_hit(pvp, reg, gs_base, r1, ar_by, d2, buff={**bf, "stamina": 4.0})["guard_part"]
+              ["stamina_rate"] - 4.0) < 1e-9, "a buff's staminaAttackRate carries into the guard part")
+    paired = {"r1_1": {"guard_own": 0.7, "dmg": 1.0}, "left_1": {"dmg": 1.0}}
+    same = {"r1_1": {"guard_own": 0.7}}
+    check(left_weapon_guard(paired, same)["r1_1"]["guard_own"] == 0.0 and left_weapon_guard(same, same) is same
+          and "guard_own" not in left_weapon_guard(paired, same)["left_1"],
+          "a left weapon in the pairing drops the one-handed row's own guard to 0; no pairing keeps it")
     # The fight the buffs cover (user, 2026-10-01): 3 to 5 minutes, sampled; the engagement
     # spacing and the landed hits do not move with it.
     buf, st = _sibling("er-mechanics-buffs"), _sibling("er-mechanics-status")
@@ -2263,12 +2303,36 @@ def main() -> int:
         base_id = tables.find_weapon(row["weapon"], "Standard")
         slots, hits = {}, {}
         crit = mech.cr.weapon_crit(mech.cr_t, crit_ev, base_id, b["aff"], level, stats, row["two"], defenders)
-        own =(blockers.own_guard(GUARD.shield_guard(gtab, wid, level, two_handed=True), opening)
-               if row["two"] else own_ref)
         choice = mech.skill_choice(base_id, b["aff"], level)
         buff = None if a.no_buffs else mech.buffs(row["weapon"], b["aff"], level, stats, row["two"], base_id,
                                                   choice, bool(b["grease"]))
         attacks = ATK.weapon_attacks(reg, wid, "both" if row["two"] else "one", level)
+        # The configuration's own guard against the corpus's opening hits, with a repel its own R1 #1
+        # punishes credited (`Blockers.own_guard`): a two-handed row guards with its weapon, a
+        # one-handed row with the corpus shield it meets the stats for that stops the most
+        # (`Blockers.best_left_shield`); a one-handed row with a weapon in the left hand
+        # (`--paired-offhand`, `--paired-loop`) cannot guard and gets 0 there.
+        r1 = next((x for x in attacks if x["slot"] in ("r1_1", "2h_r1_1")), None)
+        r1_start = (r1.get("hit_windows") or [[None]])[0][0] if r1 else None
+        guard_left = None
+        if row["two"]:
+            own = blockers.own_guard(GUARD.shield_guard(gtab, wid, level, two_handed=True), opening,
+                                     startup=r1_start)
+        else:
+            own, left_g = blockers.best_left_shield(b["stats"], opening, r1_start)
+            guard_left = left_g and {"name": left_g["name"], "weapon": left_g["weapon"], "level": left_g["level"],
+                                     "own": round(own, 4)}
+        guard_parts, guard_memo = {}, {}
+
+        def regard(k, rate):
+            """Slot `k`'s guard pressure with the attacker's staminaAttackRate set to `rate`
+            (a buff option or spill re-scores a slot under different buffs)."""
+            mk = (k, round(rate, 6))
+            if mk not in guard_memo:
+                parts_k, cycle_k = guard_parts[k]
+                guard_memo[mk] = blockers.slot_pressure([{**p, "stamina_rate": rate} for p in parts_k],
+                                                        cycle=cycle_k)
+            return guard_memo[mk]
         main_dmg = {}
         for atk in attacks:
             key = atk["slot"].removeprefix("2h_")
@@ -2301,7 +2365,9 @@ def main() -> int:
                 for el in ELEMENTS:
                     hit["by_type"][el] += land * more["by_type"][el]
                 hit["hits"] += 1
-            hit["guard"] = blockers.slot_pressure(parts)
+            # The same-button cycle bounds the guard's regeneration between two throws.
+            hit["guard"] = blockers.slot_pressure(parts, cycle=hit.get("next"))
+            guard_parts[key] = (parts, hit.get("next"))
             hit["guard_own"], hit["guard_own_ref"] = own, own_ref
             hit["stagger"] = sum(p < hit["poise"] for p in poises) / len(poises) if poises else None
             hits[key] = hit
@@ -2368,10 +2434,14 @@ def main() -> int:
                         k = atk["slot"].removeprefix("2h_")
                         if k not in new or not main_dmg.get(k):
                             continue
-                        r = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, None, a.spear_talisman, talismans,
-                                     buff=rb)["dmg"] / main_dmg[k]
+                        h = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, None, a.spear_talisman, talismans,
+                                     buff=rb)
+                        r = h["dmg"] / main_dmg[k]
                         for f in ("dmg", "med", "ctr"):
                             new[k][f] = slots[k][f] * r
+                        # The skill's rows can carry staminaAttackRate (Determination, Royal
+                        # Knight's Resolve): the guard pressure is measured again with it.
+                        new[k]["guard"] = regard(k, h["guard_part"]["stamina_rate"])
                     if eff["status_row"] is not None:
                         old = {k: s.get("status") or {} for k, s in new.items()}
                         mech.statuses(new, row["weapon"], b["aff"], level, b["stats"], row["two"], attacks, new,
@@ -2405,7 +2475,7 @@ def main() -> int:
                 return h
 
             def pair_fn(s, lid=left_id, hit_fn=left_hit):
-                return combo.paired_slots(combo_model, base_id, lid, s, hit_fn)
+                return left_weapon_guard(combo.paired_slots(combo_model, base_id, lid, s, hit_fn), s)
             ms_slots = pair_fn(slots)
             if ms_slots is not slots:
                 # A landed opener's follow-up is credited as damage of the same opening: every
@@ -2430,6 +2500,8 @@ def main() -> int:
                   "stats": b["stats"], "slots": slots, "mix": weapon_mix(slots),
                   "best_slot": best_slot(slots), "skill": skill, "crit": crit, "moveset": moveset,
                   "skill_term": None, "buff": _buff_summary(buff),
+                  "guard": {"own": round(own, 4), "own_ref": round(own_ref, 4), "left": guard_left,
+                            "left_weapon": neutral_frames is not None},
                   "kind": row.get("kind"), "weight": row.get("weight")}
         item = None
         if not a.no_skill and moveset["score"]:
@@ -2438,10 +2510,11 @@ def main() -> int:
             buff_fn = None if buff is None else _buff_moveset_fn(
                 mech, pvp, reg, base_id, row, b, level, stats, attacks, slots, main_dmg, ar_by, defenders,
                 grease, a.spear_talisman, talismans, pair_fn if neutral_frames is not None else None,
-                neutral_frames, grease_tf=grease_tf)
+                neutral_frames, grease_tf=grease_tf, regard=regard)
             item = (result, (row["weapon"], b["aff"], level, stats, row["two"], base_id, choice,
                              moveset["score"], defenders, reg, buff,
-                             lambda o, c=crit, g=own, bid=base_id, fw=f_weight:
+                             lambda o, c=crit, g=(own if neutral_frames is None else 0.0), bid=base_id,
+                             fw=f_weight:
                              mech.skill_slot_extra(o, c, g, own_ref, bid, fw)),
                     skill_engagement({**slots, **jump_openers(slots, mech.npool)}, moveset, crit, crit_ev),
                     buff_fn)

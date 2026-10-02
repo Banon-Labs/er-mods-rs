@@ -38,7 +38,7 @@ if 0 < total < 1: total = ceil(total)          # a landing hit does at least 1
 | `defense[e]` | chr vcall, for players `CalculateDefenseData` `0x140685650 / 0x1406864a0` (section 1) | EXE |
 | `armorAbsorption[e]` | chr vcall `CalculateAbsorptions` `0x140652d20` -> `0x140689c80 / 0x14068aad0` (section 2) | EXE |
 | `spCut`, `spCut110`, `spCut434` | `SpecialEffect::CalculateDefenseModifiers` `0x1404f53e0 / 0x1404f61b0`, products of SpEffect `*DamageCutRate` (section 2); `spCut110` is the counter-hit factor (section 2b) | EXE |
-| `guard[e]` | `CalculateGuardDamage`, only when the hit is blocked | EXE (not modelled) |
+| `guard[e]` | `CalculateGuardDamage`, only when the hit is blocked: the guard's pass share, with the attacker's guard-cut cancel (info+0x5c); powerstance-guard.md section 3 | EXE; modelled in `er-mechanics-powerstance-guard.block_hit`, not in this script |
 | `throwCut[e]` | `CalculateDamageCutRates`, only for throws with `AtkParam.throwDamageAttribute == 1` | EXE |
 | `corrections[e]` | `AttackDamageInfo::CalculateDamageCorrections` `0x140684d70 / 0x140685bc0` (section 3) | EXE |
 | `unk1[e]` | `short AttackDamageInfo+0x14..0x1c * 0.01 * float +0x1e8.. * vcall(chr, +0xb4)` | EXE shape, meaning not identified |
@@ -442,8 +442,9 @@ above its damage on the median defender.
 - Whether a counter hit changes poise damage; section 2b covers HP damage only.
 - The exact counter window: the event-66 span plus SpEffect 45's 0.1 s endurance is the model;
   whether the refresh on the last event frame starts the 0.1 s then was not traced.
-- `FUN_140486b10` (toughness-module factor in PvP) and `FUN_140447180` (last multiplier in
-  `CalculateDamage`).
+- `FUN_140486b10` (toughness-module factor in PvP). `FUN_140447180`, the last multiplier in
+  `CalculateDamage`, is the repel: 1 unless the hit was guarded and repelled, then
+  `flickDamageCutRateSuccessGurad` (0.5) or less (powerstance-guard.md section 3).
 - Whether the same SpEffect id from several armor pieces (Rakshasa, 6516000) stacks.
 - The durability factor for armor, taken as 1 because ER armor has no durability.
 - That the player's in-combat poise pool equals the menu poise; the super-armor module's max was
@@ -455,4 +456,3 @@ above its damage on the median defender.
   counts only unconditional ones.
 - `GetMPLevelCorrection` (row 303 on defense rates, weapon `levelSyncCorrectId` on damage): only
   active with SpEffect 590/592; its graph values were not read.
-- Guard absorption (`CalculateGuardDamage`) and the stamina side of blocking.
