@@ -111,9 +111,43 @@ def skill_hits(weapon, skill):
     _, hits, _ = L.cast(weapon, 'Standard', sid, {s: 99 for s in AR.STATS}, False)
     return {'name': L.t.arts_name(sid) if hasattr(L.t, 'arts_name') else skill, 'id': sid,
             'fp': levers.A.skill_fp(L.t, sid),
+            'commitment': commitment(levers.A, L.t, wid, sid, hits),
             'hits': [{'frame': h.get('frame'), 'from_weapon': h['from_weapon'], 'count': h.get('count', 1),
+                      'real_frame': real_frame(levers.A, L.t, sid, h),
                       'mv': {k: v for k, v in h['mv'].items() if v}, 'flat': {k: v for k, v in h['flat'].items() if v},
                       'poise': h.get('poise')} for h in hits]}
+
+
+def real_frame(A, t, sid, hit):
+    """A skill hit's clip frame on the 30 fps clock the player sees (TAE play speed applied)."""
+    events = (A.skill_tae(t, sid) or {}).get(hit.get('anim'))
+    if not events or hit.get('frame') is None:
+        return None
+    return A.ATK.real_frame(A.ATK.clip_to_real(events)(hit['frame'] / A.TAE_FPS))
+
+
+def commitment(A, t, wid, sid, hits):
+    """How long a cast holds its user, in real frames from the press (`er-mechanics-ashes.skill_commit`).
+
+    `locked_if_first_misses` is the first roll frame minus the first hit's frame: the frames a
+    defender who avoided the opening hit has to punish, whatever the later hits do. Hyperarmor
+    windows come from the opening animation's TAE, mapped to real frames the same way."""
+    if not hits:
+        return None
+    prof = A.skill_profile(t, sid, wid)
+    c = A.skill_commit(t, wid, sid, prof, hits)
+    opening = A.main_anim(prof)
+    events = (A.skill_tae(t, sid) or {}).get(opening)
+    to_real = A.ATK.clip_to_real(events) if events else None
+    armor = [[A.ATK.real_frame(to_real(x['frames'][0] / A.TAE_FPS)), A.ATK.real_frame(to_real(x['frames'][1] / A.TAE_FPS))]
+             for x in prof['anims'].get(opening, []) if x['kind'] == 'hyperarmor'] if to_real else []
+    first = real_frame(A, t, sid, hits[0])
+    last = c['hit_windows'][0][0] if c.get('hit_windows') else None
+    roll = c.get('roll')
+    return {'first_hit': first, 'last_hit': last, 'roll': roll, 'next_attack': c.get('next'),
+            'locked_if_first_misses': round(roll - first, 1) if roll is not None and first is not None else None,
+            'after_last_hit': round(roll - last, 1) if roll is not None and last is not None else None,
+            'hyperarmor': armor}
 
 
 def selftest():
