@@ -71,6 +71,24 @@ OPCODES: list[tuple[bytes, str, bool]] = [
     (b"\x80", "grp1 byte imm", False),
     (b"\x81", "grp1 imm32", False),
     (b"\x83", "grp1 imm8", False),
+    # `test byte [reg+N], imm8` is how MSVC reads a param bitfield; without these two a scan
+    # for a bitfield byte misses most of its readers.
+    (b"\xf6", "grp3 byte (TEST imm8)", False),
+    (b"\xf7", "grp3 (TEST imm32)", False),
+    # Register-destination ALU forms that read a field in place: a bitfield mask is often
+    # `and al, [reg+N]` rather than a `movzx` first.
+    (b"\x02", "ADD byte load", False),
+    (b"\x03", "ADD load", False),
+    (b"\x0a", "OR byte load", False),
+    (b"\x0b", "OR load", False),
+    (b"\x22", "AND byte load", False),
+    (b"\x23", "AND load", False),
+    (b"\x2a", "SUB byte load", False),
+    (b"\x2b", "SUB load", False),
+    (b"\x32", "XOR byte load", False),
+    (b"\x33", "XOR load", False),
+    (b"\x3a", "CMP byte load", False),
+    (b"\x3b", "CMP load", False),
     (b"\x8d", "LEA", False),
 ]
 
