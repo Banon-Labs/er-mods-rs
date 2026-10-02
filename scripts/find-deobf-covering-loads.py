@@ -24,6 +24,9 @@ import sys
 import capstone
 from capstone import x86
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402
+
 DEFAULT_IMG = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "eldenring-deobf.bin"
 )
@@ -47,7 +50,11 @@ def covering(data: bytes, target: int, follow: int) -> list[tuple[int, str]]:
                 s = at - back
                 if s < 0 or s in found:
                     continue
-                insns = list(md.disasm(data[s : s + 48], BASE + s, follow + 1))
+                # Stop at the function's last byte; an unknown extent is a refusal, not a guess.
+                stop = function_extent.body_end(data, BASE + s)
+                if stop is None or stop <= s:
+                    continue
+                insns = list(md.disasm(data[s:stop], BASE + s, follow + 1))
                 if not insns:
                     continue
                 first = insns[0]

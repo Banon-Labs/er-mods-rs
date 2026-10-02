@@ -18,6 +18,9 @@ import sys
 
 from capstone import CS_ARCH_X86, CS_MODE_64, Cs
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import function_extent  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE = 0x140000000
 TEXT_END = 0x2a00000
@@ -76,7 +79,12 @@ def main():
                 off = m.start()
                 if off < 0x1000 or off > TEXT_END:
                     continue
-                insns = list(md.disasm(img[off:off + 48], BASE + off))
+                # The mov and the five after it, never past the function's last byte; an
+                # unknown extent is a refusal, not a guess.
+                stop = function_extent.body_end(img, BASE + off)
+                if stop is None or stop <= off:
+                    continue
+                insns = list(md.disasm(img[off:stop], BASE + off, 6))
                 if not insns or insns[0].size != len(enc):
                     continue
                 calls = [i.op_str for i in insns[1:6] if i.mnemonic == 'call']
