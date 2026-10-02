@@ -25,7 +25,7 @@ The weapon is read as it comes, before any ash or infusion. Gear an infusion or 
 make work (a Blood Lance and Lord of Blood's Exultation) works the same on every weapon that
 takes them, so it says nothing about this one and is not listed.
 | `pierce` | the counter-hit row (Spear Talisman) | pierce share of the moveset's hit records |
-| `successive` | successive-hit stage rows (Winged Sword Insignia) | percentile of successive-counter gain per second of the R1 string |
+| `successive` | successive-hit stage rows (Winged Sword Insignia) | percentile, among every base weapon, of the counter its R1 string adds per second net of the host's decay, in its faster grip (multi-hitbox swings count each landed record) |
 | `stat:<STR..>` | ungated attribute points (Millicent's Prosthesis DEX, Silver Tear Mask ARC) | attack gained from those points at every attribute 40, as a fraction |
 
 Gear benefit is the damage multiplier minus one (x1.2 -> 0.2), the player-damage correction
@@ -224,9 +224,13 @@ class Population:
         self.d = d
         self.slot_q = {}
         self.status = {}
+        self.succ = []
         for wid in AFF.base_weapons(d):
             for st, v in innate_row_statuses(d, wid).items():
                 self.status.setdefault(st, []).append(v)
+            s = successive(d, wid)
+            if s:
+                self.succ.append(s['net_per_s'])
             try:
                 rows = d.ATT.weapon_attacks(d.reg, wid, 'one')
             except Exception:                           # weapon rows the attack module cannot read
@@ -241,6 +245,36 @@ class Population:
         if not values:
             return 0.0
         return sum(1 for x in values if x <= v) / len(values)
+
+
+#: The talisman whose counter defines the successive channel. Winged Sword Insignia, its rotten
+#: version and Millicent's Prosthesis share its thresholds 17/30/45/60 and its 2-per-second host
+#: decay (`er-mechanics-talisman-affinity --selftest` checks all three).
+SUCCESSIVE_REFERENCE = 'Rotten Winged Sword Insignia'
+
+
+def successive(d, wid, prof=None):
+    """How fast the weapon's R1 string fills the successive-hit counter, in the grip that fills
+    it faster: counter per second net of the decay, and the seconds and hits from an empty
+    counter to the first threshold. None when the string adds nothing."""
+    spec = d.triggers[SUCCESSIVE_REFERENCE]['kinds']['successive']
+    try:
+        f = AFF.successive_features(prof or AFF.weapon_profile(d, wid), spec)
+    except Exception:                                   # weapon rows the attack module cannot read
+        return None
+    best = None
+    for grip in ('one', 'both'):
+        g = f.get(grip) or {}
+        net = g.get('net_per_s_upper')
+        if net is None or g.get('r1_string_gain', 0) <= 0:
+            continue
+        if best is None or net > best['net_per_s']:
+            cs = g.get('cold_start_first_threshold') or {}
+            best = {'grip': grip, 'net_per_s': net, 'gain_per_s': g['gain_per_s'],
+                    'threshold': spec['hosts'] and min(h['threshold'] for h in spec['hosts']),
+                    'reached': cs.get('reached'), 'seconds': (cs.get('seconds') or [None])[0],
+                    'hits': (cs.get('hits') or [None])[0]}
+    return best
 
 
 def innate_row_statuses(d, wid):
@@ -308,10 +342,10 @@ def weapon_vector(d, pop, wid, tables, prof):
     rec = sum(h['records'] for h in hits)
     if rec:
         v['pierce'] = sum(h['records'] for h in hits if h['phys_type'] == 'pierce') / rec
-    chain = prof['grips']['one']['r1_chain']
-    gain = sum(s['counter_gain'] for s in chain)
-    if gain:
-        v['successive'] = 1.0
+    s = successive(d, wid, prof)
+    if s and s['net_per_s'] > 0:
+        v['successive'] = pop.pct(pop.succ, s['net_per_s'])
+        v['_successive'] = s
     ref = {s: REFERENCE_STAT for s in ('str', 'dex', 'int', 'fth', 'arc')}
     name = d.weapon_name(wid)
     try:
@@ -358,7 +392,7 @@ STATUS_TEXT = {'bleed': 'blood loss', 'poison': 'poison or rot', 'scarlet_rot': 
                'madness': 'madness', 'sleep': 'sleep'}
 
 
-def describe(parts, affinity, item):
+def describe(parts, affinity, item, wv):
     """One line of player-facing copy for a ranked row, from its channels and costs."""
     out, seen = [], set()
     for ch, e, g, _, b in parts:
@@ -373,7 +407,13 @@ def describe(parts, affinity, item):
         elif kind == 'status':
             text = f'{pct} damage after {STATUS_TEXT.get(arg, arg)} procs nearby'
         elif kind == 'successive':
-            text = f'{pct} damage after successive hits'
+            s = wv.get('_successive') or {}
+            grip = 'two-handed ' if s.get('grip') == 'both' else ''
+            text = f"{pct} damage once successive hits reach {s.get('threshold')}"
+            if s.get('reached') == 'always' and s.get('seconds') is not None:
+                text += (f"; {s['hits']} landed {grip}R1s get there in {s['seconds']:.1f} s and its R1 string "
+                         f"outpaces the decay by {s['net_per_s']:.1f} a second, faster than "
+                         f"{e * 100:.0f}% of weapons")
         elif kind == 'stat':
             text = f"+{b['points']} {arg}: {pct} attack at {REFERENCE_STAT} in every stat"
         elif kind == 'element':
@@ -407,7 +447,7 @@ def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
                                    'row': p[4]['row']} for p in parts],
                      'survivability_cost': round(survivability_cost(item), 4),
                      'other_costs': item['other_costs'],
-                     'why': describe(parts, None, item)})
+                     'why': describe(parts, None, item, wv)})
     rows.sort(key=lambda r: -r['score'])
     return {'weapon': d.weapon_name(wid), 'id': wid, 'powerstance': powerstance(d, wid),
             'vector': {k: round(x, 3) for k, x in wv.items() if not k.startswith('_')},
@@ -456,6 +496,10 @@ def selftest():
     for n in ('White Mask', "Lord of Blood's Exultation", "Kindred of Rot's Exultation", 'Shard of Alexander',
               'Fire Scorpion Charm'):
         assert n not in names, (n, names.get(n))
+    # Lance's slow R1 string barely outpaces the decay; Backhand Blade's two blades fill it fast.
+    assert lance['vector']['successive'] < 0.3 and 'Rotten Winged Sword Insignia' not in names, lance['vector']
+    bhb = rank(d, pop, gear, tables, 'Backhand Blade', top=60)
+    assert bhb['vector']['successive'] > 0.8 and 'Rotten Winged Sword Insignia' in {r['name'] for r in bhb['gear']}
     uchi = {r['name'] for r in rank(d, pop, gear, tables, 'Uchigatana', top=60)['gear']}
     assert "Lord of Blood's Exultation" in uchi and 'Shard of Alexander' not in uchi, uchi
     rob = {r['name'] for r in rank(d, pop, gear, tables, 'Rivers of Blood', top=60)['gear']}
