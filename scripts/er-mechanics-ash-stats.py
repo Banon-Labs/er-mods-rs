@@ -84,39 +84,84 @@ class AshScorer(OPT.Scorer):
 
 #: The groups a cast's hits are split into for `contributions`, by `skill_hits` kind.
 HIT_GROUPS = (('weapon', 'melee'), ('bullet', 'bullet'))
-STEP = 10
+SOURCES = ('base',) + DAMAGE_STATS + ('grease',)
 
 
-def contributions(scorer, stats, step=STEP):
-    """For each group of the skill's hits that exists: hits per cast, damage per cast after PvP
-    defense, and per damage stat what `step` more points of it add to that damage.
-
-    Weapon hits are the skill's melee hits, which take the weapon's attack times their motion
-    value (`hit_attack`); bullets take their own flat attack and the scaling of their attack
-    element row. A stat that adds nothing to a group is reported with 0, so the page can say so."""
-    def by_group(st):
-        hits = scorer.hits(st)
-        out = {}
-        for name, kind in HIT_GROUPS:
-            sel = [h for h in hits if h['kind'] == kind]
-            if sel:
-                out[name] = (A.pvp_damage(scorer.levers.t, scorer.wid, sel, scorer.defender, OPT.DEF),
-                             sum(h.get('count', 1) for h in sel))
-        return out
-    base = by_group(stats)
-    raised = {k: by_group(dict(stats, **{k: min(OPT.STAT_CAP, stats[k] + step)})) for k in DAMAGE_STATS}
-    out = []
-    for name, _ in HIT_GROUPS:
-        if name not in base:
+def stat_terms(ctx, el, aecp_override=-1, disable_2h=False):
+    """{stat: its term} of `element_multiplier` for one element, so the multiplier is
+    1 + the sum of the terms. None when a requirement is unmet: the multiplier is then the
+    penalty alone and does not split by stat."""
+    AR_ = ctx.AR
+    name, suf, _, _, gfield = next(e for e in AR_.ELEMENTS if e[0] == el)
+    aecp = ctx.tables.aecp.get(aecp_override if aecp_override >= 0 else ctx.wep['attackElementCorrectId'], {})
+    str_mult = AR_.TWO_HAND_STR_MULT if ctx.two and not disable_2h else 1.0
+    terms = {}
+    for s in AR_.STATS:
+        aname, cfield, rfield, pfield = AR_.STAT_FIELDS[s]
+        if not aecp.get(f'is{aname}Correct_by{suf}'):
+            terms[s] = 0.0
             continue
-        dmg, n = base[name]
-        rows = []
-        for k in DAMAGE_STATS:
-            gain = raised[k][name][0] - dmg
-            rows.append({'stat': k, 'value': stats[k], 'gain': round(gain, 1),
-                         'pct': round(100.0 * gain / dmg, 2) if dmg else 0.0})
-        rows.sort(key=lambda r: -r['gain'])
-        out.append({'group': name, 'hits': n, 'damage': round(dmg, 1), 'step': step, 'stats': rows})
+        over = aecp.get(f'overwrite{aname}CorrectRate_by{suf}', -1)
+        infl = aecp.get(f'Influence{aname}CorrectRate_by{suf}', 100) * 0.01
+        rate = (over if over >= 0 else ctx.wep[cfield]) * ctx.reinf[rfield]
+        m = infl * AR_.stat_multiplier(ctx.tables, ctx.wep[pfield], ctx.stats.get(s, 0), rate, ctx.wep[gfield],
+                                       str_mult if s == 'str' else 1.0)
+        if m < 1.0:
+            return None
+        terms[s] = m - 1.0
+    return terms
+
+
+def hit_sources(ctx, h, grease):
+    """{source: attack} for one hit, summing to its attack: the weapon's unscaled part, each stat's
+    share of the scaling (`hit_attack` = base part x (1 + sum of the stat terms)), and the grease."""
+    out = dict.fromkeys(SOURCES, 0.0)
+    for el in A.ELEMENTS:
+        if not h['from_weapon']:
+            out['base'] += h['attack'].get(el, 0.0)
+            continue
+        part = ctx.base_by[el] * h['mv'].get(el, 0) / 100.0 + h['flat'].get(el, 0.0) * ctx.base_atk_rate
+        terms = stat_terms(ctx, el, h['element_correct_override'], h['disable_2h'])
+        if terms is None:
+            out['base'] += part * ctx.multiplier(el, h['element_correct_override'], h['disable_2h'])
+            continue
+        out['base'] += part
+        for s, v in terms.items():
+            out[s] += part * v
+    if grease and h['kind'] == 'melee' and h['from_weapon']:
+        out['grease'] = sum(h['attack'].values()) - sum(out.values())
+    return out
+
+
+def contributions(scorer, stats):
+    """For each group of the skill's hits that exists: hits per cast, damage per cast after PvP
+    defense, and that damage split by where its attack comes from -- the weapon's unscaled attack,
+    each damage stat, and the grease.
+
+    The attack splits exactly, because the stat multiplier is one plus a term per stat. Defense is
+    not linear in attack, so each hit's damage is divided in proportion to its attack. Weapon hits
+    are the skill's melee hits; bullets take their flat attack and the scaling of their own attack
+    element row."""
+    hits = scorer.hits(stats)
+    A.pvp_damage(scorer.levers.t, scorer.wid, hits, scorer.defender, OPT.DEF)
+    ctx = A.WeaponContext(scorer.weapon, scorer.affinity, stats={k: stats[k] for k in DAMAGE_STATS},
+                          two_handed=scorer.two_handed, ar_tables=scorer.levers.ar_tables)
+    out = []
+    for name, kind in HIT_GROUPS:
+        sel = [h for h in hits if h['kind'] == kind]
+        if not sel:
+            continue
+        dmg = dict.fromkeys(SOURCES, 0.0)
+        for h in sel:
+            src = hit_sources(ctx, h, scorer.grease)
+            atk = sum(src.values())
+            for k, v in src.items():
+                dmg[k] += h['pvp_damage_total'] * v / atk if atk else 0.0
+        total = sum(dmg.values())
+        parts = [{'source': k, 'damage': round(v, 1), 'pct': round(100.0 * v / total, 1)}
+                 for k, v in sorted(dmg.items(), key=lambda kv: -kv[1]) if v > 0.05]
+        out.append({'group': name, 'hits': sum(h.get('count', 1) for h in sel), 'damage': round(total, 1),
+                    'parts': parts})
     return out
 
 
@@ -193,8 +238,17 @@ def selftest():
     groups = {g['group']: g for g in r['contributions']}
     assert set(groups) == {'weapon'} and groups['weapon']['hits'] == 5, r['contributions']
     assert abs(sum(g['damage'] for g in groups.values()) - r['skill_damage']) < 0.5, r
-    gains = {s['stat']: s['gain'] for s in groups['weapon']['stats']}
-    assert gains['str'] > 0 and all(v <= 0.05 for k, v in gains.items() if k != 'str'), gains
+    parts = {p['source']: p['damage'] for p in groups['weapon']['parts']}
+    assert set(parts) == {'base', 'str', 'grease'}, parts
+    # The split reproduces each hit's attack, at stats that scale on several elements too.
+    for weapon, aff, case in (('Lance', 'Heavy', st),
+                              ('Lance', 'Quality', {'str': 40, 'dex': 40, 'int': 9, 'fth': 9, 'arc': 9}),
+                              ('Lance', 'Lightning', {'str': 20, 'dex': 60, 'int': 9, 'fth': 9, 'arc': 9})):
+        sc = AshScorer(lv, weapon, aff, r['skill_id'], False, None, None)
+        ctx = A.WeaponContext(weapon, aff, stats={k: case[k] for k in DAMAGE_STATS}, ar_tables=lv.ar_tables)
+        for h in sc.hits(case):
+            got, want = sum(hit_sources(ctx, h, None).values()), sum(h['attack'].values())
+            assert abs(got - want) < 0.05, (aff, h['atk_row'], got, want)
     # A skill with a bullet gets a bullet group.
     lc = optimal('Claymore', 'Lightning Slash', levers=lv)
     assert 'bullet' in {g['group'] for g in lc['contributions']}, lc['contributions']
@@ -229,8 +283,8 @@ def main():
     print(f"  {r['skill_damage']} damage per cast on the median of {r['defender_builds']} defenders")
     print(f"  weapon's own best spread: " + ' '.join(f'{k}={v}' for k, v in r['weapon_build']['stats'].items()))
     for g in r['contributions']:
-        print(f"  {g['group']}: {g['hits']} hits, {g['damage']} per cast; +{g['step']} points: "
-              + ', '.join(f"{s['stat']} +{s['gain']} ({s['pct']}%)" for s in g['stats']))
+        print(f"  {g['group']}: {g['hits']} hits, {g['damage']} per cast: "
+              + ', '.join(f"{p['source']} {p['damage']} ({p['pct']}%)" for p in g['parts']))
     return 0
 
 
