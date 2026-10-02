@@ -24,6 +24,26 @@ denied(cmd) if {
 	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
 }
 
+# The same event with the host_platform signal set the way cupcake delivers it.
+# Every test above this section's (e) block feeds no signals at all, which is
+# the fail-closed "unclassified host" path, so all of them keep denying.
+bash_event_on(cmd, platform) := object.union(bash_event(cmd), {"signals": {"host_platform": platform}})
+
+denied_on(cmd, platform) if {
+	denials := guard.deny with input as bash_event_on(cmd, platform)
+	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
+}
+
+# The exact command denied on 2026-09-26 on the native-Linux dev box: a
+# read-only check for running cargo/rustc builds and agent sessions before a
+# disk cleanup deleted Rust target/ dirs.
+reported_listing := concat("", [
+	`pgrep -a -f 'cargo|rustc' | grep -v pgrep | cut -c1-200 | head; `,
+	`echo "--- agents:"; pgrep -a -x claude | cut -c1-120; `,
+	`pgrep -a -f '(^| |/)pi( |$)' | cut -c1-120 | head; `,
+	`echo "--- scan:"; cat /tmp/.../tasks/bv7bzk2t8.output`,
+])
+
 # --- (a) Bare / shell-token pgrep is DENIED, no escape hatch -----------------
 
 # The canonical false-negative form that blocked the overnight session.
@@ -394,6 +414,75 @@ test_deny_git_add_then_probe_then_commit_heredoc if {
 		"guard: drop the raw process probe",
 		"EOF",
 	]))
+}
+
+# --- (e) Host platform: the WSL premise, and only where it holds ------------
+#
+# On native Linux pgrep sees Steam, Proton and every other process directly, so
+# the WSL false-negative this guard exists for cannot happen there. The block
+# stands down only on a positive `native` from .cupcake/signals/host_platform.sh.
+
+test_allow_native_linux_reported_process_listing if {
+	not denied_on(reported_listing, "native")
+}
+
+test_allow_native_linux_pgrep_steam if {
+	not denied_on("pgrep -x steam", "native")
+}
+
+test_allow_native_linux_game_process_preflight if {
+	not denied_on("if pgrep -x eldenring.exe >/dev/null || pgrep -x start_protected_game.exe >/dev/null; then echo running; fi", "native")
+}
+
+# The WSL protection is intact: the same listing on a WSL host still denies.
+test_deny_wsl_reported_process_listing if {
+	denied_on(reported_listing, "wsl")
+}
+
+test_deny_wsl_pgrep_steam if {
+	denied_on("pgrep -x steam", "wsl")
+}
+
+test_deny_wsl_bash_c_quoted_pgrep if {
+	denied_on(`bash -c 'pgrep -x steam >/dev/null && echo up'`, "wsl")
+}
+
+# A host the signal could not classify keeps the block.
+test_deny_unknown_host_pgrep_steam if {
+	denied_on("pgrep -x steam", "unknown")
+}
+
+# Anything that is not exactly `native` keeps the block: a near-miss spelling,
+# an empty answer, a non-string, and the failure record cupcake substitutes when
+# the signal exits non-zero.
+test_deny_near_miss_platform_values if {
+	denied_on("pgrep -x steam", "Native")
+	denied_on("pgrep -x steam", "native-linux")
+	denied_on("pgrep -x steam", "")
+	denied_on("pgrep -x steam", true)
+}
+
+test_deny_signal_failure_record if {
+	denied_on("pgrep -x steam", {"exit_code": 126, "output": "native", "error": "permission denied", "success": false})
+}
+
+# Signals present but host_platform absent (the signal timed out).
+test_deny_signal_key_absent if {
+	denials := guard.deny with input as object.union(bash_event("pgrep -x steam"), {"signals": {"current_branch": "feature/x"}})
+	"ER-EFFECTS-BLOCK-MANUAL-PGREP" in rule_ids(denials)
+}
+
+# The reason names the verdict it acted on, and stays defined when the signal
+# produced something that is not a string.
+test_deny_reason_names_host_platform_verdict if {
+	some d in guard.deny with input as bash_event_on("pgrep -x steam", "wsl")
+	contains(d.reason, "host_platform signal: wsl")
+	contains(d.reason, "manual pgrep is blocked")
+}
+
+test_deny_reason_labels_unusable_signal if {
+	some d in guard.deny with input as bash_event_on("pgrep -x steam", {"exit_code": 1, "output": "", "error": "", "success": false})
+	contains(d.reason, "host_platform signal: unavailable")
 }
 
 # Non-Bash tools are out of scope for this Bash-command guard.

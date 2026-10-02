@@ -1507,6 +1507,11 @@ python3 "$repo_root/scripts/er-runtime-evidence.py" --selftest
 # builds a linked working tree and a stranger repository, because the two answers that matter
 # (measure there, versus refuse to guess) are the ones a string fixture cannot reach.
 python3 "$repo_root/scripts/cupcake_push_target_repo.py" --selftest
+# Whether a scratch python script the pending command runs only reads. The python_script_writes
+# signal hands this verdict to bash_no_python_file_write, which admits an uncommitted script on
+# `READONLY` alone; a false `READONLY` is a python file write let through, so the scan is
+# selftested against real temp files for each write shape it claims to catch.
+python3 "$repo_root/scripts/cupcake_python_script_writes.py" --selftest
 # A detour's expected prologue must be generated from named iced-x86 instructions in a build.rs,
 # never hand-typed: `mov rax, rsp` has two legal encodings, the game ships 48 8b c4, an assembler
 # left to choose emits 48 89 e0, and a prologue that is one byte off byte-checks its own hook off
