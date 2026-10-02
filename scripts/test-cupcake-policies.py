@@ -445,6 +445,21 @@ def main() -> int:
     run_runtime_evidence_signal_checks()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
+        # no_grep_for_build_errors through the live engine: a grep over `ls` output in another
+        # statement from a script named er-builds-* is not a build adjudicated by grep (2026-10-01),
+        # while the cargo-grep that created the policy still is.
+        PolicyCase(
+            "allow-grep-over-ls-beside-builds-named-script",
+            "ls scripts | grep -i -E 'er-builds|er-mechanics|ash' ; "
+            "python3 scripts/er-builds-ash-choice.py --help 2>&1 | head -40",
+            True,
+        ),
+        PolicyCase(
+            "deny-grep-over-cargo-check-output",
+            "cargo check -p er-quickload 2>&1 | grep -E 'error' -A6 | head -20",
+            False,
+            "A build reports success or failure ONCE",
+        ),
         PolicyCase(
             "allow-local-shell-vars-before-commands-with-coarse-ast",
             "run_id=$(date +%Y%m%d-%H%M%S)\n"

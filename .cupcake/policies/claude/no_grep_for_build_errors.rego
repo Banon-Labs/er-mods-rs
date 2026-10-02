@@ -53,11 +53,20 @@ import data.cupcake.system.commands
 # counted as running it: `grep -n x scripts/check-me3-dll-conflicts.py Cargo.toml | head` and a
 # `python3 -c` reading `'scripts/check-me3-dll-conflicts.py'` were both denied on 2026-10-02
 # while building nothing.
+#
+# The `scripts/` wrapper alternative needs `build`, `check` or `test` as the first or the last word
+# of the script name (`check.sh`, `check-rust-build.sh`, `test-cupcake-policies.py`,
+# `act-check.sh`), or the one wrapper that has it in the middle, `er-build-dlls.sh`, by name. Until
+# 2026-10-01 it took any name containing those letters, so `scripts/er-builds-*.py` -- PvP
+# character-build ranking scripts, nothing to do with compiling -- counted as a build, and a
+# delimited word anywhere in the name still caught `er-build-import*`. In this repo `build` in the
+# middle of a script name is almost always a character build: `compare-build-armament-slots.py`,
+# `decode-build-link.py`, `find-build-item.py`.
 build_command_position := "(^|[;&|(`\\n]|\\$\\(|-c[[:space:]]+['\"])[[:space:]]*([[:alpha:]_][[:alnum:]_]*=[^[:space:]]*[[:space:]]+)*((sudo|env|time|nice|exec|command|xargs|bash|sh|python3?|uv[[:space:]]+run|timeout[[:space:]]+[0-9.]+[smhd]?)[[:space:]]+)*"
 
 build_verb_pattern := concat("", [
 	build_command_position,
-	"(/?([[:alnum:]_.-]+/)*)?(cargo|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/[[:alnum:]_./-]*(build|check|test)[[:alnum:]_./-]*)($|[^[:alnum:]_-])",
+	"(/?([[:alnum:]_.-]+/)*)?(cargo|rustc|opa|make|ninja|cmake|go|npm|pnpm|yarn|pytest|tsc|scripts/([[:alnum:]_.-]+/)*((build|check|test)([-_.][[:alnum:]_.-]*)?|[[:alnum:]_.-]*[-_](build|check|test)(\\.[[:alnum:]]+)?|er-build-dlls\\.sh))($|[^[:alnum:]_-])",
 ])
 
 # Matchers that ADJUDICATE. head/tail/sed/awk/wc/jq/python are deliberately absent: they excerpt or
