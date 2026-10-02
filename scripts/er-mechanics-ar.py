@@ -66,6 +66,16 @@ STATUSES = [
 # `COMMUNITY`: bows, greatbows, crossbows and ballistae are always two-handed.
 ALWAYS_TWO_HANDED_WEP_TYPES = {50, 51, 53, 55, 56}
 
+# SpEffect scaling-rate adds (`VERIFIED` 1.16.2, attack-rating.md section 7): the accumulator
+# `FUN_1404f4520` sums these columns as ints into AttackInfo +0xb4..+0xc4, `FUN_140690390` reads
+# them back, and the per-stat wrapper (STR: `FUN_140690c60`) calls
+# `PerformWeaponScaling(req, stat, FUN_140d53db0() + add, graph)`. `FUN_140d53db0` is the weapon's
+# correct rate (or the AECP overwrite) times the ReinforceParamWeapon rate, so the add is in rate
+# points after reinforcement and before the `rate > 0` test. Roar, Barbaric/Milos Roar and War Cry
+# carry `changeStrengthPoint` 5.
+RATE_POINT_FIELDS = {'str': 'changeStrengthPoint', 'dex': 'changeAgilityPoint',
+                     'int': 'changeMagicPoint', 'fth': 'changeFaithPoint', 'arc': 'changeLuckPoint'}
+
 TWO_HAND_STR_MULT = 1.5          # 0x143b33d7c (1.16.2), 0x14069134c load on 1.17.1
 PENALTY_CAP_PCT = 20.0           # 0x143b33d80
 PENALTY_FULL_PCT = 100.0         # 0x143b33d84
@@ -186,8 +196,12 @@ def stat_multiplier(tables, requirement, stat, rate, graph_id, stat_mult=1.0, ra
     return 1.0
 
 
-def element_multiplier(tables, wep, reinf, aecp, elem_suffix, graph_id, stats, str_mult=1.0):
-    """`FUN_140690390`: combine the five stat multipliers for one element."""
+def element_multiplier(tables, wep, reinf, aecp, elem_suffix, graph_id, stats, str_mult=1.0,
+                       rate_adds=None):
+    """`FUN_140690390`: combine the five stat multipliers for one element.
+
+    `rate_adds` {stat: points} is the SpEffect scaling-rate add (`RATE_POINT_FIELDS`), added to
+    the reinforced rate of every stat the AECP row flags for this element."""
     ms = []
     for s in STATS:
         aname, cfield, rfield, pfield = STAT_FIELDS[s]
@@ -196,7 +210,7 @@ def element_multiplier(tables, wep, reinf, aecp, elem_suffix, graph_id, stats, s
             continue
         over = aecp.get(f'overwrite{aname}CorrectRate_by{elem_suffix}', -1)
         infl = aecp.get(f'Influence{aname}CorrectRate_by{elem_suffix}', 100) * 0.01
-        rate = (over if over >= 0 else wep[cfield]) * reinf[rfield]
+        rate = (over if over >= 0 else wep[cfield]) * reinf[rfield] + (rate_adds or {}).get(s, 0)
         m = stat_multiplier(tables, wep[pfield], stats.get(s, 0), rate, graph_id,
                             str_mult if s == 'str' else 1.0)
         ms.append(infl * m)
@@ -255,11 +269,20 @@ def normalise_stats(stats):
     return out
 
 
-def attack_rating(tables, weapon, affinity='Standard', level=0, stats=None, two_handed=False):
+def attack_rating(tables, weapon, affinity='Standard', level=0, stats=None, two_handed=False,
+                  rate_adds=None):
     """AR per damage type, status build-up and spell buff for one weapon.
 
-    Each entry is {'base', 'scaling', 'total'}; total = base * multiplier.
+    Each entry is {'base', 'scaling', 'total'}; total = base * multiplier. `rate_adds`
+    {stat: points} is the attacker's SpEffect `change*Point` sum (`RATE_POINT_FIELDS`, e.g.
+    {'str': 5} under War Cry); it moves the damage types only. The spell buff and the status
+    multipliers are left without it: the spell-buff path is stat-only (no AttackInfo), and no
+    regulation row sets `changeLuckPoint`.
     """
+    # Kept as floats: the buff model passes uptime-weighted points, and with the requirement met
+    # AR is linear in the rate, so a weighted add is the weighted AR.
+    rate_adds = {STAT_ALIASES.get(k.lower(), k.lower()): float(v)
+                 for k, v in (rate_adds or {}).items()} or None
     stats = normalise_stats(stats)
     base_id = tables.find_weapon(weapon, affinity)
     wep = tables.weapons[base_id]
@@ -281,7 +304,8 @@ def attack_rating(tables, weapon, affinity='Standard', level=0, stats=None, two_
         base = wep[bfield] * reinf[rfield]
         if not base:
             continue
-        mult = element_multiplier(tables, wep, reinf, aecp, suf, wep[gfield], stats, str_mult)
+        mult = element_multiplier(tables, wep, reinf, aecp, suf, wep[gfield], stats, str_mult,
+                                  rate_adds)
         out['damage'][name] = {'base': base, 'scaling': base * (mult - 1.0), 'total': base * mult}
     out['total'] = sum(d['total'] for d in out['damage'].values())
 
@@ -385,9 +409,40 @@ GRAPH_CASES = [(0, 1, 0.0), (0, 18, 25.0), (0, 60, 75.0), (0, 80, 90.0), (0, 150
                (0, 200, 110.0), (6, 25, 10.0), (6, 45, 75.0), (6, 30, 26.25)]
 
 
+# SpEffect `changeStrengthPoint` (`RATE_POINT_FIELDS`). The rows are read from the regulation; the
+# expected AR gain is base x add/100 x graph/100 (graph 0: 90 at 80, 75 at 60, `GRAPH_CASES`).
+# Giant-Crusher +25 at 80 STR one-handed is the worked example in attack-rating.md section 7:
+# 820.64 -> 837.73, +2.1% on top of the roar's x1.075. Sword of Night has `correctStrength` 0 and
+# an AECP row that flags STR for physical, so the add alone gives it STR scaling.
+RATE_ROWS = (841, 843, 846, 848, 1681, 1683, 1686, 1688, 1811, 1813, 1816, 1818)
+RATE_CASES = [
+    ('Giant-Crusher', 25, {**_S, 'str': 80}, {'str': 5}, 'physical', 379.75 * 0.05 * 0.90),
+    ('Sword of Night', 0, {**_S, 'str': 60, 'dex': 20}, {'str': 5}, 'physical', 110.0 * 0.05 * 0.75),
+    ('Sword of Night', 0, {**_S, 'str': 60, 'dex': 20}, {'str': 5}, 'magic', 0.0),
+    ('Giant-Crusher', 25, {**_S, 'str': 80}, {'str': 2.5}, 'physical', 379.75 * 0.025 * 0.90),
+]
+
+
 def selftest(tables):
     bad = 0
     n = 0
+    sp, _, _ = EPR.rows(EPR.param_bytes(EPR.load(None), 'SpEffectParam'), list(RATE_POINT_FIELDS.values()))
+    sp = {r['id']: r for r in sp}
+    for rid in RATE_ROWS:
+        got = {k: sp[rid][f] for k, f in RATE_POINT_FIELDS.items() if sp[rid][f]}
+        n += 1
+        if got != {'str': 5}:
+            bad += 1
+            print(f'FAIL SpEffect {rid} rate points {got} != {{str: 5}}')
+    for weapon, lvl, stats, adds, el, want in RATE_CASES:
+        r0 = attack_rating(tables, weapon, 'Standard', lvl, stats)['damage'][el]['total']
+        r1 = attack_rating(tables, weapon, 'Standard', lvl, stats, rate_adds=adds)['damage'][el]['total']
+        n += 1
+        if abs((r1 - r0) - want) > 1e-3:
+            bad += 1
+            print(f'FAIL {weapon} +{lvl} {el} rate adds {adds}: +{r1 - r0:.4f} want +{want:.4f}')
+        else:
+            print(f'ok   {weapon} +{lvl} {el} rate adds {adds}: +{r1 - r0:.4f}')
     for gid, x, want in GRAPH_CASES:
         got = calc_correct(tables.graphs[gid], x)
         n += 1
@@ -418,6 +473,8 @@ def main():
     ap.add_argument('--level', type=int, default=0)
     ap.add_argument('--stats', default='', help='str=18,dex=65,int=10,fth=10,arc=10')
     ap.add_argument('--two-handed', action='store_true')
+    ap.add_argument('--rate-adds', default='',
+                    help='SpEffect scaling-rate adds, e.g. str=5 under Roar / War Cry')
     ap.add_argument('--regulation')
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--selftest', action='store_true')
@@ -428,7 +485,8 @@ def main():
     if not a.weapon:
         ap.error('weapon is required unless --selftest')
     stats = dict(kv.split('=') for kv in a.stats.split(',') if kv)
-    r = attack_rating(tables, a.weapon, a.affinity, a.level, stats, a.two_handed)
+    adds = {k: float(v) for k, v in (kv.split('=') for kv in a.rate_adds.split(',') if kv)}
+    r = attack_rating(tables, a.weapon, a.affinity, a.level, stats, a.two_handed, adds)
     print(json.dumps(r, indent=2) if a.json else _fmt(r))
 
 

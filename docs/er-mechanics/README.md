@@ -48,8 +48,11 @@ attack vs defender --(defense)--> per element: attack x (1 - curve(attack/defens
 
 Each doc ends with its own "Not established" list. The ones that matter most to an optimizer:
 
-- The attacker side that writes AR x motion value into the hit, and a few unidentified per-element
-  factors in the damage function (defense.md, attacks.md).
+- The attacker side that writes AR x motion value into the hit (defense.md, attacks.md). The
+  per-element factors of the damage function are now identified: the bullet damage decay in
+  `unk1`, the sweet / sour spot `k` (1.0 in PvP), the flick cut and the hyperarmor toughness cut
+  (defense.md sections 0, 2b, 3), and the AR context terms (attack-rating.md section 7). Still open:
+  the `vcall(chr, +0xb4)` term of `unk1`, and that the victim's machine owns PvP HP (INFERRED).
 - Whether duplicate SpEffects stack (Rakshasa pieces), and where the one-talisman-per-group rule is
   enforced.
 - Status build-up: the arcane multiplier's consumer and the reinforce offset pairing are community
