@@ -301,6 +301,41 @@ def show_similar(m: dict, query: str, n: int) -> int:
     return 0
 
 
+def show_pairs(m: dict, corpus: list[dict], query: str, kind: str, n: int) -> int:
+    """Items of `kind` worn with an armament, three ways, each with its build count.
+
+    `lift` = P(item | armament) / P(item) from the corpus itself; `ease` = the armament's EASE
+    weight toward the item (what the recommender would add); `cos` = embedding cosine. A pair
+    worn together in fewer than three builds is not shown: its lift is noise.
+    """
+    want = f"w:{query}"
+    vocab = {t: i for i, t in enumerate(m["vocab"])}
+    if want not in vocab:
+        near = [t for t in m["vocab"] if t.startswith("w:") and query.lower() in t.lower()]
+        print(f"no armament {query!r}" + (f"; did you mean {near[:5]}" if near else ""))
+        return 1
+    with_w = [b for b in corpus if want in b["tokens"]]
+    if not with_w:
+        print(f"{want}: in the model but in no build of this corpus window")
+        return 1
+    df = Counter(t for b in corpus for t in set(b["tokens"]) if t.startswith(kind + ":"))
+    co = Counter(t for b in with_w for t in set(b["tokens"]) if t.startswith(kind + ":"))
+    i = vocab[want]
+    rows = []
+    for t, c in co.items():
+        if c < 3:
+            continue
+        lift = (c / len(with_w)) / (df[t] / len(corpus))
+        j = vocab.get(t)
+        rows.append((lift, c, t, m["B"][i, j] if j is not None else float("nan"),
+                     float(m["E"][j] @ m["E"][i]) if j is not None else float("nan")))
+    print(f"{want}: {len(with_w)} of {len(corpus)} builds; {KINDS[kind]} worn with it in 3+ of them")
+    print(f"  {'lift':>5} {'with':>5} {'all':>5} {'ease':>7} {'cos':>6}  item")
+    for lift, c, t, e, cos in sorted(rows, reverse=True)[:n]:
+        print(f"  {lift:5.2f} {c:5d} {df[t]:5d} {e:+7.3f} {cos:6.3f}  {t.split(':', 1)[1]}")
+    return 0
+
+
 def show_build(m: dict, ref: str, n: int) -> int:
     b = fetch_build(ref)
     vocab = {t: i for i, t in enumerate(m["vocab"])}
@@ -332,7 +367,8 @@ def show_build(m: dict, ref: str, n: int) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["fit", "eval", "similar", "build"])
+    ap.add_argument("cmd", choices=["fit", "eval", "similar", "build", "pairs"])
+    ap.add_argument("--kind", default="t", choices=sorted(KINDS), help="pairs: item kind, default talisman")
     ap.add_argument("arg", nargs="?")
     ap.add_argument("--mirror", type=Path, default=CACHE / "builds.jsonl")
     ap.add_argument("--model", type=Path, default=CACHE / "embeddings.npz")
@@ -354,6 +390,13 @@ def main() -> int:
         return show_similar(m, a.arg, a.n) if a.cmd == "similar" else show_build(m, a.arg, a.n)
 
     corpus, why = load_corpus(a.mirror, a.rl_min, a.rl_max)
+    if a.cmd == "pairs":
+        if not a.arg:
+            ap.error("pairs needs an armament name")
+        m = load_model(a.model)
+        if m["meta"]["rl"] != [a.rl_min, a.rl_max]:
+            ap.error(f"the model was fit on RL {m['meta']['rl']}; pass the same --rl-min/--rl-max")
+        return show_pairs(m, corpus, a.arg, a.kind, a.n)
     print(f"corpus RL {a.rl_min}-{a.rl_max}: " + ", ".join(f"{k} {v}" for k, v in why.most_common()))
     if a.cmd == "eval":
         evaluate(corpus, a.min_df, a.lam, a.dim, a.folds, a.k, a.seed)
