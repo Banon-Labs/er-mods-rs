@@ -17,9 +17,13 @@ Channels, each with how the weapon side is measured:
 | --- | --- | --- |
 | `move:<subcategory>` | attack rate gated on an AtkParam subcategory (Claw Talisman: jump, Retaliatory Crossed-Tree: roll) | percentile, among every base weapon whose slot carries the subcategory, of the slot's motion value per frame to its first hit; the weapon's slot must carry the subcategory itself (the row is read, not the slot name) |
 | `move:120` two-handed | Two-Handed Sword Talisman | share of the two-handed slots whose rows carry 120 |
-| `move:112` skill | Shard of Alexander, Warrior Jar Shard | share of the built-in skill's damaging rows that carry it |
-| `element:<e>` | an ungated attack rate on some elements only (scorpion charms) | the element's share of the affinity's base attack |
-| `status:<s>` | a row gated on a status-presence stateInfo (Lord of Blood's Exultation, White Mask, Mushroom Crown) | 1 when the affinity builds the status, else 0 |
+| `move:112` skill | Shard of Alexander, Warrior Jar Shard | share of the built-in skill's damaging rows that carry it, only for a weapon that takes no ash (any ash weapon fires a skill) |
+| `element:<e>` | an ungated attack rate on some elements only (scorpion charms) | the element's share of the base row's attack |
+| `status:<s>` | a row gated on a status-presence stateInfo (Lord of Blood's Exultation, White Mask, Mushroom Crown) | percentile of the weapon's own per-hit build-up among every weapon whose base row builds the status |
+
+The weapon is read as it comes, before any ash or infusion. Gear an infusion or an ash would
+make work (a Blood Lance and Lord of Blood's Exultation) works the same on every weapon that
+takes them, so it says nothing about this one and is not listed.
 | `pierce` | the counter-hit row (Spear Talisman) | pierce share of the moveset's hit records |
 | `successive` | successive-hit stage rows (Winged Sword Insignia) | percentile of successive-counter gain per second of the R1 string |
 | `stat:<STR..>` | ungated attribute points (Millicent's Prosthesis DEX, Silver Tear Mask ARC) | attack gained from those points at every attribute 40, as a fraction |
@@ -219,8 +223,10 @@ class Population:
     def __init__(self, d):
         self.d = d
         self.slot_q = {}
-        self.crit, self.succ = [], []
+        self.status = {}
         for wid in AFF.base_weapons(d):
+            for st, v in innate_row_statuses(d, wid).items():
+                self.status.setdefault(st, []).append(v)
             try:
                 rows = d.ATT.weapon_attacks(d.reg, wid, 'one')
             except Exception:                           # weapon rows the attack module cannot read
@@ -229,7 +235,6 @@ class Population:
                 q = slot_quality(r)
                 if q:
                     self.slot_q.setdefault(r['slot'], []).append(q)
-            self.crit.append(d.wep[wid]['throwAtkRate'])
 
     @staticmethod
     def pct(values, v):
@@ -238,14 +243,34 @@ class Population:
         return sum(1 for x in values if x <= v) / len(values)
 
 
+def innate_row_statuses(d, wid):
+    """{status: build-up per hit} the weapon's own row carries at +0, before any infusion: the
+    spEffectBehaviorId slots of the base row (`er-mechanics-talisman-affinity.weapon_statuses`)."""
+    w = d.wep.get(wid)
+    out = {}
+    if not w:
+        return out
+    rf = d.reinforce.get(w['reinforceTypeId'], {})
+    for k in range(3):
+        sid = w[f'spEffectBehaviorId{k}'] + rf.get(f'spEffectId{k + 1}', 0)
+        st = d.row_statuses(sid) if w[f'spEffectBehaviorId{k}'] > 0 else None
+        if st:
+            out[st[0]] = out.get(st[0], 0) + st[1]
+    return out
+
+
 def slot_quality(r):
     if not r.get('hit_windows') or not r.get('mv_phys'):
         return None
     return r['mv_phys'] / max(r['hit_windows'][0][0], 1)
 
 
-def weapon_vector(d, pop, wid, affinity, tables, prof):
-    """{channel: engagement 0..1} of one weapon at one affinity."""
+def weapon_vector(d, pop, wid, tables, prof):
+    """{channel: engagement 0..1} of one weapon as it comes, before any ash or infusion.
+
+    An infusion's element or status and an ash's skill are open to every weapon that takes them,
+    so they say nothing about this weapon; only what its own base row and moveset carry counts."""
+    affinity = 'Standard'
     v = {}
     one = {r['slot']: r for r in d.ATT.weapon_attacks(d.reg, wid, 'one')}
     sub_of = {s['slot']: {x for h in s['hits'] for x in h['subcats']}
@@ -262,7 +287,7 @@ def weapon_vector(d, pop, wid, affinity, tables, prof):
     if both:
         v['move:120'] = sum(1 for s in both if 120 in sub_of.get(s['slot'], ())) / len(both)
     rows = prof['skill']['rows']
-    if rows:
+    if rows and d.reg.weapon[wid]['gemMountType'] == 0:     # a skill no ash can replace
         v['move:112'] = sum(1 for r in rows if set(d.subcats(r)) & {111, 112}) / len(rows)
     row_id = wid + AR.AFFINITIES.index(affinity) * 100
     w = d.wep.get(row_id, d.wep[wid])
@@ -272,9 +297,13 @@ def weapon_vector(d, pop, wid, affinity, tables, prof):
     for e, x in base.items():
         if x:
             v[f'element:{e}'] = x / tot
+    # Status: how hard the weapon's own build-up hits, as a percentile of every weapon whose base
+    # row builds that status. A hit row that builds it (a moveset AtkParam) is read the same way.
     d.affinity = affinity
-    for st in AFF.weapon_statuses(d, wid, prof['grips'])['statuses']:
-        v[f'status:{st}'] = 1.0
+    for st, e in AFF.weapon_statuses(d, wid, prof['grips'])['statuses'].items():
+        per_hit = max([e['weapon_row']] + list(e['atk_rows'].values()))
+        if per_hit > 0:
+            v[f'status:{st}'] = pop.pct(pop.status.get(st, []), per_hit)
     hits = [h for s in prof['grips']['one']['slots'] for h in s['hits']]
     rec = sum(h['records'] for h in hits)
     if rec:
@@ -367,29 +396,21 @@ def describe(parts, affinity, item):
 def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
     wid = d.find_weapon(weapon)
     prof = AFF.weapon_profile(d, wid)
-    affs = [a for a in AR.AFFINITIES if wid + AR.AFFINITIES.index(a) * 100 in d.wep] or ['Standard']
-    vectors = {a: weapon_vector(d, pop, wid, a, tables, prof) for a in affs}
+    wv = weapon_vector(d, pop, wid, tables, prof)
     rows = []
     for name, item in gear.items.items():
-        best = None
-        for a, wv in vectors.items():
-            sc, parts = synergy(item, wv)
-            if parts and (best is None or sc > best[0] + 1e-9):
-                best = (sc, a, parts)
-        if not best or best[0] < min_score:
+        sc, parts = synergy(item, wv)
+        if not parts or sc < min_score:
             continue
-        sc, a, parts = best
-        needs_affinity = not all(synergy(item, wv)[0] >= min_score for wv in vectors.values())
         rows.append({'name': name, 'kind': item['kind'], 'score': round(sc, 4),
-                     'affinity': a if needs_affinity else None,
                      'channels': [{'channel': p[0], 'engagement': round(p[1], 3), 'gain': round(p[2], 4),
                                    'row': p[4]['row']} for p in parts],
                      'survivability_cost': round(survivability_cost(item), 4),
                      'other_costs': item['other_costs'],
-                     'why': describe(parts, a if needs_affinity else None, item)})
+                     'why': describe(parts, None, item)})
     rows.sort(key=lambda r: -r['score'])
-    return {'weapon': d.weapon_name(wid), 'id': wid, 'affinities': affs, 'powerstance': powerstance(d, wid),
-            'vector': {a: {k: round(x, 3) for k, x in v.items() if not k.startswith('_')} for a, v in vectors.items()},
+    return {'weapon': d.weapon_name(wid), 'id': wid, 'powerstance': powerstance(d, wid),
+            'vector': {k: round(x, 3) for k, x in wv.items() if not k.startswith('_')},
             'gear': rows[:top]}
 
 
@@ -431,11 +452,14 @@ def selftest():
     names = {r['name']: r for r in lance['gear']}
     assert 'Ritual Sword Talisman' not in names, 'HP-gated rows are not weapon synergy'
     assert 'Lance Talisman' not in names, 'horseback is left out'
-    wm = names.get('White Mask')
-    assert wm and wm['affinity'] == 'Blood', wm
-    # PvP: fire x1.08 dealt against physical x1.15 taken, so it costs more than it gives.
-    assert 'Fire Scorpion Charm' not in names, names.get('Fire Scorpion Charm')
-    assert names["Kindred of Rot's Exultation"]['affinity'] == 'Poison', names["Kindred of Rot's Exultation"]
+    # Lance builds no status and takes ashes: infusion and ash gear is open to every such weapon.
+    for n in ('White Mask', "Lord of Blood's Exultation", "Kindred of Rot's Exultation", 'Shard of Alexander',
+              'Fire Scorpion Charm'):
+        assert n not in names, (n, names.get(n))
+    uchi = {r['name'] for r in rank(d, pop, gear, tables, 'Uchigatana', top=60)['gear']}
+    assert "Lord of Blood's Exultation" in uchi and 'Shard of Alexander' not in uchi, uchi
+    rob = {r['name'] for r in rank(d, pop, gear, tables, 'Rivers of Blood', top=60)['gear']}
+    assert "Lord of Blood's Exultation" in rob, rob
     assert lance['powerstance'] and 'Lance' in lance['powerstance']['partners']
     assert any(m['slot'] == 'dual_crouch' and m['anim'].endswith('034310') for m in lance['powerstance']['moves'])
     print(f"selftest ok: Lance top {[r['name'] for r in lance['gear'][:6]]}")
