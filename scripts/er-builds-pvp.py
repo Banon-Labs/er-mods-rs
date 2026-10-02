@@ -117,7 +117,9 @@ and, at the weapon level:
   role, tears, consumables, with uptime over the fight) and of the kits every PvP build defends
   with, plus the buff rows of the skills the corpus mounts on the weapon, weighted by their
   probability. Greases stay the sweep's; on a greased build a skill's weapon buff (the same slot)
-  is dropped. `--no-buffs` leaves them out.
+  is dropped. A buff's `change*Point` scaling-rate add (Roar / War Cry: +5 STR rate) is run
+  through the weapon's own AR (`ar_stat_ratio`, attack-rating.md section 7). `--no-buffs` leaves
+  them out.
 * Skill (`er-mechanics-ashes.skill_term`, docs/er-mechanics/ashes-of-war.md sections 13-15): every
   skill the weapon can carry as built (`mountable_skills`: its own, plus each ash `can_mount`
   accepts at the build's affinity and level) is scored as a slot, with its commitment, stagger,
@@ -1298,6 +1300,7 @@ class SetupBuffs:
                 status_row = c
         return {"pre": ctx["ar_rate"], "flat": ctx["flat_add"],
                 "post": {e: ctx["pvp_rate"][e] * ctx["atk_rate"][e] for e in ELEMENTS},
+                "rate_points": {k: v for k, v in ctx["rate_points"].items() if v},
                 "status_row": status_row, "gated": bool(passed)}
 
     def right_uptime(self, element: str) -> float:
@@ -1379,6 +1382,12 @@ def _setup_left_choice(setup, model, name: str, lid: int, l1: dict, stats: dict,
             eff = setup.effect(opt)
             if eff is not None and not eff["gated"]:
                 continue
+            if eff is not None and eff.get("rate_points"):
+                # A left roar's `changeStrengthPoint` 5 (843, 1683, 1813) on this weapon's own AR
+                # (attack-rating.md section 7), folded into `pre` before the uptime blend.
+                rp = AR.attack_rating(tables, name, aff, level, stats, False, eff["rate_points"])
+                eff = {**eff, "pre": {el: eff["pre"][el] * (rp["damage"].get(el, {}).get("total", 0.0) / ar[el]
+                                                            if ar[el] else 1.0) for el in ELEMENTS}}
             for up in (eff["uptimes"] if eff else [(1.0, 0, 1.0)]):
                 buff = setup.buff_dict(body, eff, up[0], defense)
                 h = slot_hit(pvp, reg, lid, l1, ar, defenders, None, spear, talismans, buff=buff)

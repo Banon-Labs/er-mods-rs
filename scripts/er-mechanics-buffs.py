@@ -79,6 +79,12 @@ CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
 STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
+# Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo
+# +0xb4..+0xc4 and added to the weapon's reinforced correct rate, not to the attribute
+# (`er-mechanics-ar.RATE_POINT_FIELDS`, attack-rating.md section 7). Roar, Barbaric/Milos Roar and
+# War Cry carry `changeStrengthPoint` 5 beside their x1.075.
+RATE_POINTS = {'str': 'changeStrengthPoint', 'dex': 'changeAgilityPoint', 'int': 'changeMagicPoint',
+               'fth': 'changeFaithPoint', 'arc': 'changeLuckPoint'}
 # Status build-up adds, summed as ints by the same accumulator (`FUN_1404ff690` and siblings).
 STATUS = {'poison': 'poizonAttackPower', 'rot': 'diseaseAttackPower', 'blood': 'bloodAttackPower',
           'death': 'curseAttackPower', 'frost': 'freezeAttackPower', 'sleep': 'sleepAttackPower',
@@ -305,7 +311,7 @@ def _enum(name):
 def _effect_fields():
     out = []
     for d in (AP_RATE, AP_RATE_PT, AP_FLAT, AP_FLAT_PT, ATK_RATE, ATK_RATE_PT, PVP_ATK, PVE_ATK,
-              PVP_DEF, PVE_DEF, CUT, CUT_PT, STATS, STATUS):
+              PVP_DEF, PVE_DEF, CUT, CUT_PT, STATS, RATE_POINTS, STATUS):
         out += list(d.values())
     return out + list(OTHER)
 
@@ -591,7 +597,8 @@ class Buffs:
           `pvp_rate[e]` attacker `atkPlayerDmgCorrectRate` product when `pvp`, else
                         `atkEnemyDmgCorrectRate`.
         `status` sums build-up adds. `stats` are attribute adds, which change AR through scaling:
-        feed them to `er-mechanics-ar.py`.
+        feed them to `er-mechanics-ar.py`. `rate_points` are the `change*Point` scaling-rate adds,
+        `er-mechanics-ar.attack_rating(rate_adds=...)`.
 
         Every attacker column passes the same gate, `IsApplicableForCategory`: the hand rule on
         `wepParamChange`, then the sub-category mask. `sub_categories` is the attack's
@@ -609,6 +616,7 @@ class Buffs:
         pvpr = dict.fromkeys(ELEMENTS, 1.0)
         stats = dict.fromkeys(STATS, 0)
         status = dict.fromkeys(STATUS, 0)
+        points = dict.fromkeys(RATE_POINTS, 0)
         ar_sub = atk_sub = 1.0
         used = []
         subs = set(sub_categories)
@@ -634,6 +642,9 @@ class Buffs:
                 continue
             for k, f in STATUS.items():
                 status[k] += int(r[f])
+            # Plain int sum, not scaled by the byPoint/byRate correction (`FUN_1404f4520`).
+            for k, f in RATE_POINTS.items():
+                points[k] += int(r[f])
             use = r['isUseAtkParamAtkPowerCorrect']
             cp = f32(by_point * 0.01) if use else 1.0
             cr = f32(by_rate * 0.01) if use else 1.0
@@ -660,7 +671,7 @@ class Buffs:
         atk['physical'] = f32(atk['physical'] * atk_sub)
         atk = {e: int(f32(v * 100.0)) / 100.0 for e, v in atk.items()}
         return {'ar_rate': ar, 'flat_add': flat, 'pvp_rate': pvpr, 'atk_rate': atk,
-                'status': status, 'stats': stats, 'entries': used,
+                'status': status, 'stats': stats, 'rate_points': points, 'entries': used,
                 'refused': list(self.last_refused), 'unknown': unknown}
 
     def defense_context(self, active, pvp=False, phys_type='standard', hp_ratio=1.0,
@@ -794,7 +805,8 @@ class Buffs:
         and replayed through the same stacking. Per element: `pre` multiplies the weapon part of
         the AR, `post` the damage after defense (`atkPlayerDmgCorrectRate` x `*AttackRate`),
         `flat` is added after the AR multipliers; each row contributes 1 + uptime x (factor - 1).
-        `stats` are uptime-weighted attribute adds.
+        `stats` are uptime-weighted attribute adds, `rate_points` uptime-weighted scaling-rate
+        adds (Roar / War Cry: 5 STR rate x uptime).
 
         Weapon-buff rows (`WEAPON_BUFF_CATS`) from the kit are dropped by default: the grease
         sweep owns that slot. A skill's own weapon-buff row is dropped when
@@ -839,6 +851,7 @@ class Buffs:
         post = dict.fromkeys(ELEMENT_KEYS, 1.0)
         flat = dict.fromkeys(ELEMENT_KEYS, 0.0)
         stats = dict.fromkeys(STATS, 0.0)
+        points = dict.fromkeys(RATE_POINTS, 0.0)
         used = []
         for sid, src in kept:
             w = weight.get(src, (1.0, False))[0]
@@ -855,9 +868,12 @@ class Buffs:
                 flat[e] += u * f['flat_add'][e]
             for k in STATS:
                 stats[k] += u * f['stats'][k]
+            for k in RATE_POINTS:
+                points[k] += u * f['rate_points'][k]
             used.append((sid, src, round(u, 4)))
         post = {e: v * time_factor for e, v in post.items()}
-        out = {'pre': pre, 'post': post, 'flat': flat, 'stats': stats, 'entries': used,
+        out = {'pre': pre, 'post': post, 'flat': flat, 'stats': stats, 'rate_points': points,
+               'entries': used,
                'dropped': dropped, 'unknown': unknown, 'time_factor': time_factor,
                'recasts': {s: sum(n for _, n in p[2]) / len(p[2]) for s, p in plans.items()}}
         self._kit_cache[key] = out
@@ -866,8 +882,8 @@ class Buffs:
     def expected_attack(self, kits, two_handed=False, stat_ratio=None, alternatives=(), **kw):
         """Mean of `kit_factors` over `kits` (`corpus_kits`) and each kit's role weights.
 
-        `stat_ratio(stats) -> {element: AR with the adds / AR without}` turns attribute adds into
-        a `pre` factor for one weapon (`ar_stat_ratio`). `alternatives` is the weapon's skill
+        `stat_ratio(stats, rate_points) -> {element: AR with the adds / AR without}` turns
+        attribute adds and scaling-rate adds into a `pre` factor for one weapon (`ar_stat_ratio`). `alternatives` is the weapon's skill
         choice as [(p, extra)] (`er-mechanics-ashes.skill_term` 'buff_alternatives'): a weapon
         holds one skill, so each kit is scored once per alternative with that skill's `extra`,
         weighted by p, and once with none for the rest of the mass. `joint` is the mean of
@@ -883,7 +899,8 @@ class Buffs:
                 for pb, extra in branches:
                     w = w0 * pb
                     f = self.kit_factors(k['active'], role, two_handed, extra=extra, **kw)
-                    sr = stat_ratio(f['stats']) if stat_ratio and any(f['stats'].values()) else {}
+                    sr = stat_ratio(f['stats'], f['rate_points']) if stat_ratio and \
+                        (any(f['stats'].values()) or any(f['rate_points'].values())) else {}
                     for e in ELEMENT_KEYS:
                         p = f['pre'][e] * sr.get(e, 1.0)
                         acc['pre'][e] += w * p
@@ -1220,25 +1237,29 @@ def sustain_factor(m, defenders, seconds_fn, hit_hp=None, engagements=FIGHT_ENGA
 
 def ar_stat_ratio(weapon, affinity, level, stats, two_handed, tables=None):
     """{element: AR with attribute adds / AR without} for one weapon build, as a function of an
-    adds dict (`kit_factors` 'stats'). Adds are rounded to whole points; no cap is applied past
-    99 (the correction graphs run past it). `er-mechanics-ar.attack_rating` does the AR."""
+    adds dict (`kit_factors` 'stats') and a scaling-rate adds dict (`kit_factors` 'rate_points').
+    Attribute adds are rounded to whole points; no cap is applied past 99 (the correction graphs
+    run past it). Rate adds stay fractional: AR is linear in the rate once the requirement is met,
+    so an uptime-weighted add gives the uptime-weighted AR. `er-mechanics-ar.attack_rating` does
+    the AR."""
     ar = _mod('er_mechanics_ar', 'er-mechanics-ar.py')
     tables = tables or ar.Tables(None)
     base_stats = {k: int(v) for k, v in (stats or {}).items()}
 
-    def rating(st):
-        r = ar.attack_rating(tables, weapon, affinity, level, st, two_handed)['damage']
+    def rating(st, rate=None):
+        r = ar.attack_rating(tables, weapon, affinity, level, st, two_handed, rate)['damage']
         return {e: r.get(e, {}).get('total', 0.0) for e in ELEMENT_KEYS}
     base = rating(base_stats)
     cache = {}
 
-    def ratio(adds):
+    def ratio(adds, rate_adds=None):
         key = tuple(sorted((k, int(round(v))) for k, v in adds.items() if int(round(v))))
-        if key not in cache:
+        rkey = tuple(sorted((k, round(v, 6)) for k, v in (rate_adds or {}).items() if round(v, 6)))
+        if (key, rkey) not in cache:
             st = dict(base_stats)
             for k, v in key:
                 st[k] = st.get(k, 0) + v
-            got = rating(st)
+            got = rating(st, dict(rkey) or None)
             cache[key] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
         return cache[key]
     return ratio
@@ -1413,8 +1434,19 @@ def _t_expected(m, check):
           ([20501411, 20501413], 0.0))
     f = m.kit_factors([], extra=((1810, 1.0, 1.0),), fight_seconds=f25)
     check('War Cry from the skill: right-hand physical AR x1.075', round(f['pre']['physical'], 4), 1.075)
+    check('War Cry from the skill: +5 STR scaling rate (changeStrengthPoint)', f['rate_points']['str'], 5.0)
+    # Worked example (attack-rating.md section 7): Giant-Crusher +25, 80 STR, one-handed, AR 820.64;
+    # the 5 rate points add 379.75 x 0.05 x 0.90 = 17.09, so the roar is x1.075 x 837.73 / 820.64.
+    ratio = ar_stat_ratio('Giant-Crusher', 'Standard', 25, {'str': 80, 'dex': 10, 'int': 10, 'fth': 10,
+                                                            'arc': 10}, False)
+    e = m.expected_attack([{'active': [], 'roles': {'host': 1.0}}], False, ratio,
+                          alternatives=[(1.0, ((1810, 1.0, 1.0),))], fight_seconds=f25)
+    check('War Cry on Giant-Crusher 80 STR: pre x1.075 x (820.64 + 17.09) / 820.64',
+          round(e['pre']['physical'], 4), round(1.075 * (820.6375 + 379.75 * 0.05 * 0.9) / 820.6375, 4))
     f = m.kit_factors([], extra=((1810, 1.0, 1.0),), drop_skill_weapon_buffs=True, fight_seconds=f25)
-    check('War Cry dropped on a greased build', f['pre']['physical'], 1.0)
+    check('War Cry dropped on a greased build', (f['pre']['physical'], f['rate_points']['str']), (1.0, 0.0))
+    f = m.kit_factors([], extra=((1810, 0.5, 1.0),), fight_seconds=f25)
+    check('War Cry at weight 0.5: rate points 2.5', f['rate_points']['str'], 2.5)
     f = m.kit_factors([], extra=((1860, 0.5, 1.0),), two_handed=True, fight_seconds=f25)
     check("Braggart's Roar at weight 0.5, two-handed: 1 + 0.5 x 0.1", round(f['pre']['physical'], 4), 1.05)
     f = m.kit_factors(["great rune:Godrick's Great Rune"], role='invader')
