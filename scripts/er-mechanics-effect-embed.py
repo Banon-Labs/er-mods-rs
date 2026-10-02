@@ -23,7 +23,7 @@ sets, which is the share of what they do that they do alike.
 
 Two pairs anchor `--selftest`: Kindred of Rot's Exultation with Mushroom Crown (the same stateInfo
 380 trigger, the same damage rows), and Millicent's Prosthesis with Rotten Winged Sword Insignia
-(the same successive-hit damage, plus DEX on Millicent's only).
+(the same successive-hit damage, plus DEX on Millicent's only, so half of what it does).
 """
 import argparse
 import importlib.util
@@ -60,7 +60,14 @@ def trigger_terms(sp, stateinfo_names):
     return out
 
 
+# The game keeps a players and an enemies column for each damage rate. They are one effect seen
+# from two targets, and as two features they outweighed everything else an item does two to one.
+SAME_SYSTEM = {'damage vs players': 'damage dealt', 'damage vs enemies': 'damage dealt',
+               'damage taken from players': 'damage taken', 'damage taken from enemies': 'damage taken'}
+
+
 def effect_term(system, what):
+    system = SAME_SYSTEM.get(system, system)
     nums = [float(x) for x in NUMBER.findall(what)]
     direction = ''
     if nums:
