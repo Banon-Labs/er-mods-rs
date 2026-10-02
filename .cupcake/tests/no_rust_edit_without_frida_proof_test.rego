@@ -29,7 +29,7 @@ UNPROVEN_NOTHING := "UNPROVEN no-frida-evidence nothing has attached to the game
 
 UNPROVEN_SILENT := "UNPROVEN silent-session the last watch on scripts/frida/x.js reported 0 messages, so it observed nothing"
 
-UNPROVEN_SPENT := "UNPROVEN spent-by-commit the last measurement predates HEAD, so it belongs to a change that is already committed"
+UNPROVEN_SPENT := "UNPROVEN spent-by-commit the last measurement predates a Rust commit to the crate being edited, so it belongs to a change that is already committed"
 
 edit_event(path, signal) := {
 	"hook_event_name": "PreToolUse",

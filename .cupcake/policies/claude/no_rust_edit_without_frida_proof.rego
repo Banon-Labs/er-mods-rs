@@ -26,9 +26,12 @@
 #
 #     What opens the gate is `scripts/er-frida-evidence.py --check` printing PROVEN,
 #     which needs a session that attached to a pid and received at least one message,
-#     recorded after HEAD's commit time. The log lives under XDG_STATE_HOME, not in
+#     recorded after the newest Rust commit to the crate being edited. The signal pipes
+#     the pending event to the reader, which maps each target to its crate under
+#     `crates/` or `third_party/`; a target outside any crate, or no target, falls back
+#     to every `crates/**/*.rs` commit. The log lives under XDG_STATE_HOME, not in
 #     the repo, so the Write tool being gated cannot forge its own permission. A commit
-#     spends the evidence: one measurement licenses one change.
+#     to that crate spends the evidence: one measurement licenses one change.
 #
 #     Deliberately NOT carved out: tests, doc comments, host-only crates. Every carve-out
 #     is a door, and the failure this exists to stop was the agent walking through the
