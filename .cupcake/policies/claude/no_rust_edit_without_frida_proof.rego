@@ -352,7 +352,46 @@ segment_writes(words, index) if {
 # rewrite the working tree; `diff`, `log`, `show`, `grep` and `blame` read it.
 segment_writes(words, _) if {
 	program_is(words, "git")
-	subcommand(words) in {"apply", "checkout", "restore", "clean", "stash", "rm", "mv"}
+	subcommand(words) in {"apply", "checkout", "clean", "stash", "rm", "mv"}
+}
+
+# `git restore` writes the working tree by default, and only the index under `--staged`/`-S`.
+# Refused 2026-10-02: `git restore --staged <paths>` was denied as if it rewrote the sources,
+# when all it does is unstage them. `--worktree`/`-W` beside `--staged` writes both, so it
+# still counts. `git reset [HEAD] -- <paths>` is not a writer at all and is not listed: with
+# paths it only resets index entries.
+segment_writes(words, _) if {
+	program_is(words, "git")
+	subcommand(words) == "restore"
+	restore_writes_worktree(words)
+}
+
+restore_writes_worktree(words) if {
+	not restore_has_flag(words, "--staged", "S")
+}
+
+restore_writes_worktree(words) if {
+	restore_has_flag(words, "--worktree", "W")
+}
+
+# The long spelling, or the short letter alone or inside a cluster such as `-SW`. Only words
+# before a `--` count, because everything after it is a pathspec.
+restore_has_flag(words, long, _) if {
+	some index, word in words
+	word == long
+	before_end_of_options(words, index)
+}
+
+restore_has_flag(words, _, letter) if {
+	some index, word in words
+	startswith(word, "-")
+	not startswith(word, "--")
+	contains(word, letter)
+	before_end_of_options(words, index)
+}
+
+before_end_of_options(words, index) if {
+	not "--" in array.slice(words, 0, index)
 }
 
 # Every `crates/**/*.rs` path this command would write.

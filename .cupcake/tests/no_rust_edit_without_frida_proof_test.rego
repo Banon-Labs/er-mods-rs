@@ -484,6 +484,42 @@ test_deny_git_checkout_of_a_crate_source if {
 	denied(bash_event("git checkout -- crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
 }
 
+test_deny_git_restore_of_a_crate_source if {
+	denied(bash_event("git restore crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_with_a_source_tree if {
+	denied(bash_event("git restore --source HEAD~1 crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_worktree if {
+	denied(bash_event("git restore --worktree crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_staged_plus_worktree if {
+	denied(bash_event("git restore --staged --worktree crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_short_cluster_with_worktree if {
+	denied(bash_event("git restore -SW crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_short_worktree_beside_staged if {
+	denied(bash_event("git restore -S -W -- crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+# A `--staged` that is a pathspec after `--` is not the flag.
+test_deny_git_restore_where_staged_is_only_a_pathspec if {
+	denied(bash_event("git restore -- --staged crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_deny_git_restore_unstage_chained_to_a_worktree_restore if {
+	denied(bash_event(
+		"git restore --staged crates/er-title-flow/src/lib.rs && git restore crates/er-title-flow/src/lib.rs",
+		UNPROVEN_NOTHING,
+	))
+}
+
 test_deny_copy_onto_a_crate_source if {
 	denied(bash_event("cp -f /tmp/patched.rs crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
 }
@@ -507,6 +543,30 @@ test_allow_cat_of_a_crate_source if {
 
 test_allow_git_diff_of_a_crate_source if {
 	not denied(bash_event("git diff crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+# Unstaging touches the index only. Refused 2026-10-02 as if it rewrote the sources.
+test_allow_git_restore_staged if {
+	not denied(bash_event(
+		"git restore --staged crates/er-title-flow/src/lib.rs crates/er-title-flow/src/config.rs",
+		UNPROVEN_NOTHING,
+	))
+}
+
+test_allow_git_restore_staged_short_flag if {
+	not denied(bash_event("git restore -S -- crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_git_restore_staged_with_a_source_tree if {
+	not denied(bash_event("git restore --staged --source=HEAD crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_git_reset_of_paths if {
+	not denied(bash_event("git reset -- crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
+}
+
+test_allow_git_reset_head_of_paths if {
+	not denied(bash_event("git reset HEAD crates/er-title-flow/src/lib.rs", UNPROVEN_NOTHING))
 }
 
 test_allow_copying_a_crate_source_somewhere_else if {
