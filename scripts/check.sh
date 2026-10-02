@@ -2822,6 +2822,11 @@ bash "$repo_root/scripts/check-committed-compiles.sh"
 bash "$repo_root/scripts/check-git-hooks-installed.sh" --selftest
 bash "$repo_root/scripts/check-git-hooks-installed.sh"
 
+# ...and whether the pre-commit format check judges the staged files and only those. It ran
+# `cargo fmt --all -- --check` over the working tree, so another session's untracked crate blocked
+# every unrelated commit (2026-10-02). This drives the real hook in a throwaway repository.
+python3 "$repo_root/scripts/test-precommit-fmt-scope.py"
+
 # ...and whether the gate damages the checkout it is gating. It did, twice on 2026-08-31, from a
 # push made in a linked worktree: git exports GIT_DIR to a linked worktree's hooks (but not to a
 # main checkout's -- scripts/measure-git-hook-env.sh measures both, which is why this looked

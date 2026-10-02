@@ -269,6 +269,7 @@ blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; e
 blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook	cargo-build
 portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only	suite
 blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample	suite
+portable	-	test-precommit-fmt-scope.py	drives scripts/hooks/pre-commit in a throwaway git repo; needs cargo and rustfmt	suite
 portable	-	test-check-config-guard.sh	source/AST/text analysis only	suite
 portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own	suite
 portable	-	test-pre-push-deletion-only.sh	builds its own bare remote plus working clone under mktemp and pushes only between them	suite
