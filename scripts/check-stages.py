@@ -240,6 +240,14 @@ STAGES: tuple[Stage, ...] = (
             # that regenerates the map moves the provenance of a constant this stage gates on, so
             # the stage has to be selected for it.
             "docs/recon/rva-map-1162-to-1170.data.tsv",
+            # `er-stale-run-sentinel.sh --selftest` classifies the real build inputs: the
+            # `docs/recon` maps `er-game-base/build.rs` reads, the `docs/*.md` that
+            # `er-invasion-warp-core` embeds, and `build-support/prologue_build.rs`, through which
+            # build scripts reach further files. A push that moves any of them changes what that
+            # selftest proves.
+            "docs/*.md",
+            "docs/recon/**/*",
+            "build-support/**/*.rs",
         ),
     ),
     Stage(

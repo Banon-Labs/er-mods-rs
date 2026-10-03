@@ -96,6 +96,7 @@
 #
 # Usage
 #   scripts/er-stale-run-sentinel.sh check <path>              # tear down if <path> feeds a loaded DLL
+#   scripts/er-stale-run-sentinel.sh verdict <path> [prof...]  # what `check` would decide, kill nothing
 #   scripts/er-stale-run-sentinel.sh classify <path> [prof...] # print the verdict, kill nothing
 #   scripts/er-stale-run-sentinel.sh teardown                  # unconditional teardown + verify
 #   scripts/er-stale-run-sentinel.sh status
@@ -861,27 +862,57 @@ main()
 PY
 }
 
+# The whole decision `check` acts on, as one tab-separated line in the `classify_path` shape:
+#
+#   Verdict \t branch \t detail \t profiles
+#
+# It adds the two gates `classify` alone does not apply -- not repo source, and nothing live -- so
+# its answer is the one `check` would act on for the same path at the same moment. Kills nothing
+# and logs nothing.
+#
+# Two callers, one implementation. `check` tears down on TEARDOWN; the `verdict` mode prints the
+# line for `.cupcake/signals/live_er_run.sh`, so the PreToolUse guard refuses exactly the edits this
+# hook would tear a run down for -- before the edit instead of after it. On 2026-10-02 the two
+# disagreed: the guard allowed any edit outside `crates/` and promised docs stay editable mid-run,
+# while this classifier tears down for a `docs/recon/*.tsv` that `er-game-base/build.rs` compiles in.
+#
+# Explicit profile arguments stand in for the live run, as they do for `classify`, so the decision
+# is testable without a game: the /proc liveness gate is skipped and those profiles are the run.
+decide_path() {
+  local path="${1:-}"
+  shift
+  if ! is_repo_source "$path"; then
+    printf 'SKIP\tnot-repo-source\toutside the repo or gitignored\t\n'
+    return 0
+  fi
+  if [[ $# -eq 0 && -z "$(list_live)" ]]; then
+    printf 'SKIP\tno-live-run\tnothing to invalidate\t\n'
+    return 0
+  fi
+  local line
+  line="$(classify_path "$path" "$@")"
+  if [[ -z "$line" ]]; then
+    printf 'TEARDOWN\tfallback-classifier-crashed\tclassifier produced no verdict\t\n'
+    return 0
+  fi
+  printf '%s\n' "$line"
+}
+
 cmd_check() {
   local path="${1:-}"
-  if ! is_repo_source "$path"; then
+  local verdict branch detail profiles line
+  line="$(decide_path "$path")"
+  IFS=$'\t' read -r verdict branch detail profiles <<<"$line"
+  if [[ "$branch" == "not-repo-source" ]]; then
     exit 0
   fi
   local rel="${path#"$REPO_ROOT"/}"
-  local live
-  live="$(list_live)"
-  if [[ -z "$live" ]]; then
+  if [[ "$branch" == "no-live-run" ]]; then
     log_event "NOLIVE" "no-live-run" "$rel" "nothing to invalidate" "" ""
     exit 0
   fi
-
-  local verdict branch detail profiles line
-  line="$(classify_path "$path")"
-  if [[ -z "$line" ]]; then
-    verdict="TEARDOWN"; branch="fallback-classifier-crashed"
-    detail="classifier produced no verdict"; profiles=""
-  else
-    IFS=$'\t' read -r verdict branch detail profiles <<<"$line"
-  fi
+  local live
+  live="$(list_live)"
 
   if [[ "$verdict" != "TEARDOWN" ]]; then
     log_event "SKIP" "$branch" "$rel" "$detail" "$profiles" ""
@@ -1184,6 +1215,7 @@ TOML
 
 case "${1:-hook}" in
   check) shift; cmd_check "${1:-}" ;;
+  verdict) shift; decide_path "${1:-}" "${@:2}" ;;
   classify) shift; classify_path "$@" ;;
   closure) shift; classify_path - "$@" ;;
   teardown) if teardown; then echo "[er-sentinel] teardown: verified clean"; else
@@ -1192,5 +1224,5 @@ case "${1:-hook}" in
       echo "[er-sentinel] LIVE:"; echo "$live" | prefix_lines; exit 1; fi ;;
   --selftest) selftest ;;
   hook) cmd_hook ;;
-  *) echo "usage: $0 {check <path>|classify <path> [profile...]|teardown|status|--selftest|hook}" >&2; exit 2 ;;
+  *) echo "usage: $0 {check <path>|verdict <path> [profile...]|classify <path> [profile...]|teardown|status|--selftest|hook}" >&2; exit 2 ;;
 esac
