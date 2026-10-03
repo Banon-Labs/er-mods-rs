@@ -39,8 +39,9 @@ pub struct Board {
 /// - "Top Infusions": `er-mechanics-infusions.py Misericorde`, its `top physical`, `top
 ///   elemental` and `top status` rows (each infusion classed by what it adds over Standard).
 /// - "Speed and cost": `er-mechanics-weapon-card.py Misericorde`.
-/// - "Gear with synergy": `er-mechanics-gear-synergy.py Misericorde`: the dagger pair, its
-///   critical gear (shown because its critical is above the median) and the top six rows.
+/// - "Gear with synergy": `er-mechanics-gear-synergy.py Misericorde --top 6`: the dagger pair,
+///   its critical gear (shown because its critical is above the median), the top six rows after
+///   the setup discount, and Spear Talisman because its hits pierce.
 pub const MISERICORDE: Board = Board {
     class: "DAGGER",
     name: "Misericorde",
@@ -50,11 +51,13 @@ pub const MISERICORDE: Board = Board {
     unique: &[
         Line {
             key: "155 MV",
-            text: "Charged R2s, against 150 on seven of the nine.",
+            text: "Charged R2s, against 150 on seven of the nine other daggers that can be \
+                   infused.",
         },
         Line {
             key: "R2 f8",
-            text: "First R2 hits on frame 8, against 9 on six of the nine.",
+            text: "First R2 hits on frame 8, against 9 on six of the nine other daggers that can \
+                   be infused.",
         },
         Line {
             key: "DEX 12",
@@ -110,10 +113,6 @@ pub const MISERICORDE: Board = Board {
             text: "+45% on the final hit of a chain.",
         },
         Gear {
-            name: "Retaliatory Crossed-Tree",
-            text: "+12% on backstep / rolling attacks.",
-        },
-        Gear {
             name: "Two-Handed Sword Talisman",
             text: "+10% on two-handed attacks.",
         },
@@ -122,13 +121,21 @@ pub const MISERICORDE: Board = Board {
             text: "+10% on charged heavy attacks.",
         },
         Gear {
-            name: "Leda's Armor",
-            text: "+5% on backstep / rolling attacks. +5% on dash attacks. Costs 0.9% more \
-                   damage taken.",
-        },
-        Gear {
             name: "Lacerating Crossed-Tree",
             text: "+8% on dash attacks.",
+        },
+        Gear {
+            name: "Leda's Armor",
+            text: "+5% on dash attacks. +5% on backstep / rolling attacks, worth half for the \
+                   setup they need. Costs 0.9% more damage taken.",
+        },
+        Gear {
+            name: "Millicent's Prosthesis",
+            text: "+3% from its DEX, +4% on successive hits.",
+        },
+        Gear {
+            name: "Spear Talisman",
+            text: "+15% counter-hit damage; 39% of its hits pierce.",
         },
     ],
 };
