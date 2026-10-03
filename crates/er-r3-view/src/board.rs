@@ -8,7 +8,7 @@
 
 use er_build_watermark_core::overlay_host::with_font;
 use hudhook::imgui::sys::ImFont;
-use hudhook::imgui::{Condition, StyleColor, StyleVar, Ui, WindowFlags};
+use hudhook::imgui::{Condition, StyleColor, StyleVar, TextureId, Ui, WindowFlags};
 
 pub struct Line {
     pub key: &'static str,
@@ -21,6 +21,8 @@ pub struct Gear {
 }
 
 pub struct Board {
+    /// The weapon's `EquipParamWeapon` `iconId`, the `%05d` of its `MENU_ItemIcon_` symbol.
+    pub icon_id: u32,
     pub class: &'static str,
     pub name: &'static str,
     pub rule: &'static str,
@@ -39,9 +41,12 @@ pub struct Board {
 /// - "Top Infusions": `er-mechanics-infusions.py Misericorde`, its `top physical`, `top
 ///   elemental` and `top status` rows (each infusion classed by what it adds over Standard).
 /// - "Speed and cost": `er-mechanics-weapon-card.py Misericorde`.
-/// - "Gear with synergy": `er-mechanics-gear-synergy.py Misericorde`: the dagger pair, its
-///   critical gear (shown because its critical is above the median) and the top six rows.
+/// - "Gear with synergy": `er-mechanics-gear-synergy.py Misericorde --top 6`: the dagger pair,
+///   its critical gear (shown because its critical is above the median), the top six rows after
+///   the setup discount, and Spear Talisman because its hits pierce.
 pub const MISERICORDE: Board = Board {
+    // EquipParamWeapon 1030000's iconId; its icon sits in atlas SB_Icon_03.
+    icon_id: 10003,
     class: "DAGGER",
     name: "Misericorde",
     rule: "Can be infused",
@@ -50,11 +55,13 @@ pub const MISERICORDE: Board = Board {
     unique: &[
         Line {
             key: "155 MV",
-            text: "Charged R2s, against 150 on seven of the nine.",
+            text: "Charged R2s, against 150 on seven of the nine other daggers that can be \
+                   infused.",
         },
         Line {
             key: "R2 f8",
-            text: "First R2 hits on frame 8, against 9 on six of the nine.",
+            text: "First R2 hits on frame 8, against 9 on six of the nine other daggers that can \
+                   be infused.",
         },
         Line {
             key: "DEX 12",
@@ -110,10 +117,6 @@ pub const MISERICORDE: Board = Board {
             text: "+45% on the final hit of a chain.",
         },
         Gear {
-            name: "Retaliatory Crossed-Tree",
-            text: "+12% on backstep / rolling attacks.",
-        },
-        Gear {
             name: "Two-Handed Sword Talisman",
             text: "+10% on two-handed attacks.",
         },
@@ -122,13 +125,21 @@ pub const MISERICORDE: Board = Board {
             text: "+10% on charged heavy attacks.",
         },
         Gear {
-            name: "Leda's Armor",
-            text: "+5% on backstep / rolling attacks. +5% on dash attacks. Costs 0.9% more \
-                   damage taken.",
-        },
-        Gear {
             name: "Lacerating Crossed-Tree",
             text: "+8% on dash attacks.",
+        },
+        Gear {
+            name: "Leda's Armor",
+            text: "+5% on dash attacks. +5% on backstep / rolling attacks, worth half for the \
+                   setup they need. Costs 0.9% more damage taken.",
+        },
+        Gear {
+            name: "Millicent's Prosthesis",
+            text: "+3% from its DEX, +4% on successive hits.",
+        },
+        Gear {
+            name: "Spear Talisman",
+            text: "+15% counter-hit damage; 39% of its hits pierce.",
         },
     ],
 };
@@ -167,6 +178,21 @@ const MUTED: [f32; 4] = rgb(0xc9c0aa);
 const LABEL: [f32; 4] = rgb(0xa89f8a);
 const BRIGHT: [f32; 4] = rgb(0xf2e8cf);
 const GOLD: [f32; 4] = rgb(0xe3c27a);
+const ICON_FILL: [f32; 4] = rgb(0x13110d);
+const ICON_EDGE: [f32; 4] = rgb(0x3a3426);
+
+/// The canvas's "[weapon render]" slot in the left column: its width spans the name block's
+/// column, `PAD` to `LEFT_W - 40`, and it starts no higher than the design's y of 180.
+const ICON_BOX_W: f32 = LEFT_W - 40.0 - PAD;
+const ICON_BOX_H: f32 = 360.0;
+const ICON_BOX_TOP: f32 = 180.0;
+const ICON_BOX_GAP: f32 = 16.0;
+
+/// Images the board draws, each `None` until the host has uploaded it.
+pub struct BoardArt {
+    /// The weapon's icon: the host's texture id and the image's pixel size.
+    pub icon: Option<(TextureId, [f32; 2])>,
+}
 
 /// How a list of keyed rows is set: the key column's width, both sizes and the gap either side
 /// of the rule between rows.
@@ -284,7 +310,32 @@ impl Pen<'_> {
     }
 }
 
-pub fn draw(ui: &Ui, board: &Board, fonts: Option<&Fonts>) {
+/// The icon slot at canvas y `top`: the bordered box, and the image across its width at the
+/// image's own aspect (fitted to the height instead if that would overflow), centred.
+fn draw_icon(ui: &Ui, kx: f32, ky: f32, top: f32, texture: TextureId, size: [f32; 2]) {
+    if size[0] <= 0.0 || size[1] <= 0.0 {
+        return;
+    }
+    let origin = ui.window_pos();
+    let p0 = [origin[0] + PAD * kx, origin[1] + top * ky];
+    let (box_w, box_h) = (ICON_BOX_W * kx, ICON_BOX_H * ky);
+    let p1 = [p0[0] + box_w, p0[1] + box_h];
+    let draw_list = ui.get_window_draw_list();
+    draw_list.add_rect(p0, p1, ICON_FILL).filled(true).build();
+    draw_list.add_rect(p0, p1, ICON_EDGE).thickness(1.0).build();
+    let mut w = box_w;
+    let mut h = w * size[1] / size[0];
+    if h > box_h {
+        h = box_h;
+        w = h * size[0] / size[1];
+    }
+    let i0 = [p0[0] + (box_w - w) / 2.0, p0[1] + (box_h - h) / 2.0];
+    draw_list
+        .add_image(texture, i0, [i0[0] + w, i0[1] + h])
+        .build();
+}
+
+pub fn draw(ui: &Ui, board: &Board, fonts: Option<&Fonts>, art: &BoardArt) {
     let size = ui.io().display_size;
     let (kx, ky) = (size[0] / FRAME_W, size[1] / FRAME_H);
     let origin = [0.0, 0.0];
@@ -334,7 +385,17 @@ pub fn draw(ui: &Ui, board: &Board, fonts: Option<&Fonts>) {
     let left_right = LEFT_W - 40.0;
     let y = pen.text(PAD, PAD, left_right, 13.0, LABEL, board.class) + 6.0;
     let y = pen.text(PAD, y, left_right, 52.0, BRIGHT, board.name) + 6.0;
-    pen.text(PAD, y, left_right, 15.0, MUTED, board.rule);
+    let y = pen.text(PAD, y, left_right, 15.0, MUTED, board.rule);
+    if let Some((texture, size)) = art.icon {
+        draw_icon(
+            ui,
+            kx,
+            ky,
+            ICON_BOX_TOP.max(y + ICON_BOX_GAP),
+            texture,
+            size,
+        );
+    }
 
     let col1_right = COL1_X + COL1_W;
     let y = pen.text(COL1_X, PAD, col1_right, 30.0, GOLD, "What makes it unique") + 16.0;

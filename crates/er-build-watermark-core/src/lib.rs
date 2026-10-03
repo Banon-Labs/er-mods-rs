@@ -29,6 +29,7 @@
 pub mod font_request;
 pub mod layout;
 pub mod releases;
+pub mod texture_request;
 
 #[cfg(windows)]
 mod overlay;
