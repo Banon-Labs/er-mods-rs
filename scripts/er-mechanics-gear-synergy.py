@@ -20,13 +20,40 @@ Channels, each with how the weapon side is measured:
 | `move:112` skill | Shard of Alexander, Warrior Jar Shard | share of the built-in skill's damaging rows that carry it, only for a weapon that takes no ash (any ash weapon fires a skill) |
 | `element:<e>` | an ungated attack rate on some elements only (scorpion charms) | the element's share of the base row's attack |
 | `status:<s>` | a row gated on a status-presence stateInfo (Lord of Blood's Exultation, White Mask, Mushroom Crown) | percentile of the weapon's own per-hit build-up among every weapon whose base row builds the status |
+| `pierce` | the counter-hit row (Spear Talisman) | pierce share of the moveset's hit records |
+| `successive` | successive-hit stage rows (Winged Sword Insignia) | percentile, among every base weapon, of the counter its R1 string adds per second net of the host's decay, in its faster grip (multi-hitbox swings count each landed record) |
+| `stat:<STR..>` | ungated attribute points (Millicent's Prosthesis DEX, Silver Tear Mask ARC) | attack gained from those points at every attribute 40, as a fraction |
 
 The weapon is read as it comes, before any ash or infusion. Gear an infusion or an ash would
 make work (a Blood Lance and Lord of Blood's Exultation) works the same on every weapon that
 takes them, so it says nothing about this one and is not listed.
-| `pierce` | the counter-hit row (Spear Talisman) | pierce share of the moveset's hit records |
-| `successive` | successive-hit stage rows (Winged Sword Insignia) | percentile, among every base weapon, of the counter its R1 string adds per second net of the host's decay, in its faster grip (multi-hitbox swings count each landed record) |
-| `stat:<STR..>` | ungated attribute points (Millicent's Prosthesis DEX, Silver Tear Mask ARC) | attack gained from those points at every attribute 40, as a fraction |
+
+Setup discount (user directive 2026-10-02: "diminish the value of any attack that requires a
+prior input, such as jump, or backstep"). An attack thrown out of a roll, backstep, crouch or
+jump spends frames before its own swing in which the attacker can be hit, and a neutral attack
+spends none. Each move channel's weapon weight is multiplied by
+
+    discount = startup / (startup + exposed)
+
+where `startup` is the attack's own first-hit frame on its own clock and `exposed` is the frames
+of the prior input in which the attacker is open to a hit. The ratio is the share of the
+commitment that is the attack itself: an entry as long as the swing's own startup halves the
+channel, an entry of zero leaves it whole, and it never goes negative or above one. Every frame
+is read from TAE at run time through the sibling tools, medium load like the sweep builds:
+
+| family | slots | exposed |
+| --- | --- | --- |
+| neutral | R1/R2 strings, the chain final hit (104), charged heavies (100), two-handed (120), skill (112) | 0: the charge is the attack's own startup |
+| run | `run_r1`, `run_r2` | the sprint loop `a000_020200`'s first R1 input-and-cancel frame; the loop opens none, because HKS picks the running attack from `MoveSpeedIndex` (`er-builds-pvp`), so 0 |
+| roll | `roll_r1` | the medium roll `a000_027110`'s first R1 frame less its unconditional JumpTable 8 i-frames from frame 0 (`er-mechanics-ashes.evasion_motion`) |
+| backstep | `bstep_r1` | the medium backstep `a000_027000`'s first R1 frame less its i-frames; its only JumpTable 8 is gated on the Fine Crucible Feather stateInfo, so every frame counts |
+| crouch | `crouch_r1` | the standing crouch `a000_390000`'s first R1 frame, which has no i-frames |
+| jump | `jump_r1`, `jump_r2` | every frame from the input of the N jump (`a000_202010`, standing with the stick forward) to the first hit, the press frame (`er-mechanics-jump.takeoff`) included: `er-mechanics-jump.sequence`'s `first_hit`, with the swing's own clock as `startup` |
+
+A channel fed by several slots (`move:121` is the rolling, backstep and crouch R1) has its weight
+split evenly over the weapon's slots that carry the subcategory, each part discounted by its own
+family, so the channel's discount is the mean of the parts. The time a player must hold the dodge
+button before the engine sets the sprint index is not traced and is not counted.
 
 Gear benefit is the damage multiplier minus one (x1.2 -> 0.2), the player-damage correction
 included. Rows behind an HP threshold, a timer, a kill, a flask or another weapon-independent gate
@@ -83,6 +110,14 @@ MOVE_SLOTS = {100: ('r2_1c', 'r2_2c'), 102: ('jump_r1', 'jump_r2'), 104: ('r1_4'
 STATS = [('addStrengthStatus', 'STR', 'str'), ('addDexterityStatus', 'DEX', 'dex'),
          ('addMagicStatus', 'INT', 'int'), ('addFaithStatus', 'FTH', 'fth'), ('addLuckStatus', 'ARC', 'arc')]
 REFERENCE_STAT = 40
+#: The a000 clips the prior-input families start from (module docstring, setup discount).
+SETUP_CLIPS = {'run': 20200, 'roll': 27110, 'backstep': 27000, 'crouch': 390000}
+#: Family of each slot a move channel reads; a slot not named is neutral.
+SLOT_FAMILY = {'run_r1': 'run', 'run_r2': 'run', 'roll_r1': 'roll', 'bstep_r1': 'backstep',
+               'crouch_r1': 'crouch', 'jump_r1': 'jump', 'jump_r2': 'jump'}
+#: The jump the jump slots are timed from: the N jump, as `er-mechanics-interrupt.jump_entry`.
+JUMP_KIND = 'n'
+_SETUP = {}
 COST_TEXT = {'maxStaminaRate': ('max stamina', 1), 'maxMpRate': ('max FP', 1),
              'changeHpEstusFlaskCorrectRate': ('Crimson flask healing', 1),
              'changeMpEstusFlaskCorrectRate': ('Cerulean flask FP', 1)}
@@ -314,24 +349,67 @@ def slot_quality(r):
     return r['mv_phys'] / max(r['hit_windows'][0][0], 1)
 
 
+def setup_frames():
+    """{family: {'clip', 'iframes', 'ready', 'exposed'}} for run, roll, backstep and crouch, and
+    {'clip', 'press'} for the jump, read from TAE (module docstring, setup discount). Cached."""
+    if not _SETUP:
+        ash = _mod('er_mechanics_ashes', 'er-mechanics-ashes.py')
+        for fam, clip in SETUP_CLIPS.items():
+            m = ash.evasion_motion(0, clip)
+            if m is None:
+                raise SystemExit(f'no a000_{clip:06d} in the player TAE: the {fam} setup cannot be measured')
+            ready = None if m['ready'] is None else round(m['ready'], 1)
+            exposed = 0.0 if ready is None else max(0.0, ready - m['iframes'])
+            _SETUP[fam] = {'clip': m['anim'], 'iframes': m['iframes'], 'ready': ready, 'exposed': round(exposed, 1)}
+        jmp = _mod('er_mechanics_jump', 'er-mechanics-jump.py')
+        _SETUP['jump'] = {'clip': f"a000_{jmp.JUMP_KINDS[JUMP_KIND]['clip']:06d}",
+                          'press': jmp.takeoff(JUMP_KIND)['press'], 'module': jmp}
+    return _SETUP
+
+
+def slot_setup(r, family):
+    """One slot's part of a move channel: {'slot', 'family', 'startup', 'exposed', 'factor'}, with
+    `factor` = startup / (startup + exposed)."""
+    startup = r['hit_windows'][0][0]
+    exposed = 0.0
+    if family == 'jump':
+        js = setup_frames()['jump']
+        seq = js['module'].sequence({'anim': r['anim'], 'startup': startup}, JUMP_KIND)
+        if seq is None:
+            raise SystemExit(f"{r['slot']} {r['anim']}: no jump sequence, the jump setup cannot be measured")
+        startup, exposed = seq['first_hit'] - seq['press'], seq['first_hit']
+    elif family:
+        exposed = setup_frames()[family]['exposed']
+    total = startup + exposed
+    return {'slot': r['slot'], 'family': family or 'neutral', 'startup': round(startup, 1),
+            'exposed': round(exposed, 1), 'factor': round(startup / total, 4) if total > 0 else 1.0}
+
+
 def weapon_vector(d, pop, wid, tables, prof):
-    """{channel: engagement 0..1} of one weapon as it comes, before any ash or infusion.
+    """{channel: engagement 0..1} of one weapon as it comes, before any ash or infusion, and
+    `_setup` {channel: {'discount', 'parts'}} for every channel it carries (1 for all but the
+    prior-input move channels).
 
     An infusion's element or status and an ash's skill are open to every weapon that takes them,
     so they say nothing about this weapon; only what its own base row and moveset carry counts."""
     affinity = 'Standard'
     v = {}
+    setup = {}
     one = {r['slot']: r for r in d.ATT.weapon_attacks(d.reg, wid, 'one')}
     sub_of = {s['slot']: {x for h in s['hits'] for x in h['subcats']}
               for g in prof['grips'].values() for s in g['slots']}
     for sc, slots in MOVE_SLOTS.items():
         best = 0.0
+        parts = []
         for slot in slots:
             r = one.get(slot)
             if r and sc in sub_of.get(slot, ()) and slot_quality(r):
                 best = max(best, pop.pct(pop.slot_q.get(slot, []), slot_quality(r)))
+                parts.append(slot_setup(r, SLOT_FAMILY.get(slot)))
         if best:
             v[f'move:{sc}'] = best
+            setup[f'move:{sc}'] = {'discount': round(sum(p['factor'] for p in parts) / len(parts), 4),
+                                   'parts': parts}
     both = prof['grips']['both']['slots']
     if both:
         v['move:120'] = sum(1 for s in both if 120 in sub_of.get(s['slot'], ())) / len(both)
@@ -372,6 +450,10 @@ def weapon_vector(d, pop, wid, tables, prof):
                 AR.attack_rating(tables, name, affinity, top, {**ref, key: REFERENCE_STAT + pts})) / base_ar - 1)
     except SystemExit:
         pass
+    for ch in v:
+        if not ch.startswith('_') and ch not in setup:
+            setup[ch] = {'discount': 1.0, 'parts': []}
+    v['_setup'] = setup
     return v
 
 
@@ -379,8 +461,14 @@ def _total(ar):
     return sum(x['total'] for x in ar['damage'].values()) or 1.0
 
 
-def synergy(gear, wv):
-    """(score, [(channel, engagement, gain, contribution)]) of one gear item for a weapon vector."""
+def discount(wv, ch, setup=True):
+    """The channel's setup discount for this weapon (1 with `setup` off or on a neutral channel)."""
+    return (wv.get('_setup') or {}).get(ch, {}).get('discount', 1.0) if setup else 1.0
+
+
+def synergy(gear, wv, setup=True):
+    """(score, [(channel, engagement, gain, contribution, row)]) of one gear item for a weapon
+    vector; the contribution is engagement x setup discount x gain."""
     parts = []
     for b in gear['benefits']:
         ch = b['channel']
@@ -398,7 +486,7 @@ def synergy(gear, wv):
             # Only some elements boosted: weigh by the weapon's share of each.
             gain = sum(wv.get(f'element:{el}', 0.0) * (m - 1) for el, m in b['mult'].items())
         if e > 0 and gain > 1e-4:
-            parts.append((ch, e, gain, e * gain, b))
+            parts.append((ch, e, gain, e * discount(wv, ch, setup) * gain, b))
     score = sum(p[3] for p in parts) - survivability_cost(gear)
     return score, parts
 
@@ -478,17 +566,19 @@ def critical(d, pop, gear, wid):
     return out
 
 
-def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
+def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01, setup=True):
+    """`setup` False scores without the setup discount (the selftest's comparison)."""
     wid = d.find_weapon(weapon)
     prof = AFF.weapon_profile(d, wid)
     wv = weapon_vector(d, pop, wid, tables, prof)
     rows = []
     for name, item in gear.items.items():
-        sc, parts = synergy(item, wv)
+        sc, parts = synergy(item, wv, setup)
         if not parts or sc < min_score:
             continue
         rows.append({'name': name, 'kind': item['kind'], 'score': round(sc, 4),
-                     'channels': [{'channel': p[0], 'engagement': round(p[1], 3), 'gain': round(p[2], 4),
+                     'channels': [{'channel': p[0], 'engagement': round(p[1], 3),
+                                   'discount': discount(wv, p[0], setup), 'gain': round(p[2], 4),
                                    'row': p[4]['row']} for p in parts],
                      'survivability_cost': round(survivability_cost(item), 4),
                      'other_costs': item['other_costs'],
@@ -496,6 +586,8 @@ def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01):
     rows.sort(key=lambda r: -r['score'])
     return {'weapon': d.weapon_name(wid), 'id': wid, 'powerstance': powerstance(d, wid),
             'vector': {k: round(x, 3) for k, x in wv.items() if not k.startswith('_')},
+            'setup': {ch: s if setup else {'discount': 1.0, 'parts': []} for ch, s in wv['_setup'].items()},
+            'setup_frames': {f: {k: x for k, x in s.items() if k != 'module'} for f, s in setup_frames().items()},
             'gear': rows[:top], 'critical': critical(d, pop, gear, wid)}
 
 
@@ -629,6 +721,28 @@ def selftest():
     assert mis['throwAtkRate'] > longsword['throwAtkRate'], (mis, longsword)
     assert mis['above_normal'] and not longsword['above_normal'], (mis, longsword)
     assert 'Dagger Talisman' in {g['name'] for g in mis['gear']}, mis
+    # Setup discount: neutral channels whole, a prior input discounted by its exposed frames.
+    sf = setup_frames()
+    assert sf['roll']['iframes'] > 0 and sf['roll']['exposed'] == round(sf['roll']['ready'] - sf['roll']['iframes'], 1)
+    assert sf['backstep']['iframes'] == 0 and sf['backstep']['exposed'] == sf['backstep']['ready'], sf['backstep']
+    assert sf['run']['exposed'] == 0, sf['run']
+    after = rank(d, pop, gear, tables, 'Misericorde', top=60)
+    before = rank(d, pop, gear, tables, 'Misericorde', top=60, setup=False)
+    su = after['setup']
+    for ch in ('move:100', 'move:104', 'move:120'):
+        assert su[ch]['discount'] == 1.0 and all(p['family'] == 'neutral' for p in su[ch]['parts']), (ch, su[ch])
+    fam = {}
+    for s in su.values():
+        for p in s['parts']:
+            fam.setdefault(p['family'], []).append(p['factor'])
+    assert max(fam['jump']) < min(fam['roll']) and max(fam['backstep']) < min(fam['roll']), fam
+    assert max(fam['roll']) < min(fam['run']) == 1.0, fam
+    a = {r['name']: r['score'] for r in after['gear']}
+    b = {r['name']: r['score'] for r in before['gear']}
+    for low in ('Retaliatory Crossed-Tree', 'Claw Talisman'):
+        for high in ('Twinblade Talisman', 'Two-Handed Sword Talisman'):
+            assert a[low] / a[high] < b[low] / b[high], (low, high, a[low], a[high], b[low], b[high])
+    assert b['Retaliatory Crossed-Tree'] > b['Two-Handed Sword Talisman'] > a['Retaliatory Crossed-Tree'], (a, b)
     assert main_text_runs('Lance') and main_text_runs('Misericorde')
     print(f"selftest ok: Lance top {[r['name'] for r in lance['gear'][:6]]}")
     return 0
@@ -658,8 +772,20 @@ def main():
             print(f"    {m['label']:<12} {m['anim']}  first hit f{m['first_hit']:.0f}  {m['hits']} hits  "
                   f"MV {m['mv_phys']}  {m.get('rank_text', '')}")
         print(f"  {ps['heading']}: {ps['text']}")
+    sf = out['setup_frames']
+    print('  setup frames: ' + ', '.join(
+        f"{f} {s['clip']} " + (f"press f{s['press']:g}" if f == 'jump' else
+                               f"R1 f{s['ready']:g} i-frames f{s['iframes']:g} exposed {s['exposed']:g}"
+                               if s['ready'] is not None else 'no R1 window, exposed 0')
+        for f, s in sf.items()))
+    print('  setup discount per channel, startup / (startup + exposed):')
+    for ch, s in sorted(out['setup'].items()):
+        parts = ', '.join(f"{p['slot']} {p['family']} {p['startup']:g}/({p['startup']:g}+{p['exposed']:g})"
+                          f"={p['factor']:.2f}" for p in s['parts'])
+        print(f"    {ch:<18} x{s['discount']:.2f}  {parts}".rstrip())
     for r in out['gear']:
-        ch = ', '.join(f"{c['channel']} {c['engagement']:.2f}x{c['gain']:+.3f}" for c in r['channels'])
+        ch = ', '.join(f"{c['channel']} {c['engagement']:.2f}x{c['gain']:+.3f}"
+                       + (f" setup x{c['discount']:.2f}" if c['discount'] < 1 else '') for c in r['channels'])
         cost = f" cost {r['survivability_cost']:.3f}" if r['survivability_cost'] else ''
         print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8} {ch}{cost} {'; '.join(r['other_costs'])}")
     crit = out['critical']
