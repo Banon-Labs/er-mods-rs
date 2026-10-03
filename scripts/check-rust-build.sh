@@ -304,6 +304,7 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 		-p er-quit-menu-core -p er-quit-menu \
 		-p er-invasion-path -p er-invasion-warp -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
+		-p er-r3-view \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 
 	# er-game-base's `pgd` module is `#[cfg(all(windows, feature = "game-types"))]`, and

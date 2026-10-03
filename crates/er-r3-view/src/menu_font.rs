@@ -21,14 +21,15 @@ const MAX_GFX_BYTES: i32 = 64 * 1024 * 1024;
 const URL_MAX: usize = 512;
 
 static FILE_OPEN_ORIG: AtomicUsize = AtomicUsize::new(0);
-static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 /// Every `font.gfx` the game opened, in order; one locale opens a body and a map face.
 static CAPTURED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
 /// Registers the file-open observer. Returns the union route, or the hook error, for the log.
-pub fn install(base: usize) -> Result<String, String> {
-    GAME_BASE.store(base, Ordering::SeqCst);
-    let target = base + er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA;
+pub fn install() -> Result<String, String> {
+    // The hook API resolves the 1.16.2 rva for the running build itself.
+    let target = er_game_base::mem::game_rva_for_hook(
+        er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA as u32,
+    )?;
     match unsafe {
         er_hook::register_shared_hook(target, menu_font_file_open_hook, &FILE_OPEN_ORIG)
     } {
@@ -74,7 +75,9 @@ unsafe extern "system" fn menu_font_file_open_hook(
 ///
 /// `file` is the object the file open just returned, alive for this call.
 unsafe fn capture(file: usize) {
-    let base = GAME_BASE.load(Ordering::SeqCst);
+    let Ok(base) = er_game_base::mem::game_module_base() else {
+        return;
+    };
     let Some(vtable) = (unsafe { safe_read_usize(file) }) else {
         return;
     };

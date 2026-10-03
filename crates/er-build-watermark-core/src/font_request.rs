@@ -96,9 +96,10 @@ fn be32(data: &[u8], at: usize) -> Option<u32> {
 }
 
 const TAG_TRUETYPE: u32 = 0x0001_0000;
-const TAG_TRUE: u32 = u32::from_be_bytes(*b"true");
-const TAG_OTTO: u32 = u32::from_be_bytes(*b"OTTO");
-const TAG_TTCF: u32 = u32::from_be_bytes(*b"ttcf");
+/// `true`, `OTTO` and `ttcf`, big-endian.
+const TAG_TRUE: u32 = 0x7472_7565;
+const TAG_OTTO: u32 = 0x4f54_544f;
+const TAG_TTCF: u32 = 0x7474_6366;
 
 /// The checks `stbtt_GetFontOffsetForIndex(data, 0)` and `stbtt_InitFont` make, done with bounds
 /// checks: a recognised header, a table directory inside the buffer, every table inside the

@@ -21,20 +21,20 @@
 //! the BC7 decode and the hand-off to the overlay host -- runs on a thread of our own, so neither
 //! the menu thread nor the render thread waits on a fence.
 //!
-//! # Why a build gate rather than a pattern
+//! # Addresses
 //!
-//! The lookup's prologue is not unique in the image (its first 24 bytes occur 21 times), and the
-//! three call sites that load the repository and call it have shapes that occur 64 times or more.
-//! So the two addresses are the measured 1.17.1 ones, taken only when the running image is 1.17.1
-//! and the lookup's first 40 bytes are the bytes read out of `eldenring-deobf-1.17.1.bin` at that
-//! rva. Any other build logs a refusal and the board draws no icon.
+//! Both are written as 1.16.2 rvas and translated for the running build by `er_game_base`, which
+//! refuses a build it has no verified mapping for; a refusal logs and the board draws no icon. The
+//! lookup is the function map's pair (1.16.2 `0xd63e50`, 1.17.0 `0xd65b90`), and the repository
+//! global the data map's, agreed by all 35 references (1.16.2 `0x3d82510`, 1.17 `0x3d86580`).
+//! Both translated addresses were read live on 1.17.1 by `scripts/frida/r3-icon-addresses.js`:
+//! the global holds a `CS::ScaleformTexRepositoryImp` and the lookup starts with its prologue.
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use er_game_base::game_build::FileVersion;
-use er_game_base::mem::{module_backing, read_bytes, safe_read_i32, safe_read_usize};
+use er_game_base::mem::{module_backing, safe_read_i32, safe_read_usize};
 use windows::Win32::Foundation::{CloseHandle, WAIT_FAILED, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_BOX, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
@@ -58,30 +58,13 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::Interface;
 
-/// The build the addresses below were measured on: ELDEN RING 1.17.1, PE `FileVersion` 2.7.1.0.
-const MEASURED_BUILD: FileVersion = FileVersion {
-    major: 2,
-    minor: 7,
-    build: 1,
-    revision: 0,
-};
+/// 1.16.2 rva of the Scaleform texture repository global, a pointer that is null until the menu
+/// system has built it (1.17.1 `0x3d86580`, bd `item-icon-runtime-chain-1171-2026-10-02`).
+const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d82510;
 
-/// 1.17.1 rva of the Scaleform texture repository global, a pointer that is null until the menu
-/// system has built it (measured with Frida, bd `item-icon-runtime-chain-1171-2026-10-02`).
-const REPO_GLOBAL_RVA_1171: usize = 0x3d86580;
-
-/// 1.17.1 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
-/// (1.16.2 `0xd63e50`); the resource is written to `out`.
-const LOOKUP_RVA_1171: usize = 0xd65c00;
-
-/// The lookup's first 40 bytes in `eldenring-deobf-1.17.1.bin`, through the stack store before the
-/// cookie load: seven pushes, the frame, `sub rsp, 0xa0` and two stack stores. None is
-/// rip-relative.
-const LOOKUP_ENTRY_BYTES: [u8; 40] = [
-    0x40, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x6c, 0x24,
-    0xd9, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00, 0x48, 0xc7, 0x45, 0xdf, 0xfe, 0xff, 0xff, 0xff,
-    0x48, 0x89, 0x9c, 0x24, 0xf8, 0x00, 0x00, 0x00,
-];
+/// 1.16.2 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
+/// (1.17.1 `0xd65c00`); the resource is written to `out`.
+const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
 
 /// `CS::ScaleformImageResource`: its `CSTextureImage` and its symbol (a `wchar*`).
 const RESOURCE_IMAGE_OFFSET: usize = 0x18;
@@ -165,20 +148,19 @@ pub unsafe fn resolve_once(game_base: usize, icon_id: u32, log: fn(std::fmt::Arg
 ///
 /// As [`resolve_once`].
 unsafe fn lookup(game_base: usize, icon_id: u32) -> Result<IconSource, String> {
-    let found = er_game_base::game_build::game_file_version();
-    if found != Some(MEASURED_BUILD) {
-        return Err(format!(
-            "running build {found:?} is not {MEASURED_BUILD}, where the lookup was measured"
-        ));
+    let lookup_addr = er_game_base::mem::game_rva_named(
+        SCALEFORM_TEXTURE_LOOKUP_RVA,
+        "SCALEFORM_TEXTURE_LOOKUP_RVA",
+    )?;
+    let repo_global = er_game_base::mem::game_data_addr(
+        game_base,
+        SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA,
+        "SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA",
+    );
+    if repo_global == 0 {
+        return Err("texture repository global has no mapping for this build".to_string());
     }
-    let lookup_addr = game_base + LOOKUP_RVA_1171;
-    let mut entry = [0u8; LOOKUP_ENTRY_BYTES.len()];
-    if !unsafe { read_bytes(lookup_addr, &mut entry) } || entry != LOOKUP_ENTRY_BYTES {
-        return Err(format!(
-            "lookup entry at 0x{lookup_addr:x} is not the measured bytes"
-        ));
-    }
-    let repo = unsafe { safe_read_usize(game_base + REPO_GLOBAL_RVA_1171) }.unwrap_or(0);
+    let repo = unsafe { safe_read_usize(repo_global) }.unwrap_or(0);
     if repo == 0 {
         return Err("texture repository global is null".to_string());
     }

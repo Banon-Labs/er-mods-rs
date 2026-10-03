@@ -1,4 +1,4 @@
-use std::ffi::{CStr, c_void};
+use std::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
@@ -286,7 +286,7 @@ fn install() {
             "MenuJob::EmitResult hook failed: {status:?}; the board leaves when Run stops"
         )),
     }
-    match crate::menu_font::install(start) {
+    match crate::menu_font::install() {
         Ok(route) => log(format_args!(
             "Scaleform file open registered on the {route} union, for the menu font"
         )),
@@ -344,7 +344,7 @@ unsafe extern "system" fn step_hook(this: usize, _a: usize, _b: usize, _c: usize
     unsafe { apply(list, mode) };
     if i64::from(mode) == count {
         let owner = unsafe { ((this + PARTS_OWNER_WINDOW_OFFSET) as *const usize).read() };
-        if unsafe { rtti_name(owner) } == Some(ITEM_LIST) {
+        if unsafe { rtti_is(owner, ITEM_LIST) } {
             ITEM_LIST_WINDOW.store(owner, Ordering::Relaxed);
             ITEM_LIST_AT_MS.store(now_ms() as usize, Ordering::Relaxed);
         }
@@ -411,7 +411,7 @@ unsafe extern "system" fn run_hook(job: usize, a: usize, b: usize, c: usize) -> 
     } else {
         unsafe { ((job + MENU_WINDOW_JOB_WINDOW_OFFSET) as *const usize).read() }
     };
-    let is_item_list = unsafe { rtti_name(window) } == Some(ITEM_LIST);
+    let is_item_list = unsafe { rtti_is(window, ITEM_LIST) };
     let ret = unsafe { next(job, a, b, c) };
     if is_item_list {
         if ITEM_LIST_WINDOW.swap(window, Ordering::Relaxed) != window {
@@ -457,12 +457,23 @@ unsafe extern "system" fn emit_result_hook(
     unsafe { next(this, result, c, d) }
 }
 
-/// The RTTI name of the polymorphic object at `object`, when its vtable is inside the game image.
+/// Whether the polymorphic object at `object` has a vtable inside the game image whose RTTI name
+/// is `name`.
 ///
 /// # Safety
 ///
 /// `object` must be null or readable for eight bytes.
-unsafe fn rtti_name(object: usize) -> Option<&'static str> {
+unsafe fn rtti_is(object: usize, name: &str) -> bool {
+    unsafe { rtti_name(object) }.is_some_and(|found| found == name.as_bytes())
+}
+
+/// The RTTI name of the polymorphic object at `object`, when its vtable is inside the game image.
+/// The name is read through `safe_read_cstr`, so an unterminated or unmapped one reads as `None`.
+///
+/// # Safety
+///
+/// `object` must be null or readable for eight bytes.
+unsafe fn rtti_name(object: usize) -> Option<Vec<u8>> {
     if object == 0 {
         return None;
     }
@@ -480,10 +491,11 @@ unsafe fn rtti_name(object: usize) -> Option<&'static str> {
     }
     let image = col - unsafe { ((col + 0x14) as *const u32).read() } as usize;
     let td = image + unsafe { ((col + 0x0c) as *const u32).read() } as usize;
-    unsafe { CStr::from_ptr((td + 0x10) as *const std::ffi::c_char) }
-        .to_str()
-        .ok()
+    unsafe { er_game_base::mem::safe_read_cstr(td + 0x10, RTTI_NAME_MAX) }
 }
+
+/// Bound on a decorated RTTI name read; the longest this crate compares is 33 bytes.
+const RTTI_NAME_MAX: usize = 256;
 
 /// The GFx `(ObjectInterface*, data)` behind a proxy, if it is one and holds a display object.
 ///
@@ -491,7 +503,7 @@ unsafe fn rtti_name(object: usize) -> Option<&'static str> {
 ///
 /// `proxy` must point into a live menu window.
 unsafe fn gfx_value(proxy: usize) -> Option<(usize, usize)> {
-    if unsafe { rtti_name(proxy) } != Some(SCENE_OBJ_PROXY) {
+    if !unsafe { rtti_is(proxy, SCENE_OBJ_PROXY) } {
         return None;
     }
     let vtable = unsafe { (proxy as *const usize).read() };
@@ -546,7 +558,7 @@ unsafe fn set_alpha(iface: usize, data: usize, value: f64) {
 /// On the menu thread.
 unsafe fn fade_left_panel() {
     let window = ITEM_LIST_WINDOW.load(Ordering::Relaxed);
-    if unsafe { rtti_name(window) } != Some(ITEM_LIST) {
+    if !unsafe { rtti_is(window, ITEM_LIST) } {
         log(format_args!(
             "view 3: item list window unknown; left panel left up"
         ));
@@ -587,7 +599,7 @@ unsafe fn restore_left_panel() {
     for f in faded.iter() {
         // The menu windows outlive a menu close, so the same object still carrying the item list's
         // class is the window that was faded.
-        if unsafe { rtti_name(f.window) } != Some(ITEM_LIST) {
+        if !unsafe { rtti_is(f.window, ITEM_LIST) } {
             continue;
         }
         if let Some((iface, data)) = unsafe { gfx_value(f.proxy) } {
