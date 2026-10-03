@@ -110,6 +110,12 @@ const PANE_CALLBACK_SLOT: usize = 0x10;
 
 /// 1.16.2 rva of `MenuWindowJob::Run`; `register_shared_hook` carries it to the running build.
 const MENU_WINDOW_JOB_RUN_RVA_1162: usize = 0x7ad1c0;
+/// `CS::MenuJob::EmitResult` (vtable slot 12), where every window's answer passes, a cancel by B
+/// included. Measured with Frida (`r3-item-list-close-trace.js`): B on the item list calls it on
+/// the item list's window, and `Run` then keeps pumping that window for 14 more frames of the
+/// native close before it is torn down, so the board leaves here rather than when `Run` stops.
+/// Same address as er-title-flow's `MENU_JOB_EMIT_RESULT_RVA`.
+const MENU_JOB_EMIT_RESULT_RVA_1162: usize = 0x746e80;
 const MENU_WINDOW_JOB_WINDOW_OFFSET: usize = 0x130;
 
 /// The item list's own `SceneObjProxy` members that draw its left panel.
@@ -131,11 +137,18 @@ const SCENE_OBJ_PROXY: &str = ".?AVSceneObjProxy@CS@@";
 const ITEM_LIST: &str = ".?AVGaitemSelectDialog@CS@@";
 /// The item list not pumped for this long while view 3 is up means it closed.
 const ITEM_LIST_GONE_MS: u128 = 1000;
+/// The board stops drawing this soon after the item list's last `Run`, so closing the list with
+/// B takes the board with it. Measured with Frida (`r3-item-list-run-cadence.js`): while the list
+/// is open `Run` reaches it every 17 ms on median and at most 52 ms apart over 480 calls, so this
+/// is about three times the worst gap. Only the draw reads it; the left panel's alpha still comes
+/// back on `ITEM_LIST_GONE_MS`.
+const BOARD_GONE_MS: u128 = 150;
 
 static START: Once = Once::new();
 static STEP_ORIG: AtomicUsize = AtomicUsize::new(0);
 static R3_ENABLED_ORIG: AtomicUsize = AtomicUsize::new(0);
 static RUN_ORIG: AtomicUsize = AtomicUsize::new(0);
+static EMIT_RESULT_ORIG: AtomicUsize = AtomicUsize::new(0);
 static APPLY: AtomicUsize = AtomicUsize::new(0);
 /// The running game image's base, for the icon lookup's measured addresses.
 static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
@@ -257,6 +270,20 @@ fn install() {
         )),
         Err(status) => log(format_args!(
             "MenuWindowJob::Run hook failed: {status:?}; view 3 will leave the left panel up"
+        )),
+    }
+    match unsafe {
+        er_hook::register_shared_hook(
+            start + MENU_JOB_EMIT_RESULT_RVA_1162,
+            emit_result_hook,
+            &EMIT_RESULT_ORIG,
+        )
+    } {
+        Ok(route) => log(format_args!(
+            "MenuJob::EmitResult registered on the {route:?} union; B takes the board at once"
+        )),
+        Err(status) => log(format_args!(
+            "MenuJob::EmitResult hook failed: {status:?}; the board leaves when Run stops"
         )),
     }
     match crate::menu_font::install(start) {
@@ -404,6 +431,30 @@ unsafe extern "system" fn run_hook(job: usize, a: usize, b: usize, c: usize) -> 
         SHOW_BOARD.store(false, Ordering::Relaxed);
     }
     ret
+}
+
+/// The item list answering (B, or a pick) hides the board on that frame; the native close that
+/// follows runs with nothing of ours over it.
+///
+/// # Safety
+///
+/// Installed by `er-hook`; the game calls it on its menu thread with a live `MenuJob` in `this`
+/// and the result by value in the second register.
+unsafe extern "system" fn emit_result_hook(
+    this: usize,
+    result: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    if this != 0 && this == ITEM_LIST_WINDOW.load(Ordering::Relaxed) {
+        SHOW_BOARD.store(false, Ordering::Relaxed);
+    }
+    let orig = EMIT_RESULT_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    unsafe { next(this, result, c, d) }
 }
 
 /// The RTTI name of the polymorphic object at `object`, when its vtable is inside the game image.
@@ -556,7 +607,8 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
         return;
     };
     request_menu_font(ui);
-    if SHOW_BOARD.load(Ordering::Relaxed) {
+    let item_list_quiet_ms = now_ms() - ITEM_LIST_AT_MS.load(Ordering::Relaxed) as u128;
+    if SHOW_BOARD.load(Ordering::Relaxed) && item_list_quiet_ms <= BOARD_GONE_MS {
         let handle = FONT_HANDLE.load(Ordering::Relaxed);
         let fonts = (handle != 0).then(|| board::Fonts {
             faces: std::array::from_fn(|i| unsafe { frame_font(frame, handle, i) }),

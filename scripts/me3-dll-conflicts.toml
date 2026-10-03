@@ -920,13 +920,6 @@ game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to che
 against the player's configured bindings). Both are loads through the fault-safe reader."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
-"er-r3-view" = """Four detours, all through the hook union. The item-list R3 step (1.17.1 \
-0x998260) and R3's enable predicate (1.17.1 0x996b30), both found by their bytes, are detoured \
-by no other shell. MenuWindowJob::Run is shared with the product and er-quit-menu, and the \
-Scaleform file open (0x11ced80, read-only, to copy the menu font) with the product, \
-er-quit-menu and er-armament-icons, all through `register_shared_hook`, recorded as [[shared]] \
-rows. It draws as a guest of the overlay host, \
-so it adds no Present hook."""
 "er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
@@ -1202,3 +1195,42 @@ instance, so neither displaces the other."""
 evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
 crates/er-quit-menu-core/src/gfx_swap.rs `register_shared_hook(addr, \
 quit_menu_scaleform_file_open_hook, ...)`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+mechanism = "hook-union"
+handler_a = "menu_job_emit_result_hook"
+handler_b = "emit_result_hook"
+reason = """Both observe `CS::MenuJob::EmitResult`: the product's save flow through \
+`er_quit_menu_core::save_flow_boxes`, er-r3-view to hide its R3 board on the frame the item list \
+answers. Both handlers only read their arguments and always call their slot, and both register \
+through the hook union, so they chain on one MinHook instance. er-r3-view names the address as \
+a literal (`MENU_JOB_EMIT_RESULT_RVA_1162`), which is why this row is written by hand."""
+evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
+MENU_JOB_EMIT_RESULT_RVA_1162, emit_result_hook, ...)`); crates/er-quit-menu-core/src/\
+save_flow_boxes.rs `install_menu_job_emit_result_hook`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+mechanism = "hook-union"
+handler_a = "menu_job_emit_result_hook"
+handler_b = "emit_result_hook"
+reason = """The standalone quit-menu shell links the same save-flow observer as the product, so it \
+shares `EmitResult` with er-r3-view on the same terms: observe-only handlers that call their slot, \
+registered through the hook union."""
+evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/src/\
+save_game_row.rs calls `install_menu_job_emit_result_hook`."""
+
+[[conflict]]
+a = "er-r3-view"
+b = "er-reload-trace"
+kind = "hook-collision"
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+HookSpec table with its own MinHook instance, so whichever installs second finds a `jmp` where \
+the prologue should be. er-r3-view hides its R3 board from that function; without it the board \
+stays up through the item list's native close. Same mechanism as the er-quit-menu pair."""
+evidence = "crates/er-reload-trace/src/lib.rs:780; crates/er-r3-view/src/imp.rs `install`"
