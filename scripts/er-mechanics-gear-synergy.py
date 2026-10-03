@@ -584,11 +584,18 @@ def rank(d, pop, gear, tables, weapon, top=12, min_score=0.01, setup=True):
                      'other_costs': item['other_costs'],
                      'why': describe(parts, None, item, wv)})
     rows.sort(key=lambda r: -r['score'])
+    shown = rows[:top]
+    # Gear on the pierce channel (Spear Talisman) is always listed for a weapon any of whose hits
+    # pierce, ranked or not (user directive 2026-10-02); `pinned` says why it is there.
+    if wv.get('pierce', 0) > 0:
+        for r in rows[top:]:
+            if any(c['channel'] == 'pierce' for c in r['channels']):
+                shown.append(dict(r, pinned='pierce'))
     return {'weapon': d.weapon_name(wid), 'id': wid, 'powerstance': powerstance(d, wid),
             'vector': {k: round(x, 3) for k, x in wv.items() if not k.startswith('_')},
             'setup': {ch: s if setup else {'discount': 1.0, 'parts': []} for ch, s in wv['_setup'].items()},
             'setup_frames': {f: {k: x for k, x in s.items() if k != 'module'} for f, s in setup_frames().items()},
-            'gear': rows[:top], 'critical': critical(d, pop, gear, wid)}
+            'gear': shown, 'critical': critical(d, pop, gear, wid)}
 
 
 #: Dual moves whose first hit counts from the button press, so one weapon's frame compares with
@@ -721,6 +728,10 @@ def selftest():
     assert mis['throwAtkRate'] > longsword['throwAtkRate'], (mis, longsword)
     assert mis['above_normal'] and not longsword['above_normal'], (mis, longsword)
     assert 'Dagger Talisman' in {g['name'] for g in mis['gear']}, mis
+    # A weapon with any piercing hit always lists Spear Talisman, however far down it ranks.
+    mis1 = rank(d, pop, gear, tables, 'Misericorde', top=1)
+    assert mis1['vector']['pierce'] > 0 and any(
+        r['name'] == 'Spear Talisman' for r in mis1['gear']), mis1['gear']
     # Setup discount: neutral channels whole, a prior input discounted by its exposed frames.
     sf = setup_frames()
     assert sf['roll']['iframes'] > 0 and sf['roll']['exposed'] == round(sf['roll']['ready'] - sf['roll']['iframes'], 1)
@@ -787,7 +798,8 @@ def main():
         ch = ', '.join(f"{c['channel']} {c['engagement']:.2f}x{c['gain']:+.3f}"
                        + (f" setup x{c['discount']:.2f}" if c['discount'] < 1 else '') for c in r['channels'])
         cost = f" cost {r['survivability_cost']:.3f}" if r['survivability_cost'] else ''
-        print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8} {ch}{cost} {'; '.join(r['other_costs'])}")
+        pin = '  (always listed: its hits pierce)' if r.get('pinned') == 'pierce' else ''
+        print(f"  {r['score']:+.3f} {r['name']:<34} {r['kind']:<8} {ch}{cost} {'; '.join(r['other_costs'])}{pin}")
     crit = out['critical']
     if crit['above_normal']:
         print(f"  critical gear: {crit['why']}.")
