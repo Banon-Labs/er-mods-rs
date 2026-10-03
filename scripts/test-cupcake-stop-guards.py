@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -494,6 +495,21 @@ CASES = [
         "that named a defect and changed nothing",
     ),
     Case(
+        "diagnosis_committed_by_subagent.jsonl",
+        None,
+        "the 2026-10-02 false positive: a subagent committed the fix, and the closing message "
+        "named the cause and the commit. This turn wrote nothing, so `edited` is 0, but the commit "
+        "was made after the session began -- must NOT halt, or relaying a subagent's fix is "
+        "punished identically to never making it",
+    ),
+    Case(
+        "diagnosis_cites_pre_session_commit.jsonl",
+        "the diagnosis is not the deliverable",
+        "the same cause named, citing a commit that predates the session and changing nothing -- "
+        "must still halt. An old hash in the prose is history, not a fix, so the time bound on "
+        "`committed` is what keeps the true positive blocking",
+    ),
+    Case(
         "ask_without_receiver.jsonl",
         "You asked the user for something you have no receiver for",
         "the 2026-10-02 closer, verbatim: a Frida watcher backgrounded, then 'I need you to close "
@@ -568,6 +584,34 @@ def hook_command(event: str) -> list[str]:
     )
 
 
+def substitute_head(text: str) -> str:
+    """Fill the commit placeholders a fixture may carry, from the checkout's own `HEAD`.
+
+    The committed-in-session fixtures need a real commit and a session timestamp on either side of
+    it. A hash written into the fixture would stop resolving once its branch is squash-merged and
+    pruned, so the fixture names `HEAD` instead:
+      `@@HEAD@@`         the short hash of `HEAD`
+      `@@BEFORE_HEAD@@`  an ISO timestamp one minute before the committer time of `HEAD`
+      `@@AFTER_HEAD@@`   an ISO timestamp one minute after it
+    """
+    if "@@" not in text:
+        return text
+    out = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "log", "-1", "--format=%h %ct", "HEAD"],
+        capture_output=True, text=True, timeout=10, check=True,
+    ).stdout.split()
+    short, epoch = out[0], int(out[1])
+
+    def iso(seconds: int) -> str:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    return (
+        text.replace("@@HEAD@@", short)
+        .replace("@@BEFORE_HEAD@@", iso(epoch - 60))
+        .replace("@@AFTER_HEAD@@", iso(epoch + 60))
+    )
+
+
 def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict, str] | str:
     """Drive one fixture through a real cupcake hook invocation. Returns (decision, raw stdout), or
     a failure message string."""
@@ -582,7 +626,9 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict,
         slug = str(REPO_ROOT).replace("/", "-")
         tdir = Path(tmp) / ".claude" / "projects" / slug
         tdir.mkdir(parents=True)
-        shutil.copy(fixture, tdir / "session.jsonl")
+        (tdir / "session.jsonl").write_text(
+            substitute_head(fixture.read_text(encoding="utf-8")), encoding="utf-8"
+        )
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
         payload = {

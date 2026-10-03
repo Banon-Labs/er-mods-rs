@@ -6,7 +6,7 @@
 #
 #   DIAGFACTS|diagnosis=..|fixed=..|asked=..|blocked=..|promise=..|edited=..|handback=..
 #            |handbackkind=..|userneed=..|didwork=..|extblocked=..|carried=..|unread=..
-#            |consulted=..|future=..|deferral=..
+#            |consulted=..|future=..|deferral=..|committed=..
 #
 # Emitted when either shape was found; a clean turn emits empty (fail-open).
 #
@@ -212,6 +212,76 @@ fixed = bool(hit) and any(
 # The question that separates a truthful report from an announcement is whether the turn wrote
 # anything at all, so the promissory arm reads this instead.
 edited = any(kind == "tool" and is_edit(block) for kind, block in turn.blocks)
+
+# --- (2a) a commit made in this session -------------------------------------------------------
+# A fix can land in a commit this turn never wrote. Measured 2026-10-02: a subagent committed
+# 831a1bc8, and the main agent's closing message described the cause it fixed and handed the user a
+# push command. `edited` was 0 because the subagent's edits live in its own transcript, so the guard
+# halted twice, the second time on a sentence saying the cause was already fixed.
+#
+# `committed` is true when a commit hash named anywhere in this session's transcript -- a
+# `git commit` result, a subagent's report, the closing prose -- resolves to a commit in this
+# repository that was made after the session began. The time bound is what keeps the real shape
+# halting: citing an old commit ("the bug came in with abc1234") is not a fix, and a session that
+# named a defect and committed nothing still scores 0. When the transcript carries no timestamps
+# (hand-written fixtures) the bound cannot be taken and existence alone is checked.
+HASH_RE = re.compile(r"(?<![0-9A-Za-z])[0-9a-f]{7,40}(?![0-9A-Za-z])")
+
+
+def session_strings(evs):
+    for ev in evs:
+        content = ev.get("message", {}).get("content") if isinstance(ev.get("message"), dict) else None
+        if isinstance(content, str):
+            yield content
+            continue
+        for block in content or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                yield block.get("text") or ""
+            elif block.get("type") == "tool_result":
+                yield scan._result_text(block)
+
+
+def session_start(evs):
+    for ev in evs:
+        stamp = ev.get("timestamp")
+        if isinstance(stamp, str) and stamp:
+            return stamp
+    return None
+
+
+def session_committed(evs):
+    import subprocess
+
+    candidates = set()
+    for text in session_strings(evs):
+        for m in HASH_RE.finditer(text or ""):
+            # No letter/digit filter: an abbreviated hash can be all digits, and git is the check.
+            candidates.add(m.group(0))
+    if not candidates:
+        return False
+    repo = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", ".")
+    start = session_start(evs)
+    if start:
+        listed = subprocess.run(
+            ["git", "-C", repo, "rev-list", "--all", "--reflog", "--since=" + start],
+            capture_output=True, text=True, timeout=10,
+        )
+        recent = listed.stdout.split() if listed.returncode == 0 else []
+        return any(full.startswith(token) for token in candidates for full in recent)
+    probe = subprocess.run(
+        ["git", "-C", repo, "cat-file", "--batch-check=%(objecttype)"],
+        input="".join(t + "^{commit}\n" for t in sorted(candidates)),
+        capture_output=True, text=True, timeout=10,
+    )
+    return probe.returncode == 0 and "commit" in probe.stdout.split()
+
+
+try:
+    committed = session_committed(events)
+except Exception:
+    committed = False
 
 message = scrub(turn.text)
 
@@ -786,7 +856,7 @@ if not hit and not promise and not handback and not unread and not deferral:
 print(
     "DIAGFACTS|diagnosis={}|fixed={}|asked={}|blocked={}|promise={}|edited={}"
     "|handback={}|handbackkind={}|userneed={}|didwork={}|extblocked={}|carried={}"
-    "|unread={}|consulted={}|future={}|deferral={}".format(
+    "|unread={}|consulted={}|future={}|deferral={}|committed={}".format(
         hit or "",
         int(fixed),
         int(asked),
@@ -803,6 +873,7 @@ print(
         int(consulted),
         int(future),
         deferral,
+        int(committed),
     )
 )
 PY

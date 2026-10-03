@@ -54,6 +54,21 @@ stop_event(sig) := {
 
 rule_ids(halts) := {d.rule_id | some d in halts}
 
+# 2026-10-02: a subagent committed the fix, and the closing message named the cause it fixed. No
+# write in this turn, but a commit made in the session -- must not halt.
+test_no_halt_when_the_fix_was_committed_in_the_session if {
+	line := concat("", [facts("The cause was the cargo guard reading a trailing backslash as its own command.", "0", "0", "0"), "|edited=0|committed=1"])
+	halts := guard.halt with input as stop_event(line)
+	not "ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX" in rule_ids(halts)
+}
+
+# The same diagnosis with nothing changed and nothing committed still halts.
+test_halt_when_a_diagnosis_changed_and_committed_nothing if {
+	line := concat("", [facts("The cause was the cargo guard reading a trailing backslash as its own command.", "0", "0", "0"), "|edited=0|committed=0"])
+	halts := guard.halt with input as stop_event(line)
+	"ER-EFFECTS-NO-DIAGNOSIS-WITHOUT-FIX" in rule_ids(halts)
+}
+
 # The verbatim shape that prompted the rule: a real defect named, no file changed.
 test_halt_when_a_diagnosis_changed_no_file if {
 	halts := guard.halt with input as stop_event(facts("The real defect is the banner phrase.", "0", "0", "0"))

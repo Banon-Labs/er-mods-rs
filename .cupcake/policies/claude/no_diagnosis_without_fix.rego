@@ -25,6 +25,8 @@
 #                    never be gagged; this exemption is deliberately broad.
 #       blocked   -- the turn stated a real dependency (sudo, a live game, an approval, waiting on
 #                    the user). A diagnosis that cannot yet be acted on is not a stall.
+#       committed -- a commit named in the session transcript was made after the session began,
+#                    by this agent or a subagent. The fix already landed (added 2026-10-02).
 #     Halts when a diagnosis was made, nothing was written, and neither exemption applies.
 #
 #     Why a new rule rather than widening a neighbour: ER-EFFECTS-NO-DESCRIBED-NEXT-STEP excludes a
@@ -294,11 +296,18 @@ field(name) := value if {
 # same fact without the ordering, and it is what the promissory arm beside this one already reads
 # for exactly this reason. Requiring both keeps the shape the rule exists to refuse -- a turn that
 # named a defect and changed nothing at all -- and stops convicting a truthful report.
+#
+# `committed` covers the fix that landed in a commit this turn did not write. Measured 2026-10-02: a
+# subagent committed 831a1bc8, the closing message described the cause it fixed, and the guard
+# halted twice because the subagent's edits live in its own transcript. The signal sets it only for
+# a commit made after the session began and named in the session, so a diagnosis with nothing
+# changed and nothing committed still halts.
 offending := clause if {
 	clause := field("diagnosis")
 	clause != ""
 	field("fixed") == "0"
 	edited == "0"
+	committed == "0"
 	field("asked") == "0"
 	field("blocked") == "0"
 }
@@ -366,6 +375,10 @@ edited := value if {
 
 blocked := value if {
 	value := field("blocked")
+} else := "0"
+
+committed := value if {
+	value := field("committed")
 } else := "0"
 
 # Same fail-closed default for the handback fields: a degraded line that still carries a clause
