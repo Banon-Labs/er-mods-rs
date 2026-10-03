@@ -124,7 +124,7 @@ impl Default for PickerSubmitArm {
 
 impl Drop for PickerSubmitArm {
     fn drop(&mut self) {
-        let _ = PICKER_SUBMIT_DEPTH.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |depth| {
+        let _ = PICKER_SUBMIT_DEPTH.try_update(Ordering::SeqCst, Ordering::SeqCst, |depth| {
             Some(depth.saturating_sub(1))
         });
     }
