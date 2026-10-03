@@ -40,6 +40,13 @@ CASES = [
     ("scripts/er-stale-run-sentinel.sh", True, False, "host-side script"),
 ]
 
+# The same edits against a run whose DLLs another checkout built. A worktree's copy of the
+# sentinel used to tear down the main tree's run, matching loaded DLLs by basename alone.
+FOREIGN_CASES = [
+    ("crates/er-game-base/src/mem.rs", True, False, "crate source, DLL built by another tree"),
+    ("docs/recon/rva-map-1162-to-1170.data.tsv", True, False, "build-read doc, DLL built by another tree"),
+]
+
 
 def run_signal(event: dict, profiles: str) -> str:
     env = dict(os.environ, LIVE_ER_RUN_PROFILES_OVERRIDE=profiles)
@@ -74,13 +81,22 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmp:
         profile = Path(tmp) / "signal-test.me3"
         profile.write_text('profileVersion = "v1"\n\n[[natives]]\npath = "C:/x/er_r3_view.dll"\n')
-        for rel, live, want_deny, why in CASES:
+        tree_b = Path(tmp) / "tree-b"
+        (tree_b / "target/x86_64-pc-windows-msvc/release").mkdir(parents=True)
+        (tree_b / "Cargo.toml").write_text("")
+        foreign = Path(tmp) / "foreign-tree.me3"
+        foreign.write_text(
+            'profileVersion = "v1"\n\n[[natives]]\n'
+            f'path = "{tree_b}/target/x86_64-pc-windows-msvc/release/er_r3_view.dll"\n'
+        )
+        runs = [(c, profile) for c in CASES] + [(c, foreign) for c in FOREIGN_CASES]
+        for (rel, live, want_deny, why), prof in runs:
             event = {
                 "hook_event_name": "PreToolUse",
                 "tool_name": "Edit",
                 "tool_input": {"file_path": str(REPO / rel)},
             }
-            signal = run_signal(event, str(profile) if live else "")
+            signal = run_signal(event, str(prof) if live else "")
             event["signals"] = {"live_er_run": signal}
             got = denied(event)
             verdict = next((ln for ln in signal.splitlines() if ln.startswith("VERDICT ")), "-")

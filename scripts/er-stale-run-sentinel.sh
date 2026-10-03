@@ -41,6 +41,11 @@
 #      stale; that is what stops a log line killing a run)
 #   2. nothing live                                -> skip (nothing at stake, and no cargo run)
 #   3. the loaded-DLL set cannot be determined     -> FALLBACK: tear down (see fail safe below)
+#   3a. every workspace DLL loaded was built by    -> skip; a DLL from another tree drops out of
+#       another checkout                              the loaded set either way (`build_tree_of`:
+#                                                     this tree's target dir, a provenance
+#                                                     record's `repo_root`, or `<tree>/target/`;
+#                                                     unknown origin counts as this tree)
 #   4. under an inert top-level directory, or a    -> skip, unless a crate's build reads it
 #      prose file (.md/.txt/...) outside every        (`include_str!`/`include_bytes!` anywhere,
 #      crate                                          or a literal path in a build script): then
@@ -354,6 +359,27 @@ def package_dirs_from_fs():
     return out
 
 
+def fs_cdylib_names(pkg_dir):
+    """Cdylib target names read from each crate's `Cargo.toml`, or None if any is unreadable.
+
+    The stand-in for cargo metadata's target list. A crate whose manifest cannot be parsed makes
+    the whole answer None, because a missing name would let its DLL pass as foreign to the
+    workspace.
+    """
+    names = set()
+    for name, d in pkg_dir.items():
+        try:
+            with open(os.path.join(d, "Cargo.toml"), "rb") as fh:
+                manifest = tomllib.load(fh)
+        except (OSError, tomllib.TOMLDecodeError):
+            return None
+        lib = manifest.get("lib") or {}
+        if "cdylib" in (lib.get("crate-type") or []):
+            pkg = (manifest.get("package") or {}).get("name") or name
+            names.add(str(lib.get("name") or pkg).replace("-", "_"))
+    return names
+
+
 def rs_files_under(directory):
     for root, dirs, files in os.walk(directory):
         dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
@@ -565,8 +591,8 @@ def discover_profiles():
 
 
 def loaded_dll_stems(profiles):
-    """Lowercased basenames (without `.dll`) of every native the profiles load."""
-    stems = set()
+    """Every native the profiles load: lowercased basename (without `.dll`) -> the raw paths."""
+    stems = {}
     for prof in profiles:
         try:
             with open(prof, "rb") as fh:
@@ -587,8 +613,63 @@ def loaded_dll_stems(profiles):
             name = os.path.basename(raw.replace("\\", "/")).lower()
             if name.endswith(".dll"):
                 name = name[: -len(".dll")]
-            stems.add(name)
+            stems.setdefault(name, set()).add(raw)
     return stems, None
+
+
+def host_path_of(raw):
+    """A profile's native path as a host path, or None when it names no host location.
+
+    Wine maps `Z:` to `/`; any other drive letter is not a path this script can follow.
+    """
+    p = raw.replace("\\", "/")
+    if re.match(r"^[A-Za-z]:/", p):
+        if p[0] not in "zZ":
+            return None
+        p = p[2:]
+    if not p.startswith("/"):
+        return None
+    return os.path.realpath(p)
+
+
+def build_tree_of(raw, own_target):
+    """Which checkout built the DLL at profile path `raw`: (`own`|`foreign`|`unknown`, tree).
+
+    The sentinel's own copy decides for its own tree. A worktree under
+    `.claude/worktrees/agent-*/` has a sentinel of its own, and matching loaded DLLs by basename
+    let that copy tear down a run the main tree launched from the main tree's `target/` -- an
+    edit nowhere near the source those DLLs were built from.
+
+      1. under this tree's cargo target directory          -> own
+      2. a provenance record beside it names `repo_root`   -> own if it is this tree, else foreign
+      3. under `<tree>/target/` where `<tree>` holds a
+         `Cargo.toml` and is not this tree                 -> foreign
+      4. anything else                                      -> unknown
+
+    Unknown is treated as own by the caller, which is the old basename behaviour: a DLL whose
+    origin cannot be shown to be another tree is never excused.
+    """
+    path = host_path_of(raw)
+    if path is None:
+        return "unknown", None
+    if path.startswith(own_target + os.sep):
+        return "own", REPO_ROOT
+    try:
+        with open(path + ".provenance.json", encoding="utf-8") as fh:
+            recorded = json.load(fh).get("repo_root")
+    except (OSError, ValueError, AttributeError):
+        recorded = None
+    if isinstance(recorded, str) and recorded:
+        tree = os.path.realpath(recorded)
+        return ("own" if tree == REPO_ROOT else "foreign"), tree
+    parts = path.split(os.sep)
+    for i in range(len(parts) - 1, 0, -1):
+        if parts[i] != "target":
+            continue
+        tree = os.sep.join(parts[:i]) or os.sep
+        if os.path.isfile(os.path.join(tree, "Cargo.toml")):
+            return ("own" if tree == REPO_ROOT else "foreign"), tree
+    return "unknown", None
 
 
 def workspace_metadata():
@@ -683,6 +764,40 @@ def main():
     else:
         pkg_dir = package_dirs_from_fs()
         build_scripts = {n: [os.path.join(d, "build.rs")] for n, d in pkg_dir.items()}
+
+    # Drop every native another checkout built. A stem stays if any profile path for it is this
+    # tree's or of unknown origin, so a DLL is only excused when every copy loaded is shown to
+    # come from elsewhere.
+    own_target = os.path.realpath(
+        (meta or {}).get("target_directory") or os.path.join(REPO_ROOT, "target")
+    )
+    foreign = {}
+    own_stems = set()
+    for stem, raws in stems.items():
+        origins = [build_tree_of(raw, own_target) for raw in raws]
+        if all(kind == "foreign" for kind, _ in origins):
+            foreign[stem] = sorted({tree for _, tree in origins})
+        else:
+            own_stems.add(stem)
+    if foreign:
+        if meta is not None:
+            workspace_libs = set().union(*cdylibs.values()) if cdylibs else set()
+        else:
+            workspace_libs = fs_cdylib_names(pkg_dir)
+        # A remainder that cannot be shown to be non-workspace DLLs is not excused.
+        own_workspace = own_stems if workspace_libs is None else own_stems & workspace_libs
+        if not own_workspace:
+            if MODE == "closure":
+                sys.exit(0)
+            emit(
+                "SKIP",
+                "dlls-built-by-another-tree",
+                "live run loads "
+                + ",".join(f"{s}.dll from {'|'.join(t)}" for s, t in sorted(foreign.items()))
+                + f", not this tree ({REPO_ROOT})",
+                profiles,
+            )
+    stems = own_stems
 
     # Deepest owning crate wins, so a nested crate is attributed to itself rather than its parent.
     owner = None
@@ -1153,6 +1268,95 @@ profileVersion = "v1"
 game = "eldenring"
 TOML
   expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" SKIP "profile with zero natives" "$nonativeprof"
+
+  # ---- which tree built the loaded DLLs -------------------------------------------------------
+  # 2026-10-02: a worktree's copy of this script answered TEARDOWN for the main tree's live run,
+  # because it matched loaded DLLs by basename. Tree B here is a throwaway checkout in $tmpdir;
+  # the edit is always in this tree.
+  local treeb="$tmpdir/tree-b"
+  local rel_dll="target/x86_64-pc-windows-msvc/release"
+  mkdir -p "$treeb/$rel_dll" "$tmpdir/staged" "$tmpdir/no-cargo/$rel_dll"
+  : >"$treeb/Cargo.toml"
+  local treebprof="$tmpdir/tree-b.me3"
+  cat >"$treebprof" <<TOML
+profileVersion = "v1"
+[[natives]]
+path = '$treeb/$rel_dll/er_quickload.dll'
+[[natives]]
+path = '/nonexistent/SeamlessCoop/ersc.dll'
+TOML
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" dlls-built-by-another-tree \
+    "edit here, live DLLs built by tree B" "$treebprof"
+  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" dlls-built-by-another-tree \
+    "build-read doc here, live DLLs built by tree B" "$treebprof"
+  local winprof="$tmpdir/tree-b-wine.me3" windll="$treeb/$rel_dll/er_quickload.dll"
+  printf 'profileVersion = "v1"\n[[natives]]\npath = '"'"'Z:%s'"'"'\n' "${windll//\//\\}" >"$winprof"
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" dlls-built-by-another-tree \
+    "tree B DLL spelled as a Wine Z: path" "$winprof"
+  local ownprof="$tmpdir/own-tree.me3"
+  cat >"$ownprof" <<TOML
+profileVersion = "v1"
+[[natives]]
+path = '$REPO_ROOT/$rel_dll/er_quickload.dll'
+TOML
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" crate-feeds-loaded-dll \
+    "edit here, live DLL built by this tree" "$ownprof"
+  # Mixed: tree B's quickload drops out, this tree's invasion-warp still counts.
+  local mixedprof="$tmpdir/mixed.me3"
+  cat >"$mixedprof" <<TOML
+profileVersion = "v1"
+[[natives]]
+path = '$treeb/$rel_dll/er_quickload.dll'
+[[natives]]
+path = '$REPO_ROOT/$rel_dll/er_invasion_warp.dll'
+TOML
+  expect_branch "$REPO_ROOT/crates/er-invasion-warp-core/src/lib.rs" crate-feeds-loaded-dll \
+    "mixed trees: this tree's DLL still tears down" "$mixedprof"
+  expect_detail_with() {
+    local vpath="$1" want="$2" label="$3" vprof="$4"
+    vt_out="$(classify_path "$vpath" "$vprof")"
+    IFS=$'\t' read -r vt_verdict vt_branch vt_detail _ <<<"$vt_out"
+    if [[ "$vt_detail" != *"er_quickload.dll"* && "$vt_detail" == *"$want"* ]]; then
+      printf '  ok   %-58s [%s]\n' "$label" "$vt_detail"
+    else
+      printf '  FAIL %-58s reason %q\n' "$label" "$vt_detail"
+      fails=$((fails + 1))
+    fi
+  }
+  expect_detail_with "$REPO_ROOT/crates/er-game-base/src/lib.rs" "feeds er_invasion_warp.dll" \
+    "mixed trees: reason names only this tree's DLL" "$mixedprof"
+  # A staged copy outside any target/: the provenance record decides, and a record that does
+  # not say which tree built it is not an excuse.
+  local stagedprof="$tmpdir/staged.me3"
+  cat >"$stagedprof" <<TOML
+profileVersion = "v1"
+[[natives]]
+path = '$tmpdir/staged/er_quickload.dll'
+TOML
+  printf '{"repo_root": "%s"}\n' "$treeb" >"$tmpdir/staged/er_quickload.dll.provenance.json"
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" dlls-built-by-another-tree \
+    "staged copy, provenance names tree B" "$stagedprof"
+  printf '{"repo_root": "%s"}\n' "$REPO_ROOT" >"$tmpdir/staged/er_quickload.dll.provenance.json"
+  expect_branch "$REPO_ROOT/crates/er-quickload/src/lib.rs" crate-feeds-loaded-dll \
+    "staged copy, provenance names this tree" "$stagedprof"
+  printf '{"package": "er-quickload"}\n' >"$tmpdir/staged/er_quickload.dll.provenance.json"
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN \
+    "staged copy, provenance without repo_root -> fail safe" "$stagedprof"
+  rm -f "$tmpdir/staged/er_quickload.dll.provenance.json"
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN \
+    "staged copy, no provenance -> fail safe" "$stagedprof"
+  local nocargoprof="$tmpdir/no-cargo.me3"
+  cat >"$nocargoprof" <<TOML
+profileVersion = "v1"
+[[natives]]
+path = '$tmpdir/no-cargo/$rel_dll/er_quickload.dll'
+TOML
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN \
+    "target/ under no Cargo.toml -> fail safe" "$nocargoprof"
+  local cdriveprof="$tmpdir/c-drive.me3"
+  printf 'profileVersion = "v1"\n[[natives]]\npath = '"'"'C:\\x\\er_quickload.dll'"'"'\n' >"$cdriveprof"
+  expect_verdict "$REPO_ROOT/crates/er-quickload/src/lib.rs" TEARDOWN \
+    "non-Z: drive path -> fail safe" "$cdriveprof"
   expect_verdict "$REPO_ROOT/docs/recon/boot-timing.tsv" SKIP "docs/ under a zero-native profile" "$nonativeprof"
   # ...and an inert path answers before any branch that reasons about the profile. The first
   # teardown in that log was a `.tsv` of measurements under docs/, which killed the run the
