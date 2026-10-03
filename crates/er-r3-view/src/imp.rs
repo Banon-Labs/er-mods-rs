@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use er_build_watermark_core::overlay_host::{
-    OverlayFrame, add_font, adopt_frame, frame_font, register_with_host_retrying,
+    OverlayFrame, add_font, adopt_frame, frame_font, frame_texture, register_with_host_retrying,
 };
 use hudhook::imgui::Ui;
 
@@ -137,6 +137,8 @@ static STEP_ORIG: AtomicUsize = AtomicUsize::new(0);
 static R3_ENABLED_ORIG: AtomicUsize = AtomicUsize::new(0);
 static RUN_ORIG: AtomicUsize = AtomicUsize::new(0);
 static APPLY: AtomicUsize = AtomicUsize::new(0);
+/// The running game image's base, for the icon lookup's measured addresses.
+static GAME_BASE: AtomicUsize = AtomicUsize::new(0);
 static SHOW_BOARD: AtomicBool = AtomicBool::new(false);
 /// The host's handle for the game's menu font, 0 until it accepted one, and the screen scale it
 /// was sized for; how many captured `font.gfx` have been tried.
@@ -218,6 +220,7 @@ fn install() {
         return;
     }
     APPLY.store(apply, Ordering::SeqCst);
+    GAME_BASE.store(start, Ordering::SeqCst);
 
     match unsafe { er_hook::register_union_hook_runtime_derived(step, step_hook, &STEP_ORIG) } {
         Ok(()) => log(format_args!("step hooked at 0x{step:x}, apply 0x{apply:x}")),
@@ -388,6 +391,12 @@ unsafe extern "system" fn run_hook(job: usize, a: usize, b: usize, c: usize) -> 
             log(format_args!("Run names the item list window 0x{window:x}"));
         }
         ITEM_LIST_AT_MS.store(now_ms() as usize, Ordering::Relaxed);
+        // The menu thread, inside the item list's own job: the one place the icon lookup, which
+        // inserts into the texture repository's map on a miss, may run. Once per process.
+        let base = GAME_BASE.load(Ordering::Relaxed);
+        if base != 0 {
+            unsafe { crate::item_icon::resolve_once(base, board::MISERICORDE.icon_id, log) };
+        }
     }
     let faded_any = !FADED.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
     if faded_any && now_ms() - ITEM_LIST_AT_MS.load(Ordering::Relaxed) as u128 > ITEM_LIST_GONE_MS {
@@ -553,7 +562,10 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
             faces: std::array::from_fn(|i| unsafe { frame_font(frame, handle, i) }),
             ky: f32::from_bits(FONT_KY_BITS.load(Ordering::Relaxed)),
         });
-        board::draw(ui, &board::MISERICORDE, fonts.as_ref());
+        let art = board::BoardArt {
+            icon: crate::item_icon::handle().and_then(|h| unsafe { frame_texture(frame, h) }),
+        };
+        board::draw(ui, &board::MISERICORDE, fonts.as_ref(), &art);
     }
 }
 

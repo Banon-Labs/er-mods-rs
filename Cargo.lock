@@ -3232,11 +3232,13 @@ dependencies = [
 name = "er-r3-view"
 version = "0.1.0"
 dependencies = [
+ "bcdec_rs",
  "er-build-watermark-core",
  "er-game-base",
  "er-gfx",
  "er-hook",
  "hudhook",
+ "windows 0.62.2",
 ]
 
 [[package]]
