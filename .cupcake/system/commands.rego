@@ -495,8 +495,31 @@ quotes_removed(text) := out if {
 	])
 }
 
+# Public. A backslash-newline line continuation joined into the space it means
+# (2026-10-02). A newline behind an odd number of backslashes is not a command
+# boundary: the shell deletes both characters and reads one line. Every segmenter
+# here, and every policy that turns a newline into ` ; `, would otherwise cut the
+# command in two at it. `cargo xwin build --release \<newline> -p er-quickload` was
+# denied as an unscoped cargo by exactly that cut, because the `-p` landed in a
+# statement of its own. `scripts/cupcake-hook.sh` already leaves a continuation
+# newline alone (`continues_line`); this is the same parity rule on the policy side.
+#
+# Parity without a regex: escaped backslash pairs are parked first, so what remains
+# in front of a newline is at most one backslash, and that one is a continuation.
+# `replace` works left to right without overlap, which is the pairing a shell
+# applies too. `regex.replace` is avoided because it does not work in the wasm
+# runtime (`scripts/check-cupcake-wasm-builtins.py`).
+continuations_joined(text) := out if {
+	parked := replace(text, `\\`, escaped_backslash_marker)
+	joined := replace(replace(parked, "\\\r\n", " "), "\\\n", " ")
+	out := replace(joined, escaped_backslash_marker, `\\`)
+}
+
+escaped_backslash_marker := "__cupcake_escaped_backslash__"
+
 # PUBLIC. Every shell text this command executes, quoted operands neutralised.
-executed_texts(command) := texts if {
+executed_texts(raw) := texts if {
+	command := continuations_joined(raw)
 	payloads := shell_payloads_deep(command)
 	texts := {scan_text(command)} | {t |
 		some p in payloads
@@ -505,7 +528,8 @@ executed_texts(command) := texts if {
 }
 
 # PUBLIC. The same set with quoted spans removed, for substring/flag tests.
-executed_unquoted_texts(command) := texts if {
+executed_unquoted_texts(raw) := texts if {
+	command := continuations_joined(raw)
 	payloads := shell_payloads_deep(command)
 	texts := {quotes_removed(command)} | {t |
 		some p in payloads

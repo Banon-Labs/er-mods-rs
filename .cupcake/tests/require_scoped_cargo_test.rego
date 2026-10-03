@@ -263,3 +263,33 @@ test_allow_all_after_dashdash if {
 test_allow_bd_with_unquoted_cargo_operand if {
 	allowed("$HOME/.local/bin/bd close x --reason cargo test")
 }
+
+# --- line continuations --------------------------------------------------------
+# A backslash-newline joins two lines into one command, so a `-p` on the last
+# line scopes the cargo on the first. `scripts/test-cupcake-hook-shim.py` carries
+# the same command as allow-line-continuation-splitting-one-command.
+test_allow_continuation_split_xwin_build_with_p if {
+	allowed("cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc \\\n  -p er-quickload")
+}
+
+test_allow_continuation_split_with_crlf if {
+	allowed("cargo xwin build --release \\\r\n  -p er-quickload")
+}
+
+test_deny_continuation_split_build_without_p if {
+	denied_cargo("cargo build \\\n  --release")
+}
+
+test_deny_continuation_split_xwin_build_without_p if {
+	denied_cargo("cargo xwin build --release \\\n  --target x86_64-pc-windows-msvc")
+}
+
+# An escaped backslash before the newline is a literal backslash followed by a
+# real line break, so the `-p` on the next line is a command of its own.
+test_deny_escaped_backslash_is_not_a_continuation if {
+	denied_cargo("cargo build --release \\\\\n-p er-quickload")
+}
+
+test_deny_plain_newline_is_still_a_boundary if {
+	denied_cargo("cargo build --release\n-p er-quickload")
+}
