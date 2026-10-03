@@ -3229,6 +3229,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-r3-view"
+version = "0.1.0"
+dependencies = [
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "hudhook",
+]
+
+[[package]]
 name = "er-refill-all"
 version = "0.1.0"
 dependencies = [

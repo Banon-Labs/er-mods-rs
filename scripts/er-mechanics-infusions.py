@@ -192,9 +192,60 @@ def report(weapon, top=3, rls=RL_SWEEP):
         sp = [s for s in spans if s['affinity'] == a]
         out.append({'affinity': a, 'scaling': scaling(b.tables, weapon, a), 'rl150': build, 'best_at_rl': sp,
                     'text': describe(a, scaling(b.tables, weapon, a), build, sp, rls)})
+    kinds = {a: category(b.tables, weapon, a, b.affs) for a in b.affs}
+    by_category = {}
+    for kind in CATEGORIES:
+        build = next((x for x in at150 if kinds[x['affinity']] == kind), None)
+        if build is None:
+            continue
+        a = build['affinity']
+        sp = [s for s in spans if s['affinity'] == a]
+        text = describe(a, scaling(b.tables, weapon, a), build, sp, rls)
+        buildup = status_buildup(b.tables, weapon, a, build['stats'])
+        if buildup:
+            text += ' ' + ', '.join(f'{k.capitalize()} buildup {v:.0f}' for k, v in buildup.items()) + '.'
+        by_category[kind] = {'affinity': a, 'scaling': scaling(b.tables, weapon, a), 'rl150': build,
+                             'best_at_rl': sp, 'status': buildup, 'text': text}
     return {'weapon': b.tables.names.get(b.base), 'floors_rl150': fl, 'rl_sweep': list(rls), 'spans': spans,
-            'top': out, 'rank_rl150': rank,
+            'top': out, 'categories': kinds, 'by_category': by_category, 'rank_rl150': rank,
             'rank_text': rank_text(rank) if rank else None}
+
+
+CATEGORIES = ('physical', 'elemental', 'status')
+CATEGORY_PROBE_STAT = 40
+
+
+def status_buildup(tables, weapon, affinity, stats):
+    """`{status: buildup}` of `affinity` at the top level with `stats`, from the AR model."""
+    wid = tables.find_weapon(weapon, affinity)
+    lvl = tables.max_level(tables.weapons[wid]['reinforceTypeId'])
+    r = AR.attack_rating(tables, weapon, affinity, lvl, {k: stats[k] for k in STATS}, False)
+    return {k: round(v['total'], 1) for k, v in r.get('status', {}).items() if v['total'] > 0}
+
+
+def category(tables, weapon, affinity, affs):
+    """`physical`, `elemental` or `status`: what `affinity` adds over the weapon's base affinity.
+
+    Read off the AR model at every stat `CATEGORY_PROBE_STAT` and the top level, so a weapon's own
+    innate bleed or element does not make every infusion of it count. Status when it adds a
+    buildup the base lacks (Cold adds frost and magic, and is status); elemental when it adds a
+    damage element other than physical; physical otherwise (Occult only rescales)."""
+    base = 'Standard' if 'Standard' in affs else affs[0]
+
+    def added(aff):
+        wid = tables.find_weapon(weapon, aff)
+        lvl = tables.max_level(tables.weapons[wid]['reinforceTypeId'])
+        r = AR.attack_rating(tables, weapon, aff, lvl, {k: CATEGORY_PROBE_STAT for k in STATS}, False)
+        return ({k for k, v in r['damage'].items() if v['total'] > 0},
+                {k for k, v in r.get('status', {}).items() if v['total'] > 0})
+
+    dmg0, st0 = added(base)
+    dmg, st = added(affinity)
+    if st - st0:
+        return 'status'
+    if {k for k in dmg - dmg0 if k != 'physical'}:
+        return 'elemental'
+    return 'physical'
 
 
 def describe(aff, sc, build, spans, rls):
@@ -234,6 +285,13 @@ def selftest():
     assert mine and abs(mine['ar'] - rk['ar']) < 1.0, (mine, rk)
     keen = scaling(AR.Tables(None), 'Lance', 'Keen')
     assert keen['dex'] > keen['str'], keen
+    want = {'Heavy': 'physical', 'Occult': 'physical', 'Fire': 'elemental', 'Magic': 'elemental',
+            'Cold': 'status', 'Blood': 'status', 'Poison': 'status'}
+    got = {a: r['categories'][a] for a in want if a in r['categories']}
+    assert got == {a: want[a] for a in got} and len(got) == len(want), got
+    assert set(r['by_category']) == set(CATEGORIES), r['by_category']
+    for kind, x in r['by_category'].items():
+        assert r['categories'][x['affinity']] == kind, (kind, x['affinity'])
     print(f"selftest ok: {r['rank_text']}")
     for x in r['top']:
         print(f"  {x['affinity']}: {x['text']}")
@@ -259,6 +317,8 @@ def main():
     print('  best by RL: ' + ', '.join(f"{s['affinity']} {s['from']}-{s['to']}" for s in r['spans']))
     for x in r['top']:
         print(f"  {x['affinity']:<10} {x['text']}")
+    for kind, x in r['by_category'].items():
+        print(f"  top {kind:<9} {x['affinity']:<10} {x['text']}")
     if r['rank_text']:
         print(f"  {r['rank_text']}")
     return 0

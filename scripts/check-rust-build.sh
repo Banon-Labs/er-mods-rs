@@ -157,6 +157,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-npc-possess:er_npc_possess
 		er-player-name-filter:er_player_name_filter
 		er-quit-menu:er_quit_menu
+		er-r3-view:er_r3_view
 		er-reload-trace:er_reload_trace
 		er-save-disable:er_save_disable
 		er-save-picker:er_save_picker

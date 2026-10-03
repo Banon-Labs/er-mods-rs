@@ -920,6 +920,13 @@ game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to che
 against the player's configured bindings). Both are loads through the fault-safe reader."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
+"er-r3-view" = """Four detours, all through the hook union. The item-list R3 step (1.17.1 \
+0x998260) and R3's enable predicate (1.17.1 0x996b30), both found by their bytes, are detoured \
+by no other shell. MenuWindowJob::Run is shared with the product and er-quit-menu, and the \
+Scaleform file open (0x11ced80, read-only, to copy the menu font) with the product, \
+er-quit-menu and er-armament-icons, all through `register_shared_hook`, recorded as [[shared]] \
+rows. It draws as a guest of the overlay host, \
+so it adds no Present hook."""
 "er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \
@@ -1122,3 +1129,76 @@ whose absence is only discovered when it is already too late to add it."""
 # `er-quit-menu` links `er-quit-menu-core`, whose save flow reaches `er_save_suppress` too, so the
 # merged shell inherits this pair the way it inherited the `er-reload-trace` one. It is declared
 # above, at `er-quit-menu` X `er-save-disable`.
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+mechanism = "hook-union"
+handler_a = "quit_menu_window_job_run_hook"
+handler_b = "run_hook"
+reason = """Both detour `MenuWindowJob::Run`: the product through \
+`er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook` (`register_shared_hook`), \
+er-r3-view to find the item list's window, whose left panel R3's fourth view fades. er-r3-view \
+registers through `er_hook::register_shared_hook` with a `UnionFn` handler that calls its slot \
+first, so whichever registers second chains onto the one MinHook instance. Same four-integer \
+signature the product's handler already uses. er-r3-view names the address as a literal \
+(`MENU_WINDOW_JOB_RUN_RVA_1162`) rather than er-title-flow's constant, which is why this row is \
+written by hand: `check-shared-hook-rvas.py` did not pair the two spellings."""
+evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
+MENU_WINDOW_JOB_RUN_RVA_1162, run_hook, &RUN_ORIG)`); crates/er-quit-menu-core/src/menu_pump.rs \
+`install_quit_menu_window_run_hook`; docs/recon/rva-map-1162-to-1170.needed-verified.tsv \
+`0x1407ad1c0 0x1407ae040 IDENTICAL-WHOLE`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+mechanism = "hook-union"
+handler_a = "quit_menu_window_job_run_hook"
+handler_b = "run_hook"
+reason = """The standalone quit-menu shell links the same `er-quit-menu-core` detour as the \
+product, so it shares `MenuWindowJob::Run` with er-r3-view on the same terms: both register \
+through `er_hook::register_shared_hook` and chain on one MinHook instance."""
+evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/src/menu_pump.rs \
+`install_quit_menu_window_run_hook`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """Both detour the Scaleform loader's file open. er-r3-view only reads the file the chain \
+returns for `font.gfx`, to copy the game's menu font for its R3 board; it never replaces a file. \
+Both register through `er_hook::register_shared_hook` with `UnionFn` handlers that call their slot \
+first, so they chain on one MinHook instance."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs."""
+
+[[shared]]
+a = "er-armament-icons"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "file_open_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """Both observe the Scaleform loader's file open through `register_shared_hook` and call \
+their slot first; er-r3-view copies `font.gfx` after the chain returns and changes nothing."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-armament-icons/src/gfx_equip_hook.rs `file_open_hook`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "quit_menu_scaleform_file_open_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """er-quit-menu serves its Quit tab movies from this file open and er-r3-view only reads \
+the returned `font.gfx`; both register through `register_shared_hook` and chain on one MinHook \
+instance, so neither displaces the other."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-quit-menu-core/src/gfx_swap.rs `register_shared_hook(addr, \
+quit_menu_scaleform_file_open_hook, ...)`."""

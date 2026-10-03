@@ -25,7 +25,9 @@
 
 'use strict';
 
-const MENU_WINDOW_JOB_RUN_RVA = 0x7ad1c0;
+// 1.16.2 `0x7ad1c0` is `0x7ae040` on 1.17 (`docs/recon/rva-map-1162-to-1170.needed-verified.tsv`),
+// and below the `0xafefe9` boundary, so the same on the installed 1.17.1.
+const MENU_WINDOW_JOB_RUN_RVA = 0x7ae040;
 const MENU_WINDOW_JOB_WINDOW_130_OFFSET = 0x130;
 const MENU_WINDOW_JOB_RESOURCE_NAME_OFFSET = 0x138; // probed below, reported either way
 
