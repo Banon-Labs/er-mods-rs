@@ -49,6 +49,15 @@
 //! re-upload. From then on every [`OverlayFrame`] carries the resulting `ImFont*` per handle,
 //! which a guest reads with [`frame_font`] and pushes with [`with_font`]. Until a font is built,
 //! or if it never builds, both answer with the default font.
+//!
+//! # Textures
+//!
+//! Images take the same route. A guest hands RGBA8 pixels to [`ADD_TEXTURE_EXPORT`] through
+//! [`add_texture`]; the host validates and copies them (`texture_request`), uploads them from the
+//! same before-frame hook with hudhook's `RenderContext::load_texture`, and from then on every
+//! [`OverlayFrame`] carries an [`OverlayTextureSet`] per uploaded handle, which a guest reads with
+//! [`frame_texture`] and draws with `DrawList::add_image`. A guest cannot upload itself: the
+//! texture heap whose descriptors imgui samples belongs to the host's render engine.
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -97,6 +106,28 @@ pub struct OverlayFrame {
     pub font_set_count: u32,
     /// `display_h / 1080`: the factor a guest scales its 1080p layout by.
     pub ui_scale: f32,
+    /// One entry per texture handle the host has uploaded, `texture_count` long. Null when there
+    /// are none. Read it through [`frame_texture`] rather than by hand.
+    pub textures: *const OverlayTextureSet,
+    /// Length of `textures`.
+    pub texture_count: u32,
+}
+
+/// One uploaded [`add_texture`] handle: the imgui texture id to draw it with, and its size.
+///
+/// A handle appears here only once the host has uploaded it. Until then -- and forever, if the
+/// upload failed -- [`frame_texture`] answers `None` and the guest draws nothing in its place.
+#[repr(C)]
+pub struct OverlayTextureSet {
+    /// The handle [`add_texture`] returned.
+    pub handle: u32,
+    /// The value of the host's `imgui::TextureId`. An index into the host's texture heap, valid
+    /// for the life of the host's render engine, which is the process.
+    pub texture_id: usize,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
 }
 
 /// The fonts behind one [`add_font`] handle, one `ImFont*` per requested size, in request order.
@@ -117,11 +148,11 @@ pub struct OverlayFontSet {
 /// Bumped whenever the imgui version behind this ABI changes. Host and guest must agree; see the
 /// module docs for why a mismatch is refused rather than tolerated.
 ///
-/// `0x0904` is hudhook 0.9.2 / imgui-sys 0.12 with the [`OverlayFrame`] handoff, including the
-/// font sets and `ui_scale` appended to it. Each bump is a layout change a guest built against
-/// the older tag would misread: `0x0902` to `0x0903` added the imgui context and allocators,
-/// `0x0903` to `0x0904` the fonts.
-pub const OVERLAY_ABI_TAG: u32 = 0x0904;
+/// `0x0905` is hudhook 0.9.2 / imgui-sys 0.12 with the [`OverlayFrame`] handoff, including the
+/// font sets, `ui_scale` and the texture sets appended to it. Each bump is a layout change a
+/// guest built against the older tag would misread: `0x0902` to `0x0903` added the imgui context
+/// and allocators, `0x0903` to `0x0904` the fonts, `0x0904` to `0x0905` the textures.
+pub const OVERLAY_ABI_TAG: u32 = 0x0905;
 
 /// The undecorated export every shell linking this crate must provide, so a guest can find the
 /// host without knowing which module won.
@@ -133,6 +164,13 @@ pub const ADD_FONT_EXPORT: &[u8] = b"er_overlay_add_font_v1\0";
 
 /// Signature of [`ADD_FONT_EXPORT`]: bytes, byte count, sizes, size count; nonzero handle or `0`.
 pub type AddFontFn = unsafe extern "C" fn(*const u8, usize, *const f32, u32) -> u32;
+
+/// The undecorated export a guest calls to hand the host RGBA8 pixels. Defined beside
+/// [`REGISTER_EXPORT`] by [`export_overlay_host!`], and answered only by the host.
+pub const ADD_TEXTURE_EXPORT: &[u8] = b"er_overlay_add_texture_v1\0";
+
+/// Signature of [`ADD_TEXTURE_EXPORT`]: pixels, byte count, width, height; nonzero handle or `0`.
+pub type AddTextureFn = unsafe extern "C" fn(*const u8, usize, u32, u32) -> u32;
 
 /// True in the one module that won the mutex, set the instant it wins.
 ///
@@ -164,7 +202,13 @@ pub fn designate_host() {
     // Every host passes through here, whichever crate's render loop it installs, so this is the
     // one place the font hook can be wired without each host remembering to. The hook lives in
     // this module's own copy of hudhook, which is the copy that will run the render loop.
-    let _ = hudhook::set_before_frame_hook(apply_pending_fonts);
+    let _ = hudhook::set_before_frame_hook(apply_pending);
+}
+
+/// hudhook's before-frame hook: fonts into the atlas, then pixels into textures.
+fn apply_pending(ctx: &mut hudhook::imgui::Context, render: &mut dyn hudhook::RenderContext) {
+    apply_pending_fonts(ctx);
+    apply_pending_textures(render);
 }
 
 /// Confirm the render loop is really installed. Called after `apply()` returns `Ok`.
@@ -257,6 +301,13 @@ pub fn dispatch_guests(ui: &Ui) {
     let (font_sets, font_set_count) = fonts.as_ref().map_or((std::ptr::null(), 0), |fonts| {
         (fonts.sets.as_ptr(), fonts.sets.len() as u32)
     });
+    let textures = PUBLISHED_TEXTURES
+        .lock()
+        .ok()
+        .and_then(|published| published.clone());
+    let (texture_sets, texture_count) = textures.as_ref().map_or((std::ptr::null(), 0), |sets| {
+        (sets.as_ptr(), sets.len() as u32)
+    });
     let frame = OverlayFrame {
         ui: std::ptr::from_ref(ui).cast::<c_void>(),
         // SAFETY: called from inside the host's own render, so a context is current.
@@ -267,6 +318,8 @@ pub fn dispatch_guests(ui: &Ui) {
         fonts: font_sets,
         font_set_count,
         ui_scale: crate::font_request::ui_scale(ui.io().display_size[1]),
+        textures: texture_sets,
+        texture_count,
     };
     for guest in guests {
         // SAFETY: `frame` outlives the call, and the guest accepted OVERLAY_ABI_TAG at
@@ -274,6 +327,7 @@ pub fn dispatch_guests(ui: &Ui) {
         unsafe { guest(&raw const frame) };
     }
     drop(fonts);
+    drop(textures);
     GUEST_DISPATCHES.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -498,6 +552,186 @@ fn apply_pending_fonts(ctx: &mut hudhook::imgui::Context) {
     }
 }
 
+/// One texture request as the host holds it.
+enum TextureSlotState {
+    /// Accepted, copied, waiting for the next frame's upload.
+    Pending(Vec<u8>),
+    /// Uploaded; the value of the host's `TextureId`.
+    Uploaded(usize),
+    /// The upload failed. The handle stays valid and resolves to nothing.
+    Failed,
+}
+
+struct TextureSlot {
+    handle: u32,
+    width: u32,
+    height: u32,
+    state: TextureSlotState,
+}
+
+/// Every texture request this host has accepted. Only the host's copy is ever non-empty.
+static TEXTURES: Mutex<Vec<TextureSlot>> = Mutex::new(Vec::new());
+
+/// The uploaded textures in the layout [`OverlayFrame`] carries, replaced whole after each upload
+/// so a frame can hold one snapshot without holding [`TEXTURES`].
+static PUBLISHED_TEXTURES: Mutex<Option<Arc<Vec<OverlayTextureSet>>>> = Mutex::new(None);
+
+/// Texture requests the host refused, at the export or at the upload.
+static TEXTURES_REFUSED: AtomicUsize = AtomicUsize::new(0);
+
+/// Textures this host has uploaded.
+static TEXTURES_UPLOADED: AtomicUsize = AtomicUsize::new(0);
+
+/// Texture requests refused, at the export or at the upload.
+pub fn textures_refused() -> usize {
+    TEXTURES_REFUSED.load(Ordering::Relaxed)
+}
+
+/// Textures uploaded by this host.
+pub fn textures_uploaded() -> usize {
+    TEXTURES_UPLOADED.load(Ordering::Relaxed)
+}
+
+/// Accept a guest's RGBA8 image, if this module is the host. The body of every shell's
+/// `er_overlay_add_texture_v1` export.
+///
+/// Copies the pixels, so the caller's buffer need only live for the call. Returns the new handle,
+/// or `0` from a module that is not the host and for any refused request.
+///
+/// # Safety
+///
+/// `rgba` must be readable for `len` bytes, or be null.
+pub unsafe fn add_texture_v1(rgba: *const u8, len: usize, width: u32, height: u32) -> u32 {
+    if !is_host() {
+        return 0;
+    }
+    // Validated before the slice is formed, so a wild length is refused rather than read.
+    if rgba.is_null() || crate::texture_request::validate(len, width, height).is_err() {
+        TEXTURES_REFUSED.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    // SAFETY: the caller's contract, with the length bounded by the validation above.
+    let pixels = unsafe { std::slice::from_raw_parts(rgba, len) };
+    let Ok(mut textures) = TEXTURES.lock() else {
+        return 0;
+    };
+    if textures.len() >= crate::texture_request::MAX_TEXTURE_REQUESTS {
+        TEXTURES_REFUSED.fetch_add(1, Ordering::Relaxed);
+        return 0;
+    }
+    let handle = textures.len() as u32 + 1;
+    textures.push(TextureSlot {
+        handle,
+        width,
+        height,
+        state: TextureSlotState::Pending(pixels.to_vec()),
+    });
+    handle
+}
+
+/// The second half of hudhook's before-frame hook: upload every pending texture.
+///
+/// Runs on the render thread between frames. hudhook's D3D12 `load_texture` records the copy on
+/// its own queue and waits for it, so the texture is resident before the frame that first samples
+/// it. `try_lock` for the same reason as the fonts: a guest holding the registry delays its image
+/// by one frame, never the game.
+fn apply_pending_textures(render: &mut dyn hudhook::RenderContext) {
+    let Ok(mut textures) = TEXTURES.try_lock() else {
+        return;
+    };
+    if !textures
+        .iter()
+        .any(|slot| matches!(slot.state, TextureSlotState::Pending(_)))
+    {
+        return;
+    }
+    for slot in textures.iter_mut() {
+        let TextureSlotState::Pending(pixels) =
+            std::mem::replace(&mut slot.state, TextureSlotState::Failed)
+        else {
+            continue;
+        };
+        match render.load_texture(&pixels, slot.width, slot.height) {
+            Ok(id) => {
+                slot.state = TextureSlotState::Uploaded(id.id());
+                TEXTURES_UPLOADED.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                TEXTURES_REFUSED.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+    let sets: Vec<OverlayTextureSet> = textures
+        .iter()
+        .filter_map(|slot| match slot.state {
+            TextureSlotState::Uploaded(texture_id) => Some(OverlayTextureSet {
+                handle: slot.handle,
+                texture_id,
+                width: slot.width,
+                height: slot.height,
+            }),
+            _ => None,
+        })
+        .collect();
+    if let Ok(mut published) = PUBLISHED_TEXTURES.lock() {
+        *published = Some(Arc::new(sets));
+    }
+}
+
+/// Hand RGBA8 pixels (`width * height * 4` bytes, rows top to bottom) to whichever loaded module
+/// hosts the overlay.
+///
+/// Returns the handle to pass to [`frame_texture`], or `None` when no module hosts an overlay yet
+/// or the host refused the request. The image is drawable from the first frame after the host's
+/// next upload; until then [`frame_texture`] answers `None`.
+#[cfg(windows)]
+pub fn add_texture(rgba: &[u8], width: u32, height: u32) -> Option<u32> {
+    for module in er_game_base::build_id::loaded_module_handles() {
+        // SAFETY: a handle straight out of the loader's own module list, and a NUL-terminated
+        // export name. A module without the export answers None.
+        let Some(symbol) =
+            (unsafe { er_game_base::build_id::module_export(module, ADD_TEXTURE_EXPORT) })
+        else {
+            continue;
+        };
+        // SAFETY: this export is defined only by `export_overlay_host!` in this crate, so any
+        // module answering to the name has our signature.
+        let add: AddTextureFn = unsafe { std::mem::transmute(symbol) };
+        // SAFETY: the slice is live for the call, and the host copies it before returning.
+        let handle = unsafe { add(rgba.as_ptr(), rgba.len(), width, height) };
+        if handle != 0 {
+            return Some(handle);
+        }
+    }
+    None
+}
+
+/// The imgui texture id and pixel size for `handle`, if the host has uploaded it.
+///
+/// # Safety
+///
+/// `frame` must be the pointer the host just passed to the guest's draw, or null.
+pub unsafe fn frame_texture(
+    frame: *const OverlayFrame,
+    handle: u32,
+) -> Option<(hudhook::imgui::TextureId, [f32; 2])> {
+    if frame.is_null() || handle == 0 {
+        return None;
+    }
+    // SAFETY: the caller's contract.
+    let frame = unsafe { &*frame };
+    if frame.textures.is_null() || frame.texture_count == 0 {
+        return None;
+    }
+    // SAFETY: the host wrote `texture_count` entries at `textures`, alive for this call.
+    let sets = unsafe { std::slice::from_raw_parts(frame.textures, frame.texture_count as usize) };
+    let set = sets.iter().find(|set| set.handle == handle)?;
+    Some((
+        hudhook::imgui::TextureId::new(set.texture_id),
+        [set.width as f32, set.height as f32],
+    ))
+}
+
 /// Hand TrueType bytes to whichever loaded module hosts the overlay, at any time.
 ///
 /// Returns the handle to pass to [`frame_font`], or `None` when no module hosts an overlay yet or
@@ -709,6 +943,22 @@ macro_rules! export_overlay_host {
         ) -> u32 {
             // SAFETY: forwarded from the caller's contract.
             unsafe { $crate::overlay_host::add_font_v1(ttf, len, sizes_px, n) }
+        }
+
+        /// # Safety
+        ///
+        /// Called across a DLL boundary by
+        /// [`er_build_watermark_core::overlay_host::add_texture`]; `rgba` is readable for `len`
+        /// bytes.
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn er_overlay_add_texture_v1(
+            rgba: *const u8,
+            len: usize,
+            width: u32,
+            height: u32,
+        ) -> u32 {
+            // SAFETY: forwarded from the caller's contract.
+            unsafe { $crate::overlay_host::add_texture_v1(rgba, len, width, height) }
         }
     };
 }

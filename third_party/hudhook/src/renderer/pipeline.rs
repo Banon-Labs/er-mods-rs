@@ -18,16 +18,20 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::renderer::input::{imgui_wnd_proc_impl, WndProcType};
 use crate::renderer::RenderEngine;
-use crate::{util, ImguiRenderLoop, MessageFilter};
+use crate::{util, ImguiRenderLoop, MessageFilter, RenderContext};
 
 type RenderLoop = Box<dyn ImguiRenderLoop + Send + Sync>;
 
 /// Local patch (er-mods-rs, 2026-10-02): see `crate::set_before_frame_hook`.
-static BEFORE_FRAME_HOOK: std::sync::OnceLock<fn(&mut Context)> = std::sync::OnceLock::new();
+static BEFORE_FRAME_HOOK: std::sync::OnceLock<BeforeFrameHook> = std::sync::OnceLock::new();
+
+/// The per-frame hook: the imgui context, and the render engine as a texture
+/// loader so the hook can upload textures other modules handed in.
+pub type BeforeFrameHook = fn(&mut Context, &mut dyn RenderContext);
 
 /// Install the per-frame hook. The first call wins; later calls are ignored and
 /// report `false`.
-pub fn set_before_frame_hook(hook: fn(&mut Context)) -> bool {
+pub fn set_before_frame_hook(hook: BeforeFrameHook) -> bool {
     BEFORE_FRAME_HOOK.set(hook).is_ok()
 }
 
@@ -157,7 +161,7 @@ impl<T: RenderEngine> Pipeline<T> {
         // built on the CPU side and the next `NewFrame` does not assert. The new texture replaces
         // `fonts.tex_id`; the old one stays allocated, because a frame in flight may sample it.
         if let Some(hook) = BEFORE_FRAME_HOOK.get() {
-            hook(&mut self.ctx);
+            hook(&mut self.ctx, &mut self.engine);
         }
         if !self.ctx.fonts().is_built() {
             if let Err(e) = self.engine.setup_fonts(&mut self.ctx) {

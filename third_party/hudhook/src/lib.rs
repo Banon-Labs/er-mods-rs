@@ -149,8 +149,10 @@ pub use renderer::msg_filter::MessageFilter;
 /// Upstream builds the atlas exactly once, after `initialize`, so a font added
 /// later is never rasterized. This lets the module that owns the render loop
 /// accept fonts from other modules at any time. A rebuild uploads a new
-/// texture and leaves the previous one allocated.
-pub use renderer::set_before_frame_hook;
+/// texture and leaves the previous one allocated. The hook also receives the
+/// render engine as a [`RenderContext`], so it can upload RGBA textures that
+/// other modules handed in, on the render thread where uploads are legal.
+pub use renderer::{set_before_frame_hook, BeforeFrameHook};
 
 pub mod util;
 
