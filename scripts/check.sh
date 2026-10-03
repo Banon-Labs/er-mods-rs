@@ -2686,6 +2686,13 @@ python3 "$repo_root/scripts/gen-installer-catalog.py" --check
 python3 "$repo_root/scripts/gen-installer-settings.py" --selftest
 python3 "$repo_root/scripts/gen-installer-settings.py" --check
 
+# ...and the R3 weapon boards, one per weapon, generated from the mechanics scripts. A full
+# regeneration is hours of build optimizer, so --check compares inputs instead of output: every
+# source and data file the generation opened, by sha256, and the body against its own recorded
+# hash. The selftest holds the text rules to the hand-written Misericorde board.
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
+
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
 # deny list nobody exercises is a deny list that stopped matching years ago.

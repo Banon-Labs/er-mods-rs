@@ -171,6 +171,11 @@ def rank_at_150(tables, weapon, rows):
             'of': len(bests)}
 
 
+def a_class(name):
+    """`a Heavy Knight`, `an Astrologer`: the starting classes beginning with a vowel."""
+    return f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}"
+
+
 def _stats_line(st, keys=STATS):
     return ' / '.join(f'{LABEL[k]} {st[k]}' for k in keys if st[k] > 10)
 
@@ -252,7 +257,7 @@ def describe(aff, sc, build, spans, rls):
     s = ', '.join(f'{LABEL[k]} {v:g}' for k, v in sorted(sc.items(), key=lambda kv: -kv[1]))
     line = f'Scaling {s}.'
     if build:
-        line += (f" At RL 150 from a {build['class']} start: {_stats_line(build['stats'])}, {build['ar']:.0f} AR"
+        line += (f" At RL 150 from {a_class(build['class'])} start: {_stats_line(build['stats'])}, {build['ar']:.0f} AR"
                  + (f" with {build['grease']}" if build['grease'] else '') + '.')
     if spans:
         parts = [(f"RL {x['from']}-{x['to']}" if x['from'] != x['to'] else f"RL {x['from']}") for x in spans]
@@ -265,7 +270,7 @@ def describe(aff, sc, build, spans, rls):
 
 
 def rank_text(r):
-    return (f"Best RL 150 build: {r['affinity']} from a {r['class']} start, {r['ar']:.0f} AR "
+    return (f"Best RL 150 build: {r['affinity']} from {a_class(r['class'])} start, {r['ar']:.0f} AR "
             f"({CARD.rank_text(r['ar_rank'], 'highest')}) and {r['damage']:.0f} damage per hit "
             f"({CARD.rank_text(r['damage_rank'], 'highest')}), against every weapon's best RL 150 build "
             f"with its best infusion and class.")

@@ -68,7 +68,9 @@ def twins(reg, wid):
     mine = moveset(reg, wid)
     rows = []
     for oid in sorted(reg.weapon):
-        if oid == wid or oid % 10000 or not reg.weapon_names.get(oid) or not comparable(reg, wid, oid):
+        # A bracketed name ("[NPC] Reduvia") is a row no player can hold, so no player weighs it.
+        name = reg.weapon_names.get(oid)
+        if oid == wid or oid % 10000 or not name or name.startswith('[') or not comparable(reg, wid, oid):
             continue
         theirs = moveset(reg, oid)
         slots = sorted(set(mine) | set(theirs))
