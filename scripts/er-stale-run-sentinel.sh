@@ -41,9 +41,12 @@
 #      stale; that is what stops a log line killing a run)
 #   2. nothing live                                -> skip (nothing at stake, and no cargo run)
 #   3. the loaded-DLL set cannot be determined     -> FALLBACK: tear down (see fail safe below)
-#   4. inside a workspace crate                    -> tear down IFF that package is in the
+#   4. under an inert top-level directory, or a    -> skip, unless a crate's build reads it
+#      prose file (.md/.txt/...) outside every        (`include_str!`/`include_bytes!` anywhere,
+#      crate                                          or a literal path in a build script): then
+#                                                     it counts as that crate's source, as in 5
+#   5. inside a workspace crate                    -> tear down IFF that package is in the
 #      dependency closure of the loaded cdylibs, else skip
-#   5. under an inert top-level directory          -> skip
 #   6. anything else                               -> FALLBACK: tear down
 #
 # The loaded-DLL set is ground truth, not a guess: the live `me3` process's command line carries
@@ -277,6 +280,7 @@ classify_path() {
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -312,9 +316,124 @@ INERT_TOP_LEVEL = {
 }
 
 
+# Prose. Outside a crate's own tree a file with one of these extensions compiles into nothing --
+# unless a crate's build reads it, which `build_readers` answers from the sources themselves.
+# Inside a crate the owner rule still applies, because a crate may `include_str!` its own README.
+DOC_EXTENSIONS = {".md", ".markdown", ".txt", ".rst"}
+
+# Directories never walked for build inputs: build output, VCS data, and agent sandboxes that
+# hold whole second copies of the tree.
+SCAN_SKIP_DIRS = {"target", ".git", "node_modules", ".worktrees"}
+
+INCLUDE_RE = re.compile(r'include(?:_str|_bytes)?!\s*\(\s*"([^"\\\n]+)"')
+LITERAL_RE = re.compile(r'"([^"\\\n]+)"')
+
+
 def emit(verdict, branch, detail, profiles):
     print("\t".join([verdict, branch, detail, ",".join(profiles)]))
     raise SystemExit(0)
+
+
+def is_doc_file(target):
+    return os.path.splitext(target)[1].lower() in DOC_EXTENSIONS
+
+
+def package_dirs_from_fs():
+    """Workspace package directories found by walking for `Cargo.toml`, keyed by directory name.
+
+    The stand-in for cargo metadata when it cannot be read. It is only used to find which crate's
+    build reads a file; with no crate map the caller can still only skip a path no build reads.
+    """
+    out = {}
+    for top in ("crates", "tools"):
+        for root, dirs, files in os.walk(os.path.join(REPO_ROOT, top)):
+            dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
+            if "Cargo.toml" in files:
+                out[os.path.basename(root)] = os.path.realpath(root)
+    return out
+
+
+def rs_files_under(directory):
+    for root, dirs, files in os.walk(directory):
+        dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
+        for name in files:
+            if name.endswith(".rs"):
+                yield os.path.join(root, name)
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def build_readers(pkg_dir, build_scripts):
+    """Every repo path a crate's build reads, mapped to the crates that read it.
+
+    Derived from the tree on every call rather than listed here, because a list goes stale in the
+    fail-open direction -- the next `include_str!` of a doc would silently stop counting.
+
+      * `include_str!` / `include_bytes!` / `include!` literals in any `.rs` of a crate, resolved
+        against the file that holds them, which is how rustc resolves them.
+      * Every string literal in a build script, resolved against the crate's directory, which is a
+        build script's working directory. `er-game-base/build.rs` reads `docs/recon/*.tsv` this
+        way. A literal naming another `.rs` file -- `#[path = "../../build-support/..."]` -- is
+        followed, so what `build-support/prologue_build.rs` reads is attributed to every crate
+        whose build script pulls it in.
+
+    A literal that resolves to nothing on disk is ignored. A directory literal counts for every
+    file under it, unless it is the repo root or holds a crate.
+    """
+    files = {}
+    dirs = {}
+    pkg_roots = set(pkg_dir.values())
+
+    def record(path, name):
+        real = os.path.realpath(path)
+        if not real.startswith(REPO_ROOT + os.sep):
+            return
+        if os.path.isfile(real):
+            files.setdefault(real, set()).add(name)
+        elif os.path.isdir(real):
+            if any(r == real or r.startswith(real + os.sep) for r in pkg_roots):
+                return
+            dirs.setdefault(real, set()).add(name)
+
+    for name, d in pkg_dir.items():
+        for src in rs_files_under(d):
+            for lit in INCLUDE_RE.findall(read_text(src)):
+                record(os.path.join(os.path.dirname(src), lit), name)
+
+    for name, scripts in build_scripts.items():
+        base = pkg_dir.get(name)
+        if base is None:
+            continue
+        pending = list(scripts)
+        seen = set()
+        while pending:
+            script = os.path.realpath(pending.pop())
+            if script in seen or not os.path.isfile(script):
+                continue
+            seen.add(script)
+            text = read_text(script)
+            for lit in INCLUDE_RE.findall(text):
+                record(os.path.join(os.path.dirname(script), lit), name)
+            for lit in LITERAL_RE.findall(text):
+                cand = os.path.realpath(os.path.join(base, lit))
+                record(cand, name)
+                if cand.endswith(".rs") and os.path.isfile(cand):
+                    pending.append(cand)
+    return files, dirs
+
+
+def readers_of(target, files, dirs):
+    found = set(files.get(target, ()))
+    for d, names in dirs.items():
+        if target.startswith(d + os.sep):
+            found |= names
+    return found
 
 
 def inert_top_level_of(target):
@@ -530,59 +649,99 @@ def main():
             sys.exit(0)
         emit("SKIP", "no-natives-in-profile", "live profile loads no native DLL at all", profiles)
 
-    # Which inert top-level directory this path is under, if any. Read here as pure string
-    # work so the branches below can answer for it before any of them can fall back to a
-    # teardown -- an inert directory is inert whatever the profile and whatever cargo says.
+    # Which inert top-level directory this path is under, if any, and whether it is prose. Both
+    # are pure string work, so the branches below can answer for them before any of them can
+    # fall back to a teardown.
     inert_top = inert_top_level_of(target)
+    doc_like = is_doc_file(target)
 
     meta, why = workspace_metadata()
-    if meta is None and inert_top is not None:
-        # Nothing under an inert directory compiles, so a crate map this branch cannot read
-        # changes nothing about the answer. The cross-check below is what a readable map buys.
-        emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL (crate map unavailable: {why})", profiles)
-    if meta is None:
-        emit("TEARDOWN", "fallback-crate-map-unavailable", why, profiles)
 
     pkg_dir = {}
     cdylibs = {}
-    for pkg in meta.get("packages", []):
-        name = pkg.get("name")
-        manifest = pkg.get("manifest_path")
-        if not name or not manifest:
-            emit("TEARDOWN", "fallback-crate-map-unavailable", "package without name/manifest", profiles)
-        pkg_dir[name] = os.path.realpath(os.path.dirname(manifest))
-        cdylibs[name] = {
-            t.get("name")
-            for t in pkg.get("targets", [])
-            if "cdylib" in (t.get("crate_types") or [])
-        }
-    if not pkg_dir:
-        emit("TEARDOWN", "fallback-crate-map-unavailable", "no workspace packages", profiles)
+    build_scripts = {}
+    if meta is not None:
+        for pkg in meta.get("packages", []):
+            name = pkg.get("name")
+            manifest = pkg.get("manifest_path")
+            if not name or not manifest:
+                emit("TEARDOWN", "fallback-crate-map-unavailable", "package without name/manifest", profiles)
+            pkg_dir[name] = os.path.realpath(os.path.dirname(manifest))
+            cdylibs[name] = {
+                t.get("name")
+                for t in pkg.get("targets", [])
+                if "cdylib" in (t.get("crate_types") or [])
+            }
+            build_scripts[name] = [
+                t["src_path"]
+                for t in pkg.get("targets", [])
+                if "custom-build" in (t.get("kind") or []) and t.get("src_path")
+            ]
+        if not pkg_dir:
+            emit("TEARDOWN", "fallback-crate-map-unavailable", "no workspace packages", profiles)
+    else:
+        pkg_dir = package_dirs_from_fs()
+        build_scripts = {n: [os.path.join(d, "build.rs")] for n, d in pkg_dir.items()}
 
-    # The inert-directory answer, asked as soon as the crate map exists and before any branch
-    # that reasons about the live profile. It used to sit below the owner check, after three
-    # fallbacks, and on 2026-09-21 writing docs/recon/boot-timing-2026-09-21.tsv tore down the
-    # run those measurements came from -- under `fallback-no-workspace-dll-loaded`, a branch
-    # about the profile that had nothing to say about the path (bd er-effects-rs-kvqp). The
-    # Rust-edit guard's own refusal text already advertises these directories as editable
-    # mid-run, so the two were contradicting each other.
+    # Deepest owning crate wins, so a nested crate is attributed to itself rather than its parent.
+    owner = None
+    owner_dir = ""
+    for name, d in pkg_dir.items():
+        if target == d or target.startswith(d + os.sep):
+            if len(d) > len(owner_dir):
+                owner, owner_dir = name, d
+
+    # The inert answer, asked before any branch that reasons about the live profile. On
+    # 2026-09-21 writing docs/recon/boot-timing-2026-09-21.tsv tore down the run those
+    # measurements came from under `fallback-no-workspace-dll-loaded`, a branch that had nothing
+    # to say about the path (bd er-effects-rs-kvqp).
     #
-    # The cross-check is unchanged: if a workspace crate has moved under this directory it is
-    # no longer inert and must not be skipped wholesale.
-    if inert_top is not None:
-        crate_under = [
-            n for n, d in pkg_dir.items()
-            if d == os.path.join(REPO_ROOT, inert_top)
-            or d.startswith(os.path.join(REPO_ROOT, inert_top) + os.sep)
-        ]
-        if crate_under:
+    # Inert means "no build reads it", which is checked, not assumed. Until 2026-10-03 docs/ was
+    # skipped wholesale while `er-game-base/build.rs` compiles `docs/recon/rva-map-*.tsv` into
+    # every product DLL and `er-invasion-warp-core` embeds `docs/invasion-warp-*.{md,toml}` with
+    # `include_str!`. The same day AGENTS.md, which no build reads, tore down a live run under
+    # `fallback-unclassified` while the Rust-edit guard's refusal text promised docs stay
+    # editable mid-run. A prose file outside every crate is now inert by the same test.
+    readers = set()
+    if owner is None and (inert_top is not None or doc_like):
+        files, dirs = build_readers(pkg_dir, build_scripts)
+        readers = readers_of(target, files, dirs)
+        if not readers:
+            if inert_top is not None:
+                if meta is None:
+                    emit("SKIP", "inert-directory",
+                         f"{inert_top}/ compiles into no DLL (crate map unavailable: {why})", profiles)
+                # If a workspace crate has moved under this directory it is no longer inert and
+                # must not be skipped wholesale.
+                crate_under = [
+                    n for n, d in pkg_dir.items()
+                    if d == os.path.join(REPO_ROOT, inert_top)
+                    or d.startswith(os.path.join(REPO_ROOT, inert_top) + os.sep)
+                ]
+                if crate_under:
+                    emit(
+                        "TEARDOWN",
+                        "fallback-inert-dir-holds-crates",
+                        f"{inert_top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
+                        profiles,
+                    )
+                emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL", profiles)
             emit(
-                "TEARDOWN",
-                "fallback-inert-dir-holds-crates",
-                f"{inert_top}/ is allowlisted as inert but now contains: " + ",".join(sorted(crate_under)),
+                "SKIP",
+                "inert-documentation",
+                f"{os.path.relpath(target, REPO_ROOT)} is prose outside every crate and no build reads it",
                 profiles,
             )
-        emit("SKIP", "inert-directory", f"{inert_top}/ compiles into no DLL", profiles)
+        if meta is None:
+            emit(
+                "TEARDOWN",
+                "fallback-crate-map-unavailable",
+                f"build input of {','.join(sorted(readers))}; crate map unavailable: {why}",
+                profiles,
+            )
+
+    if meta is None:
+        emit("TEARDOWN", "fallback-crate-map-unavailable", why, profiles)
 
     dir_to_pkg = {v: k for k, v in pkg_dir.items()}
     deps = {}
@@ -592,9 +751,9 @@ def main():
             dep_path = dep.get("path")
             if not dep_path:
                 continue
-            owner = dir_to_pkg.get(os.path.realpath(dep_path))
-            if owner:
-                edges.add(owner)
+            dep_pkg = dir_to_pkg.get(os.path.realpath(dep_path))
+            if dep_pkg:
+                edges.add(dep_pkg)
         deps[pkg["name"]] = edges
 
     # Packages whose cdylib the live profiles actually load. The cdylib target name is used, not the
@@ -642,13 +801,31 @@ def main():
                 print(rel)
         sys.exit(0)
 
-    # Deepest owning crate wins, so a nested crate is attributed to itself rather than its parent.
-    owner = None
-    owner_dir = ""
-    for name, d in pkg_dir.items():
-        if target == d or target.startswith(d + os.sep):
-            if len(d) > len(owner_dir):
-                owner, owner_dir = name, d
+    # A file a crate's build reads counts as that crate's source: it tears down exactly when
+    # that crate is in the closure.
+    if readers:
+        hit = sorted(readers & closure)
+        if hit:
+            via = sorted(
+                f"{lib}.dll"
+                for p, reach in per_dll.items()
+                if reach & readers
+                for lib in (cdylibs[p] & stems)
+            )
+            emit(
+                "TEARDOWN",
+                "build-input-feeds-loaded-dll",
+                f"read by the build of pkg={','.join(hit)}, which feeds {','.join(via)}",
+                profiles,
+            )
+        emit(
+            "SKIP",
+            "build-input-of-unloaded-crate",
+            f"read only by the build of pkg={','.join(sorted(readers))}, outside the dependency closure of "
+            + ",".join(sorted(stems)),
+            profiles,
+        )
+
     if owner is not None:
         if owner in closure:
             via = sorted(
@@ -670,9 +847,8 @@ def main():
             profiles,
         )
 
-    # The inert-directory branch used to stand here and now runs as soon as the crate map
-    # exists, several fallbacks earlier -- see the comment beside it for the teardown that
-    # move prevents.
+    # The inert branch used to stand here and now runs before any profile reasoning -- see the
+    # comment beside it for the teardowns that move prevents.
     emit(
         "TEARDOWN",
         "fallback-unclassified",
@@ -836,6 +1012,18 @@ TOML
     fi
   }
 
+  expect_branch() {
+    local vpath="$1" want="$2" label="$3" vprof="${4:-$prof}"
+    vt_out="$(classify_path "$vpath" "$vprof")"
+    IFS=$'\t' read -r vt_verdict vt_branch vt_detail _ <<<"$vt_out"
+    if [[ "$vt_branch" == "$want" ]]; then
+      printf '  ok   %-58s [%s %s]\n' "$label" "$vt_verdict" "$vt_branch"
+    else
+      printf '  FAIL %-58s got %s (%s: %s), want branch %s\n' "$label" "$vt_verdict" "$vt_branch" "$vt_detail" "$want"
+      fails=$((fails + 1))
+    fi
+  }
+
   echo "  -- must TEAR DOWN --"
   # The crate that directly builds a loaded DLL.
   expect_verdict "$REPO_ROOT/crates/er-invasion-warp/src/lib.rs" TEARDOWN "crate builds a loaded DLL"
@@ -879,6 +1067,20 @@ profileVersion = "v1"
 path = '/nonexistent/SeamlessCoop/ersc.dll'
 TOML
   expect_verdict "$REPO_ROOT/data/effects.json" TEARDOWN "no workspace DLL loaded -> fail safe" "$otherprof"
+  # Unclassified top-level files that are not prose still fail safe: a toolchain pin or a
+  # workspace manifest changes every crate at once.
+  expect_verdict "$REPO_ROOT/rust-toolchain.toml" TEARDOWN "rust-toolchain.toml (unclassified -> fail safe)"
+  expect_branch "$REPO_ROOT/Cargo.toml" fallback-unclassified "workspace manifest is not prose"
+  expect_branch "$REPO_ROOT/new-top-level.rs" fallback-unclassified "new top-level .rs is not prose"
+  # A file a crate's build reads counts as that crate's source, inert directory or not. Both
+  # are real reads in this tree: `er-invasion-warp-core` embeds the doc with `include_str!`,
+  # and `er-game-base/build.rs` compiles the TSV into every product DLL.
+  expect_branch "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" build-input-feeds-loaded-dll \
+    "docs/*.md a crate include_str!s -> that crate"
+  expect_detail "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" \
+    "pkg=er-invasion-warp-core, which feeds er_invasion_warp.dll" "reason names the reading crate and its DLL"
+  expect_branch "$REPO_ROOT/docs/recon/rva-map-1162-to-1170.data.tsv" build-input-feeds-loaded-dll \
+    "docs/recon TSV a build.rs reads -> that crate"
 
   echo "  -- must NOT tear down --"
   # The five real false teardowns from 2026-08-04, each of which cost a user-driven invasion.
@@ -888,6 +1090,24 @@ TOML
   expect_verdict "$REPO_ROOT/.cupcake/policies/claude/idle_hold.rego" SKIP ".cupcake policy (not code)"
   expect_verdict "$REPO_ROOT/.cupcake/tests/idle_hold_test.rego" SKIP ".cupcake policy test"
   expect_verdict "$REPO_ROOT/docs/plans/world-map-invasion-warp.md" SKIP "docs/"
+  # Prose outside every crate (2026-10-03: an AGENTS.md edit tore down a live r3-view run under
+  # `fallback-unclassified`).
+  expect_branch "$REPO_ROOT/AGENTS.md" inert-documentation "AGENTS.md (repo-root prose)"
+  expect_branch "$REPO_ROOT/CLAUDE.md" inert-documentation "CLAUDE.md (repo-root prose)"
+  expect_branch "$REPO_ROOT/README.md" inert-documentation "README.md (repo-root prose)"
+  expect_branch "$REPO_ROOT/third_party/notes.txt" inert-documentation "plain-text notes outside every crate"
+  expect_verdict "$REPO_ROOT/docs/foo.md" SKIP "docs/foo.md"
+  expect_verdict "$REPO_ROOT/AGENTS.md" SKIP "AGENTS.md under a foreign-DLL profile" "$otherprof"
+  # A doc a crate embeds is that crate's source, so a run that does not load the crate keeps
+  # running.
+  local warpless="$tmpdir/warpless.me3"
+  cat >"$warpless" <<'TOML'
+profileVersion = "v1"
+[[natives]]
+path = '/nonexistent/er_quickload.dll'
+TOML
+  expect_branch "$REPO_ROOT/docs/invasion-warp-second-player-setup.md" build-input-of-unloaded-crate \
+    "embedded doc, embedding crate not loaded" "$warpless"
   # bd er-effects-rs-kvqp, both halves, measured on this machine 2026-09-21.
   #
   # A profile that parses and lists zero natives is determined, and determined to be safe: the
