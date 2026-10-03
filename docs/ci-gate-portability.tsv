@@ -290,6 +290,7 @@ portable	-	test-admission-with-defence-classifier.py	source/AST/text analysis on
 portable	-	test-diagnosis-signal.py	source/AST/text analysis only	policy
 portable	-	test-future-commitment-signal.py	source/AST/text analysis only	policy
 portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only	policy
+portable	-	test-ask-without-receiver-signal.py	source/AST/text analysis only	policy
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools

@@ -1,0 +1,4 @@
+{"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "swap the board font"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Swapped the board font."}, {"type": "tool_use", "name": "Edit", "id": "toolu_e1", "input": {"file_path": "/tmp/x.rs", "old_string": "a", "new_string": "b"}}]}}
+{"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_e1", "content": "ok"}]}}
+{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Does the font look right to you?"}]}}

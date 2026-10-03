@@ -494,6 +494,25 @@ CASES = [
         "that named a defect and changed nothing",
     ),
     Case(
+        "ask_without_receiver.jsonl",
+        "You asked the user for something you have no receiver for",
+        "the 2026-10-02 closer, verbatim: a Frida watcher backgrounded, then 'I need you to close "
+        "the item list with B twice' with no Monitor armed. The watcher's exit is not the press, "
+        "so nothing would have woken the agent when the user acted",
+    ),
+    Case(
+        "ask_with_monitor.jsonl",
+        None,
+        "the same ask after a Monitor on the trace log started and has not ended -- must NOT "
+        "halt, because the agent is now prepared to receive what it asked for",
+    ),
+    Case(
+        "ask_subjective.jsonl",
+        None,
+        "'Does the font look right to you?' -- the answer is the user's typed reply, so no "
+        "instrument is needed and the ask must NOT halt",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
