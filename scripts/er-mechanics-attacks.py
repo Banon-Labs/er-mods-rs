@@ -927,7 +927,11 @@ def weapon_attacks(reg, weapon_id, grip='one', level=0):
         src_cat, src_anim = tae['source'] if tae else (category, anim)
         row = {'slot': key, 'label': label, 'anim': f"a{src_cat:03d}_{src_anim:06d}",
                'tae_entry': f"a{category:03d}_{anim:06d}", 'state': state, **nums}
-        if tae is not None:
+        if tae is None:
+            # Attack numbers with no attack event in the animation: a bow's shot, or a staff's or
+            # seal's jumping attack. The row keeps its numbers and says it has no hit window.
+            row.update(hit_windows=None, hits=None, other_hitboxes=[])
+        else:
             row.update(tae)
             if state.endswith(('Heavy1End', 'Heavy2End')):
                 lead = release_lead_in(w, anim - R2_RELEASE_ANIM_OFFSET)
@@ -991,7 +995,7 @@ def print_table(reg, weapon_id, rows):
         print(f"{r['label']:16} {r['judge']:>5} {r['atk_row']:>9} {r['phys_type']:>8} {r['mv_phys']:>4} "
               f"{r['poise_damage']:>7.2f} {r['stamina_cost']:>4} {r['stamina_damage']:>6.1f} "
               f"{str(r.get('sweep_hits', '-')) + '/' + str(r.get('max_hits', '-')):>4}{opens} {_dash(r.get('anim_frames')):>4}"
-              f"  {r.get('hit_windows', '')}{extra}  {hyper}  {counter}")
+              f"  {r.get('hit_windows') or ''}{extra}  {hyper}  {counter}")
     print('Frames are real time: 30 fps from animation start with the TAE 608 play speed'
           ' applied (clip-time values are the *_clip fields in --json).'
           ' hits = sweep/max: max is the most times one target can be hit (one per hit record),'
