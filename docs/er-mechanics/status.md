@@ -28,6 +28,7 @@ the installed 1.17.1 `regulation.bin`.
 | How long does a bolus take? | Effect on frame 31 of `a000_050000` (TAE event 65 `ConsumeCurrentGoods`); after a hit, an item can start at frame 0 (poise held, additive flinch), 12 (small), 25 (middle), 35 (large), 40 (push) | TAE, Nyasu 1.17 agrees on 31 (COMMUNITY) |
 | Do talismans change status? | Defender: `change*ResistPoint` adds to resistance (horn charms, Mottled Necklace, Ailment Talisman), already inside the planner's resistances. Attacker: nothing raises build-up or proc HP; the exultations raise damage after a nearby proc | VERIFIED; exultation trigger INFERRED (section 9) |
 | Does a proc make the victim react? | Sleep and madness force their own clip (`a000_005840`, `a000_005850`) through any poise, hyperarmor or guard. Bleed and frost turn a hit the victim's poise held into a small stagger (roll on frame 10), unless Stamp stance, Endure, Oath of Vengeance or Seppuku is active. Poison and rot do nothing (section 11) | VERIFIED bit and env plumbing, COMMUNITY branch logic with its constants read in the installed bytecode, TAE timings |
+| How much does a shield block? | On a guarded hit that does not break the guard, each row's build-up is multiplied by `1 - min(1, max(0, GuardResist * ReinforceRate / 100)) * cancel` and floored at 0, where `GuardResist` is the guarding weapon's `*GuardResist`, `ReinforceRate` its `ReinforceParamWeapon.*GuardResistRate` / `*GuardDefRate` (1.0 or 0.95, constant over upgrade levels), and `cancel` = `(100 + attacker weapon.guardCutCancelRate) / 100 * (100 + AtkParam.guardCutCancelRate) / 100`. A Buckler (19) lets 81% through. The `*_MaxCorrect` DEX bonus is in the code but multiplied by CalcCorrectGraph 162, which is flat 0. No PvP term (section 1c) | VERIFIED |
 | Can a roll avoid the proc? | The HP of a proc is zeroed while the victim's roll i-frames are on, but in PvP the hit packet still builds up and procs, and the forced reaction still interrupts the roll (section 11) | VERIFIED code, frame order INFERRED |
 
 ## 1. The chain, per hit (EXE)
@@ -69,8 +70,9 @@ FUN_14043daf0 / 0x14043e050 (CSChrResistModule):
   status = dispatch on R.stateInfo
   amount = R.<status>AttackPower (FUN_140d4ffd0) * ctx[0xe] * ctx[s]
   defender immune if any active SpEffect has the status's disable flag (FUN_1404f9f90)
-  amount = FUN_14043e630: (1 - guardCut) * amount * product(defender SpEffect *DefDamageRate)
-           (row +0x360..+0x378, FUN_140d501a0 / 0x140d51f50); guardCut only on a guarded hit
+  amount = FUN_14043e630: max(0, (1 - guardCut) * amount * product(defender SpEffect *DefDamageRate))
+           (row +0x360..+0x378, FUN_140d501a0 / 0x140d51f50); guardCut only on a guarded hit,
+           read from the guarding weapon (section 1c)
   FUN_14043d8a0 / 0x14043de00(status, (int)amount):
      gauge -= amount; if gauge < 1: proc, count = min(count + 1, 5), NPC ResistCorrect raise,
      gauge = resistance; return "keep the SpEffect"
@@ -196,6 +198,92 @@ The calculator enforces it: `hostile_target_refusal(row)` drops a row with
 `spEffectId0..4`, `EquipParamWeapon.spEffectBehaviorId0..2` + `ReinforceParamWeapon` (levels
 0..25) and any row's `atkOccurrenceSpEffectId` (weapon buffs and greases), none is refused, so no
 ranking number changes; the selftest asserts that list stays empty.
+
+## 1c. A blocked hit: the shield's status cut (EXE + REGULATION)
+
+1.16.2 address first, 1.17.1 second. The 1.17.1 functions were located with
+`scripts/map-rvas-1162-to-1170.py` and then compared byte for byte; the only differences are
+RIP-relative displacements, except where noted.
+
+```
+CalculateDamage 0x1404472b0 / 0x140447810
+  AttackDamageInfo+0x258 (guarded) = 1 when the guard test FUN_140448fc0 passes,
+  then = 0 again if stamina <= the guard's stamina damage and the guard-break vfunc says break.
+  A guard-broken hit therefore builds up in full.                                   VERIFIED
+FUN_140d24b10 (AttackDamageInfo build) -> AttackDamageInfo+0x5c = FUN_140686f30 / 0x140687d80:
+  attacker (a ChrIns, or the owner of a bullet) vtable +0x398; 1.0 when there is none.
+  PlayerIns +0x398 = FUN_140652610 / 0x140653460:
+    cancel = (100 + attackerWeapon.guardCutCancelRate) * 0.01
+           * (100 + AtkParam.guardCutCancelRate) * 0.01
+    returns 1.0 instead when AttackDamageInfo+0xf4 and (+0x10a ? +0x10b : 1) are set (fields not identified)
+CalculateDamage2 0x1404483b0 / 0x140448910: ctx+0x3c = dmg+0x5c (cancel), ctx+0x40 = dmg+0x258 (guarded)
+FUN_14043daf0 / 0x14043e050, per status s (0 poison, 1 rot, 2 bleed, 3 death blight, 4 frost, 5 sleep, 6 madness):
+  guardCut = guarded ? victim vtable +0x3e8 (s, cancel) : 0       (call [r8+0x3e8], 7 sites in 1.17.1)
+  defRate  = FUN_1404f3d70 / 0x1404f4b40(victim SpEffects, s, guarded)
+  amount   = FUN_14043e630 / 0x14043eb90(amount, guardCut, defRate)
+           = max(0, (1 - guardCut) * amount * defRate)   (a NaN product returns the constant at 0x143c30638)
+PlayerIns +0x3e8 = FUN_140655d80 / 0x140656bd0 (vtable 0x142a7cb40 in 1.16.2; slot +0x178 is the
+0x1404f1180 section 2 names, which pins the table):
+  weapon   = GetEquipmentEntry(GetGuardReferenceHandSlot())        the weapon that is guarding
+  base     = (s8) weapon.<s>GuardResist * reinforce.<s>Rate        FUN_140d53f40 / 0x140d55cf0
+  bonus    = HasStatsForWeapon ? FUN_140689180 / 0x140689fd0(maxCorrect, 162, effective DEX, properAgility) : 0
+  guardCut = cancel * min(1, max(0, (base + bonus) * 0.01))
+```
+
+Field offsets, read from the code (the paramdef layout `dump-param-rows.py` uses drifts by one byte
+from 0x181 on, so its labels for the last three bytes and the five `*_MaxCorrect` floats are off;
+read raw bytes at these offsets):
+
+| status | EquipParamWeapon `*GuardResist` (s8) | `*_MaxCorrect` (f32) | ReinforceParamWeapon rate (f32) |
+|---|---|---|---|
+| poison | +0x100 | +0x1bc | +0x3c `poisonGuardResistRate` |
+| rot | +0x101 | +0x1c0 | +0x40 `diseaseGuardResistRate` |
+| bleed | +0x102 | +0x1c4 | +0x44 `bloodGuardResistRate` |
+| death blight | +0x103 | +0x1c8 | +0x48 `curseGuardResistRate` |
+| frost | +0x196 | +0x1cc | +0x64 `freezeGuardDefRate` |
+| sleep | +0x192 | +0xb0 | +0x74 `sleepGuardDefRate` |
+| madness | +0x193 | +0xb4 | +0x78 `madnessGuardDefRate` |
+
+The 1.17.1 getters are `0x140d55cf0` (guard resist, same seven `movzx` offsets), `0x140d55c70`
+(`*_MaxCorrect`) and `0x140d58290` (reinforce rate). All three moved by +0x1db0, not the +0x1d40
+the mapper proposed, so they were found by their byte patterns (one hit each).
+
+The DEX bonus (`FUN_140689180`):
+`maxCorrect * CalcCorrect(162, DEX) / 100 * min(DEX - properAgility, cap - properAgility) / (cap - properAgility)`,
+`cap` = `PlayerCommonParam.guardStatusCorrect_MaxStatusVal` (+0x36, 70 in 1.17.1). Graph 162 has
+`stageMaxGrowVal0..4` all 0, so the bonus is 0 for every DEX and the `*_MaxCorrect` values (15 on
+the Buckler, for all seven statuses) do nothing in the shipped regulation. VERIFIED (code + params).
+
+Regulation (installed 1.17.1):
+
+- Reinforcement does not scale the cut with upgrade level. Of 939 `ReinforceParamWeapon` rows, 731
+  have all seven rates 1.0; types 400..800 have 0.95 on all seven, 900 / 1000 / 1100 have 0.95 on
+  all but frost / poison and rot / bleed. Every type is constant over its +0..+25 rows. VERIFIED
+- The Buckler (30000000) holds 19 for all seven statuses (raw bytes at the offsets above), so a
+  guarded hit keeps `1 - 0.19` = 81% of each row's build-up before the int truncation. VERIFIED
+- `guardCutCancelRate` is non-zero on 18 weapon bases: -50 on 1060000, 1130000, 2080000, 7020000,
+  7100000, 9500000, 9680000, 9690000, 18130000, 19000000, 19010000, 19020000, 19060000, 19500000,
+  19690000, 22020000 and -30 on 22500000, 22690000 (all their reinforce/affinity rows). A -50
+  weapon halves the shield's cut (Buckler: 90.5% gets through). `AtkParam.guardCutCancelRate`
+  multiplies in the same way; its rows were not counted. VERIFIED
+- With a positive cancel the product can exceed 1; `FUN_14043e630` floors the result at 0, so a
+  guard cannot add build-up. INFERRED that no shipped row reaches that.
+
+What the guard branch does not do:
+
+- `AtkParam.guardRate` and the weapon's physical `*GuardCutRate` / `guardLevel` play no part; only
+  the per-status guard resist, the reinforce rate, the DEX bonus and `cancel` do. VERIFIED (the
+  PlayerIns +0x3e8 body reads nothing else).
+- No PvP branch: neither `FUN_140655d80` nor `FUN_14043e630` nor `FUN_140652610` tests the
+  PvP state. The only PvP term in status build-up stays `vsPlayerDmgCorrectRate_*`, applied earlier
+  on the attacker's side (section 1). VERIFIED for the code read; which client evaluates the guard
+  in PvP is the same open item as the gauge's.
+- Two defender SpEffect stateInfos only count on a guarded hit: `FUN_1404f3d70` skips rows of
+  stateInfo 158 and 204 unless the hit is guarded, so their `*DefDamageRate` multiplies a blocked
+  hit only. Which rows carry 158 / 204 was not enumerated. VERIFIED code
+- Status 3 has a second dispatch, stateInfo 118 (`0x76`), that subtracts from the death-blight
+  gauge with no guard and no defender rate. VERIFIED code; what applies stateInfo 118 not traced.
+- An NPC guarding uses its own class's +0x3e8; only the PlayerIns override was read.
 
 ## 2. Decay and resistance (EXE + REGULATION)
 
@@ -678,7 +766,9 @@ Files: `/tmp/claude-1000/-home-banon-projects-er-mods-rs/5fc1b460-61a1-4d80-9ef8
 - Which grease wins when two weapon buffs are active: `FUN_1404f71e0` returns the first applicable
   stateInfo 152/153 entry in the SpEffect list, so only one applies, but the list order was not
   read.
-- The guard branch (shield `*GuardResist` cut) and the damaged-part rate at `+0x244` for players.
+- The damaged-part rate at `+0x244` for players. (The guard branch is section 1c; its remaining
+  unknowns are the `AttackDamageInfo+0xf4/+0x10a/+0x10b` bypass of `cancel`, the rows carrying
+  stateInfo 158 / 204, and the NPC override of the guard-cut vfunc.)
 - What stateInfo 117 (death blight's replacement row 70) does to a player.
 - The disable-flag reader `FUN_140d507d0` reads bytes whose Ghidra names are stale; which
   SpEffects grant immunity in PvP was not enumerated.
