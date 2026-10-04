@@ -527,6 +527,21 @@ def display_path(p: str) -> str:
         return "~" + p[len(home):] if p.startswith(home + "/") else p
 
 
+def here_path(p: str) -> Path:
+    """A path a shard recorded, as it is in this checkout. The cache is shared across checkouts
+    of the repository (the main tree and every `.claude/worktrees/<name>`), while a shard records
+    real paths, so a repository file recorded by a run in another checkout is carried into this
+    one by its path relative to that checkout's root. Measured 2026-10-03: a run in a worktree
+    that was removed afterwards left `.../.claude/worktrees/agent-.../scripts/er-builds-embed.py`
+    in the cache, and the next render in the main tree died on it."""
+    marker = "/.claude/worktrees/"
+    if marker in p:
+        rest = p.split(marker, 1)[1]
+        if "/" in rest:
+            return REPO_ROOT / rest.split("/", 1)[1]
+    return resolve_display(p)
+
+
 def resolve_display(p: str) -> Path:
     if p.startswith("~/"):
         return Path.home() / p[2:]
@@ -608,7 +623,6 @@ def render_body(boards: list[tuple[int, dict]]) -> str:
     items = "".join(f"    ({wid}, {rust_board(b)}),\n" for wid, b in boards)
     src = ("use crate::board::{Board, Gear, Line};\n\n"
            "/// Every board, sorted by base weapon id so a lookup can binary-search it.\n"
-           "#[allow(dead_code)] // not drawn yet: choosing the weapon from the item list needs a live measurement\n"
            "#[rustfmt::skip]\n"
            f"pub static WEAPON_BOARDS: &[(u32, Board)] = &[\n{items}];\n")
     out = rustfmt(src)
@@ -732,7 +746,7 @@ def generate(jobs: int) -> int:
             skipped.append((wid, name, f"ValueError: {e}"))
     opened: set = set()
     for f in cache.glob("opened-*.json"):
-        opened |= set(json.loads(f.read_text()))
+        opened |= {str(here_path(p)) for p in json.loads(f.read_text())}
     opened.add(str(Path(__file__).resolve()))
     sources, data = [], []
     for p in sorted(x for x in opened if not _ignored(x)):

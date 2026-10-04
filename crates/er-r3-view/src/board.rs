@@ -4,7 +4,8 @@
 //! across by the screen's width, down and in type size by its height. The host's atlas has one font, so sizes come from the window font scale over the
 //! host's base size, and the canvas's serif and mono faces are drawn in that one face.
 //!
-//! Every number on a board comes from the mechanics scripts named beside it.
+//! Every board is generated from the mechanics scripts into `weapon_boards.rs` by
+//! `scripts/gen-r3-weapon-boards.py`.
 
 use er_build_watermark_core::overlay_host::with_font;
 use hudhook::imgui::sys::ImFont;
@@ -34,119 +35,34 @@ pub struct Board {
     pub gear: &'static [Gear],
 }
 
-/// Misericorde (1030000).
-///
-/// - "What makes it unique": `er-mechanics-weapon-twins.py Misericorde` -- no twin; nine infusable
-///   daggers are comparable, and each row is an advantage it holds over the siblings it names.
-/// - "Top Infusions": `er-mechanics-infusions.py Misericorde`, its `top physical`, `top
-///   elemental` and `top status` rows (each infusion classed by what it adds over Standard).
-/// - "Speed and cost": `er-mechanics-weapon-card.py Misericorde`.
-/// - "Gear with synergy": `er-mechanics-gear-synergy.py Misericorde --top 6`: the dagger pair,
-///   its critical gear (shown because its critical is above the median), the top six rows after
-///   the setup discount, and Spear Talisman because its hits pierce.
-pub const MISERICORDE: Board = Board {
-    // EquipParamWeapon 1030000's iconId; its icon sits in atlas SB_Icon_03.
-    icon_id: 10003,
-    class: "DAGGER",
-    name: "Misericorde",
-    rule: "Can be infused",
-    unique_intro: "Against the nine other daggers that can be infused; none is a twin, and \
-                   Main-gauche shares the most of its moveset, 32 of 36 moves.",
-    unique: &[
-        Line {
-            key: "155 MV",
-            text: "Charged R2s, against 150 on seven of the nine other daggers that can be \
-                   infused.",
-        },
-        Line {
-            key: "R2 f8",
-            text: "First R2 hits on frame 8, against 9 on six of the nine other daggers that can \
-                   be infused.",
-        },
-        Line {
-            key: "DEX 12",
-            text: "To wield it, against 13 to 15 on Main-gauche, Parrying Dagger, Wakizashi and \
-                   Fire Knight's Shortsword.",
-        },
-    ],
-    infusions_intro: "Best RL 150 build: Keen from a Heavy Knight start, 547 AR (311th highest \
-                      of 416) and 249 damage per hit (328th highest of 416), against every \
-                      weapon's best RL 150 build with its best infusion and class.",
-    infusions: &[
-        Line {
-            key: "Physical",
-            text: "Heavy. Scaling STR 106.4. At RL 150 from a Heavy Knight start: STR 85 / DEX \
-                   12, 543 AR with Drawstring Dragonbolt Grease. The best pick at RL 60-170; past \
-                   RL 170 another infusion does more.",
-        },
-        Line {
-            key: "Elemental",
-            text: "Lightning. Scaling DEX 60.9, STR 7.2. At RL 150 from a Heavy Knight start: STR \
-                   15 / DEX 82, 482 AR. Never the best pick between RL 60 and 200.",
-        },
-        Line {
-            key: "Status",
-            text: STATUS_ROW,
-        },
-    ],
-    speed: &[
-        Line {
-            key: "10 f",
-            text: "R1 hits on frame 10 (tied 1st fastest of 451) and reaches 3.0 m (tied 268th \
-                   longest of 419).",
-        },
-        Line {
-            key: "9 sp",
-            text: "Stamina per R1 one-handed (tied 47th cheapest of 451), 12 two-handed (tied \
-                   94th cheapest of 451).",
-        },
-    ],
-    gear: &[
-        Gear {
-            name: "A second dagger",
-            text: "Powerstance with another Misericorde or any of 16 other daggers adds a \
-                   backstep L1 that hits on frame 11 (tied 1st fastest of 320).",
-        },
-        Gear {
-            name: "Dagger Talisman",
-            text: "+17% critical damage. Misericorde's critical is x1.40, the highest of 327 \
-                   weapons that can crit; the median is x1.00.",
-        },
-        Gear {
-            name: "Twinblade Talisman",
-            text: "+45% on the final hit of a chain.",
-        },
-        Gear {
-            name: "Two-Handed Sword Talisman",
-            text: "+10% on two-handed attacks.",
-        },
-        Gear {
-            name: "Axe Talisman",
-            text: "+10% on charged heavy attacks.",
-        },
-        Gear {
-            name: "Lacerating Crossed-Tree",
-            text: "+8% on dash attacks.",
-        },
-        Gear {
-            name: "Leda's Armor",
-            text: "+5% on dash attacks. +5% on backstep / rolling attacks, worth half for the \
-                   setup they need. Costs 0.9% more damage taken.",
-        },
-        Gear {
-            name: "Millicent's Prosthesis",
-            text: "+3% from its DEX, +4% on successive hits.",
-        },
-        Gear {
-            name: "Spear Talisman",
-            text: "+15% counter-hit damage; 39% of its hits pierce.",
-        },
-    ],
-};
+/// The board for an `EquipParamWeapon` row id as the item list carries it, infusion and upgrade
+/// level included: the row's base weapon is the id rounded down to a multiple of 10000.
+pub fn for_weapon(id: u32) -> Option<&'static Board> {
+    let base = id - id % WEAPON_ID_BASE_STEP;
+    crate::weapon_boards::WEAPON_BOARDS
+        .binary_search_by_key(&base, |(id, _)| *id)
+        .ok()
+        .map(|at| &crate::weapon_boards::WEAPON_BOARDS[at].1)
+}
 
-const STATUS_ROW: &str = "Poison. Scaling DEX 89.3, ARC 43.5, STR 26.6. At RL 150 from a Heavy \
-                          Knight start: STR 15 / DEX 73 / ARC 18, 363 AR. Never the best pick \
-                          between RL 60 and 200. Poison buildup 98.";
+/// Infusion is `id % 10000 / 100` and the upgrade level `id % 100`, so the base weapon of any row
+/// is its id rounded down to this.
+const WEAPON_ID_BASE_STEP: u32 = 10000;
+
+/// What view 3 shows for a weapon the generator left out: its header names why.
+pub const NO_BOARD: Board = Board {
+    icon_id: 0,
+    class: "",
+    name: "No board for this weapon yet",
+    rule: "Staves, seals, bows, crossbows, ballistae, perfume bottles and fists are not ranked \
+           yet: the infusion ranking they would rest on leaves their classes out.",
+    unique_intro: "",
+    unique: &[],
+    infusions_intro: "",
+    infusions: &[],
+    speed: &[],
+    gear: &[],
+};
 
 const FRAME_W: f32 = 1440.0;
 pub const FRAME_H: f32 = 1200.0;

@@ -52,6 +52,8 @@ mod imp;
 mod item_icon;
 #[cfg(windows)]
 mod menu_font;
+#[cfg(windows)]
+mod weapon_boards;
 
 #[cfg(not(windows))]
 #[unsafe(no_mangle)]

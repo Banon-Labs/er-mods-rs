@@ -97,6 +97,51 @@ const R3_ENABLED_PATTERN: [Option<u8>; 24] = {
         b(0x8d), // cmp rdx, r9; jae
     ]
 };
+/// `pattern` with `len` bytes from `from` left unmatched: a rel32 that differs between builds.
+const fn aob<const N: usize>(pattern: [u8; N], from: usize, len: usize) -> [Option<u8>; N] {
+    let mut out = [None; N];
+    let mut i = 0;
+    while i < N {
+        if i < from || i >= from + len {
+            out[i] = Some(pattern[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The function the item list's detail panel names its highlighted record with,
+/// `FUN(parts, record)` (1.16.2 `0x140999400`, 1.17.1 `0x14099a5a0`, the two prologues identical
+/// but for the cookie's rip displacement). Found by its body, `RECORD_NAME_BODY_OFFSET` in:
+/// `lea r14,[rdx+0x80]; mov rbx,rdx; cmp dword [r14+0x4c],-1; cmovne rbx,r14`, which is unique in
+/// both images. Measured with Frida (`r3-selected-weapon-name.js`): every highlight in the weapon
+/// list reaches it, and the weapon name getter it calls is asked for the highlighted weapon's id,
+/// infusion and level included.
+// AOB signature: an instruction run inside the body, not the prologue that is hooked.
+const RECORD_NAME_BODY: [Option<u8>; 19] = aob(
+    [
+        0x4c, 0x8d, 0xb2, 0x80, 0x00, 0x00, 0x00, 0x48, 0x8b, 0xda, 0x41, 0x83, 0x7e, 0x4c, 0xff,
+        0x49, 0x0f, 0x45, 0xde,
+    ],
+    0,
+    0,
+);
+const RECORD_NAME_BODY_OFFSET: usize = 0x45;
+
+/// `MsgRepositoryImp::GetWeaponName(msg, u32 id)` (1.16.2 `0x140d11370`, 1.17.1 `0x140d12ab0`).
+/// Its first 25 bytes are shared with one sibling getter; the bundle fallback after the first
+/// lookup tells them apart. The call's rel32 is masked.
+// AOB signature: the getter's entry through its second bundle offset.
+const GET_WEAPON_NAME_PATTERN: [Option<u8>; 42] = aob(
+    [
+        0x48, 0x89, 0x5c, 0x24, 0x08, 0x57, 0x48, 0x83, 0xec, 0x20, 0x8b, 0xda, 0x44, 0x8b, 0xca,
+        0x33, 0xd2, 0x48, 0x8b, 0xf9, 0x44, 0x8d, 0x42, 0x73, 0xe8, 0x00, 0x00, 0x00, 0x00, 0x48,
+        0x85, 0xc0, 0x75, 0x41, 0x44, 0x8b, 0xcb, 0x44, 0x8d, 0x40, 0x0b, 0x33,
+    ],
+    25,
+    4,
+);
+
 const PANE_COUNT_OFFSET: usize = 0xb48;
 const MODE_OFFSET: usize = 0x8f8;
 /// The step's `this` is the item list's `DetailStatusViewParts`; `+0x10` is the
@@ -161,6 +206,18 @@ static FONT_TRIED: AtomicUsize = AtomicUsize::new(0);
 static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 static ITEM_LIST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 static ITEM_LIST_AT_MS: AtomicUsize = AtomicUsize::new(0);
+static RECORD_NAME_ORIG: AtomicUsize = AtomicUsize::new(0);
+static GET_WEAPON_NAME_ORIG: AtomicUsize = AtomicUsize::new(0);
+/// The weapon row the detail panel last named, or [`NO_WEAPON`] when the highlighted record it
+/// last named was not a weapon.
+static SELECTED_WEAPON: AtomicU32 = AtomicU32::new(NO_WEAPON);
+const NO_WEAPON: u32 = u32::MAX;
+
+std::thread_local! {
+    /// Set while the detail panel names a record on this thread, so the weapon name getter, which
+    /// every weapon caption in the game also calls, is read only for that record.
+    static NAMING_RECORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// A faded left-panel proxy and the alpha to give back. Touched only on the menu thread.
 struct Faded {
@@ -263,6 +320,7 @@ fn install() {
             "R3 enable predicate not found exactly once; R3 will not leave view 3"
         )),
     }
+    install_selection_hooks(start, end);
     let run = start + MENU_WINDOW_JOB_RUN_RVA_1162;
     match unsafe { er_hook::register_shared_hook(run, run_hook, &RUN_ORIG) } {
         Ok(route) => log(format_args!(
@@ -300,6 +358,94 @@ fn install() {
         log(format_args!(
             "no overlay host accepted a guest; load er-build-watermark in this profile to see the board"
         ));
+    }
+}
+
+/// The detail panel's record naming and the weapon name getter, which together say which weapon is
+/// highlighted. Without them the board shows the first weapon only if nothing else is known.
+fn install_selection_hooks(start: usize, end: usize) {
+    let record_name = unsafe { find_unique(start, end, &RECORD_NAME_BODY) }
+        .map(|at| at - RECORD_NAME_BODY_OFFSET);
+    let get_weapon_name = unsafe { find_unique(start, end, &GET_WEAPON_NAME_PATTERN) };
+    let (Some(record_name), Some(get_weapon_name)) = (record_name, get_weapon_name) else {
+        log(format_args!(
+            "selection: record naming {record_name:x?} or weapon name getter {get_weapon_name:x?} \
+             not found exactly once; the board cannot follow the highlighted weapon"
+        ));
+        return;
+    };
+    for (target, handler, slot, what) in [
+        (
+            record_name,
+            record_name_hook as er_hook::UnionFn,
+            &RECORD_NAME_ORIG,
+            "record naming",
+        ),
+        (
+            get_weapon_name,
+            get_weapon_name_hook as er_hook::UnionFn,
+            &GET_WEAPON_NAME_ORIG,
+            "weapon name getter",
+        ),
+    ] {
+        match unsafe { er_hook::register_union_hook_runtime_derived(target, handler, slot) } {
+            Ok(()) => log(format_args!("selection: {what} hooked at 0x{target:x}")),
+            Err(status) => log(format_args!(
+                "selection: {what} hook at 0x{target:x} failed: {status:?}"
+            )),
+        }
+    }
+}
+
+/// The detail panel naming its highlighted record: whatever weapon id the name getter is asked
+/// for inside this call is the highlighted weapon, and no call means the record is not a weapon.
+///
+/// # Safety
+///
+/// Installed by `er-hook` on the function's entry; the game calls it on its menu thread.
+unsafe extern "system" fn record_name_hook(
+    parts: usize,
+    record: usize,
+    c: usize,
+    d: usize,
+) -> usize {
+    let orig = RECORD_NAME_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let before = SELECTED_WEAPON.swap(NO_WEAPON, Ordering::Relaxed);
+    NAMING_RECORD.with(|n| n.set(true));
+    let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    let ret = unsafe { next(parts, record, c, d) };
+    NAMING_RECORD.with(|n| n.set(false));
+    let after = SELECTED_WEAPON.load(Ordering::Relaxed);
+    if after != before {
+        log(format_args!("selection: highlighted weapon {after}"));
+    }
+    ret
+}
+
+/// # Safety
+///
+/// Installed by `er-hook` on the getter's entry; `id` is its second argument.
+unsafe extern "system" fn get_weapon_name_hook(msg: usize, id: usize, c: usize, d: usize) -> usize {
+    if NAMING_RECORD.with(|n| n.get()) {
+        SELECTED_WEAPON.store(id as u32, Ordering::Relaxed);
+    }
+    let orig = GET_WEAPON_NAME_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    unsafe { next(msg, id, c, d) }
+}
+
+/// The board for the highlighted weapon: [`board::NO_BOARD`] for a weapon the generator left out
+/// or a record that is not a weapon.
+fn selected_board() -> &'static board::Board {
+    match SELECTED_WEAPON.load(Ordering::Relaxed) {
+        NO_WEAPON => &board::NO_BOARD,
+        id => board::for_weapon(id).unwrap_or(&board::NO_BOARD),
     }
 }
 
@@ -421,8 +567,9 @@ unsafe extern "system" fn run_hook(job: usize, a: usize, b: usize, c: usize) -> 
         // The menu thread, inside the item list's own job: the one place the icon lookup, which
         // inserts into the texture repository's map on a miss, may run. Once per process.
         let base = GAME_BASE.load(Ordering::Relaxed);
-        if base != 0 {
-            unsafe { crate::item_icon::resolve_once(base, board::MISERICORDE.icon_id, log) };
+        let icon_id = selected_board().icon_id;
+        if base != 0 && icon_id != 0 && SHOW_BOARD.load(Ordering::Relaxed) {
+            unsafe { crate::item_icon::resolve_once(base, icon_id, log) };
         }
     }
     let faded_any = !FADED.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
@@ -626,10 +773,12 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
             faces: std::array::from_fn(|i| unsafe { frame_font(frame, handle, i) }),
             ky: f32::from_bits(FONT_KY_BITS.load(Ordering::Relaxed)),
         });
+        let board = selected_board();
         let art = board::BoardArt {
-            icon: crate::item_icon::handle().and_then(|h| unsafe { frame_texture(frame, h) }),
+            icon: crate::item_icon::handle(board.icon_id)
+                .and_then(|h| unsafe { frame_texture(frame, h) }),
         };
-        board::draw(ui, &board::MISERICORDE, fonts.as_ref(), &art);
+        board::draw(ui, board, fonts.as_ref(), &art);
     }
 }
 
