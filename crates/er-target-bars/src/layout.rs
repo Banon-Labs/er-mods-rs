@@ -1,8 +1,9 @@
-//! Where the game's own HP bar for the locked-on target is, and where the extra bars go under it.
+//! Where the game's own HP bar for the locked-on target is, and where the copies go under it.
 //!
 //! Nothing here draws a second HP bar. The game already shows one for the target -- a floating
-//! enemy tag over its head, or a boss bar along the bottom -- and the extra bars hang directly
-//! under it, at its left edge and width, and vanish whenever the game hides it.
+//! enemy tag over its head, or a boss bar along the bottom -- and the extra bars are copies of that
+//! bar's art (see [`crate::art`]) hung directly under it, at its left edge and width, and gone
+//! whenever the game hides it.
 //!
 //! # Where the numbers come from
 //!
@@ -14,12 +15,24 @@
 //! `isVisible` 1, and `screenX/Y` as `i32` (959, 567 and onward, tracking the enemy) -- the same
 //! values the `chrEnemyTagDisplays` float pair held, so they are HUD stage pixels.
 //!
-//! The geometry is the HUD movie's: `menu/01_000_fe.gfx` has a 1920x1080 stage, places
-//! `EnemyTag0..7` and `BossList` on its root timeline, and draws the tag's HP fill with shape 291
-//! (1486.9 px wide, 47 tall) scaled `0.0915 x 0.1277` at `x = -2` inside the tag: 136 by 6 px,
-//! spanning `-70..66`, framed by shape 286 from `-69.05` to `73.95`, `-7.95..7.55` tall. The boss
-//! fill is the same shape scaled `0.6726 x 0.3404` at `x = 14.85` inside `Item_k_0`, which sits at
-//! `y = -35 - 55k` inside `BossList` at `(947, 908)`: 1000 by 16 px, so stage `x 461.85..1461.85`.
+//! The geometry is the HUD movie's, `menu/01_000_fe.gfx` (1920x1080 stage, `EnemyTag0..7` and
+//! `BossList` on the root timeline):
+//!
+//! * Enemy tag. The base is shape 286 (`x 0..143`, `y -7.95..7.55`) placed at `(-69.05, 0.2)`,
+//!   filled with image 270 `MENU_FL_HP_Base` through the bitmap matrix `9.7577 x 7.0439` twips
+//!   per texel, translated `(-1284.55, -7.95)`: about half a stage pixel per texel across, so
+//!   the 143-pixel shape shows only the image's right end, texels `2633..2926` of 2926, at full
+//!   height. Drawing the whole image into the tag's base would squeeze it tenfold. The fill is
+//!   image 283 `MENU_FL_Red` placed at `(-70, -4.85)` at scale `0.3` (`Current` at `-68`, its
+//!   child at `(-2, -4.85)` scale `0.6`, the image at `0.5`), clipped by mask 291: shape 290
+//!   scaled `0.0915 x 0.1277` at `x 66` inside `Current`, i.e. `x -70..66`, `y -3..3`. So the
+//!   visible fill is the image's `x 0..453.3`, `y 6.17..26.17` of its 2898 x 32.
+//! * Boss bar `k`. Its `HP` sprite sits at `(-482.15, -35 - 55k)` inside `BossList` at
+//!   `(947, 908)`, so its origin is stage `(464.85, 873 - 55k)`. The base is sprite 323, which
+//!   places the whole of `MENU_FL_HP_Base` at scale `0.5`, itself placed at `(-6.35, -11.1)`
+//!   scaled `0.6909 x 1`: `x -6.35..1004.3`, `y -11.1..10.9`. The fill is `MENU_FL_Red` at
+//!   `(-2.7, -9)` scale `0.5`, clipped by mask 291 scaled `0.6726 x 0.3404` at `x 497`:
+//!   `x -3..997`, `y -8..8`, i.e. the image's `x 0..1999.4`, `y 2..32`.
 
 // Several items here are consumed only by the Windows build; the host build keeps them for tests.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -30,28 +43,69 @@ use crate::model::{self, LockState};
 pub const STAGE_WIDTH: f32 = 1920.0;
 pub const STAGE_HEIGHT: f32 = 1080.0;
 
-/// Left edge and width of the enemy tag's HP fill, relative to the tag's anchor.
-pub const TAG_BAR_LEFT: f32 = -70.0;
-pub const TAG_BAR_WIDTH: f32 = 136.0;
-/// Bottom of the tag's HP frame, relative to the anchor.
-pub const TAG_BAR_BOTTOM: f32 = 7.55;
-
-/// The boss HP fill on the stage.
-pub const BOSS_BAR_LEFT: f32 = 461.85;
-pub const BOSS_BAR_WIDTH: f32 = 1000.0;
-/// `BossList` y plus `Item_0_0`'s offset, and the step between stacked boss bars.
-pub const BOSS_ITEM0_Y: f32 = 908.0 - 35.0;
+/// `BossList` origin plus `Item_0_0` and the `HP` sprite inside it, and the step between bosses.
+pub const BOSS_ORIGIN: [f32; 2] = [947.0 - 482.15, 908.0 - 35.0];
 pub const BOSS_ITEM_STEP: f32 = 55.0;
-/// Half the boss fill's height.
-pub const BOSS_BAR_HALF_HEIGHT: f32 = 8.0;
 
-/// Thickness of one extra bar and the gap between bars, in stage pixels, per anchor kind. The
-/// tag's own fill is 6 px tall, the boss fill 16; the extra bars are thinner than either so they
-/// read as an addition to the game's bar rather than a rival to it.
-pub const TAG_EXTRA_HEIGHT: f32 = 3.0;
-pub const TAG_EXTRA_GAP: f32 = 1.5;
-pub const BOSS_EXTRA_HEIGHT: f32 = 5.0;
-pub const BOSS_EXTRA_GAP: f32 = 2.0;
+/// `MENU_FL_Red`'s size in its atlas, measured live 2026-10-04
+/// (`scripts/frida/target-bars-hud-art-probe.js`: rect 0,113..2898,145 of a 4096 x 512 BC7 atlas).
+pub const FILL_IMAGE_SIZE: [f32; 2] = [2898.0, 32.0];
+/// `MENU_FL_HP_Base`'s size, from the same probe (rect 0,29..2926,73) and the movie's own
+/// `DefineExternalImage2` for image 270.
+pub const BASE_IMAGE_SIZE: [f32; 2] = [2926.0, 44.0];
+/// Shape 286's bitmap matrix: horizontal scale in twips per texel, and translation in pixels.
+pub const TAG_BASE_TWIPS_PER_TEXEL: f32 = 9.757_69;
+pub const TAG_BASE_IMAGE_X: f32 = -1284.55;
+/// The first texel column shape 286 shows, as a fraction of the base image's width.
+pub const TAG_BASE_U0: f32 =
+    -TAG_BASE_IMAGE_X / (BASE_IMAGE_SIZE[0] * TAG_BASE_TWIPS_PER_TEXEL / 20.0);
+
+/// One game bar's art, relative to the bar's origin, in stage pixels: the base under it, the
+/// visible fill, and which part of the fill image that visible fill shows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarArt {
+    /// `[left, top, right, bottom]` of the `MENU_FL_HP_Base` base.
+    pub base: [f32; 4],
+    /// `[u0, v0, u1, v1]` of the base image that base shows.
+    pub base_uv: [f32; 4],
+    /// `[left, top, right, bottom]` of the full (100%) fill.
+    pub fill: [f32; 4],
+    /// `[u0, v0, u1, v1]` of the fill image shown by the full fill.
+    pub fill_uv: [f32; 4],
+}
+
+/// The enemy tag's bar.
+pub const TAG_ART: BarArt = BarArt {
+    base: [-69.05, -7.75, 73.95, 7.75],
+    base_uv: [TAG_BASE_U0, 0.0, 1.0, 1.0],
+    fill: [-70.0, -3.0, 66.0, 3.0],
+    fill_uv: [
+        0.0,
+        6.17 / FILL_IMAGE_SIZE[1],
+        453.3 / FILL_IMAGE_SIZE[0],
+        26.17 / FILL_IMAGE_SIZE[1],
+    ],
+};
+
+/// A boss bar.
+pub const BOSS_ART: BarArt = BarArt {
+    base: [-6.35, -11.1, 1004.3, 10.9],
+    base_uv: [0.0, 0.0, 1.0, 1.0],
+    fill: [-3.0, -8.0, 997.0, 8.0],
+    fill_uv: [
+        0.0,
+        2.0 / FILL_IMAGE_SIZE[1],
+        1999.4 / FILL_IMAGE_SIZE[0],
+        1.0,
+    ],
+};
+
+/// Copies are the game bar's width and this fraction of its height, so a stack of them reads as
+/// an addition to the game's bar rather than as more health bars.
+pub const TAG_COPY_HEIGHT_SCALE: f32 = 0.75;
+pub const BOSS_COPY_HEIGHT_SCALE: f32 = 0.5;
+/// Gap between the game's bar and the first copy, and between copies, in stage pixels.
+pub const COPY_GAP: f32 = 1.0;
 
 /// One `ChrNameHudData` entry, as much of it as the anchor needs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,6 +124,23 @@ pub enum Anchor {
     EnemyTag { x: f32, y: f32 },
     /// Boss bar `slot` along the bottom.
     Boss { slot: usize },
+}
+
+impl Anchor {
+    /// The game bar's art, origin and copy height scale.
+    fn art(self) -> (BarArt, [f32; 2], f32) {
+        match self {
+            Anchor::EnemyTag { x, y } => (TAG_ART, [x, y], TAG_COPY_HEIGHT_SCALE),
+            Anchor::Boss { slot } => (
+                BOSS_ART,
+                [
+                    BOSS_ORIGIN[0],
+                    BOSS_ORIGIN[1] - BOSS_ITEM_STEP * slot as f32,
+                ],
+                BOSS_COPY_HEIGHT_SCALE,
+            ),
+        }
+    }
 }
 
 /// `CSFeManImp::hudState` value that hides the whole HUD.
@@ -104,26 +175,55 @@ pub fn pick_anchor(
         })
 }
 
-/// One extra bar's rectangle on the stage: `[left, top, right, bottom]`.
-pub fn bar_rect(anchor: Anchor, index: usize) -> [f32; 4] {
-    let (left, width, first_top, height, gap) = match anchor {
-        Anchor::EnemyTag { x, y } => (
-            x + TAG_BAR_LEFT,
-            TAG_BAR_WIDTH,
-            y + TAG_BAR_BOTTOM + TAG_EXTRA_GAP,
-            TAG_EXTRA_HEIGHT,
-            TAG_EXTRA_GAP,
-        ),
-        Anchor::Boss { slot } => (
-            BOSS_BAR_LEFT,
-            BOSS_BAR_WIDTH,
-            BOSS_ITEM0_Y - BOSS_ITEM_STEP * slot as f32 + BOSS_BAR_HALF_HEIGHT + BOSS_EXTRA_GAP,
-            BOSS_EXTRA_HEIGHT,
-            BOSS_EXTRA_GAP,
-        ),
+/// One copy of the game bar on the stage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarCopy {
+    /// `[left, top, right, bottom]` of the base.
+    pub base: [f32; 4],
+    /// `[u0, v0, u1, v1]` of the base image.
+    pub base_uv: [f32; 4],
+    /// `[left, top, right, bottom]` of the full fill.
+    pub fill: [f32; 4],
+    /// `[u0, v0, u1, v1]` of the fill image for the full fill.
+    pub fill_uv: [f32; 4],
+}
+
+impl BarCopy {
+    /// The fill rectangle and its UVs at `fraction` full: the art is cropped, not squeezed, so a
+    /// half bar shows the left half of the full bar's image exactly as the game's own does.
+    pub fn fill_at(self, fraction: f32) -> ([f32; 4], [f32; 4]) {
+        let fraction = model::fraction(fraction, 1.0);
+        let [left, top, right, bottom] = self.fill;
+        let [u0, v0, u1, v1] = self.fill_uv;
+        (
+            [left, top, left + (right - left) * fraction, bottom],
+            [u0, v0, u0 + (u1 - u0) * fraction, v1],
+        )
+    }
+}
+
+/// The `index`th copy under the game's bar, on the stage.
+pub fn copy_at(anchor: Anchor, index: usize) -> BarCopy {
+    let (art, [x, y], height_scale) = anchor.art();
+    let base_height = (art.base[3] - art.base[1]) * height_scale;
+    // The centre line of copy `index`: below the game bar's base, then one copy height plus a
+    // gap per copy.
+    let first_center = y + art.base[3] + COPY_GAP - art.base[1] * height_scale;
+    let center = first_center + index as f32 * (base_height + COPY_GAP);
+    let place = |rect: [f32; 4]| {
+        [
+            x + rect[0],
+            center + rect[1] * height_scale,
+            x + rect[2],
+            center + rect[3] * height_scale,
+        ]
     };
-    let top = first_top + index as f32 * (height + gap);
-    [left, top, left + width, top + height]
+    BarCopy {
+        base: place(art.base),
+        base_uv: art.base_uv,
+        fill: place(art.fill),
+        fill_uv: art.fill_uv,
+    }
 }
 
 /// How the 1920x1080 stage lands on the display: uniform scale, centred (letterboxed on a display
@@ -194,14 +294,11 @@ mod tests {
         let mut off_screen = tag(LOCKED, 959, 567);
         off_screen.not_on_screen = true;
         assert_eq!(pick_anchor(LOCKED, 3, &[off_screen], &[]), None);
-        // The whole HUD hidden.
         assert_eq!(
             pick_anchor(LOCKED, HUD_STATE_HIDE_ALL, &[tag(LOCKED, 1, 1)], &[]),
             None
         );
-        // Nothing locked.
         assert_eq!(pick_anchor(u64::MAX, 3, &[tag(u64::MAX, 1, 1)], &[]), None);
-        // Another enemy's tag is not the target's.
         assert_eq!(
             pick_anchor(LOCKED, 3, &[tag(0x0a00_0000_1000_005c, 1, 1)], &[]),
             None
@@ -218,25 +315,64 @@ mod tests {
     }
 
     #[test]
-    fn tag_bars_hang_under_the_hp_frame_at_its_left_edge_and_width() {
+    fn tag_copies_hang_under_the_game_bar_at_its_left_edge_and_width() {
         let anchor = Anchor::EnemyTag { x: 959.0, y: 567.0 };
-        let first = bar_rect(anchor, 0);
-        assert_eq!(first[0], 959.0 - 70.0);
-        assert_eq!(first[2] - first[0], 136.0);
-        assert!(first[1] > 567.0 + TAG_BAR_BOTTOM);
-        let second = bar_rect(anchor, 1);
-        assert_eq!(second[0], first[0]);
-        assert!(second[1] > first[3], "bars must not overlap");
+        let first = copy_at(anchor, 0);
+        assert_eq!(first.base[0], 959.0 - 69.05);
+        assert_eq!(first.base[2], 959.0 + 73.95);
+        assert_eq!(first.fill[0], 959.0 - 70.0);
+        assert_eq!(first.fill[2] - first.fill[0], 136.0);
+        // Below the game bar's own base, with a gap.
+        assert!((first.base[1] - (567.0 + 7.75 + COPY_GAP)).abs() < 1e-3);
+        let second = copy_at(anchor, 1);
+        assert_eq!(second.base[0], first.base[0]);
+        assert!(second.base[1] > first.base[3], "copies must not overlap");
+        assert!((first.base[3] - first.base[1] - 15.5 * TAG_COPY_HEIGHT_SCALE).abs() < 1e-3);
+        assert_eq!(first.base_uv, TAG_ART.base_uv);
     }
 
     #[test]
-    fn boss_bars_hang_under_their_own_slot() {
-        let first = bar_rect(Anchor::Boss { slot: 0 }, 0);
-        assert_eq!(first[0], BOSS_BAR_LEFT);
-        assert_eq!(first[2], BOSS_BAR_LEFT + 1000.0);
-        assert!(first[1] > BOSS_ITEM0_Y + BOSS_BAR_HALF_HEIGHT);
-        let upper = bar_rect(Anchor::Boss { slot: 1 }, 0);
-        assert_eq!(first[1] - upper[1], BOSS_ITEM_STEP);
+    fn boss_copies_hang_under_their_own_slot() {
+        let first = copy_at(Anchor::Boss { slot: 0 }, 0);
+        assert!((first.fill[0] - 461.85).abs() < 1e-3);
+        assert!((first.fill[2] - 1461.85).abs() < 1e-3);
+        assert!(first.base[1] > BOSS_ORIGIN[1] + BOSS_ART.base[3]);
+        let upper = copy_at(Anchor::Boss { slot: 1 }, 0);
+        assert!((first.base[1] - upper.base[1] - BOSS_ITEM_STEP).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_partial_fill_crops_the_art_instead_of_squeezing_it() {
+        let copy = copy_at(Anchor::EnemyTag { x: 0.0, y: 0.0 }, 0);
+        let (rect, uv) = copy.fill_at(0.5);
+        assert!((rect[2] - rect[0] - 68.0).abs() < 1e-3);
+        assert!((uv[2] - TAG_ART.fill_uv[2] * 0.5).abs() < 1e-6);
+        assert_eq!(uv[1], TAG_ART.fill_uv[1]);
+        let (empty, _) = copy.fill_at(-1.0);
+        assert_eq!(empty[2], empty[0]);
+        let (full, full_uv) = copy.fill_at(2.0);
+        assert_eq!(full, copy.fill);
+        assert_eq!(full_uv, copy.fill_uv);
+    }
+
+    #[test]
+    fn uvs_stay_inside_their_images() {
+        for art in [TAG_ART, BOSS_ART] {
+            for uv in [art.fill_uv, art.base_uv] {
+                assert!(uv.iter().all(|v| (0.0..=1.0).contains(v)));
+                assert!(uv[0] < uv[2] && uv[1] < uv[3]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_tag_base_shows_the_right_end_of_the_base_image_at_half_scale() {
+        // Texel 2633 of 2926 is where shape 286's matrix puts the shape's left edge.
+        assert!((TAG_BASE_U0 * BASE_IMAGE_SIZE[0] - 2632.9).abs() < 0.5);
+        // About half a stage pixel per texel: the 143-pixel shape spans the remaining texels.
+        let texels = (1.0 - TAG_BASE_U0) * BASE_IMAGE_SIZE[0];
+        let width = TAG_ART.base[2] - TAG_ART.base[0];
+        assert!((texels * TAG_BASE_TWIPS_PER_TEXEL / 20.0 - width).abs() < 0.1);
     }
 
     #[test]

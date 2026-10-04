@@ -3390,6 +3390,7 @@ dependencies = [
 name = "er-target-bars"
 version = "0.1.0"
 dependencies = [
+ "bcdec_rs",
  "eldenring",
  "er-build-watermark-core",
  "er-game-base",

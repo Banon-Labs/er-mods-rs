@@ -24,6 +24,7 @@
 // Ungated on purpose: the bar maths, the row selection, the status filter and the stale-handle
 // rejection are pure and are exercised by `cargo test` on the host, where the game-facing modules
 // compile out.
+mod art;
 mod layout;
 mod log;
 mod model;
@@ -104,13 +105,15 @@ fn tick(state: &mut TaskState) {
     if ticks.is_multiple_of(STATUS_LOG_TICKS) && ticks > 0 {
         bars_log(format_args!(
             "status: ticks={ticks} found={} anchored={} stale={} overlay_installed={} frames={} \
-             draws={}",
+             draws={} art_draws={} art_handles={:?}",
             FOUND.load(Ordering::Relaxed),
             ANCHORED.load(Ordering::Relaxed),
             STALE.load(Ordering::Relaxed),
             render::installed(),
             render::frames(),
-            render::draws()
+            render::draws(),
+            render::art_draws(),
+            art::base_and_fill()
         ));
     }
     // SAFETY: the task runs on the game thread.
@@ -192,6 +195,11 @@ fn tick(state: &mut TaskState) {
             }
             match anchor {
                 Some(anchor) => {
+                    // The first time there is something to draw: copy the game's bar art. This
+                    // is the main thread (the frame-begin task), the one the texture repository
+                    // belongs to; `art` records the measurement.
+                    // SAFETY: game thread.
+                    unsafe { art::request_once(bars_log) };
                     ANCHORED.fetch_add(1, Ordering::Relaxed);
                     render::publish(anchor, model::panel_rows(&reading, &held));
                 }

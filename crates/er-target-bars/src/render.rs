@@ -18,9 +18,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use er_build_watermark_core::overlay_host::{OverlayFrame, adopt_frame, register_with_host};
+use er_build_watermark_core::overlay_host::{
+    OVERLAY_ABI_TAG, OverlayFrame, adopt_frame, frame_texture, register_guest, register_with_host,
+};
 use hudhook::hooks::dx12::ImguiDx12Hooks;
-use hudhook::imgui::{Context, Ui};
+use hudhook::imgui::{Context, DrawListMut, TextureId, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
 use crate::layout::{self, Anchor, StageTransform};
@@ -46,6 +48,8 @@ static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
 /// Frames this module has drawn bars into.
 static DRAWS: AtomicUsize = AtomicUsize::new(0);
+/// Frames drawn with the game's bar art rather than flat colour.
+static ART_DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Frames dispatched to this module at all, drawn or not.
 static FRAMES: AtomicUsize = AtomicUsize::new(0);
 /// Set once the module is hosting or registered as a guest.
@@ -91,8 +95,31 @@ pub(crate) fn installed() -> bool {
     INSTALLED.load(Ordering::Relaxed) != 0
 }
 
+pub(crate) fn art_draws() -> usize {
+    ART_DRAWS.load(Ordering::Relaxed)
+}
+
+/// The game's bar images as this frame's host has them: the base and the value-grey fill.
+struct BarImages {
+    base: TextureId,
+    fill: TextureId,
+}
+
+/// Draw `rect` (display pixels) with the part `uv` of `texture`, as it is.
+fn image(draw_list: &DrawListMut<'_>, texture: TextureId, rect: [f32; 4], uv: [f32; 4]) {
+    draw_list
+        .add_image(texture, [rect[0], rect[1]], [rect[2], rect[3]])
+        .uv_min([uv[0], uv[1]])
+        .uv_max([uv[2], uv[3]])
+        .build();
+}
+
 /// Draw the current snapshot onto a live imgui frame.
-fn draw(ui: &Ui) {
+///
+/// # Safety
+///
+/// `frame` is the pointer the overlay host just passed, live for the duration of this call.
+unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     FRAMES.fetch_add(1, Ordering::Relaxed);
     let now = now_ms();
     let Ok(slot) = SNAPSHOT.lock() else {
@@ -109,33 +136,71 @@ fn draw(ui: &Ui) {
     let Some(stage) = StageTransform::for_display(display) else {
         return;
     };
+    // Both images or neither: a copy with the game's fill on a flat base, or the reverse, would
+    // read as a bug rather than as the game's bar.
+    // SAFETY: the caller's contract on `frame`.
+    let images = crate::art::base_and_fill().and_then(|(base, fill)| {
+        Some(BarImages {
+            base: unsafe { frame_texture(frame, base) }?.0,
+            fill: unsafe { frame_texture(frame, fill) }?.0,
+        })
+    });
     // The background list: under every imgui window, over the game -- the bars belong to the
     // game's HUD, not on top of another overlay's panel.
     let draw_list = ui.get_background_draw_list();
     for (index, row) in snapshot.rows.iter().enumerate() {
-        let [left, top, right, bottom] = stage.rect(layout::bar_rect(snapshot.anchor, index));
-        draw_list
-            .add_rect([left, top], [right, bottom], BAR_TRACK)
-            .filled(true)
-            .build();
-        let filled = left + (right - left) * row.fraction.clamp(0.0, 1.0);
-        if filled > left {
-            draw_list
-                .add_rect([left, top], [filled, bottom], row.color)
-                .filled(true)
-                .build();
+        let copy = layout::copy_at(snapshot.anchor, index);
+        let base = stage.rect(copy.base);
+        let (fill_rect, fill_uv) = copy.fill_at(row.fraction);
+        let fill = stage.rect(fill_rect);
+        match &images {
+            Some(images) => {
+                image(&draw_list, images.base, base, copy.base_uv);
+                if fill[2] > fill[0] {
+                    draw_list
+                        .add_image(images.fill, [fill[0], fill[1]], [fill[2], fill[3]])
+                        .uv_min([fill_uv[0], fill_uv[1]])
+                        .uv_max([fill_uv[2], fill_uv[3]])
+                        .col(crate::art::tint(row.color))
+                        .build();
+                }
+            }
+            None => {
+                draw_list
+                    .add_rect([base[0], base[1]], [base[2], base[3]], BAR_TRACK)
+                    .filled(true)
+                    .build();
+                if fill[2] > fill[0] {
+                    draw_list
+                        .add_rect([fill[0], fill[1]], [fill[2], fill[3]], row.color)
+                        .filled(true)
+                        .build();
+                }
+            }
         }
         if row.active {
             draw_list
-                .add_rect([left, top], [right, bottom], ACTIVE_OUTLINE)
+                .add_rect([base[0], base[1]], [base[2], base[3]], ACTIVE_OUTLINE)
                 .thickness(stage.scale.max(1.0))
                 .build();
         }
     }
+    if images.is_some() && ART_DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
+        bars_log(format_args!(
+            "overlay: first bars drawn with the game's bar art, {} row(s) under {:?}",
+            snapshot.rows.len(),
+            snapshot.anchor
+        ));
+    }
     if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
         bars_log(format_args!(
-            "overlay: first bars drawn, {} row(s) under {:?}, display {}x{}, stage scale {:.3} \
-             offset {:?}",
+            "overlay: first bars drawn ({}), {} row(s) under {:?}, display {}x{}, stage scale \
+             {:.3} offset {:?}",
+            if images.is_some() {
+                "game art"
+            } else {
+                "flat, art not uploaded yet"
+            },
             snapshot.rows.len(),
             snapshot.anchor,
             display[0],
@@ -146,7 +211,8 @@ fn draw(ui: &Ui) {
     }
 }
 
-/// The guest entry point: adopt the host's imgui and draw.
+/// The draw entry point, as a guest of whichever module hosts -- this one included, which
+/// registers with itself so its own frames carry the host's texture table too.
 ///
 /// # Safety
 ///
@@ -158,7 +224,8 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    draw(ui);
+    // SAFETY: as above.
+    unsafe { draw(ui, frame) };
 }
 
 /// This module's own render loop, used only when nothing else in the process hosts one.
@@ -171,9 +238,9 @@ impl ImguiRenderLoop for BarsOverlay {
 
     fn render(&mut self, ui: &mut Ui) {
         // Guests first and before any early return: this module hosts the only imgui context in
-        // the process, so returning early here draws nothing for every other overlay too.
+        // the process, so returning early here draws nothing for every other overlay too. The
+        // bars are among the guests (see `install`), which is how they get the texture table.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
-        draw(ui);
         // The watermark never registers a guest; whichever module hosts carries its rows.
         er_build_watermark_core::draw_rows(ui, bars_log);
     }
@@ -231,8 +298,12 @@ pub(crate) fn install(hmodule_raw: usize) {
     {
         Ok(()) => {
             er_build_watermark_core::overlay_host::become_host();
+            // The bars draw as a guest of their own host: only an `OverlayFrame` carries the
+            // uploaded textures, and `dispatch_guests` is what builds one.
+            let registered = register_guest(OVERLAY_ABI_TAG, guest_draw);
             bars_log(format_args!(
-                "overlay: hudhook dx12 overlay installed (this module hosts the imgui context)"
+                "overlay: hudhook dx12 overlay installed (this module hosts the imgui context; \
+                 bars registered with it: {registered})"
             ));
         }
         Err(error) => {
