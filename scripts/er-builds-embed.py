@@ -26,7 +26,9 @@ Corpus filter, each rule counted in the `fit` report:
 
 Tokens, one per equipped thing: `w:` armament, `wa:` armament|affinity (an affinity changes what
 the weapon is for, so the pair is its own token beside the plain weapon, which a rare pair falls
-back on), `aow:` ash of war, `t:` talisman, `s:` spell, `a:` armor piece, `gr:` great rune, `ct:`
+back on), `ld:` the loadout the build fights with -- right primary + left primary, or one weapon
+`(2H)` when the planner's `is2h` is set, so a powerstanced pair, a weapon with a seal and a weapon
+with a shield are three different things rather than one weapon (`loadout`), `aow:` ash of war, `t:` talisman, `s:` spell, `a:` armor piece, `gr:` great rune, `ct:`
 crystal tear. Stats are not tokens: eight always-present stat tokens would swamp a build of fifteen
 and pull every query toward "same stats". They are kept beside the embeddings for neighbour
 queries instead.
@@ -55,7 +57,7 @@ CACHE = Path.home() / ".cache/er-build-planner"
 API = "https://er-inventory-api.nyasu.business"
 ATTRS = ["vig", "mnd", "vit", "str", "dex", "int", "fth", "arc"]  # planner keys; `vit` is Endurance
 LEVEL_OFFSET = 79  # RL = sum of the eight attributes - 79
-KINDS = {"w": "armament", "wa": "armament|affinity", "aow": "ash of war", "t": "talisman",
+KINDS = {"w": "armament", "wa": "armament|affinity", "ld": "loadout", "aow": "ash of war", "t": "talisman",
          "s": "spell", "a": "armor", "gr": "great rune", "ct": "crystal tear"}
 
 
@@ -67,16 +69,46 @@ def active_set(build: dict, kind: str) -> int:
     return next((i for i, s in enumerate(sets) if s.get("active")), 0)
 
 
+def slot_pos(s: dict, active: int) -> int | None:
+    es = s.get("equipSet")
+    return (es[active] if active < len(es) else None) if isinstance(es, list) else s.get("equipIndex")
+
+
 def equipped(slots: list, active: int) -> list[dict]:
     """Slots worn in the active set. `equipSet[i]` is the slot's position in set `i` (holes are
     sets it is not in); `equipIndex` caches the active one and is all a pre-sets build carries."""
-    out = []
-    for s in slots or []:
-        es = s.get("equipSet")
-        pos = (es[active] if active < len(es) else None) if isinstance(es, list) else s.get("equipIndex")
-        if pos is not None:
-            out.append(s)
-    return out
+    return [s for s in slots or [] if slot_pos(s, active) is not None]
+
+
+#: Armament positions: 0-2 are the right hand's three slots, 3-5 the left's. Measured on the
+#: mirror 2026-10-04: of 1,260 shield slots 1,100 sit at 3-5 and 9 at 1-2 (the 151 at 0 are
+#: shield-pokers and parry builds), and seals and staves split 901 right / 3,469 left.
+RIGHT_PRIMARY, LEFT_PRIMARY = 0, 3
+
+
+def loadout(build: dict) -> dict:
+    """The pair the build fights with: the armaments in the right and left primary slots of the
+    active set, and the planner's `is2h` flag. A left primary of the same name as the right is a
+    powerstance pair (a different-name pair can be one too; `ld:` tokens keep both names)."""
+    a = active_set(build, "weapons")
+    at = {}
+    for s in (build.get("inventory") or {}).get("slots") or []:
+        p = slot_pos(s, a)
+        if p is not None and s.get("name"):
+            at.setdefault(p, s)
+    r, l = at.get(RIGHT_PRIMARY), at.get(LEFT_PRIMARY)
+    return {"right": r and r["name"], "right_infusion": r and (r.get("infusion") or "Standard"),
+            "left": l and l["name"], "left_infusion": l and (l.get("infusion") or "Standard"),
+            "two_handed": bool(build.get("is2h")),
+            "others": sorted(s["name"] for p, s in at.items() if p not in (RIGHT_PRIMARY, LEFT_PRIMARY))}
+
+
+def loadout_token(lo: dict) -> str | None:
+    if not lo["right"] and not lo["left"]:
+        return None
+    if lo["two_handed"]:
+        return f"ld:{lo['right'] or lo['left']} (2H)"
+    return f"ld:{lo['right'] or '-'} + {lo['left'] or '-'}"
 
 
 def tokens(build: dict) -> list[str]:
@@ -89,6 +121,9 @@ def tokens(build: dict) -> list[str]:
         # "No Skill" is the planner's placeholder for an armament with no ash of war, not a skill.
         if s.get("weaponArt") and s["weaponArt"] != "No Skill":
             toks.append(f"aow:{s['weaponArt']}")
+    lt = loadout_token(loadout(build))
+    if lt:
+        toks.append(lt)
     for s in equipped((build.get("talismans") or {}).get("slots"), active_set(build, "talismans")):
         toks.append(f"t:{s['name']}")
     pa = active_set(build, "protectors")
@@ -142,7 +177,7 @@ def load_corpus(path: Path, rl_min: int, rl_max: int) -> tuple[list[dict], Count
         seen.add(key)
         why["kept"] += 1
         out.append({"id": row["id"], "name": b.get("name", ""), "pve": bool(b.get("isPvE")),
-                    "stats": st, "tokens": toks})
+                    "stats": st, "tokens": toks, "loadout": loadout(b)})
     return out, why
 
 

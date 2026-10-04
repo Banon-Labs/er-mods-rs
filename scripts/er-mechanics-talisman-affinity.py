@@ -204,7 +204,8 @@ class Data:
                          + [f'subCategory{i}' for i in range(1, 5)])
         self.wep = table('EquipParamWeapon', ['throwAtkRate', 'attackBasePhysics', 'attackBaseMagic',
                                               'attackBaseFire', 'attackBaseThunder', 'attackBaseDark',
-                                              'swordArtsParamId', 'reinforceTypeId', 'wepmotionCategory']
+                                              'swordArtsParamId', 'reinforceTypeId', 'wepmotionCategory',
+                                              'isDualBlade', 'bothHandEquipable', 'spAtkcategory']
                          + [f'spEffectBehaviorId{k}' for k in range(3)])
         self.reinforce = table('ReinforceParamWeapon', ['spEffectId1', 'spEffectId2', 'spEffectId3'])
         self.affinity = affinity
@@ -425,7 +426,10 @@ def skill_rows(d, wid):
 
     states = collections.defaultdict(list)
     for a in sorted(anims):
-        if a in twins:
+        # A unique weapon's own moveset can live in the same TimeAct file as its skill
+        # (Rakshasa's Great Katana: motion category 61 reads a953, Weed Cutter's file). Its
+        # 03xxxx R1/R2/powerstance/mounted clips are the weapon's ordinary moves, not the skill.
+        if a in twins or 30000 <= a < 40000:
             continue
         for e in anims[a]:
             p = e.params
@@ -489,15 +493,61 @@ def weapon_statuses(d, wid, grips):
     return {'affinity': d.affinity, 'row': row_id, 'statuses': out}
 
 
+def dual_profile(d, wid):
+    """The powerstance grip: the same weapon in both hands, its dual L1 slots
+    (`er-mechanics-moveset.dual_attacks`, each hit a fresh record of a dual judge 800-899, so
+    `records` is 1 and the sweep count equals it). The chain is L1 #1..#6, each cancelled into the
+    next L1. None when the weapon cannot be powerstanced with itself (`can_powerstance`)."""
+    if 'moveset' not in _LAZY:
+        _LAZY['moveset'] = _mod('er_mechanics_moveset', 'er-mechanics-moveset.py')
+        _LAZY['psg'] = _mod('er_mechanics_powerstance_guard', 'er-mechanics-powerstance-guard.py')
+    if not _LAZY['psg'].can_powerstance(d.reg, wid, wid):
+        return None
+    slots = []
+    for r in _LAZY['moveset'].dual_attacks(d.reg, wid):
+        hits = [{'judge': h['judge'], 'atk_row': h['atk_row'], 'frames': tuple(h['frames']),
+                 'records': 1, 'sweep': 1, 'phys_type': h['phys_type'], 'hand': h['hand'],
+                 'gain': d.counter_gain(h['atk_row']) if h['atk_row'] else 0,
+                 'subcats': d.subcats(h['atk_row']) if h['atk_row'] else ()} for h in r['hits']]
+        gain = sum(h['gain'] for h in hits)
+        slots.append({'slot': r['slot'], 'label': r['label'], 'atk_row': hits[0]['atk_row'],
+                      'hits': hits, 'cancel_r1': (r.get('cancel_frame') or {}).get('l1'),
+                      'records': len(hits), 'sweep': len(hits),
+                      'counter_gain': gain, 'counter_gain_sweep': gain})
+    by = {s['slot']: s for s in slots}
+    chain = []
+    for k in range(1, 7):
+        if f'dual_{k}' not in by:
+            break
+        chain.append(by[f'dual_{k}'])
+    return {'grip': 'dual', 'slots': slots, 'r1_chain': chain} if slots else None
+
+
+#: Grips a feature is measured in: one-handed, two-handed, and powerstanced (same weapon twice).
+GRIPS = ('one', 'both', 'dual')
+
+
 def weapon_profile(d, wid):
     grips = {g: grip_profile(d, wid, g) for g in ('one', 'both')}
+    dual = dual_profile(d, wid)
+    if dual:
+        grips['dual'] = dual
     w = d.wep[wid]
+    paired_2h = bool(w['isDualBlade'] and w['bothHandEquipable'])
     return {'id': wid, 'name': d.weapon_name(wid), 'grips': grips, 'skill': skill_rows(d, wid),
             'status': weapon_statuses(d, wid, grips), 'throwAtkRate': w['throwAtkRate'],
             'base_attack': {'physical': w['attackBasePhysics'], 'magic': w['attackBaseMagic'],
                             'fire': w['attackBaseFire'], 'lightning': w['attackBaseThunder'],
                             'holy': w['attackBaseDark']},
-            'motion_category': w['wepmotionCategory']}
+            'motion_category': w['wepmotionCategory'],
+            # Powerstanced by itself: EquipParamWeapon.isDualBlade (two-handing mirrors the weapon
+            # into the left hand) and bothHandEquipable (it can be two-handed at all). Grafted
+            # Dragon is the one base weapon with isDualBlade and not bothHandEquipable, so it
+            # needs two copies. `INFERRED`: the fields' consumer was not traced; the split
+            # matches the user's game knowledge (Star Fist alone, Grafted Dragon needs two).
+            # A build holding such a weapon with a different left primary (a shield on the back
+            # for its passive, a seal) fights two-handed, so its loadout maps to `both`.
+            'two_hand_is_pair': paired_2h}
 
 
 # ------------------------------------------------------------------------------------------
@@ -608,11 +658,20 @@ def successive_features(prof, spec):
                   'r1_string_gain': gain, 'r1_string_gain_sweep': gain_sw,
                   'r1_string_records': sum(s['records'] for s in chain),
                   'r1_period_frames': round(period, 2) if period else None,
+                  # Attack speed: hit records the string lands per second at its earliest inputs.
+                  'hits_per_s': (round(sum(s['records'] for s in chain) / (period / FPS), 3)
+                                 if period else None),
                   'gain_per_s': per_s,
                   'net_per_s_upper': round(per_s - decay_per_s, 3) if per_s is not None else None,
                   'cold_start_first_threshold': cs,
                   'cold_start_first_threshold_sweep': cs_sw}
-    out['unknown'] = ('stage 2+ timing: stage-row coexistence (spCategory 120 / 20) and host order '
+        if g == 'dual':
+            # Per-hand split of the powerstance string, so a mixed pair (two different weapons
+            # `can_powerstance` accepts) takes each hand's gain from its own weapon.
+            for hand in ('right', 'left'):
+                out[g][f'{hand}_string_gain'] = sum(h['gain'] * h['records'] for s in chain
+                                                    for h in s['hits'] if h.get('hand') == hand)
+    out['unknown'] =('stage 2+ timing: stage-row coexistence (spCategory 120 / 20) and host order '
                       'in the entry list not traced')
     return out
 
@@ -700,20 +759,24 @@ def flat_vector(feat):
         for kind, f in sorted(feat[name].items()):
             p = f'{name}|{kind}'
             if kind == 'subcategory':
-                for g in ('one', 'both'):
-                    cols.append((f'{p}|{g}|slot_share', f[g]['slot_share']))
-                    cols.append((f'{p}|{g}|hit_record_share', f[g]['hit_record_share']))
+                for g in GRIPS:
+                    fg = f.get(g) or {}
+                    cols.append((f'{p}|{g}|slot_share', fg.get('slot_share')))
+                    cols.append((f'{p}|{g}|hit_record_share', fg.get('hit_record_share')))
                 cols.append((f'{p}|skill|row_share', f['skill']['row_share']))
             elif kind == 'successive':
-                for g in ('one', 'both'):
-                    cols.append((f'{p}|{g}|r1_string_gain', f[g]['r1_string_gain']))
-                    cols.append((f'{p}|{g}|gain_per_s', f[g]['gain_per_s']))
-                    cs = f[g]['cold_start_first_threshold']
+                for g in GRIPS:
+                    fg = f.get(g) or {}
+                    cols.append((f'{p}|{g}|r1_string_gain', fg.get('r1_string_gain')))
+                    cols.append((f'{p}|{g}|hits_per_s', fg.get('hits_per_s')))
+                    cols.append((f'{p}|{g}|gain_per_s', fg.get('gain_per_s')))
+                    cs = fg.get('cold_start_first_threshold')
                     cols.append((f'{p}|{g}|first_threshold_s_max',
                                  cs['seconds'][1] if cs and cs.get('reached') == 'always' else None))
             elif kind == 'counter_hit':
-                for g in ('one', 'both'):
-                    cols.append((f'{p}|{g}|pierce_hit_record_share', f[g]['pierce_hit_record_share']))
+                for g in GRIPS:
+                    cols.append((f'{p}|{g}|pierce_hit_record_share',
+                                 (f.get(g) or {}).get('pierce_hit_record_share')))
             elif kind == 'critical':
                 cols.append((f'{p}|throwAtkRate', f['throwAtkRate']))
             elif kind == 'status':
@@ -769,13 +832,18 @@ def print_weapon(d, prof, feat):
                 vals = d.triggers[name]['kinds'][kind]['values']
                 txt = (f"{{{','.join(map(str, vals))}}} slots {f['one']['slot_share']} | {f['both']['slot_share']}"
                        f"  hits {f['one']['hit_record_share']} | {f['both']['hit_record_share']}"
-                       f"  skill rows {f['skill']['matched_rows']}/{f['skill']['damaging_rows']}")
+                       f"  skill rows {f['skill']['matched_rows']}/{f['skill']['damaging_rows']}"
+                       + (f"  powerstance hits {f['dual']['hit_record_share']}" if f.get('dual') else ''))
             elif kind == 'successive':
+                dual = f.get('dual')
                 txt = (f"R1 string +{f['one']['r1_string_gain']} | +{f['both']['r1_string_gain']}"
                        f"  /s {f['one']['gain_per_s']} | {f['both']['gain_per_s']}"
                        f"  (decay {sum(x['per_s'] for x in f['host_decay']):g}/s)"
                        f"  to {f['thresholds'][0]}: {_fmt_cs(f['one']['cold_start_first_threshold'])}"
-                       f" | {_fmt_cs(f['both']['cold_start_first_threshold'])}")
+                       f" | {_fmt_cs(f['both']['cold_start_first_threshold'])}"
+                       + (f"  powerstance L1 string +{dual['r1_string_gain']} /s {dual['gain_per_s']}"
+                          f" to {f['thresholds'][0]}: {_fmt_cs(dual['cold_start_first_threshold'])}"
+                          if dual else ''))
             elif kind == 'counter_hit':
                 txt = f"pierce hit share {f['one']['pierce_hit_record_share']} | {f['both']['pierce_hit_record_share']}"
             elif kind == 'critical':
@@ -879,6 +947,18 @@ def selftest():
     rob = d.find_weapon('Rivers of Blood')
     rp = weapon_profile(d, rob)
     check('Rivers of Blood builds bleed', 'bleed' in rp['status']['statuses'], True)
+    # 6b. Powerstance grip: Cross-Naginata's dual L1 lands both blades (+8 each), and two-handing
+    # it is not a pair; Star Fist's 2H string is its powerstance string.
+    xn = weapon_profile(d, d.find_weapon('Cross-Naginata'))
+    check('Cross-Naginata dual L1 chain gains', [s['counter_gain'] for s in xn['grips']['dual']['r1_chain']],
+          [16, 16, 16])
+    check('Cross-Naginata 2H is not a pair', xn['two_hand_is_pair'], False)
+    sf = weapon_profile(d, d.find_weapon('Star Fist'))
+    check('Star Fist 2H is a pair', sf['two_hand_is_pair'], True)
+    gd = weapon_profile(d, d.find_weapon('Grafted Dragon'))
+    check('Grafted Dragon needs two copies', gd['two_hand_is_pair'], False)
+    check('Star Fist 2H chain gains', [s['counter_gain'] for s in sf['grips']['both']['r1_chain']],
+          [12, 12, 6, 12, 6, 12])
     # 7. cold_start on a synthetic chain: +8 per hit every 10 frames, decay -1 / 15 frames.
     chain = [{'hits': [{'frames': (5, 8), 'records': 1, 'sweep': 1, 'gain': 8}], 'cancel_r1': 10}]
     cs = cold_start(chain, 17, -1, 0.5, max_s=5)
@@ -941,7 +1021,11 @@ def main():
         if columns is None:
             columns = [c for c, _ in vec]
         rows.append([v for _, v in vec])
-        out_weapons.append({'id': wid, 'name': prof['name'], 'features': feat})
+        out_weapons.append({'id': wid, 'name': prof['name'], 'features': feat,
+                            'grips': sorted(prof['grips']), 'two_hand_is_pair': prof['two_hand_is_pair'],
+                            # `can_powerstance` inputs, so a consumer can pair two weapons.
+                            'wepmotionCategory': prof['motion_category'],
+                            'spAtkcategory': d.wep[wid]['spAtkcategory']})
     out = {'about': __doc__.split('\n\n')[0],
            'talismans': {t.name: {'kinds': {k: {kk: vv for kk, vv in s.items()}
                                             for k, s in d.triggers[t.name]['kinds'].items()},
