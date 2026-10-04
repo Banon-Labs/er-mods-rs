@@ -92,6 +92,14 @@ CASES = [
         "turn is a pure pause announcing an idle hold while a background task runs",
     ),
     Case(
+        "idle_hold_report_after_notification.jsonl",
+        None,
+        "a final report after both background tasks finished -- one completion delivered mid-turn "
+        "as a queued_command attachment, the other as a notification that started the turn -- and "
+        "one status peek of the output. Must NOT halt: VERBOSEPAUSE halted this shape four times "
+        "in a row on 2026-10-04 because it read only the user-event notification carrier",
+    ),
+    Case(
         "authority_agreement.jsonl",
         "authority-coded agreement",
         "turn opens with \"You're right\" -- banned agreement phrasing (2026-07-17 directive)",
