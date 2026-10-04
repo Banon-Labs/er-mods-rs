@@ -155,11 +155,11 @@ mod gpu {
 
     use super::{BASE_IMAGE, BLOCK_BYTES, BLOCK_DIM, FILL_IMAGE};
 
-    /// 1.16.2 rva of the Scaleform texture repository global (1.17.1 `0x3d86580`), translated for
-    /// the running build by `er_game_base`, as `er-r3-view` does.
-    const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d82510;
-    /// 1.16.2 rva of `lookup(repo, out, wchar* name)` (1.17.1 `0xd65c00`).
-    const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
+    // The repository global and its lookup are 1.16.2 rvas shared with `er-r3-view`, translated
+    // for the running build by `er_game_base`.
+    use er_game_base::rva::{
+        SCALEFORM_TEXTURE_LOOKUP_RVA, SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA,
+    };
     /// `CS::ScaleformImageResource`: its `CSTextureImage`, and its symbol.
     const RESOURCE_IMAGE_OFFSET: usize = 0x18;
     const RESOURCE_SYMBOL_OFFSET: usize = 0x70;
