@@ -61,6 +61,75 @@ hit.
    lockout is 1 s (memory `er-status-reproc-lockout-spcategory-2026-09-29`), so each enemy in the
    cloud would proc about once a second for as long as it keeps building 30 per hit.
 
+## What makes the Piquebone smoke different (2026-10-04)
+
+Two of the predictions below failed in game (`USER`, 2026-10-04): Eruption's puddles after a swap
+and Soporific Grease put no sleep on a sleepable enemy, and the Poison Mist incantation followed by
+Blood Grease put no bleed on a bleedable one. Both failures, and the Piquebone success, come down to
+two gates. Neither is a Bullet field and neither involves the weapon held at the hit. Run
+`python3 scripts/interactions/carrier_diff.py` for the full field diff.
+
+| | Piquebone smoke 20003309 | Poisonous Mist ash cloud 2416 | Eruption puddle 2019 | Poison Mist incantation cloud 10722001 |
+|---|---|---|---|---|
+| launched by | arrow BEH, e.g. Rain of Arrows 105040851 | BEH 300000162 | BEH 300000042 (TimeAct judge 3042) | Magic 7220, bullet by id 10722000 |
+| hit context byte | 1 (`BehaviorParam.category`) | 1 | 0 | 4 (`Magic.spEffectCategory`) |
+| gate 1: context admits `wepParamChange` 1 | yes | yes | no: context 0 takes only 0/5/6 | no: context 4 takes only `miracleParamChange` rows, and none of the 60 stateInfo 152 rows set it |
+| AtkParam_Pc row | 0 | 20 | 30000042 | 72200 |
+| `statusAilmentAtkPowerCorrectRate` / `_byPoint` | 100 / 100 | 0 / 0 | 0 / 0 | 100 / 100 |
+| gate 2: buff's status buildup scale | 1.0 | 0 | 0 | 1.0 (gate 1 already failed) |
+| status from your grease | yes (`USER`) | none predicted | none (`USER`) | none (`USER`) |
+| status the cloud applies on its own | lure 482/483, no status | poison 834 (120 per hit) from `spEffectId0` | none | poison 1722000 from `spEffectId0` |
+
+Gate 1 `VERIFIED`: the context byte is ADI+0xda, written from the launch (see the table under
+"Which launches can carry a right-hand buff"). Offsets checked against the paramdef:
+`wepParamChange` +0x158, `magParamChange` +0x160 bit 7, `miracleParamChange` +0x161 bit 0,
+`shamanParamChange` +0x259 bit 5, each read by the matching case of `IsApplicableForCategory`
+(0x140500930).
+
+Gate 2 `VERIFIED`, and it was missing from every earlier version of this page:
+
+- `FUN_140d24b10` writes ADI+0x13c = AtkParam `statusAilmentAtkPowerCorrectRate` x 0.01 and
+  ADI+0x140 = `statusAilmentAtkPowerCorrectRate_byPoint` x 0.01.
+- In `CalculateDamage2`, right after `FUN_1404f71e0` returns the buff's on-hit id
+  (0x140448e12): if that on-hit row has byte +0x259 bit 0 set (`isUseStatusAilmentAtkPowerCorrect`;
+  Ghidra's struct mislabels it `isCheckAboveShadowTest`), the rate passed on is
+  ADI+0x140 x ADI+0x13c x the hit's rate.
+- That rate reaches `FUN_1403e8c90` -> `FUN_1403fade0` -> `FUN_14043daf0`, which builds
+  `row.<status>AttackPower x rate x ADI.finalStatuses.<status>` (stateInfo 2 poison, 5 rot,
+  6 bleed, 0x74 frost, 0x104 sleep, ...).
+- 48 of the 54 weapon-buff on-hit rows set the bit: every grease (3191 bleed 30, 3151 sleep 33,
+  3141 frost 63, ...), Seppuku's 1756, and the mist skills' own 882/880. The six that do not are
+  1521, 1511 (Stormhawk Axe), 3182 (Drawstring Poison Grease Left), 13451, and Black Flame Blade
+  1626001 / Bloodflame Blade 1632001.
+
+So the Piquebone smoke works because the arrow's BehaviorParam row is category 1 and the smoke's
+AtkParam_Pc row 0 keeps both status rates at 100. Most skill bullets set those rates to 0, so they
+pass a grease's on-hit row to the enemy with zero buildup even when the context admits it.
+
+### Is the swap required?
+
+No. The reader walks the attacker's whole SpEffect list (`dealer->specialEffect`) at each hit and
+filters by context, hand byte, arm style (context 12) and sub-category mask; no weapon id is
+compared anywhere in `FUN_1404f71e0` or `IsApplicableForCategory` (`VERIFIED`). A grease or
+Seppuku buff is a character-wide SpEffect entry tagged with a hand (`wepParamChange` 1 right,
+2 left), not something stored on the weapon. The swap in the measured case is there only because
+no bow or crossbow can hold a grease (`isEnhance` 0 on every bow, light bow, greatbow and crossbow
+row, `VERIFIED`) and a grease does not stay on a weapon you swap away from (`USER`: the grease was
+applied after the swap; the removal itself is not traced).
+
+Every arrow BehaviorParam_PC row is category 1, whichever hand holds the bow (1,247 ammo rows are
+category 1; the 205 category-2 rows are all bolt judges 4xx, `VERIFIED`). So the no-swap version
+is: bow in the left hand, a greasable weapon in the right with the grease or Seppuku already on it,
+two-hand the bow, fire Rain of Arrows with Piquebone arrows. `INFERRED`, untested: it rests on the
+right-hand buff entry staying live (flags `& 0x800c0003` clear) while the left bow is two-handed,
+and those flag bits are not traced.
+
+The only skill bullet with a window of at least 1 s that passes both gates for a right- or
+left-hand grease on a weapon that can hold one is Firebreather (ash 223; bullet 2631, 3 s,
+0.6 m, endless with record 1.0; context 12 from BEH 300000590, context 2 from 300000596;
+AtkParam_Pc 300000591 rates 100 / 100). That is the skill's own breath carrying your grease, not a
+lingering field, and the ash allows Standard, Heavy, Keen and Quality, which keep `isEnhance` 1.
+
 ## What Seppuku's self-bleed does, and why it is not the spreader
 
 `VERIFIED`. Seppuku 1753 (`bloodAttackPower` 9999) procs bleed on the player. Every bleed row
@@ -144,26 +213,28 @@ ammo; category 12 is most weapon skills.
 All rows `VERIFIED` from the regulation. That the bolt's judges 3xx are the right-hand shots and
 4xx the left-hand ones is `INFERRED` from the category split.
 
-The mists are the one case where the cloud does not carry your grease. The skill applies its own
-weapon buff first (TAE frame 16; the cloud spawns at frame 52): 831 Poisonous Mist poison buff /
-826 Chilling Mist frost buff, stateInfo 152, spCategory 162, `wepParamChange` 1, on-hit 882
-(poison 60) / 880 (frost 60). Seppuku 1755 and every grease are spCategory 162 too, so the
-skill's buff replaces them (`INFERRED`: same-spCategory replacement, not traced here). The cloud
-therefore spreads 882 / 880 on every hit, on top of its own bullet SpEffect 834 (poison 120) /
-829 (frost). Untested prediction: cast from a one-handed left weapon, the skill applies the
-left-hand row (833 / 828, `wepParamChange` 2), which category 1 refuses, so a right-hand grease or
-Seppuku would ride the cloud instead.
+Correction (2026-10-04): the mist clouds pass gate 1 but fail gate 2 (see "What makes the
+Piquebone smoke different"). Their AtkParam_Pc 20 has `statusAilmentAtkPowerCorrectRate` 0 and
+`_byPoint` 0, so a grease, Seppuku or the skill's own buff (831 Poisonous Mist / 826 Chilling Mist,
+on-hit 882 / 880, both flagged `isUseStatusAilmentAtkPowerCorrect`) reaches the enemy with zero
+buildup. The poison and frost the cloud does apply come from its own bullet SpEffect 834 (poison
+120) / 829 (frost 120), which the slot loop applies without that scale. Prediction: Poisonous Mist
+ash plus Blood Grease, in either order, gives no bleed from the cloud. The earlier text here said
+the skill's buff replaced your grease and spread 882 / 880; the replacement is still `INFERRED`,
+but nothing the buff carries survives gate 2 either way.
 
 ### (b) Lingering, re-hitting damage bullets that carry the buff
 
-Only one is reachable on a weapon that can hold a buff:
+Correction (2026-10-04, after the user's Eruption + Soporific Grease test failed): Eruption is
+not one. Its TimeAct (anim 40000, frames 62-64) fires judge 3042 = BEH 300000042, category 0, ->
+2012 -> 2013 -> 2018 (five globs) -> 2019. No TimeAct names the category-1 rows 300000041 and
+300000048; the earlier table tied 300000048 to Eruption only because it launches the same bullet
+2018, and the scan has stopped making that link. 2019 fails both gates: context 0 refuses
+`wepParamChange` 1, and its AtkParam_Pc 30000042 has both status rates at 0. Greasing the
+weapon that casts Eruption instead of swapping changes neither. Rows `VERIFIED`.
 
-| source | bullets | context | re-hit settings |
-|---|---|---|---|
-| Eruption (ash 207; Greatsword, Greataxe, Great Katana, Large Club, Bastard Sword and three more mount types) | BEH 300000048 (category 1) -> 2018 -> 2019: 5.0 s, radius 1.0 m, damaging | 1 | `dmgHitRecordLifeTime` 1.0 against life 5.0, so up to five hits per enemy (`INFERRED` cadence) |
-
-Eruption's other launch, BEH 300000042 -> 2012 -> the same 2019, is category 0 and carries
-nothing; which animation fires which row was not split out. Rows `VERIFIED`.
+The only bullet in this group that passes both gates on a weapon that can hold a buff is
+Firebreather's breath (see "Is the swap required?").
 
 The same mechanism, but on weapons that cannot hold a buff (`isEnhance` 0 and `gemMountType` 0 on
 every one, so no grease, no armament spell and no Seppuku mount; rows `VERIFIED`):
@@ -178,11 +249,17 @@ every one, so no grease, no armament spell and no Seppuku mount; rows `VERIFIED`
 | Rolling Sparks (the four Perfume Bottles) | 200003036 / 046 / 056 / 066, 12 | 1.3 s, 1 m, record 0.5 |
 | Spear of the Impaler moves | 200041913, 1 and 12 | 1.0 s, 1 m, record 0.5 |
 
+Gate 2 (2026-10-04) splits that table. Status scale from the bullet's AtkParam
+(`statusAilmentAtkPowerCorrectRate` x `_byPoint` / 100^2): Ghostflame Ignition 1.0, Zamor Ice
+Storm 1.0, Spear of the Impaler 1.0, Frenzyflame Thrust 0.35, Rolling Sparks 0.01, Bloodboon
+Ritual 0, Bloodfiends' Bloodboon 0. A zero means no grease status even with a swap. Fires of
+Slumber is 0.078 and Soul Stifler 0.
+
 Two zero-damage clouds with the Piquebone shape are on unbuffable weapons as well: Soul Stifler
 (Winged Greathorn; BEH 301511900, category 12 -> 2065, 9.0 s, radius 0.1 -> 5 m, record 0,
 `spEffectId0` 1545) and Fires of Slumber (St. Trina's Torch; 2826, category 12 right-hand and 2
-left-hand rows, 5.0 s, 1 m, endless, record 0.4). That a weapon buff does not survive a weapon
-swap, the only way one could be live while these run, is `INFERRED`.
+left-hand rows, 5.0 s, 1 m, endless, record 0.4). A buff applied after a swap does ride a bullet
+fired before it (the measured Piquebone case), so a swap is not what rules these out; gate 2 is.
 
 ### (c) Near misses
 
@@ -203,8 +280,9 @@ swap, the only way one could be live while these run, is `INFERRED`.
 - Single hit per bullet (`dmgHitRecordLifeTime` at or above the bullet's life), context 1 or 12,
   `VERIFIED`: Stormcaller (ash 123, seven bullets 2640-2646), Storm Assault (ash 122, 2600 /
   2601), Thunderstorm (Stormhawk Axe), Magma Guillotine, Moon-and-Fire Stance, Horn Calling:
-  Storm, Smithing Art Spears, and Eruption's first zero-damage burst 2011. These spread the buff
-  once per enemy per bullet; Stormcaller is the only one on buffable weapons.
+  Storm, Smithing Art Spears, and Eruption's first zero-damage burst 2011. These would spread the
+  buff once per enemy per bullet, but Stormcaller (AtkParam_Pc 300000643), Storm Assault and 2011
+  have both status rates at 0, so gate 2 zeroes them.
 - Shriek of Milos (Sword of Milos, unbuffable): 2960 / 2961, zero damage, 10 m, but 1.0 s.
 - Rows with no player source (`VERIFIED`: no named weapon owns the variation): 2171 (BEH
   102001910, variation 2001, 8 s endless damage) and 1000000 (BEH 103490910, variation 3490 whose

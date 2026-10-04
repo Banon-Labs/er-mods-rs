@@ -21,6 +21,16 @@ The gate (1.16.2, Ghidra :8765, shift 0):
     then CheckMagicSubCategoryChangeMask 0x140d50880 (an all-zero row mask passes; otherwise the
     row mask and the hit mask must be non-zero), and a row with throwAttackParamChange set passes
     only on a throw hit.
+
+A second gate decides how much status the buff's on-hit row builds (`status_reaches`):
+
+    FUN_140d24b10 writes ADI+0x13c = AtkParam.statusAilmentAtkPowerCorrectRate * 0.01 and
+    ADI+0x140 = statusAilmentAtkPowerCorrectRate_byPoint * 0.01.
+    CalculateDamage2, after FUN_1404f71e0 returns the on-hit id (0x140448e12): if the on-hit row's
+    byte +0x259 bit 0 (isUseStatusAilmentAtkPowerCorrect) is set, the buildup rate handed to
+    FUN_1403e8c90 -> FUN_1403fade0 -> FUN_14043daf0 is ADI+0x140 * ADI+0x13c * rate. 48 of the 54
+    weapon-buff on-hit rows set that bit (every grease, Seppuku, the mist skills' 882/880), so a
+    bullet whose AtkParam has either rate at 0 applies the row with zero buildup.
 """
 import importlib.util
 import os
@@ -74,6 +84,27 @@ def mask_passes(sp, atk):
     if atk is None:
         return False
     return bool(row & ({atk[f'subCategory{i}'] for i in (1, 2, 3, 4)} - {0}))
+
+
+def status_scale(atk):
+    """ADI+0x140 * ADI+0x13c for a hit with AtkParam row `atk` (both are percent / 100)."""
+    if atk is None:
+        return 0.0
+    return (atk['statusAilmentAtkPowerCorrectRate'] / 100.0
+            * atk['statusAilmentAtkPowerCorrectRate_byPoint'] / 100.0)
+
+
+def status_reaches(on_hit, atk):
+    """Whether a weapon buff's on-hit row builds any status through a hit with AtkParam `atk`.
+
+    `on_hit` is the atkOccurrenceSpEffectId row. A row without isUseStatusAilmentAtkPowerCorrect
+    is not scaled; one with it is scaled by `status_scale(atk)` (CalculateDamage2 0x140448e12).
+    """
+    if on_hit is None:
+        return False
+    if not on_hit['isUseStatusAilmentAtkPowerCorrect']:
+        return True
+    return status_scale(atk) > 0
 
 
 def gate(ctx, sp, atk, left_two_handed=False):

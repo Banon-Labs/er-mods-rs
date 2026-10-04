@@ -156,19 +156,17 @@ def launches(reg, smap):
             out[key] = Launch(bid, ctx, src, b['refId'])
         return out[key]
 
+    # Only rows a TimeAct names or a weapon variation owns are launches. Rows that merely share a
+    # bullet with a named skill are not: Eruption's TimeAct fires judge 3042 = BEH 300000042
+    # (category 0), and attributing the unused category-1 row 300000048 to it produced the
+    # Eruption + grease prediction the user measured as a negative on 2026-10-04.
     skill_beh = {int(k): v for k, v in smap['behavior'].items()}
-    skill_bul = {int(k): v for k, v in smap['bullet'].items()}
     for bid, b in reg.beh.items():
         if b['refType'] != 1:
             continue
         ws = variation_weapons(reg, bid)
         tags = skill_beh.get(bid, [])
         src_label = 'BehaviorParam.category'
-        if not ws and not tags and bid >= 300000000 and b['refId'] in skill_bul:
-            # A generic skill row the TimeAct walk did not name, launching a bullet a named skill
-            # reaches (Eruption's 300000048 -> 2018). Its owner is that skill, by the shared bullet.
-            tags = skill_bul[b['refId']]
-            src_label = 'BehaviorParam.category, row tied to the skill by its bullet'
         if ws or tags:
             L = get(bid, b['category'], src_label)
             for w in ws:
@@ -193,9 +191,15 @@ def launches(reg, smap):
         if not nm:
             continue
         for i in range(1, 11):
-            b = reg.beh.get(m[f'refId{i}'])
-            if b and b['refType'] == 1:
-                get(m[f'refId{i}'], m['spEffectCategory'], 'Magic.spEffectCategory').owners.add(f'spell {nm}')
+            # A spell names its bullet directly (refCategory 1; no Magic refId is a BehaviorParam
+            # row), so the spawn carries an explicit bullet id and FUN_14038e210 takes the context
+            # from Magic.spEffectCategory (3 or 4), or 0 if no magic id rides the spawn.
+            rid = m[f'refId{i}']
+            if m[f'refCategory{i}'] == 1 and rid in reg.bullet:
+                key = (-(m['id'] * 100 + i), m['spEffectCategory'])   # no BehaviorParam row
+                if key not in out:
+                    out[key] = Launch(key[0], m['spEffectCategory'], 'Magic.spEffectCategory', rid)
+                out[key].owners.add(f'spell {nm}')
     return list(out.values())
 
 
@@ -266,13 +270,27 @@ def carriers(reg, smap, min_window):
 
 # ---------------------------------------------------------------- crossing
 
+AMMO_TYPES = (81, 83, 85, 86)   # arrow, greatarrow, bolt, greatbolt (EquipParamWeapon.wepType)
+
+
 def buffable(reg, wids):
+    """Whether a launching weapon can hold a grease: EquipParamWeapon.isEnhance on the base row.
+
+    gemMountType says nothing about grease (every bow mounts ashes and has isEnhance 0), so it
+    is not consulted. The base row is the Standard affinity; every ash in the measured set
+    allows Standard, and status/element affinity rows have isEnhance 0.
+    """
     if not wids:
         return None
     named = [w for w in wids if w in reg.weapon and reg.name('EquipParamWeapon', w)]
     if not named:
         return None
-    return any(reg.weapon[w]['isEnhance'] or reg.weapon[w]['gemMountType'] == 2 for w in named)
+    return any(reg.weapon[w]['isEnhance'] for w in named)
+
+
+def is_ammo(reg, wids):
+    named = [w for w in wids if w in reg.weapon]
+    return bool(named) and all(reg.weapon[w]['wepType'] in AMMO_TYPES for w in named)
 
 
 def skill_own_buffs(reg, smap):
@@ -307,6 +325,7 @@ def cross(reg, src, cars, own=None):
         dmg = a['damaging']
         n, rh = rehits(bi)
         wb = buffable(reg, c.weapons)
+        ammo = is_ammo(reg, c.weapons)
         own_ids = set()
         for sk in c.skills:
             own_ids |= own.get(sk, set())
@@ -317,14 +336,17 @@ def cross(reg, src, cars, own=None):
 
         def emit(rid, rows, note=''):
             out.append({'reader': rid, 'carrier': c, 'rows': rows, 'hits': n, 'rehit': rh,
-                        'buffable': wb, 'note': note})
+                        'buffable': wb, 'ammo': ammo, 'note': note})
 
-        rows = [s for s in r1_rows if regdata.gate(c.ctx, s, atk)]
+        def reaches(s):
+            return regdata.status_reaches(reg.sp.get(s['atkOccurrenceSpEffectId']), atk)
+
+        rows = [s for s in r1_rows if regdata.gate(c.ctx, s, atk) and reaches(s)]
         if rows:
             emit('R1', rows, own_note)
         if c.ctx == 12:
             rows = [s for s in r1_rows if regdata.gate(12, s, atk, True)
-                    and not regdata.gate(12, s, atk, False)]
+                    and not regdata.gate(12, s, atk, False) and reaches(s)]
             if rows:
                 emit('R5', rows, 'two-hand the left weapon while the bullet is out')
         if dmg:
@@ -348,6 +370,11 @@ def cross(reg, src, cars, own=None):
     return out
 
 
+# A swap-then-grease row needs the bullet to outlast a weapon swap plus a grease use. The only
+# measured fit is the Piquebone smoke (4 s, user test 2026-10-04); shorter windows score down.
+SWAP_GREASE_WINDOW = 4.0
+
+
 def score(reg, src, p):
     c, bi = p['carrier'], p['carrier'].bi
     rid = p['reader']
@@ -367,10 +394,18 @@ def score(reg, src, p):
         s += 1.0
     if rid == 'R5' or (rid == 'R1' and c.ctx == 2):
         s += 1.5
-    if rid in ('R1', 'S1') and p['buffable'] is False:
+    if rid in ('R1', 'S1') and p['buffable'] is False and not (p['ammo'] and c.ctx == 1):
         s -= 2.0
+        if rid == 'R1' and c.end < SWAP_GREASE_WINDOW:
+            s -= 2.0
     if rid == 'R1' and p['note']:
         s -= 1.0
+    if rid in ('R1', 'R5') and all(
+            (reg.sp.get(r['atkOccurrenceSpEffectId']) or {}).get('isUseStatusAilmentAtkPowerCorrect')
+            for r in p['rows']):
+        # Gate 2 passes any non-zero scale, but a 0.08 scale (Fires of Slumber) builds 8 % of the
+        # grease's status per hit.
+        s -= 2.0 * (1.0 - min(1.0, regdata.status_scale(bi['a']['row'])))
     return round(s, 2)
 
 
@@ -417,15 +452,24 @@ def describe(reg, src, p):
         eff = '/'.join(sorted(sts)) or 'non-status on-hit rows'
         hand = {1: 'right-hand', 2: 'left-hand', 12: 'right-hand'}.get(c.ctx, f'ctx {c.ctx}')
         try_ = f'{who}; within {win} apply a {hand} buff ({names})'
-        if p['buffable'] is False:
-            try_ = (f'{hand} buff ({names}) on a buffable weapon, swap to {who} and use it '
-                    f'(the weapon cannot hold a buff; whether one survives the swap is untested)')
-        exp = f'every enemy it touches gets the buff\'s on-hit row per hit ({eff})'
+        if p['ammo'] and c.ctx == 1:
+            try_ = (f'{who}: bow in the left hand, a greasable weapon in the right with a right-hand '
+                    f'buff ({names}) already on it; two-hand the bow and fire. No swap: every arrow '
+                    f'BehaviorParam row is category 1 whichever hand holds the bow')
+        elif p['buffable'] is False:
+            try_ = (f'{who}: fire it, then swap that hand to a greasable weapon and apply a {hand} '
+                    f'buff ({names}) before the bullet ends ({win}); the launching weapon cannot '
+                    f'hold one. Same order as the measured Piquebone case (bow fired, swap, grease, '
+                    f'4 s smoke)')
+        scale = regdata.status_scale(bi['a']['row'])
+        exp = (f'every enemy it touches gets the buff\'s on-hit row per hit ({eff}), status '
+               f'buildup x{scale:.2g} (AtkParam statusAilmentAtkPowerCorrectRate x _byPoint)')
         if p['note']:
             exp += f"; {p['note']}"
     elif rid == 'R5':
         try_ = f'{who} with a left-hand buff ({names}); two-hand the left weapon before it lands'
-        exp = 'the left-hand buff starts riding the hits only while the left weapon is two-handed'
+        exp = ('the left-hand buff starts riding the hits only while the left weapon is two-handed, '
+               f"status buildup x{regdata.status_scale(bi['a']['row']):.2g}")
     elif rid == 'R2':
         try_ = f'{who}; within {win} switch on {names}'
         exp = 'later hits of the same bullet take the new damage multiplier'
@@ -521,8 +565,9 @@ def write_doc(path, reg, src, cars, pairs, top):
     L.append('# Interaction candidates: attacker state read at the hit, carried by lingering bullets')
     L.append('')
     L.append('Generated by `python3 scripts/interactions/scan.py --doc '
-             'docs/er-mechanics/interaction-candidates.md`. Nothing here was tested in game. '
-             'Every row is a hypothesis.')
+             'docs/er-mechanics/interaction-candidates.md`. Tested in game so far: the Piquebone '
+             'smoke (positive) and the two measured negatives below. Every ranked row is a '
+             'hypothesis.')
     L.append('')
     L.append('Labels: `VERIFIED` = read in the 1.16.2 executable (Ghidra :8765, shift 0) or the '
              '1.17.1 regulation; `INFERRED` = follows from verified pieces, not traced end to end.')
@@ -541,6 +586,15 @@ def write_doc(path, reg, src, cars, pairs, top):
              '`HitBulletID` and `intervalCreateBulletId`. A carrier is kept when its AtkParam hits '
              f'enemies (`opposeTarget`), it has a hit radius, and it can still be hitting at least '
              '1 s after launch (longest launch-to-last-hit path).')
+    L.append('')
+    L.append('A weapon buff rides a bullet only through two gates, both `VERIFIED` and both checked '
+             'here: the hit-context byte the launch gives the bullet (`BehaviorParam.category` of '
+             'the row the TimeAct or weapon fires, or `Magic.spEffectCategory` for a spell) must '
+             'admit the buff\'s hand, and the bullet\'s AtkParam `statusAilmentAtkPowerCorrectRate` '
+             'x `_byPoint` must be non-zero, because every grease and Seppuku on-hit row sets '
+             '`isUseStatusAilmentAtkPowerCorrect` (CalculateDamage2 0x140448e12). The buff itself '
+             'is a character-wide SpEffect entry read at the hit; no weapon id is compared, so a '
+             'swap only matters for timing.')
     L.append('')
     L.append('A pair is kept when the reader\'s gate passes for the carrier\'s hit context and a '
              'player-reachable SpEffect row (skill, item, spell, talisman, armor or weapon passive) '
@@ -579,6 +633,16 @@ def write_doc(path, reg, src, cars, pairs, top):
         t, e = describe(reg, src, p)
         L.append(f"- #{G.index(p) + 1} {p['known']}: {carrier_line(reg, c)}. Gate passes for "
                  f"{', '.join(row_names(reg, src, p['rows'], 4))}.")
+    L.append('')
+    L.append('## Measured negatives (USER 2026-10-04)')
+    L.append('')
+    L.append('The selftest requires the scan to emit no R1/R5 pair for these, and requires each to be '
+             'a carrier it sees, so the rejection comes from the gates. Field diff: '
+             '`python3 scripts/interactions/carrier_diff.py`.')
+    L.append('')
+    for bid, (tried, why) in readers.MEASURED_NEGATIVE.items():
+        ctxs = sorted({c.ctx for c in cars if c.bid == bid})
+        L.append(f'- bullet {bid}, ctx {ctxs}: {tried}. Fails because {why}.')
     L.append('')
     L.append(f'## Ranked candidates (top {top}, known cases excluded)')
     L.append('')
@@ -644,9 +708,39 @@ def selftest():
     assert left and 1755 not in {r['id'] for r in left[0]['rows']}, 'left-hand bolt should refuse 1755'
     owners = ' '.join(p['carrier'].owners)
     assert 'Piquebone' in owners or 'Rain of Arrows' in owners, owners[:200]
+
+    # Measured negatives (user test 2026-10-04). Each must be a carrier the scan sees, so the
+    # rejection comes from the gates and not from the bullet being missed.
+    for bid, (tried, why) in readers.MEASURED_NEGATIVE.items():
+        seen = [c for c in cars if c.bid == bid]
+        assert seen, f'{tried}: bullet {bid} is not a carrier, so the negative proves nothing'
+        bad = [q for q in pairs if q['reader'] in ('R1', 'R5') and q['carrier'].bid == bid]
+        assert not bad, f'{tried} is a measured negative but scored as {bad[0]["reader"]}: {why}'
+    erupt = {c.ctx for c in cars if c.bid == 2019}
+    assert erupt == {0}, f'Eruption 2019 should launch only at context 0 (BEH 300000042): {erupt}'
+    mist = {c.ctx for c in cars if c.bid == 10722001}
+    assert mist == {4}, f'Poison Mist cloud should be context 4: {mist}'
+    # Each Eruption gate fails on its own: context 0 refuses the grease even with a nonzero
+    # status scale, and its AtkParam zeroes the buildup even at context 1.
+    soporific = reg.sp[3150]
+    erupt_atk = reg.atk[reg.bullet[2019]['atkId_Bullet']]
+    assert not regdata.accepts(0, soporific)
+    assert regdata.accepts(1, soporific)
+    assert not regdata.status_reaches(reg.sp[soporific['atkOccurrenceSpEffectId']], erupt_atk)
+    # Poisonous Mist ash: context 1 passes the grease, but AtkParam_Pc 20 zeroes the buildup, so
+    # its cloud spreads no grease; its repeated poison is its own bullet SpEffect 834.
+    assert {c.ctx for c in cars if c.bid == 2416} == {1}
+    on_mist = {r['id'] for q in pairs if q['reader'] == 'R1' and q['carrier'].bid == 2416
+               for r in q['rows']}
+    assert not on_mist & {3190, 3150, 3140, 1755, 831}, sorted(on_mist & {3190, 3150, 3140, 1755, 831})
+    assert reg.bullet[2416]['spEffectId0'] == 834
+    # And the positive passes both gates.
+    smoke_atk = reg.atk[reg.bullet[20003309]['atkId_Bullet']]
+    assert regdata.status_reaches(reg.sp[3191], smoke_atk) and regdata.status_scale(smoke_atk) == 1.0
     rank = pairs.index(p) + 1
     print(f'selftest ok: Piquebone smoke x right-hand buff found at rank {rank} of {len(pairs)} '
-          f'pairs, {len(p["rows"])} buff rows pass its gate')
+          f'pairs, {len(p["rows"])} buff rows pass its gate; measured negatives rejected: '
+          + ', '.join(t for t, _ in readers.MEASURED_NEGATIVE.values()))
 
 
 def main():

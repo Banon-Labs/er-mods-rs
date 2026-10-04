@@ -25,7 +25,10 @@ READERS = {
                  'FUN_1404fee60(ADI)) -> IsApplicableForCategory 0x140500930 -> FUN_1403e8c90(victim, id, dealer)',
         'live': 'live: the entry list is walked per hit',
         'gate': 'hit context byte ADI+0xda (bullet: BehaviorParam.category / goods / magic spEffectCategory), '
-                'sub-category mask, not a throw row; entry flags & 0x800c0003 == 0',
+                'sub-category mask, not a throw row; entry flags & 0x800c0003 == 0; and the buildup '
+                'is scaled by AtkParam statusAilmentAtkPowerCorrectRate x _byPoint (ADI+0x13c x '
+                '+0x140, 0x140448e12) when the on-hit row sets isUseStatusAilmentAtkPowerCorrect, '
+                'which every grease and Seppuku row does: a 0 there builds nothing',
         'evidence': 'VERIFIED',
         'needs_damage': False,
     },
@@ -114,8 +117,16 @@ UNCROSSED = [
 ]
 
 KNOWN = {
-    ('R1', 20003309): 'Piquebone smoke (rain-of-arrows-seppuku.md)',
-    ('R1', 2416): 'Poisonous Mist cloud (rain-of-arrows-seppuku.md)',
-    ('R1', 2411): 'Chilling Mist cloud (rain-of-arrows-seppuku.md)',
-    ('R1', 2019): 'Eruption (rain-of-arrows-seppuku.md)',
+    ('R1', 20003309): 'Piquebone smoke (rain-of-arrows-seppuku.md; USER positive)',
+}
+
+# Measured in game by the user, 2026-10-04: no status from the weapon buff. The selftest requires
+# the scan to emit no R1/R5 pair for these. bullet -> (what was tried, why it fails).
+MEASURED_NEGATIVE = {
+    2019: ('Eruption puddles, then swap and Soporific Grease',
+           'context 0 (TimeAct fires BEH 300000042, category 0) refuses wepParamChange 1; and '
+           'AtkParam_Pc 30000042 statusAilmentAtkPowerCorrectRate 0 / _byPoint 0 zeroes the buildup'),
+    10722001: ('Poison Mist incantation cloud, then Blood Grease',
+               'context 4 (Magic 7220 spEffectCategory) passes only miracleParamChange rows; no '
+               'stateInfo 152/153 row sets it'),
 }
