@@ -87,4 +87,139 @@ category 6) with no buff to carry, so procs do not chain from enemy to enemy.
   open.
 - Untested predictions from the gate: a right-hand Freezing, Poison or Soporific grease (3140,
   3175, 3150) spreads its status the same way; a left-hand grease does not; an Alluring Pot thrown
-  while buffed does too, if its goods context also admits `wepParamChange` 1.
+  while buffed does too, if its goods context also admits `wepParamChange` 1. (Answered below: the
+  goods context is 0 or 5, which refuses it.)
+
+## Other sources
+
+Question: what else spreads the right-hand status buff the way the Piquebone smoke does? Answered
+by walking all 4,958 bullet rows of BehaviorParam_PC (13,865 rows) through `HitBulletID` and
+`intervalCreateBulletId`, keeping bullets that hit enemies (`opposeTarget` 1), last at least 1 s,
+cover at least 1 m and move at most 5 m/s, then naming each launch through the skill TimeAct
+(`er-mechanics-ashes` skill profiles, every skill on every weapon type that can mount it) and the
+Smithbox row names. Ids are 1.17.1 regulation.
+
+### Which launches can carry a right-hand buff
+
+`VERIFIED` (1.16.2 :8765, shift 0). The context byte is not always `BehaviorParam.category`.
+`FUN_14038e210` takes it from one of three places, by what the bullet spawn data carries:
+
+| spawn data | context byte | values in the regulation |
+|---|---|---|
+| no explicit bullet id (+0x14 == -1) | `BehaviorParam.category` (+0x1c) | 0, 1, 2, 4, 5, 9, 12 |
+| goods id (+0x18) | `EquipParamGoods.spEffectCategory` (+0x40) | 0, 5 |
+| magic id (+0xc) | `Magic.spEffectCategory` (+0x28) | 3 (sorcery), 4 (incantation) |
+
+The whole `IsApplicableForCategory` switch (jump table 0x140500b08, index = context - 1; context
+0 and anything above 12 take the default branch):
+
+| context | accepts | carries a `wepParamChange` 1 buff |
+|---|---|---|
+| 1 | anything but `wepParamChange` 2, 3, 4 | yes |
+| 2 | anything but 1, 3, 4 | no (left-hand buffs instead) |
+| 3 | rows with `magParamChange` set | no |
+| 4 | rows with `miracleParamChange` set | no |
+| 10 | rows with `shamanParamChange` set | no |
+| 11 | anything but 3, 4 (both hands) | yes, but no row uses 11 |
+| 12 | 1 always; 0/5/6; 2 only while `GetArmStyle` returns 2 (left weapon two-handed) | yes |
+| 9 | 0/5/6 or 4 (kick) | no |
+| 0, 5-8 | 0/5/6 only (`IsWepParamChange056`) | no |
+
+An accepted row must then pass `CheckMagicSubCategoryChangeMask`. Every grease, Seppuku and
+armament buff has `magicSubCategoryChange1..3` all 0, which takes the no-mask early return (the
+only stateInfo 152 row with a mask is the Serpent Bow's 1938). None of the 60 stateInfo 152 rows
+has `magParamChange`, `miracleParamChange` or `shamanParamChange`, so sorceries, incantations and
+thrown goods never carry a weapon buff. Category 1 is the plain right-hand moveset and right-hand
+ammo; category 12 is most weapon skills.
+
+### (a) Zero-damage lingering cloud that applies the buff's status on each hit
+
+| source | bullets | context | re-hit settings |
+|---|---|---|---|
+| Piquebone Arrow, Piquebone Arrow (Fletched) | 40 launch rows (variations 5040/5041, all category 1) -> 20003308 -> smoke 20003309 | 1 | `dmgHitRecordLifeTime` 0, `isEndlessHit` 0 |
+| Piquebone Bolt (52520000), crossbow in the right hand | BEH 1052203xx, 105220500, 105220505 (7 rows, category 1) -> 20010000-20010055 -> 20003308 -> 20003309 | 1 | same smoke |
+| Piquebone Bolt, crossbow in the left hand | BEH 105220400, 410, 440-442 (5 rows, category 2) -> same smoke | 2 | same smoke; spreads a left-hand buff (Blood Grease Left 3194, left Seppuku 1758) and refuses the right-hand one |
+| Poisonous Mist (ash 228), Chilling Mist (ash 227) | BEH 300000162 / 300000161 (category 1) -> 2415 / 2410 -> cloud 2416 / 2411: 4.0 s, radius 1.0 -> 2.5 m, AtkParam_Pc 20 (zero damage, `opposeTarget` 1), `spEffectId0` 834 / 829 | 1 | `isEndlessHit` 1, `dmgHitRecordLifeTime` 0.7, shared hit list, `isHitBothTeam` 1 |
+
+All rows `VERIFIED` from the regulation. That the bolt's judges 3xx are the right-hand shots and
+4xx the left-hand ones is `INFERRED` from the category split.
+
+The mists are the one case where the cloud does not carry your grease. The skill applies its own
+weapon buff first (TAE frame 16; the cloud spawns at frame 52): 831 Poisonous Mist poison buff /
+826 Chilling Mist frost buff, stateInfo 152, spCategory 162, `wepParamChange` 1, on-hit 882
+(poison 60) / 880 (frost 60). Seppuku 1755 and every grease are spCategory 162 too, so the
+skill's buff replaces them (`INFERRED`: same-spCategory replacement, not traced here). The cloud
+therefore spreads 882 / 880 on every hit, on top of its own bullet SpEffect 834 (poison 120) /
+829 (frost). Untested prediction: cast from a one-handed left weapon, the skill applies the
+left-hand row (833 / 828, `wepParamChange` 2), which category 1 refuses, so a right-hand grease or
+Seppuku would ride the cloud instead.
+
+### (b) Lingering, re-hitting damage bullets that carry the buff
+
+Only one is reachable on a weapon that can hold a buff:
+
+| source | bullets | context | re-hit settings |
+|---|---|---|---|
+| Eruption (ash 207; Greatsword, Greataxe, Great Katana, Large Club, Bastard Sword and three more mount types) | BEH 300000048 (category 1) -> 2018 -> 2019: 5.0 s, radius 1.0 m, damaging | 1 | `dmgHitRecordLifeTime` 1.0 against life 5.0, so up to five hits per enemy (`INFERRED` cadence) |
+
+Eruption's other launch, BEH 300000042 -> 2012 -> the same 2019, is category 0 and carries
+nothing; which animation fires which row was not split out. Rows `VERIFIED`.
+
+The same mechanism, but on weapons that cannot hold a buff (`isEnhance` 0 and `gemMountType` 0 on
+every one, so no grease, no armament spell and no Seppuku mount; rows `VERIFIED`):
+
+| skill (weapon) | bullet, context | life, radius, re-hit |
+|---|---|---|
+| Bloodboon Ritual (Mohgwyn's Sacred Spear) | 2340, 12 | 2.2 s, 8 m, endless, record 0.3 |
+| Ghostflame Ignition (Death's Poker) | 2294, 1 | 5.0 s, 1 m, record 0.5 |
+| Zamor Ice Storm (Zamor Curved Sword) | 3057, 1 | 1.5 s, 3 m, record 0.4 |
+| Frenzyflame Thrust (Vyke's War Spear) | 2749, 12 | 2.0 s, 0.1 -> 1 m, record 0.4 |
+| Bloodfiends' Bloodboon (Bloodfiend's Sacred Spear) | 200003205, 12 | 2.0 s, 2.5 m, record 0.4 |
+| Rolling Sparks (the four Perfume Bottles) | 200003036 / 046 / 056 / 066, 12 | 1.3 s, 1 m, record 0.5 |
+| Spear of the Impaler moves | 200041913, 1 and 12 | 1.0 s, 1 m, record 0.5 |
+
+Two zero-damage clouds with the Piquebone shape are on unbuffable weapons as well: Soul Stifler
+(Winged Greathorn; BEH 301511900, category 12 -> 2065, 9.0 s, radius 0.1 -> 5 m, record 0,
+`spEffectId0` 1545) and Fires of Slumber (St. Trina's Torch; 2826, category 12 right-hand and 2
+left-hand rows, 5.0 s, 1 m, endless, record 0.4). That a weapon buff does not survive a weapon
+swap, the only way one could be live while these run, is `INFERRED`.
+
+### (c) Near misses
+
+- Category refuses the right-hand buff (`VERIFIED`):
+  - White Shadow's Lure (ash 850): the closest twin of the Piquebone smoke, a zero-damage lure
+    cloud 2672 (5.0 s, radius 0.1 -> 15 m, record 0, `spEffectId0` 487, create-limit group 19),
+    but its rows BEH 300000760-762 are category 0.
+  - Prelate's Charge (ash 113): fire trail 2312 / 2314, 5.0 s, record 1.0, category 0.
+  - Knowledge Above All (Scepter of the All-Knowing): 2114 / 2115, 1.0 s, radius up to 65 m,
+    category 0.
+  - Ghostflame Call (DLC skill 4220): 200002594, 5.0 s, record 0.5, category 0.
+  - Deadly Poison Spray (DLC skill 5490): 200003260, 7.0 s, radius 1 -> 6 m, category 0.
+  - Thrown goods (Alluring Pot and every pot or throwable): context is
+    `EquipParamGoods.spEffectCategory`, 0 or 5 on every row. That a goods throw fills the goods
+    id rather than a behavior id is `INFERRED`; the behavior rows goods name are category 0, 5 or
+    9, so either path refuses.
+  - Every sorcery and incantation, lingering ones included: context 3 or 4, see above.
+- Single hit per bullet (`dmgHitRecordLifeTime` at or above the bullet's life), context 1 or 12,
+  `VERIFIED`: Stormcaller (ash 123, seven bullets 2640-2646), Storm Assault (ash 122, 2600 /
+  2601), Thunderstorm (Stormhawk Axe), Magma Guillotine, Moon-and-Fire Stance, Horn Calling:
+  Storm, Smithing Art Spears, and Eruption's first zero-damage burst 2011. These spread the buff
+  once per enemy per bullet; Stormcaller is the only one on buffable weapons.
+- Shriek of Milos (Sword of Milos, unbuffable): 2960 / 2961, zero damage, 10 m, but 1.0 s.
+- Rows with no player source (`VERIFIED`: no named weapon owns the variation): 2171 (BEH
+  102001910, variation 2001, 8 s endless damage) and 1000000 (BEH 103490910, variation 3490 whose
+  weapons 34900000 / 34960000 have no name; a scarlet rot cloud). Catalyst-variation rows that
+  fire spell bullets under category 1 exist (Greyoll's Roar 103400920 under the Finger Seal
+  variation, Rejection, Rancorcall, Carian Phalanx), but the spells themselves launch through
+  `Magic.refId1` (Greyoll's Roar 7090 -> 10709000). Whether those behavior rows are ever used is
+  not traced, and Greyoll's Roar is single-hit anyway.
+
+### Not proven, for these
+
+- Re-hit cadence. `FUN_1403960a0` is called from the bullet state updates `FUN_1403abfc0` and
+  `FUN_1403abf30`. It passes the previous `DmgMan` handle only while the radius is still
+  expanding and -1 otherwise, so a bullet past its growth asks `FUN_140526230` for a fresh damage
+  entry on each call. How often those state updates run, and how `DmgMan` dedupes a target with
+  no hit record, decides what record 0 means for the Piquebone smoke, White Shadow's Lure and
+  Soul Stifler.
+- No combination above was tested in game.
