@@ -68,9 +68,28 @@ if not path:
     sys.exit(0)
 
 events = scan.load_events(path)
-turn = scan.last_text_turn(scan.split_turns(events))
+turns = scan.split_turns(events)
+turn = scan.last_text_turn(turns)
 if turn is None:
     sys.exit(0)
+
+
+def prompt_text_for(turn_index):
+    """The real user prompt that opened turns[turn_index] (turns[0] precedes any prompt)."""
+    prompts = [ev for ev in events if scan.is_real_user_prompt(ev)]
+    if turn_index < 1 or turn_index > len(prompts):
+        return ""
+    content = prompts[turn_index - 1].get("message", {}).get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(
+            b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+        )
+    return ""
+
+
+turn_prompt = prompt_text_for(next((i for i, t in enumerate(turns) if t is turn), -1))
 last_turn = turn.text
 turn_has_work = turn.work
 
@@ -179,10 +198,28 @@ PENDING_WORK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Live background work alone does not make a reply to the user's question a pause. Measured
+# 2026-10-04: the user asked whether Eruption plus a greased weapon swap applies the buff through
+# Eruption's damage, the closing message was the one-paragraph answer (735 chars), and a
+# board-generation run unrelated to the question was still live -- so this rule halted the answer as
+# a verbose blocked pause. When the turn was opened by a user question (not a task-notification),
+# the live job makes it a pause only if the closing message itself says it is blocked on or waiting
+# for something; "Blocked on X ... <long recap>" still trips.
+TASK_NOTIFICATION_PROMPT_RE = re.compile(r"<task-notification>", re.IGNORECASE)
+ANNOUNCES_BLOCK_RE = re.compile(
+    r"\b(?:blocked\s+(?:on|by|until)|waiting\s+(?:for|on|until)|wait\s+(?:for|on|until)"
+    r"|until\s+(?:it|that|they|the\s+\w+)\s+(?:finishes|finish|lands|land|completes|complete))\b",
+    re.IGNORECASE,
+)
+answers_user_question = "?" in turn_prompt and not TASK_NOTIFICATION_PROMPT_RE.search(turn_prompt)
+live_bg_is_pause = bool(scan.live_background_work(events)) and (
+    not answers_user_question or bool(ANNOUNCES_BLOCK_RE.search(scrubbed))
+)
+
 verbose_n = None
 turn_is_pause = (
     bool(phrase)
-    or bool(scan.live_background_work(events))
+    or live_bg_is_pause
     or bool(PENDING_WORK_RE.search(scrubbed))
 )
 if turn_is_pause and not turn_has_work and not scan.blocked_on_user(scrubbed):

@@ -100,6 +100,19 @@ CASES = [
         "in a row on 2026-10-04 because it read only the user-event notification carrier",
     ),
     Case(
+        "idle_hold_answer_while_background_live.jsonl",
+        None,
+        "a one-paragraph answer to the user's direct question while an unrelated background board "
+        "run is still live. Must NOT halt: VERBOSEPAUSE halted this exact shape on 2026-10-04 because "
+        "any live background job made every long closing message a blocked pause",
+    ),
+    Case(
+        "idle_hold_blocked_recap_after_question.jsonl",
+        "paused while blocked on a background task",
+        "the other half: a user question ('How is it going?') answered with 'Blocked on the board "
+        "generation run.' plus a long recap is still a verbose blocked pause and must halt",
+    ),
+    Case(
         "authority_agreement.jsonl",
         "authority-coded agreement",
         "turn opens with \"You're right\" -- banned agreement phrasing (2026-07-17 directive)",
