@@ -142,6 +142,28 @@ const GET_WEAPON_NAME_PATTERN: [Option<u8>; 42] = aob(
     4,
 );
 
+/// The detail panel's update on a cursor move, `FUN(parts, flag)` (1.16.2 `0x140998790`, 1.17.1
+/// `0x140999930`, prologues identical but for the cookie's rip displacement). It asks
+/// `parts+0x180`, a `CS::DetailStatusViewParts::CompositeItemStatusDialogHolder`, whether its panel
+/// is shown (`vtable+8`, 1.17.1 `0x140997c40`: `*holder.shown_flag`, a byte behind `holder+8`) and
+/// names the highlighted record only if it is. View 3 borrows view 0's layout, where both holders
+/// answer 0, so the cursor moves and the board never hears of it. Measured with Frida
+/// (`r3-view3-cursor.js`): holders answer 1 in views 1 and 2 and 0 in view 3, and two cursor moves
+/// in view 3 reached this function and never the record naming. Found by its gate, which is
+/// unique in both images.
+// AOB signature: `mov rax,[rcx+0x180]; add rcx,0x180; call [rax+8]; test al,al; je`, inside the body.
+const PANEL_UPDATE_GATE: [Option<u8>; 20] = aob(
+    [
+        0x48, 0x8b, 0x81, 0x80, 0x01, 0x00, 0x00, 0x48, 0x81, 0xc1, 0x80, 0x01, 0x00, 0x00, 0xff,
+        0x50, 0x08, 0x84, 0xc0, 0x74,
+    ],
+    0,
+    0,
+);
+const PANEL_UPDATE_GATE_OFFSET: usize = 0x3e;
+const PANEL_HOLDER_OFFSET: usize = 0x180;
+const HOLDER_SHOWN_FLAG_OFFSET: usize = 8;
+
 const PANE_COUNT_OFFSET: usize = 0xb48;
 const MODE_OFFSET: usize = 0x8f8;
 /// The step's `this` is the item list's `DetailStatusViewParts`; `+0x10` is the
@@ -207,6 +229,7 @@ static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 static ITEM_LIST_WINDOW: AtomicUsize = AtomicUsize::new(0);
 static ITEM_LIST_AT_MS: AtomicUsize = AtomicUsize::new(0);
 static RECORD_NAME_ORIG: AtomicUsize = AtomicUsize::new(0);
+static PANEL_UPDATE_ORIG: AtomicUsize = AtomicUsize::new(0);
 static GET_WEAPON_NAME_ORIG: AtomicUsize = AtomicUsize::new(0);
 /// The weapon row the detail panel last named, or [`NO_WEAPON`] when the highlighted record it
 /// last named was not a weapon.
@@ -395,6 +418,63 @@ fn install_selection_hooks(start: usize, end: usize) {
             )),
         }
     }
+    let Some(panel_update) = unsafe { find_unique(start, end, &PANEL_UPDATE_GATE) }
+        .map(|at| at - PANEL_UPDATE_GATE_OFFSET)
+    else {
+        log(format_args!(
+            "selection: detail panel update not found exactly once; the board keeps the weapon \
+             highlighted when view 3 opened"
+        ));
+        return;
+    };
+    match unsafe {
+        er_hook::register_union_hook_runtime_derived(
+            panel_update,
+            panel_update_hook,
+            &PANEL_UPDATE_ORIG,
+        )
+    } {
+        Ok(()) => log(format_args!(
+            "selection: detail panel update hooked at 0x{panel_update:x}"
+        )),
+        Err(status) => log(format_args!(
+            "selection: detail panel update hook at 0x{panel_update:x} failed: {status:?}"
+        )),
+    }
+}
+
+/// While the board is up, the detail panel's update runs as if its panel were shown, so a cursor
+/// move in view 3 still names the highlighted record and the board follows it. The holder's
+/// shown byte is set only for this call and put back after it; the panel itself stays hidden by
+/// view 0's layout.
+///
+/// # Safety
+///
+/// Installed by `er-hook` on the function's entry; the game calls it on its menu thread with a
+/// live `parts`.
+unsafe extern "system" fn panel_update_hook(parts: usize, b: usize, c: usize, d: usize) -> usize {
+    let orig = PANEL_UPDATE_ORIG.load(Ordering::SeqCst);
+    if orig == 0 {
+        return 0;
+    }
+    let next: er_hook::UnionFn = unsafe { std::mem::transmute(orig) };
+    let flag = if SHOW_BOARD.load(Ordering::Relaxed) && parts != 0 {
+        unsafe {
+            er_game_base::mem::safe_read_usize(
+                parts + PANEL_HOLDER_OFFSET + HOLDER_SHOWN_FLAG_OFFSET,
+            )
+        }
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    if flag == 0 || unsafe { er_game_base::mem::safe_read_u8(flag) } != Some(0) {
+        return unsafe { next(parts, b, c, d) };
+    }
+    unsafe { (flag as *mut u8).write(1) };
+    let ret = unsafe { next(parts, b, c, d) };
+    unsafe { (flag as *mut u8).write(0) };
+    ret
 }
 
 /// The detail panel naming its highlighted record: whatever weapon id the name getter is asked
