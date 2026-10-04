@@ -537,6 +537,13 @@ CASES = [
         "instrument is needed and the ask must NOT halt",
     ),
     Case(
+        "ask_game_mechanic_you.jsonl",
+        None,
+        "the 2026-10-04 false positive, verbatim: a finished report saying the axes catch a roll "
+        "'after you run in'. That 'you' is the player in a game mechanic, mid-sentence, not a "
+        "request to the user -- must NOT halt",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
