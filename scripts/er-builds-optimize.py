@@ -392,6 +392,9 @@ class Scorer:
         return by
 
     def score(self, st: dict) -> float:
+        if self.objective == "spell_buff":
+            # A catalyst's sorcery or incantation scaling; one that does both counts its better.
+            return max(self.ar(st)["spell_buff"].values(), default=0.0)
         by = self.by_element(st)
         if self.objective == "ar":
             return sum(by.values())

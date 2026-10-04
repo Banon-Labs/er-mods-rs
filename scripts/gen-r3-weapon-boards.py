@@ -18,7 +18,7 @@ only arranges what they print:
 | --- | --- |
 | `icon_id`, `class`, `name`, `rule` | `EquipParamWeapon` `iconId`, `wepType` (Smithbox's `WEP_TYPE` names), the row name, and `gemMountType` / `disableGemAttr` |
 | `unique_intro`, `unique` | `er-mechanics-weapon-twins.py`: the comparable weapons (same class and build rules), their moveset match, and each advantage this weapon holds over them |
-| `infusions_intro`, `infusions` | `er-mechanics-infusions.py`: `rank_text`, and the `top physical` / `top elemental` / `top status` rows |
+| `infusions_intro`, `infusions` | `er-mechanics-infusions.py`: `rank_text`, and the `top physical` / `top elemental` / `top status` rows; for a class the melee ranking skips, `er-mechanics-class-best.py`: its rank within its class and the build behind it |
 | `speed` | `er-mechanics-weapon-card.py`: R1 first hit, reach and stamina, each ranked |
 | `gear` | `er-mechanics-gear-synergy.py --top 6`: the powerstance pair, the critical gear when the critical is above the median, the six best rows after the setup discount, and Spear Talisman when any hit pierces |
 
@@ -32,12 +32,13 @@ named; more are counted ("seven of the nine other daggers that can be infused").
 Which weapons
 -------------
 Every base row (`id % 10000 == 0`) the game's message files name (`er-builds-catalog.py`'s
-`catalog.json`, as the optimizer reads it), less the classes `er-builds-optimize.py`'s RL 150
-sweep skips (`SWEEP_SKIP_WEP_TYPES`): ammunition, consumables, bows, crossbows, ballistae, staves,
-seals and perfume bottles. The infusion section ranks a weapon by one melee hit against every
-other weapon's, and those classes are not in that ranking, so their board would carry a build
-section measured on a hit the weapon is not used for. A weapon that a source script cannot
-evaluate is left out and named in the generated header.
+`catalog.json`, as the optimizer reads it). The infusion section ranks a weapon by one melee hit
+against every other weapon's, so for the classes `er-builds-optimize.py`'s RL 150 sweep skips
+(`SWEEP_SKIP_WEP_TYPES`: ammunition, bows, crossbows, ballistae, staves, seals, perfume bottles
+and Unarmed) it comes from `er-mechanics-class-best.py` instead, which ranks each within its own
+class by what the class is used for: spell buff, attack rating, or for ammunition its own damage.
+Ammunition is not wielded, so its board has no unique, speed or gear rows. A weapon that a source
+script cannot evaluate is left out and named in the generated header.
 
 Cost, and why `--check` does not regenerate
 --------------------------------------------
@@ -351,6 +352,46 @@ def infusion_section(inf: dict) -> tuple[str, list[dict]]:
     return intro, rows
 
 
+#: What `er-mechanics-class-best.py` ranks each kind by, as the board's intro names it.
+MEASURE = {"sorcery": "sorcery scaling", "incantation": "incantation scaling", "ar": "attack rating",
+           "ammo": "its own damage, which no stat scales,"}
+
+
+def class_best_section(cb: dict | None, cls: str) -> tuple[str, list[dict]]:
+    """The build section of a class the melee ranking leaves out: its rank within its class, and
+    the build or the damage behind it."""
+    if cb is None:
+        return "No starting class can wield it at RL 150.", []
+    measure = MEASURE[cb["spell_kind"] or cb["kind"]]
+    if cb["rank"]:
+        place, tied, of = cb["rank"]
+        where = f"{'tied ' if tied else ''}{ordinal_n(place)} highest of the {of} {plural(cls)}"
+        intro = f"Ranked by {measure} at RL 150 against every other {cls.lower()}: {where}."
+    else:
+        intro = f"The only {cls.lower()}, so there is nothing to rank it against."
+    if cb["kind"] == "ammo":
+        intro = intro.replace(" at RL 150", "")
+        text = ", ".join(f"{k.capitalize()} {v:g}" for k, v in cb["damage"].items()) or "No damage"
+        status = ", ".join(f"{STATUS_TEXT.get(k, k)} buildup {v:g}" for k, v in cb["status"].items())
+        return intro, [{"key": "Damage", "text": text + "." + (f" {status.capitalize()}." if status else "")}]
+    st = cb["stats"]
+    stats = " / ".join(f"{STAT_LABEL[k]} {st[k]}" for k in STAT_LABEL if st[k] > 10)
+    start = f"from {'an' if cb['class'][:1] in 'AEIOU' else 'a'} {cb['class']} start" + (f": {stats}" if stats else "")
+    if cb["kind"] == "casting":
+        text = f"{measure.capitalize()} {cb['value']:.0f} {start}."
+    else:
+        parts = " + ".join(f"{k} {v:.0f}" for k, v in cb["damage"].items())
+        text = f"{cb['value']:.0f} AR" + (f" ({parts})" if len(cb["damage"]) > 1 else "") + f" {start}."
+        status = ", ".join(f"{STATUS_TEXT.get(k, k)} buildup {v:.0f}" for k, v in cb["status"].items())
+        if status:
+            text += f" {status.capitalize()}."
+    return intro, [{"key": cb["affinity"], "text": text}]
+
+
+def ordinal_n(n: int) -> str:
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
 # --------------------------------------------------------------------------------------------
 # the sources, one process's worth
 
@@ -377,6 +418,9 @@ class Sources:
         self.gd, self.gpop, self.gear, self.gtables = self.gs.build()
         self.sweep = self.inf.load_sweep()
         self.subcat = self.gs.TAL.SUBCAT
+        self.cb = _mod("er_mechanics_class_best", "er-mechanics-class-best.py")
+        self.cb_tables = self.cb.AR.Tables(None)
+        self.skip_types = _sweep_skip_types((HERE / "er-builds-optimize.py").read_text())
 
     def _memoize_optimizer(self):
         """Output-identical caches over the infusion path: the corpus window of an RL is the same
@@ -407,14 +451,24 @@ class Sources:
         so a change to how a board is worded needs no recomputation."""
         if self.reg.find_weapon(name) != wid:
             raise ValueError(f"the name {name!r} resolves to row {self.reg.find_weapon(name)}, not {wid}")
+        wep_type = self.reg.weapon[wid]["wepType"]
+        if wep_type in self.skip_types:
+            # A class the melee ranking leaves out is ranked within its class instead.
+            build = {"class_best": self.cb.report(name, self.cb_tables)}
+            if wep_type in self.cb.OPT.AMMO_WEP_TYPES:
+                # Ammunition is not wielded: no moveset, no R1, no gear that engages one.
+                out = {"twins": {"comparable": []}, **build, "card": None,
+                       "gear": {"powerstance": None, "critical": {}, "gear": []}, "subcat": {}}
+                return json.loads(json.dumps(out, default=str))
+        else:
+            inf = self.inf.report(name)
+            build = {"infusions": {"by_category": inf["by_category"], "rank_text": inf["rank_text"]}}
         tw = self.tw.twins(self.reg, wid)
         for r in tw:
             r["advantages"] = self.tw.advantages(self.reg, wid, r["id"])
-        inf = self.inf.report(name)
         card = self.card.speed_and_cost(name, self.rc, self.card_pop)
         gs = self.gs.rank(self.gd, self.gpop, self.gear, self.gtables, name, GEAR_TOP)
-        out = {"twins": {"comparable": tw},
-               "infusions": {"by_category": inf["by_category"], "rank_text": inf["rank_text"]},
+        out = {"twins": {"comparable": tw}, **build,
                "card": card,
                "gear": {"powerstance": gs["powerstance"], "critical": gs["critical"], "gear": gs["gear"]},
                "subcat": {str(k): v for k, v in self.subcat.items()}}
@@ -424,19 +478,22 @@ class Sources:
 def board(raw: dict, name: str, row: dict, cls: str) -> dict:
     rule, pop = rule_of(row["gemMountType"], row["disableGemAttr"])
     unique_intro, unique = unique_section(raw["twins"], cls, pop)
-    inf_intro, infusions = infusion_section(raw["infusions"])
+    if "class_best" in raw:
+        inf_intro, infusions = class_best_section(raw["class_best"], cls)
+    else:
+        inf_intro, infusions = infusion_section(raw["infusions"])
+    if raw["card"] is None:                                   # ammunition
+        rule, unique_intro = "Ammunition; fired from a bow, crossbow or ballista", ""
     subcat = {int(k): v for k, v in raw["subcat"].items()}
     return {"icon_id": row["iconId"], "class": cls.upper(), "name": name, "rule": rule,
             "unique_intro": unique_intro, "unique": unique, "infusions_intro": inf_intro,
-            "infusions": infusions, "speed": speed_section(raw["card"]),
+            "infusions": infusions, "speed": speed_section(raw["card"]) if raw["card"] else [],
             "gear": gear_section(raw["gear"], name, subcat)}
 
 
 def weapon_list() -> tuple[list[tuple[int, str, dict, str]], list[tuple[int, str, str]]]:
     """([(id, name, row, class)], [(id, name, why skipped)]): every base row the item list names."""
     pr = _mod("er_param_read", "er-param-read.py")
-    opt_src = (HERE / "er-builds-optimize.py").read_text()
-    skip_types = _sweep_skip_types(opt_src)
     catalog = Path.home() / ".cache" / "er-build-planner" / "catalog.json"
     real = set(json.loads(catalog.read_text())["armament"].values())
     rows = pr.rows(pr.param_bytes(pr.load(), "EquipParamWeapon"),
@@ -448,11 +505,16 @@ def weapon_list() -> tuple[list[tuple[int, str, dict, str]], list[tuple[int, str
         wid, nm = r["id"], names.get(r["id"])
         if wid % 10000 or not nm or nm.startswith("[") or wid not in real:
             continue
-        if r["wepType"] in skip_types:
-            skipped.append((wid, nm, f"class {types.get(r['wepType'], r['wepType'])} is not in the RL 150 sweep"))
+        cls = types.get(r["wepType"]) or UNNAMED_WEP_TYPES.get(r["wepType"])
+        if cls is None:
+            skipped.append((wid, nm, f"class {r['wepType']} has no name in Smithbox's WEP_TYPE"))
             continue
-        keep.append((wid, nm, r, types[r["wepType"]]))
+        keep.append((wid, nm, r, cls))
     return keep, skipped
+
+
+#: Classes Smithbox's `WEP_TYPE` enum does not name: 33 is the bare-handed row, Unarmed.
+UNNAMED_WEP_TYPES = {33: "Unarmed"}
 
 
 def _sweep_skip_types(src: str) -> set[int]:
@@ -846,6 +908,25 @@ def selftest() -> int:
                                 "longest of 419)."},
         {"key": "9 sp", "text": "Stamina per R1 one-handed (tied 47th cheapest of 451), 12 two-handed (tied 94th "
                                 "cheapest of 451)."}]
+
+    staff = {"kind": "casting", "spell_kind": "sorcery", "value": 277.9, "affinity": "Standard",
+             "class": "Astrologer", "stats": {"str": 8, "dex": 12, "int": 85, "fth": 7, "arc": 9},
+             "rank": [19, 0, 20], "of": 20}
+    assert class_best_section(staff, "Staff") == (
+        "Ranked by sorcery scaling at RL 150 against every other staff: 19th highest of the 20 staves.",
+        [{"key": "Standard", "text": "Sorcery scaling 278 from an Astrologer start: DEX 12 / INT 85."}])
+    arrow = {"kind": "ammo", "spell_kind": None, "value": 45.0, "damage": {"physical": 45.0},
+             "status": {"poison": 60.0}, "rank": [14, 1, 34], "of": 34}
+    assert class_best_section(arrow, "Arrow") == (
+        "Ranked by its own damage, which no stat scales, against every other arrow: tied 14th highest "
+        "of the 34 arrows.", [{"key": "Damage", "text": "Physical 45. Poison or rot buildup 60."}])
+    fist = {"kind": "ar", "spell_kind": None, "value": 32.3, "affinity": "Standard", "class": "Heavy Knight",
+            "stats": {"str": 46, "dex": 46, "int": 7, "fth": 8, "arc": 9}, "damage": {"physical": 32.3},
+            "status": {}, "rank": None, "of": 1}
+    assert class_best_section(fist, "Unarmed") == (
+        "The only unarmed, so there is nothing to rank it against.",
+        [{"key": "Standard", "text": "32 AR from a Heavy Knight start: STR 46 / DEX 46."}])
+    assert class_best_section(None, "Bow") == ("No starting class can wield it at RL 150.", [])
 
     assert rust_str('a "b" \\c') == '"a \\"b\\" \\\\c"'
     assert _sweep_skip_types("AMMO_WEP_TYPES = {81, 83}\nSWEEP_SKIP_WEP_TYPES = AMMO_WEP_TYPES | {0, 57}\n") == {
