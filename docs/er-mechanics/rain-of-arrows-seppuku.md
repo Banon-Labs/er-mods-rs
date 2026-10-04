@@ -6,7 +6,9 @@ grease instead of Seppuku does the same.
 
 Labels: `VERIFIED` = read from the 1.17.1 regulation or the 1.16.2 executable (Ghidra :8765,
 shift 0); `INFERRED` = follows from verified pieces but not traced end to end; `USER` = the
-user's in-game observation.
+user's in-game observation. Addresses are 1.17.1 (the installed build, read in
+`eldenring-deobf-1.17.1.bin`) with the 1.16.2 address in brackets; 1.17.1 equals 1.17.0 below rva
+`0xafefe9` and is `+0x70` at or above it.
 
 ## Lock-on (2026-10-04): the smoke is not shown to be the spreader
 
@@ -28,7 +30,21 @@ changes only where the emitter appears and whether the falling arrows home. So t
 exists in the locked case and not in the other two is the falling arrows landing on the target and
 on enemies within their 1 m radius. Every gate passes for them (context 1, scale 0.65).
 
-Two consequences, both `INFERRED`:
+Falsified by `USER` (2026-10-04): every test used Rain of Arrows with the grease applied well
+after the arrows had landed, and lock-on is needed only to make the hitbox cover all the enemies.
+The falling arrows are gone before the grease exists, so they cannot be the carrier. The two
+bullets below are kept as the reasoning that was ruled out.
+
+Proven live the same day (Frida, `scripts/frida/weapon-buff-bullet-hits.js`, run
+`br-20261004-223342-81c1`): the smoke 20003309 is the carrier. One locked-on Rain of Arrows gave
+4 falling-arrow hits with no buff live, then 115 smoke hits over 3,959 ms (the smoke's 4.0 s
+life). The first 6 returned no buff. The other 109 came after the grease went on: the buff reader
+returned 3313 (Drawstring Rot Grease - Right, rot 80, scale 1.0) and applied it on every hit. Why
+lock-on matters is still open. The `launchConditionType` 5 lead is ruled out: the gate spawns the
+smoke wherever a falling arrow lands, on a body or on the ground (`weapon-buff-leak.md`, "Smoke
+spawn gate and re-hit cadence").
+
+Two consequences, both `INFERRED` and both superseded by the paragraph above:
 
 - The spreader is the homed falling arrows, not the smoke. The smoke passes both gates in all three
   cases but builds nothing in two of them, so something not in the static data stops it (the
@@ -40,10 +56,13 @@ Two consequences, both `INFERRED`:
   locked-on test applied it after firing, the arrows theory is wrong too and only the trace below
   can say what carried it.
 
-`launchConditionType` 5 on 20003308 is read in `FUN_14039da40` (1.16.2): case 5 suppresses the
-child when the hit's material id (hit info +0x2c, passed by `FUN_14039dcc0`) is -1, so the smoke
-spawns only when 20003308's hit reports a material; case 4 is the reverse. `VERIFIED` for the
-switch; what the +0x2c id holds for a character hit versus a map hit is not traced.
+`launchConditionType` is read in `0x14039da50` [`FUN_14039da40`], called on a hit from
+`0x14039dcd0` [`FUN_14039dcc0`] and on expiry from `KillBullet` `0x14039f0c0` [`0x14039f0b0`].
+Hit info +0x2c is the struck Havok body's hit material, set for character and map hits alike;
+only the expiry path passes -1. Case 5 spawns on a hit and never on expiry, case 4 the reverse.
+On a hit the hitting bullet's own value decides; on expiry the child's. So 20003308 needs the
+falling arrow to land anywhere, and 20003309 follows 20003308 whether it hits or expires.
+`VERIFIED`; details and the full table in `weapon-buff-leak.md`.
 
 The trace that settles it is `scripts/frida/weapon-buff-bullet-hits.js` (not run: another session
 holds the game). Per enemy hit it logs the AtkParam id (0 = smoke, 5036850 = falling arrow,
@@ -79,29 +98,32 @@ hit.
    `effectTargetOpposeTarget` 1 and a 1.0 s duration. The lure itself is AI-side and is not
    traced here.
 4. **The smoke's hit context comes from the arrow's BehaviorParam category.** `VERIFIED`.
-   `FUN_14038e210` copies `BehaviorParam.category` (+0x1c, disassembly 0x14038e2ae) into the
-   bullet's attack-context byte. `FUN_14038e380` puts it in the attack info, and `FUN_140d24b10`
-   copies it to `AttackDamageInfo+0xda`. Every Piquebone BehaviorParam_PC row (variations 5040 and
+   `0x14038e220` [`FUN_14038e210`] copies `BehaviorParam.category` (+0x1c, disassembly
+   `0x14038e2be` [`0x14038e2ae`]) into the bullet's attack-context byte. `0x14038e390`
+   [`FUN_14038e380`] puts it in the attack info, and `0x140d26290` [`FUN_140d24b10`] copies it to
+   `AttackDamageInfo+0xda`. Every Piquebone BehaviorParam_PC row (variations 5040 and
    5041, ids 1050408xx / 1050418xx) has category 1. Per memory
    `bullets-carry-firing-weapon-hit-speffects-great-stars-heal-2026-10-01`, children launched
    through `HitBulletID` copy the parent's attack info.
 5. **At hit time the game reads the owner's live buffs.** `VERIFIED`. `CalculateDamage2`
-   (0x1404483b0; call at 0x140448dd5) runs `FUN_1404f71e0(damageDealer->specialEffect,
-   FUN_1404fee60(damageInfo))`. That returns the `atkOccurrenceSpEffectId` of the first live
-   stateInfo 152/153 entry passing `IsApplicableForCategory` (0x140500930), and applies it to the
-   victim through `FUN_1403e8c90(victim, id, dealer)`. Because the lookup happens per hit, a buff
+   `0x140448910` [`0x1404483b0`] (call at `0x140449335` [`0x140448dd5`]) runs
+   `0x1404f7fb0(damageDealer->specialEffect, 0x1404ffc30(damageInfo))` [`FUN_1404f71e0`,
+   `FUN_1404fee60`]. That returns the `atkOccurrenceSpEffectId` of the first live stateInfo
+   152/153 entry passing `IsApplicableForCategory` `0x140501700` [`0x140500930`], and applies it
+   to the victim through `0x1403e8e70(victim, id, dealer)` [`FUN_1403e8c90`]. Because the lookup happens per hit, a buff
    applied after the smoke spawned still rides it.
 6. **Category 1 admits right-hand buffs only.** `VERIFIED`. The context switch jump table at
-   0x140500b08 sends context 1 to 0x140500979, which refuses `wepParamChange` 2, 3 and 4 and
+   `0x1405018d8` [`0x140500b08`] sends context 1 to `0x140501749` [`0x140500979`], which refuses `wepParamChange` 2, 3 and 4 and
    accepts 1. Seppuku 1755 and Blood Grease Right 3190 are both stateInfo 152, spCategory 162,
    `wepParamChange` 1. Their on-attack rows are 1756 and 3191, each stateInfo 6 with
    `bloodAttackPower` 30. Left-hand rows (1758, 3194; `wepParamChange` 2) are refused, which
    matches the user's "main hand". `USER` + `VERIFIED`.
 7. **Repeated procs on everyone in range.** `INFERRED`. The smoke reaches 15 m and hits every
-   enemy in it. `FUN_1403960a0` opens a timed `DmgHitRecord` only when `dmgHitRecordLifeTime` is
-   above 0, and the smoke's is 0 with no shared list, so it runs with no hit record. Whether that
-   means re-hitting every tick is not traced inside `DmgMan`. The 1.0 s lure duration on 482/483
-   and the observed repeated procs both fit a continuously re-hitting cloud. Bleed's re-proc
+   enemy in it. `0x1403960b0` [`FUN_1403960a0`] opens a timed `DmgHitRecord` only when
+   `dmgHitRecordLifeTime` is above 0, and the smoke's is 0 with no shared list. The static read
+   (`weapon-buff-leak.md`, "Smoke spawn gate and re-hit cadence") then finds a lazily made record
+   whose entries never expire, which predicts one hit per victim per smoke. The live trace saw 115
+   smoke hits in 3.96 s, so either many victim/smoke pairs or a reset not yet found; open. Bleed's re-proc
    lockout is 1 s (memory `er-status-reproc-lockout-spcategory-2026-09-29`), so each enemy in the
    cloud would proc about once a second for as long as it keeps building 30 per hit.
 
@@ -128,17 +150,18 @@ Gate 1 `VERIFIED`: the context byte is ADI+0xda, written from the launch (see th
 "Which launches can carry a right-hand buff"). Offsets checked against the paramdef:
 `wepParamChange` +0x158, `magParamChange` +0x160 bit 7, `miracleParamChange` +0x161 bit 0,
 `shamanParamChange` +0x259 bit 5, each read by the matching case of `IsApplicableForCategory`
-(0x140500930).
+`0x140501700` [`0x140500930`].
 
 Gate 2 `VERIFIED`, and it was missing from every earlier version of this page:
 
-- `FUN_140d24b10` writes ADI+0x13c = AtkParam `statusAilmentAtkPowerCorrectRate` x 0.01 and
+- `0x140d26290` [`FUN_140d24b10`] writes ADI+0x13c = AtkParam `statusAilmentAtkPowerCorrectRate` x 0.01 and
   ADI+0x140 = `statusAilmentAtkPowerCorrectRate_byPoint` x 0.01.
-- In `CalculateDamage2`, right after `FUN_1404f71e0` returns the buff's on-hit id
-  (0x140448e12): if that on-hit row has byte +0x259 bit 0 set (`isUseStatusAilmentAtkPowerCorrect`;
+- In `CalculateDamage2`, right after `0x1404f7fb0` [`FUN_1404f71e0`] returns the buff's on-hit id
+  (`0x140449372` [`0x140448e12`]): if that on-hit row has byte +0x259 bit 0 set (`isUseStatusAilmentAtkPowerCorrect`;
   Ghidra's struct mislabels it `isCheckAboveShadowTest`), the rate passed on is
   ADI+0x140 x ADI+0x13c x the hit's rate.
-- That rate reaches `FUN_1403e8c90` -> `FUN_1403fade0` -> `FUN_14043daf0`, which builds
+- That rate reaches `0x1403e8e70` -> `0x1403fb010` -> `0x14043e050` [`FUN_1403e8c90` ->
+  `FUN_1403fade0` -> `FUN_14043daf0`], which builds
   `row.<status>AttackPower x rate x ADI.finalStatuses.<status>` (stateInfo 2 poison, 5 rot,
   6 bleed, 0x74 frost, 0x104 sleep, ...).
 - 48 of the 54 weapon-buff on-hit rows set the bit: every grease (3191 bleed 30, 3151 sleep 33,
@@ -154,7 +177,7 @@ pass a grease's on-hit row to the enemy with zero buildup even when the context 
 
 No. The reader walks the attacker's whole SpEffect list (`dealer->specialEffect`) at each hit and
 filters by context, hand byte, arm style (context 12) and sub-category mask; no weapon id is
-compared anywhere in `FUN_1404f71e0` or `IsApplicableForCategory` (`VERIFIED`). A grease or
+compared anywhere in `0x1404f7fb0` [`FUN_1404f71e0`] or `IsApplicableForCategory` (`VERIFIED`). A grease or
 Seppuku buff is a character-wide SpEffect entry tagged with a hand (`wepParamChange` 1 right,
 2 left), not something stored on the weapon. The swap in the measured case is there only because
 no bow or crossbow can hold a grease (`isEnhance` 0 on every bow, light bow, greatbow and crossbow
@@ -178,26 +201,26 @@ lingering field, and the ash allows Standard, Heavy, Keen and Quality, which kee
 
 `VERIFIED`. Seppuku 1753 (`bloodAttackPower` 9999) procs bleed on the player. Every bleed row
 cycles SpEffect 500 "Blood Loss (Cycled)" (stateInfo 467, `behaviorId` 2100, dmypoly 220) onto
-the bleeding character: `FUN_1404fae40` applies `cycleOccurrenceSpEffectId` to
-`container->owner`. `FUN_1404faa70` then fires BehaviorParam 2100 -> Bullet 1000 "Blood Loss -
+the bleeding character: `0x1404fbc10` [`FUN_1404fae40`] applies `cycleOccurrenceSpEffectId` to
+`container->owner`. `0x1404fb840` [`FUN_1404faa70`] then fires BehaviorParam 2100 -> Bullet 1000 "Blood Loss -
 Bullet" out of that character's own `chrBulletShooter`. Bullet 1000 is a 0.5 s, 7 m sphere with
 AtkParam 2 ("Impact: Oppose and Self") that applies 501 "Presence of Blood" (stateInfo 379, the
 Lord of Blood's Exultation trigger). The launch passes equip slot 0xc, and
-`PlayerIns::GetEquipmentEntryParamId` (0x140656960) returns -1 for it, so the burst carries no
+`PlayerIns::GetEquipmentEntryParamId` `0x1406577b0` [`0x140656960`] returns -1 for it, so the burst carries no
 weapon. BehaviorParam_PC 2100 is category 0, which takes the switch's default branch: only
-`wepParamChange` 0/5/6 rows pass there (`IsWepParamChange056` 0x140d50990), and the
+`wepParamChange` 0/5/6 rows pass there (`IsWepParamChange056` `0x140d52740` [`0x140d50990`]), and the
 right-hand 1755 does not. So the player's blood burst carries no buff, and a grease reproduces the
 effect without it. An enemy's own bleed proc fires an enemy-owned burst (NPC BehaviorParam 2100,
 category 6) with no buff to carry, so procs do not chain from enemy to enemy.
 
 ## Not proven
 
-- Smoke re-hit cadence with `dmgHitRecordLifeTime` 0 and `isEndlessHit` 0 (step 7): needs a trace
-  of how `DmgMan` treats a null hit record, or a Frida hook on `FUN_1403e8c90` counting
-  applications of 1756/3191 per victim per second.
-- `launchConditionType` 5 on 20003308 is "Unknown" in Paramdex, and its reader was not
-  identified. Whether the smoke needs the arrow to hit a character (the user aimed at an NPC) is
-  open.
+- Smoke re-hit cadence with `dmgHitRecordLifeTime` 0 and `isEndlessHit` 0 (step 7): the static
+  read predicts one hit per victim per smoke, the live trace saw 115 hits in 3.96 s. Settle it by
+  logging the victim (`[RCX+0x8]`) and the bullet (ADI+0x1d8) per `CalculateDamage2`
+  `0x140448910` [`0x1404483b0`] call and counting distinct pairs.
+- Why lock-on is needed. Not the `launchConditionType` gate (answered above: the smoke spawns
+  wherever a falling arrow lands).
 - Untested predictions from the gate: a right-hand Freezing, Poison or Soporific grease (3140,
   3175, 3150) spreads its status the same way; a left-hand grease does not; an Alluring Pot thrown
   while buffed does too, if its goods context also admits `wepParamChange` 1. (Answered below: the
@@ -215,7 +238,7 @@ Smithbox row names. Ids are 1.17.1 regulation.
 ### Which launches can carry a right-hand buff
 
 `VERIFIED` (1.16.2 :8765, shift 0). The context byte is not always `BehaviorParam.category`.
-`FUN_14038e210` takes it from one of three places, by what the bullet spawn data carries:
+`0x14038e220` [`FUN_14038e210`] takes it from one of three places, by what the bullet spawn data carries:
 
 | spawn data | context byte | values in the regulation |
 |---|---|---|
@@ -223,7 +246,7 @@ Smithbox row names. Ids are 1.17.1 regulation.
 | goods id (+0x18) | `EquipParamGoods.spEffectCategory` (+0x40) | 0, 5 |
 | magic id (+0xc) | `Magic.spEffectCategory` (+0x28) | 3 (sorcery), 4 (incantation) |
 
-The whole `IsApplicableForCategory` switch (jump table 0x140500b08, index = context - 1; context
+The whole `IsApplicableForCategory` switch (jump table `0x1405018d8` [`0x140500b08`], index = context - 1; context
 0 and anything above 12 take the default branch):
 
 | context | accepts | carries a `wepParamChange` 1 buff |
@@ -338,10 +361,11 @@ fired before it (the measured Piquebone case), so a swap is not what rules these
 
 ### Not proven, for these
 
-- Re-hit cadence. `FUN_1403960a0` is called from the bullet state updates `FUN_1403abfc0` and
-  `FUN_1403abf30`. It passes the previous `DmgMan` handle only while the radius is still
-  expanding and -1 otherwise, so a bullet past its growth asks `FUN_140526230` for a fresh damage
-  entry on each call. How often those state updates run, and how `DmgMan` dedupes a target with
-  no hit record, decides what record 0 means for the Piquebone smoke, White Shadow's Lure and
-  Soul Stifler.
+- Re-hit cadence. Corrected 2026-10-04: `0x1403960b0` [`FUN_1403960a0`] is called once when the
+  fly state starts (`0x1403abfd0` [`FUN_1403abfc0`], a fresh damage entry) and again from
+  `0x1403abf40` [`FUN_1403abf30`] only while the radius spreads, throttled to 1/6 s, passing the
+  previous handle each time, so the new entry inherits the old one's hit lists. With record 0 the
+  hit list is made on the first hit and never ages, which predicts one hit per victim per cloud
+  for the Piquebone smoke, White Shadow's Lure and Soul Stifler. That conflicts with the 115
+  live smoke hits; see `weapon-buff-leak.md`.
 - No combination above was tested in game.

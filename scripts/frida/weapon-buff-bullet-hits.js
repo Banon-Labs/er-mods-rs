@@ -55,7 +55,15 @@ const hooks = [];
 hooks.push(Interceptor.attach(CALC_DAMAGE2, {
     onEnter(args) {
         const adi = args[2];
+        // 1.17.1: RCX is the victim's CSChrDamageModule (victim ChrIns at +0x8), RDX the dealer,
+        // R8 the ADI, whose +0x1d8 is the attacking bullet instance.
+        let victim = null;
+        let bulletIns = null;
+        try { victim = args[0].add(8).readPointer().toString(); } catch (e) { victim = null; }
+        try { bulletIns = args[2].add(0x1d8).readPointer().toString(); } catch (e) { bulletIns = null; }
         const info = {
+            victim: victim,
+            bullet_ins: bulletIns,
             dealer: args[1].isNull() ? null : args[1].toString(),
             atk: rd(adi, 0x40, 's32'),
             bullet: rd(adi, 0x10c, 's32'),
