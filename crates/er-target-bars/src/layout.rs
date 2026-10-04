@@ -104,8 +104,12 @@ pub const BOSS_ART: BarArt = BarArt {
 /// an addition to the game's bar rather than as more health bars.
 pub const TAG_COPY_HEIGHT_SCALE: f32 = 0.75;
 pub const BOSS_COPY_HEIGHT_SCALE: f32 = 0.5;
-/// Gap between the game's bar and the first copy, and between copies, in stage pixels.
-pub const COPY_GAP: f32 = 1.0;
+/// Gap between the game's bar and the first copy's fill, and between the fills of consecutive
+/// copies, in stage pixels. Copies are stacked by fill height, not base height: the base art is
+/// mostly margin above and below its frame, so stacking whole bases left about a bar's height of
+/// empty space between strips (user report 2026-10-04). The bases overlap; render draws every
+/// base before any fill so no fill is covered.
+pub const COPY_GAP: f32 = 1.5;
 
 /// One `ChrNameHudData` entry, as much of it as the anchor needs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -205,11 +209,13 @@ impl BarCopy {
 /// The `index`th copy under the game's bar, on the stage.
 pub fn copy_at(anchor: Anchor, index: usize) -> BarCopy {
     let (art, [x, y], height_scale) = anchor.art();
-    let base_height = (art.base[3] - art.base[1]) * height_scale;
-    // The centre line of copy `index`: below the game bar's base, then one copy height plus a
-    // gap per copy.
-    let first_center = y + art.base[3] + COPY_GAP - art.base[1] * height_scale;
-    let center = first_center + index as f32 * (base_height + COPY_GAP);
+    let fill_height = (art.fill[3] - art.fill[1]) * height_scale;
+    // The centre line of copy `index`. The first copy's base must not reach up over the game
+    // bar's own fill, so its fill starts below the game's fill by the copy's top margin plus a
+    // gap; after that, one fill height plus a gap per copy.
+    let top_margin = (art.fill[1] - art.base[1]) * height_scale;
+    let first_center = y + art.fill[3] + top_margin + COPY_GAP - art.fill[1] * height_scale;
+    let center = first_center + index as f32 * (fill_height + COPY_GAP);
     let place = |rect: [f32; 4]| {
         [
             x + rect[0],
@@ -322,11 +328,12 @@ mod tests {
         assert_eq!(first.base[2], 959.0 + 73.95);
         assert_eq!(first.fill[0], 959.0 - 70.0);
         assert_eq!(first.fill[2] - first.fill[0], 136.0);
-        // Below the game bar's own base, with a gap.
-        assert!((first.base[1] - (567.0 + 7.75 + COPY_GAP)).abs() < 1e-3);
+        // The first copy's base starts one gap below the game bar's fill, never over it.
+        assert!((first.base[1] - (567.0 + 3.0 + COPY_GAP)).abs() < 1e-3);
         let second = copy_at(anchor, 1);
         assert_eq!(second.base[0], first.base[0]);
-        assert!(second.base[1] > first.base[3], "copies must not overlap");
+        // Fills stack one gap apart; bases may overlap.
+        assert!((second.fill[1] - first.fill[3] - COPY_GAP).abs() < 1e-3);
         assert!((first.base[3] - first.base[1] - 15.5 * TAG_COPY_HEIGHT_SCALE).abs() < 1e-3);
         assert_eq!(first.base_uv, TAG_ART.base_uv);
     }
@@ -336,7 +343,7 @@ mod tests {
         let first = copy_at(Anchor::Boss { slot: 0 }, 0);
         assert!((first.fill[0] - 461.85).abs() < 1e-3);
         assert!((first.fill[2] - 1461.85).abs() < 1e-3);
-        assert!(first.base[1] > BOSS_ORIGIN[1] + BOSS_ART.base[3]);
+        assert!(first.base[1] > BOSS_ORIGIN[1] + BOSS_ART.fill[3]);
         let upper = copy_at(Anchor::Boss { slot: 1 }, 0);
         assert!((first.base[1] - upper.base[1] - BOSS_ITEM_STEP).abs() < 1e-3);
     }

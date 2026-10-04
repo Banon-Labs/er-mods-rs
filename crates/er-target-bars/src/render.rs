@@ -148,6 +148,14 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
     // The background list: under every imgui window, over the game -- the bars belong to the
     // game's HUD, not on top of another overlay's panel.
     let draw_list = ui.get_background_draw_list();
+    // Copies are stacked by fill height, so a copy's base overlaps its neighbours' fills: every
+    // base goes down first, then every fill on top.
+    if let Some(images) = &images {
+        for index in 0..snapshot.rows.len() {
+            let copy = layout::copy_at(snapshot.anchor, index);
+            image(&draw_list, images.base, stage.rect(copy.base), copy.base_uv);
+        }
+    }
     for (index, row) in snapshot.rows.iter().enumerate() {
         let copy = layout::copy_at(snapshot.anchor, index);
         let base = stage.rect(copy.base);
@@ -155,7 +163,6 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
         let fill = stage.rect(fill_rect);
         match &images {
             Some(images) => {
-                image(&draw_list, images.base, base, copy.base_uv);
                 if fill[2] > fill[0] {
                     draw_list
                         .add_image(images.fill, [fill[0], fill[1]], [fill[2], fill[3]])
@@ -166,8 +173,10 @@ unsafe fn draw(ui: &Ui, frame: *const OverlayFrame) {
                 }
             }
             None => {
+                // The flat track is the full fill's rectangle, not the base's: bases overlap.
+                let track = stage.rect(copy.fill);
                 draw_list
-                    .add_rect([base[0], base[1]], [base[2], base[3]], BAR_TRACK)
+                    .add_rect([track[0], track[1]], [track[2], track[3]], BAR_TRACK)
                     .filled(true)
                     .build();
                 if fill[2] > fill[0] {
