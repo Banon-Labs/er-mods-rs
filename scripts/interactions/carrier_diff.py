@@ -16,7 +16,8 @@ it takes the magic branch, or 0 if the spawn carried no magic id; both refuse ev
 
 Cases and their in-game status (the user's observations, 2026-10-04):
 
-    piquebone    20003309  Piquebone smoke, any arrow row      carries the grease
+    roa_arrow    20003354  Rain of Arrows falling arrow         locked on: grease status (carrier inferred)
+    smoke        20003309  Piquebone smoke                      none after plain shot or unlocked RoA
     mist_aow     2416      Poisonous Mist ash cloud             poisons; its own bullet SpEffect 834
     eruption     2019      Eruption puddles                     does not carry the grease
     poison_mist  10722001  Poison Mist incantation cloud        does not carry the grease
@@ -32,7 +33,8 @@ import regdata  # noqa: E402
 
 CASES = [
     # name, bullet, launch kind, launch id, status
-    ('piquebone', 20003309, 'behavior', 105040851, 'carries (USER)'),
+    ('roa_arrow', 20003354, 'behavior', 105040851, 'locked: yes'),
+    ('smoke', 20003309, 'behavior', 105040300, 'plain: no'),
     ('rancor', 2021, 'behavior', 301302901, 'carries (USER)'),
     ('mist_aow', 2416, 'behavior', 300000162, 'own 834 (USER)'),
     ('eruption', 2019, 'behavior', 300000042, 'does not (USER)'),

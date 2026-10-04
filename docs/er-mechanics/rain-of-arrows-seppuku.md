@@ -1,4 +1,4 @@
-# Piquebone smoke spreads your right-hand status buff (Rain of Arrows + Seppuku or grease)
+# Rain of Arrows with Piquebone, locked on, spreads your right-hand status buff
 
 Observed by the user (ground truth, not re-derived here): Rain of Arrows fired with Piquebone
 Arrows at an NPC, followed by Seppuku, puts repeated bleed procs on every enemy in the area. A blood
@@ -8,7 +8,51 @@ Labels: `VERIFIED` = read from the 1.17.1 regulation or the 1.16.2 executable (G
 shift 0); `INFERRED` = follows from verified pieces but not traced end to end; `USER` = the
 user's in-game observation.
 
-## Short answer
+## Lock-on (2026-10-04): the smoke is not shown to be the spreader
+
+New `USER` ground truth: the grease builds status only when Rain of Arrows is fired locked on.
+Rain of Arrows without lock-on and plain Piquebone shots build none. That contradicts the short
+answer below, because the smoke is the same bullet in all three:
+
+| | plain Piquebone shot | Rain of Arrows, unlocked | Rain of Arrows, locked |
+|---|---|---|---|
+| launch row (all category 1) | BEH 1050403xx/8xx, e.g. 105040300 | 105040851 (FP anims 40060/44560; 105040856 = no-FP single arrow) | same row as unlocked |
+| chain | 20003300 -> 20003308 -> 20003309 | 20003351 -> 352 -> emitter 353 -> ~12 x 20003354 -> 20003308 -> 20003309 | same rows |
+| lock-dependent fields | none (arrow `homingAngle` 0) | 20003351 `EmittePosType` 6 "above and behind target" has no target; 20003354 `homingAngle` 10 has nothing to home on | emitter placed over the target; ~12 falling arrows home onto it |
+| hit that could carry the grease | arrow AtkParam_Pc 5036300 (scale 1.0), smoke AtkParam_Pc 0 (scale 1.0) | smoke (scale 1.0); arrows land at a fixed spot | falling arrows AtkParam_Pc 5036850 (scale 0.65, radius 0.05 -> 1.0 m, record 0.1), smoke (scale 1.0) |
+| grease status (`USER`) | none | none | yes |
+
+`VERIFIED` (regulation; the TimeAct of skill 406 on the Longbow fires judge 851 in the FP
+animations and 856 in the no-FP ones). Lock-on changes no row, no context byte and no AtkParam. It
+changes only where the emitter appears and whether the falling arrows home. So the one hit that
+exists in the locked case and not in the other two is the falling arrows landing on the target and
+on enemies within their 1 m radius. Every gate passes for them (context 1, scale 0.65).
+
+Two consequences, both `INFERRED`:
+
+- The spreader is the homed falling arrows, not the smoke. The smoke passes both gates in all three
+  cases but builds nothing in two of them, so something not in the static data stops it (the
+  hit-record behaviour of a `dmgHitRecordLifeTime` 0 bullet, a damage-path skip for a zero-damage
+  hit, or `launchConditionType` 5 on 20003308, see below). The scan now flags the smoke as a
+  measured negative it cannot explain and ranks the falling arrows as the positive.
+- The falling arrows land about 1.3 s into the animation plus the 0.8 s emitter, so the grease has
+  to be live before that. A grease applied after firing could not have reached them; if the
+  locked-on test applied it after firing, the arrows theory is wrong too and only the trace below
+  can say what carried it.
+
+`launchConditionType` 5 on 20003308 is read in `FUN_14039da40` (1.16.2): case 5 suppresses the
+child when the hit's material id (hit info +0x2c, passed by `FUN_14039dcc0`) is -1, so the smoke
+spawns only when 20003308's hit reports a material; case 4 is the reverse. `VERIFIED` for the
+switch; what the +0x2c id holds for a character hit versus a map hit is not traced.
+
+The trace that settles it is `scripts/frida/weapon-buff-bullet-hits.js` (not run: another session
+holds the game). Per enemy hit it logs the AtkParam id (0 = smoke, 5036850 = falling arrow,
+5036300 = plain arrow), the bullet id, the context byte, the status scale, whether the
+`0x267 & 8` skip fired, whether the buff reader ran, the on-hit SpEffect it returned, and every
+SpEffect applied to the victim. Three runs (plain shot, unlocked, locked, each with the grease
+on) answer which hit applies 3191 / 3151 and whether the smoke reaches the reader at all.
+
+## Short answer (superseded in part, see "Lock-on" above)
 
 Seppuku's self-bleed is not the cause. The cause is the Piquebone Arrow's white lure smoke. The
 smoke is a 4 s, 15 m player-owned zero-damage hitbox. Each time it hits an enemy, the game reads

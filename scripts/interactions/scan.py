@@ -522,6 +522,7 @@ def run(min_window=1.0):
     for p in pairs:
         p['score'] = score(reg, src, p)
         p['known'] = readers.KNOWN.get((p['reader'], p['carrier'].bid))
+        p['contradicted'] = readers.CONTRADICTED.get(p['carrier'].bid)
     pairs.sort(key=lambda p: (-p['score'], p['reader'], p['carrier'].bid, p['carrier'].ctx))
     return reg, src, cars, pairs
 
@@ -644,6 +645,16 @@ def write_doc(path, reg, src, cars, pairs, top):
         ctxs = sorted({c.ctx for c in cars if c.bid == bid})
         L.append(f'- bullet {bid}, ctx {ctxs}: {tried}. Fails because {why}.')
     L.append('')
+    L.append('## Measured negatives the gates do not explain')
+    L.append('')
+    L.append('Both gates pass for these, yet the user saw no grease status. They are kept out of the '
+             'ranking; `scripts/frida/weapon-buff-bullet-hits.js` is the trace that would name the '
+             'cause.')
+    L.append('')
+    for bid, (tried, why) in readers.CONTRADICTED.items():
+        rs = sorted({p['reader'] for p in pairs if p['carrier'].bid == bid})
+        L.append(f'- bullet {bid} (readers the scan would have ranked: {", ".join(rs)}): {tried}. {why}.')
+    L.append('')
     L.append(f'## Ranked candidates (top {top}, known cases excluded)')
     L.append('')
     L.append('At most ' + ', '.join(f'{v} {k}' for k, v in sorted(CAPS.items())) + ' rows, so one '
@@ -656,7 +667,7 @@ def write_doc(path, reg, src, cars, pairs, top):
     per = collections.Counter()
     per_bullet = collections.Counter()
     for p in G:
-        if p['known'] or per[p['reader']] >= CAPS.get(p['reader'], top):
+        if p['known'] or p['contradicted'] or per[p['reader']] >= CAPS.get(p['reader'], top):
             continue
         if per_bullet[p['carrier'].bid] >= 2:
             continue
@@ -671,8 +682,9 @@ def write_doc(path, reg, src, cars, pairs, top):
     L.append('')
     L.append('## Caveats that apply to every row')
     L.append('')
-    L.append('- Re-hit cadence for `dmgHitRecordLifeTime` 0 is not traced (`FUN_1403960a0` / DmgMan); '
-             'the Piquebone smoke shows repeated procs in play (user observation).')
+    L.append('- Re-hit cadence for `dmgHitRecordLifeTime` 0 is not traced (`FUN_1403960a0` / DmgMan). '
+             'The Piquebone smoke is no longer evidence for it: the user measured no grease status '
+             'from it after a plain shot or an unlocked Rain of Arrows.')
     L.append('- R1 picks the first passing entry in list order; with two passing buffs which one '
              'wins is not traced.')
     L.append('- Goods and spell hit contexts come from `EquipParamGoods/Magic.spEffectCategory` '
@@ -695,19 +707,29 @@ def selftest():
     assert not regdata.accepts(0, sp(1)) and regdata.accepts(0, sp(0))
     assert regdata.accepts(12, sp(2), True) and not regdata.accepts(12, sp(2), False)
     reg, src, cars, pairs = run()
-    hit = [p for p in pairs if p['reader'] == 'R1' and p['carrier'].bid == 20003309
+    # Positive (user test 2026-10-04): Rain of Arrows with Piquebone, locked on. Of its chain only
+    # the falling arrows 20003354 depend on a lock target (emitter 20003351 EmittePosType 6 "above
+    # and behind target", arrow homingAngle 10), so they are the scan's carrier for it.
+    hit = [p for p in pairs if p['reader'] == 'R1' and p['carrier'].bid == 20003354
            and p['carrier'].ctx == 1]
-    assert hit, 'scan did not find the Piquebone smoke x right-hand buff pair'
+    assert hit, 'scan did not find the Rain of Arrows falling arrow x right-hand buff pair'
     p = hit[0]
     ids = {r['id'] for r in p['rows']}
     assert 1755 in ids and 3190 in ids, f'Seppuku 1755 / Blood Grease 3190 missing: {sorted(ids)[:20]}'
     assert p['known'], 'pair not flagged as known'
-    assert p['carrier'].bi['a']['damaging'] is False
+    assert reg.bullet[20003351]['EmittePosType'] == 6 and reg.bullet[20003354]['homingAngle'] > 0
+    assert reg.bullet[20003300]['homingAngle'] == 0, 'plain shot should not home'
+    # Measured negatives the gates do not explain (plain shot, unlocked Rain of Arrows): the smoke
+    # passes both gates, so it must be flagged and kept out of the ranking, never scored as a hit.
+    smoke = [q for q in pairs if q['carrier'].bid == 20003309]
+    assert smoke and all(q['contradicted'] for q in smoke), 'smoke pairs must be flagged contradicted'
+    smoke_atk = reg.atk[reg.bullet[20003309]['atkId_Bullet']]
+    assert regdata.status_scale(smoke_atk) == 1.0 and regdata.accepts(1, reg.sp[3190])
     left = [q for q in pairs if q['reader'] == 'R1' and q['carrier'].bid == 20003309
             and q['carrier'].ctx == 2]
     assert left and 1755 not in {r['id'] for r in left[0]['rows']}, 'left-hand bolt should refuse 1755'
     owners = ' '.join(p['carrier'].owners)
-    assert 'Piquebone' in owners or 'Rain of Arrows' in owners, owners[:200]
+    assert 'Piquebone' in owners, owners[:200]
 
     # Measured negatives (user test 2026-10-04). Each must be a carrier the scan sees, so the
     # rejection comes from the gates and not from the bullet being missed.
@@ -734,13 +756,15 @@ def selftest():
                for r in q['rows']}
     assert not on_mist & {3190, 3150, 3140, 1755, 831}, sorted(on_mist & {3190, 3150, 3140, 1755, 831})
     assert reg.bullet[2416]['spEffectId0'] == 834
-    # And the positive passes both gates.
-    smoke_atk = reg.atk[reg.bullet[20003309]['atkId_Bullet']]
-    assert regdata.status_reaches(reg.sp[3191], smoke_atk) and regdata.status_scale(smoke_atk) == 1.0
+    # And the positive passes both gates (falling arrow AtkParam_Pc 5036850, scale 0.65).
+    arrow_atk = reg.atk[reg.bullet[20003354]['atkId_Bullet']]
+    assert regdata.status_reaches(reg.sp[3191], arrow_atk) and regdata.status_scale(arrow_atk) > 0
     rank = pairs.index(p) + 1
-    print(f'selftest ok: Piquebone smoke x right-hand buff found at rank {rank} of {len(pairs)} '
-          f'pairs, {len(p["rows"])} buff rows pass its gate; measured negatives rejected: '
-          + ', '.join(t for t, _ in readers.MEASURED_NEGATIVE.values()))
+    print(f'selftest ok: Rain of Arrows falling arrow x right-hand buff found at rank {rank} of '
+          f'{len(pairs)} pairs, {len(p["rows"])} buff rows pass its gate; measured negatives '
+          'rejected: ' + ', '.join(t for t, _ in readers.MEASURED_NEGATIVE.values())
+          + '; flagged, gates pass but measured negative: '
+          + ', '.join(t for t, _ in readers.CONTRADICTED.values()))
 
 
 def main():

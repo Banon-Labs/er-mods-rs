@@ -116,8 +116,21 @@ UNCROSSED = [
      'GetAtkFlickPower(dealer->specialEffect)', 'live; guard-repel strength', 'VERIFIED'),
 ]
 
+_ROA_LOCKED = ('Rain of Arrows falling Piquebone arrows, locked on (USER positive; that these '
+               'arrows rather than the smoke carry it is INFERRED)')
 KNOWN = {
-    ('R1', 20003309): 'Piquebone smoke (rain-of-arrows-seppuku.md; USER positive)',
+    ('R1', 20003354): _ROA_LOCKED,   # Piquebone Arrow (Fletched)
+    ('R1', 20003454): _ROA_LOCKED,   # Piquebone Arrow
+}
+
+# Measured in game, but the two gates do not explain the result: both pass, and the user saw no
+# grease status. The scan flags these and keeps them out of the ranking until a runtime trace
+# (scripts/frida/weapon-buff-bullet-hits.js) names the cause. bullet -> (what was tried, note).
+CONTRADICTED = {
+    20003309: ('Piquebone smoke after a plain Piquebone shot, or after Rain of Arrows without lock-on',
+               'context 1 and AtkParam_Pc 0 (status scale 1.0) pass both gates, and the smoke is the '
+               'same row in the locked case that did build status, so the smoke is not shown to carry '
+               'the grease at all'),
 }
 
 # Measured in game by the user, 2026-10-04: no status from the weapon buff. The selftest requires
