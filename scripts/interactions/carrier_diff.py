@@ -33,6 +33,7 @@ import regdata  # noqa: E402
 CASES = [
     # name, bullet, launch kind, launch id, status
     ('piquebone', 20003309, 'behavior', 105040851, 'carries (USER)'),
+    ('rancor', 2021, 'behavior', 301302901, 'carries (USER)'),
     ('mist_aow', 2416, 'behavior', 300000162, 'own 834 (USER)'),
     ('eruption', 2019, 'behavior', 300000042, 'does not (USER)'),
     ('poison_mist', 10722001, 'magic', 7220, 'does not (USER)'),
