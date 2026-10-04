@@ -49,6 +49,8 @@ members = [
   "crates/er-inventory-sort",
   # R3 in the item list cycles a fourth view that hides the menu and draws our own overlay.
   "crates/er-r3-view",
+  # Bars for the lock-on target: HP, stance, stamina and FP when it has them, status build-up.
+  "crates/er-target-bars",
   "crates/er-better-refills",
   # Hotkey that marks every auto-refillable item refill / no-refill in one press, cycling.
   # Runs from inside the storage box dialog's own update, which is what confines it to the only

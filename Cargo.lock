@@ -3387,6 +3387,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-target-bars"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-watermark-core",
+ "er-game-base",
+ "fromsoftware-shared",
+ "hudhook",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-telemetry"
 version = "0.1.0"
 dependencies = [

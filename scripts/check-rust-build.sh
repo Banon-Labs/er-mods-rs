@@ -162,6 +162,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-save-disable:er_save_disable
 		er-save-picker:er_save_picker
 		er-seamless-bugfixes:er_seamless_bugfixes
+		er-target-bars:er_target_bars
 		er-telemetry:er_telemetry
 		mushroom-man-runtime:mushroom_man
 	)

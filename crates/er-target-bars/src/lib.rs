@@ -1,0 +1,248 @@
+//! Bars for whatever you are locked on to.
+//!
+//! While the local player holds a lock-on, a small panel at the top of the screen shows the
+//! target's HP, its stance (the poise that breaks into a stagger) with the time until it starts
+//! to refill, its stamina and FP when it has those pools at all, and one bar per status that is
+//! building up or active: build-up against the target's own resistance, or the time left on a
+//! proc. Statuses the target is immune to never appear. Release the lock and the panel goes.
+//!
+//! # What this DLL does to the game
+//!
+//! Nothing. No detours, no memory writes, no param edits, no input. A `FrameBegin` game task reads
+//! the lock-on slot and the target's modules ([`game`] has every offset and where it was proven),
+//! and the overlay draws what that task published.
+//!
+//! # The log is the oracle
+//!
+//! `er-target-bars.log` beside the game records each new target with every raw value the panel
+//! was built from, each status the first time it builds up on that target, every proc as it
+//! starts, and a status line every ten seconds counting locked frames, stale handles and draws.
+
+// Ungated on purpose: the bar maths, the row selection, the status filter and the stale-handle
+// rejection are pure and are exercised by `cargo test` on the host, where the game-facing modules
+// compile out.
+mod log;
+mod model;
+
+#[cfg(windows)]
+mod game;
+#[cfg(windows)]
+mod render;
+
+#[cfg(windows)]
+use std::sync::{
+    Once,
+    atomic::{AtomicUsize, Ordering},
+};
+
+#[cfg(windows)]
+use eldenring::{
+    cs::{CSTaskGroupIndex, CSTaskImp},
+    fd4::FD4TaskData,
+};
+#[cfg(windows)]
+use fromsoftware_shared::{FromStatic, SharedTaskImpExt};
+#[cfg(windows)]
+use windows::Win32::{Foundation::HINSTANCE, System::SystemServices::DLL_PROCESS_ATTACH};
+
+#[cfg(windows)]
+use crate::log::{bars_log, reset_log_file};
+#[cfg(windows)]
+use crate::model::{ActiveHold, STATUS_COUNT, Status};
+
+const DLL_MAIN_SUCCESS: i32 = 1;
+
+/// Frames between status lines. At 60fps, roughly every ten seconds.
+#[cfg(windows)]
+const STATUS_LOG_TICKS: usize = 600;
+
+#[cfg(windows)]
+static START: Once = Once::new();
+#[cfg(windows)]
+static TICKS: AtomicUsize = AtomicUsize::new(0);
+/// Frames the lock-on slot named a live character.
+#[cfg(windows)]
+static FOUND: AtomicUsize = AtomicUsize::new(0);
+/// Frames it named a character no ChrSet holds any more.
+#[cfg(windows)]
+static STALE: AtomicUsize = AtomicUsize::new(0);
+
+/// What the game task carries between frames.
+#[cfg(windows)]
+#[derive(Default)]
+struct TaskState {
+    /// The handle the panel is about, so a new target resets everything per-target.
+    target: Option<u64>,
+    hold: ActiveHold,
+    /// Statuses already logged as building up on this target.
+    logged_buildup: [bool; STATUS_COUNT],
+    /// Statuses live last frame, to log a proc once as it starts.
+    was_live: [bool; STATUS_COUNT],
+    /// The last stale handle logged, so a lingering one is reported once.
+    logged_stale: Option<u64>,
+}
+
+#[cfg(windows)]
+fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
+    // Bounded: an unbounded spin on this singleton once starved the wineserver (er_game_base::wait).
+    er_game_base::wait::poll_until(|| unsafe { CSTaskImp::instance() }.ok())
+}
+
+/// One game frame.
+#[cfg(windows)]
+fn tick(state: &mut TaskState) {
+    let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
+    if ticks.is_multiple_of(STATUS_LOG_TICKS) && ticks > 0 {
+        bars_log(format_args!(
+            "status: ticks={ticks} found={} stale={} overlay_installed={} frames={} draws={}",
+            FOUND.load(Ordering::Relaxed),
+            STALE.load(Ordering::Relaxed),
+            render::installed(),
+            render::frames(),
+            render::draws()
+        ));
+    }
+    // SAFETY: the task runs on the game thread.
+    match unsafe { game::lookup() } {
+        game::Lookup::NoWorld | game::Lookup::Unlocked => {
+            if state.target.take().is_some() {
+                bars_log(format_args!("lock released"));
+            }
+            render::clear();
+        }
+        game::Lookup::Stale(handle) => {
+            STALE.fetch_add(1, Ordering::Relaxed);
+            if state.logged_stale != Some(handle) {
+                state.logged_stale = Some(handle);
+                bars_log(format_args!(
+                    "stale: lock-on handle {handle:#018x} names no live character; panel hidden"
+                ));
+            }
+            render::clear();
+        }
+        game::Lookup::Found {
+            handle,
+            address,
+            reading,
+        } => {
+            FOUND.fetch_add(1, Ordering::Relaxed);
+            if state.target != Some(handle) {
+                state.target = Some(handle);
+                state.hold.reset();
+                state.logged_buildup = [false; STATUS_COUNT];
+                state.was_live = [false; STATUS_COUNT];
+                bars_log(format_args!(
+                    "target: handle={handle:#018x} chr={address:#x} player={} npc_param={} \
+                     hp={}/{} fp={}/{} stamina={}/{} stance={:?} gauges={:?}",
+                    reading.is_player,
+                    reading.npc_param_id,
+                    reading.hp,
+                    reading.hp_max,
+                    reading.fp,
+                    reading.fp_max,
+                    reading.stamina,
+                    reading.stamina_max,
+                    reading.stance,
+                    reading.statuses
+                ));
+            }
+            let live = reading.live_flags();
+            for status in Status::ALL {
+                let index = status.index();
+                if let Some(gauges) = reading.statuses
+                    && !state.logged_buildup[index]
+                    && gauges[index].buildup() > 0
+                {
+                    state.logged_buildup[index] = true;
+                    bars_log(format_args!(
+                        "buildup: {} gauge {} of resistance {}",
+                        status.label(),
+                        gauges[index].gauge,
+                        gauges[index].resistance
+                    ));
+                }
+                if live[index] && !state.was_live[index] {
+                    bars_log(format_args!(
+                        "proc: {} active, timer {:?}",
+                        status.label(),
+                        reading.active[index].flatten()
+                    ));
+                }
+            }
+            state.was_live = live;
+            let now = render::now_ms() as f64 / 1000.0;
+            let held = state.hold.observe(now, &live);
+            render::publish(model::header(&reading), model::panel_rows(&reading, &held));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn spawn_game_task() {
+    let _ = std::thread::Builder::new()
+        .name("er-target-bars-task".to_owned())
+        .spawn(move || {
+            bars_log(format_args!("game task thread waiting for CSTaskImp"));
+            let Some(task) = wait_for_task_instance() else {
+                bars_log(format_args!(
+                    "CSTaskImp never appeared; this shell stays inert rather than spinning"
+                ));
+                return;
+            };
+            bars_log(format_args!("game task registering FrameBegin tick"));
+            let mut state = TaskState::default();
+            task.run_recurring(
+                move |_data: &FD4TaskData| tick(&mut state),
+                CSTaskGroupIndex::FrameBegin,
+            );
+        });
+}
+
+#[cfg(windows)]
+fn install(module_base: usize) {
+    reset_log_file();
+    bars_log(format_args!(
+        "attach: module_base={module_base:#x}; read-only lock-on target panel (no detours, no \
+         game writes), overlay ABI {:#06x}",
+        er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
+    ));
+    spawn_game_task();
+    render::install(module_base);
+}
+
+#[cfg(windows)]
+#[unsafe(no_mangle)]
+/// # Safety
+///
+/// Called by the Windows loader. On attach it only starts an installer thread -- hudhook's
+/// install takes locks and enumerates modules, neither of which belongs under the loader lock.
+pub unsafe extern "system" fn DllMain(
+    module: HINSTANCE,
+    reason: u32,
+    _reserved: *mut core::ffi::c_void,
+) -> i32 {
+    if reason == DLL_PROCESS_ATTACH {
+        // First, before anything that can panic: a panic crossing `extern "system"` is an abort
+        // that leaves no record, and this hook turns it into a file:line in the log.
+        er_game_base::panic_report::report_panics_to("er-target-bars", crate::log::bars_log);
+
+        let module_base = module.0 as usize;
+        START.call_once(|| {
+            let _ = std::thread::Builder::new()
+                .name("er-target-bars-install".to_owned())
+                .spawn(move || install(module_base));
+        });
+    }
+    DLL_MAIN_SUCCESS
+}
+
+#[cfg(not(windows))]
+#[unsafe(no_mangle)]
+pub extern "C" fn er_target_bars_host_stub() -> i32 {
+    DLL_MAIN_SUCCESS
+}
+
+// If this module wins the imgui context, every other overlay in the process has to be able to
+// find it by name.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();
