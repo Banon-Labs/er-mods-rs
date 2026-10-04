@@ -211,7 +211,18 @@ ANNOUNCES_BLOCK_RE = re.compile(
     r"|until\s+(?:it|that|they|the\s+\w+)\s+(?:finishes|finish|lands|land|completes|complete))\b",
     re.IGNORECASE,
 )
-answers_user_question = "?" in turn_prompt and not TASK_NOTIFICATION_PROMPT_RE.search(turn_prompt)
+# A question about the background work itself ("Anything yet?", "How is it going?") is answered
+# from the job's state, so it does not exempt the reply.
+STATUS_PROMPT_RE = re.compile(
+    r"\b(?:anything\s+yet|\w+\s+yet\s*\?|how(?:'s|\s+is|\s+are)\s+(?:it|that|they|things)\s+going"
+    r"|status|progress|still\s+running|done\s*\?|finished\s*\?|eta)\b",
+    re.IGNORECASE,
+)
+answers_user_question = (
+    "?" in turn_prompt
+    and not TASK_NOTIFICATION_PROMPT_RE.search(turn_prompt)
+    and not STATUS_PROMPT_RE.search(turn_prompt)
+)
 live_bg_is_pause = bool(scan.live_background_work(events)) and (
     not answers_user_question or bool(ANNOUNCES_BLOCK_RE.search(scrubbed))
 )
