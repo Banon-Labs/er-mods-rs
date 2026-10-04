@@ -142,7 +142,7 @@
 //! - 61530000 Lightning Perfume Bottle: class Perfume Bottle is not in the RL 150 sweep
 //! - 61540000 Deadly Poison Perfume Bottle: class Perfume Bottle is not in the RL 150 sweep
 
-// inputs-sha256 57760f4db55395d1013170496121efc2e237d907e2b34849d2420a4633a23312
+// inputs-sha256 c000af833bdb16918e28b2625f5b18b1c12becab6046004df09b9d70632e852e
 // body-sha256 3ccd090ff6af3f96e2174dd18bfd406aed26a77876415c86d2bb3c49ec5f0b97
 // ---- generated body below; its sha256 is recorded above ----
 use crate::board::{Board, Gear, Line};

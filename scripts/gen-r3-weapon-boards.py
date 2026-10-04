@@ -49,9 +49,9 @@ file's wording re-renders without recomputing. `--check` therefore checks inputs
 rather than output: `weapon_boards.inputs`, beside the module, records the sha256 of every
 repository source file and every data file the generation opened (read with an audit hook and the
 loaded modules, not listed by hand), and the module's header records the sha256 of that list and
-of its own Rust body. A changed source, a changed data file, or a hand-edited body makes the file stale. A data
-file that is absent (a machine with no game install) cannot be compared; `--check` says so and
-still checks the other two halves.
+of its own Rust body. A changed source or a hand-edited body makes the file stale. A data file is
+not part of any commit: one that is absent (a machine with no game install) or that differs here
+(the sweep was re-run from another checkout) is named by `--check` and does not fail it.
 """
 
 from __future__ import annotations
@@ -71,6 +71,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
+#: The main tree, when this checkout is one of its worktrees (`.worktrees/<name>` or
+#: `.claude/worktrees/<name>`); the board cache is shared between them.
+MAIN_ROOT = next((a for a in (REPO_ROOT.parent.parent, REPO_ROOT.parent.parent.parent)
+                  if REPO_ROOT.parent in (a / ".worktrees", a / ".claude" / "worktrees")), REPO_ROOT)
 OUT_RS = REPO_ROOT / "crates" / "er-r3-view" / "src" / "weapon_boards.rs"
 REL_OUT = OUT_RS.relative_to(REPO_ROOT).as_posix()
 SELF_REL = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()
@@ -533,12 +537,16 @@ def here_path(p: str) -> Path:
     real paths, so a repository file recorded by a run in another checkout is carried into this
     one by its path relative to that checkout's root. Measured 2026-10-03: a run in a worktree
     that was removed afterwards left `.../.claude/worktrees/agent-.../scripts/er-builds-embed.py`
-    in the cache, and the next render in the main tree died on it."""
-    marker = "/.claude/worktrees/"
-    if marker in p:
-        rest = p.split(marker, 1)[1]
-        if "/" in rest:
-            return REPO_ROOT / rest.split("/", 1)[1]
+    in the cache, and the next render in the main tree died on it. The other direction too: a
+    render in `.worktrees/target-bars-pr` on 2026-10-04 recorded five main-tree scripts as data
+    inputs, because the main tree's root is not this checkout's."""
+    for marker in ("/.claude/worktrees/", "/.worktrees/"):
+        if marker in p:
+            rest = p.split(marker, 1)[1]
+            if "/" in rest:
+                return REPO_ROOT / rest.split("/", 1)[1]
+    if MAIN_ROOT != REPO_ROOT and p.startswith(str(MAIN_ROOT) + "/"):
+        return REPO_ROOT / Path(p).relative_to(MAIN_ROOT)
     return resolve_display(p)
 
 
@@ -665,12 +673,18 @@ def parse_header(text: str) -> tuple[str | None, str | None, str]:
     return i[1] if i else None, b[1] if b else None, body
 
 
-def staleness(text: str, inputs: str) -> tuple[list[str], list[str]]:
-    """(why the file is stale, which data files could not be compared)."""
+def staleness(text: str, inputs: str) -> tuple[list[str], list[str], list[str]]:
+    """(why the file is stale, which data files are absent here, which differ here).
+
+    Only the committed half can make the file stale: the body and the repository sources. A data
+    file lives outside the repository, under one machine's home directory, and is rewritten by
+    runs in any checkout -- the RL 150 grease sweep was re-run from a newer branch on 2026-10-04,
+    and every older branch's boards then failed this check with nothing on that branch changed. So
+    a data file that differs here is reported beside the absent ones, never counted as stale."""
     inputs_sha, body_sha, body = parse_header(text)
-    why, absent = [], []
+    why, absent, moved = [], [], []
     if body_sha is None or inputs_sha is None:
-        return ["no generated header"], absent
+        return ["no generated header"], absent, moved
     if hashlib.sha256(body.encode()).hexdigest() != body_sha:
         why.append("the body was edited after generation")
     if hashlib.sha256(inputs.encode()).hexdigest() != inputs_sha:
@@ -690,8 +704,8 @@ def staleness(text: str, inputs: str) -> tuple[list[str], list[str]]:
         if not f.exists():
             absent.append(p)
         elif sha256_file(f) != h:
-            why.append(f"data {p} changed")
-    return why, absent
+            moved.append(p)
+    return why, absent, moved
 
 
 def check() -> int:
@@ -701,7 +715,11 @@ def check() -> int:
     if not OUT_INPUTS.exists():
         print(f"gen-r3-weapon-boards: {REL_INPUTS} does not exist; generate it", file=sys.stderr)
         return 1
-    why, absent = staleness(OUT_RS.read_text(), OUT_INPUTS.read_text())
+    why, absent, moved = staleness(OUT_RS.read_text(), OUT_INPUTS.read_text())
+    if moved:
+        print(f"gen-r3-weapon-boards: {len(moved)} data file(s) differ here from the generation, not "
+              "counted as stale (regenerate if this copy is meant to be the input): "
+              + ", ".join(moved[:5]) + (" ..." if len(moved) > 5 else ""))
     if absent:
         print(f"gen-r3-weapon-boards: {len(absent)} data file(s) absent here, not compared: "
               + ", ".join(absent[:5]) + (" ..." if len(absent) > 5 else ""))
@@ -860,8 +878,17 @@ def selftest() -> int:
         inputs = f"source {sha256_file(src_file)} {src_file}\ndata {'0' * 64} {Path(tmp) / 'absent.bin'}\n"
         text = (f"// inputs-sha256 {hashlib.sha256(inputs.encode()).hexdigest()}\n"
                 f"// body-sha256 {hashlib.sha256(body.encode()).hexdigest()}\n" + BEGIN + body)
-        why, absent = staleness(text, inputs)
-        assert why == [] and absent == [str(Path(tmp) / "absent.bin")], (why, absent)
+        why, absent, moved = staleness(text, inputs)
+        assert why == [] and absent == [str(Path(tmp) / "absent.bin")] and moved == [], (why, absent, moved)
+        # A data file that moved is named, and the file is still current.
+        data_file = Path(tmp) / "sweep.jsonl"
+        data_file.write_text("a\n")
+        with_data = inputs + f"data {sha256_file(data_file)} {data_file}\n"
+        dtext = (f"// inputs-sha256 {hashlib.sha256(with_data.encode()).hexdigest()}\n"
+                 f"// body-sha256 {hashlib.sha256(body.encode()).hexdigest()}\n" + BEGIN + body)
+        assert staleness(dtext, with_data)[::2] == ([], []), staleness(dtext, with_data)
+        data_file.write_text("b\n")
+        assert staleness(dtext, with_data)[::2] == ([], [str(data_file)]), staleness(dtext, with_data)
         assert staleness(text.replace("= 1;", "= 2;"), inputs)[0] == ["the body was edited after generation"]
         assert staleness(text, inputs + "source x y\n")[0] == [
             f"{OUT_INPUTS.name} does not match the module it was written with"]
