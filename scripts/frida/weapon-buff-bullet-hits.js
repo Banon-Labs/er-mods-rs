@@ -59,6 +59,10 @@ hooks.push(Interceptor.attach(CALC_DAMAGE2, {
             dealer: args[1].isNull() ? null : args[1].toString(),
             atk: rd(adi, 0x40, 's32'),
             bullet: rd(adi, 0x10c, 's32'),
+            // Launch-time source: equip slot (+0x48) and the weapon in the launching hand (+0x144).
+            // The proposed fix compares +0x144 with the weapon now in the buff's hand.
+            slot: rd(adi, 0x48, 's32'),
+            hand_weapon: rd(adi, 0x144, 's32'),
             ctx: rd(adi, 0xda, 'u8'),
             scale_rate: rd(adi, 0x13c, 'f32'),
             scale_point: rd(adi, 0x140, 'f32'),
@@ -81,16 +85,62 @@ hooks.push(Interceptor.attach(CALC_DAMAGE2, {
             send({ kind: 'counts', counts: counts });
             counts = {};
         }
-        if (WATCH_ATK.has(info.atk)) send(Object.assign({ kind: 'hit', t: Date.now() }, info));
+        // Any hit the reader answered with a buff row is a carrier, whatever its attack id, so
+        // Familial Rancor's spirits and carriers nobody has named yet are logged too.
+        if (WATCH_ATK.has(info.atk) || (info.on_hit !== null && info.on_hit > 0)) {
+            send(Object.assign({ kind: 'hit', t: Date.now() }, info));
+        }
     },
 }));
 
+// The proposed fix, as a prototype. When FIX is true a hand-tagged buff's on-hit row is refused
+// unless ADI+0x144 (the weapon that launched the hit) is the weapon now in that buff's hand.
+// Prototype limits: it refuses the first passing entry instead of walking on to the next, and it
+// skips the 10 on-hit ids that buffs of both hands share (880, 882, 1724, ...).
+const FIX = false;
+// atkOccurrenceSpEffectId -> hand of every stateInfo 152/153 row with wepParamChange 1/5 (R) or
+// 2/6 (L), from the 1.17.1 regulation; ids shared by both hands are left out.
+const ON_HIT_HAND = {"1511": "R", "1521": "R", "1756": "R", "1759": "L", "3141": "R", "3143": "R", "3145": "L", "3147": "L", "3151": "R", "3153": "R", "3155": "L", "3157": "L", "3176": "R", "3178": "R", "3180": "L", "3182": "L", "3191": "R", "3193": "R", "3195": "L", "3197": "L", "3311": "R", "3313": "R", "3315": "L", "3317": "L", "102311": "R", "102313": "R", "102315": "L", "102317": "L", "1449001": "R", "1626001": "R", "1632001": "R", "1723001": "R"};
+// PlayerIns::GetEquipmentEntryParamId, 1.16.2 0x140656960 -> 1.17.1 0x1406577b0 (read: slot
+// -6..11, else -1; reads PlayerIns+0x638), and the main player at WorldChrMan +0x1e508.
+const GET_EQUIP = new NativeFunction(game.base.add(ptr('0x1406577b0').sub(BASE)), 'int', ['pointer', 'int']);
+const WORLD_CHR_MAN = game.base.add(0x3d69ff8);
+
+function mainPlayer() {
+    try {
+        const wcm = WORLD_CHR_MAN.readPointer();
+        return wcm.isNull() ? null : wcm.add(0x1e508).readPointer();
+    } catch (e) {
+        return null;
+    }
+}
+
 hooks.push(Interceptor.attach(BUFF_READER, {
+    onEnter() {
+        // At the call in CalculateDamage2, RSI is the attacker and R14 the ADI; both are
+        // callee-saved, so they are still the caller's at entry.
+        this.attacker = this.context.rsi;
+        this.adi = this.context.r14;
+    },
     onLeave(ret) {
         const info = perThread[this.threadId];
         if (!info) return;
         info.reader_ran = true;
         info.on_hit = ret.toInt32();
+        const hand = ON_HIT_HAND[String(info.on_hit)];
+        if (!hand) return;
+        const player = mainPlayer();
+        if (player === null || !this.attacker.equals(player)) return;
+        const launch = rd(this.adi, 0x144, 's32');
+        const held = GET_EQUIP(player, hand === 'R' ? -1 : -2);
+        info.buff_hand = hand;
+        info.launch_weapon = launch;
+        info.held_weapon = held;
+        info.fix_refuses = launch !== held;
+        if (FIX && info.fix_refuses) {
+            ret.replace(ptr(-1));
+            info.refused = true;
+        }
     },
 }));
 
