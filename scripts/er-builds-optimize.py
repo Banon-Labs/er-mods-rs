@@ -469,7 +469,10 @@ def physical_build(tables, st: dict, defender: dict) -> tuple[bool, int, int]:
     The vote is by damage and not by AR because AR sums a split weapon's elements at face value:
     measured on STR 88 / DEX 9, Fire wins 90 of 98 votes by AR and Heavy wins 95 of 98 by damage,
     since each element meets its own defense and a split hit loses more to it."""
-    key = tuple(st[k] for k in DAMAGE_STATS)
+    # The defender is in the key: each RL window has its own median defender, and the vote is by
+    # damage on it, so a verdict cached under one window's defender is wrong for another's. Keyed
+    # by the stats alone, the answer depended on which RL a process happened to ask first.
+    key = (tuple(st[k] for k in DAMAGE_STATS), json.dumps(defender, sort_keys=True))
     if key in _PHYSICAL:
         return _PHYSICAL[key]
     dmg = {k: st[k] for k in DAMAGE_STATS}
