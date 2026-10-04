@@ -30,6 +30,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def _mod(name, fname):
+    # A caller that already loaded it (`gen-r3-weapon-boards.py`) keeps its instance: loading it
+    # again would replace `er_builds_optimize` in `sys.modules`, and the optimizer's worker pool
+    # could then no longer pickle `_optimize_one`.
+    if name in sys.modules:
+        return sys.modules[name]
     s = importlib.util.spec_from_file_location(name, os.path.join(HERE, fname))
     m = importlib.util.module_from_spec(s)
     sys.modules[name] = m
