@@ -14,14 +14,44 @@
 use std::mem::offset_of;
 
 use eldenring::cs::{
-    CSChrDataModule, CSChrSuperArmorModule, ChrIns, ChrInsModuleContainer, ChrSet, PlayerIns,
-    WorldChrMan,
+    CSChrDataModule, CSChrSuperArmorModule, CSFeManImp, ChrIns, ChrInsModuleContainer, ChrSet,
+    FrontEndViewValues, PlayerIns, TagHudData, WorldChrMan,
 };
 use fromsoftware_shared::FromStatic;
 
+use crate::layout::{self, Anchor, HudEntry};
 use crate::model::{
     self, LockState, STATUS_COUNT, StanceReading, Status, StatusGauge, TargetReading,
 };
+
+/// `CSFeManImp+0x78`, the HUD visibility state (0 hides everything).
+const FE_HUD_STATE: usize = 0x78;
+/// `CSFeManImp+0x80`, the `FrontEndViewValues` the HUD movie reads.
+const FE_FRONTEND_VALUES: usize = 0x80;
+/// `FrontEndViewValues+0x11d0`, eight enemy tags; `+0x1b10`, three boss bars.
+const FRONTEND_ENEMY_TAGS: usize = 0x11d0;
+const FRONTEND_BOSS_TAGS: usize = 0x1b10;
+const ENEMY_TAG_COUNT: usize = 8;
+const BOSS_TAG_COUNT: usize = 3;
+/// One `ChrNameHudData`: visible `+0x0`, not-on-screen `+0x2`, handle `+0x8`, stage x/y `i32` at
+/// `+0x10`/`+0x14` (measured live: the locked enemy's tag read 959, 567 and tracked it).
+const TAG_STRIDE: usize = 0x128;
+const TAG_VISIBLE: usize = 0x0;
+const TAG_NOT_ON_SCREEN: usize = 0x2;
+const TAG_HANDLE: usize = 0x8;
+const TAG_SCREEN_X: usize = 0x10;
+const TAG_SCREEN_Y: usize = 0x14;
+
+const _: () = assert!(offset_of!(CSFeManImp, hud_state) == FE_HUD_STATE);
+const _: () = assert!(offset_of!(CSFeManImp, frontend_values) == FE_FRONTEND_VALUES);
+const _: () = assert!(offset_of!(FrontEndViewValues, enemy_chr_tag_data) == FRONTEND_ENEMY_TAGS);
+const _: () = assert!(offset_of!(FrontEndViewValues, boss_list_tag_data) == FRONTEND_BOSS_TAGS);
+const _: () = assert!(std::mem::size_of::<TagHudData>() == TAG_STRIDE);
+const _: () = assert!(offset_of!(TagHudData, is_visible) == TAG_VISIBLE);
+const _: () = assert!(offset_of!(TagHudData, is_not_on_screen) == TAG_NOT_ON_SCREEN);
+const _: () = assert!(offset_of!(TagHudData, field_ins_handle) == TAG_HANDLE);
+const _: () = assert!(offset_of!(TagHudData, screen_pos_x) == TAG_SCREEN_X);
+const _: () = assert!(offset_of!(TagHudData, screen_pos_y) == TAG_SCREEN_Y);
 
 /// `ChrIns+0x8`, the character's own `FieldInsHandle`; `LockTgtMan` copies it to the player's
 /// lock-on slot (1.17.1 `0x1407180d2`).
@@ -88,7 +118,49 @@ pub(crate) enum Lookup {
         handle: u64,
         address: usize,
         reading: TargetReading,
+        /// The game's own HP bar for it, or `None` while the game shows none.
+        anchor: Option<Anchor>,
     },
+}
+
+/// Read `count` `ChrNameHudData` entries starting at `base`.
+///
+/// # Safety
+///
+/// `base` must be inside a live `CSFeManImp`, read on the game thread.
+unsafe fn hud_entries(base: usize, count: usize) -> Vec<HudEntry> {
+    (0..count)
+        .map(|index| {
+            let entry = base + index * TAG_STRIDE;
+            // SAFETY: inside the `FrontEndViewValues` the singleton embeds.
+            unsafe {
+                HudEntry {
+                    visible: read::<u8>(entry, TAG_VISIBLE) != 0,
+                    not_on_screen: read::<u8>(entry, TAG_NOT_ON_SCREEN) != 0,
+                    handle: read(entry, TAG_HANDLE),
+                    x: read(entry, TAG_SCREEN_X),
+                    y: read(entry, TAG_SCREEN_Y),
+                }
+            }
+        })
+        .collect()
+}
+
+/// The game's HP bar for `want`, from the HUD data `CSFeManImp` hands its movie.
+///
+/// # Safety
+///
+/// Must be called on the game thread.
+unsafe fn game_hp_bar(want: u64) -> Option<Anchor> {
+    // SAFETY: singleton access on the game thread; `Err` before the HUD exists.
+    let fe = unsafe { CSFeManImp::instance() }.ok()?;
+    let fe = std::ptr::from_ref::<CSFeManImp>(fe) as usize;
+    let values = fe + FE_FRONTEND_VALUES;
+    // SAFETY: fields of the live singleton.
+    let hud_state: u8 = unsafe { read(fe, FE_HUD_STATE) };
+    let enemy = unsafe { hud_entries(values + FRONTEND_ENEMY_TAGS, ENEMY_TAG_COUNT) };
+    let boss = unsafe { hud_entries(values + FRONTEND_BOSS_TAGS, BOSS_TAG_COUNT) };
+    layout::pick_anchor(want, hud_state, &enemy, &boss)
 }
 
 /// Read `T` at `base + offset`.
@@ -274,5 +346,7 @@ pub(crate) unsafe fn lookup() -> Lookup {
         address,
         // SAFETY: as above.
         reading: unsafe { read_target(address, player_vtable) },
+        // SAFETY: game thread.
+        anchor: unsafe { game_hp_bar(want) },
     }
 }

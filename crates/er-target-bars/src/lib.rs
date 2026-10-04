@@ -1,26 +1,30 @@
-//! Bars for whatever you are locked on to.
+//! Extra bars under the game's own HP bar for whatever you are locked on to.
 //!
-//! While the local player holds a lock-on, a small panel at the top of the screen shows the
-//! target's HP, its stance (the poise that breaks into a stagger) with the time until it starts
-//! to refill, its stamina and FP when it has those pools at all, and one bar per status that is
-//! building up or active: build-up against the target's own resistance, or the time left on a
-//! proc. Statuses the target is immune to never appear. Release the lock and the panel goes.
+//! The game already draws the target's HP: a floating tag over an ordinary enemy, a bar along the
+//! bottom for a boss. This adds thin bars directly under that bar, at its left edge and width:
+//! stance (the poise that breaks into a stagger), stamina and FP when the target has those pools
+//! at all, and one bar per status that is building up (against the target's own resistance) or
+//! active. Statuses the target is immune to never appear. The bars follow the game's bar as it
+//! moves and vanish whenever the game hides it; there is no panel and no second HP bar.
 //!
 //! # What this DLL does to the game
 //!
 //! Nothing. No detours, no memory writes, no param edits, no input. A `FrameBegin` game task reads
-//! the lock-on slot and the target's modules ([`game`] has every offset and where it was proven),
-//! and the overlay draws what that task published.
+//! the lock-on slot, the target's modules and the HUD's own tag data ([`game`] has every offset
+//! and where it was proven, [`layout`] the HUD geometry), and the overlay draws what that task
+//! published.
 //!
 //! # The log is the oracle
 //!
-//! `er-target-bars.log` beside the game records each new target with every raw value the panel
-//! was built from, each status the first time it builds up on that target, every proc as it
-//! starts, and a status line every ten seconds counting locked frames, stale handles and draws.
+//! `er-target-bars.log` beside the game records each new target with every raw value the bars
+//! were built from and which game bar they hang under, each status the first time it builds up on
+//! that target, every proc as it starts, and a status line every ten seconds counting locked
+//! frames, frames with a game bar shown, stale handles and draws.
 
 // Ungated on purpose: the bar maths, the row selection, the status filter and the stale-handle
 // rejection are pure and are exercised by `cargo test` on the host, where the game-facing modules
 // compile out.
+mod layout;
 mod log;
 mod model;
 
@@ -66,12 +70,15 @@ static FOUND: AtomicUsize = AtomicUsize::new(0);
 /// Frames it named a character no ChrSet holds any more.
 #[cfg(windows)]
 static STALE: AtomicUsize = AtomicUsize::new(0);
+/// Frames the game showed an HP bar for the live target, so the bars had somewhere to go.
+#[cfg(windows)]
+static ANCHORED: AtomicUsize = AtomicUsize::new(0);
 
 /// What the game task carries between frames.
 #[cfg(windows)]
 #[derive(Default)]
 struct TaskState {
-    /// The handle the panel is about, so a new target resets everything per-target.
+    /// The handle the bars are about, so a new target resets everything per-target.
     target: Option<u64>,
     hold: ActiveHold,
     /// Statuses already logged as building up on this target.
@@ -80,6 +87,8 @@ struct TaskState {
     was_live: [bool; STATUS_COUNT],
     /// The last stale handle logged, so a lingering one is reported once.
     logged_stale: Option<u64>,
+    /// The last game bar logged, so the log records each change rather than every frame.
+    logged_anchor: Option<Option<crate::layout::Anchor>>,
 }
 
 #[cfg(windows)]
@@ -94,8 +103,10 @@ fn tick(state: &mut TaskState) {
     let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
     if ticks.is_multiple_of(STATUS_LOG_TICKS) && ticks > 0 {
         bars_log(format_args!(
-            "status: ticks={ticks} found={} stale={} overlay_installed={} frames={} draws={}",
+            "status: ticks={ticks} found={} anchored={} stale={} overlay_installed={} frames={} \
+             draws={}",
             FOUND.load(Ordering::Relaxed),
+            ANCHORED.load(Ordering::Relaxed),
             STALE.load(Ordering::Relaxed),
             render::installed(),
             render::frames(),
@@ -115,7 +126,7 @@ fn tick(state: &mut TaskState) {
             if state.logged_stale != Some(handle) {
                 state.logged_stale = Some(handle);
                 bars_log(format_args!(
-                    "stale: lock-on handle {handle:#018x} names no live character; panel hidden"
+                    "stale: lock-on handle {handle:#018x} names no live character; bars hidden"
                 ));
             }
             render::clear();
@@ -124,6 +135,7 @@ fn tick(state: &mut TaskState) {
             handle,
             address,
             reading,
+            anchor,
         } => {
             FOUND.fetch_add(1, Ordering::Relaxed);
             if state.target != Some(handle) {
@@ -172,7 +184,19 @@ fn tick(state: &mut TaskState) {
             state.was_live = live;
             let now = render::now_ms() as f64 / 1000.0;
             let held = state.hold.observe(now, &live);
-            render::publish(model::header(&reading), model::panel_rows(&reading, &held));
+            // Logged on change only: which game bar the extras hang under, or that the game shows
+            // none (and so neither do we).
+            if state.logged_anchor != Some(anchor) {
+                state.logged_anchor = Some(anchor);
+                bars_log(format_args!("anchor: {anchor:?}"));
+            }
+            match anchor {
+                Some(anchor) => {
+                    ANCHORED.fetch_add(1, Ordering::Relaxed);
+                    render::publish(anchor, model::panel_rows(&reading, &held));
+                }
+                None => render::clear(),
+            }
         }
     }
 }
@@ -202,7 +226,7 @@ fn spawn_game_task() {
 fn install(module_base: usize) {
     reset_log_file();
     bars_log(format_args!(
-        "attach: module_base={module_base:#x}; read-only lock-on target panel (no detours, no \
+        "attach: module_base={module_base:#x}; read-only bars under the lock-on target's HP bar (no detours, no \
          game writes), overlay ABI {:#06x}",
         er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
     ));

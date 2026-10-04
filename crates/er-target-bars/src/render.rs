@@ -1,4 +1,9 @@
-//! Putting the panel on screen, through whatever imgui already exists in the process.
+//! Drawing the extra bars under the game's own HP bar, through whatever imgui already exists in
+//! the process.
+//!
+//! No panel and no HP bar of our own: each frame the bars are placed from the game's HUD data
+//! (see [`crate::layout`]), so they follow the game's bar as it moves and disappear whenever the
+//! game hides it.
 //!
 //! This DLL never installs a second `Present` hook. If another module hosts the overlay (the
 //! build watermark, in the profile this was written for) it registers as a guest and draws through
@@ -18,28 +23,20 @@ use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
+use crate::layout::{self, Anchor, StageTransform};
 use crate::log::bars_log;
 use crate::model::{self, Row};
 
-/// A panel older than this is not drawn: the game task stopped publishing (a load, a pause), and
-/// the character it describes may be gone.
+/// A snapshot older than this is not drawn: the game task stopped publishing (a load, a pause),
+/// and the character it describes may be gone.
 const MAX_SNAPSHOT_AGE_MS: u64 = 500;
 
-/// Panel sizes at 1080p; everything is multiplied by the frame's UI scale.
-const PANEL_WIDTH: f32 = 380.0;
-const PANEL_TOP_FRACTION: f32 = 0.09;
-const PADDING: f32 = 8.0;
-const LABEL_WIDTH: f32 = 96.0;
-const ROW_GAP: f32 = 4.0;
-const BAR_ROUNDING: f32 = 2.0;
-const PANEL_BACKGROUND: [f32; 4] = [0.0, 0.0, 0.0, 0.55];
-const BAR_TRACK: [f32; 4] = [0.15, 0.15, 0.15, 0.85];
-const TEXT_COLOR: [f32; 4] = [0.95, 0.93, 0.88, 1.0];
+const BAR_TRACK: [f32; 4] = [0.05, 0.05, 0.05, 0.75];
 const ACTIVE_OUTLINE: [f32; 4] = [1.0, 1.0, 1.0, 0.9];
 
 /// What the game task most recently published.
 struct Snapshot {
-    header: String,
+    anchor: Anchor,
     rows: Vec<Row>,
     published_ms: u64,
 }
@@ -47,7 +44,7 @@ struct Snapshot {
 static SNAPSHOT: Mutex<Option<Snapshot>> = Mutex::new(None);
 static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 
-/// Frames this module has drawn a panel into.
+/// Frames this module has drawn bars into.
 static DRAWS: AtomicUsize = AtomicUsize::new(0);
 /// Frames dispatched to this module at all, drawn or not.
 static FRAMES: AtomicUsize = AtomicUsize::new(0);
@@ -63,19 +60,19 @@ pub(crate) fn now_ms() -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Publish this frame's panel. Called from the game thread.
-pub(crate) fn publish(header: String, rows: Vec<Row>) {
+/// Publish this frame's bars and where the game's bar is. Called from the game thread.
+pub(crate) fn publish(anchor: Anchor, rows: Vec<Row>) {
     let published_ms = now_ms();
     if let Ok(mut slot) = SNAPSHOT.lock() {
         *slot = Some(Snapshot {
-            header,
+            anchor,
             rows,
             published_ms,
         });
     }
 }
 
-/// Hide the panel. Called when nothing is locked on.
+/// Draw nothing. Called when nothing is locked on, or the game shows no bar for the target.
 pub(crate) fn clear() {
     if let Ok(mut slot) = SNAPSHOT.lock() {
         *slot = None;
@@ -95,7 +92,7 @@ pub(crate) fn installed() -> bool {
 }
 
 /// Draw the current snapshot onto a live imgui frame.
-fn draw(ui: &Ui, scale: f32) {
+fn draw(ui: &Ui) {
     FRAMES.fetch_add(1, Ordering::Relaxed);
     let now = now_ms();
     let Ok(slot) = SNAPSHOT.lock() else {
@@ -108,71 +105,43 @@ fn draw(ui: &Ui, scale: f32) {
     {
         return;
     }
-    let [screen_width, screen_height] = ui.io().display_size;
-    let font = ui.current_font_size();
-    let row_height = (font + 6.0).max(16.0 * scale);
-    let width = PANEL_WIDTH * scale;
-    let padding = PADDING * scale;
-    let gap = ROW_GAP * scale;
-    let label_width = LABEL_WIDTH * scale;
-    let rows = snapshot.rows.len() as f32;
-    let height = padding * 2.0 + font + gap + rows * (row_height + gap);
-    let left = ((screen_width - width) / 2.0).max(0.0);
-    let top = screen_height * PANEL_TOP_FRACTION;
-
-    // The foreground list, so the panel sits above the game and above any imgui window another
-    // overlay in this process draws.
-    let draw_list = ui.get_foreground_draw_list();
-    draw_list
-        .add_rect([left, top], [left + width, top + height], PANEL_BACKGROUND)
-        .filled(true)
-        .rounding(4.0 * scale)
-        .build();
-    draw_list.add_text(
-        [left + padding, top + padding],
-        TEXT_COLOR,
-        &snapshot.header,
-    );
-
-    let bar_left = left + padding + label_width;
-    let bar_right = left + width - padding;
-    let mut y = top + padding + font + gap;
-    for row in &snapshot.rows {
-        let text_y = y + (row_height - font) / 2.0;
-        draw_list.add_text([left + padding, text_y], TEXT_COLOR, row.label);
+    let display = ui.io().display_size;
+    let Some(stage) = StageTransform::for_display(display) else {
+        return;
+    };
+    // The background list: under every imgui window, over the game -- the bars belong to the
+    // game's HUD, not on top of another overlay's panel.
+    let draw_list = ui.get_background_draw_list();
+    for (index, row) in snapshot.rows.iter().enumerate() {
+        let [left, top, right, bottom] = stage.rect(layout::bar_rect(snapshot.anchor, index));
         draw_list
-            .add_rect([bar_left, y], [bar_right, y + row_height], BAR_TRACK)
+            .add_rect([left, top], [right, bottom], BAR_TRACK)
             .filled(true)
-            .rounding(BAR_ROUNDING * scale)
             .build();
-        let filled = bar_left + (bar_right - bar_left) * row.fraction.clamp(0.0, 1.0);
-        if filled > bar_left {
+        let filled = left + (right - left) * row.fraction.clamp(0.0, 1.0);
+        if filled > left {
             draw_list
-                .add_rect([bar_left, y], [filled, y + row_height], row.color)
+                .add_rect([left, top], [filled, bottom], row.color)
                 .filled(true)
-                .rounding(BAR_ROUNDING * scale)
                 .build();
         }
         if row.active {
             draw_list
-                .add_rect([bar_left, y], [bar_right, y + row_height], ACTIVE_OUTLINE)
-                .rounding(BAR_ROUNDING * scale)
-                .thickness(2.0 * scale)
+                .add_rect([left, top], [right, bottom], ACTIVE_OUTLINE)
+                .thickness(stage.scale.max(1.0))
                 .build();
         }
-        let text_width = ui.calc_text_size(&row.text)[0];
-        draw_list.add_text(
-            [bar_right - padding - text_width, text_y],
-            TEXT_COLOR,
-            &row.text,
-        );
-        y += row_height + gap;
     }
     if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
         bars_log(format_args!(
-            "overlay: first panel drawn, {} row(s), display {screen_width}x{screen_height}, \
-             scale {scale:.2}",
-            snapshot.rows.len()
+            "overlay: first bars drawn, {} row(s) under {:?}, display {}x{}, stage scale {:.3} \
+             offset {:?}",
+            snapshot.rows.len(),
+            snapshot.anchor,
+            display[0],
+            display[1],
+            stage.scale,
+            stage.offset
         ));
     }
 }
@@ -183,24 +152,13 @@ fn draw(ui: &Ui, scale: f32) {
 ///
 /// `frame` is the pointer the overlay host just passed, live for the duration of this call.
 unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
-    // SAFETY: `frame` is the host's live pointer; read before adopting so a null is a no-op.
-    let host_scale = if frame.is_null() {
-        0.0
-    } else {
-        unsafe { (*frame).ui_scale }
-    };
     // Adopt the host's context and allocators before touching `ui`: imgui's current context is a
     // per-DLL global, so this module's copy is null until this runs.
     // SAFETY: `frame` is the host's live pointer.
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    let scale = if host_scale.is_finite() && host_scale > 0.0 {
-        host_scale
-    } else {
-        model::ui_scale_for(ui.io().display_size[1])
-    };
-    draw(ui, scale);
+    draw(ui);
 }
 
 /// This module's own render loop, used only when nothing else in the process hosts one.
@@ -215,8 +173,7 @@ impl ImguiRenderLoop for BarsOverlay {
         // Guests first and before any early return: this module hosts the only imgui context in
         // the process, so returning early here draws nothing for every other overlay too.
         er_build_watermark_core::overlay_host::dispatch_guests(ui);
-        let scale = model::ui_scale_for(ui.io().display_size[1]);
-        draw(ui, scale);
+        draw(ui);
         // The watermark never registers a guest; whichever module hosts carries its rows.
         er_build_watermark_core::draw_rows(ui, bars_log);
     }
@@ -248,7 +205,7 @@ pub(crate) fn install(hmodule_raw: usize) {
             } else {
                 INSTALLED.store(0, Ordering::SeqCst);
                 bars_log(format_args!(
-                    "overlay: a module owns the overlay but would not accept a guest -- the panel \
+                    "overlay: a module owns the overlay but would not accept a guest -- the bars \
                      cannot be drawn. The host speaks a different overlay ABI than this DLL's \
                      {:#06x}; rebuild the whole profile from one tree.",
                     er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG

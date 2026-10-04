@@ -178,17 +178,17 @@ impl TargetReading {
     }
 }
 
-/// What a row of the panel is about.
+/// What one extra bar under the game's HP bar is about. HP itself is never one: the game already
+/// draws it, and a second copy was exactly what the user rejected on 2026-10-04.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
-    Hp,
     Stance,
     Stamina,
     Fp,
     Status(Status),
 }
 
-/// One bar of the panel, ready to draw.
+/// One extra bar, ready to draw.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub kind: RowKind,
@@ -266,19 +266,10 @@ pub fn visible_statuses(
         .collect()
 }
 
-/// Build the panel's rows for one reading. `active` is the held activity from [`ActiveHold`].
+/// The extra bars for one reading, top to bottom. `active` is the held activity from
+/// [`ActiveHold`].
 pub fn panel_rows(reading: &TargetReading, active: &[bool; STATUS_COUNT]) -> Vec<Row> {
-    let mut rows = Vec::with_capacity(4 + STATUS_COUNT);
-    if reading.hp_max > 0 {
-        rows.push(Row {
-            kind: RowKind::Hp,
-            label: "HP",
-            fraction: fraction_i32(reading.hp, reading.hp_max),
-            text: format!("{} / {}", reading.hp.max(0), reading.hp_max),
-            color: [0.70, 0.12, 0.10, 1.0],
-            active: false,
-        });
-    }
+    let mut rows = Vec::with_capacity(3 + STATUS_COUNT);
     if let Some(stance) = reading.stance.filter(has_stance) {
         let mut text = format!("{:.0} / {:.0}", stance.current.max(0.0), stance.max);
         if let Some(seconds) = shown_seconds(stance.recover_in) {
@@ -440,25 +431,6 @@ pub fn is_fresh(published_ms: u64, now_ms: u64, max_age_ms: u64) -> bool {
     now_ms >= published_ms && now_ms - published_ms <= max_age_ms
 }
 
-/// Layout scale for a display height, against the 1080p the sizes are written in.
-pub fn ui_scale_for(display_height: f32) -> f32 {
-    if !display_height.is_finite() || display_height <= 0.0 {
-        return 1.0;
-    }
-    (display_height / 1080.0).clamp(0.5, 4.0)
-}
-
-/// Panel header: who the panel is about.
-pub fn header(reading: &TargetReading) -> String {
-    if reading.is_player {
-        "Target: player".to_owned()
-    } else if reading.npc_param_id > 0 {
-        format!("Target: NpcParam {}", reading.npc_param_id)
-    } else {
-        "Target".to_owned()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -538,14 +510,10 @@ mod tests {
     }
 
     #[test]
-    fn an_ordinary_enemy_gets_hp_stance_and_stamina_but_no_fp() {
+    fn an_ordinary_enemy_gets_stance_and_stamina_but_no_hp_copy_and_no_fp() {
         let rows = panel_rows(&enemy(), &[false; STATUS_COUNT]);
-        assert_eq!(
-            kinds(&rows),
-            vec![RowKind::Hp, RowKind::Stance, RowKind::Stamina]
-        );
-        assert_eq!(rows[0].text, "3148 / 3148");
-        assert_eq!(rows[2].text, "163 / 163");
+        assert_eq!(kinds(&rows), vec![RowKind::Stance, RowKind::Stamina]);
+        assert_eq!(rows[1].text, "163 / 163");
     }
 
     #[test]
@@ -556,7 +524,7 @@ mod tests {
         reading.stamina = 1;
         reading.stamina_max = 1;
         let rows = panel_rows(&reading, &[false; STATUS_COUNT]);
-        assert_eq!(kinds(&rows), vec![RowKind::Hp, RowKind::Stance]);
+        assert_eq!(kinds(&rows), vec![RowKind::Stance]);
     }
 
     #[test]
@@ -568,9 +536,9 @@ mod tests {
         let rows = panel_rows(&reading, &[false; STATUS_COUNT]);
         assert_eq!(
             kinds(&rows),
-            vec![RowKind::Hp, RowKind::Stance, RowKind::Stamina, RowKind::Fp]
+            vec![RowKind::Stance, RowKind::Stamina, RowKind::Fp]
         );
-        assert_eq!(rows[3].text, "40 / 120");
+        assert_eq!(rows[2].text, "40 / 120");
     }
 
     #[test]
@@ -582,11 +550,11 @@ mod tests {
             recover_in: 2.5,
         });
         let rows = panel_rows(&reading, &[false; STATUS_COUNT]);
-        assert_eq!(rows[1].text, "40 / 80  regen in 2.5s");
-        assert_eq!(rows[1].fraction, 0.5);
+        assert_eq!(rows[0].text, "40 / 80  regen in 2.5s");
+        assert_eq!(rows[0].fraction, 0.5);
         // At rest the timer sits just below zero (live: -0.0196); nothing to count down.
         let rows = panel_rows(&enemy(), &[false; STATUS_COUNT]);
-        assert_eq!(rows[1].text, "65 / 65");
+        assert_eq!(rows[0].text, "65 / 65");
     }
 
     #[test]
@@ -753,21 +721,5 @@ mod tests {
         assert!(is_fresh(1_000, 1_100, 500));
         assert!(!is_fresh(1_000, 1_600, 500));
         assert!(!is_fresh(2_000, 1_000, 500));
-    }
-
-    #[test]
-    fn ui_scale_tracks_display_height() {
-        assert_eq!(ui_scale_for(1080.0), 1.0);
-        assert_eq!(ui_scale_for(2160.0), 2.0);
-        assert_eq!(ui_scale_for(0.0), 1.0);
-        assert_eq!(ui_scale_for(f32::NAN), 1.0);
-    }
-
-    #[test]
-    fn the_header_names_players_and_npc_rows() {
-        assert_eq!(header(&enemy()), "Target: NpcParam 46000014");
-        let mut player = enemy();
-        player.is_player = true;
-        assert_eq!(header(&player), "Target: player");
     }
 }
