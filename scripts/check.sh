@@ -2339,6 +2339,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-r3-view's scroll arithmetic for the weapon board's gear list. The six tests are pure
+# integer/float logic with no `cfg(windows)`, so the windows-target `cargo xwin test --lib` in
+# check-rust-build.sh is not where they belong: check-test-target-coverage.py counts them as host
+# tests and requires a host runner.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
+
 # The patch registry invariants (no two patches share a flag, key or address; every
 # patch actually changes its byte; `target` follows a window the running build moved) and
 # the config parser. Host-testable because none of it needs a game -- the addresses are
