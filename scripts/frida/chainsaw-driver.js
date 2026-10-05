@@ -1646,6 +1646,30 @@ function bind () {
       const mine = uint64(S.pad.actions || 0);
       if (!raw.and(mine.not()).equals(0)) S.foreign.actions += 1;
       args[0].add(0x10).writeU64(mine);
+      // `move: { m, state, delay, frames }` (test setup): walk forward at speed level m for `frames`
+      // frames, starting `delay` frames after the drive enters `state`. The manipulator's move vector
+      // +0x10 / +0x70 = (0, 0, -m, 0) and module+0xfc bit 0, rewritten every frame of the walk and
+      // zeroed once after (docs/er-mechanics/movement-input-injection.md; measured with
+      // action-script.js 2026-10-05: walk clip a003_020010, speed level 0.5).
+      const mv = cfgIn.move;
+      if (mv && S.driver !== null) {
+        if (S.driver.state !== S.moveState) { S.moveState = S.driver.state; if (S.driver.state === mv.state && S.moveFrom === undefined) S.moveFrom = S.frame + (mv.delay || 0); }
+        const on = S.moveFrom !== undefined && S.frame >= S.moveFrom && S.frame < S.moveFrom + (mv.frames || 30);
+        if (on || S.moving) {
+          try {
+            const ctrl = p.add(0x58).readPointer();
+            let man = ctrl.add(0x3b0).readPointer();
+            if (man.isNull()) man = ctrl.add(0x18).readPointer();
+            const m = on ? (mv.m || 1) : 0;
+            [0x10, 0x70].forEach(function (o) { man.add(o).writeFloat(0); man.add(o + 4).writeFloat(0); man.add(o + 8).writeFloat(-m); man.add(o + 12).writeFloat(0); });
+            const f = args[0].add(0xfc).readU32();
+            args[0].add(0xfc).writeU32(on ? (f | 1) : (f & ~1));
+            if (on !== S.moving) send2('move', { on: on, state: S.driver.state, speedLevel: ctrl.add(0x3a0).readFloat() });
+            S.moving = on;
+            if (!on) S.moveFrom = undefined;
+          } catch (e) { S.moving = false; send2('move', { error: e.message }); }
+        }
+      }
       // The pad manipulator's tap command, issued at the point it would have been: during this
       // player's manipulator update, before the request bits are consumed.
       if (S.pendingCommand) {
