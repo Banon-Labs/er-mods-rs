@@ -389,12 +389,21 @@ rows each hitbox resolves to. The stance loop on Starscourge is the only fallbac
     [Stance loop without sync, without FP], [Wild Strikes `a610_*`], [same],
     [Combo finishers], [Spinning Slash `a603_*`; second finisher Bloodboon Ritual `a834_040020` or Stormcaller `a623_042420`], [Spinning Slash, Double Slash, Sword Dance, Stormcaller, Blood Blade chains],
     [Charged skill released early], [Charge Forth `a605_040001`], [Charge Forth, Carian Grandeur, Black Flame Tornado, Siluria's Woe and similar],
-    [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [routing not traced],
+    [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [Causality's Wrath follow-up after activation (*measured*); a plain weapon switch breaks it (*measured*)],
     [Spinning Chain with 0 < FP < cost], [Spinning Wheel `a839_040055` (start), Wild Strikes `a610_040056/57` (loop)], [no swap needed (*data*, routing unverified)],
     [Thrusting-shield heavy specials], [axe `a030` or claw `a022` clips], [Dueling, Carian and Ritual Shields],
     [Scythe left heavy 5], [straight sword `a023_035040`], [scythes],
   ),
 ) <tbl-fallbacks>
+
+Causality's Wrath (Golden Order Flail) reaches the `SwordArtsOneShot_111` selector the way its
+caption says: activating the skill plays `a973_040000`, and the additional input plays
+`a973_040111` (*measured*, `scripts/frida/skill-clip-trace.js`, 5 October 2026). Activating it and
+then switching the right hand to another weapon by hand does not carry it over: the follow-up input
+started the new weapon's own skill, `a663_040000`, twice. The skill id the behavior script reads
+follows the held weapon, so an ordinary switch ends Causality's Wrath before the fallback can
+happen. Reaching `a928_040111` on another weapon would need the equip to land inside the skill, the
+way the stance loop is reached; that has not been tried.
 
 The stance follow-up attacks (`040060/65/70`) have generic `a000_` children and borrow nothing.
 Working notes:
