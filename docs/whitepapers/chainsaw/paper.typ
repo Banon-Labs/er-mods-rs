@@ -388,7 +388,7 @@ rows each hitbox resolves to. The stance loop on Starscourge is the only fallbac
     [Stance start, loop, loop while moving], [Spinning Wheel `a839_040050/51/52` (13, 8, 10 hit events)], [any skill without its own clip, after a mid-skill equip (loop *measured*)],
     [Stance loop without sync, without FP], [Wild Strikes `a610_*`], [same],
     [Combo finishers], [Spinning Slash `a603_*`; second finisher Bloodboon Ritual `a834_040020` or Stormcaller `a623_042420`], [Spinning Slash, Double Slash, Sword Dance, Stormcaller, Blood Blade chains],
-    [Charged skill released early], [Charge Forth `a605_040001`], [Charge Forth, Carian Grandeur, Black Flame Tornado, Siluria's Woe and similar],
+    [Charged skill released early], [Charge Forth `a605_040001`], [Glintstone Dart (Glintstone Kris) swapped to Meteoric Ore Blade on its first clip, L2 released: `a605_040001` played on two attempts, 4 hits with the held weapon's row 301701905 (*measured*, `drive-watch41`)],
     [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [Causality's Wrath follow-up after activation (*measured*); a plain weapon switch breaks it (*measured*)],
     [Spinning Chain with 0 < FP < cost], [Spinning Wheel `a839_040055` (start), Wild Strikes `a610_040056/57` (loop)], [does not happen: at FP 5 (cost above it) the Flail played its own `a625_040050/51/52/53`, the loop running on at FP 0 (*measured*)],
     [Thrusting-shield heavy specials], [axe `a030` or claw `a022` clips], [Dueling, Carian and Ritual Shields],
