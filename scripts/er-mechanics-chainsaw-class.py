@@ -210,6 +210,42 @@ def target_check(t, sword_arts_id, target_name):
             'loop_hits': clip_hits(t, sword_arts_id, wid, CLIP_LOOP)}
 
 
+#: Spinning Wheel (Ghiza's Wheel): its loop a839_040051 is child 0 of `DrawStanceRightLoop_CMSG`, so
+#: it is the clip that plays when the held weapon's own skill TimeAct has no 040051 (measured on
+#: Starscourge, drive-watch27: every attack-stance source looped 839040051 there).
+FALLBACK_LOOP_SKILL = 1039
+
+
+def loop_carriers(t, weapons=None):
+    """Every player weapon that turns the carried loop into damage once it is the held weapon.
+
+    A weapon whose own skill has a 040051 plays that loop instead (`own_loop`); otherwise the
+    fallback Spinning Wheel loop plays and its judges resolve through this weapon's
+    behaviorVariationId. Bows and crossbows are left out: the loop update diverts them."""
+    weapons = weapons or player_weapons(t)
+    out = []
+    for wid in weapons:
+        w = t.reg.weapon[wid]
+        if w['wepmotionCategory'] in DIVERTED_CATEGORIES:
+            continue
+        own = w['swordArtsParamId']
+        own_tae = ASH.skill_tae(t, own) or {}
+        hits = clip_hits(t, FALLBACK_LOOP_SKILL, wid, CLIP_LOOP) or []
+        # clip_hits keeps only 'melee' (damaging, any element or flat) and 'bullet' events.
+        dmg = hits
+        if not dmg:
+            continue
+        atk = [t.reg.atk.get(h['atk_row'], {}) for h in dmg]
+        out.append({'id': wid, 'name': t.reg.weapon_names[wid], 'behaviorVariationId': w['behaviorVariationId'],
+                    'own_skill': t.arts_name(own), 'own_loop': CLIP_LOOP in own_tae,
+                    'hits': len(dmg), 'atk_rows': sorted({h['atk_row'] for h in dmg}),
+                    'atk_names': sorted({str(t.reg.atk_names.get(h['atk_row'])) for h in dmg}),
+                    'mv_phys_max': max(h['mv_phys'] or 0 for h in dmg),
+                    'dmg_level_max': max(a.get('dmgLevel', 0) for a in atk)})
+    out.sort(key=lambda r: (-r['dmg_level_max'], -r['mv_phys_max'], r['name']))
+    return out
+
+
 def print_report(r, t):
     print(f"IsAttackStanceArts ids (c0000.hks): {r['hks_attack_stance_ids']}")
     print(f"  ids with no SwordArtsParam row: {r['attack_stance_ids_without_a_row']}")
@@ -299,10 +335,23 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--json', action='store_true')
     ap.add_argument('--selftest', action='store_true')
+    ap.add_argument('--loop-carriers', action='store_true',
+                    help='weapons that deal damage with the carried loop once held (target side of the swap)')
     args = ap.parse_args()
     if args.selftest:
         return selftest()
     t = ASH.AshTables()
+    if args.loop_carriers:
+        rows = loop_carriers(t)
+        if args.json:
+            print(json.dumps(rows, indent=1))
+        else:
+            for x in rows:
+                print(f"dmgLevel {x['dmg_level_max']}  MV {x['mv_phys_max']:4}  {x['name']} ({x['id']}, var "
+                      f"{x['behaviorVariationId']})  own skill {x['own_skill']}{' [own loop plays]' if x['own_loop'] else ''}"
+                      f"  atk {x['atk_rows']} {x['atk_names']}")
+            print(f'{len(rows)} weapons')
+        return 0
     r = build(t)
     if args.json:
         r['target_check'] = target_check(t, 110, 'Starscourge Greatsword')
