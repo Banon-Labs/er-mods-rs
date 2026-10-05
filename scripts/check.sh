@@ -2245,6 +2245,9 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # nothing else in any gate would ever run these.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 
+# er-r3-view's scroll timing (the pause at the top, the step rate) is host-testable.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
+
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed nothing ran them: the workspace
 # pins `default-members` to er-quickload, so a bare `cargo test` never selects this crate and the
