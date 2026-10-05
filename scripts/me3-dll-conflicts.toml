@@ -803,6 +803,12 @@ once per frame, and both DLLs pin the same hudhook so the `ui` pointer crossing 
 is the type both were built against (OVERLAY_ABI_TAG refuses the pair if that stops being true). \
 Load order no longer decides who is visible."""
 "er-better-refills" = "Hooks the native storage-box toggle and calls the game's own refill; no shared prologue."
+"er-allow-hostile-actions" = """Co-loadable with everything here. It installs one bare MinHook \
+detour, on the SpecialEffect add-entry function (1.16.2 `0x4fd090`, 1.17.1 `0x4fde60`), which no \
+other crate in this workspace hooks -- `check-shared-hook-rvas.py` would name a second owner. The \
+nearest neighbour is er-seamless-bugfixes' guard on `SpecialEffect::Apply` (1.16.2 `0x4fa8e0`), \
+the caller one frame up: a different prologue, and both detours run in sequence on the same call. \
+Everything else is a call to the game's own `GetSpEffectParam` and two pointer reads."""
 "er-enemynpc-effects" = """Co-loadable with the product. It detours exactly one address -- \
 the DirectInput keyboard `GetDeviceState` slot -- through `er_hook::register_shared_hook`, so the \
 product's single MinHook instance owns the prologue and the handlers chain; see the [[shared]] \

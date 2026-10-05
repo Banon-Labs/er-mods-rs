@@ -1,0 +1,21 @@
+[package]
+name = "er-allow-hostile-actions"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_allow_hostile_actions"
+crate-type = ["cdylib"]
+
+# Refuses the "Disallow Hostile Actions" SpEffect (any row with stateInfo 457) for the main
+# player, at the one function every SpEffect add goes through. No regulation edit: the event
+# scripts still try to apply it, and the add says no.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+
+[lints]
+workspace = true

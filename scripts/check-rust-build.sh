@@ -136,6 +136,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 	# er-ags-stub produces amd_ags_x64.dll. Deriving the filename would silently skip those,
 	# which is how four overridden `[lib] name`s went unchecked before.
 	me3_shells=(
+		er-allow-hostile-actions:er_allow_hostile_actions
 		er-armament-icons:er_armament_icons
 		er-better-refills:er_better_refills
 		er-build-import:er_build_import
