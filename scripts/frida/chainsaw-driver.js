@@ -88,6 +88,7 @@ const DEFAULTS = {
   mainMenuCell: null, // pause-menu GridControl cell of Equipment; null learns it in the dry run
   attempts: 3, // refusals retried before giving up
   grant: [], // test setup: [{ item, gem }] put into the inventory first (gem -1: none)
+  stats: null, // test setup: every attribute to this value once, before anything else (99 -> level 713)
   lockOn: false,
   menuDelayFrames: 6, // frames between "switch complete" and Start: 0.1 s at 60 fps
   sequence: 'hold', // 'hold': skill first, swap mid-loop. 'pivot': R3, soft swap, L2, commit (the video's pivot method)
@@ -402,6 +403,11 @@ function createDriver (userConfig) {
       d.ctx.pending = null;
       d.ctx.settle = d.frame;
       return; // the next read shows what the action did
+    }
+    if (cfg.stats && !d.statsDone) {
+      d.statsDone = true;
+      d.ctx.pending = { op: 'stats', value: cfg.stats, id: d.native.length + 1, at: d.frame };
+      return request(d.ctx.pending);
     }
     if (d.ctx.grants.length > 0) {
       const g = d.ctx.grants.shift();
@@ -1450,6 +1456,11 @@ function bind () {
   const ADD_INVENTORY_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // [0x140246480]
   const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']); // [0x140682480]
   const GLOBAL_CSGAITEM = va('0x143d6d900'); // [0x143d69890]
+  // GetMainPlayerStats(int out[10]) / ApplyMainPlayerStats(const int in[10]): level, then vigor, endurance, mind,
+  // strength, dexterity, [6], intelligence, faith, arcane; the apply recomputes every derived value
+  // (er-build-import-runtime character.rs). [0x140788360] / [0x140788cf0]
+  const GET_MAIN_PLAYER_STATS = new NativeFunction(va('0x1407891e0'), 'void', ['pointer']);
+  const APPLY_MAIN_PLAYER_STATS = new NativeFunction(va('0x140789b70'), 'void', ['pointer']);
   const GET_INV = new NativeFunction(A.GET_EQUIP_INVENTORY, 'pointer', ['pointer']);
   const GET_IDX = new NativeFunction(A.GET_ITEM_INVENTORY_IDX, 'int', ['pointer', 'pointer']);
   const GET_SLOT_OF_IDX = new NativeFunction(A.GET_SLOT_BY_ITEM_IDX, 'int', ['pointer', 'int']);
@@ -1910,7 +1921,7 @@ function bind () {
         const v = args[0].add(8).readPointer();
         const a = chrPos(v); const b = chrPos(p);
         const dx = a[0] - b[0]; const dy = a[1] - b[1]; const dz = a[2] - b[2];
-        victims[this.threadId] = { victim: v.toString(), npc: v.add(0x60).readS32(), vdist: Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz) * 100) / 100 };
+        victims[this.threadId] = { victim: v.toString(), npc: v.add(0x60).readS32(), vdist: Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz) * 100) / 100, vpos: a.map(function (x) { return Math.round(x * 100) / 100; }) };
       } catch (e) { victims[this.threadId] = { victimErr: e.message }; }
     },
     onLeave () {
@@ -1921,7 +1932,7 @@ function bind () {
       if (!adi) return;
       const p = mainPlayer();
       const rd = function (o) { try { return adi.add(o).readS32(); } catch (e) { return null; } };
-      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1), dist: S.nearest === undefined ? null : S.nearest, quat: S.playerQuat || null, victim: vic.victim || null, npc: vic.npc === undefined ? null : vic.npc, vdist: vic.vdist === undefined ? null : vic.vdist, victimErr: vic.victimErr || null });
+      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1), dist: S.nearest === undefined ? null : S.nearest, quat: S.playerQuat || null, victim: vic.victim || null, npc: vic.npc === undefined ? null : vic.npc, vdist: vic.vdist === undefined ? null : vic.vdist, vpos: vic.vpos || null, victimErr: vic.victimErr || null });
     },
   });
 
@@ -1979,6 +1990,21 @@ function bind () {
       // Test setup: put a source weapon into the inventory, its gem mounted in slot 0 when `gem` >= 0
       // (er-build-import-runtime grant.rs: mint, add by handle, release the mint's reference).
       // Skipped when the item id is already carried, so a re-attach does not stack copies.
+      // Test setup: every attribute to op.value, the level to their sum - 79 (er-build-import-core stats.rs).
+      if (op.op === 'stats') {
+        const s = Memory.alloc(40);
+        GET_MAIN_PLAYER_STATS(s);
+        ev.before = s.readS32();
+        [1, 2, 3, 4, 5, 7, 8, 9].forEach(function (i) { s.add(i * 4).writeS32(op.value); });
+        s.writeS32(8 * op.value - 79);
+        APPLY_MAIN_PLAYER_STATS(s);
+        const r = Memory.alloc(40);
+        GET_MAIN_PLAYER_STATS(r);
+        ev.after = [0, 1, 2, 3, 4, 5, 7, 8, 9].map(function (i) { return r.add(i * 4).readS32(); });
+        ev.ok = ev.after[0] === 8 * op.value - 79 && ev.after.slice(1).every(function (v) { return v === op.value; });
+        if (!ev.ok) ev.why = 'stats_not_applied';
+        return push(ev);
+      }
       if (op.op === 'grant') {
         if (inventoryIndex(egd, op.item) >= 0) { ev.ok = true; ev.why = 'already'; return push(ev); }
         const gaitem = GLOBAL_CSGAITEM.readPointer();
@@ -2167,7 +2193,7 @@ function bind () {
         const pdm = p.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer();
         const smax = pdm.add(0x158).readS32();
         if (smax > 0 && pdm.add(0x154).readS32() < smax) pdm.add(0x154).writeS32(smax);
-        if (sc.lock) pin(p, S.playerPin || (S.playerPin = {}), 'player');
+        if (sc.lock && !S.following) pin(p, S.playerPin || (S.playerPin = {}), 'player');
         S.playerPos = chrPos(p);
         // Facing: the physics module's orientation quaternion (+0x50, x y z w), kept for the hit records.
         const o = p.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x50);
@@ -2187,8 +2213,22 @@ function bind () {
       const k = c.toString();
       const rec = S.sustained[k] || (S.sustained[k] = { last: -1e9, applied: 0, refused: 0 });
       rec.dist = Math.round(dist * 100) / 100;
+      // `trace`: every free character's position each frame while a run drives, to tell a hit's knockback
+      // apart from the character walking.
+      if (sc.trace && S.blocking && (S.traceSent || 0) < 4000 && rec.traceFrame !== S.frame) { rec.traceFrame = S.frame; S.traceSent = (S.traceSent || 0) + 1; send({ kind: 'vtrace', frame: S.frame, chr: k, pos: a.map(function (x) { return Math.round(x * 1000) / 1000; }) }); }
       if (S.nearest === undefined || S.nearestFrame !== S.frame || dist < S.nearest) { S.nearest = rec.dist; S.nearestFrame = S.frame; }
-      if (sc.lock) pin(c, rec, k);
+      // `pinOthers: false` leaves everyone but the player free, to measure how far a hit moves its victim.
+      // `pinOthers: 'untilEquip'` holds them until the equip lands, then frees them for the loop, so each run
+      // starts from the same distance and the hits alone move the victim.
+      const freed = sc.pinOthers === false || (sc.pinOthers === 'untilEquip' && S.driver !== null && ['RELEASE_L2', 'REHOLD_L2', 'FINAL_RELEASE', 'DONE'].indexOf(S.driver.state) !== -1);
+      if (sc.lock && !freed) pin(c, rec, k);
+      // `follow: { chr }`: once that character is freed, the player is kept at the offset it had from it at
+      // that moment, every frame, so distance and angle hold while the victim moves.
+      if (sc.follow && k === sc.follow.chr && freed) {
+        if (!S.following) { S.following = true; S.followOff = [S.playerPos[0] - a[0], S.playerPos[1] - a[1], S.playerPos[2] - a[2]]; }
+        const q = p.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
+        q.writeFloat(a[0] + S.followOff[0]); q.add(4).writeFloat(a[1] + S.followOff[1]); q.add(8).writeFloat(a[2] + S.followOff[2]);
+      }
       if (S.frame - rec.last >= (sc.every || 60)) {
         rec.last = S.frame;
         if (APPLY_SPEFFECT_FROM(c, sc.effect || 1653000, p, SUSTAIN_POS, SUSTAIN_CORR, 0, 0, 0) & 1) rec.applied += 1; else rec.refused += 1;
