@@ -6,13 +6,14 @@
 //           frame, skipped when already carried (the chainsaw driver's grant op: mint 0x140672b30,
 //           add by handle 0x140246480, release 0x1406832d0; CSGaitem global 0x143d6d900).
 //   clips   every TimeAct the CustomManualSelectorGenerator writer 0x1419bb530 [0x1419b96c0]
-//           stores at node+0xec for skill categories 600-999 (a<category>_<anim>), with the frame,
+//           stores, categories minCat..maxCat (default all, so weapon clips a0xx-a2xx show too)
+//           at node+0xec (a<category>_<anim>), with the frame,
 //           the right-hand weapon and FP. Repeats of the same clip on consecutive frames are folded.
 'use strict';
 
 const game = Process.findModuleByName('eldenring.exe');
 const va = (s) => game.base.add(ptr(s).sub(ptr('0x140000000')));
-const cfg = Object.assign({ grant: [] }, globalThis.__ER_FRIDA_CONFIG || {});
+const cfg = Object.assign({ grant: [], minCat: 0, maxCat: 999, fpMax: null }, globalThis.__ER_FRIDA_CONFIG || {});
 
 const WORLD_CHR_MAN = va('0x143d69ff8');
 const GAME_DATA_MAN = va('0x143d61f98');
@@ -61,6 +62,24 @@ function grant (egd, g) {
   if (!r.ok) r.why = 'not_added';
   return r;
 }
+// The selector's hkbNode name (`SwordArtsStanceNoSyncLoop_CMSG`, `DrawStanceRightLoop_CMSG`, ...), so
+// two selectors that pick the same clip can be told apart. The name pointer's offset in the live
+// object is not pinned down: the 2018 tagfile has it at +0x48, so +0x38 and +0x48 are both tried and
+// the first that reads as a plain identifier wins. Cached per node.
+const names = new Map();
+function nodeName (node) {
+  const k = node.toString();
+  if (names.has(k)) return names.get(k);
+  let out = null;
+  for (const off of [0x38, 0x48, 0x40]) {
+    try {
+      const s = node.add(off).readPointer().readUtf8String(96);
+      if (s && /^[A-Za-z][A-Za-z0-9_]{3,}$/.test(s)) { out = s + '@+0x' + off.toString(16); break; }
+    } catch (e) { /* not a string pointer */ }
+  }
+  names.set(k, out);
+  return out;
+}
 function fp (p) { try { return p.add(0x190).readPointer().readPointer().add(0x148).readS32(); } catch (e) { return null; } }
 
 const hooks = [];
@@ -69,6 +88,8 @@ hooks.push(Interceptor.attach(PRE_BEHAVIOR_SAFE, {
     const p = mainPlayer();
     if (p === null || !args[0].equals(p)) return;
     S.frame += 1;
+    // `fpMax`: FP held at or below this value every frame, for skills that behave differently on low FP.
+    if (cfg.fpMax !== null) { try { const dm = p.add(0x190).readPointer().readPointer(); if (dm.add(0x148).readS32() > cfg.fpMax) dm.add(0x148).writeS32(cfg.fpMax); } catch (e) { /* no data module yet */ } }
     if (!S.granted) {
       S.granted = true;
       const egd = equipGameData();
@@ -82,13 +103,13 @@ hooks.push(Interceptor.attach(CMSG_SET_TAE, {
     let tae;
     try { tae = this.node.add(0xec).readS32(); } catch (e) { return; }
     const cat = Math.floor(tae / 1000000);
-    if (cat < 600 || cat >= 1000) return;
+    if (cat < cfg.minCat || cat > cfg.maxCat) return;
     const fold = tae === S.last && S.frame - S.lastFrame <= 1;
     S.last = tae; S.lastFrame = S.frame;
     if (fold) return;
     const p = mainPlayer();
     S.clips += 1;
-    send({ kind: 'clip', frame: S.frame, tae: tae, clip: 'a' + cat + '_' + String(tae % 1000000).padStart(6, '0'), node: this.node.toString(), heldR: p === null ? null : GET_EQUIP(p, -1), fp: p === null ? null : fp(p) });
+    send({ kind: 'clip', frame: S.frame, tae: tae, clip: 'a' + cat + '_' + String(tae % 1000000).padStart(6, '0'), node: this.node.toString(), name: nodeName(this.node), heldR: p === null ? null : GET_EQUIP(p, -1), fp: p === null ? null : fp(p) });
   },
 }));
 
