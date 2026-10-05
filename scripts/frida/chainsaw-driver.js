@@ -2165,6 +2165,7 @@ function bind () {
   const SUSTAIN_POS = Memory.alloc(16);
   const SUSTAIN_CORR = Memory.alloc(0x60);
   S.sustained = {};
+  S.noDead = {};
   function chrPos (c) {
     const q = c.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
     return [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()];
@@ -2173,6 +2174,11 @@ function bind () {
     const dm = c.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer();
     const max = dm.add(0x13c).readS32();
     if (max > 0 && dm.add(0x138).readS32() < max) dm.add(0x138).writeS32(max);
+    // A hit bigger than max HP kills before the next refill, so the data module's no-death bit
+    // (+0x19b bit 0, tested by 1.17.1 0x1404379d0; +0x19b bit 1 is no-damage, 0x140437970) is set too
+    // and cleared again on dispose.
+    const f = dm.add(0x19b).readU8();
+    if ((f & 1) === 0) { dm.add(0x19b).writeU8(f | 1); S.noDead[dm.toString()] = dm; }
   }
   // `lock`: each sustained character is put back at the position it had when first seen, every
   // frame, so a glitch run and its control stand at the same distance.
@@ -2208,10 +2214,25 @@ function bind () {
       const a = chrPos(c);
       const dx = a[0] - S.playerPos[0]; const dy = a[1] - S.playerPos[1]; const dz = a[2] - S.playerPos[2];
       const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      if (dist > (sc.radius || 8)) return;
+      // `bring: metres`: one living character is pinned on the player-to-target line at that distance,
+      // wherever it stood: the one the player is locked onto (PlayerIns+0x6b0 equals its ChrIns+0x8
+      // handle), or with no lock the nearest living one within `bringFrom` metres, chosen once after
+      // `bringPickFrames` frames of looking.
+      let locked = false;
+      if (sc.bring && dist > 0) {
+        const ck = c.toString();
+        if (p.add(OFF.LOCK_ON).readU64().equals(c.add(8).readU64())) S.bringChr = ck;
+        if (!S.bringChr && dist <= (sc.bringFrom || 60) && c.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer().add(0x138).readS32() > 0) {
+          if (!S.bringBest || dist < S.bringBest.dist) S.bringBest = { chr: ck, dist: dist, npc: c.add(0x60).readS32() };
+          if (S.frame >= (sc.bringPickFrames || 5)) { S.bringChr = S.bringBest.chr; send({ kind: 'bring', chr: S.bringChr, from: Math.round(S.bringBest.dist * 100) / 100, npc: S.bringBest.npc }); }
+        }
+        locked = S.bringChr === ck;
+      }
+      if (dist > (sc.radius || 8) && !locked) return;
       fillHp(c);
       const k = c.toString();
       const rec = S.sustained[k] || (S.sustained[k] = { last: -1e9, applied: 0, refused: 0 });
+      if (locked && !rec.pos) { rec.brought = true; rec.pos = [0, 1, 2].map(function (i) { return S.playerPos[i] + [dx, dy, dz][i] * sc.bring / dist; }); }
       rec.dist = Math.round(dist * 100) / 100;
       // `trace`: every free character's position each frame while a run drives, to tell a hit's knockback
       // apart from the character walking.
@@ -2326,6 +2347,7 @@ function bind () {
     dispose: function () {
       S.blocking = false;
       try { FOCUS_BYTE.writeU8(0); } catch (e) { /* detaching anyway */ }
+      Object.keys(S.noDead || {}).forEach(function (k) { try { const b = S.noDead[k].add(0x19b); b.writeU8(b.readU8() & 0xfe); } catch (e) { /* character gone */ } });
       S.pad = { buttons: 0, lt: 0, ly: 0, actions: 0 };
       hooks.forEach(function (h) { h.detach(); });
     },
