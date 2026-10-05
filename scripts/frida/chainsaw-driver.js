@@ -18,6 +18,7 @@
 // Every wait is counted in game frames from a game event; nothing here runs on a timer. Every step
 // that waits names its semaphore, logs the value that released it, and on running out of frames
 // fails with a named state instead of carrying on.
+// er-frida-watch: no-reload (this agent drives the game; an edit must not restart a drive mid-session)
 'use strict';
 
 // ---------------------------------------------------------------------------------------------
@@ -2271,6 +2272,17 @@ function bind () {
       if (p === null || !args[0].equals(p)) return;
       S.frame += 1;
       S.pollsSinceTick = 0;
+      // The player's live SpEffect ids while L2 is released and pressed again after the equip, sent when
+      // the set changes: a combo follow-up needs its window SpEffect (100052/100053) live at the press.
+      // List at ChrIns+0x178 -> +0x8 head; entry param row +0x0, param id +0x8, next +0x30 (fromsoftware-rs SpecialEffectEntry).
+      if (S.driver !== null && (S.driver.state === 'RELEASE_L2' || S.driver.state === 'REHOLD_L2')) {
+        try {
+          const ids = [];
+          for (let e = p.add(0x178).readPointer().add(0x8).readPointer(); !e.isNull() && ids.length < 64; e = e.add(0x30).readPointer()) ids.push(e.add(8).readS32());
+          const key = ids.slice().sort().join(',');
+          if (key !== S.spKey) { S.spKey = key; send({ kind: 'sp', frame: S.frame, state: S.driver.state, ids: ids }); }
+        } catch (e) { S.spErr = e.message; }
+      }
       // PlayerIns+0x6a8 holds the last character command (vtable +0x2c0 only stores it); follow it
       // for a while after one is issued, to see who takes it.
       if (S.cmdWatch > 0) { S.cmdWatch -= 1; try { send2('cmd_field', { v: p.add(0x6a8).readS32() }); } catch (e) { /* the player went away */ } }
