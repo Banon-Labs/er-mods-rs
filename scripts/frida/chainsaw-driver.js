@@ -2272,6 +2272,9 @@ function bind () {
       if (p === null || !args[0].equals(p)) return;
       S.frame += 1;
       S.pollsSinceTick = 0;
+      // `fpMax` (test setup): FP held at or below this every frame, for skills that switch to their
+      // no-FP clips (Moon-and-Fire Stance below half its R1 cost). Use with `fpFraction: 0`.
+      if (typeof cfgIn.fpMax === 'number') { try { const dm = p.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer(); if (dm.add(0x148).readS32() > cfgIn.fpMax) dm.add(0x148).writeS32(cfgIn.fpMax); } catch (e) { /* no data module yet */ } }
       // The player's live SpEffect ids while L2 is released and pressed again after the equip, sent when
       // the set changes: a combo follow-up needs its window SpEffect (100052/100053) live at the press.
       // List at ChrIns+0x178 -> +0x8 head; entry param row +0x0, param id +0x8, next +0x30 (fromsoftware-rs SpecialEffectEntry).
