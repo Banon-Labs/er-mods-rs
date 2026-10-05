@@ -386,7 +386,7 @@ rows each hitbox resolves to. The stance loop on Starscourge is the only fallbac
     columns: (1.6fr, 1.6fr, 2fr),
     header: ([States], [Child 0 played on fallback], [Reached by]),
     [Stance start, loop, loop while moving], [Spinning Wheel `a839_040050/51/52` (13, 8, 10 hit events)], [any skill without its own clip, after a mid-skill equip (loop *measured*)],
-    [Stance loop without sync, without FP], [Wild Strikes `a610_*`], [same],
+    [Stance loop without sync, without FP], [Wild Strikes `a610_*`], [no-FP loop: Moon-and-Fire Stance (Rellana's Twin Blades) at FP 3, swapped to Starscourge on `a918_040055`: `a610_040056` for one frame, then `a839_040051`, on two attempts (*measured*, `drive-watch46`). No-sync loop: only after an equip once the loop runs, which the gate refuses (*inferred*)],
     [Combo finishers], [Spinning Slash `a603_*`; second finisher Bloodboon Ritual `a834_040020` or Stormcaller `a623_042420`], [Stormcaller on a Twinblade swapped to Starscourge on its first clip, L2 again inside the 100052 window (live 2.2-2.75 s): `a603_042410` on two attempts (*measured*, `drive-watch45`; the window SpEffect survives the swap, `drive-watch44`)],
     [Charged skill released early], [Charge Forth `a605_040001`], [Glintstone Dart (Glintstone Kris) swapped to Meteoric Ore Blade on its first clip, L2 released: `a605_040001` played on two attempts, 4 hits with the held weapon's row 301701905 (*measured*, `drive-watch41`)],
     [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [Causality's Wrath follow-up after activation (*measured*); a plain weapon switch breaks it (*measured*)],
