@@ -391,7 +391,7 @@ function createDriver (userConfig) {
     if (d.ctx.pending !== null) {
       const res = events(obs, 'native').filter(function (e) { return e.id === d.ctx.pending.id; })[0];
       if (res === undefined) {
-        if (d.frame - d.ctx.pending.at >= cfg.budget.native) return fail(FAIL.SETUP_NO_NATIVE_RESULT, { pending: d.ctx.pending });
+        if (d.frame - d.ctx.pending.at >= cfg.budget.native + (d.ctx.pending.waitFrames || 0)) return fail(FAIL.SETUP_NO_NATIVE_RESULT, { pending: d.ctx.pending });
         return;
       }
       d.setupLog.push(res);
@@ -411,7 +411,9 @@ function createDriver (userConfig) {
     if (next === null) return go('SETUP_VERIFY', 'loadout planned', { slots: obs.slots, actions: d.ctx.actions });
     if (d.ctx.actions >= cfg.setupMaxActions) return fail(FAIL.SETUP_DID_NOT_CONVERGE, { slots: obs.slots, next: next, actions: d.ctx.actions });
     d.ctx.actions += 1;
-    d.ctx.pending = Object.assign({ id: d.native.length + 1, at: d.frame }, next);
+    // An equip goes through the gate, which is shut while the character is mid-action (an attach
+    // during a leftover skill was refused, 2026-10-05), so each one waits for it to open.
+    d.ctx.pending = Object.assign({ id: d.native.length + 1, at: d.frame, whenOpen: true, waitFrames: 240 }, next);
     request(d.ctx.pending);
     if (waited() >= cfg.budget.setup) fail(FAIL.SETUP_DID_NOT_CONVERGE, { slots: obs.slots });
   };
@@ -1874,19 +1876,30 @@ function bind () {
   });
 
   const dmg = {};
+  const victims = {};
   attach(follow(A.CALC_DAMAGE2), {
     onEnter (args) {
       const p = mainPlayer();
       if (p === null || !args[1].equals(p)) return;
       dmg[this.threadId] = args[2];
+      // The victim is [rcx+0x8] (rain-of-arrows-seppuku.md); its own distance and NpcParam id say which
+      // character a hit landed on.
+      try {
+        const v = args[0].add(8).readPointer();
+        const a = chrPos(v); const b = chrPos(p);
+        const dx = a[0] - b[0]; const dy = a[1] - b[1]; const dz = a[2] - b[2];
+        victims[this.threadId] = { victim: v.toString(), npc: v.add(0x60).readS32(), vdist: Math.round(Math.sqrt(dx * dx + dy * dy + dz * dz) * 100) / 100 };
+      } catch (e) { victims[this.threadId] = { victimErr: e.message }; }
     },
     onLeave () {
       const adi = dmg[this.threadId];
       delete dmg[this.threadId];
+      const vic = victims[this.threadId] || {};
+      delete victims[this.threadId];
       if (!adi) return;
       const p = mainPlayer();
       const rd = function (o) { try { return adi.add(o).readS32(); } catch (e) { return null; } };
-      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1), dist: S.nearest === undefined ? null : S.nearest });
+      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1), dist: S.nearest === undefined ? null : S.nearest, quat: S.playerQuat || null, victim: vic.victim || null, npc: vic.npc === undefined ? null : vic.npc, vdist: vic.vdist === undefined ? null : vic.vdist, victimErr: vic.victimErr || null });
     },
   });
 
@@ -2099,9 +2112,12 @@ function bind () {
   }
   // `lock`: each sustained character is put back at the position it had when first seen, every
   // frame, so a glitch run and its control stand at the same distance.
-  function pin (c, rec) {
+  function pin (c, rec, key) {
     const q = c.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
-    if (!rec.pos) { rec.pos = [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()]; return; }
+    // `at` names fixed coordinates by key (`player` or a ChrIns address), so separate attaches pin
+    // to the same spot instead of wherever each one starts.
+    const at = cfgIn.sustain.at && cfgIn.sustain.at[key];
+    if (!rec.pos) { rec.pos = at ? at.slice() : [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()]; }
     q.writeFloat(rec.pos[0]); q.add(4).writeFloat(rec.pos[1]); q.add(8).writeFloat(rec.pos[2]);
   }
   function sustain (c, p) {
@@ -2109,8 +2125,19 @@ function bind () {
     try {
       if (c.equals(p)) {
         fillHp(p);
-        if (sc.lock) pin(p, S.playerPin || (S.playerPin = {}));
+        // Stamina too (data module +0x154, max +0x158), so the player can also drive it by hand.
+        const pdm = p.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer();
+        const smax = pdm.add(0x158).readS32();
+        if (smax > 0 && pdm.add(0x154).readS32() < smax) pdm.add(0x154).writeS32(smax);
+        if (sc.lock) pin(p, S.playerPin || (S.playerPin = {}), 'player');
         S.playerPos = chrPos(p);
+        // Facing: the physics module's orientation quaternion (+0x50, x y z w), kept for the hit records.
+        const o = p.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x50);
+        S.playerQuat = [o.readFloat(), o.add(4).readFloat(), o.add(8).readFloat(), o.add(12).readFloat()].map(function (v) { return Math.round(v * 1000) / 1000; });
+        if (sc.lock && S.playerPin.quat === undefined) S.playerPin.quat = S.playerQuat;
+        // `face`: [qy, qw] written over the orientation every frame (a yaw about the up axis), so a glitch
+        // run and its control face the same way.
+        if (sc.face) { o.writeFloat(0); o.add(4).writeFloat(sc.face[0]); o.add(8).writeFloat(0); o.add(12).writeFloat(sc.face[1]); }
         return;
       }
       if (!S.playerPos) return;
@@ -2123,7 +2150,7 @@ function bind () {
       const rec = S.sustained[k] || (S.sustained[k] = { last: -1e9, applied: 0, refused: 0 });
       rec.dist = Math.round(dist * 100) / 100;
       if (S.nearest === undefined || S.nearestFrame !== S.frame || dist < S.nearest) { S.nearest = rec.dist; S.nearestFrame = S.frame; }
-      if (sc.lock) pin(c, rec);
+      if (sc.lock) pin(c, rec, k);
       if (S.frame - rec.last >= (sc.every || 60)) {
         rec.last = S.frame;
         if (APPLY_SPEFFECT_FROM(c, sc.effect || 1653000, p, SUSTAIN_POS, SUSTAIN_CORR, 0, 0, 0) & 1) rec.applied += 1; else rec.refused += 1;
@@ -2210,7 +2237,7 @@ function bind () {
 
   send2('armed', { hooks: hooks.length, block: S.block, player: mainPlayer() !== null, xinput: XI === null ? null : XI.name });
   // The heartbeat rides PreBehaviorSafe below: raw calls (every character) against counted player frames.
-  S.hbSend = function () { send2('hb', { pbsCalls: S.pbsCalls || 0, state: S.driver === null ? null : S.driver.state, polls: S.polls.xinput + S.polls.xinputEx, caps: S.polls.caps || 0, capsForced: S.polls.capsForced || 0, sustained: S.sustained, sustainErr: S.sustainErr || null, focus: (function () { try { return FOCUS_BYTE.readU8(); } catch (e) { return e.message; } })() }); };
+  S.hbSend = function () { send2('hb', { pbsCalls: S.pbsCalls || 0, state: S.driver === null ? null : S.driver.state, polls: S.polls.xinput + S.polls.xinputEx, caps: S.polls.caps || 0, capsForced: S.polls.capsForced || 0, sustained: S.sustained, playerPin: S.playerPin || null, playerQuat: S.playerQuat || null, sustainErr: S.sustainErr || null, focus: (function () { try { return FOCUS_BYTE.readU8(); } catch (e) { return e.message; } })() }); };
 
   rpc.exports = {
     start: start,
