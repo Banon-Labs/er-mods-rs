@@ -87,6 +87,7 @@ const DEFAULTS = {
   requireHits: 1, // success needs this many hits computed with the target held
   mainMenuCell: null, // pause-menu GridControl cell of Equipment; null learns it in the dry run
   attempts: 3, // refusals retried before giving up
+  grant: [], // test setup: [{ item, gem }] put into the inventory first (gem -1: none)
   lockOn: false,
   menuDelayFrames: 6, // frames between "switch complete" and Start: 0.1 s at 60 fps
   sequence: 'hold', // 'hold': skill first, swap mid-loop. 'pivot': R3, soft swap, L2, commit (the video's pivot method)
@@ -387,7 +388,7 @@ function createDriver (userConfig) {
   // Native setup, one action per wait. The first action asks the inventory for the target so a
   // missing target fails here and not three confirms deep.
   H.SETUP = function (obs) {
-    if (d.ctx.entered) { d.ctx.entered = false; d.ctx.pending = null; d.ctx.actions = 0; d.ctx.foundTarget = false; }
+    if (d.ctx.entered) { d.ctx.entered = false; d.ctx.pending = null; d.ctx.actions = 0; d.ctx.foundTarget = false; d.ctx.grants = (cfg.grant || []).slice(); }
     if (d.ctx.pending !== null) {
       const res = events(obs, 'native').filter(function (e) { return e.id === d.ctx.pending.id; })[0];
       if (res === undefined) {
@@ -401,6 +402,11 @@ function createDriver (userConfig) {
       d.ctx.pending = null;
       d.ctx.settle = d.frame;
       return; // the next read shows what the action did
+    }
+    if (d.ctx.grants.length > 0) {
+      const g = d.ctx.grants.shift();
+      d.ctx.pending = { op: 'grant', item: g.item, gem: g.gem === undefined ? -1 : g.gem, id: d.native.length + 1, at: d.frame };
+      return request(d.ctx.pending);
     }
     if (!d.ctx.foundTarget && !control) {
       d.ctx.pending = { op: 'find', item: cfg.targetWeapon, id: d.native.length + 1, at: d.frame };
@@ -825,6 +831,11 @@ function createDriver (userConfig) {
     const onTarget = weaponBase(obs.heldR) === weaponBase(d.ctx.target);
     const k = kindsOf(obs.anims, cfg.sourceArtsType);
     if (anyCategory(obs.anims, cfg.sourceArtsType) || anyCategory(obs.anims, cfg.targetArtsType)) d.ctx.anySkill = true;
+    // The loop that plays is not always the source's: a target with no loop clip falls back to the
+    // loop selector's child 0 (Wild Strikes -> Starscourge looped Spinning Wheel's a839, 2026-10-05).
+    // Any skill category's stance loop counts, and each category seen is recorded.
+    const loopCat = (obs.anims || []).map(function (a) { const c = Math.floor(a / 1000000); const clip = a % 1000000; return c >= 600 && c < 1000 && (clip === 40051 || clip === 40056) ? c : null; }).filter(function (c) { return c !== null; })[0];
+    if (loopCat !== undefined) { d.ctx.anySkill = true; d.ctx.loopCats = d.ctx.loopCats || {}; d.ctx.loopCats[loopCat] = (d.ctx.loopCats[loopCat] || 0) + 1; }
     // A press the game was not ready for (still in the swap animation) is lost, and holding does
     // not press again (measured: request bit held 60 frames, no clip). Until a skill clip shows,
     // release for 2 frames and press again every `repressFrames`, as a player would.
@@ -832,11 +843,11 @@ function createDriver (userConfig) {
     d.l2 = d.ctx.anySkill || since < cfg.repressFrames;
     if (!d.ctx.anySkill && since >= cfg.repressFrames + 2) { d.ctx.pressAt = d.frame; d.ctx.presses += 1; d.l2 = true; }
     if (k.loop || k.start) d.ctx.sourceFrames += 1;
-    if (onTarget && k.loop) d.ctx.loopOnTarget += 1;
+    if (onTarget && (k.loop || loopCat !== undefined)) d.ctx.loopOnTarget += 1;
     events(obs, 'hit').forEach(function (h) { if (weaponBase(h.heldR) === weaponBase(d.ctx.target)) { d.ctx.hitsOnTarget += 1; if ((d.ctx.hitDetail = d.ctx.hitDetail || []).length < 50) d.ctx.hitDetail.push(h); } });
     events(obs, 'fpcharge').forEach(function (c) { if (d.ctx.charges.length < 40) d.ctx.charges.push(c); });
     const evidence = function () {
-      return { presses: d.ctx.presses, loopOnTarget: d.ctx.loopOnTarget, hitsOnTarget: d.ctx.hitsOnTarget, hitDetail: d.ctx.hitDetail || [], sourceFrames: d.ctx.sourceFrames, fpAtRehold: d.ctx.fpAtRehold, fp: obs.fp, charges: d.ctx.charges, heldR: obs.heldR, anims: obs.anims };
+      return { presses: d.ctx.presses, loopOnTarget: d.ctx.loopOnTarget, hitsOnTarget: d.ctx.hitsOnTarget, hitDetail: d.ctx.hitDetail || [], loopCats: d.ctx.loopCats || {}, sourceFrames: d.ctx.sourceFrames, fpAtRehold: d.ctx.fpAtRehold, fp: obs.fp, charges: d.ctx.charges, heldR: obs.heldR, anims: obs.anims };
     };
     if (anyCategory(obs.anims, cfg.targetArtsType)) {
       cur().outcome = FAIL.TARGET_SKILL_PLAYED;
@@ -1197,6 +1208,11 @@ function runSelftest () {
   r = simulate({ sequence: 'pivot', pivotCommit: 'fe' }, { action: true });
   check('pivot fe: the commit is queued at L2 down for the source category, with no tick gate wait', v(r) === 'success' &&
     r.d.log.some(function (e) { return e.kind === 'native_request' && e.op === 'equip' && e.whenSource === 839 && e.whenOpen === undefined; }), r.d.verdict);
+  r = simulate({ grant: [{ item: 14000000 }, { item: 16000000, gem: 11100 }] }, { action: true });
+  check('grants run first, in order, before the target lookup', (function () {
+    const ops = r.d.log.filter(function (e) { return e.kind === 'native_request'; }).map(function (e) { return e.op + (e.gem !== undefined ? ':' + e.gem : ''); });
+    return ops[0] === 'grant:-1' && ops[1] === 'grant:11100' && ops[2] === 'find';
+  })(), r.d.log.filter(function (e) { return e.kind === 'native_request'; }).slice(0, 3));
   r = simulate({ sequence: 'pivot', attempts: 1 }, { action: true, noSkill: true });
   check('pivot: no source clip after L2 -> source_never_started refusal', v(r) === FAIL.REFUSED_OUT_OF_ATTEMPTS &&
     r.d.attempts[0].refusal.pivot === 'source_never_started', r.d.verdict);
@@ -1428,6 +1444,12 @@ function bind () {
   const GET_EQUIP = new NativeFunction(A.GET_EQUIP, 'int', ['pointer', 'int']);
   const EQUIP = new NativeFunction(A.EQUIP_TO_SLOT, 'void', ['int', 'pointer']);
   const UNEQUIP = new NativeFunction(A.UNEQUIP, 'void', ['int', 'uint8']);
+  // Grant natives (er-build-import-runtime grant.rs), 1.16.2 -> 1.17 by docs/recon/rva-map-1162-to-1170: all
+  // below the 1.17.1 shift, and .data did not move.
+  const MINT_WEAPON_WITH_GEM = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'pointer', 'int', 'int']); // [0x140671ce0]
+  const ADD_INVENTORY_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']); // [0x140246480]
+  const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']); // [0x140682480]
+  const GLOBAL_CSGAITEM = va('0x143d6d900'); // [0x143d69890]
   const GET_INV = new NativeFunction(A.GET_EQUIP_INVENTORY, 'pointer', ['pointer']);
   const GET_IDX = new NativeFunction(A.GET_ITEM_INVENTORY_IDX, 'int', ['pointer', 'pointer']);
   const GET_SLOT_OF_IDX = new NativeFunction(A.GET_SLOT_BY_ITEM_IDX, 'int', ['pointer', 'int']);
@@ -1952,6 +1974,22 @@ function bind () {
         ev.after = slotParam(egd, op.slot);
         ev.ok = weaponBase(ev.after) === weaponBase(op.item);
         if (!ev.ok) ev.why = 'slot_unchanged';
+        return push(ev);
+      }
+      // Test setup: put a source weapon into the inventory, its gem mounted in slot 0 when `gem` >= 0
+      // (er-build-import-runtime grant.rs: mint, add by handle, release the mint's reference).
+      // Skipped when the item id is already carried, so a re-attach does not stack copies.
+      if (op.op === 'grant') {
+        if (inventoryIndex(egd, op.item) >= 0) { ev.ok = true; ev.why = 'already'; return push(ev); }
+        const gaitem = GLOBAL_CSGAITEM.readPointer();
+        const h = Memory.alloc(16);
+        MINT_WEAPON_WITH_GEM(gaitem, h, op.item, op.gem === undefined ? -1 : op.gem);
+        ev.handle = h.readU32();
+        if (ev.handle === 0) { ev.why = 'mint_failed'; return push(ev); }
+        ev.idx = ADD_INVENTORY_BY_HANDLE(egd, h, 1, 1, 1);
+        HANDLE_DTOR(h);
+        ev.ok = ev.idx >= 0 && inventoryIndex(egd, op.item) >= 0;
+        if (!ev.ok) ev.why = 'not_added';
         return push(ev);
       }
       if (op.op === 'unequip') {
