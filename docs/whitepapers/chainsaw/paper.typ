@@ -391,7 +391,7 @@ rows each hitbox resolves to. The stance loop on Starscourge is the only fallbac
     [Charged skill released early], [Charge Forth `a605_040001`], [Glintstone Dart (Glintstone Kris) swapped to Meteoric Ore Blade on its first clip, L2 released: `a605_040001` played on two attempts, 4 hits with the held weapon's row 301701905 (*measured*, `drive-watch41`)],
     [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [Causality's Wrath follow-up after activation (*measured*); a plain weapon switch breaks it (*measured*)],
     [Spinning Chain with 0 < FP < cost], [Spinning Wheel `a839_040055` (start), Wild Strikes `a610_040056/57` (loop)], [does not happen: at FP 5 (cost above it) the Flail played its own `a625_040050/51/52/53`, the loop running on at FP 0 (*measured*)],
-    [Thrusting-shield heavy specials], [axe `a030` or claw `a022` clips], [Dueling, Carian and Ritual Shields],
+    [Thrusting-shield heavy specials], [axe `a030` or claw `a022` clips], [not reached by a weapon change: Barbaric Roar's buff 1681 was live after the roar and gone after equipping the Dueling Shield, and R2 played the plain heavy `a057_030500` (*measured*, `action-script.js`)],
     [Scythe left heavy 5], [straight sword `a023_035040`], [scythes],
   ),
 ) <tbl-fallbacks>
