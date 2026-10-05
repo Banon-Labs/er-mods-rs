@@ -4,7 +4,7 @@
     python3 scripts/er-frida-up.py                         # once, after the player is in world
     uv run --with frida python3 scripts/er-ai-lab.py       # then open http://127.0.0.1:8770/
 
-What it holds, in ONE session (a second watcher on the same process silently breaks the first's
+What it holds, in one session (a second watcher on the same process silently breaks the first's
 hooks -- see er-frida-watch.py), so stop any other er-frida-watch.py first:
 
 - `scripts/frida/ai-lua-hot-reload.js`: re-applies `scripts/frida/ai-lua/hot.lua` into the game's AI
