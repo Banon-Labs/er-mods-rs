@@ -2116,6 +2116,23 @@ def main() -> int:
             True,
             extra_env=(("ER_FRIDA_EVIDENCE_LOG", str(FRIDA_EVIDENCE_PROVEN)),),
         ),
+        # argparse prints usage and exits before any teardown code runs, like `--status`.
+        PolicyCase(
+            "allow-teardown-help",
+            "python3 scripts/er-teardown.py --help 2>&1 | head -15",
+            True,
+        ),
+        PolicyCase(
+            "allow-teardown-short-help",
+            "python3 scripts/er-teardown.py -h",
+            True,
+        ),
+        PolicyCase(
+            "deny-teardown-help-then-a-real-teardown",
+            "python3 scripts/er-teardown.py --help; python3 scripts/er-teardown.py; cargo build",
+            False,
+            "teardown that does not relaunch",
+        ),
         PolicyCase(
             "deny-inline-python-file-write",
             "python3 -c \"open('notes.md','w').write('x')\"",

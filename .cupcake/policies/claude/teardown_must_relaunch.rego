@@ -12,7 +12,7 @@
 #     hygiene and is actually a kill: on 2026-09-12 it ended run
 #     br-20260912-204637-08ba while the user was driving it, one line after that
 #     run logged the placement fix they were inspecting, for a rebuild nobody had
-#     asked for yet. `--status` is read-only and always allowed.
+#     asked for yet. `--status`, `--help` and `-h` are read-only and always allowed.
 #
 #     The rule is deliberately not "ask whether a run is live". The agent cannot
 #     see whether a person is looking at the screen, and a memory saying "never
@@ -129,8 +129,12 @@ killing_teardown if {
 	some index, word in words
 	token_names_teardown(word)
 	commands.word_in_command_slot(words, index)
-	next_word(words, index) != "--status"
+	not next_word(words, index) in read_only_flags
 }
+
+# Flags that make the script kill nothing. `--status` reports; `--help`/`-h` are argparse's,
+# which prints usage and exits inside `parse_args()` before any teardown code runs.
+read_only_flags := {"--status", "--help", "-h"}
 
 # The word after `index`, or the empty string when the invocation ends the text. Spelled
 # with `else` because a bare `words[index + 1]` is undefined past the end, and an undefined
@@ -291,7 +295,7 @@ reason_value_at(words, i) if {
 	words[i - 1] == "--reason"
 }
 
-block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status` is read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
+block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status`, `--help` and `-h` are read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
