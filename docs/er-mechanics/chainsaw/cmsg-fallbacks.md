@@ -157,3 +157,73 @@ casts) have stub clips that fall back to `a999_*` / `a401_*` / `a407_*`, all wit
   (drive-watch25-27). The others are candidates for `scripts/frida/chainsaw-driver.js`.
 - The hks routing that decides which skills enter `SwordArtsOneShot_111/_110` and the
   heavy-special weapon states was not traced.
+
+## 5. Routing into DrawStanceNoSyncLoop
+
+Sources: 1.17.1 `c0000.hkx` (witchy extract), 1.17.1 `action/script/c0000.hks`
+(`~/er-extract/1171-20261004`), `common_define.hks` from the 2026-07-13 extract (no 1.17.1 copy
+exists locally). Graph side: `python3 scripts/er-behbnd-transitions-to.py DrawStanceNoSyncLoop
+DrawStanceNoSyncLoop_Upper`.
+
+**Graph (`DATA`).** Exactly one transition targets each state, and each is a wildcard:
+
+| state | owner SM, path | event | TransitionInfo flags |
+|---|---|---|---|
+| `DrawStanceNoSyncLoop` (id 3) | `DrawStanceNoSync_Lower_SM` < `HalfBlendNoSync_SM` state 8 < `Master_SM` state 63 `HalfBlendNoSync` | 783 `W_DrawStanceNoSyncLoop` | `0xe00` |
+| `DrawStanceNoSyncLoop_Upper` (id 3) | `DrawStanceNoSync_Upper_SM` < `HalfBlendNoSync_Upper_SM` state 8 < `Master_SM` state 63 | 785 `W_DrawStanceNoSyncLoop_Upper` | `0xc00` |
+
+No transition in `Master_SM` or the `HalfBlendNoSync*` machines names either state, so they are
+entered only through these. `INFERRED` from Havok's flag enum: `0x400` is a global wildcard (taken
+from anywhere, forcing the parent machines over), `0x800` local wildcard, `0x200` allows a
+self-transition (lower only). There is no `W_DrawStanceNoSyncLoopMax` event in the graph, so
+`DrawStanceNoSyncLoopMax_Upper_onUpdate` (HKS function 470) is dead code.
+
+**HKS (`VERIFIED`, bytecode).** No HKS function contains `W_DrawStanceNoSyncLoop`; the name lives in
+`common_define.hks`: `Event_DrawStanceNoSyncLoop = {'W_DrawStanceNoSyncLoop',
+DRAWSTANCERIGHT_DEF0, DRAWSTANCERIGHTLOOPNOSYNC_DEF1}`. The `ExecEventHalfBlend*` helpers take a
+layer argument (`UPPER`/`LOWER`). That they turn it into `..._Upper` (785) is `INFERRED`: the
+helper body was not read. `Event_DrawStanceNoSyncLoop` is read by exactly two functions:
+
+1. `DrawStanceRightStart_Upper_onUpdate` (hks lines 11513-11519), the start of every stance
+   skill. When `env(339, 1)` (`IsAnimEnd`, community name) or `env(301, 0)` (TimeAct event 227
+   flag 0) is true and the skill was not released early (lines 11507-11509, `ActionDuration(L2)`
+   < 200 or a cancel request -> `Event_DrawStanceRightEnd`):
+   `if c_SwordArtsID in {10, 11, 340, 341, 309}` -> `ExecEventHalfBlendNoReset(Event_DrawStanceNoSyncLoop)`
+   and `drawStanceNoSyncLoop_NoMP = GetVariable('IsEnoughArtPointsL2')`; otherwise
+   `Event_DrawStanceRightLoop`.
+2. `DrawStanceNoSyncLoop_Upper_onUpdate` (line 11651) re-fires it every update through
+   `HalfBlendLowerCommonFunctionNoSync`, which sends the lower body to `W_MoveNoSync` while moving
+   and fires the loop event again on the lower layer (`ExecEventHalfBlendNoReset(..., LOWER)`)
+   when movement ends. It leaves the loop (to `Event_DrawStanceRightEnd`) only on a flag-0 frame
+   with L2 released, a cancel request, FP <= 0 or the FP-enough variable at 0. It never reads
+   `c_SwordArtsID`.
+
+`SetSwordArtsPointInfo` (line 796) writes `IsEnoughArtPointsL2_DrawStanceNoSyncLoop` when the
+hand's `env(326)` skill type is 309 and `DrawStanceNoSyncLoop_Upper Selector00` is active.
+
+**Which skills (`DATA`).** `c_SwordArtsID` is `swordArtsTypeNew`: 10 Wild Strikes, 11 Spinning
+Strikes, 309 Unending Dance. 340 and 341 have no SwordArtsParam row and no `a940`/`a941` TimeAct,
+so no equippable skill produces them. All three real ones have their own `040051` child in
+`SwordArtsStanceNoSyncLoop_CMSG` (children a610, a611, a909 and 23 others), and their start clips
+carry the flag-0 window: `a610_040050` 0.63-1.17 s, `a611_040050` 1.33-1.93 s, `a909_040050`
+0.70-1.33 s. So in normal play the state is entered at that window while the skill is held,
+and plays the skill's own loop.
+
+**TimeAct (`DATA`).** No TimeAct event names a graph event. The only TimeAct input to this routing
+is event 227 flag 0 on the start clip, which `env(301, 0)` reads.
+
+**Swap during the skill (`INFERRED`).**
+
+- A swap landing during the start clip cannot reach the child-0 fallback by itself. The gate reads
+  the live `c_SwordArtsID` at the hand-off, so a target outside {10, 11, 309} goes to
+  `DrawStanceRightLoop` (the Spinning Wheel fallback, section 1). A target inside the set has its
+  own child. A one-frame disagreement between HKS's `c_SwordArtsID` and the selector's
+  `swordArtsTypeNew` would be needed, and nothing shows that it can happen.
+- A swap after the loop has started can. The loop update never re-checks the skill, so the loop
+  keeps running on the new weapon. The selectors are `changeType` 0, so the running one keeps its
+  clip. But every move-then-stop sends the lower layer `MoveNoSync` -> `W_DrawStanceNoSyncLoop`,
+  which re-activates `SwordArtsStanceNoSyncLoop_CMSG`. That reads the new category, and a target
+  skill without `a<cat>_040051` gets `a610_040051` (Wild Strikes loop, 2 hit events). The upper
+  loop/loop-move selectors (40051/40052) are candidates by the same rule. Needs runtime proof
+  (`chainsaw-driver.js`: start Wild Strikes, Spinning Strikes or Unending Dance, swap, then move
+  and stop).
