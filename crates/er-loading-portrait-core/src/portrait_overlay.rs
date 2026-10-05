@@ -275,10 +275,10 @@ pub fn portrait_onto(buf: &mut [u8], w: usize, h: usize) -> bool {
     // `PORTRAIT_CROP_SEED_FRAMES` count composited frames rather than seeding ones: a live run reported 324
     // against a seed window of 40, so the counter could not say whether the envelope was still moving --
     // the single thing its name promises. Saturating at the window makes `== PORTRAIT_CROP_SEED_N` mean
-    // frozen. `fetch_update` rather than a load/compare/store so the clamp is one indivisible step; this is
+    // frozen. `try_update` rather than a load/compare/store so the clamp is one indivisible step; this is
     // the render thread alone, but a counter whose whole point is to be trusted should not need that caveat.
     let seeded = PORTRAIT_CROP_SEED_FRAMES
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
             (n < PORTRAIT_CROP_SEED_N).then_some(n + 1)
         })
         .unwrap_or_else(|frozen| frozen);

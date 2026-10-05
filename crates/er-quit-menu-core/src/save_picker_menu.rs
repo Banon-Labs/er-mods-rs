@@ -2332,7 +2332,7 @@ pub unsafe fn save_picker_menu_pump_edge_scroll() {
     // nothing and cannot fight a hover; it only re-applies the cell chrome onto cells that have
     // finished being rebuilt.
     if SAVE_PICKER_CHROME_DIRTY_TICKS
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |owed| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |owed| {
             owed.checked_sub(1)
         })
         .is_ok()
