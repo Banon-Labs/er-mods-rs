@@ -276,7 +276,7 @@ portable	-	test-pre-push-dirty-tree.sh	builds its own single-branch repo under m
 portable	-	test-pre-push-gates-pushed-ref.sh	builds its own two-commit repo under mktemp with every gate stubbed, drives the real hook with a ref list on stdin, and lets it pin its gate worktree inside that fixture	suite
 portable	-	test-er-push-watched-ref-carries-work.sh	builds its own bare remote plus working clone under mktemp; every fetch and push names that fixture, so it needs no network and no origin/main	suite
 portable	-	test-cpu-courtesy.sh	runs renice/taskset on itself; every number is derived from nproc, so a 2-core runner asserts 1	suite
-portable	-	check-save-disable-warnings.py	source/AST/text analysis only	product
+portable	-	check-save-disable-warnings.py	cross-compiles two crates with cargo-xwin after the warm-up build step before it	cargo-build
 portable	-	conventional-commit-subject.py --selftest	source/AST/text analysis only	suite
 portable	-	test-described-next-step-signal.py	drives the signal script under mktemp; source/text only	policy
 portable	-	check-no-thread-suspension.py --selftest	source/AST/text analysis only	source
