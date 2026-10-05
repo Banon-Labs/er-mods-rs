@@ -2078,12 +2078,50 @@ function bind () {
     };
   }
 
+  // Test setup, not part of the glitch (`sustain`): the player and every other character within
+  // `radius` metres are held at full HP, and those others get the Darkness SpEffect from the player
+  // every `every` frames so they drop their target, the way er-enemynpc-effects applies it
+  // (charm.rs: apply with the player as source, 1.16.2 0x1403fade0 -> 1.17 0x1403fb010, below the
+  // 1.17.1 shift). Offsets from fromsoftware-rs: data module hp +0x138 / max +0x13c, physics module
+  // (container +0x68) position +0x70.
+  const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb010'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
+  const SUSTAIN_POS = Memory.alloc(16);
+  const SUSTAIN_CORR = Memory.alloc(0x60);
+  S.sustained = {};
+  function chrPos (c) {
+    const q = c.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
+    return [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()];
+  }
+  function fillHp (c) {
+    const dm = c.add(OFF.MODULES).readPointer().add(OFF.MOD_DATA).readPointer();
+    const max = dm.add(0x13c).readS32();
+    if (max > 0 && dm.add(0x138).readS32() < max) dm.add(0x138).writeS32(max);
+  }
+  function sustain (c, p) {
+    const sc = cfgIn.sustain;
+    try {
+      if (c.equals(p)) { fillHp(p); S.playerPos = chrPos(p); return; }
+      if (!S.playerPos) return;
+      const a = chrPos(c);
+      const dx = a[0] - S.playerPos[0]; const dy = a[1] - S.playerPos[1]; const dz = a[2] - S.playerPos[2];
+      if (dx * dx + dy * dy + dz * dz > (sc.radius || 8) * (sc.radius || 8)) return;
+      fillHp(c);
+      const k = c.toString();
+      const rec = S.sustained[k] || (S.sustained[k] = { last: -1e9, applied: 0, refused: 0 });
+      if (S.frame - rec.last >= (sc.every || 60)) {
+        rec.last = S.frame;
+        if (APPLY_SPEFFECT_FROM(c, sc.effect || 1653000, p, SUSTAIN_POS, SUSTAIN_CORR, 0, 0, 0) & 1) rec.applied += 1; else rec.refused += 1;
+      }
+    } catch (e) { S.sustainErr = e.message; }
+  }
+
   // The frame clock: the main player's PreBehaviorSafe, once per game frame on the game thread.
   attach(follow(A.PRE_BEHAVIOR_SAFE), {
     onEnter (args) {
       S.pbsCalls = (S.pbsCalls || 0) + 1;
       if (S.pbsCalls % 600 === 0 && S.hbSend) S.hbSend();
       const p = mainPlayer();
+      if (p !== null && cfgIn.sustain) sustain(args[0], p);
       if (p === null || !args[0].equals(p)) return;
       S.frame += 1;
       S.pollsSinceTick = 0;
@@ -2156,7 +2194,7 @@ function bind () {
 
   send2('armed', { hooks: hooks.length, block: S.block, player: mainPlayer() !== null, xinput: XI === null ? null : XI.name });
   // The heartbeat rides PreBehaviorSafe below: raw calls (every character) against counted player frames.
-  S.hbSend = function () { send2('hb', { pbsCalls: S.pbsCalls || 0, state: S.driver === null ? null : S.driver.state, polls: S.polls.xinput + S.polls.xinputEx, caps: S.polls.caps || 0, capsForced: S.polls.capsForced || 0, focus: (function () { try { return FOCUS_BYTE.readU8(); } catch (e) { return e.message; } })() }); };
+  S.hbSend = function () { send2('hb', { pbsCalls: S.pbsCalls || 0, state: S.driver === null ? null : S.driver.state, polls: S.polls.xinput + S.polls.xinputEx, caps: S.polls.caps || 0, capsForced: S.polls.capsForced || 0, sustained: S.sustained, sustainErr: S.sustainErr || null, focus: (function () { try { return FOCUS_BYTE.readU8(); } catch (e) { return e.message; } })() }); };
 
   rpc.exports = {
     start: start,
