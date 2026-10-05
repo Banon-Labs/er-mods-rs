@@ -1467,6 +1467,10 @@ function bind () {
   const GET_PARAM_IN_SLOT = new NativeFunction(A.GET_PARAM_ID_IN_SLOT, 'int', ['pointer', 'int']);
   function slotParam (egd, slot) { try { return GET_PARAM_IN_SLOT(egd, slot); } catch (e) { return null; } }
   const cfgIn = (globalThis.__ER_FRIDA_CONFIG || {});
+  // The player's input is blocked while the driver runs, so the player is kept alive and the enemies
+  // near them are kept blind by default (2026-10-05: a run without `sustain` got the player killed).
+  // `sustain: false` turns it off; an object replaces it.
+  const SUSTAIN = cfgIn.sustain === false ? null : (cfgIn.sustain || { radius: 12, effect: 1653000, every: 60 });
 
   function mainPlayer () {
     try {
@@ -2186,12 +2190,12 @@ function bind () {
     const q = c.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
     // `at` names fixed coordinates by key (`player` or a ChrIns address), so separate attaches pin
     // to the same spot instead of wherever each one starts.
-    const at = cfgIn.sustain.at && cfgIn.sustain.at[key];
+    const at = SUSTAIN.at && SUSTAIN.at[key];
     if (!rec.pos) { rec.pos = at ? at.slice() : [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()]; }
     q.writeFloat(rec.pos[0]); q.add(4).writeFloat(rec.pos[1]); q.add(8).writeFloat(rec.pos[2]);
   }
   function sustain (c, p) {
-    const sc = cfgIn.sustain;
+    const sc = SUSTAIN;
     try {
       if (c.equals(p)) {
         fillHp(p);
@@ -2263,7 +2267,7 @@ function bind () {
       S.pbsCalls = (S.pbsCalls || 0) + 1;
       if (S.pbsCalls % 600 === 0 && S.hbSend) S.hbSend();
       const p = mainPlayer();
-      if (p !== null && cfgIn.sustain) sustain(args[0], p);
+      if (p !== null && SUSTAIN) sustain(args[0], p);
       if (p === null || !args[0].equals(p)) return;
       S.frame += 1;
       S.pollsSinceTick = 0;
