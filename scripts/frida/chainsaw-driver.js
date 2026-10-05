@@ -831,10 +831,10 @@ function createDriver (userConfig) {
     if (!d.ctx.anySkill && since >= cfg.repressFrames + 2) { d.ctx.pressAt = d.frame; d.ctx.presses += 1; d.l2 = true; }
     if (k.loop || k.start) d.ctx.sourceFrames += 1;
     if (onTarget && k.loop) d.ctx.loopOnTarget += 1;
-    events(obs, 'hit').forEach(function (h) { if (weaponBase(h.heldR) === weaponBase(d.ctx.target)) d.ctx.hitsOnTarget += 1; });
+    events(obs, 'hit').forEach(function (h) { if (weaponBase(h.heldR) === weaponBase(d.ctx.target)) { d.ctx.hitsOnTarget += 1; if ((d.ctx.hitDetail = d.ctx.hitDetail || []).length < 50) d.ctx.hitDetail.push(h); } });
     events(obs, 'fpcharge').forEach(function (c) { if (d.ctx.charges.length < 40) d.ctx.charges.push(c); });
     const evidence = function () {
-      return { presses: d.ctx.presses, loopOnTarget: d.ctx.loopOnTarget, hitsOnTarget: d.ctx.hitsOnTarget, sourceFrames: d.ctx.sourceFrames, fpAtRehold: d.ctx.fpAtRehold, fp: obs.fp, charges: d.ctx.charges, heldR: obs.heldR, anims: obs.anims };
+      return { presses: d.ctx.presses, loopOnTarget: d.ctx.loopOnTarget, hitsOnTarget: d.ctx.hitsOnTarget, hitDetail: d.ctx.hitDetail || [], sourceFrames: d.ctx.sourceFrames, fpAtRehold: d.ctx.fpAtRehold, fp: obs.fp, charges: d.ctx.charges, heldR: obs.heldR, anims: obs.anims };
     };
     if (anyCategory(obs.anims, cfg.targetArtsType)) {
       cur().outcome = FAIL.TARGET_SKILL_PLAYED;
@@ -1886,7 +1886,7 @@ function bind () {
       if (!adi) return;
       const p = mainPlayer();
       const rd = function (o) { try { return adi.add(o).readS32(); } catch (e) { return null; } };
-      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1) });
+      push({ kind: 'hit', atk: rd(0x40), damage: rd(0x228), launchWeapon: rd(0x144), heldR: p === null ? null : equipOf(p, -1), dist: S.nearest === undefined ? null : S.nearest });
     },
   });
 
@@ -2097,17 +2097,33 @@ function bind () {
     const max = dm.add(0x13c).readS32();
     if (max > 0 && dm.add(0x138).readS32() < max) dm.add(0x138).writeS32(max);
   }
+  // `lock`: each sustained character is put back at the position it had when first seen, every
+  // frame, so a glitch run and its control stand at the same distance.
+  function pin (c, rec) {
+    const q = c.add(OFF.MODULES).readPointer().add(0x68).readPointer().add(0x70);
+    if (!rec.pos) { rec.pos = [q.readFloat(), q.add(4).readFloat(), q.add(8).readFloat()]; return; }
+    q.writeFloat(rec.pos[0]); q.add(4).writeFloat(rec.pos[1]); q.add(8).writeFloat(rec.pos[2]);
+  }
   function sustain (c, p) {
     const sc = cfgIn.sustain;
     try {
-      if (c.equals(p)) { fillHp(p); S.playerPos = chrPos(p); return; }
+      if (c.equals(p)) {
+        fillHp(p);
+        if (sc.lock) pin(p, S.playerPin || (S.playerPin = {}));
+        S.playerPos = chrPos(p);
+        return;
+      }
       if (!S.playerPos) return;
       const a = chrPos(c);
       const dx = a[0] - S.playerPos[0]; const dy = a[1] - S.playerPos[1]; const dz = a[2] - S.playerPos[2];
-      if (dx * dx + dy * dy + dz * dz > (sc.radius || 8) * (sc.radius || 8)) return;
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (dist > (sc.radius || 8)) return;
       fillHp(c);
       const k = c.toString();
       const rec = S.sustained[k] || (S.sustained[k] = { last: -1e9, applied: 0, refused: 0 });
+      rec.dist = Math.round(dist * 100) / 100;
+      if (S.nearest === undefined || S.nearestFrame !== S.frame || dist < S.nearest) { S.nearest = rec.dist; S.nearestFrame = S.frame; }
+      if (sc.lock) pin(c, rec);
       if (S.frame - rec.last >= (sc.every || 60)) {
         rec.last = S.frame;
         if (APPLY_SPEFFECT_FROM(c, sc.effect || 1653000, p, SUSTAIN_POS, SUSTAIN_CORR, 0, 0, 0) & 1) rec.applied += 1; else rec.refused += 1;
