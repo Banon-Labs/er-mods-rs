@@ -1,0 +1,21 @@
+-- Moongrum AI changes. Save to apply; delete a line and save to undo it.
+-- Everything here only touches the NPCs in LAB_TARGET_THINK (Moongrum), unless an override
+-- checks nothing -- an override replaces the function for every NPC that calls it, so test
+-- lab_is_target(ai) inside it when only Moongrum should change.
+--
+-- Act numbers are the ones in the lab's plan/act log. The game's own code for any act is in the
+-- page's Reference tab (search GeneralNPC_Act02, etc.).
+
+-- Plan weights: the game's weights are percentages that sum to ~100 per plan.
+-- lab_weight(2, 0)        -- never pick act 2
+-- lab_scale(3, 3)         -- act 3 three times as likely
+-- lab_weight(200, 50)     -- act 200 at weight 50 regardless of distance
+
+-- Replace an act. `orig` is the game's version; call it to keep the original behaviour.
+-- lab_override("GeneralNPC_Act02", function(orig, ai, goal, paramTbl)
+--   if not lab_is_target(ai) then return orig(ai, goal, paramTbl) end
+--   hot_log("note", "msg", "act 2 replaced by a backstep")
+--   -- Same arguments as after_attack_act.lua's own side step call.
+--   goal:AddSubGoal(GOAL_COMMON_StepSafety, 5, -1, -1, 50, 50, TARGET_ENE_0, 4, 0, true)
+--   return 0
+-- end)

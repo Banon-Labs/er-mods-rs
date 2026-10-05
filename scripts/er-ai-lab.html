@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>AI Lab</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root {
+  --bg: #111316; --panel: #1a1d22; --line: #2a2f37; --text: #d7dce3; --dim: #8a93a0;
+  --accent: #d9b45a; --good: #6cc68a; --bad: #e0675f; --plan: #7aa7e0; --act: #d9b45a;
+  --mono: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; height: 100vh; display: flex; flex-direction: column; }
+header { display: flex; gap: 16px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 14px; margin: 0; color: var(--accent); letter-spacing: .04em; }
+.stat { font-family: var(--mono); color: var(--dim); }
+.stat b { color: var(--text); font-weight: 600; }
+.pill { padding: 1px 7px; border-radius: 9px; font-size: 11px; font-family: var(--mono); }
+.ok { background: #1f3a29; color: var(--good); } .no { background: #3d1f1f; color: var(--bad); }
+button { background: #252a32; color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; }
+button:hover { border-color: var(--accent); }
+button.on { background: #3a3220; border-color: var(--accent); color: var(--accent); }
+main { flex: 1; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); min-height: 0; }
+section { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+.bar .title { font-weight: 600; color: var(--dim); text-transform: uppercase; font-size: 11px; letter-spacing: .08em; margin-right: auto; }
+.bar label { color: var(--dim); display: flex; gap: 3px; align-items: center; }
+input[type=text] { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 6px; font-family: var(--mono); }
+#log { flex: 1; overflow: auto; font-family: var(--mono); font-size: 12px; padding: 4px 0; }
+.row { padding: 1px 10px; white-space: pre-wrap; word-break: break-word; border-left: 3px solid transparent; }
+.row:hover { background: #181b20; }
+.row .t { color: #5b6370; margin-right: 6px; }
+.row.plan { border-left-color: var(--plan); } .row.act { border-left-color: var(--act); }
+.row.err { border-left-color: var(--bad); color: #f0a39d; }
+.row.lab { color: var(--dim); }
+.k { color: var(--dim); } .v { color: var(--text); }
+.bars { display: inline-flex; gap: 4px; flex-wrap: wrap; vertical-align: middle; }
+.wb { display: inline-flex; align-items: center; gap: 3px; }
+.wb i { display: inline-block; height: 8px; background: var(--plan); border-radius: 2px; }
+.right { display: grid; grid-template-rows: auto minmax(0, 1.3fr) minmax(0, 1fr); border-right: 0; }
+#acts { padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; font-family: var(--mono); font-size: 12px; max-height: 190px; overflow: auto; }
+.ab { display: grid; grid-template-columns: 60px 1fr 46px; gap: 6px; align-items: center; }
+.ab i { display: block; height: 10px; background: var(--act); border-radius: 2px; }
+.ed { flex: 1; min-height: 0; }
+.ed[hidden], .bar[hidden] { display: none; }
+select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 3px 4px; font-family: var(--mono); max-width: 260px; }
+#repl-in { flex: 0 0 64px; border-top: 1px solid var(--line); }
+#repl-out { flex: 1; overflow: auto; font: 12px/1.4 var(--mono); padding: 6px 10px; white-space: pre-wrap; }
+#repl-out .in { color: var(--accent); } #repl-out .bad { color: var(--bad); }
+.pane { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } section { min-height: 50vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>AI LAB</h1>
+  <span class="stat">link <span id="link" class="pill no">connecting</span></span>
+  <span class="stat">npc <span id="npc" class="pill no">none</span> hp <b id="npchp">-</b> dist <b id="dist">-</b></span>
+  <span class="stat">you hp <b id="php">-</b></span>
+  <button id="god">god mode</button>
+  <button id="respawn">respawn npc</button>
+  <button id="despawn">despawn</button>
+  <span class="stat">plans <b id="nplan">0</b> acts <b id="nact">0</b></span>
+</header>
+<main>
+  <section>
+    <div class="bar">
+      <span class="title">Event log</span>
+      <label><input type="checkbox" data-f="plan" checked>plan</label>
+      <label><input type="checkbox" data-f="act" checked>act</label>
+      <label><input type="checkbox" data-f="ai" checked>other ai</label>
+      <label><input type="checkbox" data-f="npc">npc heartbeat</label>
+      <label><input type="checkbox" data-f="heartbeat">lua heartbeat</label>
+      <label><input type="checkbox" data-f="misc" checked>lab/errors</label>
+      <input type="text" id="grep" placeholder="filter text" size="12">
+      <button id="pause">pause</button>
+      <button id="clear">clear</button>
+    </div>
+    <div id="log"></div>
+  </section>
+  <section class="right">
+    <div>
+      <div class="bar"><span class="title">Executed acts (last 200)</span><button id="resetacts">reset</button></div>
+      <div id="acts"></div>
+    </div>
+    <div class="pane">
+      <div class="bar">
+        <button id="tab-mods" class="on">your mods</button>
+        <button id="tab-ref">game AI (reference)</button>
+        <span class="title"></span>
+        <span class="stat" id="filestate"></span>
+      </div>
+      <div class="bar" id="mods-bar">
+        <select id="files"></select>
+        <button id="newmod">new mod</button>
+        <button id="revert">reload from disk</button>
+        <button id="save">save &amp; apply (ctrl+s)</button>
+      </div>
+      <div class="bar" id="ref-bar" hidden>
+        <input type="text" id="ref-q" placeholder="search game functions, e.g. Act02, Activate" size="22">
+        <select id="ref-list"></select>
+        <button id="ref-override">override in current mod</button>
+      </div>
+      <div id="src" class="ed"></div>
+      <div id="refsrc" class="ed" hidden></div>
+    </div>
+    <div class="pane">
+      <div class="bar">
+        <span class="title">Lua REPL (AI state)</span>
+        <span class="stat">enter runs, shift+enter newline, ctrl+up/down history</span>
+        <button id="refresh">refresh completions</button>
+      </div>
+      <div id="repl-out"></div>
+      <div id="repl-in" class="ed"></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const log = $('log');
+const show = { plan: true, act: true, ai: true, npc: false, heartbeat: false, misc: true };
+let paused = false, nplan = 0, nact = 0, god = false, dirty = false;
+const recentActs = [];
+const MAX_ROWS = 4000;
+// Events older than the page are backlog replay; they must not trigger live actions.
+const PAGE_T0 = Date.now();
+
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const ts = (at) => new Date(at * 1000).toTimeString().slice(0, 8);
+const fmt = (v) => typeof v === 'number' && !Number.isInteger(v) ? v.toFixed(2) : v;
+
+function category(e) {
+  if (e.kind === 'ai') return e.what === 'plan' ? 'plan' : e.what === 'act' ? 'act' : 'ai';
+  if (e.kind === 'npc') return 'npc';
+  if (e.kind === 'heartbeat') return 'heartbeat';
+  return 'misc';
+}
+
+function kv(e, skip) {
+  return Object.entries(e).filter(([k]) => !skip.includes(k))
+    .map(([k, v]) => `<span class="k">${esc(k)}=</span><span class="v">${esc(typeof v === 'object' && v !== null ? JSON.stringify(v) : fmt(v))}</span>`).join(' ');
+}
+
+function planBars(top) {
+  const items = String(top || '').trim().split(/\s+/).filter(Boolean).map((p) => p.split(':'));
+  return '<span class="bars">' + items.map(([a, w]) =>
+    `<span class="wb">${esc(a)}<i style="width:${Math.max(2, Number(w) * 0.9)}px"></i><span class="k">${Number(w).toFixed(0)}%</span></span>`).join('') + '</span>';
+}
+
+function render(e) {
+  const cat = category(e);
+  const div = document.createElement('div');
+  div.className = 'row ' + cat;
+  div.dataset.cat = cat;
+  const bad = /error|fail|fault|detached/.test(e.kind || '') || (e.kind === 'eval-result' && !e.ok);
+  if (bad) div.classList.add('err');
+  if (e.src === 'lab') div.classList.add('lab');
+  let body;
+  if (cat === 'plan') {
+    body = `<b>plan</b> think=${e.think} dist=<b>${fmt(e.dist)}</b> acts=${e.acts} ${planBars(e.top)}`;
+  } else if (cat === 'act') {
+    body = `<b style="color:var(--act)">act ${e.act}</b> dist=${fmt(e.dist)} think=${e.think}`;
+  } else if (e.kind === 'ai') {
+    body = `<b>${esc(e.what)}</b> ` + kv(e, ['seq', 'at', 'src', 'kind', 't', 'what']);
+  } else {
+    body = `<span class="k">${esc(e.src)}</span> <b>${esc(e.kind)}</b> ` + kv(e, ['seq', 'at', 'src', 'kind', 't']);
+  }
+  div.innerHTML = `<span class="t">${ts(e.at)}</span>` + body;
+  div.dataset.text = div.textContent.toLowerCase();
+  applyFilter(div);
+  const stick = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.appendChild(div);
+  while (log.childElementCount > MAX_ROWS) log.firstElementChild.remove();
+  if (stick && !paused) log.scrollTop = log.scrollHeight;
+}
+
+function applyFilter(div) {
+  const g = $('grep').value.toLowerCase();
+  div.style.display = show[div.dataset.cat] && (!g || div.dataset.text.includes(g)) ? '' : 'none';
+}
+function refilter() { for (const d of log.children) applyFilter(d); }
+
+function drawActs() {
+  const counts = {};
+  for (const a of recentActs) counts[a] = (counts[a] || 0) + 1;
+  const rows = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  const max = rows.length ? rows[0][1] : 1;
+  $('acts').innerHTML = rows.map(([a, n]) =>
+    `<div class="ab"><span>act ${esc(a)}</span><i style="width:${(n / max) * 100}%"></i><span class="k">${n}</span></div>`).join('')
+    || '<span class="k">no acts yet</span>';
+}
+
+function onEvent(e) {
+  if (e.kind === 'npc') {
+    const alive = e.alive;
+    $('npc').textContent = alive ? 'alive' : (e.chr ? 'gone' : 'none');
+    $('npc').className = 'pill ' + (alive ? 'ok' : 'no');
+    $('npchp').textContent = e.npcHp ? `${e.npcHp[0]}/${e.npcHp[1]}` : '-';
+    $('php').textContent = e.playerHp ? `${e.playerHp[0]}/${e.playerHp[1]}` : '-';
+    if (alive && e.pos && e.player) {
+      const d = Math.hypot(e.pos[0] - e.player[0], e.pos[1] - e.player[1], e.pos[2] - e.player[2]);
+      $('dist').textContent = d.toFixed(1) + 'm';
+    } else $('dist').textContent = '-';
+    god = !!e.god;
+    $('god').classList.toggle('on', god);
+    $('god').textContent = god ? 'god mode ON' : 'god mode off';
+  }
+  if (e.kind === 'ai' && e.what === 'plan') $('nplan').textContent = ++nplan;
+  if (e.kind === 'ai' && e.what === 'act') {
+    $('nact').textContent = ++nact;
+    recentActs.push(e.act);
+    if (recentActs.length > 200) recentActs.shift();
+    drawActs();
+  }
+  if (e.kind === 'detached') { $('link').textContent = 'detached'; $('link').className = 'pill no'; }
+  if (e.kind === 'saved' || e.kind === 'reloaded') $('filestate').textContent = e.kind + ' ' + ts(e.at);
+  if (e.kind === 'reloaded' && window.monaco && e.at * 1000 > PAGE_T0) refreshCompletions();
+  if (e.kind === 'reload-failed') $('filestate').textContent = 'RELOAD FAILED: ' + (e.error || '');
+  if (e.kind === 'manifest' && window.monaco && e.at * 1000 > PAGE_T0) listFiles();
+  render(e);
+}
+
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => { $('link').textContent = 'live'; $('link').className = 'pill ok'; };
+  es.onerror = () => { $('link').textContent = 'reconnecting'; $('link').className = 'pill no'; };
+  es.onmessage = (m) => onEvent(JSON.parse(m.data));
+}
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  return r.json();
+}
+
+// ---- Monaco: Lua highlighting, completion from the live AI state and the decompiled scripts ----
+let srcEd = null, replEd = null;
+let globals = [], methods = [];
+const LUA_KEYWORDS = ['and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for', 'function', 'if', 'in',
+  'local', 'nil', 'not', 'or', 'repeat', 'return', 'then', 'true', 'until', 'while'];
+// Lua 5.0 library tables; their members are listed from the live state when it is reachable.
+const LIBS = { table: ['insert', 'remove', 'getn', 'setn', 'sort', 'concat', 'foreach', 'foreachi'],
+  math: ['floor', 'ceil', 'abs', 'min', 'max', 'mod', 'sqrt', 'random', 'randomseed', 'sin', 'cos', 'pi', 'huge'] };
+
+async function refreshCompletions() {
+  try {
+    methods = await api('GET', '/api/methods');
+    const g = await api('GET', '/api/globals');
+    if (Array.isArray(g)) globals = g;
+    $('filestate').textContent = `completions: ${globals.length} globals, ${methods.length} methods`;
+  } catch (e) {
+    $('filestate').textContent = 'completion refresh failed: ' + e;
+  }
+}
+
+function setupMonaco() {
+  monaco.editor.defineTheme('lab', {
+    base: 'vs-dark', inherit: true, rules: [],
+    colors: { 'editor.background': '#0d0f12', 'editor.lineHighlightBackground': '#161a1f' },
+  });
+  const K = monaco.languages.CompletionItemKind;
+  monaco.languages.registerCompletionItemProvider('lua', {
+    triggerCharacters: ['.', ':'],
+    provideCompletionItems(model, pos) {
+      const word = model.getWordUntilPosition(pos);
+      const range = { startLineNumber: pos.lineNumber, endLineNumber: pos.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn };
+      const before = model.getLineContent(pos.lineNumber).slice(0, word.startColumn - 1);
+      const member = before.match(/([A-Za-z_][A-Za-z0-9_]*)\s*([.:])\s*$/);
+      if (member) {
+        if (member[2] === '.' && LIBS[member[1]]) {
+          return { suggestions: LIBS[member[1]].map((n) => ({ label: n, kind: K.Function, insertText: n, range })) };
+        }
+        return { suggestions: methods.map((m, i) => ({
+          label: m.name, kind: K.Method, insertText: m.name, range,
+          detail: `engine method, used ${m.count}x`, documentation: `first seen in ${m.file}`,
+          sortText: String(i).padStart(5, '0'),
+        })) };
+      }
+      const kindOf = (t) => t.startsWith('function') ? K.Function : t.startsWith('number') ? K.Constant : t.startsWith('table') ? K.Module : K.Variable;
+      return { suggestions: [
+        ...globals.map((g) => ({ label: g.name, kind: kindOf(g.type), insertText: g.name, range, detail: g.type })),
+        ...LUA_KEYWORDS.map((k) => ({ label: k, kind: K.Keyword, insertText: k, range })),
+      ] };
+    },
+  });
+  monaco.languages.registerHoverProvider('lua', {
+    provideHover(model, pos) {
+      const w = model.getWordAtPosition(pos);
+      if (!w) return null;
+      const g = globals.find((x) => x.name === w.word);
+      const m = methods.find((x) => x.name === w.word);
+      const lines = [];
+      if (g) lines.push({ value: `**${g.name}** : \`${g.type}\` (live global)` });
+      if (m) lines.push({ value: `**${m.name}** engine method, used ${m.count}x in the decompiled AI scripts (first: ${m.file})` });
+      return lines.length ? { contents: lines } : null;
+    },
+  });
+
+  const common = { language: 'lua', theme: 'lab', automaticLayout: true, fontSize: 12, tabSize: 2,
+    minimap: { enabled: false }, scrollBeyondLastLine: false, fontFamily: 'ui-monospace, Menlo, Consolas, monospace' };
+  srcEd = monaco.editor.create($('src'), { ...common, value: '' });
+  srcEd.onDidChangeModelContent(() => { if (!loadingFile) { dirty = true; $('filestate').textContent = 'unsaved'; } });
+  srcEd.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveFile);
+
+  refEd = monaco.editor.create($('refsrc'), { ...common, readOnly: true, value: '' });
+
+  replEd = monaco.editor.create($('repl-in'), { ...common, lineNumbers: 'off', glyphMargin: false, folding: false,
+    lineDecorationsWidth: 6, renderLineHighlight: 'none', value: '' });
+  // Enter runs unless the suggestion widget is open (then it accepts the suggestion).
+  replEd.addCommand(monaco.KeyCode.Enter, runRepl, '!suggestWidgetVisible');
+  replEd.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.UpArrow, () => { if (hi > 0) replEd.setValue(hist[--hi]); });
+  replEd.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.DownArrow, () => { if (hi < hist.length) replEd.setValue(hist[++hi] || ''); });
+}
+
+// ---- files: _lab.lua is the framework (read-only here), mods/*.lua are the AI changes ----
+let loadingFile = false;
+let current = null;
+async function listFiles(select) {
+  const files = await api('GET', '/api/files');
+  const sel = $('files');
+  sel.innerHTML = files.map((f) => `<option value="${esc(f.name)}">${esc(f.framework ? f.name + ' (framework, read-only)' : f.name)}</option>`).join('');
+  const want = select || current || (files.find((f) => !f.framework) || files[0]).name;
+  sel.value = want;
+  if (want !== current) await loadFile(want);
+}
+async function loadFile(name) {
+  name = name || current;
+  const f = await api('GET', '/api/file?name=' + encodeURIComponent(name));
+  current = name;
+  loadingFile = true;
+  srcEd.setValue(f.text);
+  srcEd.updateOptions({ readOnly: name === '_lab.lua' });
+  loadingFile = false;
+  dirty = false;
+  $('filestate').textContent = name === '_lab.lua' ? 'framework: edit mods instead' : 'loaded ' + name;
+}
+async function saveFile() {
+  if (current === '_lab.lua') return;
+  const r = await api('PUT', '/api/file', { name: current, text: srcEd.getValue() });
+  if (r.ok === false) { $('filestate').textContent = r.out; return; }
+  dirty = false;
+  $('filestate').textContent = 'saved ' + current + ', waiting for apply...';
+}
+$('files').onchange = async (ev) => {
+  if (dirty && !confirm('Discard unsaved edits to ' + current + '?')) { ev.target.value = current; return; }
+  await loadFile(ev.target.value);
+};
+$('newmod').onclick = async () => {
+  const n = prompt('Mod file name (letters, digits, _ or -):', 'test');
+  if (!n) return;
+  const name = 'mods/' + n.replace(/\.lua$/, '') + '.lua';
+  const r = await api('PUT', '/api/file', { name, text: '-- ' + name + ': AI changes. Save to apply.\n\n' });
+  if (r.ok === false) { alert(r.out); return; }
+  await listFiles(name);
+};
+
+// ---- reference: the game's decompiled AI functions, read-only ----
+let refEd = null;
+function showTab(ref) {
+  $('tab-mods').classList.toggle('on', !ref);
+  $('tab-ref').classList.toggle('on', ref);
+  $('mods-bar').hidden = ref; $('src').hidden = ref;
+  $('ref-bar').hidden = !ref; $('refsrc').hidden = !ref;
+}
+$('tab-mods').onclick = () => showTab(false);
+$('tab-ref').onclick = () => { showTab(true); if (!$('ref-list').options.length) searchRef(); };
+let refTimer = null;
+async function searchRef() {
+  const r = await api('GET', '/api/ref?q=' + encodeURIComponent($('ref-q').value));
+  $('ref-list').innerHTML = r.names.map((n) => `<option>${esc(n)}</option>`).join('');
+  $('filestate').textContent = `${r.total} game functions match`;
+  if (r.names.length) openRef(r.names[0]);
+}
+async function openRef(name) {
+  const r = await api('GET', '/api/refsrc?name=' + encodeURIComponent(name));
+  refEd.setValue(r.text || r.error);
+  $('ref-list').value = name;
+}
+$('ref-q').addEventListener('input', () => { clearTimeout(refTimer); refTimer = setTimeout(searchRef, 200); });
+$('ref-list').onchange = (ev) => openRef(ev.target.value);
+// Goal methods (029999_battle:Goal.Activate) live on a table, not a global, so only globals get
+// the lab_override skeleton.
+$('ref-override').onclick = () => {
+  const name = $('ref-list').value;
+  if (!name) return;
+  if (name.includes(':')) { alert('Goal methods are not globals; override the functions they call instead.'); return; }
+  if (current === '_lab.lua') { alert('Pick or create a mod first.'); return; }
+  const isAct = /_Act\d+$/.test(name);
+  const args = isAct ? 'ai, goal, paramTbl' : '...';
+  const call = isAct ? 'orig(ai, goal, paramTbl)' : 'orig(unpack(arg))';
+  const body = `\nlab_override("${name}", function(orig, ${args})\n` +
+    (isAct ? '  if not lab_is_target(ai) then return orig(ai, goal, paramTbl) end\n' : '') +
+    `  -- your version here; calling orig keeps the game's behaviour\n  return ${call}\nend)\n`;
+  const model = srcEd.getModel();
+  const end = model.getFullModelRange().getEndPosition();
+  srcEd.executeEdits('ref', [{ range: new monaco.Range(end.lineNumber, end.column, end.lineNumber, end.column), text: body }]);
+  showTab(false);
+  srcEd.revealLine(model.getLineCount());
+  srcEd.focus();
+};
+
+const replOut = $('repl-out');
+const hist = [];
+let hi = 0;
+function replLine(cls, text) {
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = text;
+  replOut.appendChild(d);
+  replOut.scrollTop = replOut.scrollHeight;
+}
+async function runRepl() {
+  const code = replEd.getValue();
+  if (!code.trim()) return;
+  hist.push(code); hi = hist.length;
+  replEd.setValue('');
+  replLine('in', '> ' + code);
+  const r = await api('POST', '/api/eval', { code });
+  replLine(r.ok ? '' : 'bad', r.out === '' ? '(no value)' : r.out);
+  // A definition made in the REPL should complete straight away.
+  if (r.ok && /=|function/.test(code)) refreshCompletions();
+}
+
+$('refresh').onclick = refreshCompletions;
+$('save').onclick = saveFile;
+$('revert').onclick = () => { if (!dirty || confirm('Discard unsaved edits?')) loadFile(); };
+$('god').onclick = () => api('POST', '/api/god', { on: !god });
+$('respawn').onclick = () => api('POST', '/api/respawn', {});
+$('despawn').onclick = () => api('POST', '/api/despawn', {});
+$('pause').onclick = (ev) => { paused = !paused; ev.target.classList.toggle('on', paused); if (!paused) log.scrollTop = log.scrollHeight; };
+$('clear').onclick = () => { log.innerHTML = ''; };
+$('resetacts').onclick = () => { recentActs.length = 0; drawActs(); };
+$('grep').addEventListener('input', refilter);
+for (const cb of document.querySelectorAll('[data-f]')) {
+  cb.addEventListener('change', () => { show[cb.dataset.f] = cb.checked; refilter(); });
+}
+drawActs();
+connect();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js"></script>
+<script>
+const MONACO = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/';
+require.config({ paths: { vs: MONACO + 'vs' } });
+// Cross-origin workers cannot be started from a CDN URL directly; a same-origin blob that imports
+// the CDN worker can.
+window.MonacoEnvironment = {
+  getWorkerUrl: () => URL.createObjectURL(new Blob([
+    `self.MonacoEnvironment = { baseUrl: '${MONACO}' }; importScripts('${MONACO}vs/base/worker/workerMain.js');`,
+  ], { type: 'text/javascript' })),
+};
+require(['vs/editor/editor.main'], () => {
+  setupMonaco();
+  listFiles();
+  refreshCompletions();
+});
+</script>
+</body>
+</html>
