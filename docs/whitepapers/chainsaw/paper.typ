@@ -372,13 +372,34 @@ enemies and remains open.
 
 = Other animation fallbacks <sec-other>
 
-#label-box[
-  #text(weight: "bold")[Placeholder.] This section is not written yet. It will cover which other
-  selector nodes fall back to child 0 when the held weapon's skill lacks the requested clip, and
-  what child 0 is on each. The working notes are being prepared in
-  `docs/er-mechanics/chainsaw/cmsg-fallbacks.md`, produced by `scripts/er-behbnd-cmsg-fallbacks.py`.
-  Nothing in this paper depends on them.
-]
+A `CustomManualSelectorGenerator` builds the name `a<category>_<animId>` and plays the first child
+whose node name contains it. With no match it tries `a000_<animId>`, and with no match there either
+it plays child 0; there is no default field (*code*: 1.17.1 `0x1419bb2f0`, 1.16.2 `FUN_1419b9480`).
+The TimeAct that fires, hitboxes and FP included, is child 0's; the held weapon only decides which
+rows each hitbox resolves to. The stance loop on Starscourge is the only fallback seen in game
+(`drive-watch27`). The rest of @tbl-fallbacks is read from `c0000.behbnd` and the TimeAct files
+(*data*) and has not been driven.
+
+#figure(
+  caption: [Selectors whose child 0 is another skill's attack clip.],
+  ruled(
+    columns: (1.6fr, 1.6fr, 2fr),
+    header: ([States], [Child 0 played on fallback], [Reached by]),
+    [Stance start, loop, loop while moving], [Spinning Wheel `a839_040050/51/52` (13, 8, 10 hit events)], [any skill without its own clip, after a mid-skill equip (loop *measured*)],
+    [Stance loop without sync, without FP], [Wild Strikes `a610_*`], [same],
+    [Combo finishers], [Spinning Slash `a603_*`; second finisher Bloodboon Ritual `a834_040020` or Stormcaller `a623_042420`], [Spinning Slash, Double Slash, Sword Dance, Stormcaller, Blood Blade chains],
+    [Charged skill released early], [Charge Forth `a605_040001`], [Charge Forth, Carian Grandeur, Black Flame Tornado, Siluria's Woe and similar],
+    [Euporia Vortex / Causality's Wrath states], [`a928_040111` (38 hit events), `a928_040110` (14)], [routing not traced],
+    [Spinning Chain with 0 < FP < cost], [Spinning Wheel `a839_040055` (start), Wild Strikes `a610_040056/57` (loop)], [no swap needed (*data*, routing unverified)],
+    [Thrusting-shield heavy specials], [axe `a030` or claw `a022` clips], [Dueling, Carian and Ritual Shields],
+    [Scythe left heavy 5], [straight sword `a023_035040`], [scythes],
+  ),
+) <tbl-fallbacks>
+
+The stance follow-up attacks (`040060/65/70`) have generic `a000_` children and borrow nothing.
+Working notes:
+#link(branch + "docs/er-mechanics/chainsaw/cmsg-fallbacks.md")[`cmsg-fallbacks.md`], produced by
+#link(branch + "scripts/er-behbnd-cmsg-fallbacks.py")[`scripts/er-behbnd-cmsg-fallbacks.py`].
 
 = Proposed fix
 
