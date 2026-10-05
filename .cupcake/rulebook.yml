@@ -20,8 +20,14 @@ signals:
   # that explicitly target a registered non-main worktree even when the session
   # checkout (which current_branch reads) sits on main. The override mirrors
   # CUPCAKE_CURRENT_BRANCH_OVERRIDE and exists for the policy regression tests.
+  #
+  # `cat >/dev/null` first: cupcake writes the whole event to a signal's stdin before it reads
+  # the signal's stdout. With a long command (a 288 KB event) and many worktrees (32 KB of
+  # porcelain with 196 of them), both pipes fill and the two block on each other until the
+  # caller gives up; measured 2026-10-05, cupcake at 1 s of CPU in 26 s, this signal in
+  # anon_pipe_write. Draining stdin lets cupcake finish writing and start reading.
   worktree_branches:
-    command: 'printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
+    command: 'cat >/dev/null; printf "%s" "${CUPCAKE_WORKTREE_BRANCHES_OVERRIDE:-$(git worktree list --porcelain)}"'
     timeout_seconds: 2
   
   # Is an Elden Ring run live? Read by no_source_edit_during_live_run, which refuses a
