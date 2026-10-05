@@ -10,6 +10,8 @@
 //   { equip: item, hand: 'R'|'L' }  into the active slot of that hand, natively
 //                              (EquipItemToChrAsmSlot 0x140788ab0 with a MenuGaitem, as the driver)
 //   { press: ['R1','R2','L1','L2'], frames }  request bits held that many frames, then released
+//   { move: m, frames, hold? }  walk forward at speed level m (0.5 walk, 1 run) for that many frames,
+//                              holding the listed request bits meanwhile
 //   { fillFp: true }          FP to its maximum
 //   { speffects: true }       log the player's live SpEffect ids
 //   { wait: frames }
@@ -97,6 +99,11 @@ function runStep (p, st) {
     S.bits = st.press.reduce(function (b, k) { return b | BIT[k]; }, 0);
     S.until = S.frame + (st.frames || 2);
     S.release = true;
+  } else if (st.move !== undefined) {
+    S.move = st.move;
+    S.moveUntil = S.frame + (st.frames || 30);
+    if (st.hold) S.bits = st.hold.reduce(function (b, k) { return b | BIT[k]; }, 0);
+    ev.from = pos(p);
   } else if (st.fillFp) {
     const dm = dataModule(p);
     dm.add(0x148).writeS32(dm.add(0x14c).readS32());
@@ -145,6 +152,23 @@ hooks.push(Interceptor.attach(UPDATE_FROM_MANIPULATOR, {
     const p = mainPlayer();
     if (p === null || !args[0].add(8).readPointer().equals(p)) return;
     args[0].add(0x10).writeU64(uint64(S.bits));
+    // Movement (docs/er-mechanics/movement-input-injection.md): the manipulator's character-relative
+    // move vector at +0x10 and its copy +0x70, (0, 0, -m, 0) with forward = local -Z, plus the move
+    // request bit 0 of module+0xfc, rewritten every frame of the hold; zeroed once afterwards.
+    // Manipulator = ChrIns+0x58 (ChrCtrl) -> +0x3b0, or +0x18 when that is null.
+    if (S.move !== undefined) {
+      try {
+        const ctrl = p.add(0x58).readPointer();
+        let man = ctrl.add(0x3b0).readPointer();
+        if (man.isNull()) man = ctrl.add(0x18).readPointer();
+        const on = S.frame < S.moveUntil;
+        const m = on ? S.move : 0;
+        [0x10, 0x70].forEach(function (o) { man.add(o).writeFloat(0); man.add(o + 4).writeFloat(0); man.add(o + 8).writeFloat(-m); man.add(o + 12).writeFloat(0); });
+        const f = args[0].add(0xfc).readU32();
+        args[0].add(0xfc).writeU32(on ? (f | 1) : (f & ~1));
+        if (!on) { S.move = undefined; send({ kind: 'moved', frame: S.frame, to: pos(p), speedLevel: ctrl.add(0x3a0).readFloat() }); }
+      } catch (e) { send({ kind: 'error', frame: S.frame, error: 'move: ' + e.message }); S.move = undefined; }
+    }
   },
 }));
 hooks.push(Interceptor.attach(CMSG_SET_TAE, {
