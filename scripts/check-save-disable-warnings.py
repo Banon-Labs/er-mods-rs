@@ -36,6 +36,23 @@ function is not reported.
 `cargo rustc` also builds only this crate's lints (path dependencies keep their
 own levels), so no filtering by path is needed to avoid failing on
 `er-game-base`/`er-hook` warnings.
+
+It runs under `--profile check`, which is what `cargo check` does: lints only, no
+codegen and no link. `dead_code` and `unused` are emitted before codegen, so the
+gate sees exactly the same findings, at a fraction of the cost. Measured
+2026-10-04 in an empty target directory: a full build of `er-save-disable` took
+10s and linked (relaying lld's LNK4099 as a warning); the check profile took 6s
+and produced no linker output at all.
+
+Where it runs matters as much as how. The cross-compile needs the xwin CRT/SDK
+under `$HOME/.cache/cargo-xwin`, which cargo-xwin downloads on first use. On a
+developer machine that cache is always warm, so the gate is ~2s. On a runner the
+cache is restored by the `cargo-build` stage's job, and the `cargo xwin check`
+steps before this one in check.sh absorb any download without a time limit. The
+gate used to sit in the `product` stage, where it was the first `cargo xwin` of
+the job: on 2026-10-04 both the SDK and rust caches had been evicted, and it spent
+its whole 25s budget before the crate compiled (PR #485, and every run since the
+caches expired). So it belongs to `cargo-build` in `docs/ci-gate-portability.tsv`.
 """
 
 from __future__ import annotations
@@ -51,13 +68,16 @@ TARGET = "x86_64-pc-windows-msvc"
 # Lints that indicate rot in a crate whose job is to suppress saving.
 FORCED_LINTS = ["dead_code", "unused"]
 
-# Generous: a cold cross-compile of the crate plus its path dependencies. Well
-# under the repo's 30s cap for non-game operations, and typically ~2s when warm.
+# A cold check of the crate plus its path dependencies, with the xwin SDK already
+# present: 6s measured locally. Under the repo's 30s cap for non-game operations,
+# and ~2s when warm. It does not cover an SDK download; see the module docstring.
 TIMEOUT_SECONDS = 25.0
 
 
 def audit_crate(crate: str) -> int:
-    command = ["cargo", "xwin", "rustc", "-p", crate, "--target", TARGET, "--"]
+    command = [
+        "cargo", "xwin", "rustc", "-p", crate, "--profile", "check", "--target", TARGET, "--",
+    ]
     for lint in FORCED_LINTS:
         command += ["--force-warn", lint]
     try:
