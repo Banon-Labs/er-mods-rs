@@ -145,6 +145,35 @@ measured and what still has to be found before the rule can be built.
 - She is removed with `NotifyBuddyUnsummon`, never `RemoveChrIns` (that crashed the game).
 - Open: she fights only after being hit, not when an enemy approaches.
 
+## Training data: combat recorder
+
+`scripts/frida/combat-recorder.js` logs how players actually fight, as the data her weights and
+conditions get tuned from. It is built and smoke-tested, and no recording session has been made yet
+(the user will say when). Run it beside the lab, from the repo root:
+
+    uv run --with frida python3 scripts/er-frida-watch.py --agent scripts/frida/combat-recorder.js \
+        --log ~/.cache/er-frida/combat-rec.jsonl
+
+It reads only the local game's memory: the player, every Seamless peer (from what their game
+already sends ours) and every NPC within `radius` (40 m). No Steam id or character name is read;
+characters are numbered per session.
+
+| Event | Fields |
+|---|---|
+| `anim` | each new animation (a different id, or the same id restarted): anim id, play time, length, position, yaw, distance to the player, HP / FP / stamina, two-handing for players |
+| `hit` | attacker, victim, damage, distance, the attacker's animation and how far into it |
+| `char` | every 5 s: level, attributes, arm style, weapons, armour and talismans for players; NpcParam for NPCs |
+| `self-check` | the player's HP through the data module and PlayerGameData, which must agree |
+
+Measured 2026-10-05 on 1.17.1: `self-check` ok (both HP reads 522, level 9, arm style 3 while
+two-handing), about 9 `anim` events a second for some 30 NPCs in range. Not yet seen live: a `hit`,
+and a peer's `char` (whether a peer's PlayerGameData carries attributes is unverified).
+
+Rough sample sizes (estimates): tuned conditions and frequency tables need 30-100 examples per
+situation, one to three hours of combat; a small behaviour-cloning model needs tens of thousands
+of decisions, 10-30 hours from several players; reinforcement learning needs far more than human
+play can give.
+
 ## Control surface
 
 Her whole brain is Lua. `common10000_Logic` (010000_logic) only adds the battle goal through

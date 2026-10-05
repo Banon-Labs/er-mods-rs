@@ -64,6 +64,9 @@ const cfg = Object.assign({
     path: 'summon',
     // Keep the main player from taking damage or dying (CSChrDataModule debug flags, below).
     god: false,
+    // How many of her to summon. The first is `spawned`; the rest are `extras`, summoned one per
+    // frame after it, EXTRA_SPACING m to the side, with the same gear, face and heals.
+    count: 2,
 }, globalThis.__ER_FRIDA_CONFIG || {});
 
 // Which path, measured 2026-10-05 on one session each:
@@ -206,11 +209,21 @@ const CHR_TYPE = 0x68;
 const TEAM_TYPE = 0x6c;
 let teamSpawned = null;
 
+// A summon-path spawn is put on its creator's team, which is what CreateSummonChr gives it (1, the
+// player's, measured) and what a peer's copy is created with: a local 47 left a Seamless partner
+// able to hit her but not lock on to her (user report 2026-10-05).
 function applyTeam(chr) {
     const t = chr.add(TEAM_TYPE);
     const before = t.readU8();
     if (teamSpawned === null) teamSpawned = before;
-    const want = cfg.team === null || cfg.team === undefined ? teamSpawned : cfg.team;
+    let want = cfg.team === null || cfg.team === undefined ? teamSpawned : cfg.team;
+    if (spawnedPath === 'summon') {
+        const player = WORLD_CHR_MAN.readPointer().add(MAIN_PLAYER).readPointer();
+        if (!player.isNull()) want = player.add(TEAM_TYPE).readU8();
+        // cfg.summonTeam overrides that locally (6 is the team every enemy measured has); a peer's
+        // copy still takes the creator's team from the summon packet.
+        if (cfg.summonTeam !== null && cfg.summonTeam !== undefined) want = cfg.summonTeam;
+    }
     if (want !== before) {
         t.writeU8(want);
         emit('team', { chr: chr.toString(), from: before, to: want, spawnedWith: teamSpawned });
@@ -548,6 +561,60 @@ function isAlive(chr) {
     }
 }
 
+// The extras ride in a third variable, as a comma list.
+function rememberExtras() {
+    SET_ENV(Memory.allocUtf16String(ENV_KEY + '_EXTRA'),
+        Memory.allocUtf16String(extras.map((c) => c.toString()).join(',')));
+}
+
+function rememberedExtras() {
+    const buf = Memory.alloc(1024);
+    const n = GET_ENV(Memory.allocUtf16String(ENV_KEY + '_EXTRA'), buf, 500);
+    if (n === 0 || n >= 500) return [];
+    return buf.readUtf16String().split(',').filter((s) => s.length > 0).map((s) => ptr(s));
+}
+
+// Is this field-ins handle (8 bytes, as RequestWarp gets it) one of our summons.
+function isOurHandle(handle) {
+    const h = handle.readU64();
+    if (spawned !== null && h.equals(spawned.add(8).readU64())) return true;
+    return extras.some((c) => isAlive(c).alive && h.equals(c.add(8).readU64()));
+}
+
+// Unsummon a summon-path character the game's way (see NOTIFY_BUDDY_UNSUMMON).
+function unsummon(chr) {
+    const wcm = WORLD_CHR_MAN.readPointer();
+    if (wcm.isNull() || !isAlive(chr).alive) return false;
+    NOTIFY_BUDDY_UNSUMMON(wcm.add(SUMMON_BUDDY_MANAGER).readPointer(), chr.add(8));
+    return true;
+}
+
+// Every extra goes to the unsummon queue, and none are still to come.
+function dropExtras() {
+    for (const c of extras) if (isAlive(c).alive) extrasToRemove.push(c);
+    extras = [];
+    extrasWanted = 0;
+    rememberExtras();
+}
+
+// Gear, face and heals on a freshly created character, on its creation frame. cfg.dress false
+// leaves her as CharaInitParam made her.
+function dressNew(chr) {
+    if (cfg.dress === false) return;
+    applyEquip(chr, true);
+    try {
+        const face = applyFace(chr);
+        if (face !== null) emit('face', { chr: chr.toString(), ...face });
+    } catch (e) {
+        emit('hook-error', { where: 'face', error: e.message });
+    }
+    try {
+        emit('heals', { chr: chr.toString(), ...(setHeals(chr) || { missing: true }) });
+    } catch (e) {
+        emit('hook-error', { where: 'heals', error: e.message });
+    }
+}
+
 function rememberedSpawn() {
     const buf = Memory.alloc(64);
     const n = GET_ENV(Memory.allocUtf16String(ENV_KEY), buf, 32);
@@ -600,7 +667,8 @@ function playerPose() {
     }
 }
 
-function spawn(pose) {
+// `side` moves the spot sideways from straight ahead, in metres, for the extras.
+function spawn(pose, side) {
     const manager = pose.wcm.add(SUMMON_BUDDY_MANAGER).readPointer();
     if (manager.isNull()) return { why: 'no SummonBuddyManager' };
 
@@ -615,10 +683,11 @@ function spawn(pose) {
     const center = [c.readFloat(), c.add(4).readFloat(), c.add(8).readFloat()];
 
     // Ahead along the facing; height copied, the way intent::ahead_of places a spawn.
+    const s = side || 0;
     const at = [
-        pose.pos[0] - cfg.distance * Math.sin(pose.yaw),
+        pose.pos[0] - cfg.distance * Math.sin(pose.yaw) + s * Math.cos(pose.yaw),
         pose.pos[1],
-        pose.pos[2] - cfg.distance * Math.cos(pose.yaw),
+        pose.pos[2] - cfg.distance * Math.cos(pose.yaw) - s * Math.sin(pose.yaw),
     ];
     const local = Memory.alloc(16);
     [at[0] - center[0], at[1] - center[1], at[2] - center[2], 0].forEach((v, i) => local.add(i * 4).writeFloat(v));
@@ -750,6 +819,18 @@ const damageHook = Interceptor.attach(CALC_DAMAGE2.readU8() === 0xe9 ? CALC_DAMA
     onEnter(args) {
         if (spawned === null) return;
         const victim = args[0].add(8).readPointer();
+        // A hit on any of ours: who, from how far (centre to centre, metres), for the hitbox question.
+        if (victim.equals(spawned) || extras.some((c) => c.equals(victim))) {
+            try {
+                const a = posOf(args[1]);
+                const v = posOf(victim);
+                const d = a && v ? Math.round(Math.hypot(a[0] - v[0], a[1] - v[1], a[2] - v[2]) * 100) / 100 : null;
+                emit('hit-extra', { victim: victim.toString(), attacker: args[1].toString(),
+                    attackerNpc: args[1].add(0x60).readS32(), d });
+            } catch (e) {
+                emit('hook-error', { where: 'hit-extra', error: e.message });
+            }
+        }
         if (victim.equals(spawned)) {
             damageInfo[this.threadId] = { info: args[2], attacker: args[1], incoming: true };
             return;
@@ -788,7 +869,7 @@ const requestWarpOriginal = new NativeFunction(REQUEST_WARP, 'void', ['pointer',
 let warpsDropped = 0;
 Interceptor.replace(REQUEST_WARP, new NativeCallback(function (manager, handle) {
     try {
-        if (spawned !== null && handle.readU64().equals(spawned.add(8).readU64())) {
+        if (isOurHandle(handle)) {
             warpsDropped += 1;
             if (warpsDropped <= 3 || warpsDropped % 100 === 0) {
                 emit('warp-dropped', { chr: spawned.toString(), n: warpsDropped, ageMs: Date.now() - spawnedAt });
@@ -811,7 +892,9 @@ const despawnAllOriginal = new NativeFunction(DESPAWN_ALL, 'void', ['pointer']);
 let despawnAlls = 0;
 Interceptor.replace(DESPAWN_ALL, new NativeCallback(function (manager) {
     try {
-        if (spawned !== null && spawnedPath === 'summon' && isAlive(spawned).alive) {
+        const ours = (spawned !== null && spawnedPath === 'summon' && isAlive(spawned).alive)
+            || extras.some((c) => isAlive(c).alive);
+        if (ours) {
             despawnAlls += 1;
             if (despawnAlls <= 3 || despawnAlls % 600 === 0) {
                 emit('despawn-all-dropped', { n: despawnAlls, ageMs: Date.now() - spawnedAt });
@@ -834,6 +917,17 @@ let spawnedAt = 0;
 const STABLE_MS = 5000;
 let stableSince = null;
 
+// The summons after the first (cfg.count), how many are still to come, and those to unsummon.
+const EXTRA_SPACING = 1.5;
+let extras = [];
+let extrasWanted = 0;
+const extrasToRemove = [];
+for (const c of rememberedExtras()) {
+    if (!isAlive(c).alive) continue;
+    if (cfg.replace) extrasToRemove.push(c);
+    else extras.push(c);
+}
+
 // A spawn from an earlier load of this agent that is still alive is adopted, not duplicated.
 const previous = rememberedSpawn();
 let pendingRemove = null;
@@ -850,7 +944,8 @@ if (previous !== null && isAlive(previous).alive) {
         spawned = previous;
         spawnedAt = Date.now();
         done = true;
-        emit('adopted', { chr: previous.toString() });
+        if (spawnedPath === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1 - extras.length);
+        emit('adopted', { chr: previous.toString(), extras: extras.length, extrasWanted });
     }
 }
 const removeChrIns = new NativeFunction(REMOVE_CHR_INS, 'void', ['pointer', 'pointer']);
@@ -969,6 +1064,37 @@ const hook = Interceptor.attach(FRAME_TICK, {
             liftCheckAt = now;
             liftCheck();
         }
+        if (extrasToRemove.length > 0) {
+            const gone = extrasToRemove.splice(0);
+            for (const c of gone) {
+                try {
+                    if (unsummon(c)) emit('replaced', { chr: c.toString(), via: 'NotifyBuddyUnsummon', extra: true });
+                } catch (e) {
+                    emit('hook-error', { where: 'unsummon-extra', error: e.message });
+                }
+            }
+        }
+        // One extra per frame once the first is up, each EXTRA_SPACING m further to the side.
+        if (extrasWanted > 0 && spawned !== null && isAlive(spawned).alive) {
+            extrasWanted -= 1;
+            try {
+                const pose = playerPose();
+                if (pose.why === undefined) {
+                    const n = extras.length + 1;
+                    const r = spawn(pose, (n % 2 === 1 ? 1 : -1) * EXTRA_SPACING * Math.ceil(n / 2));
+                    if (r.why !== undefined) {
+                        emit('spawn-refused', { why: r.why, extra: true });
+                    } else if (!r.chr.isNull()) {
+                        extras.push(r.chr);
+                        rememberExtras();
+                        dressNew(r.chr);
+                        emit('spawned', { chr: r.chr.toString(), extra: n, at: r.at, path: 'summon', net: r.net });
+                    }
+                }
+            } catch (e) {
+                emit('spawn-fault', { error: e.message, extra: true });
+            }
+        }
         if (done) return;
         if (pendingRemove !== null) {
             const old = pendingRemove;
@@ -1019,18 +1145,8 @@ const hook = Interceptor.attach(FRAME_TICK, {
                 spawnedPath = cfg.path;
                 rememberSpawn(r.chr, cfg.path);
                 // Same frame as creation, ahead of the first part load.
-                applyEquip(r.chr, true);
-                try {
-                    const face = applyFace(r.chr);
-                    if (face !== null) emit('face', { chr: r.chr.toString(), ...face });
-                } catch (e) {
-                    emit('hook-error', { where: 'face', error: e.message });
-                }
-                try {
-                    emit('heals', { chr: r.chr.toString(), ...(setHeals(r.chr) || { missing: true }) });
-                } catch (e) {
-                    emit('hook-error', { where: 'heals', error: e.message });
-                }
+                dressNew(r.chr);
+                if (cfg.path === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1);
             }
             emit(r.chr.isNull() ? 'spawn-null' : 'spawned', {
                 chr: r.chr.toString(), npcParam: cfg.npcParam, think: cfg.think, charaInit: cfg.charaInit,
@@ -1068,13 +1184,22 @@ function heartbeat() {
                 npcHp: state.alive ? hpOf(spawned) : null,
                 team: state.alive ? applyTeam(spawned) : null,
                 home: state.alive ? applyHome(spawned, pose.pos) : null,
-                equip: state.alive ? applyEquip(spawned, false) : null,
+                equip: state.alive && cfg.dress !== false ? applyEquip(spawned, false) : null,
                 chrType: state.alive ? spawned.add(CHR_TYPE).readS32() : null,
             });
         } catch (e) {
             fields.error = e.message;
         }
     }
+    fields.extras = extras.map((c) => {
+        try {
+            if (!isAlive(c).alive) return { chr: c.toString(), alive: false };
+            return { chr: c.toString(), alive: true, hp: hpOf(c), team: applyTeam(c),
+                home: applyHome(c, pose.pos), equip: cfg.dress !== false && applyEquip(c, false) !== null };
+        } catch (e) {
+            return { chr: c.toString(), error: e.message };
+        }
+    });
     emit('npc', fields);
 }
 
@@ -1208,6 +1333,7 @@ rpc.exports = {
             pendingRemove = spawned;
             pendingRemovePath = spawnedPath;
         }
+        dropExtras();
         spawned = null;
         stableSince = null;
         holdSpawn = false;
@@ -1219,6 +1345,7 @@ rpc.exports = {
             pendingRemove = spawned;
             pendingRemovePath = spawnedPath;
         }
+        dropExtras();
         spawned = null;
         holdSpawn = pendingRemove !== null;
         done = !holdSpawn;
