@@ -275,6 +275,17 @@ mod tests {
         state
     }
 
+    // The latch is process-global and the test harness runs tests on parallel threads, so one
+    // test's `reset()` could clear another's held key between two of its assertions (CI saw
+    // `dinput_nav_held()` read 0 mid-test). Every test holds this for its whole body.
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn reset() {
         DINPUT_DOWN_MASK.store(0, Ordering::SeqCst);
         DINPUT_EDGE_LATCH.store(0, Ordering::SeqCst);
@@ -282,6 +293,7 @@ mod tests {
 
     #[test]
     fn a_held_arrow_reports_down_on_every_read_and_an_edge_only_on_the_first() {
+        let _serial = serial();
         reset();
         let held = buffer_with(&[DIK_DOWN]);
         assert_eq!(latch_arrows_from(&held), SAVE_PICKER_NAV_DOWN_MASK);
@@ -301,6 +313,7 @@ mod tests {
 
     #[test]
     fn releasing_and_pressing_again_is_a_second_edge() {
+        let _serial = serial();
         reset();
         let held = buffer_with(&[DIK_UP]);
         let released = buffer_with(&[]);
@@ -312,6 +325,7 @@ mod tests {
 
     #[test]
     fn a_drain_leaves_the_directions_it_was_not_asked_for() {
+        let _serial = serial();
         reset();
         latch_arrows_from(&buffer_with(&[DIK_LEFT, DIK_DOWN]));
         assert_eq!(
@@ -327,6 +341,7 @@ mod tests {
 
     #[test]
     fn every_arrow_maps_to_its_own_direction() {
+        let _serial = serial();
         reset();
         assert_eq!(
             latch_arrows_from(&buffer_with(&[DIK_RIGHT])),
