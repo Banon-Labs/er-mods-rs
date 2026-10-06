@@ -185,30 +185,14 @@ const MENU_WINDOW_JOB_RUN_RVA_1162: usize = 0x7ad1c0;
 const MENU_JOB_EMIT_RESULT_RVA_1162: usize = 0x746e80;
 const MENU_WINDOW_JOB_WINDOW_OFFSET: usize = 0x130;
 
-/// The item list's own `SceneObjProxy` members that draw its left panel.
-const LEFT_PANEL_PROXY_OFFSETS: [usize; 2] = [0x120, 0x230];
-const VALUE_INTERFACE: usize = 0x18;
-const VALUE_TYPE: usize = 0x20;
-const VALUE_DATA: usize = 0x28;
-const VALUE_TYPE_MASK: u8 = 0x8f;
-const GET_DISPLAY_INFO_SLOT: usize = 0xd8;
-const SET_DISPLAY_INFO_SLOT: usize = 0xe0;
-const DISPLAY_INFO_BYTES: usize = 0xd8;
-const DISPLAY_INFO_VARS_SET: usize = 0xd4;
-/// `DisplayInfo.Alpha`, a percentage double: measured 100.0 at +0x28 on a visible proxy, after
-/// X, Y, rotation and the two scales, which is Scaleform's own field order.
-const DISPLAY_INFO_ALPHA: usize = 0x28;
-const V_ALPHA: u16 = 0x20;
-
-const SCENE_OBJ_PROXY: &str = ".?AVSceneObjProxy@CS@@";
 const ITEM_LIST: &str = ".?AVGaitemSelectDialog@CS@@";
 /// The item list not pumped for this long while view 3 is up means it closed.
 const ITEM_LIST_GONE_MS: u128 = 1000;
 /// The board stops drawing this soon after the item list's last `Run`, so closing the list with
 /// B takes the board with it. Measured with Frida (`r3-item-list-run-cadence.js`): while the list
 /// is open `Run` reaches it every 17 ms on median and at most 52 ms apart over 480 calls, so this
-/// is about three times the worst gap. Only the draw reads it; the left panel's alpha still comes
-/// back on `ITEM_LIST_GONE_MS`.
+/// is about three times the worst gap. Only the draw reads it; `SHOW_BOARD` itself is cleared on
+/// `ITEM_LIST_GONE_MS`.
 const BOARD_GONE_MS: u128 = 150;
 
 static START: Once = Once::new();
@@ -241,14 +225,6 @@ std::thread_local! {
     /// every weapon caption in the game also calls, is read only for that record.
     static NAMING_RECORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
-
-/// A faded left-panel proxy and the alpha to give back. Touched only on the menu thread.
-struct Faded {
-    window: usize,
-    proxy: usize,
-    alpha: f64,
-}
-static FADED: Mutex<Vec<Faded>> = Mutex::new(Vec::new());
 
 fn log(args: std::fmt::Arguments<'_>) {
     let path = er_game_base::log::game_directory_path()
@@ -350,7 +326,7 @@ fn install() {
             "MenuWindowJob::Run registered on the {route:?} union"
         )),
         Err(status) => log(format_args!(
-            "MenuWindowJob::Run hook failed: {status:?}; view 3 will leave the left panel up"
+            "MenuWindowJob::Run hook failed: {status:?}; the board will not follow the item list"
         )),
     }
     match unsafe {
@@ -574,11 +550,11 @@ unsafe extern "system" fn step_hook(this: usize, _a: usize, _b: usize, _c: usize
             ITEM_LIST_WINDOW.store(owner, Ordering::Relaxed);
             ITEM_LIST_AT_MS.store(now_ms() as usize, Ordering::Relaxed);
         }
+        // The item list's own left panel stays up: the board draws to its right, so the player
+        // keeps the grid, the cursor and the weapon's name and icon where the game puts them.
         unsafe { enter_view_zero_layout(list) };
-        unsafe { fade_left_panel() };
         SHOW_BOARD.store(true, Ordering::Relaxed);
     } else {
-        unsafe { restore_left_panel() };
         SHOW_BOARD.store(false, Ordering::Relaxed);
     }
     0
@@ -618,7 +594,7 @@ unsafe extern "system" fn r3_enabled_hook(parts: usize, a: usize, b: usize, c: u
     unsafe { next(parts, a, b, c) }
 }
 
-/// Note the item list's window, and give its left panel back if it closes while faded.
+/// Note the item list's window, and drop the board if the list stops being pumped.
 ///
 /// # Safety
 ///
@@ -645,16 +621,21 @@ unsafe extern "system" fn run_hook(job: usize, a: usize, b: usize, c: usize) -> 
         }
         ITEM_LIST_AT_MS.store(now_ms() as usize, Ordering::Relaxed);
         // The menu thread, inside the item list's own job: the one place the icon lookup, which
-        // inserts into the texture repository's map on a miss, may run. Once per process.
+        // inserts into the texture repository's map on a miss, may run. Once per gear icon per
+        // process.
         let base = GAME_BASE.load(Ordering::Relaxed);
-        let icon_id = selected_board().icon_id;
-        if base != 0 && icon_id != 0 && SHOW_BOARD.load(Ordering::Relaxed) {
-            unsafe { crate::item_icon::resolve_once(base, icon_id, log) };
+        if base != 0 && SHOW_BOARD.load(Ordering::Relaxed) {
+            let board = selected_board();
+            let gear = board.gear.iter().map(|g| g.icon_id);
+            // The weapon's own icon is the game's to draw, in its left panel.
+            for icon_id in gear.filter(|&id| id != 0) {
+                unsafe { crate::item_icon::resolve_once(base, icon_id, log) };
+            }
         }
     }
-    let faded_any = !FADED.lock().unwrap_or_else(|e| e.into_inner()).is_empty();
-    if faded_any && now_ms() - ITEM_LIST_AT_MS.load(Ordering::Relaxed) as u128 > ITEM_LIST_GONE_MS {
-        unsafe { restore_left_panel() };
+    if SHOW_BOARD.load(Ordering::Relaxed)
+        && now_ms() - ITEM_LIST_AT_MS.load(Ordering::Relaxed) as u128 > ITEM_LIST_GONE_MS
+    {
         SHOW_BOARD.store(false, Ordering::Relaxed);
     }
     ret
@@ -724,120 +705,6 @@ unsafe fn rtti_name(object: usize) -> Option<Vec<u8>> {
 /// Bound on a decorated RTTI name read; the longest this crate compares is 33 bytes.
 const RTTI_NAME_MAX: usize = 256;
 
-/// The GFx `(ObjectInterface*, data)` behind a proxy, if it is one and holds a display object.
-///
-/// # Safety
-///
-/// `proxy` must point into a live menu window.
-unsafe fn gfx_value(proxy: usize) -> Option<(usize, usize)> {
-    if !unsafe { rtti_is(proxy, SCENE_OBJ_PROXY) } {
-        return None;
-    }
-    let vtable = unsafe { (proxy as *const usize).read() };
-    let get_value: unsafe extern "system" fn(usize) -> usize =
-        unsafe { std::mem::transmute((vtable as *const usize).read()) };
-    let value = unsafe { get_value(proxy) };
-    if value == 0 || unsafe { ((value + VALUE_TYPE) as *const u8).read() } & VALUE_TYPE_MASK == 0 {
-        return None;
-    }
-    let iface = unsafe { ((value + VALUE_INTERFACE) as *const usize).read() };
-    if iface == 0 {
-        return None;
-    }
-    Some((iface, unsafe {
-        ((value + VALUE_DATA) as *const usize).read()
-    }))
-}
-
-type DisplayInfoFn = unsafe extern "system" fn(usize, usize, *mut u8);
-
-/// # Safety
-///
-/// `iface` must be a live `GFx::Value::ObjectInterface`.
-unsafe fn display_info_fn(iface: usize, slot: usize) -> DisplayInfoFn {
-    let vtable = unsafe { (iface as *const usize).read() };
-    unsafe { std::mem::transmute(((vtable + slot) as *const usize).read()) }
-}
-
-/// # Safety
-///
-/// As [`gfx_value`], and on the menu thread.
-unsafe fn alpha(iface: usize, data: usize) -> f64 {
-    let mut info = [0u8; DISPLAY_INFO_BYTES];
-    unsafe { display_info_fn(iface, GET_DISPLAY_INFO_SLOT)(iface, data, info.as_mut_ptr()) };
-    let mut raw = [0u8; 8];
-    raw.copy_from_slice(&info[DISPLAY_INFO_ALPHA..DISPLAY_INFO_ALPHA + 8]);
-    f64::from_le_bytes(raw)
-}
-
-/// # Safety
-///
-/// As [`gfx_value`], and on the menu thread.
-unsafe fn set_alpha(iface: usize, data: usize, value: f64) {
-    let mut info = [0u8; DISPLAY_INFO_BYTES];
-    info[DISPLAY_INFO_VARS_SET..DISPLAY_INFO_VARS_SET + 2].copy_from_slice(&V_ALPHA.to_le_bytes());
-    info[DISPLAY_INFO_ALPHA..DISPLAY_INFO_ALPHA + 8].copy_from_slice(&value.to_le_bytes());
-    unsafe { display_info_fn(iface, SET_DISPLAY_INFO_SLOT)(iface, data, info.as_mut_ptr()) };
-}
-
-/// # Safety
-///
-/// On the menu thread.
-unsafe fn fade_left_panel() {
-    let window = ITEM_LIST_WINDOW.load(Ordering::Relaxed);
-    if !unsafe { rtti_is(window, ITEM_LIST) } {
-        log(format_args!(
-            "view 3: item list window unknown; left panel left up"
-        ));
-        return;
-    }
-    let mut faded = FADED.lock().unwrap_or_else(|e| e.into_inner());
-    for offset in LEFT_PANEL_PROXY_OFFSETS {
-        let proxy = window + offset;
-        let Some((iface, data)) = (unsafe { gfx_value(proxy) }) else {
-            continue;
-        };
-        let was = unsafe { alpha(iface, data) };
-        if was <= 0.0 {
-            continue;
-        }
-        unsafe { set_alpha(iface, data, 0.0) };
-        faded.push(Faded {
-            window,
-            proxy,
-            alpha: was,
-        });
-    }
-    log(format_args!(
-        "view 3: right and center panels via view 0's layout, left panel faded ({})",
-        faded.len()
-    ));
-}
-
-/// # Safety
-///
-/// On the menu thread.
-unsafe fn restore_left_panel() {
-    let mut faded = FADED.lock().unwrap_or_else(|e| e.into_inner());
-    if faded.is_empty() {
-        return;
-    }
-    let mut shown = 0;
-    for f in faded.iter() {
-        // The menu windows outlive a menu close, so the same object still carrying the item list's
-        // class is the window that was faded.
-        if !unsafe { rtti_is(f.window, ITEM_LIST) } {
-            continue;
-        }
-        if let Some((iface, data)) = unsafe { gfx_value(f.proxy) } {
-            unsafe { set_alpha(iface, data, f.alpha) };
-            shown += 1;
-        }
-    }
-    log(format_args!("left panel back: {shown} of {}", faded.len()));
-    faded.clear();
-}
-
 /// # Safety
 ///
 /// `frame` is the pointer the overlay host just passed, live for this call.
@@ -855,8 +722,15 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
         });
         let board = selected_board();
         let art = board::BoardArt {
-            icon: crate::item_icon::handle(board.icon_id)
-                .and_then(|h| unsafe { frame_texture(frame, h) }),
+            gear: board
+                .gear
+                .iter()
+                .map(|g| {
+                    crate::item_icon::handle(g.icon_id)
+                        .and_then(|h| unsafe { frame_texture(frame, h) })
+                        .map(|(texture, _)| texture)
+                })
+                .collect(),
         };
         board::draw(ui, board, fonts.as_ref(), &art);
     }

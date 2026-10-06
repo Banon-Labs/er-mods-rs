@@ -51,6 +51,8 @@ import er_run_lib
 
 PORT = 27042
 DEFAULT_ENDPOINT = f"127.0.0.1:{PORT}"
+# A line in an agent containing this keeps the watcher from reloading it in place on an edit.
+NO_RELOAD_MARKER = "er-frida-watch: no-reload"
 DEFAULT_AGENT = pathlib.Path(__file__).resolve().parent / "frida" / "ersc-session.js"
 DEFAULT_LOG = pathlib.Path(
     os.environ.get("ER_FRIDA_LOG", pathlib.Path.home() / ".cache" / "er-frida" / "hits.jsonl")
@@ -416,7 +418,14 @@ def run(
                         current = agent_path.stat().st_mtime
                     except OSError:
                         continue
-                    if current != stamp:
+                    if current != stamp and NO_RELOAD_MARKER in agent_path.read_text(encoding="utf-8", errors="replace"):
+                        # An agent that drives the game (blocks input, presses buttons) restarts its
+                        # drive on every load, so an edit made for the next run must not reach a
+                        # session that is still attached. Measured 2026-10-05: twice, an edit to
+                        # chainsaw-driver.js restarted a drive on the attached game.
+                        print("agent file changed; not reloading (agent is marked no-reload)", flush=True)
+                        stamp = current
+                    elif current != stamp:
                         print("agent file changed, reloading in place", flush=True)
                         try:
                             load()

@@ -370,12 +370,35 @@ def bracket_defender(rows: list[dict]) -> dict:
 # --------------------------------------------------------------------------------------------
 # search
 
+_CAPS: dict = {}
+
+
+def stat_caps(tables, weapon, affinity, level=None) -> dict:
+    """{damage stat: highest value `spend` may raise it to}: the top soft cap of the weapon and
+    affinity (`AR.soft_caps`), `STAT_CAP` for a stat with no curve. Cached per weapon row."""
+    key = (weapon, affinity, level)
+    if key not in _CAPS:
+        if tables is None:                    # a caller whose tables load lazily (ash levers)
+            tables = _CAPS.setdefault("_tables", AR.Tables(None))
+        caps = {k: STAT_CAP for k in DAMAGE_STATS}
+        try:
+            caps.update(AR.soft_caps(tables, weapon, affinity, level))
+        except (KeyError, SystemExit):
+            pass
+        _CAPS[key] = caps
+    return _CAPS[key]
+
+
 class Scorer:
     def __init__(self, tables, weapon, affinity, level, two_handed, objective, defender, grease=None):
         self.args = (tables, weapon, affinity, level)
         self.two_handed, self.objective, self.defender = two_handed, objective, defender
         self.grease = grease  # (element, flat attack) or None
         self.cache: dict = {}
+        # No damage stat is raised past its top soft cap (`AR.soft_caps`, user directive
+        # 2026-10-04: a build past it is one nobody makes). A requirement above the cap still
+        # holds, through the floor `spend` starts from.
+        self.cap = stat_caps(tables, weapon, affinity, level)
 
     def ar(self, st: dict) -> dict:
         key = tuple(st[k] for k in DAMAGE_STATS)
@@ -392,6 +415,9 @@ class Scorer:
         return by
 
     def score(self, st: dict) -> float:
+        if self.objective == "spell_buff":
+            # A catalyst's sorcery or incantation scaling; one that does both counts its better.
+            return max(self.ar(st)["spell_buff"].values(), default=0.0)
         by = self.by_element(st)
         if self.objective == "ar":
             return sum(by.values())
@@ -425,7 +451,7 @@ def spend(st: dict, points: int, scorer: Scorer, stats=DAMAGE_STATS) -> tuple[di
     while points > 0:
         best = None
         for k in stats:
-            for n in range(1, min(LOOKAHEAD, points, STAT_CAP - st[k]) + 1):
+            for n in range(1, min(LOOKAHEAD, points, scorer.cap.get(k, STAT_CAP) - st[k]) + 1):
                 gain = (scorer.score(dict(st, **{k: st[k] + n})) - cur) / n
                 if best is None or gain > best[0]:
                     best = (gain, k, n)
@@ -441,7 +467,7 @@ def spend(st: dict, points: int, scorer: Scorer, stats=DAMAGE_STATS) -> tuple[di
         improved = False
         for a in stats:
             for b in stats:
-                if a == b or st[a] <= scorer.floor[a] or st[b] >= STAT_CAP:
+                if a == b or st[a] <= scorer.floor[a] or st[b] >= scorer.cap.get(b, STAT_CAP):
                     continue
                 trial = dict(st, **{a: st[a] - 1, b: st[b] + 1})
                 s = scorer.score(trial)
@@ -466,7 +492,10 @@ def physical_build(tables, st: dict, defender: dict) -> tuple[bool, int, int]:
     The vote is by damage and not by AR because AR sums a split weapon's elements at face value:
     measured on STR 88 / DEX 9, Fire wins 90 of 98 votes by AR and Heavy wins 95 of 98 by damage,
     since each element meets its own defense and a split hit loses more to it."""
-    key = tuple(st[k] for k in DAMAGE_STATS)
+    # The defender is in the key: each RL window has its own median defender, and the vote is by
+    # damage on it, so a verdict cached under one window's defender is wrong for another's. Keyed
+    # by the stats alone, the answer depended on which RL a process happened to ask first.
+    key = (tuple(st[k] for k in DAMAGE_STATS), json.dumps(defender, sort_keys=True))
     if key in _PHYSICAL:
         return _PHYSICAL[key]
     dmg = {k: st[k] for k in DAMAGE_STATS}
@@ -947,6 +976,16 @@ def selftest() -> int:
         check(r.get("kind") == "unique" and r.get("elemental") and r["elemental"]["aff"] == "Standard"
               and r.get("quality") is None,
               f"Bloodhound's Fang 2H gets a Standard build ({(r.get('elemental') or {}).get('dmg', 0):.0f} dmg)")
+        # No damage stat is spent past its top soft cap, even at RL 200 where points are spare.
+        lvl = tables.max_level(tables.weapons[tables.find_weapon("Claymore", "Heavy")]["reinforceTypeId"])
+        caps = stat_caps(tables, "Claymore", "Heavy", lvl)
+        sc = Scorer(tables, "Claymore", "Heavy", lvl, False, "damage", dfn)
+        need = requirements(tables, "Claymore", "Heavy", lvl, False)
+        start = {k: max(10, need.get(k, 0)) for k in STATS}
+        sc.floor = dict(start)
+        st, left = spend(start, 200 - (sum(start.values()) - LEVEL_OFFSET), sc)
+        check(caps["str"] == 80 and st["str"] == 80 and all(st[k] <= caps[k] for k in DAMAGE_STATS),
+              f"a Heavy Claymore at RL 200 stops STR at its soft cap 80 ({st['str']}, {left} points left)")
         check(bool(r.get("greased")) == greasable(tables, "Bloodhound's Fang", "Standard"),
               "a unique weapon is greased exactly when its row has isEnhance")
         wc = r.get("weight") or {}

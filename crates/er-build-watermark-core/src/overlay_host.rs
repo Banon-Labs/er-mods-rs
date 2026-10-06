@@ -615,7 +615,14 @@ pub unsafe fn add_texture_v1(rgba: *const u8, len: usize, width: u32, height: u3
     let Ok(mut textures) = TEXTURES.lock() else {
         return 0;
     };
-    if textures.len() >= crate::texture_request::MAX_TEXTURE_REQUESTS {
+    // Every slot keeps its size after its pixels are uploaded, so the bytes so far are its sum.
+    let bytes: usize = textures
+        .iter()
+        .map(|t| t.width as usize * t.height as usize * crate::texture_request::BYTES_PER_PIXEL)
+        .sum();
+    if textures.len() >= crate::texture_request::MAX_TEXTURE_REQUESTS
+        || bytes + len > crate::texture_request::MAX_TEXTURE_BYTES
+    {
         TEXTURES_REFUSED.fetch_add(1, Ordering::Relaxed);
         return 0;
     }

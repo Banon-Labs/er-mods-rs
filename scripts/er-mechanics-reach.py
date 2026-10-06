@@ -786,6 +786,22 @@ def attack_reach(rc, weapon_id, slot, label, judge, anim, grip, clip=None):
     return out
 
 
+def weapon_length(rc, weapon_id):
+    """How far the weapon's own hitbox reaches from the grip, in metres: the largest
+    `shape_extent` of the damaging weapon-sourced shapes of its one-handed R1 #1. No pose and no
+    root motion, so two weapons that share every animation differ here only by their models and
+    hit radii. None when the R1 has no weapon shape (bows, a body hitbox) or a dummy is missing."""
+    nums = ATK.attack_numbers(rc.reg, weapon_id, 0)
+    row = rc.atk_shape.get(nums['atk_row']) if nums else None
+    model = rc.model.get(weapon_id)
+    dm = weapon_dummies(model) if row is not None and model is not None else None
+    if not dm or HIT_SOURCE.get(row['hitSourceType'], row['hitSourceType']) != 'weapon':
+        return None
+    ext = [shape_extent(s, dm[0]) for s in hit_shapes(row)]
+    ext = [e['extent'] for e in ext if e]
+    return max(ext) if ext else None
+
+
 def weapon_reach(rc, weapon_id, grip='one'):
     rows = []
     for slot, label, judge, anim, _ in ATK.SLOTS_ONE_HAND:

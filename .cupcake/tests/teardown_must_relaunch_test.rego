@@ -156,6 +156,29 @@ test_allow_status_piped if {
 	not denied("python3 scripts/er-teardown.py --status 2>&1 | tail -3")
 }
 
+# argparse prints usage and exits before any teardown code runs.
+test_allow_help if {
+	not denied("python3 scripts/er-teardown.py --help")
+}
+
+test_allow_short_help if {
+	not denied("python3 scripts/er-teardown.py -h")
+}
+
+# The exact command refused on 2026-10-05: reads chained with a usage read.
+test_allow_help_chained_with_reads if {
+	not denied(`ls -la /x/er_allow_hostile_actions.dll 2>&1; grep -nE "ME3_PROFILE|profile" /home/banon/Elden/launch.sh | head -12; cd /home/banon/projects/er-mods-rs && $HOME/.local/bin/bd memories "lab launch" 2>/dev/null | head -5; python3 scripts/er-teardown.py --help 2>&1 | head -15`)
+}
+
+# A help read earlier in the command does not excuse a real kill later in it.
+test_deny_help_then_a_real_teardown if {
+	denied("python3 scripts/er-teardown.py --help; python3 scripts/er-teardown.py; cargo build")
+}
+
+test_deny_short_help_then_a_real_teardown if {
+	denied("python3 scripts/er-teardown.py -h; python3 scripts/er-teardown.py; cargo build")
+}
+
 # --- the guard stays out of everything else ----------------------------------
 
 # A similarly-named script is not the teardown.

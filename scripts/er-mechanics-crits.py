@@ -58,6 +58,7 @@ import argparse
 import collections
 import importlib.util
 import json
+import math
 import os
 import struct
 import sys
@@ -464,10 +465,11 @@ def parry_exposure(t, weapon, grips=('one', 'both')):
             _, _, events = resolve_anim(cat, anim)
             classic = _jump_table_windows(events, JT_GET_PARRIED)
             contact = t.atk[r['atk_row']]['isDisableParry'] == 0
+            react = parry_reaction_share(r, classic) if classic else 0.0
             slots.append({'slot': r['slot'], 'label': r['label'], 'anim': r['anim'],
                           'atk_row': r['atk_row'], 'classic_windows': classic,
                           'classic': bool(classic), 'contact': contact,
-                          'parryable': bool(classic)})
+                          'parryable': bool(classic), 'reactable': react})
     n = len(slots)
 
     def share(key, subset=None):
@@ -476,7 +478,229 @@ def parry_exposure(t, weapon, grips=('one', 'both')):
     return {'weapon': t.reg.weapon_names.get(wid), 'id': wid, 'slots': n,
             'exposure': share('parryable'), 'classic': share('classic'),
             'contact': share('contact'), 'exposure_1h': share('parryable', False),
-            'exposure_2h': share('parryable', True), 'detail': slots}
+            'exposure_2h': share('parryable', True), 'reactive': share('reactable'),
+            'detail': slots}
+
+
+#: The shield a parrying defender blocks with when he does not parry: Buckler +25, the shield of
+#: the Buckler Parry (`INFERRED`: the corpus names the parry skill, not which shield carries it).
+PARRY_SHIELD, PARRY_SHIELD_LEVEL = 'Buckler', 25
+#: Slot weight = (damage per committed frame) ** this. A power above 1 lets a slot that is far
+#: better than the rest decide the weapon's parryability (`INFERRED`, user 2026-10-04: "if the
+#: only moveset that isn't parryable is the best moveset by far, then maybe the others don't
+#: matter quite as much"; the windup penalty in `er-mechanics-gear-synergy` uses 2 for the same
+#: reason).
+PARRY_VALUE_POWER = 2
+_GUARD = []
+
+
+def _guard():
+    if not _GUARD:
+        g = _load('er_mechanics_powerstance_guard', 'er-mechanics-powerstance-guard.py')
+        reg = g.Tables()
+        _GUARD.extend((g, reg, g.shield_guard(reg, reg.find_weapon(PARRY_SHIELD), PARRY_SHIELD_LEVEL)))
+    return _GUARD
+
+
+def parry_guard_leak(weapon, ar_by):
+    """{slot: share of the slot's pre-defense damage that a raised `PARRY_SHIELD` lets through}
+    (`er-mechanics-powerstance-guard.block_hit` chip over the unblocked attack). `ar_by` is
+    {element: attack rating} of the build. Status buildup through the guard is not counted."""
+    g, reg, guard = _guard()
+    out = {}
+    for grip in ('one', 'both'):
+        for r in g.ATK.weapon_attacks(reg, reg.find_weapon(weapon), grip):
+            raw = sum(ar_by.get(el, 0.0) * r[mv] / 100.0 for el, _, _, mv in g.ELEMENT_CUTS)
+            if raw:
+                out[r['slot']] = round(g.block_hit(reg, r, ar_by, guard)['chip_raw_total'] / raw, 3)
+    return out
+
+
+MV_FIELDS = (('physical', 'mv_phys'), ('magic', 'mv_mag'), ('fire', 'mv_fire'),
+             ('lightning', 'mv_light'), ('holy', 'mv_holy'))
+
+
+#: Status buildup a blocked hit keeps (docs/er-mechanics/status.md section 1c, `VERIFIED`):
+#: 1 - cancel x min(1, shield GuardResist x ReinforceParamWeapon rate / 100), the same for every
+#: status on a Buckler (19, rate 1.0). `cancel` is the attacker's guardCutCancelRate term, taken as
+#: 1 here (`INFERRED`: 18 weapon bases carry -30 or -50 and are not read).
+_STATUS = []
+
+
+def _status():
+    if not _STATUS:
+        st = _load('er_mechanics_status', 'er-mechanics-status.py')
+        tables = st.Tables()
+        _STATUS.extend((st, tables, st.corpus_defender(st.corpus_rows())))
+    return _STATUS
+
+
+def parry_shield_status_leak():
+    """Bleed build-up a raised `PARRY_SHIELD` lets through (every status is the same on a
+    Buckler)."""
+    _, reg, guard = _guard()
+    files = PR.load(None)
+    w = {r['id']: r for r in PR.rows(PR.param_bytes(files, 'EquipParamWeapon'),
+                                      ['bloodGuardResist', 'reinforceTypeId'])[0]}[guard['weapon']]
+    rf = {r['id']: r for r in PR.rows(PR.param_bytes(files, 'ReinforceParamWeapon'),
+                                       ['bloodGuardResistRate'])[0]}.get(w['reinforceTypeId'] + PARRY_SHIELD_LEVEL, {})
+    return round(1.0 - min(1.0, max(0.0, w['bloodGuardResist'] * rf.get('bloodGuardResistRate', 1.0) / 100.0)), 3)
+
+
+def status_share(t, weapon, affinity, stats, ar_by):
+    """Share of the R1's worth that is status: its proc HP per hit (`er-mechanics-status`
+    `status_per_hit` against the RL 150 corpus median defender) over that plus the R1's damage on
+    the reference defender. 0 for a build with no status."""
+    st, tables, dfn = _status()
+    level = tables.ar.max_level(tables.ar.weapons[tables.ar.find_weapon(weapon, affinity)]['reinforceTypeId'])
+    ws = st.weapon_status(tables, weapon, affinity, level, stats)
+    if not ws['sources']:
+        return 0.0
+    row = next((r for r in ATTACKS.weapon_attacks(t.reg, t.find_weapon(weapon), 'one')
+                if r['slot'] == 'r1_1'), None)
+    if row is None:
+        return 0.0
+    s = sum(v['hp_per_hit'] for v in st.status_per_hit(tables, ws, row, dfn).values())
+    by = {el: ar_by.get(el, 0.0) * row[k] / 100.0 for el, k in MV_FIELDS}
+    d = sum(DEF.damage(by, 100.0, reference_defender(t), _phys_type(t, t.find_weapon(weapon),
+                                                                    row['atk_attribute']))['by_type'].values())
+    return round(s / (s + d), 3) if s + d else 0.0
+
+
+def _slot_value(reg, wid, row, ar_by):
+    """Damage per committed frame: the slot's attack over every sweep hitbox, its own and the
+    other judges', divided by its earliest dodge cancel, the commitment `er-builds-pvp.slot_score`
+    divides by."""
+    def attack(nums):
+        return sum(ar_by.get(el, 0.0) * nums[k] / 100.0 for el, k in MV_FIELDS)
+    dmg = attack(row) * max(1, row.get('own_sweep_hits') or 1)
+    for x in row.get('other_hitboxes') or []:
+        nums = ATTACKS.attack_numbers(reg, wid, x['judge']) if x.get('sweep_hit') else None
+        if nums:
+            dmg += attack(nums)
+    end = (row.get('cancel_frame') or {}).get('dodge')
+    return dmg / end if dmg and end else 0.0
+
+
+def build_ar(t, weapon, affinity='Standard', stats=None):
+    """{element: attack rating} one-handed at the affinity's highest upgrade."""
+    base = (t.find_weapon(weapon) // 10000) * 10000
+    aff_id = t.ar.find_weapon(base, affinity)
+    level = t.ar.max_level(t.ar.weapons[aff_id]['reinforceTypeId'])
+    ar = AR.attack_rating(t.ar, base, affinity, level, stats or REF_ATTACKER, False)
+    return {el: d['total'] for el, d in ar['damage'].items()}
+
+
+def parryability(t, weapon, ar_by, affinity='Standard', stats=None, grips=('one', 'both')):
+    """The weapon's moveset as a parrying defender sees it: per slot, the share of defenders who
+    parry it on reaction (`parry_reaction_share`) times what a block of it would have stopped,
+    weighted by `_slot_value` ** `PARRY_VALUE_POWER`. A block's leak blends the damage leak
+    (`parry_guard_leak`) and the status leak (`parry_shield_status_leak`) by the build's
+    `status_share` (`INFERRED`: the R1's share stands for every slot's). `naive` is the plain
+    share of parryable slots, as `parry_exposure` gives it."""
+    pe = parry_exposure(t, weapon, grips)
+    sigma = status_share(t, weapon, affinity, stats, ar_by)
+    s_leak = parry_shield_status_leak()
+    leak = {k: round((1 - sigma) * v + sigma * s_leak, 3) for k, v in parry_guard_leak(weapon, ar_by).items()}
+    wid = t.find_weapon(weapon)
+    rows = {r['slot']: r for g in grips for r in ATTACKS.weapon_attacks(t.reg, wid, g)}
+    num = den = 0.0
+    slots = []
+    for s in pe['detail']:
+        v = _slot_value(t.reg, wid, rows[s['slot']], ar_by) ** PARRY_VALUE_POWER
+        p = s['reactable'] * (1.0 - leak.get(s['slot'], 0.0))
+        num, den = num + v * p, den + v
+        slots.append({'slot': s['slot'], 'label': s['label'], 'value': v, 'reactable': s['reactable'],
+                      'leak': leak.get(s['slot']), 'parry': round(p, 3)})
+    return {'weapon': pe['weapon'], 'naive': pe['exposure'], 'reactive': pe['reactive'],
+            'weighted': round(num / den, 3) if den else None, 'status_share': sigma,
+            'status_leak': s_leak, 'slots': slots}
+
+
+_REACTION = []
+
+
+def parry_reaction_share(row, classic):
+    """Share of defenders who parry the slot on reaction: one who presses Parry at his reaction
+    delay (`er-mechanics-ashes.reaction_delays`, network legs included) has its hitbox open from
+    `PARRY_HITBOX[0]` frames later, and that must come no later than both the last JumpTable 5
+    frame and the first active frame. The attack is taken as visible from its first frame, and the
+    JumpTable 5 clip frames as real frames (`INFERRED`: a slot whose clip plays faster than speed 1
+    is read slightly late)."""
+    if not _REACTION:
+        _REACTION.extend(_load('er_mechanics_ashes', 'er-mechanics-ashes.py').reaction_delays())
+    starts = sorted(s for s, _ in (row.get('hit_windows') or [])
+                    + [x['frames'] for x in row.get('other_hitboxes') or [] if x['hits']])
+    if not starts:
+        return 0.0
+    # Each window guards the first swing that starts with or after it.
+    latest = max(min(e, next((h for h in starts if h >= s - 1), e)) for s, e in classic)
+    return round(sum(w for d, w in _REACTION if d + PARRY_HITBOX[0] <= latest), 3)
+
+
+#: Medium roll (`er-mechanics-disengage.tool('roll medium')`): i-frames f0-13, skill gate f20.
+ROLL_IFRAMES, ROLL_TO_SKILL = 13, 20
+#: Parry (302) hitbox, clip frames of a692_040000 (`parry_tools`). Its play speed is taken as 1.
+PARRY_HITBOX = (4, 6)
+#: Hitbox windows closer than this many real frames are one swing.
+SAME_SWING_GAP = 2
+
+
+def _swings(windows):
+    out = []
+    for s, e in sorted(windows):
+        if out and s - out[-1][1] <= SAME_SWING_GAP:
+            out[-1] = (out[-1][0], max(out[-1][1], e))
+        else:
+            out.append((s, e))
+    return out
+
+
+def parry_follow_up(t, weapon, grips=('one', 'both')):
+    """Slots a defender can roll the first swing of and parry a later one.
+
+    Per later swing: `locked` when the attacker has no dodge or guard cancel before it starts;
+    `gap` the real frames from the earlier swing's last active frame to the later one's first;
+    `presses` how many frames the Parry can be pressed on and land, or None. The defender takes a
+    medium roll whose i-frames cover the earlier swing whole, so the press comes no sooner than
+    that roll's skill gate, and the Parry hitbox must touch a JumpTable 5 window of the later
+    swing no later than its first active frame (`INFERRED`: a hit landing on the same frame is
+    parried, and the parry clip plays at speed 1)."""
+    wid = t.find_weapon(weapon)
+    out = []
+    for grip in grips:
+        for r in ATTACKS.weapon_attacks(t.reg, wid, grip):
+            sw = _swings((r.get('hit_windows') or []) + [x['frames'] for x in r.get('other_hitboxes') or []
+                                                          if x['hits']])
+            if len(sw) < 2:
+                continue
+            cat, anim = (int(x) for x in r['tae_entry'][1:].split('_'))
+            _, _, events = ATTACKS.resolve_events(cat, anim)
+            if not events:
+                continue
+            to_real = ATTACKS.clip_to_real(events)
+            jt5 = [(ATTACKS.real_frame(to_real(e.start)), ATTACKS.real_frame(to_real(e.end)))
+                   for e in events if e.type == TAE_JUMP_TABLE
+                   and struct.unpack_from('<i', e.params, 0)[0] == JT_GET_PARRIED]
+            cf = r.get('cancel_frame') or {}
+            bail = [cf[k] for k in ('dodge', 'guard') if cf.get(k) is not None]
+            for k in range(1, len(sw)):
+                (a0, a1), (b0, _) = sw[k - 1], sw[k]
+                first_press = math.ceil(a1 - ROLL_IFRAMES) + ROLL_TO_SKILL
+                presses = None
+                if a1 - ROLL_IFRAMES <= a0:
+                    for s, e in jt5:
+                        if not a1 < s <= b0:
+                            continue
+                        lo = max(first_press, s - PARRY_HITBOX[1])
+                        hi = min(e, b0) - PARRY_HITBOX[0]
+                        if hi >= lo:
+                            presses = max(presses or 0, math.floor(hi) - math.ceil(lo) + 1)
+                out.append({'slot': r['slot'], 'label': r['label'], 'swing': k + 1,
+                            'swings': len(sw), 'first': sw[k - 1], 'later': sw[k],
+                            'gap': round(b0 - a1, 1), 'jt5': jt5,
+                            'locked': not bail or min(bail) >= b0, 'presses': presses})
+    return out
 
 
 def parry_tools(t):
@@ -998,6 +1222,23 @@ def selftest(t=None):
     check('Giant-Crusher 2H exposure', gc['exposure_2h'], 0.0)
     check('Giant-Crusher jump R1 classic', next(s['classic'] for s in gc['detail'] if s['slot'] == 'jump_r1'), False)
     check('Giant-Crusher R1 #1 JT5', next(s['classic_windows'] for s in gc['detail'] if s['slot'] == 'r1_1'), [(23, 24)])
+    # Roll-then-parry: the Lance's running R2 leaves 3 press frames on its third swing; no Dagger
+    # slot swings twice.
+    lance = {(f['slot'], f['swing']): f for f in parry_follow_up(t, 'Lance', grips=('one',))}
+    check('Lance running R2 swing 3', (lance[('run_r2', 3)]['gap'], lance[('run_r2', 3)]['presses']), (13, 3))
+    check('Dagger multi-swing slots', parry_follow_up(t, 'Dagger'), [])
+    # Reaction: the Lance's crouch R1 opens JumpTable 5 on frame 12, sooner than any reaction plus
+    # the Parry's 4 startup frames; its running R2's window on the third swing (40) is reachable.
+    lance = {s['slot']: s for s in parry_exposure(t, 'Lance', grips=('one',))['detail']}
+    check('Lance crouch R1 reactable', lance['crouch_r1']['reactable'], 0)
+    check('Lance running R2 reactable', lance['run_r2']['reactable'], 1.0)
+    # Guard leak through Buckler +25: physical cut 74, lightning 16.
+    leak = parry_guard_leak('Lance', {'physical': 500.0})
+    check('Lance R1 physical leak', leak['r1_1'], 0.26)
+    check('Lance R1 lightning leak', parry_guard_leak('Lance', {'lightning': 500.0})['r1_1'], 0.84)
+    # Buckler GuardResist 19 at rate 1.0 (status.md section 1c): 81% of build-up gets through.
+    check('Buckler status leak', parry_shield_status_leak(), 0.81)
+    check('Lance has no status', status_share(t, 'Lance', 'Standard', None, {'physical': 500.0}), 0.0)
     tools = {x['name']: x for x in parry_tools(t)}
     check('Parry skill category', tools['Parry']['tae_category'], 692)
     check('Parry hitbox a692_040000', tools['Parry']['animations'][0]['parry_hitbox'], [(4, 6, 591)])

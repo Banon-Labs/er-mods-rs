@@ -92,6 +92,27 @@ CASES = [
         "turn is a pure pause announcing an idle hold while a background task runs",
     ),
     Case(
+        "idle_hold_report_after_notification.jsonl",
+        None,
+        "a final report after both background tasks finished -- one completion delivered mid-turn "
+        "as a queued_command attachment, the other as a notification that started the turn -- and "
+        "one status peek of the output. Must NOT halt: VERBOSEPAUSE halted this shape four times "
+        "in a row on 2026-10-04 because it read only the user-event notification carrier",
+    ),
+    Case(
+        "idle_hold_answer_while_background_live.jsonl",
+        None,
+        "a one-paragraph answer to the user's direct question while an unrelated background board "
+        "run is still live. Must NOT halt: VERBOSEPAUSE halted this exact shape on 2026-10-04 because "
+        "any live background job made every long closing message a blocked pause",
+    ),
+    Case(
+        "idle_hold_blocked_recap_after_question.jsonl",
+        "paused while blocked on a background task",
+        "the other half: a user question ('How is it going?') answered with 'Blocked on the board "
+        "generation run.' plus a long recap is still a verbose blocked pause and must halt",
+    ),
+    Case(
         "authority_agreement.jsonl",
         "authority-coded agreement",
         "turn opens with \"You're right\" -- banned agreement phrasing (2026-07-17 directive)",
@@ -527,6 +548,13 @@ CASES = [
         None,
         "'Does the font look right to you?' -- the answer is the user's typed reply, so no "
         "instrument is needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_game_mechanic_you.jsonl",
+        None,
+        "the 2026-10-04 false positive, verbatim: a finished report saying the axes catch a roll "
+        "'after you run in'. That 'you' is the player in a game mechanic, mid-sentence, not a "
+        "request to the user -- must NOT halt",
     ),
     Case(
         "clean.jsonl",

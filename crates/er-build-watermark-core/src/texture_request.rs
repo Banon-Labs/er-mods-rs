@@ -13,7 +13,14 @@ pub const MAX_TEXTURE_DIM: u32 = 4096;
 
 /// Most texture requests one host accepts over the life of the process. hudhook never frees an
 /// uploaded texture, so a guest that asked every frame would otherwise leak until the GPU ran out.
-pub const MAX_TEXTURE_REQUESTS: usize = 32;
+/// Sized for `er-r3-view`, which uploads one 160 x 160 item icon per weapon and gear row a player
+/// looks at: 32 ran out within five weapon boards (measured 2026-10-04, handle 19 after four).
+/// [`MAX_TEXTURE_BYTES`] bounds the memory; this bounds the count.
+pub const MAX_TEXTURE_REQUESTS: usize = 2048;
+
+/// Most pixel bytes one host accepts over the life of the process, across every request: 2048
+/// item icons at 160 x 160 RGBA8 are 200 MiB, so this is what stops a guest first.
+pub const MAX_TEXTURE_BYTES: usize = 192 * 1024 * 1024;
 
 /// Bytes per pixel of the only format accepted, `R8G8B8A8_UNORM`.
 pub const BYTES_PER_PIXEL: usize = 4;
