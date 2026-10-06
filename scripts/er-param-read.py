@@ -155,7 +155,68 @@ def rows(p, fields=None, strict=True):
     return out, pt, size
 
 
+# Params whose row ids are the ids of a game message file. Smithbox's list trails the game: on
+# 1.17.1 it had no name for 390 weapon rows the game names (Reverse-Bladed Sword 64530000, Royal
+# Soldier Straight Sword, every Inseparable Sword affinity). GemName agrees with Smithbox on all
+# 116 ids both name (`scripts/er-name-sources.py`). `Magic` is left out: MagicName is empty, a
+# spell's text is the GoodsName of the spell good at the same id, and id 8000 there is the
+# Stonesword Key, so a plain id lookup would mislabel it.
+GAME_FMG = {'EquipParamWeapon': 'WeaponName', 'EquipParamProtector': 'ProtectorName',
+            'EquipParamAccessory': 'AccessoryName', 'EquipParamGoods': 'GoodsName',
+            'EquipParamGem': 'GemName', 'SwordArtsParam': 'ArtsName'}
+# Params whose text id is a field of the row rather than the row id. A skill's name is
+# ArtsName[SwordArtsParam.textId]: `CSFeManImp::UpdatePlayerComponents` (1.16.2 0x140772a80)
+# looks the row up through 0x140d50d00, reads +0xc and hands it to the ArtsName getter
+# 0x140d0ff70 (bundles 42, 331, 431). Ten rows differ from their id, e.g. 4990 Kick -> 503 and
+# 5510 -> 4030 Scattershot Throw, where ArtsName[5510] is an unused `Scattershot (Claws)`.
+GAME_TEXT_FIELD = {'SwordArtsParam': 'textId'}
+_ITEM_NAME = None
+_WARNED = set()
+
+
+def _item_name():
+    global _ITEM_NAME
+    if _ITEM_NAME is None:
+        spec = importlib.util.spec_from_file_location('er_item_name', os.path.join(_HERE, 'er-item-name.py'))
+        _ITEM_NAME = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_ITEM_NAME)
+    return _ITEM_NAME
+
+
 def row_names(stem):
+    """Smithbox's row names, with every id it leaves unnamed filled from the game's own text.
+
+    Where both name an id, Smithbox's spelling is kept: the two differ only in accents and case
+    (`Misericorde` / `Miséricorde`), and callers look weapons up by the plain spelling. The game
+    text comes from `er-item-name.py --refresh`; when that cache is missing or older than the
+    installed archives this says so once on stderr and returns Smithbox's names alone.
+    """
+    out = _smithbox_names(stem)
+    fmg = GAME_FMG.get(stem)
+    if fmg is None:
+        return out
+    names = _item_name()
+    state = names.cache_state()
+    if state != 'ok':
+        if state not in _WARNED:
+            _WARNED.add(state)
+            print(f'er-param-read: game item text is {state}; names come from Smithbox alone, which '
+                  f'lacks rows added since its last update. Run: python3 {_HERE}/er-item-name.py --refresh',
+                  file=sys.stderr)
+        if state == 'missing':
+            return out
+    game = names.game_names(fmg)
+    field = GAME_TEXT_FIELD.get(stem)
+    if field:
+        text_ids = {r['id']: r[field] for r in rows(param_bytes(load(), stem), [field], strict=False)[0]}
+        game = {i: game[t] for i, t in text_ids.items() if t in game}
+    for i, nm in game.items():
+        if not out.get(i):
+            out[i] = nm
+    return out
+
+
+def _smithbox_names(stem):
     import json
     path = os.path.join(ROWNAME_DIR, stem + '.json')
     if not os.path.exists(path):

@@ -2952,6 +2952,7 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.13.1",
  "er-game-base",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -3224,6 +3225,19 @@ dependencies = [
  "er-title-flow",
  "fromsoftware-shared",
  "iced-x86",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-r3-view"
+version = "0.1.0"
+dependencies = [
+ "bcdec_rs",
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-gfx",
+ "er-hook",
+ "hudhook",
  "windows 0.62.2",
 ]
 

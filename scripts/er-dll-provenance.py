@@ -207,6 +207,11 @@ def build_record(package: str, artifact: Path) -> dict:
         "artifact_sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "git_sha": git("rev-parse", "HEAD").strip(),
         "git_dirty": bool(git("status", "--porcelain").strip()),
+        # Which checkout built this. `scripts/er-stale-run-sentinel.sh` reads it to tell a DLL
+        # copied out of this tree from one copied out of a sibling worktree: an edit in one tree
+        # cannot stale a DLL another tree built, and a sentinel that matches DLLs by basename
+        # alone tore down for exactly that.
+        "repo_root": str(REPO_ROOT),
         "built_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 

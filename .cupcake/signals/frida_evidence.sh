@@ -15,5 +15,12 @@ repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)" || exit 0
 reader="$repo_root/scripts/er-frida-evidence.py"
 [ -f "$reader" ] || exit 0
 
-timeout 15 python3 "$reader" --check 2>/dev/null || true
+# Cupcake pipes the pending event to every signal on stdin. The reader takes it so that only a
+# commit to the crate being edited spends the measurement, not every Rust commit in the tree.
+# Guarded on a pipe: run by hand from a terminal, stdin is a keyboard and reading it would hang.
+if [ -t 0 ]; then
+  timeout 15 python3 "$reader" --check 2>/dev/null || true
+else
+  timeout 15 python3 "$reader" --check --event - 2>/dev/null || true
+fi
 exit 0

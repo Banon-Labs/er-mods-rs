@@ -383,7 +383,191 @@ def main() -> int:
         "expected VERBOSEPAUSE for the same long message when a background job is still live",
     )
 
-    print("idle-hold signal tests passed (17 cases)")
+    # ---- 2026-10-04 regression: a delivered final report is not a pause ---------------------------
+    #
+    # The incident: a selftest was run in the background, its completion arrived, the agent peeked the
+    # finished output with one `tail` and wrote its final answer. VERBOSEPAUSE halted it, and then
+    # halted each shorter rewrite, four times in a row, with nothing running. The notification had
+    # been delivered mid-turn as a `queued_command` attachment, which the scanner did not read, so the
+    # finished task stayed "live" for the rest of the window.
+    report = answer_no_pending  # >450 chars, no hold or pending-work phrasing
+
+    def bg_launch(tool_id: str, task_id: str, *, foreground_moved: bool = False) -> list[dict]:
+        ack = (
+            "Command did not complete within its 120s timeout and was moved to the background "
+            f"(ID: {task_id}). Output is being written to: /tmp/x/{task_id}.output"
+            if foreground_moved
+            else f"Command running in background with ID: {task_id}. Output is being written to: "
+            f"/tmp/x/{task_id}.output"
+        )
+        inp = {"command": "python3 scripts/x.py --selftest > /tmp/x/st.txt"}
+        if not foreground_moved:
+            inp["run_in_background"] = True
+        return [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "tool_use", "id": tool_id, "name": "Bash", "input": inp}]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [{"type": "tool_result", "tool_use_id": tool_id, "content": ack}]
+                },
+            },
+        ]
+
+    def notification(tool_id: str, task_id: str, status: str = "completed") -> str:
+        return (
+            f"<task-notification>\n<task-id>{task_id}</task-id>\n<tool-use-id>{tool_id}</tool-use-id>\n"
+            f"<output-file>/tmp/x/{task_id}.output</output-file>\n<status>{status}</status>\n"
+            f"<summary>Background command completed (exit code 0)</summary>\n</task-notification>"
+        )
+
+    def queued_notification(tool_id: str, task_id: str) -> list[dict]:
+        """The two carriers a mid-turn completion arrives in -- never a user event."""
+        text = notification(tool_id, task_id)
+        return [
+            {"type": "queue-operation", "operation": "enqueue", "content": text},
+            {
+                "type": "attachment",
+                "attachment": {
+                    "type": "queued_command",
+                    "prompt": text,
+                    "commandMode": "task-notification",
+                },
+            },
+        ]
+
+    def peek_turn() -> list[dict]:
+        return [assistant_bash("tail -3 /tmp/x/st.txt"), tool_result()]
+
+    stop_feedback = user(
+        "Stop hook feedback:\nYou paused while blocked on a background task but wrote a long "
+        "message (1534 chars)."
+    )
+
+    # (18) The incident shape: the earlier task's completion came only as a queued_command
+    # attachment, the current one as a user-event notification, the turn peeked and reported.
+    incident = (
+        [user("Use the metric for gear with synergy.")]
+        + bg_launch("toolu_a", "ba1")
+        + queued_notification("toolu_a", "ba1")
+        + bg_launch("toolu_b", "bb2", foreground_moved=True)
+        + [assistant_text("Waiting on the selftest re-run (task bb2).")]
+        + [user(notification("toolu_b", "bb2"))]
+        + peek_turn()
+        + [assistant_text(report)]
+    )
+    expect(
+        "report-after-notification-and-peek",
+        incident,
+        lambda o: o == "",
+        "a final report after every task finished (one via a queued_command attachment) and a "
+        "status peek must not be a VERBOSEPAUSE",
+    )
+
+    # (19) The turn after Stop-hook feedback has no tool use by construction; with nothing running
+    # its rewrite must go through.
+    expect(
+        "report-after-stop-feedback",
+        incident + [stop_feedback, assistant_text(report)],
+        lambda o: o == "",
+        "the rewrite after Stop-hook feedback, with nothing running, must not be a VERBOSEPAUSE",
+    )
+
+    # (20) A task with no completion notice, ended by a successful TaskStop of its task id.
+    stopped = (
+        [user("Run the selftest.")]
+        + bg_launch("toolu_c", "bc3")
+        + [user("Stop that and tell me what you found.")]
+        + [
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_stop", "name": "TaskStop",
+                         "input": {"task_id": "bc3"}}
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_stop",
+                         "content": '{"message":"Successfully stopped task: bc3"}'}
+                    ]
+                },
+            },
+            assistant_text(report),
+        ]
+    )
+    expect(
+        "report-after-taskstop",
+        stopped,
+        lambda o: o == "",
+        "a task ended by a successful TaskStop is not live work",
+    )
+
+    # (21) Control: the ban stays. A notification for a different task does not close the one still
+    # running, and a long text-only turn over it is a VERBOSEPAUSE.
+    expect(
+        "verbose-long-other-task-still-live",
+        [user("Run both.")]
+        + bg_launch("toolu_d", "bd4")
+        + bg_launch("toolu_e", "be5")
+        + [user(notification("toolu_d", "bd4"))]
+        + peek_turn()
+        + [assistant_text(report)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "a long message while another background task is still running must flag",
+    )
+
+    # (22) Control: a foreground Bash the harness moved to the background is live work until its
+    # notification lands.
+    expect(
+        "verbose-long-moved-to-background-still-live",
+        [user("Run the selftest.")]
+        + bg_launch("toolu_f", "bf6", foreground_moved=True)
+        + [user("Anything yet?"), assistant_text(report)],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "a long message while a moved-to-background Bash is still running must flag",
+    )
+
+    # (23) Control: a refused TaskStop (wrong id) leaves the task live.
+    expect(
+        "verbose-long-failed-taskstop-still-live",
+        [user("Run the selftest.")]
+        + bg_launch("toolu_g", "bg7")
+        + [
+            user("Stop it."),
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_stop2", "name": "TaskStop",
+                         "input": {"task_id": "bg7"}}
+                    ]
+                },
+            },
+            {
+                "type": "user",
+                "message": {
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_stop2", "is_error": True,
+                         "content": "No task found with ID: bg7"}
+                    ]
+                },
+            },
+            assistant_text(report),
+        ],
+        lambda o: o.startswith("VERBOSEPAUSE:"),
+        "a TaskStop that errored must not count as ending the task",
+    )
+
+    print("idle-hold signal tests passed (23 cases)")
     return 0
 
 

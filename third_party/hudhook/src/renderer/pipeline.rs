@@ -18,9 +18,22 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::renderer::input::{imgui_wnd_proc_impl, WndProcType};
 use crate::renderer::RenderEngine;
-use crate::{util, ImguiRenderLoop, MessageFilter};
+use crate::{util, ImguiRenderLoop, MessageFilter, RenderContext};
 
 type RenderLoop = Box<dyn ImguiRenderLoop + Send + Sync>;
+
+/// Local patch (er-mods-rs, 2026-10-02): see `crate::set_before_frame_hook`.
+static BEFORE_FRAME_HOOK: std::sync::OnceLock<BeforeFrameHook> = std::sync::OnceLock::new();
+
+/// The per-frame hook: the imgui context, and the render engine as a texture
+/// loader so the hook can upload textures other modules handed in.
+pub type BeforeFrameHook = fn(&mut Context, &mut dyn RenderContext);
+
+/// Install the per-frame hook. The first call wins; later calls are ignored and
+/// report `false`.
+pub fn set_before_frame_hook(hook: BeforeFrameHook) -> bool {
+    BEFORE_FRAME_HOOK.set(hook).is_ok()
+}
 
 // Safety: HWND is an opaque integer handle, safe to send/share across threads.
 #[derive(Clone, Copy, Debug)]
@@ -64,7 +77,7 @@ impl<T: RenderEngine> Pipeline<T> {
         mut engine: T,
         mut render_loop: RenderLoop,
     ) -> std::result::Result<Self, (Error, RenderLoop)> {
-        // LOCAL PATCH (er-mods-rs, 2026-08-29): refuse rather than abort. See util::try_win_size --
+        // Local patch (er-mods-rs, 2026-08-29): refuse rather than abort. See util::try_win_size --
         // the HWND here can be a handle that is no longer a window, and the upstream unwrap made
         // that a process kill from inside a callback the game owns. Returning the error puts the
         // failure down hudhook's existing "pipeline not initialised" path instead.
@@ -140,6 +153,21 @@ impl<T: RenderEngine> Pipeline<T> {
         io.nav_visible = true;
 
         self.render_loop.before_render(&mut self.ctx, &mut self.engine);
+
+        // Local patch (er-mods-rs, 2026-10-02): fonts added after the first build. Adding a font
+        // clears the atlas's `TexReady`, so `is_built` is the exact "something changed" signal,
+        // and rebuilding here -- before `ctx.frame()` -- keeps the rebuild out of a live frame.
+        // `setup_fonts` rasterizes before it uploads, so even a failed upload leaves the atlas
+        // built on the CPU side and the next `NewFrame` does not assert. The new texture replaces
+        // `fonts.tex_id`; the old one stays allocated, because a frame in flight may sample it.
+        if let Some(hook) = BEFORE_FRAME_HOOK.get() {
+            hook(&mut self.ctx, &mut self.engine);
+        }
+        if !self.ctx.fonts().is_built() {
+            if let Err(e) = self.engine.setup_fonts(&mut self.ctx) {
+                error!("Could not rebuild the font atlas: {e:?}");
+            }
+        }
 
         Ok(())
     }

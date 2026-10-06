@@ -39,6 +39,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +90,27 @@ CASES = [
         "idle_hold.jsonl",
         "announced holding/idling",
         "turn is a pure pause announcing an idle hold while a background task runs",
+    ),
+    Case(
+        "idle_hold_report_after_notification.jsonl",
+        None,
+        "a final report after both background tasks finished -- one completion delivered mid-turn "
+        "as a queued_command attachment, the other as a notification that started the turn -- and "
+        "one status peek of the output. Must NOT halt: VERBOSEPAUSE halted this shape four times "
+        "in a row on 2026-10-04 because it read only the user-event notification carrier",
+    ),
+    Case(
+        "idle_hold_answer_while_background_live.jsonl",
+        None,
+        "a one-paragraph answer to the user's direct question while an unrelated background board "
+        "run is still live. Must NOT halt: VERBOSEPAUSE halted this exact shape on 2026-10-04 because "
+        "any live background job made every long closing message a blocked pause",
+    ),
+    Case(
+        "idle_hold_blocked_recap_after_question.jsonl",
+        "paused while blocked on a background task",
+        "the other half: a user question ('How is it going?') answered with 'Blocked on the board "
+        "generation run.' plus a long recap is still a verbose blocked pause and must halt",
     ),
     Case(
         "authority_agreement.jsonl",
@@ -494,6 +516,47 @@ CASES = [
         "that named a defect and changed nothing",
     ),
     Case(
+        "diagnosis_committed_by_subagent.jsonl",
+        None,
+        "the 2026-10-02 false positive: a subagent committed the fix, and the closing message "
+        "named the cause and the commit. This turn wrote nothing, so `edited` is 0, but the commit "
+        "was made after the session began -- must NOT halt, or relaying a subagent's fix is "
+        "punished identically to never making it",
+    ),
+    Case(
+        "diagnosis_cites_pre_session_commit.jsonl",
+        "the diagnosis is not the deliverable",
+        "the same cause named, citing a commit that predates the session and changing nothing -- "
+        "must still halt. An old hash in the prose is history, not a fix, so the time bound on "
+        "`committed` is what keeps the true positive blocking",
+    ),
+    Case(
+        "ask_without_receiver.jsonl",
+        "You asked the user for something you have no receiver for",
+        "the 2026-10-02 closer, verbatim: a Frida watcher backgrounded, then 'I need you to close "
+        "the item list with B twice' with no Monitor armed. The watcher's exit is not the press, "
+        "so nothing would have woken the agent when the user acted",
+    ),
+    Case(
+        "ask_with_monitor.jsonl",
+        None,
+        "the same ask after a Monitor on the trace log started and has not ended -- must NOT "
+        "halt, because the agent is now prepared to receive what it asked for",
+    ),
+    Case(
+        "ask_subjective.jsonl",
+        None,
+        "'Does the font look right to you?' -- the answer is the user's typed reply, so no "
+        "instrument is needed and the ask must NOT halt",
+    ),
+    Case(
+        "ask_game_mechanic_you.jsonl",
+        None,
+        "the 2026-10-04 false positive, verbatim: a finished report saying the axes catch a roll "
+        "'after you run in'. That 'you' is the player in a game mechanic, mid-sentence, not a "
+        "request to the user -- must NOT halt",
+    ),
+    Case(
         "clean.jsonl",
         None,
         "substantive work, no banned prose -- must NOT halt, or every turn wedges",
@@ -549,6 +612,34 @@ def hook_command(event: str) -> list[str]:
     )
 
 
+def substitute_head(text: str) -> str:
+    """Fill the commit placeholders a fixture may carry, from the checkout's own `HEAD`.
+
+    The committed-in-session fixtures need a real commit and a session timestamp on either side of
+    it. A hash written into the fixture would stop resolving once its branch is squash-merged and
+    pruned, so the fixture names `HEAD` instead:
+      `@@HEAD@@`         the short hash of `HEAD`
+      `@@BEFORE_HEAD@@`  an ISO timestamp one minute before the committer time of `HEAD`
+      `@@AFTER_HEAD@@`   an ISO timestamp one minute after it
+    """
+    if "@@" not in text:
+        return text
+    out = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "log", "-1", "--format=%h %ct", "HEAD"],
+        capture_output=True, text=True, timeout=10, check=True,
+    ).stdout.split()
+    short, epoch = out[0], int(out[1])
+
+    def iso(seconds: int) -> str:
+        return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    return (
+        text.replace("@@HEAD@@", short)
+        .replace("@@BEFORE_HEAD@@", iso(epoch - 60))
+        .replace("@@AFTER_HEAD@@", iso(epoch + 60))
+    )
+
+
 def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict, str] | str:
     """Drive one fixture through a real cupcake hook invocation. Returns (decision, raw stdout), or
     a failure message string."""
@@ -563,7 +654,9 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict,
         slug = str(REPO_ROOT).replace("/", "-")
         tdir = Path(tmp) / ".claude" / "projects" / slug
         tdir.mkdir(parents=True)
-        shutil.copy(fixture, tdir / "session.jsonl")
+        (tdir / "session.jsonl").write_text(
+            substitute_head(fixture.read_text(encoding="utf-8")), encoding="utf-8"
+        )
 
         env = {**os.environ, "HOME": tmp, "CLAUDE_PROJECT_DIR": str(REPO_ROOT)}
         payload = {

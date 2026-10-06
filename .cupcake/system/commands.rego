@@ -495,8 +495,31 @@ quotes_removed(text) := out if {
 	])
 }
 
+# Public. A backslash-newline line continuation joined into the space it means
+# (2026-10-02). A newline behind an odd number of backslashes is not a command
+# boundary: the shell deletes both characters and reads one line. Every segmenter
+# here, and every policy that turns a newline into ` ; `, would otherwise cut the
+# command in two at it. `cargo xwin build --release \<newline> -p er-quickload` was
+# denied as an unscoped cargo by exactly that cut, because the `-p` landed in a
+# statement of its own. `scripts/cupcake-hook.sh` already leaves a continuation
+# newline alone (`continues_line`); this is the same parity rule on the policy side.
+#
+# Parity without a regex: escaped backslash pairs are parked first, so what remains
+# in front of a newline is at most one backslash, and that one is a continuation.
+# `replace` works left to right without overlap, which is the pairing a shell
+# applies too. `regex.replace` is avoided because it does not work in the wasm
+# runtime (`scripts/check-cupcake-wasm-builtins.py`).
+continuations_joined(text) := out if {
+	parked := replace(text, `\\`, escaped_backslash_marker)
+	joined := replace(replace(parked, "\\\r\n", " "), "\\\n", " ")
+	out := replace(joined, escaped_backslash_marker, `\\`)
+}
+
+escaped_backslash_marker := "__cupcake_escaped_backslash__"
+
 # PUBLIC. Every shell text this command executes, quoted operands neutralised.
-executed_texts(command) := texts if {
+executed_texts(raw) := texts if {
+	command := continuations_joined(raw)
 	payloads := shell_payloads_deep(command)
 	texts := {scan_text(command)} | {t |
 		some p in payloads
@@ -505,7 +528,8 @@ executed_texts(command) := texts if {
 }
 
 # PUBLIC. The same set with quoted spans removed, for substring/flag tests.
-executed_unquoted_texts(command) := texts if {
+executed_unquoted_texts(raw) := texts if {
+	command := continuations_joined(raw)
 	payloads := shell_payloads_deep(command)
 	texts := {quotes_removed(command)} | {t |
 		some p in payloads
@@ -523,7 +547,6 @@ unparsed_shell_payload(command) if {
 	not quote_parity_ok(escaped_quotes_stripped(command))
 	regex.match(shell_wrapper_anywhere_pattern, command)
 }
-
 
 # ---------------------------------------------------------------------------
 # COMMAND SLOT, AS TOKENS (2026-09-22, bd er-effects-rs-ak3q / er-effects-rs-if5l)
@@ -718,4 +741,166 @@ input_executed_unquoted_texts := executed_unquoted_texts(input.tool_input.comman
 
 input_unparsed_shell_payload if {
 	unparsed_shell_payload(input.tool_input.command)
+}
+
+# ---------------------------------------------------------------------------
+# A heredoc body no shell reads is prose (2026-09-22, moved here 2026-10-02)
+#
+# Written first in `no_whole_check_sh` and moved here when `require_scoped_cargo`
+# needed the same answer: a commit message written through `git commit -F - <<'EOF'`
+# that names `cargo build` was refused by it as a build.
+#
+# `heredoc_body_blanked` above already means to neutralise a heredoc body that a
+# non-shell command reads, and in the opa interpreter it does. In production it never
+# fires: it locates the body by looking for `"\n"` plus the tag, and the engine has
+# replaced every unquoted newline with a space before a policy runs. That is recorded
+# as dead logic and measured by `scripts/test-cupcake-delivered-shape.py`, so the body
+# arrives welded onto the command that reads it, with its own `;`, `&`, `|` and `(`
+# still standing as command positions.
+#
+# So a pull-request body written with `cat > <file> <<'EOF' ... EOF` hands a
+# command-slot guard a command slot per parenthesis. Measured 2026-09-22 on the real
+# denial: the whole body below became one line, and the word after the `(` was read
+# as a program.
+#
+#     test-check-sh-accumulates.py   PASS   (check.sh changed)
+#
+# The narrowing is read per policy (callers pass the spans to `index_inside`) rather
+# than applied inside the shared decomposition on purpose -- neutralising every data
+# heredoc for every policy would change what the destructive and protected-path guards
+# see, which is not a command-slot guard's to decide.
+#
+# The condition is not "written to a file", which was the first draft and was wrong in
+# the same direction as the bug: `git commit -F - <<'EOF'` carries no redirect, and the
+# commit message adding this was refused by it. What matters is whether a shell is fed
+# the body. Two tests, and both are about the opener alone:
+#
+#   * nothing in the command that opens the heredoc may be a shell, so `bash <<'EOF'`
+#     keeps its body as a program;
+#   * no shell may be reachable across the rest of the opener's line -- the tokens that
+#     can still stand there once the newline is gone are separators, redirects, file
+#     descriptors and a line continuation. That is what keeps `cat <<'EOF' | bash`,
+#     `cat <<'EOF' \ | bash`, `tee f <<'EOF' | bash` and
+#     `cat > f <<'EOF' ; bash scripts/check.sh ; EOF` denied, while a body that merely
+#     opens with a markdown table is prose: its first word is not a token a shell line
+#     can hold, so the scan stops there.
+#
+# An invocation after the terminator is outside the body and is denied as before.
+#
+# Residue, stated rather than hidden, and pinned by tests rather than described. The
+# first word carrying the tag closes the span, so a body line that repeats it ends the
+# exemption early; and a body whose first line is itself a shell invocation behind a
+# separator (`; bash <path>`) cannot be told from a statement on the opener's own line.
+# Both of those deny, which is the direction a guard errs in.
+#
+# Computed once per text, before the caller's match iterates, and that placement is the
+# whole performance story. A body the exemption covers produces no match at all, so the
+# engine cannot stop early -- it tries every word -- and a span test written per
+# candidate scans the word list again each time. Measured on a 32 KB body naming the
+# script 400 times: per candidate, 17.7s and the wasm module out of memory; as a set
+# computed once, well under a second. The out-of-memory path is a refusal, so the cost
+# was not merely slow, it denied.
+
+# PUBLIC. `[open, close]` word-index pairs of every heredoc body no shell reads, over
+# `command_slot_words` output.
+data_heredoc_spans(words) := {[open, close] |
+	some open, word in words
+	tag := heredoc_open_tag(word)
+	data_heredoc_opener(words, open)
+	closes := [i |
+		some i, w in words
+		i > open
+		tag in word_lines(w)
+	]
+	count(closes) > 0
+	close := min(closes)
+}
+
+# PUBLIC. The word at `index` lies strictly inside one of `spans`.
+index_inside(spans, index) if {
+	some span in spans
+	span[0] < index
+	index < span[1]
+}
+
+# `command_slot_words` splits on spaces, so a newline that survived enrichment glues
+# its neighbours into one word. That happens whenever `scan_text` falls back to the raw
+# command -- a backtick in a markdown body is enough -- and the terminator of the
+# measured case arrived as the single word `call.\nEOF\ntimeout`. Reading a word as
+# its lines is what finds it. Only the heredoc span is read this way: the match itself
+# keeps the shared tokenisation, so nothing that is denied today stops being denied
+# because a newline was split.
+word_lines(word) := split(replace(word, "\r", "\n"), "\n")
+
+# The tag of a word that opens a heredoc: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`.
+# Token operations rather than a regex, for the reason the header of this package
+# records. A word this cannot read whole (`<<'EOF'$`, a bare `<<` from `x << 2`)
+# yields a tag no terminator word can carry, so the body is never located and the deny
+# stands.
+heredoc_open_tag(word) := tag if {
+	startswith(word, "<<")
+	not startswith(word, "<<<")
+	parts := split(word, "<<")
+	count(parts) == 2
+	unquoted := replace(replace(word_lines(parts[1])[0], "'", ""), `"`, "")
+	tag := trim_prefix(unquoted, "-")
+	tag != ""
+}
+
+# The words of the command that opens the heredoc, from its command slot to the opener.
+heredoc_opener_command(words, open) := [w |
+	some i, w in words
+	i >= command_slot_start(words, open)
+	i < open
+]
+
+data_heredoc_opener(words, open) if {
+	count([w |
+		some w in heredoc_opener_command(words, open)
+		heredoc_shell_name(w)
+	]) == 0
+	not shell_on_the_opener_line(words, open)
+}
+
+# A shell reached from the opener across nothing but tokens a command line can still
+# hold. The scan stops at the first word that is none of those, which in a data heredoc
+# is the first word of the body.
+shell_on_the_opener_line(words, open) if {
+	some i, w in words
+	i > open
+	heredoc_shell_name(w)
+	count([j |
+		some j, x in words
+		j > open
+		j < i
+		not opener_line_word(x)
+	]) == 0
+}
+
+# `|`, `;`, `&` as the decomposition spells them; `>file`, `2>`, `<&-` and their kin;
+# a file descriptor number; and the backslash that joins the opener's line to the next.
+opener_line_word(word) if word == command_slot_separator
+
+opener_line_word(word) if word == "\\"
+
+opener_line_word(word) if contains(word, ">")
+
+opener_line_word(word) if startswith(word, "<")
+
+opener_line_word(word) if {
+	word != ""
+	count([c |
+		some c in split(word, "")
+		not digit_char(c)
+	]) == 0
+}
+
+# The shells `shell_name_pattern` recognises, as names rather than as a regex: sh,
+# bash, zsh, ksh, dash, ash, fish, csh, tcsh, and the three words that read a body as
+# a program without being one of them.
+heredoc_shell_name(word) if word in {"sh", "bash", "zsh", "ksh", "dash", "ash", "fish", "csh", "tcsh", "eval", "source", "."}
+
+heredoc_shell_name(word) if {
+	some name in {"/sh", "/bash", "/zsh", "/ksh", "/dash", "/ash", "/fish", "/csh", "/tcsh"}
+	endswith(word, name)
 }

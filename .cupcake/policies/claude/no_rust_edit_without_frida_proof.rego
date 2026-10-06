@@ -26,9 +26,12 @@
 #
 #     What opens the gate is `scripts/er-frida-evidence.py --check` printing PROVEN,
 #     which needs a session that attached to a pid and received at least one message,
-#     recorded after HEAD's commit time. The log lives under XDG_STATE_HOME, not in
+#     recorded after the newest Rust commit to the crate being edited. The signal pipes
+#     the pending event to the reader, which maps each target to its crate under
+#     `crates/` or `third_party/`; a target outside any crate, or no target, falls back
+#     to every `crates/**/*.rs` commit. The log lives under XDG_STATE_HOME, not in
 #     the repo, so the Write tool being gated cannot forge its own permission. A commit
-#     spends the evidence: one measurement licenses one change.
+#     to that crate spends the evidence: one measurement licenses one change.
 #
 #     Deliberately NOT carved out: tests, doc comments, host-only crates. Every carve-out
 #     is a door, and the failure this exists to stop was the agent walking through the
@@ -352,7 +355,46 @@ segment_writes(words, index) if {
 # rewrite the working tree; `diff`, `log`, `show`, `grep` and `blame` read it.
 segment_writes(words, _) if {
 	program_is(words, "git")
-	subcommand(words) in {"apply", "checkout", "restore", "clean", "stash", "rm", "mv"}
+	subcommand(words) in {"apply", "checkout", "clean", "stash", "rm", "mv"}
+}
+
+# `git restore` writes the working tree by default, and only the index under `--staged`/`-S`.
+# Refused 2026-10-02: `git restore --staged <paths>` was denied as if it rewrote the sources,
+# when all it does is unstage them. `--worktree`/`-W` beside `--staged` writes both, so it
+# still counts. `git reset [HEAD] -- <paths>` is not a writer at all and is not listed: with
+# paths it only resets index entries.
+segment_writes(words, _) if {
+	program_is(words, "git")
+	subcommand(words) == "restore"
+	restore_writes_worktree(words)
+}
+
+restore_writes_worktree(words) if {
+	not restore_has_flag(words, "--staged", "S")
+}
+
+restore_writes_worktree(words) if {
+	restore_has_flag(words, "--worktree", "W")
+}
+
+# The long spelling, or the short letter alone or inside a cluster such as `-SW`. Only words
+# before a `--` count, because everything after it is a pathspec.
+restore_has_flag(words, long, _) if {
+	some index, word in words
+	word == long
+	before_end_of_options(words, index)
+}
+
+restore_has_flag(words, _, letter) if {
+	some index, word in words
+	startswith(word, "-")
+	not startswith(word, "--")
+	contains(word, letter)
+	before_end_of_options(words, index)
+}
+
+before_end_of_options(words, index) if {
+	not "--" in array.slice(words, 0, index)
 }
 
 # Every `crates/**/*.rs` path this command would write.

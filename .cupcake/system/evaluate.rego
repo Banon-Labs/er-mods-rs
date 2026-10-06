@@ -29,63 +29,65 @@ evaluate := {
 }
 
 # Halt decisions.
-all_halts contains decision if { some decision in data.cupcake.policies.builtins.git_pre_check.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.builtins.protected_paths.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.builtins.rulebook_security_guardrails.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.guard_layer_destructive_guard.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.idle_hold.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_admission_with_defence.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_authority_agreement.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_deferred_evidence_read.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_described_next_step.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_explanation_instead_of_correction.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_fix_claim_without_runtime_evidence.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_future_tense_commitment.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_narrated_action.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_proof_without_observation.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_stall_on_friction.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_unbacked_claim.halt }
-all_halts contains decision if { some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt }
+all_halts contains decision if some decision in data.cupcake.policies.builtins.git_pre_check.halt
+all_halts contains decision if some decision in data.cupcake.policies.builtins.protected_paths.halt
+all_halts contains decision if some decision in data.cupcake.policies.builtins.rulebook_security_guardrails.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.guard_layer_destructive_guard.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.idle_hold.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_admission_with_defence.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_ask_without_receiver.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_deferred_evidence_read.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_described_next_step.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_diagnosis_without_fix.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_explanation_instead_of_correction.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_fix_claim_without_runtime_evidence.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_future_tense_commitment.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_narrated_action.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_proof_without_observation.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_stall_on_friction.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
 
 # Deny decisions.
-all_denials contains decision if { some decision in data.cupcake.policies.bash_elden_ring_launch_guard.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.bash_no_python_file_write.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.block_askuserquestion.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.block_compositor_input_injection.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.block_manual_pgrep.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.builtins.claude_code_enforce_full_file_read.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.builtins.git_block_no_verify.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.edit_no_comment_caps_guard.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.edit_no_tmp_scripts_guard.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.gh_pr_title_conventional.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_block_any_push.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_block_detached_push.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_block_main_commit.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_block_main_push.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_require_fresh_origin_main.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.git_require_runtime_evidence.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.monitor_rate_limit.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.no_whole_check_sh.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.require_scoped_cargo.deny }
-all_denials contains decision if { some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny }
+all_denials contains decision if some decision in data.cupcake.policies.bash_elden_ring_launch_guard.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.bash_no_python_file_write.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.block_askuserquestion.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.block_compositor_input_injection.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.block_manual_pgrep.deny
+all_denials contains decision if some decision in data.cupcake.policies.builtins.claude_code_enforce_full_file_read.deny
+all_denials contains decision if some decision in data.cupcake.policies.builtins.git_block_no_verify.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_comment_caps_guard.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.edit_no_tmp_scripts_guard.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.gh_pr_title_conventional.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_any_push.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_detached_push.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_commit.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_block_main_push.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_fresh_origin_main.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.git_require_runtime_evidence.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.monitor_rate_limit.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_grep_for_build_errors.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_rust_edit_without_frida_proof.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_source_edit_during_live_run.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.no_whole_check_sh.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.require_scoped_cargo.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny
 
 # Block and ask decisions. No current project policy exports these, but keep the shape stable.
 
 # Modify decisions. No current project policy exports these, but keep the shape stable.
 
 # Prompt-context decisions.
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.builtins.claude_code_always_inject_on_prompt.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.idle_hold_reminder.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.no_authority_agreement_reminder.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.no_false_ci_green.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.no_repo_network_banners_prompt_context.add_context }
-all_add_context contains decision if { some decision in data.cupcake.policies.claude.wall_of_text.add_context }
+all_add_context contains decision if some decision in data.cupcake.policies.claude.block_askuserquestion_reminder.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.builtins.claude_code_always_inject_on_prompt.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.idle_hold_reminder.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.native_ownership_vocab_reminder.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.no_authority_agreement_reminder.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.no_false_ci_green.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.no_repo_network_banners_prompt_context.add_context
+all_add_context contains decision if some decision in data.cupcake.policies.claude.wall_of_text.add_context

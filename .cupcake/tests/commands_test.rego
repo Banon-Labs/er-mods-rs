@@ -454,3 +454,30 @@ test_quoted_separator_does_not_split_under_the_contract if {
 	some text in commands.executed_texts(`rm -rf "a;b"`)
 	commands.shell_statements(text) == {`rm -rf "a b"`}
 }
+
+# --- line continuations are joined before segmenting -------------------------
+
+test_continuation_joined_into_a_space if {
+	commands.continuations_joined("a \\\n  b") == "a    b"
+}
+
+test_crlf_continuation_joined_into_a_space if {
+	commands.continuations_joined("a \\\r\n  b") == "a    b"
+}
+
+# Two backslashes are one escaped backslash; the newline after them is real.
+test_escaped_backslash_newline_is_kept if {
+	commands.continuations_joined("a \\\\\nb") == "a \\\\\nb"
+}
+
+# Three: an escaped backslash, then a continuation.
+test_odd_backslash_run_is_a_continuation if {
+	commands.continuations_joined("a \\\\\\\nb") == "a \\\\ b"
+}
+
+test_executed_texts_see_one_line_across_a_continuation if {
+	texts := commands.executed_texts("cargo build \\\n  -p x")
+	some t in texts
+	not contains(t, "\n")
+	contains(t, "-p x")
+}

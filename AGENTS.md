@@ -489,6 +489,17 @@ This is enforced, not advisory: the Stop hook halts a turn whose closing message
 list without matching the second. When it fires, do not rewrite the sentence to slip past it --
 take the next action instead, then report what happened.
 
+Asking for an in-game action or event means the receiver is already armed (user directive
+2026-10-02: "you set no monitors, so you needed nothing from me"). Before a closing "I need you
+to", "please <verb>", "let me know when" or "once you <verb>", the session must hold a live
+`Monitor` on the instrument that captures the result, or a `run_in_background` wait whose own exit
+is the event (an until-loop on the log). A backgrounded watcher or build does not count: its exit
+is not what the user is being asked to cause. Questions answered by the user's typed reply --
+judgement, preference, decision, credential, what they see where no oracle exists -- are exempt.
+Enforced by `.cupcake/policies/claude/no_ask_without_receiver.rego` over
+`.cupcake/signals/last_assistant_ask_without_receiver.sh`, tested by
+`scripts/test-ask-without-receiver-signal.py` and `scripts/test-cupcake-stop-guards.py`.
+
 ## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 

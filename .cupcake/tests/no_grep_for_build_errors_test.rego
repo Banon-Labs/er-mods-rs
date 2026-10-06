@@ -91,3 +91,87 @@ test_lookalike_verbs_do_not_match if {
 	not denied("mycargo status | grep error")
 	not denied("./not-make.sh | grep error")
 }
+
+# --- 2026-10-02 false positives: a build word as an argument is not a build --------------------
+#
+# Both commands below were denied while running nothing but grep/sed/python over files. The
+# trigger was not `Cargo.toml` (the verb match is case-sensitive) but the path
+# `scripts/check-me3-dll-conflicts.py`: it matched the repo-build-script verb after a plain space
+# in argument position, and again after the `'` of a python string literal. A build verb now only
+# counts in command position.
+
+test_read_only_grep_naming_check_script_and_cargo_toml_is_allowed if {
+	not denied("cd /home/banon/projects/er-mods-rs && grep -P \"\\t0x998260$|\\t0x975890$\" docs/recon/rva-map-1162-to-1170.functions.tsv; sed -n 1922,1960p crates/er-hook/src/lib.rs | grep -n \"pub unsafe fn\"; ls scripts/me3-dll-list.py docs/ci-gate-portability.tsv >/dev/null && grep -n \"er-inventory-sort\" scripts/me3-dll-list.py scripts/check-me3-dll-conflicts.py Cargo.toml | head")
+}
+
+test_python_reading_check_script_and_cargo_toml_is_allowed if {
+	not denied("cd /home/banon/projects/er-mods-rs && python3 -c \"import re\nfor f in ['docs/recon/rva-map-1162-to-1170.functions.tsv','scripts/me3-dll-list.py','scripts/check-me3-dll-conflicts.py','Cargo.toml']:\n  [print(f,l) for l in open(f) if 'er-inventory-sort' in l]\"; sed -n 1922,1990p crates/er-hook/src/lib.rs | grep \"pub unsafe fn\"")
+}
+
+test_build_word_as_grep_argument_is_allowed if {
+	not denied("grep -n cargo Cargo.toml | grep -v '#'")
+	not denied("cat scripts/check.sh | grep opa")
+}
+
+test_cargo_check_into_grep_is_still_denied if {
+	denied("cargo check -p er-quickload 2>&1 | grep -E 'error'")
+	denied("cd /home/banon/projects/er-mods-rs && cargo check -p er-quickload 2>&1 | grep -E 'error'")
+	denied("RUSTFLAGS=-Dwarnings cargo build 2>&1 | grep error")
+	denied("bash -c 'cargo build 2>&1 | grep error'")
+	denied("(cargo build 2>&1) | grep error")
+	denied("echo start; scripts/check-rust-build.sh | grep FAIL")
+	denied("python3 scripts/check-me3-dll-conflicts.py | grep FAIL")
+}
+
+# --- 2026-10-02 false positive: a grep in a sibling command does not read the build ------------
+#
+# The grep below reads a source file in its own `;`-separated command, before `cargo fmt` runs, and
+# `cargo fmt` is piped nowhere. The guard used to match a build verb and a matcher anywhere in the
+# whole line, so this was denied.
+
+test_grep_in_earlier_sibling_command_is_allowed if {
+	not denied("cd /home/banon/projects/er-mods-rs; sed -i 's/in this profile to see the X\"/in this profile to see the board\"/' crates/er-r3-view/src/imp.rs; grep -rn \"the X\\|an X\\| X \" crates/er-r3-view/src/imp.rs | grep -v \"X, Y\"; cargo fmt -p er-r3-view && python3 scripts/check-comment-caps.py crates/er-r3-view/src/board.rs")
+}
+
+test_grep_after_the_build_in_a_sibling_command_is_allowed if {
+	not denied("cargo build 2>&1 | tee build.log; grep -n error build.log")
+	not denied("cargo check && grep -n version Cargo.toml")
+	not denied("cargo build & grep -rn TODO src")
+}
+
+test_build_continued_onto_a_new_line_is_still_denied if {
+	denied("cargo build 2>&1 |\n  grep error")
+	denied("cargo build 2>&1 \\\n  | grep error")
+	denied("echo a && cargo build 2>&1 | tee log | grep error; echo done")
+}
+
+# --- 2026-10-02: a build-into-grep that is only quoted is prose ---------------------------------
+#
+# The hook driver that proved this policy through `scripts/cupcake-hook.sh` was denied while being
+# written: `cat > cases.sh <<'EOF'` whose body quotes the deny cases. Quoted operands and data
+# heredoc bodies are read through the shared decomposition, so their separators are not pipes.
+
+test_quoted_build_into_grep_is_allowed if {
+	not denied("git commit -m \"guard: deny cargo check 2>&1 | grep error\"")
+	not denied("echo 'cargo build | grep error' >> notes.txt")
+}
+
+test_data_heredoc_quoting_build_into_grep_is_allowed if {
+	not denied("cat > cases.sh <<'EOF'\nrun deny \"cargo check -p x 2>&1 | grep -E 'error'\"\nEOF\nbash cases.sh")
+}
+
+test_shell_read_heredoc_build_into_grep_is_still_denied if {
+	denied("bash <<'EOF'\ncargo check -p x 2>&1 | grep error\nEOF")
+}
+
+# `scripts/cupcake-hook.sh` turns every unquoted newline into `; `, so a pipe continued onto the
+# next line reaches the policy as `|;`. Measured through the hook on 2026-10-02: without this the
+# trailing-pipe case above passed under the interpreter and was allowed in production.
+test_pipe_continuation_as_the_hook_delivers_it_is_denied if {
+	denied("cargo build 2>&1 |;   grep error")
+	denied("cargo build 2>&1 | tee log |;   grep error")
+}
+
+test_or_after_the_build_is_still_not_a_pipe if {
+	not denied("cargo build ||; grep -n error build.log")
+}

@@ -26,8 +26,10 @@
 //! process, alongside the product's own `Present` hook, and `DrawList::add_text` takes a float
 //! alpha imgui blends for free. Reusing it costs one dependency and no stall.
 
+pub mod font_request;
 pub mod layout;
 pub mod releases;
+pub mod texture_request;
 
 #[cfg(windows)]
 mod overlay;

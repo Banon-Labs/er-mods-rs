@@ -39,11 +39,12 @@
 #     described in the commit that removes it is unwritable in the repo that
 #     enforces it".
 #
-#     Exempt by shape, not by intent: `cargo fmt` (whole-tree formatting is the
-#     point, and it compiles nothing), the non-building `cargo metadata`/`tree`/
-#     `--version`, a `-p`-scoped invocation however many crates it names, and the
-#     narrow non-executing TEXT positions every guard in this directory shares --
-#     a single non-chained bd command, or a git commit message.
+#     Only a `cargo` a shell would run counts: one in command position, in the
+#     command itself or in a `bash -c` payload, outside quoted operands and
+#     outside a heredoc body no shell reads. Exempt by shape, not by intent:
+#     `cargo fmt` (whole-tree formatting is the point, and it compiles nothing),
+#     the non-building `cargo metadata`/`tree`/`--version`, and a `-p`-scoped
+#     invocation however many crates it names.
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
@@ -51,109 +52,139 @@ package cupcake.policies.claude.require_scoped_cargo
 
 import rego.v1
 
+import data.cupcake.system.commands
+
 command := object.get(input.tool_input, "command", "")
 
-# Whitespace-normalized command. The live cupcake engine collapses unquoted
-# newlines to spaces before any policy runs while `opa test` sees the raw text;
-# normalizing here makes both behave identically. Same reasoning, and the same
-# builtin-only construction, as block_manual_pgrep's norm_command -- the engine
-# evaluates policies as wasm modules whose host provides no regex.replace or
-# sprintf.
-norm_command := concat(" ", [word |
-	some word in split(replace(replace(replace(command, "\t", " "), "\r", " "), "\n", " "), " ")
-	word != ""
-])
-
-# --- quote scrub -------------------------------------------------------------
-# Only the text-mention exemptions read this; detection scans the whole command
-# so nothing can be smuggled past the guard inside quotes.
-escapes_stripped := replace(replace(norm_command, `\"`, ""), `\'`, "")
-
-double_parts := split(escapes_stripped, `"`)
-
-outside_double := concat(" ", [double_parts[idx] |
-	some idx
-	double_parts[idx]
-	idx % 2 == 0
-])
-
-single_parts := split(outside_double, "'")
-
-unquoted_command := concat(" ", [single_parts[idx] |
-	some idx
-	single_parts[idx]
-	idx % 2 == 0
-])
-
 # --- detection ---------------------------------------------------------------
-# A `cargo` token at command start or after a shell separator -- quotes included,
-# so `bash -c 'cargo build'` is caught -- optionally preceded by any path prefix
-# ending in `/` (`~/.cargo/bin/cargo`), followed by a COMPILING subcommand.
-# `cargo xwin build` is the same shape with one word in between, hence the
-# optional `xwin`. The trailing class keeps `cargotest` from matching, and the
-# required whitespace after the subcommand keeps a path like `.cargo/registry`
-# from matching at all.
-cargo_build_pattern := "(^|[[:space:];|&('\"`])([^[:space:];|&('\"`]*/)?cargo[[:space:]]+(xwin[[:space:]]+)?(build|test|check|clippy|bench|doc)($|[^[:alnum:]_-])"
+# A `cargo` counts only where a shell would run it: in command position of a
+# statement, read from the executed decomposition in `.cupcake/system/commands.rego`.
+#
+# This used to be one regex over the whole command with quotes left in, so that
+# `bash -c 'cargo build'` was caught. It also caught every quoted mention: on
+# 2026-10-02 `git commit -m "..."` was denied because the message described a
+# `cargo build`, and the git-commit text exemption that was meant to cover that
+# shape gave up on any message holding a backtick, a parenthesis or a heredoc.
+#
+# The decomposition answers both halves without an exemption. A quoted operand has
+# its separators blanked, so the words inside it follow `git`, `echo` or `bd` and are
+# that command's operands, never a program. A shell wrapper's payload is decomposed
+# as an executed text of its own, so `bash -c 'cargo build'` still has `cargo` at
+# position 0. Command substitution keeps the raw text, so `$(cargo build)` still
+# reads `(` as a separator and is denied. A heredoc body that no shell reads is
+# skipped through `commands.data_heredoc_spans`, the same narrowing
+# `no_whole_check_sh` uses; a body fed to a shell keeps its words.
+#
+# Unquoted newlines arrive in production as `; ` -- `scripts/cupcake-hook.sh`
+# rewrites them before the engine sees the command -- while `opa test` sees the raw
+# text. Turning the newline into a separator here makes both read the same
+# statements. Newlines inside quotes were blanked by the decomposition already.
+executed_word_lists contains words if {
+	some text in commands.input_executed_texts
+	words := commands.command_slot_words(replace(replace(text, "\r", "\n"), "\n", " ; "))
+}
 
-cargo_build_invoked if {
-	regex.match(cargo_build_pattern, norm_command)
+# Compiling subcommands. `cargo fmt`, `metadata`, `tree` and `--version` are not in it.
+compiling_subcommand := {"build", "test", "check", "clippy", "bench", "doc"}
+
+# `cargo`, `~/.cargo/bin/cargo`, `/usr/bin/cargo`. Quote characters are trimmed
+# because the decomposition keeps them on the word (`"cargo" build` runs cargo),
+# and a leading backtick marks a command substitution the raw text kept whole.
+# Closing parentheses and braces are trimmed because the word split only cuts at
+# an opening `(`, so `(cd x && cargo check)` ends on the word `check)`.
+cargo_word(word) if bare_word(word) == "cargo"
+
+cargo_word(word) if endswith(bare_word(word), "/cargo")
+
+bare_word(word) := trim(word, "\"'`(){}")
+
+# Words that stand before a program without being one and that the shared slot
+# test does not know: a brace group, a negation, `time`, and `xargs`, whose next
+# word is the program it runs. Kept here rather than added to
+# `commands.command_slot_wrapper`, which every command-slot guard reads.
+extra_slot_prefix(word) if word in {"{", "!", "time", "xargs"}
+
+# The word at `index` is the program its statement runs.
+in_command_slot(words, index) if {
+	start := commands.command_slot_start(words, index)
+	count([position |
+		some position, _ in words
+		position >= start
+		position < index
+		not commands.command_slot_wrapper_at(words, position)
+		not extra_slot_prefix(words[position])
+	]) == 0
+}
+
+# A backtick opening the word is a command substitution, which runs whatever
+# precedes it in the text.
+in_command_slot(words, index) if startswith(trim_left(words[index], "\"'"), "`")
+
+# The words after `cargo` up to the end of its statement, and the part of those
+# before a bare `--`: what follows `--` belongs to the test binary or the tool cargo
+# runs, so a `--all` there is not cargo's.
+invocation_args(words, index) := args if {
+	ends := [position |
+		some position, word in words
+		position > index
+		word == commands.command_slot_separator
+	]
+	end := min(array.concat(ends, [count(words)]))
+	all_args := array.slice(words, index + 1, end)
+	dashdash := [position |
+		some position, word in all_args
+		word == "--"
+	]
+	args := array.slice(all_args, 0, min(array.concat(dashdash, [count(all_args)])))
+}
+
+# The subcommand is the first argument that is not an option, a `+toolchain`, or
+# the `xwin` of `cargo xwin build`.
+subcommand(args) := sub if {
+	positional := [word |
+		some word in args
+		not startswith(word, "-")
+		not startswith(word, "+")
+		word != "xwin"
+	]
+	sub := bare_word(positional[0])
 }
 
 # `-p`/`--package` in any accepted spelling: `-p x`, `-p=x`, `--package x`,
-# `--package=x`. A crate scope anywhere in the command satisfies the rule --
-# naming several crates is still naming them.
-has_package_flag if {
-	regex.match("(^|[[:space:]])(-p|--package)([[:space:]]|=)", norm_command)
-}
+# `--package=x`. Naming several crates is still naming them.
+package_flag(word) if bare_word(word) in {"-p", "--package"}
+
+package_flag(word) if startswith(word, "-p=")
+
+package_flag(word) if startswith(word, "--package=")
 
 # `--workspace`/`--all` are the explicit spelling of the thing being blocked, so
 # they never count as a scope even when paired with a `-p`.
-explicit_whole_workspace if {
-	regex.match("(^|[[:space:]])(--workspace|--all)([[:space:]]|$)", norm_command)
+whole_workspace_flag(word) if bare_word(word) in {"--workspace", "--all"}
+
+unscoped_args(args) if {
+	count([word |
+		some word in args
+		package_flag(word)
+	]) == 0
+}
+
+unscoped_args(args) if {
+	some word in args
+	whole_workspace_flag(word)
 }
 
 unscoped_cargo if {
-	cargo_build_invoked
-	not has_package_flag
+	some words in executed_word_lists
+	spans := commands.data_heredoc_spans(words)
+	some index, word in words
+	cargo_word(word)
+	not commands.index_inside(spans, index)
+	in_command_slot(words, index)
+	args := invocation_args(words, index)
+	subcommand(args) in compiling_subcommand
+	unscoped_args(args)
 }
-
-unscoped_cargo if {
-	cargo_build_invoked
-	explicit_whole_workspace
-}
-
-# --- text-mention exemptions -------------------------------------------------
-# Identical in shape and rationale to block_manual_pgrep's: bd records text and
-# git records a message, so a single non-chained invocation whose token sits
-# entirely inside quoted text is documentation, not a build. Anything chained,
-# substituted, or wrapped in `bash -c` fails the shape and stays denied.
-text_mention_only if {
-	bd_text_command
-	not regex.match(cargo_build_pattern, unquoted_command)
-}
-
-text_mention_only if {
-	git_commit_text_command
-	not regex.match(cargo_build_pattern, unquoted_command)
-}
-
-bd_text_command if {
-	input.tool_name == "Bash"
-	regex.match(`^[[:space:]]*((\$HOME|\$\{HOME\}|~|/home/[[:alnum:]._-]+|/root|/Users/[[:alnum:]._-]+)/\.local/bin/)?bd[[:space:]]+(create|update|comment|comments|remember|close)([[:space:]]|$)`, norm_command)
-	not regex.match(`[;|&()<>\x60]`, unquoted_command)
-	not contains(command, "$(")
-	not contains(command, "`")
-}
-
-git_commit_text_command if {
-	input.tool_name == "Bash"
-	not contains(command, "$(")
-	not contains(command, "`")
-	not contains(command, "<<")
-	regex.match(git_commit_only_pattern, unquoted_command)
-}
-
-git_commit_only_pattern := `^[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:];|&()<>]+)?[[:space:]]+(add|commit)[^;|&()<>]*(&&[[:space:]]*git([[:space:]]+-C[[:space:]]+[^[:space:];|&()<>]+)?[[:space:]]+(add|commit)[^;|&()<>]*)*$`
 
 # --- decision ----------------------------------------------------------------
 
@@ -163,7 +194,6 @@ deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	unscoped_cargo
-	not text_mention_only
 
 	decision := {
 		"rule_id": "ER-EFFECTS-REQUIRE-SCOPED-CARGO",

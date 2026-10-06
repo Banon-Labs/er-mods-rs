@@ -157,6 +157,7 @@ if command -v cargo-xwin >/dev/null 2>&1; then
 		er-npc-possess:er_npc_possess
 		er-player-name-filter:er_player_name_filter
 		er-quit-menu:er_quit_menu
+		er-r3-view:er_r3_view
 		er-reload-trace:er_reload_trace
 		er-save-disable:er_save_disable
 		er-save-picker:er_save_picker
@@ -303,6 +304,7 @@ if command -v cargo-xwin >/dev/null 2>&1 && command -v wine >/dev/null 2>&1; the
 		-p er-quit-menu-core -p er-quit-menu \
 		-p er-invasion-path -p er-invasion-warp -p er-invasion-warp-core \
 		-p er-loading-portrait-core -p er-better-refills -p er-build-import-runtime \
+		-p er-r3-view \
 		--manifest-path "$repo_root/Cargo.toml" --target "$target"
 
 	# er-game-base's `pgd` module is `#[cfg(all(windows, feature = "game-types"))]`, and

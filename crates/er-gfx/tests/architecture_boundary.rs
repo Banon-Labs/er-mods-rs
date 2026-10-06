@@ -143,6 +143,10 @@ fn the_direct_codec_consumers_match_the_decision_evidence() {
         // than a new coupling shape, and it went when the fork was deleted -- so the edge closed
         // by deletion rather than by the extraction bd er-effects-rs-ejfl measures, which is still
         // undone and is still what a second product-shaped shell would need.
+        // Added 2026-10-02: the R3 weapon board draws in the menu font, converted from the
+        // `DefineFont3` in `font.gfx` by `er_gfx::ttf::menu_font_ttf`. It reads one tag and edits
+        // no movie.
+        "er-r3-view".to_owned(),
     ]);
     if workspace_root()
         .join("crates/er-scaleform-hooks/Cargo.toml")

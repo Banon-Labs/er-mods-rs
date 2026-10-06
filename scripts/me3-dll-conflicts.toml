@@ -1122,3 +1122,115 @@ whose absence is only discovered when it is already too late to add it."""
 # `er-quit-menu` links `er-quit-menu-core`, whose save flow reaches `er_save_suppress` too, so the
 # merged shell inherits this pair the way it inherited the `er-reload-trace` one. It is declared
 # above, at `er-quit-menu` X `er-save-disable`.
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+mechanism = "hook-union"
+handler_a = "quit_menu_window_job_run_hook"
+handler_b = "run_hook"
+reason = """Both detour `MenuWindowJob::Run`: the product through \
+`er_quit_menu_core::menu_pump::install_quit_menu_window_run_hook` (`register_shared_hook`), \
+er-r3-view to find the item list's window, whose left panel R3's fourth view fades. er-r3-view \
+registers through `er_hook::register_shared_hook` with a `UnionFn` handler that calls its slot \
+first, so whichever registers second chains onto the one MinHook instance. Same four-integer \
+signature the product's handler already uses. er-r3-view names the address as a literal \
+(`MENU_WINDOW_JOB_RUN_RVA_1162`) rather than er-title-flow's constant, which is why this row is \
+written by hand: `check-shared-hook-rvas.py` did not pair the two spellings."""
+evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
+MENU_WINDOW_JOB_RUN_RVA_1162, run_hook, &RUN_ORIG)`); crates/er-quit-menu-core/src/menu_pump.rs \
+`install_quit_menu_window_run_hook`; docs/recon/rva-map-1162-to-1170.needed-verified.tsv \
+`0x1407ad1c0 0x1407ae040 IDENTICAL-WHOLE`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_title_flow::PAB_NODE_UPDATE_RVA / MenuWindowJob::Run (0x7ad1c0; 1.17 0x7ae040)"
+mechanism = "hook-union"
+handler_a = "quit_menu_window_job_run_hook"
+handler_b = "run_hook"
+reason = """The standalone quit-menu shell links the same `er-quit-menu-core` detour as the \
+product, so it shares `MenuWindowJob::Run` with er-r3-view on the same terms: both register \
+through `er_hook::register_shared_hook` and chain on one MinHook instance."""
+evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/src/menu_pump.rs \
+`install_quit_menu_window_run_hook`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "title_scaleform_file_open_observer_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """Both detour the Scaleform loader's file open. er-r3-view only reads the file the chain \
+returns for `font.gfx`, to copy the game's menu font for its R3 board; it never replaces a file. \
+Both register through `er_hook::register_shared_hook` with `UnionFn` handlers that call their slot \
+first, so they chain on one MinHook instance."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-quickload/src/experiments/startup_hooks/loading_cover/profile_table_gfx_files.rs."""
+
+[[shared]]
+a = "er-armament-icons"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "file_open_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """Both observe the Scaleform loader's file open through `register_shared_hook` and call \
+their slot first; er-r3-view copies `font.gfx` after the chain returns and changes nothing."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-armament-icons/src/gfx_equip_hook.rs `file_open_hook`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_game_base::rva::TITLE_SCALEFORM_FILE_OPEN_RVA"
+mechanism = "hook-union"
+handler_a = "quit_menu_scaleform_file_open_hook"
+handler_b = "menu_font_file_open_hook"
+reason = """er-quit-menu serves its Quit tab movies from this file open and er-r3-view only reads \
+the returned `font.gfx`; both register through `register_shared_hook` and chain on one MinHook \
+instance, so neither displaces the other."""
+evidence = """crates/er-r3-view/src/menu_font.rs `install`; \
+crates/er-quit-menu-core/src/gfx_swap.rs `register_shared_hook(addr, \
+quit_menu_scaleform_file_open_hook, ...)`."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-r3-view"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+mechanism = "hook-union"
+handler_a = "menu_job_emit_result_hook"
+handler_b = "emit_result_hook"
+reason = """Both observe `CS::MenuJob::EmitResult`: the product's save flow through \
+`er_quit_menu_core::save_flow_boxes`, er-r3-view to hide its R3 board on the frame the item list \
+answers. Both handlers only read their arguments and always call their slot, and both register \
+through the hook union, so they chain on one MinHook instance. er-r3-view names the address as \
+a literal (`MENU_JOB_EMIT_RESULT_RVA_1162`), which is why this row is written by hand."""
+evidence = """crates/er-r3-view/src/imp.rs `install` (`register_shared_hook(start + \
+MENU_JOB_EMIT_RESULT_RVA_1162, emit_result_hook, ...)`); crates/er-quit-menu-core/src/\
+save_flow_boxes.rs `install_menu_job_emit_result_hook`."""
+
+[[shared]]
+a = "er-quit-menu"
+b = "er-r3-view"
+target = "er_title_flow::MENU_JOB_EMIT_RESULT_RVA / CS::MenuJob::EmitResult (0x746e80)"
+mechanism = "hook-union"
+handler_a = "menu_job_emit_result_hook"
+handler_b = "emit_result_hook"
+reason = """The standalone quit-menu shell links the same save-flow observer as the product, so it \
+shares `EmitResult` with er-r3-view on the same terms: observe-only handlers that call their slot, \
+registered through the hook union."""
+evidence = """crates/er-r3-view/src/imp.rs `install`; crates/er-quit-menu-core/src/\
+save_game_row.rs calls `install_menu_job_emit_result_hook`."""
+
+[[conflict]]
+a = "er-r3-view"
+b = "er-reload-trace"
+kind = "hook-collision"
+reason = """The tracer claims `MENU_JOB_EMIT_RESULT_RVA` (0x746e80) as a bare `rva:` in its own \
+HookSpec table with its own MinHook instance, so whichever installs second finds a `jmp` where \
+the prologue should be. er-r3-view hides its R3 board from that function; without it the board \
+stays up through the item list's native close. Same mechanism as the er-quit-menu pair."""
+evidence = "crates/er-reload-trace/src/lib.rs:780; crates/er-r3-view/src/imp.rs `install`"

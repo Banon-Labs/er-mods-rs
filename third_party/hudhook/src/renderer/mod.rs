@@ -29,3 +29,4 @@ pub(crate) use backend::dx9::D3D9RenderEngine;
 #[cfg(feature = "opengl3")]
 pub(crate) use backend::opengl3::OpenGl3RenderEngine;
 pub(crate) use pipeline::Pipeline;
+pub use pipeline::{set_before_frame_hook, BeforeFrameHook};

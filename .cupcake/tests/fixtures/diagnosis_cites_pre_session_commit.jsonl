@@ -1,0 +1,4 @@
+{"type": "user", "timestamp": "@@AFTER_HEAD@@", "message": {"role": "user", "content": [{"type": "text", "text": "the cargo guard blocked a multi-line command again"}]}}
+{"type": "assistant", "timestamp": "@@AFTER_HEAD@@", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "id": "t1", "input": {"command": "git log -1 --oneline"}}]}}
+{"type": "user", "timestamp": "@@AFTER_HEAD@@", "message": {"role": "user", "content": [{"tool_use_id": "t1", "type": "tool_result", "content": [{"type": "text", "text": "@@HEAD@@ an older change"}]}]}}
+{"type": "assistant", "timestamp": "@@AFTER_HEAD@@", "message": {"role": "assistant", "content": [{"type": "text", "text": "The cause is the cargo guard reading a backslash at the end of a line as its own command, and it came in before @@HEAD@@."}]}}

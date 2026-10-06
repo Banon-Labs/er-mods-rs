@@ -413,8 +413,276 @@ def table_registered_sites(crate_dir: Path, handler: str) -> list[str]:
     return found
 
 
-def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
-    """Where `handler` is union-registered, and where it is bare-hooked, as file:line lists."""
+# The dependency tables a manifest can carry a `path =` entry in. Target-specific tables
+# (`[target.'cfg(windows)'.dependencies]`) are read too, because a Windows-only shell keeps its
+# whole hook stack there.
+DEPENDENCY_TABLES = ("dependencies", "build-dependencies")
+
+
+def path_dependency_dirs(crate_dir: Path, root: Path = REPO_ROOT) -> list[Path]:
+    """`crate_dir` followed by every workspace crate it reaches through `path =` dependencies.
+
+    Why a shell's handler has to be searched past its own directory: `er-quickload` and
+    `er-quit-menu` are thin cdylibs whose `quit_menu_window_job_run_hook` is defined and
+    union-registered in their shared path dependency `er-quit-menu-core`. Scanning only the
+    shell's directory reported "never reaches a union registrar" for a handler that plainly
+    does -- a false red on a `[[shared]]` row that is true.
+
+    Transitive, breadth-first, each crate once. Only directories inside `root` with a
+    `Cargo.toml` count, and anything under `third_party` is skipped: an out-of-tree sibling such
+    as `fromsoftware-rs` is not this workspace's code, and a vendored crate is not ours to prove.
+    A manifest that cannot be read or parsed contributes no dependencies rather than stopping the
+    gate, since the shell itself is still scanned.
+    """
+    root = root.resolve()
+    start = crate_dir.resolve()
+    ordered: list[Path] = [start]
+    seen = {start}
+    queue = [start]
+    while queue:
+        current = queue.pop(0)
+        try:
+            data = tomllib.loads((current / "Cargo.toml").read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            continue
+        tables = [data.get(name, {}) for name in DEPENDENCY_TABLES]
+        for target in data.get("target", {}).values():
+            if isinstance(target, dict):
+                tables += [target.get(name, {}) for name in DEPENDENCY_TABLES]
+        for table in tables:
+            if not isinstance(table, dict):
+                continue
+            for spec in table.values():
+                if not isinstance(spec, dict) or not isinstance(spec.get("path"), str):
+                    continue
+                dependency = (current / spec["path"]).resolve()
+                if dependency in seen or not (dependency / "Cargo.toml").is_file():
+                    continue
+                try:
+                    inside = dependency.relative_to(root)
+                except ValueError:
+                    continue
+                if "third_party" in inside.parts:
+                    continue
+                seen.add(dependency)
+                ordered.append(dependency)
+                queue.append(dependency)
+    return ordered
+
+
+# The head of a Rust fn definition, up to its opening parenthesis. Generics are skipped loosely;
+# a `where` clause and the return type sit between the parameters and the body and are stepped over.
+FN_HEAD = re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*(?:<[^(){};]*>)?\s*\(")
+
+
+def _balanced_end(text: str, start: int, opener: str, closer: str) -> int:
+    """Index just past the `closer` that balances the `opener` at `start`, or -1."""
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == opener:
+            depth += 1
+        elif char == closer:
+            depth -= 1
+            if depth == 0:
+                return index + 1
+    return -1
+
+
+def rust_functions(text: str) -> list[tuple[str, str, str]]:
+    """`[(name, parameter text, body text)]` for every fn with a body in comment-blanked source.
+
+    A declaration ending in `;` (a trait method, an `extern` block entry) has no body and is skipped.
+    """
+    found: list[tuple[str, str, str]] = []
+    for match in FN_HEAD.finditer(text):
+        open_paren = match.end() - 1
+        close_paren = _balanced_end(text, open_paren, "(", ")")
+        if close_paren < 0:
+            continue
+        brace = -1
+        for index in range(close_paren, len(text)):
+            if text[index] == ";":
+                break
+            if text[index] == "{":
+                brace = index
+                break
+        if brace < 0:
+            continue
+        end = _balanced_end(text, brace, "{", "}")
+        if end < 0:
+            continue
+        found.append((match.group(1), text[open_paren + 1 : close_paren - 1], text[brace:end]))
+    return found
+
+
+# A free-function call: an optional lowercase module path, the name, an optional turbofish, an
+# opening parenthesis. Method calls (`.name(`) and associated functions (`MhHook::new(`) are not
+# free-function calls, and reading them as one made every `Foo::new(` in the tree a call to any
+# fn named `new` -- which turned the whole workspace into "bare wrappers". The `fn name(` that
+# defines a fn is not a call either.
+CALL_NAME = re.compile(
+    r"(?<![.:\w])(?<!fn )(?:[a-z_]\w*::)*([A-Za-z_]\w*)\s*(?:::<[^>]*>)?\s*\("
+)
+
+
+def called_names(text: str) -> set[str]:
+    """Every free-function name `text` calls."""
+    return set(CALL_NAME.findall(text))
+
+
+WrapperView = dict[Path, tuple[set[str], set[str]]]
+_WRAPPER_CACHE: dict[tuple[Path, ...], WrapperView] = {}
+
+
+def registrar_wrappers(dirs: list[Path]) -> WrapperView:
+    """`{crate dir: (union wrappers, bare wrappers)}`: the fns that register a detour they are
+    handed, as names a call written in that crate resolves to.
+
+    Why. `er-quit-menu-core` installs `menu_job_emit_result_hook` through
+    `mh_install_hook_once(..., handler, &ORIG, ...)`, and that helper is what calls
+    `er_hook::register_union_hook` on its own parameter. The handler mention and the registrar sit
+    in different functions, so the proximity rule alone reported "never reaches a union registrar"
+    for a handler that does -- a false red on a true `[[shared]]` row.
+
+    The rule. A fn whose body calls a union registrar or a union wrapper, and no bare hook and no
+    bare wrapper, is a union wrapper. A fn whose body calls a bare hook or a bare wrapper is a bare
+    wrapper whatever else it calls, so a mixed helper never counts as union. Iterated to a
+    fixpoint, so wrappers of wrappers resolve.
+
+    Only fns that take parameters qualify. A registrar is handed the detour it installs; a
+    parameterless `install_foo_hook()` registers one fixed handler, and crediting every call to it
+    as a registration would turn any handler mentioned beside it green.
+
+    Name resolution. A call resolves to the one definition of that name in the calling crate, or,
+    when the calling crate has none, to the one definition anywhere in `dirs`. Anything else --
+    two definitions in one crate, or several elsewhere and none here -- resolves to nothing and
+    infers nothing. That is what keeps `er-quickload`'s own `mh_install_hook_once` in `mh.rs` from
+    shadowing `er-quit-menu-core`'s. The registrars themselves are never wrappers: `er-hook`
+    implements `register_union_hook` on top of `MH_CreateHook`, and classifying it by its body
+    would make the union a bare hook. Comments and strings are blanked first, for the reason
+    `crate_hook_mechanism` gives.
+    """
+    key = tuple(dirs)
+    if key not in _WRAPPER_CACHE:
+        _WRAPPER_CACHE[key] = _registrar_wrappers(dirs)
+    return _WRAPPER_CACHE[key]
+
+
+def _registrar_wrappers(dirs: list[Path]) -> WrapperView:
+    # One entry per fn with parameters:
+    # (crate dir, name, calls a bare hook directly, calls a union registrar directly, names called)
+    functions: list[tuple[Path, str, bool, bool, set[str]]] = []
+    in_crate: dict[tuple[Path, str], int] = {}
+    anywhere: dict[str, int] = {}
+    for directory in dirs:
+        for source in sorted(directory.rglob("*.rs")):
+            if "target" in source.parts:
+                continue
+            try:
+                text = code_only(source.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            for name, params, body in rust_functions(text):
+                in_crate[(directory, name)] = in_crate.get((directory, name), 0) + 1
+                anywhere[name] = anywhere.get(name, 0) + 1
+                if params.strip() and not UNION_REGISTER.search(name):
+                    functions.append(
+                        (
+                            directory,
+                            name,
+                            bool(BARE_HOOK.search(body)),
+                            bool(UNION_REGISTER.search(body)),
+                            called_names(body),
+                        )
+                    )
+    by_key = {(directory, name): None for directory, name, *_ in functions}
+    owner_anywhere = {name: directory for directory, name, *_ in functions}
+
+    def resolve(caller: Path, name: str) -> tuple[Path, str] | None:
+        here = in_crate.get((caller, name), 0)
+        if here == 1:
+            target = (caller, name)
+        elif here == 0 and anywhere.get(name, 0) == 1 and name in owner_anywhere:
+            target = (owner_anywhere[name], name)
+        else:
+            return None
+        return target if target in by_key else None
+
+    resolved_calls = [
+        (directory, name, direct_bare, direct_union,
+         {target for call in calls if (target := resolve(directory, call))})
+        for directory, name, direct_bare, direct_union, calls in functions
+    ]
+    union: set[tuple[Path, str]] = set()
+    bare: set[tuple[Path, str]] = set()
+    while True:
+        next_union: set[tuple[Path, str]] = set()
+        next_bare: set[tuple[Path, str]] = set()
+        for directory, name, direct_bare, direct_union, targets in resolved_calls:
+            if in_crate[(directory, name)] != 1:
+                continue
+            if direct_bare or not targets.isdisjoint(bare):
+                next_bare.add((directory, name))
+            elif direct_union or not targets.isdisjoint(union):
+                next_union.add((directory, name))
+        if next_union == union and next_bare == bare:
+            break
+        union, bare = next_union, next_bare
+    view: WrapperView = {}
+    names = {name for _, name, *_ in functions}
+    for directory in dirs:
+        union_names: set[str] = set()
+        bare_names: set[str] = set()
+        for name in names:
+            target = resolve(directory, name)
+            if target in union:
+                union_names.add(name)
+            elif target in bare:
+                bare_names.add(name)
+        view[directory] = (union_names, bare_names)
+    return view
+
+
+def handler_sites(
+    crate_dir: Path, handler: str, root: Path = REPO_ROOT
+) -> tuple[list[str], list[str]]:
+    """Where `handler` is union-registered, and where it is bare-hooked, as file:line lists --
+    across the shell crate and every workspace crate it depends on by path.
+
+    A bare-hook site for the handler in any of those crates is still a failure: a dependency that
+    installs the handler on a private MinHook puts that private instance into the shell's DLL just
+    as surely as the shell's own code would.
+    """
+    dirs = path_dependency_dirs(crate_dir, root)
+    wrappers = registrar_wrappers(dirs)
+    unioned: list[str] = []
+    bare: list[str] = []
+    for directory in dirs:
+        found_unioned, found_bare = _proximity_sites(directory, handler, *wrappers[directory])
+        unioned += found_unioned
+        bare += found_bare
+    # Last resort, and only when the proximity rule found the handler neither way in any crate: a
+    # table-driven registrant in a crate that provably owns no private MinHook instance. Consulted
+    # after every crate's scan so a handler with a real bare-hook site keeps that finding, and
+    # judged per crate, because the inference rests on that one crate having no bare hook.
+    if not unioned and not bare:
+        for directory in dirs:
+            unioned += table_registered_sites(directory, handler)
+    return unioned, bare
+
+
+def _proximity_sites(
+    crate_dir: Path,
+    handler: str,
+    union_wrappers: set[str] | frozenset[str] = frozenset(),
+    bare_wrappers: set[str] | frozenset[str] = frozenset(),
+) -> tuple[list[str], list[str]]:
+    """Where `handler` is union-registered, and where it is bare-hooked, within one crate.
+
+    `union_wrappers` and `bare_wrappers` are the helpers `registrar_wrappers` found: a handler
+    passed to one within the window counts the way that helper's body does.
+    """
     unioned: list[str] = []
     bare: list[str] = []
     symbol = re.compile(rf"\b{re.escape(handler)}\b")
@@ -438,15 +706,11 @@ def handler_sites(crate_dir: Path, handler: str) -> tuple[list[str], list[str]]:
                 l for l in lines[low:high] if not l.strip().startswith(("//", "*"))
             )
             where = f"{relative(source)}:{index + 1}"
-            if UNION_REGISTER.search(window):
+            calls = called_names(window) if union_wrappers or bare_wrappers else set()
+            if UNION_REGISTER.search(window) or not calls.isdisjoint(union_wrappers):
                 unioned.append(where)
-            if BARE_HOOK.search(window):
+            if BARE_HOOK.search(window) or not calls.isdisjoint(bare_wrappers):
                 bare.append(where)
-    # Last resort, and only when the proximity rule found the handler neither way: a table-driven
-    # registrant in a crate that provably owns no private MinHook instance. Consulted after the
-    # loop so a handler with a real bare-hook site keeps that finding.
-    if not unioned and not bare:
-        unioned += table_registered_sites(crate_dir, handler)
     return unioned, bare
 
 
@@ -609,6 +873,133 @@ def selftest() -> int:
             "...and ONE bare hook anywhere in the crate withdraws it",
             not withdrawn and not still_bare,
         )
+
+    # A handler that lives in a path dependency (2026-10-02). `er-quickload` and `er-quit-menu`
+    # take `quit_menu_window_job_run_hook` from `er-quit-menu-core`, so a scan of the shell's own
+    # directory found nothing and two true `[[shared]]` rows failed.
+    with tempfile.TemporaryDirectory() as raw:
+        workspace = Path(raw)
+        shell = workspace / "crates" / "shell"
+        core = workspace / "crates" / "core"
+        inner = workspace / "crates" / "inner"
+        vendored = workspace / "third_party" / "vendored"
+        for crate in (shell, core, inner, vendored):
+            (crate / "src").mkdir(parents=True)
+        (shell / "Cargo.toml").write_text(
+            '[package]\nname = "shell"\n\n'
+            "[target.'cfg(windows)'.dependencies]\n"
+            'core = { path = "../core" }\n'
+            'vendored = { path = "../../third_party/vendored" }\n',
+            encoding="utf-8",
+        )
+        (shell / "src" / "lib.rs").write_text("pub use core::go;\n", encoding="utf-8")
+        (core / "Cargo.toml").write_text(
+            '[package]\nname = "core"\n\n[dependencies]\ninner = { path = "../inner" }\n',
+            encoding="utf-8",
+        )
+        (inner / "Cargo.toml").write_text('[package]\nname = "inner"\n', encoding="utf-8")
+        (vendored / "Cargo.toml").write_text('[package]\nname = "vendored"\n', encoding="utf-8")
+        (core / "src" / "lib.rs").write_text(
+            "pub fn go() {\n    er_hook::register_shared_hook(\n        addr,\n"
+            "        dep_detour,\n        &ORIG,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        reached = path_dependency_dirs(shell, workspace)
+        case(
+            "path dependencies are followed transitively, and third_party is skipped",
+            reached == [shell.resolve(), core.resolve(), inner.resolve()],
+        )
+        # Non-vacuity: the shell's own directory must not already see the handler.
+        shell_only, _ = _proximity_sites(shell, "dep_detour")
+        case("...and the shell's own directory alone cannot see the handler", shell_only == [])
+        unioned, bare = handler_sites(shell, "dep_detour", workspace)
+        case("a handler union-registered in a path dependency passes", bool(unioned) and not bare)
+        (inner / "src" / "lib.rs").write_text(
+            "fn go() {\n    let h = MhHook::new(\n        addr,\n"
+            "        dep_detour as *mut c_void,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        unioned, bare = handler_sites(shell, "dep_detour", workspace)
+        case("a handler bare-hooked in a transitive dependency still fails", bool(bare))
+        (vendored / "src" / "lib.rs").write_text(
+            "fn go() { register_union_hook(addr, vendored_detour, &ORIG); }\n", encoding="utf-8"
+        )
+        unioned, _ = handler_sites(shell, "vendored_detour", workspace)
+        case("a third_party crate is never credited with a registration", unioned == [])
+
+    # A handler registered through a wrapper (2026-10-02). `er-quit-menu-core` hands
+    # `menu_job_emit_result_hook` to `mh_install_hook_once`, whose body is what calls
+    # `register_union_hook` on its parameter, so no registrar sits near the handler mention.
+    with tempfile.TemporaryDirectory() as raw:
+        workspace = Path(raw)
+        shell = workspace / "crates" / "shell"
+        core = workspace / "crates" / "core"
+        for crate in (shell, core):
+            (crate / "src").mkdir(parents=True)
+        (shell / "Cargo.toml").write_text(
+            '[package]\nname = "shell"\n\n[dependencies]\ncore = { path = "../core" }\n',
+            encoding="utf-8",
+        )
+        (core / "Cargo.toml").write_text('[package]\nname = "core"\n', encoding="utf-8")
+        (core / "src" / "keyboard.rs").write_text(
+            "pub(crate) fn install_once(\n    addr: usize,\n    handler: *mut c_void,\n"
+            "    orig: &'static AtomicUsize,\n) -> bool {\n"
+            "    let f = unsafe { transmute(handler) };\n"
+            "    match unsafe { er_hook::register_union_hook(addr, f, orig) } {\n"
+            "        Ok(()) => true,\n        Err(_) => false,\n    }\n}\n"
+            "pub(crate) fn install_layered(addr: usize, handler: *mut c_void) -> bool {\n"
+            "    install_once(addr, handler, &ORIG)\n}\n"
+            "pub(crate) fn install_private(addr: usize, handler: *mut c_void) {\n"
+            "    let h = MhHook::new(addr as *mut _, handler);\n}\n"
+            "pub(crate) fn install_mixed(addr: usize, handler: *mut c_void) {\n"
+            "    install_private(addr, handler);\n    install_once(addr, handler, &ORIG);\n}\n"
+            "pub fn install_fixed() {\n    install_once(1, fixed_detour as *mut c_void, &ORIG);\n}\n",
+            encoding="utf-8",
+        )
+        # The shell defines its own, bare, `install_once`. A call written in `core` still reaches
+        # `core`'s -- the shape of `er-quickload`'s `mh.rs` beside `er-quit-menu-core`'s helper.
+        (shell / "src" / "mh.rs").write_text(
+            "pub fn install_once(addr: usize, handler: *mut c_void) {\n"
+            "    let h = MhHook::new(addr as *mut _, handler);\n}\n",
+            encoding="utf-8",
+        )
+        view = registrar_wrappers(path_dependency_dirs(shell, workspace))
+        union_wrappers, bare_wrappers = view[core.resolve()]
+        case("a same-named helper in another crate does not shadow the caller's own",
+             "install_once" in union_wrappers and "install_once" in view[shell.resolve()][1])
+        case("a fn that union-registers its parameter is a union wrapper",
+             "install_once" in union_wrappers)
+        case("a wrapper of a union wrapper is a union wrapper", "install_layered" in union_wrappers)
+        case("a fn that bare-hooks is a bare wrapper", "install_private" in bare_wrappers)
+        case("a fn calling both kinds is bare, never union",
+             "install_mixed" in bare_wrappers and "install_mixed" not in union_wrappers)
+        case("a parameterless installer is no wrapper",
+             "install_fixed" not in union_wrappers | bare_wrappers)
+        # One file each, so no handler's window reaches another fixture's call.
+        (core / "src" / "emit.rs").write_text(
+            "pub fn install_emit() {\n    install_once(\n        addr,\n"
+            "        union_wrapped_detour as *mut c_void,\n        &ORIG,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        (core / "src" / "deep.rs").write_text(
+            "pub fn install_deep() {\n    install_layered(addr, layered_detour as *mut c_void);\n}\n",
+            encoding="utf-8",
+        )
+        (core / "src" / "private.rs").write_text(
+            "pub fn install_bare() {\n    install_private(\n        addr,\n"
+            "        bare_wrapped_detour as *mut c_void,\n    );\n}\n",
+            encoding="utf-8",
+        )
+        # Non-vacuity: without the wrapper rule, the proximity scan cannot see the registration.
+        plain, _ = _proximity_sites(core, "union_wrapped_detour")
+        case("...and the proximity rule alone misses the wrapped registration", plain == [])
+        unioned, bare = handler_sites(shell, "union_wrapped_detour", workspace)
+        case("a handler registered through a union wrapper passes", bool(unioned) and not bare)
+        unioned, bare = handler_sites(shell, "layered_detour", workspace)
+        case("a handler registered through a wrapper of a wrapper passes",
+             bool(unioned) and not bare)
+        unioned, bare = handler_sites(shell, "bare_wrapped_detour", workspace)
+        case("a handler installed through a bare wrapper fails", bool(bare) and not unioned)
 
     # ------------------------------------------------------------------ The value key
     # the control this fix exists for, and the one address in this tree that proves it. 0xb0d400

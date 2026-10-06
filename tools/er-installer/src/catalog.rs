@@ -334,6 +334,19 @@ pub const CATALOG: &[Mod] = &[
         config: Some("er-quit-menu.toml"),
     },
     Mod {
+        package: "er-r3-view",
+        artifact: "er_r3_view.dll",
+        label: "Weapon board in the item list",
+        blurb: "R3 in the equipment item list gains a fourth view: a full-screen board of what makes the weapon good -- top infusions, gear with synergy and how its motion values compare. Misericorde only so far.",
+        category: "cosmetic",
+        audience: "player",
+        default_on: false,
+        needs_seamless: false,
+        caution: None,
+        included_in: &[],
+        config: None,
+    },
+    Mod {
         package: "er-refill-all",
         artifact: "er_refill_all.dll",
         label: "Refill all / refill none",
@@ -480,5 +493,11 @@ pub const CONFLICTS: &[Conflict] = &[
         b: "er-reload-trace",
         kind: "diagnostic-drive",
         explanation: "a development tool that drives menus the other one owns",
+    },
+    Conflict {
+        a: "er-r3-view",
+        b: "er-reload-trace",
+        kind: "hook-collision",
+        explanation: "both change the same piece of the game's code, and whichever loads second wins silently -- nothing crashes and nothing says so",
     },
 ];

@@ -245,6 +245,8 @@ portable	-	gen-installer-catalog.py --selftest	source/AST/text analysis only	pro
 portable	-	gen-installer-catalog.py --check	source/AST/text analysis only	product
 portable	-	gen-installer-settings.py --selftest	source/AST/text analysis only	product
 portable	-	gen-installer-settings.py --check	source/AST/text analysis only	product
+portable	-	gen-r3-weapon-boards.py --selftest	text rules on inline fixtures; reads no game data	product
+partial	game-install	gen-r3-weapon-boards.py --check	body and repository sources still compared; prints which data files (regulation.bin, the planner cache) it could not compare	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product
 portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses
@@ -269,6 +271,7 @@ blocked	minhook	check-committed-compiles.sh --selftest	compiles the workspace; e
 blocked	minhook	check-committed-compiles.sh	compiles the workspace; er-hook needs vendor/minhook	cargo-build
 portable	-	check-git-hooks-installed.sh --selftest	source/AST/text analysis only	suite
 blocked	git-hooks	check-git-hooks-installed.sh	asserts THIS clone's hooks; a fresh checkout has only *.sample	suite
+portable	-	test-precommit-fmt-scope.py	drives scripts/hooks/pre-commit in a throwaway git repo; needs cargo and rustfmt	suite
 portable	-	test-check-config-guard.sh	source/AST/text analysis only	suite
 portable	-	test-pre-push-scrubs-git-env.sh	builds its own main+linked-worktree pair under mktemp; touches no repo but its own	suite
 portable	-	test-pre-push-deletion-only.sh	builds its own bare remote plus working clone under mktemp and pushes only between them	suite
@@ -290,6 +293,8 @@ portable	-	test-admission-with-defence-classifier.py	source/AST/text analysis on
 portable	-	test-diagnosis-signal.py	source/AST/text analysis only	policy
 portable	-	test-future-commitment-signal.py	source/AST/text analysis only	policy
 portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only	policy
+portable	-	test-ask-without-receiver-signal.py	source/AST/text analysis only	policy
+portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools

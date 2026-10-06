@@ -1375,6 +1375,9 @@ python3 "$repo_root/scripts/test-future-commitment-signal.py"
 python3 "$repo_root/scripts/test-stall-on-friction-signal.py"
 python3 "$repo_root/scripts/test-wall-of-text-signal.py"
 python3 "$repo_root/scripts/test-deferred-evidence-read-signal.py"
+python3 "$repo_root/scripts/test-ask-without-receiver-signal.py"
+python3 "$repo_root/scripts/test-live-er-run-signal.py"
+opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$repo_root/.cupcake/tests/no_ask_without_receiver_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_mergeable_without_green_ci.rego" "$repo_root/.cupcake/tests/no_mergeable_without_green_ci_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_main_push.rego" "$repo_root/.cupcake/tests/git_block_main_push_test.rego"
@@ -2342,6 +2345,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-r3-view's scroll arithmetic for the weapon board's gear list. The six tests are pure
+# integer/float logic with no `cfg(windows)`, so the windows-target `cargo xwin test --lib` in
+# check-rust-build.sh is not where they belong: check-test-target-coverage.py counts them as host
+# tests and requires a host runner.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
+
 # The patch registry invariants (no two patches share a flag, key or address; every
 # patch actually changes its byte; `target` follows a window the running build moved) and
 # the config parser. Host-testable because none of it needs a game -- the addresses are
@@ -2689,6 +2698,13 @@ python3 "$repo_root/scripts/gen-installer-catalog.py" --check
 python3 "$repo_root/scripts/gen-installer-settings.py" --selftest
 python3 "$repo_root/scripts/gen-installer-settings.py" --check
 
+# ...and the R3 weapon boards, one per weapon, generated from the mechanics scripts. A full
+# regeneration is hours of build optimizer, so --check compares inputs instead of output: every
+# source and data file the generation opened, by sha256, and the body against its own recorded
+# hash. The selftest holds the text rules to the hand-written Misericorde board.
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
+
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
 # deny list nobody exercises is a deny list that stopped matching years ago.
@@ -2827,6 +2843,11 @@ bash "$repo_root/scripts/check-committed-compiles.sh"
 # checkout is renamed, and then it is silently wrong.
 bash "$repo_root/scripts/check-git-hooks-installed.sh" --selftest
 bash "$repo_root/scripts/check-git-hooks-installed.sh"
+
+# ...and whether the pre-commit format check judges the staged files and only those. It ran
+# `cargo fmt --all -- --check` over the working tree, so another session's untracked crate blocked
+# every unrelated commit (2026-10-02). This drives the real hook in a throwaway repository.
+python3 "$repo_root/scripts/test-precommit-fmt-scope.py"
 
 # ...and whether the gate damages the checkout it is gating. It did, twice on 2026-08-31, from a
 # push made in a linked worktree: git exports GIT_DIR to a linked worktree's hooks (but not to a

@@ -207,6 +207,13 @@ category = "cosmetic"
 audience = "player"
 default = true
 
+[er-r3-view]
+label = "Weapon board in the item list"
+blurb = "R3 in the equipment item list gains a fourth view: a full-screen board of what makes the weapon good -- top infusions, gear with synergy and how its motion values compare. Misericorde only so far."
+category = "cosmetic"
+audience = "player"
+default = false
+
 [er-loading-portrait]
 label = "Character portrait on the loading screen"
 blurb = "Puts your character and their stats on the loading screen. Pick this instead of Quickload, which already draws it, never alongside it."
