@@ -68,13 +68,26 @@ BUCKETS = ("portable", "partial", "blocked")
 
 # Every external input a gate can need that a GitHub runner cannot have. The probe below is what
 # decides whether it exists here; nothing in this file assumes a machine.
-DEP_PROBES = {
+# Gitignored, game-derived inputs that sit at a fixed path under the checkout root. A tree that is
+# not the developer's main checkout -- any `git worktree`, including the one scripts/hooks/pre-push
+# pins to a pushed commit -- starts without them, and the gates that read them then skip. The hook
+# links these paths in from the checkout that has them (`--root-inputs` prints the list), so a push
+# gated in a worktree covers what a push gated in the main checkout covers. The 1.17.1 image has no
+# ledger dependency of its own yet; it is listed because gates name it by path.
+ROOT_INPUTS = {
     # The de-Arxan'd game images. Gitignored, ~100 MB, derived from the user's install.
-    "image-1162": lambda root: (root / "eldenring-deobf.bin").exists(),
-    "image-1170": lambda root: (root / "eldenring-deobf-1.17.bin").exists(),
+    "image-1162": "eldenring-deobf.bin",
+    "image-1170": "eldenring-deobf-1.17.bin",
+    "image-1171": "eldenring-deobf-1.17.1.bin",
     # The whole-image .pdata alignment (128,602 pairs) derived from those images. Gitignored at
     # .gitignore:82 because it is 128k rows of game-derived addresses.
-    "rva-map-tsv": lambda root: (root / "docs/recon/rva-map-1162-to-1170.functions.tsv").exists(),
+    "rva-map-tsv": "docs/recon/rva-map-1162-to-1170.functions.tsv",
+}
+
+DEP_PROBES = {
+    "image-1162": lambda root: (root / ROOT_INPUTS["image-1162"]).exists(),
+    "image-1170": lambda root: (root / ROOT_INPUTS["image-1170"]).exists(),
+    "rva-map-tsv": lambda root: (root / ROOT_INPUTS["rva-map-tsv"]).exists(),
     # A compiled DLL under target/. Present on a developer's machine, and on a runner only after
     # the Rust steps have run -- which are later in check.sh than the gates that read it.
     "build-artifact": lambda root: any(
@@ -437,6 +450,11 @@ def main() -> int:
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--probe", action="store_true")
     ap.add_argument("--skip-lines", action="store_true")
+    ap.add_argument(
+        "--root-inputs",
+        action="store_true",
+        help="print the root-relative gitignored inputs a worktree must borrow (see ROOT_INPUTS)",
+    )
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--root", default=str(REPO))
@@ -462,6 +480,10 @@ def main() -> int:
             f"ci-gate-portability ok -- {scripted} script steps ledgered, "
             f"{len(steps) - scripted} toolchain steps resolved at run time"
         )
+        return 0
+    if args.root_inputs:
+        for path in ROOT_INPUTS.values():
+            print(path)
         return 0
     if args.skip_lines:
         for line, reason in skip_lines(root):

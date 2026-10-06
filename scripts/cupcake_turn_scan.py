@@ -357,16 +357,78 @@ RECENT_TURNS = 10
 BACKGROUND_LAUNCH_RE = re.compile(
     r"async agent launched|agentId:"
     r"|command running in background|running in background with id"
+    r"|moved to the background"
     r"|you will be notified when it completes",
     re.IGNORECASE,
 )
 
+# The task id a launch acknowledgement names: "with ID: bx1" for a backgrounded call, "(ID: bx1)" for
+# a foreground Bash the harness moved to the background after its timeout. A TaskStop names the task
+# only by this id, so it has to be tied back to the tool_use that started it.
+LAUNCH_TASK_ID_RE = re.compile(r"\bID:\s*([A-Za-z0-9_-]+)")
+
 # The harness injects these when a background task stops. `<status>` distinguishes a finished task
 # from a progress ping.
 TASK_NOTIFICATION_RE = re.compile(r"<task-notification>", re.IGNORECASE)
+TASK_NOTIFICATION_BLOCK_RE = re.compile(
+    r"<task-notification>(.*?)(?:</task-notification>|\Z)", re.IGNORECASE | re.DOTALL
+)
 TASK_TOOL_USE_ID_RE = re.compile(r"<tool-use-id>\s*([^<\s]+)\s*</tool-use-id>", re.IGNORECASE)
+TASK_ID_RE = re.compile(r"<task-id>\s*([^<\s]+)\s*</task-id>", re.IGNORECASE)
 TASK_STATUS_RE = re.compile(r"<status>\s*([^<\s]+)\s*</status>", re.IGNORECASE)
-FINISHED_STATUSES = {"completed", "complete", "failed", "error", "killed", "cancelled", "canceled"}
+FINISHED_STATUSES = {
+    "completed", "complete", "failed", "error", "killed", "cancelled", "canceled", "stopped",
+}
+
+# Tools that end a background task, naming it by its task id.
+STOP_TOOLS = ("TaskStop", "KillShell", "KillBash")
+
+
+def _notification_carriers(ev: dict) -> list[str]:
+    """Every string in one transcript event that can carry a `<task-notification>`.
+
+    A notification does not only arrive as a user event. When the task finishes while a turn is still
+    running, the harness delivers it mid-turn as an `attachment` of type `queued_command` (the text in
+    `prompt`), and logs it beforehand as a `queue-operation` (the text in `content`). Reading only the
+    user-event form left every mid-turn completion pending forever, so a task that had finished and
+    been read kept the next long answer flagged as a pause -- measured 2026-10-04, four halts in a row
+    on a turn that was delivering its final report with nothing running.
+    """
+    out: list[str] = []
+    msg = ev.get("message")
+    if isinstance(msg, dict):
+        content = msg.get("content")
+        if isinstance(content, str):
+            out.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text" and block.get("text"):
+                    out.append(block["text"])
+    attachment = ev.get("attachment")
+    if isinstance(attachment, dict):
+        for key in ("prompt", "content"):
+            value = attachment.get(key)
+            if isinstance(value, str):
+                out.append(value)
+    if isinstance(ev.get("content"), str):
+        out.append(ev["content"])
+    return [s for s in out if TASK_NOTIFICATION_RE.search(s)]
+
+
+def finished_notifications(ev: dict) -> list[tuple[str, str]]:
+    """(tool_use_id, task_id) for every finished-task notification the event carries; either half may
+    be empty. A progress ping, with no finished `<status>`, is not included."""
+    found: list[tuple[str, str]] = []
+    for text in _notification_carriers(ev):
+        for m in TASK_NOTIFICATION_BLOCK_RE.finditer(text):
+            body = m.group(1)
+            status = TASK_STATUS_RE.search(body)
+            if not status or status.group(1).lower() not in FINISHED_STATUSES:
+                continue
+            tool_id = TASK_TOOL_USE_ID_RE.search(body)
+            task_id = TASK_ID_RE.search(body)
+            found.append((tool_id.group(1) if tool_id else "", task_id.group(1) if task_id else ""))
+    return found
 
 
 def _result_text(block: dict) -> str:
@@ -422,8 +484,10 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
     a quiet non-event while a false "nothing is running" would accuse an agent that did cover itself.
     Three sources, all read straight out of the transcript:
 
-      * a Bash tool_use with `run_in_background: true` whose tool_result has not arrived (the harness
-        delivers that result when the command exits, so a missing one means it is still going);
+      * a Bash tool_use with `run_in_background: true`, or a foreground one the harness moved to the
+        background, for which no finished `<task-notification>` (in any carrier, see
+        `_notification_carriers`), finished `task_status`, or successful TaskStop of its task id has
+        arrived;
       * an Agent tool_use whose result said "Async agent launched" and for which no
         `<task-notification>` with a finished `<status>` has arrived;
       * a foreground Bash call in the last turn that detached a process itself (nohup/setsid/`&`), or
@@ -442,26 +506,38 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
     pending_bg: dict[str, tuple[int, str]] = {}   # tool_use_id -> (event index, description)
     agent_uses: dict[str, int] = {}
     pending_agents: dict[str, tuple[int, str]] = {}
+    # A foreground Bash the harness may move to the background after its timeout ("moved to the
+    # background (ID: ...)"). Only its result says so, so every foreground Bash is remembered until
+    # that result arrives.
+    foreground_bash: dict[str, int] = {}
+    task_to_tool: dict[str, str] = {}             # harness task id -> launching tool_use_id
+    stop_uses: dict[str, str] = {}                # TaskStop tool_use_id -> task id it stops
+
+    def close(tool_id: str, task_id: str) -> None:
+        for key in (tool_id, task_to_tool.get(task_id, "")):
+            if key:
+                pending_bg.pop(key, None)
+                pending_agents.pop(key, None)
 
     # Everything before this event index is too old to still be running (see RECENT_TURNS above).
     prompt_indices = [i for i, ev in enumerate(events) if is_real_user_prompt(ev)]
     cutoff = prompt_indices[-RECENT_TURNS] if len(prompt_indices) >= RECENT_TURNS else 0
 
     for index, ev in enumerate(events):
-        content = ev.get("message", {}).get("content")
+        # Harness-injected completion notice for a background task, in whichever carrier it came:
+        # a user event, a mid-turn queued_command attachment, or a queue-operation. One notification
+        # shape closes both kinds of launch: a backgrounded Bash and an async subagent.
+        for tool_id, task_id in finished_notifications(ev):
+            close(tool_id, task_id)
 
-        # Harness-injected completion notice for a background task.
-        raw = _user_content_string(ev)
-        if raw and TASK_NOTIFICATION_RE.search(raw):
-            m = TASK_TOOL_USE_ID_RE.search(raw)
-            status = TASK_STATUS_RE.search(raw)
-            if m and status and status.group(1).lower() in FINISHED_STATUSES:
-                # One notification shape closes both kinds of launch: a backgrounded Bash and an
-                # async subagent are both reported this way.
-                pending_agents.pop(m.group(1), None)
-                pending_bg.pop(m.group(1), None)
-            continue
+        # The harness's own task bookkeeping, when it records a task as finished.
+        attachment = ev.get("attachment")
+        if isinstance(attachment, dict) and attachment.get("type") == "task_status":
+            if str(attachment.get("status") or "").lower() in FINISHED_STATUSES:
+                close("", str(attachment.get("taskId") or ""))
 
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
         if not isinstance(content, list):
             continue
         for block in content:
@@ -470,22 +546,40 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
             if block.get("type") == "tool_use":
                 name = block.get("name") or ""
                 inp = block.get("input") or {}
+                bid = block.get("id") or ""
                 if isinstance(inp, dict) and inp.get("run_in_background"):
-                    pending_bg[block.get("id") or ""] = (index, "backgrounded %s" % (name or "tool"))
+                    pending_bg[bid] = (index, "backgrounded %s" % (name or "tool"))
                 elif name in ("Agent", "Task"):
-                    agent_uses[block.get("id") or ""] = index
+                    agent_uses[bid] = index
+                elif name == "Bash":
+                    foreground_bash[bid] = index
+                elif name in STOP_TOOLS and isinstance(inp, dict):
+                    stop_uses[bid] = str(inp.get("task_id") or inp.get("shell_id") or "")
             elif block.get("type") == "tool_result":
                 tid = block.get("tool_use_id") or ""
                 text = _result_text(block)
                 launched = bool(BACKGROUND_LAUNCH_RE.search(text))
+                task_id = LAUNCH_TASK_ID_RE.search(text) if launched else None
+                if task_id:
+                    task_to_tool[task_id.group(1)] = tid
                 if tid in pending_bg and not launched:
                     # A real result (output, exit status) -- the job is done. A "running in
                     # background" acknowledgement is not a result and leaves it pending.
                     pending_bg.pop(tid, None)
+                if tid in foreground_bash:
+                    if launched:
+                        pending_bg[tid] = (foreground_bash[tid], "Bash moved to the background")
+                    foreground_bash.pop(tid, None)
                 if tid in agent_uses:
                     if launched:
                         pending_agents[tid] = (agent_uses[tid], "async subagent")
                     agent_uses.pop(tid, None)
+                if tid in stop_uses:
+                    # A stop that succeeded ends the task; a refused one ("no such task") leaves the
+                    # bookkeeping as it was.
+                    if not block.get("is_error"):
+                        close("", stop_uses[tid])
+                    stop_uses.pop(tid, None)
 
     candidates = [
         (at, desc)

@@ -57,6 +57,7 @@ Usage:
 import argparse
 import importlib.util
 import json
+import math
 import os
 import struct
 import sys
@@ -620,6 +621,128 @@ def reach_check(model, right, left, lk, rc=None):
     return out
 
 
+#: Roll directions a covered roll is tried in, as `er-mechanics-offhand.Scorer.roll_catch`.
+ROLL_DIRS = {'away': (1.0, 0.0), 'side': (0.0, 1.0), 'toward': (-1.0, 0.0)}
+_ROLL = {}
+_GEO = {}
+
+
+def _roll():
+    """The medium roll (`er-mechanics-disengage.tool`): i-frames, next-roll frame, travel per frame."""
+    if not _ROLL:
+        r = _load('er_mechanics_disengage', 'er-mechanics-disengage.py').tool('roll medium')
+        _ROLL.update(iframes=r['iframes'], next=r['roll'], away=r['away'])
+    return _ROLL
+
+
+def _geometry(wid, row, rc):
+    """(contact_centre_m, lunge to the hit, half effective arc in degrees, clip root motion at a
+    real frame), cached; None when the reach or pose module cannot measure the row."""
+    key = (wid, row['slot'], row['anim'])
+    if key not in _GEO:
+        R = reach_module()
+        pose = R._pose_module()
+        cat, anim = _clip_ref(row)
+        out = None
+        try:
+            r = R.attack_reach(rc, wid, row['slot'], row['label'], row['judge'], anim, 'one', clip=(cat, anim))
+            if pose is not None and r and r.get('contact_centre_m') is not None:
+                hc, ha = R.hkx_source(cat, anim)
+                pose.root_motion(hc, ha, 0.0)
+                arc = r.get('coverage_arc_eff_deg')
+                out = (r['contact_centre_m'], r.get('root_motion_to_hit_m') or 0.0,
+                       180.0 if arc is None else arc / 2.0,
+                       lambda t, hc=hc, ha=ha: -pose.root_motion(hc, ha, max(0.0, t) / FPS)[2])
+        except (KeyError, ValueError, IndexError, TypeError, OSError):
+            out = None
+        _GEO[key] = out
+    return _GEO[key]
+
+
+#: Locked-on run, m/s (`er-mechanics-neutral` hkx root motion of a000_020100). The user closes on a
+#: rolling defender this way before the L1 (2026-10-04: "run towards the enemy while they are
+#: rolling away before using my L1").
+RUN_SPEED = 4.01
+
+
+def roll_cover(model, right, left, opener, rc=None, chase=True):
+    """The off-hand L1 #1 pressed late enough to land on a roll taken at the first frame the
+    opener's stagger allows (the mashed roll: `reaction['roll'][1]`, DamageCount 1), or the
+    earliest press if that already lands after the roll's i-frames. A defender who does not roll
+    takes the same L1. Frames are real frames from the opener's first hit.
+
+    Caught when the L1's first active frame falls in the roll's recovery [roll + i-frames, next
+    roll) and the rolled defender is inside the L1's contact and arc. He starts where the opener
+    hit him, its `contact_centre_m` (tip) or its lunge plus two idle front radii (body), pushed by
+    its `knockbackDist`; the attacker has moved by the opener's root motion up to the press. A
+    roll toward the attacker stops at body contact (`INFERRED`, as `Scorer.roll_catch`).
+
+    With `chase` the attacker runs at him from the opener's move cancel to the press, at
+    `RUN_SPEED` straight at where he is, and the L1 is pressed at the frame in the recovery that
+    catches the most cases (later presses buy more running against a roll that has slowed). A
+    chased defender is in front of him, so the arc does not apply. The L1 is taken to start from a
+    run as from standing (`INFERRED`: the user's own play, the run-to-L1 transition is not traced).
+    None when the pair has no off-hand L1 or a row cannot be measured."""
+    R = reach_module()
+    rc = rc or R.Reach()
+    a = model.rows(right).get(opener)
+    b = model.offhand(left).get('left_1')
+    if a is None or b is None or a.get('l1_start') is None or left_mode(model.reg, right, left) != 'offhand':
+        return None
+    level = FA.reaction_level(model.fa, a['atk_row'], True)
+    react = model.react(level)
+    if react is None or not react['locks'] or react['roll'].get(1) is None:
+        return None
+    roll = _roll()
+    rs = react['roll'][1]
+    h0, h1 = a['hit_windows'][0]
+    b0, b1 = b['hit_windows'][0]
+    earliest = max(a['l1_start'], h1) - h0
+    t_hit = max(rs + roll['iframes'], earliest + b0)
+    if t_hit >= rs + roll['next'] or t_hit + (b1 - b0) < rs + roll['iframes']:
+        return {'opener': opener, 'level': level, 'roll_at': rs, 'feasible': False}
+    ga, gb = _geometry(right, a, rc), _geometry(left, b, rc)
+    if ga is None or gb is None:
+        return None
+    front = (R.defender_hurtbox('idle') or {'front_m': 0.3})['front_m']
+    contact, _, half_arc, _ = gb
+    knock = model.push.get(a['atk_row'], (0.0, 0.0))[0]
+    away = roll['away']
+    move_at = (a.get('cancel_frame') or {}).get('move')
+    move_at = None if move_at is None else move_at - h0
+
+    def cases(t):
+        press = t - b0
+        moved = ga[3](h0 + min(press, move_at if move_at is not None else press))
+        run = (RUN_SPEED / FPS * max(0.0, press - move_at)) if chase and move_at is not None else 0.0
+        travel = away[min(max(int(t - rs), 0), len(away) - 1)]
+        out = {}
+        for start, d0 in (('tip', ga[0]), ('body', ga[1] + 2 * front)):
+            for name, (ux, uy) in ROLL_DIRS.items():
+                x, y = d0 + knock + ux * travel, uy * travel
+                if ux < 0:
+                    x = max(x, moved + 2 * front)
+                dx = x - moved
+                gap = max(math.hypot(dx, y) - run, 2 * front if run else 0.0)
+                bearing = 0.0 if run or (dx <= 0 and y == 0) else math.degrees(math.atan2(abs(y), dx))
+                out[f'{start}_{name}'] = gap <= contact and bearing <= half_arc
+        return out, press, run, travel
+    best = None
+    t = t_hit
+    while t < rs + roll['next']:
+        c = cases(t)
+        if best is None or sum(c[0].values()) > sum(best[1][0].values()):
+            best = (t, c)
+        t += 1.0
+    t_hit, (caught, press, run, travel) = best
+    return {'opener': opener, 'label': a['label'], 'level': level, 'roll_at': rs, 'feasible': True,
+            'press': round(press, 1), 'earliest_press': round(earliest, 1), 'hit': round(t_hit, 1),
+            'move_at': move_at, 'run_m': round(run, 2),
+            'recovery': (rs + roll['iframes'], rs + roll['next']), 'travel_m': round(travel, 2),
+            'knockback_m': round(knock, 2), 'contact_m': round(contact, 2), 'caught': caught,
+            'share': round(sum(caught.values()) / len(caught), 3), 'stagger': model.stagger(a)}
+
+
 # ------------------------------------------------------------------------------------ sweep
 
 
@@ -941,6 +1064,25 @@ def selftest():
               max(moves) < 1e-6, True, 'MEASURED a000 hkx')
     else:
         skips.append('pose decoder absent')
+
+    # Roll cover: a dagger R1 #1 (level 8, roll on 10) into a Hand Axe L1 pressed 11.1 frames
+    # after the hit lands it on frame 23, the end of a mashed roll's i-frames; the roll has carried
+    # him 2.86 m by then against the L1's 2.55 m, so only a roll toward the attacker is caught.
+    if pose is not None:
+        m = Model(mirror=None)
+        axe = m.reg.find_weapon('Hand Axe')
+        cov = roll_cover(m, m.reg.find_weapon('Dagger'), axe, 'r1_1', chase=False)
+        check('dagger R1 -> Hand Axe L1 roll cover: press, hit, roll start',
+              (cov['press'], cov['hit'], cov['roll_at']), (11.1, 23.0, 10), 'TAE + reaction model')
+        check('dagger R1 -> Hand Axe L1 roll cover: directions caught',
+              sorted(k for k, v in cov['caught'].items() if v), ['body_toward', 'tip_toward'], 'MEASURED reach')
+        # Chasing: the Banished Knight's Halberd R1 #1 frees the attacker to run on frame 18 after
+        # the hit and the level 2 stagger holds the roll until 25, so he closes 1.08 m and the L1
+        # catches the away roll from body range too.
+        cov = roll_cover(m, m.reg.find_weapon("Banished Knight's Halberd"), axe, 'r1_1')
+        check('halberd R1 -> Hand Axe L1 chased: move, roll, run, caught',
+              (cov['move_at'], cov['roll_at'], cov['run_m'], sorted(k for k, v in cov['caught'].items() if v)),
+              (18, 25, 1.08, ['body_away', 'body_side', 'body_toward', 'tip_toward']), 'TAE + run 4.01 m/s')
 
     for line in passes:
         print('PASS', line)

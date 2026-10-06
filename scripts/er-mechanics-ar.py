@@ -205,6 +205,47 @@ def element_multiplier(tables, wep, reinf, aecp, elem_suffix, graph_id, stats, s
     return 1.0 + sum(m - 1.0 for m in ms)
 
 
+#: CalcCorrectGraph stage whose start is the top soft cap: `stageMaxVal3`, where the last and
+#: flattest stage begins (80 on the STR and DEX physical graphs 0, 1, 2, 7, 8; 60 on the arcane
+#: status graph 6; 43 on graph 12).
+SOFT_CAP_STAGE = 3
+
+
+def soft_caps(tables, weapon, affinity='Standard', level=None):
+    """{stat: the top soft cap} for one weapon and affinity: for each stat, the highest
+    `stageMaxVal3` among the graphs of the elements and statuses that stat scales on this weapon
+    (an element counts when AttackElementCorrectParam lets the stat correct it and the weapon has
+    a scaling rate for the stat). A stat that scales nothing is absent. A build past these points
+    buys little damage per level, and nobody makes it."""
+    wep = tables.weapons[tables.find_weapon(weapon, affinity)]
+    lvl = tables.max_level(wep['reinforceTypeId']) if level is None else level
+    reinf = tables.reinforce[wep['reinforceTypeId'] + lvl]
+    aecp = tables.aecp.get(wep['attackElementCorrectId'], {})
+    caps = {}
+
+    def take(stat, graph_id):
+        g = tables.graphs.get(graph_id)
+        if g is not None:
+            caps[stat] = max(caps.get(stat, 0), int(g[f'stageMaxVal{SOFT_CAP_STAGE}']))
+
+    for _, suf, bfield, _, gfield in ELEMENTS:
+        # A catalyst's spell buff reads the magic or holy graph with no base attack behind it.
+        buff = (suf == 'Magic' and wep.get('enableMagic')) or (suf == 'Dark' and wep.get('enableMiracle'))
+        if not wep[bfield] and not buff:
+            continue
+        for s in STATS:
+            aname, cfield, rfield, _ = STAT_FIELDS[s]
+            over = aecp.get(f'overwrite{aname}CorrectRate_by{suf}', -1)
+            rate = (over if over >= 0 else wep[cfield]) * reinf[rfield]
+            if aecp.get(f'is{aname}Correct_by{suf}') and rate > 0:
+                take(s, wep[gfield])
+    if wep['correctLuck'] * reinf['correctLuckRate'] > 0:
+        for _, _, gfield in STATUSES:
+            if gfield and any(wep.get(f'spEffectBehaviorId{k}', -1) > 0 for k in range(3)):
+                take('arc', wep[gfield])
+    return caps
+
+
 def normalise_stats(stats):
     out = {s: 0 for s in STATS}
     for k, v in (stats or {}).items():

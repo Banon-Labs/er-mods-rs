@@ -77,6 +77,8 @@ def scrub(text):
     text = re.sub(r"[“][^”\n]*[”]", " ", text)
     return text.replace("’", "'")
 
+_NOT_PAST = r"(?!said\b|asked\b|wrote\b|mentioned\b|told\b|were\b|was\b|did\b|meant\b|described\b)"
+
 ASK_RE = re.compile(
     r"\bneed\s+you\s+to\b"
     r"|\bi(?:'d|\s+would|\s+still)?\s+need\s+(?!to\b|nothing\b|no\b|not\b)\w+"
@@ -84,8 +86,15 @@ ASK_RE = re.compile(
     r"|\bplease\s+\w+"
     r"|\b(?:let|tell|ping|show)\s+me\s+(?:know\s+)?(?:when|once|after|as\s+soon\s+as|whether\s+it|if\s+it)\b"
     r"|\bwaiting\s+(?:on|for)\s+you\b"
-    r"|\b(?:once|when|after|as\s+soon\s+as)\s+you(?:'re|'ve|\s+have|\s+are)?\s+"
-    r"(?!said\b|asked\b|wrote\b|mentioned\b|told\b|were\b|was\b|did\b|meant\b|described\b)\w+"
+    # A temporal "you" clause is an ask only where it leads a sentence or clause ("Once you open
+    # it, the probe records ...") or trails a first-person main clause ("I'll read the log when
+    # you finish"). Mid-sentence it is usually the generic player of a game mechanic: on
+    # 2026-10-04 "... catch a roll taken at the first chance in 5 of 6 cases after you run in"
+    # halted a finished report.
+    r"|(?:^[\s*•>-]*|[,;:–—(]\s*|\b(?:and|then|so)\s+)"
+    r"(?:once|when|after|as\s+soon\s+as)\s+you(?:'re|'ve|\s+have|\s+are)?\s+" + _NOT_PAST + r"\w+"
+    r"|\b(?:i'll|i\s+will|i\s+can|we'll|we\s+will)\b[^.!?]*?\b(?:once|when|after|as\s+soon\s+as)\s+"
+    r"you(?:'re|'ve|\s+have|\s+are)?\s+" + _NOT_PAST + r"\w+"
     r"|\b(?:can|could|would)\s+you\s+(?:please\s+)?\w+"
     r"|\bover\s+to\s+you\b|\byour\s+turn\b|\bin\s+your\s+court\b",
     re.IGNORECASE,

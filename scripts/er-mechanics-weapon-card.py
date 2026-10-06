@@ -49,6 +49,10 @@ def card(rc, wid):
     one = {a['slot']: a for a in ATT.weapon_attacks(rc.reg, wid, 'one')}
     both = {a['slot']: a for a in ATT.weapon_attacks(rc.reg, wid, 'both')}
     r1, r1_2h = one.get('r1_1'), both.get('2h_r1_1')
+    if r1 and not r1['hit_windows']:
+        # A bow's R1 is a shot, not a melee hit: it has no frame or reach, and its stamina is the
+        # draw's, which would rank it against swings it is not comparable with.
+        r1 = r1_2h = None
     reach = None
     if r1:
         slot = next(s for s in ATT.SLOTS_ONE_HAND if s[0] == 'r1_1')

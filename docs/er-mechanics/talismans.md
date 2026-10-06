@@ -393,6 +393,23 @@ charms. `--weapon "<name>"` prints one weapon, `--json --out <file>` writes the 
 
 - The module docstring documents `multipliers(t, talismans, ctx)` and
   `defender_modifiers(t, talismans, incoming)`.
+- **Grips.** Every weapon feature is measured one-handed, two-handed and powerstanced (two
+  copies, `dual`). Both hands' hits of a powerstance swing each add their own successive-counter
+  entry (+8 and +8 on a Cross-Naginata L1). A weapon with `isDualBlade` and `bothHandEquipable`
+  (fists, claws, hand-to-hand arts, perfume bottles, backhand blades and a few others) is
+  powerstanced by itself, so its two-handed grip is its powerstance; Grafted Dragon needs two.
+- **Chain final hits (Twinblade Talisman, 104).** `scripts/er-mechanics-chain-attacks.py` lists,
+  per weapon and grip, the string slot carrying 104, the time from the first press to that hit
+  at the earliest inputs, the string's loop period, and the chain hits' damage. The 104 rows are
+  only string finishers: one- and two-handed R1 (judges 20-50, 220-250), powerstance L1 (8xx),
+  off-hand L1 (420-450) and mounted R1/L1 #3 (610/710). No R2, no skill animation (04xxxx) and
+  no ash of war carries one (`--skills`). Default skills whose TimeAct file also holds the
+  weapon's own moveset (Golden Tempering, Starcaller Cry, Weed Cutter) contribute nothing: those
+  03xxxx clips are the ordinary moves.
+- **Gear ranking.** `er-mechanics-gear-synergy.py` scores Twinblade Talisman by chain damage per
+  second in the weapon's best grip and the three successive-hit talismans by counter per second
+  net of decay in its fastest grip, both including powerstance; `gen-r3-weapon-boards.py` writes
+  those rows into `crates/er-r3-view/src/weapon_boards.rs`.
 - **Timed buffs are off unless named.** Blade of Mercy, the exultations, Rellana, Crusade, Dried
   Bouquet and Lord's Bestowal apply only when named in `ctx['active']`. Successive-hit stages apply
   only through `successive_stage`. This is so a model never assumes a buff the fight did not earn.
