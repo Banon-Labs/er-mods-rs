@@ -262,20 +262,41 @@ def session_committed(evs):
     if not candidates:
         return False
     repo = os.environ.get("CLAUDE_PROJECT_DIR") or os.environ.get("CUPCAKE_SIGNAL_REPO_ROOT", ".")
-    start = session_start(evs)
-    if start:
-        listed = subprocess.run(
-            ["git", "-C", repo, "rev-list", "--all", "--reflog", "--since=" + start],
-            capture_output=True, text=True, timeout=10,
-        )
-        recent = listed.stdout.split() if listed.returncode == 0 else []
-        return any(full.startswith(token) for token in candidates for full in recent)
+    # Resolve only the hashes the session named, then read their committer times. This used to be
+    # `git rev-list --all --reflog --since=<start>`, which walks every ref and reflog entry in the
+    # repository: 1.2 s on an idle machine here (902 refs, 3,470 reflog lines) and past cupcake's
+    # signal deadline once a dozen Stop signals run at once under a parallel check.sh. A signal
+    # that misses its deadline is dropped, so the guard returned `{}` and went inert -- measured
+    # 2026-10-04, 16 of 24 concurrent hook runs on diagnosis_cites_pre_session_commit.jsonl.
     probe = subprocess.run(
-        ["git", "-C", repo, "cat-file", "--batch-check=%(objecttype)"],
+        ["git", "-C", repo, "cat-file", "--batch-check=%(objectname) %(objecttype)"],
         input="".join(t + "^{commit}\n" for t in sorted(candidates)),
         capture_output=True, text=True, timeout=10,
     )
-    return probe.returncode == 0 and "commit" in probe.stdout.split()
+    if probe.returncode != 0:
+        return False
+    commits = sorted({
+        parts[0] for parts in (line.split() for line in probe.stdout.splitlines())
+        if len(parts) == 2 and parts[1] == "commit"
+    })
+    if not commits:
+        return False
+    start = session_start(evs)
+    if not start:
+        return True
+    from datetime import datetime
+
+    try:
+        start_epoch = datetime.fromisoformat(start).timestamp()
+    except ValueError:
+        return False
+    times = subprocess.run(
+        ["git", "-C", repo, "log", "--no-walk=unsorted", "--format=%ct", *commits],
+        capture_output=True, text=True, timeout=10,
+    )
+    if times.returncode != 0:
+        return False
+    return any(int(t) >= int(start_epoch) for t in times.stdout.split() if t.isdigit())
 
 
 try:

@@ -49,6 +49,10 @@ def card(rc, wid):
     one = {a['slot']: a for a in ATT.weapon_attacks(rc.reg, wid, 'one')}
     both = {a['slot']: a for a in ATT.weapon_attacks(rc.reg, wid, 'both')}
     r1, r1_2h = one.get('r1_1'), both.get('2h_r1_1')
+    if r1 and not r1['hit_windows']:
+        # A bow's R1 is a shot, not a melee hit: it has no frame or reach, and its stamina is the
+        # draw's, which would rank it against swings it is not comparable with.
+        r1 = r1_2h = None
     reach = None
     if r1:
         slot = next(s for s in ATT.SLOTS_ONE_HAND if s[0] == 'r1_1')
@@ -112,12 +116,21 @@ def speed_and_cost(weapon, rc=None, pop=None):
     pop = pop or population(rc)
     c['rank'] = {f: rank(pop[f], c[f], better) for f, better in FIELDS.items() if c[f] is not None}
     c['rank_text'] = {f: rank_text(r, WORD[f]) for f, r in c['rank'].items()}
-    c['text'] = {
-        'speed': f"R1 hits on frame {c['r1_first_hit_frame']:g} ({c['rank_text']['r1_first_hit_frame']}) "
-                 f"and reaches {c['r1_reach_m']:.1f} m ({c['rank_text']['r1_reach_m']}).",
-        'cost': f"Stamina per R1 one-handed ({c['rank_text']['r1_stamina_one_handed']}), "
-                f"{c['r1_stamina_two_handed']} two-handed ({c['rank_text']['r1_stamina_two_handed']}).",
-    }
+    # A value the attack or reach module could not read (no R1 hit, no reach trace) is None and
+    # has no rank; its clause is left out rather than printed as a number it does not have.
+    rt = c['rank_text']
+    speed = cost = None
+    if c['r1_first_hit_frame'] is not None:
+        speed = f"R1 hits on frame {c['r1_first_hit_frame']:g} ({rt['r1_first_hit_frame']})"
+        if c['r1_reach_m'] is not None:
+            speed += f" and reaches {c['r1_reach_m']:.1f} m ({rt['r1_reach_m']})"
+        speed += '.'
+    if c['r1_stamina_one_handed'] is not None:
+        cost = f"Stamina per R1 one-handed ({rt['r1_stamina_one_handed']})"
+        if c['r1_stamina_two_handed'] is not None:
+            cost += f", {c['r1_stamina_two_handed']} two-handed ({rt['r1_stamina_two_handed']})"
+        cost += '.'
+    c['text'] = {'speed': speed, 'cost': cost}
     return c
 
 

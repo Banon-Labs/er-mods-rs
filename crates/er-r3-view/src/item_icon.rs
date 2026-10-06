@@ -32,7 +32,7 @@
 
 use std::ffi::c_void;
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use er_game_base::mem::{module_backing, safe_read_i32, safe_read_usize};
 use windows::Win32::Foundation::{CloseHandle, WAIT_FAILED, WAIT_OBJECT_0};
@@ -90,16 +90,29 @@ const MAX_ICON_DIM: u32 = 512;
 /// Bound on the copy's fence wait.
 const FENCE_WAIT_MS: u32 = 2000;
 
-static LOOKUP_TRIED: AtomicBool = AtomicBool::new(false);
-/// The overlay host's handle for the icon, 0 until it accepted one.
-static ICON_HANDLE: AtomicU32 = AtomicU32::new(0);
+/// Every icon looked up so far and the overlay host's handle for it: [`PENDING`] while the worker
+/// copies it, [`FAILED`] when any step refused. Each icon is tried once per process; one entry is
+/// 160 x 160 RGBA on the host's side, so the list grows only with the weapons a player looks at.
+static ICONS: Mutex<Vec<(u32, u32)>> = Mutex::new(Vec::new());
+const PENDING: u32 = 0;
+const FAILED: u32 = u32::MAX;
 
-/// The host handle for the icon, once the worker has handed it over.
-pub fn handle() -> Option<u32> {
-    match ICON_HANDLE.load(Ordering::Relaxed) {
-        0 => None,
-        handle => Some(handle),
+fn set_state(icon_id: u32, state: u32) {
+    let mut icons = ICONS.lock().unwrap_or_else(|e| e.into_inner());
+    match icons.iter_mut().find(|(id, _)| *id == icon_id) {
+        Some(entry) => entry.1 = state,
+        None => icons.push((icon_id, state)),
     }
+}
+
+/// The host handle for `icon_id`, once the worker has handed it over.
+pub fn handle(icon_id: u32) -> Option<u32> {
+    let icons = ICONS.lock().unwrap_or_else(|e| e.into_inner());
+    icons
+        .iter()
+        .find(|(id, _)| *id == icon_id)
+        .map(|&(_, state)| state)
+        .filter(|&state| state != PENDING && state != FAILED)
 }
 
 /// What the lookup yields: the atlas texture, held by one reference of our own, and the icon's
@@ -111,19 +124,25 @@ struct IconSource {
     rect: [u32; 4],
 }
 
-/// Resolve `MENU_ItemIcon_<icon_id>` and start the copy, the first time it is called.
+/// Resolve `MENU_ItemIcon_<icon_id>` and start the copy, the first time it is called for that
+/// icon.
 ///
 /// # Safety
 ///
 /// Only from `MenuWindowJob::Run` of the item list, on the menu thread: the lookup inserts into
 /// the repository's map, which the menu thread owns.
 pub unsafe fn resolve_once(game_base: usize, icon_id: u32, log: fn(std::fmt::Arguments<'_>)) {
-    if LOOKUP_TRIED.swap(true, Ordering::Relaxed) {
-        return;
+    {
+        let mut icons = ICONS.lock().unwrap_or_else(|e| e.into_inner());
+        if icons.iter().any(|(id, _)| *id == icon_id) {
+            return;
+        }
+        icons.push((icon_id, PENDING));
     }
     let source = match unsafe { lookup(game_base, icon_id) } {
         Ok(source) => source,
         Err(why) => {
+            set_state(icon_id, FAILED);
             log(format_args!(
                 "icon {icon_id}: {why}; the board draws no icon"
             ));
@@ -138,6 +157,7 @@ pub unsafe fn resolve_once(game_base: usize, icon_id: u32, log: fn(std::fmt::Arg
         .name("er-r3-view-icon".to_string())
         .spawn(move || copy_and_hand_over(source, icon_id, log));
     if spawned.is_err() {
+        set_state(icon_id, FAILED);
         log(format_args!(
             "icon {icon_id}: could not spawn the copy thread"
         ));
@@ -256,6 +276,7 @@ fn copy_and_hand_over(source: IconSource, icon_id: u32, log: fn(std::fmt::Argume
     let pixels = match unsafe { copy_rect(&resource, source.atlas, source.rect, log) } {
         Ok(pixels) => pixels,
         Err(why) => {
+            set_state(icon_id, FAILED);
             log(format_args!("icon {icon_id}: copy refused: {why}"));
             return;
         }
@@ -269,14 +290,17 @@ fn copy_and_hand_over(source: IconSource, icon_id: u32, log: fn(std::fmt::Argume
     ));
     match er_build_watermark_core::overlay_host::add_texture(&pixels, width, height) {
         Some(handle) => {
-            ICON_HANDLE.store(handle, Ordering::Relaxed);
+            set_state(icon_id, handle);
             log(format_args!(
                 "icon {icon_id}: handed to the overlay host, handle {handle}"
             ));
         }
-        None => log(format_args!(
-            "icon {icon_id}: the overlay host refused the texture"
-        )),
+        None => {
+            set_state(icon_id, FAILED);
+            log(format_args!(
+                "icon {icon_id}: the overlay host refused the texture"
+            ));
+        }
     }
 }
 

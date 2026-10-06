@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""A weapon's best infusions: each one's scaling, the rune levels where it is the best pick, and
-how its best RL 150 build ranks against every other weapon's best RL 150 build.
+"""A weapon's best infusions: each one's scaling and its best RL 150 build at max upgrade, and
+how its best RL 150 build ranks against every other weapon's best RL 150 build. No build raises
+a damage stat past the weapon's top soft cap (`er-builds-optimize.stat_caps`); the per-RL sweep
+runs only when `report` is given levels.
 
     python3 scripts/er-mechanics-infusions.py Lance
     python3 scripts/er-mechanics-infusions.py Lance --json
@@ -171,15 +173,22 @@ def rank_at_150(tables, weapon, rows):
             'of': len(bests)}
 
 
+def a_class(name):
+    """`a Heavy Knight`, `an Astrologer`: the starting classes beginning with a vowel."""
+    return f"{'an' if name[:1].lower() in 'aeiou' else 'a'} {name}"
+
+
 def _stats_line(st, keys=STATS):
     return ' / '.join(f'{LABEL[k]} {st[k]}' for k in keys if st[k] > 10)
 
 
-def report(weapon, top=3, rls=RL_SWEEP):
+def report(weapon, top=3, rls=()):
+    """`rls` is empty by default: every build is shown at RL 150 and max upgrade only (user
+    directive 2026-10-04), and the per-RL best-pick sweep runs only when `rls` names levels."""
     b = Builder(weapon)
     fl, dfn = b.setup(RANK_RL)
     at150 = sorted((x for x in (b.best(RANK_RL, a, fl, dfn) for a in b.affs) if x), key=lambda x: -x['damage'])
-    spans = rl_spans(b, rls)
+    spans = rl_spans(b, rls) if rls else []
     rank = rank_at_150(b.tables, b.tables.names.get(b.base), load_sweep())
     order = []
     for s in spans:
@@ -252,8 +261,10 @@ def describe(aff, sc, build, spans, rls):
     s = ', '.join(f'{LABEL[k]} {v:g}' for k, v in sorted(sc.items(), key=lambda kv: -kv[1]))
     line = f'Scaling {s}.'
     if build:
-        line += (f" At RL 150 from a {build['class']} start: {_stats_line(build['stats'])}, {build['ar']:.0f} AR"
+        line += (f" At RL 150 from {a_class(build['class'])} start: {_stats_line(build['stats'])}, {build['ar']:.0f} AR"
                  + (f" with {build['grease']}" if build['grease'] else '') + '.')
+    if not rls:
+        return line
     if spans:
         parts = [(f"RL {x['from']}-{x['to']}" if x['from'] != x['to'] else f"RL {x['from']}") for x in spans]
         line += f" The best pick at {', '.join(parts)}"
@@ -265,15 +276,19 @@ def describe(aff, sc, build, spans, rls):
 
 
 def rank_text(r):
-    return (f"Best RL 150 build: {r['affinity']} from a {r['class']} start, {r['ar']:.0f} AR "
+    return (f"Best RL 150 build: {r['affinity']} from {a_class(r['class'])} start, {r['ar']:.0f} AR "
             f"({CARD.rank_text(r['ar_rank'], 'highest')}) and {r['damage']:.0f} damage per hit "
             f"({CARD.rank_text(r['damage_rank'], 'highest')}), against every weapon's best RL 150 build "
             f"with its best infusion and class.")
 
 
 def selftest():
-    r = report('Lance', rls=(100, 150, 200))
-    assert r['top'] and r['spans'], r
+    r = report('Lance')
+    assert r['top'] and not r['spans'] and ' RL ' not in r['top'][0]['text'].replace('At RL 150', ''), r['top']
+    # Every build stops each damage stat at the weapon's top soft cap (80 on Lance's curves).
+    for x in r['top']:
+        st = x['rl150']['stats']
+        assert all(st[k] <= 80 for k in STATS), x['rl150']
     for x in r['top']:
         b = x['rl150']
         if b and b['affinity'] in ('Fire', 'Flame Art', 'Lightning', 'Sacred', 'Magic', 'Cold'):
@@ -314,7 +329,8 @@ def main():
         json.dump(r, sys.stdout, indent=1, default=str)
         return 0
     print(r['weapon'])
-    print('  best by RL: ' + ', '.join(f"{s['affinity']} {s['from']}-{s['to']}" for s in r['spans']))
+    if r['spans']:
+        print('  best by RL: ' + ', '.join(f"{s['affinity']} {s['from']}-{s['to']}" for s in r['spans']))
     for x in r['top']:
         print(f"  {x['affinity']:<10} {x['text']}")
     for kind, x in r['by_category'].items():

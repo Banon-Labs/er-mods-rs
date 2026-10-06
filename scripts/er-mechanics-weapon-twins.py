@@ -48,6 +48,33 @@ def moveset(reg, wid):
     return out
 
 
+def animations(reg, wid):
+    """{slot: animation} over both grips: the moveset as a player sees it, without the numbers."""
+    cache = reg.__dict__.setdefault('_twin_anims', {})
+    if wid not in cache:
+        cache[wid] = {a['slot']: a['anim'] for grip in ('one', 'both') for a in ATT.weapon_attacks(reg, wid, grip)}
+    return cache[wid]
+
+
+def moveset_peers(reg, wid):
+    """Every other player weapon that plays the same animation in every slot, whatever its class
+    or build rules: the weapons a player would call the same moveset."""
+    mine = animations(reg, wid)
+    if not mine:
+        return []
+    out = []
+    for oid in sorted(reg.weapon):
+        name = reg.weapon_names.get(oid)
+        if oid == wid or oid % 10000 or not name or name.startswith('['):
+            continue
+        try:
+            if animations(reg, oid) == mine:
+                out.append({'id': oid, 'name': name})
+        except (KeyError, TypeError, ValueError):     # rows the attack module cannot read
+            continue
+    return out
+
+
 def build_fields(reg):
     """`BUILD_RULES` fields of every weapon row; the attack module's table does not carry them."""
     if not hasattr(reg, '_twin_fields'):
@@ -68,7 +95,9 @@ def twins(reg, wid):
     mine = moveset(reg, wid)
     rows = []
     for oid in sorted(reg.weapon):
-        if oid == wid or oid % 10000 or not reg.weapon_names.get(oid) or not comparable(reg, wid, oid):
+        # A bracketed name ("[NPC] Reduvia") is a row no player can hold, so no player weighs it.
+        name = reg.weapon_names.get(oid)
+        if oid == wid or oid % 10000 or not name or name.startswith('[') or not comparable(reg, wid, oid):
             continue
         theirs = moveset(reg, oid)
         slots = sorted(set(mine) | set(theirs))

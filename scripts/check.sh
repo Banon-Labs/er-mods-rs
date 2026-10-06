@@ -2339,6 +2339,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-telemetry-core --lib
 # bytes are ground-truthed separately, against eldenring-deobf.bin, by the crate's build.rs.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 
+# er-r3-view's scroll arithmetic for the weapon board's gear list. The six tests are pure
+# integer/float logic with no `cfg(windows)`, so the windows-target `cargo xwin test --lib` in
+# check-rust-build.sh is not where they belong: check-test-target-coverage.py counts them as host
+# tests and requires a host runner.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
+
 # The patch registry invariants (no two patches share a flag, key or address; every
 # patch actually changes its byte; `target` follows a window the running build moved) and
 # the config parser. Host-testable because none of it needs a game -- the addresses are
@@ -2686,6 +2692,13 @@ python3 "$repo_root/scripts/gen-installer-catalog.py" --check
 python3 "$repo_root/scripts/gen-installer-settings.py" --selftest
 python3 "$repo_root/scripts/gen-installer-settings.py" --check
 
+# ...and the R3 weapon boards, one per weapon, generated from the mechanics scripts. A full
+# regeneration is hours of build optimizer, so --check compares inputs instead of output: every
+# source and data file the generation opened, by sha256, and the body against its own recorded
+# hash. The selftest holds the text rules to the hand-written Misericorde board.
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
+python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
+
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
 # deny list nobody exercises is a deny list that stopped matching years ago.
@@ -2844,6 +2857,17 @@ bash "$repo_root/scripts/test-check-config-guard.sh"
 # crate on purpose: the repo builds with a global `-Awarnings`, so this is the narrow
 # place where warning-freedom is both achievable today and load-bearing -- the crate's
 # whole job is to stop saves, and two dead helpers already survived a refactor unseen.
+#
+# The audit's own cargo call is capped at 25s, which a warm tree meets in about 2s and a cold one
+# does not: on a 4-core runner with no cache the cross-compile of these two crates and their path
+# dependencies ran past the cap (PR #485, run 37249825276). That is a deadlock rather than a slow
+# job, because rust-cache saves only on a green stage, so a stage that is red for want of a cache
+# never writes one. So the compile happens here first, uncapped like every other toolchain step,
+# and the audit then rebuilds only the crate it is linting. Same profile and target as the audit,
+# or the units differ and nothing is reused. Being a `cargo xwin` step, this and the audit belong
+# to the `cargo-build` stage, the one whose job installs cargo-xwin and caches the Windows target.
+cargo xwin build --manifest-path "$repo_root/Cargo.toml" -p er-save-disable -p er-save-suppress \
+  --target x86_64-pc-windows-msvc
 python3 "$repo_root/scripts/check-save-disable-warnings.py"
 
 # Reached only when every step above has run. The exit trap reads this to tell a completed

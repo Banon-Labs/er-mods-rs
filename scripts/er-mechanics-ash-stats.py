@@ -62,6 +62,7 @@ class AshScorer(OPT.Scorer):
         self.two_handed, self.defender, self.grease = two_handed, defender, grease
         self.wid = levers.t.find_weapon(weapon)
         self.cache = {}
+        self.cap = OPT.stat_caps(levers.ar_tables, weapon, affinity)
 
     def hits(self, st):
         _, hits, _ = self.levers.cast(self.weapon, self.affinity, self.sid,
