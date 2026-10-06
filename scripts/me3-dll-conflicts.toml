@@ -605,6 +605,17 @@ like "no hosts online" -- the worst possible way for a DLL to arrive uninvited o
 dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
 invade during that run: `--with er-death-persist`."""
 
+"er-npc-summons" = """Changes what two items do. The Duelist's Furled Finger opens an NPC picker \
+instead of placing the player's own red sign (a detour on \
+`PlayerIns::StartMultiplayProcedureWithMountData`, 1.16.2 `0x1406587b0`, that skips the original \
+for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 through the shared \
+seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
+companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
+`GetBuddyListBySpEffectId` `0x1404bc960` and `GetBuddyParam` `0x140d26890`, all scoped to one \
+Mimic Tear request). No other shell hooks those four prologues. Co-loadable, but a player who \
+did not ask for it would find two items behaving differently, so it is never pulled in by a \
+dependency closure: `--with er-npc-summons`."""
+
 [compatible]
 "er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its whole \

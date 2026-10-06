@@ -1,0 +1,20 @@
+# The game-free half of `er-npc-summons`: the config file, the duel state machine, the hidden-NPC
+# readiness verdict and the Mimic Tear companion plan.
+#
+# Host-buildable on purpose. There is no `windows` dependency and no `cfg(windows)` gate: every
+# decision the DLL makes about what to spawn, when a hidden NPC is safe to offer, and what a
+# companion's BuddyParam row should say is a pure function proven by `cargo test` on Linux.
+# Design: docs/plans/npc-duel-signs-and-custom-mimic.md.
+[package]
+name = "er-npc-summons-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_npc_summons_core"
+
+[dependencies]
+
+[lints]
+workspace = true

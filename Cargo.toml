@@ -66,6 +66,12 @@ members = [
   # writes no game memory -- it polls its two hotkeys from a FrameBegin task -- so nothing here
   # depends on the reverse engineering the later layers need.
   "crates/er-npc-possess",
+  # NPC duel signs (the Duelist's Furled Finger picks an NPC, which comes out of a red sign as a
+  # hostile phantom) and a custom Mimic Tear (up to four configured companions). The core crate
+  # is game-free and host-tested; the shell is its own `[[natives]]` entry.
+  # Design: docs/plans/npc-duel-signs-and-custom-mimic.md.
+  "crates/er-npc-summons-core",
+  "crates/er-npc-summons",
   "crates/er-player-name-filter",
   # While you are invading, fellow invaders stop being lock-on targets. One detour on the
   # lock-on system's point-owner resolver, which answers "no character owns this point" for
