@@ -132,7 +132,9 @@ fi
 # --- position: after the deletion skip, before the gate that reads the tree -----------------
 refusal_line=$(grep -n 'the working tree differs from the commit being pushed' "$hook" | head -1 | cut -d: -f1)
 deletion_line=$(grep -n 'deletion-only push' "$hook" | head -1 | cut -d: -f1)
-exec_line=$(grep -n '^exec bash scripts/check.sh' "$hook" | head -1 | cut -d: -f1)
+# The first non-comment line that invokes the suite. It was a bare `exec` until 2026-10-05, when the
+# hook started running the suite once per pushed tip (scripts/test-pre-push-gates-pushed-ref.sh).
+exec_line=$(awk '!/^[[:space:]]*#/ && /bash scripts\/check\.sh/ { print NR; exit }' "$hook")
 if [[ -n $refusal_line && -n $exec_line && $refusal_line -lt $exec_line ]]; then
 	ok "the refusal is at line $refusal_line -- before the gate at $exec_line that reads the tree"
 else

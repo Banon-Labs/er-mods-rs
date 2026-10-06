@@ -295,8 +295,8 @@ fi
 # contend for the same cores while still waiting on its own slowest stage -- and two gate runs at
 # once share one .git/config, which a run on 2026-09-13 was observed to clobber.
 #
-# Which commits it asks about: the pushed tips, the same `--rev` shape the compile gate above uses
-# and for the same reason.
+# Which commits it asks about: each pushed tip on its own, the same `--rev` shape the compile gate
+# above uses and for the same reason. One tip, one selection, one run of check.sh.
 #
 # This used to carry a second sentence saying that a deletion contributes no tip, so the selector
 # would fall back to the working tree against origin/main -- "the closest thing to a question a
@@ -304,36 +304,140 @@ fi
 # pushing checkout's own branch, and the deletion it was supposed to be about never completed
 # (measured 2026-09-14; see the skip near the top of this file, which now returns before this
 # line is ever reached). A deletion-only push cannot arrive here any more, so `pushed_shas` is
-# empty below only when git sent no ref list at all, and the whole suite is the right answer to
-# that.
-stage_argv=()
+# empty below only when git sent no ref list at all, and the whole suite in this checkout is the
+# right answer to that.
+#
+# WHICH TREE THE SUITE READS (bd er-effects-rs-xe0r). check.sh reads the working tree it is run in,
+# and until 2026-10-05 that was always the checkout `git push` was typed in -- whatever branch it
+# had out. Measured that day: `git -C <main checkout> push -u origin feat/ai-simulated-player`, run
+# from a checkout on feat/er-r3-view-rest-of-catalog while the pushed branch lived in
+# .worktrees/ai-sim-player. Stage selection diffed the pushed ref correctly; check.sh then went red
+# on `check-test-target-coverage.py` for a crate the pushed branch does not contain, and it would
+# just as readily have passed code the pushed branch breaks.
+#
+# So the suite runs on the commit being pushed:
+#
+#   * a tip equal to this checkout's HEAD runs here, as before. The dirty-tree refusal above has
+#     already proven the working tree equals that commit, so this tree is the pushed state.
+#   * any other tip runs in `.worktrees/pre-push-gate` under the main checkout (override with
+#     ER_PRE_PUSH_GATE_WORKTREE), a detached worktree pinned to that sha by
+#     scripts/lib/pinned-worktree.sh -- the mechanism scripts/check-committed-compiles.sh already
+#     uses for its own worktree. It is reused rather than made fresh because a new path is a cold
+#     cargo build; `target/` inside it survives the pin's `git clean`, nothing else does.
+#
+# The worktree runs the pushed commit's own scripts/check.sh and its own stage selector, which is
+# what CI runs for that commit. Everything check.sh does for itself is unchanged there: the refusal
+# while Elden Ring runs, the machine-wide lock, MinHook's self-heal through the shared git dir. The
+# gitignored game-derived inputs some gates read (`ci-gate-portability.py --root-inputs`) are
+# linked in from the checkout that has them, so a push gated in the worktree covers what one gated
+# in the main checkout covers. The worktree itself has a lock of its own, because two pushes of two
+# different branches would otherwise pin the same directory under each other.
+#
+# Proven by scripts/test-pre-push-gates-pushed-ref.sh.
+gate_tree=""
+need_gate_tree=0
 for sha in "${pushed_shas[@]:-}"; do
-	[[ -n $sha ]] && stage_argv+=(--rev "$sha")
+	[[ -n $sha && $sha != "$head_sha" ]] && need_gate_tree=1
 done
-
-# Run once, not twice: the names go to stdout and the accounting to stderr, so stderr is caught in
-# a file and replayed rather than asking the same git question a second time. `|| true` because a
-# selector that somehow exits non-zero must still leave this hook running the whole suite below,
-# not abort the push under `set -e`.
-stage_report=$(mktemp)
-mapfile -t scope_stages < <(python3 scripts/check-stages.py --stages-for-diff \
-	"${stage_argv[@]}" 2>"$stage_report" || true)
-cat "$stage_report" >&2
-rm -f "$stage_report"
-mapfile -t all_stages < <(python3 scripts/check-stages.py --stages 2>/dev/null || true)
-
-if [[ ${#scope_stages[@]} -eq 0 || ${#scope_stages[@]} -eq ${#all_stages[@]} ]]; then
-	if [[ ${#scope_stages[@]} -eq 0 ]]; then
-		printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
+if [[ $need_gate_tree -eq 1 ]]; then
+	# Next to this file first, so a copy of the hook in a fixture still finds the real library;
+	# then the pushing checkout's own copy.
+	hook_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+	pinned_lib="$hook_dir/../lib/pinned-worktree.sh"
+	[[ -f $pinned_lib ]] || pinned_lib="$repo_root/scripts/lib/pinned-worktree.sh"
+	# shellcheck source=../lib/pinned-worktree.sh
+	# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+	. "$pinned_lib"
+	main_checkout=$(dirname -- "$(git rev-parse --path-format=absolute --git-common-dir)")
+	gate_tree=${ER_PRE_PUSH_GATE_WORKTREE:-$main_checkout/.worktrees/pre-push-gate}
+	mkdir -p "$(dirname -- "$gate_tree")"
+	if command -v flock >/dev/null 2>&1; then
+		exec 8>"$gate_tree.lock"
+		if ! flock -n 8; then
+			printf 'pre-push: REFUSED -- another push is already gating a commit in %s.\n' "$gate_tree" >&2
+			printf '  Wait for that push and read its result; this one would re-pin the same tree\n' >&2
+			printf '  under it. The lock is %s.lock.\n' "$gate_tree" >&2
+			exit 1
+		fi
 	fi
-	printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
-	exec bash scripts/check.sh
 fi
 
-printf -v scope_csv '%s,' "${scope_stages[@]}"
-export ER_CHECK_STAGES="${scope_csv%,}"
-printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
-	"${#scope_stages[@]}" "${#all_stages[@]}" "$ER_CHECK_STAGES" >&2
-printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
-printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
-exec bash scripts/check.sh
+# Callers check the return status rather than relying on `set -e`: these run on the left of `||`,
+# where bash switches errexit off inside the function body.
+link_root_inputs() {
+	local rel src candidate
+	while IFS= read -r rel; do
+		[[ -n $rel && ! -e $gate_tree/$rel ]] || continue
+		src=""
+		for candidate in "$repo_root/$rel" "$main_checkout/$rel"; do
+			if [[ -e $candidate ]]; then
+				src=$(realpath -- "$candidate")
+				break
+			fi
+		done
+		[[ -n $src ]] || continue
+		mkdir -p "$(dirname -- "$gate_tree/$rel")" && ln -sfn "$src" "$gate_tree/$rel" || return 1
+		printf 'pre-push: linked gitignored input %s -> %s\n' "$rel" "$src" >&2
+	done < <(python3 scripts/ci-gate-portability.py --root-inputs 2>/dev/null || true)
+}
+
+pin_gate_tree() { # pin_gate_tree <sha>
+	pinned_worktree_pin "$repo_root" "$gate_tree" "$1" /target/ || return 1
+	if ! pinned_worktree_link_sibling "$main_checkout/../fromsoftware-rs" "$gate_tree"; then
+		printf 'pre-push: no sibling checkout at %s/../fromsoftware-rs; the cargo steps will say so.\n' \
+			"$main_checkout" >&2
+	fi
+	link_root_inputs
+}
+
+run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
+	local sha=$1 tree=$repo_root rev_argv=() stage_report scope_stages all_stages scope_csv
+	[[ -n $sha ]] && rev_argv=(--rev "$sha")
+	if [[ -n $sha && $sha != "$head_sha" ]]; then
+		printf 'pre-push: %s is not this checkout'"'"'s HEAD (%s), so the suite runs on it in\n' \
+			"${sha:0:12}" "${head_sha:0:12}" >&2
+		printf '          %s, pinned to that commit -- not on this working tree.\n' "$gate_tree" >&2
+		if ! pin_gate_tree "$sha"; then
+			printf 'pre-push: REFUSED -- could not pin %s to %s.\n' "$gate_tree" "$sha" >&2
+			return 1
+		fi
+		tree=$gate_tree
+	fi
+
+	# Run once, not twice: the names go to stdout and the accounting to stderr, so stderr is caught
+	# in a file and replayed rather than asking the same git question a second time. `|| true`
+	# because a selector that somehow exits non-zero must still leave this hook running the whole
+	# suite, not abort the push.
+	stage_report=$(mktemp)
+	mapfile -t scope_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages-for-diff \
+		"${rev_argv[@]}" 2>"$stage_report" || true)
+	cat "$stage_report" >&2
+	rm -f "$stage_report"
+	mapfile -t all_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages 2>/dev/null || true)
+
+	if [[ ${#scope_stages[@]} -eq 0 || ${#scope_stages[@]} -eq ${#all_stages[@]} ]]; then
+		if [[ ${#scope_stages[@]} -eq 0 ]]; then
+			printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
+		fi
+		printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+		(cd "$tree" && bash scripts/check.sh)
+		return
+	fi
+
+	printf -v scope_csv '%s,' "${scope_stages[@]}"
+	printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
+		"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
+	printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
+	printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
+	(cd "$tree" && ER_CHECK_STAGES="${scope_csv%,}" bash scripts/check.sh)
+}
+
+suite_failed=0
+if [[ ${#pushed_shas[@]} -eq 0 ]]; then
+	run_suite "" || suite_failed=1
+else
+	for sha in "${pushed_shas[@]}"; do
+		run_suite "$sha" || suite_failed=1
+	done
+fi
+exit "$suite_failed"

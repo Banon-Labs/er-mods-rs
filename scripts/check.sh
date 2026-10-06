@@ -1117,6 +1117,10 @@ bash "$repo_root/scripts/test-pre-push-deletion-only.sh"
 # had already been spent. The silent inverse is worse: a gate green on an edit the push omits. See
 # the header of scripts/test-pre-push-dirty-tree.sh.
 bash "$repo_root/scripts/test-pre-push-dirty-tree.sh"
+# ...and that the suite the hook runs reads the commit being pushed, not the checkout `git push` was
+# typed in. On 2026-10-05 a push of one branch from a checkout on another went red on a crate the
+# pushed branch does not contain. See the header of scripts/test-pre-push-gates-pushed-ref.sh.
+bash "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
 # ...and that the push helper refuses a local ref carrying no commit main does not already have,
 # before the push and before this suite the push triggers. On 2026-09-14 a `worktree-agent-<id>`
 # branch that had never moved was pushed over PR #448 and took two commits off it. See the header
@@ -2134,6 +2138,8 @@ shellcheck "$repo_root/scripts/build-invasion-warp-profile.sh"
 shellcheck "$repo_root/scripts/check-rust-build.sh"
 shellcheck "$repo_root/scripts/check-committed-compiles.sh"
 shellcheck "$repo_root/scripts/lib/cpu-courtesy.sh"
+shellcheck "$repo_root/scripts/lib/pinned-worktree.sh"
+shellcheck "$repo_root/scripts/test-pre-push-gates-pushed-ref.sh"
 shellcheck "$repo_root/scripts/test-cpu-courtesy.sh"
 shellcheck "$repo_root/scripts/check-git-hooks-installed.sh"
 shellcheck "$repo_root/scripts/check-gate-config-guard.sh"
