@@ -248,7 +248,23 @@ Static RE behind the implementation, each in bd:
 
 Every address is a 1.16.2 RVA with a verified row in `docs/recon/rva-map-1162-to-1170.verified.tsv`. They are listed in `docs/recon/npc-summons-addresses.tsv`, plus `StartMultiplayProcedureWithMountData` 1.16.2 `0x1406587b0` (`IDENTICAL-WHOLE`).
 
-Not runtime-proven yet. Not built yet:
+Runtime-proven 2026-10-06, run `br-20261006-231247-f262` (Leo, 1.17.1, Seamless loaded): the
+finger opened the picker offline, the chosen NPC (Yura) was created hidden, its red sign was
+placed 1.5 m from the player, touching the sign joined it as a red phantom, and it fought until
+the player killed it. A Mimic Tear +10 summon was replaced by the configured companion.
+
+Found live, and filed:
+
+- After the quickload autoload, `CS::TestNetStep` stays `NotExecuting` until a map reload. That
+  step owns `SosSignMan` and runs its per-frame sign update, which sets `SosSignData+0x30` (the
+  byte `CreateSignSfx` reads before it shows a sign) and runs the phantom-join tick. Without it a
+  placed sign is invisible and a touched sign never joins. `TriggerAreaReload(false)` starts it.
+  bd `testnetstep-not-executing-after-autoload-1171-2026-10-06`; it is an er-quickload bug, not
+  one in this DLL.
+- The hidden NPC shows a party HP bar on the left of the HUD before the sign is touched, which
+  breaks section 2.2.
+
+Not built yet:
 
 - companion dressing from build URLs;
 - Lua brains;
