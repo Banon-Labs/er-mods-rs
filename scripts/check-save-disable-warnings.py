@@ -51,8 +51,14 @@ TARGET = "x86_64-pc-windows-msvc"
 # Lints that indicate rot in a crate whose job is to suppress saving.
 FORCED_LINTS = ["dead_code", "unused"]
 
-# Generous: a cold cross-compile of the crate plus its path dependencies. Well
-# under the repo's 30s cap for non-game operations, and typically ~2s when warm.
+# Sized for a warm tree, where this is ~2s, and held under the repo's 30s cap for
+# non-game operations. A cold one does not fit: the cross-compile of these crates
+# and their path dependencies took ~10s on a 16-core machine and ran past 25s on
+# a 4-core CI runner with no cache. check.sh therefore runs
+# `cargo xwin build -p er-save-disable -p er-save-suppress` (same profile and
+# target) as the step before this one, and this call only rebuilds the crate it
+# lints. Run on its own against a cold tree, it can still time out; the fix is
+# that build step, not a larger number here.
 TIMEOUT_SECONDS = 25.0
 
 

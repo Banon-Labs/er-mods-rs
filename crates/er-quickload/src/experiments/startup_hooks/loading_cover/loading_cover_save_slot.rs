@@ -135,7 +135,7 @@ pub(crate) unsafe fn count_live_profile_models(base: usize) -> usize {
                     "TITLE_CUSTOM_COVER_PROFILE_RENDERER_VTABLE_RVA",
                 )
             && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                .map(&valid)
+                .map(valid)
                 .unwrap_or(false)
         {
             n += 1;

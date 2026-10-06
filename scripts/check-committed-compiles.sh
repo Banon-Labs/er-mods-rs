@@ -85,6 +85,9 @@ repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
 . "$repo_root/scripts/lib/cpu-courtesy.sh"
 cpu_courtesy check-committed-compiles
+# shellcheck source=lib/pinned-worktree.sh
+# shellcheck disable=SC1091  # sourced at run time; shellcheck -x is not how this suite is linted.
+. "$repo_root/scripts/lib/pinned-worktree.sh"
 target="x86_64-pc-windows-msvc"
 worktree="${ER_COMMITTED_CHECK_WORKTREE:-$repo_root/.worktrees/committed-compiles}"
 target_dir="${ER_COMMITTED_CHECK_TARGET_DIR:-$repo_root/target/committed-compiles}"
@@ -127,27 +130,12 @@ flock 9
 # not exist -- so without this link cargo cannot even parse the workspace, and the gate would fail
 # for a reason that has nothing to do with the commit under test.
 link_sibling() {
-	local real="$repo_root/../fromsoftware-rs" link
-	link="$(dirname -- "$worktree")/fromsoftware-rs"
-	if [[ ! -d "$real" ]]; then
-		echo "[committed-compiles] FAIL: no sibling checkout at $real" >&2
+	# The link itself, and the ELOOP history behind making it from `pwd -P`, live in
+	# scripts/lib/pinned-worktree.sh, shared with the pre-push hook's gate worktree.
+	if ! pinned_worktree_link_sibling "$repo_root/../fromsoftware-rs" "$worktree"; then
+		echo "[committed-compiles] FAIL: no sibling checkout at $repo_root/../fromsoftware-rs" >&2
 		echo "  the workspace uses ../fromsoftware-rs path dependencies and cannot be loaded without it" >&2
 		exit 2
-	fi
-	# Only ever replace a symlink of our own making; never touch a real directory.
-	#
-	# `pwd -P`, not `pwd`. bash's logical pwd echoes back the path you arrived by, symlinks and
-	# all -- so when `$real` and `$link` name the same path, `ln -sfn` points the link at itself
-	# and every later read of it dies with ELOOP ("Too many levels of symbolic links"), which
-	# cargo reports as `failed to load manifest for dependency eldenring`. That collision is not
-	# hypothetical: it is what happens whenever the invoking checkout is itself a worktree under
-	# `<repo>/.worktrees/` and ER_COMMITTED_CHECK_WORKTREE points back at the family's shared
-	# scratch dir -- then `$repo_root/../fromsoftware-rs` and `$(dirname $worktree)/fromsoftware-rs`
-	# are both `<repo>/.worktrees/fromsoftware-rs`. Measured 2026-09-03; it also poisons the link
-	# for every later run, including the main checkout's, because the damage is on disk.
-	# `pwd -P` resolves to the real sibling and can never name the link.
-	if [[ -L "$link" || ! -e "$link" ]]; then
-		ln -sfn "$(cd -- "$real" && pwd -P)" "$link"
 	fi
 }
 
@@ -184,24 +172,10 @@ link_vendor() {
 
 # --- pin the worktree to one commit -----------------------------------------------------------
 pin_worktree() {
-	local sha=$1
-	if [[ -d "$worktree/.git" || -f "$worktree/.git" ]]; then
-		# `--force` twice: the first lets the detached checkout move even when the previous run
-		# left the tree dirty, the second lets it discard an untracked file that a tracked file
-		# in the target commit wants to occupy.
-		git -C "$worktree" checkout --detach --force --force "$sha" >/dev/null 2>&1 ||
-			{ git worktree remove --force "$worktree" >/dev/null 2>&1 || rm -rf -- "$worktree"
-			  git -C "$repo_root" worktree add --detach --force "$worktree" "$sha" >/dev/null; }
-	else
-		rm -rf -- "$worktree"
-		git -C "$repo_root" worktree prune >/dev/null 2>&1 || true
-		git -C "$repo_root" worktree add --detach --force "$worktree" "$sha" >/dev/null
-	fi
-	# Remove leftovers from the previous commit under test so a deleted file cannot linger and
-	# make a broken commit look whole. -x because the interesting leftovers (a stray crate
-	# directory, a generated module) are exactly the gitignored/untracked ones. CARGO_TARGET_DIR
-	# lives outside the worktree, so this never touches the build cache.
-	git -C "$worktree" clean -qxfd
+	# Checkout plus `git clean -qxfd`, so a file the previous commit under test left behind
+	# cannot make a broken commit look whole. CARGO_TARGET_DIR lives outside the worktree, so the
+	# clean never touches the build cache and nothing needs excluding from it.
+	pinned_worktree_pin "$repo_root" "$worktree" "$1"
 	link_vendor
 }
 
