@@ -444,7 +444,7 @@ pub(crate) unsafe fn force_profile_render_tick(base: usize, _slot: i32) {
             if s == target
                 && PROFILE_SPARE_CANDIDATE.load(Ordering::SeqCst) == 0
                 && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                    .map(&valid)
+                    .map(valid)
                     .unwrap_or(false)
             {
                 PROFILE_SPARE_CANDIDATE.store(r, Ordering::SeqCst);
@@ -678,7 +678,7 @@ pub(crate) unsafe extern "system" fn profile_renderer_teardown_spare_hook() {
             let r = unsafe { safe_read_usize(target_te) }.unwrap_or(0);
             let model_built = valid(r)
                 && unsafe { safe_read_usize(r + PROFILE_RENDERER_MODEL_INS_OFFSET) }
-                    .map(&valid)
+                    .map(valid)
                     .unwrap_or(false);
             (if model_built { r } else { 0 }, target_te, slot)
         };
