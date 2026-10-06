@@ -15,7 +15,7 @@ const counts = { stepOther: 0, step: 0, cutsceneTrue: 0, cutsceneFalse: 0, wrapp
 const hooks = [];
 hooks.push(Interceptor.attach(va('0x140b082c0'), { onEnter() { counts.step++; } }));
 hooks.push(Interceptor.attach(va('0x140b082b0'), { onEnter() { counts.stepOther++; } }));
-send({ kind: 'netstep-names', update: va('0x142b642f8').readCString(), other: va('0x142b64330').readCString() });
+send({ kind: 'netstep-names', update: va('0x142b642f8').readUtf16String(), other: va('0x142b64330').readUtf16String() });
 hooks.push(Interceptor.attach(va('0x140a9e000'), {
     onLeave(r) { if ((r.toInt32() & 0xff) !== 0) counts.cutsceneTrue++; else counts.cutsceneFalse++; },
 }));
