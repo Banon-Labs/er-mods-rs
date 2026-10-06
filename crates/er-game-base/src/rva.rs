@@ -716,6 +716,18 @@ pub const CS_EVENT_MAN_GLOBAL_RVA: usize = 0x3d6_86f8;
 /// `CS::CSScaleformValue::~CSScaleformValue`, the destructor every resolved child proxy owes.
 pub const CSSCALEFORMVALUE_DTOR_RVA: usize = 0xd7f850;
 
+// The Scaleform texture repository and its by-name lookup, read by `er-r3-view` (item icons) and
+// `er-target-bars` (HUD bar art). Both resolve them through `game_data_addr` / `game_rva_named`;
+// declared once here so the two crates cannot disagree about the address.
+
+/// 1.16.2 rva of the Scaleform texture repository global, a pointer that is null until the menu
+/// system has built it (1.17.1 `0x3d86580`, bd `item-icon-runtime-chain-1171-2026-10-02`).
+pub const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d82510;
+
+/// 1.16.2 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
+/// (1.17.1 `0xd65c00`); the resource is written to `out`. Called, never hooked.
+pub const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
+
 /// `GFx::TextField::SetSelection(field, begin, end)` -- the caret/selection primitive, and the only
 /// thing that moves the caret in either 02_990 field. The native SoftwareKeyboard owns no caret at
 /// all: `EnterName_` (`0xe70c00`) writes a prompt string, max length and flags, and the set-initial

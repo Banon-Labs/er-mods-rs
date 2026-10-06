@@ -58,13 +58,7 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 use windows::core::Interface;
 
-/// 1.16.2 rva of the Scaleform texture repository global, a pointer that is null until the menu
-/// system has built it (1.17.1 `0x3d86580`, bd `item-icon-runtime-chain-1171-2026-10-02`).
-const SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA: usize = 0x3d82510;
-
-/// 1.16.2 rva of the repository lookup, `fn(repo, out: *mut *mut c_void, name: *const u16)`
-/// (1.17.1 `0xd65c00`); the resource is written to `out`.
-const SCALEFORM_TEXTURE_LOOKUP_RVA: u32 = 0xd63e50;
+use er_game_base::rva::{SCALEFORM_TEXTURE_LOOKUP_RVA, SCALEFORM_TEXTURE_REPOSITORY_GLOBAL_RVA};
 
 /// `CS::ScaleformImageResource`: its `CSTextureImage` and its symbol (a `wchar*`).
 const RESOURCE_IMAGE_OFFSET: usize = 0x18;

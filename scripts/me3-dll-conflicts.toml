@@ -920,6 +920,12 @@ game's own `CSPcKeyConfig` binding table at `GLOBAL_CSPcKeyConfig+0x440` (to che
 against the player's configured bindings). Both are loads through the fault-safe reader."""
 "er-crash-logging" = "First-chance exception handler only. The product does not link er-crash-logging-core, so this is the sole crash logger in the process."
 "er-inventory-sort" = "Applies equipment-menu sort defaults once per process; installs no detour."
+"er-target-bars" = """Co-loadable with everything: it installs no detour and writes no game \
+memory. A FrameBegin game task reads the lock-on handle at PlayerIns+0x6b0, finds the character \
+that owns it by walking the world's ChrSets (the same walk er-npc-possess and \
+er-enemynpc-effects make), and reads its data, super armor, resist and SpEffect state. It draws \
+as a guest of the overlay host when one exists (er-build-watermark), and hosts only when nothing \
+else does, so the process keeps one Present hook either way."""
 "er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \

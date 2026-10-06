@@ -221,6 +221,13 @@ category = "cosmetic"
 audience = "player"
 default = false
 
+[er-target-bars]
+label = "Target stance and status bars"
+blurb = "Thin bars under the HP bar of whatever you are locked on to: stance, stamina and FP, plus every status building up against its resistance. Reads only; changes nothing in the game."
+category = "quality-of-life"
+audience = "player"
+default = false
+
 [er-build-watermark]
 label = "Build watermark"
 blurb = "A corner overlay naming every mod loaded in this profile and whether any of them is behind the branch it was built from."

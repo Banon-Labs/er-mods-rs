@@ -1,0 +1,45 @@
+# Bars for whatever you are locked on to: HP, stance, stamina and FP when it has them, and the
+# build-up of every status that is filling or active.
+#
+# Standalone shell: its own `[[natives]]` entry, no product dependency, no detours, no param
+# edits and no writes to game memory. It reads the lock-on handle off the local `PlayerIns`,
+# finds the character that owns it in the world's own ChrSets, and draws through the process's
+# one imgui overlay.
+[package]
+name = "er-target-bars"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_target_bars"
+crate-type = ["cdylib"]
+
+# Host-buildable half: the bar fractions, which bars a target gets, the status filter, the
+# lock-on handle test and the stale-handle rejection are pure functions proven by `cargo test`
+# on Linux rather than by launching a game.
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The one-imgui-host-per-process arbitration. This DLL draws as a guest when another module hosts
+# (er-build-watermark in the current profile), and hosts only when nothing else does; either way
+# the process keeps exactly one `Present` hook.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+# The bar art: a private-queue copy out of the HUD's BC7 atlas, decoded in pure Rust, the way
+# er-r3-view copies item icons.
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Security",
+  "Win32_System_SystemServices",
+  "Win32_System_Threading",
+] }
+bcdec_rs = "0.2"
+
+[lints]
+workspace = true
