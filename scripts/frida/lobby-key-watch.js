@@ -48,6 +48,8 @@ const POOL_KEY = 'lobby_key';
 const counts = { searches: 0, seen: 0, changes: 0, publishes: 0 };
 let lastSent = null;
 let lastPublished = null;
+let lastBand = null;
+const BAND_KEY_PREFIX = '21c40388';
 
 function str (pointer) {
   try {
@@ -93,7 +95,18 @@ if (steam === null) {
       // The search side: what this client ASKS for.
       Interceptor.attach(slot(STRING_FILTER_SLOT), {
         onEnter (args) {
-          if (str(args[1]) !== POOL_KEY) return;
+          const name = str(args[1]);
+          // Seamless's hashed band field, `<level band>_<weapon band>` (bd
+          // seamless-21c40388-is-level-band-underscore-weapon-band-2026-09-17).
+          if (name !== null && name.startsWith(BAND_KEY_PREFIX)) {
+            const band = str(args[2]);
+            if (band !== lastBand) {
+              lastBand = band;
+              send({ tag: 'band', search: counts.searches, now: band });
+            }
+            return;
+          }
+          if (name !== POOL_KEY) return;
           const value = str(args[2]);
           if (value === null) return;
           counts.seen += 1;
