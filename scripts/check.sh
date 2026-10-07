@@ -1351,6 +1351,10 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 # trusted on its own say-so.
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py" --selftest
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
+# A policy the hand-written dispatcher in .cupcake/system/evaluate.rego does not name is compiled,
+# routed, unit-tested and never read by the live hook (measured 2026-10-07 on two policies).
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py" --selftest
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py"
 # Second gate: drive real transcripts through the real hook commands out of .claude/settings.json
 # and assert the halt actually comes back -- plus a clean turn that must still be allowed, because a
 # guard that halts everything wedges every session just as badly as one that halts nothing. It also

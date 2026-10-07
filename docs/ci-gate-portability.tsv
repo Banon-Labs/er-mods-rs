@@ -120,6 +120,8 @@ portable	-	test-windows-proof-render-smoke-verdict.py	verdict logic in-process; 
 portable	-	test-cupcake-policies.py	176 cupcake eval spawns, 20-35s; needs the cupcake binary the fail-fast guard above checks for	policy
 portable	-	check-cupcake-wasm-builtins.py --selftest	source/AST/text analysis only	policy
 portable	-	check-cupcake-wasm-builtins.py	source/AST/text analysis only	policy
+portable	-	check-cupcake-dispatcher.py --selftest	source/AST/text analysis only	policy
+portable	-	check-cupcake-dispatcher.py	source/AST/text analysis only	policy
 portable	-	test-cupcake-hook-shim.py	source/AST/text analysis only	policy
 portable	-	test-cupcake-stop-guards.py	source/AST/text analysis only	policy
 portable	-	test-fix-claim-classifier.py	pure python over fixed strings; no game image, no cupcake binary	policy

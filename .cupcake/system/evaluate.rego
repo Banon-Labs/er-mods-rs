@@ -47,6 +47,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.no_
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_narrated_action.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_proof_without_observation.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_restating_user_own_rule.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_stall_on_friction.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
