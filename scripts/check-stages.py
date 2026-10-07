@@ -159,6 +159,7 @@ STAGES: tuple[Stage, ...] = (
             ".cargo/config.toml",
             "scripts/comment-caps-words.txt",
             "scripts/comment-caps.baseline.json",
+            "scripts/frida/ai-lua/**/*",
         ),
     ),
     Stage(
