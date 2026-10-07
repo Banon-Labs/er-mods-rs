@@ -3,7 +3,7 @@
 
     python3 scripts/planner-copy-build.py <build id> [--accessories-colour R,G,B]
 
-Reads the build anonymously (GET /inventories/<id>) and stores the copy under the mod's own
+Reads the build anonymously (`GET /inventories/<id>`) and stores the copy under the mod's own
 anonymous planner session -- the file er-build-import-runtime's upload path keeps in the game
 directory (er-build-planner-session.json) -- so it gets a fresh `?b=` link that whoever opens it
 can save into their own account. Prints the link and what the planner reads back.
