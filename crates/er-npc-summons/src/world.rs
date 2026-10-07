@@ -5,7 +5,7 @@
 
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use crate::addr::{physics, tree};
+use crate::addr::{lab, physics, tree};
 
 /// Reads that fail instead of faulting.
 pub(crate) trait Mem {
@@ -88,6 +88,191 @@ pub(crate) fn pos_of(mem: &impl Mem, chr: usize) -> Option<[f32; 3]> {
     let p = physics_of(mem, chr)? + physics::POS;
     let pos = [mem.f32(p)?, mem.f32(p + 4)?, mem.f32(p + 8)?];
     pos.iter().all(|v| v.is_finite()).then_some(pos)
+}
+
+/// The pointer at `at`, when it is not null.
+fn ptr(mem: &impl Mem, at: usize) -> Option<usize> {
+    mem.usize(at).filter(|&p| p != 0)
+}
+
+fn module(mem: &impl Mem, chr: usize, offset: usize) -> Option<usize> {
+    let modules = ptr(mem, chr + physics::CHR_MODULES)?;
+    ptr(mem, modules + offset)
+}
+
+/// HP and max HP.
+pub(crate) fn hp_of(mem: &impl Mem, chr: usize) -> Option<(i32, i32)> {
+    let data = module(mem, chr, lab::MODULE_DATA)?;
+    Some((
+        mem.u32(data + lab::DATA_HP)? as i32,
+        mem.u32(data + lab::DATA_HP + 4)? as i32,
+    ))
+}
+
+/// Alive: HP reads and is above zero.
+pub(crate) fn alive(mem: &impl Mem, chr: usize) -> bool {
+    hp_of(mem, chr).is_some_and(|(hp, _)| hp > 0)
+}
+
+/// SpEffect ids running on `chr`, at most 512.
+pub(crate) fn speffect_ids(mem: &impl Mem, chr: usize) -> Vec<i32> {
+    let mut out = Vec::new();
+    let Some(list) = ptr(mem, chr + lab::SPEFFECTS) else {
+        return out;
+    };
+    let mut entry = mem.usize(list + lab::SPEFFECTS_FIRST).unwrap_or(0);
+    while entry != 0 && out.len() < 512 {
+        let Some(id) = mem.u32(entry + lab::SPEFFECT_ID) else {
+            break;
+        };
+        out.push(id as i32);
+        entry = mem.usize(entry + lab::SPEFFECT_NEXT).unwrap_or(0);
+    }
+    out
+}
+
+/// The newest TimeAct queue entry: which animation, how far into it, and the write index that
+/// tells a new entry from the same one.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Anim {
+    pub(crate) write: u32,
+    pub(crate) anim: i32,
+    pub(crate) time: f32,
+}
+
+pub(crate) fn anim_of(mem: &impl Mem, chr: usize) -> Option<Anim> {
+    let ta = module(mem, chr, lab::MODULE_TIME_ACT)?;
+    let write = mem.u32(ta + lab::TA_WRITE)?;
+    let slot = (write as usize + lab::TA_SLOTS - 1) % lab::TA_SLOTS;
+    let at = ta + lab::TA_QUEUE + slot * lab::TA_SLOT;
+    Some(Anim {
+        write,
+        anim: mem.u32(at)? as i32,
+        time: mem.f32(at + 4)?,
+    })
+}
+
+pub(crate) fn npc_param_of(mem: &impl Mem, chr: usize) -> Option<i32> {
+    mem.u32(chr + lab::NPC_PARAM).map(|v| v as i32)
+}
+
+/// The lock-on target's handle, when there is one.
+pub(crate) fn lock_handle_of(mem: &impl Mem, chr: usize) -> Option<u64> {
+    let lo = mem.u32(chr + lab::LOCK_TARGET)?;
+    if lo == u32::MAX {
+        return None;
+    }
+    let hi = mem.u32(chr + lab::LOCK_TARGET + 4)?;
+    Some(u64::from(lo) | (u64::from(hi) << 32))
+}
+
+/// Status build-up: `(left, max)` per status, poison, rot, bleed, death blight, frost, sleep,
+/// madness. A gauge counts down from the resistance and procs below 1.
+pub(crate) fn gauges_of(mem: &impl Mem, chr: usize) -> Option<[(i32, i32); 7]> {
+    let resist = module(mem, chr, lab::MODULE_RESIST)?;
+    let mut out = [(0, 0); 7];
+    for (i, g) in out.iter_mut().enumerate() {
+        *g = (
+            mem.u32(resist + lab::RESIST_GAUGE + 4 * i)? as i32,
+            mem.u32(resist + lab::RESIST_MAX + 4 * i)? as i32,
+        );
+    }
+    Some(out)
+}
+
+/// Every character in `WorldChrMan`'s chr sets.
+pub(crate) fn all_chrs(mem: &impl Mem, wcm: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    for s in 0..lab::CHR_SET_COUNT {
+        let Some(set) = ptr(mem, wcm + lab::CHR_SETS + s * 8) else {
+            continue;
+        };
+        let (Some(cap), Some(entries)) = (
+            mem.u32(set + lab::SET_CAPACITY),
+            ptr(mem, set + lab::SET_ENTRIES),
+        ) else {
+            continue;
+        };
+        if cap > 4096 {
+            continue;
+        }
+        for i in 0..cap as usize {
+            if let Some(chr) = ptr(mem, entries + i * lab::SET_ENTRY) {
+                out.push(chr);
+            }
+        }
+    }
+    out
+}
+
+/// The class name behind `chr`'s vtable, from its MSVC RTTI complete object locator; `base` is
+/// the game image's.
+pub(crate) fn rtti_name(mem: &impl Mem, base: usize, chr: usize) -> Option<Vec<u8>> {
+    let vt = ptr(mem, chr)?;
+    let col = ptr(mem, vt.checked_sub(8)?)?;
+    let td = base + mem.u32(col + 12)? as usize;
+    let mut name = Vec::new();
+    for i in 0..64 {
+        let b = mem.u8(td + 16 + i)?;
+        if b == 0 {
+            return Some(name);
+        }
+        name.push(b);
+    }
+    None
+}
+
+pub(crate) const PLAYER_INS_RTTI: &[u8] = b".?AVPlayerIns@CS@@";
+
+/// The handle of the character `chr`'s AI has picked as its enemy (its `TARGET_ENE_0`): the
+/// highest-scoring node of its enemy search list, when that node is a character.
+pub(crate) fn ai_target_handle(mem: &impl Mem, chr: usize, is_player: bool) -> Option<u64> {
+    let man = ptr(
+        mem,
+        chr + if is_player {
+            lab::AI_MAN_PLAYER
+        } else {
+            lab::AI_MAN_ENEMY
+        },
+    )?;
+    let ai = ptr(mem, man + lab::AI_INS)?;
+    let ts = ptr(mem, ai + lab::AI_TARGETING)?;
+    let mut node = mem.usize(ts + lab::AI_LIST)?;
+    let mut best: Option<(usize, f32)> = None;
+    let mut guard = 0;
+    while node != 0 && guard < 64 {
+        let score = mem.f32(node + lab::AI_NODE_SCORE)?;
+        if score > best.map_or(AI_ENEMY_NO_SCORE, |(_, s)| s) {
+            best = Some((node, score));
+        }
+        node = mem.usize(node + lab::AI_NODE_NEXT)?;
+        guard += 1;
+    }
+    let (node, _) = best?;
+    if mem.u32(node + lab::AI_NODE_KIND)? != 1 {
+        return None;
+    }
+    let lo = mem.u32(node + lab::AI_NODE_HANDLE)?;
+    let hi = mem.u32(node + lab::AI_NODE_HANDLE + 4)?;
+    Some(u64::from(lo) | (u64::from(hi) << 32))
+}
+
+/// The search list's "no score" value; a node must beat it to count.
+const AI_ENEMY_NO_SCORE: f32 = -99999.9;
+
+/// Euclidean distance, unrounded.
+pub(crate) fn distance(a: [f32; 3], b: [f32; 3]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| f64::from(x - y).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// `v` rounded to `places` decimals, as the lab rounded what it sent.
+pub(crate) fn round_to(v: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    (v * scale).round() / scale
 }
 
 /// Straight-line distance, rounded to centimetres as the lab reported it.
