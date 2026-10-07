@@ -198,6 +198,45 @@ pub(crate) const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
 // by build.rs from named instructions and checked against the 1.17 image.
 include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
+/// `ChrIns+0x190` modules -> `+0x68` physics module (`scripts/frida/spawn-npc.js` `physicsOf`,
+/// live 1.17.1).
+pub(crate) mod physics {
+    pub(crate) const CHR_MODULES: usize = 0x190;
+    pub(crate) const MODULES_PHYSICS: usize = 0x68;
+    /// Position, three f32 (`spawn-npc.js` `posOf`).
+    pub(crate) const POS: usize = 0x70;
+    /// Standing on solid ground, one byte.
+    pub(crate) const STANDING: usize = 0x92;
+    /// The field-ins handle of what the character stands on: low dword, then high dword. The low
+    /// dword's top nibble is the kind (0 map collision, 6 asset, 8 asset collision part). Measured
+    /// 2026-10-05 in Raya Lucaria (bd `lift-detection-ground-handle-1171-2026-10-05`).
+    pub(crate) const GROUND_HANDLE: usize = 0x240;
+}
+
+/// `CSWorldGeomMan*` global (1.17.1 `0x143d6dc18`), carried by the data map, whose row for it
+/// (`WORLD_SINGLETON_B_RVA`, 389/394 votes) another crate declares.
+pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize = 0x3d6_9ba8;
+
+/// `CSWorldGeomMan` -> `+0x20` an MSVC `std::map` of loaded blocks (node `+0x28` block data), and
+/// in each block data `+0x340` a `std::map` of entity id (node `+0x20`) -> field-ins handle (node
+/// `+0x28` low, `+0x2c` high). 1.17.1 `0x1406d38f0`, `0x1406a76d0`; read live by
+/// `spawn-npc.js` `refreshLiftHandles`.
+pub(crate) mod geom {
+    pub(crate) const MAN_BLOCKS: usize = 0x20;
+    pub(crate) const BLOCK_NODE_DATA: usize = 0x28;
+    pub(crate) const BLOCK_ENTITIES: usize = 0x340;
+    pub(crate) const ENTITY_NODE_ID: usize = 0x20;
+    pub(crate) const ENTITY_NODE_HANDLE: usize = 0x28;
+}
+
+/// MSVC `std::map` node: left, parent (the head's parent is the root), right, nil flag.
+pub(crate) mod tree {
+    pub(crate) const LEFT: usize = 0x0;
+    pub(crate) const PARENT: usize = 0x8;
+    pub(crate) const RIGHT: usize = 0x10;
+    pub(crate) const IS_NIL: usize = 0x19;
+}
+
 /// `SummonBuddyManager+0x20`: the requested summon SpEffect, `207000 + level` for the Mimic Tear.
 pub(crate) const BUDDY_MANAGER_REQUEST: usize = 0x20;
 

@@ -21,6 +21,10 @@
 //! world load builds a new state) and every [`REAPPLY_FRAMES`] frames, because battle scripts load
 //! lazily and overwrite the globals the framework wraps.
 //!
+//! Between applies, the world facts producers set through `facts` run as one more chunk
+//! (`LAB_WORLD.<key> = <value>`), in the same detour and with the same saved-index restore,
+//! whenever the store has changed since the last injection, and in full after every apply.
+//!
 //! A brain is keyed by think id. Every character running that think, world NPCs included, runs
 //! it; the Mimic Tear's own think (100000010) is used by nothing else.
 
@@ -28,7 +32,7 @@
 
 use std::ffi::CString;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use er_game_base::mem::{
     game_module_base, game_rva_named, read_global_ptr, safe_read_cstr, safe_read_usize,
@@ -36,6 +40,7 @@ use er_game_base::mem::{
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use crate::addr::{self, ai_lua, lua};
+use crate::facts;
 use crate::log::summons_log;
 
 /// Frames between applies.
@@ -59,6 +64,11 @@ static LAST_STATE: AtomicUsize = AtomicUsize::new(0);
 /// The thread applying right now, so a `pcall` inside a brain goes straight to the game.
 static APPLYING_TID: AtomicU32 = AtomicU32::new(0);
 static APPLIES: AtomicUsize = AtomicUsize::new(0);
+/// The `facts` generation last brought into the AI state.
+static FACTS_GENERATION: AtomicU64 = AtomicU64::new(u64::MAX);
+/// Facts chunks that failed; only the first few are logged.
+static FACTS_FAILURES: AtomicUsize = AtomicUsize::new(0);
+const FACTS_FAILURES_LOGGED: usize = 5;
 
 static ORIG_PCALL: AtomicUsize = AtomicUsize::new(0);
 
@@ -253,6 +263,29 @@ fn apply(api: &Api, state: usize) {
     }
 }
 
+/// Bring the AI state's `LAB_WORLD` up to date with `facts`.
+fn inject_facts(api: &Api, state: usize) {
+    let Some(pending) = facts::take_chunk(state) else {
+        FACTS_GENERATION.store(facts::generation(), Ordering::Release);
+        return;
+    };
+    // SAFETY: as in `apply`.
+    let top = unsafe { (api.gettop)(state) };
+    let ran = run(api, state, "brain-facts", &pending.chunk, 0);
+    // SAFETY: restore by index; see the module docs.
+    unsafe { (api.settop)(state, top) };
+    // A failed chunk is not retried until the facts change again, so it cannot run on every call.
+    FACTS_GENERATION.store(pending.generation, Ordering::Release);
+    match ran {
+        Ok(()) => facts::commit(state, pending),
+        Err(why) => {
+            if FACTS_FAILURES.fetch_add(1, Ordering::AcqRel) < FACTS_FAILURES_LOGGED {
+                summons_log(format_args!("brains: facts did not apply: {why}"));
+            }
+        }
+    }
+}
+
 unsafe extern "system" fn pcall_detour(
     state: usize,
     nargs: i32,
@@ -272,16 +305,24 @@ unsafe extern "system" fn pcall_detour(
                 .load(Ordering::Acquire)
                 .wrapping_sub(LAST_APPLY_FRAME.load(Ordering::Acquire))
                 >= REAPPLY_FRAMES;
-        if due
+        let facts_due = FACTS_GENERATION.load(Ordering::Acquire) != facts::generation();
+        if (due || facts_due)
             && APPLYING_TID.load(Ordering::Acquire) != me
             && ai_state() == Some(state)
             && APPLYING_TID
                 .compare_exchange(0, me, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
         {
-            LAST_APPLY_FRAME.store(FRAME.load(Ordering::Acquire), Ordering::Release);
             match api(original) {
-                Ok(api) => apply(&api, state),
+                Ok(api) => {
+                    if due {
+                        LAST_APPLY_FRAME.store(FRAME.load(Ordering::Acquire), Ordering::Release);
+                        apply(&api, state);
+                        // A brain may have rebuilt `LAB_WORLD`; give it every fact again.
+                        facts::invalidate();
+                    }
+                    inject_facts(&api, state);
+                }
                 Err(why) => {
                     BRAIN_COUNT.store(0, Ordering::Release);
                     summons_log(format_args!("brains: off -- {why}"));

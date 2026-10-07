@@ -26,7 +26,10 @@
 //! duel transition with the character's address, and every Mimic Tear summon.
 
 mod addr;
+mod facts;
+mod lift;
 mod log;
+mod world;
 
 #[cfg(windows)]
 mod brains;
@@ -337,6 +340,7 @@ fn tick(state: &mut TaskState) {
     step(state, Event::Frame);
     names::prune();
     team::tick();
+    lift::live::tick();
     match state.duel.state.clone() {
         State::Hidden { chr, .. } => {
             let seen = alive(state, chr)

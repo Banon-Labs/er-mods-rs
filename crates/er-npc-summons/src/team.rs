@@ -69,6 +69,17 @@ pub(crate) fn adopt(slot: u8, chr: usize) {
     }
 }
 
+/// The tracked companions still holding the handle they were built with, as `ChrIns*`.
+pub(crate) fn companions() -> Vec<usize> {
+    COMPANIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|&&(chr, handle)| game::chr_handle(chr) == Some(handle))
+        .map(|&(chr, _)| chr)
+        .collect()
+}
+
 /// Re-apply the player's team to every tracked companion and forget the ones that are gone.
 /// Called from the game task every frame.
 pub(crate) fn tick() {
