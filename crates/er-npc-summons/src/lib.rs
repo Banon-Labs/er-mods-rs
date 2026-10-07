@@ -84,7 +84,7 @@ const CONFIG_POLL_FRAMES: u32 = 60;
 const PARTY_JOINED: i32 = 4;
 /// How far from the player the hidden NPC and its sign go, in metres along physics x.
 #[cfg(windows)]
-const SIGN_OFFSET: f32 = 1.5;
+const SIGN_DISTANCE_M: f32 = 1.5;
 
 #[cfg(windows)]
 static START: Once = Once::new();
@@ -205,7 +205,7 @@ fn perform(state: &mut TaskState, actions: Vec<Action>) -> Option<Event> {
                 let at = game::main_player()
                     .and_then(game::physics_pos)
                     .map(|mut pos| {
-                        pos.0[0] += SIGN_OFFSET;
+                        pos.0[0] += SIGN_DISTANCE_M;
                         pos
                     });
                 follow = Some(match at {
@@ -418,6 +418,8 @@ fn spawn_game_task() {
 #[cfg(windows)]
 fn install(module_base: usize) {
     reset_log_file();
+    // A refused address or detour is logged here instead of failing silently.
+    er_hook::set_hook_logger(summons_log);
     summons_log(format_args!(
         "attach: module_base={module_base:#x}; duel signs + custom Mimic Tear, overlay ABI {:#06x}",
         er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG

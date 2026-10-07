@@ -194,12 +194,9 @@ pub(crate) mod ai_lua {
 /// it has no verified ledger row; it is an rva into 1.17.1 only, checked by its opening bytes
 /// before it is hooked.
 pub(crate) const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
-/// The 1.17.1 opening of [`MENU_HAS_MOUSE_1171_RVA`]: three register saves, `sub rsp,0x20`,
-/// `cmp byte [rcx+0x1a],0`.
-pub(crate) const MENU_HAS_MOUSE_1171_PROLOGUE: [u8; 24] = [
-    0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57,
-    0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x1a, 0x00,
-];
+// The 1.17.1 opening of `MENU_HAS_MOUSE_1171_RVA`, `MENU_HAS_MOUSE_1171_PROLOGUE`, is generated
+// by build.rs from named instructions and checked against the 1.17 image.
+include!(concat!(env!("OUT_DIR"), "/generated_prologues.rs"));
 
 /// `SummonBuddyManager+0x20`: the requested summon SpEffect, `207000 + level` for the Mimic Tear.
 pub(crate) const BUDDY_MANAGER_REQUEST: usize = 0x20;

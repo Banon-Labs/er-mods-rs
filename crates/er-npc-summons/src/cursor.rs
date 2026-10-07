@@ -77,6 +77,9 @@ pub(crate) fn install() {
     let Ok(base) = game_module_base() else {
         return;
     };
+    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
+    // the opening bytes are compared below before anything is hooked. `game_rva` has no ledger
+    // row for this function because 1.17 changed its body.
     let entry = base + MENU_HAS_MOUSE_1171_RVA;
     let mut bytes = [0u8; MENU_HAS_MOUSE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.

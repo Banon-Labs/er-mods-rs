@@ -26,11 +26,13 @@
 
 #![cfg(windows)]
 
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
-use er_game_base::mem::{game_module_base, game_rva_named, read_global_ptr, safe_read_usize};
+use er_game_base::mem::{
+    game_module_base, game_rva_named, read_global_ptr, safe_read_cstr, safe_read_usize,
+};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
 use crate::addr::{self, ai_lua, lua};
@@ -40,6 +42,8 @@ use crate::log::summons_log;
 const REAPPLY_FRAMES: u32 = 120;
 /// Log lines one drain may copy into the DLL's log.
 const DRAIN_LINES_MAX: usize = 40;
+/// The longest Lua string read back: a full drain is 200 lines of at most a few hundred bytes.
+const LUA_STRING_MAX: usize = 64 * 1024;
 /// The framework every apply loads first.
 const FRAMEWORK: &str = include_str!("../lua/brain-framework.lua");
 
@@ -149,10 +153,10 @@ fn string_at(api: &Api, state: usize, index: i32) -> Option<String> {
     if text.is_null() {
         return None;
     }
-    // SAFETY: Lua strings are NUL-terminated.
-    let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
+    // SAFETY: a fault-tolerant, length-capped read of the string Lua returned.
+    let bytes = unsafe { safe_read_cstr(text as usize, LUA_STRING_MAX) }?;
     // UTF-8 Lossy: Lua strings are bytes; an error message may carry a non-UTF-8 name.
-    Some(String::from_utf8_lossy(bytes).into_owned())
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Compile and run one chunk with `nresults` results; the caller restores the stack.

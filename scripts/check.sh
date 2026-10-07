@@ -2356,6 +2356,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # tests and requires a host runner.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 
+# er-npc-summons-core: the config parser, the Mimic formation and buddy-list shaping, the duel
+# entity id and the CharaInitParam dressing table. Pure logic with no `cfg(windows)`, so it runs on
+# the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons-core --lib
+
 # The patch registry invariants (no two patches share a flag, key or address; every
 # patch actually changes its byte; `target` follows a window the running build moved) and
 # the config parser. Host-testable because none of it needs a game -- the addresses are

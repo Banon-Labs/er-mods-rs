@@ -19,6 +19,13 @@ er-npc-summons-core = { path = "../er-npc-summons-core" }
 # A companion's build URL is parsed by the importer's own model, never a second parser.
 er-build-import-core = { path = "../er-build-import-core" }
 
+# build.rs assembles the byte-checked prologue from named instructions.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
 [target.'cfg(windows)'.dependencies]
 # The MinHook wrapper, for the four Mimic Tear detours (BuddyGenerator, GetBuddyList,
 # GetBuddyParam, CreateSummonChr). Each is a bare `MhHook` with a typed detour; all four addresses

@@ -66,8 +66,8 @@ pub fn set_keys_taken(keys: &[u8]) {
         let (word, bit) = key_bit(dik);
         words[word] |= bit;
     }
-    for (slot, word) in KEYS_TAKEN.iter().zip(words) {
-        slot.store(word, Ordering::Relaxed);
+    for (index, bits) in words.into_iter().enumerate() {
+        KEYS_TAKEN[index].store(bits, Ordering::Relaxed);
     }
 }
 
