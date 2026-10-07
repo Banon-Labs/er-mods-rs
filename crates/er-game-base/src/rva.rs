@@ -14,6 +14,9 @@ pub const GAME_DATA_MAN_GLOBAL_RVA: usize = 0x3d5df38;
 /// CS_MENU_MAN_GLOBAL_RVA / SELECTBOT_INPUT_MANAGER_GLOBAL_RVA /
 /// TITLE_INPUT_MANAGER_RVA).
 pub const CS_MENU_MAN_GLOBAL_RVA: usize = 0x3d6b7b0;
+/// `CSWorldGeomMan` singleton global, built by `MoveMapStep::STEP_MsbLoad`. Carried to 1.17 by
+/// the data map: `0x3d69ba8 -> 0x3d6dc18`, 389/394 votes.
+pub const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize = 0x3d69ba8;
 /// `GameMan` singleton global (save-slot owner).
 pub const GAME_MAN_SINGLETON_RVA: usize = 0x3d69918;
 /// `CS::CSNetMan` singleton global -- `0x143d6de98` on 1.16.2.

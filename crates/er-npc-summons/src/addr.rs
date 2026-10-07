@@ -213,9 +213,9 @@ pub(crate) mod physics {
     pub(crate) const GROUND_HANDLE: usize = 0x240;
 }
 
-/// `CSWorldGeomMan*` global (1.17.1 `0x143d6dc18`), carried by the data map, whose row for it
-/// (`WORLD_SINGLETON_B_RVA`, 389/394 votes) another crate declares.
-pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize = 0x3d6_9ba8;
+/// `CSWorldGeomMan*` global (1.17.1 `0x143d6dc18`), carried by the data map.
+pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize =
+    er_game_base::rva::CS_WORLD_GEOM_MAN_GLOBAL_RVA;
 
 /// `CSWorldGeomMan` -> `+0x20` an MSVC `std::map` of loaded blocks (node `+0x28` block data), and
 /// in each block data `+0x340` a `std::map` of entity id (node `+0x20`) -> field-ins handle (node
