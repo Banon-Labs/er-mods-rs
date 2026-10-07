@@ -257,7 +257,10 @@ function applyHome(chr, playerPos) {
 }
 
 // Equipment overrides for the spawn, from lab_equip in the AI mods: cfg.equip is
-// {think: {slot: protector id}}, applied only when the spawn's think id is the key.
+// {think: {slot: protector id}}, applied only when the spawn's think id is the key. A key of
+// "think.N" applies to the Nth summon only (0 is `spawned`, 1.. the extras in creation order) and
+// wins over the plain think key slot by slot, so one think id can field differently geared
+// characters (scripts/frida/ai-lua/mods/turtles.lua).
 //
 // The spawn holds two ChrAsm copies (fromsoftware-rs cs/player_game_data.rs ChrAsm,
 // equipment_param_ids at +0x7c, one i32 per ChrAsmSlot). Measured 2026-10-05 on Moongrum, whose
@@ -291,19 +294,37 @@ function mintKey(chr, slot, piece) {
     return `${chr}:${slot}:${piece.id}:${piece.gem}`;
 }
 
-// canMint is true only at creation; the heartbeat only re-writes handles minted earlier.
-function applyEquip(chr, canMint) {
-    const want = (cfg.equip || {})[String(cfg.think)];
+// What `table` (cfg.equip or cfg.face) holds for the summon at `index`: its own "think.N" entry
+// over the think-wide one.
+function forSpawn(table, index) {
+    const all = table || {};
+    const shared = all[String(cfg.think)];
+    const own = index === undefined ? undefined : all[`${cfg.think}.${index}`];
+    if (shared === undefined) return own;
+    if (own === undefined) return shared;
+    return typeof own === 'string' ? own : Object.assign({}, shared, own);
+}
+
+// Each summon's current Ash of War, set by artPlanner (ChrIns string -> EquipParamGem id).
+const artNow = new Map();
+
+// canMint is true only at creation; the heartbeat only re-writes handles minted earlier, plus any
+// a new artPlanner pick needs.
+function applyEquip(chr, canMint, index) {
+    const want = forSpawn(cfg.equip, index);
     if (!want) return null;
     const asms = [chr.add(CHR_ASM_PTR).readPointer(), chr.add(PLAYER_GAME_DATA).readPointer().add(PGD_CHR_ASM)];
     const changed = [];
-    for (const [slot, piece] of Object.entries(want)) {
+    for (const [slot, base] of Object.entries(want)) {
         const index = EQUIP_SLOT[slot];
         if (index === undefined) continue;
+        // artPlanner's pick replaces the right hand's gem; the weapon, and so the grip, stay.
+        const art = slot === 'right1' ? artNow.get(chr.toString()) : undefined;
+        const piece = art === undefined ? base : { id: base.id, gem: art };
         let handle = null;
         if (index <= 5) {
             const key = mintKey(chr, slot, piece);
-            if (canMint && !minted.has(key)) {
+            if ((canMint || art !== undefined) && !minted.has(key)) {
                 const buf = Memory.alloc(16);
                 MINT_WEAPON(CSGAITEM.readPointer(), buf, piece.id, piece.gem);
                 minted.set(key, { buf, handle: buf.readU32() >>> 0 });
@@ -372,8 +393,83 @@ const BUDDY_PACKET = {
 };
 const FACE_BLOCK = 0x768;
 
-function applyFace(chr) {
-    const hex = (cfg.face || {})[String(cfg.think)];
+// A summon's displayed name. Every name plate and lock-on tag gets its text from
+// GetChrName(MenuString* out, ChrIns* chr, bool decorate), 1.16.2 0x14075f750 = 1.17.x 0x1407605a0
+// (bd npc-overhead-name-source-getchrname-1171-2026-10-06). For an NPC it is NpcParam's nameId,
+// never PlayerGameData character_name: writing that changed nothing on screen. The hook below
+// points the returned MenuString's rawString (+0) at a buffer of ours for each named summon; the
+// MenuString destructor frees only its own heap buffer, so the buffer just has to stay alive.
+// A name's buffer is never freed (a tag may hold the pointer past the call); only the ChrIns ->
+// name map is cleared, on respawn, since ChrIns addresses are reused.
+const GET_CHR_NAME = va('0x1407605a0');
+const nameTexts = new Map();
+const nameplates = new Map();
+
+function applyName(chr, index) {
+    const name = forSpawn(cfg.name, index);
+    if (!name) return null;
+    if (!nameTexts.has(name)) nameTexts.set(name, Memory.allocUtf16String(name));
+    const key = chr.toString();
+    const had = nameplates.get(key);
+    nameplates.set(key, { name, text: nameTexts.get(name) });
+    namesByHandle.set(chr.add(8).readU64().toString(), name);
+    return { name, changed: had === undefined || had.name !== name };
+}
+
+// The summon sidebar (spirit-ash panel) has one name label for the whole panel and no text per
+// bar (bd spirit-ash-hud-panel-name-is-one-label-1171-2026-10-06). Its per-frame producer,
+// 0x140771a20 (CSFeManImp*), fills CSFeManImp +0x4d58 visible (u8), +0x4da0 the label MenuString,
+// +0x4dd8 the bar count and +0x4de0 the bars (stride 0x18, ChrIns handle first), and takes the
+// label from the summoning goods, which our summons never had, so it is blank. After it runs, the
+// label's rawString is pointed at our names joined in bar order; the label setter 0x140736200 uses
+// rawString when it is set.
+const FE_BUDDY_PANEL = va('0x140771a20');
+const namesByHandle = new Map();
+const panelTexts = new Map();
+let panelSeen = null;
+const panelHook = Interceptor.attach(FE_BUDDY_PANEL, {
+    onEnter(args) {
+        this.fe = args[0];
+    },
+    onLeave() {
+        try {
+            const fe = this.fe;
+            if (fe.add(0x4d58).readU8() === 0) return;
+            const n = Math.min(fe.add(0x4dd8).readS32(), 5);
+            const handles = [];
+            const parts = [];
+            for (let i = 0; i < n; i++) {
+                const h = fe.add(0x4de0 + i * 0x18).readU64().toString();
+                handles.push(h);
+                if (namesByHandle.has(h)) parts.push(namesByHandle.get(h));
+            }
+            const seen = `${n}:${parts.join(',')}`;
+            if (seen !== panelSeen) {
+                panelSeen = seen;
+                emit('panel-names', { bars: n, handles, names: parts });
+            }
+            if (parts.length === 0) return;
+            const s = parts.join(' / ');
+            if (!panelTexts.has(s)) panelTexts.set(s, Memory.allocUtf16String(s));
+            fe.add(0x4da0).writePointer(panelTexts.get(s));
+        } catch (e) {
+            emit('hook-error', { where: 'panel-names', error: e.message });
+        }
+    },
+});
+
+const nameHook = Interceptor.attach(GET_CHR_NAME, {
+    onEnter(args) {
+        this.out = args[0];
+        this.plate = nameplates.get(args[1].toString());
+    },
+    onLeave() {
+        if (this.plate !== undefined) this.out.writePointer(this.plate.text);
+    },
+});
+
+function applyFace(chr, index) {
+    const hex = forSpawn(cfg.face, index);
     if (!hex) return null;
     const pgd = chr.add(PLAYER_GAME_DATA).readPointer();
     const bytes = new Uint8Array(hex.match(/../g).map((b) => parseInt(b, 16)));
@@ -440,6 +536,192 @@ const HEAL_HANDLE = 0xb0000000 | 50201;
 const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']);
 let pendingHealAdd = null;
 
+// Food kept in every summon's quick slots for brain_turtles.lua to eat when idle: one of each at a
+// time (both are max held 1), and a new one restockMs after the last was eaten. Restocking is the
+// stew's only cooldown; crab is eaten whenever neither buff is up, so it just comes back quickly.
+//   Scorpion Stew  goods 2001202, slot 1  physical damage negation up and 8 HP a second
+//   Boiled Crab    goods 820,     slot 2  physical damage negation greatly up
+// Quick slots, measured 2026-10-06 on a turtle's EquipGameData (PlayerGameData +0x2b0): slot N is
+// {gaitem handle u32, inventory index i32} at +0x290 + 8N, mirrored as an item id at +0x3a0 + 4N.
+// The heal sat in slot 0 as {0xb000c419, 4} with its entry first in the normal item list and a key
+// item capacity of 4, so an inventory index is key capacity + position in the normal list.
+// When one is eaten, 'food' reports the SpEffect ids that appeared since it was stocked: that is
+// how the stew's (20501201, 20501202) were found, and how the crab's will be.
+// The two greases ride the same path, but only for a summon whose right-hand weapon takes grease
+// (EquipParamWeapon isEnhance; the game's own use check refuses the rest):
+//   Dragonbolt Grease             goods 2001410, slot 3  SpEffect 20501410 (left 20501412), 60 s
+//   Drawstring Dragonbolt Grease  goods 2001510, slot 4  SpEffect 20501411 (left 20501413), 25 s
+// brain_turtles.lua applies the first when idle and the second in battle.
+const FOODS = [
+    { name: 'stew', goods: 2001202, slot: 1, restockMs: 60000 },
+    { name: 'crab', goods: 820, slot: 2, restockMs: 5000 },
+    { name: 'grease', goods: 2001410, slot: 3, restockMs: 2000, needsEnhance: true },
+    { name: 'drawstring', goods: 2001510, slot: 4, restockMs: 2000, needsEnhance: true },
+    // Throwables from the turtles' planner builds, for brain_turtles.lua's volley, a full stack at
+    // a time (EquipParamGoods maxNum). Slot 10 is pouch 0: EquipItemData's six pouch slots follow
+    // its ten quick slots, and ChrAsm's pouch ids follow its quick item ids, so +8N and +4N reach it.
+    { name: 'kukri', goods: 1730, slot: 5, restockMs: 3000, qty: 30 },
+    { name: 'harpoon', goods: 2001710, slot: 6, restockMs: 3000, qty: 5 },
+    { name: 'hefty-pot', goods: 2000690, slot: 7, restockMs: 3000, qty: 10 },
+    { name: 'fetid-pot', goods: 330, slot: 8, restockMs: 3000, qty: 10 },
+    { name: 'albinauric-pot', goods: 610, slot: 9, restockMs: 3000, qty: 10 },
+    { name: 'spark-aromatic', goods: 3510, slot: 10, restockMs: 3000, qty: 10 },
+    // Boluses for statusCheck below, in pouch slots 1..5. Each bolus's SpEffect chain ends on a row
+    // with -99999 build-up of its status (3061 poison, 3071 rot, 3051 bleed, 3093 frost); the
+    // poison, rot and frost ones also end a running ailment (parent stateInfo 10, 11, 276).
+    { name: 'neutralizing', goods: 900, slot: 11, restockMs: 3000, qty: 5 },
+    { name: 'preserving', goods: 940, slot: 12, restockMs: 3000, qty: 5 },
+    { name: 'stanching', goods: 910, slot: 13, restockMs: 3000, qty: 5 },
+    // The last two pouch slots went to these (user rules 2026-10-06), in place of the Thawfrost and
+    // Clarifying Boluses: all sixteen slots are taken, and ChangeEquipItem_ById only finds an item
+    // that is in one (measured: an item held in the inventory alone was refused).
+    //   Uplifting Aromatic  goods 3500, bullet 10350000 -> SpEffects 503500 / 503501, 40 s, area
+    //   Mimic's Veil        goods 3040 (not consumed), bullet 10304000 -> SpEffect 503040
+    { name: 'uplifting', goods: 3500, slot: 14, restockMs: 3000, qty: 10 },
+    { name: 'mimic-veil', goods: 3040, slot: 15, restockMs: 3000, qty: 1 },
+];
+
+// EquipParamWeapon isEnhance for the weapon in a summon's right hand, read from the live param
+// table the way scripts/frida/goods-row-live.js walks EquipParamGoods: SoloParamRepository (1.17
+// .data rva 0x3d85f58) -> holder index 0 is EquipParamWeapon -> PARAM blob, rows at +0x40 with a
+// 24-byte stride. The row is the param id with the upgrade level dropped ((id / 100) * 100, as
+// fromsoftware-rs solo_param_repository.rs looks it up); isEnhance is +0x106 bit 7
+// (EQUIP_PARAM_WEAPON_ST bits_106). Regulation 1.17.1: Keen Parrying Dagger 1, Keen Flail 1,
+// Staff of the Avatar 0.
+const SOLO_PARAM_REPOSITORY = va('0x143d85f58');
+const WEAPON_IS_ENHANCE = 0x106;
+const enhanceOf = new Map();
+
+// Row `id` of solo param `index` (fromsoftware-rs solo_param_repository.rs: 0 EquipParamWeapon,
+// 15 SpEffectParam), by binary search: PARAM rows are sorted by id.
+function paramRow(index, id) {
+    const repo = SOLO_PARAM_REPOSITORY.readPointer();
+    if (repo.isNull() || repo.add(0x80 + index * 72).readS32() <= 0) return null;
+    const fd4 = repo.add(0x88 + index * 9 * 8).readPointer().add(0x80).readPointer();
+    const blob = fd4.add(0x80).readPointer();
+    let lo = 0;
+    let hi = blob.add(0x0a).readU16() - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const entry = blob.add(0x40 + mid * 24);
+        const at = entry.readU32();
+        if (at === id) return blob.add(entry.add(8).readU64().toNumber());
+        if (at < id) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return null;
+}
+
+function weaponRow(id) {
+    return paramRow(0, id);
+}
+
+// SpEffectParam spCategory, u16 at +0x13e (Smithbox paramdef laid out by er-param-read.py; row
+// size 0x390 matches the regulation's stride). A status in progress is a live entry of category
+// 10003..10010, and the game refuses a second row of that category until it ends (bd
+// er-status-reproc-lockout-spcategory-2026-09-29).
+const SP_CATEGORY = 0x13e;
+const categoryOf = new Map();
+
+function spCategory(id) {
+    if (!categoryOf.has(id)) {
+        const row = paramRow(15, id);
+        if (row === null) return -1;
+        categoryOf.set(id, row.add(SP_CATEGORY).readU16());
+    }
+    return categoryOf.get(id);
+}
+
+function statusCategories(chr) {
+    const cats = new Set();
+    for (const id of speffectIds(chr)) {
+        const c = spCategory(id);
+        if (c >= 10003 && c <= 10010) cats.add(c);
+    }
+    return cats;
+}
+
+function greasable(chr) {
+    const id = chr.add(CHR_ASM_PTR).readPointer().add(CHR_ASM_PARAM_IDS + EQUIP_SLOT.right1 * 4).readS32();
+    const base = Math.floor(id / 100) * 100;
+    if (!enhanceOf.has(base)) {
+        const row = weaponRow(base);
+        if (row === null) return false;
+        enhanceOf.set(base, (row.add(WEAPON_IS_ENHANCE).readU8() & 0x80) !== 0);
+        emit('greasable', { weapon: base, enhance: enhanceOf.get(base) });
+    }
+    return enhanceOf.get(base);
+}
+const EGD = 0x2b0;
+const EGD_QUICK_SLOTS = 0x290;
+const EGD_QUICK_ITEM_IDS = 0x3a0;
+const INV_KEY_CAPACITY = 0x158 + 0x1c;
+const foodGiven = new Set();
+const foodEatenAt = new Map();
+const foodBefore = new Map();
+
+function speffectIds(chr) {
+    const ids = [];
+    let entry = chr.add(0x178).readPointer().add(0x08).readPointer();
+    for (let i = 0; i < 512 && !entry.isNull(); i++) {
+        ids.push(entry.add(0x08).readS32());
+        entry = entry.add(0x30).readPointer();
+    }
+    return ids;
+}
+
+function tendFood(chr) {
+    for (const food of FOODS) {
+        try {
+            if (food.needsEnhance && !greasable(chr)) continue;
+            const r = stockFood(chr, food);
+            if (r !== null) emit('food', { chr: chr.toString(), food: food.name, ...r });
+        } catch (e) {
+            emit('hook-error', { where: `food-${food.name}`, error: e.message });
+        }
+    }
+}
+
+function foodAt(chr, item) {
+    return inventoryOf(chr).findIndex((e) => (e.add(4).readU32() >>> 0) === (item >>> 0)
+        && e.add(8).readU32() > 0);
+}
+
+function stockFood(chr, food) {
+    const item = 0x40000000 | food.goods;
+    const handle = 0xb0000000 | food.goods;
+    const egd = chr.add(PLAYER_GAME_DATA).readPointer().add(EGD);
+    const key = `${chr}:${food.name}`;
+    let at = foodAt(chr, item);
+    if (at < 0) {
+        // The first comes at once; each later one restockMs after the last was eaten.
+        if (foodGiven.has(key)) {
+            if (!foodEatenAt.has(key)) {
+                foodEatenAt.set(key, Date.now());
+                const before = new Set(foodBefore.get(key) || []);
+                return { eaten: true, newEffects: speffectIds(chr).filter((id) => !before.has(id)) };
+            }
+            if (Date.now() - foodEatenAt.get(key) < food.restockMs) return null;
+        }
+        const buf = Memory.alloc(16);
+        buf.writeU32(handle >>> 0);
+        buf.add(4).writeU32(item >>> 0);
+        ADD_BY_HANDLE(egd, buf, food.qty || 1, 1, 1);
+        at = foodAt(chr, item);
+        if (at < 0) return { added: false };
+        foodGiven.add(key);
+        foodBefore.set(key, speffectIds(chr));
+    }
+    foodEatenAt.delete(key);
+    const index = egd.add(INV_KEY_CAPACITY).readU32() + at;
+    const slot = egd.add(EGD_QUICK_SLOTS + 8 * food.slot);
+    if ((slot.readU32() >>> 0) === (handle >>> 0) && slot.add(4).readS32() === index) return null;
+    slot.writeU32(handle >>> 0);
+    slot.add(4).writeS32(index);
+    egd.add(EGD_QUICK_ITEM_IDS + 4 * food.slot).writeU32(item >>> 0);
+    return { stocked: true, index };
+}
+
 function setHeals(chr) {
     for (const e of inventoryOf(chr)) {
         if ((e.add(4).readU32() >>> 0) === (HEAL_ITEM >>> 0)) {
@@ -495,6 +777,10 @@ function playerFlasks(player) {
 // alone misses a rest taken with full flasks.
 const GRACE_SIT_ANIMS = [68010, 68011];
 let lastPlayerSat = false;
+// Resting dismisses the summons: measured 2026-10-06, 0.6 s after the player sat, all three were
+// removed through ersc.dll+0x8a384 -> eldenring.exe+0x4b96fa, the game's own spirit-ash dismissal.
+// Set when that happens while seated; watchGraceRest respawns the squad when the player stands.
+let graceResummon = false;
 
 function watchGraceRest(player) {
     try {
@@ -506,6 +792,12 @@ function watchGraceRest(player) {
             const heals = spawned !== null && isAlive(spawned).alive ? setHeals(spawned) : null;
             emit('grace-rest', { why: sat && !lastPlayerSat ? 'sit' : 'flasks', anim, flasks: f.ids,
                 before: lastPlayerFlasks, after: f.total, heals });
+        }
+        // Standing up from a rest that dismissed the squad brings it back.
+        if (graceResummon && lastPlayerSat && !sat && !despawnedEarlier()) {
+            graceResummon = false;
+            emit('grace-resummon', { anim });
+            rpc.exports.respawn();
         }
         lastPlayerSat = sat;
         lastPlayerFlasks = f.total;
@@ -598,15 +890,21 @@ function dropExtras() {
 }
 
 // Gear, face and heals on a freshly created character, on its creation frame. cfg.dress false
-// leaves her as CharaInitParam made her.
-function dressNew(chr) {
+// leaves her as CharaInitParam made her. `index` is the summon's place (0 is `spawned`).
+function dressNew(chr, index) {
     if (cfg.dress === false) return;
-    applyEquip(chr, true);
+    applyEquip(chr, true, index);
     try {
-        const face = applyFace(chr);
+        const face = applyFace(chr, index);
         if (face !== null) emit('face', { chr: chr.toString(), ...face });
     } catch (e) {
         emit('hook-error', { where: 'face', error: e.message });
+    }
+    try {
+        const name = applyName(chr, index);
+        if (name !== null) emit('name', { chr: chr.toString(), ...name });
+    } catch (e) {
+        emit('hook-error', { where: 'name', error: e.message });
     }
     try {
         emit('heals', { chr: chr.toString(), ...(setHeals(chr) || { missing: true }) });
@@ -766,7 +1064,9 @@ const removeHook = Interceptor.attach(REMOVE_CHR_INS, {
             const m = Process.findModuleByAddress(a);
             return m === null ? a.toString() : m.name + '+0x' + a.sub(m.base).toString(16);
         });
-        emit('removed', { chr: args[1].toString(), ageMs: Date.now() - spawnedAt, frames: frames });
+        emit('removed', { chr: args[1].toString(), ageMs: Date.now() - spawnedAt, frames: frames,
+            playerSat: lastPlayerSat });
+        if (lastPlayerSat) graceResummon = true;
     },
 });
 
@@ -815,10 +1115,62 @@ function attackerState(chr) {
     }
 }
 
+// The squad's view of an attack on any of them, for brain_turtles.lua: a hostile landing a hit on
+// the player or on any of our summons bumps tt_ally_hit (a count, so every turtle can tell a new hit
+// from one it has already answered) and names the victim in tt_ally_victim (-1 for the player, else
+// the summon index). Quiet: each turtle reads it at its next decision. Both are numbers because
+// er-ai-lab.py route_world turned only numbers, booleans and lists into Lua: measured 2026-10-06,
+// a string victim made it raise on all 250 squad hits, so no turtle ever saw one.
+let playerChr = null;
+let squadHits = 0;
+
+// The player landing a hit on anything but the squad starts the squad's fight too (user,
+// 2026-10-06: they held back while the player fought and joined only once hit themselves).
+// tt_player_hit counts those hits; each turtle answers a new one like an ally hit.
+let playerHits = 0;
+
+function squadHit(victim, attacker) {
+    try {
+        if (playerChr !== null && attacker.equals(playerChr) && !victim.equals(playerChr)
+            && !victim.equals(spawned) && !extras.some((c) => c.equals(victim))) {
+            playerHits++;
+            emit('world', { facts: { tt_player_hit: playerHits }, quiet: true });
+            return;
+        }
+        let who = null;
+        if (playerChr !== null && victim.equals(playerChr)) who = -1;
+        else if (victim.equals(spawned)) who = 0;
+        else {
+            const i = extras.findIndex((c) => c.equals(victim));
+            if (i >= 0) who = i + 1;
+        }
+        // Any attacker but the player and our own summons. Not TEAM_HOSTILE: measured 2026-10-06,
+        // the enemy hitting the turtles was team 7, and a team-6 test let every squad hit through.
+        if (who === null) return;
+        if ((playerChr !== null && attacker.equals(playerChr)) || attacker.equals(spawned)
+            || extras.some((c) => c.equals(attacker))) return;
+        learnWindup(attacker);
+        if (who !== -1 && artNow.get(victim.toString()) === GEM.parry) {
+            const st = attackerState(attacker);
+            const swingKey = st.last === undefined ? null : `${st.npcParam}:${st.last.anim}`;
+            if (swingKey !== null && Date.now() - (parryRead.get(swingKey) || 0) <= PARRY_WINDOW_MS
+                && !parryFailed.has(swingKey)) {
+                parryFailed.add(swingKey);
+                emit('parry-failed', { swing: swingKey, victim: victim.toString() });
+            }
+        }
+        squadHits++;
+        emit('world', { facts: { tt_ally_hit: squadHits, tt_ally_victim: who }, quiet: true });
+    } catch (e) {
+        emit('hook-error', { where: 'squad-hit', error: e.message });
+    }
+}
+
 const damageHook = Interceptor.attach(CALC_DAMAGE2.readU8() === 0xe9 ? CALC_DAMAGE2.add(5).add(CALC_DAMAGE2.add(1).readS32()) : CALC_DAMAGE2, {
     onEnter(args) {
         if (spawned === null) return;
         const victim = args[0].add(8).readPointer();
+        squadHit(victim, args[1]);
         // A hit on any of ours: who, from how far (centre to centre, metres), for the hitbox question.
         if (victim.equals(spawned) || extras.some((c) => c.equals(victim))) {
             try {
@@ -947,6 +1299,19 @@ if (previous !== null && isAlive(previous).alive) {
         if (spawnedPath === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1 - extras.length);
         emit('adopted', { chr: previous.toString(), extras: extras.length, extrasWanted });
     }
+} else if (despawnedEarlier()) {
+    // despawn() was the last word from an earlier load: a reload must not summon again.
+    done = true;
+}
+
+// Whether despawn() ran after the last respawn(), across reloads of this agent.
+function despawnedEarlier() {
+    const buf = Memory.alloc(16);
+    return GET_ENV(Memory.allocUtf16String(ENV_KEY + '_HELD'), buf, 4) > 0;
+}
+
+function setDespawned(held) {
+    SET_ENV(Memory.allocUtf16String(ENV_KEY + '_HELD'), held ? Memory.allocUtf16String('1') : NULL);
 }
 const removeChrIns = new NativeFunction(REMOVE_CHR_INS, 'void', ['pointer', 'pointer']);
 
@@ -988,8 +1353,9 @@ function sampleThrows() {
 //   mr_near        hostiles within MR_NEAR m of her (the parry rule's "only one enemy near")
 //   mr_heavy_reach hostiles within MR_R2_REACH m (a heavy attack's "hits more than one target");
 //                  fact names must match [a-z_]+ to pass er-ai-lab.py's route_world
-// Hostile is TEAM_HOSTILE until the team table is measured further; seen so far: 6 for every enemy.
-const TEAM_HOSTILE = new Set([6]);
+// Hostile is TEAM_HOSTILE until the team table is measured further; seen so far: 6, and 7 for the
+// enemy that hit the turtles on 2026-10-06.
+const TEAM_HOSTILE = new Set([6, 7]);
 const MR_NEAR = 6;
 const MR_R2_REACH = 3.2;
 let lastBrainFacts = null;
@@ -1051,9 +1417,855 @@ function sampleTarget() {
     }
 }
 
+// Input reading for brain_turtles.lua's roll. Every frame, the attack animation of each enemy near
+// a turtle is read off its TimeAct queue (attackerState). An attack animation's windup -- its play
+// time at the moment it hits -- is learned from real hits (learnWindup, from squadHit), the
+// earliest seen per enemy NpcParam and animation. When a watched attack's play time reaches
+// windup - ROLL_LEAD, tt_roll is bumped with tt_roll_d, the attacker's distance to each turtle in
+// range, and the turtle whose own enemy sits at that distance rolls. An attack not yet learned
+// rolls at DEFAULT_WINDUP. An animation id is a section times 1000000 plus the TAE id, and enemy
+// attacks are TAE 3000..3999 in any section: measured 3003000..3003008 on NpcParam 43111110 and
+// 3000, 3003, 3016, 3017 on NpcParam 42700041.
+const READ_RADIUS = 8;
+const READ_LIST_MS = 300;
+const ROLL_RADIUS = 4.5;
+const ROLL_LEAD = 0.3;
+const DEFAULT_WINDUP = 0.5;
+const ANIM_SECTION = 1000000;
+const ATTACK_ANIM_MIN = 3000;
+const ATTACK_ANIM_MAX = 3999;
+const windups = new Map();
+const swingSeen = new Map();
+let watched = [];
+let watchedAt = 0;
+let rollSignals = 0;
+
+function squadChrs() {
+    const out = [];
+    if (spawned !== null && isAlive(spawned).alive) out.push(spawned);
+    for (const c of extras) if (isAlive(c).alive) out.push(c);
+    for (const c of mimics) if (isAlive(c).alive) out.push(c);
+    return out;
+}
+
+// Turtles summoned natively by the Mimic Tear Ashes (mimic-tear-turtles.js swaps the params inside
+// BuddyGenerator 0x1404bbdd0). Kept out of `spawned`/`extras` so the game's own dismissal, FP cost
+// and one-summon rule still apply; here they are only dressed and counted as squad. The Nth body
+// a request creates is dressed as turtle N.
+const MIMIC_TRIGGER = 207000;
+
+// NpcParam 523590024 is Moongrum's enemy row, so a turtle is created on team 6 and attacks the
+// player (user report 2026-10-06); the Mimic Tear's own row puts it on the player's. Called at
+// creation and every frame.
+function mimicTeam(chr) {
+    const player = WORLD_CHR_MAN.readPointer().add(MAIN_PLAYER).readPointer();
+    if (player.isNull()) return;
+    const want = player.add(TEAM_TYPE).readU8();
+    const t = chr.add(TEAM_TYPE);
+    if (t.readU8() !== want) t.writeU8(want);
+}
+let mimics = [];
+let mimicTid = null;
+let mimicIndex = 0;
+Interceptor.attach(va('0x1404bbdd0'), {
+    onEnter(args) {
+        const request = args[0].add(0x20).readS32();
+        if (request < 0 || Math.floor(request / 100) * 100 !== MIMIC_TRIGGER) return;
+        mimicTid = this.threadId;
+        mimicIndex = 0;
+        mimics = [];
+        this.mimic = true;
+    },
+    onLeave() {
+        if (!this.mimic) return;
+        mimicTid = null;
+        emit('mimic-squad', { chrs: mimics.map(String) });
+    },
+});
+Interceptor.attach(va('0x1404baea0'), {
+    onLeave(ret) {
+        if (this.threadId !== mimicTid || ret.isNull()) return;
+        // `ret` is live and reads whatever rax holds later, so keep a copy.
+        const chr = ptr(ret.toString());
+        mimics.push(chr);
+        try {
+            mimicTeam(chr);
+            dressNew(chr, mimicIndex);
+        } catch (e) {
+            emit('hook-error', { where: 'mimic-dress', error: e.message });
+        }
+        mimicIndex += 1;
+    },
+});
+
+function isAttackAnim(anim) {
+    const tae = anim % ANIM_SECTION;
+    return anim >= 0 && tae >= ATTACK_ANIM_MIN && tae <= ATTACK_ANIM_MAX;
+}
+
+function learnWindup(attacker) {
+    const s = attackerState(attacker);
+    if (s.last === undefined || !isAttackAnim(s.last.anim)) return;
+    const key = `${s.npcParam}:${s.last.anim}`;
+    const before = windups.get(key);
+    if (before === undefined || s.last.t < before) {
+        windups.set(key, s.last.t);
+        emit('windup', { key, t: s.last.t, before: before === undefined ? null : before });
+    }
+}
+
+// Parry learning, for brain_turtles.lua's Parry (user rule 2026-10-06: only a low-risk,
+// parryable attack). parryRead is when each NpcParam:anim swing was last read at a turtle;
+// a hit from that swing on a turtle carrying Parry within PARRY_WINDOW_MS of the read means the
+// parry did not take, and the swing goes into parryFailed for good.
+const PARRY_WINDOW_MS = 1500;
+const parryRead = new Map();
+const parryFailed = new Set();
+
+function readSwings() {
+    const squad = squadChrs();
+    if (squad.length === 0) return;
+    const now = Date.now();
+    if (now - watchedAt >= READ_LIST_MS) {
+        watchedAt = now;
+        const at = squad.map(posOf).filter((p) => p !== null);
+        watched = allChrs().filter((chr) => {
+            if (squad.some((c) => c.equals(chr)) || (playerChr !== null && chr.equals(playerChr))) return false;
+            const hp = hpOf(chr);
+            const p = posOf(chr);
+            if (hp === null || hp[0] <= 0 || p === null) return false;
+            return at.some((q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) <= READ_RADIUS);
+        });
+    }
+    for (const chr of watched) {
+        const s = attackerState(chr);
+        if (s.last === undefined) continue;
+        const key = chr.toString();
+        let seen = swingSeen.get(key);
+        if (seen === undefined || seen.w !== s.w || seen.anim !== s.last.anim) {
+            seen = { w: s.w, anim: s.last.anim, fired: false };
+            swingSeen.set(key, seen);
+        }
+        if (seen.fired || !isAttackAnim(s.last.anim)) continue;
+        const learned = windups.get(`${s.npcParam}:${s.last.anim}`);
+        const windup = learned === undefined ? DEFAULT_WINDUP : learned;
+        if (s.last.t < windup - ROLL_LEAD) continue;
+        seen.fired = true;
+        const p = posOf(chr);
+        if (p === null) continue;
+        // tt_roll_d is each threatened turtle's distance to the attacker, which a turtle in battle
+        // matches against its own enemy; tt_roll_p is its distance to the player, which an idle
+        // one matches instead. Measured 2026-10-06: NpcParam 21500064 hit all three for seconds
+        // while none of them entered battle, so 142 signals went to turtles that had no enemy.
+        const me = playerChr === null ? null : posOf(playerChr);
+        const dists = [];
+        const toPlayer = [];
+        for (const c of squad) {
+            const q = posOf(c);
+            if (q === null) continue;
+            const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+            // Only a turtle in reach of the swing is warned: measured 2026-10-06, warning every
+            // one within READ_RADIUS kept all three rolling instead of attacking.
+            if (d > ROLL_RADIUS) continue;
+            dists.push(Math.round(d * 100) / 100);
+            if (me !== null) toPlayer.push(Math.round(Math.hypot(q[0] - me[0], q[1] - me[1], q[2] - me[2]) * 100) / 100);
+        }
+        if (dists.length === 0) continue;
+        rollSignals++;
+        // Parry is only worth trying on a swing that has never got through one (parryFailed).
+        const swingKey = `${s.npcParam}:${s.last.anim}`;
+        parryRead.set(swingKey, Date.now());
+        emit('world', { facts: { tt_roll: rollSignals, tt_roll_d: dists, tt_roll_p: toPlayer,
+            tt_roll_parry: parryFailed.has(swingKey) ? 0 : 1 }, quiet: true });
+        emit('read-swing', { attacker: key, npcParam: s.npcParam, anim: s.last.anim, t: s.last.t, windup,
+            learned: learned !== undefined, dists });
+    }
+}
+
+// Permission to throw, for brain_turtles.lua's volley (user rule 2026-10-06): the player has held
+// lock-on on the same enemy for VOLLEY_LOCK_MS. The player's lock-on target is PlayerIns +0x6b0, a
+// handle (scripts/frida/target-bars-probe.js), resolved like sampleTarget's. While it holds,
+// tt_volley is 1 and tt_volley_hp is the enemy's HP; a turtle throws only when its own target's
+// HP equals it, which is how it tells the player's enemy from another one. Both are re-sent when
+// the HP changes, and tt_volley drops to 0 on unlock, a new target, or the enemy's death.
+const VOLLEY_LOCK_MS = 2000;
+let volleyLock = null;
+let volleySent = null;
+
+function volleyCheck() {
+    if (playerChr === null) return;
+    const handlePtr = playerChr.add(0x6b0);
+    const handle = handlePtr.readU32() >>> 0;
+    let hp = null;
+    let cats = [];
+    let human = 0;
+    if (handle !== 0xffffffff) {
+        const chr = GET_CHR_FROM_HANDLE(WORLD_CHR_MAN.readPointer(), handlePtr);
+        const h = chr.isNull() ? null : hpOf(chr);
+        if (h !== null && h[0] > 0) {
+            hp = h[0];
+            // The statuses already running on it, so no turtle throws one it would refuse.
+            cats = Array.from(statusCategories(chr)).sort();
+            human = isHuman(chr) ? 1 : 0;
+        }
+    }
+    const now = Date.now();
+    if (hp === null) volleyLock = null;
+    else if (volleyLock === null || volleyLock.handle !== handle) volleyLock = { handle, since: now };
+    const on = volleyLock !== null && now - volleyLock.since >= VOLLEY_LOCK_MS;
+    const sent = on ? `1:${hp}:${cats.join(',')}:${human}` : '0';
+    if (sent === volleySent) return;
+    volleySent = sent;
+    emit('world', { facts: { tt_volley: on ? 1 : 0, tt_volley_hp: on ? hp : -1, tt_volley_cats: on ? cats : [],
+        tt_volley_human: on ? human : 0 }, quiet: true });
+    emit('volley', { on, handle: on ? handle : null, hp, cats, human });
+}
+
+// A turtle that cannot get back to the player, for brain_turtles.lua's jumping recovery (user rule
+// 2026-10-06: no teleport). Measured the same day: one stood ~66 m away for minutes while its
+// approach goal kept running. Stuck means either:
+//   pinned  - more than STUCK_GAP m from the player and moved less than STUCK_MOVE m in STUCK_MS;
+//   losing  - more than STUCK_FAR m away and no STUCK_GAIN m closer in STUCK_MS while the
+//             player, who could be running off, moved less than STUCK_MOVE.
+// Each stuck turtle is named by its distance to the player, as in tt_cure.
+// Tightened 2026-10-06 (user: "far too loose"): from 3 s / 6 m / 1.5 m / 0.5 s checks.
+const STUCK_MS = 1500;
+const STUCK_GAP = 5;
+const STUCK_FAR = 15;
+const STUCK_MOVE = 1.0;
+const STUCK_GAIN = 1.5;
+const STUCK_CHECK_MS = 250;
+// Beyond melee reach plus a margin: closer than this it is fighting, not travelling.
+const STUCK_ENEMY_GAP = 3.5;
+const stuckTrail = new Map();
+let stuckAt = 0;
+let stuckSent = null;
+
+function stuckCheck() {
+    const now = Date.now();
+    if (now - stuckAt < STUCK_CHECK_MS || playerChr === null) return;
+    stuckAt = now;
+    const me = posOf(playerChr);
+    if (me === null) return;
+    const out = [];
+    const outEnemy = [];
+    const why = [];
+    for (const c of squadChrs()) {
+        const p = posOf(c);
+        const hp = hpOf(c);
+        if (p === null || hp === null || hp[0] <= 0) continue;
+        const gap = Math.hypot(p[0] - me[0], p[1] - me[1], p[2] - me[2]);
+        const key = c.toString();
+        const trail = (stuckTrail.get(key) || []).filter((s) => now - s.t <= STUCK_MS + STUCK_CHECK_MS);
+        trail.push({ t: now, p, me, gap });
+        stuckTrail.set(key, trail);
+        const old = trail[0];
+        if (now - old.t < STUCK_MS) continue;
+        const moved = Math.hypot(p[0] - old.p[0], p[1] - old.p[1], p[2] - old.p[2]);
+        const playerMoved = Math.hypot(me[0] - old.me[0], me[1] - old.me[1], me[2] - old.me[2]);
+        const pinned = gap > STUCK_GAP && moved < STUCK_MOVE;
+        const losing = gap > STUCK_FAR && old.gap - gap < STUCK_GAIN && playerMoved < STUCK_MOVE;
+        // The same toward its own enemy (user rule 2026-10-06: an enemy it cannot walk to is
+        // reached by jumping): more than STUCK_ENEMY_GAP m from its lock-on target and either not
+        // moving, or not closing while the enemy stays put. Named by its distance to that enemy.
+        const t = enemyOf(c);
+        const tq = t === null ? null : posOf(t.chr);
+        if (tq !== null) {
+            const egap = Math.hypot(p[0] - tq[0], p[1] - tq[1], p[2] - tq[2]);
+            const was = old.tq === undefined ? null : old.tq;
+            const enemyMoved = was === null ? 0 : Math.hypot(tq[0] - was[0], tq[1] - was[1], tq[2] - was[2]);
+            const closed = old.egap === undefined ? Infinity : old.egap - egap;
+            if (egap > STUCK_ENEMY_GAP && (moved < STUCK_MOVE || (closed < STUCK_GAIN && enemyMoved < STUCK_MOVE))) {
+                outEnemy.push(Math.round(egap * 100) / 100);
+                why.push({ chr: key, enemyGap: Math.round(egap * 10) / 10, moved: Math.round(moved * 10) / 10,
+                    kind: 'enemy' });
+            }
+            trail[trail.length - 1].tq = tq;
+            trail[trail.length - 1].egap = egap;
+        }
+        if (!pinned && !losing) continue;
+        out.push(Math.round(gap * 100) / 100);
+        why.push({ chr: key, gap: Math.round(gap * 10) / 10, moved: Math.round(moved * 10) / 10,
+            kind: pinned ? 'pinned' : 'losing' });
+    }
+    const sent = JSON.stringify(why.map((w) => [w.chr, w.kind]));
+    if (sent === stuckSent && out.length === 0 && outEnemy.length === 0) return;
+    if (sent !== stuckSent && why.length > 0) emit('stuck', { why });
+    stuckSent = sent;
+    emit('world', { facts: { tt_stuck_p: out, tt_stuck_e: outEnemy }, quiet: true });
+}
+
+// Which Ash of War each turtle carries right now (user rules 2026-10-06), one of the gems its
+// build lists (cfg.arts, _lab.lua lab_arts). brain_turtles.lua reads it with GetArtsID and
+// decides when to press it; this decides what is on the weapon:
+//   Bloodhound's Step  80100   below ART_LOW_HP with its enemy within ART_ESCAPE m: get away to heal
+//   Thunderbolt 21600 / Storm Blade 21000   its enemy below ART_FINISH HP and over ART_REACH m
+//                       away: catch it (Thunderbolt from ART_BOLT m, Storm Blade nearer)
+//   Poisonous Mist 22800 / Chilling Mist 22700   its enemy without that status running: one use,
+//                       then off at once (FP drop seen) and not again for ART_MIST_REST ms
+//   Blinkbolt 413000   its enemy over ART_REACH m away: get in on it
+//   otherwise the first gem listed (Raph's Parry, Mikey's own skill).
+// The target is the summon's lock-on handle (PlayerIns +0x6b0, as sampleTarget reads it). FP is the
+// data module's +0x148 (fromsoftware-rs chr_ins/module/data.rs). A pick is held ART_HOLD_MS
+// unless it is the mist switching off.
+const GEM = { parry: 30200, thunderbolt: 21600, chilling: 22700, poison: 22800, storm: 21000,
+    blinkbolt: 413000, bloodhound: 80100 };
+const GEM_FP = { 21600: 10, 21000: 10, 22700: 14, 22800: 14, 413000: 8, 80100: 5, 30200: 0 };
+const ART_LOW_HP = 0.5;
+const ART_ESCAPE = 6;
+const ART_FINISH = 0.25;
+const ART_REACH = 4;
+const ART_BOLT = 6;
+const ART_MIST_REST = 10000;
+// Held this long before another pick: at 1 s, Raph changed every second as the enemy's distance
+// crossed the rules' boundaries (measured 2026-10-06).
+const ART_HOLD_MS = 3000;
+const ART_MIST_ON_MS = 4000;
+const ART_CHECK_MS = 250;
+const DATA_FP = 0x148;
+const artState = new Map();
+let artAt = 0;
+// rpc forceArt: every summon whose build lists `gem` carries it for `ms`, for checking a switch.
+let artForce = null;
+
+function fpOf(chr) {
+    const d = dataOf(chr);
+    return d === null ? 0 : d.add(DATA_FP).readS32();
+}
+
+function lockTargetOf(chr) {
+    const handlePtr = chr.add(0x6b0);
+    if ((handlePtr.readU32() >>> 0) === 0xffffffff) return null;
+    const t = GET_CHR_FROM_HANDLE(WORLD_CHR_MAN.readPointer(), handlePtr);
+    if (t.isNull()) return null;
+    const hp = hpOf(t);
+    return hp === null || hp[0] <= 0 ? null : { chr: t, hp };
+}
+
+// Its enemy: the lock-on target if it has one, else the nearest living character readSwings is
+// watching near the squad. Measured 2026-10-06: in a session of fights artPlanner only ever
+// picked the default gems, because the summons' +0x6b0 lock-on handle stayed empty.
+let enemyWhy = null;
+
+function enemyOf(chr) {
+    const locked = lockTargetOf(chr);
+    if (locked !== null) return locked;
+    const p = posOf(chr);
+    if (p === null) return null;
+    let best = null;
+    let bestD = Infinity;
+    const why = [];
+    for (const w of watched) {
+        const hp = hpOf(w);
+        const q = posOf(w);
+        if (hp === null || hp[0] <= 0 || q === null) {
+            why.push({ hp, q: q !== null });
+            continue;
+        }
+        const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+        why.push({ d, q });
+        if (best === null || d < bestD) {
+            bestD = d;
+            best = { chr: w, hp };
+        }
+    }
+    enemyWhy = { n: watched.length, why, p, found: best !== null };
+    return best;
+}
+
+function pickArt(chr, arts, st) {
+    const has = (g) => arts.includes(g);
+    const fp = fpOf(chr);
+    const can = (g) => has(g) && fp >= GEM_FP[g];
+    const t = enemyOf(chr);
+    if (t === null) return arts[0];
+    const p = posOf(chr);
+    const q = posOf(t.chr);
+    if (p === null || q === null) return arts[0];
+    const d = Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    const mine = hpOf(chr);
+    const share = t.hp[0] / t.hp[1];
+    if (mine !== null && mine[0] / mine[1] < ART_LOW_HP && d < ART_ESCAPE && can(GEM.bloodhound)) return GEM.bloodhound;
+    if (share < ART_FINISH && d > ART_REACH) {
+        if (d >= ART_BOLT && can(GEM.thunderbolt)) return GEM.thunderbolt;
+        if (can(GEM.storm)) return GEM.storm;
+        if (can(GEM.thunderbolt)) return GEM.thunderbolt;
+    }
+    if (Date.now() - (st.mistUsedAt || 0) >= ART_MIST_REST) {
+        const cats = statusCategories(t.chr);
+        if (!cats.has(10004) && can(GEM.poison)) return GEM.poison;
+        if (!cats.has(10007) && can(GEM.chilling)) return GEM.chilling;
+    }
+    if (d > ART_REACH && can(GEM.blinkbolt)) return GEM.blinkbolt;
+    return arts[0];
+}
+
+function artPlanner() {
+    const now = Date.now();
+    if (now - artAt < ART_CHECK_MS) return;
+    artAt = now;
+    const all = [spawned].concat(extras);
+    all.forEach((chr, index) => {
+        if (chr === null || !isAlive(chr).alive) return;
+        const arts = forSpawn(cfg.arts, index);
+        if (!Array.isArray(arts) || arts.length === 0) return;
+        const key = chr.toString();
+        const st = artState.get(key) || { gem: undefined, at: 0, fp: 0 };
+        const fp = fpOf(chr);
+        // A mist is one use: the FP drop of its cost means it went off, so switch it off now.
+        // NPC FP never drops (measured 2026-10-06: 69 through a whole fight of skills), so a mist
+        // counts as used once its status is running on the enemy, or ART_MIST_ON_MS after it went on.
+        const mist = st.gem === GEM.poison || st.gem === GEM.chilling;
+        let used = false;
+        if (mist) {
+            const foe = enemyOf(chr);
+            const cat = st.gem === GEM.poison ? 10004 : 10007;
+            used = now - st.at >= ART_MIST_ON_MS || (foe !== null && statusCategories(foe.chr).has(cat));
+        }
+        if (used) st.mistUsedAt = now;
+        const forced = artForce !== null && now < artForce.until && arts.includes(artForce.gem);
+        const want = forced ? artForce.gem : pickArt(chr, arts, st);
+        // What it saw, reported when that changes, for checking the rules against a real fight.
+        const t = enemyOf(chr);
+        const seen = t === null ? 'no-enemy' : `enemy:${t.chr}:${Math.round(t.hp[0] / t.hp[1] * 20) / 20}`;
+        if (seen !== st.seen) {
+            st.seen = seen;
+            emit('art-sees', { chr: key, seen, want, watched: watched.length, fp });
+        }
+        // Diagnostic: every 2 s while anything is watched, what each watched entry looks like.
+        if (watched.length > 0 && now - (st.dbgAt || 0) > 2000) {
+            st.dbgAt = now;
+            const p = posOf(chr);
+            emit('art-debug', { chr: key, lock: (chr.add(0x6b0).readU32() >>> 0).toString(16),
+                watched: watched.slice(0, 4).map((w) => {
+                    const hp = hpOf(w);
+                    const q = posOf(w);
+                    return { w: w.toString(), hp, d: p === null || q === null ? null
+                        : Math.round(Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) * 10) / 10 };
+                }) });
+        }
+        if (want !== st.gem && (used || st.gem === undefined || now - st.at >= ART_HOLD_MS)) {
+            emit('art', { chr: key, from: st.gem === undefined ? null : st.gem, to: want, fp, mistUsed: used });
+            const swapped = st.gem !== undefined;
+            st.gem = want;
+            st.at = now;
+            artNow.set(key, want);
+            applyEquip(chr, false, index);
+            // A swap costs the grip (user rule 2026-10-06); brain_turtles.lua drops and retakes it
+            // when GetArtsID changes. Writing ChrAsm arm style (+0x8) here does not: measured
+            // 2026-10-06, GetWeaponBothHandState stayed two-handed after it.
+            void swapped;
+        }
+        st.fp = fp;
+        artState.set(key, st);
+    });
+}
+
+// A real player: a PlayerIns with no NpcParam (ChrIns +0x60). An NPC built as a PlayerIns, ours
+// included, carries one (the turtles read 523590024); the PlayerIns constructor sets it only
+// when the creation npcParamId is nonzero (docs/er-mechanics/status.md s2).
+function isHuman(chr) {
+    return rttiName(chr.readPointer()) === '.?AVPlayerIns@CS@@' && chr.add(0x60).readS32() <= 0;
+}
+
+// The player's Mimic's Veil (SpEffect 503040, held until the veil breaks), for brain_turtles.lua:
+// while it is up, every turtle puts on its own and does nothing else. Not quiet, so they replan
+// the moment it changes.
+const MIMIC_VEIL = 503040;
+let veilSent = null;
+
+// The player crouching, for brain_turtles.lua (user rule 2026-10-06: crouch with them when no
+// enemy is on anyone). SpEffect 8001 "[HKS] Is Stealth" is on while crouched: measured
+// 2026-10-06, it appeared with the crouch animations 10390000 / 10300000 and left with the
+// stand-up 10390001, together with 150 and 373. Not quiet, so they react at once.
+// 8001 alone flapped while moving crouched (measured 2026-10-06: tt_crouch flipped every 2-3 s
+// with the player in crouch-move animation 10320110), so the crouch animation family 103xxxxx
+// counts too, minus the stand-up 10390001, and a change must hold CROUCH_STEADY_MS first.
+const STEALTH = 8001;
+const CROUCH_STEADY_MS = 400;
+let crouchSent = null;
+let crouchSeen = null;
+
+function crouchCheck() {
+    if (playerChr === null) return;
+    const st = attackerState(playerChr);
+    const anim = st.last === undefined ? -1 : st.last.anim % 100000000;
+    const family = anim >= 10300000 && anim <= 10399999 && anim !== 10390001;
+    const on = speffectIds(playerChr).includes(STEALTH) || family ? 1 : 0;
+    const now = Date.now();
+    if (crouchSeen === null || crouchSeen.on !== on) crouchSeen = { on, since: now };
+    if (on === crouchSent || now - crouchSeen.since < CROUCH_STEADY_MS) return;
+    crouchSent = on;
+    emit('world', { facts: { tt_crouch: on }, quiet: false, anim });
+}
+
+// An enemy whose AI has picked a turtle (user rule 2026-10-06: a turtle an enemy locks onto is free
+// to engage). The enemy's TARGET_ENE_0 is the highest-scoring node of its AI's enemy search list
+// (bd ai-target-ene0-chain-1171-static-2026-10-06): manipulator at EnemyIns +0x580 (PlayerIns
+// +0x588) -> AiIns +0xc0 -> CSTargetingSystem +0xc950 -> list head +0x20, node next +0x10, score
+// float +0x38, kind s32 +0x34 (1 is a character), its FieldInsHandle at +0x68. tt_targeted_p names
+// each picked turtle by its distance to the player. Not quiet, so they react at once.
+const AI_ENEMY_NO_SCORE = -99999.9;
+let targetedSent = null;
+
+function aiTargetHandle(chr) {
+    const isPlayer = rttiName(chr.readPointer()) === '.?AVPlayerIns@CS@@';
+    const man = chr.add(isPlayer ? 0x588 : 0x580).readPointer();
+    if (man.isNull()) return null;
+    const aiIns = man.add(0xc0).readPointer();
+    if (aiIns.isNull()) return null;
+    const ts = aiIns.add(0xc950).readPointer();
+    if (ts.isNull()) return null;
+    let best = null;
+    let bestScore = AI_ENEMY_NO_SCORE;
+    let guard = 0;
+    for (let n = ts.add(0x20).readPointer(); !n.isNull() && guard < 64; n = n.add(0x10).readPointer(), guard++) {
+        const s = n.add(0x38).readFloat();
+        if (s > bestScore) {
+            bestScore = s;
+            best = n;
+        }
+    }
+    if (best === null || best.add(0x34).readS32() !== 1) return null;
+    return best.add(0x68).readU64();
+}
+
+function targetedCheck() {
+    if (playerChr === null) return;
+    const me = posOf(playerChr);
+    if (me === null) return;
+    const squad = squadChrs();
+    const out = [];
+    const who = [];
+    for (const c of squad) {
+        const h = c.add(8).readU64();
+        const by = watched.find((e) => {
+            try {
+                const t = aiTargetHandle(e);
+                return t !== null && t.equals(h);
+            } catch (err) {
+                return false;
+            }
+        });
+        if (by === undefined) continue;
+        const p = posOf(c);
+        if (p === null) continue;
+        out.push(Math.round(Math.hypot(p[0] - me[0], p[1] - me[1], p[2] - me[2]) * 100) / 100);
+        who.push([c.toString(), by.toString()]);
+    }
+    const sent = JSON.stringify(who);
+    if (sent === targetedSent) return;
+    targetedSent = sent;
+    emit('world', { facts: { tt_targeted_p: out }, quiet: false });
+    emit('targeted', { who });
+}
+
+function veilCheck() {
+    try {
+        crouchCheck();
+    } catch (e) {
+        emit('hook-error', { where: 'crouch', error: e.message });
+    }
+    try {
+        targetedCheck();
+    } catch (e) {
+        emit('hook-error', { where: 'targeted', error: e.message });
+    }
+    if (playerChr === null) return;
+    const on = speffectIds(playerChr).includes(MIMIC_VEIL) ? 1 : 0;
+    if (on === veilSent) return;
+    veilSent = on;
+    emit('world', { facts: { tt_veil: on }, quiet: false });
+    emit('veil', { on });
+}
+
+// One group per summon in the per-player tag list, the one co-op phantoms get, each with its own
+// name and HP bar (bd npc-summons-in-friendly-tag-list-via-producer-probes-1171-2026-10-06). Its
+// producer 0x140778200 rebuilds all 7 entries (CSFeManImp +0x5c60, stride 0xb0) every frame, slot
+// i from GetFieldInsHandleByMemberIndex(i) resolved to a ChrIns, HP from that ChrIns and the name
+// from GetChrName -- so nameHook above names them. Nothing is added to PartyMemberInfo: AddMember
+// is real party state (player limit, red/white counts, join notice) and a risk to Seamless's sync.
+// Instead two probes inside the producer raise its member count by our summons and hand slots
+// real..real+n-1 our handles (ChrIns +0x8), and the voice-chat lookup it calls, which reads
+// PlayerIns +0x6b8 without a null check, is told "no player" for them. All three sites
+// byte-checked in eldenring-deobf-1.17.1.bin; no branch lands inside the probed bytes.
+const TAG_COUNT = va('0x140778292');      // mov [rsp+0x50],eax; eax = players in the world
+const TAG_HANDLE = va('0x14077851c');     // after the handle call; r15d = index, [rbp-0x78] = handle
+const TAG_VOICE = va('0x140cbbc50');      // (.., .., PlayerIns*); returns 0 when r8 is null
+const CS_FE_MAN = va('0x143d6f8f0');
+let tagHandles = [];
+let tagReal = 0;
+let tagSeen = null;
+
+function refreshTagHandles() {
+    // A summon at 0 HP still passes isAlive (measured: Donnie's entry held hp 0), so drop it here.
+    tagHandles = squadChrs().filter((c) => { const h = hpOf(c); return h !== null && h[0] > 0; })
+        .map((c) => c.add(8).readU64());
+}
+
+const tagHooks = [
+    Interceptor.attach(TAG_COUNT, function () {
+        tagReal = this.context.rax.toInt32();
+        if (tagHandles.length > 0) this.context.rax = ptr(Math.min(7, tagReal + tagHandles.length));
+    }),
+    Interceptor.attach(TAG_HANDLE, function () {
+        const k = this.context.r15.toInt32() - tagReal;
+        if (k >= 0 && k < tagHandles.length) this.context.rbp.sub(0x78).writeU64(tagHandles[k]);
+    }),
+    Interceptor.attach(TAG_VOICE, {
+        onEnter(args) {
+            if (args[2].isNull() || tagHandles.length === 0) return;
+            const h = args[2].add(8).readU64();
+            if (tagHandles.some((t) => t.equals(h))) args[2] = NULL;
+        },
+    }),
+];
+
+// Their names drew red: the tag colour is RoleParam.roleNameColor of row vowType*10000 + chrType,
+// and our summons are chrType 5 (Npc), whose row says 2 (hostile); the host, white phantoms and
+// summoned NPCs say 1 (bd npc-summon-tag-name-colour-is-rolenamecolor-1171-2026-10-06). The
+// producer calls GetRoleNameColor at 0x140778802 with the ChrIns in r15 and stores al at
+// 0x140778807 (mov [rsp+0x33],al); for ours, al becomes 1 there. No game state is written.
+const TAG_COLOUR = va('0x140778807');
+tagHooks.push(Interceptor.attach(TAG_COLOUR, function () {
+    if (tagHandles.length === 0) return;
+    const chr = this.context.r15;
+    if (squadChrs().some((c) => c.equals(chr))) this.context.rax = this.context.rax.and(ptr('0xffffffffffffff00')).or(1);
+}));
+
+// A second, red name and HP bar showed over them when hit: the enemy tag list (CSFeManImp
+// +0x59f0, 8 x 0x40), which CSChrDamageModule::UpdateUI 0x1404497e0 feeds through
+// SetEntityHealthBarDamage at 0x140449b43 (bd npc-summon-enemy-damage-tag-producer-1171-2026-10-06).
+// At 0x140449a4e, r12 = 1 makes the next jnz go to 0x140449b55, past that call; rdi is the damage
+// module, whose owner ChrIns is at +0x8. Nothing after reads r12 on that path.
+const ENEMY_BAR_SKIP = va('0x140449a4e');
+tagHooks.push(Interceptor.attach(ENEMY_BAR_SKIP, function () {
+    if (tagHandles.length === 0) return;
+    const owner = this.context.rdi.add(8).readPointer();
+    if (squadChrs().some((c) => c.equals(owner))) this.context.r12 = ptr(1);
+}));
+
+// The entries our summons landed in, reported when they change: handle +0x98, HP +0x7c, shown
+// as an overhead tag +0x10 or docked off screen +0x12.
+function tagCheck() {
+    const fe = CS_FE_MAN.readPointer();
+    if (fe.isNull()) return;
+    const rows = [];
+    for (let i = 0; i < 7; i++) {
+        const e = fe.add(0x5c60 + i * 0xb0);
+        const h = e.add(0x98).readU64();
+        if (i >= tagReal + tagHandles.length) continue;
+        rows.push({ slot: i, ours: tagHandles.some((t) => t.equals(h)), hp: e.add(0x7c).readS32(),
+            tag: e.add(0x10).readU8(), docked: e.add(0x12).readU8(), team: e.add(0xa2).readU8(),
+            colour: e.add(0x13).readU8() });
+    }
+    const seen = JSON.stringify(rows.map((r) => [r.slot, r.tag, r.docked, r.team, r.colour]));
+    if (seen === tagSeen) return;
+    tagSeen = seen;
+    emit('tag-list', { real: tagReal, ours: tagHandles.length, rows });
+}
+
+// A turtle with a status to counter, for brain_turtles.lua: running poison or rot (a live entry
+// of category 10004 or 10005), or a gauge at least STATUS_FILL emptied
+// towards a proc. The gauges are CSChrResistModule (ChrIns modules +0x20): gauge[7] at +0x10 and
+// resistance[7] at +0x2c, s32, order poison, rot, bleed, death blight, frost, sleep, madness; a
+// gauge counts down from the resistance and procs below 1 (docs/er-mechanics/status.md s2).
+// The Lua side cannot be told which character it is, so each request names its turtle by its
+// distance to the player and its HP share, both of which the brain can read for itself.
+const STATUS_FILL = 0.5;
+const STATUS_CHECK_MS = 400;
+const RESIST_GAUGE = 0x10;
+const RESIST_MAX = 0x2c;
+// Gauge index -> bolus, for build-up: poison, rot and bleed are the ones stocked.
+const GAUGE_CURE = { 0: 900, 1: 940, 2: 910 };
+const RUNNING_CURE = { 10004: 900, 10005: 940 };
+let statusAt = 0;
+let statusSent = null;
+
+function gauges(chr) {
+    const resist = chr.add(0x190).readPointer().add(0x20).readPointer();
+    const out = [];
+    for (let i = 0; i < 7; i++) {
+        out.push([resist.add(RESIST_GAUGE + i * 4).readS32(), resist.add(RESIST_MAX + i * 4).readS32()]);
+    }
+    return out;
+}
+
+function statusCheck() {
+    const now = Date.now();
+    if (now - statusAt < STATUS_CHECK_MS || playerChr === null) return;
+    statusAt = now;
+    const me = posOf(playerChr);
+    if (me === null) return;
+    const flat = [];
+    const report = [];
+    for (const c of squadChrs()) {
+        const hp = hpOf(c);
+        const p = posOf(c);
+        if (hp === null || hp[0] <= 0 || p === null) continue;
+        let item = null;
+        let why = null;
+        for (const cat of statusCategories(c)) {
+            if (RUNNING_CURE[cat] !== undefined) {
+                item = RUNNING_CURE[cat];
+                why = `running:${cat}`;
+                break;
+            }
+        }
+        if (item === null) {
+            const g = gauges(c);
+            let worst = STATUS_FILL;
+            for (const [i, cure] of Object.entries(GAUGE_CURE)) {
+                const [left, max] = g[i];
+                const filled = max > 0 ? 1 - left / max : 0;
+                if (filled >= worst) {
+                    worst = filled;
+                    item = cure;
+                    why = `buildup:${i}:${Math.round(filled * 100)}%`;
+                }
+            }
+        }
+        if (item === null) continue;
+        const d = Math.hypot(p[0] - me[0], p[1] - me[1], p[2] - me[2]);
+        flat.push(Math.round(d * 10) / 10, Math.round(hp[0] / hp[1] * 100) / 100, item);
+        report.push({ chr: c.toString(), item, why });
+    }
+    // Re-sent every check while anyone needs a cure, since distances move; reported on change.
+    const sent = JSON.stringify(report.map((r) => [r.chr, r.item]));
+    const changed = sent !== statusSent;
+    if (!changed && flat.length === 0) return;
+    statusSent = sent;
+    emit('world', { facts: { tt_cure: flat }, quiet: true });
+    if (changed) emit('status', { report });
+}
+
+// Reload the current map in place, as the map events' area reload does: TriggerAreaReload(false),
+// 1.16.2 0x1405f2890 = 1.17.x 0x1405f36e0 (bytes match). With false it also runs the event-flag
+// manager's reload pass first. Requested by the reloadArea RPC and run here, on the game's frame.
+const TRIGGER_AREA_RELOAD = new NativeFunction(va('0x1405f36e0'), 'void', ['uint8']);
+let reloadPending = false;
+
+// A grace rest's world reset without the grace: ResetWorld() (1.16.2 0x1405f35c0 = 1.17.1
+// 0x1405f4410) drops the saved records of dead map characters and sets WorldChrMan +0x1e524 to 1,
+// and the engine then despawns, respawns and restarts the map events over the next frames. The
+// rest then clears world-time +0xec and refills flasks (BonfirelikeRecovery) and items from the
+// chest. See bd grace-rest-recipe-1171-2026-10-06. Requested by the graceRest RPC.
+const GR_WORLD_CHR_MAN = va('0x143d69ff8');
+const GR_CS_EVENT_MAN = va('0x143d6c768');
+const GR_RESET_WORLD = new NativeFunction(va('0x1405f4410'), 'void', []);
+const GR_RECOVERY = new NativeFunction(va('0x1405f4170'), 'void', []);
+const GR_REPLENISH = new NativeFunction(va('0x14024dff0'), 'void', []);
+const WCM_MAIN_PLAYER = 0x1e508;
+const WCM_RESPAWN_STATE = 0x1e524;
+let gracePending = false;
+let graceWatch = -1;
+
+function graceRestReset() {
+    const wcm = GR_WORLD_CHR_MAN.readPointer();
+    if (wcm.isNull()) return { ok: false, why: 'no WorldChrMan' };
+    if (wcm.add(WCM_MAIN_PLAYER).readPointer().isNull()) return { ok: false, why: 'no player' };
+    const state = wcm.add(WCM_RESPAWN_STATE).readS32();
+    if (state !== 0) return { ok: false, why: 'respawn already running', state };
+    GR_RESET_WORLD();
+    const em = GR_CS_EVENT_MAN.readPointer();
+    if (!em.isNull()) {
+        const wat = em.add(0xc0).readPointer();
+        if (!wat.isNull()) wat.add(0xec).writeU8(0);
+    }
+    GR_RECOVERY();
+    GR_REPLENISH();
+    return { ok: true, stateAfter: wcm.add(WCM_RESPAWN_STATE).readS32() };
+}
+
+function graceWatchTick() {
+    const wcm = GR_WORLD_CHR_MAN.readPointer();
+    if (wcm.isNull()) return;
+    const s = wcm.add(WCM_RESPAWN_STATE).readS32();
+    if (s !== graceWatch) {
+        emit('grace-rest-state', { state: s });
+        graceWatch = s === 0 ? -1 : s;
+        // State 1 despawns every map character, the squad included (measured 2026-10-06: the
+        // spawn was "removed" 75 ms after the reset), so summon it again once the respawn is done.
+        if (s === 0 && !despawnedEarlier()) {
+            emit('grace-resummon', { why: 'reset-world' });
+            rpc.exports.respawn();
+        }
+    }
+}
+
 const hook = Interceptor.attach(FRAME_TICK, {
     onEnter() {
+        for (const c of mimics) {
+            try {
+                if (isAlive(c).alive) mimicTeam(c);
+            } catch (e) {
+                emit('hook-error', { where: 'mimic-team', error: e.message });
+            }
+        }
+        if (gracePending) {
+            gracePending = false;
+            try {
+                const r = graceRestReset();
+                emit('grace-rest', r);
+                if (r.ok) graceWatch = r.stateAfter;
+            } catch (e) {
+                emit('hook-error', { where: 'grace-rest', error: e.message });
+            }
+        }
+        if (graceWatch !== -1) {
+            try {
+                graceWatchTick();
+            } catch (e) {
+                emit('hook-error', { where: 'grace-watch', error: e.message });
+                graceWatch = -1;
+            }
+        }
+        if (reloadPending) {
+            reloadPending = false;
+            try {
+                TRIGGER_AREA_RELOAD(0);
+                emit('area-reload', { ok: true });
+            } catch (e) {
+                emit('hook-error', { where: 'area-reload', error: e.message });
+            }
+        }
         sampleTarget();
+        try {
+            statusCheck();
+        } catch (e) {
+            emit('hook-error', { where: 'status', error: e.message });
+        }
+        try {
+            refreshTagHandles();
+            tagCheck();
+        } catch (e) {
+            emit('hook-error', { where: 'tag-list', error: e.message });
+        }
+        try {
+            artPlanner();
+        } catch (e) {
+            emit('hook-error', { where: 'arts', error: e.message });
+        }
+        try {
+            stuckCheck();
+        } catch (e) {
+            emit('hook-error', { where: 'stuck', error: e.message });
+        }
+        try {
+            veilCheck();
+        } catch (e) {
+            emit('hook-error', { where: 'veil', error: e.message });
+        }
+        try {
+            volleyCheck();
+        } catch (e) {
+            emit('hook-error', { where: 'volley', error: e.message });
+        }
+        try {
+            readSwings();
+        } catch (e) {
+            emit('hook-error', { where: 'read-swings', error: e.message });
+        }
         addHeals();
         const now = Date.now();
         if (now - heartbeatAt >= HEARTBEAT_MS) {
@@ -1087,7 +2299,8 @@ const hook = Interceptor.attach(FRAME_TICK, {
                     } else if (!r.chr.isNull()) {
                         extras.push(r.chr);
                         rememberExtras();
-                        dressNew(r.chr);
+                        mimicTeam(r.chr);
+                        dressNew(r.chr, n);
                         emit('spawned', { chr: r.chr.toString(), extra: n, at: r.at, path: 'summon', net: r.net });
                     }
                 }
@@ -1144,8 +2357,10 @@ const hook = Interceptor.attach(FRAME_TICK, {
                 spawnedAt = Date.now();
                 spawnedPath = cfg.path;
                 rememberSpawn(r.chr, cfg.path);
-                // Same frame as creation, ahead of the first part load.
-                dressNew(r.chr);
+                // Same frame as creation, ahead of the first part load. The team too: the summon is
+                // created on team 6 and attacked the player until the later pass fixed it.
+                applyTeam(r.chr);
+                dressNew(r.chr, 0);
                 if (cfg.path === 'summon') extrasWanted = Math.max(0, (cfg.count || 1) - 1);
             }
             emit(r.chr.isNull() ? 'spawn-null' : 'spawned', {
@@ -1166,6 +2381,7 @@ let heartbeatAt = 0;
 function heartbeat() {
     const flags = applyGod();
     const pose = playerPose();
+    playerChr = pose.player || null;
     const fields = {
         god: cfg.god, godFlags: flags, playerHp: pose.player ? hpOf(pose.player) : null,
         playerTeam: pose.player ? pose.player.add(TEAM_TYPE).readU8() : null,
@@ -1176,6 +2392,10 @@ function heartbeat() {
     if (spawned !== null) {
         try {
             const state = isAlive(spawned);
+            if (state.alive) {
+                applyName(spawned, 0);
+                tendFood(spawned);
+            }
             const physics = state.alive ? physicsOf(spawned) : null;
             const p = physics === null ? null : physics.add(0x70);
             Object.assign(fields, {
@@ -1184,18 +2404,20 @@ function heartbeat() {
                 npcHp: state.alive ? hpOf(spawned) : null,
                 team: state.alive ? applyTeam(spawned) : null,
                 home: state.alive ? applyHome(spawned, pose.pos) : null,
-                equip: state.alive && cfg.dress !== false ? applyEquip(spawned, false) : null,
+                equip: state.alive && cfg.dress !== false ? applyEquip(spawned, false, 0) : null,
                 chrType: state.alive ? spawned.add(CHR_TYPE).readS32() : null,
             });
         } catch (e) {
             fields.error = e.message;
         }
     }
-    fields.extras = extras.map((c) => {
+    fields.extras = extras.map((c, i) => {
         try {
             if (!isAlive(c).alive) return { chr: c.toString(), alive: false };
+            applyName(c, i + 1);
+            tendFood(c);
             return { chr: c.toString(), alive: true, hp: hpOf(c), team: applyTeam(c),
-                home: applyHome(c, pose.pos), equip: cfg.dress !== false && applyEquip(c, false) !== null };
+                home: applyHome(c, pose.pos), equip: cfg.dress !== false && applyEquip(c, false, i + 1) !== null };
         } catch (e) {
             return { chr: c.toString(), error: e.message };
         }
@@ -1278,6 +2500,8 @@ function refreshLiftHandles() {
 
 let onLift = null;
 let liftError = null;
+let liftOffSent = null;
+const liftGround = new Map();
 // Every LIFT_CHECK_MS of game frames, from the frame tick.
 const LIFT_CHECK_MS = 250;
 let liftCheckAt = 0;
@@ -1309,6 +2533,37 @@ function liftCheck() {
             emit('world', { facts: { player_on_lift: now_on }, lift: lift || null,
                 ground: `0x${(hi >>> 0).toString(16)}_${(lo >>> 0).toString(16)}`, groundKind: kind });
         }
+        // The turtles still off the player's lift, by their distance to the player, for
+        // brain_turtles.lua TT_on_lift: one standing on the same ground handle is aboard,
+        // however far from the player (measured 2026-10-06: they stopped 1.8-2 m away on the
+        // lift and kept re-boarding against a fixed radius).
+        const off = [];
+        if (now_on) {
+            const me = posOf(pose.player);
+            for (const c of squadChrs()) {
+                const ph = physicsOf(c);
+                const q = posOf(c);
+                if (ph === null || q === null || me === null) continue;
+                // Same lift, not same handle: a lift's asset and its collision parts (kinds 6 and
+                // 8) carry different handles, and liftHandles maps each to the lift's entity id.
+                const tlo = ph.add(PHYS_GROUND_HANDLE).readU32();
+                const thi = ph.add(PHYS_GROUND_HANDLE + 4).readU32();
+                const same = liftHandles.get(handleKey(tlo, thi)) === lift || (tlo === lo && thi === hi);
+                const d = Math.round(Math.hypot(q[0] - me[0], q[1] - me[1], q[2] - me[2]) * 100) / 100;
+                if (!same) {
+                    off.push(d);
+                    liftGround.set(c.toString(), `0x${(thi >>> 0).toString(16)}_${(tlo >>> 0).toString(16)} kind ${tlo >>> 28} d ${d}`);
+                }
+            }
+        }
+        const offKey = off.length;
+        if (offKey !== liftOffSent || off.length > 0) {
+            if (offKey !== liftOffSent) emit('lift-squad', { player: `0x${(hi >>> 0).toString(16)}_${(lo >>> 0).toString(16)}`,
+                lift: lift || null, off: Object.fromEntries(liftGround) });
+            liftOffSent = offKey;
+            emit('world', { facts: { tt_lift_off_p: off }, quiet: true });
+        }
+        liftGround.clear();
         liftError = null;
     } catch (e) {
         if (e.message !== liftError) {
@@ -1334,13 +2589,20 @@ rpc.exports = {
             pendingRemovePath = spawnedPath;
         }
         dropExtras();
+        nameplates.clear();
+        namesByHandle.clear();
+        foodGiven.clear();
+        foodEatenAt.clear();
+        foodBefore.clear();
         spawned = null;
         stableSince = null;
         holdSpawn = false;
         done = false;
+        setDespawned(false);
         return cfg;
     },
     despawn() {
+        setDespawned(true);
         if (spawned !== null && isAlive(spawned).alive) {
             pendingRemove = spawned;
             pendingRemovePath = spawnedPath;
@@ -1370,6 +2632,90 @@ rpc.exports = {
     },
     // The spawn's normal inventory (fromsoftware-rs EquipGameData at PlayerGameData +0x2b0,
     // EquipInventoryData at +0x158 in it): {handle, item, qty} per entry, `stride` bytes apart.
+    // What artPlanner sees for each summon: its enemy, distance, FP and the watched list size.
+    peekArts() {
+        return { watched: watched.length, enemyWhy,
+            enemyLocks: watched.map((w) => ({ w: w.toString(), lock: (w.add(0x6b0).readU32() >>> 0).toString(16) })),
+            squadHandles: squadChrs().map((c) => (c.add(8).readU32() >>> 0).toString(16)), squad: [spawned].concat(extras).map((c, index) => {
+            if (c === null || !isAlive(c).alive) return null;
+            const t = enemyOf(c);
+            const p = posOf(c);
+            const q = t === null ? null : posOf(t.chr);
+            return { chr: c.toString(), arts: forSpawn(cfg.arts, index), fp: fpOf(c), now: artNow.get(c.toString()),
+                enemy: t === null ? null : { chr: t.chr.toString(), hp: t.hp, npc: t.chr.add(0x60).readS32(),
+                    d: q === null || p === null ? null : Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]) } };
+        }) };
+    },
+    // Put Ash of War `gem` on every summon whose build lists it, for `ms` (artPlanner then resumes).
+    // Each nearby enemy's AI target handle beside the player's and the turtles' handles, to check
+    // the targetedCheck chain against a live fight.
+    // The game's own display name for a ChrIns (GetChrName, undecorated). The MenuString is leaked
+    // on purpose: it is a few bytes and its destructor is not ours to call.
+    chrName(addr) {
+        const out = Memory.alloc(0x80);
+        new NativeFunction(GET_CHR_NAME, 'pointer', ['pointer', 'pointer', 'bool'])(out, ptr(addr), 0);
+        const raw = out.readPointer();
+        return raw.isNull() ? null : raw.readUtf16String();
+    },
+    // Event flags (bd great-jar-sign-flags-1171-2026-10-06): CSEventFlagMan* at 0x143d6c4b8,
+    // GetEventFlag(man, id) 0x1405fa250, SetEventFlag(man, u32* id, state, caller, netSync)
+    // 0x1405d2f60. netSync 0, since the sync list is not safe from this thread. `state` null reads.
+    eventFlags(ids, state) {
+        const man = va('0x143d6c4b8').readPointer();
+        const get = new NativeFunction(va('0x1405fa250'), 'int', ['pointer', 'uint32']);
+        const set = new NativeFunction(va('0x1405d2f60'), 'void', ['pointer', 'pointer', 'uint8', 'pointer', 'uint8']);
+        const id = Memory.alloc(4);
+        const out = {};
+        for (const f of ids) {
+            const before = get(man, f);
+            if (state !== null && state !== undefined) {
+                id.writeU32(f);
+                set(man, id, state, NULL, 0);
+            }
+            out[f] = [before, get(man, f)];
+        }
+        return out;
+    },
+    reloadArea() {
+        reloadPending = true;
+        return true;
+    },
+    // Count already-summoned Mimic Tear turtles as squad again (after a reload of this agent).
+    mimicAdopt(addrs) {
+        mimics = addrs.map((a) => ptr(a)).filter((c) => isAlive(c).alive);
+        mimics.forEach((c, i) => {
+            mimicTeam(c);
+            dressNew(c, i);
+        });
+        return mimics.map(String);
+    },
+    graceRest() {
+        gracePending = true;
+        return true;
+    },
+    peekTargets() {
+        const hex = (h) => (h === null ? null : h.and(0xffffffff).toString(16));
+        return {
+            player: playerChr === null ? null : hex(playerChr.add(8).readU64()),
+            squad: squadChrs().map((c) => hex(c.add(8).readU64())),
+            enemies: watched.map((e) => {
+                try {
+                    return { chr: e.toString(), npcParam: e.add(0x60).readS32(), target: hex(aiTargetHandle(e)) };
+                } catch (err) {
+                    return { chr: e.toString(), error: err.message };
+                }
+            }),
+        };
+    },
+    forceArt(gem, ms) {
+        artForce = { gem, until: Date.now() + ms };
+        return artForce;
+    },
+    // Each living summon's status gauges ([left, resistance] x 7) and running status categories.
+    peekStatus() {
+        return squadChrs().map((c) => ({ chr: c.toString(), gauges: gauges(c),
+            running: Array.from(statusCategories(c)) }));
+    },
     peekInventory(stride) {
         if (spawned === null || !isAlive(spawned).alive) return null;
         const inv = spawned.add(PLAYER_GAME_DATA).readPointer().add(0x2b0 + 0x158);
@@ -1508,33 +2854,58 @@ rpc.exports = {
         homeSpawned = xyz;
         return homeSpawned;
     },
+    // The team applyTeam pins a summon-path spawn to (null: the player's), without respawning; a
+    // red-sign join (scripts/frida/signs-to-player.js) puts the spawn on 16 and needs it kept there.
+    setSummonTeam(t) {
+        cfg.summonTeam = t === null || t === undefined || t < 0 ? null : t;
+        return cfg.summonTeam;
+    },
     // What the AI mods asked for (_lab.lua lab_team / lab_home), applied on the next heartbeat.
     // team null or negative restores the team it spawned with; home is 'spawn', 'self' or 'player'.
     request(r) {
         cfg.team = r.team === null || r.team === undefined || r.team < 0 ? null : r.team;
         cfg.home = ['self', 'player'].includes(r.home) ? r.home : 'spawn';
-        // "think:slot=id;think:slot=id/gem", as _lab.lua logs LAB_EQUIP; no gem is -1.
+        // "think:slot=id;think:slot=id/gem", as _lab.lua logs LAB_EQUIP; no gem is -1. The think
+        // may carry a summon index, "think.N" (see forSpawn).
         // A face rides the same string as "think:face=<hex>" (_lab.lua lab_face).
         cfg.equip = {};
         cfg.face = {};
+        cfg.name = {};
+        cfg.arts = {};
         for (const item of String(r.equip || '').split(';')) {
-            const f = /^(\d+):face=([0-9A-Fa-f]+)$/.exec(item);
+            const f = /^(\d+(?:\.\d+)?):face=([0-9A-Fa-f]+)$/.exec(item);
             if (f !== null) {
                 cfg.face[f[1]] = f[2];
                 continue;
             }
-            const m = /^(\d+):(\w+)=(-?\d+)(?:\/(-?\d+))?$/.exec(item);
+            // The Ashes of War its right-hand weapon can switch between, "think:arts=g,g,..."
+            // (_lab.lua lab_arts; -1 is the weapon's own skill), for artPlanner.
+            const a = /^(\d+(?:\.\d+)?):arts=(-?\d+(?:,-?\d+)*)$/.exec(item);
+            if (a !== null) {
+                cfg.arts[a[1]] = a[2].split(',').map(Number);
+                continue;
+            }
+            // A name rides it too, as "think:name=<text>" (_lab.lua lab_name).
+            const n = /^(\d+(?:\.\d+)?):name=([A-Za-z0-9 ]{1,16})$/.exec(item);
+            if (n !== null) {
+                cfg.name[n[1]] = n[2];
+                continue;
+            }
+            const m = /^(\d+(?:\.\d+)?):(\w+)=(-?\d+)(?:\/(-?\d+))?$/.exec(item);
             if (m === null) continue;
             (cfg.equip[m[1]] = cfg.equip[m[1]] || {})[m[2]] =
                 { id: Number(m[3]), gem: m[4] === undefined ? -1 : Number(m[4]) };
         }
-        return { team: cfg.team, home: cfg.home, equip: cfg.equip,
+        return { team: cfg.team, home: cfg.home, equip: cfg.equip, name: cfg.name,
             face: Object.fromEntries(Object.entries(cfg.face).map(([k, v]) => [k, v.length / 2])) };
     },
     dispose() {
         hook.detach();
         removeHook.detach();
         damageHook.detach();
+        nameHook.detach();
+        panelHook.detach();
+        for (const h of tagHooks) h.detach();
         Interceptor.revert(REQUEST_WARP);
         Interceptor.revert(DESPAWN_ALL);
     },

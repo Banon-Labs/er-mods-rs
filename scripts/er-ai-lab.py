@@ -285,6 +285,8 @@ class Lab:
                 return repr(float(v))
             if isinstance(v, (list, tuple)):
                 return "{" + ", ".join(lua(x) for x in v) + "}"
+            if isinstance(v, str):
+                return json.dumps(v)
             raise TypeError(f"no Lua literal for {type(v).__name__}")
 
         code = "; ".join(f'lab_world_set("{k}", {lua(v)}, {lua(quiet)})' for k, v in facts.items()

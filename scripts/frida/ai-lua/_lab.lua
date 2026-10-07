@@ -104,6 +104,18 @@ function lab_face(think, hex)
   table.insert(LAB_EQUIP, think .. ":face=" .. hex)
 end
 
+-- The spawn's character name (PlayerGameData character_name, 16 UTF-16 units at most), written by
+-- spawn-npc.js at creation. Letters, digits and spaces only; it travels as "think:name=<text>".
+function lab_name(think, name)
+  table.insert(LAB_EQUIP, think .. ":name=" .. name)
+end
+
+-- The Ashes of War (EquipParamGem ids, -1 for the weapon's own skill) the summon's right-hand
+-- weapon may switch between; spawn-npc.js artPlanner picks one for the moment.
+function lab_arts(think, gems)
+  table.insert(LAB_EQUIP, think .. ":arts=" .. gems)
+end
+
 function lab_equip(think, slot, id, gem)
   local piece = think .. ":" .. slot .. "=" .. id
   if gem ~= nil then piece = piece .. "/" .. gem end
