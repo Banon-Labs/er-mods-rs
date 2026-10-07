@@ -5,6 +5,7 @@
 # property of this tree -- no DLL can corrupt the 1.17 image with a
 # stale address -- and this file is what keeps it true.
 er-ags-stub	0	0
+er-allow-hostile-actions	0	0
 er-armament-icons	0	0
 er-better-refills	0	0
 er-build-import	0	0

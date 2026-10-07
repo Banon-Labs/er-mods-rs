@@ -20,15 +20,58 @@
 #     non-chained bd issue-tracker command whose pgrep token sits entirely
 #     inside quoted text (bd only records text; see bd er-effects-rs-uxyz), and
 #     a single git commit whose token sits in the recorded MESSAGE (2026-08-12).
+#     The guard applies only where its premise can hold: it stands down when the
+#     host_platform signal positively reports native Linux, where pgrep sees
+#     Steam, Proton and every other process directly (2026-09-26). WSL, and any
+#     host the signal cannot classify, keep the full block.
 #     See bd steam-detection-wsl-false-negative-2026-07-18.
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
+#     required_signals: ["host_platform"]
 package cupcake.policies.claude.block_manual_pgrep
 
 import rego.v1
 
 command := object.get(input.tool_input, "command", "")
+
+# ---------------------------------------------------------------------------
+# WHERE THE PREMISE HOLDS (2026-09-26)
+#
+# Everything below assumes a WSL2 box with a native-WINDOWS Steam install, where
+# Steam and the game/EAC processes are Windows processes that pgrep cannot see.
+# This repo's dev box has not been that box since the WSL2 setup was retired
+# (AGENTS.md: "This machine now runs a NATIVE LINUX Steam install"). On native
+# Linux the premise is false and the guard's only effect was to deny read-only
+# process listings -- measured 2026-09-26, a pre-cleanup check for running
+# builds and agent sessions before deleting Rust target/ dirs:
+#
+#   pgrep -a -f 'cargo|rustc' | grep -v pgrep | cut -c1-200 | head; ...
+#   pgrep -a -x claude | cut -c1-120; ...
+#
+# So the guard now asks where it is running. `.cupcake/signals/host_platform.sh`
+# answers `wsl`, `native` or `unknown` from the kernel release and WSL's own
+# runtime markers, and the block stands down ONLY on a positive `native`.
+#
+# Fail-closed by construction, so the WSL protection cannot be lost by the
+# signal breaking: `wsl`, `unknown`, a mistyped override, an absent key (the
+# signal timed out, or `opa test` supplied no signals -- which is why every
+# pre-existing deny test here still denies unchanged), and the failure record
+# cupcake substitutes for a non-zero exit all leave the guard exactly as it was.
+# A clone of this repo on a real WSL2 box keeps the full block.
+# ---------------------------------------------------------------------------
+
+host_platform_signal := object.get(object.get(input, "signals", {}), "host_platform", "")
+
+host_is_native_linux if host_platform_signal == "native"
+
+# For the deny reason, so a block explains which verdict it acted on. Always
+# defined: a deny whose reason concat reached an undefined value would silently
+# never fire, which is the fail-open this section exists to rule out.
+host_platform_label := host_platform_signal if {
+	is_string(host_platform_signal)
+	host_platform_signal != ""
+} else := "unavailable"
 
 # A `pgrep` command token: at command start or after a shell separator
 # (whitespace, `;`, `|`/`||`, `&`/`&&`, `(`/`$(`, a backtick, or a quote),
@@ -257,16 +300,17 @@ pgrep_heredoc_tag := tag if {
 	regex.match(`^[A-Za-z_][A-Za-z0-9_]*$`, tag)
 }
 
-block_reason := "🧁 Cupcake blocked a manual pgrep. On this WSL2 + native-Windows-Steam box manual pgrep is blocked because it FALSE-NEGATIVES: Steam runs as the Windows process steam.exe (and the game/EAC processes are Windows processes too), visible only via tasklist.exe, so `pgrep -x steam` reports 'down' while Steam is UP. That false negative once blocked an entire overnight runtime session. For a Steam check run `bash scripts/steam-running.sh` (the committed WSL-aware helper). For any OTHER process use tasklist.exe or a WSL-aware check, never raw pgrep. This guard has NO escape hatch for anything that could execute pgrep: the only sanctioned pgrep lives INSIDE scripts/steam-running.sh itself. (Narrow text exemptions: a single non-chained bd issue-tracker command may MENTION the token inside quoted text, and a single git commit may mention it in the recorded MESSAGE -- `-m \"...\"`, `-m \"$(cat <<'TAG' ... TAG )\"`, or `-F -` with a quoted-tag heredoc. Chained batches, `bash -c` wrappers, command substitution and anything after the heredoc terminator do not qualify -- run those invocations one at a time.) See bd steam-detection-wsl-false-negative-2026-07-18."
+block_reason := "🧁 Cupcake blocked a manual pgrep. This host was not confirmed as native Linux by .cupcake/signals/host_platform.sh (on native Linux pgrep sees every process and is allowed), so the WSL rule applies. On a WSL2 + native-Windows-Steam box manual pgrep is blocked because it FALSE-NEGATIVES: Steam runs as the Windows process steam.exe (and the game/EAC processes are Windows processes too), visible only via tasklist.exe, so `pgrep -x steam` reports 'down' while Steam is UP. That false negative once blocked an entire overnight runtime session. For a Steam check run `bash scripts/steam-running.sh` (the committed WSL-aware helper). For any OTHER process use tasklist.exe or a WSL-aware check, never raw pgrep. This guard has NO escape hatch for anything that could execute pgrep: the only sanctioned pgrep lives INSIDE scripts/steam-running.sh itself. (Narrow text exemptions: a single non-chained bd issue-tracker command may MENTION the token inside quoted text, and a single git commit may mention it in the recorded MESSAGE -- `-m \"...\"`, `-m \"$(cat <<'TAG' ... TAG )\"`, or `-F -` with a quoted-tag heredoc. Chained batches, `bash -c` wrappers, command substitution and anything after the heredoc terminator do not qualify -- run those invocations one at a time.) See bd steam-detection-wsl-false-negative-2026-07-18."
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	manual_pgrep_detected
+	not host_is_native_linux
 
 	decision := {
 		"rule_id": "ER-EFFECTS-BLOCK-MANUAL-PGREP",
 		"severity": "HIGH",
-		"reason": concat("", [block_reason, "\n\nSource: ", command]),
+		"reason": concat("", [block_reason, "\n\nhost_platform signal: ", host_platform_label, "\n\nSource: ", command]),
 	}
 }
