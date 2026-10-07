@@ -714,8 +714,9 @@ dependency closure: `--with er-npc-summons`."""
 [compatible]
 "er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \
 structural rather than a run that happened to survive: this shell INSTALLS NO DETOUR. Its whole \
-effect is three one-byte stores into `.text`, from its own install thread, after which the thread \
-exits and nothing here runs again for the session. Neither failure mode this table exists to \
+effect is three one-byte stores into `.text`, made (and undone, when an option is switched back \
+off) from a `FrameBegin` game task that otherwise only re-reads its own config file about once a \
+second. Neither failure mode this table exists to \
 catch can arise -- no second MinHook instance can overwrite a trampoline it never installed, and \
 no D3D12 Present/compositor is touched.
 
