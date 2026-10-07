@@ -1152,10 +1152,131 @@ def earlier_result(wid: int, cache: Path) -> dict | None:
     return None
 
 
-def generate(jobs: int, partial: bool = False, build: str | None = None) -> int:
+# --------------------------------------------------------------------------------------------
+# Remote shards
+
+#: Where the shards run by default: a machine reached over SSH that shares this user and home
+#: directory, so every path a shard opens or records is the same on both. `local` keeps them here.
+DEFAULT_HOST = os.environ.get("ER_R3_BOARDS_HOST", "zerk")
+#: The remote interpreter: a venv beside the board cache, so numpy is installed there once and
+#: nothing is added to the host's system Python.
+REMOTE_VENV = "~/.cache/er-r3-boards-remote/venv"
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+SSH_PROBE_SECONDS = 20
+#: A result that failed because the host lacked a file: recomputed here rather than kept.
+MISSING_FILE_MARKERS = ("FileNotFoundError", "No such file or directory")
+
+
+def _ssh(host: str, command: str) -> subprocess.CompletedProcess:
+    return subprocess.run(SSH + [host, command], capture_output=True, text=True, timeout=SSH_PROBE_SECONDS)
+
+
+def _run_to_exit(argv: list[str]) -> subprocess.CompletedProcess:
+    """Run a step whose length is the work itself -- a first copy of every data file, a numpy
+    install -- and finish when the process exits, the same way the shards are waited on."""
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    out, err = proc.communicate()
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
+
+
+def remote_python(host: str) -> tuple[str | None, str]:
+    """The host's interpreter for the shards, or None and why the host cannot take them."""
+    import shlex
+    try:
+        probe = _ssh(host, 'printf %s "$HOME"')
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"{host} unreachable ({type(e).__name__})"
+    if probe.returncode != 0:
+        return None, f"{host} unreachable: {probe.stderr.strip()[:200]}"
+    if probe.stdout != str(Path.home()):
+        return None, f"{host}'s home is {probe.stdout!r}, not {str(Path.home())!r}; paths would not match"
+    venv = REMOTE_VENV
+    setup = (f"test -x {venv}/bin/python || python3 -m venv {venv}; "
+             f"{venv}/bin/python -c 'import numpy' 2>/dev/null || {venv}/bin/python -m pip install -q numpy; "
+             f"{venv}/bin/python -c 'import numpy' && printf %s {venv}/bin/python")
+    try:
+        got = _run_to_exit(SSH + [host, setup])
+    except OSError as e:
+        return None, f"{host}: {e}"
+    if got.returncode != 0 or not got.stdout:
+        return None, f"{host} has no Python with numpy: {got.stderr.strip()[:200]}"
+    return shlex.quote(got.stdout.replace("~", str(Path.home()), 1)), ""
+
+
+def data_manifest(cache: Path) -> list[Path]:
+    """The data files a shard opens: the last generation's recorded inputs, and whatever this
+    cache's shards have recorded since. A file a shard needs that neither lists is caught after
+    the run (`MISSING_FILE_MARKERS`) and its weapon recomputed here."""
+    found: set = set()
+    if OUT_INPUTS.exists():
+        for line in OUT_INPUTS.read_text().splitlines():
+            parts = line.split(" ", 2)
+            if len(parts) == 3 and parts[0] == "data":
+                found.add(resolve_display(parts[2]))
+    for f in cache.glob("opened-*.json"):
+        found |= {Path(p) for p in json.loads(f.read_text()) if not p.startswith(str(REPO_ROOT) + "/")}
+    # The archive headers `er-item-name.py` stats (never opens) to decide whether its text cache is
+    # current; without them on the host every shard warns that the game item text is stale.
+    game_dir = Path(os.environ.get("ER_GAME_DIR", Path.home() / ".local/share/Steam/steamapps/common/ELDEN RING/Game"))
+    if game_dir.is_dir():
+        found |= set(game_dir.glob("*.bhd"))
+    return sorted(p for p in found if p.is_file())
+
+
+def rsync(args: list[str], mode: tuple = ("-a",)) -> None:
+    run = _run_to_exit(["rsync", *mode, "--mkpath"] + args)
+    if run.returncode != 0:
+        raise SystemExit(f"rsync {' '.join(args[-2:])} failed: {run.stderr.strip()[:400]}")
+
+
+def run_remote_shards(host: str, py: str, jobs: int, cache: Path, subset: Path | None) -> int:
+    """Copy the scripts, the data and the cache to `host`, run the shards there with each one's
+    output appended to the local `shard-<i>.log`, and copy the cache back. Returns the number of
+    shards that failed."""
+    import shlex
+    print(f"remote {host}: copying scripts, data and cache", flush=True)
+    rsync(["--delete", f"{REPO_ROOT / 'scripts'}/", f"{host}:{REPO_ROOT / 'scripts'}/"])
+    with tempfile.NamedTemporaryFile("w", suffix=".files", delete=False) as listing:
+        listing.write("".join(str(p).lstrip("/") + "\n" for p in data_manifest(cache)))
+    try:
+        # Files and their times only: rooted at `/`, the implied parent directories include
+        # `/home`, whose times and modes the user cannot set.
+        rsync([f"--files-from={listing.name}", "/", f"{host}:/"], mode=("-rlt", "--omit-dir-times"))
+    finally:
+        os.unlink(listing.name)
+    rsync([f"{cache}/", f"{host}:{cache}/"])
+    procs = []
+    for i in range(jobs):
+        cmd = (f"cd {shlex.quote(str(REPO_ROOT))} && exec {py} scripts/gen-r3-weapon-boards.py "
+               f"--shard {i} --of {jobs} --cache {shlex.quote(str(cache))}"
+               + (f" --subset {shlex.quote(str(subset))}" if subset else ""))
+        log = open(cache / f"shard-{i}.log", "a")
+        log.write(f"remote {host}: shard {i}\n")
+        log.flush()
+        procs.append((subprocess.Popen(SSH + [host, cmd], stdout=log, stderr=subprocess.STDOUT), log))
+    failed = 0
+    for p, log in procs:
+        failed += p.wait() != 0
+        log.close()
+    rsync([f"{host}:{cache}/", f"{cache}/"])
+    for f in cache.glob("*.json"):
+        if f.name.startswith(("opened-", "subset")):
+            continue
+        got = json.loads(f.read_text())
+        if not got.get("ok") and any(m in got.get("why", "") for m in MISSING_FILE_MARKERS):
+            print(f"remote {host}: {f.stem} needed a file the host lacks; recomputing it here", flush=True)
+            f.unlink()
+    print(f"remote {host}: done, {failed} shard(s) failed", flush=True)
+    return failed
+
+
+def generate(jobs: int, partial: bool = False, build: str | None = None,
+             host: str = DEFAULT_HOST) -> int:
     """`partial` computes nothing: it renders the weapons the current cache already holds and lists
     the rest as not generated yet, so a run that is still going can be looked at in game. `build`
-    computes only that build's weapons and takes every other board from `earlier_result`."""
+    computes only that build's weapons and takes every other board from `earlier_result`. `host`
+    runs the shards on another machine first (`run_remote_shards`); the local pass after it then
+    computes only what the host did not."""
     key = cache_key()
     cache = CACHE_ROOT / key
     cache.mkdir(parents=True, exist_ok=True)
@@ -1166,6 +1287,12 @@ def generate(jobs: int, partial: bool = False, build: str | None = None) -> int:
         subset = cache / "subset.json"
         subset.write_text(json.dumps(sorted(ids)))
         print(f"build {build}: {len(ids)} weapons to compute", flush=True)
+    if host != "local" and not partial:
+        py, why = remote_python(host)
+        if py is None:
+            print(f"remote: {why}; computing here", flush=True)
+        elif run_remote_shards(host, py, jobs, cache, subset):
+            print(f"remote {host}: a shard failed; the local pass computes what is missing", flush=True)
     procs = []
     for i in range(0 if partial else jobs):
         log = open(cache / f"shard-{i}.log", "a")
@@ -1475,6 +1602,9 @@ def main() -> int:
     ap.add_argument("--build", metavar="URL",
                     help="compute only the weapons a build planner link carries (a ?b= link or its id); "
                          "every other weapon is rendered from its newest earlier cached result")
+    ap.add_argument("--host", default=DEFAULT_HOST,
+                    help="run the shards on this SSH host first (same user and home directory); "
+                         "'local' runs them here. Default %(default)s, or ER_R3_BOARDS_HOST")
     ap.add_argument("--shard", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--of", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--cache", type=Path, help=argparse.SUPPRESS)
@@ -1488,7 +1618,7 @@ def main() -> int:
         return only(a.only)
     if a.shard is not None:
         return run_shard(a.shard, a.of, a.cache, a.subset)
-    return generate(max(1, a.jobs), a.partial, a.build)
+    return generate(max(1, a.jobs), a.partial, a.build, a.host)
 
 
 if __name__ == "__main__":
