@@ -2356,6 +2356,10 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # tests and requires a host runner.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 
+# er-allow-hostile-actions: its address constants and the stateInfo it refuses. No `cfg(windows)`
+# in the tests, so they run on the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-allow-hostile-actions --lib
+
 # The patch registry invariants (no two patches share a flag, key or address; every
 # patch actually changes its byte; `target` follows a window the running build moved) and
 # the config parser. Host-testable because none of it needs a game -- the addresses are
