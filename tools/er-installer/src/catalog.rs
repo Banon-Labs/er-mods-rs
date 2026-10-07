@@ -61,6 +61,19 @@ pub const CATEGORIES: &[(&str, &str)] = &[
 
 pub const CATALOG: &[Mod] = &[
     Mod {
+        package: "er-allow-hostile-actions",
+        artifact: "er_allow_hostile_actions.dll",
+        label: "Allow hostile actions everywhere",
+        blurb: "Lets you attack and use items in places the game's event scripts forbid it, by refusing the 'disallow hostile actions' state on your own character.",
+        category: "quality-of-life",
+        audience: "player",
+        default_on: false,
+        needs_seamless: false,
+        caution: None,
+        included_in: &[],
+        config: None,
+    },
+    Mod {
         package: "er-armament-icons",
         artifact: "er_armament_icons.dll",
         label: "Ash of War badges on weapon tiles",

@@ -45,7 +45,12 @@
 #       (3) ACTED (arm 1 only) -- the turn made a substantive tool call, i.e. it rectified rather than
 #           only confessed.
 #       (4) OWNED (arm 3 only) -- the turn named its own triggering action, so the attribution is a
-#           full causal account rather than a deflection.
+#           full causal account rather than a deflection. Either anywhere in the turn through the
+#           signal's `owned` shapes, or locally: a first-person cause ("I wrote ...", "my brief
+#           told ...") earlier in the blame phrase's sentence or in the sentence before it.
+#     Arm 3 reads only the closing message (prose after the last tool call), as the sibling Stop
+#     rules do: a halt over mid-turn narration could never be cleared, since that text is already
+#     sent and every continuation stays in the same turn.
 #
 #     WHY BOTH ARMS REQUIRE FRICTION: "already knows what to do next" is not observable to a policy, so
 #     friction is the tractable proxy for the stall this directive is about, and requiring it keeps a
@@ -123,10 +128,32 @@ handed_back if {
 
 # The deflection conjunction. `owned` is the only way out, and it is the right one: naming your own
 # triggering action turns the same sentence from a deflection into an account.
+#
+# The second way out is local: every blame phrase is preceded, in its own sentence or the one before
+# it, by a first-person cause (bd er-effects-rs-454a). "My brief told the agent to keep scripts in
+# the scratchpad. The guard refused that as designed" already names the agent's hand before the
+# mechanism acts, and was being halted because none of the turn-global ownership shapes matched it.
+# A bare "The guard refused it." has no such cause and still halts. A signal without `blamectx` (an
+# older or degraded one) yields one empty context, which is unowned, so it fails closed.
 deflected if {
 	blame != ""
 	owned == "0"
+	some ctx in blame_contexts
+	not first_person_cause(ctx)
 }
+
+blame_contexts := split(object.get(fact, "blamectx", ""), "~~")
+
+# "I" plus a past-tense or causal verb, or "my <noun>" (one or two words) plus such a verb.
+first_person_cause(ctx) if regex.match(
+	`(?i)\bi(?:'ve|'d|\s+had|\s+have)?\s+(?:\w+ed|wrote|ran|made|told|chose|put|broke|did|gave|sent|set|left|took|built|kept|hit|tripped|forgot|missed|redid|got|let|brought|began|drove|went)\b`,
+	ctx,
+)
+
+first_person_cause(ctx) if regex.match(
+	`(?i)\bmy\s+(?:own\s+)?\w+(?:\s+\w+)?\s+(?:\w+ed|told|broke|wrote|ran|made|put|sent|left|hit|tripped|gave|set|took|kept|asked|said|named|went|drove|let|brought)\b`,
+	ctx,
+)
 
 # Correction directives. Both name the friction so the agent can see what tripped it, and both say
 # plainly that the admission itself is not the violation -- the policy must never read as "stop being
