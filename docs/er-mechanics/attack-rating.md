@@ -68,8 +68,8 @@ hit[e] = ( (attackBase[e] * reinforce.<e>AtkRate  [+ arrow term])  * AtkParam.at
   `ReinforceParamWeapon.physicsAtkRate` at +25 on type 0 is 2.45, so Uchigatana 115 becomes 281.75.
 - `AtkParam.atk<e>Correction * 0.01` is the motion value (VERIFIED multiply; constant
   `0x3c23d70a` = 0.01).
-- `M[e]` is the stat multiplier from section 2 (VERIFIED). The rest are per-attack context terms
-  and are out of scope here.
+- `M[e]` is the stat multiplier from section 2 (VERIFIED). The rest are per-attack context terms;
+  section 7 says what writes each one.
 
 So **AR[e] = base[e] * M[e]**, where `base[e] = attackBase[e] * reinforce.<e>AtkRate`. The planner's
 "base + scaling" split is `base` and `base*(M-1)`. The status screen is assumed to evaluate the same
@@ -108,8 +108,8 @@ else:
   * ReinforceParamWeapon.correct<Stat>Rate`. The getters are `0x140d53db0` (STR, +0x24 * reinforce
   +0x1c), `0x140d53c60` (DEX, +0x28 * +0x20), `GetCorrectMagic`, `0x140d53cb0` (FTH) and
   `GetWeaponArcaneScaling` `0x140d53d00` (arc, `correctLuck * correctLuckRate` +0x60). The per-hit
-  path adds a context int (`ctx+0xb4..+0xc4`, converted to float) to the rate. What writes those
-  ints was not traced.
+  path adds a context int (`ctx+0xb4..+0xc4`, converted to float) to the rate: the SpEffect
+  `change*Point` sum, after the reinforce multiply and before the `rate > 0` test (section 7).
 
 ### 2b. The curve: `PerformCalcCorrection` 0x140690f30
 
@@ -240,6 +240,10 @@ M = any(m_s < 1) ? min(1, m_s...)                                       0x140690
   - Rivers of Blood fire plus bleed.
 - **Result.** 44/44 pass, within 0.02 or 1e-4 relative. The values agree to the printed precision,
   so the 1.17.0 -> 1.17.1 regulation change did not touch these rows.
+- **Rate adds (section 7).** 16 more checks: the twelve roar / War Cry rows carry
+  `changeStrengthPoint` 5 and nothing else of the five, and the AR gain matches
+  `base x add/100 x graph/100` on Giant-Crusher (+5 and +2.5 at 80 STR) and Sword of Night (STR
+  scaling 0, AECP flags STR physical; magic unchanged). 60/60 pass.
 - **SITE check.** The SITE's `Rl.getScalingPerAttribute` / `getScalingMultiplier` /
   `getBaseAndScaledEffect` implement the same structure. It uses base = `damage * reinforcement`,
   a -0.4 penalty on any unmet requirement of an enabled stat, and
@@ -248,6 +252,45 @@ M = any(m_s < 1) ? min(1, m_s...)                                       0x140690
   - `spellBuff` returns all zeros when any stat is below any requirement. The EXE penalises per
     element instead.
   - 2H STR is `min(floor(str*1.5), 150)`, gated on an unknown predicate `tn(a)`.
+
+## 7. The per-hit context terms (EXE + REGULATION)
+
+Read 2026-10-01 against the 1.16.2 named dump (addresses are 1.16.2). Each term of the section 1
+formula, who writes it, and what it is on a player's melee hit:
+
+| term | writer and meaning | value on a PvP melee hit |
+|---|---|---|
+| `ctx+0x6c..+0x8c` (`ctx-rate[e]`) | `FUN_1404f4520`, the SpEffect accumulator: the product of `*AttackPowerRate` over the attacker's active SpEffects, which `FUN_1406832a0` multiplies into element e (VERIFIED) | modelled by `er-mechanics-buffs.py` (buffs.md section 2, talismans.md) |
+| `ctx+0xb4..+0xc4` (rate adds) | the same accumulator sums `changeStrengthPoint` (+0x240), `changeAgilityPoint` (+0x244), `changeMagicPoint` (+0x248), `changeFaithPoint` (+0x24c) and `changeLuckPoint` (+0x250) as ints (getters `0x1404ff690/610/670/630/650`), with no byPoint/byRate correction (VERIFIED) | see below; modelled |
+| `FUN_1404f3c60` (`ctx-vector[e]`) | a factor only from rows with `stateInfo` 315 / 316: Blue Dancer Charm and one DLC row (VERIFIED) | modelled (talismans.md) |
+| `FUN_140691320` | `EquipParamWeapon.isHeroPointCorrect` (+0x107 bit 0) gate; when set, a scale from `PlayerGameData+0x60`: 1.05 + 0.025(L-1) for L in [1,3), 1.1 + 0.0157(L-3) for [3,10), 1.21 for [10,99] (VERIFIED) | 1.0: no weapon row in the regulation sets the flag |
+
+**The rate add (VERIFIED).** `FUN_140690390` reads AttackInfo `+0xb4..+0xc4` and hands each to
+the per-stat wrapper (STR: `FUN_140690c60`), which calls
+`PerformWeaponScaling(req, stat, FUN_140d53db0(weapon, overwrite) + add, graph)`.
+`FUN_140d53db0` is `(overwrite >= 0 ? overwrite : correctStrength) * ReinforceParamWeapon` rate, so
+the add is in rate points after reinforcement. It sits before the `rate > 0` test, and the wrapper
+only runs for a stat the AECP row enables, so a weapon with 0 STR scaling whose AECP flags STR for
+an element gains STR scaling from it (Sword of Night). The requirement check is unchanged: an unmet
+requirement still gives 0.6 and the add does nothing.
+
+**Which rows carry it (REGULATION).** `changeStrengthPoint` 5 on Roar (841/843/846/848),
+Barbaric / Milos Roar (1681/1683/1686/1688), War Cry (1811/1813/1816/1818), the unnamed 120000
+and ten DLC rows 20000901..20000928. `changeMagicPoint` 100 / 30 on the unnamed
+120500/120501/120510/120511. No row sets the agility, faith or luck add. The roar rows are the
+weapon-buff slot (162 right hand, 163 left) and each also carries `physicsAttackPowerRate` 1.075.
+
+**Size.** `dAR[e] = base[e] x add/100 x CalcCorrect(stat)/100` while the requirement is met.
+Giant-Crusher +25 at 80 STR one-handed: AR 820.64 = 379.75 base + 440.89 scaling; the add is
+379.75 x 0.05 x 0.90 = 17.09, AR 837.73, +2.1%, before the roar's x1.075 multiplies the whole
+weapon part.
+
+**Where the scripts use it.** `er-mechanics-ar.attack_rating(rate_adds=...)` (`--rate-adds str=5`)
+adds it to the damage types; the spell buff (stat-only path) and the arcane status multiplier are
+left without it. `er-mechanics-buffs.attack_context` sums it as `rate_points`, `kit_factors`
+weights it by uptime, and `expected_attack` runs it through the weapon's own AR
+(`ar_stat_ratio`), so the ranking's buff term and every skill-buff option carry it. The `--setup`
+off-hand path folds a left roar's add into that option's `pre` on the left weapon's own AR.
 
 ## Not established
 
@@ -259,9 +302,8 @@ M = any(m_s < 1) ? min(1, m_s...)                                       0x140690
 - The pairing `spEffectBehaviorIdN` <-> `ReinforceParamWeapon.spEffectId(N+1)` for status
   build-up, and the consumer that multiplies the SpEffect's `*AttackPower` by the arcane
   multiplier.
-- The context rate adds `ctx+0xb4..+0xc4`, the context multipliers `ctx+0x6c..+0x8c`, the vector
-  from `FUN_1404f3c60` and `FUN_140691320`. These are where SpEffect buffs, talismans and weapon
-  buffs enter AR; none of them is modelled.
+- Who applies the unnamed rate-add rows 120000 and 120500..120511 (section 7). The named ones are
+  the roars and War Cry.
 - The bow/arrow combination (`weaponCategory == 13` branch) and arrow `attackBase`.
 - How a spell's damage uses the catalyst buff (MagicParam / Bullet / AtkParam chain).
 - The reader of `EquipParamWeapon.vsPlayerDmgCorrectRate_*` (all 1.0 today, so it has no effect on

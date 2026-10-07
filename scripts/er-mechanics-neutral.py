@@ -169,8 +169,10 @@ def pool_reaches(pool_raw: dict, cache: bool = True) -> dict:
     active frames of every exchange-pool profile (`er-mechanics-reach.reach_summary`, the class
     median when unposed). Cached beside the exchange pool, keyed on its stamp."""
     ex = _mod("er-mechanics-exchange")
-    path = CACHE / f"neutral-pool-reach-{pool_raw['rl'][0]}-{pool_raw['rl'][1]}.json"
     stamp = pool_raw.get("stamp")
+    # Named by the pool's source stamp as well (`er-mechanics-exchange.opponent_pool`).
+    tag = f"-{stamp[-1]}" if stamp else ""
+    path = CACHE / f"neutral-pool-reach-{pool_raw['rl'][0]}-{pool_raw['rl'][1]}{tag}.json"
     if cache and path.exists():
         got = json.loads(path.read_text())
         if got.get("stamp") == stamp:
@@ -212,10 +214,81 @@ class NeutralPool:
         self.active = np.array([(reaches.get(k) or {}).get("active") or fb_active for k in pool.keys], float)
         self.tools = tuple(tools)
         self.k = frames_per_metre()
-        self.weight = np.bincount(pool.build_prof, minlength=len(pool.keys)).astype(float)
+        self.weight = np.bincount(pool.build_prof, weights=pool.weight,
+                                  minlength=len(pool.keys)).astype(float)
+        self.cover = None
 
     def mean_reach(self) -> float:
         return float((self.reach * self.weight).sum() / self.weight.sum())
+
+    @classmethod
+    def from_results(cls, pool, reaches: dict, results: list, slots_fn=None, tools=DEFAULT_TOOLS):
+        """The pool throwing what each build's weapon and grip throws in a stored `er-builds-pvp`
+        ranking (`results`) instead of R1 #1 alone: every moveset family's best opener
+        (`moveset.families[*].opener`) at that family's use share, renormalised over the openers
+        that have a `neutral_in` (strike frame at 2.5 m from the opener's own input, entry and R2
+        lead-in included; world reach; PvP poise; TAE 795 windows on the same clock; live
+        frames) and a `dmg`. `slots_fn(row)` gives the row's slots with the synthesized jump
+        openers (`er-builds-pvp.jump_openers`), else the stored slots alone. A build whose weapon
+        has no row, or no opener resolves, keeps its R1 #1 (`pool`'s row, `reaches` for its reach).
+        Each build keeps its own armor poise across its openers. `cover` records the entry share
+        that fell back to R1 #1, the share of dropped families, and the opener shares."""
+        ex = _mod("er-mechanics-exchange")
+        by = {ex.profile_key(r["weapon"], r["two"]): r for r in results}
+        fb_reach = float(np.median([v["reach"] for v in reaches.values() if v.get("reach")] or [3.0]))
+        fb_active = float(np.median([v["active"] for v in reaches.values() if v.get("active")] or [3.0]))
+        keys, rows, idx, entries, rreach = [], [], {}, [], {}
+        cover = {"r1_fallback": 0.0, "dropped": {}, "openers": {}}
+        nb = len(pool.build_prof)
+        memo = {}
+        for b, (pk, poise) in enumerate(zip(pool.build_prof, pool.build_poise)):
+            key = pool.keys[pk]
+            if key not in memo:
+                r = by.get(key)
+                opts, dropped = [], {}
+                if r is not None:
+                    slots = slots_fn(r) if slots_fn else (r.get("slots") or {})
+                    for fam, f in ((r.get("moveset") or {}).get("families") or {}).items():
+                        if not f.get("share"):
+                            continue
+                        s = slots.get(f.get("opener")) or {}
+                        ni = s.get("neutral_in")
+                        if not ni or not ni.get("reach") or ni.get("strike") is None or not s.get("dmg"):
+                            dropped[fam] = dropped.get(fam, 0.0) + f["share"]
+                            continue
+                        opts.append((f["share"], f["opener"], {
+                            "startup": float(ni["strike"]), "poise": float(ni.get("poise") or 0.0),
+                            "hyper": [tuple(h) for h in ni.get("hyper") or []], "dmg": float(s["dmg"]),
+                            "reach": float(ni["reach"]), "active": float(ni.get("active") or 3.0)}))
+                tot = sum(o[0] for o in opts)
+                if tot:
+                    opts = [(w / tot, op, row) for w, op, row in opts]
+                else:
+                    rr = reaches.get(key) or {}
+                    opts = [(1.0, ex.OPPONENT_SLOT, {
+                        "startup": float(pool.startup[pk]), "poise": float(pool.poise_dealt[pk]),
+                        "hyper": list(pool.hyper[pk]), "dmg": float(pool.dmg[pk]),
+                        "reach": rr.get("reach") or fb_reach, "active": rr.get("active") or fb_active})]
+                    dropped = None
+                memo[key] = (opts, dropped)
+            opts, dropped = memo[key]
+            if dropped is None:
+                cover["r1_fallback"] += 1.0 / nb
+            else:
+                for fam, sh in dropped.items():
+                    cover["dropped"][fam] = cover["dropped"].get(fam, 0.0) + sh / nb
+            for w, opener, row in opts:
+                ident = f"{key}#{opener}"
+                if ident not in idx:
+                    idx[ident] = len(rows)
+                    keys.append(ident)
+                    rows.append(row)
+                    rreach[ident] = {"reach": row["reach"], "active": row["active"]}
+                entries.append((idx[ident], float(poise), w))
+                cover["openers"][opener] = cover["openers"].get(opener, 0.0) + w / nb
+        out = cls(ex.Pool.weighted(pool, keys, rows, entries), rreach, tools)
+        out.cover = cover
+        return out
 
 
 def _window_at(windows, frame):
@@ -227,15 +300,15 @@ def _window_at(windows, frame):
 
 def neutral_exchange(npool: NeutralPool, strike: float, reach: float, poise: float, hyper: list,
                      active: float = 3.0, tools=DEFAULT_TOOLS, weight: float | None = None,
-                     k: float | None = None) -> dict:
+                     k: float | None = None, dmg: float | None = None) -> dict:
     """The exchange of one attack against the pool, started from the neutral game (module
     docstring). `strike` is the attack's strike frame 2.5 m ahead (`er-mechanics-exchange`
     `strike_frame`), `reach` its world reach, `poise` its PvP poise damage (menu x saRate),
     `hyper` its TAE 795 windows [(start, end, bonus, multiplier)] from its own start, `active`
     its live frames, `tools` the dodges the attacker may close with, `k` the attacker's frames a
-    metre when he closes slower than a run (a held crouch, `er-mechanics-timing-mixup`). Returns
-    the outcome shares, `f_neutral`, and the shares of the pool it outreaches and that must
-    approach it."""
+    metre when he closes slower than a run (a held crouch, `er-mechanics-timing-mixup`), `dmg` its
+    own hit, read only when the pool prices trades (`trade_clamp`). Returns the outcome shares,
+    `f_neutral`, and the shares of the pool it outreaches and that must approach it."""
     ex = _mod("er-mechanics-exchange")
     p = npool.pool
     w = ex.EXCHANGE_WEIGHT if weight is None else weight
@@ -262,13 +335,22 @@ def neutral_exchange(npool: NeutralPool, strike: float, reach: float, poise: flo
     f_b, s_b = first[p.build_prof], second[p.build_prof]
     # A hit that lands on a player whose own hit whiffed has nothing to trade against.
     whiff_b, iwhiff_b = (they_miss & ~i_miss)[p.build_prof], (i_miss & ~they_miss)[p.build_prof]
-    win = float(np.mean(f_b & (breaks_them | whiff_b)))
-    loss = float(np.mean(np.where(s_b, np.where(iwhiff_b, 1.0, p_break_me[p.build_prof]), 0.0)))
-    outreach = float(np.mean((npool.reach < reach)[p.build_prof]))
-    return {"win": win, "loss": loss, "trade": 1.0 - win - loss, "net": win - loss,
-            "p_first": float(np.mean(f_b)), "p_second": float(np.mean(s_b)),
-            "outreach": outreach, "dodge_in": float(np.mean((my_ifr > 0)[p.build_prof])),
-            "f_neutral": 1.0 + w * (win - loss), "strike": strike, "reach": reach,
+    win_b = f_b & (breaks_them | whiff_b)
+    loss_b = np.where(s_b, np.where(iwhiff_b, 1.0, p_break_me[p.build_prof]), 0.0)
+    win, loss = p.mean(win_b), p.mean(loss_b)
+    outreach = p.mean((npool.reach < reach)[p.build_prof])
+    f = 1.0 + w * (win - loss)
+    priced = {}
+    clamp = getattr(p, "trade_clamp", None)
+    if clamp is not None and dmg:
+        # Trades priced by damage (`er-mechanics-exchange.priced_net`, exchange.md section 2a).
+        net_hp = ex.priced_net(p, win_b, loss_b, float(dmg))
+        f = 1.0 + w * max(-clamp, min(clamp, net_hp))
+        priced = {"net_hp": net_hp}
+    return {"win": win, "loss": loss, "trade": 1.0 - win - loss, "net": win - loss, **priced,
+            "p_first": p.mean(f_b), "p_second": p.mean(s_b),
+            "outreach": outreach, "dodge_in": p.mean((my_ifr > 0)[p.build_prof]),
+            "f_neutral": f, "strike": strike, "reach": reach,
             "tools": [x if isinstance(x, str) else x.get("anim") for x in tools]}
 
 
@@ -285,7 +367,7 @@ def slot_neutral(npool: NeutralPool, slot: dict, atk: dict | None, entry: float 
     lead = (atk or {}).get("release_lead_in") or 0.0
     hyper = _mod("er-mechanics-exchange").hyper_windows(atk or {}, lead + entry)
     return neutral_exchange(npool, strike, reach, slot.get("poise") or 0.0, hyper,
-                            slot.get("active") or 3.0, tools, k=k)
+                            slot.get("active") or 3.0, tools, k=k, dmg=slot.get("dmg"))
 
 
 # --------------------------------------------------------------------------------------------
@@ -329,6 +411,9 @@ def selftest() -> int:
     p.build_prof = np.array([0, 1])
     p.build_poise = np.array([40.0, 40.0])
     p.my_poise = np.sort(np.array([40.0, 40.0]))
+    p.weight = None
+    p.dmg = np.array([400.0, 400.0])
+    p.mean = lambda x: float(np.mean(np.asarray(x, float)))
     npool = NeutralPool(p, {"short": {"reach": 2.5, "active": 3.0}, "long": {"reach": 5.0, "active": 3.0}})
     e = neutral_exchange(npool, 16.0, 4.0, 100.0, [])
     check(abs(e["outreach"] - 0.5) < 1e-9 and e["win"] == 0.5 and e["loss"] == 0.5,
@@ -350,6 +435,47 @@ def selftest() -> int:
     check(fast["loss"] == 0.5 and fast["win"] == 0.5,
           "a poke live over f10-13 lands inside the roll the short build closes 3.5 m with (i-frames "
           "f0-13), which then hits back")
+
+    # The weighted pool: the same two profiles as a real `er-mechanics-exchange.Pool`, then thrown
+    # from a ranking where build A opens half with its 2.5 m R1 and half with a 5 m jump, and B
+    # has no row (it keeps its R1 #1).
+    ex = _mod("er-mechanics-exchange")
+    raw = {"profiles": {"A|1h": {"startup": 16.0, "poise": 50.0, "hyper": [], "stamina": 10},
+                        "B|1h": {"startup": 16.0, "poise": 50.0, "hyper": [], "stamina": 10}},
+           "builds": [["A|1h", 40.0], ["B|1h", 40.0]], "poise": [40.0, 40.0], "bar": 150.0, "ref_per_bar": 7.0}
+    base = ex.Pool(raw)
+    reaches = {"A|1h": {"reach": 2.5, "active": 3.0}, "B|1h": {"reach": 5.0, "active": 3.0}}
+    plain = NeutralPool(base, reaches)
+    rows = [{"startup": 16.0, "poise": 50.0, "hyper": [], "dmg": 388.0}] * 2
+    same_w = NeutralPool(ex.Pool.weighted(base, base.keys, rows, [(0, 40.0, 3.0), (1, 40.0, 3.0)]), reaches)
+    a, b = neutral_exchange(plain, 16.0, 4.0, 100.0, []), neutral_exchange(same_w, 16.0, 4.0, 100.0, [])
+    check(all(abs(a[k] - b[k]) < 1e-12 for k in ("win", "loss", "f_neutral", "outreach")),
+          "equal entry weights reproduce the unweighted pool")
+    ni = {"poise": 50.0, "hyper": [], "active": 3.0}
+    res = [{"weapon": "A", "two": False,
+            "moveset": {"families": {"r1": {"opener": "r1_1", "share": 0.3},
+                                     "jump": {"opener": "jump_r1_f", "share": 0.3},
+                                     "move": {"opener": "run_r1", "share": 0.4}}},
+            "slots": {"r1_1": {"dmg": 300.0, "neutral_in": {**ni, "strike": 16.0, "reach": 2.5}},
+                      "run_r1": {"dmg": 300.0}}}]
+    jumps = {"jump_r1_f": {"dmg": 500.0, "neutral_in": {**ni, "strike": 16.0, "reach": 5.0}}}
+    fam = NeutralPool.from_results(base, reaches, res, lambda r: {**r["slots"], **jumps})
+    e = neutral_exchange(fam, 16.0, 4.0, 100.0, [])
+    check(abs(e["win"] - 0.25) < 1e-12 and abs(e["loss"] - 0.75) < 1e-12,
+          f"family pool: A's R1 and jump at half each once the unresolved run R1 is dropped, B on its "
+          f"R1 #1 (win 0.25, loss 0.75: {e['win']:.3f}, {e['loss']:.3f})")
+    cov = fam.cover
+    check(abs(cov["r1_fallback"] - 0.5) < 1e-12 and abs(cov["dropped"]["move"] - 0.2) < 1e-12
+          and abs(cov["openers"]["jump_r1_f"] - 0.25) < 1e-12 and sorted(fam.pool.dmg) == [300.0, 388.0, 500.0],
+          f"coverage: B falls back, the run R1 is dropped, rows carry their own dmg ({cov})")
+    # Priced trades on the first synthetic pool (both builds hit for 400): an 800 hit that beats
+    # the short build and loses to the long one is net (800 / 600 - 400 / 600) / 2 = 1/3, not 0.
+    p.trade_clamp = 1.0
+    pr = neutral_exchange(npool, 16.0, 4.0, 100.0, [], dmg=800.0)
+    check(abs(pr["net_hp"] - 1.0 / 3.0) < 1e-12 and abs(pr["f_neutral"] - (1.0 + 0.25 / 3.0)) < 1e-12
+          and neutral_exchange(npool, 16.0, 4.0, 100.0, [])["f_neutral"] == 1.0,
+          f"priced trades: net 1/3 with an 800 hit ({pr['net_hp']:.4f}); no damage given, unpriced")
+    p.trade_clamp = None
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 

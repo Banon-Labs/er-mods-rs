@@ -38,17 +38,30 @@ if 0 < total < 1: total = ceil(total)          # a landing hit does at least 1
 | `defense[e]` | chr vcall, for players `CalculateDefenseData` `0x140685650 / 0x1406864a0` (section 1) | EXE |
 | `armorAbsorption[e]` | chr vcall `CalculateAbsorptions` `0x140652d20` -> `0x140689c80 / 0x14068aad0` (section 2) | EXE |
 | `spCut`, `spCut110`, `spCut434` | `SpecialEffect::CalculateDefenseModifiers` `0x1404f53e0 / 0x1404f61b0`, products of SpEffect `*DamageCutRate` (section 2); `spCut110` is the counter-hit factor (section 2b) | EXE |
-| `guard[e]` | `CalculateGuardDamage`, only when the hit is blocked | EXE (not modelled) |
+| `guard[e]` | `CalculateGuardDamage`, only when the hit is blocked: the guard's pass share, with the attacker's guard-cut cancel (info+0x5c); powerstance-guard.md section 3 | EXE; modelled in `er-mechanics-powerstance-guard.block_hit`, not in this script |
 | `throwCut[e]` | `CalculateDamageCutRates`, only for throws with `AtkParam.throwDamageAttribute == 1` | EXE |
 | `corrections[e]` | `AttackDamageInfo::CalculateDamageCorrections` `0x140684d70 / 0x140685bc0` (section 3) | EXE |
-| `unk1[e]` | `short AttackDamageInfo+0x14..0x1c * 0.01 * float +0x1e8.. * vcall(chr, +0xb4)` | EXE shape, meaning not identified |
-| `k` | flags `AttackDamageInfo+0x25b` / `+0x25c`: if either is set, `k = float +0x214` when that is >= 0, else 1.125 (flag 0x25b) or 0.8 (flag 0x25c); constants at `0x143b33d64/68` (1.16.2) | EXE, meaning not identified |
+| `unk1[e]` | `short AttackDamageInfo+0x14..0x1c * 0.01 * float +0x1e8.. * vcall(chr, +0xb4)`. `+0x1e8..+0x1f8` is 1.0 from `InitDamageStruct` `0x140528200` and only the bullet path lowers it: `CSBulletFlyState::OnUpdate` `0x1403939d0` -> `FUN_14039a810` decays it by `BulletParam.*DamageDamp * 0.01 * dt` once the bullet's flight time passes a threshold (1526 of 15475 bullets have one). A remote hit carries the product in Packet15's `*AttackRate` shorts (`FUN_140443c40`) | EXE (1.16.2); 1.0 on every melee hit; the vcall is not identified |
+| `k` | flags `AttackDamageInfo+0x25b` / `+0x25c`: if either is set, `k = float +0x214` when that is >= 0, else 1.125 (flag 0x25b) or 0.8 (flag 0x25c); constants at `0x143b33d64/68` (1.16.2). The flags are the attacker's sweet spot / sour spot: TAE JumpTable 42 sets action flag 0x800 (most of the flail moveset, a few halberd and skill animations), 59 sets 0x1000; the hit record copies them in (`FUN_140521a80` -> `FUN_140521490`). A hit on a remote player goes as Packet15, which does not carry them, and the victim's `FUN_1404434f0` writes both to 0 and `+0x214 = 1.0` | EXE (1.16.2); k = 1.0 in PvP, x1.125 / x0.8 against NPCs. That the victim's own computation is the HP loss that counts is INFERRED |
 | `mpCorrection` | `SpecialEffect::GetMPLevelCorrection` with the attacker weapon's `EquipParamWeapon.levelSyncCorrectId`; only returns != 1 while SpEffect 590 or 592 is on the defender | EXE |
 
 After `CalculateDamageBasic`, `CalculateDamage` multiplies by the parts-damage rate
 (`FUN_140605b50`, `field_0x244`) and `FUN_140447180`, then stores `(int)` into
 `AttackDamageInfo.damage`. So the HP loss is truncated, and the per-element finals
 (`fireFinalDamage` etc.) are truncated separately.
+
+`FUN_140447180` is the flick (deflect) cut (EXE, 1.16.2). Defender flick power is the max of the
+armor `defFlickPower` sum (weighted 1.1/1.5/1.2/1.2 x 0.25, less 5/10 per durability tier; vslot
+0x380 `0x1406555d0`, or 0x378 `0x140655510` while blocking) and SpEffect `defFlickPower`; attacker
+flick power is the max of `AttackDamageInfo+0x2c` and SpEffect `atkFlickPower`. When the attacker's
+is higher the factor is 1.0. Otherwise `+0x264` is set and the factor is
+`min(base, clamp(1 - max SpEffect flickDamageCutRate / 100, 0, 1))`, base being 1 - the weighted
+armor `flickDamageCutRate` sum x 0.25/100 unblocked, or
+`GameSystemCommonParam.flickDamageCutRateSuccessGurad` (0.5) blocked. Skipped when `+0x267 & 2`.
+Every protector row has `defFlickPower` 0 and `flickDamageCutRate` 0, and the only SpEffect with a
+`flickDamageCutRate` is 11550, so an unblocked player hit takes 1.0; a blocked hit takes x0.5 when
+the guard's flick power is at least the attack's (the repel; blocking is modelled in
+powerstance-guard.md section 3).
 
 **Motion value.** The damage code above never reads an attack rating and a motion value separately.
 It receives `rawDamage` per element, already scaled. That the attacker side multiplies AR by the
@@ -236,11 +249,17 @@ otherwise. Spear Talisman raises that to 1.15 x 1.15 = 1.3225. Slash, strike and
 no counter bonus from this path, and the elemental part of a pierce hit gets none either. Poise
 damage is not in this path; whether counters change poise damage was not traced.
 
-`AttackDamageInfo+0x25b/+0x25c` (the `k` factor 1.125 / 0.8 in section 0) are not the counter:
-the only writer found is the network-packet path `FUN_1404434f0`, which clears both and sets
-`+0x214` to 1.0. Their setter was searched for in the decompiles of every caller of `GetAtkParam`
-and of `0x140420000-0x14044c000`, `0x14051a000-0x140530000`, `0x140d23000-0x140d26000`, and
-not found.
+`AttackDamageInfo+0x25b/+0x25c` (the `k` factor 1.125 / 0.8 in section 0) are not the counter.
+They are the attacker's sweet spot / sour spot (EXE, 1.16.2): TAE JumpTable 42 ORs `0x800` and 59
+ORs `0x1000` into the attacker's `CSChrActionFlagModule` (`0x140428130` / `0x1404281e4`);
+`FUN_140521a80` writes them to the hit record (`+0x250` / `+0x251`, with the SpEffect
+`vitalSpotChangeRate` / `normalSpotChangeRate` product at `+0x254`, -1 on every row today), and
+`FUN_140521490` copies the record into `+0x25b/+0x25c/+0x214`. A direct-store search could not find
+the setter because it is that struct copy. The network path `FUN_1404434f0`, which applies a
+remote player's Packet15 on the victim's machine, clears both and sets `+0x214` to 1.0, and the
+serializer `FUN_140443c40` does not carry them, so a PvP hit takes k = 1.0. JumpTable 42 is in the
+flail TAE a34 (71 animations), a38 / a938 halberd skill animations, a807 and a835; 59 only in a938
+30605.
 
 ## 3. PvP-only factors on the defender (EXE + REGULATION)
 
@@ -257,7 +276,7 @@ else:
 x *= defender SpEffect defPlayerDmgCorrectRate_* if the attacker is a PvP chr, else defEnemyDmgCorrectRate_*
 if both are the main player or chrs with event id < 9998 (players):
     x *= FinalDamageRateParam[AtkParam.finalDamageRateId].{phys,mag,fire,thun,dark}Rate
-    x *= FUN_140486b10(defender toughness module, finalDamageRateId)   # not identified; 1.0 unless +0x28
+    x *= FUN_140486b10(defender toughness module, finalDamageRateId)   # ToughnessParam.unk2 in a hyperarmor window, below
 ```
 
 There is **no global PvP damage reduction**. The PvP scaling is per attack: `AtkParam_Pc.
@@ -266,6 +285,12 @@ finalDamageRateId` picks a `FinalDamageRateParam` row (REGULATION: 377 rows; row
 which skips the lookup). The same row's `staminaRate` (+0x14) scales guard stamina damage in
 `CalculateDamage` (EXE, the `*(row+0x14)` read), and `saRate` (+0x18) is the likely poise-damage
 scale (INFERRED from the name). This is attacker data applied on the defender's side of the hit.
+
+`FUN_140486b10` (EXE, 1.16.2) returns `ToughnessParam[toughness+0x1c].unk2` (+0x14) while the
+defender's toughness `+0x28` (the TAE 795 hyperarmor window) is set and toughness vslot 6
+`0x140486ba0` holds: max toughness above 0, current toughness above 0, owner alive. Otherwise 1.0.
+The `finalDamageRateId` argument is overwritten before use. Values: 0.925 (rows x0), 0.825 (rows
+x1); attacks.md section 2 models it. The cut ends once the defender's poise breaks.
 
 ## 4. The defense curve (EXE)
 
@@ -435,15 +460,15 @@ above its damage on the median defender.
 
 - What `AttackDamageInfo.rawDamage` holds: that it is AR x motion value (AtkParam correction) is
   INFERRED; the attacker-side writer was not traced.
-- The meaning of the `unk1` factor (`short +0x14..+0x1c * 0.01 * float +0x1e8..`) and of the
-  hit-state flags `+0x25b` / `+0x25c` (1.125 and 0.8, or the override at `+0x214`). They are not
-  the counter hit (that is section 2b), and their setter was not found (section 2b lists where it
-  was looked for).
+- The `vcall(chr, +0xb4)` term of `unk1` (its `+0x1e8..` part is the bullet decay, section 0).
+  What sets the bullet's decay start field (`CSBulletIns+0xa7c`), and whether `dt` is seconds.
+- That the victim's own computation is the PvP HP loss (owner-authoritative HP), which is what
+  makes k = 1.0 in PvP (section 2b). The separate damage-result broadcast
+  `P2PBroadcast(0xf, 0x140 bytes)` (`FUN_140c9f370`) and its receiver were not followed.
 - Whether a counter hit changes poise damage; section 2b covers HP damage only.
 - The exact counter window: the event-66 span plus SpEffect 45's 0.1 s endurance is the model;
   whether the refresh on the last event frame starts the 0.1 s then was not traced.
-- `FUN_140486b10` (toughness-module factor in PvP) and `FUN_140447180` (last multiplier in
-  `CalculateDamage`).
+- Who applies SpEffect 11550, the only row with a `flickDamageCutRate` (section 0).
 - Whether the same SpEffect id from several armor pieces (Rakshasa, 6516000) stacks.
 - The durability factor for armor, taken as 1 because ER armor has no durability.
 - That the player's in-combat poise pool equals the menu poise; the super-armor module's max was
@@ -455,4 +480,3 @@ above its damage on the median defender.
   counts only unconditional ones.
 - `GetMPLevelCorrection` (row 303 on defense rates, weapon `levelSyncCorrectId` on damage): only
   active with SpEffect 590/592; its graph values were not read.
-- Guard absorption (`CalculateGuardDamage`) and the stamina side of blocking.

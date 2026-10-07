@@ -1165,6 +1165,21 @@ def fp_uses(fp_bar, cost):
     return n + (1 if AshTables.has_enough_fp(rest, cost) else 0)
 
 
+def _hits_cap(engagements):
+    """Casts a free skill (no FP limit) is taken to have: one per landed hit, the most any point
+    of a schedule (`er-mechanics-buffs.fight_hits`) lands, so no point is capped by it."""
+    if isinstance(engagements, (tuple, list)):
+        return float(max(engagements, default=ENGAGEMENTS_DEFAULT))
+    return float(engagements)
+
+
+def _use_share(uses, engagements):
+    """Share of the fight's landed hits `uses` casts cover, capped at 1: the mean over a
+    schedule's points of min(1, uses / hits), or that of one count."""
+    hs = engagements if isinstance(engagements, (tuple, list)) else (engagements,)
+    return sum(min(1.0, uses / max(h, 1)) for h in hs) / len(hs)
+
+
 def anim_recovery(t, weapon_id, sword_arts_id, anim, after=0.0):
     """{action: first real frame it can start} for one skill animation, the way attacks.md
     section 4 reads a slot: `recovery_windows` over the skill TimeAct's JumpTable events, TAE 608
@@ -2028,7 +2043,7 @@ def skill_buff_alternatives(t, weapon_id, choice, level=0, fp_bar=FP_BAR_DEFAULT
         roots = [s['id'] for s in skill_buffs(t, prof) if s.get('effect') == 'buff']
         if roots:
             uses = fp_uses(fp_bar, skill_fp(t, sid))
-            casts = float(uses if uses is not None else engagements)
+            casts = float(uses if uses is not None else _hits_cap(engagements))
             out.append((p, tuple((r, 1.0, casts) for r in roots)))
     return out
 
@@ -2376,12 +2391,19 @@ PAIRED_STRINGS = None
 
 def _opener_row(slots, key, fallback, chain=None):
     """One `Opponents` row from a ranking slot: the opener `key` and, when `chain` names a
-    true-combo follow-up of it, that hit (gap `follow_up_gap`). None when the slot has no hit."""
+    true-combo follow-up of it, that hit (gap `follow_up_gap`). None when the slot has no hit.
+
+    A jump opener (`jump_entry`, synthesized by `er-builds-pvp.jump_openers`) keeps the landed
+    clip's `front_contact`, which counts from the landing clip, not the jump input. Its start is
+    the `neutral_in` strike instead (from the input, 22 f on Alabaster Lord's Sword 2H against the
+    landed clip's 17.5), else its first hit from the input."""
     s = slots.get(key)
     if not s or s.get('startup') is None:
         return None
     fc = s.get('front_contact') or {}
     at = fc.get(ENGAGE_DISTANCE_M, fc.get(str(ENGAGE_DISTANCE_M))) if isinstance(fc, dict) else None
+    if 'jump_entry' in s:
+        at = (s.get('neutral_in') or {}).get('strike')
     start = at if at is not None else s['startup']
     reach = s.get('reach') or fallback['reach']
     advance = max(0.0, reach - (s.get('weapon_reach') or reach))
@@ -2401,16 +2423,19 @@ def _opener_row(slots, key, fallback, chain=None):
 
 
 def opponents_from_results(pool_raw, results, fallback=OPPONENT_FALLBACK, openers=None, timing='react',
-                           react=True):
+                           react=True, slots_fn=None):
     """`Opponents` for the exchange pool (`er-mechanics-exchange.opponent_pool`): each pool build's
     weapon and grip looked up in the ranking's own rows (`er-builds-pvp` results; `dmg` is the
     sweep build's corpus-mean damage, standing in for that player's own).
 
     `openers` `r1`: R1 #1 as the exchange throws it and its R1 #2 when R1 #1 lists it in `combos`
     (section 14a). `families` (the default, `OPPONENT_OPENERS`): every moveset family's best
-    engagement at that family's use share, the opener with its first chained follow-up. A key
-    the ranking has no row for takes `fallback` (no follow-up). Returns (Opponents, matched share,
-    pool-weighted means)."""
+    engagement at that family's use share, the opener with its first chained follow-up, the shares
+    renormalised over the openers that resolve. `slots_fn(row)` gives a row's slots with the
+    synthesized jump openers (`er-builds-pvp.jump_openers`); without it the stored slots alone,
+    which have none, so the jump family drops out (er-effects-rs-8uha). A key the ranking has no
+    row for takes `fallback` (no follow-up). Returns (Opponents, matched share, pool-weighted
+    means)."""
     openers = openers or OPPONENT_OPENERS
     by = {}
     # The off-hand L1 a dodge skill leaves the stagger before and a roll does not
@@ -2424,11 +2449,14 @@ def opponents_from_results(pool_raw, results, fallback=OPPONENT_FALLBACK, opener
         key = f"{plain(r['weapon'])}|{'2h' if r['two'] else '1h'}"
         rows = []
         if openers == 'families':
+            fam_slots = slots_fn(r) if slots_fn else slots
             for fam in ((r.get('moveset') or {}).get('families') or {}).values():
                 links = fam.get('links') or []
-                row = _opener_row(slots, fam.get('opener'), fallback, links[0] if links else None)
+                row = _opener_row(fam_slots, fam.get('opener'), fallback, links[0] if links else None)
                 if row and fam.get('share'):
                     rows.append((fam['share'], {**row, 'opener': fam.get('opener')}))
+            total = sum(share for share, _ in rows)
+            rows = [(share / total, row) for share, row in rows] if total else []
         if not rows:
             s = slots.get('r1_1') or {}
             chain = 'r1_2' if any((c.get('next') or '').removeprefix('2h_') == 'r1_2'
@@ -2504,8 +2532,8 @@ def utility_value(t, sword_arts_id, weapon_id, eng, opp):
             fwd = min(prof['moves'], key=lambda m: m['path'][-1][1])
             tool = n.tool_from_motion(fwd)
             args = (npool, ni['strike'], ni['reach'], ni['poise'], ni['hyper'], ni.get('active') or 3.0)
-            with_roll = n.neutral_exchange(*args, tools=n.DEFAULT_TOOLS)
-            with_step = n.neutral_exchange(*args, tools=tuple(n.DEFAULT_TOOLS) + (tool,))
+            with_roll = n.neutral_exchange(*args, tools=n.DEFAULT_TOOLS, dmg=eng.get('dmg'))
+            with_step = n.neutral_exchange(*args, tools=tuple(n.DEFAULT_TOOLS) + (tool,), dmg=eng.get('dmg'))
             gain = (1.0 - REACT_SHARE) * hp_me * (with_step['f_neutral'] - with_roll['f_neutral'])
             out.update(hp=out['hp'] + gain, neutral_gain_hp=gain,
                        neutral={'roll': with_roll['f_neutral'], 'step': with_step['f_neutral'],
@@ -2879,7 +2907,7 @@ def buff_option(t, sword_arts_id, weapon_id, buffed_score, best_score, eng, opp,
         fight_seconds = FIGHT_SECONDS
     durs = [_buff_duration(t, r) for r in roots]
     dur = -1.0 if -1.0 in durs else max(durs, default=0.0)
-    casts = float(uses) if uses is not None else float(engagements)
+    casts = float(uses) if uses is not None else _hits_cap(engagements)
     plan = BUFFS.recast_plan(dur, fight_seconds, uses=casts, cast_frames=cast_frames or 0.0,
                              hits=engagements)
     recasts, uptime, tf = plan['recasts'], plan['uptime'], plan['time_factor']
@@ -3051,7 +3079,7 @@ def skill_term(t, weapon_id, choice, ctx, level, best_score, fp_bar=FP_BAR_DEFAU
             top = max(variants, key=worth)
             value_corpus += p * worth(top)
             if o['buff_roots']:
-                casts = float(o['uses'] if o['uses'] is not None else engagements)
+                casts = float(o['uses'] if o['uses'] is not None else _hits_cap(engagements))
                 buffs.append((p, tuple((root, 1.0, casts) for root in o['buff_roots'])))
             o = top
         opts.append({**o, 'p': p})
@@ -3132,7 +3160,7 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
                 cast = f['first'] + rec if rec is not None else cast
         if roots:
             uses = fp_uses(fp_bar, fp)
-            casts = float(uses if uses is not None else engagements)
+            casts = float(uses if uses is not None else _hits_cap(engagements))
             buffed = buff_fn(base, tuple(roots), casts)
             b = buff_option(t, sid, weapon_id, buffed, best_score, engagement, opponents, uses, cast,
                             engagements, roots=roots) if buffed else None
@@ -3151,7 +3179,7 @@ def _skill_variant_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, eng
     if o is None:
         return None
     uses = fp_uses(fp_bar, o['fp'])
-    share = 1.0 if uses is None else min(1.0, uses / max(engagements, 1))
+    share = 1.0 if uses is None else _use_share(uses, engagements)
     o.update(uses=uses, share=share, score=None, gain=0.0, _slot=None, reach_measured=False)
     ends = [f for f in (o['roll'], o['next']) if f]
     # A skill whose TimeAct has no FP-charging animation has no identified opening
@@ -3774,6 +3802,30 @@ def selftest():
           'EXE 0x140673f70')
     check('wepType->flag: Greatsword is colossal', WEP_TYPE_MOUNT_FLAG[t.reg.weapon[greatsword]['wepType']],
           'SwordGigantic', 'EXE 0x140d29e00 + COMMUNITY class')
+    # er-effects-rs-8uha: the jump family's opener is synthesized, so the stored slots alone drop
+    # it; the shares that remain are renormalised, and a supplied jump opener starts at its
+    # `neutral_in` strike from the jump input, not the landed clip's 2.5 m contact.
+    fam_row = {'weapon': 'A', 'two': False,
+               'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 0.4},
+                                        'jump': {'opener': 'jump_r1_f', 'share': 0.4},
+                                        'move': {'opener': 'run_r1', 'share': 0.2}}},
+               'slots': {'r1_1': {'startup': 14.0, 'front_contact': {'2.5': 16.0}, 'dmg': 300.0, 'next': 30.0}}}
+    jump = {'jump_r1_f': {'startup': 20.0, 'jump_entry': 6.0, 'front_contact': {'2.5': 17.5}, 'dmg': 500.0,
+                          'next': 50.0, 'neutral_in': {'strike': 22.0}}}
+    check("the exchange pool's damage fallback is this module's opponent fallback hit",
+          _load('er_mechanics_exchange', 'er-mechanics-exchange.py').OPPONENT_HP_FALLBACK, OPPONENT_FALLBACK['hp'],
+          'er-mechanics-exchange.OPPONENT_HP_FALLBACK')
+    row_b = {'weapon': 'B', 'two': False, 'moveset': {'families': {'r1': {'opener': 'r1_1', 'share': 1.0}}},
+             'slots': fam_row['slots']}
+    pool_raw = {'builds': [['A|1h', 50.0], ['B|1h', 50.0]]}
+    alone, _, _ = opponents_from_results(pool_raw, [fam_row, row_b], openers='families')
+    both, _, _ = opponents_from_results(pool_raw, [fam_row, row_b], openers='families',
+                                        slots_fn=lambda r: {**r['slots'], **(jump if r['weapon'] == 'A' else {})})
+    check('families without the jump openers: A keeps its whole build on R1 (renormalised), as B does',
+          [round(float(x), 6) for x in alone.w], [0.5, 0.5], 'er-effects-rs-8uha')
+    check('families with them: A throws R1 and the jump at a quarter each, the jump from its input strike '
+          '(22, not 17.5)', ([round(float(x), 6) for x in both.w], [float(x) for x in both.startup]),
+          ([0.25, 0.25, 0.5], [16.0, 22.0, 16.0]), 'er-effects-rs-8uha, er-builds-pvp.jump_openers')
     tae_ok = skill_tae(t, lion) is not None
     if not tae_ok:
         print('SKIP TAE checks: ER_PLAYER_TAE_DIR not found')

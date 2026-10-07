@@ -49,7 +49,9 @@ Per slot, from the sibling mechanics modules (their functions, not a copy of the
   or frost before the next engagement; anyone else keeps the gauge, which refills over
   `ENGAGEMENT_SECONDS`. While a proc is live the next row of that status is refused, so nothing
   builds and nothing refreshes. A proc is credited up to its expiry, the carrier's cure or the end
-  of a `fight_engagements` fight. Its `hp_per_hit` (credited proc HP over the fight / landed hits)
+  of the fight, whose engagements are the landed-hit schedule (`Mechanics.set_fight`: one count
+  per fight point, the HP and flasks to empty at most what the fight length leaves room for, the
+  fight kinds mixed by planner tag). Its `hp_per_hit` (credited proc HP over the fight / landed hits)
   enters the score. The greases this sweep uses carry no status.
 * `--talismans` with an exultation: the slot's damage is scaled by the share of its hits inside
   the buff its own procs start (`exultation_factor`); nothing an attacker wears raises build-up.
@@ -74,8 +76,11 @@ true-combo follow-ups, and the families are combined with use shares proportiona
             * coverage (`er-mechanics-reach.coverage_factor`: swing arc plus late turn, `INFERRED` weights)
             * (1 + SCORE_ADV_WEIGHT * clamp(expected advantage, +-SCORE_ADV_SPAN) / SCORE_ADV_SPAN)
             * (1 + SCORE_STAGGER_WEIGHT * stagger share)
-            * guard factor (`er-mechanics-powerstance-guard.guard_score_factor`: chip and guard
-              break against the window's blockers, and a 2H weapon's own guard)
+            * guard factor (`er-mechanics-powerstance-guard.guard_score_factor`: chip, stamina
+              drain net of guard regen over the slot's cycle, guard break and repel punish against
+              the window's blockers, with the attacker's staminaAttackRate from talismans and
+              buffs; and the configuration's own guard: a 2H weapon's, a 1H row's best corpus
+              shield, 0 with a weapon in the left hand)
             * f_exchange * f_stamina (`er-mechanics-exchange.slot_exchange`, below)
 
 `crit HP` and `parry HP` are per exchange (`er-mechanics-crits.weapon_crit`): the weapon's riposte
@@ -117,7 +122,9 @@ and, at the weapon level:
   role, tears, consumables, with uptime over the fight) and of the kits every PvP build defends
   with, plus the buff rows of the skills the corpus mounts on the weapon, weighted by their
   probability. Greases stay the sweep's; on a greased build a skill's weapon buff (the same slot)
-  is dropped. `--no-buffs` leaves them out.
+  is dropped. A buff's `change*Point` scaling-rate add (Roar / War Cry: +5 STR rate) is run
+  through the weapon's own AR (`ar_stat_ratio`, attack-rating.md section 7). `--no-buffs` leaves
+  them out.
 * Skill (`er-mechanics-ashes.skill_term`, docs/er-mechanics/ashes-of-war.md sections 13-15): every
   skill the weapon can carry as built (`mountable_skills`: its own, plus each ash `can_mount`
   accepts at the build's affinity and level) is scored as a slot, with its commitment, stagger,
@@ -522,7 +529,11 @@ def slot_hit(pvp, reg, weapon_id, attack, ar_by, defenders, grease=None, spear=F
         for k in ("startup", "next", "roll"):
             if out[k] is not None:
                 out[k] = round(out[k] + lead, 1)
-    out["guard_part"] = {"hit": attack, "scaled": scaled, "fr": fr, "post": post, "n": n}
+    # The attacker's staminaAttackRate on a guarded hit (info+0x28, `FUN_14068aa80`): the worn
+    # talismans' (Hammer Talisman) times the buff kits' uptime-weighted product.
+    stamina_rate = (tm["stamina_damage"] if tm else 1.0) * (buff.get("stamina", 1.0) if buff else 1.0)
+    out["guard_part"] = {"hit": {**attack, "weapon": weapon_id}, "scaled": scaled, "fr": fr, "post": post,
+                         "n": n, "stamina_rate": stamina_rate}
     return out
 
 
@@ -568,11 +579,10 @@ class Mechanics:
         self.buf_m.item_cast_frames = float(self.st.cure_frame())
         self.att_kits = self.buf.corpus_kits(self.buf_m, str(mirror), (lo, hi), SCORE_BUFF_ARCHETYPE, "offense-last")
         self.def_kits = self.buf.corpus_kits(self.buf_m, str(mirror), (lo, hi), None, "defense-last")
-        # The fight the buffs have to cover: `fight_seconds` is the sample points of the 3 to 5
-        # minute range (`er-mechanics-buffs.FIGHT_SECONDS`, `--fight-seconds`), which only buff
-        # uptime and recasts read; `hits` is the landed-hit count, `ENGAGEMENT_SECONDS` apart.
-        self.fight = {"fight_seconds": self.buf.FIGHT_SECONDS, "hits": self.st_dfs.fight_engagements}
-        self.def_buffs = self.buf_m.expected_defense(self.def_kits, **self.fight)
+        # The fight (`set_fight`): its sample points and the landed hits at each, from the
+        # window's rows (tags, flask split, median HP).
+        self.fight_rows = rows
+        self.set_fight()
         # Section 16 of ashes-of-war.md: the reaction dodge on every attack (`react`, with the
         # pool's R1 strike frames `strikes` for the whiff punish once `main` has the pool), and the
         # buff ashes scored as buffs in the option pool (`buff_options`; the corpus-weighted skill
@@ -589,13 +599,67 @@ class Mechanics:
         self.npool = None
         self.neut = NEUT
 
+    def set_fight(self, fight_seconds=None, flasks="corpus", eta=None, pinned=None, cerulean="corpus") -> None:
+        """The fight every buff, recast and status reader takes (buffs.md section 10).
+
+        `fight_seconds` is the sample points of the 3 to 5 minute range
+        (`er-mechanics-buffs.fight_points`, `--fight-seconds`); `hits` the landed hits at each,
+        `er-mechanics-buffs.fight_hits` from the window's median HP, the reference landed hit
+        (`er-mechanics-status.FIGHT_REF_DAMAGE`) and the defender's crimson flasks:
+
+            duel      0 flasks (duel etiquette)
+            invasion  every crimson flask the window carries (median `items.flasks.crimson`, 10)
+            corpus    both, mixed by the window's planner tags (`tag_shares`, `fight_mix`)
+            N         N flasks
+
+        `pinned` sets every point to that many hits (the old fixed count is 5). `cerulean` is the
+        attacker's cerulean flasks for skill recasts (`SetupBuffs.skill`): `corpus` takes the
+        window's median. The status sims take the same schedule (`Defenders.fight_hits`)."""
+        b = self.buf
+        rows = self.fight_rows
+        fs = tuple(fight_seconds) if fight_seconds is not None else tuple(b.FIGHT_SECONDS)
+
+        def median(key, fallback):
+            v = sorted(int(r["flasks"][key]) for r in rows if (r.get("flasks") or {}).get(key) is not None)
+            return v[len(v) // 2] if v else fallback
+
+        crimson = median("crimson", b.CORPUS_CRIMSON)
+        eta = b.FLASK_ETA if eta is None else eta
+        eng = self.st.ENGAGEMENT_SECONDS
+
+        def sched(k):
+            return b.fight_hits(fs, self.st_dfs.median_hp, self.st.FIGHT_REF_DAMAGE, k, b.FLASK_HEAL_HP, eta, eng)
+
+        shares = b.tag_shares(rows)
+        if pinned:
+            points, hits, kind = fs, (int(pinned),) * len(fs), f"pinned {int(pinned)}"
+        elif flasks == "corpus":
+            points, hits = b.fight_mix([(shares["duel"], fs, sched(0)), (shares["flasks"], fs, sched(crimson))])
+            kind = (f"corpus mix: duel {shares['duel']:.3f} (0 flasks), invasion/gank {shares['flasks']:.3f} "
+                    f"({crimson} flasks), tag mentions {shares['mentions'][0]} / {shares['mentions'][1]}")
+        elif flasks == "duel":
+            points, hits, kind = fs, sched(0), "duel (0 flasks)"
+        elif flasks == "invasion":
+            points, hits, kind = fs, sched(crimson), f"invasion ({crimson} flasks)"
+        else:
+            points, hits, kind = fs, sched(int(flasks)), f"{int(flasks)} flasks"
+        self.fight = {"fight_seconds": points, "hits": hits}
+        self.fight_kind = {"kind": kind, "eta": eta, "crimson": crimson, "shares": shares,
+                           "hits_mean": b.hits_mean(hits), "hits_min": min(hits), "hits_max": max(hits)}
+        self.cerulean = median("cerulean", b.CORPUS_CERULEAN) if cerulean == "corpus" else int(cerulean)
+        self.fight_kind["cerulean"] = self.cerulean
+        self.st_dfs.fight_hits = hits
+        self.def_buffs = self.buf_m.expected_defense(self.def_kits, **self.fight)
+        self.ash.FIGHT_SECONDS = points
+        self.__dict__.pop("_grease_plans", None)
+
     def grease_plan(self, tier: str, element: str) -> dict:
         """The right hand's grease of `element` (`OPT.GREASE_NAMES[tier]`) over the fight: its
         category-162 row's duration, recast as every buff is (`er-mechanics-buffs.recast_plan`) at
         most `maxNum` times (`Buffs.source_recast`), each use costing the item clip's goods frame.
         {'uptime', 'recasts', 'time_factor'}, cached."""
         cache = self.__dict__.setdefault("_grease_plans", {})
-        key = (tier, element, self.fight["fight_seconds"])
+        key = (tier, element, self.fight["fight_seconds"], self.fight["hits"])
         if key not in cache:
             name = OPT.GREASE_NAMES[tier][element]
             ents, _ = self.buf_m.resolve([name])
@@ -615,7 +679,7 @@ class Mechanics:
             ci = None
         if not ci:
             return None
-        ex = EXCH.exchange(self.pool, ci["strike"], ci["poise"], ci["hyper"])
+        ex = EXCH.exchange(self.pool, ci["strike"], ci["poise"], ci["hyper"], option.get("dmg"))
         ex["strike_frame"], ex["strike_source"] = ci["strike"], "skill contact at 2.5 m"
         atk = {"slot": "skill", "stamina_cost": ci["stamina"], "hit_windows": [(ci["strike"], ci["strike"])],
                "tae_entry": ci["tae_entry"], "cancel_frame": option.get("cancel_frame") or {}}
@@ -640,7 +704,7 @@ class Mechanics:
         e = self.buf_m.expected_attack(self.att_kits, two, ratio, alternatives=alts,
                                        drop_skill_weapon_buffs=greased, **self.fight)
         return {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": self.def_buffs["factor"],
-                "alternatives": alts}
+                "stamina": e["stamina"], "alternatives": alts}
 
     def skill_buff(self, weapon: str, aff: str, level: int, stats: dict, two: bool, roots: tuple,
                    casts: float) -> dict:
@@ -654,7 +718,7 @@ class Mechanics:
         slot = any(self.buf_m.sp[i]["spCategory"] in self.buf.WEAPON_BUFF_CATS
                    for r in roots for i in self.buf_m.skill_rows(r))
         return {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": self.def_buffs["factor"],
-                "alternatives": [], "weapon_slot": slot}
+                "stamina": e["stamina"], "alternatives": [], "weapon_slot": slot}
 
     def skill_term(self, weapon: str, aff: str, level: int, stats: dict, two: bool, base_id: int,
                    choice: list, base_score: float, defenders, reg, buff: dict | None, slot_extra,
@@ -698,7 +762,7 @@ class Mechanics:
         if ex.get("strike_frame") is None or not slot.get("reach"):
             return None
         return self.neut.neutral_exchange(self.npool, ex["strike_frame"], slot["reach"], ex.get("poise") or 0.0,
-                                          ex.get("hyper") or [])
+                                          ex.get("hyper") or [], dmg=option.get("dmg") or slot.get("dmg"))
 
     def skill_slot_extra(self, option: dict, crit: dict | None, own, own_ref, base_id: int | None = None,
                          f_weight: float = 1.0) -> dict:
@@ -985,7 +1049,8 @@ def slot_score(s: dict, entry: float = 0.0) -> dict | None:
 
 
 def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slots, main_dmg, ar_by,
-                     defenders, grease, spear, talismans, pair_fn=None, opening=None, grease_tf=1.0):
+                     defenders, grease, spear, talismans, pair_fn=None, opening=None, grease_tf=1.0,
+                     regard=None):
     """`er-mechanics-ashes.skill_term`'s `buff_fn` for one row (ashes-of-war.md section 16b): the
     moveset score with a skill's buff rows held. Every slot's main hitbox is hit again with the
     build's buff factors plus that skill's (`Mechanics.skill_buff`), and without the sweep's grease
@@ -993,7 +1058,9 @@ def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slo
     other hitboxes are taken to scale the same, `INFERRED`) and the moveset scored again.
     `pair_fn` and `opening` are the row's `--paired-offhand` step, so the buffed moveset is scored
     the way the row's own was (the off-hand L1 itself is not buffed). A grease that stays on pays
-    its uses' time (`grease_tf`, `Mechanics.grease_plan`), as the row's own score does."""
+    its uses' time (`grease_tf`, `Mechanics.grease_plan`), as the row's own score does.
+    `regard(slot key, staminaAttackRate)` re-measures a slot's guard pressure under the skill's
+    stamina multiplier (Royal Knight's Resolve x4 on its next hit); None keeps the row's."""
     cache = {}
 
     def fn(_option, roots, casts):
@@ -1011,8 +1078,11 @@ def _buff_moveset_fn(mech, pvp, reg, base_id, row, b, level, stats, attacks, slo
             if not main_dmg.get(k):
                 buffed[k] = s
                 continue
-            r = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, g, spear, talismans, buff=bf)["dmg"] / main_dmg[k]
+            h = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, g, spear, talismans, buff=bf)
+            r = h["dmg"] / main_dmg[k]
             new = {**s, "dmg": s["dmg"] * r, "med": s["med"] * r, "ctr": s["ctr"] * r}
+            if regard is not None:
+                new["guard"] = regard(k, h["guard_part"]["stamina_rate"])
             new["score"] = slot_score(new, entry_frames(k))
             buffed[k] = new
         if pair_fn is not None:
@@ -1030,10 +1100,10 @@ def jump_openers(slots: dict, npool=None) -> dict:
     included) and its first hit counted from the jump input, the landed clip's delay from first
     hit to the 2.5 m contact and its hyperarmor windows moved to the same clock (`INFERRED`: the
     landed clip's timing relative to its first hit holds in the air). Without `npool` the openers
-    are what the moveset module makes of them anyway."""
+    carry the same `neutral_in` (what an opponent pool throws, `NEUT.NeutralPool.from_results`)
+    but no contest, so the moveset scores them as it did before; when the landed slot has no
+    `neutral_in` they are what the moveset module makes of them."""
     synth = {k: v for k, v in MOVESET.with_jumps(slots, entry_frames).items() if k not in slots}
-    if npool is None:
-        return synth
     out = {}
     for k, s in synth.items():
         base_key = k.rsplit("_", 1)[0]
@@ -1045,8 +1115,9 @@ def jump_openers(slots: dict, npool=None) -> dict:
             delay = max(0.0, ni["strike"] - entry - base["startup"])
             shift = s["startup"] - base["startup"] - entry
             hyper = [(a + shift, b + shift, bonus, m) for a, b, bonus, m in ni["hyper"]]
-            s["neutral"] = NEUT.neutral_exchange(npool, s["startup"] + delay, s["reach"], ni["poise"], hyper,
-                                                 ni["active"])
+            if npool is not None:
+                s["neutral"] = NEUT.neutral_exchange(npool, s["startup"] + delay, s["reach"], ni["poise"], hyper,
+                                                     ni["active"], dmg=s.get("dmg"))
             s["neutral_in"] = {**ni, "strike": s["startup"] + delay, "reach": s["reach"], "hyper": hyper}
         out[k] = s
     return out
@@ -1180,9 +1251,11 @@ class SetupBuffs:
     Uptime: the first application is before the fight and free (buffs.md section 10). A buff
     that does not cover the fight is either left to lapse or recast by the rule every buff shares
     (`er-mechanics-buffs.recast_plan` over the fight lengths `fight_s`, the 180..300 s sample
-    points: ceil(fight / duration) - 1 recasts, or once per landed hit for a next-hit row, at most
-    what one FP bar pays for, or a grease's `maxNum`), each recast costing its cast's frames of
-    the fight (time factor 1 - recasts x cast / fight). A skill's cast is its opening animation's
+    points: ceil(fight / duration) - 1 recasts, or once per landed hit of that point's schedule
+    (`Mechanics.set_fight`) for a next-hit row, at most what one FP bar and the attacker's
+    cerulean flasks pay for, or a grease's `maxNum`), each recast costing its cast's frames of
+    the fight and each cerulean drink its drink frames (time factor 1 - (recasts x cast + drinks x
+    drink) / fight). A skill's cast is its opening animation's
     first roll frame (`er-mechanics-ashes.anim_recovery`); a grease's is the item-use frame to its
     SpEffect (`er-mechanics-status.cure_frame`, the bolus animation standing in, `INFERRED`). The
     grip change a left skill needs is not counted, nor is the cast's punish exposure."""
@@ -1230,8 +1303,15 @@ class SetupBuffs:
                 if rows:
                     op = ash.main_anim(prof)
                     cast = ash.anim_recovery(t, wid, sid, op).get("dodge") if op is not None else None
+                    # The FP budget: one bar, then each cerulean flask the attacker carries
+                    # (`Mechanics.cerulean`, `CERULEAN_FP` each). `paid[d]` is the casts d drinks
+                    # pay for; each drink a recast needs costs `FLASK_DRINK_FRAMES` of the fight.
+                    cost, buf = ash.skill_fp(t, sid), self.mech.buf
+                    paid = tuple(ash.fp_uses(self.mech.fp_bar + d * buf.CERULEAN_FP, cost)
+                                 for d in range(self.mech.cerulean + 1))
+                    refill = (paid, buf.FLASK_DRINK_FRAMES) if cost > 0 and self.mech.cerulean else None
                     opt = {"kind": "skill", "name": t.arts_name(sid), "sid": sid, "rows": rows, "cast": cast,
-                           "uses": ash.fp_uses(self.mech.fp_bar, ash.skill_fp(t, sid)),
+                           "uses": paid[-1], "refill": refill,
                            "rows_right": self._rows(roots, RIGHT_WEAPON_BUFF_CAT)}
             except (SystemExit, KeyError, StopIteration, TypeError, ValueError):
                 opt = None
@@ -1267,16 +1347,18 @@ class SetupBuffs:
             dur = -1.0 if -1.0 in durs else max(durs)
             # Uptime by `Buffs.uptime`, the rule the buff kits use: a timed row covers duration /
             # fight per cast, a next-hit row (stateInfo 384/385: Royal Knight's Resolve 1703,
-            # Determination 1693) one of the fight's `hits` landed hits per cast. Recasts: as many
-            # as reach full uptime, at most what one FP bar pays for after the free first cast.
-            # The recasts are `er-mechanics-buffs.recast_plan`'s, averaged over the fight lengths.
+            # Determination 1693) one of that fight point's landed hits per cast. Recasts: as many
+            # as reach full uptime, at most what one FP bar and the cerulean flasks pay for after
+            # the free first cast, each drink charged its frames (`refill`). The recasts are
+            # `er-mechanics-buffs.recast_plan`'s, averaged over the fight points.
             hits = self.mech.fight["hits"]
             one_hit = any(self.buf.one_hit(i) for i in key)
             lapse = self.mech.buf.recast_plan(dur, self.fight_s, uses=1, hits=hits, one_hit=one_hit)
             ups = [(lapse["uptime"], 0, 1.0)]
             if ups[0][0] < 1.0:
                 plan = self.mech.buf.recast_plan(dur, self.fight_s, uses=opt.get("uses"),
-                                                 cast_frames=opt.get("cast") or 0.0, hits=hits, one_hit=one_hit)
+                                                 cast_frames=opt.get("cast") or 0.0, hits=hits, one_hit=one_hit,
+                                                 refill=opt.get("refill"))
                 if plan["recasts"] > 0:
                     ups.append((plan["uptime"], round(plan["recasts"], 4), plan["time_factor"]))
             self._eff[key] = {**hand, "duration": dur, "uptimes": ups}
@@ -1298,6 +1380,8 @@ class SetupBuffs:
                 status_row = c
         return {"pre": ctx["ar_rate"], "flat": ctx["flat_add"],
                 "post": {e: ctx["pvp_rate"][e] * ctx["atk_rate"][e] for e in ELEMENTS},
+                "stamina": ctx["stamina_rate"],
+                "rate_points": {k: v for k, v in ctx["rate_points"].items() if v},
                 "status_row": status_row, "gated": bool(passed)}
 
     def right_uptime(self, element: str) -> float:
@@ -1314,20 +1398,22 @@ class SetupBuffs:
             e = m.buf_m.expected_attack(m.att_kits, False, None, alternatives=[], drop_skill_weapon_buffs=False,
                                         **m.fight)
             self._body = {"pre": e["pre"], "post": e["post"], "flat": e["flat"], "def": m.def_buffs["factor"],
-                          "alternatives": []}
+                          "stamina": e["stamina"], "alternatives": []}
         return self._body
 
     @staticmethod
     def buff_dict(base: dict | None, eff: dict | None, up: float, defense: dict) -> dict | None:
         """`slot_hit` `buff` for one off-hand hit: `base` (the body kits, or None) with the option
-        `eff` held `up` of the fight."""
+        `eff` held `up` of the fight. `stamina` is the `staminaAttackRate` product a guarded hit's
+        stamina damage takes (Determination 3, Royal Knight's Resolve 4, `slot_hit`)."""
         if eff is None:
             return base
         b = base or {"pre": dict.fromkeys(ELEMENTS, 1.0), "post": dict.fromkeys(ELEMENTS, 1.0),
-                     "flat": dict.fromkeys(ELEMENTS, 0.0), "def": defense, "alternatives": []}
+                     "flat": dict.fromkeys(ELEMENTS, 0.0), "def": defense, "stamina": 1.0, "alternatives": []}
         return {**b, "pre": {e: b["pre"][e] * (1.0 + up * (eff["pre"][e] - 1.0)) for e in ELEMENTS},
                 "post": {e: b["post"][e] * (1.0 + up * (eff["post"][e] - 1.0)) for e in ELEMENTS},
-                "flat": {e: b["flat"][e] + up * eff["flat"][e] for e in ELEMENTS}}
+                "flat": {e: b["flat"][e] + up * eff["flat"][e] for e in ELEMENTS},
+                "stamina": b.get("stamina", 1.0) * (1.0 + up * (eff.get("stamina", 1.0) - 1.0))}
 
     def status(self, name: str, aff: str, level: int, stats: dict, l1: dict, status_row, up: float,
                gap, react, stagger: float) -> dict:
@@ -1379,6 +1465,12 @@ def _setup_left_choice(setup, model, name: str, lid: int, l1: dict, stats: dict,
             eff = setup.effect(opt)
             if eff is not None and not eff["gated"]:
                 continue
+            if eff is not None and eff.get("rate_points"):
+                # A left roar's `changeStrengthPoint` 5 (843, 1683, 1813) on this weapon's own AR
+                # (attack-rating.md section 7), folded into `pre` before the uptime blend.
+                rp = AR.attack_rating(tables, name, aff, level, stats, False, eff["rate_points"])
+                eff = {**eff, "pre": {el: eff["pre"][el] * (rp["damage"].get(el, {}).get("total", 0.0) / ar[el]
+                                                            if ar[el] else 1.0) for el in ELEMENTS}}
             for up in (eff["uptimes"] if eff else [(1.0, 0, 1.0)]):
                 buff = setup.buff_dict(body, eff, up[0], defense)
                 h = slot_hit(pvp, reg, lid, l1, ar, defenders, None, spear, talismans, buff=buff)
@@ -1484,7 +1576,7 @@ def paired_loop(combo, model, lefts: dict, base_id: int, slots: dict, stats: dic
                 return h
 
             def pf(s, lid=lid, hit_fn=hit_fn, c=info):
-                return combo.paired_slots(model, base_id, lid, s, hit_fn, catch=c)
+                return left_weapon_guard(combo.paired_slots(model, base_id, lid, s, hit_fn, catch=c), s)
             ms = pf(right)
             if ms is right:
                 continue
@@ -1542,6 +1634,16 @@ def apply_relative_speed(results: list[dict], tables, tau: float, measure: str =
         r["moveset"]["f_speed"] = f
         r["moveset"]["speed_measure"] = measure
         r["moveset"]["score"] = r["moveset"]["score"] * f
+
+
+def left_weapon_guard(paired: dict, slots: dict) -> dict:
+    """`paired` (`er-mechanics-combo.paired_slots` of `slots`) with every slot's own guard at 0:
+    a left hand holding an off-hand weapon (the only kind `paired_slots` pairs) cannot raise a
+    guard one-handed (`er-mechanics-powerstance-guard.GUARD_LEFT_ONE_HAND`), so the one-handed
+    row's left shield (`best_left_shield`) is gone. `slots` itself when nothing was paired."""
+    if paired is slots:
+        return slots
+    return {k: ({**v, "guard_own": 0.0} if v.get("guard_own") is not None else v) for k, v in paired.items()}
 
 
 def best_slot(slots: dict) -> str | None:
@@ -1779,6 +1881,21 @@ def selftest() -> int:
           "a left weapon buff held half the fight adds half of each factor and half its flat attack")
     check(SetupBuffs.buff_dict({"pre": ones}, None, 1.0, {}) == {"pre": ones},
           "no left weapon buff leaves the body-kit buff as it is")
+    # A guarded hit's stamina damage takes the attacker's staminaAttackRate (info+0x28,
+    # docs/er-mechanics/powerstance-guard.md section 3): Determination 3.0 held half the fight is
+    # 2.0, and Hammer Talisman's 1.4 reaches the guard part through the talisman list.
+    bd = SetupBuffs.buff_dict(None, {**eff, "stamina": 3.0}, 0.5, {"standard": 1.0})
+    check(abs(bd["stamina"] - 2.0) < 1e-9, "a left Determination held half the fight doubles the guard stamina rate")
+    gp = slot_hit(pvp, reg, gs_base, r1, ar_by, d2, talismans=["Hammer Talisman"])["guard_part"]
+    check(abs(gp["stamina_rate"] - 1.4) < 1e-6 and gp["hit"]["weapon"] == gs_base,
+          f"Hammer Talisman carries x1.4 into the guard part ({gp['stamina_rate']:.4f}) with the weapon id")
+    check(abs(slot_hit(pvp, reg, gs_base, r1, ar_by, d2, buff={**bf, "stamina": 4.0})["guard_part"]
+              ["stamina_rate"] - 4.0) < 1e-9, "a buff's staminaAttackRate carries into the guard part")
+    paired = {"r1_1": {"guard_own": 0.7, "dmg": 1.0}, "left_1": {"dmg": 1.0}}
+    same = {"r1_1": {"guard_own": 0.7}}
+    check(left_weapon_guard(paired, same)["r1_1"]["guard_own"] == 0.0 and left_weapon_guard(same, same) is same
+          and "guard_own" not in left_weapon_guard(paired, same)["left_1"],
+          "a left weapon in the pairing drops the one-handed row's own guard to 0; no pairing keeps it")
     # The fight the buffs cover (user, 2026-10-01): 3 to 5 minutes, sampled; the engagement
     # spacing and the landed hits do not move with it.
     buf, st = _sibling("er-mechanics-buffs"), _sibling("er-mechanics-status")
@@ -1796,6 +1913,27 @@ def selftest() -> int:
     check(st.ENGAGEMENT_SECONDS == 5.0 and buf.ENGAGEMENT_SECONDS == 5.0
           and buf.fight_points(100.0, 200.0) != fights and st.ENGAGEMENT_SECONDS == 5.0,
           "the engagement spacing (5 s) is a separate constant from the fight length")
+    # Landed hits per fight point (`Mechanics.set_fight`): a duel drinks no crimson flask, so 5
+    # at every point; an invasion every flask, so the kill needs 22 and the clock holds the
+    # short points below it; the corpus default mixes both by the window's tags; the status sims
+    # read the same schedule.
+    mech.set_fight(flasks="duel")
+    duel = mech.fight["hits"]
+    mech.set_fight(flasks="invasion")
+    inv = mech.fight["hits"]
+    mech.set_fight()
+    mix = mech.fight
+    sh = mech.fight_kind["shares"]
+    check(set(duel) == {5} and max(inv) == 22 and min(inv) < 22 and mech.fight_kind["crimson"] == 10,
+          f"duel 5 hits everywhere, invasion {min(inv)}..{max(inv)} with {mech.fight_kind['crimson']} flasks")
+    check(0.0 < sh["duel"] < 0.5 and len(mix["fight_seconds"]) == len(mix["hits"]) > len(fights)
+          and mech.st_dfs.fight_hits == mix["hits"] and mech.cerulean == 4,
+          f"corpus mix: duel share {sh['duel']:.3f} over {len(mix['hits'])} points, the status sims on the same "
+          f"schedule, 4 cerulean flasks")
+    mech.set_fight(pinned=5)
+    check(set(mech.fight["hits"]) == {5} and mech.st_dfs.fight_hits == mech.fight["hits"],
+          "--fight-hits 5 pins every point, status sims included")
+    mech.set_fight()
     print("selftest", "passed" if ok else "FAILED")
     return 0 if ok else 1
 
@@ -1954,6 +2092,17 @@ def main() -> int:
     ap.add_argument("--opponents-from", type=Path,
                     help="a full --sort score --json ranking to read the opponents' attacks from "
                     "(for a --weapon run, which otherwise has only its own rows)")
+    ap.add_argument("--trades", choices=("zero", "priced"), default="zero",
+                    help="what a trade (both hits land) is worth in the exchange and neutral contests: "
+                         "zero, or priced by the two hits' damage, the opponent's read from --opponents-from "
+                         "(else 388 for every one; EXCH.priced_net, docs/er-mechanics/exchange.md section 2a)")
+    ap.add_argument("--trade-clamp", type=float, default=None, metavar="C",
+                    help="with --trades priced: bound on the priced net (default EXCH.TRADE_CLAMP; inf: none)")
+    ap.add_argument("--opponent-pool", choices=("r1", "families"), default="r1",
+                    help="what the exchange and neutral contests throw at every scored attack: R1 #1 "
+                         "per pool build, or (needs --opponents-from) each build's moveset family "
+                         "openers at their use share read from that ranking "
+                         "(NEUT.NeutralPool.from_results, docs/er-mechanics/neutral.md section 6)")
     ap.add_argument("--measure-all", action="store_true",
                     help="land, react and reach every mountable skill, not only the ones that can win")
     ap.add_argument("--build-aff", help="with --weapon: build this affinity instead of the sweep's")
@@ -1967,8 +2116,22 @@ def main() -> int:
     ap.add_argument("--fight-seconds", type=float, nargs=2, metavar=("MIN", "MAX"), default=None,
                     help="fight length range, seconds, that buff uptime and recasts are averaged over "
                          "(default 180 300, er-mechanics-buffs.FIGHT_SECONDS_RANGE; sampled every "
-                         "FIGHT_SAMPLE_STEP_S, equal weights). The landed-hit count and engagement spacing "
-                         "do not change with it")
+                         "FIGHT_SAMPLE_STEP_S, equal weights). The landed hits at each point follow it "
+                         "through their time bound (--flasks)")
+    ap.add_argument("--flasks", default="corpus", metavar="KIND",
+                    help="crimson flasks the defender drinks, for the landed hits per fight point "
+                         "(er-mechanics-buffs.fight_hits; Mechanics.set_fight): duel = 0, invasion = every "
+                         "crimson flask the window carries, corpus (default) = both mixed by the window's "
+                         "planner tags (Duels vs Invasions + Co-op/Gank), or a number")
+    ap.add_argument("--flask-eta", type=float, default=None, metavar="ETA",
+                    help="share of a crimson drink that heals net (default er-mechanics-buffs.FLASK_ETA, 1, INFERRED)")
+    ap.add_argument("--fight-hits", type=int, default=None, metavar="N",
+                    help="pin the landed hits to N at every fight point, buffs and status sims alike "
+                         "(5 = the fixed count before 2026-10-01)")
+    ap.add_argument("--cerulean-flasks", default="corpus", metavar="N",
+                    help="cerulean flasks (220 FP each at +12) the attacker spends on --setup left-hand skill "
+                         "recasts, each drink charged FLASK_DRINK_FRAMES; corpus (default) = the window's "
+                         "median, 0 = one FP bar")
     ap.add_argument("--fight-window", type=float, metavar="S",
                     help="stamina budget window, seconds (default er-mechanics-exchange.FIGHT_WINDOW_S, INFERRED)")
     ap.add_argument("--multi-hit-escape", action="store_true",
@@ -2023,18 +2186,25 @@ def main() -> int:
         # Every reader of the engagement spacing takes it from here, before the workers fork.
         mech.st.ENGAGEMENT_SECONDS = a.engagement_seconds
         mech.ash.ENGAGEMENT_SECONDS = a.engagement_seconds
-    if a.fight_seconds is not None:
-        # Only the buffs read the fight length; the same before the workers fork.
-        mech.fight["fight_seconds"] = mech.buf.fight_points(*a.fight_seconds)
-        mech.def_buffs = mech.buf_m.expected_defense(mech.def_kits, **mech.fight)
-        mech.ash.FIGHT_SECONDS = mech.fight["fight_seconds"]
+    # The fight's points and landed hits, after the engagement spacing it reads; the same before
+    # the workers fork.
+    if a.flasks not in ("corpus", "duel", "invasion") and not a.flasks.isdigit():
+        ap.error("--flasks is corpus, duel, invasion or a number")
+    if a.cerulean_flasks != "corpus" and not a.cerulean_flasks.isdigit():
+        ap.error("--cerulean-flasks is corpus or a number")
+    mech.set_fight(mech.buf.fight_points(*a.fight_seconds) if a.fight_seconds is not None else None,
+                   flasks=a.flasks, eta=a.flask_eta, pinned=a.fight_hits, cerulean=a.cerulean_flasks)
+    fk = mech.fight_kind
+    print(f"# fight: {fk['kind']}; landed hits {fk['hits_min']}..{fk['hits_max']} (mean {fk['hits_mean']:.2f}) "
+          f"over {len(mech.fight['fight_seconds'])} points; attacker cerulean flasks {fk['cerulean']}",
+          file=sys.stderr)
     if a.fight_window is not None:
         EXCH.FIGHT_WINDOW_S = a.fight_window
     mech.ash.DISENGAGE = a.disengage
     if a.sustain:
         global SUSTAIN
         regen = mech.buf.corpus_regen(mech.buf_m, str(a.mirror), (a.rl - a.window, a.rl + a.window))
-        eng_s, n_fight = mech.st.ENGAGEMENT_SECONDS, mech.st_dfs.fight_engagements
+        eng_s, n_fight = mech.st.ENGAGEMENT_SECONDS, round(mech.buf.hits_mean(mech.fight["hits"]))
         fixed = mech.buf.sustain_factor(mech.buf_m, regen, lambda n: n * eng_s, engagements=n_fight)
         memo: dict = {}
 
@@ -2048,14 +2218,35 @@ def main() -> int:
         SUSTAIN = sustain
         print(f"# sustain {a.sustain}: {sum(1 for d in regen if d['rows'])} of {len(regen)} defenders heal over "
               f"time; fixed-fight factor {fixed:.5f}", file=sys.stderr)
+    opp_rows_from = json.loads(a.opponents_from.read_text())["results"] if a.opponents_from else None
+    if a.opponent_pool == "families" and opp_rows_from is None:
+        ap.error("--opponent-pool families reads the openers from a ranking: give --opponents-from")
     if pool is not None:
         # The evading dodger's punish is an R1 (ashes-of-war.md section 16a): the pool's own R1 #1
         # strike frames, one per build.
         mech.strikes = pool.startup[pool.build_prof]
-        mech.pool = pool
-        if not a.no_neutral:
+        if opp_rows_from is not None:
+            # Each opponent's hit, from the ranking the opponents are read from.
+            pool.set_damage(opp_rows_from)
+        if a.trades == "priced":
+            pool.trade_clamp = EXCH.TRADE_CLAMP if a.trade_clamp is None else a.trade_clamp
+        if a.opponent_pool == "families":
+            # Two passes, as the skill term's opponents: the families of a ranking scored against
+            # R1 #1 become what every slot is contested against (neutral.md section 4).
+            fam = NEUT.NeutralPool.from_results(pool, NEUT.pool_reaches(pool.raw), opp_rows_from,
+                                                lambda r: {**r["slots"], **jump_openers(r["slots"])})
+            print(f"# opponent pool: families from {a.opponents_from}; R1 #1 fallback "
+                  f"{fam.cover['r1_fallback']:.3f} of builds, dropped "
+                  f"{ {k: round(v, 3) for k, v in fam.cover['dropped'].items()} }, openers "
+                  f"{ {k: round(v, 3) for k, v in sorted(fam.cover['openers'].items(), key=lambda x: -x[1])} }",
+                  file=sys.stderr)
+            pool = fam.pool
+            if not a.no_neutral:
+                mech.npool = fam
+        elif not a.no_neutral:
             # The neutral game (docs/er-mechanics/neutral.md): the pool's R1 reach per build.
             mech.npool = NEUT.NeutralPool(pool, NEUT.pool_reaches(pool.raw))
+        mech.pool = pool
     flat = OPT.GREASES[a.grease]
     talismans = [n.strip() for n in (a.talismans or "").split(",") if n.strip()]
     if a.spear_talisman and talismans and "Spear Talisman" not in talismans:
@@ -2122,12 +2313,39 @@ def main() -> int:
         base_id = tables.find_weapon(row["weapon"], "Standard")
         slots, hits = {}, {}
         crit = mech.cr.weapon_crit(mech.cr_t, crit_ev, base_id, b["aff"], level, stats, row["two"], defenders)
-        own =(blockers.own_guard(GUARD.shield_guard(gtab, wid, level, two_handed=True), opening)
-               if row["two"] else own_ref)
         choice = mech.skill_choice(base_id, b["aff"], level)
         buff = None if a.no_buffs else mech.buffs(row["weapon"], b["aff"], level, stats, row["two"], base_id,
                                                   choice, bool(b["grease"]))
         attacks = ATK.weapon_attacks(reg, wid, "both" if row["two"] else "one", level)
+        # The configuration's own guard against the corpus's opening hits, with a repel its own R1 #1
+        # punishes credited (`Blockers.own_guard`): a two-handed row guards with its weapon, a
+        # one-handed row with the corpus shield it meets the stats for that stops the most
+        # (`Blockers.best_left_shield`), times the share of the corpus's one-handers of its
+        # weapon class that carry a shield at all (`Blockers.carried_left_shield`, `MEASURED`);
+        # a one-handed row with a weapon in the left hand (`--paired-offhand`, `--paired-loop`)
+        # cannot guard and gets 0 there.
+        r1 = next((x for x in attacks if x["slot"] in ("r1_1", "2h_r1_1")), None)
+        r1_start = (r1.get("hit_windows") or [[None]])[0][0] if r1 else None
+        guard_left = carry = None
+        if row["two"]:
+            own = blockers.own_guard(GUARD.shield_guard(gtab, wid, level, two_handed=True), opening,
+                                     startup=r1_start)
+        else:
+            own, left_g, carry = blockers.carried_left_shield(b["stats"], opening,
+                                                              tables.weapons[base_id]["wepType"], r1_start)
+            guard_left = left_g and {"name": left_g["name"], "weapon": left_g["weapon"], "level": left_g["level"],
+                                     "own": round(own / carry, 4) if carry else 0.0}
+        guard_parts, guard_memo = {}, {}
+
+        def regard(k, rate):
+            """Slot `k`'s guard pressure with the attacker's staminaAttackRate set to `rate`
+            (a buff option or spill re-scores a slot under different buffs)."""
+            mk = (k, round(rate, 6))
+            if mk not in guard_memo:
+                parts_k, cycle_k = guard_parts[k]
+                guard_memo[mk] = blockers.slot_pressure([{**p, "stamina_rate": rate} for p in parts_k],
+                                                        cycle=cycle_k)
+            return guard_memo[mk]
         main_dmg = {}
         for atk in attacks:
             key = atk["slot"].removeprefix("2h_")
@@ -2160,7 +2378,9 @@ def main() -> int:
                 for el in ELEMENTS:
                     hit["by_type"][el] += land * more["by_type"][el]
                 hit["hits"] += 1
-            hit["guard"] = blockers.slot_pressure(parts)
+            # The same-button cycle bounds the guard's regeneration between two throws.
+            hit["guard"] = blockers.slot_pressure(parts, cycle=hit.get("next"))
+            guard_parts[key] = (parts, hit.get("next"))
             hit["guard_own"], hit["guard_own_ref"] = own, own_ref
             hit["stagger"] = sum(p < hit["poise"] for p in poises) / len(poises) if poises else None
             hits[key] = hit
@@ -2227,10 +2447,14 @@ def main() -> int:
                         k = atk["slot"].removeprefix("2h_")
                         if k not in new or not main_dmg.get(k):
                             continue
-                        r = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, None, a.spear_talisman, talismans,
-                                     buff=rb)["dmg"] / main_dmg[k]
+                        h = slot_hit(pvp, reg, base_id, atk, ar_by, defenders, None, a.spear_talisman, talismans,
+                                     buff=rb)
+                        r = h["dmg"] / main_dmg[k]
                         for f in ("dmg", "med", "ctr"):
                             new[k][f] = slots[k][f] * r
+                        # The skill's rows can carry staminaAttackRate (Determination, Royal
+                        # Knight's Resolve): the guard pressure is measured again with it.
+                        new[k]["guard"] = regard(k, h["guard_part"]["stamina_rate"])
                     if eff["status_row"] is not None:
                         old = {k: s.get("status") or {} for k, s in new.items()}
                         mech.statuses(new, row["weapon"], b["aff"], level, b["stats"], row["two"], attacks, new,
@@ -2264,7 +2488,7 @@ def main() -> int:
                 return h
 
             def pair_fn(s, lid=left_id, hit_fn=left_hit):
-                return combo.paired_slots(combo_model, base_id, lid, s, hit_fn)
+                return left_weapon_guard(combo.paired_slots(combo_model, base_id, lid, s, hit_fn), s)
             ms_slots = pair_fn(slots)
             if ms_slots is not slots:
                 # A landed opener's follow-up is credited as damage of the same opening: every
@@ -2281,7 +2505,8 @@ def main() -> int:
             # The right grease's recasts take that share of the fight, as a left buff's do (with
             # `--setup` the loop charged it already, only where the right hand kept the grease).
             moveset["score"] *= grease_tf
-            moveset["grease_time_factor"] = round(grease_tf, 5)
+            # Unrounded: the adoption scripts multiply it back in to reproduce the stored score.
+            moveset["grease_time_factor"] = grease_tf
         moveset["base_score"] = moveset["score"]
         if loop:
             moveset["paired_loop"] = loop
@@ -2289,6 +2514,9 @@ def main() -> int:
                   "stats": b["stats"], "slots": slots, "mix": weapon_mix(slots),
                   "best_slot": best_slot(slots), "skill": skill, "crit": crit, "moveset": moveset,
                   "skill_term": None, "buff": _buff_summary(buff),
+                  "guard": {"own": round(own, 4), "own_ref": round(own_ref, 4), "left": guard_left,
+                            "carry": None if carry is None else round(carry, 4),
+                            "left_weapon": neutral_frames is not None},
                   "kind": row.get("kind"), "weight": row.get("weight")}
         item = None
         if not a.no_skill and moveset["score"]:
@@ -2297,10 +2525,11 @@ def main() -> int:
             buff_fn = None if buff is None else _buff_moveset_fn(
                 mech, pvp, reg, base_id, row, b, level, stats, attacks, slots, main_dmg, ar_by, defenders,
                 grease, a.spear_talisman, talismans, pair_fn if neutral_frames is not None else None,
-                neutral_frames, grease_tf=grease_tf)
+                neutral_frames, grease_tf=grease_tf, regard=regard)
             item = (result, (row["weapon"], b["aff"], level, stats, row["two"], base_id, choice,
                              moveset["score"], defenders, reg, buff,
-                             lambda o, c=crit, g=own, bid=base_id, fw=f_weight:
+                             lambda o, c=crit, g=(own if neutral_frames is None else 0.0), bid=base_id,
+                             fw=f_weight:
                              mech.skill_slot_extra(o, c, g, own_ref, bid, fw)),
                     skill_engagement({**slots, **jump_openers(slots, mech.npool)}, moveset, crit, crit_ev),
                     buff_fn)
@@ -2334,11 +2563,11 @@ def main() -> int:
     if pending:
         opp_pool = pool.raw if pool is not None else \
             EXCH.opponent_pool(reg, a.mirror, a.rl - a.window, a.rl + a.window)
-        opp_rows = results
-        if a.opponents_from:
-            opp_rows = json.loads(a.opponents_from.read_text())["results"]
-        opponents, _, _ = mech.ash.opponents_from_results(opp_pool, opp_rows, openers=a.opponent_openers,
-                                                          timing=a.dodge_timing, react=mech.react)
+        opp_rows = results if opp_rows_from is None else opp_rows_from
+        # The jump family's openers are synthesized, not stored (er-effects-rs-8uha).
+        opponents, _, _ = mech.ash.opponents_from_results(
+            opp_pool, opp_rows, openers=a.opponent_openers, timing=a.dodge_timing, react=mech.react,
+            slots_fn=lambda r: {**(r.get("slots") or {}), **jump_openers(r.get("slots") or {})})
         # A dodge skill reruns its opener's neutral contest with the dodge in the kit.
         opponents.npool = mech.npool
         if not need:
@@ -2353,7 +2582,7 @@ def main() -> int:
 
     if a.json:
         print(json.dumps({"rl": a.rl, "defenders": defenders.n, "distribution": defenders.distribution(),
-                          "results": results}, indent=1))
+                          "fight": mech.fight_kind, "results": results}, indent=1))
         return 0
     print(f"RL {a.rl}: scored against {defenders.n} PvP builds of RL {a.rl - a.window}-{a.rl + a.window} "
           f"(dmg = mean over them, med = their median defender); PvP rates applied; frames at 30 fps; "
@@ -2408,7 +2637,8 @@ def main() -> int:
               f"reach m (i = class median, no pose); adv/advS = frame advantage when poise holds / breaks; "
               f"status = engagements to the first proc on a non-carrier (an engagement = the first hit plus its true "
               f"combos; {mech.st_dfs.n} builds, gauge refill between engagements, one proc live at a time); "
-              f"stHP = expected status HP per landed hit in a fight of {mech.st_dfs.fight_engagements} engagements, in the score; "
+              f"stHP = expected status HP per landed hit over the fight schedule "
+              f"(mean {mech.fight_kind['hits_mean']:.1f} engagements), in the score; "
               f"carP% = share of bolus carriers it procs within one engagement; "
               f"skill = the weapon's own skill, best single hit vs the median defender; "
               f"base = moveset score before the skill term, sk+ = SKILL_WEIGHT x the best skill it can "

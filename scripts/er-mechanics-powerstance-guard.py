@@ -39,18 +39,30 @@ Blocking (1.16.2 code, `VERIFIED` unless marked):
   guardBaseRepel * SpEffect rate) + clamp(STR - overStrength, 0, 10) + durability term`
   (`FUN_14068c3c0`, 0 when the defender lacks the stats). Repelled when defender >= attacker.
   The -5/-10 term is weapon durability status (AtRisk/Broken), not a hand. `overStrength` is 99
-  on every weapon read, so the STR term is 0.
-* Guard break is stamina only: `stamina <= stamina damage` breaks the guard.
+  on every weapon read, so the STR term is 0. A repelled hit keeps
+  `GameSystemCommonParam.flickDamageCutRateSuccessGurad` (0.5) of its HP damage
+  (`FUN_1404f7280`), and its stamina charge and guard-break test are untouched: both run before
+  the repel multiplier, and `CalculateDamage2` deducts ADI+0x22c with no repel check.
+* Guard break is stamina only: `stamina <= stamina damage` breaks the guard. On a player the
+  breaking hit stays guarded (`CSPlayerDamageModule` vtable slot 6 returns 0), so chip applies.
 * Stamina damage to the blocker (`FUN_140684540`):
   `g = clamp((statBonus + staminaGuardDef * staminaGuardDefRate + 1.0) * (1 + guard
   AtkParam.guardStaminaCutRate / 100) * SpEffect, 0, 100)`, `0` without the stats;
-  `damage = (1 - g / 100) * attack stamina damage * SpEffect + guard BehaviorParam.stamina`,
+  `damage = (1 - g / 100) * info+0x28 + guard BehaviorParam.stamina`,
   `* 0.9` when the blocker two-hands, `* 0.7` when that weapon's `weaponCategory` is 12 (shields);
-  then `* FinalDamageRateParam.staminaRate` (1.25) when both are players.
+  then `* FinalDamageRateParam.staminaRate` (1.25) when both are players. info+0x28 is the
+  attacker's stamina damage times the product of its SpEffect `staminaAttackRate`
+  (`FUN_14068aa80`; Hammer Talisman 1.4, Determination 3, Royal Knight's Resolve 4, Cragblade
+  1.5).
 * Chip damage (`CalculateGuardDamage` 0x140689460): fraction of each element that passes
   `= (100 - (1 + typeCut / 100) * (cut * reinforce cut rate + statBonus) * durability * (1 +
   guard AtkParam.guardRate / 100) * info+0x5c) / 100`, multiplied onto the per-element damage
-  after defense (`CalculateDamageBasic` 0x1406849d0).
+  after defense (`CalculateDamageBasic` 0x1406849d0). info+0x5c is the attacker's guard-cut
+  cancel `(1 + weapon guardCutCancelRate / 100) (1 + attack guardCutCancelRate / 100)`
+  (`FUN_140652610`): -50 on 88 weapon rows (shotels, scythes, sickles), nonzero on 168 attack rows.
+* Guard reaction: `GUARD_REACTION_TABLE[guardLevel][damage level]`, small / middle / large, with
+  the blocker's R1 at f5 / f10 / f50 and its 20% guard regeneration paused for 10 / 27 / 49
+  frames. A repelled attacker can roll at f22 (small repel), which is the blocker's punish window.
 * Every stat bonus above goes through CalcCorrectGraph 160/161/163, which are flat 0 in the
   1.17.1 regulation, so the bonuses are 0 (`VERIFIED` regulation).
 
@@ -66,7 +78,11 @@ Corpus blockers (write-up section 8): `Blockers` turns the PvP builds of an RL w
 guard each one raises, and `Blockers.slot_pressure` scores one attack slot against all of them:
 stamina drained, the share one attack breaks from full stamina, the share it bounces off, chip
 HP, and the guard-pressure factor `er-builds-pvp.py --sort score` multiplies in.
-`Blockers.own_guard` is the defensive side: how much of the corpus's opening hit a guard stops.
+`Blockers.own_guard` is the defensive side: how much of the corpus's opening hit a guard stops,
+with a repel the configuration's own R1 can punish credited; `Blockers.best_left_shield` picks
+the left-hand shield of a one-handed configuration from the shields the corpus carries, and
+`Blockers.carried_left_shield` weighs it by the share of the corpus's one-handers of that weapon
+class that carry a shield at all (`Blockers.carry_rates`, `MEASURED`).
 
     python3 scripts/er-mechanics-powerstance-guard.py blockers --rl 140-160
     python3 scripts/er-mechanics-powerstance-guard.py pressure Giant-Crusher --grip both --rl 140-160
@@ -163,22 +179,70 @@ WEAPON_CATEGORY_SHIELD = 12
 TWO_HAND_GUARD, TWO_HAND_SHIELD_GUARD = 0.9, 0.7
 #: The +1.0 inside the guard-boost sum (`ADDSS XMM2, XMM6` at 0x140684735, XMM6 = 1.0).
 GUARD_BOOST_ADD = 1.0
-#: Guard behavior judges set by JumpTable 3 (`Set Guard Type`, ArgB) in the TAEs: 460 and 470 in
-#: every weapon and shield TAE read, 480 in a few. 460/470 rows are neutral (guardBreakCorrection
-#: 100, guardStaminaCutRate 0, guardRate 0, stamina 0) on every weapon read. Which one the plain
-#: raised guard uses is not traced; 460 is the default here.
+#: Guard behavior judges set by TAE JumpTable 3 (`_ChrActionFlag` 0x1404275e0 at 0x140427683 raises
+#: the guard flag and stores ArgB as the judge in one write). Every one-handed `GuardOn` /
+#: `GuardStart` / guard-reaction clip (a00/a02/a03) sets 460; the same clips in a10..a16 set 470,
+#: and that a1x is the two-handed guard is `INFERRED` from the 2H attack clips there (`TAE`).
+#: 461/471 are thrusting-shield attacks and Flame Spit / Tongues of Fire, 480 the parry skills:
+#: never a plain raised guard. 460/470 rows are neutral on every weapon read, so the two give
+#: the same numbers today.
 GUARD_JUDGE_DEFAULT = 460
+GUARD_JUDGE_TWO_HAND = 470
+
+#: Guard reaction (`HksEnv` env 237 `GetGuardLevelAction` -> `FUN_140686f00`): the 5x12 int table at
+#: 0x143b340b0 (1.16.2) / 0x143b380c0 (1.17.1), row = the guard weapon's `guardLevel`, column = the
+#: hit's damage level. The selftest reads both images. The behavior script (`COMMUNITY` c0000.hks
+#: l.4585) plays 1 `GuardDamageSmall`, 3 `Middle`, 4 `Large`, and no reaction for 0. SpEffect 171
+#: raising a result below 3 to 3 is not modelled.
+GUARD_REACTION_TABLE = (
+    (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    (0, 1, 3, 3, 4, 1, 3, 3, 1, 3, 4, 3),
+    (0, 1, 1, 3, 3, 1, 3, 3, 1, 3, 4, 3),
+    (0, 1, 1, 3, 3, 1, 3, 3, 1, 3, 4, 3),
+    (0, 1, 1, 1, 3, 1, 3, 3, 1, 3, 4, 3),
+)
+GUARD_REACTION_TABLE_VA = {'1.16.2': 0x143b340b0, '1.17.1': 0x143b380c0}
+GUARD_REACTION_NAME = {0: 'none', 1: 'small', 3: 'middle', 4: 'large'}
+#: Per guard reaction, the first frame the blocker can R1 out of it, and the frames its stamina
+#: regeneration stays at 0% (clips 19200/19210/19220, TAE 225 = 0 over that span; disengage.md
+#: section 2, `TAE`). A guard break (19500): roll f43, R1 f55, regen 0% for f0-50.
+GUARD_REACTION_R1 = {'none': 0, 'small': 5, 'middle': 10, 'large': 50}
+GUARD_REACTION_REGEN_PAUSE = {'none': 0, 'small': 10, 'middle': 27, 'large': 49}
+GUARD_BREAK_R1, GUARD_BREAK_REGEN_PAUSE = 55, 50
+#: `FUN_140d22e90` (table 0x142bafc88): a player defender reacts to `dmgLevel_vsPlayer` through
+#: this remap when it is nonzero, else to `dmgLevel`; a guarded hit keeps that level
+#: (`FUN_140690250`). Same table as `er-mechanics-frame-advantage.REMAP` (the selftest compares).
+DAMAGE_LEVEL_REMAP = (0, 0, 8, 1, 2, 3, 7, 4, 6, 9, 5, 10, 11)
+#: Stamina regeneration while guarding (`FUN_1404016d0`): `GetStaminaRecoverySpeed` (45 + talisman
+#: adds) x `ctrlModifier+0x14` / 100 per second. Every `GuardOn`/`GuardStart` clip carries TAE 225
+#: (`SetSPRegenRatePercent`) = 20 for its whole length (`TAE`), so a raised guard regenerates 20%.
+#: Per second is `INFERRED`; talisman adds are not read for blockers.
+BASE_STAMINA_REGEN_PER_S = 45.0
+GUARD_REGEN_RATE = 0.20
+GUARD_REGEN_PER_FRAME = BASE_STAMINA_REGEN_PER_S * GUARD_REGEN_RATE / 30.0
+#: A repelled attacker plays `W_Repelled_Small` (31910/33910/35910) or `W_Repelled_Large`
+#: (31920/...), picked by a damage level not traced here. Small allows roll and R1 at f22, large
+#: roll f27, R1 f30 (`TAE`, categories 20/23/31 identical). The small one is used: it is the
+#: shorter window, so the blocker's punish is not overstated.
+REPELLED_ATTACKER_FREE = 22
+#: A repel's punish in the score: a blocker whose own R1 lands inside that window (its guard
+#: reaction's R1 frame plus its R1's first hit frame below `REPELLED_ATTACKER_FREE`) is taken to
+#: land one hit worth as much as the attacker's (`INFERRED` weight). Adoption cannot pin it:
+#: `scripts/er-builds-guard-adoption.py` (RL 150, 2026-10-01) found every punish weight from 0 to
+#: 1 indistinguishable on the within-class percentile coefficient and the grip test.
+SCORE_REPEL_PUNISH = 1.0
 
 GUARD_FIELDS = ['guardBaseRepel', 'attackBaseRepel', 'staminaGuardDef', 'physGuardCutRate',
                 'magGuardCutRate', 'fireGuardCutRate', 'thunGuardCutRate', 'darkGuardCutRate',
                 'guardLevel', 'wepType', 'reinforceTypeId', 'isDualBlade', 'weaponCategory',
                 'wepmotionCategory', 'spAtkcategory', 'overStrength', 'saGuardCutRate',
                 'properStrength', 'properAgility', 'properMagic', 'properFaith', 'properLuck',
-                'slashGuardCutRate', 'blowGuardCutRate', 'thrustGuardCutRate']
+                'slashGuardCutRate', 'blowGuardCutRate', 'thrustGuardCutRate',
+                'guardCutCancelRate']
 REINFORCE_GUARD_FIELDS = ['staminaGuardDefRate', 'physicsGuardCutRate', 'magicGuardCutRate',
                           'fireGuardCutRate', 'thunderGuardCutRate', 'darkGuardCutRate']
 GUARD_ATK_FIELDS = ['guardBreakCorrection', 'guardStaminaCutRate', 'guardRate',
-                    'finalDamageRateId']
+                    'finalDamageRateId', 'guardCutCancelRate', 'dmgLevel', 'dmgLevel_vsPlayer']
 #: (element, EquipParamWeapon cut, ReinforceParamWeapon rate, attacks.py MV key)
 ELEMENT_CUTS = [
     ('physical', 'physGuardCutRate', 'physicsGuardCutRate', 'mv_phys'),
@@ -208,6 +272,11 @@ class Tables(ATK.Regulation):
         self.atk_guard = {r['id']: r for r in rows}
         rows, _, _ = PR.rows(PR.param_bytes(files, 'FinalDamageRateParam'), None)
         self.final_rate = {r['id']: r for r in rows}
+        # The HP share a repelled hit keeps (`FUN_1404f7280`: min with 1 - the defender's largest
+        # SpEffect flickDamageCutRate / 100, no such SpEffect modelled): 0.5 in 1.17.1.
+        rows, _, _ = PR.rows(PR.param_bytes(files, 'GameSystemCommonParam'),
+                             ['flickDamageCutRateSuccessGurad'])
+        self.repel_chip = max(0.0, min(1.0, rows[0]['flickDamageCutRateSuccessGurad']))
 
     def name(self, wid):
         return self.weapon_names.get(wid) or str(wid)
@@ -356,8 +425,11 @@ def can_powerstance(reg, right, left, two_handing=False):
 # Blocking.
 
 
-def shield_guard(reg, shield, level=0, guard_judge=GUARD_JUDGE_DEFAULT, two_handed=False):
-    """The defender's guard numbers for `shield` (any weapon id) held up at `level`."""
+def shield_guard(reg, shield, level=0, guard_judge=None, two_handed=False):
+    """The defender's guard numbers for `shield` (any weapon id) held up at `level`. The judge
+    defaults to 460 one-handed and 470 two-handed (`GUARD_JUDGE_TWO_HAND`)."""
+    if guard_judge is None:
+        guard_judge = GUARD_JUDGE_TWO_HAND if two_handed else GUARD_JUDGE_DEFAULT
     s = reg.weapon[shield]
     rf = reg.reinforce.get(s['reinforceTypeId'] + level, {})
     bid = reg.resolve_behavior_id(guard_judge, s['behaviorVariationId'])
@@ -400,31 +472,84 @@ def pvp_stamina_rate(reg, hit):
     return reg.final_rate.get(fid, {}).get('staminaRate', 1.0)
 
 
-def block_hit(reg, hit, ar, guard, strength=0, pvp=True):
+def guard_cut_cancel(reg, hit):
+    """info+0x5c (`FUN_140652610`): (1 + weapon guardCutCancelRate / 100) x (1 + attack
+    guardCutCancelRate / 100). It multiplies the guard's cut of every element. The attack's
+    AttackInfo+0xf4 bypass (1.0) is not identified and not modelled. 1.0 without a weapon id."""
+    w = reg.weapon.get(hit.get('weapon'), {}).get('guardCutCancelRate', 0) if 'weapon' in hit else 0
+    a = reg.atk_guard.get(hit.get('atk_row'), {}).get('guardCutCancelRate', 0)
+    return (1 + w / 100.0) * (1 + a / 100.0)
+
+
+def guarded_damage_level(reg, hit):
+    """The damage level a player blocker's guard reaction is looked up with: `dmgLevel_vsPlayer`
+    through `DAMAGE_LEVEL_REMAP` when nonzero, else `dmgLevel` (frame-advantage.md section 1)."""
+    row = reg.atk_guard.get(hit.get('atk_row'), {})
+    v = row.get('dmgLevel_vsPlayer') or 0
+    level = row.get('dmgLevel', hit.get('dmg_level', 0)) or 0
+    return DAMAGE_LEVEL_REMAP[v] if 0 < v < len(DAMAGE_LEVEL_REMAP) else level
+
+
+def guard_reaction(guard_level, damage_level):
+    """'none', 'small', 'middle' or 'large' from `GUARD_REACTION_TABLE`."""
+    if not 0 <= guard_level < len(GUARD_REACTION_TABLE) or not 0 <= damage_level < 12:
+        return 'none'
+    return GUARD_REACTION_NAME.get(GUARD_REACTION_TABLE[guard_level][damage_level], 'none')
+
+
+def block_hit(reg, hit, ar, guard, strength=0, pvp=True, stamina_rate=1.0):
     """One hit into a raised guard. `ar` {element: attack rating} of the hitting weapon.
 
-    `chip_fraction` multiplies each element's damage after defense; `chip_raw` is AR * MV *
-    fraction before defense, for comparing attacks only.
+    `stamina_rate` is the attacker's product of SpEffect `staminaAttackRate` (Hammer Talisman 1.4,
+    Determination 3, Royal Knight's Resolve 4, Cragblade 1.5): `FUN_14068aa80` multiplies it into
+    info+0x28, the stamina damage, before the blocker's guard boost.
+
+    `chip_fraction` is the share of each element the guard passes, with the attacker's
+    guard-cut cancel (`guard_cut_cancel`) in; it multiplies each element's damage after defense.
+    `chip_hp_rate` is what a repel leaves of that chip (`Tables.repel_chip`, 1 when not repelled).
+    `chip_raw` is AR * MV * fraction * that rate before defense, for comparing attacks only.
+    A repel charges the full stamina and can still break the guard: both are computed before the
+    repel multiplier in `CalculateDamage`.
     """
     atk = attacker_repel(reg, hit, strength)
-    stamina = ((1 - guard['guard_boost'] / 100.0) * hit['stamina_damage']
+    stamina = ((1 - guard['guard_boost'] / 100.0) * hit['stamina_damage'] * stamina_rate
                + guard['guard_behavior_stamina']) * guard['two_hand_factor']
     if pvp:
         stamina *= pvp_stamina_rate(reg, hit)
+    repelled = guard['repel_value'] >= atk
+    hp_rate = reg.repel_chip if repelled else 1.0
+    gcc = guard_cut_cancel(reg, hit)
     type_cut = guard['type_cuts'].get(hit.get('atk_attribute'), 0)
     frac, chip = {}, {}
     for el, _, _, mv in ELEMENT_CUTS:
         extra = (1 + type_cut / 100.0) if el == 'physical' else 1.0
-        frac[el] = (100.0 - extra * guard['cuts'][el] * (1 + guard['guard_rate'] / 100.0)) / 100.0
+        frac[el] = (100.0 - extra * guard['cuts'][el] * (1 + guard['guard_rate'] / 100.0) * gcc) / 100.0
         raw = ar.get(el, 0.0) * hit[mv] / 100.0
         if raw:
-            chip[el] = raw * frac[el]
+            chip[el] = raw * max(0.0, frac[el]) * hp_rate
     return {
         'attacker_repel': atk, 'defender_repel': guard['repel_value'],
-        'repelled': guard['repel_value'] >= atk,
+        'repelled': repelled,
         'stamina_to_blocker': max(0, int(stamina)),
+        'guard_cut_cancel': gcc, 'chip_hp_rate': hp_rate,
+        'reaction': guard_reaction(guard['guard_level_class'], guarded_damage_level(reg, hit)),
         'chip_fraction': frac, 'chip_raw': chip, 'chip_raw_total': sum(chip.values()),
     }
+
+
+def blocker_ready(reaction, broken=False):
+    """(R1 frame, regen-pause frames) of the blocker after a guard reaction or a guard break."""
+    if broken:
+        return GUARD_BREAK_R1, GUARD_BREAK_REGEN_PAUSE
+    return GUARD_REACTION_R1[reaction], GUARD_REACTION_REGEN_PAUSE[reaction]
+
+
+def repel_punishes(reaction, startup):
+    """Whether a blocker whose R1 first hits on frame `startup` lands it before a repelled
+    attacker can roll (`REPELLED_ATTACKER_FREE`); False when `startup` is unknown."""
+    if startup is None or startup != startup:
+        return False
+    return GUARD_REACTION_R1[reaction] + startup < REPELLED_ATTACKER_FREE
 
 
 def _ar_for(ar, hit):
@@ -434,11 +559,13 @@ def _ar_for(ar, hit):
     return ar
 
 
-def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pvp=True):
+def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pvp=True,
+                 stamina_rate=1.0):
     """[{attack, shield, ...}] for attack rows (attacks.py or this module) and shield specs.
 
     `shields` holds weapon ids or (id, level) tuples. `hits_to_break` counts identical
     attacks until `blocker_stamina` is reached, with no regeneration between them.
+    `stamina_rate` is the attacker's `staminaAttackRate` product (`block_hit`).
     """
     out = []
     for row in attacks:
@@ -446,7 +573,7 @@ def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pv
         hits = row['hits'] if isinstance(row.get('hits'), list) else [row]
         for spec in shields:
             g = shield_guard(reg, *spec) if isinstance(spec, tuple) else shield_guard(reg, spec)
-            per = [block_hit(reg, h, _ar_for(ar, h), g, strength, pvp) for h in hits]
+            per = [block_hit(reg, h, _ar_for(ar, h), g, strength, pvp, stamina_rate) for h in hits]
             stam = sum(p['stamina_to_blocker'] for p in per)
             out.append({
                 'attack': row['label'], 'shield': g['name'], 'shield_level': g['level'],
@@ -457,6 +584,8 @@ def block_matrix(reg, attacks, shields, ar, strength=0, blocker_stamina=None, pv
                 'repelled': any(p['repelled'] for p in per),
                 'attacker_repel': max(p['attacker_repel'] for p in per),
                 'defender_repel': g['repel_value'],
+                'guard_cut_cancel': round(per[0]['guard_cut_cancel'], 4),
+                'reaction': per[0]['reaction'],
             })
     return out
 
@@ -506,8 +635,14 @@ PERCENTILES = (10, 25, 50, 75, 90)
 #: The share of an attacker's hits that meet a raised guard when the defender has one up.
 SCORE_GUARD_BLOCK_RATE = 0.25
 #: How much a guard that stops the corpus's opening hit completely is worth to the weapon's own
-#: score, relative to a guard that stops nothing.
+#: score, relative to a guard that stops nothing. `INFERRED`: the adoption calibration
+#: (`scripts/er-builds-guard-adoption.py`, RL 150, 2026-10-01) cannot pin it. With the carry rate
+#: below every weight from 0 to 0.4 scores the same within its bootstrap CI; it only excluded 0.4
+#: under the older assumption that every one-hander carries its best shield.
 SCORE_GUARD_OWN_WEIGHT = 0.1
+#: Pseudo-builds a weapon class's shield-carry rate is shrunk toward the pooled rate with
+#: (`Blockers.carry_rates`). The strength is `INFERRED`; the rates themselves are `MEASURED`.
+CARRY_PRIOR_BUILDS = 10
 
 
 def plain_name(name):
@@ -578,6 +713,10 @@ class Blockers:
         self.reg = reg
         self.curve = curve
         self._per_guard = {}
+        self._builds = builds
+        self._opening = None
+        self._own_cache = {}
+        self._shields = None
         self.n = len(builds)
         ar = _ar_module()
         self._aff = {a.lower(): i for i, a in enumerate(ar.AFFINITIES)}
@@ -657,13 +796,17 @@ class Blockers:
                             'left ' + LEFT_KIND.get(self.reg.weapon[wid]['weaponCategory'], 'weapon'))
             # A pair would refuse the guard, but no torch or shield category powerstances.
             kind = 'shield' if self.reg.weapon[wid]['wepType'] in SHIELD_TYPES else 'other guard item'
+        level = 0 if slot is None else self._level(wid, slot, build)
+        return {'kind': kind, 'weapon': wid, 'level': level, 'two_handed': two,
+                'stats_met': self.meets(wid, st, two)}
+
+    def meets(self, wid, stats, two=False):
+        """Whether `stats` meet weapon `wid`'s requirements (STR x1.5 two-handed)."""
         w = self.reg.weapon[wid]
         need = {'str': w['properStrength'], 'dex': w['properAgility'], 'int': w['properMagic'],
                 'fth': w['properFaith']}
-        have = {k: float(st.get(k) or 0) * (TWO_HAND_STR if k == 'str' and two else 1.0) for k in need}
-        level = 0 if slot is None else self._level(wid, slot, build)
-        return {'kind': kind, 'weapon': wid, 'level': level, 'two_handed': two,
-                'stats_met': all(have[k] >= need[k] for k in need)}
+        have = {k: float(stats.get(k) or 0) * (TWO_HAND_STR if k == 'str' and two else 1.0) for k in need}
+        return all(have[k] >= need[k] for k in need)
 
     # -- the distribution ----------------------------------------------------------------------
 
@@ -708,75 +851,97 @@ class Blockers:
             per[el] = np.maximum(d, 0.0)
         return per
 
-    def slot_pressure(self, parts, block_rate=SCORE_GUARD_BLOCK_RATE):
+    def slot_pressure(self, parts, block_rate=SCORE_GUARD_BLOCK_RATE, cycle=None):
         """One attack slot into every build's raised guard.
 
         `parts` is one entry per separate hit of the slot: {'hit': attack row (`stamina_damage`,
-        `guard_level_base`, `atk_row`, `phys_type`), 'scaled': {element: attack after the motion
-        value and PvP weapon rate}, 'fr': FinalDamageRateParam row or None, 'post': {element:
-        after-defense factor} or None, 'n': sweep hits of that row}. `er-builds-pvp.slot_hit`
-        computes all of these.
+        `guard_level_base`, `atk_row`, `phys_type`, and `weapon` for its guard-cut cancel),
+        'scaled': {element: attack after the motion value and PvP weapon rate}, 'fr':
+        FinalDamageRateParam row or None, 'post': {element: after-defense factor} or None, 'n':
+        sweep hits of that row, 'stamina_rate': the attacker's `staminaAttackRate` product (1 when
+        absent)}. `er-builds-pvp.slot_hit` computes all of these. `cycle` is the frames until the
+        same attack can be thrown again (the slot's same-button recovery), or None.
 
-        Per blocker: stamina summed over the hits (`block_hit`, PvP rate and 2H factor in),
-        `drain` = that / max stamina capped at 1, `broken` when it reaches max stamina (one
-        attack from full, no regeneration), `repelled` when any hit bounces (`FUN_140447180`:
-        defender repel >= attacker repel), chip = each element's unguarded damage x the share the
-        guard passes (`CalculateDamageBasic` 0x1406849d0 multiplies `victimGuardDefRate` into
-        the same product as armor absorption, `VERIFIED`). The blocked hit is worth
-        `value` = 0 when repelled, else min(1, chip / unguarded + drain) of a landed one
-        (`INFERRED`: a full drain is a guard break, which is taken as one landed hit's worth).
+        Per blocker: stamina summed over the hits (`block_hit`: attacker `staminaAttackRate`, PvP
+        rate and 2H factor in), `broken` when it reaches max stamina (one attack from full; a
+        repel still charges it and can still break, `CalculateDamage` order), `repelled` when any
+        hit bounces (`FUN_140447180`: defender repel >= attacker repel), chip = each element's
+        unguarded damage x the share the guard passes with the attacker's guard-cut cancel in
+        (`CalculateDamageBasic` 0x1406849d0 multiplies `victimGuardDefRate` into the same product
+        as armor absorption, `VERIFIED`), times `Tables.repel_chip` on a repelled hit.
+        With `cycle`, the guard regenerates `GUARD_REGEN_PER_FRAME` over the frames between two
+        throws that are past its guard reaction's 0% window (`blocker_ready`), and `drain` is the
+        stamina net of that / max stamina, capped at 1; without it, no regeneration.
+        The blocked hit is worth `value` = min(1, chip / unguarded + drain) of a landed one
+        (`INFERRED`: a full drain is a guard break, taken as one landed hit's worth), minus
+        `SCORE_REPEL_PUNISH` when the hit is repelled and the blocker's own R1 #1 (`startups`)
+        lands before the repelled attacker can roll (`repel_punishes`).
         `factor` = 1 - `block_rate` x mean over every build of (can block) x (1 - value).
         """
         if not self.n:
             return None
-        g_idx = [i for i in range(len(self.guards))]
-        stam = np.zeros(len(self.guards))
-        repel = np.zeros(len(self.guards), bool)
+        g_idx = range(len(self.guards))
+        ng = len(self.guards)
+        stam = np.zeros(ng)
+        repel = np.zeros(ng, bool)
+        pause = np.zeros(ng)
+        ready = np.zeros(ng)
         dmg = np.zeros(self.n)
         chip = np.zeros(self.n)
+        safe = np.where(self.index >= 0, self.index, 0)
         for p in parts:
             hit = dict(p['hit'])
             if hit.get('phys_type') in PHYS_ATTRIBUTE:
                 hit['atk_attribute'] = PHYS_ATTRIBUTE[hit['phys_type']]
             n = p.get('n', 1) or 0
+            rate = p.get('stamina_rate', 1.0)
             per = self._unguarded(p['scaled'], hit.get('phys_type', 'standard'), p.get('fr'), p.get('post'))
             key = (hit.get('atk_row'), hit.get('atk_attribute'), hit['stamina_damage'],
-                   hit['guard_level_base'])
+                   hit['guard_level_base'], hit.get('weapon'), round(rate, 6))
             if key not in self._per_guard:
-                s_, r_, f_ = np.zeros(len(self.guards)), np.zeros(len(self.guards), bool), \
-                    np.zeros((len(self.guards), len(ELEMENTS)))
+                s_, r_, f_ = np.zeros(ng), np.zeros(ng, bool), np.zeros((ng, len(ELEMENTS)))
+                pz_, rd_ = np.zeros(ng), np.zeros(ng)
                 for i in g_idx:
-                    r = block_hit(self.reg, hit, {}, self.guards[i], pvp=True)
+                    r = block_hit(self.reg, hit, {}, self.guards[i], pvp=True, stamina_rate=rate)
                     s_[i], r_[i] = r['stamina_to_blocker'], r['repelled']
-                    f_[i] = [max(0.0, r['chip_fraction'][el]) for el in ELEMENTS]
-                self._per_guard[key] = (s_, r_, f_)
-            s_, r_, fracs = self._per_guard[key]
+                    f_[i] = [max(0.0, r['chip_fraction'][el]) * r['chip_hp_rate'] for el in ELEMENTS]
+                    rd_[i], pz_[i] = blocker_ready(r['reaction'])
+                self._per_guard[key] = (s_, r_, f_, pz_, rd_)
+            s_, r_, fracs, pz_, rd_ = self._per_guard[key]
             stam += s_ * n
             if n > 0:
                 repel |= r_
-            safe = np.where(self.index >= 0, self.index, 0)
+                pause = np.maximum(pause, pz_)
+                ready = np.maximum(ready, rd_)
             for k, el in enumerate(ELEMENTS):
                 dmg += per[el] * n
                 chip += per[el] * fracs[safe, k] * n
         # CalculateDamageBasic lifts a total in (0, 1) to 1 (ceil), guarded or not.
         chip = np.where((chip > 0) & (chip < 1), np.ceil(chip), chip)
         can = self.can
-        st_b = stam[np.where(can, self.index, 0)]
+        st_b = stam[safe]
+        regen = np.zeros(self.n)
+        if cycle:
+            regen = GUARD_REGEN_PER_FRAME * np.maximum(0.0, cycle - pause[safe])
         with np.errstate(divide='ignore', invalid='ignore'):
-            drain = np.where(self.stamina > 0, np.minimum(1.0, st_b / self.stamina), 1.0)
+            drain = np.where(self.stamina > 0,
+                             np.minimum(1.0, np.maximum(0.0, st_b - regen) / self.stamina), 1.0)
             share = np.where(dmg > 0, chip / dmg, 0.0)
-        rep_b = repel[np.where(can, self.index, 0)] & can
-        value = np.where(rep_b, 0.0, np.minimum(1.0, share + drain))
+        rep_b = repel[safe] & can
+        punish = rep_b & (ready[safe] + self.startups() < REPELLED_ATTACKER_FREE)
+        value = np.minimum(1.0, share + drain) - SCORE_REPEL_PUNISH * punish
         loss = np.where(can, 1.0 - value, 0.0)
-        broken = (st_b >= self.stamina) & can & ~rep_b
+        broken = (st_b >= self.stamina) & can
         m = can.sum()
 
         def mean(a):
             return float(a[can].mean()) if m else None
 
         return {'can_block': float(can.mean()), 'stamina': mean(st_b), 'drain': mean(drain),
+                'regen': mean(regen),
                 'break_share': float(broken.sum() / m) if m else None,
                 'repel_share': float(rep_b.sum() / m) if m else None,
+                'punish_share': float(punish.sum() / m) if m else None,
                 'chip': mean(chip), 'chip_share': mean(share), 'value': mean(value),
                 'loss': float(loss.mean()), 'factor': 1.0 - block_rate * float(loss.mean())}
 
@@ -784,7 +949,7 @@ class Blockers:
 
     def opening_hits(self, builds):
         """Each build's right-hand R1 #1 as it holds it (2H when `is2h`): one attack row per build
-        (None where no row resolves), the incoming side of `own_guard`."""
+        with its `weapon` id (None where no row resolves), the incoming side of `own_guard`."""
         cache, out = {}, []
         for b in builds:
             slot = _active_slots(b).get(0)
@@ -801,49 +966,146 @@ class Blockers:
                 except (KeyError, SystemExit, TypeError):
                     rows = []  # catalysts and bows without an R1 clip the module resolves
                 want = ('2h_' if grip == 'both' else '') + 'r1_1'
-                cache[key] = next((r for r in rows if r['slot'] == want), None)
+                row = next((r for r in rows if r['slot'] == want), None)
+                cache[key] = dict(row, weapon=wid) if row else None
             out.append(cache[key])
+        if builds is self._builds:
+            self._opening = out
         return out
 
-    def own_guard(self, guard, opening, stamina=None):
-        """How much of the corpus's opening hit `guard` (a `shield_guard` dict) stops, 0..1.
+    def startups(self):
+        """Each build's R1 #1 first hit frame (`opening_hits` of the corpus, NaN where none), as an
+        array aligned with the corpus: the blocker's punish after a repel."""
+        if self._opening is None:
+            self.opening_hits(self._builds)
+        if not hasattr(self, '_startups'):
+            self._startups = np.array([(h.get('hit_windows') or [[np.nan]])[0][0] if h else np.nan
+                                       for h in self._opening], float)
+        return self._startups
 
-        Per incoming hit: 0 when it bounces, else 1 - min(1, physical pass share + stamina drained
-        / `stamina`). Physical only, because the pass share is what the guard owns; the elements
-        pass at their own cut rates. `stamina` defaults to the corpus median max stamina.
+    def _own_parts(self, guard, opening, stamina):
+        """Per incoming opening hit into `guard`: the value without a punish credit, whether it is
+        repelled, and the blocker's R1 frame out of the guard reaction (arrays, cached)."""
+        key = (guard['weapon'], guard['level'], guard['two_hand_factor'], guard['guard_boost'],
+               guard['repel_value'], id(opening), stamina)
+        if key not in self._own_cache:
+            base, rep, ready = [], [], []
+            for hit in opening:
+                if hit is None:
+                    continue
+                h = dict(hit)
+                if h.get('phys_type') in PHYS_ATTRIBUTE:
+                    h['atk_attribute'] = PHYS_ATTRIBUTE[h['phys_type']]
+                r = block_hit(self.reg, h, {}, guard, pvp=True)
+                passed = max(0.0, r['chip_fraction']['physical']) * r['chip_hp_rate'] \
+                    + r['stamina_to_blocker'] / stamina
+                base.append(1.0 - min(1.0, passed))
+                rep.append(r['repelled'])
+                ready.append(blocker_ready(r['reaction'])[0])
+            self._own_cache[key] = (np.array(base), np.array(rep, bool), np.array(ready, float))
+        return self._own_cache[key]
+
+    def own_guard(self, guard, opening, stamina=None, startup=None):
+        """How much of the corpus's opening hit `guard` (a `shield_guard` dict) stops.
+
+        Per incoming hit: 1 - min(1, physical pass share + stamina drained / `stamina`), the pass
+        share with the attacker's guard-cut cancel in and halved on a repel (`block_hit`); a
+        repel still charges its stamina. A repelled hit adds `SCORE_REPEL_PUNISH` when the
+        configuration's own R1 first hits on frame `startup` early enough to land before the
+        attacker can roll (`repel_punishes`); so the value can exceed 1. Physical only, because
+        the pass share is what the guard owns; the elements pass at their own cut rates.
+        `stamina` defaults to the corpus median max stamina.
         """
         if stamina is None:
             stamina = float(np.median(self.stamina[self.stamina > 0])) if self.n else 150.0
-        vals = []
-        for hit in opening:
-            if hit is None:
-                continue
-            h = dict(hit)
-            if h.get('phys_type') in PHYS_ATTRIBUTE:
-                h['atk_attribute'] = PHYS_ATTRIBUTE[h['phys_type']]
-            r = block_hit(self.reg, h, {}, guard, pvp=True)
-            if r['repelled']:
-                vals.append(1.0)
-                continue
-            passed = max(0.0, r['chip_fraction']['physical']) + r['stamina_to_blocker'] / stamina
-            vals.append(1.0 - min(1.0, passed))
-        return float(np.mean(vals)) if vals else 0.0
+        base, rep, ready = self._own_parts(guard, opening, stamina)
+        if not len(base):
+            return 0.0
+        v = base
+        if startup is not None and startup == startup:
+            v = base + SCORE_REPEL_PUNISH * (rep & (ready + startup < REPELLED_ATTACKER_FREE))
+        return float(v.mean())
 
     def one_hand_guard_mean(self, opening, stamina=None):
-        """`own_guard` averaged over the one-handing builds' own guards (a `MEASURED` distribution):
-        what a one-handed configuration of any weapon blocks with, since the left hand is not
-        part of that configuration. Builds that cannot guard count as 0."""
-        vals, memo = [], {}
-        for k, i in zip(self.kind, self.index):
+        """`own_guard` averaged over the one-handing builds' own guards (a `MEASURED` distribution),
+        each with that build's own R1 as the repel punish: what the corpus's one-handed
+        configurations block with. Builds that cannot guard count as 0."""
+        vals = []
+        starts = self.startups()
+        for b, (k, i) in enumerate(zip(self.kind, self.index)):
             if k.startswith('two-handed'):
                 continue
             if i < 0:
                 vals.append(0.0)
                 continue
-            if i not in memo:
-                memo[i] = self.own_guard(self.guards[i], opening, stamina)
-            vals.append(memo[i])
+            vals.append(self.own_guard(self.guards[i], opening, stamina, starts[b]))
         return float(np.mean(vals)) if vals else 0.0
+
+    def shield_options(self):
+        """The distinct one-handed shields the corpus carries (weapon id with affinity, the
+        highest level seen), as `shield_guard` dicts: what a one-handed configuration picks its
+        left hand from (`best_left_shield`)."""
+        if self._shields is None:
+            top = {}
+            for g in self.guards:
+                if g['kind'] == 'shield':
+                    top[g['weapon']] = max(top.get(g['weapon'], 0), g['level'])
+            self._shields = [shield_guard(self.reg, w, lvl) for w, lvl in sorted(top.items())]
+        return self._shields
+
+    def best_left_shield(self, stats, opening, startup=None, stamina=None):
+        """(own_guard, shield dict) of the corpus shield that stops the most of the opening hit
+        for a one-handed configuration with `stats` (requirements met one-handed) whose own R1
+        first hits on frame `startup`; (0.0, None) when it meets none."""
+        best = (0.0, None)
+        for g in self.shield_options():
+            if not self.meets(g['weapon'], stats, False):
+                continue
+            v = self.own_guard(g, opening, stamina, startup)
+            if best[1] is None or v > best[0]:
+                best = (v, g)
+        return best
+
+    def carry_rates(self):
+        """({right-hand `wepType`: p}, pooled p) over the corpus's one-handing builds (`is2h`
+        unset): p is the share with a shield in the active left hand (`kind` 'shield'), by the
+        weapon class of the active right hand (None when it does not resolve), shrunk toward the
+        pooled share with `CARRY_PRIOR_BUILDS` pseudo-builds. `MEASURED`; RL 140-160 pools 121 of
+        797 (15.2%) and runs from 4% (katana) to 34% (greatsword)."""
+        if getattr(self, '_carry', None) is None:
+            unmatched = collections.Counter(self.unmatched)
+            counts = collections.defaultdict(lambda: [0, 0])
+            for b, kind in zip(self._builds, self.kind):
+                if b.get('is2h'):
+                    continue
+                slot = _active_slots(b).get(0)
+                wid = self._weapon_id(slot) if slot else None
+                wt = self.reg.weapon[wid]['wepType'] if wid is not None else None
+                counts[wt][0] += kind == 'shield'
+                counts[wt][1] += 1
+            self.unmatched = unmatched  # a read of the right hands, not a second guard lookup
+            k = sum(c[0] for c in counts.values())
+            n = sum(c[1] for c in counts.values())
+            pooled = k / n if n else 0.0
+            self._carry = ({wt: (c[0] + CARRY_PRIOR_BUILDS * pooled) / (c[1] + CARRY_PRIOR_BUILDS)
+                            for wt, c in counts.items()}, pooled)
+        return self._carry
+
+    def carry_rate(self, wep_type):
+        """`carry_rates` for a right hand of `wep_type`, the pooled share for a class the corpus
+        does not one-hand."""
+        rates, pooled = self.carry_rates()
+        return rates.get(wep_type, pooled)
+
+    def carried_left_shield(self, stats, opening, wep_type, startup=None, stamina=None):
+        """(own guard, shield dict, p) of a one-handed configuration whose right hand is of
+        `wep_type`: `best_left_shield`'s own guard times p = `carry_rate(wep_type)`. A one-hander
+        without a shield cannot guard (`GUARD_LEFT_ONE_HAND`), which `one_hand_guard_mean` counts
+        as 0 too, so this is the expected own guard of that class's builds if they carried the
+        best shield whenever they carry one."""
+        own, shield = self.best_left_shield(stats, opening, startup, stamina)
+        p = self.carry_rate(wep_type)
+        return own * p, shield, p
 
 
 def guard_score_factor(pressure, own=None, own_ref=None, own_weight=SCORE_GUARD_OWN_WEIGHT):
@@ -1082,7 +1344,7 @@ def main():
     ar = {wid: weapon_ar(reg.name(wid), a.level, stats, two_handed=two) for wid in {right, left}}
     shields = [(reg.find_weapon(s), a.shield_level) for s in a.shield] or [
         (31130000, a.shield_level), (32130000, a.shield_level)]
-    shields = [(sid, lvl, GUARD_JUDGE_DEFAULT, a.two_handed_guard) for sid, lvl in shields]
+    shields = [(sid, lvl, None, a.two_handed_guard) for sid, lvl in shields]
     m = block_matrix(reg, attacks, shields, ar, int(stats.get('str', 0)), a.blocker_stamina)
     if a.json:
         print(json.dumps(m, indent=1))
@@ -1096,14 +1358,14 @@ def main():
 def slot_parts(reg, wid, attack, level, ar):
     """`Blockers.slot_pressure` parts for one attacks.py row and its separate sweep hitboxes, with
     `scaled_for` damage (the CLI's; the ranking builds its own from `slot_hit`)."""
-    parts = [{'hit': attack, 'scaled': scaled_for(reg, attack, ar), 'fr': final_rate_row(reg, attack),
-              'n': attack.get('own_sweep_hits', 1)}]
+    parts = [{'hit': dict(attack, weapon=wid), 'scaled': scaled_for(reg, attack, ar),
+              'fr': final_rate_row(reg, attack), 'n': attack.get('own_sweep_hits', 1)}]
     for extra in attack.get('other_hitboxes') or []:
         if not extra.get('sweep_hit', True):
             continue
         nums = ATK.attack_numbers(reg, wid, extra['judge'], level)
         if nums:
-            parts.append({'hit': nums, 'scaled': scaled_for(reg, nums, ar),
+            parts.append({'hit': dict(nums, weapon=wid), 'scaled': scaled_for(reg, nums, ar),
                           'fr': final_rate_row(reg, nums), 'n': 1})
     return parts
 
@@ -1132,25 +1394,40 @@ def corpus_main(a):
     rows = ATK.weapon_attacks(reg, wid, a.grip, level)
     opening = bl.opening_hits(builds)
     ref = bl.one_hand_guard_mean(opening)
-    own = bl.own_guard(shield_guard(reg, wid, level, two_handed=True), opening) if two else ref
+    r1 = next((r for r in rows if r['slot'] in ('r1_1', '2h_r1_1')), None)
+    startup = (r1.get('hit_windows') or [[None]])[0][0] if r1 else None
+    if two:
+        own, left = bl.own_guard(shield_guard(reg, wid, level, two_handed=True), opening,
+                                 startup=startup), None
+    else:
+        own, left, carry = bl.carried_left_shield(stats, opening, reg.weapon[wid]['wepType'], startup)
     print(f'{reg.name(wid)} +{level} {"2H" if two else "1H"}; {bl.n} PvP builds of RL {lo}-{hi}, '
           f'{100 * bl.can.mean():.0f}% can raise a guard; AR '
           + ', '.join(f'{k} {v:.0f}' for k, v in ar.items() if v))
-    print(f'own guard: stops {100 * own:.0f}% of the corpus opening hit (one-handers\' guards: '
-          f'{100 * ref:.0f}%)')
-    print(f"{'slot':18}{'stam':>6}{'drain%':>7}{'break%':>7}{'bounce%':>8}{'chip':>6}{'chip%':>6}"
-          f"{'value':>7}{'factor':>7}")
+    left_note = ''
+    if left:
+        left_note = (f' (left {left["name"]} +{left["level"]} carried by {100 * carry:.1f}% of the '
+                     f'class\'s one-handers, {own / carry if carry else 0.0:.3f} when carried)')
+    print(f'own guard{left_note}: {own:.3f} of the corpus opening hit stopped, repel punish credited '
+          f'(one-handers\' own guards: {ref:.3f})')
+    print(f"{'slot':18}{'stam':>6}{'drain%':>7}{'break%':>7}{'bounce%':>8}{'pun%':>6}{'chip':>6}"
+          f"{'chip%':>6}{'value':>7}{'factor':>7}")
     for r in rows:
-        p = bl.slot_pressure(slot_parts(reg, wid, r, level, ar))
+        cf = r.get('cancel_frame') or {}
+        button = 'r2' if r['slot'].removeprefix('2h_').startswith('r2') else 'r1'
+        cycle = cf.get(button)
+        p = bl.slot_pressure(slot_parts(reg, wid, r, level, ar), cycle=cycle)
         if p is None or p['stamina'] is None:
             continue
         f = guard_score_factor(p, own, ref)
         print(f"{r['label'][:17]:18}{p['stamina']:>6.0f}{100 * p['drain']:>7.0f}"
-              f"{100 * p['break_share']:>7.0f}{100 * p['repel_share']:>8.0f}{p['chip']:>6.0f}"
+              f"{100 * p['break_share']:>7.0f}{100 * p['repel_share']:>8.0f}"
+              f"{100 * p['punish_share']:>6.0f}{p['chip']:>6.0f}"
               f"{100 * p['chip_share']:>6.0f}{p['value']:>7.2f}{f:>7.3f}")
     print('stam = blocker stamina lost (mean over builds that can guard); drain = share of their max'
-          ' stamina; break = share one attack breaks from full; bounce = share it is repelled by;'
-          ' chip = HP through the guard; value = a blocked hit\'s worth against a landed one;'
+          ' stamina net of guard regen over the same-button cycle; break = share one attack breaks'
+          ' from full; bounce = share it is repelled by; pun = share whose own R1 punishes the'
+          ' repel; chip = HP through the guard; value = a blocked hit\'s worth against a landed one;'
           ' factor = guard pressure x own-guard term (SCORE_GUARD_BLOCK_RATE, SCORE_GUARD_OWN_WEIGHT).')
     return 0
 
@@ -1310,6 +1587,30 @@ def selftest():
     src = 'block_hit / HKS guard hand'
     check('kinds: shield, bare hand, left dagger, two-handed greatsword', bl.kind,
           ['shield', 'bare left hand', 'left weapon', 'two-handed weapon'], src)
+
+    #    d. The shield-carry rate: per right-hand class, shrunk toward the pooled share.
+    cb = Blockers(reg, [build('Brass Shield'), build('Brass Shield'), build(None, right='Dagger'),
+                        build('Dagger', right='Dagger'), build('Brass Shield', True, right='Greatsword')])
+    ls_t = reg.weapon[reg.find_weapon('Longsword')]['wepType']
+    dg_t = reg.weapon[reg.find_weapon('Dagger')]['wepType']
+    rates, pooled = cb.carry_rates()
+    src = 'definition: (shields + CARRY_PRIOR_BUILDS x pooled) / (builds + CARRY_PRIOR_BUILDS)'
+    check('pooled carry rate skips the two-handed build (2 of 4)', pooled, 0.5, src)
+    check('Longsword class 2 of 2 shrinks to 7/12, Dagger class 0 of 2 to 5/12',
+          (round(rates[ls_t], 9), round(rates[dg_t], 9)), (round(7 / 12, 9), round(5 / 12, 9)), src)
+    check('a class the corpus does not one-hand gets the pooled rate', cb.carry_rate(-1), 0.5, src)
+    cop = cb.opening_hits(cb._builds)
+    best_own, best_g = cb.best_left_shield({'str': 40, 'dex': 20, 'int': 9, 'fth': 9}, cop)
+    c_own, c_g, c_p = cb.carried_left_shield({'str': 40, 'dex': 20, 'int': 9, 'fth': 9}, cop, dg_t)
+    check('carried own guard = best shield own guard x the class rate',
+          (c_g is best_g, round(c_own, 9)), (True, round(best_own * 5 / 12, 9)), src)
+    check('carry_rates leaves the unmatched-name count alone', sum(cb.unmatched.values()), 0, src)
+    if os.path.exists(mirror):
+        corpus_bl = Blockers(reg, blocker_corpus(mirror, 140, 160))
+        rates, pooled = corpus_bl.carry_rates()
+        src = 'MEASURED corpus: er-builds-guard-adoption.py 2026-10-01, 121 of 797, Wilson 95%'
+        check('RL 140-160 pooled shield-carry rate inside [0.129, 0.178]', 0.129 <= pooled <= 0.178, True, src)
+        check('every class rate between 0 and 1', all(0.0 <= v <= 1.0 for v in rates.values()), True, src)
     gs2 = [r for r in ATK.weapon_attacks(reg, 4000000, 'both', 25) if r['slot'] == '2h_r1_1'][0]
     ar = {'physical': 500.0}
     p = bl.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}])
@@ -1334,6 +1635,84 @@ def selftest():
     dg_guard = shield_guard(reg, 1000000, 25, two_handed=True)
     check('a 2H Greatsword guard stops more than a 2H Dagger guard',
           bl.own_guard(gs_guard, [gs2, dg]) > bl.own_guard(dg_guard, [gs2, dg]), True, src)
+
+    # 9. The guard dig's formulas against regulation rows (docs/er-mechanics/powerstance-guard.md
+    #    section 3; the numbers are the ones that section's tables quote).
+    files = PR.load(None)
+    sp_rows, _, _ = PR.rows(PR.param_bytes(files, 'SpEffectParam'), ['staminaAttackRate'])
+    sp = {r['id']: round(r['staminaAttackRate'], 4) for r in sp_rows}
+    src = 'VERIFIED regulation SpEffectParam.staminaAttackRate'
+    for sid, want in ((320700, 1.4), (1691, 3.0), (1693, 3.0), (1701, 4.0), (1703, 4.0),
+                      (1821, 1.5), (1826, 1.2)):
+        check(f'SpEffect {sid} staminaAttackRate', sp.get(sid), want, src)
+    brass = 31130000
+    shotel = reg.find_weapon('Shotel')
+
+    def r1_of(w, grip='one'):
+        want = ('2h_' if grip == 'both' else '') + 'r1_1'
+        return [dict(r, weapon=w, label=f'{w} {grip}') for r in ATK.weapon_attacks(reg, w, grip, 25)
+                if r['slot'] == want]
+
+    def one(w, grip='one', rate=1.0):
+        return block_matrix(reg, r1_of(w, grip), [(brass, 25)], {'physical': 500.0},
+                            blocker_stamina=150, stamina_rate=sp.get(320700) if rate == 'hammer' else rate)[0]
+    src = 'powerstance-guard.md section 3 (Brass Shield +25, 150 stamina)'
+    check('Greatsword R1 into Brass: 45 stamina, 4 hits', (one(4000000)['stamina_to_blocker'],
+                                                          one(4000000)['hits_to_break']), (45, 4), src)
+    check('... with Hammer Talisman: 63 stamina, 3 hits',
+          (one(4000000, rate='hammer')['stamina_to_blocker'], one(4000000, rate='hammer')['hits_to_break']),
+          (63, 3), src)
+    check('Giant-Crusher 2H R1 into Brass with Hammer: 78 -> 109',
+          (one(23110000, 'both')['stamina_to_blocker'], one(23110000, 'both', 'hammer')['stamina_to_blocker']),
+          (78, 109), src)
+    d = one(1000000)
+    check('a repelled Dagger R1 still charges 17 stamina and keeps half the chip',
+          (d['repelled'], d['stamina_to_blocker']), (True, 17), src)
+    src = 'VERIFIED regulation guardCutCancelRate / GameSystemCommonParam'
+    check('weapon rows with guardCutCancelRate -50', sum(w['guardCutCancelRate'] == -50
+                                                        for w in reg.weapon.values()), 88, src)
+    check('AtkParam_Pc rows with a nonzero guardCutCancelRate',
+          sum(a['guardCutCancelRate'] != 0 for a in reg.atk_guard.values()), 168, src)
+    s = one(shotel)
+    check('Shotel R1 into a 100% physical shield passes 50% physical (gcc 0.5)',
+          (s['guard_cut_cancel'], s['chip_fraction_phys']), (0.5, 0.5), src)
+    check('flickDamageCutRateSuccessGurad (repelled chip share)', reg.repel_chip, 0.5, src)
+    check('a repelled hit keeps that share of its chip',
+          block_hit(reg, dict(r1_of(1000000)[0]), {'physical': 500.0},
+                    dict(shield_guard(reg, brass, 25), cuts=dict(shield_guard(reg, brass, 25)['cuts'],
+                                                                   physical=50.0)))['chip_hp_rate'],
+          0.5, src)
+    src = 'definitions: guard reaction table and regen pause'
+    check('Greatsword R1 (dmgLevel 2) on a medium shield is a small reaction',
+          guard_reaction(3, 2), 'small', 'TABLE row 3 column 2')
+    check('a colossal R1 (dmgLevel 3) on a greatshield is small, on a straight sword middle',
+          (guard_reaction(4, 3), guard_reaction(1, 3)), ('small', 'middle'), 'TABLE')
+    check('no regeneration inside the cycle when the reaction pause covers it',
+          bl.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}],
+                           cycle=5)['regen'], 0.0, src)
+    check('regen over a long cycle lowers the drain',
+          bl.slot_pressure([{'hit': gs2, 'scaled': scaled_for(reg, gs2, ar), 'fr': None, 'n': 1}],
+                           cycle=120)['drain'] < p['drain'], True, src)
+    fa = _load('er_mechanics_frame_advantage_for_selftest', 'er-mechanics-frame-advantage.py')
+    check('DAMAGE_LEVEL_REMAP == frame-advantage REMAP', DAMAGE_LEVEL_REMAP, fa.REMAP,
+          'er-mechanics-frame-advantage.py')
+    for build, path in (('1.16.2', ATK.DEOBF_1162), ('1.17.1', ATK.DEOBF_1171)):
+        if os.path.exists(path):
+            raw = ATK._image_read(path, GUARD_REACTION_TABLE_VA[build], 5 * 12 * 4)
+            vals = struct.unpack('<60i', raw)
+            check(f'guard reaction table at {GUARD_REACTION_TABLE_VA[build]:#x} ({build})',
+                  tuple(tuple(vals[r * 12:(r + 1) * 12]) for r in range(5)), GUARD_REACTION_TABLE,
+                  f'EXE {os.path.basename(path)}')
+        else:
+            skips.append(f'guard reaction table: {path} absent')
+    src = 'sanity only: expected direction, no outside number'
+    check('a repel the blocker can punish raises its own guard\'s value',
+          bl.own_guard(shield_guard(reg, brass, 25), [dg], startup=10.0)
+          > bl.own_guard(shield_guard(reg, brass, 25), [dg]), True, src)
+    pd_ham = bl.slot_pressure([{'hit': dg, 'scaled': scaled_for(reg, dg, ar), 'fr': None, 'n': 1,
+                                'stamina_rate': 4.0}])
+    check('Royal Knight\'s Resolve x4 drains more than a plain Dagger R1', pd_ham['drain'] > pd['drain'],
+          True, src)
 
     for line in passes:
         print('PASS', line)

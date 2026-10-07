@@ -6,7 +6,7 @@ named Ghidra dump on :8765, shift 0 against `eldenring-deobf.bin`) or a value in
 consistent with the data, consuming code not traced; **COMMUNITY** = outside claim (Smithbox row
 names, wiki); **MEASURED** = counted in the planner corpus. Nothing was launched.
 
-Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 58/58.
+Tool: `scripts/er-mechanics-ashes.py` (commands at the end). `--selftest` passes 97/97.
 
 ## 0. In plain words
 
@@ -227,7 +227,7 @@ What the popular buffs do (REGULATION; `x0.6 player damage taken` means
 | Royal Knight's Resolve | 15 | 1700/1702 -> 1701/1703; no FP 1705 -> 1706 | x1.4 damage dealt to players (`atkPlayerDmgCorrectRate_*`; x1.8 to NPCs), x4 stamina damage, `atkFlickPower` 100; while active it cycles 1704, x0.75 on critical hits; no FP: x1.08 | 10 s |
 | Determination | 10 | 1690/1692 -> 1691/1693; no FP 1695 -> 1696 | x1.3 damage to players (x1.6 to NPCs), x3 stamina damage, criticals x0.75 (1694); no FP: x1.05 | 10 s |
 | Braggart's Roar | 16 | 1860/1862 -> 1861/1863; no FP 1866 | physical attack x1.1, x0.9 damage taken (players and NPCs), stamina recovery +10; no FP x1.075 / +7 / x0.95 | 60 s; no FP 6 s |
-| Barbaric Roar / War Cry | 16 | 1680/1682, 1810/1812 -> 1681/1683, 1811/1813 | physical attack x1.075, `changeStrengthPoint` 5 (meaning not traced) | 40 s; no FP the same for 6 s |
+| Barbaric Roar / War Cry | 16 | 1680/1682, 1810/1812 -> 1681/1683, 1811/1813 | physical attack x1.075, `changeStrengthPoint` 5: +5 on the weapon's reinforced STR scaling rate (attack-rating.md section 7; Giant-Crusher +25 at 80 STR: +17 AR, +2.1%) | 40 s; no FP the same for 6 s |
 | Cragblade | 16 | 1820/1822 -> 1821/1823; no FP 1826 | physical attack x1.15, stamina damage x1.5, poise damage x1.1; no FP x1.1 / x1.2 / x1.05 | 60 s; no FP 6 s |
 | Sacred Order / Shared Order | 18 / 20 | 1841/1843 -> 1849; 1870 -> 1876 (self), ally hitbox 300000820 `spEffectId1` 1871 -> 1877 | `weakDmgRateB` x2.0 (x1.5 for Shared; INFERRED: vs undead), x1.025 vs players, x1.1 vs NPCs (allies x1.075) | 60 s |
 | Shriek of Sorrow | 19 | four 331 tiers at f17-20, `conditionHp` none/85/55/30 | physical x1.075 / 1.1 / 1.15 / 1.2 vs players (x1.1 .. x1.25 vs NPCs); INFERRED that a tier fires only below that HP% | 40 s |
@@ -509,7 +509,8 @@ startup and recovery scoring.
 
 ## 11. Selftest
 
-`python3 scripts/er-mechanics-ashes.py --selftest`: 78 passed, 0 failed.
+`python3 /home/banon/projects/er-mods-rs/scripts/er-mechanics-ashes.py --selftest`: 96 passed, 0
+failed (2026-10-01; the table lists the original checks).
 
 | check | reference |
 |---|---|
@@ -582,8 +583,8 @@ startup and recovery scoring.
 - How many times a lingering bullet (Hoarfrost's mist, Holy Ground) hits one target; the tool
   counts each AtkParam row once, and a child bullet with its parent's row as the same wave.
 - `wepParamChange` 1/2/3 meaning right weapon, left weapon, target (INFERRED from names and use).
-- What `dmgLv_*` and `defFlickPower` do to incoming reactions (Endure), and what
-  `changeStrengthPoint` 5 on the roars does.
+- What `dmgLv_*` and `defFlickPower` do to incoming reactions (Endure). (`changeStrengthPoint` 5
+  on the roars is traced: attack-rating.md section 7.)
 - Bow skills (event 64, ammunition) are not classified; Igon's Drake Hunt's arrow judges 890/895
   do not resolve against the bow.
 - Shared hit lists: Thunderbolt, Flaming Strike, Flame of the Redmanes and Hoarfrost use
@@ -1313,6 +1314,25 @@ after it, which is shorter than any dodge's R1 cancel plus a strike. So from its
 distances the step buys nothing measurable here, and the section 16 validation does not move with
 this gap. What it does in play that this does not model (approach from outside reach, spacing,
 tracking) is still open.
+
+**Correction (2026-10-01, er-effects-rs-8uha).** Until this date the `families` table had no jump
+openers. `_opener_row` looked each family's opener up in the ranking row's stored slots, and the
+jump openers (`jump_r1_f`, `jump_r2_f`, ...) are synthesized by `er-builds-pvp.jump_openers`, never
+stored. So the jump family, the largest at 28.8% mean use share on the RL 150 ranking, was dropped
+from every row, and the remaining shares were not renormalised (median retained share 0.707, min
+0): a weapon whose players jump more counted for less as an opponent. Every result in this section
+and in 16d was measured without it. Now `opponents_from_results` takes `slots_fn` (the ranking
+passes the stored slots plus `jump_openers`), renormalises each key's shares over the openers that
+resolve, and a jump opener starts at its `neutral_in` strike, counted from the jump input (22 f on
+Alabaster Lord's Sword 2H), not at the landed clip's 2.5 m contact (17.5 f), which would make
+every jump 4.5 frames too fast.
+
+MEASURED on the RL 150 ranking (`er-opponent-family-pool-probe.py`, 945 pool builds): the table
+grows from 868 to 1151 rows, the jump openers take 26.8% of its weight (0 before), and its
+weighted means move from strike 14.96 f, reach 4.11 m, hit 425.7 to 16.85 f, 4.42 m, 428.2. The
+opponents now open slower and from farther away, so a dodge has more to read and a punish has
+farther to go. On a five-weapon run (Giant-Crusher, Uchigatana, Dagger, Lance, Great Stars, both
+grips) no row's best skill option or score moves; only options that are not chosen change.
 
 ### 16d. Validation and the whole ranking (MEASURED 2026-09-30)
 

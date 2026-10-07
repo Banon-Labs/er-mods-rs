@@ -79,6 +79,12 @@ CUT_PT = {p: f'{_PT[p]}DamageCutRate' for p in PHYS_TYPES}
 STATS = {'vig': 'addLifeForceStatus', 'mnd': 'addWillpowerStatus', 'vit': 'addEndureStatus',
          'str': 'addStrengthStatus', 'dex': 'addDexterityStatus', 'int': 'addMagicStatus',
          'fth': 'addFaithStatus', 'arc': 'addLuckStatus'}
+# Scaling-rate adds (`change*Point`), summed as ints by the same accumulator into AttackInfo
+# +0xb4..+0xc4 and added to the weapon's reinforced correct rate, not to the attribute
+# (`er-mechanics-ar.RATE_POINT_FIELDS`, attack-rating.md section 7). Roar, Barbaric/Milos Roar and
+# War Cry carry `changeStrengthPoint` 5 beside their x1.075.
+RATE_POINTS = {'str': 'changeStrengthPoint', 'dex': 'changeAgilityPoint', 'int': 'changeMagicPoint',
+               'fth': 'changeFaithPoint', 'arc': 'changeLuckPoint'}
 # Status build-up adds, summed as ints by the same accumulator (`FUN_1404ff690` and siblings).
 STATUS = {'poison': 'poizonAttackPower', 'rot': 'diseaseAttackPower', 'blood': 'bloodAttackPower',
           'death': 'curseAttackPower', 'frost': 'freezeAttackPower', 'sleep': 'sleepAttackPower',
@@ -137,13 +143,15 @@ NEXT_HIT_STATES = (384, 385)
 # A row whose duration is this short only lives while something keeps re-applying it (Thorny
 # Cracked Tear's 1.5 s accumulator tiers). What re-applies it is not traced, so it gets no uptime.
 REFRESHED_ROW_S = 2.0
-# Fight shape. Landed hits: `er-mechanics-status.Defenders.fight_engagements` (5 at RL 150, from
-# the corpus median HP), `ENGAGEMENT_SECONDS` (5 s, `INFERRED`, the status module's) apart; both
-# stay as they were. The fight a buff has to cover is longer than those 25 s of trading: 3 to 5
-# minutes (user, 2026-10-01: a PvP fight lasts that long, and a 60 s weapon buff cast once before
-# a 25 s fight was free and never recast). Only buff duration, uptime and recast logic read the
-# fight length; engagement spacing, status decay between hits and sustain pacing read
-# `ENGAGEMENT_SECONDS`. The ranking passes its own values; these are the defaults.
+# Fight shape. The fight a buff has to cover is 3 to 5 minutes (user, 2026-10-01: a PvP fight
+# lasts that long, and a 60 s weapon buff cast once before a 25 s fight was free and never
+# recast). Only buff duration, uptime and recast logic read the fight length; engagement spacing,
+# status decay between hits and sustain pacing read `ENGAGEMENT_SECONDS` (5 s, `INFERRED`, the
+# status module's). Landed hits are a schedule, one count per fight point (`fight_hits`): the
+# hits it takes to empty the defender's HP and every flask he drinks, at most what that fight
+# length leaves room for. `FIGHT_ENGAGEMENTS` is the one-HP-bar, no-flask count
+# (`er-mechanics-status.Defenders.fight_engagements`, 5 at RL 150), the default where no schedule
+# is passed. The ranking passes its own values; these are the defaults.
 FIGHT_ENGAGEMENTS = 5
 ENGAGEMENT_SECONDS = 5.0
 FIGHT_SECONDS_RANGE = (180.0, 300.0)
@@ -181,6 +189,109 @@ FP_BAR_DEFAULT = 88.0
 #: only at a Site of Grace, so a tear is never recast inside a fight.
 TEAR_USES = 1
 
+# -- landed hits per fight point (buffs.md section 10) -----------------------------------------
+#: HP one Flask of Crimson Tears +12 heals: EquipParamGoods 1025 -> SpEffect 501012
+#: `changeHpEstusFlaskPoint` -810 (`VERIFIED` regulation, `er-mechanics-disengage.flask`).
+FLASK_HEAL_HP = 810.0
+#: FP one Flask of Cerulean Tears +12 restores: EquipParamGoods 1075 -> SpEffect 501062
+#: `changeMpEstusFlaskPoint` -220 (`VERIFIED` regulation).
+CERULEAN_FP = 220.0
+#: Frames a drink takes from the fight: the first frame anything (roll, R1, item, move) cancels the
+#: crimson drink, f54 of the 55-frame `a000_050000` (`TAE`, `er-mechanics-disengage.flask`). That
+#: `goodsUseAnim` 10 plays that clip is `INFERRED` (disengage.md section 3). The cerulean flask is
+#: `goodsUseAnim` 19, which `c0000.hks` `ExecItem` sends to its own event, `Event_ItemDrinkingMP`
+#: (`ITEM_DRINK_MP` 19, `common_define.hks`; crimson is `ITEM_DRINK` 10 -> `Event_ItemDrinking`);
+#: the clip behind that event is not traced, so the crimson frames stand in (`INFERRED`).
+FLASK_DRINK_FRAMES = 54.0
+#: Share of a crimson drink that heals net (`INFERRED` 1: every drink lands). The disengage race
+#: (`er-mechanics-disengage.heal_outcome`) gives the traded and denied shares per escape; folding
+#: them in needs the escape mix of a whole fight, which is not modelled.
+FLASK_ETA = 1.0
+#: Share of the engagements the attacker lands a hit in (`INFERRED`: a symmetric fight, 0.5).
+FIGHT_WIN_SHARE = 0.5
+#: Crimson / cerulean flask split the corpus carries (`build.items.flasks`, `MEASURED` 2026-10-01:
+#: 10 / 4 at +12 on 1134 / 1138 of the 1141 RL 140-160 PvP builds, the planner default).
+CORPUS_CRIMSON, CORPUS_CERULEAN = 10, 4
+#: Fight kinds by planner tag (duel etiquette, `COMMUNITY`: crimson flasks are not drunk in a
+#: duel, cerulean and physick are; invasions and ganks drink everything). Other PvP tags (2v2,
+#: Ladder, Fishing) and untagged builds say nothing about it and are left out of the split.
+DUEL_TAGS = ('Duels',)
+FLASK_TAGS = ('Invasions', 'Co-op/Gank')
+#: The fight points of a mix of fight kinds are each kind's points repeated in proportion to its
+#: share, the shares rounded to this many parts (4: quarters, 52 points for two kinds).
+FIGHT_MIX_PARTS = 4
+
+
+def fight_hits(fight_seconds=FIGHT_SECONDS, hp=1945.84, damage=471.5, flasks=0, heal=FLASK_HEAL_HP,
+               eta=FLASK_ETA, engagement_s=ENGAGEMENT_SECONDS, win_share=FIGHT_WIN_SHARE,
+               drink_frames=FLASK_DRINK_FRAMES):
+    """Landed hits at each fight length, as a tuple aligned with `fight_seconds`.
+
+    Two bounds, both read per point; the count is the smaller (at least 1):
+
+        to kill  ceil((hp + flasks x heal x eta) / damage)      the defender's HP and his flasks
+        by time  floor((f - flasks x drink) / engagement_s x win_share)
+
+    `hp` is the corpus median max HP and `damage` the reference landed hit
+    (`er-mechanics-status.FIGHT_REF_DAMAGE`); at RL 150 with no flask that is
+    ceil(1945.84 / 471.5) = 5, the old fixed count. The time bound is the same fight seen from
+    the clock: an engagement every `engagement_s`, the attacker winning `win_share` of them, and
+    the defender's drinks taking their frames out of the fight. With every flask (10) the kill
+    needs 22 hits and the time bound holds it to 16..22 over 180..300 s (`INFERRED` reading: a
+    fight shorter than the kill ends on time). With none, 5 at every length."""
+    fs = _fights(fight_seconds)
+    kill = max(1, math.ceil((hp + flasks * heal * eta) / damage - 1e-9))
+    drink_s = flasks * drink_frames / CAST_FPS
+    return tuple(max(1, min(kill, int(max(0.0, f - drink_s) / engagement_s * win_share + 1e-9)))
+                 for f in fs)
+
+
+def fight_mix(kinds, parts=FIGHT_MIX_PARTS):
+    """(fight points, hits) of a mix of fight kinds [(share, points, hits)]: each kind's points
+    and hit counts repeated in proportion to its share (rounded to `parts`, then reduced), so the
+    plain mean over the points every reader takes is the share-weighted mean. A kind whose share
+    rounds to 0 is left out; with every share at 0, the first kind alone."""
+    reps = [round(s * parts) for s, _, _ in kinds]
+    if not any(reps):
+        reps = [1] + [0] * (len(kinds) - 1)
+    g = 0
+    for r in reps:
+        g = math.gcd(g, r)
+    fs, hs = [], []
+    for r, (_, pts, hits) in zip(reps, kinds):
+        for _ in range(r // g):
+            fs += list(pts)
+            hs += list(hits)
+    return tuple(fs), tuple(hs)
+
+
+def tag_shares(rows):
+    """{'duel': share, 'flasks': share} of the fight-kind tag mentions (`DUEL_TAGS`,
+    `FLASK_TAGS`) over corpus rows carrying `tags`; a row tagged both counts once in each."""
+    duel = sum(1 for r in rows for t in r.get('tags') or () if t in DUEL_TAGS)
+    fl = sum(1 for r in rows for t in r.get('tags') or () if t in FLASK_TAGS)
+    n = duel + fl
+    return {'duel': duel / n if n else 0.0, 'flasks': fl / n if n else 0.0, 'mentions': (duel, fl)}
+
+
+def _pairs(fight_seconds, hits):
+    """[(fight s, landed hits)]: `hits` a number is the same count at every length, a sequence
+    is one count per point of `fight_seconds` (a `fight_hits` / `fight_mix` schedule). A sequence
+    of another length (a single length asked of a schedule) takes the schedule's mean, rounded."""
+    fs = _fights(fight_seconds)
+    if isinstance(hits, (tuple, list)):
+        if len(hits) == len(fs):
+            return list(zip(fs, (int(h) for h in hits)))
+        return [(f, round(hits_mean(hits))) for f in fs]
+    return [(f, int(hits)) for f in fs]
+
+
+def hits_mean(hits):
+    """Mean landed hits of a count or a schedule, for a reader that takes one number."""
+    if isinstance(hits, (tuple, list)):
+        return sum(hits) / len(hits) if hits else float(FIGHT_ENGAGEMENTS)
+    return float(hits)
+
 
 def _fights(fight_seconds):
     """`fight_seconds` as a tuple of lengths: a number is one length, a sequence is sample points."""
@@ -193,13 +304,13 @@ def recast_points(duration, fight_seconds=FIGHT_SECONDS, uses=None, hits=FIGHT_E
                   one_hit=False):
     """[(fight s, recasts)] of one buff at each fight length: as many recasts as keep it on the
     whole fight (ceil(fight / duration) - 1; a next-hit buff once per landed hit after the first,
-    `hits` - 1), at most `uses` - 1 (the first cast is made before contact and free, buffs.md
-    section 10, `INFERRED`); `uses` None is no limit. A permanent (-1) or refreshed/0 s buff is
-    never recast."""
+    that point's `hits` - 1), at most `uses` - 1 (the first cast is made before contact and free,
+    buffs.md section 10, `INFERRED`); `uses` None is no limit. A permanent (-1) or refreshed/0 s
+    buff is never recast. `hits` is a count or a schedule (`_pairs`)."""
     out = []
-    for f in _fights(fight_seconds):
+    for f, h in _pairs(fight_seconds, hits):
         if one_hit:
-            need = max(0, int(hits) - 1)
+            need = max(0, h - 1)
         elif duration < REFRESHED_ROW_S:
             need = 0
         else:
@@ -208,31 +319,45 @@ def recast_points(duration, fight_seconds=FIGHT_SECONDS, uses=None, hits=FIGHT_E
     return out
 
 
+def drinks_needed(casts, refill):
+    """Cerulean drinks `casts` casts need: `refill` = (casts payable after d drinks for
+    d = 0, 1, ..., drink frames); the fewest d whose count reaches `casts`, at most the last."""
+    paid = refill[0]
+    for d, n in enumerate(paid):
+        if n is None or n >= casts:
+            return d
+    return len(paid) - 1
+
+
 def recast_plan(duration, fight_seconds=FIGHT_SECONDS, uses=None, cast_frames=0.0,
-                hits=FIGHT_ENGAGEMENTS, one_hit=False):
+                hits=FIGHT_ENGAGEMENTS, one_hit=False, refill=None):
     """Mean over the fight lengths of one buff's uptime, recasts and time factor.
 
-    Uptime: (1 + recasts) x duration / fight, at most 1, or (1 + recasts) / `hits` for a next-hit
-    buff; 1 for a permanent one, 0 for a refreshed one. Time factor: each recast takes its
-    `cast_frames` out of the fight, 1 - recasts x cast / fight (the cast's punish exposure is not
-    modelled, only its time)."""
+    Uptime: (1 + recasts) x duration / fight, at most 1, or (1 + recasts) / that point's landed
+    hits for a next-hit buff; 1 for a permanent one, 0 for a refreshed one. Time factor: each
+    recast takes its `cast_frames` out of the fight, 1 - recasts x cast / fight (the cast's
+    punish exposure is not modelled, only its time). `refill` (`drinks_needed`) charges the
+    cerulean drinks the casts need beyond one FP bar, each its drink frames, the same way."""
     pts = recast_points(duration, fight_seconds, uses, hits, one_hit)
-    ups, ns, tfs = [], [], []
-    for f, n in pts:
+    ups, ns, tfs, ds = [], [], [], []
+    for (f, n), (_, h) in zip(pts, _pairs(fight_seconds, hits)):
         if one_hit:
-            u = min(1.0, (1.0 + n) / max(hits, 1))
+            u = min(1.0, (1.0 + n) / max(h, 1))
         elif duration < 0:
             u = 1.0
         elif duration < REFRESHED_ROW_S:
             u = 0.0
         else:
             u = min(1.0, (1.0 + n) * duration / f)
+        d = drinks_needed(1 + n, refill) if refill else 0
         ups.append(u)
         ns.append(n)
-        tfs.append(max(0.0, 1.0 - n * (cast_frames or 0.0) / CAST_FPS / f))
+        ds.append(d)
+        frames = n * (cast_frames or 0.0) + (d * refill[1] if refill else 0.0)
+        tfs.append(max(0.0, 1.0 - frames / CAST_FPS / f))
     k = len(pts)
     return {'uptime': sum(ups) / k, 'recasts': sum(ns) / k, 'time_factor': sum(tfs) / k,
-            'points': [(f, n) for f, n in pts]}
+            'drinks': sum(ds) / k, 'points': [(f, n) for f, n in pts]}
 # Planner tags -> the role a build plays, for the great rune (`ApplyRuneArcEffects`, section 4).
 # Invasions -> invader is the tag's meaning; the rest -> host is `INFERRED` (a duel or gank build
 # can also be a summoned cooperator, for whom the rune is inert).
@@ -305,7 +430,7 @@ def _enum(name):
 def _effect_fields():
     out = []
     for d in (AP_RATE, AP_RATE_PT, AP_FLAT, AP_FLAT_PT, ATK_RATE, ATK_RATE_PT, PVP_ATK, PVE_ATK,
-              PVP_DEF, PVE_DEF, CUT, CUT_PT, STATS, STATUS):
+              PVP_DEF, PVE_DEF, CUT, CUT_PT, STATS, RATE_POINTS, STATUS):
         out += list(d.values())
     return out + list(OTHER)
 
@@ -591,7 +716,11 @@ class Buffs:
           `pvp_rate[e]` attacker `atkPlayerDmgCorrectRate` product when `pvp`, else
                         `atkEnemyDmgCorrectRate`.
         `status` sums build-up adds. `stats` are attribute adds, which change AR through scaling:
-        feed them to `er-mechanics-ar.py`.
+        feed them to `er-mechanics-ar.py`. `rate_points` are the `change*Point` scaling-rate adds,
+        `er-mechanics-ar.attack_rating(rate_adds=...)`. `stamina_rate` is the `staminaAttackRate`
+        product, the multiplier `FUN_14068aa80` puts on a guarded hit's stamina damage
+        (info+0x28); that it passes the same hand gate is `INFERRED` from the right/left row pairs
+        (Royal Knight's Resolve 1701 `wepParamChange` 1, 1703 2).
 
         Every attacker column passes the same gate, `IsApplicableForCategory`: the hand rule on
         `wepParamChange`, then the sub-category mask. `sub_categories` is the attack's
@@ -609,7 +738,9 @@ class Buffs:
         pvpr = dict.fromkeys(ELEMENTS, 1.0)
         stats = dict.fromkeys(STATS, 0)
         status = dict.fromkeys(STATUS, 0)
+        points = dict.fromkeys(RATE_POINTS, 0)
         ar_sub = atk_sub = 1.0
+        stamina_rate = 1.0
         used = []
         subs = set(sub_categories)
         for r, src in rows:
@@ -624,6 +755,7 @@ class Buffs:
             if need and not need & subs:
                 continue
             used.append((r['id'], src))
+            stamina_rate *= float(r['staminaAttackRate'])
             for e in ELEMENTS:
                 col = (PVP_ATK if pvp else PVE_ATK)[e]
                 pvpr[e] = f32(pvpr[e] * f32(r[col]))
@@ -634,6 +766,9 @@ class Buffs:
                 continue
             for k, f in STATUS.items():
                 status[k] += int(r[f])
+            # Plain int sum, not scaled by the byPoint/byRate correction (`FUN_1404f4520`).
+            for k, f in RATE_POINTS.items():
+                points[k] += int(r[f])
             use = r['isUseAtkParamAtkPowerCorrect']
             cp = f32(by_point * 0.01) if use else 1.0
             cr = f32(by_rate * 0.01) if use else 1.0
@@ -660,7 +795,8 @@ class Buffs:
         atk['physical'] = f32(atk['physical'] * atk_sub)
         atk = {e: int(f32(v * 100.0)) / 100.0 for e, v in atk.items()}
         return {'ar_rate': ar, 'flat_add': flat, 'pvp_rate': pvpr, 'atk_rate': atk,
-                'status': status, 'stats': stats, 'entries': used,
+                'status': status, 'stats': stats, 'rate_points': points, 'entries': used,
+                'stamina_rate': stamina_rate,
                 'refused': list(self.last_refused), 'unknown': unknown}
 
     def defense_context(self, active, pvp=False, phys_type='standard', hp_ratio=1.0,
@@ -716,12 +852,14 @@ class Buffs:
 
         Applied before the first hit (`INFERRED`: a PvP player buffs before contact). -1 is
         permanent (great runes). A one-hit row (`one_hit`) covers `uses` of the `hits` landed
-        hits. A refreshed row (under `REFRESHED_ROW_S`) or a 0-duration row gets none, since what
-        keeps it alive is not traced. Otherwise `uses` x duration over the fight, at most 1."""
+        hits (a count, or a schedule over `fight_seconds`, `_pairs`). A refreshed row (under
+        `REFRESHED_ROW_S`) or a 0-duration row gets none, since what keeps it alive is not traced.
+        Otherwise `uses` x duration over the fight, at most 1."""
         r = self.sp[sid]
         d = r['effectEndurance']
         if self.one_hit(sid):
-            return min(1.0, uses / max(hits, 1))
+            ps = _pairs(fight_seconds, hits)
+            return sum(min(1.0, uses / max(h, 1)) for _, h in ps) / len(ps)
         if d < 0:
             return 1.0
         if d < REFRESHED_ROW_S:
@@ -777,8 +915,9 @@ class Buffs:
 
     def planned_uptime(self, sid, points, hits=FIGHT_ENGAGEMENTS):
         """`uptime` of one row whose source makes `points` [(fight s, recasts)] recasts: the mean
-        over the fight lengths of `uptime` with 1 + recasts uses at that length."""
-        return sum(self.uptime(sid, f, hits, 1.0 + n) for f, n in points) / len(points)
+        over the fight lengths of `uptime` with 1 + recasts uses and that point's landed hits."""
+        hs = _pairs(tuple(f for f, _ in points), hits)
+        return sum(self.uptime(sid, f, h, 1.0 + n) for (f, n), (_, h) in zip(points, hs)) / len(points)
 
     def skill_rows(self, root):
         """The relevant rows a skill's buff SpEffect puts on its user (root + cycled rows)."""
@@ -794,7 +933,9 @@ class Buffs:
         and replayed through the same stacking. Per element: `pre` multiplies the weapon part of
         the AR, `post` the damage after defense (`atkPlayerDmgCorrectRate` x `*AttackRate`),
         `flat` is added after the AR multipliers; each row contributes 1 + uptime x (factor - 1).
-        `stats` are uptime-weighted attribute adds.
+        `stats` are uptime-weighted attribute adds, `rate_points` uptime-weighted scaling-rate
+        adds (Roar / War Cry: 5 STR rate x uptime). `stamina` is the same uptime-weighted product
+        of `staminaAttackRate` (a guarded hit's stamina damage, `attack_context`).
 
         Weapon-buff rows (`WEAPON_BUFF_CATS`) from the kit are dropped by default: the grease
         sweep owns that slot. A skill's own weapon-buff row is dropped when
@@ -839,6 +980,8 @@ class Buffs:
         post = dict.fromkeys(ELEMENT_KEYS, 1.0)
         flat = dict.fromkeys(ELEMENT_KEYS, 0.0)
         stats = dict.fromkeys(STATS, 0.0)
+        stamina = 1.0
+        points = dict.fromkeys(RATE_POINTS, 0.0)
         used = []
         for sid, src in kept:
             w = weight.get(src, (1.0, False))[0]
@@ -849,15 +992,19 @@ class Buffs:
                                     sub_categories=sub_categories, apply_stack=False)
             if not f['entries']:
                 continue                              # the hand / sub-category gate refused it
+            stamina *= 1.0 + u * (f['stamina_rate'] - 1.0)
             for e in ELEMENT_KEYS:
                 pre[e] *= 1.0 + u * (f['ar_rate'][e] - 1.0)
                 post[e] *= 1.0 + u * (f['pvp_rate'][e] * f['atk_rate'][e] - 1.0)
                 flat[e] += u * f['flat_add'][e]
             for k in STATS:
                 stats[k] += u * f['stats'][k]
+            for k in RATE_POINTS:
+                points[k] += u * f['rate_points'][k]
             used.append((sid, src, round(u, 4)))
         post = {e: v * time_factor for e, v in post.items()}
-        out = {'pre': pre, 'post': post, 'flat': flat, 'stats': stats, 'entries': used,
+        out = {'pre': pre, 'post': post, 'flat': flat, 'stats': stats, 'rate_points': points,
+               'entries': used, 'stamina': stamina,
                'dropped': dropped, 'unknown': unknown, 'time_factor': time_factor,
                'recasts': {s: sum(n for _, n in p[2]) / len(p[2]) for s, p in plans.items()}}
         self._kit_cache[key] = out
@@ -866,16 +1013,17 @@ class Buffs:
     def expected_attack(self, kits, two_handed=False, stat_ratio=None, alternatives=(), **kw):
         """Mean of `kit_factors` over `kits` (`corpus_kits`) and each kit's role weights.
 
-        `stat_ratio(stats) -> {element: AR with the adds / AR without}` turns attribute adds into
-        a `pre` factor for one weapon (`ar_stat_ratio`). `alternatives` is the weapon's skill
+        `stat_ratio(stats, rate_points) -> {element: AR with the adds / AR without}` turns
+        attribute adds and scaling-rate adds into a `pre` factor for one weapon (`ar_stat_ratio`). `alternatives` is the weapon's skill
         choice as [(p, extra)] (`er-mechanics-ashes.skill_term` 'buff_alternatives'): a weapon
         holds one skill, so each kit is scored once per alternative with that skill's `extra`,
         weighted by p, and once with none for the rest of the mass. `joint` is the mean of
         pre x post, the single factor on an element's damage when the defense curve is taken as
-        linear. `time_factor` (already in `post`) and `recasts_by_source` are the kit means."""
+        linear. `time_factor` (already in `post`), `stamina` (`kit_factors`) and
+        `recasts_by_source` are the kit means."""
         acc = {k: dict.fromkeys(ELEMENT_KEYS, 0.0) for k in ('pre', 'post', 'joint', 'flat')}
         by_src, total = {}, 0.0
-        tf_acc, rc_src = 0.0, {}
+        tf_acc, rc_src, st_acc = 0.0, {}, 0.0
         rest = max(0.0, 1.0 - sum(p for p, _ in alternatives))
         branches = [(p, tuple(x)) for p, x in alternatives if p > 0] + ([(rest, ())] if rest > 0 else [])
         for k in kits:
@@ -883,7 +1031,8 @@ class Buffs:
                 for pb, extra in branches:
                     w = w0 * pb
                     f = self.kit_factors(k['active'], role, two_handed, extra=extra, **kw)
-                    sr = stat_ratio(f['stats']) if stat_ratio and any(f['stats'].values()) else {}
+                    sr = stat_ratio(f['stats'], f['rate_points']) if stat_ratio and \
+                        (any(f['stats'].values()) or any(f['rate_points'].values())) else {}
                     for e in ELEMENT_KEYS:
                         p = f['pre'][e] * sr.get(e, 1.0)
                         acc['pre'][e] += w * p
@@ -895,11 +1044,13 @@ class Buffs:
                     for src, n in f['recasts'].items():
                         rc_src[src] = rc_src.get(src, 0.0) + w * n
                     tf_acc += w * f['time_factor']
+                    st_acc += w * f['stamina']
                     total += w
         out = {k: {e: v / total for e, v in d.items()} for k, d in acc.items()} if total else \
             {k: dict.fromkeys(ELEMENT_KEYS, 1.0 if k != 'flat' else 0.0) for k in acc}
         out['kits'] = total
         out['time_factor'] = tf_acc / total if total else 1.0
+        out['stamina'] = st_acc / total if total else 1.0
         out['recasts_by_source'] = {s: v / total for s, v in sorted(rc_src.items(), key=lambda kv: -kv[1])} \
             if total else {}
         out['uptime_by_source'] = {s: v / total for s, v in sorted(by_src.items(), key=lambda kv: -kv[1])} \
@@ -1220,25 +1371,29 @@ def sustain_factor(m, defenders, seconds_fn, hit_hp=None, engagements=FIGHT_ENGA
 
 def ar_stat_ratio(weapon, affinity, level, stats, two_handed, tables=None):
     """{element: AR with attribute adds / AR without} for one weapon build, as a function of an
-    adds dict (`kit_factors` 'stats'). Adds are rounded to whole points; no cap is applied past
-    99 (the correction graphs run past it). `er-mechanics-ar.attack_rating` does the AR."""
+    adds dict (`kit_factors` 'stats') and a scaling-rate adds dict (`kit_factors` 'rate_points').
+    Attribute adds are rounded to whole points; no cap is applied past 99 (the correction graphs
+    run past it). Rate adds stay fractional: AR is linear in the rate once the requirement is met,
+    so an uptime-weighted add gives the uptime-weighted AR. `er-mechanics-ar.attack_rating` does
+    the AR."""
     ar = _mod('er_mechanics_ar', 'er-mechanics-ar.py')
     tables = tables or ar.Tables(None)
     base_stats = {k: int(v) for k, v in (stats or {}).items()}
 
-    def rating(st):
-        r = ar.attack_rating(tables, weapon, affinity, level, st, two_handed)['damage']
+    def rating(st, rate=None):
+        r = ar.attack_rating(tables, weapon, affinity, level, st, two_handed, rate)['damage']
         return {e: r.get(e, {}).get('total', 0.0) for e in ELEMENT_KEYS}
     base = rating(base_stats)
     cache = {}
 
-    def ratio(adds):
+    def ratio(adds, rate_adds=None):
         key = tuple(sorted((k, int(round(v))) for k, v in adds.items() if int(round(v))))
-        if key not in cache:
+        rkey = tuple(sorted((k, round(v, 6)) for k, v in (rate_adds or {}).items() if round(v, 6)))
+        if (key, rkey) not in cache:
             st = dict(base_stats)
             for k, v in key:
                 st[k] = st.get(k, 0) + v
-            got = rating(st)
+            got = rating(st, dict(rkey) or None)
             cache[key] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
         return cache[key]
     return ratio
@@ -1383,6 +1538,11 @@ def _t_context(m, check):
     check("Scholar's Shield on guard", round(d['cut']['magic'], 4), 0.3)
     a = m.attack_context(['Spiked Cracked Tear', 'Spiked Cracked Tear'], sub_categories=(100,))
     check('same tear twice is one entry', round(a['atk_rate']['physical'], 4), 1.15)
+    # staminaAttackRate (guarded stamina damage, info+0x28): Royal Knight's Resolve's right-hand
+    # row 1701 is 4.0 and its left-hand row 1703 does not reach a right-hand hit.
+    check("RKR 1701 staminaAttackRate, right hand", m.attack_context([1701])['stamina_rate'], 4.0)
+    check("RKR 1703 refused on the right hand", m.attack_context([1703])['stamina_rate'], 1.0)
+    check("Determination 1693 on the left hand", m.attack_context([1693], hand='left')['stamina_rate'], 3.0)
 
 
 def _t_expected(m, check):
@@ -1413,8 +1573,19 @@ def _t_expected(m, check):
           ([20501411, 20501413], 0.0))
     f = m.kit_factors([], extra=((1810, 1.0, 1.0),), fight_seconds=f25)
     check('War Cry from the skill: right-hand physical AR x1.075', round(f['pre']['physical'], 4), 1.075)
+    check('War Cry from the skill: +5 STR scaling rate (changeStrengthPoint)', f['rate_points']['str'], 5.0)
+    # Worked example (attack-rating.md section 7): Giant-Crusher +25, 80 STR, one-handed, AR 820.64;
+    # the 5 rate points add 379.75 x 0.05 x 0.90 = 17.09, so the roar is x1.075 x 837.73 / 820.64.
+    ratio = ar_stat_ratio('Giant-Crusher', 'Standard', 25, {'str': 80, 'dex': 10, 'int': 10, 'fth': 10,
+                                                            'arc': 10}, False)
+    e = m.expected_attack([{'active': [], 'roles': {'host': 1.0}}], False, ratio,
+                          alternatives=[(1.0, ((1810, 1.0, 1.0),))], fight_seconds=f25)
+    check('War Cry on Giant-Crusher 80 STR: pre x1.075 x (820.64 + 17.09) / 820.64',
+          round(e['pre']['physical'], 4), round(1.075 * (820.6375 + 379.75 * 0.05 * 0.9) / 820.6375, 4))
     f = m.kit_factors([], extra=((1810, 1.0, 1.0),), drop_skill_weapon_buffs=True, fight_seconds=f25)
-    check('War Cry dropped on a greased build', f['pre']['physical'], 1.0)
+    check('War Cry dropped on a greased build', (f['pre']['physical'], f['rate_points']['str']), (1.0, 0.0))
+    f = m.kit_factors([], extra=((1810, 0.5, 1.0),), fight_seconds=f25)
+    check('War Cry at weight 0.5: rate points 2.5', f['rate_points']['str'], 2.5)
     f = m.kit_factors([], extra=((1860, 0.5, 1.0),), two_handed=True, fight_seconds=f25)
     check("Braggart's Roar at weight 0.5, two-handed: 1 + 0.5 x 0.1", round(f['pre']['physical'], 4), 1.05)
     f = m.kit_factors(["great rune:Godrick's Great Rune"], role='invader')
@@ -1462,6 +1633,30 @@ def _t_expected(m, check):
     check('one War Cry cast over 180-300 s covers only its duration', round(f['pre']['physical'], 4),
           round(1.0 + 0.075 * up, 4))
     check('the engagement spacing is not the fight length', (ENGAGEMENT_SECONDS, FIGHT_ENGAGEMENTS), (5.0, 5))
+    # Landed hits per fight point.
+    check('no flask: ceil(1945.84 / 471.5) = 5 hits at every length', set(fight_hits()), {5})
+    check('5 flasks: ceil((1945.84 + 5 x 810) / 471.5) = 13, under every time bound', set(fight_hits(flasks=5)), {13})
+    h10 = fight_hits(flasks=10)
+    check('10 flasks: kill at 22, time bound floor((f - 18 s) / 5 x 0.5) = 16 at 180 s',
+          (h10[0], h10[-1], max(h10)), (16, 22, 22))
+    check('time bound alone: 18 / 24 / 30 hits at 180 / 240 / 300 s',
+          fight_hits((180.0, 240.0, 300.0), damage=1.0), (18, 24, 30))
+    fs, hs = fight_mix([(0.255, (180.0, 300.0), (5, 5)), (0.745, (180.0, 300.0), (16, 22))])
+    check('mix 1 : 3 (shares 0.255 / 0.745 in quarters): points repeated, mean hits 1/4 x 5 + 3/4 x 19',
+          (len(fs), sum(hs) / len(hs)), (8, 0.25 * 5 + 0.75 * 19))
+    check('tag shares count mentions; a row tagged both counts in each',
+          tag_shares([{'tags': ['Duels', 'Invasions']}, {'tags': ['Co-op/Gank']}, {'tags': []}])['duel'], 1 / 3)
+    rk = recast_plan(10.0, (180.0, 300.0), hits=(5, 21), one_hit=True)
+    check('a next-hit buff per point: 4 and 20 recasts, full uptime', (rk['recasts'], rk['uptime']), (12.0, 1.0))
+    rk = recast_plan(10.0, (180.0, 300.0), uses=9, hits=(5, 21), one_hit=True)
+    check('capped at 9 uses: 4 / 8 recasts, uptime 5/5 and 9/21', (rk['recasts'], round(rk['uptime'], 4)),
+          (6.0, round((1.0 + 9 / 21) / 2, 4)))
+    refill = ((9, 15, 20), 54.0)
+    rk = recast_plan(10.0, 300.0, uses=20, cast_frames=30.0, hits=21, one_hit=True, refill=refill)
+    check('20 casts need 2 cerulean drinks: 19 x 30 f + 2 x 54 f off 300 s',
+          (rk['drinks'], round(rk['time_factor'], 5)), (2.0, round(1.0 - (19 * 30.0 + 2 * 54.0) / 30.0 / 300.0, 5)))
+    check('a one-hit row over a schedule: the mean of 1 / hits per point',
+          round(m.uptime(503500, (180.0, 300.0), (5, 20)), 4), round((0.2 + 0.05) / 2, 4))
 
 
 def _t_regen(m, check):

@@ -1,7 +1,12 @@
 """Read-only impact estimate on an existing RL 150 ranking JSON: damage-weighted trades and a
 fixed attacker armor poise, re-running the neutral contest per pool build.
 
-Not part of the ranking. Usage: python3 scripts/er-builds-trade-dig.py <ranking.json> <out.json>
+Not part of the ranking. Usage:
+python3 scripts/er-builds-trade-dig.py <ranking.json> <out.json> [clamp] [slim-prefix]
+
+`clamp` bounds the priced net (default 1; `inf` leaves it unbounded). With `slim-prefix` it also
+writes `<prefix>-base.json` and `<prefix>-trade.json`, the rows with only `moveset.score`, for
+`er-builds-sweep-compare.py`.
 
 The trade price: per pool build k, `hp = (win + trade) x D_me - (loss + trade) x D_k`, divided by
 the pair's mean hit `(D_me + D_k) / 2`, so it equals `win - loss` when the two hits are equal.
@@ -30,6 +35,7 @@ NEUT = mod("er-mechanics-neutral")
 ATK = EXCH.ATK
 W = EXCH.EXCHANGE_WEIGHT
 FALLBACK = 388.0
+CLAMP = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
 POISE_GRID = (0, 40, 60, 80, 100, 120, 140, 160)
 
 
@@ -149,7 +155,7 @@ def main():
             f_old = 1.0 + W * float(np.mean(win - loss))
             errs.append(abs(f_old - nt["f_neutral"]))
             net_p = priced(win, loss, s["dmg"])
-            f_new = 1.0 + W * max(-1.0, min(1.0, net_p))
+            f_new = 1.0 + W * max(-CLAMP, min(CLAMP, net_p))
             used = abs((sc.get("f_contest") or 0) - nt["f_neutral"]) < 1e-9
             ratio = slot_ratio(sc, s, f_new) if used else 1.0
             fam_new.append(fs * ratio)
@@ -176,7 +182,13 @@ def main():
                             "score_new": agg(fam_new) + extra, "families": detail,
                             "wepType": reg.weapon[ids[name]]["wepType"] if name in ids else None})
     out["check_f_neutral_maxerr"] = max(errs) if errs else None
+    out["clamp"] = CLAMP
     json.dump(out, open(sys.argv[2], "w"))
+    if len(sys.argv) > 4:
+        for tag, field in (("base", "score_old"), ("trade", "score_new")):
+            rows = [{"weapon": r["weapon"], "two": r["two"], "moveset": {"score": r[field]}} for r in out["rows"]]
+            with open(f"{sys.argv[4]}-{tag}.json", "w") as fh:
+                json.dump({"rl": d.get("rl", 150), "results": rows}, fh)
     print("done", len(out["rows"]), "maxerr", out["check_f_neutral_maxerr"], "matched", matched)
 
 
