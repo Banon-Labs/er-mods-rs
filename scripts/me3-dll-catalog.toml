@@ -160,6 +160,13 @@ audience = "player"
 default = false
 config = "er-npc-possess.toml"
 
+[er-allow-hostile-actions]
+label = "Allow hostile actions everywhere"
+blurb = "Lets you attack and use items in places the game's event scripts forbid it, by refusing the 'disallow hostile actions' state on your own character."
+category = "quality-of-life"
+audience = "player"
+default = false
+
 [er-seamless-bugfixes]
 label = "Seamless Co-op crash guards"
 blurb = "Catches faults only Seamless Co-op's networking can reach, returning what the game's own code already returns for the case it failed to handle."
