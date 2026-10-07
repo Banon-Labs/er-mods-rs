@@ -5,7 +5,9 @@
 #     scripts/open-draft-prs.sh --selftest
 #
 # The agent cannot run this: `.cupcake/policies/claude/git_block_any_push.rego` refuses every agent
-# push, and a pull request needs the branch on the remote first. It exists to be handed over, which
+# push except one plain `git push <remote> <branch>` the user authorized with an exact
+# `authorize <sha>` reply, and a pull request needs the branch on the remote first. A script that
+# pushes several branches is never that shape. It exists to be handed over, which
 # is why it is worth generalising rather than writing a fresh one-off each time.
 #
 # Two things it knows that a hand-typed loop does not:

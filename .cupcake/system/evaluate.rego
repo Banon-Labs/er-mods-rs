@@ -77,6 +77,7 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.n
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_scoped_cargo.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.transcript_write_guard.deny
 
 # Block and ask decisions. No current project policy exports these, but keep the shape stable.
 

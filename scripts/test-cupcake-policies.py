@@ -2042,6 +2042,37 @@ def main() -> int:
             include_timeout=False,
             tool_name="Write",
         ),
+        # `ER-EFFECTS-TRANSCRIPT-WRITE-GUARD`, live: the push authorization is read from the session
+        # transcript, so the agent may read transcripts and never rewrite one.
+        PolicyCase(
+            "deny-write-tool-on-session-transcript",
+            "",
+            False,
+            "Session transcripts under ~/.claude/projects",
+            {"file_path": "/home/u/.claude/projects/-home-u-repo/abc.jsonl", "content": "{}"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
+        PolicyCase(
+            "deny-redirect-into-session-transcript",
+            "echo '{}' >> /home/u/.claude/projects/-home-u-repo/abc.jsonl",
+            False,
+            "Session transcripts under ~/.claude/projects",
+        ),
+        PolicyCase(
+            "allow-reading-session-transcript",
+            "jq -c . /home/u/.claude/projects/-home-u-repo/abc.jsonl 2>/dev/null",
+            True,
+        ),
+        PolicyCase(
+            "allow-write-tool-on-auto-memory",
+            "",
+            True,
+            None,
+            {"file_path": "/home/u/.claude/projects/-home-u-repo/memory/MEMORY.md", "content": "x"},
+            include_timeout=False,
+            tool_name="Write",
+        ),
         PolicyCase(
             "allow-write-log-into-tmp",
             "",
