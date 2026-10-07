@@ -499,9 +499,38 @@ TT_STUCK_SHARE = 0.2
 TT_UNSTICK_MIN = 6
 TT_UNSTICK_N = "TT_UnstickTry"
 
+-- The turtle's own measure of being stuck, for when nothing fills LAB_WORLD (er_npc_summons.dll has
+-- no spawn-npc.js beside it). Measured 2026-10-07 (user): the player dropped down a safe fall and
+-- the turtles stood at the edge, because the walk route ends there and no tt_stuck_p ever named
+-- them. Stuck here is TT_SELF_STUCK_S of chasing that neither closed TT_SELF_STUCK_GAIN m nor lost
+-- TT_SELF_STUCK_LOSE m (a target running off is not a ledge); the unstick's running jump then
+-- takes the fall. An anchor older than TT_SELF_STUCK_STALE means the chase lapsed, so it restarts:
+-- measured 2026-10-07, a turtle held at 12.4 m re-planned only every ~6 s, and a 4 s limit threw
+-- the anchor away on every look, so it was never called stuck.
+TT_SELF_STUCK_S = 2
+TT_SELF_STUCK_GAIN = 1
+TT_SELF_STUCK_LOSE = 3
+TT_SELF_STUCK_STALE = 20
+
+local function self_stuck(ai, key, d)
+  local now = os.clock()
+  local at = ai:GetStringIndexedNumber(key .. "At")
+  local seen = ai:GetStringIndexedNumber(key .. "Seen")
+  local from = ai:GetStringIndexedNumber(key .. "D")
+  ai:SetStringIndexedNumber(key .. "Seen", now)
+  if at == 0 or now - seen > TT_SELF_STUCK_STALE
+      or d < from - TT_SELF_STUCK_GAIN or d > from + TT_SELF_STUCK_LOSE then
+    ai:SetStringIndexedNumber(key .. "At", now)
+    ai:SetStringIndexedNumber(key .. "D", d)
+    return false
+  end
+  return now - at >= TT_SELF_STUCK_S
+end
+
 function TT_is_stuck(ai)
   if os.clock() - ai:GetStringIndexedNumber(TT_ITEM_AT) < TT_ITEM_STILL_S then return false end
   local p = ai:GetDist(TARGET_LOCALPLAYER)
+  if self_stuck(ai, "TT_SelfStuckP", p) then return true end
   for _, dp in ipairs(LAB_WORLD.tt_stuck_p or {}) do
     local tol = TT_STUCK_SHARE * p
     if tol < TT_STUCK_MATCH then tol = TT_STUCK_MATCH end
@@ -526,6 +555,7 @@ end
 function TT_is_stuck_enemy(ai)
   if os.clock() - ai:GetStringIndexedNumber(TT_ITEM_AT) < TT_ITEM_STILL_S then return false end
   local d = ai:GetDist(TARGET_ENE_0)
+  if self_stuck(ai, "TT_SelfStuckE", d) then return true end
   for _, de in ipairs(LAB_WORLD.tt_stuck_e or {}) do
     local tol = TT_STUCK_SHARE * d
     if tol < TT_STUCK_MATCH then tol = TT_STUCK_MATCH end
