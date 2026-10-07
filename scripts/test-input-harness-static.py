@@ -140,24 +140,28 @@ def test_input_harness_manifest_names_actual_hook_layer() -> None:
     assert "0x240e70/0x241130/0x26634a0" in manifest
 
 
-def test_boot_autoload_mms18_can_force_stuck_testnet_step() -> None:
+def test_boot_autoload_never_finishes_the_in_world_testnet_step() -> None:
+    # `requestCode == 1, mms == 18, fin == 0` is the ordinary in-world state, and the TestNetStep runs
+    # for the whole map stay; the game finishes it only from the map-leave teardown. The boot branch
+    # that called RequestFinish on it after 120 frames left summon signs dead for every boot autoload
+    # (bd testnetstep-not-executing-after-autoload-1171-2026-10-06), so its return is a regression.
     hooks = (REPO_ROOT / "crates/er-quickload/src/experiments/startup_hooks/quit_menu/system_quit_hooks.rs").read_text()
-    assert "let boot_epoch = epoch == 0;" in hooks
-    assert "if boot_epoch {" in hooks
-    assert "mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX" in hooks
-    assert "fin == 0" in hooks
-    assert "MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET" in hooks
-    assert "EZ_CHILD_STEP_REQUEST_FINISH_RVA" in hooks
-    assert "request_finish(wrapper)" in hooks
+    assert "request_finish(wrapper)" not in hooks
+    assert "boot_stuck_signature" not in hooks
+    assert "TESTNET_FF_STUCK_FRAME_THRESHOLD" not in hooks
+    assert "game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA)" not in hooks
+    assert "if epoch == 0 {\n        return;\n    }" in hooks
     assert "ORACLE_RELIABLE_MMS_PTR.load(Ordering::SeqCst)" in hooks
     assert "SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst)" in hooks
-    assert "No reload committed yet -> this is load1; never force" not in hooks
     telemetry = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_telemetry.rs").read_text()
-    assert 'oracle_testnet_ff_stuck_frames' in telemetry
+    assert 'oracle_testnet_ff_stuck_frames' not in telemetry
     assert 'oracle_testnet_ff_fired_epoch' in telemetry
     oracle = (REPO_ROOT / "crates/er-quickload/src/telemetry/runtime_oracles/write_oracle.rs").read_text()
     assert 'oracle_mms_next_step_4c' in oracle
     assert 'oracle_mms_done_flag_50' in oracle
+    assert 'oracle_testnet_step_current_state' in oracle
+    assert 'oracle_testnet_step_executing' in oracle
+    assert '"testnet-state: epoch {epoch}' in oracle
     assert 'oracle_mms_advance_gate_lo_4b8' in oracle
     assert 'oracle_mms_advance_gate_hi_4b9' in oracle
 
@@ -267,7 +271,7 @@ def main() -> int:
         test_pad_inject_direct_stamp_writes_are_enabled,
         test_pad_inject_id_map_todo_is_burned_down_without_speculative_ids,
         test_input_harness_manifest_names_actual_hook_layer,
-        test_boot_autoload_mms18_can_force_stuck_testnet_step,
+        test_boot_autoload_never_finishes_the_in_world_testnet_step,
         test_continue_and_boot_view_timing_oracles_exist,
     ]
     for test in tests:

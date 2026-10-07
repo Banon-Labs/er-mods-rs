@@ -170,10 +170,21 @@ pub(crate) const CSMENUMAN_LOADINGSCREEN_FIELD10_730_OFFSET: usize = 0x730;
 pub(crate) const MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET: usize = 0x108;
 #[allow(dead_code)]
 pub(crate) const MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET: usize = 0x110;
-/// `EzChildStepBase::RequestFinish` (dump 0x140eb5590) -- save-safe lever to force testNetStep to finish
-/// (sets child+0xb4). Fire on the wrapper at MoveMapStep+0x108 if the stepper is hung offline.
+/// `EzChildStepBase::RequestFinish` (1.16.2 0x140eb5570). On the wrapper at `MoveMapStep+0x108` it
+/// sets the TestNetStep's `+0xb4` finish flag, which ends the in-world network step for the rest of
+/// that map stay. The game does that only from the map-leave teardown (finalize case 8). A running
+/// TestNetStep with `requestCode == 1, mms == 18` is the normal in-world state, not a hang -- calling
+/// this there is what left summon signs dead after every boot autoload until 2026-10-06.
 #[allow(dead_code)]
 pub(crate) const EZ_CHILDSTEP_REQUEST_FINISH_PINNED_RVA: usize = EZ_CHILDSTEP_REQUEST_FINISH_RVA;
+/// `CS::TestNetStep` (the stepper at `MoveMapStep+0x110`) `FD4StepTemplateBase` current state:
+/// 0 = `STEP_Update` (running), 1 = `STEP_Finish`, -1 = finished.
+pub(crate) const TESTNETSTEP_CURRENT_STATE_48_OFFSET: usize = 0x48;
+/// `CS::TestNetStep` requested state, the value the step executor copies into `+0x48`.
+pub(crate) const TESTNETSTEP_REQUESTED_STATE_4C_OFFSET: usize = 0x4c;
+/// `CS::TestNetStep` finish-requested byte, written to 1 only by `CSSetFinishHelper<TestNetStep>`
+/// (1.16.2 0x140af9d80, 1.17.1 0x140afb0a0).
+pub(crate) const TESTNETSTEP_FINISH_REQUESTED_B4_OFFSET: usize = 0xb4;
 /// `FUN_140eb54e0` EzChildStep reset (corrected deobf; nulls stepper + clears finish latch +0x10).
 #[allow(dead_code)]
 pub(crate) const EZ_CHILDSTEP_RESET_PINNED_RVA: usize =

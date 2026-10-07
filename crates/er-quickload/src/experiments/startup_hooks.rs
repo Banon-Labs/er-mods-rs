@@ -74,8 +74,6 @@ pub(crate) use er_telemetry_core::counters::SAVE_PICKER_RESUBMIT_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_STAGED_ROW_COUNT;
 pub(crate) use er_telemetry_core::counters::SAVE_PICKER_SURFACE;
 pub(crate) use er_telemetry_core::counters::TESTNET_FF_FIRED_EPOCH;
-pub(crate) use er_telemetry_core::counters::TESTNET_FF_LAST_MMS;
-pub(crate) use er_telemetry_core::counters::TESTNET_FF_STUCK_FRAMES;
 pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_PASSTHROUGH_AFTER_SUPPRESS_COUNT;
 pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_PASSTHROUGH_COUNT;
 pub(crate) use er_telemetry_core::counters::TITLE_OPEN_MENU_SUPPRESSED_COUNT;

@@ -274,9 +274,7 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         crate::experiments::REQUEST_MOVE_MAP_LAST_C30.load(Ordering::SeqCst),
     ));
     body.push_str(&format!(
-        "  \"oracle_testnet_ff_stuck_frames\": {},\n  \"oracle_testnet_ff_last_mms\": \"0x{:x}\",\n  \"oracle_testnet_ff_fired_epoch\": {},\n",
-        crate::experiments::TESTNET_FF_STUCK_FRAMES.load(Ordering::SeqCst),
-        crate::experiments::TESTNET_FF_LAST_MMS.load(Ordering::SeqCst),
+        "  \"oracle_testnet_ff_fired_epoch\": {},\n",
         crate::experiments::TESTNET_FF_FIRED_EPOCH.load(Ordering::SeqCst),
     ));
     let product_core_blocker = PRODUCT_CORE_LAST_BLOCKER.load(Ordering::SeqCst);
