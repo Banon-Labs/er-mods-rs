@@ -32,7 +32,8 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use eldenring::cs::{CharaInitParam, SoloParamRepository};
 use eldenring::param::CHARACTER_INIT_PARAM;
 use er_game_base::mem::{
-    game_rva_for_hook, game_rva_named, safe_read_i32, safe_read_u8, safe_read_usize,
+    game_module_base, game_rva_for_hook, game_rva_named, safe_read_i32, safe_read_u8,
+    safe_read_usize,
 };
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use er_npc_summons_core::dress::CharaInitGear;
@@ -459,7 +460,48 @@ unsafe extern "system" fn create_detour(
          {build:?} (R {:?}, L {:?}, armour {:?}, talismans {:?}, ammo {:?}); row restored",
         gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
     ));
+    if chr != 0 {
+        apply_face(slot, chr);
+    }
     chr
+}
+
+/// `ChrIns+0x580`: the character's `PlayerGameData`, which an NPC built from a `CharaInitParam`
+/// row has too (its face block is filled from that row's `FaceParam`).
+const CHR_PLAYER_GAME_DATA: usize = 0x580;
+
+/// Give a freshly built companion its build's face, through the game's own
+/// `PlayerGameData::CopyFaceDataFromBuffer` (the importer's [`adopt_build_face`]). Done on the
+/// creation frame, while the model is still streaming in, so the hair and face-mesh ids land with
+/// the sliders. Proven live 2026-10-06 by `scripts/frida/mimic-turtle-faces.js`: the same call
+/// on the same frame gave three companions their blindfold colours.
+///
+/// [`adopt_build_face`]: er_build_import_runtime::face::adopt_build_face
+fn apply_face(slot: u8, chr: usize) {
+    let Some(face) = crate::dress::face_for(slot) else {
+        summons_log(format_args!(
+            "dress: companion {slot}: its build names no face; it keeps the body's own"
+        ));
+        return;
+    };
+    let (Ok(base), Some(pgd)) = (
+        game_module_base(),
+        // SAFETY: a fault-tolerant read off the character just built.
+        unsafe { safe_read_usize(chr + CHR_PLAYER_GAME_DATA) }.filter(|&p| p != 0),
+    ) else {
+        summons_log(format_args!(
+            "dress: companion {slot}: 0x{chr:x} has no PlayerGameData; face not applied"
+        ));
+        return;
+    };
+    // SAFETY: the game thread, inside the CreateSummonChr detour, with `pgd` read off the
+    // character the call just built.
+    let outcome =
+        unsafe { er_build_import_runtime::face::adopt_build_face(base, pgd, Some(&face)) };
+    summons_log(format_args!(
+        "dress: companion {slot}: face {}",
+        outcome.label()
+    ));
 }
 
 /// Find and check `BuddyGenerator`'s first-loop return site: the 5 bytes before it must be a

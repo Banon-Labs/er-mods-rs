@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use er_build_import_core::catalog::MapCatalog;
 use er_build_import_core::model::{self, BuildDoc};
+use er_build_import_core::sliders::SliderMap;
 use er_build_import_core::{API_HOST, build_path};
 use er_build_import_runtime::catalog::{self, ReinforceLevels};
 use er_npc_summons_core::config::Companion;
@@ -36,7 +37,12 @@ const USER_AGENT: &str = "er-mods-rs npc-summons (+github.com/Banon-Labs)";
 enum Status {
     Fetching,
     Parsed(Box<BuildDoc>),
-    Ready { gear: CharaInitGear, build: String },
+    /// `face` is the build's appearance sliders, `None` when the author never set one.
+    Ready {
+        gear: CharaInitGear,
+        build: String,
+        face: Option<SliderMap>,
+    },
     Failed(String),
 }
 
@@ -217,6 +223,7 @@ pub(crate) fn tick() {
             Status::Ready {
                 gear: values,
                 build: doc.name.clone(),
+                face: doc.appearance().ok().map(|found| found.sliders.clone()),
             }
         };
     }
@@ -233,9 +240,19 @@ pub(crate) fn gear_for(slot: u8) -> Result<(CharaInitGear, String), String> {
         .find(|e| e.slot == slot)
         .ok_or_else(|| "no build_url".to_owned())?;
     match &entry.status {
-        Status::Ready { gear, build } => Ok((*gear, build.clone())),
+        Status::Ready { gear, build, .. } => Ok((*gear, build.clone())),
         Status::Fetching => Err("its build is still being fetched".to_owned()),
         Status::Parsed(_) => Err("its build is fetched but the item catalog is not up".to_owned()),
         Status::Failed(why) => Err(why.clone()),
+    }
+}
+
+/// The appearance sliders of the build the companion in config `slot` wears, or `None` when it
+/// has no fetched build or the build names no appearance.
+pub(crate) fn face_for(slot: u8) -> Option<SliderMap> {
+    let entries = ENTRIES.lock().ok()?;
+    match &entries.iter().find(|e| e.slot == slot)?.status {
+        Status::Ready { face, .. } => face.clone(),
+        _ => None,
     }
 }
