@@ -48,6 +48,8 @@ mod overlay;
 mod pad;
 #[cfg(windows)]
 mod picker;
+#[cfg(windows)]
+mod team;
 
 #[cfg(windows)]
 use std::sync::Once;
@@ -334,6 +336,7 @@ fn tick(state: &mut TaskState) {
     }
     step(state, Event::Frame);
     names::prune();
+    team::tick();
     match state.duel.state.clone() {
         State::Hidden { chr, .. } => {
             let seen = alive(state, chr)
