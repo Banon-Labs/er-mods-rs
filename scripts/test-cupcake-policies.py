@@ -2247,6 +2247,33 @@ def main() -> int:
             True,
             extra_env=(("ER_FRIDA_EVIDENCE_LOG", str(FRIDA_EVIDENCE_PROVEN)),),
         ),
+        # A run that has become invalid has produced no measurement, and AGENTS.md obliges the
+        # agent to stop it, so the declared form passes with the verdict pinned absent. The
+        # second case is the command refused on 2026-10-07 with the declaration added; the
+        # deny cases keep chained work and a multi-word reason refused.
+        PolicyCase(
+            "allow-invalid-run-teardown-without-measurement",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-build-import-did-not-apply",
+            True,
+        ),
+        PolicyCase(
+            "allow-invalid-run-teardown-with-output-trim",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=invalid-run-build-import-did-not-apply 2>&1 | tail -3",
+            True,
+        ),
+        PolicyCase(
+            "deny-invalid-run-teardown-then-build",
+            "python3 scripts/er-teardown.py --reason=invalid-run-wrong-build; cargo build",
+            False,
+            "teardown that does not relaunch",
+        ),
+        PolicyCase(
+            "deny-invalid-run-teardown-multi-word-reason",
+            'python3 scripts/er-teardown.py --reason="invalid-run-import did not apply"',
+            False,
+            "teardown that does not relaunch",
+        ),
         # argparse prints usage and exits before any teardown code runs, like `--status`.
         PolicyCase(
             "allow-teardown-help",
