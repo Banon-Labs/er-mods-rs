@@ -5,4 +5,5 @@
 # entry is a direct transfer of control to a 1.16.2 address on a build that moved the
 # code. Convert a site by resolving through er_game_base::mem::game_rva and handling
 # the Err, then re-run --refresh to record the smaller set.
-# Currently 0 sites in 0 files.
+# Currently 1 sites in 1 files.
+crates/er-npc-summons/src/cursor.rs	MENU_HAS_MOUSE_1171_RVA

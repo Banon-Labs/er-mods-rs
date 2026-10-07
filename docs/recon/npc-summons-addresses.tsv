@@ -1,0 +1,54 @@
+# er-npc-summons game addresses, 1.17.1 runtime -> 1.16.2 RVA as written in Rust.
+# verified_row: whether rva-map-1162-to-1170.verified.tsv holds the pair. "added" rows were written
+#   2026-10-06 by `uv run --with capstone python3 scripts/verify-rva-map-1170.py --map <candidates>
+#   --tsv docs/recon/rva-map-1162-to-1170.verified.tsv` (24 accepted, 0 rejected; the 174 earlier rows
+#   carried forward). Data globals are not function rows; their column names the data.tsv row instead.
+# detour_audited: whether the pair reaches DETOUR_SAFE_1162_TO_1170 in er-game-base/build.rs (an
+#   exhaustive verdict plus BOTH-ENTRIES or NEITHER-ENTRY), which is what resolve_detour_address reads.
+# 1.17.1 equals 1.17.0 below rva 0xafefe9 and is +0x70 at or above it; the ledger holds the 1.17.0 VA.
+# name	kind	1.17.1 VA	1.16.2 VA	verified_row	detour_audited	verdict	note
+CreateSummonChr	call+detour	0x1404baea0	0x1404ba980	added	yes	IDENTICAL-WHOLE 639 insns	detour since 2026-10-06 for companion dressing (CharaInitParam row swapped for the length of one hijacked call)
+ChangeCharacterDisableState	call	0x1403f6500	0x1403f62d0	added	yes	IDENTICAL-WHOLE 29 insns
+PlaceNPCSummonSign body	call	0x1406fa7f0	0x1406f99a0	added	yes	IDENTICAL-WHOLE 88 insns	FUN_1406f99a0(SosSignMan*, MultiplayType, uint* summonedNPCEntityId, ...) in 1.16.2
+CreateSignSfx	call	0x1406febe0	0x1406fdd90	added	yes	IDENTICAL-WHOLE 313 insns
+GetChrInsByEntityId	call	0x1405eefd0	0x1405ee180	added	yes	IDENTICAL-WHOLE 116 insns
+GetPhysicsPos	call	0x1403f0e20	0x1403f0bf0	added	yes	IDENTICAL-WHOLE 9 insns	was already in needed.tsv and needed-verified.tsv
+ChrIns_SetThinkParam	call	0x1402ca470	0x1402ca460	added	yes	IDENTICAL-WHOLE 39 insns	unnamed FUN_1402ca460 in 1.16.2
+EnableLogic	call	0x1403ee260	0x1403ee030	added	yes	IDENTICAL-LEAF 6 insns	no functions.tsv row; candidate from uniform +0x230 neighbour delta
+ConvertBlockCoordsToPhysicsCoords	call	0x14061ef70	0x14061e120	added	yes	IDENTICAL-WHOLE 87 insns	was already in needed.tsv and needed-verified.tsv
+IsDrawn	call	0x1403f3930	0x1403f3700	added	yes	BYTE-IDENTICAL 118 insns	unnamed FUN_1403f3700(ChrIns*) in 1.16.2
+buddy list insert	call	0x1404b4fb0	0x1404b4a50	added	yes	IDENTICAL-WHOLE 15 insns	no functions.tsv row; candidate from uniform +0x560 neighbour delta
+P2P handle (GetP2PEntityHandle)	call	0x14037c670	0x14037c660	added	yes	BYTE-IDENTICAL 52 insns
+SetChrSyncLocalControlFlagOn0x18	call	0x1404df5c0	0x1404de7f0	added	yes	BYTE-IDENTICAL 117 insns
+InitializeChrOwned	call	0x1404deac0	0x1404ddcf0	added	yes	IDENTICAL-WHOLE 41 insns
+spawn-path helper	call	0x1403f59b0	0x1403f5780	added	yes	IDENTICAL-LEAF 2 insns	FUN_1403f5780(ChrIns*, undefined4), 7-byte leaf; no functions.tsv row; uniform +0x230 neighbour delta
+BuddyPacketEntry ctor	call	0x140ca68b0	0x140ca5170	added	yes	IDENTICAL-LEAF 16 insns	no functions.tsv row; uniform +0x16d0 neighbour delta
+BuddyPacketEntry set flag bit0	call	0x140ca8490	0x140ca6d50	added	yes	IDENTICAL-LEAF 6 insns	no functions.tsv row; uniform +0x16d0 neighbour delta
+BroadcastBuddySummon	call	0x140ca00f0	0x140c9e9b0	added	yes	IDENTICAL-WHOLE 52 insns
+event id getter (CharacterEventId)	call	0x140657230	0x1406563e0	added	yes	IDENTICAL-WHOLE 13 insns
+steam id getter (GetSteamId)	call	0x140657160	0x140656310	added	yes	IDENTICAL-WHOLE 34 insns
+NotifyBuddyUnsummon	call	0x1404b84b0	0x1404b7f90	added	yes	BYTE-IDENTICAL 246 insns	from scripts/frida/spawn-npc.js NOTIFY_BUDDY_UNSUMMON
+BuddyGenerator	detour	0x1404bbdd0	0x1404bb8b0	added	yes	IDENTICAL-WHOLE 679 insns
+GetBuddyList (GetBuddyListBySpEffectId)	detour	0x1404bce80	0x1404bc960	added	yes	IDENTICAL-WHOLE 60 insns
+GetBuddyParam	detour	0x140d28010	0x140d26890	added	yes	IDENTICAL-WHOLE 96 insns	no functions.tsv row; uniform +0x1710 neighbour delta
+CSEventMan	data	0x143d6c768	0x143d686f8	data.tsv CS_EVENT_MAN_GLOBAL_RVA 435/435	n/a
+GameMan	data	0x143d6d988	0x143d69918	data.tsv GAME_MAN_SINGLETON_RVA 142/142	n/a
+WorldChrMan	data	0x143d69ff8	0x143d65f88	data.tsv WORLD_CHR_MAN_GLOBAL_RVA 2325/2330	n/a
+SoloParamRepository	data	0x143d85f58	0x143d81ee8	data.tsv SOLO_PARAM_REPOSITORY_GLOBAL_RVA 333/333	n/a
+CSWorldAiManager	data	0x143d66548	0x143d624e8	no	n/a		map-data-rvas-1162-to-1170.py 0x3d624e8 -> 0x3d66548 agreed by 425/425 references, but data.tsv has no row: --refresh harvests only constants declared in crates/, so it is refused at runtime until the crate declares 0x3d624e8 and data.tsv is refreshed. Delta is +0x4060, not +0x4070 (0x3d624d8 carries to 0x3d66538)
+# Added 2026-10-06 for the gaps change (design doc section 6, "Gaps"). Not used by the DLL yet.
+red-sign term FUN_140656f90	call	0x140657de0	0x140656f90	added	n/a	IDENTICAL-WHOLE 40 insns	bool(PlayerIns*); CanUseGoods calls it for goods 101 at 0x14068f9bf
+WorldChrManImp::CanStartMultiplay	call	0x14050aa50	0x140509c80	added	n/a	IDENTICAL-WHOLE 34 insns	bool(WorldChrManImp*)
+GetChrName	detour	0x1407605a0	0x14075f750	added	pending	BYTE-IDENTICAL 164 insns	MenuString*(MenuString* out, ChrIns*, bool decorate); readers take out+0 rawString when non-null
+lua_pcall	detour	0x142026970	0x142024b00	added	pending	BYTE-IDENTICAL 97 insns	ledger holds 1.17.0 0x142026900
+lua_gettop	call	0x1420265d0	0x142024760	added	n/a	IDENTICAL-LEAF 4 insns	ledger holds 1.17.0 0x142026560
+lua_settop	call	0x142026fd0	0x142025160	added	n/a	IDENTICAL-LEAF 26 insns	ledger holds 1.17.0 0x142026f60
+luaL_loadbuffer	call	0x142027f30	0x1420260c0	added	n/a	BYTE-IDENTICAL 36 insns	ledger holds 1.17.0 0x142027ec0
+lua_tostring	call	0x142027200	0x142025390	added	n/a	BYTE-IDENTICAL 126 insns	ledger holds 1.17.0 0x142027190
+SummonBuddyManager::RemoveChrIns	call	0x1404bbaa0	0x1404bb580	added	n/a	IDENTICAL-WHOLE 62 insns	void(mgr, ChrIns*): warp untrack, then WorldChrManImp::RemoveChrIns 0x14050b340 unconditionally, then the arena-only packet 79
+summon warp untrack FUN_1404c21d0	call	0x1404c26f0	0x1404c21d0	added	n/a	BYTE-IDENTICAL 79 insns	void(SummonBuddyWarpManager* = [mgr+0xe8], FieldInsHandle by value); untracked handle is a no-op; no null check
+menu-has-the-mouse FUN_140765800	detour	0x140766650	0x140765800	no	no	DIVERGES 0.56, first diff at insn 6	1.17 added a clause (UI element 2 visible forces false); callers only the cursor gate 0x140e20490 and the mouse X/Y axis readers 0x140e2b360 / 0x140e2b450. Hook by its 1.17.1 address on 1.17.1 only, runtime-derived
+cursor gate FUN_140e1e620	reference	0x140e20490	0x140e1e620	no	n/a	IDENTICAL-WHOLE 46 insns (dry run)	CSMenuMan predicate && IsGameInForeground; not hooked
+CSWorldAiManager	data	0x143d66548	0x143d624e8	no	n/a		see the row above; needs a crate declaration and a data.tsv --refresh before the DLL can read it
+ChrSet::SpawnChr	detour	0x140493380	0x140492e20	added	yes	IDENTICAL-WHOLE 166 insns	(ChrSet*, u8, ChrSpawnRequest*, int); sole caller CreateSummonChr; request +0x4c event entity (35000 stored at 0x1404bb43b); the duel spawn rewrites it to 35001
+WorldChrManImp::GetChrInsFromHandle	call	0x140508a50	0x140507c80	added	n/a	BYTE-IDENTICAL 27 insns	(WorldChrManImp*, FieldInsHandle*) -> ChrIns*; the duel NPC's liveness test

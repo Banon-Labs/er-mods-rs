@@ -142,11 +142,8 @@ pub(crate) fn install_system_quit_child_finish_trace_hook() {
     }
 }
 
+/// One-shot epoch latch for the `cvar10-warp-clear` log line below.
 pub(crate) use er_telemetry_core::counters::TESTNET_FF_FIRED_EPOCH;
-pub(crate) use er_telemetry_core::counters::TESTNET_FF_LAST_MMS;
-/// Stuck-frame + one-shot state for the load2/boot testNetStep force-finish below.
-pub(crate) use er_telemetry_core::counters::TESTNET_FF_STUCK_FRAMES;
-pub(crate) const TESTNET_FF_STUCK_FRAME_THRESHOLD: usize = 120;
 
 /// Lifetime of the load2 `warpRequested` clear, as a per-epoch phase.
 ///
@@ -261,20 +258,46 @@ fn warp_clear_note_world_live(epoch: usize) {
     ));
 }
 
-/// LOAD2 world-completion fix (bd load2-fires-but-stalls-at-mms18-world-completion-2026-07-19). A
-/// driven reload (`fresh_deser>=1`) reaches MoveMapStep STEP_Finish but its testNetStep child never
-/// finishes -- observed LOAD2-ONLY: load1's testNetStep finishes so requestCode latches 1->2 and the
-/// world completes; load2's hangs so requestCode stays 1, STEP_GameStepWait never gets a completed
-/// world, and there is no readiness (mms=18, warmup=0, testnet_stepper_present=True, csremo idle).
-/// Force the hung child via the RE'd save-safe lever `EzChildStepBase::RequestFinish` (0xeb5570) on the
-/// testNetStep wrapper at `MoveMapStep+0x108`. Tightly gated so it can never touch a healthy load1 or a
-/// still-progressing load: only after a reload committed (epoch>=1), only while requestCode==1, only
-/// when the inner stepper (+0x110) is non-null (unfinished), only after stuck frames of no mms_state
-/// progress, and once per reload epoch. Called per-frame from `tick_before_player_lookup`.
+/// Reload-epoch finalize helpers: the case-7 save-drain satisfier and the load2 `warpRequested`
+/// clear. Called per-frame from `tick_before_player_lookup`; a no-op on the boot epoch.
+///
+/// The name is historical. This function no longer finishes `CS::TestNetStep`, and must not. That
+/// step is the in-world network step (it owns SosSignMan, BloodstainMan and WanderGhostMan and runs
+/// the PartyMemberInfo and joining-player updates), and in vanilla it runs for the whole time the
+/// player is on a map. Read statically out of 1.16.2 (1.17.1 in brackets):
+///
+/// - `MoveMapStep::STEP_InitAnim` 0x140af7b20 [0x140af8e30] constructs it (ctor 0x140b05a30
+///   [0x140b07140]) and registers it into `MoveMapStep+0x108` through
+///   `EzChildStepBase::RegisterStepTask` 0x140eb55a0 [0x140eb7410]. Its state table (written at
+///   0x1400a47e0 in both builds) has two entries, 0 = `STEP_Update` 0x140b06bb0 [0x140b082c0] and
+///   1 = `STEP_Finish` 0x140b06ba0 [0x140b082b0], and the base constructor starts it at state 0.
+///   Nothing has to "start" it.
+/// - It leaves `STEP_Update` only when its `+0xb4` finish flag is set: the tail of `STEP_Update`
+///   (0x140b07479) then bumps `+0x4c` to 1, and `STEP_Finish` writes -1. `+0xb4` is written only by
+///   `CSSetFinishHelper<TestNetStep>` 0x140af9d80 [0x140afb0a0], which only
+///   `EzChildStepBase::RequestFinish` 0x140eb5570 [0x140eb73e0] calls.
+/// - The game's one call of that on `MoveMapStep+0x108` is case 8 of the finalize advancer
+///   `FUN_140afa6d0` (call at 0x140afb602 [0x140afc922]) -- the map-leave teardown.
+/// - `InGameStep::STEP_MoveMap_Update` 0x140aec720 [0x140aeda30] returns every frame until the
+///   MoveMapStep finishes and only then writes requestCode (`InGameStep+0xd8`) = 2. So
+///   `requestCode == 1, mms == 18, fin == 0` is the ordinary in-world state, not a stall.
+///
+/// Until 2026-10-06 the boot epoch carried a branch (commit ec482455) that read exactly that
+/// signature as "stuck" and called `RequestFinish` on the step after 120 frames. Every boot autoload
+/// therefore ended the network step about two seconds after world entry (`testnet-ff: boot epoch 0
+/// stuck 120 frames at requestCode=1 mms=18 fin=0` in both 2026-10-05 debug logs), leaving it at
+/// state -1 for the session: summon signs invisible, sign joins never completing. A map reload
+/// built a fresh step and the once-per-epoch latch kept it alive, which is why
+/// `TriggerAreaReload` appeared to fix it (bd testnetstep-not-executing-after-autoload-1171-2026-10-06).
+/// The branch was deleted rather than gated. `oracle_testnet_step_current_state` records the step's
+/// state so a run can show it stays at 0.
 pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     let null = TITLE_OWNER_SCAN_START_ADDRESS;
     let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
-    let boot_epoch = epoch == 0;
+    // The boot load has no reload residue to clear and no reload-time save drain to satisfy.
+    if epoch == 0 {
+        return;
+    }
     let mut owner = TITLE_OWNER_PTR.load(Ordering::SeqCst);
     if owner == null {
         owner = TITLE_SETSTATE_TRACE_LAST_OWNER.load(Ordering::SeqCst);
@@ -285,14 +308,13 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
     } else {
         None
     };
-    // requestCode must be 1 (world loading, not latched to 2 = done). Any other value: reset + bail.
-    // Fall back to the same oracle path the report uses; the fresh title-owner scan can be stale during
-    // the boot-autoload handoff while write_oracle has already resolved the live MoveMapStep.
+    // requestCode is 1 for the whole map stay and becomes 2 only once the MoveMapStep finishes. Any
+    // other value: bail. Fall back to the same oracle path the report uses; the fresh title-owner
+    // scan can be stale while write_oracle has already resolved the live MoveMapStep.
     let request_code = ig
         .map(|ig| unsafe { safe_read_i32(ig + IN_GAME_STEP_REQUEST_CODE_D8_OFFSET) }.unwrap_or(-1))
         .unwrap_or_else(|| SWITCH_ORACLE_REQUEST_CODE.load(Ordering::SeqCst));
     if request_code != 1 {
-        TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
         return;
     }
     let mms_from_ingame = ig.and_then(|ig| {
@@ -313,45 +335,6 @@ pub(crate) unsafe fn maybe_force_finish_stuck_testnet_step() {
         .map(i32::from)
         .unwrap_or(-1);
     let mms_state = unsafe { safe_read_i32(mms + MOVEMAPSTEP_STATE_48_RE_OFFSET) }.unwrap_or(-1);
-    if boot_epoch {
-        let testnet_stepper =
-            unsafe { safe_read_usize(mms + MOVEMAPSTEP_TESTNETSTEP_STEPPER_110_OFFSET) }
-                .unwrap_or(0);
-        let boot_stuck_signature = request_code == 1
-            && mms_state == MOVEMAPSTEP_STEP_MOVEMAP_INDEX
-            && fin == 0
-            && testnet_stepper >= 0x10000;
-        if !boot_stuck_signature {
-            TESTNET_FF_STUCK_FRAMES.store(0, Ordering::Relaxed);
-            TESTNET_FF_LAST_MMS.store(usize::MAX, Ordering::Relaxed);
-            return;
-        }
-        let stuck_frames = if TESTNET_FF_LAST_MMS.swap(mms, Ordering::SeqCst) == mms {
-            TESTNET_FF_STUCK_FRAMES.fetch_add(1, Ordering::SeqCst) + 1
-        } else {
-            TESTNET_FF_STUCK_FRAMES.store(1, Ordering::SeqCst);
-            1
-        };
-        if stuck_frames >= TESTNET_FF_STUCK_FRAME_THRESHOLD
-            && TESTNET_FF_FIRED_EPOCH.swap(epoch, Ordering::SeqCst) != epoch
-        {
-            let wrapper = mms + MOVEMAPSTEP_TESTNETSTEP_WRAPPER_108_OFFSET;
-            match game_rva(EZ_CHILD_STEP_REQUEST_FINISH_RVA) {
-                Ok(addr) => {
-                    let request_finish: unsafe extern "system" fn(usize) =
-                        unsafe { std::mem::transmute(addr) };
-                    unsafe { request_finish(wrapper) };
-                    append_autoload_debug(format_args!(
-                        "testnet-ff: boot epoch {epoch} stuck {stuck_frames} frames at requestCode={request_code} mms={mms_state} fin={fin} testnet=0x{testnet_stepper:x} -> RequestFinish(wrapper=0x{wrapper:x})"
-                    ));
-                }
-                Err(_) => append_autoload_debug(format_args!(
-                    "testnet-ff: boot epoch {epoch} stuck {stuck_frames} frames but failed to resolve RequestFinish rva 0x{EZ_CHILD_STEP_REQUEST_FINISH_RVA:x}"
-                )),
-            }
-        }
-        return;
-    }
     // FRAMERATE fix (2026-07-21, case 7 gate decompiled from FUN_140afa6d0 via the ghidra MCP): the
     // finalize walk (fin 5->9) is a cleanup that runs after the fin=0 movable window; load1 becomes
     // movable, then walks and settles (mms 18->-1) -> exits loading mode -> fps recovers. Holding fin=0

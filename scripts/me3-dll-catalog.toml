@@ -235,6 +235,14 @@ category = "quality-of-life"
 audience = "player"
 default = false
 
+[er-npc-summons]
+label = "NPC duels and custom Mimic Tear"
+blurb = "The Duelist's Furled Finger lets you pick an NPC and place a red sign that summons them to fight you, offline too. The Mimic Tear Ashes summon up to four companions you configure instead of the mimic."
+category = "multiplayer"
+audience = "player"
+default = false
+caution = "changes two items"
+
 [er-build-watermark]
 label = "Build watermark"
 blurb = "A corner overlay naming every mod loaded in this profile and whether any of them is behind the branch it was built from."

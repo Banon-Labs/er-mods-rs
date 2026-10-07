@@ -13,6 +13,72 @@ pub(crate) fn write_oracle_telemetry(body: &mut String) {
     cover_after_release_write(body);
 }
 
+/// Whether the in-world network step `CS::TestNetStep` is executing (bd
+/// testnetstep-not-executing-after-autoload-1171-2026-10-06).
+///
+/// While the player is on a map the step should sit at current state 0 (`STEP_Update`, which runs
+/// SosSignMan, BloodstainMan, WanderGhostMan and the joining-player update every frame) with its
+/// `+0xb4` finish flag clear. Current state -1 with the player in the world means something ended it
+/// early; in vanilla only the map-leave teardown does. `stepper` is `MoveMapStep+0x110`, 0 when the
+/// step is unregistered and `usize::MAX` when the MoveMapStep did not resolve. The state triple is
+/// also logged on every change, so the debug log carries the transition and not only the latest
+/// sample.
+fn write_testnet_step_state_oracle(body: &mut String, stepper: usize, request_code: i64, mms: i64) {
+    let live = stepper != 0 && stepper != usize::MAX;
+    let rdi = |off: usize| -> i64 {
+        if !live {
+            return i64::MIN;
+        }
+        unsafe { crate::experiments::safe_read_usize(stepper + off) }
+            .map_or(i64::MIN, |v| i64::from(v as u32 as i32))
+    };
+    let current = rdi(TESTNETSTEP_CURRENT_STATE_48_OFFSET);
+    let requested = rdi(TESTNETSTEP_REQUESTED_STATE_4C_OFFSET);
+    let finish_requested = if live {
+        unsafe {
+            crate::experiments::safe_read_u8(stepper + TESTNETSTEP_FINISH_REQUESTED_B4_OFFSET)
+        }
+        .map_or(-1, i64::from)
+    } else {
+        -1
+    };
+    let json = |v: i64| -> String {
+        if v == i64::MIN {
+            "null".to_owned()
+        } else {
+            v.to_string()
+        }
+    };
+    body.push_str(&format!(
+        "  \"oracle_testnet_step_stepper\": \"0x{:x}\",\n  \"oracle_testnet_step_current_state\": {},\n  \"oracle_testnet_step_requested_state\": {},\n  \"oracle_testnet_step_finish_requested\": {finish_requested},\n  \"oracle_testnet_step_executing\": {},\n",
+        if live { stepper } else { 0 },
+        json(current),
+        json(requested),
+        live && current == 0 && finish_requested == 0,
+    ));
+    if !live {
+        return;
+    }
+    static LAST_KEY: std::sync::Mutex<(usize, i64, i64, i64)> =
+        std::sync::Mutex::new((0, i64::MIN, i64::MIN, i64::MIN));
+    let key = (stepper, current, requested, finish_requested);
+    let changed = match LAST_KEY.lock() {
+        Ok(mut last) if *last != key => {
+            *last = key;
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        let epoch = SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
+        append_autoload_debug(format_args!(
+            "testnet-state: epoch {epoch} stepper=0x{stepper:x} current={} requested={} finish_requested={finish_requested} requestCode={request_code} mms={mms}",
+            json(current),
+            json(requested),
+        ));
+    }
+}
+
 /// STEP_Finish sub-gate diagnostic (bd render-handoff-freeze-second-gate-pins-2026-07-18). The
 /// render handoff needs requestCode (InGameStep+0xd8) to advance 1->2, which happens only when
 /// MoveMapStep::STEP_Finish reaches terminal. STEP_Finish is gated on: warmup (+0xb0) >= 2, the
@@ -59,6 +125,7 @@ fn write_stepfinish_gate_oracle(body: &mut String) {
         ),
         None => (-1, usize::MAX, -1, -1),
     };
+    write_testnet_step_state_oracle(body, testnet_stepper, request_code, mms_state);
     // CSRemo-idle gate inputs (read-only, no vtable call): remoMan present + pending qword.
     let (csremo, remoman, remo_pending) = if let Ok(base) = crate::experiments::game_module_base() {
         let csremo = rd(er_game_base::mem::game_data_addr(base, GLOBAL_CSREMO_RVA, "GLOBAL_CSREMO_RVA"))

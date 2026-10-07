@@ -518,6 +518,90 @@ this cannot be described as user-driven, and its own header says to omit it from
 profiles."""
 evidence = "crates/er-input-harness/src/lib.rs"
 
+[[shared]]
+a = "er-quickload"
+b = "er-npc-summons"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """A fifth shell on the keyboard `GetDeviceState` slot. While the duel picker is open, \
+er-npc-summons zeroes the arrows, Enter, keypad Enter and Backspace in 256-byte reads so the \
+picker's keys do not also walk or roll the character, and it keeps a key blanked after the picker \
+closes until that key is released. The handler lives in `er-dinput-suppress-core` (the keyboard \
+half of its mouse blanking), registered through `er_hook::register_shared_hook_with_budget`, so \
+it chains on the one union instance the other four shells use."""
+evidence = """crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression` \
+`register_shared_hook_with_budget(keyboard_addr, keyboard_get_state_hook, &KEYBOARD_ORIG, ...)`, \
+resolved from a probe device on `GUID_SysKeyboard` (slot 9) like the rows above; armed from \
+crates/er-npc-summons/src/picker.rs."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-npc-summons"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-npc-summons row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-enemynpc-effects"
+b = "er-npc-summons"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-npc-summons row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-npc-summons"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "hook_get_device_state"
+handler_b = "keyboard_get_state_hook"
+reason = """See the er-quickload / er-npc-summons row on this slot. er-hotkey-conflicts observes \
+the buffer after the chain returns, so while the picker is open it sees the picker's keys \
+already blanked; that is the read the game gets, which is what it reports."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-quickload"
+b = "er-npc-summons"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state_detour"
+handler_b = "picker_xinput_get_state"
+reason = """On this Wine prefix the `XInputGetState` export is a five-byte `jmp rel32` into the \
+real implementation, and both DLLs follow that jump and detour the function it lands on: \
+er-quickload's input blocker to add the harness's injected pad state, er-npc-summons to keep the \
+raw buttons for its picker and clear d-pad up/down, A and B while the picker is open. The \
+input blocker used to take it with a bare `MhHook`, which against a second MinHook instance on \
+the same prologue would have left one of the two installed and never running. It now registers \
+through `register_union_hook`, and er-npc-summons through `register_shared_hook_with_budget`, so \
+both chain on er-quickload's union. er-quickload's experiment harness (`xinput_get_state_union` in \
+experiments/input_block.rs) hooks the unfollowed export address, a different prologue."""
+evidence = """crates/er-quickload/src/input_blocker.rs `install_xinput_hook` \
+`register_union_hook(target, xinput_get_state_detour, &ORIG_XINPUT_GET_STATE)`; \
+crates/er-npc-summons/src/pad.rs `try_install` \
+`register_shared_hook_with_budget(target, picker_xinput_get_state, &ORIG, 1, 0)`."""
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-npc-summons"
+target = "xinput1_x.dll!XInputGetState (the export itself, where there is no forwarding thunk)"
+mechanism = "hook-union"
+handler_a = "hook_xinput_get_state"
+handler_b = "picker_xinput_get_state"
+reason = """er-hotkey-conflicts hooks the export address and er-npc-summons the function a \
+forwarding thunk jumps to. Under Wine those are two prologues; where the export is the function \
+itself they are one, and both handlers are union-registered, so they chain either way."""
+evidence = """crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput` -> `arm(.., \
+hook_xinput_get_state, &XINPUT_GET_STATE_ORIG, ..)`; crates/er-npc-summons/src/pad.rs."""
+
 [[conflict]]
 a = "er-quickload"
 b = "er-reload-trace"
@@ -604,6 +688,28 @@ prologue is contended, so there is no pair to rank. The failure is INVISIBLE and
 like "no hosts online" -- the worst possible way for a DLL to arrive uninvited on a \
 dependency-closure walk. Load it only when death-persistence IS the experiment, and expect not to \
 invade during that run: `--with er-death-persist`."""
+
+"er-npc-summons" = """Changes what two items do. The Duelist's Furled Finger opens an NPC picker \
+instead of placing the player's own red sign (a detour on \
+`PlayerIns::StartMultiplayProcedureWithMountData`, 1.16.2 `0x1406587b0`, that skips the original \
+for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 through the shared \
+seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
+companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
+`GetBuddyListBySpEffectId` `0x1404bc960`, `GetBuddyParam` `0x140d26890` and \
+`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request; the \
+last swaps the companion's `CharaInitParam` row for its build URL's gear for the length of one \
+call). It links `er-build-import-runtime` for the item catalog and the reinforce clamp only: \
+it never starts that crate's phase machine, fetch worker or game task, so it is not a second \
+owner of the player's inventory the way `er-build-import` is. No other shell hooks those five \
+prologues. Since 2026-10-06 it also detours, bare and alone on each prologue: \
+`ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
+`0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
+only on the AI state); and through the union: the 1.17.1 menu-has-the-mouse predicate \
+`0x140766650` (a free cursor and a still camera while the picker is open), the keyboard \
+`GetDeviceState` slot and `XInputGetState` (the picker's keys and buttons are taken from the \
+game while it is open; see the [[shared]] rows). Co-loadable, but a player who \
+did not ask for it would find two items behaving differently, so it is never pulled in by a \
+dependency closure: `--with er-npc-summons`."""
 
 [compatible]
 "er-convenient-deaths" = """CO-LOADABLE WITH EVERYTHING, INCLUDING THE PRODUCT, and the reason is \

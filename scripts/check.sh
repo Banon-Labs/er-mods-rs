@@ -2361,6 +2361,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-seamless-bugfixes --lib
 # tests and requires a host runner.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 
+# er-npc-summons-core: the config parser, the Mimic formation and buddy-list shaping, the duel
+# entity id and the CharaInitParam dressing table. Pure logic with no `cfg(windows)`, so it runs on
+# the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons-core --lib
+
 # er-allow-hostile-actions: its address constants and the stateInfo it refuses. No `cfg(windows)`
 # in the tests, so they run on the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-allow-hostile-actions --lib

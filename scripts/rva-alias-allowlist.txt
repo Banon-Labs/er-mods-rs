@@ -133,3 +133,7 @@
 # bd er-effects-rs-ejfl measured -- 5,000 to 10,500 lines, blocked on splitting
 # `system_quit_menu_window_run_post` -- is still undone and is still what a SECOND row shell would
 # need; it is no longer what this file is waiting on.
+0x3f0bf0    todo:centralize-function-rva  # GET_PHYSICS_POS (er-npc-summons), CHR_INS_GET_PHYSICS_POSITION_RVA (er-invasion-warp-core) || 1.16.2 `ChrIns::GetPhysicsPosition(ChrIns*, FloatVector4*)`. er-npc-summons does not depend on er-invasion-warp-core; centralise both on the Ghidra name.
+0x61e120    todo:centralize-function-rva  # BLOCK_TO_PHYSICS (er-npc-summons), CONVERT_BLOCK_COORDS_TO_PHYSICS_RVA (er-invasion-warp-core) || 1.16.2 `ConvertBlockCoordsToPhysicsCoords(out, blockLocal, BlockId*)`. Same function, two crates with no dependency between them.
+0x68ee60    todo:centralize-function-rva  # CAN_USE_GOODS (er-npc-summons), CAN_USE_GOODS_RVA (er-invasion-warp) || 1.17 `CS::CanUseGoods`, both crates hook it through the runtime-derived installer with the 1.17 address; both DLLs chain on it, listed as `[[shared]]` in scripts/me3-dll-conflicts.toml.
+0x766650    exempt:role-alias         # MENU_HAS_MOUSE_1170_VA, MENU_HAS_MOUSE_1171_RVA  || er-npc-summons: build.rs VA assembles MENU_HAS_MOUSE_1171_PROLOGUE from the 1.17 image; src RVA is the version-gated detour target it guards.
