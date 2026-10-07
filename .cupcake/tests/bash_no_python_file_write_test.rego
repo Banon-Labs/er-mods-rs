@@ -100,23 +100,25 @@ test_tmp_scratchpad_script_is_denied if {
 # exit code to be read as `; echo "exit=$?"` -- so this was the shape most
 # likely to be typed, not an exotic one.
 test_tmp_script_with_abutting_separator_is_denied if {
-	some cmd in [
+	every cmd in [
 		`python3 /tmp/x/patch.py; echo "exit=$?"`,
 		"python3 /tmp/x/patch.py&& echo hi",
 		"python3 /tmp/x/patch.py|tee log",
 		"(python3 /tmp/x/patch.py)",
-	]
-	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
 }
 
 # The same abutting separator on a committed script must still be exempt, or
 # widening the trailing class above would deny every legitimate scoped gate.
 test_committed_script_with_abutting_separator_is_allowed if {
-	some cmd in [
+	every cmd in [
 		`python3 scripts/check-comment-caps.py; echo "exit=$?"`,
 		"python3 scripts/er-teardown.py > /dev/null 2>&1; python3 scripts/er-run-branch.py",
-	]
-	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
 }
 
 test_home_scratch_script_is_denied if {
@@ -160,13 +162,14 @@ test_nested_scripts_subdir_script_is_allowed if {
 # resolve the same way; the lookalike test above still denies an absolute path
 # that lands outside this repo.
 test_repo_absolute_path_script_is_allowed if {
-	some cmd in [
+	every cmd in [
 		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py",
 		"python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=band-tables-measured",
 		"python3 /home/banon/projects/er-mods-rs/scripts/ghidra/mcp_query.py getContext",
 		"uv run --with capstone python3 /home/banon/projects/er-mods-rs/scripts/map-rvas-1162-to-1170.py",
-	]
-	count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
 }
 
 # A worktree checkout of this repo is the same tree under a different prefix.
@@ -178,14 +181,15 @@ test_worktree_absolute_path_script_is_allowed if {
 # ...but the repo name is the whole of what admits it, so a scratch tree that
 # merely contains a `scripts/` directory stays denied.
 test_absolute_scratch_scripts_dir_is_denied if {
-	some cmd in [
+	every cmd in [
 		"python3 /tmp/claude-1000/scratchpad/scripts/patch.py",
 		"python3 /home/banon/other-repo/scripts/patch.py",
 		# The session scratchpad's last component ENDS in the repo name without
 		# being it, so the repo name has to be matched as a whole component.
 		"python3 /tmp/claude-1000/-home-banon-projects-er-mods-rs/scripts/patch.py",
-	]
-	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
 }
 
 # --- not a python command at all ------------------------------------------
@@ -279,4 +283,86 @@ test_dotdot_escape_in_the_script_path_is_denied if {
 test_python_write_inside_a_shell_wrapper_payload_is_denied if {
 	cmd := `bash -c "python3 -c \"open('a','w').write('x')\""`
 	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
+# --- a scratch script that only reads (2026-09-29) --------------------------
+#
+# Both commands below were refused in production although the scripts they ran write
+# nothing. The policy cannot read a file, so the verdict on its contents comes from the
+# `python_script_writes` signal (`.cupcake/signals/python_script_writes.sh`, judgement in
+# `scripts/cupcake_python_script_writes.py`, whose `--selftest` scans real temp files for
+# the same shapes). `opa test` runs no signals, so each case supplies the line the signal
+# would print. The scratchpad path is a placeholder: the policy compares it only against
+# the signal's text and never touches the filesystem.
+
+scratch := "/tmp/claude-1000/-home-banon-projects-er-mods-rs/SESSION/scratchpad"
+
+bash_with_signal(cmd, signal) := {
+	"hook_event_name": "PreToolUse",
+	"tool_name": "Bash",
+	"tool_input": {"command": cmd},
+	"signals": {"python_script_writes": signal},
+}
+
+analyse_cmd := concat("", ["timeout 29 python3 ", scratch, "/analyse.py ", scratch, " 2>&1 | cut -c1-260"])
+
+test_read_only_scratch_script_is_allowed if {
+	signal := concat("", ["READONLY ", scratch, "/analyse.py\n"])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(analyse_cmd, signal)
+}
+
+# The same verdict in the `{output: ...}` shape cupcake can hand a signal back in.
+test_read_only_verdict_in_output_shape_is_allowed if {
+	signal := {"output": concat("", ["READONLY ", scratch, "/analyse.py"])}
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(analyse_cmd, signal)
+}
+
+# The second refused command, with `S` assigned in the same command so the signal can
+# resolve it. Its committed scripts are admitted by path as before; the scratch one by the
+# signal, matched with the quotes `command_slot_words` keeps stripped off.
+selftest_and_sim_cmd := concat("", [
+	"S=", scratch, "; python3 scripts/er-mechanics-ashes.py --selftest > $S/out 2>&1; ",
+	"timeout 25 python3 \"$S/sim.py\" | head -9; python3 scripts/check-comment-caps.py scripts/x.py",
+])
+
+test_committed_scripts_plus_read_only_scratch_script_is_allowed if {
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(selftest_and_sim_cmd, "READONLY $S/sim.py")
+}
+
+# Everything short of an exact READONLY line for the operand keeps the refusal. `every`,
+# not `some`: a `some` over a list passes when any one element denies.
+test_scratch_script_without_a_read_only_verdict_is_denied if {
+	every signal in [
+		concat("", ["WRITES ", scratch, "/analyse.py open() mode 'w'"]),
+		concat("", ["UNKNOWN ", scratch, "/analyse.py unresolved variable"]),
+		"",
+		"READONLY /some/other/analyse.py",
+		concat("", ["READONLY ", scratch, "/analyse.pyc"]),
+		{"error": "signal exited 1"},
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(analyse_cmd, signal)
+	}
+}
+
+test_scratch_script_with_no_signal_at_all_is_denied if {
+	count(bash_no_python_file_write.deny) == 1 with input as bash(analyse_cmd)
+}
+
+test_unresolved_variable_scratch_script_is_denied if {
+	cmd := "timeout 25 python3 $S/sim.py | head -9"
+	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, "UNKNOWN $S/sim.py unresolved variable")
+}
+
+# One vetted script does not carry another that was not vetted.
+test_read_only_script_beside_an_unvetted_one_is_denied if {
+	cmd := concat("", ["python3 ", scratch, "/analyse.py; python3 ", scratch, "/patch.py"])
+	signal := concat("", ["READONLY ", scratch, "/analyse.py\nWRITES ", scratch, "/patch.py open() mode 'w'"])
+	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
+}
+
+# A vetted script does not excuse an inline program in the same command.
+test_read_only_script_plus_inline_write_is_denied if {
+	cmd := concat("", ["python3 ", scratch, "/analyse.py && python3 -c \"open('a','w').write('x')\""])
+	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
+	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
 }

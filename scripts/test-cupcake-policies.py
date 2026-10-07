@@ -122,6 +122,17 @@ FRIDA_EVIDENCE_PROVEN.write_text(
     encoding="utf-8",
 )
 
+# The read-only listing denied on the native-Linux dev box on 2026-09-26, verbatim: a check for
+# running cargo/rustc builds and agent sessions before a disk cleanup deleted Rust target/ dirs.
+# It tripped two guards, neither of whose premise held -- the WSL pgrep false-negative, and a
+# build grepped for errors when `cargo|rustc` was only pgrep's pattern.
+REPORTED_PROCESS_LISTING = (
+    "pgrep -a -f 'cargo|rustc' | grep -v pgrep | cut -c1-200 | head; "
+    'echo "--- agents:"; pgrep -a -x claude | cut -c1-120; '
+    "pgrep -a -f '(^| |/)pi( |$)' | cut -c1-120 | head; "
+    'echo "--- scan:"; cat /tmp/.../tasks/bv7bzk2t8.output'
+)
+
 
 def run_case(case: PolicyCase) -> None:
     tool_input: dict[str, object] = {"command": case.command}
@@ -200,6 +211,13 @@ def run_case(case: PolicyCase) -> None:
     # it cannot mask a guard that should have denied. A case that wants the other verdict names a
     # log through `extra_env`, which is applied below and wins.
     env["ER_FRIDA_EVIDENCE_LOG"] = str(FRIDA_EVIDENCE_ABSENT)
+
+    # The host_platform signal behind `block_manual_pgrep` answers from the machine running this
+    # suite, and the pgrep guard stands down on native Linux. Every pgrep deny case below is about
+    # the WSL guard, and CI and the dev box are both native Linux, so without this pin those cases
+    # would go red for a reason that has nothing to do with the policy. `wsl` by default; the cases
+    # about native hosts pin `native` through `extra_env`.
+    env["CUPCAKE_HOST_PLATFORM_OVERRIDE"] = "wsl"
 
     env.update(dict(case.extra_env))
 
@@ -349,6 +367,60 @@ def run_runtime_evidence_signal_checks() -> None:
         )
 
 
+HOST_PLATFORM_SIGNAL = ".cupcake/signals/host_platform.sh"
+HOST_PLATFORM_ANSWERS = {"wsl", "native", "unknown"}
+
+
+def run_host_platform_signal_checks() -> None:
+    """The host_platform signal must answer one known word, and never `native` on a WSL kernel.
+
+    `block_manual_pgrep` stands down only on `native`. Every other answer keeps the guard, so the
+    dangerous failure is the one direction this checks: a WSL host reported as native, which would
+    switch the WSL false-negative guard off exactly where it is needed. The cases in `main()` pin
+    the answer through the override, so they cannot see what the script does unpinned; this does.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "CUPCAKE_HOST_PLATFORM_OVERRIDE"}
+    result = subprocess.run(
+        [str(REPO_ROOT / HOST_PLATFORM_SIGNAL)],
+        cwd=REPO_ROOT,
+        input=_signal_event("true"),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=SIGNAL_TIMEOUT_SECONDS,
+        env=env,
+    )
+    answer = result.stdout.strip()
+    if result.returncode != 0 or answer not in HOST_PLATFORM_ANSWERS:
+        raise AssertionError(
+            f"{HOST_PLATFORM_SIGNAL} exited {result.returncode} with {answer!r}; it must exit 0 "
+            f"with one of {sorted(HOST_PLATFORM_ANSWERS)}.\n{result.stderr}"
+        )
+    osrelease = Path("/proc/sys/kernel/osrelease")
+    if osrelease.is_file() and "microsoft" in osrelease.read_text(errors="replace").lower():
+        if answer != "wsl":
+            raise AssertionError(
+                f"{HOST_PLATFORM_SIGNAL} answered {answer!r} on a WSL kernel "
+                f"({osrelease.read_text(errors='replace').strip()!r}); it must answer 'wsl', or the "
+                "pgrep guard stands down on the one kind of host it exists for."
+            )
+    for pinned in ("wsl", "native"):
+        pinned_result = subprocess.run(
+            [str(REPO_ROOT / HOST_PLATFORM_SIGNAL)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=SIGNAL_TIMEOUT_SECONDS,
+            env={**env, "CUPCAKE_HOST_PLATFORM_OVERRIDE": pinned},
+        )
+        if pinned_result.stdout.strip() != pinned:
+            raise AssertionError(
+                f"{HOST_PLATFORM_SIGNAL} ignored CUPCAKE_HOST_PLATFORM_OVERRIDE={pinned!r} "
+                f"(answered {pinned_result.stdout.strip()!r}); the regression cases depend on it."
+            )
+
+
 def run_signal_executable_checks() -> None:
     """Every script in `.cupcake/signals/` must be executable, with a shebang.
 
@@ -441,10 +513,26 @@ def main() -> int:
     # every other gate here stays green, so there is no point spending 237 CPU-seconds before
     # asking whether the signals can run at all.
     run_signal_executable_checks()
+    run_host_platform_signal_checks()
     run_orphaned_rego_suites()
     run_runtime_evidence_signal_checks()
     cases = [
         PolicyCase("allow-rtk", "rtk ls", True),
+        # no_grep_for_build_errors through the live engine: a grep over `ls` output in another
+        # statement from a script named er-builds-* is not a build adjudicated by grep (2026-10-01),
+        # while the cargo-grep that created the policy still is.
+        PolicyCase(
+            "allow-grep-over-ls-beside-builds-named-script",
+            "ls scripts | grep -i -E 'er-builds|er-mechanics|ash' ; "
+            "python3 scripts/er-builds-ash-choice.py --help 2>&1 | head -40",
+            True,
+        ),
+        PolicyCase(
+            "deny-grep-over-cargo-check-output",
+            "cargo check -p er-quickload 2>&1 | grep -E 'error' -A6 | head -20",
+            False,
+            "A build reports success or failure ONCE",
+        ),
         PolicyCase(
             "allow-local-shell-vars-before-commands-with-coarse-ast",
             "run_id=$(date +%Y%m%d-%H%M%S)\n"
@@ -1429,6 +1517,49 @@ def main() -> int:
         PolicyCase(
             "allow-mypgreptool-word-not-pgrep",
             "./mypgreptool --version",
+            True,
+        ),
+        # The pgrep guard stands down on native Linux, and only there (2026-09-26): pgrep sees
+        # Steam and Proton directly on a native host. The listing that was denied on the native
+        # dev box must pass there -- through both guards it tripped -- and still be refused on WSL
+        # or on a host the signal cannot classify.
+        PolicyCase(
+            "allow-native-linux-pgrep-process-listing",
+            REPORTED_PROCESS_LISTING,
+            True,
+            extra_env=(("CUPCAKE_HOST_PLATFORM_OVERRIDE", "native"),),
+        ),
+        PolicyCase(
+            "deny-wsl-pgrep-process-listing",
+            REPORTED_PROCESS_LISTING,
+            False,
+            "manual pgrep is blocked",
+        ),
+        PolicyCase(
+            "allow-native-linux-pgrep-steam",
+            "pgrep -x steam",
+            True,
+            extra_env=(("CUPCAKE_HOST_PLATFORM_OVERRIDE", "native"),),
+        ),
+        PolicyCase(
+            "deny-unknown-host-pgrep-steam",
+            "pgrep -x steam",
+            False,
+            "host_platform signal: unknown",
+            extra_env=(("CUPCAKE_HOST_PLATFORM_OVERRIDE", "unknown"),),
+        ),
+        # `ER-EFFECTS-NO-GREP-FOR-BUILD-ERRORS` had no end-to-end case at all, and its rewrite into
+        # token operations runs in the wasm runtime, where a green `opa test` proves nothing.
+        PolicyCase(
+            "deny-cargo-check-piped-into-grep",
+            "timeout 28 cargo check -p er-quickload 2>&1 | grep -E 'error' -A6 | head -20; "
+            'echo "--- clean ---"',
+            False,
+            "as its EXIT CODE",
+        ),
+        PolicyCase(
+            "allow-cargo-tree-piped-into-grep",
+            "cargo tree -i serde | grep serde",
             True,
         ),
         PolicyCase(

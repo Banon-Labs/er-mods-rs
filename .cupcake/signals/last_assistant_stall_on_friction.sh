@@ -7,7 +7,7 @@
 # observation. Keeping the conjunction in rego is deliberate: it makes the rule unit-testable against
 # the verbatim corpus instead of hiding it in shell regexes.
 #
-#   STALLFACTS|friction=<phrase>|admission=<phrase>|handback=<phrase>|blame=<phrase>|acted=<0|1>|blocked=<0|1>|question=<0|1>|owned=<0|1>|mustact=<0|1>
+#   STALLFACTS|friction=<phrase>|admission=<phrase>|handback=<phrase>|blame=<phrase>|blamectx=<text>|acted=<0|1>|blocked=<0|1>|question=<0|1>|owned=<0|1>|mustact=<0|1>
 #
 # Emitted only when friction or blame was detected; a clean turn emits empty (fail-open).
 #
@@ -21,7 +21,10 @@
 #   handback   -- the turn ended by making the user decide ("your call", "let me know how you'd like
 #                 to proceed", "say the word", "want me to X?", "two ways forward").
 #   blame      -- the turn attributed a consequence to a tool / guard / sentinel / subagent /
-#                 environment ("the sentinel tore down the run", "cupcake blocked it").
+#                 environment ("the sentinel tore down the run", "cupcake blocked it"). Read from
+#                 the closing message only (prose after the turn's last tool call).
+#   blamectx   -- for each blame phrase (up to four), the previous sentence plus its own sentence up
+#                 to the phrase, joined by ` ~~ `. The policy looks there for a first-person cause.
 #   acted      -- the turn made a substantive tool call (Edit/Write/Bash/Agent/Workflow/...). Any such
 #                 call counts, deliberately unlike idle_hold's stricter "status peeks are not work":
 #                 here the defect is a turn that changed nothing, and reading the log the user pointed
@@ -103,7 +106,13 @@ def assistant_has_action(ev):
 
 # Bucket the transcript into turns delimited by real user prompts, keeping each turn's opening prompt
 # alongside its assistant text and action flag.
-turns = [{"prompt": "", "text": [], "acted": False}]
+#
+# `closing` is the prose after the turn's last tool call of any kind -- the closing message. The blame
+# arm reads only that, like the sibling Stop rules (no_unexecuted_promise, no_narrated_action,
+# no_admission_with_defence): narration between two tool calls is not the account the user is handed
+# at turn end, and a halt over it could never be cleared, because a sentence already sent cannot be
+# rewritten and every continuation stays inside the same turn.
+turns = [{"prompt": "", "text": [], "closing": [], "acted": False}]
 try:
     with open(files[0], encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -112,23 +121,37 @@ try:
             except ValueError:
                 continue
             if is_real_user_prompt(ev):
-                turns.append({"prompt": event_text(ev), "text": [], "acted": False})
+                turns.append({"prompt": event_text(ev), "text": [], "closing": [], "acted": False})
             elif ev.get("type") == "assistant":
                 t = event_text(ev)
                 if t:
                     turns[-1]["text"].append(t)
                 if assistant_has_action(ev):
                     turns[-1]["acted"] = True
+                content = ev.get("message", {}).get("content")
+                if isinstance(content, str):
+                    if content:
+                        turns[-1]["closing"].append(content)
+                    continue
+                for block in content or []:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "tool_use":
+                        turns[-1]["closing"] = []
+                    elif block.get("type") == "text" and block.get("text"):
+                        turns[-1]["closing"].append(block["text"])
 except OSError:
     sys.exit(0)
 
 prompt = ""
 turn = ""
+closing = ""
 acted = False
 for bucket in reversed(turns):
     if bucket["text"]:
         prompt = bucket["prompt"]
         turn = "\n".join(bucket["text"])
+        closing = "\n".join(bucket["closing"])
         acted = bucket["acted"]
         break
 
@@ -138,9 +161,14 @@ if not turn:
 # Strip fenced code blocks, inline backtick spans and double-quoted spans from the assistant text so
 # quoting/naming a banned shape is not using it. Single quotes are left alone: the phrases themselves
 # contain apostrophes (I'm / that's / you're).
-scrubbed = re.sub(r"```.*?```", " ", turn, flags=re.DOTALL)
-scrubbed = re.sub(r"`[^`]*`", " ", scrubbed)
-scrubbed = re.sub(r'"[^"]*"', " ", scrubbed)
+def scrub(text):
+    text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
+    text = re.sub(r"`[^`]*`", " ", text)
+    return re.sub(r'"[^"]*"', " ", text)
+
+
+scrubbed = scrub(turn)
+scrubbed_closing = scrub(closing)
 
 # --- (a) friction in the opening user prompt ------------------------------------------------------
 FRICTION_RES = [
@@ -288,8 +316,36 @@ def sanitize(phrase):
     return re.sub(r"[|=\r\n\t]+", " ", phrase).strip()[:60]
 
 
+# Each blame phrase travels with its local context: the sentence before it plus its own sentence up
+# to the end of the phrase. The policy decides from that text whether a first-person cause precedes
+# the mechanism ("my brief told ..., so the guard refused"), which keeps the rule in rego where the
+# corpus is unit-tested. Contexts are joined with ` ~~ ` and capped so the facts line stays bounded.
+SENTENCE_BREAK_RE = re.compile(r"(?<=[.!?])\s+|\n+")
+BLAMECTX_SEP = " ~~ "
+
+
+def blame_contexts(text):
+    starts = [0] + [m.end() for m in SENTENCE_BREAK_RE.finditer(text)]
+    found = []
+    for rx in BLAME_RES:
+        for m in rx.finditer(text):
+            found.append(m)
+    found.sort(key=lambda m: m.start())
+    out = []
+    for m in found[:4]:
+        own = max(i for i, s in enumerate(starts) if s <= m.start())
+        begin = starts[max(own - 1, 0)]
+        ctx = re.sub(r"\s+", " ", text[begin:m.end()]).replace("~~", " ")
+        out.append(sanitize_ctx(ctx))
+    return found[0].group(0) if found else "", BLAMECTX_SEP.join(out)
+
+
+def sanitize_ctx(ctx):
+    return re.sub(r"[|=\r\n\t]+", " ", ctx).strip()[-400:]
+
+
 friction = first_match(prompt, FRICTION_RES)
-blame = first_match(scrubbed, BLAME_RES)
+blame, blamectx = blame_contexts(scrubbed_closing)
 
 if not friction and not blame:
     sys.exit(0)
@@ -307,6 +363,7 @@ sys.stdout.write(
     "|admission=" + sanitize(admission) +
     "|handback=" + sanitize(handback) +
     "|blame=" + sanitize(blame) +
+    "|blamectx=" + blamectx +
     "|acted=" + ("1" if acted else "0") +
     "|blocked=" + ("1" if blocked else "0") +
     "|question=" + ("1" if question else "0") +
