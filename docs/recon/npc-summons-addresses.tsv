@@ -7,7 +7,7 @@
 #   exhaustive verdict plus BOTH-ENTRIES or NEITHER-ENTRY), which is what resolve_detour_address reads.
 # 1.17.1 equals 1.17.0 below rva 0xafefe9 and is +0x70 at or above it; the ledger holds the 1.17.0 VA.
 # name	kind	1.17.1 VA	1.16.2 VA	verified_row	detour_audited	verdict	note
-CreateSummonChr	call	0x1404baea0	0x1404ba980	added	yes	IDENTICAL-WHOLE 639 insns
+CreateSummonChr	call+detour	0x1404baea0	0x1404ba980	added	yes	IDENTICAL-WHOLE 639 insns	detour since 2026-10-06 for companion dressing (CharaInitParam row swapped for the length of one hijacked call)
 ChangeCharacterDisableState	call	0x1403f6500	0x1403f62d0	added	yes	IDENTICAL-WHOLE 29 insns
 PlaceNPCSummonSign body	call	0x1406fa7f0	0x1406f99a0	added	yes	IDENTICAL-WHOLE 88 insns	FUN_1406f99a0(SosSignMan*, MultiplayType, uint* summonedNPCEntityId, ...) in 1.16.2
 CreateSignSfx	call	0x1406febe0	0x1406fdd90	added	yes	IDENTICAL-WHOLE 313 insns

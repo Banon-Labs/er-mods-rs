@@ -15,8 +15,13 @@
 //!    npc, think, charaInit and formation offset written into the row before `BuddyGenerator`
 //!    copies them out.
 //!
-//! What this does not do yet: dress companions from their build URL, load Lua brains, or name
-//! them. Those are logged as not applied (design doc section 3.3).
+//! 4. `CreateSummonChr` detour: for each companion `BuddyGenerator` builds, write its build's gear
+//!    into the `CharaInitParam` row the call is about to build from, and put the row back when the
+//!    call returns. The call is synchronous: `ChrSet::SpawnChr` -> `CreateCharacter` reads the row
+//!    and mints the gear before it returns (see `er_npc_summons_core::dress` for the evidence).
+//!
+//! What this does not do yet: load Lua brains or name companions. Those are logged as not applied
+//! (design doc section 3.3).
 
 #![cfg(windows)]
 
@@ -24,11 +29,15 @@ use core::ffi::c_void;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
+use eldenring::cs::{CharaInitParam, SoloParamRepository};
+use eldenring::param::CHARACTER_INIT_PARAM;
 use er_game_base::mem::{
     game_rva_for_hook, game_rva_named, safe_read_i32, safe_read_u8, safe_read_usize,
 };
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
+use er_npc_summons_core::dress::CharaInitGear;
 use er_npc_summons_core::mimic::{self, HUMAN_ROW, MIMIC_TRIGGER, RowValues};
+use fromsoftware_shared::FromStatic;
 use windows::Win32::System::Diagnostics::Debug::RtlCaptureStackBackTrace;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 
@@ -48,6 +57,12 @@ static LOOP1_RET: AtomicUsize = AtomicUsize::new(0);
 static ORIG_GENERATOR: AtomicUsize = AtomicUsize::new(0);
 static ORIG_LIST: AtomicUsize = AtomicUsize::new(0);
 static ORIG_PARAM: AtomicUsize = AtomicUsize::new(0);
+static ORIG_CREATE: AtomicUsize = AtomicUsize::new(0);
+
+/// The values each first-loop read was given in the current hijacked call, not yet built.
+static PENDING: Mutex<Vec<RowValues>> = Mutex::new(Vec::new());
+/// Companions built in the current hijacked call that wore their build's gear.
+static DRESSED: AtomicUsize = AtomicUsize::new(0);
 
 /// The human row's original bytes while a hijacked call has it patched.
 struct SavedRow {
@@ -60,6 +75,28 @@ type GeneratorFn = unsafe extern "system" fn(usize);
 type ListFn = unsafe extern "system" fn(usize, i32, usize);
 type ParamFn = unsafe extern "system" fn(usize, i32) -> usize;
 type ListInsertFn = unsafe extern "system" fn(usize, usize, usize, *const i32) -> usize;
+/// `CreateSummonChr`, the same 18 arguments `game.rs` calls it with. The four flags are taken as
+/// `u8`: the detour forwards whatever byte the caller passed rather than asserting it is 0 or 1.
+type CreateFn = unsafe extern "system" fn(
+    usize, // SummonBuddyManager*
+    usize, // creator event id*
+    usize, // creator steam id*
+    usize, // BlockId*
+    u32,   // unused, 0xffffffff
+    usize, // FieldInsHandle*
+    i32,   // npcParamId
+    i32,   // npcThinkId
+    i32,   // charaInitParam
+    usize, // block-local position*
+    f32,   // yaw
+    u8,    // spawnHidden
+    u8,    // hasMount
+    u32,   // buddyStoneParamId
+    u32,   // buddyParamId
+    u32,   // dopingLevel
+    u8,    // fromNetwork
+    u8,    // hasMoghGreatRune
+) -> usize;
 
 /// Replace the companion plan (from a config reload).
 pub(crate) fn set_plan(plan: Vec<RowValues>) {
@@ -116,14 +153,19 @@ unsafe extern "system" fn generator_detour(manager: usize) {
     }
     HIJACK_TID.store(this_thread(), Ordering::Release);
     READS.store(0, Ordering::Release);
+    DRESSED.store(0, Ordering::Release);
+    if let Ok(mut pending) = PENDING.lock() {
+        pending.clear();
+    }
     unsafe { original(manager) };
     restore_row();
     HIJACK_TID.store(0, Ordering::Release);
     summons_log(format_args!(
-        "mimic: Mimic Tear +{} summoned {} companion(s); build URLs, Lua brains and names are \
-         not applied yet",
+        "mimic: Mimic Tear +{} summoned {} companion(s), {} dressed from a build URL; Lua brains \
+         and names are not applied yet",
         level.unwrap_or(0),
-        READS.load(Ordering::Acquire)
+        READS.load(Ordering::Acquire),
+        DRESSED.load(Ordering::Acquire)
     ));
 }
 
@@ -253,8 +295,166 @@ unsafe extern "system" fn param_detour(lookup: usize, id: i32) -> usize {
     let read = READS.fetch_add(1, Ordering::AcqRel);
     if let Some(values) = mimic::entry_for_read(&plan(), read) {
         patch_row(row, values);
+        if let Ok(mut pending) = PENDING.lock() {
+            pending.push(values);
+        }
     }
     result
+}
+
+/// Write a build's gear into a `CharaInitParam` row: the fields `CreateCharacter`'s row applier
+/// mints from (`er_npc_summons_core::dress`). Every armament slot gets type 0, `EquipParamWeapon`.
+fn write_gear(row: &mut CHARACTER_INIT_PARAM, gear: &CharaInitGear) {
+    row.set_equip_wep_right(gear.right[0]);
+    row.set_equip_subwep_right(gear.right[1]);
+    row.set_equip_subwep_right3(gear.right[2]);
+    row.set_equip_wep_left(gear.left[0]);
+    row.set_equip_subwep_left(gear.left[1]);
+    row.set_equip_subwep_left3(gear.left[2]);
+    row.set_wep_param_type_right1(0);
+    row.set_wep_param_type_right2(0);
+    row.set_wep_param_type_right3(0);
+    row.set_wep_param_type_left1(0);
+    row.set_wep_param_type_left2(0);
+    row.set_wep_param_type_left3(0);
+    row.set_equip_helm(gear.protectors[0]);
+    row.set_equip_armer(gear.protectors[1]);
+    row.set_equip_gaunt(gear.protectors[2]);
+    row.set_equip_leg(gear.protectors[3]);
+    row.set_equip_arrow(gear.ammo[0]);
+    row.set_equip_bolt(gear.ammo[1]);
+    row.set_equip_sub_arrow(gear.ammo[2]);
+    row.set_equip_sub_bolt(gear.ammo[3]);
+    row.set_arrow_num(gear.ammo_count[0]);
+    row.set_bolt_num(gear.ammo_count[1]);
+    row.set_sub_arrow_num(gear.ammo_count[2]);
+    row.set_sub_bolt_num(gear.ammo_count[3]);
+    row.set_equip_accessory01(gear.talismans[0]);
+    row.set_equip_accessory02(gear.talismans[1]);
+    row.set_equip_accessory03(gear.talismans[2]);
+    row.set_equip_accessory04(gear.talismans[3]);
+}
+
+/// Patch the companion's `CharaInitParam` row and return its original contents, or why not.
+fn dress_row(chara_init: i32, gear: &CharaInitGear) -> Result<CHARACTER_INIT_PARAM, String> {
+    let id = u32::try_from(chara_init)
+        .map_err(|_| format!("charaInit {chara_init} builds no human, so there is no row"))?;
+    // SAFETY: game thread, inside `BuddyGenerator`; the repository is resident once a summon runs.
+    let repo = unsafe { SoloParamRepository::instance_mut() }
+        .map_err(|_| "SoloParamRepository is not up".to_owned())?;
+    let row = repo
+        .get_mut::<CharaInitParam>(id)
+        .ok_or_else(|| format!("CharaInitParam {id} does not exist"))?;
+    let saved = row.clone();
+    write_gear(row, gear);
+    Ok(saved)
+}
+
+fn restore_chara_init(chara_init: i32, saved: CHARACTER_INIT_PARAM) {
+    let Ok(id) = u32::try_from(chara_init) else {
+        return;
+    };
+    // SAFETY: as in `dress_row`.
+    if let Ok(repo) = unsafe { SoloParamRepository::instance_mut() }
+        && let Some(row) = repo.get_mut::<CharaInitParam>(id)
+    {
+        *row = saved;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe extern "system" fn create_detour(
+    manager: usize,
+    event_id: usize,
+    steam_id: usize,
+    block: usize,
+    unused: u32,
+    handle: usize,
+    npc: i32,
+    think: i32,
+    chara_init: i32,
+    pos: usize,
+    yaw: f32,
+    hidden: u8,
+    mount: u8,
+    stone: u32,
+    buddy_param: u32,
+    doping: u32,
+    from_network: u8,
+    mogh: u8,
+) -> usize {
+    let original = ORIG_CREATE.load(Ordering::Acquire);
+    if original == 0 {
+        return 0;
+    }
+    // SAFETY: the trampoline of the function this replaces.
+    let original: CreateFn = unsafe { core::mem::transmute(original) };
+    let call = || unsafe {
+        original(
+            manager,
+            event_id,
+            steam_id,
+            block,
+            unused,
+            handle,
+            npc,
+            think,
+            chara_init,
+            pos,
+            yaw,
+            hidden,
+            mount,
+            stone,
+            buddy_param,
+            doping,
+            from_network,
+            mogh,
+        )
+    };
+    if !hijacking() {
+        return call();
+    }
+    let slot = PENDING
+        .lock()
+        .ok()
+        .and_then(|mut pending| mimic::claim(&mut pending, npc, think, chara_init));
+    let Some(slot) = slot else {
+        summons_log(format_args!(
+            "dress: CreateSummonChr(npc {npc}, think {think}, charaInit {chara_init}) matched no \
+             companion; built as configured"
+        ));
+        return call();
+    };
+    let (gear, build) = match crate::dress::gear_for(slot) {
+        Ok(found) => found,
+        Err(why) => {
+            summons_log(format_args!(
+                "dress: companion {slot}: not dressed ({why}); built in charaInit {chara_init}'s own \
+                 gear"
+            ));
+            return call();
+        }
+    };
+    let saved = match dress_row(chara_init, &gear) {
+        Ok(saved) => saved,
+        Err(why) => {
+            summons_log(format_args!(
+                "dress: companion {slot}: not dressed ({why}); built as configured"
+            ));
+            return call();
+        }
+    };
+    let chr = call();
+    restore_chara_init(chara_init, saved);
+    if chr != 0 {
+        DRESSED.fetch_add(1, Ordering::AcqRel);
+    }
+    summons_log(format_args!(
+        "dress: companion {slot}: built 0x{chr:x} from charaInit {chara_init} wearing build \
+         {build:?} (R {:?}, L {:?}, armour {:?}, talismans {:?}, ammo {:?}); row restored",
+        gear.right, gear.left, gear.protectors, gear.talismans, gear.ammo
+    ));
+    chr
 }
 
 /// Find and check `BuddyGenerator`'s first-loop return site: the 5 bytes before it must be a
@@ -289,7 +489,7 @@ fn hook(rva: u32, detour: usize, original: &AtomicUsize, what: &str) -> Result<M
     Ok(hook)
 }
 
-/// Install the three detours. Called once, from the install thread.
+/// Install the four detours. Called once, from the install thread.
 pub(crate) fn install() {
     let ret = match verify_loop1_ret() {
         Ok(ret) => ret,
@@ -327,6 +527,12 @@ pub(crate) fn install() {
             &ORIG_PARAM,
             "GetBuddyParam",
         ),
+        hook(
+            addr::CREATE_SUMMON_CHR,
+            create_detour as *const () as usize,
+            &ORIG_CREATE,
+            "CreateSummonChr",
+        ),
     ];
     // `MhHook` has no `Drop`: each detour stays installed once applied, so nothing is kept.
     for result in installed {
@@ -338,7 +544,7 @@ pub(crate) fn install() {
             }
         }
     }
-    // SAFETY: applies the three queued enables at once.
+    // SAFETY: applies the four queued enables at once.
     match unsafe { MH_ApplyQueued() } {
         MH_STATUS::MH_OK => {}
         status => {
@@ -348,7 +554,7 @@ pub(crate) fn install() {
     }
     LOOP1_RET.store(ret, Ordering::Release);
     summons_log(format_args!(
-        "mimic: BuddyGenerator, GetBuddyList and GetBuddyParam detours installed; first-loop \
-         return site 0x{ret:x} verified"
+        "mimic: BuddyGenerator, GetBuddyList, GetBuddyParam and CreateSummonChr detours \
+         installed; first-loop return site 0x{ret:x} verified"
     ));
 }

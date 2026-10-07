@@ -14,8 +14,10 @@
 //! * [`config`] turns it into a validated [`config::Config`].
 //! * [`duel`] is the duel state machine and the hidden-NPC readiness verdict.
 //! * [`mimic`] plans the companions: which BuddyParam values each summon request gets.
+//! * [`dress`] turns a companion's build URL into the `CharaInitParam` gear it is built with.
 
 pub mod config;
+pub mod dress;
 pub mod duel;
 pub mod mimic;
 pub mod toml;

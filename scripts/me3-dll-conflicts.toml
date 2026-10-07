@@ -611,8 +611,13 @@ instead of placing the player's own red sign (a detour on \
 for `MultiplayType` 2), and offline it answers `CanUseGoods` for goods 101 through the shared \
 seven-argument union `er-invasion-warp` also uses. The Mimic Tear Ashes summon configured \
 companions instead of the mimic (bare detours on `BuddyGenerator` `0x1404bb8b0`, \
-`GetBuddyListBySpEffectId` `0x1404bc960` and `GetBuddyParam` `0x140d26890`, all scoped to one \
-Mimic Tear request). No other shell hooks those four prologues. Co-loadable, but a player who \
+`GetBuddyListBySpEffectId` `0x1404bc960`, `GetBuddyParam` `0x140d26890` and \
+`SummonBuddyManager::CreateSummonChr` `0x1404ba980`, all scoped to one Mimic Tear request; the \
+last swaps the companion's `CharaInitParam` row for its build URL's gear for the length of one \
+call). It links `er-build-import-runtime` for the item catalog and the reinforce clamp only: \
+it never starts that crate's phase machine, fetch worker or game task, so it is not a second \
+owner of the player's inventory the way `er-build-import` is. No other shell hooks those five \
+prologues. Co-loadable, but a player who \
 did not ask for it would find two items behaving differently, so it is never pulled in by a \
 dependency closure: `--with er-npc-summons`."""
 

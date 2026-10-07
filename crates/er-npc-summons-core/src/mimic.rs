@@ -68,6 +68,8 @@ pub struct Offset {
 /// `+0x54` charaInit.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RowValues {
+    /// The companion's config slot, 1..=4: the key its dressing is found by.
+    pub slot: u8,
     pub npc_param: i32,
     pub think: i32,
     pub chara_init: i32,
@@ -84,6 +86,7 @@ pub fn plan(companions: &[Companion]) -> Vec<RowValues> {
         .map(|companion| {
             let slot = usize::from(companion.slot.max(1)) - 1;
             RowValues {
+                slot: companion.slot,
                 npc_param: companion.body.npc_param,
                 think: companion.think(),
                 chara_init: companion.body.chara_init,
@@ -100,10 +103,26 @@ pub fn entry_for_read(plan: &[RowValues], read: usize) -> Option<RowValues> {
     plan.get(read).or_else(|| plan.last()).copied()
 }
 
+/// Which companion a `CreateSummonChr` call is building.
+///
+/// `BuddyGenerator` reads every row first (loop one, where each read is given a companion's
+/// values and recorded in `pending`), then calls `CreateSummonChr` once per request it kept (loop
+/// two, in the same list order). A request whose `NpcParam` row is missing, or whose block does
+/// not resolve, is dropped between the loops, so the call count alone could pair a companion with
+/// the next one's build. The call's own npc, think and charaInit arguments are what loop one
+/// wrote, so the first pending entry carrying all three is the one being built. It is removed, so
+/// two companions with the same body are matched in order.
+pub fn claim(pending: &mut Vec<RowValues>, npc: i32, think: i32, chara_init: i32) -> Option<u8> {
+    let index = pending.iter().position(|values| {
+        values.npc_param == npc && values.think == think && values.chara_init == chara_init
+    })?;
+    Some(pending.remove(index).slot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, MIMIC_HUMAN_BODY};
 
     #[test]
     fn only_mimic_tear_requests_are_recognised() {
@@ -126,6 +145,29 @@ mod tests {
         assert_eq!(plan[0].offset, FORMATION[0]);
         assert_eq!(plan[1].npc_param, 523_590_024);
         assert_eq!(plan[1].offset, FORMATION[3]);
+    }
+
+    #[test]
+    fn a_dropped_request_does_not_shift_the_pairing() {
+        let config = Config::parse(
+            "[mimic.companion.1]\nnpc_param = 1\n[mimic.companion.2]\n[mimic.companion.3]\n",
+        );
+        let mut pending = plan(&config.mimic.companions);
+        let human = MIMIC_HUMAN_BODY;
+        // Companion 1's request was dropped between the loops; the first call builds companion 2.
+        assert_eq!(
+            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            Some(2)
+        );
+        assert_eq!(
+            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            Some(3)
+        );
+        assert_eq!(
+            claim(&mut pending, human.npc_param, human.think, human.chara_init),
+            None
+        );
+        assert_eq!(pending.len(), 1);
     }
 
     #[test]

@@ -264,9 +264,29 @@ Found live, and filed:
 - The hidden NPC shows a party HP bar on the left of the HUD before the sign is touched, which
   breaks section 2.2.
 
+Companion dressing from build URLs (2026-10-06, static RE only, not run live yet; bd
+er-effects-rs-x6nl):
+
+- A companion is a c0000 human because its request carries a `CharaInitParam` id. `CreateSummonChr`
+  builds it synchronously through `ChrSet::SpawnChr` -> `ChrInsFactory::CreateCharacter` (1.16.2
+  `0x140403a60`, 1.17.1 `0x140403dd0`), which looks the row up (`GetCharaInitParam`, solo param
+  23) and applies it with `0x140258c00` (1.17.1 `0x140258bd0`). That applier mints the six
+  armaments, four armour pieces, four ammo stacks and four talismans from the row's equip fields
+  into the new character's `ChrAsm`. Weapon fields carry affinity and level in the id, as 4100 of
+  the regulation's own CharaInitParam weapons do.
+- So the DLL adds a fourth detour, on `CreateSummonChr`, active only inside a hijacked
+  `BuddyGenerator`. It pairs the call with its companion by the npc/think/charaInit loop one wrote
+  (`mimic::claim`), writes that companion's build into the row, calls the original and restores
+  the row. Field values come from `er_npc_summons_core::dress`, which reuses the importer's parser,
+  catalog interface and equip planner; the game side fetches each build once per URL and resolves
+  it with the importer's runtime catalog and `ReinforceParamWeapon` clamp.
+- Not carried by the row, and logged as not applied: Ashes of War, spells, the great rune, the
+  face, attributes. Peers still build the body's own gear, because packet 78 carries only the
+  charaInit id. A URL that is refused, fails to fetch or parse, or resolves to nothing leaves the
+  companion in its body's own gear, with the reason in the log.
+
 Not built yet:
 
-- companion dressing from build URLs;
 - Lua brains;
 - companion names;
 - taking picker input away from the game;

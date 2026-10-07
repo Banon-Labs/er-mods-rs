@@ -16,12 +16,18 @@ crate-type = ["cdylib"]
 [dependencies]
 er-game-base = { path = "../er-game-base" }
 er-npc-summons-core = { path = "../er-npc-summons-core" }
+# A companion's build URL is parsed by the importer's own model, never a second parser.
+er-build-import-core = { path = "../er-build-import-core" }
 
 [target.'cfg(windows)'.dependencies]
-# The MinHook wrapper, for the three Mimic Tear detours (BuddyGenerator, GetBuddyList,
-# GetBuddyParam). Each is a bare `MhHook` with a typed detour; all three addresses are recorded in
-# `scripts/me3-dll-conflicts.toml`.
+# The MinHook wrapper, for the four Mimic Tear detours (BuddyGenerator, GetBuddyList,
+# GetBuddyParam, CreateSummonChr). Each is a bare `MhHook` with a typed detour; all four addresses
+# are recorded in `scripts/me3-dll-conflicts.toml`.
 er-hook = { path = "../er-hook" }
+# Only the importer's catalog (names to item ids from the game's own tables) and its reinforce
+# level clamp. Its phase machine, fetch worker and game task are never started from this DLL, so
+# this is not a second owner of the player's inventory.
+er-build-import-runtime = { path = "../er-build-import-runtime" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # The one-imgui-host-per-process arbitration, for the duel picker. Hosts only when nothing else

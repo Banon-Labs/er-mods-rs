@@ -10,8 +10,9 @@
 //!   the player's own red sign. The chosen NPC is created through the spirit-ash spawn call and
 //!   disabled before any frame draws it; once its model is loaded a red NPC summon sign keyed to it
 //!   is placed at the player's feet ([`game`]). Touching the sign is the game's own phantom join.
-//! * Mimic Tear: three detours rewrite what `BuddyGenerator` summons for a Mimic Tear request
-//!   ([`mimic_hooks`]).
+//! * Mimic Tear: four detours rewrite what `BuddyGenerator` summons for a Mimic Tear request
+//!   ([`mimic_hooks`]), and each companion with a `build_url` is built wearing that build's gear
+//!   ([`dress`]).
 //!
 //! # The log is the oracle
 //!
@@ -21,6 +22,8 @@
 mod addr;
 mod log;
 
+#[cfg(windows)]
+mod dress;
 #[cfg(windows)]
 mod finger;
 #[cfg(windows)]
@@ -121,8 +124,10 @@ fn refresh_config(state: &mut TaskState) {
     ));
     finger::set_enabled(config.duel.enabled);
     let plan = if config.mimic.enabled {
+        dress::configure(&config.mimic.companions);
         er_npc_summons_core::mimic::plan(&config.mimic.companions)
     } else {
+        dress::configure(&[]);
         Vec::new()
     };
     mimic_hooks::set_plan(plan);
@@ -242,6 +247,7 @@ fn tick(state: &mut TaskState) {
         refresh_config(state);
     }
     state.frames = state.frames.wrapping_add(1);
+    dress::tick();
     if finger::take_finger_use() {
         step(state, Event::FingerUsed);
     }
