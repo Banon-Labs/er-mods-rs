@@ -33,6 +33,20 @@ pub const LOAD_DEADLINE_FRAMES: u32 = 600;
 /// How long the picker may stay open before the use is treated as abandoned.
 pub const PICK_DEADLINE_FRAMES: u32 = 60 * 60;
 
+/// The event entity id `CreateSummonChr` gives every character it builds (a constant store into
+/// its spawn request, 1.17.1 `0x1404bb43b`). Every spirit ash, Mimic Tear companion and duel NPC
+/// built that way shares it.
+pub const SUMMON_ENTITY_ID: u32 = 35_000;
+
+/// The event entity id the duel NPC is registered under instead, so its sign and
+/// `GetChrInsByEntityId` find it and nothing else. `ChrSet::SpawnChr` registers the new
+/// character in its set's entity map under the request's id, and that map is what the lookup
+/// searches; the map is ordered and the lookup takes the first match, which is how a live Mimic
+/// companion was found in the duel NPC's place on 2026-10-06 (bd `er-effects-rs-gqu9`). It stays
+/// in the 30000..39999 band 35000 is in, which `GetChrInsByEntityId` treats as an id no map
+/// owns. The DLL checks that nothing is registered under it before a spawn.
+pub const DUEL_ENTITY_ID: u32 = 35_001;
+
 /// An opaque handle for the spawned character (the DLL uses `ChrIns+0x8`).
 pub type ChrHandle = u64;
 
@@ -248,6 +262,14 @@ fn transition(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_duel_entity_is_its_own_and_in_the_global_band() {
+        assert_ne!(DUEL_ENTITY_ID, SUMMON_ENTITY_ID);
+        // `GetChrInsByEntityId` special-cases 10000..=20000, 30000 and 40000; the band 30000..39999
+        // with no block is the one `IsEventEntityIdInBetween30kand39999AndAlsoGlobal` names.
+        assert!((30_001..39_999).contains(&DUEL_ENTITY_ID));
+    }
 
     const YURA: Body = Body {
         npc_param: 523_180_079,

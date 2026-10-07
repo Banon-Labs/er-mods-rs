@@ -358,7 +358,6 @@ const XINPUT_STATE_BUTTONS_OFFSET: usize = 0x04;
 const XINPUT_STATE_THUMB_LX_OFFSET: usize = 0x08;
 const XINPUT_STATE_THUMB_LY_OFFSET: usize = 0x0a;
 
-type XInputGetStateFn = unsafe extern "system" fn(u32, *mut u8) -> u32;
 static ORIG_XINPUT_GET_STATE: AtomicUsize = AtomicUsize::new(0);
 
 /// Add the harness's pad state to what the pad actually reported.
@@ -376,23 +375,34 @@ static ORIG_XINPUT_GET_STATE: AtomicUsize = AtomicUsize::new(0);
 /// pad in a real hand keeps working while an injection window is open. The packet number is bumped
 /// whenever anything was added, because a consumer that skips unchanged packets would otherwise
 /// never see the injected frame.
-unsafe extern "system" fn xinput_get_state_detour(user_index: u32, state: *mut u8) -> u32 {
+///
+/// Registered through this DLL's union rather than as a bare `MhHook`, in the four-argument
+/// shape: `er-npc-summons` chains its picker's pad handler onto the same followed address, and a
+/// second MinHook on one prologue silently drops one of the two. `ORIG_XINPUT_GET_STATE` may hold
+/// the next handler, so it is called through `UnionFn`.
+unsafe extern "system" fn xinput_get_state_detour(
+    user_index: usize,
+    state_ptr: usize,
+    c: usize,
+    d: usize,
+) -> usize {
     let orig = ORIG_XINPUT_GET_STATE.load(Ordering::Relaxed);
     if orig == 0 {
         return 0x48f; // ERROR_DEVICE_NOT_CONNECTED
     }
-    // SAFETY: the trampoline MinHook returned, with both arguments untouched.
+    let state = state_ptr as *mut u8;
+    // SAFETY: the next handler or the trampoline, both `UnionFn`, with the arguments untouched.
     let result =
-        unsafe { core::mem::transmute::<usize, XInputGetStateFn>(orig)(user_index, state) };
+        unsafe { core::mem::transmute::<usize, UnionFn>(orig)(user_index, state_ptr, c, d) as u32 };
     XINPUT_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
     if result != 0 || state.is_null() {
-        return result;
+        return result as usize;
     }
     let buttons = INJECTED_PAD_BUTTONS.load(Ordering::Relaxed) as u16;
     let thumb_lx = INJECTED_PAD_THUMB_LX.load(Ordering::Relaxed) as i16;
     let thumb_ly = INJECTED_PAD_THUMB_LY.load(Ordering::Relaxed) as i16;
     if buttons == 0 && thumb_lx == 0 && thumb_ly == 0 {
-        return result;
+        return result as usize;
     }
     // SAFETY: the 16-byte structure the caller passed and the original just filled.
     unsafe {
@@ -414,7 +424,7 @@ unsafe extern "system" fn xinput_get_state_detour(user_index: u32, state: *mut u
         packet.write_unaligned(packet.read_unaligned().wrapping_add(1));
     }
     XINPUT_INJECTED_PAD_STAMPS.fetch_add(1, Ordering::Relaxed);
-    result
+    result as usize
 }
 
 /// Detour `XInputGetState` in whichever XInput module the game loaded.
@@ -456,19 +466,12 @@ unsafe fn install_xinput_hook() {
             let displacement = unsafe { *((target + 1) as *const i32) };
             target = (target + JMP_REL32_LEN).wrapping_add_signed(displacement as isize);
         }
-        let target = target as *mut core::ffi::c_void;
-        let hook = match unsafe {
-            er_hook::MhHook::new(target, xinput_get_state_detour as *mut core::ffi::c_void)
-        } {
-            Ok(hook) => hook,
-            Err(_) => continue,
-        };
-        ORIG_XINPUT_GET_STATE.store(hook.trampoline() as usize, Ordering::Relaxed);
-        if unsafe { hook.queue_enable() }.is_err()
-            || !matches!(
-                unsafe { er_hook::MH_ApplyQueued() },
-                er_hook::MH_STATUS::MH_OK
-            )
+        // Through the union, so `er-npc-summons`' pad handler on this same followed address
+        // chains instead of losing the prologue (the `[[shared]]` row in
+        // scripts/me3-dll-conflicts.toml).
+        // SAFETY: the handler has the union's four-`usize` shape and calls its slot through it.
+        if unsafe { register_union_hook(target, xinput_get_state_detour, &ORIG_XINPUT_GET_STATE) }
+            .is_err()
         {
             ORIG_XINPUT_GET_STATE.store(0, Ordering::Relaxed);
             continue;

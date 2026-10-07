@@ -20,8 +20,8 @@
 //!    call returns. The call is synchronous: `ChrSet::SpawnChr` -> `CreateCharacter` reads the row
 //!    and mints the gear before it returns (see `er_npc_summons_core::dress` for the evidence).
 //!
-//! What this does not do yet: load Lua brains or name companions. Those are logged as not applied
-//! (design doc section 3.3).
+//! Each companion built is also named for its slot ([`crate::names`]); a companion's Lua brain is
+//! loaded by [`crate::brains`], keyed by the think id the plan gives it.
 
 #![cfg(windows)]
 
@@ -161,8 +161,7 @@ unsafe extern "system" fn generator_detour(manager: usize) {
     restore_row();
     HIJACK_TID.store(0, Ordering::Release);
     summons_log(format_args!(
-        "mimic: Mimic Tear +{} summoned {} companion(s), {} dressed from a build URL; Lua brains \
-         and names are not applied yet",
+        "mimic: Mimic Tear +{} summoned {} companion(s), {} dressed from a build URL",
         level.unwrap_or(0),
         READS.load(Ordering::Acquire),
         DRESSED.load(Ordering::Acquire)
@@ -425,6 +424,12 @@ unsafe extern "system" fn create_detour(
         ));
         return call();
     };
+    let named = |chr: usize| {
+        if chr != 0 {
+            crate::names::name_companion(slot, chr);
+        }
+        chr
+    };
     let (gear, build) = match crate::dress::gear_for(slot) {
         Ok(found) => found,
         Err(why) => {
@@ -432,7 +437,7 @@ unsafe extern "system" fn create_detour(
                 "dress: companion {slot}: not dressed ({why}); built in charaInit {chara_init}'s own \
                  gear"
             ));
-            return call();
+            return named(call());
         }
     };
     let saved = match dress_row(chara_init, &gear) {
@@ -441,10 +446,10 @@ unsafe extern "system" fn create_detour(
             summons_log(format_args!(
                 "dress: companion {slot}: not dressed ({why}); built as configured"
             ));
-            return call();
+            return named(call());
         }
     };
-    let chr = call();
+    let chr = named(call());
     restore_chara_init(chara_init, saved);
     if chr != 0 {
         DRESSED.fetch_add(1, Ordering::AcqRel);
@@ -477,7 +482,13 @@ fn verify_loop1_ret() -> Result<usize, String> {
     Ok(ret)
 }
 
-fn hook(rva: u32, detour: usize, original: &AtomicUsize, what: &str) -> Result<MhHook, String> {
+/// Create and queue one bare detour on a 1.16.2 rva; the caller applies the queue.
+pub(crate) fn hook(
+    rva: u32,
+    detour: usize,
+    original: &AtomicUsize,
+    what: &str,
+) -> Result<MhHook, String> {
     // Unresolved on purpose: `MhHook::new` translates through the detour map itself.
     let target = game_rva_for_hook(rva)?;
     // SAFETY: `detour` has the target's exact signature.

@@ -10,9 +10,15 @@
 //!   the player's own red sign. The chosen NPC is created through the spirit-ash spawn call and
 //!   disabled before any frame draws it; once its model is loaded a red NPC summon sign keyed to it
 //!   is placed at the player's feet ([`game`]). Touching the sign is the game's own phantom join.
+//!   The NPC is registered under its own entity id and unlinked from the player's summon group,
+//!   so neither its sign nor the spirit-ash HUD can mistake it for a companion. While the picker
+//!   is open the game gets neither its keys and buttons ([`pad`], `er-dinput-suppress-core`) nor
+//!   the mouse ([`cursor`]).
+//! * The finger is still refused where the game bars summoning ([`finger`]).
 //! * Mimic Tear: four detours rewrite what `BuddyGenerator` summons for a Mimic Tear request
 //!   ([`mimic_hooks`]), and each companion with a `build_url` is built wearing that build's gear
-//!   ([`dress`]).
+//!   ([`dress`]), carries its configured name ([`names`]) and, with `ai = { brain = "x" }`, runs
+//!   a Lua brain loaded into the AI state ([`brains`]).
 //!
 //! # The log is the oracle
 //!
@@ -23,6 +29,10 @@ mod addr;
 mod log;
 
 #[cfg(windows)]
+mod brains;
+#[cfg(windows)]
+mod cursor;
+#[cfg(windows)]
 mod dress;
 #[cfg(windows)]
 mod finger;
@@ -31,7 +41,11 @@ mod game;
 #[cfg(windows)]
 mod mimic_hooks;
 #[cfg(windows)]
+mod names;
+#[cfg(windows)]
 mod overlay;
+#[cfg(windows)]
+mod pad;
 #[cfg(windows)]
 mod picker;
 
@@ -46,7 +60,7 @@ use eldenring::{
     fd4::FD4TaskData,
 };
 #[cfg(windows)]
-use er_npc_summons_core::config::{Body, Config};
+use er_npc_summons_core::config::{Ai, Body, Config};
 #[cfg(windows)]
 use er_npc_summons_core::duel::{Action, Duel, Event, State};
 #[cfg(windows)]
@@ -85,8 +99,15 @@ struct TaskState {
     edges: picker::Edges,
     /// Where the current duel's NPC and sign stand (physics space).
     sign_at: Option<game::Vec4>,
-    /// The current duel NPC's event entity, read once it exists.
+    /// The current duel NPC's event entity, read once it exists (`duel::DUEL_ENTITY_ID` when the
+    /// spawn went as intended); the key its sign is placed under.
     entity: Option<u32>,
+    /// The current duel NPC's `FieldInsHandle`, the key its liveness is judged by. An entity
+    /// lookup is not: on 2026-10-06 every summon-path character carried entity 35000, and the
+    /// lookup found a live Mimic companion in the duel NPC's place (bd `er-effects-rs-gqu9`).
+    handle: Option<u64>,
+    /// The roster name of the NPC being spawned, from the pick.
+    picked_name: Option<String>,
 }
 
 #[cfg(windows)]
@@ -123,6 +144,26 @@ fn refresh_config(state: &mut TaskState) {
         config.mimic.companions.len()
     ));
     finger::set_enabled(config.duel.enabled);
+    let companions: &[er_npc_summons_core::config::Companion] = if config.mimic.enabled {
+        &config.mimic.companions
+    } else {
+        &[]
+    };
+    names::set_companions(
+        companions
+            .iter()
+            .map(|companion| (companion.slot, companion.name.clone()))
+            .collect(),
+    );
+    brains::configure(
+        companions
+            .iter()
+            .filter_map(|companion| match &companion.ai {
+                Ai::Brain(name) => Some((name.clone(), companion.think())),
+                Ai::Native | Ai::LikeNpc(_) => None,
+            })
+            .collect(),
+    );
     let plan = if config.mimic.enabled {
         dress::configure(&config.mimic.companions);
         er_npc_summons_core::mimic::plan(&config.mimic.companions)
@@ -173,9 +214,14 @@ fn perform(state: &mut TaskState, actions: Vec<Action>) -> Option<Event> {
                         Ok(chr) => {
                             state.sign_at = Some(at);
                             state.entity = game::event_entity(chr);
+                            state.handle = game::chr_handle(chr);
+                            if let Some(name) = state.picked_name.as_deref() {
+                                names::set(chr, name);
+                            }
                             summons_log(format_args!(
-                                "duel: spawned npc {} hidden as 0x{chr:x} (entity {:?})",
-                                body.npc_param, state.entity
+                                "duel: spawned npc {} hidden as 0x{chr:x} (entity {:?}, handle \
+                                 {:?})",
+                                body.npc_param, state.entity, state.handle
                             ));
                             Event::Created(chr as u64)
                         }
@@ -203,14 +249,22 @@ fn perform(state: &mut TaskState, actions: Vec<Action>) -> Option<Event> {
                     )),
                     Err(why) => {
                         summons_log(format_args!("duel: the sign was not placed: {why}"));
-                        let _ = game::unsummon(chr as usize);
+                        if alive(state, chr) {
+                            let _ = game::unsummon(chr as usize);
+                        }
+                        forget(state, chr);
                         follow = Some(Event::Gone);
                     }
                 }
             }
             Action::Remove { chr, why } => {
-                let result = game::unsummon(chr as usize);
+                let result = if alive(state, chr) {
+                    game::unsummon(chr as usize)
+                } else {
+                    Err("already gone".to_owned())
+                };
                 summons_log(format_args!("duel: removed 0x{chr:x} ({why}): {result:?}"));
+                forget(state, chr);
             }
             Action::Log(line) => summons_log(format_args!("duel: {line}")),
         }
@@ -232,13 +286,22 @@ fn step(state: &mut TaskState, event: Event) {
     }
 }
 
-/// Is the duel NPC still the character its entity id names?
+/// Is the duel NPC still alive: does the handle it was created with still resolve to it?
 #[cfg(windows)]
 fn alive(state: &TaskState, chr: u64) -> bool {
     state
-        .entity
-        .and_then(game::chr_by_entity)
+        .handle
+        .and_then(game::chr_by_handle)
         .is_some_and(|found| found as u64 == chr)
+}
+
+/// The duel is over: forget the NPC.
+#[cfg(windows)]
+fn forget(state: &mut TaskState, chr: u64) {
+    names::clear(chr as usize);
+    state.entity = None;
+    state.handle = None;
+    state.sign_at = None;
 }
 
 #[cfg(windows)]
@@ -248,12 +311,19 @@ fn tick(state: &mut TaskState) {
     }
     state.frames = state.frames.wrapping_add(1);
     dress::tick();
+    brains::tick();
     if finger::take_finger_use() {
         step(state, Event::FingerUsed);
     }
     match picker::poll(&mut state.edges) {
         Some(picker::Choice::Picked(index)) => {
             summons_log(format_args!("duel: picker chose row {index}"));
+            state.picked_name = state
+                .config
+                .duel
+                .roster
+                .get(index)
+                .map(|npc| npc.name.clone());
             step(state, Event::Picked(index));
         }
         Some(picker::Choice::Cancelled) => {
@@ -263,32 +333,50 @@ fn tick(state: &mut TaskState) {
         None => {}
     }
     step(state, Event::Frame);
+    names::prune();
     match state.duel.state.clone() {
-        State::Hidden { chr, .. } => match game::hidden_observation(chr as usize) {
-            Some(seen) => step(state, Event::Observed(seen)),
-            None => step(state, Event::Gone),
-        },
+        State::Hidden { chr, .. } => {
+            let seen = alive(state, chr)
+                .then(|| game::hidden_observation(chr as usize))
+                .flatten();
+            match seen {
+                Some(seen) => step(state, Event::Observed(seen)),
+                None => {
+                    summons_log(format_args!(
+                        "duel: hidden 0x{chr:x} is gone (its handle no longer resolves to it)"
+                    ));
+                    forget(state, chr);
+                    step(state, Event::Gone);
+                }
+            }
+        }
         State::Offered { chr } => {
-            let joined = game::chr_handle(chr as usize)
+            let joined = state
+                .handle
                 .and_then(game::party_state)
                 .is_some_and(|s| s >= PARTY_JOINED);
             if joined {
                 summons_log(format_args!("duel: 0x{chr:x} joined as a red phantom"));
                 step(state, Event::Joined);
             } else if !alive(state, chr) {
+                summons_log(format_args!(
+                    "duel: offered 0x{chr:x} is gone (its handle no longer resolves to it)"
+                ));
+                forget(state, chr);
                 step(state, Event::Gone);
             }
         }
         State::Joined { chr } => {
-            let in_party = game::chr_handle(chr as usize)
-                .and_then(game::party_state)
-                .is_some();
-            if !alive(state, chr) || !in_party {
-                if alive(state, chr) {
+            let in_party = state.handle.and_then(game::party_state).is_some();
+            let live = alive(state, chr);
+            if !live || !in_party {
+                if live {
                     let _ = game::unsummon(chr as usize);
                 }
-                state.entity = None;
-                state.sign_at = None;
+                summons_log(format_args!(
+                    "duel: joined 0x{chr:x} ended (alive {live}, in party {in_party})"
+                ));
+                forget(state, chr);
                 step(state, Event::Gone);
             }
         }
@@ -316,6 +404,8 @@ fn spawn_game_task() {
                 edges: picker::Edges::default(),
                 sign_at: None,
                 entity: None,
+                handle: None,
+                picked_name: None,
             };
             summons_log(format_args!("game task registering on FrameBegin"));
             task.run_recurring(
@@ -334,6 +424,10 @@ fn install(module_base: usize) {
     ));
     finger::install();
     mimic_hooks::install();
+    game::install();
+    names::install();
+    brains::install();
+    cursor::install();
     spawn_game_task();
     overlay::install(module_base);
 }

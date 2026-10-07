@@ -39,6 +39,7 @@ er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
   "Win32_System_SystemServices",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",

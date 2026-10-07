@@ -34,10 +34,6 @@ pub(crate) const IS_DRAWN: u32 = 0x003f_3700;
 pub(crate) const PLAYER_EVENT_ID: u32 = 0x0065_63e0;
 /// `PlayerIns` steam id getter used by `BuddyGenerator` (1.17.1 `0x140657160`).
 pub(crate) const PLAYER_STEAM_ID: u32 = 0x0065_6310;
-/// `NotifyBuddyUnsummon(SummonBuddyManager*, FieldInsHandle*)`: the deferred unsummon that unlinks
-/// the summon group, removes the character and broadcasts. `RemoveChrIns` alone crashed the game
-/// on a summon (measured 2026-10-05) (1.17.1 `0x1404b84b0`).
-pub(crate) const NOTIFY_BUDDY_UNSUMMON: u32 = 0x004b_7f90;
 /// MSVC `std::list<int>` node insert the buddy list fill uses: `node*(List*, next, prev, int*)`
 /// (1.17.1 `0x1404b4fb0`).
 pub(crate) const BUDDY_LIST_INSERT: u32 = 0x004b_4a50;
@@ -106,6 +102,104 @@ pub(crate) mod party {
     pub(crate) const ENTRY_COUNT: usize = 6;
     pub(crate) const ENTRY_STATE: usize = 0xc;
 }
+
+/// `SummonBuddyManager::RemoveChrIns(SummonBuddyManager*, ChrIns*)`: untracks the warp, then
+/// `WorldChrManImp::RemoveChrIns`, then (arena only) packet 79. It reads no summon group, which
+/// is why it is the unsummon for a character this DLL has unlinked (1.17.1 `0x1404bbaa0`).
+pub(crate) const SUMMON_REMOVE_CHR: u32 = 0x004b_b580;
+/// `SummonBuddyWarpManager` untrack, `void(warpManager, FieldInsHandle by value)`; a handle it
+/// does not track is a no-op, and it does not check the manager for null (1.17.1 `0x1404c26f0`).
+pub(crate) const WARP_UNTRACK: u32 = 0x004c_21d0;
+/// `WorldChrManImp::GetChrInsFromHandle(WorldChrManImp*, FieldInsHandle*) -> ChrIns*` (1.17.1
+/// `0x140508a50`).
+pub(crate) const GET_CHR_FROM_HANDLE: u32 = 0x0050_7c80;
+/// Detour: `ChrSet::SpawnChr(ChrSet*, u8, ChrSpawnRequest*, int buddySlot) -> ChrIns*`. Its only
+/// caller is `CreateSummonChr`, which hands it a request whose event entity it set to 35000
+/// (1.17.1 `0x1404bb43b`, call at `0x1404bb4bf`) (1.17.1 `0x140493380`).
+pub(crate) const SPAWN_CHR: u32 = 0x0049_2e20;
+/// `ChrSpawnRequest+0x4c`: the event entity id `SpawnChr` registers the new character under in
+/// its `ChrSet`'s entity map, which is what `GetChrInsByEntityId` searches.
+pub(crate) const SPAWN_REQUEST_EVENT_ENTITY: usize = 0x4c;
+
+/// The summon groups: `SummonBuddyManager+0x70` is an MSVC tree (head pointer `+0x78`) keyed by
+/// owner event id; each node holds a `std::list` of 0x40-byte entries whose `+0x10` is the
+/// `ChrIns*` (bd `summon-groups-hud-bar-and-removechrins-1171-static-2026-10-06`).
+pub(crate) mod summon_group {
+    pub(crate) const MANAGER_TREE_HEAD: usize = 0x78;
+    pub(crate) const MANAGER_WARP_MANAGER: usize = 0xe8;
+    pub(crate) const NODE_LEFT: usize = 0x0;
+    pub(crate) const NODE_PARENT: usize = 0x8;
+    pub(crate) const NODE_RIGHT: usize = 0x10;
+    pub(crate) const NODE_IS_NIL: usize = 0x19;
+    pub(crate) const NODE_KEY: usize = 0x20;
+    pub(crate) const NODE_LIST_ALLOCATOR: usize = 0x28;
+    pub(crate) const NODE_LIST_HEAD: usize = 0x30;
+    pub(crate) const NODE_LIST_SIZE: usize = 0x38;
+    pub(crate) const ENTRY_NEXT: usize = 0x0;
+    pub(crate) const ENTRY_PREV: usize = 0x8;
+    pub(crate) const ENTRY_CHR: usize = 0x10;
+    /// `DLAllocator::Deallocate(this, void*)`, the slot the game's own sweep frees an entry
+    /// through (1.17.1 `0x1404b945f`).
+    pub(crate) const ALLOCATOR_DEALLOCATE: usize = 0x68;
+}
+
+/// The finger's own red-sign term, `bool(PlayerIns*)`: the player's `+0x2e7` bit 3, then
+/// `IsInSafePosRange`, `WorldChrManImp::IsRedSignLimited` and the play region's red-sign event
+/// flag. `CanUseGoods` calls it for goods 101 at 1.17.1 `0x14068f9bf` (1.16.2 `FUN_140656f90`,
+/// 1.17.1 `0x140657de0`).
+pub(crate) const RED_SIGN_TERM: u32 = 0x0065_6f90;
+/// `WorldChrManImp::CanStartMultiplay(WorldChrManImp*) -> bool`: the term every multiplayer item
+/// shares; false in an area where summoning is barred (1.17.1 `0x14050aa50`).
+pub(crate) const CAN_START_MULTIPLAY: u32 = 0x0050_9c80;
+
+/// Detour: `GetChrName(MenuString* out, ChrIns*, bool decorate) -> MenuString*` (1.17.1
+/// `0x1407605a0`).
+pub(crate) const GET_CHR_NAME: u32 = 0x0075_f750;
+/// `MenuString+0`: `wchar_t* rawString`, then a `DLString<wchar_t>`. Readers take `rawString`
+/// when it is not null and the `DLString` otherwise (`MenuString::Replace`, 1.16.2
+/// `0x140763490`).
+pub(crate) const MENU_STRING_RAW: usize = 0x0;
+
+/// Lua 5.0.2 API of the AI state (bd `ai-lua-state-and-loader-1171-static-2026-10-05`).
+pub(crate) mod lua {
+    /// Detour: `lua_pcall(L, nargs, nresults, errfunc) -> int` (1.17.1 `0x142026970`).
+    pub(crate) const PCALL: u32 = 0x0202_4b00;
+    /// `lua_gettop(L) -> int` (1.17.1 `0x1420265d0`).
+    pub(crate) const GETTOP: u32 = 0x0202_4760;
+    /// `lua_settop(L, int)` (1.17.1 `0x142026fd0`).
+    pub(crate) const SETTOP: u32 = 0x0202_5160;
+    /// `luaL_loadbuffer(L, const char*, size_t, const char* name) -> int` (1.17.1
+    /// `0x142027f30`).
+    pub(crate) const LOADBUFFER: u32 = 0x0202_60c0;
+    /// `lua_tostring(L, int) -> const char*` (1.17.1 `0x142027200`).
+    pub(crate) const TOSTRING: u32 = 0x0202_5390;
+}
+
+/// `CSWorldAiManager*` global (1.17.1 `0x143d66548`), carried by the data map.
+pub(crate) const CS_WORLD_AI_MAN_GLOBAL_RVA: usize = 0x3d6_24e8;
+
+/// `CSWorldAiManager` -> `+0x6938` `CSAiLua*` (getter `mov rax,[rcx+0x6938]; ret` at 1.17.1
+/// `0x14037c140`) -> `+0xb8` `DLLuaDetail*` -> `+0x28` `lua_State*` (the detail's load wrapper at
+/// 1.17.1 `0x142020900` passes `[this+0x28]`). Live-confirmed 2026-10-06: `lua_pcall` was called
+/// with the state this chain reads.
+pub(crate) mod ai_lua {
+    pub(crate) const MAN_CS_AI_LUA: usize = 0x6938;
+    pub(crate) const CS_AI_LUA_DETAIL: usize = 0xb8;
+    pub(crate) const DETAIL_STATE: usize = 0x28;
+}
+
+/// "A menu has the mouse", `bool(CSMenuManImp*)`, 1.16.2 `FUN_140765800`. Its callers are the
+/// cursor gate (1.17.1 `0x140e20490`: show and free the cursor) and the mouse axis readers
+/// (`0x140e2b360`, `0x140e2b450`: return 0 while it is true). 1.17 added a clause to its body, so
+/// it has no verified ledger row; it is an rva into 1.17.1 only, checked by its opening bytes
+/// before it is hooked.
+pub(crate) const MENU_HAS_MOUSE_1171_RVA: usize = 0x0076_6650;
+/// The 1.17.1 opening of [`MENU_HAS_MOUSE_1171_RVA`]: three register saves, `sub rsp,0x20`,
+/// `cmp byte [rcx+0x1a],0`.
+pub(crate) const MENU_HAS_MOUSE_1171_PROLOGUE: [u8; 24] = [
+    0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57,
+    0x48, 0x83, 0xec, 0x20, 0x80, 0x79, 0x1a, 0x00,
+];
 
 /// `SummonBuddyManager+0x20`: the requested summon SpEffect, `207000 + level` for the Mimic Tear.
 pub(crate) const BUDDY_MANAGER_REQUEST: usize = 0x20;

@@ -285,9 +285,126 @@ er-effects-rs-x6nl):
   charaInit id. A URL that is refused, fails to fetch or parse, or resolves to nothing leaves the
   companion in its body's own gear, with the reason in the log.
 
-Not built yet:
+### 6.1 Gaps (2026-10-06): built, not yet run as a DLL
 
-- Lua brains;
-- companion names;
-- taking picker input away from the game;
-- refusing the finger where summoning is barred.
+The seven gaps below are implemented on branch `feat/er-npc-summons-gaps` (modules `game`,
+`names`, `brains`, `finger`, `pad`, `cursor`, `picker`; `er-dinput-suppress-core`'s keyboard half;
+`er-quickload`'s pad hook moved onto its union). Their addresses are verified
+(`docs/recon/npc-summons-addresses.tsv`). The read-only Frida agent
+`scripts/frida/npc-summons-gaps-probe.js` ran against the live game on 2026-10-06 (pid 376, 16
+messages) and confirmed, MEASURED:
+
+- every `CreateSummonChr` (two Mimic companions, then the duel NPC) pushed the new character as
+  the tail entry of the creator's group; the group was keyed 0, sizes 1, 2, 3, one allocator;
+- `lua_pcall` was called with the state the `CSWorldAiManager` chain reads;
+- the finger's terms in the open world under Seamless: verdict 1, red-sign term true,
+  `CanStartMultiplay` true;
+- the menu-has-the-mouse predicate answered 0 in the world and 1 with a game menu open.
+
+`GetChrName` was not called during those 178 seconds, so where item 2's names appear is still
+STATIC.
+
+**7. The duel NPC was mistaken for a companion (bd `er-effects-rs-gqu9`, MEASURED 2026-10-06).**
+With two companions alive, the log read `spawned npc 523730040 hidden as 0x1c5615880 (entity
+Some(35000))`, the sign was placed, and 30 ms later `the duel character 0x1c5615880 vanished`.
+`CreateSummonChr` stores a constant 35000 into its spawn request (1.17.1 `0x1404bb43b`, request
+`+0x4c`); `ChrSet::SpawnChr` (1.17.1 `0x140493380`, its only caller is `CreateSummonChr`) registers
+the new character in its set's entity map under that id, and `GetChrInsByEntityId` searches those
+maps (`GetChrInsByEntityId_IdOnly` 1.16.2 `0x140507d30` -> `GetChrInsFromSetByEntityId`
+`0x140494d00`, an ordered map, first match). So the liveness lookup found a companion, and the
+sign, keyed by entity, could have joined one. Fix: (a) liveness is the handle, through
+`WorldChrManImp::GetChrInsFromHandle` (1.17.1 `0x140508a50`), and every read of the NPC after it
+is gone goes through that check; (b) a `SpawnChr` detour, active only on the thread inside the
+duel's own `CreateSummonChr`, rewrites the request's entity to `DUEL_ENTITY_ID` (35001) before the
+character is built, so `SpawnChr` registers it there natively; the DLL refuses the spawn when
+35001 is already registered and removes the NPC if it did not land there.
+Runtime proof: `duel: spawned npc ... (entity Some(35001), handle Some(..))`, and with companions
+alive the NPC stays until the touch.
+
+**1. The duel NPC's HUD HP bar.** `CreateSummonChr` always pushes the new character onto the tail
+of its creator's group: the tree at `SummonBuddyManager+0x70` (head pointer `+0x78`), node `+0x20`
+owner event id, the group's list at `+0x28` (allocator `+0x28`, head `+0x30`, size `+0x38`), entry
+`+0` next, `+8` prev, `+0x10` the `ChrIns*` inline (0x40-byte node). The HUD panel producer
+(1.17.1 `0x140771a20`) gets its bars only from that list (`0x1404b7240` count, `0x1404b7160` i-th
+character), and `DespawnAll` and `RemoveSummonsByOwnerEventId` walk it too. Fix, in
+`game::spawn_hidden` right after the call returns: find the entry whose `+0x10` is the new
+character, unlink and free it exactly as the game's PostPhysics sweep does at 1.17.1
+`0x1404b943c..0x1404b945f` (`prev->next = next`, `next->prev = prev`, `size -= 1`, then
+`allocator->vtbl[+0x68](allocator, entry)`), never touching the sentinel or the tree node; then
+untrack the warp: `0x1404c26f0(wm = [mgr+0xe8], chr->handle by value)` when `wm` is not null
+(a no-op for an untracked handle). Log the group size before and after. Unsummon becomes
+`SummonBuddyManager::RemoveChrIns` (1.17.1 `0x1404bbaa0`, `(mgr, ChrIns*)`), because
+`NotifyBuddyUnsummon` finds nothing once the entry is gone. Two facts the reader must not miss:
+`SummonBuddyManager::RemoveChrIns` ends in the same `WorldChrManImp::RemoveChrIns` (`0x14050b340`)
+whose direct use crashed on 2026-10-05, and it is also the call the game's own sweep makes before
+it unlinks. The INFERRED reading is that the 2026-10-05 crash was the still-linked entry being read
+after the character was freed; only a run proves it. Nothing on the duel join path reads the groups
+(sign handler `0x1406fe520`, join update `0x1406ff260`, `ConvertToNpcPhantom` `0x14050c6d0`,
+`AddMember` `0x1409faba0`, two levels deep), and no sweep removes a summon character for having no
+entry. The unlinked character also skips the activation step (`0x1404bdfc0`), which the duel spawn
+already avoids by passing `args[11] = 0`.
+Runtime proof: the log line with the group size dropping by one; the probe's `summon-group` report
+(`tailIsChr: true` right after the call); no left-HUD bar before the touch; the duel still joins.
+
+**2. Names.** Detour `GetChrName(MenuString* out, ChrIns*, bool decorate)` (1.17.1 `0x1407605a0`):
+call the original, then for a configured character write a never-freed UTF-16 buffer into
+`out+0`. `MenuString` is `{ wchar_t* rawString; DLString<wchar_t> }` and every reader takes
+`rawString` when it is not null (`MenuString::Replace` 1.16.2 `0x140763490`), so the `DLString`
+is left for the destructor. Keyed by `ChrIns*` plus the handle at `+8`, so a reused address does not
+inherit a name. The duel NPC takes its roster `name`; companions their `name`, recorded per slot in
+the `CreateSummonChr` detour. Callers of `GetChrName` in 1.16.2 include `UpdateEnemyTags`, the
+summon/red-hunter network messages and `SendHome`. Overhead plates for companions need mid-function
+hooks, which `er-hook` refuses; the DLL logs that they are not drawn.
+Runtime proof: the probe's `chr-name` report shows `rawString` per character; with the DLL, the
+network message on the duel NPC's join names it.
+
+**3. Lua brains.** Detour `lua_pcall` (1.17.1 `0x142026970`, prologue `40 53 48 83 ec 40`). Only
+when its first argument is the AI state (`CSWorldAiManager` `0x143d66548` -> `+0x6938`
+(getter `0x14037c140`) -> `+0xb8` -> `+0x28` (the detail's load wrapper `0x142020900` passes
+`[this+0x28]`)): save `lua_gettop` (`0x1420265d0`), `luaL_loadbuffer` (`0x142027f30`) and run each
+chunk through the trampoline with `(L, 0, 0, 0)`, read an error with `lua_tostring`
+(`0x142027200`), restore with `lua_settop` (`0x142026fd0`), then make the game's own call. Never
+write the raw top pointer: the stack can be reallocated by a chunk (two crashes in `luaV_execute`,
+2026-10-05). Apply when the state pointer changes and every 120 frames. The framework is
+`crates/er-npc-summons/lua/brain-framework.lua` (cut down from `scripts/frida/ai-lua/_lab.lua`,
+host-checked by `brain-framework.test.lua`); brains are `<game dir>/er-npc-summons/brains/<name>.lua`
+and are keyed by think id, so a brain on a shared think also drives every world NPC with that think.
+`CSWorldAiManager` has no `data.tsv` row until a crate declares `0x3d624e8` and
+`map-data-rvas-1162-to-1170.py --refresh` runs (425/425 references agree on `0x3d66548`).
+Runtime proof: the probe's `ai-lua-pcall` report; with the DLL, the log's `brain_drain_log` lines
+(`wrapped count N brains name=think`).
+
+**4. The finger where summoning is barred.** In `can_use_goods_hook`, a refusal of goods 101 is
+turned into a permission only when the finger's own red-sign term (1.17.1 `0x140657de0`,
+`bool(PlayerIns*)`: `+0x2e7` bit 3, `IsInSafePosRange`, `IsRedSignLimited`, the play region's
+red-sign flag) and `WorldChrManImp::CanStartMultiplay` (`0x14050aa50`, `bool(WorldChrManImp*)`)
+both answer true; the log names the refusing term whenever the answer changes.
+Runtime proof: the probe's `finger-101` report in Roundtable Hold (a refusing term) and at a
+Site of Grace in the open world (both true).
+
+**5. Picker input taken from the game.** Keyboard: `er-dinput-suppress-core` gains a keyboard
+install mirroring the mouse one, through `register_shared_hook_with_budget` on the keyboard
+`GetDeviceState` slot, zeroing `DIK_UP`, `DIK_DOWN`, `DIK_RETURN`, `DIK_NUMPADENTER` and `DIK_BACK`
+on 256-byte reads while the picker is open, and keeping a key blanked after close until it is seen
+released. Needs `[[shared]]` rows against `er-quickload`, `er-net-effects`, `er-enemynpc-effects`
+and `er-hotkey-conflicts`. Pad: a union hook on `XInputGetState` past the Wine forwarding thunk,
+storing raw `wButtons` for the picker and clearing d-pad up/down, A and B while open. That target
+is the one `er-quickload`'s `input_blocker` detours with a bare `MhHook`, so that install has to move
+to `register_union_hook` in the same change, or one of the two is silently dropped.
+Runtime proof: `keyboard_hook_fires` and a suppressed-key counter in the log while the picker is
+open; the character does not walk or roll on the picker's keys.
+
+**6. A free cursor and a still camera while the picker is open.** One predicate drives both:
+`FUN_140765800(CSMenuManImp*) -> bool` (1.17.1 `0x140766650`), "a menu has the mouse". Its only
+callers are the cursor gate `FUN_140e1e620` (1.17.1 `0x140e20490`, which ANDs it with
+`IsGameInForeground` and feeds `ShowCursor` and `ClipCursor`/re-centre) and the mouse X/Y axis
+readers (1.17.1 `0x140e2b360`, `0x140e2b450`), which return `0.0` while it is true; `ChrCam`'s
+input update and the mouse-flick lock-on switch read only those. Detour it to return true while the
+picker is open. 1.17 changed its body (`DIVERGES 0.56`: a clause forces false while UI element 2 is
+visible), so it has no ledger row and is hooked by its 1.17.1 address on 1.17.1 only, through the
+runtime-derived installer. Mouse buttons, keyboard actions and the right stick are gated by inline
+reads of `CSMenuMan+0x1c` instead, which this does not reach; the left click is already blanked over
+the picker.
+Runtime proof: `CSMouseMan+0x03` reads 1 after a mouse move while open and 0 after close; `+0x24`
+(the re-centre timer) stays 0 while open and climbs after; the axis readers return `0.0` while
+open with `CSMouseMan+0x30 == 1`; the probe's `menu-has-the-mouse` transitions.

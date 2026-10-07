@@ -14,17 +14,18 @@
 //! * `CanUseGoods`, through the shared seven-argument union (`er-invasion-warp` answers the same
 //!   function for the invasion fingers): row 101 carries `disable_offline`, so offline it is
 //!   refused on `IsInOnlineMode`. A refusal of 101 while duels are enabled is turned into a
-//!   permission. That also lifts the item's other terms (safe position, red signs allowed in the
-//!   region, no pending request); the duel code re-checks what it needs before it spawns.
+//!   permission only where the finger's own red-sign term and `CanStartMultiplay` both pass, so a
+//!   place where summoning is barred still refuses it.
 
 #![cfg(windows)]
 
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
-use er_game_base::mem::game_rva_for_hook;
+use er_game_base::mem::{game_rva_for_hook, game_rva_named};
 use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 
+use crate::addr::{CAN_START_MULTIPLAY, RED_SIGN_TERM};
 use crate::log::summons_log;
 
 /// `PlayerIns::StartMultiplayProcedureWithMountData(PlayerIns*, MultiplayType)`, 1.16.2
@@ -99,9 +100,57 @@ unsafe extern "system" fn can_use_goods_hook(
         )
     };
     if verdict == 0 && goods_id == DUELIST_FURLED_FINGER && DUELS_ENABLED.load(Ordering::Acquire) {
-        return 1;
+        return usize::from(summoning_allowed_here(player));
     }
     verdict
+}
+
+/// `FUN_140656f90` / `WorldChrManImp::CanStartMultiplay`: both `bool(this)`.
+type TermFn = unsafe extern "system" fn(usize) -> u8;
+
+/// The last answer [`summoning_allowed_here`] logged: 0 none yet, else `1 + red + 2 * multiplay`.
+static LAST_TERMS: AtomicU8 = AtomicU8::new(0);
+
+fn term(rva: u32, what: &'static str, this: usize) -> Option<bool> {
+    let address = game_rva_named(rva, what).ok()?;
+    // SAFETY: both terms are `bool(this)` predicates the game calls from `CanUseGoods`.
+    let call: TermFn = unsafe { core::mem::transmute(address) };
+    Some(unsafe { call(this) } != 0)
+}
+
+/// Whether the finger may be used here although the game refused it: only where the finger's own
+/// red-sign term (the player's red-sign bit, safe position, the world's and the play region's
+/// red-sign limits) and `WorldChrManImp::CanStartMultiplay` both pass. That keeps the refusal in
+/// Roundtable Hold and every other place summoning is barred, and lifts only the offline refusal.
+/// Live 2026-10-06 in the open world under Seamless: both true. The log names the refusing term
+/// whenever the answer changes.
+fn summoning_allowed_here(player: usize) -> bool {
+    let red = term(RED_SIGN_TERM, "RED_SIGN_TERM", player);
+    let multiplay = crate::game::world_chr_man()
+        .and_then(|wcm| term(CAN_START_MULTIPLAY, "CAN_START_MULTIPLAY", wcm));
+    let (Some(red), Some(multiplay)) = (red, multiplay) else {
+        if LAST_TERMS.swap(u8::MAX, Ordering::AcqRel) != u8::MAX {
+            summons_log(format_args!(
+                "finger: goods 101 refused -- a term could not be asked (red-sign term {red:?}, \
+                 CanStartMultiplay {multiplay:?})"
+            ));
+        }
+        return false;
+    };
+    let code = 1 + u8::from(red) + 2 * u8::from(multiplay);
+    if LAST_TERMS.swap(code, Ordering::AcqRel) != code {
+        let refusing = match (red, multiplay) {
+            (true, true) => "none, offered",
+            (false, true) => "the red-sign term",
+            (true, false) => "CanStartMultiplay",
+            (false, false) => "the red-sign term and CanStartMultiplay",
+        };
+        summons_log(format_args!(
+            "finger: goods 101 -- red-sign term {red}, CanStartMultiplay {multiplay}; refused by \
+             {refusing}"
+        ));
+    }
+    red && multiplay
 }
 
 /// Install both hooks. Called once, from the install thread.

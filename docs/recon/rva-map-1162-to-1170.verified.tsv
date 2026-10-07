@@ -50,9 +50,20 @@
 # The extent column shows where each body's end came from and, when the two
 # disagree, by how much: PDATA:0x120b/0x1213+8 is a body that GREW, which is
 # evidence of a change that costs no decoding to see.
-0x1406587b0	0x140659600	IDENTICAL-WHOLE	1.000	84	npc-summons 2026-10-06: PlayerIns::StartMultiplayProcedureWithMountData (1.16.2 Ghidra :8765 name), er-npc-summons detour target; map-rvas-1162-to-1170 unique 45B signature; 1.17.1 runtime 0x140659600	BOTH-ENTRIES	PDATA:0x165/0x165
+0x140656f90	0x140657de0	IDENTICAL-WHOLE	1.000	40	hand-derived 2026-10-06: FUN_140656f90(PlayerIns*) -> bool, the Duelist's Furled Finger red-sign term; CanUseGoods calls it at 1.17.1 0x14068f9bf (mov rcx,rsi; call 0x140657de0). Below 0xafefe9, so 1.17.0 == 1.17.1	BOTH-ENTRIES	PDATA:0x97/0x97
+0x140509c80	0x14050aa50	IDENTICAL-WHOLE	1.000	34	hand-derived 2026-10-06: CS::WorldChrManImp::CanStartMultiplay(WorldChrManImp*) -> bool; +0xdd0 region (bd can-use-goods-terms-measured-live-2026-09-17). Below 0xafefe9	BOTH-ENTRIES	PDATA:0x75/0x75
+0x14075f750	0x1407605a0	BYTE-IDENTICAL	1.000	164	hand-derived 2026-10-06: CS::GetChrName(MenuString* out, ChrIns*, bool decorate) -> MenuString*; prologue 48 89 4c 24 08 57 48 83 ec 30 identical in both builds. Below 0xafefe9	BOTH-ENTRIES	PDATA:0xa4/0xa4
+0x142024b00	0x142026900	BYTE-IDENTICAL	1.000	97	hand-derived 2026-10-06: lua_pcall(L, nargs, nresults, errfunc), AI Lua 5.0.2 state; 1.17.1 0x142026970 (+0x70 above 0xafefe9); prologue 40 53 48 83 ec 40	BOTH-ENTRIES	PDATA:0x61/0x61
+0x142024760	0x142026560	IDENTICAL-LEAF	1.000	4	hand-derived 2026-10-06: lua_gettop(L), 4-instruction leaf; 1.17.1 0x1420265d0	NEITHER-ENTRY	LEAF:0xd/0xd
+0x142025160	0x142026f60	IDENTICAL-LEAF	1.000	26	hand-derived 2026-10-06: lua_settop(L, idx); 1.17.1 0x142026fd0	NEITHER-ENTRY	LEAF:0x54/0x54
+0x1420260c0	0x142027ec0	BYTE-IDENTICAL	1.000	36	hand-derived 2026-10-06: luaL_loadbuffer(L, buf, size, name); 1.17.1 0x142027f30	BOTH-ENTRIES	PDATA:0x24/0x24
+0x142025390	0x142027190	BYTE-IDENTICAL	1.000	126	hand-derived 2026-10-06: lua_tostring(L, idx); 1.17.1 0x142027200	BOTH-ENTRIES	PDATA:0x7e/0x7e
+0x1404bb580	0x1404bbaa0	IDENTICAL-WHOLE	1.000	62	hand-derived 2026-10-06: CS::SummonBuddyManager::RemoveChrIns; +0x520 region. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x11c/0x11c
+0x1404c21d0	0x1404c26f0	BYTE-IDENTICAL	1.000	79	hand-derived 2026-10-06: FUN_1404c21d0(manager+0xe8, handle), the summon warp-tracking removal. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x4f/0x4f
+0x140507c80	0x140508a50	BYTE-IDENTICAL	1.000	27	hand-derived 2026-10-06: CS::WorldChrManImp::GetChrInsFromHandle(WorldChrManImp*, FieldInsHandle*) -> ChrIns*; +0xdd0 region, same 9-instruction body. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x1b/0x1b
+0x140492e20	0x140493380	IDENTICAL-WHOLE	1.000	166	hand-derived 2026-10-06: CS::ChrSet::SpawnChr(ChrSet*, u8 index, ChrSpawnRequest*, int buddySlot) -> ChrIns*; sole caller CreateSummonChr, which calls it at 1.17.1 0x1404bb4bf with r8 = the request whose +0x4c eventEntityId it set to 35000 at 0x1404bb43b. Below 0xafefe9	BOTH-ENTRIES	PDATA:0x25a/0x25a
 #
-# CARRIED FORWARD -- 198 row(s) and 248 comment/blank line(s) the run that last
+# CARRIED FORWARD -- 199 row(s) and 248 comment/blank line(s) the run that last
 # wrote this file did not produce. `--tsv` TRUNCATES, so a pair verified in an
 # earlier, narrower run -- `verify-rva-map-1170.py 0x1407ada40 --tsv <this
 # file>` -- would otherwise disappear at exit 0 with nothing naming it, and the
@@ -64,6 +75,7 @@
 # refused for being mid-function despite verifying IDENTICAL. Until 2026-09-01
 # only rows were carried and 181 of those lines were dropped by one narrow run.
 # To drop one, delete its line.
+0x1406587b0	0x140659600	IDENTICAL-WHOLE	1.000	84	npc-summons 2026-10-06: PlayerIns::StartMultiplayProcedureWithMountData (1.16.2 Ghidra :8765 name), er-npc-summons detour target; map-rvas-1162-to-1170 unique 45B signature; 1.17.1 runtime 0x140659600	BOTH-ENTRIES	PDATA:0x165/0x165
 0x1404ba980	0x1404baea0	IDENTICAL-WHOLE	1.000	639	npc-summons 2026-10-06: CreateSummonChr (1.16.2 Ghidra :8765 entry); paired by rva-map-1162-to-1170.functions.tsv; 1.17.1 runtime 0x1404baea0	BOTH-ENTRIES	PDATA:0xaf7/0xaf7
 0x1403f62d0	0x1403f6500	IDENTICAL-WHOLE	1.000	29	npc-summons 2026-10-06: ChangeCharacterDisableState (1.16.2 Ghidra :8765 entry); paired by rva-map-1162-to-1170.functions.tsv; 1.17.1 runtime 0x1403f6500	BOTH-ENTRIES	PDATA:0x73/0x73
 0x1406f99a0	0x1406fa7f0	IDENTICAL-WHOLE	1.000	88	npc-summons 2026-10-06: PlaceNPCSummonSign body, FUN_1406f99a0(SosSignMan*, MultiplayType, uint* summonedNPCEntityId, ...) (1.16.2 Ghidra :8765 entry); paired by rva-map-1162-to-1170.functions.tsv; 1.17.1 runtime 0x1406fa7f0	BOTH-ENTRIES	PDATA:0x148/0x148

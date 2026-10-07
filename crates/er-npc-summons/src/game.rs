@@ -10,6 +10,7 @@
 #![cfg(windows)]
 
 use core::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use er_game_base::mem::{
     game_module_base, game_rva_named, read_global_ptr, safe_read_i32, safe_read_u8,
@@ -19,9 +20,11 @@ use er_game_base::rva::{
     CS_EVENT_MAN_GLOBAL_RVA, GAME_MAN_SINGLETON_RVA, WORLD_CHR_MAN_GLOBAL_RVA,
 };
 use er_npc_summons_core::config::Body;
-use er_npc_summons_core::duel::HiddenObservation;
+use er_npc_summons_core::duel::{DUEL_ENTITY_ID, HiddenObservation};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 
-use crate::addr::{self, chr_ins, chr_set_entry, party, sign, world_chr_man};
+use crate::addr::{self, chr_ins, chr_set_entry, party, sign, summon_group, world_chr_man};
+use crate::log::summons_log;
 
 /// `FloatVector4`. The game loads these with `MOVAPS`, so the alignment is required, not tidy.
 #[repr(C, align(16))]
@@ -57,7 +60,81 @@ type PhysicsPosFn = unsafe extern "system" fn(usize, *mut Vec4);
 type BlockToPhysicsFn = unsafe extern "system" fn(*mut Vec4, *const Vec4, *const u32) -> u8;
 type IsDrawnFn = unsafe extern "system" fn(usize) -> u8;
 type IdOutFn = unsafe extern "system" fn(usize, *mut c_void);
-type UnsummonFn = unsafe extern "system" fn(usize, *const u64);
+type RemoveChrFn = unsafe extern "system" fn(usize, usize);
+type WarpUntrackFn = unsafe extern "system" fn(usize, u64);
+type ChrFromHandleFn = unsafe extern "system" fn(usize, *const u64) -> usize;
+type DeallocateFn = unsafe extern "system" fn(usize, usize);
+type SpawnChrFn = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
+
+/// The thread inside [`spawn_hidden`]'s `CreateSummonChr` call, or 0. The `SpawnChr` detour
+/// rewrites the request's entity id only on that thread.
+static DUEL_SPAWN_TID: AtomicU32 = AtomicU32::new(0);
+static ORIG_SPAWN_CHR: AtomicUsize = AtomicUsize::new(0);
+/// The `SpawnChr` detour is live.
+static SPAWN_CHR_HOOKED: AtomicBool = AtomicBool::new(false);
+
+fn this_thread() -> u32 {
+    // SAFETY: no preconditions.
+    unsafe { GetCurrentThreadId() }
+}
+
+/// `ChrSet::SpawnChr(ChrSet*, u8, ChrSpawnRequest*, int)`. Inside the duel spawn the request's
+/// event entity is changed from 35000 to [`DUEL_ENTITY_ID`] before the character is created, so
+/// `SpawnChr` registers it in its set's entity map under an id nothing else holds. The id is
+/// copied into the character by `CreateCharacter` and read back through `GetEntityEventId` for
+/// the registration, so the character and the map agree, which poking `ChrIns+0x1e8` afterwards
+/// would not give.
+unsafe extern "system" fn spawn_chr_detour(
+    chr_set: usize,
+    index: usize,
+    request: usize,
+    buddy_slot: usize,
+) -> usize {
+    let original = ORIG_SPAWN_CHR.load(Ordering::Acquire);
+    if original == 0 {
+        return 0;
+    }
+    if request != 0 && DUEL_SPAWN_TID.load(Ordering::Acquire) == this_thread() {
+        // SAFETY: the request `CreateSummonChr` built on its stack and passes in r8.
+        unsafe {
+            safe_write_i32(
+                request + addr::SPAWN_REQUEST_EVENT_ENTITY,
+                DUEL_ENTITY_ID as i32,
+            )
+        };
+    }
+    // SAFETY: the trampoline of the function this replaces.
+    let original: SpawnChrFn = unsafe { core::mem::transmute(original) };
+    unsafe { original(chr_set, index, request, buddy_slot) }
+}
+
+/// Install the `SpawnChr` detour. Without it the duel spawn is refused: an NPC registered under
+/// 35000 cannot be told apart from a live companion by its sign or by `GetChrInsByEntityId`.
+pub(crate) fn install() {
+    match crate::mimic_hooks::hook(
+        addr::SPAWN_CHR,
+        spawn_chr_detour as *const () as usize,
+        &ORIG_SPAWN_CHR,
+        "ChrSet::SpawnChr",
+    ) {
+        // SAFETY: applies the queued enable.
+        Ok(_hook) => match unsafe { er_hook::MH_ApplyQueued() } {
+            er_hook::MH_STATUS::MH_OK => {
+                SPAWN_CHR_HOOKED.store(true, Ordering::Release);
+                summons_log(format_args!(
+                    "duel: ChrSet::SpawnChr detoured; the duel NPC is registered as entity \
+                     {DUEL_ENTITY_ID}"
+                ));
+            }
+            status => summons_log(format_args!(
+                "duel: MH_ApplyQueued(SpawnChr) failed, duels are off: {status:?}"
+            )),
+        },
+        Err(why) => summons_log(format_args!(
+            "duel: SpawnChr not detoured, duels are off -- {why}"
+        )),
+    }
+}
 
 /// Resolve `rva` for the running build and view it as `F`.
 ///
@@ -151,7 +228,24 @@ pub(crate) fn set_disabled(chr: usize, disable: bool) -> Result<(), String> {
 /// player, the player's block, block-local position, `0xffffffff` / `{-1,-1}` for the handles,
 /// then `0,0,-1,-1,0,0,0`. The first of those differs from the prototype's `1` on purpose (see the
 /// call). No network announce: the duel is local.
+///
+/// Two things are undone before the call returns, both on this thread and before any frame:
+/// the character is registered as [`DUEL_ENTITY_ID`] rather than 35000 (the `SpawnChr` detour),
+/// and its entry in the creator's summon group is unlinked, which is what the HUD's spirit-ash
+/// bars, `DespawnAll` and `RemoveSummonsByOwnerEventId` read.
 pub(crate) fn spawn_hidden(body: Body, at: Vec4) -> Result<usize, String> {
+    if !SPAWN_CHR_HOOKED.load(Ordering::Acquire) {
+        return Err(
+            "ChrSet::SpawnChr is not detoured, so the NPC could not be given its own \
+                    entity id"
+                .to_owned(),
+        );
+    }
+    if let Some(holder) = chr_by_entity(DUEL_ENTITY_ID) {
+        return Err(format!(
+            "entity {DUEL_ENTITY_ID} is already registered to 0x{holder:x}"
+        ));
+    }
     let player = main_player().ok_or("no main player")?;
     let manager = summon_buddy_manager().ok_or("no SummonBuddyManager")?;
     let block = block_id(player).ok_or("the player has no block")?;
@@ -174,6 +268,7 @@ pub(crate) fn spawn_hidden(body: Body, at: Vec4) -> Result<usize, String> {
         steam_id_of(player, (&raw mut steam_id).cast());
     }
     let handle: u64 = u64::MAX;
+    DUEL_SPAWN_TID.store(this_thread(), Ordering::Release);
     let chr = unsafe {
         create(
             manager,
@@ -200,11 +295,143 @@ pub(crate) fn spawn_hidden(body: Body, at: Vec4) -> Result<usize, String> {
             false,
         )
     };
+    DUEL_SPAWN_TID.store(0, Ordering::Release);
     if chr == 0 {
         return Err("CreateSummonChr returned null".to_owned());
     }
     set_disabled(chr, true)?;
+    let entity = event_entity(chr);
+    if entity != Some(DUEL_ENTITY_ID) || chr_by_entity(DUEL_ENTITY_ID) != Some(chr) {
+        summons_log(format_args!(
+            "duel: 0x{chr:x} carries entity {entity:?} and entity {DUEL_ENTITY_ID} finds {:?}; \
+             removing it",
+            chr_by_entity(DUEL_ENTITY_ID)
+        ));
+        let _ = unlink_from_group(manager, event_id, chr);
+        let _ = unsummon(chr);
+        return Err(format!(
+            "the NPC was not registered as entity {DUEL_ENTITY_ID}"
+        ));
+    }
+    match unlink_from_group(manager, event_id, chr) {
+        Ok((before, after)) => summons_log(format_args!(
+            "duel: 0x{chr:x} unlinked from summon group {event_id}: {before} -> {after} entries"
+        )),
+        Err(why) => summons_log(format_args!(
+            "duel: 0x{chr:x} was not unlinked from summon group {event_id} ({why}); the HUD will \
+             show its bar"
+        )),
+    }
+    untrack_warp(manager, chr);
     Ok(chr)
+}
+
+/// The group node keyed `key` in `SummonBuddyManager`'s group tree (MSVC tree: head's parent is
+/// the root, left/parent/right at `+0/+8/+0x10`, is-nil at `+0x19`, key at `+0x20`).
+fn summon_group_node(manager: usize, key: i32) -> Option<usize> {
+    // SAFETY: fault-tolerant reads.
+    let head = unsafe { safe_read_usize(manager + summon_group::MANAGER_TREE_HEAD) }?;
+    let mut node = unsafe { safe_read_usize(head + summon_group::NODE_PARENT) }?;
+    for _ in 0..64 {
+        if node == 0 || unsafe { safe_read_u8(node + summon_group::NODE_IS_NIL) } != Some(0) {
+            return None;
+        }
+        let at = unsafe { safe_read_i32(node + summon_group::NODE_KEY) }?;
+        if at == key {
+            return Some(node);
+        }
+        let next = if key < at {
+            summon_group::NODE_LEFT
+        } else {
+            summon_group::NODE_RIGHT
+        };
+        node = unsafe { safe_read_usize(node + next) }?;
+    }
+    None
+}
+
+/// Unlink and free `chr`'s entry in the group keyed `key`, the way the game's PostPhysics sweep
+/// does (1.17.1 `0x1404b943c..0x1404b945f`): `prev->next = next`, `next->prev = prev`, the size
+/// down by one, then the list allocator's `Deallocate(entry)`. The sentinel and the group node are
+/// never touched; the game does not erase a group node either. Returns the size before and after.
+///
+/// The key is whatever was passed to `CreateSummonChr` as the creator id. Measured 2026-10-06:
+/// the main player's group is keyed 0 on that session, and the new character is its tail entry.
+fn unlink_from_group(manager: usize, key: i32, chr: usize) -> Result<(usize, usize), String> {
+    let node = summon_group_node(manager, key).ok_or("no group under that key")?;
+    // SAFETY: fault-tolerant reads; the writes go to entries just walked from the sentinel.
+    let sentinel = unsafe { safe_read_usize(node + summon_group::NODE_LIST_HEAD) }
+        .filter(|&h| h != 0)
+        .ok_or("the group has no list")?;
+    let before = unsafe { safe_read_usize(node + summon_group::NODE_LIST_SIZE) }
+        .ok_or("the list size did not read")?;
+    // From the tail backwards: the new character was pushed there.
+    let mut entry = unsafe { safe_read_usize(sentinel + summon_group::ENTRY_PREV) }
+        .ok_or("the list tail did not read")?;
+    let mut found = None;
+    for _ in 0..64 {
+        if entry == sentinel || entry == 0 {
+            break;
+        }
+        if unsafe { safe_read_usize(entry + summon_group::ENTRY_CHR) } == Some(chr) {
+            found = Some(entry);
+            break;
+        }
+        entry = unsafe { safe_read_usize(entry + summon_group::ENTRY_PREV) }
+            .ok_or("an entry did not read")?;
+    }
+    let entry = found.ok_or("the character has no entry in the group")?;
+    let next = unsafe { safe_read_usize(entry + summon_group::ENTRY_NEXT) }.ok_or("next")?;
+    let prev = unsafe { safe_read_usize(entry + summon_group::ENTRY_PREV) }.ok_or("prev")?;
+    let allocator = unsafe { safe_read_usize(node + summon_group::NODE_LIST_ALLOCATOR) }
+        .filter(|&a| a != 0)
+        .ok_or("the list has no allocator")?;
+    let deallocate = unsafe { safe_read_usize(allocator) }
+        .and_then(|vtable| unsafe { safe_read_usize(vtable + summon_group::ALLOCATOR_DEALLOCATE) })
+        .filter(|&f| f != 0)
+        .ok_or("the allocator's Deallocate did not read")?;
+    // SAFETY: the same three writes and the same call the game's sweep makes on this list.
+    unsafe {
+        core::ptr::write_volatile((prev + summon_group::ENTRY_NEXT) as *mut usize, next);
+        core::ptr::write_volatile((next + summon_group::ENTRY_PREV) as *mut usize, prev);
+        core::ptr::write_volatile(
+            (node + summon_group::NODE_LIST_SIZE) as *mut usize,
+            before.saturating_sub(1),
+        );
+        let deallocate: DeallocateFn = core::mem::transmute(deallocate);
+        deallocate(allocator, entry);
+    }
+    let after = unsafe { safe_read_usize(node + summon_group::NODE_LIST_SIZE) }.unwrap_or(0);
+    Ok((before, after))
+}
+
+/// Stop the summon warp manager tracking `chr`: `CreateSummonChr` registered its handle, and the
+/// manager would otherwise warp it back to the player. A handle it does not track is a no-op.
+fn untrack_warp(manager: usize, chr: usize) {
+    // SAFETY: fault-tolerant reads; the untrack has no null check, so a null manager is skipped.
+    let Some(warp) = unsafe { safe_read_usize(manager + summon_group::MANAGER_WARP_MANAGER) }
+        .filter(|&w| w != 0)
+    else {
+        return;
+    };
+    let Some(handle) = chr_handle(chr) else {
+        return;
+    };
+    // SAFETY: `void(SummonBuddyWarpManager*, FieldInsHandle)`, handle by value.
+    if let Ok(call) = unsafe { native::<WarpUntrackFn>(addr::WARP_UNTRACK, "WARP_UNTRACK") } {
+        unsafe { call(warp, handle) };
+    }
+}
+
+/// The character `handle` names now, through `WorldChrManImp::GetChrInsFromHandle`. This is the
+/// liveness test: an entity lookup can find a different character with the same entity id.
+pub(crate) fn chr_by_handle(handle: u64) -> Option<usize> {
+    let wcm = world_chr_man()?;
+    // SAFETY: `(WorldChrManImp*, FieldInsHandle*) -> ChrIns*`.
+    let call: ChrFromHandleFn =
+        unsafe { native(addr::GET_CHR_FROM_HANDLE, "GET_CHR_FROM_HANDLE") }.ok()?;
+    let chr = unsafe { call(wcm, &handle) };
+    (chr != 0).then_some(chr)
 }
 
 /// What the duel machine needs to judge a hidden character.
@@ -346,12 +573,15 @@ pub(crate) fn party_state(handle: u64) -> Option<i32> {
     })
 }
 
-/// Unsummon a summon-path character through the game's own deferred path.
+/// Remove the duel NPC through `SummonBuddyManager::RemoveChrIns(mgr, chr)`: the warp untrack,
+/// then `WorldChrManImp::RemoveChrIns`, which queues the character on the delayed-delete list.
+/// `NotifyBuddyUnsummon` would find nothing, because [`spawn_hidden`] unlinked the group entry it
+/// looks the character up by. The game's own sweep makes this call and then unlinks; here the
+/// entry is already gone, so no group walker can read the freed character.
 pub(crate) fn unsummon(chr: usize) -> Result<(), String> {
     let manager = summon_buddy_manager().ok_or("no SummonBuddyManager")?;
-    let handle = chr_handle(chr).ok_or("the character's handle did not read")?;
-    // SAFETY: `NotifyBuddyUnsummon(SummonBuddyManager*, FieldInsHandle*)`.
-    let call: UnsummonFn = unsafe { native(addr::NOTIFY_BUDDY_UNSUMMON, "NOTIFY_BUDDY_UNSUMMON") }?;
-    unsafe { call(manager, &handle) };
+    // SAFETY: `void(SummonBuddyManager*, ChrIns*)`.
+    let call: RemoveChrFn = unsafe { native(addr::SUMMON_REMOVE_CHR, "SUMMON_REMOVE_CHR") }?;
+    unsafe { call(manager, chr) };
     Ok(())
 }

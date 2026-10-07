@@ -36,3 +36,19 @@ GameMan	data	0x143d6d988	0x143d69918	data.tsv GAME_MAN_SINGLETON_RVA 142/142	n/a
 WorldChrMan	data	0x143d69ff8	0x143d65f88	data.tsv WORLD_CHR_MAN_GLOBAL_RVA 2325/2330	n/a
 SoloParamRepository	data	0x143d85f58	0x143d81ee8	data.tsv SOLO_PARAM_REPOSITORY_GLOBAL_RVA 333/333	n/a
 CSWorldAiManager	data	0x143d66548	0x143d624e8	no	n/a		map-data-rvas-1162-to-1170.py 0x3d624e8 -> 0x3d66548 agreed by 425/425 references, but data.tsv has no row: --refresh harvests only constants declared in crates/, so it is refused at runtime until the crate declares 0x3d624e8 and data.tsv is refreshed. Delta is +0x4060, not +0x4070 (0x3d624d8 carries to 0x3d66538)
+# Added 2026-10-06 for the gaps change (design doc section 6, "Gaps"). Not used by the DLL yet.
+red-sign term FUN_140656f90	call	0x140657de0	0x140656f90	added	n/a	IDENTICAL-WHOLE 40 insns	bool(PlayerIns*); CanUseGoods calls it for goods 101 at 0x14068f9bf
+WorldChrManImp::CanStartMultiplay	call	0x14050aa50	0x140509c80	added	n/a	IDENTICAL-WHOLE 34 insns	bool(WorldChrManImp*)
+GetChrName	detour	0x1407605a0	0x14075f750	added	pending	BYTE-IDENTICAL 164 insns	MenuString*(MenuString* out, ChrIns*, bool decorate); readers take out+0 rawString when non-null
+lua_pcall	detour	0x142026970	0x142024b00	added	pending	BYTE-IDENTICAL 97 insns	ledger holds 1.17.0 0x142026900
+lua_gettop	call	0x1420265d0	0x142024760	added	n/a	IDENTICAL-LEAF 4 insns	ledger holds 1.17.0 0x142026560
+lua_settop	call	0x142026fd0	0x142025160	added	n/a	IDENTICAL-LEAF 26 insns	ledger holds 1.17.0 0x142026f60
+luaL_loadbuffer	call	0x142027f30	0x1420260c0	added	n/a	BYTE-IDENTICAL 36 insns	ledger holds 1.17.0 0x142027ec0
+lua_tostring	call	0x142027200	0x142025390	added	n/a	BYTE-IDENTICAL 126 insns	ledger holds 1.17.0 0x142027190
+SummonBuddyManager::RemoveChrIns	call	0x1404bbaa0	0x1404bb580	added	n/a	IDENTICAL-WHOLE 62 insns	void(mgr, ChrIns*): warp untrack, then WorldChrManImp::RemoveChrIns 0x14050b340 unconditionally, then the arena-only packet 79
+summon warp untrack FUN_1404c21d0	call	0x1404c26f0	0x1404c21d0	added	n/a	BYTE-IDENTICAL 79 insns	void(SummonBuddyWarpManager* = [mgr+0xe8], FieldInsHandle by value); untracked handle is a no-op; no null check
+menu-has-the-mouse FUN_140765800	detour	0x140766650	0x140765800	no	no	DIVERGES 0.56, first diff at insn 6	1.17 added a clause (UI element 2 visible forces false); callers only the cursor gate 0x140e20490 and the mouse X/Y axis readers 0x140e2b360 / 0x140e2b450. Hook by its 1.17.1 address on 1.17.1 only, runtime-derived
+cursor gate FUN_140e1e620	reference	0x140e20490	0x140e1e620	no	n/a	IDENTICAL-WHOLE 46 insns (dry run)	CSMenuMan predicate && IsGameInForeground; not hooked
+CSWorldAiManager	data	0x143d66548	0x143d624e8	no	n/a		see the row above; needs a crate declaration and a data.tsv --refresh before the DLL can read it
+ChrSet::SpawnChr	detour	0x140493380	0x140492e20	added	yes	IDENTICAL-WHOLE 166 insns	(ChrSet*, u8, ChrSpawnRequest*, int); sole caller CreateSummonChr; request +0x4c event entity (35000 stored at 0x1404bb43b); the duel spawn rewrites it to 35001
+WorldChrManImp::GetChrInsFromHandle	call	0x140508a50	0x140507c80	added	n/a	BYTE-IDENTICAL 27 insns	(WorldChrManImp*, FieldInsHandle*) -> ChrIns*; the duel NPC's liveness test

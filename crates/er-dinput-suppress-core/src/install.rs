@@ -41,9 +41,89 @@ type DInput8CreateFn =
 type CreateDeviceFn = unsafe extern "system" fn(RawObj, *const GUID, *mut RawObj, usize) -> i32;
 type ReleaseFn = unsafe extern "system" fn(RawObj) -> u32;
 
+const GUID_SYS_KEYBOARD: GUID = GUID::from_values(
+    0x6F1D2B61,
+    0xD5A0,
+    0x11CF,
+    [0xBF, 0xC7, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00],
+);
+
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 static ORIG: AtomicUsize = AtomicUsize::new(0);
 static HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+
+static KEYBOARD_INSTALLED: AtomicBool = AtomicBool::new(false);
+static KEYBOARD_ORIG: AtomicUsize = AtomicUsize::new(0);
+static KEYBOARD_HOOK_FIRES: AtomicUsize = AtomicUsize::new(0);
+
+/// Install the keyboard blanking detour ([`crate::set_keys_taken`]), idempotently. The keyboard
+/// half of [`install_mouse_suppression`], with the same contract: drive it from a game-frame tick
+/// until it reports `Ok`, and it registers through `er-hook`'s union because `er-quickload`,
+/// `er-net-effects`, `er-enemynpc-effects` and `er-hotkey-conflicts` all detour this slot (see the
+/// `[[shared]]` rows in `scripts/me3-dll-conflicts.toml`). When the keyboard and the mouse resolve
+/// to one `GetDeviceState`, both handlers chain on it and each checks the buffer's size.
+///
+/// # Safety
+///
+/// Call from a game thread, after the process has run at least one frame.
+pub unsafe fn install_keyboard_suppression() -> Result<usize, MH_STATUS> {
+    if KEYBOARD_INSTALLED.load(Ordering::Relaxed) {
+        return Ok(0);
+    }
+    let dinput8 = unsafe { GetModuleHandleA(s!("dinput8.dll")) }
+        .map_err(|_| MH_STATUS::MH_ERROR_MODULE_NOT_FOUND)?;
+    let di8_create: DInput8CreateFn = unsafe {
+        std::mem::transmute(
+            GetProcAddress(dinput8, s!("DirectInput8Create"))
+                .ok_or(MH_STATUS::MH_ERROR_FUNCTION_NOT_FOUND)?,
+        )
+    };
+    let hinstance = unsafe { GetModuleHandleA(None) }
+        .map_err(|_| MH_STATUS::MH_ERROR_MODULE_NOT_FOUND)?
+        .0 as usize;
+    let mut keyboard_addr = 0usize;
+    unsafe {
+        with_probe_device(di8_create, hinstance, &GUID_SYS_KEYBOARD, |addr| {
+            keyboard_addr = addr;
+        })?;
+    }
+    unsafe {
+        register_shared_hook_with_budget(
+            keyboard_addr,
+            keyboard_get_state_hook,
+            &KEYBOARD_ORIG,
+            FRAME_DRIVEN_RESOLVE_TRIES,
+            FRAME_DRIVEN_RESOLVE_SLEEP_MS,
+        )?;
+    }
+    KEYBOARD_INSTALLED.store(true, Ordering::Relaxed);
+    Ok(keyboard_addr)
+}
+
+/// How many times the keyboard detour has run; zero after an install means it lost its prologue.
+#[must_use]
+pub fn keyboard_hook_fires() -> usize {
+    KEYBOARD_HOOK_FIRES.load(Ordering::Relaxed)
+}
+
+/// The keyboard detour, in the union's four-`usize` shape; see [`mouse_get_state_hook`].
+unsafe extern "system" fn keyboard_get_state_hook(
+    device: usize,
+    size: usize,
+    data: usize,
+    unused: usize,
+) -> usize {
+    KEYBOARD_HOOK_FIRES.fetch_add(1, Ordering::Relaxed);
+    let next = KEYBOARD_ORIG.load(Ordering::Relaxed);
+    if next == 0 {
+        return 0;
+    }
+    let call: UnionFn = unsafe { std::mem::transmute::<usize, UnionFn>(next) };
+    let raw = unsafe { call(device, size, data, unused) };
+    // Shape-checked inside: a mouse read through a shared vtable is left alone.
+    unsafe { crate::blank_taken_keys(raw as i32, size as u32, data as *mut u8) };
+    raw
+}
 
 /// Install the mouse-click suppression detour, idempotently.
 ///
