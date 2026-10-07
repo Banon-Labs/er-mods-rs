@@ -36,6 +36,15 @@ function is not reported.
 `cargo rustc` also builds only this crate's lints (path dependencies keep their
 own levels), so no filtering by path is needed to avoid failing on
 `er-game-base`/`er-hook` warnings.
+
+It runs under `--profile check`, which is what `cargo check` does: lints only, no
+codegen and no link. `dead_code` and `unused` are emitted before codegen, so the
+gate sees the same findings without paying for codegen, and without the linker
+relaying LNK4099 as a warning. The warm-up step before it in check.sh is
+`cargo xwin check` for the same reason: a check-mode warm-up and a check-profile
+audit share units, and a build-mode warm-up and this audit do not. Measured
+2026-10-06 in an empty target directory: the check warm-up took 9.4s and the two
+audits after it 0.37s and 0.49s, against ~10s and 3.9s for the build-mode pair.
 """
 
 from __future__ import annotations
@@ -55,15 +64,17 @@ FORCED_LINTS = ["dead_code", "unused"]
 # non-game operations. A cold one does not fit: the cross-compile of these crates
 # and their path dependencies took ~10s on a 16-core machine and ran past 25s on
 # a 4-core CI runner with no cache. check.sh therefore runs
-# `cargo xwin build -p er-save-disable -p er-save-suppress` (same profile and
-# target) as the step before this one, and this call only rebuilds the crate it
-# lints. Run on its own against a cold tree, it can still time out; the fix is
-# that build step, not a larger number here.
+# `cargo xwin check -p er-save-disable -p er-save-suppress` (check mode, same
+# target) as the step before this one, and this call only re-lints the crate it
+# audits. Run on its own against a cold tree, it can still time out; the fix is
+# that warm-up step, not a larger number here.
 TIMEOUT_SECONDS = 25.0
 
 
 def audit_crate(crate: str) -> int:
-    command = ["cargo", "xwin", "rustc", "-p", crate, "--target", TARGET, "--"]
+    command = [
+        "cargo", "xwin", "rustc", "-p", crate, "--profile", "check", "--target", TARGET, "--",
+    ]
     for lint in FORCED_LINTS:
         command += ["--force-warn", lint]
     try:
