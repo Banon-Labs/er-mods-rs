@@ -2883,10 +2883,12 @@ bash "$repo_root/scripts/test-check-config-guard.sh"
 # dependencies ran past the cap (PR #485, run 37249825276). That is a deadlock rather than a slow
 # job, because rust-cache saves only on a green stage, so a stage that is red for want of a cache
 # never writes one. So the compile happens here first, uncapped like every other toolchain step,
-# and the audit then rebuilds only the crate it is linting. Same profile and target as the audit,
-# or the units differ and nothing is reused. Being a `cargo xwin` step, this and the audit belong
-# to the `cargo-build` stage, the one whose job installs cargo-xwin and caches the Windows target.
-cargo xwin build --manifest-path "$repo_root/Cargo.toml" -p er-save-disable -p er-save-suppress \
+# and the audit then re-lints only the crate it is auditing. Check mode, because the audit runs
+# `cargo xwin rustc --profile check`: a check warm-up and a check-profile audit share units, while
+# a build warm-up and that audit share nothing. Being a `cargo xwin` step, this and the audit
+# belong to the `cargo-build` stage, the one whose job installs cargo-xwin and caches the Windows
+# target.
+cargo xwin check --manifest-path "$repo_root/Cargo.toml" -p er-save-disable -p er-save-suppress \
   --target x86_64-pc-windows-msvc
 python3 "$repo_root/scripts/check-save-disable-warnings.py"
 
