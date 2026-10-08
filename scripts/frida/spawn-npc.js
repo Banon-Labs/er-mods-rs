@@ -305,12 +305,57 @@ function forSpawn(table, index) {
     return typeof own === 'string' ? own : Object.assign({}, shared, own);
 }
 
+// Memorized spells, "think:spells=id,id,..." (_lab.lua lab_spells; MagicParam ids, which are the
+// spells' goods ids: Swift Glintstone Shard 4010, Bestial Sling 6800). fromsoftware-rs
+// cs/player_game_data.rs: EquipGameData (PlayerGameData +0x2b0) holds EquipMagicData* just before
+// EquipItemData, i.e. at +0x280 (EquipItemData's quick slots, measured at +0x290, follow its
+// vftable at +0x288). EquipMagicData: vftable, EquipGameData* back-pointer at +0x8, 14 entries of
+// {param_id i32, charges i32} at +0x10, selected_slot at +0x80. The back-pointer is checked before
+// anything is written, so a wrong offset writes nothing and says so.
+const EGD_IN_PGD = 0x2b0;
+const EGD_MAGIC_PTR = 0x280;
+const MAGIC_BACKPTR = 0x8;
+const MAGIC_ENTRIES = 0x10;
+const MAGIC_SLOTS = 14;
+const MAGIC_SELECTED = 0x80;
+const spellsWarned = new Set();
+
+function applySpells(chr, index) {
+    const want = forSpawn(cfg.spells, index);
+    if (!Array.isArray(want) || want.length === 0) return;
+    const egd = chr.add(PLAYER_GAME_DATA).readPointer().add(EGD_IN_PGD);
+    const magic = egd.add(EGD_MAGIC_PTR).readPointer();
+    if (magic.isNull() || !magic.add(MAGIC_BACKPTR).readPointer().equals(egd)) {
+        const key = chr.toString();
+        if (!spellsWarned.has(key)) {
+            spellsWarned.add(key);
+            emit('spells-error', { chr: key, why: 'EquipMagicData back-pointer mismatch', magic: magic.toString() });
+        }
+        return;
+    }
+    const changed = [];
+    for (let i = 0; i < MAGIC_SLOTS; i++) {
+        const at = magic.add(MAGIC_ENTRIES + i * 8);
+        const id = i < want.length ? want[i] : -1;
+        const before = at.readS32();
+        if (before !== id) {
+            at.writeS32(id);
+            changed.push({ slot: i, from: before, to: id });
+        }
+    }
+    const sel = magic.add(MAGIC_SELECTED);
+    if (sel.readS32() < 0 || sel.readS32() >= want.length) sel.writeS32(0);
+    if (changed.length > 0) emit('spells', { chr: chr.toString(), changed, selected: sel.readS32() });
+}
+
 // Each summon's current Ash of War, set by artPlanner (ChrIns string -> EquipParamGem id).
 const artNow = new Map();
 
 // canMint is true only at creation; the heartbeat only re-writes handles minted earlier, plus any
 // a new artPlanner pick needs.
 function applyEquip(chr, canMint, index) {
+    // Spells first: a spawn that keeps its CharaInitParam gear has no equip entry at all.
+    applySpells(chr, index);
     const want = forSpawn(cfg.equip, index);
     if (!want) return null;
     const asms = [chr.add(CHR_ASM_PTR).readPointer(), chr.add(PLAYER_GAME_DATA).readPointer().add(PGD_CHR_ASM)];
@@ -2872,7 +2917,14 @@ rpc.exports = {
         cfg.face = {};
         cfg.name = {};
         cfg.arts = {};
+        cfg.spells = {};
         for (const item of String(r.equip || '').split(';')) {
+            // Memorized spells, "think:spells=id,id,..." (_lab.lua lab_spells), for applySpells.
+            const s = /^(\d+(?:\.\d+)?):spells=(\d+(?:,\d+)*)$/.exec(item);
+            if (s !== null) {
+                cfg.spells[s[1]] = s[2].split(',').map(Number);
+                continue;
+            }
             const f = /^(\d+(?:\.\d+)?):face=([0-9A-Fa-f]+)$/.exec(item);
             if (f !== null) {
                 cfg.face[f[1]] = f[2];

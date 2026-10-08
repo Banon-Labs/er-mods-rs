@@ -2,6 +2,7 @@
 _lab.lua
 mods/brain_moonrithyll.lua
 mods/brain_turtles.lua
+mods/brain_voidtech.lua
 mods/kill_confirm.lua
 mods/moongrum.lua
 mods/moongrum_follow.lua
@@ -9,3 +10,6 @@ mods/moongrum_hearing.lua
 mods/moongrum_patrol.lua
 mods/moonrithyll.lua
 mods/turtles.lua
+mods/voiddagger.lua
+mods/voidlance.lua
+mods/voidtech.lua

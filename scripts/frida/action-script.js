@@ -9,7 +9,7 @@
 //                              release 0x1406832d0), skipped when already carried
 //   { equip: item, hand: 'R'|'L' }  into the active slot of that hand, natively
 //                              (EquipItemToChrAsmSlot 0x140788ab0 with a MenuGaitem, as the driver)
-//   { press: ['R1','R2','L1','L2'], frames }  request bits held that many frames, then released
+//   { press: ['R1','R2','L1','L2','JUMP'], frames }  request bits held that many frames, then released
 //   { move: m, frames, hold? }  walk forward at speed level m (0.5 walk, 1 run) for that many frames,
 //                              holding the listed request bits meanwhile
 //   { fillFp: true }          FP to its maximum
@@ -41,7 +41,9 @@ const MINT = new NativeFunction(va('0x140672b30'), 'pointer', ['pointer', 'point
 const ADD_BY_HANDLE = new NativeFunction(va('0x140246480'), 'int', ['pointer', 'pointer', 'uint32', 'uint8', 'uint8']);
 const HANDLE_DTOR = new NativeFunction(va('0x1406832d0'), 'void', ['pointer']);
 const APPLY_SPEFFECT_FROM = new NativeFunction(va('0x1403fb010'), 'uint8', ['pointer', 'uint32', 'pointer', 'pointer', 'pointer', 'uint8', 'uint8', 'uint8']);
-const BIT = { R1: 1, R2: 2, L1: 4, L2: 8 };
+// JUMP is HKS ACTION_ARM_CHANGE_STYLE (6): ExecJump starts a jump on env(ActionRequest, 6), the
+// player's jump button, or env 700 (IsAIJumpRequested) for an AI.
+const BIT = { R1: 1, R2: 2, L1: 4, L2: 8, JUMP: 0x40 };
 
 const S = { frame: 0, step: 0, until: 0, bits: 0, blocking: false, done: false, last: null, lastFrame: -10, darkness: {}, noDead: {} };
 const SP_POS = Memory.alloc(16);
