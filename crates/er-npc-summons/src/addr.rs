@@ -175,6 +175,67 @@ pub(crate) mod lua {
     pub(crate) const TOSTRING: u32 = 0x0202_5390;
 }
 
+/// Void tech for brains ([`crate::void_tech`]), all measured with `scripts/frida/void-trace.js`
+/// on 1.17.1 (bd `void-tech-landing-frame-spawn-double-1171-2026-10-07`).
+pub(crate) mod void_tech {
+    /// Detour: `CSChrActionRequestModule::UpdateFromManipulator(module, FD4Time*)` (1.17.1
+    /// `0x140408190`). Request bits written to `module+0x10` on entry reach the action; written
+    /// from anywhere else they never did.
+    pub(crate) const UPDATE_FROM_MANIPULATOR: u32 = 0x0040_7c60;
+    /// Detour: the damage module's attack create-or-reuse, `FUN_1404428f0(CSChrDamageModule*,
+    /// out, behaviorId, dmgType, slot, ...)`, 10 integer arguments (1.17.1 `0x140442e50`).
+    /// Behavior 550 is created at a jump's takeoff and refreshed every airborne frame; the last
+    /// refresh is the landing frame.
+    pub(crate) const ATTACK_CREATE_OR_REUSE: u32 = 0x0044_28f0;
+    /// Detour: `CSBulletManager::SpawnBullet(manager, int* out, BulletSpawnData*, param4)` (1.17.1
+    /// `0x1403a2cb0`). `BulletSpawnData`: owner `FieldInsHandle` +0x0, behavior id +0x8.
+    pub(crate) const SPAWN_BULLET: u32 = 0x003a_2ca0;
+    /// The jump's airborne attack behavior.
+    pub(crate) const JUMP_BEHAVIOR: i32 = 550;
+    /// `CSChrModuleBase` +0x8: the owning `ChrIns*`.
+    pub(crate) const MODULE_OWNER: usize = 0x8;
+    /// `CSChrActionRequestModule` +0x10: this frame's action request bits.
+    pub(crate) const ACTION_REQUESTS: usize = 0x10;
+    /// `FD4Time` +0x8: the frame's time step in seconds.
+    pub(crate) const FD4_TIME: usize = 0x8;
+    /// `ChrIns` +0x8: its `FieldInsHandle`, what a bullet's owner field holds.
+    pub(crate) const CHR_HANDLE: usize = 0x8;
+    /// `ChrIns` vtable slot `GetComManipulator` (+0x1d0), then `ComManipulator` +0xc0 `AiIns*`,
+    /// `AiIns` +0x28 the running NpcThinkParam id (bd `npc-think-swap-live-1171-2026-10-06`).
+    pub(crate) const VT_GET_COM_MANIPULATOR: usize = 0x1d0;
+    pub(crate) const COM_AI_INS: usize = 0xc0;
+    pub(crate) const AI_INS_THINK: usize = 0x28;
+    /// `PlayerIns` +0x638 `ChrAsm*`: `+0x8` arm style (3 is the right weapon in both hands),
+    /// `+0x10` the active right weapon slot (0..2), `+0x7c` one param id per `ChrAsmSlot`, where
+    /// right weapon slot n is index 1 + 2n (fromsoftware-rs `ChrAsm`; spawn-npc.js writes it).
+    pub(crate) const PLAYER_CHR_ASM: usize = 0x638;
+    pub(crate) const ASM_ARM_STYLE: usize = 0x8;
+    pub(crate) const ASM_RIGHT_SLOT: usize = 0x10;
+    pub(crate) const ASM_PARAM_IDS: usize = 0x7c;
+    pub(crate) const ARM_STYLE_RIGHT_BOTH: u32 = 3;
+    /// `PlayerIns` +0x580 `PlayerGameData`, +0x2b0 `EquipGameData`, +0x280 `EquipMagicData*`
+    /// (back-pointer +0x8 to the `EquipGameData`), entries `{id, charges}` at +0x10, selected slot
+    /// +0x80 (spawn-npc.js `applySpells`, measured).
+    pub(crate) const PLAYER_GAME_DATA: usize = 0x580;
+    pub(crate) const PGD_EQUIP_GAME_DATA: usize = 0x2b0;
+    pub(crate) const EGD_MAGIC: usize = 0x280;
+    pub(crate) const MAGIC_BACK: usize = 0x8;
+    pub(crate) const MAGIC_ENTRIES: usize = 0x10;
+    pub(crate) const MAGIC_SELECTED: usize = 0x80;
+    pub(crate) const MAGIC_SLOTS: i32 = 14;
+    /// `ChrIns` +0x190 module table: +0x0 `CSChrDataModule` (FP at +0x148), +0x18
+    /// `CSChrTimeActModule` (anim queue of 16-byte entries at +0x20, `anim_id` first, read index at
+    /// +0xc4; fromsoftware-rs `time_act.rs`, read live by `void-trace.js`).
+    pub(crate) const CHR_MODULES: usize = 0x190;
+    pub(crate) const MODULE_DATA: usize = 0x0;
+    pub(crate) const DATA_FP: usize = 0x148;
+    pub(crate) const MODULE_TIME_ACT: usize = 0x18;
+    pub(crate) const TAE_QUEUE: usize = 0x20;
+    pub(crate) const TAE_ENTRY: usize = 16;
+    pub(crate) const TAE_READ: usize = 0xc4;
+    pub(crate) const TAE_QUEUE_LEN: u32 = 10;
+}
+
 /// `CSWorldAiManager*` global (1.17.1 `0x143d66548`), carried by the data map.
 pub(crate) const CS_WORLD_AI_MAN_GLOBAL_RVA: usize = 0x3d6_24e8;
 

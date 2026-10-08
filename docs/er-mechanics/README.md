@@ -21,6 +21,7 @@ Ghidra dump and re-checked against `eldenring-deobf-1.17.1.bin`), **INFERRED**, 
 | Cross-hand combos: right-hand attack into the off-hand L1, L1 cancel ids, SubStart, push and reach | [combo.md](combo.md) | `scripts/er-mechanics-combo.py` | 24/24: JumpTable 9/16/87/117 case bytes, HKS routing, TAE frames, knockback fields |
 | Ashes of war and weapon skills: skill lookup, melee / bullet / buff events, FP, bullet and melee damage, buff durations, adoption | [ashes-of-war.md](ashes-of-war.md) | `scripts/er-mechanics-ashes.py` | 33/33: decompiled skill lookup, FP half-cost rule and bullet damage, audited ash classification |
 | Backstabs, ripostes, crit multiplier, parry rules, parry tools, parry exposure | [crits.md](crits.md) | `scripts/er-mechanics-crits.py` | 24/24: decompiled crit factor and parry test, ThrowParam rows, TAE import chain and windows |
+| Void tech: jump casts and jump projectiles that fire twice on the landing frame, who can, why, and that both copies are sent | [void-tech.md](void-tech.md) | `scripts/er-mechanics-voidtech.py` | 12/12: behavior-graph selectors, TAE spawn frames, runtime doubles (Bestial Sling, Smithscript Dagger NPC and player), 88 melee jumps, and the DLL gear table is current |
 | Neutral game: walk/run/sprint and dodge motion, each build's reach, who strikes first from outside both reaches | [neutral.md](neutral.md) | `scripts/er-mechanics-neutral.py` | 11/11: hkx root-motion speeds, dodge i-frames and R1 frames against ashes-of-war.md 14a, synthetic races |
 
 ## The chain, end to end
