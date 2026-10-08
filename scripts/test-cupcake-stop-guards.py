@@ -32,8 +32,11 @@ Fixtures live in .cupcake/tests/fixtures/*.jsonl and are ordinary Claude Code tr
 """
 from __future__ import annotations
 
+import argparse
+import functools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -643,6 +646,16 @@ def hook_command(event: str) -> list[str]:
     )
 
 
+@functools.lru_cache(maxsize=1)
+def head_commit() -> tuple[str, int]:
+    """`HEAD`'s short hash and committer time, read once per run rather than once per attempt."""
+    out = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "log", "-1", "--format=%h %ct", "HEAD"],
+        capture_output=True, text=True, timeout=10, check=True,
+    ).stdout.split()
+    return out[0], int(out[1])
+
+
 def substitute_head(text: str) -> str:
     """Fill the commit placeholders a fixture may carry, from the checkout's own `HEAD`.
 
@@ -655,11 +668,7 @@ def substitute_head(text: str) -> str:
     """
     if "@@" not in text:
         return text
-    out = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "log", "-1", "--format=%h %ct", "HEAD"],
-        capture_output=True, text=True, timeout=10, check=True,
-    ).stdout.split()
-    short, epoch = out[0], int(out[1])
+    short, epoch = head_commit()
 
     def iso(seconds: int) -> str:
         return datetime.fromtimestamp(seconds, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
@@ -671,9 +680,85 @@ def substitute_head(text: str) -> str:
     )
 
 
-def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict, str] | str:
-    """Drive one fixture through a real cupcake hook invocation. Returns (decision, raw stdout), or
-    a failure message string."""
+# Cupcake runs every signal under a deadline -- 5 s for the auto-discovered .cupcake/signals/*.sh,
+# a constant in cupcake-core's rulebook.rs that nothing here can raise -- and a signal that misses
+# it is dropped with this line on stderr. The policy that reads it then sees no signal and stays
+# silent, so the hook prints `{}`: byte-for-byte the same output as an inert guard. Under a
+# parallel check.sh at nice 10 / SCHED_IDLE beside cargo, a python signal that takes 0.3 s idle can
+# take longer than that, which is how this test failed on two pushed tips in one pre-push run while
+# passing alone on the same commit (2026-10-08). An evaluation that dropped a signal has not
+# answered the question, so it is retried rather than read as a verdict.
+SIGNAL_TIMEOUT_RE = re.compile(r"Signal '([^']+)' failed: Signal execution timed out")
+# Attempts per case before a dropped-signal evaluation is reported as a failure of its own.
+ATTEMPTS = 4
+# The whole hook, per attempt. A hook that overruns it is the same non-answer as a dropped signal.
+HOOK_TIMEOUT_SECONDS = 25
+
+
+def leave_sched_idle() -> None:
+    """Move this test, and so every hook and git call it spawns, to SCHED_OTHER at the inherited nice.
+
+    check.sh drops every gate to SCHED_IDLE (scripts/lib/cpu-courtesy.sh), which runs a task only
+    when no ordinary task wants the core. That is right for a gate that merely has to finish, and
+    wrong for this one: what it measures is a hook that in production runs at ordinary priority
+    under cupcake's 5 s signal deadline. Measured 2026-10-08 with 15 ordinary busy loops on this
+    16-core machine: at SCHED_IDLE every single hook evaluation overran 25 s, so the test could
+    produce no verdict at all, while at the same nice under SCHED_OTHER it passed. With 96 such
+    loops the test's own `git log` for the fixture placeholders overran its 10 s too, which is why
+    this applies to the whole process and not only to the hook subprocess. The nice value
+    is kept, so the hook still loses every contested slice to the user's own work -- it is only no
+    longer starved outright. RLIMIT_NICE decides whether an unprivileged process may leave
+    SCHED_IDLE; where it may not, the hook stays idle and the retry in run_hook is what is left.
+    """
+    if not hasattr(os, "sched_getscheduler"):
+        return
+    try:
+        if os.sched_getscheduler(0) == getattr(os, "SCHED_IDLE", -1):
+            os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))
+    except OSError:
+        pass
+
+
+@dataclass(frozen=True)
+class HookResult:
+    decision: dict
+    raw: str
+    stderr: str
+    # Signals cupcake dropped on its deadline, or ["<whole hook>"] when the hook itself overran.
+    dropped: list[str]
+
+
+def stderr_tail(stderr: str, limit: int = 1200) -> str:
+    tail = stderr.strip()[-limit:]
+    return f"\n      cupcake stderr: {tail!r}" if tail else ""
+
+
+def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> HookResult | str:
+    """Drive one fixture through the real hook until an evaluation runs every signal it asked for.
+
+    Returns the first complete evaluation, or a failure message string. A failure message names
+    the dropped signals when every attempt dropped one, so a signal that has become too slow for
+    cupcake's deadline still fails this test -- as itself, not disguised as an inert guard."""
+    last: HookResult | str = "no attempt ran"
+    for attempt in range(1, ATTEMPTS + 1):
+        last = run_hook_once(fixture_name, event_name, argv)
+        if isinstance(last, str) or not last.dropped:
+            return last
+        print(
+            f"     retry {fixture_name} ({event_name}): attempt {attempt} dropped "
+            f"{', '.join(last.dropped)} on cupcake's deadline -- no verdict",
+            file=sys.stderr,
+        )
+    assert isinstance(last, HookResult)
+    return (
+        f"every one of {ATTEMPTS} evaluations dropped a signal on cupcake's deadline "
+        f"({', '.join(last.dropped)}), so none of them is a verdict. A signal that cannot finish "
+        f"inside 5 s on this machine is itself the defect to fix.{stderr_tail(last.stderr)}"
+    )
+
+
+def run_hook_once(fixture_name: str, event_name: str, argv: list[str]) -> HookResult | str:
+    """One real cupcake hook invocation. Returns a HookResult, or a failure message string."""
     fixture = FIXTURES / fixture_name
     if not fixture.is_file():
         return f"missing fixture {fixture}"
@@ -700,15 +785,22 @@ def run_hook(fixture_name: str, event_name: str, argv: list[str]) -> tuple[dict,
             payload["stop_hook_active"] = False
         else:
             payload["prompt"] = "next question"
-        proc = subprocess.run(
-            argv, input=json.dumps(payload), capture_output=True, text=True, env=env, timeout=25
-        )
+        try:
+            proc = subprocess.run(
+                argv, input=json.dumps(payload), capture_output=True, text=True, env=env,
+                timeout=HOOK_TIMEOUT_SECONDS,
+            )
+        except subprocess.TimeoutExpired as exc:
+            err = exc.stderr.decode(errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+            return HookResult({}, "", err, [f"<whole hook, {HOOK_TIMEOUT_SECONDS}s>"])
 
     raw = proc.stdout.strip()
     try:
-        return (json.loads(raw) if raw else {}), raw
+        decision = json.loads(raw) if raw else {}
     except ValueError:
-        return f"unparseable cupcake output: {raw[:200]!r}"
+        return f"unparseable cupcake output: {raw[:200]!r}{stderr_tail(proc.stderr)}"
+    dropped = sorted(set(SIGNAL_TIMEOUT_RE.findall(proc.stderr)))
+    return HookResult(decision, raw, proc.stderr, dropped)
 
 
 def run_case(case: Case, argv: list[str]) -> str | None:
@@ -716,14 +808,14 @@ def run_case(case: Case, argv: list[str]) -> str | None:
     outcome = run_hook(case.fixture, "Stop", argv)
     if isinstance(outcome, str):
         return outcome
-    decision, raw = outcome
+    decision, raw, err = outcome.decision, outcome.raw, stderr_tail(outcome.stderr)
 
     reason = decision.get("reason", "")
     blocked = decision.get("decision") == "block"
 
     if case.expect_halt_text is None:
         if blocked:
-            return f"expected NO halt (clean turn) but cupcake blocked: {reason[:160]!r}"
+            return f"expected NO halt (clean turn) but cupcake blocked: {reason[:160]!r}{err}"
         return None
 
     if not blocked:
@@ -731,10 +823,10 @@ def run_case(case: Case, argv: list[str]) -> str | None:
             f"expected a HALT but cupcake returned {raw or '{}'!r}.\n"
             f"      The guard is INERT -- this is the exact 2026-07-17..2026-08-22 defect. Check that\n"
             f"      no rule in its path uses a builtin Cupcake's WASM runtime cannot execute\n"
-            f"      (run: python3 scripts/check-cupcake-wasm-builtins.py)."
+            f"      (run: python3 scripts/check-cupcake-wasm-builtins.py).{err}"
         )
     if case.expect_halt_text not in reason:
-        return f"halted, but reason lacked {case.expect_halt_text!r}: {reason[:200]!r}"
+        return f"halted, but reason lacked {case.expect_halt_text!r}: {reason[:200]!r}{err}"
     return None
 
 
@@ -750,7 +842,7 @@ def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
     outcome = run_hook(case.fixture, "UserPromptSubmit", argv)
     if isinstance(outcome, str):
         return outcome
-    decision, raw = outcome
+    decision, raw = outcome.decision, outcome.raw
 
     if decision.get("decision") == "block":
         return f"UserPromptSubmit must never block on answer length, but cupcake blocked: {raw[:200]!r}"
@@ -759,7 +851,7 @@ def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
     if STANDING_RULE not in context:
         return (
             f"the standing one-paragraph rule is missing from additionalContext -- the policy is not\n"
-            f"      routed or is inert. Got: {context[:200]!r}"
+            f"      routed or is inert. Got: {context[:200]!r}{stderr_tail(outcome.stderr)}"
         )
 
     if case.expect_context is None:
@@ -773,14 +865,31 @@ def run_context_case(case: ContextCase, argv: list[str]) -> str | None:
 
 
 def main() -> int:
+    global ATTEMPTS
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--only", action="append", default=[], metavar="FIXTURE",
+                        help="run only the cases for this fixture (repeatable)")
+    parser.add_argument("--attempts", type=int, default=ATTEMPTS,
+                        help="evaluations per case before a dropped signal fails it "
+                             f"(default {ATTEMPTS}; 1 reproduces the pre-2026-10-08 behaviour)")
+    args = parser.parse_args()
+    ATTEMPTS = max(1, args.attempts)
+    leave_sched_idle()
+
     if shutil.which("cupcake") is None:
         print("test-cupcake-stop-guards: SKIP (cupcake not installed)")
         return 0
 
+    stop_cases = [c for c in CASES if not args.only or c.fixture in args.only]
+    ups_cases = [c for c in UPS_CASES if not args.only or c.fixture in args.only]
+    if args.only and not stop_cases and not ups_cases:
+        print(f"test-cupcake-stop-guards: no case uses {args.only}", file=sys.stderr)
+        return 2
+
     stop_argv = hook_command("Stop")
     ups_argv = hook_command("UserPromptSubmit")
     failures = 0
-    for case in CASES:
+    for case in stop_cases:
         err = run_case(case, stop_argv)
         verdict = "halt" if case.expect_halt_text else "allow"
         if err:
@@ -789,7 +898,7 @@ def main() -> int:
         else:
             print(f"ok   [{verdict}] {case.fixture}: {case.why}")
 
-    for ctx_case in UPS_CASES:
+    for ctx_case in ups_cases:
         err = run_context_case(ctx_case, ups_argv)
         verdict = "correct" if ctx_case.expect_context else "quiet"
         if err:
@@ -802,7 +911,7 @@ def main() -> int:
         print(f"\ntest-cupcake-stop-guards: {failures} failure(s)", file=sys.stderr)
         return 1
     print(
-        f"test-cupcake-stop-guards: OK ({len(CASES)} Stop cases, {len(UPS_CASES)} UserPromptSubmit "
+        f"test-cupcake-stop-guards: OK ({len(stop_cases)} Stop cases, {len(ups_cases)} UserPromptSubmit "
         f"cases, through the real hook commands)"
     )
     return 0
