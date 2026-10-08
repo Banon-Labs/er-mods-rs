@@ -18,6 +18,10 @@
 --                             protector `id` in `slot` (head, chest, hands, legs) over what its
 --                             CharaInitParam row gave it; the row itself is not touched
 --   LAB_TARGET_THINK          NpcThinkParam ids the weights and logging apply to (nil: every NPC)
+--   lab_brain(think, name)    give the characters running NpcThinkParam `think` the brain `name`
+--                             (a mods/brain_<name>.lua); the last call for a think id wins, and no
+--                             call leaves that think id on the stock AI
+--   lab_runs(ai, name)        inside a brain: true when `ai` was given brain `name`
 --   hot_log(what, k, v, ...)  one line into the lab's event log
 --   LAB_WORLD                 facts about the world the AI cannot query itself, pushed in by the
 --                             lab from spawn-npc.js (player_on_lift, lift_pos {x, y, z})
@@ -104,6 +108,24 @@ function lab_face(think, hex)
   table.insert(LAB_EQUIP, think .. ":face=" .. hex)
 end
 
+-- The spawn's character name (PlayerGameData character_name, 16 UTF-16 units at most), written by
+-- spawn-npc.js at creation. Letters, digits and spaces only; it travels as "think:name=<text>".
+function lab_name(think, name)
+  table.insert(LAB_EQUIP, think .. ":name=" .. name)
+end
+
+-- The Ashes of War (EquipParamGem ids, -1 for the weapon's own skill) the summon's right-hand
+-- weapon may switch between; spawn-npc.js artPlanner picks one for the moment.
+function lab_arts(think, gems)
+  table.insert(LAB_EQUIP, think .. ":arts=" .. gems)
+end
+
+-- The spawn's memorized spells (MagicParam ids, in slot order), written by spawn-npc.js into its
+-- EquipMagicData; it travels as "think:spells=id,id,...".
+function lab_spells(think, ids)
+  table.insert(LAB_EQUIP, think .. ":spells=" .. ids)
+end
+
 function lab_equip(think, slot, id, gem)
   local piece = think .. ":" .. slot .. "=" .. id
   if gem ~= nil then piece = piece .. "/" .. gem end
@@ -147,6 +169,25 @@ function lab_is_target(ai)
   local target = LAB_TARGET_THINK[id] == true
   if target then LAB_AI[id] = ai end
   return target, id
+end
+
+-- Which brain each think id runs, rebuilt on every apply like the overrides, so moving a
+-- lab_brain line to another think id moves the brain on the next save. Lua sees a character only
+-- through its think id, so characters sharing one row share its brain; a character that needs its
+-- own brain is spawned on a think row of its own.
+LAB_BRAIN_OF = {}
+
+function lab_brain(think, name)
+  LAB_BRAIN_OF[think] = name
+  if LAB_TARGET_THINK ~= nil then LAB_TARGET_THINK[think] = true end
+  hot_log("brain-assign", "think", think, "brain", name)
+end
+
+function lab_runs(ai, name)
+  local id = think_id(ai)
+  if LAB_BRAIN_OF[id] ~= name then return false end
+  LAB_AI[id] = ai
+  return true
 end
 
 local function dist(ai)
