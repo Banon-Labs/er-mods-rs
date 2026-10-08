@@ -26,4 +26,28 @@ assert(common10000_Logic(ai(7)) == "game:7", "an erroring override falls back to
 local log = brain_drain_log()
 assert(string.find(log, "override-error", 1, true), log)
 assert(brain_drain_log() == "", "a drain clears the log")
+-- Void tech: brain_void opts the think in, and brain_void_act jumps, switches grip, or declines.
+dofile(framework)
+BRAIN = { name = "v", think = 100000010 }
+brain_void()
+BRAIN = nil
+assert(brain_void_list() == "100000010", brain_void_list())
+TARGET_ENE_0, TARGET_SELF, GOAL_COMMON_AttackTunableSpin, GOAL_COMMON_Wait = 0, -1, 1, 2
+NPC_ATK_Jump, NPC_ATK_ChangeStyleR = 30, 31
+function AI:GetDist() return self.dist end
+function AI:GetWeaponBothHandState() return self.hands end
+local function goal()
+  return { subs = {}, AddSubGoal = function(g, id, t, act) table.insert(g.subs, act or id) end }
+end
+local npc = setmetatable({ think = 100000010, dist = 3, hands = -1 }, { __index = AI })
+local g = goal()
+assert(brain_void_act(npc, g) == false, "no offer yet")
+BRAIN_VOID_OFFERS = { [100000010] = { one = false, two = true } }
+assert(brain_void_act(npc, g) == true and g.subs[1] == NPC_ATK_ChangeStyleR, "switches to two hands")
+npc.hands = 1
+g = goal()
+assert(brain_void_act(npc, g) == true and g.subs[1] == NPC_ATK_Jump, "jumps two-handed")
+npc.dist = 9
+assert(brain_void_act(npc, goal()) == false, "out of range")
+assert(brain_void_act(npc, goal(), 10) == true, "a brain's own range")
 print("ok")

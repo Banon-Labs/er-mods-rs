@@ -704,7 +704,10 @@ owner of the player's inventory the way `er-build-import` is. No other shell hoo
 prologues. Since 2026-10-06 it also detours, bare and alone on each prologue: \
 `ChrSet::SpawnChr` `0x140492e20` (the duel NPC gets its own entity id), `GetChrName` \
 `0x14075f750` (duel NPC and companion names), `lua_pcall` `0x142024b00` (companion Lua brains, \
-only on the AI state); and through the union: the 1.17.1 menu-has-the-mouse predicate \
+only on the AI state). Since 2026-10-07, for brains that call `brain_void()`, also bare and alone: \
+`UpdateFromManipulator` `0x140407c60` (the void tech press), the attack create-or-reuse \
+`0x1404428f0` (jump takeoff and landing) and `SpawnBullet` `0x1403a2ca0` (the spawn and its \
+double); and through the union: the 1.17.1 menu-has-the-mouse predicate \
 `0x140766650` (a free cursor and a still camera while the picker is open), the keyboard \
 `GetDeviceState` slot and `XInputGetState` (the picker's keys and buttons are taken from the \
 game while it is open; see the [[shared]] rows). Co-loadable, but a player who \

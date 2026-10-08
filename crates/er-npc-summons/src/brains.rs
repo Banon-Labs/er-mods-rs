@@ -201,6 +201,16 @@ fn apply(api: &Api, state: usize) {
     if let Err(why) = run(api, state, "brain-framework", FRAMEWORK, 0) {
         problems.push(why);
     } else {
+        // What each void-tech think's gear offers, before the brains that read it.
+        if let Err(why) = run(
+            api,
+            state,
+            "brain-void-offers",
+            &crate::void_tech::offers_chunk(),
+            0,
+        ) {
+            problems.push(why);
+        }
         for (name, think) in &brains {
             let Some(path) = brain_path(name) else {
                 problems.push(format!("{name}: not a usable brain name"));
@@ -226,6 +236,19 @@ fn apply(api: &Api, state: usize) {
     }
     // SAFETY: restore by index; see the module docs.
     unsafe { (api.settop)(state, top) };
+    // The thinks whose brains called brain_void(): their jumps get the void press.
+    let thinks = run(api, state, "brain-void-list", "return brain_void_list()", 1)
+        .ok()
+        .and_then(|()| string_at(api, state, -1))
+        .unwrap_or_default();
+    // SAFETY: as above.
+    unsafe { (api.settop)(state, top) };
+    crate::void_tech::set_thinks(
+        thinks
+            .split(',')
+            .filter_map(|t| t.trim().parse().ok())
+            .collect(),
+    );
     let drained = run(api, state, "brain-drain", "return brain_drain_log()", 1)
         .ok()
         .and_then(|()| string_at(api, state, -1))
