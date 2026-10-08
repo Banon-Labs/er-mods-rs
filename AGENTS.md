@@ -500,6 +500,15 @@ Enforced by `.cupcake/policies/claude/no_ask_without_receiver.rego` over
 `.cupcake/signals/last_assistant_ask_without_receiver.sh`, tested by
 `scripts/test-ask-without-receiver-signal.py` and `scripts/test-cupcake-stop-guards.py`.
 
+A monitor or loop that is no longer needed is stopped first, before anything else (user directive
+2026-10-07: "any time you have a monitor that runs after you don't need it, the first thing you
+should do is stop it"). A turn may not end while a background Bash or Monitor task this session
+started is still running, unless the closing message names that task id in a sentence saying why it
+is still needed. Still running means no finished notification, no Monitor expiry and no TaskStop for
+it in the transcript. Enforced by `.cupcake/policies/claude/no_unexplained_running_tasks.rego` over
+`.cupcake/signals/last_assistant_unexplained_running_tasks.sh`, tested by
+`scripts/test-unexplained-running-tasks-signal.py` and `scripts/test-cupcake-stop-guards.py`.
+
 ## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)
 
