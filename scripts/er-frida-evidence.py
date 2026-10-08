@@ -251,6 +251,96 @@ def read_event(source: str) -> dict:
     return event if isinstance(event, dict) else {}
 
 
+# The tools that carry a single `file_path`. Only these are admitted for conflict resolution: a
+# Bash command names its targets in free text, and a `git checkout --theirs` or a `sed` over a
+# conflicted file is not distinguishable here from a write that merely happens to land on one.
+CONFLICT_RESOLUTION_TOOLS = ("Edit", "Write", "MultiEdit")
+
+# What git leaves in the git dir while each operation is stopped. A stash apply also leaves
+# unmerged entries but none of these, and it is deliberately not admitted: a stash is uncommitted
+# work, so resolving it is not combining changes that are each already committed.
+OPERATION_MARKERS = (
+    ("rebase", "rebase-merge"),
+    ("rebase", "rebase-apply"),
+    ("merge", "MERGE_HEAD"),
+    ("cherry-pick", "CHERRY_PICK_HEAD"),
+    ("revert", "REVERT_HEAD"),
+)
+
+
+def git_output(directory: pathlib.Path, *argv: str) -> str | None:
+    """`git -C <directory> <argv>` stdout, or `None` on any failure."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(directory), *argv],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def conflict_operation(target: pathlib.Path) -> str | None:
+    """The stopped operation `target` is conflicted in, or `None`.
+
+    Two facts, both read from git and neither from the edit: the checkout holding the file has a
+    rebase, merge, cherry-pick or revert stopped in it, and the index holds unmerged stages for
+    this very file. Resolving that conflict combines changes that are each already committed, so
+    there is no new behaviour for an instrument to measure.
+
+    Measured 2026-10-07: `git rebase --onto feat/npc-summons-lab-facts d23bb905 HEAD` in the
+    worktree `.worktrees/ledge-reveal-check` stopped on `crates/er-npc-summons/src/addr.rs`, and
+    the Edit that removed the conflict markers was refused with `UNPROVEN spent-by-commit`.
+
+    Git is asked from the file's own directory, so a target in a linked worktree is judged by that
+    worktree's state and not by the main checkout's.
+    """
+    directory = target.parent
+    if not directory.is_dir():
+        return None
+    git_dir = git_output(directory, "rev-parse", "--absolute-git-dir")
+    if not git_dir or not git_dir.strip():
+        return None
+    git_dir_path = pathlib.Path(git_dir.strip())
+    operation = next(
+        (name for name, marker in OPERATION_MARKERS if (git_dir_path / marker).exists()), None
+    )
+    if operation is None:
+        return None
+    unmerged = git_output(directory, "ls-files", "--unmerged", "--", target.name)
+    if not unmerged or not unmerged.strip():
+        return None
+    return operation
+
+
+def conflict_resolution_verdict(event: dict) -> str | None:
+    """`CONFLICT-RESOLUTION op=<op> path=<file_path>` when the event resolves a conflict.
+
+    `None` otherwise. `path=` is the event's `file_path` exactly as given and sits last, because
+    the policy compares it with the path it is judging: a verdict about one file must not open
+    another.
+    """
+    if event.get("tool_name") not in CONFLICT_RESOLUTION_TOOLS:
+        return None
+    tool_input = event.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return None
+    file_path = tool_input.get("file_path")
+    if not isinstance(file_path, str) or not file_path.endswith(".rs") or "\n" in file_path:
+        return None
+    target = pathlib.Path(file_path)
+    if not target.is_absolute():
+        cwd = event.get("cwd")
+        target = (pathlib.Path(cwd) if isinstance(cwd, str) and cwd else REPO_ROOT) / target
+    operation = conflict_operation(target)
+    if operation is None:
+        return None
+    return f"CONFLICT-RESOLUTION op={operation} path={file_path}"
+
+
 def record(agent: str, pid: int, messages: int, seconds: float) -> int:
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -580,6 +670,58 @@ def selftest() -> int:
             check(git_repo, ["crates/brand-new/src/lib.rs"]) == 1,
         )
 
+        # --- resolving a conflict of a stopped merge is not a new change ------------------
+        #
+        # A real conflict: two branches change the same line of one crate source and the
+        # second is merged into the first.
+        conflicted = "crates/measured/src/board.rs"
+        absolute = str(git_repo / conflicted)
+        git("checkout", "-q", "-b", "side")
+        commit_rust(conflicted, now - 40)
+        git("checkout", "-q", "-")
+        commit_rust(conflicted, now - 30)
+
+        def edit(path: str, tool: str = "Edit", cwd: str | None = None) -> dict:
+            event: dict = {"tool_name": tool, "tool_input": {"file_path": path}}
+            if cwd is not None:
+                event["cwd"] = cwd
+            return event
+
+        ok(
+            "an edit with no operation in progress is not conflict resolution",
+            conflict_resolution_verdict(edit(absolute)) is None,
+        )
+        try:
+            git("merge", "-q", "side")
+        except subprocess.CalledProcessError:
+            pass  # the conflict is the point; a clean merge fails the next check
+        ok(
+            "an edit to the conflicted file of a stopped merge is conflict resolution",
+            conflict_resolution_verdict(edit(absolute))
+            == f"CONFLICT-RESOLUTION op=merge path={absolute}",
+        )
+        ok(
+            "a relative path resolves against the event's cwd",
+            conflict_resolution_verdict(edit(conflicted, "Write", str(git_repo)))
+            == f"CONFLICT-RESOLUTION op=merge path={conflicted}",
+        )
+        ok(
+            "a Bash call is never admitted as conflict resolution",
+            conflict_resolution_verdict(
+                {"tool_name": "Bash", "tool_input": {"command": f"sed -i d {absolute}"}}
+            )
+            is None,
+        )
+        ok(
+            "a file that is not conflicted is not admitted during the same merge",
+            conflict_resolution_verdict(edit(str(git_repo / "crates/other/src/ttf.rs"))) is None,
+        )
+        git("add", "--", conflicted)
+        ok(
+            "the file stops being admitted once it is resolved and staged",
+            conflict_resolution_verdict(edit(absolute)) is None,
+        )
+
         ok("the log lives outside the repo by default", REPO_ROOT not in state_dir().parents)
         os.environ.pop("ER_FRIDA_EVIDENCE_LOG", None)
 
@@ -626,7 +768,12 @@ def main(argv: list[str]) -> int:
     if args.check:
         targets = list(args.target)
         if args.event:
-            targets += targets_from_event(read_event(args.event))
+            event = read_event(args.event)
+            conflict = conflict_resolution_verdict(event)
+            if conflict is not None:
+                print(conflict)
+                return 0
+            targets += targets_from_event(event)
         return check(REPO_ROOT, targets)
     parser.print_help()
     return 2
