@@ -20,6 +20,7 @@
 -- blindfold): Raph [170,30,30], Donnie [110,30,170], Mikey [71,40,10].
 
 TURTLE_THINK = 523590100
+lab_brain(TURTLE_THINK, "turtles")
 
 local function turtle(index, weapon, gem, face)
   local key = TURTLE_THINK .. "." .. index

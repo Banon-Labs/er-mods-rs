@@ -35,14 +35,11 @@ end
 -- false hands her back to the stock AI (every override below passes her through).
 MR_BRAIN_ON = false
 
+-- Which characters run this brain is set by lab_brain(think, "moonrithyll"), in moonrithyll.lua
+-- for her; the same line on any other think id puts that character on it.
 local function is_her(ai)
   if not MR_BRAIN_ON then return false end
-  local ok, id = pcall(function() return ai:GetNpcThinkParamID() end)
-  if ok and id == MR_THINK then
-    LAB_AI[id] = ai
-    return true
-  end
-  return false
+  return lab_runs(ai, "moonrithyll")
 end
 
 local function unhittable(d)

@@ -163,14 +163,11 @@ local function r1(x)
   return math.floor(x * 10 + 0.5) / 10
 end
 
+-- Which characters run this brain is set by lab_brain(think, "turtles"), in turtles.lua for the
+-- squad; the same line on any other think id puts that character on it.
 function tt_is_turtle(ai)
   if not TT_BRAIN_ON then return false end
-  local ok, id = pcall(function() return ai:GetNpcThinkParamID() end)
-  if ok and id == TURTLE_THINK then
-    LAB_AI[id] = ai
-    return true
-  end
-  return false
+  return lab_runs(ai, "turtles")
 end
 
 -- Press use on the selected item, outside battle, and note when: a turtle standing still to use
