@@ -65,7 +65,7 @@ ref_line="refs/heads/work $head refs/heads/work $zero"
 run_hook() {
 	(
 		cd "$fixture" || exit 99
-		printf '%s\n' "$ref_line" | bash "$hook" origin https://example.invalid/fixture.git \
+		printf '%s\n' "$ref_line" | ER_PRE_PUSH_NO_CACHE=1 bash "$hook" origin https://example.invalid/fixture.git \
 			>"$tmp/out" 2>"$tmp/err"
 	)
 }

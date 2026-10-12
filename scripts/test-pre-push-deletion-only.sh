@@ -28,6 +28,9 @@
 #
 # Nothing here touches the repository it lives in: every git invocation names the fixture.
 set -uo pipefail
+# Every push here must reach the gates; a green marker from an earlier push in this fixture would
+# answer for a commit instead (scripts/test-pre-push-green-cache.sh covers that path).
+export ER_PRE_PUSH_NO_CACHE=1
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 hook="$repo_root/scripts/hooks/pre-push"

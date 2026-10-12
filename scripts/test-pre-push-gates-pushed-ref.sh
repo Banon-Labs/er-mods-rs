@@ -108,7 +108,7 @@ run_hook() { # run_hook <ref line>... -- one push through the hook, as git drive
 	(
 		cd "$fixture" || exit 99
 		printf '%s\n' "$@" | env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
-			PRE_PUSH_GATES_TEST_LOG="$log" ER_PRE_PUSH_LOG_DIR="$logs" bash "$hook_under_test" origin \
+			PRE_PUSH_GATES_TEST_LOG="$log" ER_PRE_PUSH_LOG_DIR="$logs" ER_PRE_PUSH_NO_CACHE=1 bash "$hook_under_test" origin \
 			https://example.invalid/fixture.git >"$tmp/out" 2>"$tmp/err"
 	)
 	status=$?
