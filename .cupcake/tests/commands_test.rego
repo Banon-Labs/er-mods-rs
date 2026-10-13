@@ -481,3 +481,55 @@ test_executed_texts_see_one_line_across_a_continuation if {
 	not contains(t, "\n")
 	contains(t, "-p x")
 }
+
+# --- a shell's options stand in front of its script ---------------------------
+# The script is the last word of each case, and the question is whether it is what runs.
+script_in_command_slot(text) if {
+	words := commands.command_slot_words(text)
+	commands.word_in_command_slot(words, count(words) - 1)
+}
+
+test_script_after_a_shell_option_value_is_in_the_slot if {
+	script_in_command_slot("bash -o pipefail x.sh")
+}
+
+test_script_after_a_clustered_option_value_is_in_the_slot if {
+	script_in_command_slot("bash -euo pipefail x.sh")
+}
+
+test_script_after_a_shopt_value_is_in_the_slot if {
+	script_in_command_slot("bash -O extglob x.sh")
+}
+
+test_script_after_an_rcfile_is_in_the_slot if {
+	script_in_command_slot("bash --rcfile /dev/null x.sh")
+}
+
+test_script_after_a_plus_option_is_in_the_slot if {
+	script_in_command_slot("bash +x x.sh")
+}
+
+test_script_after_a_shell_option_behind_a_wrapper_is_in_the_slot if {
+	script_in_command_slot("timeout 30 /usr/bin/bash -o pipefail x.sh")
+}
+
+# `-O` to python takes no value, so the word after it is the program and the next is
+# its operand.
+test_operand_after_a_python_flag_is_not_in_the_slot if {
+	not script_in_command_slot("python3 -O tool.py x.sh")
+}
+
+# A shell named only in an earlier command does not make this command's option a shell's.
+# `nice -o` is not a real option; it is here so the wrapper chain reaches the value and
+# nothing but the scope of the shell test decides the case.
+test_option_value_after_a_separator_is_not_a_shells if {
+	script_in_command_slot("nice -o x.sh")
+	not script_in_command_slot("bash a.sh; nice -o out x.sh")
+}
+
+test_shell_program_by_name_and_by_path if {
+	commands.shell_program("bash")
+	commands.shell_program("/usr/bin/zsh")
+	not commands.shell_program("check.sh")
+	not commands.shell_program("bashrc")
+}

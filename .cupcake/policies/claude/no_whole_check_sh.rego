@@ -86,6 +86,100 @@ runs_check_sh if {
 	# for that walk once per mention.
 	not commands.index_inside(spans, index)
 	commands.word_in_command_slot(words, index)
+	not read_without_executing(words, index)
+}
+
+# A shell handed `-n` reads the script and executes none of it: `man bash` documents the
+# flag as "Read commands but do not execute them. This may be used to check a shell script
+# for syntax errors", and `-o noexec` as "Same as -n". `bash -n scripts/check.sh` is a
+# syntax check, and it was denied on 2026-10-13 as a run of the suite.
+#
+# The exemption is narrow on purpose. The shell must be the nearest one before the script
+# in the same command, and every word between them must be one of that shell's own options,
+# so `nice -n 10 bash scripts/check.sh` and `sudo -n bash scripts/check.sh` still deny: the
+# `-n` there belongs to the wrapper. Anything this cannot read as an option -- a `+n` that
+# switches the flag back off, a word it does not recognise -- leaves the deny standing.
+# Each mention of the script is judged on its own, so a syntax check chained in front of a
+# real run does not excuse the run.
+read_without_executing(words, index) if {
+	start := commands.command_slot_start(words, index)
+	shells := [position |
+		some position, word in words
+		position >= start
+		position < index
+		noexec_shell(word)
+	]
+	count(shells) > 0
+	options := array.slice(words, max(shells) + 1, index)
+	every position, _ in options {
+		shell_option_word(options, position)
+	}
+	some position, _ in options
+	noexec_option(options, position)
+	not interactive_option(options)
+}
+
+# The shells whose `-n` is documented as no-exec. A path is judged by its last part, so
+# `/bin/bash` and `/usr/bin/env bash` read the same as `bash`.
+noexec_shell(word) if {
+	parts := split(word, "/")
+	parts[count(parts) - 1] in {"sh", "bash", "zsh", "ksh", "mksh", "dash", "ash"}
+}
+
+# A cluster of single-letter options, `-n` or `-xn`, as against a long `--norc`.
+short_option_cluster(word) if {
+	startswith(word, "-")
+	not startswith(word, "--")
+	word != "-"
+}
+
+# The options that take the next word as their value: `-o name` (and a cluster ending in
+# it, `-eo name`), `-O shopt_name`, and the two long options that name a file.
+valued_option(word) if {
+	short_option_cluster(word)
+	endswith(word, "o")
+}
+
+valued_option(word) if {
+	short_option_cluster(word)
+	endswith(word, "O")
+}
+
+valued_option(word) if word in {"--rcfile", "--init-file"}
+
+option_value(options, position) if {
+	position > 0
+	valued_option(options[position - 1])
+}
+
+shell_option_word(options, position) if startswith(options[position], "-")
+
+shell_option_word(options, position) if option_value(options, position)
+
+noexec_option(options, position) if {
+	short_option_cluster(options[position])
+	contains(options[position], "n")
+	not option_value(options, position)
+}
+
+# The long spelling is zsh's (`man zsh`: options "may also be specified by name in GNU long
+# option style", with dashes in the name ignored). Bash's manual lists no such long option,
+# so there it is an invalid option rather than a way to run the script.
+noexec_option(options, position) if options[position] in {"--noexec", "--no-exec"}
+
+noexec_option(options, position) if {
+	options[position] == "noexec"
+	position > 0
+	short_option_cluster(options[position - 1])
+	endswith(options[position - 1], "o")
+}
+
+# The same manual page says `-n` "is ignored by interactive shells", and `-i` makes one.
+interactive_option(options) if {
+	some position, word in options
+	short_option_cluster(word)
+	contains(word, "i")
+	not option_value(options, position)
 }
 
 # A heredoc body no shell reads is prose (2026-09-22): a pull-request body written with
