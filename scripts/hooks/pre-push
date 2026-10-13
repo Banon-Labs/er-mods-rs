@@ -4,6 +4,15 @@
 set -euo pipefail
 
 repo_root=$(git rev-parse --show-toplevel)
+
+# On a terminal the suite is followed live (the live fan-out in scripts/check.sh), so this hook's
+# own preamble shrinks to what someone watching needs: one line per decision rather than one per
+# input or per stage. Piped, logged, or under a test, every line prints as before, and
+# ER_CHECK_LIVE=0 turns both halves off.
+live_tty=0
+if [[ -t 2 && ${ER_CHECK_LIVE:-1} != 0 && ${TERM:-dumb} != dumb ]]; then
+	live_tty=1
+fi
 cd "$repo_root"
 
 # GIT EXPORTS GIT_DIR TO HOOKS IN A LINKED WORKTREE, AND EVERY GATE BELOW INHERITS IT.
@@ -365,7 +374,7 @@ fi
 # Callers check the return status rather than relying on `set -e`: these run on the left of `||`,
 # where bash switches errexit off inside the function body.
 link_root_inputs() {
-	local rel src candidate
+	local rel src candidate linked=0
 	while IFS= read -r rel; do
 		[[ -n $rel && ! -e $gate_tree/$rel ]] || continue
 		src=""
@@ -377,8 +386,12 @@ link_root_inputs() {
 		done
 		[[ -n $src ]] || continue
 		mkdir -p "$(dirname -- "$gate_tree/$rel")" && ln -sfn "$src" "$gate_tree/$rel" || return 1
-		printf 'pre-push: linked gitignored input %s -> %s\n' "$rel" "$src" >&2
+		linked=$((linked + 1))
+		[[ $live_tty -eq 1 ]] || printf 'pre-push: linked gitignored input %s -> %s\n' "$rel" "$src" >&2
 	done < <(python3 scripts/ci-gate-portability.py --root-inputs 2>/dev/null || true)
+	if [[ $live_tty -eq 1 && $linked -gt 0 ]]; then
+		printf 'pre-push: linked %d gitignored input(s) into the gate tree\n' "$linked" >&2
+	fi
 }
 
 pin_gate_tree() { # pin_gate_tree <sha>
@@ -411,7 +424,13 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 	stage_report=$(mktemp)
 	mapfile -t scope_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages-for-diff \
 		"${rev_argv[@]}" 2>"$stage_report" || true)
-	cat "$stage_report" >&2
+	# Live, the per-stage table (its rows are the indented lines) gives way to its headline; the
+	# stages it left out are named again, with "not a pass", by check.sh's one-line summary.
+	if [[ $live_tty -eq 1 ]]; then
+		awk '!/^  /' "$stage_report" >&2
+	else
+		cat "$stage_report" >&2
+	fi
 	rm -f "$stage_report"
 	mapfile -t all_stages < <(cd "$tree" && python3 scripts/check-stages.py --stages 2>/dev/null || true)
 
@@ -425,10 +444,15 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 	fi
 
 	printf -v scope_csv '%s,' "${scope_stages[@]}"
-	printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
-		"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
-	printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
-	printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
+	if [[ $live_tty -eq 1 ]]; then
+		printf 'pre-push: running %d of %d stage(s) for this push: %s (all of them: ER_SCOPE_ALL=1 git push)\n' \
+			"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
+	else
+		printf 'pre-push: running %d of %d stage(s) for this push: %s\n' \
+			"${#scope_stages[@]}" "${#all_stages[@]}" "${scope_csv%,}" >&2
+		printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
+		printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
+	fi
 	(cd "$tree" && ER_CHECK_STAGES="${scope_csv%,}" bash scripts/check.sh)
 }
 
