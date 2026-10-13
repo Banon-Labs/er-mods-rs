@@ -1484,6 +1484,11 @@ python3 "$repo_root/scripts/check-no-lossy-utf8.py"
 # load-bearing and wants a rewritten sentence rather than a lowercase letter.
 python3 "$repo_root/scripts/check-comment-caps.py" --selftest
 python3 "$repo_root/scripts/check-comment-caps.py"
+# The game's AI Lua has no `#` length operator, and `luac5.1 -p` accepts it, so a `#` reaches the
+# lab's hot reload and fails there silently (510 reload failures on 2026-10-06, turtles back on
+# stock AI). Selftest first, so the scanner is never trusted on its own say-so.
+python3 "$repo_root/scripts/check-ai-lua-dialect.py" --selftest
+python3 "$repo_root/scripts/check-ai-lua-dialect.py"
 # A NUL-terminator walk over a pointer we did not create is how both testers' games died on
 # 2026-08-23 (bd er-effects-rs-uuly): `CStr::from_ptr` -> `strlen` -> AV on a garbage non-null
 # `key` from Steam/Seamless, past a guard that only checked for null. Four more sites of the same
