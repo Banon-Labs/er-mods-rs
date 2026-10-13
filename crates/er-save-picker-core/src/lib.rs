@@ -86,6 +86,8 @@ pub mod autocomplete;
 pub mod boot;
 pub mod config;
 pub mod host;
+#[cfg(feature = "boot-flow")]
+pub mod load_error;
 pub mod model;
 #[cfg(feature = "os-dialog")]
 pub mod os_dialog;

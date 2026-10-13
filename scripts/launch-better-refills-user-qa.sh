@@ -104,14 +104,203 @@ preflight() {
 	fi
 }
 
+# Build the exact me3 argv for this run. It is split out from the launch itself so
+# `--selftest` can assert on it without starting anything.
+#
+# No path conversion happens here, on purpose. `me3` on this machine is a native Linux
+# `ELF` binary, so it takes the same Linux paths every other helper hands it -- see
+# `me3_launch` in `scripts/me3-launch-lib.sh`, which passes `$ME3_STEAM_DIR` and the
+# profile path through unchanged. An earlier revision ran both of these paths through a
+# `me3_to_host_path` helper. That helper was written for the retired `WSL2` setup, where
+# `me3.exe` was a Windows binary reached through `wslpath`, and its definition never landed
+# on main: under `set -euo pipefail` the two command substitutions returned 127 and aborted
+# the script before any launch, every run from 2026-07-27 to 2026-09-14. Do not add it back.
+me3_launch_argv() {
+	ME3_LAUNCH_ARGV=("$ME3_BIN" --steam-dir "$ME3_STEAM_DIR" launch -g eldenring -p "$ME3_PROFILE")
+}
+
 launch_me3_detached() {
-	local launch_steam_dir launch_profile_path
-	launch_steam_dir=$(me3_to_host_path "$ME3_STEAM_DIR")
-	launch_profile_path=$(me3_to_host_path "$ME3_PROFILE")
-	nohup "$ME3_BIN" --steam-dir "$launch_steam_dir" launch -g eldenring -p "$launch_profile_path" \
-		>"$ARTIFACT_DIR/me3-launch.stdout.log" 2>"$ARTIFACT_DIR/me3-launch.stderr.log" &
+	me3_launch_argv
+	# me3 resolves `me3-launcher.exe` and `me3_mod_host.dll` from a cwd-relative
+	# `target/x86_64-pc-windows-msvc/release` directory when one exists, so launching from
+	# this checkout would make Proton exec the wrong payload and die inside the compat
+	# tool. `GAME_DIR` is the directory `me3_launch` tells its callers to move to first.
+	(
+		cd -- "$GAME_DIR" || exit 1
+		exec nohup "${ME3_LAUNCH_ARGV[@]}"
+	) >"$ARTIFACT_DIR/me3-launch.stdout.log" 2>"$ARTIFACT_DIR/me3-launch.stderr.log" &
 	echo $! >"$PID_FILE"
 }
+
+usage() {
+	cat <<'USAGE'
+Usage: launch-better-refills-user-qa.sh [--selftest | --help]
+
+No arguments: preflight, write a one-native me3 profile for er_better_refills.dll,
+launch Elden Ring detached, and leave it running for manual QA.
+
+  --selftest  resolve every path, check that every me3 helper this script names is
+              defined, and run the real launch path against a recording stub in place
+              of me3. Starts no game and needs no Steam.
+  --help      this text.
+
+Environment overrides: GAME_DIR, BUILT_DLL, ARTIFACT_DIR, ME3_PROFILE, PID_FILE,
+ME3_BIN, ME3_STEAM_DIR, HOOK_READY_TIMEOUT_SECONDS.
+USAGE
+}
+
+SELFTEST_FAILURES=0
+
+selftest_true() {
+	local label="$1"
+	shift
+	if "$@"; then
+		printf '  ok    %s\n' "$label"
+	else
+		printf '  fail  %s\n' "$label" >&2
+		SELFTEST_FAILURES=$((SELFTEST_FAILURES + 1))
+	fi
+}
+
+selftest_equal() {
+	local label="$1" actual="$2" expected="$3"
+	if [[ "$actual" == "$expected" ]]; then
+		printf '  ok    %s\n' "$label"
+	else
+		printf '  fail  %s\n' "$label" >&2
+		printf '        expected: %s\n' "$expected" >&2
+		printf '        actual:   %s\n' "$actual" >&2
+		SELFTEST_FAILURES=$((SELFTEST_FAILURES + 1))
+	fi
+}
+
+selftest_is_defined() {
+	declare -F "$1" >/dev/null
+}
+
+# Every lowercase `me3_` helper this file calls must come from the sourced library.
+# Checking the call sites against `declare -F` is the exact guard the 2026-07-27
+# regression needed: a helper that is called but defined nowhere is a 127 at launch time
+# and nothing sooner.
+selftest_me3_helpers_defined() {
+	local name
+	while IFS= read -r name; do
+		[[ -n "$name" ]] || continue
+		selftest_true "helper $name is defined" selftest_is_defined "$name"
+	done < <(
+		python3 - "${BASH_SOURCE[0]}" <<'PY'
+import re
+import sys
+
+# Command position only: start of line, or after a separator or a command substitution.
+# Prose in comments is skipped, so naming a retired helper in a comment does not report
+# it as missing, and a trailing `.` or `-` rules out filenames such as the mod host dll.
+call = re.compile(r"(?:^|[;&|(]|\$\()\s*(me3_[a-z0-9_]+)(?![.\-])\b")
+names = set()
+for line in open(sys.argv[1], encoding="utf-8"):
+    if line.lstrip().startswith("#"):
+        continue
+    names.update(call.findall(line))
+print("\n".join(sorted(names)))
+PY
+	)
+}
+
+selftest() {
+	local tmp stub record pid expected actual
+	echo "better-refills-user-qa: selftest (no game is launched)"
+
+	echo "  REPO_ROOT=$REPO_ROOT"
+	echo "  GAME_DIR=$GAME_DIR"
+	echo "  ME3_BIN=$ME3_BIN"
+	echo "  ME3_STEAM_DIR=$ME3_STEAM_DIR"
+	echo "  BUILT_DLL=$BUILT_DLL"
+
+	selftest_me3_helpers_defined
+	selftest_true "GAME_DIR is absolute" test "${GAME_DIR:0:1}" = "/"
+	selftest_true "ME3_STEAM_DIR is absolute" test "${ME3_STEAM_DIR:0:1}" = "/"
+	selftest_true "GAME_DIR holds eldenring.exe" test -f "$GAME_DIR/eldenring.exe"
+	selftest_true "ME3_BIN is executable" test -x "$ME3_BIN"
+	selftest_true "ME3_STEAM_DIR is a directory" test -d "$ME3_STEAM_DIR"
+	selftest_true "launch cwd carries no rust payload dir" \
+		test ! -d "$GAME_DIR/target/x86_64-pc-windows-msvc/release"
+
+	tmp="$(mktemp -d -t better-refills-user-qa-selftest-XXXXXX)"
+	stub="$tmp/me3-stub.sh"
+	record="$tmp/me3-argv.txt"
+	cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+printf 'cwd=%s\n' "$PWD" >"$ME3_STUB_RECORD"
+printf 'bin=%s\n' "$0" >>"$ME3_STUB_RECORD"
+printf '%s\n' "$@" >>"$ME3_STUB_RECORD"
+STUB
+	chmod +x "$stub"
+
+	# Point every mutable global at the temp tree, then run the real launch path. The stub
+	# stands in for me3 and records what it was handed, so this exercises the former abort
+	# point end to end without a game.
+	ME3_BIN="$stub"
+	ARTIFACT_DIR="$tmp/artifacts"
+	PID_FILE="$ARTIFACT_DIR/me3-launch.pid"
+	ME3_PROFILE="$ARTIFACT_DIR/better-refills-user-qa.me3"
+	mkdir -p "$ARTIFACT_DIR"
+	printf 'not a real dll\n' >"$ARTIFACT_DIR/er_better_refills.dll"
+	me3_write_profile "$ME3_PROFILE" "$ARTIFACT_DIR/er_better_refills.dll"
+	selftest_true "profile names the built DLL" \
+		grep -q 'er_better_refills.dll' "$ME3_PROFILE"
+
+	export ME3_STUB_RECORD="$record"
+	launch_me3_detached
+	pid=""
+	IFS= read -r pid <"$PID_FILE" || true
+	selftest_true "launch recorded a pid" test -n "$pid"
+	if [[ -n "$pid" ]]; then
+		timeout 10 tail --pid="$pid" -f /dev/null >/dev/null 2>&1 || true
+	fi
+	unset ME3_STUB_RECORD
+
+	if [[ -f "$record" ]]; then
+		expected="cwd=$GAME_DIR
+bin=$stub
+--steam-dir
+$ME3_STEAM_DIR
+launch
+-g
+eldenring
+-p
+$ME3_PROFILE"
+		actual="$(cat "$record")"
+		selftest_equal "launch handed me3 the expected cwd and argv" "$actual" "$expected"
+	else
+		printf '  fail  the launch path never reached the me3 binary\n' >&2
+		printf '        stderr: %s\n' "$(cat "$ARTIFACT_DIR/me3-launch.stderr.log" 2>/dev/null)" >&2
+		SELFTEST_FAILURES=$((SELFTEST_FAILURES + 1))
+	fi
+
+	rm -rf "$tmp"
+	if ((SELFTEST_FAILURES > 0)); then
+		echo "better-refills-user-qa: selftest FAILED ($SELFTEST_FAILURES check(s))" >&2
+		return 1
+	fi
+	echo "better-refills-user-qa: selftest passed"
+	return 0
+}
+
+case "${1:-}" in
+-h | --help)
+	usage
+	exit 0
+	;;
+--selftest)
+	selftest
+	exit $?
+	;;
+"") ;;
+*)
+	usage >&2
+	fatal "unknown argument: $1"
+	;;
+esac
 
 preflight
 mkdir -p "$ARTIFACT_DIR"

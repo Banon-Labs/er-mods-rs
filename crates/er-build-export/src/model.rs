@@ -140,6 +140,29 @@ pub struct BuildExportDoc {
     pub tags: Vec<String>,
     /// User-authored effects. Shape is the planner's business, so it stays untyped.
     pub custom_effects: Vec<serde_json::Value>,
+    /// Values the planner derives (`populateComputedValues`), written empty.
+    ///
+    /// This and the three keys after it are the planner's own state keys, and they are written for
+    /// one reason: so the appearance survives the load. `importState` merges with
+    /// `hv(live, incoming)`, which walks the keys of whichever object has more of them, not the
+    /// union. A key only the incoming build carries -- `sliders`, for a browser character whose
+    /// Cosmetics tab was never opened -- is therefore dropped whenever the browser's character has
+    /// more keys, and a saved character carries `computed`, one that toggled an effect carries
+    /// `activeEffects`, one with DLC progress carries `pve`. Measured 2026-10-13: build
+    /// `e36f37c0e54a8d` stored all 202 slider values and opened as "No cosmetics data".
+    ///
+    /// With all four a build arrives with every key the planner itself writes (27 once `loadById`
+    /// strips `revision`), and a tie goes to the incoming side. Empty is not stale: `importState`
+    /// ends in `save()`, whose first step rebuilds `computed` from the merged character.
+    pub computed: serde_json::Map<String, serde_json::Value>,
+    /// Toggled effects. Written empty: an imported build starts with none toggled.
+    pub active_effects: Vec<serde_json::Value>,
+    /// Shadow of the Erdtree progress (`scadutree`, `revered`, `inDLC1`). Named `pve` upstream,
+    /// which is why the field is renamed: [`BuildExportDoc::pve`] is the `isPvE` flag.
+    #[serde(rename = "pve")]
+    pub dlc_progress: serde_json::Map<String, serde_json::Value>,
+    /// The planner's current health and FP overrides (`character.current`). Written empty.
+    pub current: serde_json::Map<String, serde_json::Value>,
 }
 
 impl Default for BuildExportDoc {
@@ -169,6 +192,10 @@ impl Default for BuildExportDoc {
             sets: Sets::default(),
             tags: Vec::new(),
             custom_effects: Vec::new(),
+            computed: serde_json::Map::new(),
+            active_effects: Vec::new(),
+            dlc_progress: serde_json::Map::new(),
+            current: serde_json::Map::new(),
         }
     }
 }
@@ -725,6 +752,10 @@ mod tests {
         "customEffects",
     ];
 
+    /// The planner's own state keys, which `makeDefault` leaves out and its live character gains
+    /// as it is used. This crate writes all four, empty; see [`BuildExportDoc::computed`].
+    const PLANNER_STATE_KEYS: &[&str] = &["computed", "activeEffects", "pve", "current"];
+
     fn as_object(doc: &BuildExportDoc) -> serde_json::Map<String, serde_json::Value> {
         match serde_json::to_value(doc).expect("a plain data document always serialises") {
             serde_json::Value::Object(map) => map,
@@ -733,10 +764,10 @@ mod tests {
     }
 
     #[test]
-    fn default_document_carries_exactly_the_planner_default_key_set() {
+    fn default_document_carries_the_planner_default_and_state_key_sets() {
         let map = as_object(&BuildExportDoc::default());
         let mut got: Vec<&str> = map.keys().map(String::as_str).collect();
-        let mut want = MAKE_DEFAULT_KEYS.to_vec();
+        let mut want = [MAKE_DEFAULT_KEYS, PLANNER_STATE_KEYS].concat();
         got.sort_unstable();
         want.sort_unstable();
         assert_eq!(got, want);
@@ -792,17 +823,14 @@ mod tests {
     /// while `len(live) <= len(incoming)`. Carrying *more* keys is what protects the key, not
     /// fewer.
     ///
-    /// `makeDefault()` writes 21 and this crate may add `greatRune` and `sliders`, so a fully
-    /// populated document is 23. The live object ratchets past that on its own:
-    /// `populateComputedValues` adds `computed` on every save (22), and `greatRune`, `pve` and
-    /// `activeEffects` each add one more as the player uses those features. A live character at
-    /// 24 or more that does not already carry `sliders` will drop ours.
-    ///
-    /// This test pins the number so the arithmetic stays checkable; it cannot fix the asymmetry,
-    /// which is an interop decision about whether to emit `computed`/`activeEffects` purely to
-    /// raise the count.
+    /// `makeDefault()` writes 21. The live object ratchets past that on its own:
+    /// `populateComputedValues` adds `computed` on every save, and `greatRune`, `pve`,
+    /// `activeEffects`, `current` and `sliders` each add one as the player uses those features --
+    /// 27 at most. A document of ours that was shorter than the live character lost `sliders`
+    /// (build `e36f37c0e54a8d`, 2026-10-13), so a fully populated one now carries all 27 and
+    /// wins the tie.
     #[test]
-    fn a_fully_populated_document_stays_within_the_planners_key_count() {
+    fn a_fully_populated_document_carries_every_key_the_planner_writes() {
         let mut set = er_build_import_core::sliders::SliderMap::new();
         set.insert("age".to_owned(), serde_json::Value::from(1));
         let doc = BuildExportDoc {
@@ -813,18 +841,25 @@ mod tests {
             )),
             ..BuildExportDoc::default()
         };
-        assert_eq!(as_object(&doc).len(), MAKE_DEFAULT_KEYS.len() + 2);
-        assert_eq!(
-            as_object(&BuildExportDoc::default()).len(),
-            MAKE_DEFAULT_KEYS.len()
-        );
+        let live_character_maximum = MAKE_DEFAULT_KEYS.len() + PLANNER_STATE_KEYS.len() + 2;
+        assert_eq!(live_character_maximum, 27);
+        assert_eq!(as_object(&doc).len(), live_character_maximum);
     }
 
+    /// The state keys go out empty, never with numbers: a derived value from the game would be a
+    /// claim the planner did not make, and `computed` is rebuilt by the save that ends the import.
     #[test]
-    fn derived_values_are_never_written() {
+    fn state_keys_are_written_empty() {
         let map = as_object(&BuildExportDoc::default());
-        assert!(!map.contains_key("computed"));
-        assert!(!map.contains_key("activeEffects"));
+        assert_eq!(map["computed"], serde_json::json!({}));
+        assert_eq!(map["activeEffects"], serde_json::json!([]));
+        assert_eq!(map["pve"], serde_json::json!({}));
+        assert_eq!(map["current"], serde_json::json!({}));
+        assert_eq!(
+            map["isPvE"],
+            serde_json::json!(false),
+            "pve is not the isPvE flag"
+        );
     }
 
     #[test]

@@ -101,8 +101,108 @@ pub(crate) fn save_trace_enabled() -> bool {
 
 pub(crate) use er_telemetry_core::counters::OBSERVED_ACTIVE_STEAM_ID64;
 
+/// The SteamAPI answer, cached once it exists: the signed-in account cannot change inside one process.
+static STEAM_API_ACTIVE_STEAM_ID64: AtomicU64 = AtomicU64::new(0);
+
+/// SteamAPI's signed-in account, or `None` before `SteamAPI_Init` has run.
+fn steam_api_active_steam_id64_cached() -> Option<u64> {
+    let cached = STEAM_API_ACTIVE_STEAM_ID64.load(Ordering::SeqCst);
+    if cached != 0 {
+        return Some(cached);
+    }
+    let steam_id = steam_api_active_steam_id64()?;
+    STEAM_API_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
+    Some(steam_id)
+}
+
+/// The account whose save folder this process owns: SteamAPI's answer when it has one, else the
+/// first account observed in a save path.
+pub(crate) fn active_account_steam_id64() -> Option<u64> {
+    steam_api_active_steam_id64_cached()
+        .or_else(|| plausible_steam_id64(OBSERVED_ACTIVE_STEAM_ID64.load(Ordering::SeqCst)))
+}
+
+/// Lines logged for save paths naming an account other than the active one.
+static FOREIGN_ACCOUNT_PATHS_LOGGED: AtomicUsize = AtomicUsize::new(0);
+const FOREIGN_ACCOUNT_PATHS_LOG_MAX: usize = 8;
+
+fn log_foreign_account_path(path: &[u16], steam_id: u64, active: u64, what: &str) {
+    if FOREIGN_ACCOUNT_PATHS_LOGGED.fetch_add(1, Ordering::SeqCst) >= FOREIGN_ACCOUNT_PATHS_LOG_MAX
+    {
+        return;
+    }
+    // UTF-8 Lossy: log-only decode of a Windows wide path.
+    let shown = String::from_utf16_lossy(path);
+    append_autoload_debug(format_args!(
+        "save-override: '{shown}' names account {steam_id}, not the active account {active} -- {what}"
+    ));
+}
+
+/// The redirect's question for a path naming `steam_id`: is that the active account's folder?
+/// True while no account is known yet, so the first boot open still redirects.
+fn save_redirect_account_is_active(path: &[u16], steam_id: u64) -> bool {
+    match active_account_steam_id64() {
+        Some(active) if active != steam_id => {
+            log_foreign_account_path(
+                path,
+                steam_id,
+                active,
+                "not redirected; the open goes to the real file",
+            );
+            false
+        }
+        _ => true,
+    }
+}
+
+/// Lines logged for failed primary opens after a world loaded.
+static FAILED_OPENS_AFTER_WORLD_LOGGED: AtomicUsize = AtomicUsize::new(0);
+const FAILED_OPENS_AFTER_WORLD_LOG_MAX: usize = 8;
+
+fn log_failed_open_after_world(path: &[u16]) {
+    if FAILED_OPENS_AFTER_WORLD_LOGGED.fetch_add(1, Ordering::SeqCst)
+        >= FAILED_OPENS_AFTER_WORLD_LOG_MAX
+    {
+        return;
+    }
+    // UTF-8 Lossy: log-only decode of a Windows wide path.
+    let shown = String::from_utf16_lossy(path);
+    append_autoload_debug(format_args!(
+        "save-override: redirected save open FAILED after a world loaded '{shown}' -- NOT arming the missing-save picker (the accepted save already loaded, so \"it did not load\" would be false); look at the stage share or whoever opened this path"
+    ));
+}
+
+/// Learn the active account from a save path the game opened, and stage its save.
+///
+/// The latch is never overwritten by a different account. Every open of any `EldenRing\<id>` path
+/// passes through here, ours included, and on 2026-10-13 the quit menu's stat of a second account's
+/// folder replaced the latch with that account for about 5 ms -- a save picked inside that window
+/// would have been stamped with the wrong SteamID. SteamAPI is the truth when it answers; before it
+/// does, the first account seen is kept.
 pub(super) fn observe_steam_id64_from_save_path(path: &[u16]) {
     if let Some(steam_id) = steam_id64_from_wide_save_path(path) {
+        let accepted = match steam_api_active_steam_id64_cached() {
+            Some(active) => active == steam_id,
+            None => match OBSERVED_ACTIVE_STEAM_ID64.compare_exchange(
+                0,
+                steam_id,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => true,
+                Err(latched) => latched == steam_id,
+            },
+        };
+        if !accepted {
+            let active = active_account_steam_id64().unwrap_or(0);
+            log_foreign_account_path(
+                path,
+                steam_id,
+                active,
+                "the active-account latch keeps its value and nothing is staged",
+            );
+            return;
+        }
         OBSERVED_ACTIVE_STEAM_ID64.store(steam_id, Ordering::SeqCst);
         // Latching the observed id is a pure store and always safe. The two calls below are NOT:
         // both open files, which re-enters the detour this observation was made from. They are
@@ -2034,6 +2134,7 @@ fn save_redirect_path(path: &[u16]) -> Option<Vec<u16>> {
         path,
         SAVE_REDIRECT_DIR_W.get().map(Vec::as_slice),
         observe_steam_id64_from_save_path,
+        |steam_id| save_redirect_account_is_active(path, steam_id),
         ensure_direct_stage_for_requested_path,
     )
 }
@@ -2157,7 +2258,12 @@ pub(super) unsafe extern "system" fn save_redirect_createfilew_hook(
                 )
             };
             // Decision, one-shot and reasoning all live in `er_save_redirect`.
-            if SAVE_REDIRECT_FAILED_PICKER.should_arm(ret == INVALID_HANDLE_RETURN, path) {
+            let open_failed = ret == INVALID_HANDLE_RETURN;
+            let in_world_seen = IN_WORLD_REACHED.load(Ordering::SeqCst) == IN_WORLD_REACHED_YES;
+            if in_world_seen && er_save_redirect::FailedRedirectPicker::counts(open_failed, path) {
+                log_failed_open_after_world(path);
+            }
+            if SAVE_REDIRECT_FAILED_PICKER.should_arm(open_failed, path, in_world_seen) {
                 append_autoload_debug(format_args!(
                     "save-override: redirected save open FAILED -- arming the missing-save picker"
                 ));
