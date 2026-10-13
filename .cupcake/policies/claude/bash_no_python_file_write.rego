@@ -122,10 +122,22 @@ python_file_write_detected if {
 # inline write text to match. Cupcake evaluates each Bash call independently,
 # so the only way to catch call two is to distrust script-file execution
 # itself unless the path is one this repo has already reviewed and committed.
+#
+# The inline-program markers below disqualify the exemption, and until 2026-10-13 they
+# also switched this rule off, because it was written as "runs a script file and is not
+# exempt" and `runs_a_python_script_file` carries them. So a `-c` or a stdin `-` anywhere
+# in the command let any script through: `wc -c f; python3 /tmp/patch.py`,
+# `bash -c "python3 /tmp/patch.py"` and `python3 -c "print(1)"; python3 /tmp/patch.py`
+# were all allowed, measured on this policy. A marker is a reason to withhold the
+# exemption, never a reason to stop looking at the scripts, so this rule now asks only
+# whether a script operand is unadmitted. A heredoc still ends the check here: its body
+# is read as words like any other text, and a body of prose that quotes a command would
+# otherwise be refused as one.
 python_file_write_detected if {
 	invokes_python
-	runs_a_python_script_file
-	not runs_only_admitted_scripts
+	not contains(command, "<<")
+	some text in executed_texts
+	not every_script_operand_is_admitted(text)
 }
 
 # ---------------------------------------------------------------------------
@@ -156,12 +168,17 @@ python_file_write_detected if {
 # `/tmp/x/patch.py)`), so it is trimmed before the suffix test. Without that the subshell
 # form named no script at all and ran uninspected; the test that listed it used `some`
 # over its cases, which passed on the three that did deny (found 2026-09-29).
+#
+# Quotes are removed for the same reason, found 2026-10-13: `command_slot_words` keeps
+# them, so `python3 "/tmp/patch.py"` ended in a quote, failed the suffix test, and ran
+# uninspected exactly as the subshell form had. The path tests below and the signal's
+# verdicts are both written against the unquoted path.
 script_operand(words, index) := operand if {
 	python_invocation(words, index)
 	some j
 	j > index
 	j < count(words)
-	operand := trim_right(words[j], ")")
+	operand := unquoted(trim_right(words[j], ")"))
 	endswith(operand, ".py")
 	count([p |
 		some p, _ in words

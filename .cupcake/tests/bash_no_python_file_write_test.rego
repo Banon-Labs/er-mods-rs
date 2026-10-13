@@ -443,6 +443,12 @@ test_unresolved_variable_scratch_script_is_denied if {
 	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, "UNKNOWN $S/sim.py unresolved variable")
 }
 
+# The quoted `"$S/sim.py"` above is inspected, not skipped: without its verdict the same
+# command is refused. Before 2026-10-13 the quote hid the operand and this allowed.
+test_quoted_scratch_script_without_a_verdict_is_denied if {
+	count(bash_no_python_file_write.deny) == 1 with input as bash(selftest_and_sim_cmd)
+}
+
 # One vetted script does not carry another that was not vetted.
 test_read_only_script_beside_an_unvetted_one_is_denied if {
 	cmd := concat("", ["python3 ", scratch, "/analyse.py; python3 ", scratch, "/patch.py"])
@@ -455,4 +461,58 @@ test_read_only_script_plus_inline_write_is_denied if {
 	cmd := concat("", ["python3 ", scratch, "/analyse.py && python3 -c \"open('a','w').write('x')\""])
 	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
 	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
+}
+
+# --- two ways a scratch script used to run uninspected (2026-10-13) ---------
+#
+# Every command in the two deny tests below was allowed by this policy before that date,
+# measured. A quoted path failed the `.py` suffix test, and a `-c` or stdin `-` anywhere in
+# the command switched off the script-file rule instead of only withholding the exemption.
+
+test_quoted_scratch_script_is_denied if {
+	every cmd in [
+		`python3 "/tmp/patch.py"`,
+		`python3 '/tmp/patch.py'`,
+		`(python3 "/tmp/x/patch.py")`,
+		`timeout 25 python3 "$S/patch.py" | head -9`,
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+test_quoted_committed_script_is_allowed if {
+	every cmd in [
+		`python3 "scripts/check-comment-caps.py" x.rs`,
+		`python3 '/home/banon/projects/er-mods-rs/scripts/er-teardown.py' --status`,
+		`python3 ".worktrees/lab/scripts/check-stages.py" --selftest`,
+		`W=.worktrees; python3 "$W/lab/scripts/check-stages.py" --selftest`,
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+test_inline_program_marker_does_not_hide_a_scratch_script if {
+	every cmd in [
+		"wc -c f; python3 /tmp/patch.py",
+		`bash -c "python3 /tmp/patch.py"`,
+		`python3 -c "print(1)"; python3 /tmp/patch.py`,
+		"cat x | python3 - ; python3 /tmp/patch.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# The marker still only withholds the exemption: a committed script, or a vetted read-only
+# one, beside a `-c` that writes nothing is allowed as before.
+test_inline_program_marker_beside_admitted_scripts_is_allowed if {
+	every cmd in [
+		`python3 scripts/check-comment-caps.py x.rs; python3 -c "print(1)"`,
+		`bash -c "python3 scripts/check-stages.py --selftest"`,
+		"wc -c f; python3 scripts/check-comment-caps.py f",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+	cmd := concat("", [`python3 -c "print(1)"; python3 "`, scratch, `/analyse.py"`])
+	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, signal)
 }

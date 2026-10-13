@@ -2343,6 +2343,20 @@ def main() -> int:
             False,
             "python file write from Bash",
         ),
+        # Both allowed until 2026-10-13: a quoted path hid the operand, and a `-c` anywhere in
+        # the command switched the script-file rule off.
+        PolicyCase(
+            "deny-quoted-scratch-script",
+            'python3 "/tmp/claude-1000/scratchpad/patch.py"',
+            False,
+            "python file write from Bash",
+        ),
+        PolicyCase(
+            "deny-scratch-script-inside-bash-c",
+            'bash -c "python3 /tmp/claude-1000/scratchpad/patch.py"',
+            False,
+            "python file write from Bash",
+        ),
     ])
 
     # --- the Bash spelling of a Rust edit (bd er-effects-rs-wuij) --------------------------
