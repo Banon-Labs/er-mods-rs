@@ -1,0 +1,159 @@
+# Void tech gear table, written by scripts/er-mechanics-voidtech.py --ai-table; do not edit.
+# w weapon_base button grip spawn_s | s magic school spawn_s | c weapon_base school
+w	14500000	R2	1	0.5333
+w	14500000	R2	2	0.5333
+w	22500000	R2	1	0.5
+w	22500000	R2	2	0.4333
+w	22690000	R2	1	0.5
+w	22690000	R2	2	0.4333
+w	40000000	R1	2	0.2
+w	40010000	R1	2	0.2
+w	40020000	R1	2	0.2
+w	40030000	R1	2	0.2
+w	40050000	R1	2	0.2
+w	40500000	R1	2	0.2
+w	41000000	R1	2	0.4
+w	41010000	R1	2	0.4
+w	41020000	R1	2	0.4
+w	41030000	R1	2	0.4
+w	41040000	R1	2	0.4
+w	41060000	R1	2	0.4
+w	41070000	R1	2	0.2
+w	41510000	R1	2	0.2
+w	41690000	R1	2	0.2
+w	43000000	R1	1	0.4333
+w	43000000	R1	2	0.4333
+w	43020000	R1	1	0.4333
+w	43020000	R1	2	0.4333
+w	43030000	R1	1	0.4333
+w	43030000	R1	2	0.4333
+w	43050000	R1	1	0.4
+w	43050000	R1	2	0.4
+w	43060000	R1	1	0.4333
+w	43060000	R1	2	0.4333
+w	43080000	R1	1	0.4333
+w	43080000	R1	2	0.4333
+w	43110000	R1	1	0.4333
+w	43110000	R1	2	0.4333
+w	43500000	R1	1	0.4333
+w	43500000	R1	2	0.4333
+w	43510000	R1	1	0.4333
+w	43510000	R1	2	0.4333
+w	43690000	R1	1	0.4333
+w	43690000	R1	2	0.4333
+w	43900000	R1	1	0.4333
+w	43900000	R1	2	0.4333
+w	60500000	R2	1	0.6
+w	60500000	R2	2	0.4333
+w	60510000	R2	1	0.6
+w	60510000	R2	2	0.4333
+w	60680000	R2	1	0.6
+w	60680000	R2	2	0.4333
+w	60690000	R2	1	0.6
+w	60690000	R2	2	0.4333
+w	61500000	R1	1	0.4333
+w	61500000	R1	2	0.4
+w	61500000	R2	1	0.5
+w	61500000	R2	2	0.4
+w	61510000	R1	1	0.4333
+w	61510000	R1	2	0.4
+w	61510000	R2	1	0.5
+w	61510000	R2	2	0.4
+w	61520000	R1	1	0.4333
+w	61520000	R1	2	0.4
+w	61520000	R2	1	0.5
+w	61520000	R2	2	0.4
+w	61530000	R1	1	0.4333
+w	61530000	R1	2	0.4
+w	61530000	R2	1	0.5
+w	61530000	R2	2	0.4
+w	61540000	R1	1	0.4333
+w	61540000	R1	2	0.4
+w	61540000	R2	1	0.5
+w	61540000	R2	2	0.4
+w	61690000	R1	1	0.4333
+w	61690000	R1	2	0.4
+w	61690000	R2	1	0.5
+w	61690000	R2	2	0.4
+w	63500000	R1	1	0.2333
+w	63500000	R1	2	0.2333
+w	63500000	R2	1	0.5
+w	63500000	R2	2	0.4333
+w	64510000	R2	1	0.4667
+w	64510000	R2	2	0.4667
+w	99040000	R1	2	0.4
+w	99050000	R1	1	0.4333
+w	99050000	R1	2	0.4333
+s	4010	enableMagic	0.3333
+s	4440	enableMagic	0.4
+s	4610	enableMagic	0.3333
+s	6000	enableMiracle	0.5
+s	6800	enableMiracle	0.5333
+s	53010	enableMiracle	0.5
+s	53524	enableMagic	0.4
+s	53610	enableMagic	0.4
+s	53820	enableMiracle	0.5
+s	53910	enableMiracle	0.5333
+c	2530000	enableMagic
+c	33000000	enableMagic
+c	33040000	enableMagic
+c	33050000	enableMagic
+c	33060000	enableMagic
+c	33090000	enableMagic
+c	33120000	enableMagic
+c	33130000	enableMagic
+c	33170000	enableMagic
+c	33180000	enableMagic
+c	33190000	enableMagic
+c	33200000	enableMagic
+c	33210000	enableMagic
+c	33230000	enableMagic
+c	33240000	enableMagic
+c	33250000	enableMagic
+c	33260000	enableMagic
+c	33270000	enableMagic
+c	33280000	enableMagic
+c	33510000	enableMagic
+c	33510000	enableMiracle
+c	33520000	enableMagic
+c	33690000	enableMagic
+c	33900000	enableMagic
+c	33910000	enableMagic
+c	33920000	enableMagic
+c	33930000	enableMagic
+c	33940000	enableMagic
+c	33950000	enableMagic
+c	33960000	enableMagic
+c	33970000	enableMagic
+c	33980000	enableMagic
+c	34000000	enableMiracle
+c	34010000	enableMiracle
+c	34020000	enableMiracle
+c	34030000	enableMiracle
+c	34040000	enableMiracle
+c	34060000	enableMiracle
+c	34070000	enableMiracle
+c	34080000	enableMiracle
+c	34090000	enableMiracle
+c	34500000	enableMiracle
+c	34510000	enableMiracle
+c	34520000	enableMiracle
+c	34610000	enableMiracle
+c	34620000	enableMiracle
+c	34630000	enableMiracle
+c	34640000	enableMiracle
+c	34650000	enableMiracle
+c	34660000	enableMiracle
+c	34670000	enableMiracle
+c	34680000	enableMiracle
+c	34690000	enableMiracle
+c	34900000	enableMiracle
+c	34910000	enableMiracle
+c	34920000	enableMiracle
+c	34930000	enableMiracle
+c	34940000	enableMiracle
+c	34950000	enableMiracle
+c	34960000	enableMiracle
+c	34970000	enableMiracle
+c	34980000	enableMiracle
+c	34990000	enableMiracle
