@@ -2,12 +2,40 @@
 
 This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
+## A command for the user goes into a kitty tab, never into the reply (user directive 2026-10-13)
+
+When the agent wants the user to run a command, it does not paste a bash block into its
+message. It opens one kitty tab per command block, focused, with the command typed in but not
+submitted, under a `#` comment block that says why it should be run:
+
+```bash
+python3 scripts/kitty-user-command.py --title 'push loading PR' \
+    --why 'The agent may not push; this publishes fix/load-character-from-file.' \
+    -- 'git -C /home/banon/projects/er-mods-rs/.worktrees/pr-x push -u origin fix/x'
+```
+
+The reply then says in prose which tabs it opened and what each one does. The helper wraps
+the command as `bash -c '...'` because the tabs run fish, and it finds kitty through
+`$KITTY_LISTEN_ON` because `kitty.conf` uses a random port (`listen_on tcp:127.0.0.1:0`).
+`--dry-run` shows what it would send; `--selftest` proves the quoting in bash and fish;
+`--live-selftest` sends that quoting through a real fish tab and checks what fish ran. Run the
+live one after touching the helper: on 2026-10-13 the offline test passed while keystroke-typed
+text reached fish mangled, which is why everything now goes in as a bracketed paste. The same day
+two handed-over tabs came up as bare prompts, because the text was sent before fish drew its first
+prompt and its startup ate it; the helper now waits for kitty's `at_prompt` and exits non-zero
+unless the comments and the command are on screen, so a tab it reports is a tab with the command
+in it.
+A long command goes in a file passed as `--command-file <path>`: a `git push && gh pr
+create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
+The Stop hook refuses a closing message that carries a shell code block.
+
 ## A command written for the user is spelled absolutely
 
 Every command example in this file, and in every Cupcake block message, is written
 repo-relative because the agent's shell is already in the repo root. **A command the
-user will read is a different artifact and must carry the full path**, because their
-shell is somewhere else and `python3 scripts/er-teardown.py` names nothing there:
+user will read is a different artifact and must carry the full path** -- inside the kitty
+tab above as much as anywhere -- because their shell is somewhere else and
+`python3 scripts/er-teardown.py` names nothing there:
 
 ```bash
 python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py    # hand the user THIS
@@ -185,7 +213,7 @@ Standing user order (2026-07-17): do not stop or yield merely because the proper
 
 Standing user order (2026-07-04): whenever a new DLL build is ready for runtime validation, do not try to validate a newly built DLL in an already-running process.
 
-If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why.
+If a live user-inspection Elden Ring run becomes invalid because the agent finds structured evidence that a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's current visual question, stop the agent-launched run before continuing implementation. Do not let the user keep inspecting a known-invalid run while the agent quietly fixes the cause in the background. Do not announce the stop and then pause before acting; complete the stop/teardown action first, then tell the user what was stopped and why. The teardown guard (`teardown_must_relaunch.rego`) admits this stop without a measurement only in this form, as the whole command: `python3 scripts/er-teardown.py --reason=invalid-run-<one-token-why>` (a trailing `| tail -<n>` / `| head -<n>` is allowed; chained work and multi-word reasons are still refused).
 
 Do not launch Elden Ring through Steam from agent workflows. Forbidden launch forms include `steam -applaunch 1245620`, `steam://run/1245620`, `steam://rungameid/1245620`, and `xdg-open` or similar wrappers around those URLs. Do not launch `start_protected_game.exe` directly or through Proton/Wine/Steam; that is the protected/EAC launcher, not an approved agent runtime target. Process detection of stale `start_protected_game.exe` is allowed, but launching it is not. Runtime work must use only an approved, explicitly gated direct/offline `eldenring.exe` probe path.
 
@@ -499,6 +527,15 @@ judgement, preference, decision, credential, what they see where no oracle exist
 Enforced by `.cupcake/policies/claude/no_ask_without_receiver.rego` over
 `.cupcake/signals/last_assistant_ask_without_receiver.sh`, tested by
 `scripts/test-ask-without-receiver-signal.py` and `scripts/test-cupcake-stop-guards.py`.
+
+A monitor or loop that is no longer needed is stopped first, before anything else (user directive
+2026-10-07: "any time you have a monitor that runs after you don't need it, the first thing you
+should do is stop it"). A turn may not end while a background Bash or Monitor task this session
+started is still running, unless the closing message names that task id in a sentence saying why it
+is still needed. Still running means no finished notification, no Monitor expiry and no TaskStop for
+it in the transcript. Enforced by `.cupcake/policies/claude/no_unexplained_running_tasks.rego` over
+`.cupcake/signals/last_assistant_unexplained_running_tasks.sh`, tested by
+`scripts/test-unexplained-running-tasks-signal.py` and `scripts/test-cupcake-stop-guards.py`.
 
 ## Session Completion`), and bd's own non-memory output is a 367-byte header (measured). `bd prime` is bounded to ~4 KB by `scripts/beads-prime.sh` + `scripts/gen-beads-prime.py`, because the unbounded form is 4.6 MB and even a titles-only index was 157 KB -- past what the harness inlines, so it got persisted to a file and never read. The full title list is written beside it at `.beads/PRIME-memory-index.txt`; `scripts/test-beads-prime-size.py` keeps the output small.
 - Use `$HOME/.local/bin/bd remember` for persistent knowledge -- do NOT use MEMORY.md files (and to READ a memory use `$HOME/.local/bin/bd recall <key>`, NOT `bd remember <key>` which clobbers it)

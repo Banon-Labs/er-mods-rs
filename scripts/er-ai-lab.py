@@ -285,6 +285,8 @@ class Lab:
                 return repr(float(v))
             if isinstance(v, (list, tuple)):
                 return "{" + ", ".join(lua(x) for x in v) + "}"
+            if isinstance(v, str):
+                return json.dumps(v)
             raise TypeError(f"no Lua literal for {type(v).__name__}")
 
         code = "; ".join(f'lab_world_set("{k}", {lua(v)}, {lua(quiet)})' for k, v in facts.items()
@@ -498,7 +500,15 @@ def main() -> int:
     parser.add_argument("--ai-config", default="{}", help="JSON for ai-lua-hot-reload.js cfg")
     parser.add_argument("--corpus", type=pathlib.Path, default=DEFAULT_CORPUS,
                         help="directory of decompiled AI .lua files mined for method completions")
+    parser.add_argument("--extra-agent", action="append", default=[], metavar="NAME=PATH",
+                        help="load another agent in the same session (a second watcher on the process "
+                             "would break these hooks), e.g. void=scripts/frida/void-trace.js")
     args = parser.parse_args()
+    for spec in args.extra_agent:
+        name, _, path = spec.partition("=")
+        if not name or not path or name in AGENTS:
+            raise SystemExit(f"--extra-agent wants NAME=PATH with a new name, got {spec!r}")
+        AGENTS[name] = pathlib.Path(path).resolve()
     args.log.parent.mkdir(parents=True, exist_ok=True)
 
     lab = Lab(args.log, args.endpoint, {"spawn": json.loads(args.spawn_config), "ai": json.loads(args.ai_config)})

@@ -9,6 +9,9 @@
 -- head (EquipParamProtector 10000: headEquip 1, equipModelId 0).
 lab_equip(524320000, "head", 10000)
 
+-- Her brain, brain_moonrithyll.lua (MR_BRAIN_ON there switches it on).
+lab_brain(524320000, "moonrithyll")
+
 -- The "Ordinary Bean" build (er-build-planner ?b=98f687a96d43b1), less its Albinauric Mask so she
 -- stays bare-headed. Armament ids are the affinity row plus the upgrade level: Bloodfiend's Arm
 -- 12530000 + Blood 1100 + 25, Miséricorde 1030000 + Lightning 600 + 25, Spiralhorn Shield

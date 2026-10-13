@@ -19,6 +19,10 @@
 #     tear down a run the user is touching" did not stop it. Requiring the launch
 #     in the same command makes the failure mode unreachable: the worst outcome
 #     becomes a restarted game rather than no game.
+#
+#     Two standalone forms are excused: one after a proven measurement, and one whose
+#     `--reason=invalid-run-<token>` declares the run invalid, which AGENTS.md obliges the
+#     agent to stop.
 #   routing:
 #     required_events: ["PreToolUse"]
 #     required_tools: ["Bash"]
@@ -227,6 +231,56 @@ teardown_alone_after_measurement if {
 	teardown_segment_alone(non_cd[0])
 }
 
+# A standalone teardown that declares the run invalid needs no measurement. AGENTS.md obliges the
+# agent to stop an agent-launched run once structured evidence shows a required patch did not
+# apply, the wrong build is loaded, or the test state cannot answer the user's question -- and to
+# complete that stop before continuing implementation. Such a run has by definition produced no
+# measurement, so the evidence gate above can never open for it. Refused 2026-10-07 on
+# `er-teardown.py --reason=build-import-did-not-apply 2>&1 | tail -3`: the `build_url` import never
+# applied, the character was still the Vagabond at level 9, and the guard kept the invalid run up.
+#
+# The declaration is a fixed spelling, `--reason=invalid-run-<one-token>`, so it is written on
+# purpose and lands in `er-run-outcome.txt` as such. Everything else stays as narrow as the
+# measured form: one teardown segment, no chained work, a one-token reason. The single extra
+# admission is an output trim (`| tail -<n>` / `| head -<n>`), which reads the teardown's own
+# output and does no work.
+invalid_run_reason_prefix := "--reason=invalid-run-"
+
+teardown_alone_declaring_invalid_run if {
+	segments := [segment |
+		some segment in standalone_segments_for(tool_command())
+		norm_command_for(segment) != ""
+	]
+	non_cd := [segment |
+		some segment in segments
+		not cd_segment(segment)
+		not output_trim_segment(segment)
+	]
+	count(non_cd) == 1
+	teardown_segment_alone(non_cd[0])
+	declares_invalid_run(non_cd[0])
+}
+
+declares_invalid_run(segment) if {
+	some tok in split(norm_command_for(segment), " ")
+	startswith(tok, invalid_run_reason_prefix)
+	count(tok) > count(invalid_run_reason_prefix)
+}
+
+# `tail -3`, `head -15`: exactly two words, the second a dash and digits. Spelled without a regex
+# for the engine-crash reason recorded at the top of this file.
+output_trim_segment(segment) if {
+	words := [tok |
+		some tok in split(norm_command_for(segment), " ")
+		tok != ""
+	]
+	count(words) == 2
+	words[0] in {"tail", "head"}
+	startswith(words[1], "-")
+	count(words[1]) > 1
+	trim(substring(words[1], 1, -1), "0123456789") == ""
+}
+
 cd_segment(segment) if {
 	words := [tok |
 		some tok in split(norm_command_for(segment), " ")
@@ -295,13 +349,14 @@ reason_value_at(words, i) if {
 	words[i - 1] == "--reason"
 }
 
-block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status`, `--help` and `-h` are read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
+block_reason := "🧁 Cupcake blocked a teardown that does not relaunch. `scripts/er-teardown.py` belongs immediately before a launch and nowhere else -- stapled to the front of a build it reads as hygiene and is actually a kill. On 2026-09-12 exactly that ended run br-20260912-204637-08ba while the user was driving it, one line after the run logged the fix they were inspecting. Put the launch in the SAME command:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; python3 /home/banon/projects/er-mods-rs/scripts/er-run-branch.py --with <pkg> ...\n\nBuild FIRST, in its own command, then tear down and relaunch together -- the build does not need the game stopped. `--status`, `--help` and `-h` are read-only and always allowed. A `--dry-run` launch does not count: it stages nothing and still leaves the user with no game.\n\nA teardown that is the WHOLE command is allowed once this run has produced the measurement that justified having the game up -- the `frida_evidence` signal has to read `PROVEN`, the same evidence the live-source-edit guard demands before an edit. That is also the form to hand the user when they ask for one:\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=<one-token-why>\n\nA run that has become INVALID needs no measurement, and stopping it is an obligation, not an option: AGENTS.md (\"Elden Ring Runtime Probe Hygiene\") says that when structured evidence shows a required DLL/runtime patch did not apply, the wrong build is loaded, or the test state cannot answer the user's question, the agent must stop the agent-launched run before continuing implementation. Declare it in the reason, as the whole command (a trailing `| tail -<n>` or `| head -<n>` is allowed):\n\n    python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-<one-token-why>\n\nSpell it absolutely there. The user's shell is not in the repo root, so `python3 scripts/er-teardown.py` names nothing for them. `--reason` takes ONE token: a quoted multi-word value is trailing work to this guard and is denied."
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"
 	input.tool_name == "Bash"
 	killing_teardown
 	not teardown_alone_after_measurement
+	not teardown_alone_declaring_invalid_run
 	not relaunches
 
 	decision := {

@@ -2849,8 +2849,11 @@ dependencies = [
 name = "er-convenient-deaths"
 version = "0.1.0"
 dependencies = [
+ "eldenring",
  "er-game-base",
  "er-hook",
+ "er-hotkey-config",
+ "fromsoftware-shared",
  "iced-x86",
 ]
 

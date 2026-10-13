@@ -297,21 +297,22 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
                 // (loading starts only after the pick releases the hold).
                 save_picker_overlay_process_completion();
+                // A commit held back waiting for the engine to take down the title menu the switch
+                // made it rebuild. Retried here, above the player split, because it is the only
+                // place every tick reaches: during a switch the player is gone and the no-player
+                // branch returns early, and once a player exists the branch below returns early
+                // too while the switch phase is past RETURN_TITLE_REQUESTED. The call used to sit
+                // after that return, so a deferred commit was never retried (2026-10-13: first
+                // fire at +63860 with no player, then nothing). A no-op unless a commit is deferred.
+                unsafe {
+                    crate::experiments::own_load_continue_retry_deferred(
+                        er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst)
+                            as u64,
+                    )
+                };
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
-                    // A switch commit held back by the title-menu drain is waiting at the title, where
-                    // there is no local player -- so this branch is the only one that runs while it
-                    // waits. The retry used to live only in the player-present branch below, which
-                    // never runs at the title: the 2026-10-07 12:10:21 switch to slot 4 deferred its
-                    // `continue_confirm` once, logged no second `OWN_LOAD_CONTINUE_FIRE ENTRY`, and sat
-                    // on the rebuilt title until the orphan close restarted it (`WORLD LOST #2`).
-                    // A no-op unless a commit is actually deferred.
-                    unsafe {
-                        crate::experiments::own_load_continue_retry_deferred(
-                            state.game_task_ticks,
-                        )
-                    };
                     // Answer the container question DllMain could not (bd er-effects-rs-1742).
                     // Idempotent after the first call; a no-op on every run that did not defer.
                     resolve_deferred_save_override();
@@ -625,12 +626,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
-                // A commit held back waiting for the engine to take down the title menu the switch
-                // made it rebuild. Whatever called `own_load_continue_fire` the first time does not
-                // call it again: a switch logs its `GUARD PASS` line exactly once. The hold is
-                // normally at the title, with no player, so the no-player branch above carries the
-                // same call; this one covers a hold that began while a player still existed.
-                unsafe { crate::experiments::own_load_continue_retry_deferred(state.game_task_ticks) };
                 // In-world correctness oracle: on the first frame the local player exists, log
                 // the load-correctness record + the T_controllable timeline marker once. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so

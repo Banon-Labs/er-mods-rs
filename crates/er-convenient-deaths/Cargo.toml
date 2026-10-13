@@ -15,6 +15,9 @@ crate-type = ["cdylib"]
 # fourth patch would have to satisfy.
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# `HotFile`, the workspace's one reload decision: re-reads the config about once a second and
+# compares its text rather than its mtime. Host-buildable, so the reload diff stays `cargo test`-able.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 # Assembles each patched window from NAMED instructions in `build.rs` and ground-truths it
 # against `eldenring-deobf.bin`, so a hand-typed byte cannot silently disarm a patch.
@@ -26,6 +29,9 @@ iced-x86 = { version = "1.21", default-features = false, features = [
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
+# `CSTaskImp`, for the `FrameBegin` task that polls the config and applies or restores patches.
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 
 [lints]
 workspace = true
