@@ -192,14 +192,38 @@ runs_a_python_script_file if {
 # `scripts/<name>.py` in shape. The old regex checked only the `.py` suffix and
 # the absence of a leading dash, so `/tmp/.../patch.py` and `~/scratch/patch.py`
 # both satisfied it -- the bypass an earlier rewrite closed.
-committed_script_path(path) if {
+committed_script_path(path) if repo_relative_script_path(trim_prefix(path, "./"))
+
+repo_relative_script_path(path) if {
 	startswith(path, "scripts/")
 	not contains(path, "..")
 }
 
+# The same file in one of this repo's local worktree checkouts, spelled relative to the repo
+# root: `.worktrees/<name>/scripts/<file>.py`. Added 2026-10-13. The absolute spelling of such
+# a checkout was already admitted by the component rule below, and the relative one was not, so
+# this command, which runs a committed test from a PR worktree, was refused as a python file
+# write:
+#
+#   cd /home/banon/projects/er-mods-rs && S=/tmp/x; W=.worktrees; ( python3 $W/pr-hook-shim/scripts/test-cupcake-hook-shim.py > $S/hs.log 2>&1; echo done )
+#
+# `.worktrees/` is the gitignored directory AGENTS.md reserves for these checkouts, so what sits
+# under `<name>/scripts/` is this repo's own `scripts/` tree on another branch. The `$W` in that
+# command is resolved by `variable_resolved` further down.
+#
+# Narrow on purpose. The checkout name is exactly one path component, neither empty nor `.`,
+# and `..` anywhere refuses the path, so `.worktrees/../../tmp/scripts/x.py` and
+# `.worktrees/x/../scripts/x.py` stay where they were. Below the name, the path must pass the
+# same test as a bare `scripts/` path, so the nesting rules are the two spellings' shared rules
+# rather than a second copy of them.
 committed_script_path(path) if {
-	startswith(path, "./scripts/")
 	not contains(path, "..")
+	segments := split(trim_prefix(path, "./"), "/")
+	count(segments) > 3
+	segments[0] == ".worktrees"
+	segments[1] != ""
+	segments[1] != "."
+	repo_relative_script_path(concat("/", array.slice(segments, 2, count(segments))))
 }
 
 # This repo's own absolute spelling names the same committed file, added
@@ -251,13 +275,132 @@ every_script_operand_is_admitted(text) if {
 	count([index |
 		some index, _ in words
 		path := script_operand(words, index)
-		not script_operand_admitted(path)
+		not script_operand_admitted(words, index, path)
 	]) == 0
 }
 
-script_operand_admitted(path) if committed_script_path(path)
+script_operand_admitted(_, _, path) if committed_script_path(path)
 
-script_operand_admitted(path) if vetted_read_only(path)
+script_operand_admitted(words, index, path) if committed_script_path(variable_resolved(words, index, path))
+
+script_operand_admitted(_, _, path) if vetted_read_only(path)
+
+# ---------------------------------------------------------------------------
+# A committed script reached through a variable, added 2026-10-13.
+#
+# `W=.worktrees; python3 $W/<name>/scripts/<file>.py` names the same file as the literal
+# spelling, and the path test above can only see `$W/...`. The `python_script_writes` signal
+# already expands a variable like this one, but only to read the file and only for an absolute
+# result, so a relative checkout path came back `UNKNOWN` and the refusal stood. The expansion
+# here exists to run the path test on what the shell will actually hand python; whatever it
+# yields still has to pass `committed_script_path`, so it admits nothing a literal would not.
+#
+# It resolves one shape and fails closed on the rest. The operand must begin `$NAME/` or
+# `${NAME}/` with no other `$` after it. `NAME` must be bound exactly once in this text, by a
+# statement made only of `NAME=value` words that comes before the python invocation, to a value
+# with no expansion, quoting, glob or escape character in it. Any other word that could bind the
+# name -- the bare name (`read W`, `for W in`), `W+=`, `W[...]`, a second `W=`, or a `W=` used as
+# a prefix to a command, where bash expands `$W` before the assignment takes effect -- leaves the
+# variable unresolved, and the operand is judged exactly as it was before this rule existed.
+#
+# Residue, stated rather than hidden: the shell's own word splitting is not modelled, so a
+# command that also rebinds `IFS` can make bash split the expansion where this does not. Like
+# the signal, this is a guard against a habit, and getting past it that way takes intent.
+# ---------------------------------------------------------------------------
+
+variable_resolved(words, index, path) := concat("/", [trim_right(value, "/"), rest]) if {
+	reference := variable_reference(path)
+	rest := reference[1]
+	not contains(rest, "$")
+	value := bound_literal(words, index, reference[0])
+}
+
+variable_reference(path) := [name, rest] if {
+	startswith(path, "${")
+	close := indexof(path, "}/")
+	close > 2
+	name := substring(path, 2, close - 2)
+	rest := substring(path, close + 2, (count(path) - close) - 2)
+}
+
+variable_reference(path) := [name, rest] if {
+	startswith(path, "$")
+	not startswith(path, "${")
+	slash := indexof(path, "/")
+	slash > 1
+	name := substring(path, 1, slash - 1)
+	rest := substring(path, slash + 1, (count(path) - slash) - 1)
+}
+
+bound_literal(words, index, name) := value if {
+	shell_name(name)
+	prefix := concat("", [name, "="])
+	bindings := [position |
+		some position, word in words
+		binds_name(word, name)
+	]
+	count(bindings) == 1
+	position := bindings[0]
+	position < index
+	startswith(words[position], prefix)
+	assignment_statement(words, position)
+	value := substring(words[position], count(prefix), count(words[position]) - count(prefix))
+	literal_value(value)
+}
+
+binds_name(word, name) if word == name
+
+binds_name(word, name) if startswith(word, concat("", [name, "="]))
+
+binds_name(word, name) if startswith(word, concat("", [name, "+="]))
+
+binds_name(word, name) if startswith(word, concat("", [name, "["]))
+
+# Every word of the statement holding `position` is an assignment, and a separator ends it.
+assignment_statement(words, position) if {
+	start := commands.command_slot_start(words, position)
+	ends := [i |
+		some i, word in words
+		i > position
+		word == commands.command_slot_separator
+	]
+	count(ends) > 0
+	end := min(ends)
+	count([i |
+		some i, word in words
+		i >= start
+		i < end
+		not assignment_word(word)
+	]) == 0
+}
+
+assignment_word(word) if {
+	equals := indexof(word, "=")
+	equals > 0
+	shell_name(substring(word, 0, equals))
+}
+
+shell_name(name) if {
+	name != ""
+	characters := split(name, "")
+	not digit(characters[0])
+	count([c |
+		some c in characters
+		not name_character(c)
+	]) == 0
+}
+
+name_character(c) if contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_0123456789", c)
+
+digit(c) if contains("0123456789", c)
+
+literal_value(value) if {
+	value != ""
+	count([c |
+		some c in ["$", "`", "\\", "'", `"`, "~", "*", "?", "[", "(", ")", "<", ">", "\t", "\n", "\r"]
+		contains(value, c)
+	]) == 0
+}
 
 # ---------------------------------------------------------------------------
 # A scratch script that only reads, added 2026-09-29.
@@ -307,7 +450,7 @@ vetted_read_only(path) if unquoted(path) in vetted_read_only_operands
 
 python_token_pattern_followed_by_stdin := "python[0-9.]*[[:space:]]+-($|[[:space:]])"
 
-block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py`. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
+block_reason := "🧁 Cupcake blocked a python file write from Bash. Editing a file by running a python program hides the change: it never shows up as a reviewable diff, a mismatched `replace` anchor silently no-ops, and composing the program costs a turn that the edit itself does not. Use the Edit tool to change an existing file (it fails loudly when the anchor does not match) and the Write tool to create one. Reading files in python is untouched, and so is shell redirection -- `cmd > file` and a plain heredoc into a file are visible in the command itself. A committed script under this repo's `scripts/` is also allowed, by either spelling -- `python3 scripts/<name>.py` or `python3 /home/banon/projects/er-mods-rs/scripts/<name>.py` -- and so is the same file in a local checkout, `.worktrees/<name>/scripts/<file>.py`, written out or reached through a `$VAR` assigned a literal by its own statement earlier in the same command. A script file anywhere else runs only when the `python_script_writes` signal reads it and finds no write: an absolute path (or `$VAR` assigned a literal earlier in the same command), no `open(..., 'w')`, `.write_text`, `shutil`, `subprocess`, `os.remove`-style call, and `importlib` pointed only at this repo's `scripts/`. An inline program (`-c`, `<<HEREDOC`, `python3 -`) is not. Write the absolute spelling in anything the user will read: their shell is not in the repo root and the relative form names nothing there. User directive 2026-09-16: \"We NEED a hook to stop you from using python to write massive files.\""
 
 deny contains decision if {
 	input.hook_event_name == "PreToolUse"

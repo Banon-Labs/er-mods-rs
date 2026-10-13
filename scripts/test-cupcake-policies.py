@@ -2327,6 +2327,22 @@ def main() -> int:
             False,
             "python file write from Bash",
         ),
+        # A committed script in one of the repo's `.worktrees/<name>/` checkouts, reached through
+        # a variable: the command refused in production on 2026-10-13. Run here because this is
+        # the compiled policy, and the `indexof`/`substring` arithmetic that resolves `$W` is only
+        # proven in the OPA interpreter by the Rego suite.
+        PolicyCase(
+            "allow-worktree-script-through-a-variable",
+            "cd /home/banon/projects/er-mods-rs && S=/tmp/x; W=.worktrees; "
+            "( python3 $W/pr-hook-shim/scripts/test-cupcake-hook-shim.py > $S/hs.log 2>&1; echo done )",
+            True,
+        ),
+        PolicyCase(
+            "deny-worktree-traversal-through-a-variable",
+            "W=.worktrees; python3 $W/../../tmp/scripts/x.py",
+            False,
+            "python file write from Bash",
+        ),
     ])
 
     # --- the Bash spelling of a Rust edit (bd er-effects-rs-wuij) --------------------------
