@@ -390,9 +390,32 @@ pin_gate_tree() { # pin_gate_tree <sha>
 	link_root_inputs
 }
 
+# Each tip keeps its own stage logs (2026-10-08). check.sh writes every stage's log and verdict to
+# one fixed directory, `${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-check-stages`, and clears it when it
+# starts. With one run per pushed tip, the second tip's run deleted the first tip's logs before
+# anyone could read them. Measured on a 12-branch push that day: check-oracle-singleton-globals.py
+# went red on the second tip, and by the time the push ended addresses.log held the twelfth tip's
+# green run -- the failure's own output was gone, and the check passed every time it was rerun.
+#
+# So each tip gets its own result directory, keyed by its full sha, and check.sh is pointed at it
+# through ER_CHECK_RESULT_DIR -- the knob it already has for exactly this. The paths check.sh prints
+# ("per-stage logs: ...") then name the directory that holds that tip's logs, and nothing a later
+# tip does can touch them. Directories older than a week are pruned so the tmpfs does not fill.
+# ER_PRE_PUSH_LOG_DIR moves the whole tree, which is how the hook's own test keeps out of it.
+pre_push_log_root=${ER_PRE_PUSH_LOG_DIR:-${XDG_RUNTIME_DIR:-/tmp}/er-mods-rs-pre-push}
+if [[ -d $pre_push_log_root ]]; then
+	find "$pre_push_log_root" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf -- {} + 2>/dev/null || true
+fi
+
 run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 	local sha=$1 tree=$repo_root rev_argv=() stage_report scope_stages all_stages scope_csv
 	[[ -n $sha ]] && rev_argv=(--rev "$sha")
+	# Exported for this tip only: the next call to run_suite replaces it with that tip's directory.
+	# No sha (git sent no ref list) means one run, so check.sh's own default is left alone.
+	if [[ -n $sha ]]; then
+		export ER_CHECK_RESULT_DIR="$pre_push_log_root/$sha"
+		printf 'pre-push: stage logs for %s are kept in %s\n' "${sha:0:12}" "$ER_CHECK_RESULT_DIR" >&2
+	fi
 	if [[ -n $sha && $sha != "$head_sha" ]]; then
 		printf 'pre-push: %s is not this checkout'"'"'s HEAD (%s), so the suite runs on it in\n' \
 			"${sha:0:12}" "${head_sha:0:12}" >&2
@@ -433,11 +456,24 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 }
 
 suite_failed=0
+failed_tips=()
 if [[ ${#pushed_shas[@]} -eq 0 ]]; then
 	run_suite "" || suite_failed=1
 else
 	for sha in "${pushed_shas[@]}"; do
-		run_suite "$sha" || suite_failed=1
+		run_suite "$sha" || {
+			suite_failed=1
+			failed_tips+=("$sha")
+		}
+	done
+fi
+# Repeated at the very end, because on a many-tip push the red tip's own report has scrolled far
+# above the last tip's green one.
+if [[ ${#failed_tips[@]} -gt 0 && ${#pushed_shas[@]} -gt 1 ]]; then
+	printf '\npre-push: %d of %d pushed tip(s) failed the suite; their logs are kept here:\n' \
+		"${#failed_tips[@]}" "${#pushed_shas[@]}" >&2
+	for sha in "${failed_tips[@]}"; do
+		printf '  %s  %s/\n' "${sha:0:12}" "$pre_push_log_root/$sha" >&2
 	done
 fi
 exit "$suite_failed"
