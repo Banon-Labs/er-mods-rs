@@ -122,6 +122,63 @@ FRIDA_EVIDENCE_PROVEN.write_text(
     encoding="utf-8",
 )
 
+
+
+def _make_conflict_fixture(root: Path) -> tuple[Path, Path]:
+    """A repo stopped in a merge with one crate source conflicted and one clean.
+
+    Returns `(conflicted, clean)`, both absolute. The Frida gate admits an Edit to the first --
+    resolving it combines changes that are each already committed -- and must still refuse the
+    second, which sits in the same stopped merge but has nothing to resolve. Built for real rather
+    than described, because the verdict comes from git (`ls-files --unmerged` and the git dir's
+    `MERGE_HEAD`), not from anything in the event.
+    """
+    repo = root / "conflict-repo"
+    conflicted = repo / "crates" / "demo" / "src" / "addr.rs"
+    clean = repo / "crates" / "demo" / "src" / "lib.rs"
+    conflicted.parent.mkdir(parents=True)
+
+    def git(*argv: str, check: bool = True) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-c", "user.name=policy-regression",
+                "-c", "user.email=policy-regression@invalid",
+                "-c", "commit.gpgsign=false",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "init.defaultBranch=base",
+                "-C", str(repo),
+                *argv,
+            ],
+            capture_output=True,
+            check=check,
+            timeout=10,
+        )
+
+    git("init", "-q")
+    conflicted.write_text("pub const A: u32 = 0;\n", encoding="utf-8")
+    clean.write_text("mod addr;\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "side")
+    conflicted.write_text("pub const A: u32 = 1;\n", encoding="utf-8")
+    git("commit", "-q", "-am", "side")
+    git("checkout", "-q", "base")
+    conflicted.write_text("pub const A: u32 = 2;\n", encoding="utf-8")
+    git("commit", "-q", "-am", "base change")
+    git("merge", "-q", "side", check=False)
+    return conflicted, clean
+
+
+# Under the gitignored `target/` rather than `/tmp`, because a `.rs` path in `/tmp` is refused by
+# the scratch-script guard before the Frida gate is ever asked.
+(REPO_ROOT / "target").mkdir(exist_ok=True)
+_CONFLICT_FIXTURE_DIR = Path(
+    tempfile.mkdtemp(prefix="cupcake-policy-regression-conflict-", dir=REPO_ROOT / "target")
+)
+atexit.register(shutil.rmtree, _CONFLICT_FIXTURE_DIR, True)
+CONFLICTED_RUST, CLEAN_RUST_IN_CONFLICTED_REPO = _make_conflict_fixture(_CONFLICT_FIXTURE_DIR)
+
 # The read-only listing denied on the native-Linux dev box on 2026-09-26, verbatim: a check for
 # running cargo/rustc builds and agent sessions before a disk cleanup deleted Rust target/ dirs.
 # It tripped two guards, neither of whose premise held -- the WSL pgrep false-negative, and a
@@ -2320,6 +2377,40 @@ def main() -> int:
             "allow-bash-write-of-a-non-rust-file-under-crates",
             "cat > crates/er-title-flow/Cargo.toml <<'EOF'\n[package]\nEOF",
             True,
+        ),
+    ])
+
+    # --- resolving a conflict of a stopped merge --------------------------------------------
+    #
+    # Measured 2026-10-07: a `git rebase --onto` stopped on `crates/er-npc-summons/src/addr.rs`
+    # and the Edit deleting the conflict markers was refused with `UNPROVEN spent-by-commit`.
+    # Both cases run the real signal against a real stopped merge, with the Frida log absent, so
+    # the only thing that can open the gate is the conflict itself.
+    cases.extend([
+        PolicyCase(
+            "allow-edit-resolving-a-conflicted-crate-source",
+            "",
+            True,
+            extra_tool_input={
+                "file_path": str(CONFLICTED_RUST),
+                "old_string": "<<<<<<< HEAD\npub const A: u32 = 2;\n=======\n",
+                "new_string": "pub const A: u32 = 2;\n",
+            },
+            include_timeout=False,
+            tool_name="Edit",
+        ),
+        PolicyCase(
+            "deny-edit-of-an-unconflicted-crate-source-during-the-same-merge",
+            "",
+            False,
+            "no Frida measurement behind it",
+            extra_tool_input={
+                "file_path": str(CLEAN_RUST_IN_CONFLICTED_REPO),
+                "old_string": "mod addr;\n",
+                "new_string": "mod addr;\nmod extra;\n",
+            },
+            include_timeout=False,
+            tool_name="Edit",
         ),
     ])
 
