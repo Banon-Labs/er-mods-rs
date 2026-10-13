@@ -162,7 +162,7 @@ const PICKER_ACT_UP: usize = 1 << 0;
 const PICKER_ACT_DOWN: usize = 1 << 1;
 const PICKER_ACT_LEFT: usize = 1 << 2;
 const PICKER_ACT_RIGHT: usize = 1 << 3;
-const PICKER_ACT_SELECT: usize = 1 << 4;
+pub(crate) const PICKER_ACT_SELECT: usize = 1 << 4;
 const PICKER_ACT_BACK: usize = 1 << 5;
 
 // Virtual-key codes (win32).
@@ -187,6 +187,19 @@ const XINPUT_B: u16 = 0x2000;
 /// missing-save-pending latch that holds the boot.
 pub fn save_picker_overlay_active() -> bool {
     SAVE_PICKER_OVERLAY_ARMED.load(Ordering::SeqCst) != 0 && missing_save_selection_pending()
+}
+
+/// True when the armed overlay has something on screen to choose from: a file listing, or the
+/// character list of a picked file.
+///
+/// Armed is not enough. The overlay shares `ACTIVE_SAVE_PICKER` with the in-world System > Quit
+/// browser, and on 2026-10-13 the overlay armed mid-session while that browser held the slot; the
+/// browser's pick then emptied it. The overlay stayed armed with no model, which draws only the
+/// background and offers nothing a press can act on -- a picker in name only.
+pub fn save_picker_overlay_presentable() -> bool {
+    save_picker_overlay_active()
+        && (SAVE_PICKER_STAGE_CHARS.load(Ordering::SeqCst) != 0
+            || model::active_save_picker_lock().is_some())
 }
 
 type GetAsyncKeyStateFn = unsafe extern "system" fn(i32) -> i16;
@@ -289,13 +302,16 @@ fn resolve_xinput_get_state() -> Option<XInputGetStateFn> {
 /// Must be called on the game's render thread (the Present hook). `GetAsyncKeyState` does not report
 /// the user's keys from a background thread under Wine/Proton -- measured: a dedicated poll thread ran
 /// 1089 polls yet saw only 5 key-downs while the user mashed, and completed 0 picks.
-fn save_picker_sample() -> (usize, usize) {
+pub(crate) fn save_picker_sample() -> (usize, usize) {
     let mut held = 0usize;
     let mut pressed = 0usize;
     // Keyboard: only when the event-driven low-level hook is not active. The hook (when installed)
     // owns keyboard so every press registers regardless of this poll's ~4fps boot rate; polling it
-    // here too would double-apply. This branch is the fallback if the hook failed to install.
-    if !SAVE_PICKER_KBD_HOOK_ACTIVE.load(Ordering::SeqCst)
+    // here too would double-apply. This branch is the fallback if the hook failed to install, and
+    // the only keyboard source while the load-error screen is up, which clears this poll's
+    // "pressed since the last call" state when it appears -- a state the hook does not have.
+    if (!SAVE_PICKER_KBD_HOOK_ACTIVE.load(Ordering::SeqCst)
+        || crate::load_error::load_error_screen_active())
         && let Some(gaks) = resolve_get_async_key_state()
     {
         let mut probe = |vk: i32, act: usize| {
@@ -347,22 +363,22 @@ fn save_picker_sample() -> (usize, usize) {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MouseButton {
+pub(crate) enum MouseButton {
     Left,
     Right,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct MouseClick {
-    x: usize,
-    y: usize,
-    w: usize,
-    h: usize,
-    button: MouseButton,
+pub(crate) struct MouseClick {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) button: MouseButton,
 }
 
 #[cfg(windows)]
-fn save_picker_mouse_click() -> Option<MouseClick> {
+pub(crate) fn save_picker_mouse_click() -> Option<MouseClick> {
     let gaks = resolve_get_async_key_state()?;
     let left = unsafe { gaks(VK_LBUTTON) } as u16;
     let right = unsafe { gaks(VK_RBUTTON) } as u16;
@@ -400,7 +416,7 @@ fn save_picker_mouse_click() -> Option<MouseClick> {
 }
 
 #[cfg(not(windows))]
-fn save_picker_mouse_click() -> Option<MouseClick> {
+pub(crate) fn save_picker_mouse_click() -> Option<MouseClick> {
     None
 }
 
@@ -746,6 +762,13 @@ fn picker_character_row_hit(
 /// deferred to [`save_picker_overlay_process_completion`] on the game-task thread. No-op unless the
 /// overlay is active.
 pub fn save_picker_overlay_input_tick() {
+    // The load-error screen is drawn over everything this overlay draws, so it takes the input too.
+    // A picker still armed underneath it (the 2026-10-13 soft lock had one) must not navigate on
+    // presses the player aimed at a screen they can see.
+    if crate::load_error::load_error_screen_active() {
+        crate::load_error::load_error_input_tick();
+        return;
+    }
     // The host owns the open decision by calling `arm_boot_picker()` only after its surface router
     // decides this overlay owns the boot pick. This tick only drives/drops an already-armed overlay;
     // arming here would bypass the OS-native boot surface again.
@@ -864,6 +887,7 @@ unsafe extern "system" fn save_picker_ll_keyboard_proc(
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
             && save_picker_path_edit_active()
             && save_picker_overlay_active()
+            && !crate::load_error::load_error_screen_active()
         {
             let shift = resolve_get_async_key_state()
                 .map(|gaks| (unsafe { gaks(VK_SHIFT) } as u16) & 0x8000 != 0)
@@ -878,7 +902,12 @@ unsafe extern "system" fn save_picker_ll_keyboard_proc(
         // key-up swallowed the user's repeated taps whenever the up event was missed (measured: 10
         // edges for many more presses). A distinct tap is a single KEYDOWN, so tapping stays 1:1; only
         // holding a key repeats, which is acceptable for a picker.
-        if act != 0 && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) {
+        // The load-error screen polls the keyboard itself (see `load_error_input_tick`), so the
+        // hook applies nothing while it is up.
+        if act != 0
+            && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN)
+            && !crate::load_error::load_error_screen_active()
+        {
             SAVE_PICKER_KBD_HOOK_HITS.fetch_add(1, Ordering::SeqCst);
             if save_picker_overlay_active() {
                 let _ = std::panic::catch_unwind(|| save_picker_apply_pressed(act));
@@ -1226,13 +1255,13 @@ enum CharacterAct {
 // ---- Rendering ----
 
 // Overlay palette (reuses the boot bar's understated language; dark panel, off-white highlight).
-const PICKER_RGB_PANEL: [u8; 3] = [12, 12, 14];
+pub(crate) const PICKER_RGB_PANEL: [u8; 3] = [12, 12, 14];
 const PICKER_RGB_TITLE: [u8; 3] = [214, 208, 190];
-const PICKER_RGB_DIM: [u8; 3] = [120, 117, 108];
-const PICKER_RGB_SEL_BAR: [u8; 3] = [58, 54, 44];
-const PICKER_RGB_SEL_TEXT: [u8; 3] = [238, 232, 214];
-const PICKER_RGB_RULE: [u8; 3] = [40, 38, 33];
-const PICKER_RGB_WARNING: [u8; 3] = [220, 160, 82];
+pub(crate) const PICKER_RGB_DIM: [u8; 3] = [120, 117, 108];
+pub(crate) const PICKER_RGB_SEL_BAR: [u8; 3] = [58, 54, 44];
+pub(crate) const PICKER_RGB_SEL_TEXT: [u8; 3] = [238, 232, 214];
+pub(crate) const PICKER_RGB_RULE: [u8; 3] = [40, 38, 33];
+pub(crate) const PICKER_RGB_WARNING: [u8; 3] = [220, 160, 82];
 /// A filesystem location: the header's current directory and the drive row's path field. Cool
 /// against the warm parchment of the saves, so "where you are" and "what you can load" are
 /// separable at a glance rather than one undifferentiated column of the same grey.
@@ -1243,7 +1272,7 @@ const PICKER_RGB_DIR: [u8; 3] = [142, 170, 196];
 const PICKER_RGB_SAVE: [u8; 3] = [218, 198, 148];
 /// The explanatory line under a warning headline. Brighter than `DIM`, which was too dark for a
 /// sentence the user is expected to act on.
-const PICKER_RGB_DETAIL: [u8; 3] = [198, 194, 184];
+pub(crate) const PICKER_RGB_DETAIL: [u8; 3] = [198, 194, 184];
 /// Text the user is typing right now.
 const PICKER_RGB_EDIT: [u8; 3] = [240, 236, 220];
 /// The part of an autocomplete suggestion the user has not typed yet.
@@ -1273,7 +1302,12 @@ fn picker_columns(max_px: usize, scale: usize) -> usize {
 ///
 /// The status banner used to be one `HEADLINE: detail` line truncated to the panel width, so
 /// every sentence longer than the panel lost its tail -- including the part naming the save.
-fn picker_wrap_text(text: &str, max_px: usize, scale: usize, max_lines: usize) -> Vec<String> {
+pub(crate) fn picker_wrap_text(
+    text: &str,
+    max_px: usize,
+    scale: usize,
+    max_lines: usize,
+) -> Vec<String> {
     let cols = picker_columns(max_px, scale);
     let mut lines: Vec<String> = Vec::new();
     let mut current = String::new();

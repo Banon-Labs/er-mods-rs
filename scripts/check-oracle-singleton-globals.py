@@ -304,7 +304,10 @@ def constant_values(root: Path) -> dict[str, int | None]:
     if _CONSTANT_VALUES is None:
         seen: dict[str, int | None] = {}
         for path in (root / "crates").rglob("*.rs"):
-            text = code_only(path.read_text(encoding="utf-8", errors="replace"))
+            raw = read_listed_source(path)
+            if raw is None:
+                continue
+            text = code_only(raw)
             for name, literal in DECLARATION_RE.findall(text):
                 value = int(literal.replace("_", ""), 0)
                 if name in seen and seen[name] != value:
@@ -388,14 +391,33 @@ def rhs_is_compiled_in(text: str, bound, rhs: str, base_name: str, before: int) 
 # drift that opened the seam in the first place.
 
 
+def read_listed_source(path: Path) -> str | None:
+    """The text of a file `rglob` listed, or None when it was gone by the time it was read.
+
+    The tree is not quiet while this runs. check.sh runs its stages in parallel in one checkout, and
+    until 2026-10-08 `er-stale-run-sentinel.sh --selftest` (stage runtime-tools) created and removed
+    `crates/.er-sentinel-selftest-new-source.rs` while this gate (stage addresses) was walking
+    `crates/`. A listing that caught the file and a read that missed it raised FileNotFoundError,
+    and the gate failed once in a pre-push of 5a8d8771 and passed on every rerun. That selftest no
+    longer creates the file, but a file that vanished between the listing and the read is not source
+    this gate could have judged, so it is skipped rather than allowed to crash the gate.
+    """
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return None
+
+
 def source_offenders(root: Path) -> list[str]:
     found = []
     for path in sorted((root / "crates").rglob("*.rs")):
         relative = path.relative_to(root).as_posix()
         if relative in SOURCE_EXEMPT:
             continue
-        text = code_only(path.read_text(encoding="utf-8", errors="replace"))
-        found.extend(offenders_in(text, relative))
+        raw = read_listed_source(path)
+        if raw is None:
+            continue
+        found.extend(offenders_in(code_only(raw), relative))
     return sorted(found)
 
 
@@ -916,6 +938,26 @@ def selftest() -> int:
     # A comment describing the hazard is not an instance of it.
     if flags("let base = game_module_base();\n// was safe_read_usize(base + rva) until today\n"):
         failures.append("SOURCE matcher reads prose as a finding")
+
+    # A file listed by the walk and gone before it is read. A dangling symlink is exactly that
+    # state, held still: `rglob` lists it and opening it raises FileNotFoundError. The real file
+    # beside it must still be judged, so skipping cannot be mistaken for reading nothing.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch)
+        (root / "crates" / "demo" / "src").mkdir(parents=True)
+        (root / "crates" / ".vanished.rs").symlink_to(root / "no-such-file.rs")
+        (root / "crates" / "demo" / "src" / "lib.rs").write_text(BEFORE_FIX, encoding="utf-8")
+        try:
+            vanished = source_offenders(root)
+        except FileNotFoundError as error:
+            failures.append(f"a file that vanished between listing and reading crashed the gate: {error}")
+        else:
+            if not any(line.startswith("crates/demo/src/lib.rs:") for line in vanished):
+                failures.append(
+                    f"with a vanished file beside it, the real defect was not reported: {vanished}"
+                )
 
     for name, snippet in (
         ("hex literal on a parameter base", HEX_LITERAL_ON_PARAM),

@@ -970,6 +970,15 @@ pub(crate) fn write_telemetry(state: &EffectsState, player_available: bool) {
         SAVE_PICKER_OVERLAY_PICK_COUNT.load(Ordering::SeqCst),
         SAVE_PICKER_OVERLAY_PICK_REJECT_COUNT.load(Ordering::SeqCst)
     ));
+    // The load-error screen: raised means a load was judged unable to finish, draw hits mean the
+    // player could see it, and a refused exit means Close Game was pressed during a save write.
+    body.push_str(&format!(
+        "  \"oracle_load_error_screen_armed\": {},\n  \"oracle_load_error_screen_arm_count\": {},\n  \"oracle_load_error_screen_draw_hits\": {},\n  \"oracle_load_error_screen_exit_refused\": {},\n",
+        crate::experiments::LOAD_ERROR_SCREEN_ARMED.load(Ordering::SeqCst),
+        crate::experiments::LOAD_ERROR_SCREEN_ARM_COUNT.load(Ordering::SeqCst),
+        crate::experiments::LOAD_ERROR_SCREEN_DRAW_HITS.load(Ordering::SeqCst),
+        crate::experiments::LOAD_ERROR_SCREEN_EXIT_REFUSED.load(Ordering::SeqCst)
+    ));
     body.push_str(&format!(
         "  \"system_quit_continue_confirm_fresh_deser_done\": {},\n  \"system_quit_continue_confirm_fresh_deser_count\": {},\n  \"system_quit_continue_confirm_block_count\": {},\n  \"system_quit_continue_confirm_allow_count\": {},\n  \"system_quit_continue_confirm_non_switch_count\": {},\n  \"system_quit_continue_confirm_world_up_count\": {},\n  \"system_quit_continue_confirm_unproven_forward_count\": {},\n",
         SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_DONE.load(Ordering::SeqCst),

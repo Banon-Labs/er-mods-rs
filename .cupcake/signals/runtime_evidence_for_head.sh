@@ -79,8 +79,13 @@ fi
 # event mentions a push at all, which is nearly every Bash call, and that keeps the warm path free
 # of a second python start. The test is sound in the direction that matters: the policy's own
 # pattern requires the literal word, so an event without it cannot be a push there either.
+#
+# Every `grep -q` in this file reads a here-string, never a pipe. `-q` exits at its first match, so
+# a `printf` still writing a long input hits a closed pipe, `pipefail` makes that write error the
+# pipeline's status, and the test reads the opposite of what grep found. Measured 2026-10-13 against
+# 8000 changed paths under crates/: the piped test below answered `NOTRUNTIME`.
 target_dir=""
-if printf '%s' "$event" | grep -q 'push'; then
+if grep -q 'push' <<<"$event"; then
   push_repo="$(printf '%s' "$event" |
     python3 "$repo_root/scripts/cupcake_push_target_repo.py" 2>/dev/null)"
   case "$push_repo" in
@@ -125,7 +130,7 @@ fi
 # Only code that ends up inside the game can be proven by a run. A push that moves docs, scripts or
 # policies has nothing to demonstrate and must not be blocked -- a guard that fires on everything is
 # one the next agent learns to override by reflex.
-if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
+if ! grep -q '^crates/' <<<"$changed"; then
   printf 'NOTRUNTIME'
   exit 0
 fi

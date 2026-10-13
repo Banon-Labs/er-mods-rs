@@ -1095,11 +1095,17 @@ selftest() {
   # actually escaped on 2026-08-04: the first file created after the sentinel was written was a
   # new `.rs`, `ls-files --error-unmatch` said no, and a live run survived an edit it should not
   # have. Creating source invalidates a loaded DLL exactly as much as editing source.
+  #
+  # The path is asked about, never created. is_repo_source reads only git's answer for the path
+  # (ls-files, check-ignore) and its parent directory, so a file on disk adds nothing to the proof.
+  # Creating one did cost something: this selftest runs in check.sh's runtime-tools stage while the
+  # addresses stage runs alongside it in the same tree, and check-oracle-singleton-globals.py lists
+  # crates/**/*.rs and then reads each file. A listing taken while this file existed and a read
+  # after it was removed raised FileNotFoundError and failed that gate -- measured 2026-10-08 on a
+  # pre-push of 5a8d8771, reproduced under strace, and the file sorts first under crates/.
   local newsrc="$REPO_ROOT/crates/.er-sentinel-selftest-new-source.rs"
-  : >"$newsrc"
   if is_repo_source "$newsrc"; then echo "  ok   brand-new untracked source file counts as repo source";
   else echo "  FAIL new source file not recognised (the 2026-08-04 escape)"; fails=$((fails + 1)); fi
-  rm -f "$newsrc"
   # A gitignored path does not count -- this is what keeps a log line or a build artefact from
   # killing a run. `target/` is ignored in this repo.
   local ignored="$REPO_ROOT/target/.er-sentinel-selftest-ignored"

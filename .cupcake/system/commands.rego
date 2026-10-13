@@ -696,6 +696,55 @@ command_slot_wrapper_at(words, i) if {
 	words[i - 1] == "--with"
 }
 
+# A shell's options stand in front of its script the way its `-` flags already do, in the
+# two shapes the per-word rule cannot read: a `+` option, which switches a flag off
+# (`bash +x x`), and the value of an option that takes one (`bash -o pipefail x`,
+# `bash -euo pipefail x`, `bash -O extglob x`, `bash --rcfile /dev/null x`). Measured
+# 2026-10-13 against `no_whole_check_sh`: each of those spellings ran `scripts/check.sh` and
+# was allowed, because the option's value was read as the program and the script as its
+# operand.
+#
+# Only behind a shell earlier in the same command, so `python3 -O x.py` keeps its meaning:
+# there `-O` takes no value and `x.py` is what runs.
+command_slot_wrapper_at(words, i) if {
+	startswith(words[i], "+")
+	shell_earlier_in_command(words, i)
+}
+
+command_slot_wrapper_at(words, i) if {
+	i > 0
+	shell_valued_option(words[i - 1])
+	shell_earlier_in_command(words, i - 1)
+}
+
+# `-o name` and `-O name`, alone or ending a short cluster (`-euo name`), their `+` forms,
+# and the two long options that name a file.
+shell_valued_option(word) if {
+	some prefix in {"-", "+"}
+	startswith(word, prefix)
+	not startswith(word, "--")
+	some suffix in {"o", "O"}
+	endswith(word, suffix)
+}
+
+shell_valued_option(word) if word in {"--rcfile", "--init-file"}
+
+shell_earlier_in_command(words, i) if {
+	start := command_slot_start(words, i)
+	some j, word in words
+	j >= start
+	j < i
+	shell_program(word)
+}
+
+# PUBLIC. A word naming a shell program, by itself or as a path: `bash`, `/usr/bin/bash`.
+# The same shells `heredoc_shell_name` lists, without the three words that read a program
+# without being one.
+shell_program(word) if {
+	parts := split(word, "/")
+	parts[count(parts) - 1] in {"sh", "bash", "zsh", "ksh", "mksh", "dash", "ash", "fish", "csh", "tcsh"}
+}
+
 # PUBLIC. True when every word from the start of this command up to `index` is a
 # wrapper, which is what makes the word at `index` the thing being run.
 word_in_command_slot(words, index) if {

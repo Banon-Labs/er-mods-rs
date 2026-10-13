@@ -60,6 +60,7 @@
 blocked	git-baseline	check-no-local-main-commits.sh	exits 2 without refs/remotes/origin/main to diff a local main against	suite
 portable	-	audit-selftest-vacuity.py --selftest	source/AST/text analysis only	suite
 portable	-	test-check-sh-accumulates.py	source/AST/text analysis only	suite
+portable	-	test-check-sh-live.py	lifts check.sh's live fan-out and drives it over fake stages in a temp dir; reads no game data	suite
 portable	-	ci-gate-portability.py --selftest	synthetic check.sh + synthetic ledger; needs nothing	suite
 portable	-	ci-gate-portability.py --check	reads check.sh and the ledger beside it	suite
 portable	-	check-stages.py --selftest	synthetic check.sh + synthetic ledger; needs nothing	suite
@@ -139,6 +140,8 @@ portable	-	test-regulation-params-zstd-skip.py	blinds the interpreter in a subpr
 portable	-	check-no-lossy-utf8.py	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py --selftest	source/AST/text analysis only	lint
 portable	-	check-comment-caps.py	source/AST/text analysis only, plus git ls-files/show in the checkout itself	lint
+partial	luac5.1	check-ai-lua-dialect.py --selftest	scanner cases and the `#` tree case still assert; prints that the luac syntax-error case was not exercised	lint
+partial	luac5.1	check-ai-lua-dialect.py	the `#` dialect scan still runs on every file; prints 'syntax half SKIPPED'	lint
 portable	-	check-no-unguarded-cstr-from-ptr.py --selftest	source/AST/text analysis only	source
 portable	-	check-no-unguarded-cstr-from-ptr.py	source/AST/text analysis only	source
 portable	-	check-prologue-bytes.py --selftest	source/AST/text analysis only	addresses
@@ -298,6 +301,8 @@ portable	-	test-future-commitment-signal.py	source/AST/text analysis only	policy
 portable	-	test-deferred-evidence-read-signal.py	source/AST/text analysis only	policy
 portable	-	test-ask-without-receiver-signal.py	source/AST/text analysis only	policy
 portable	-	test-push-authorization-signal.py	fixture transcripts and a throwaway git repo; the cupcake end-to-end case skips when cupcake is absent	policy
+portable	-	test-unexplained-running-tasks-signal.py	source/AST/text analysis only	policy
+portable	-	test-inline-user-command-signal.py	drives the signal script over transcripts it writes to a temp dir; source/text only	policy
 portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against a throwaway profile; needs opa, no game	policy
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses

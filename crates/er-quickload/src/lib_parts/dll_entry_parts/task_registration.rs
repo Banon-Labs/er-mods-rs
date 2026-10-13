@@ -297,6 +297,19 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                 // (redirect + MinHook install) runs here on the game task -- it is alive at pick time
                 // (loading starts only after the pick releases the hold).
                 save_picker_overlay_process_completion();
+                // A commit held back waiting for the engine to take down the title menu the switch
+                // made it rebuild. Retried here, above the player split, because it is the only
+                // place every tick reaches: during a switch the player is gone and the no-player
+                // branch returns early, and once a player exists the branch below returns early
+                // too while the switch phase is past RETURN_TITLE_REQUESTED. The call used to sit
+                // after that return, so a deferred commit was never retried (2026-10-13: first
+                // fire at +63860 with no player, then nothing). A no-op unless a commit is deferred.
+                unsafe {
+                    crate::experiments::own_load_continue_retry_deferred(
+                        er_telemetry_core::counters::GAME_TASK_TICKS_TOTAL.load(Ordering::SeqCst)
+                            as u64,
+                    )
+                };
                 let Ok(player) = (unsafe { PlayerIns::local_player_mut() }) else {
                     let mut state = state_or_return(&state);
                     state.game_task_ticks += GAME_TASK_TICK_INCREMENT;
@@ -613,11 +626,6 @@ pub(crate) fn spawn_game_task(state: Arc<Mutex<EffectsState>>) {
                             cleanup_title_dialog_after_world_once(base, state.game_task_ticks)
                         };
                     }
-                // A commit held back waiting for the engine to take down the title menu the switch
-                // made it rebuild. The retry lives on this tick because the tick demonstrably keeps
-                // running across the whole switch, and whatever called `own_load_continue_fire` the
-                // first time does not: a switch logs its `GUARD PASS` line exactly once.
-                unsafe { crate::experiments::own_load_continue_retry_deferred(state.game_task_ticks) };
                 // In-world correctness oracle: on the first frame the local player exists, log
                 // the load-correctness record + the T_controllable timeline marker once. Fires
                 // for both a native-menu load (observe) and a DLL-driven load (own-stepper), so
