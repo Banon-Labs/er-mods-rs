@@ -182,6 +182,7 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         save_file_core_hooks_live: crate::experiments::save_file_core_hooks_live,
         windows_path_for_log: er_quit_menu_core::row_text::system_quit_windows_path_for_log,
         save_dest_commit_window_armed: crate::experiments::save_dest_commit_window_armed,
+        request_game_exit: crate::experiments::load_error_close_game,
     });
     // Quit-menu crate split: wire product (B)'s seam before its moved hook code can run.
     // This slice moves the OS-dialog dim overlay; the rest of the seam stays on neutral

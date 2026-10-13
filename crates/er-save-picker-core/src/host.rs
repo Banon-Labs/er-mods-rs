@@ -116,6 +116,12 @@ pub struct SavePickerHost {
     /// True while a destination-commit window is armed. Log-only context on the dialog
     /// opened line (`save_dest_commit_window_armed`).
     pub save_dest_commit_window_armed: fn() -> bool,
+
+    // --- load-error screen ------------------------------------------------------------
+    /// Close the game because the player pressed Close Game on the load-error screen. Does not
+    /// return when it closes; returns `false` when the host refuses, which it must while a save
+    /// write is in flight, because ending the process then tears the write in half.
+    pub request_game_exit: fn(&str) -> bool,
 }
 
 fn default_log(_args: std::fmt::Arguments<'_>) {}
@@ -142,6 +148,10 @@ fn default_game_main_window() -> usize {
 fn default_windows_path_for_log(path: &str) -> String {
     path.to_owned()
 }
+/// No host: nothing here knows whether a save is being written, so it never ends the process.
+fn default_request_game_exit(_reason: &str) -> bool {
+    false
+}
 
 impl SavePickerHost {
     /// Neutral defaults: no-op logging, never pending, every commit refused, vanilla
@@ -159,6 +169,7 @@ impl SavePickerHost {
             save_file_core_hooks_live: default_gate_off,
             windows_path_for_log: default_windows_path_for_log,
             save_dest_commit_window_armed: default_gate_off,
+            request_game_exit: default_request_game_exit,
         }
     }
 }
@@ -226,6 +237,10 @@ pub(crate) fn system_quit_windows_path_for_log(path: &str) -> String {
 pub(crate) fn save_dest_commit_window_armed() -> bool {
     (host().save_dest_commit_window_armed)()
 }
+#[allow(dead_code)]
+pub(crate) fn request_game_exit(reason: &str) -> bool {
+    (host().request_game_exit)(reason)
+}
 
 #[cfg(test)]
 mod tests {
@@ -245,6 +260,8 @@ mod tests {
         assert_eq!(save_picker_title_start_dir(), PathBuf::new());
         assert!(!save_file_core_hooks_live());
         assert_eq!(game_main_window(), 0);
+        // And it never ends the process: only a host can say no save write is in flight.
+        assert!(!request_game_exit("test"));
     }
 
     #[test]

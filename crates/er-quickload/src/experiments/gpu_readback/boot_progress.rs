@@ -1998,14 +1998,17 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     let strip_dx = (bw32 - strip_w) / 2;
     let strip_dy = (bh32 * BOOT_VIEW_STRIP_Y_NUM / BOOT_VIEW_STRIP_Y_DEN).min(bh32 - strip_h);
     let bg = boot_bg_image();
-    let picker_active = save_picker_overlay_active();
+    // A load that cannot finish owns the whole frame: the bar, the portrait and any picker armed
+    // underneath it all describe a load that is not happening.
+    let load_error = load_error_screen_active();
+    let picker_active = !load_error && save_picker_overlay_active();
     // Loading-screen character stats (game menu font) also need the full-screen canvas so they land at
     // their expected 5%/60% location; force full_frame when they are shown, exactly like picker_active.
     let stats_active = stats_overlay_active();
     // Captured character portrait (from LOADING_BG_PORTRAIT_RGBA) also needs the full-screen canvas so the
     // head lands at its upper-left rect; force full_frame when a portrait is published, like picker/stats.
     let portrait_active = portrait_overlay_active();
-    let full_frame = bg.is_some() || picker_active || stats_active || portrait_active;
+    let full_frame = load_error || bg.is_some() || picker_active || stats_active || portrait_active;
     let (region_w, region_h, dx, dy, content_x, content_y, content_w) = if full_frame {
         (
             bw,
@@ -2029,7 +2032,7 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
     };
     let (ms_idx, permille) = boot_view_progress();
     // Portrait draws inside the rasterizer (behind the bar) when active and the picker is not up.
-    let draw_portrait = portrait_active && !picker_active;
+    let draw_portrait = portrait_active && !picker_active && !load_error;
     let mut rgba = boot_view_rasterize(
         BootViewRaster {
             w: region_w,
@@ -2044,7 +2047,10 @@ pub(crate) fn boot_view_render_frame(bw: usize, bh: usize) -> BootViewFrame {
         },
         bg,
     );
-    if picker_active {
+    if load_error {
+        // Draws over every pixel, so whatever the rasterizer put underneath is gone.
+        let _ = overlay_load_error_onto(&mut rgba, region_w, region_h);
+    } else if picker_active {
         // Picker owns the screen exclusively (no character context to portrait/stat yet).
         let _ = overlay_save_picker_onto(&mut rgba, region_w, region_h);
     } else if stats_active {
@@ -2450,6 +2456,28 @@ unsafe fn composite_boot_progress_inner(
     // overrides on the way is the native-loading hold below -- which cannot be evidence here,
     // because it is a recency read of counters a dead loading-screen detour never writes.
     let backstop = boot_view_absolute_backstop(boot_view_epoch_ms(), world_handoff);
+    // The lifetime arm of that backstop is a clock, not evidence of a world. When it is the arm that
+    // tripped and no character is loaded, fading the cover off reveals a game with nothing in it --
+    // the black title of 2026-10-13. So a picker with something to choose keeps the cover, because
+    // the player is choosing; otherwise the load never finished, and the load-error screen says so.
+    let backstop_on_nothing = backstop
+        && !world_handoff
+        && er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_TRIGGER.load(Ordering::SeqCst)
+            == BOOT_VIEW_BACKSTOP_TRIGGER_LIFETIME
+        && !boot_view_player_loaded();
+    if backstop_on_nothing && !save_picker_overlay_presentable() {
+        arm_load_error_screen("cover-lifetime-expired");
+    }
+    let backstop = backstop && !backstop_on_nothing;
+    // The world arrived after all, so whatever raised the load-error screen was wrong and the
+    // normal release owns the frame again.
+    if world_handoff || backstop {
+        disarm_load_error_screen(if world_handoff {
+            "world-handoff"
+        } else {
+            "world-live-backstop"
+        });
+    }
     // Diagnostic (bd ab-portrait-disabled-load2-fps-still-low-boot-view-not-stopping): log the actual
     // stop gates. The product cover must not stop at player-present/native-loading; only the same
     // can_move epoch-gated proof used by the watcher is allowed to uncover the game.
@@ -2740,7 +2768,17 @@ unsafe fn composite_boot_progress_inner(
     // and nothing else. The `if own_menu_active` below is the whole reason the boot epoch had no
     // bound at all, which is what [`boot_view_absolute_backstop`] now supplies for every epoch. The
     // 20 s cap here still fires first on a switch, so this path is unchanged in practice.
-    if own_menu_active {
+    //
+    // What the cap does when it fires depends on why (2026-10-13). It used to stop the cover in
+    // every case, and on a frozen switch that revealed a title whose logo and menu this mod hides --
+    // pure black, with the missing-save picker still taking presses it no longer drew. Now:
+    //   * the gauge finished, or froze over a loaded character: stop, as before, because there is a
+    //     world to reveal;
+    //   * the gauge froze with no character loaded: the load cannot finish, so raise the load-error
+    //     screen and keep compositing it;
+    //   * the gauge froze while a picker with something to choose is up, or the gauge is still
+    //     moving: keep covering, because the player can still act or the load is still going.
+    if own_menu_active && !load_error_screen_active() {
         let cur_epoch =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
         let now_ms = boot_view_epoch_ms().max(1);
@@ -2764,7 +2802,22 @@ unsafe fn composite_boot_progress_inner(
         // Both still feed the stop log below -- they describe the state the cap fired in, they no
         // longer decide it.
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
-        if let Some(cap) = np::cap_fired(cur_epoch, now_ms, composite_ms, COMPOSITE_CAP) {
+        let decision = np::cap_fired(cur_epoch, now_ms, composite_ms, COMPOSITE_CAP);
+        let player_loaded = decision.is_some() && boot_view_player_loaded();
+        if let Some(frozen) = decision
+            && frozen.bar_stalled
+            && !player_loaded
+            && !save_picker_overlay_presentable()
+            && arm_load_error_screen("switch-load-frozen")
+        {
+            append_autoload_debug(format_args!(
+                "boot-view: switch load FROZEN with no character loaded (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} cover_window_ms={}) {} -- raising the load-error screen instead of stopping the cover onto a title with no menu",
+                (now_ms as usize).saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
+                np::bail_detail(&frozen),
+            ));
+        }
+        let stop = decision.filter(|d| d.bar_terminal || (d.bar_stalled && player_loaded));
+        if let Some(cap) = stop {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and
                 // slot-key snapshots the publish-triggered resume compares/restores against.
@@ -2784,7 +2837,7 @@ unsafe fn composite_boot_progress_inner(
                     Ordering::SeqCst,
                 );
                 append_autoload_debug(format_args!(
-                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={}) {}; stopping per-frame GPU readback (resumable once on a fresh portrait publish while native loading is active)",
+                    "boot-view: FPS BAIL stop (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} resumed={resumed} cover_window_ms={} player_loaded={player_loaded}) {}; the cover stops drawing entirely and the game's own frame shows (resumable once on a fresh portrait publish while native loading is active)",
                     BOOT_VIEW_COVER_WINDOW_MS_LAST.load(Ordering::SeqCst),
                     np::bail_detail(&cap),
                 ));
@@ -2830,8 +2883,10 @@ unsafe fn composite_boot_progress_inner(
         return false;
     }
 
-    let picker_active = save_picker_overlay_active();
-    let full_frame = boot_bg_image().is_some()
+    let load_error = load_error_screen_active();
+    let picker_active = !load_error && save_picker_overlay_active();
+    let full_frame = load_error
+        || boot_bg_image().is_some()
         || picker_active
         || stats_overlay_active()
         || portrait_overlay_active();
