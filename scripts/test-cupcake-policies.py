@@ -2597,6 +2597,38 @@ def main() -> int:
             include_timeout=False,
             tool_name="Edit",
         ),
+        # gh_pr_title_conventional through the live WASM engine (2026-10-13). The kitty hand-off
+        # below was refused naming the helper's own `--title`, not the PR title. The PR title is
+        # the `--title` of the `gh pr create` inside the quoted argument, and that one is typed.
+        # The deny side uses `gh pr edit`: a body-less `gh pr create` is refused by the machine-
+        # global attribution guard before the project policies run, so it would never reach this
+        # rule on a box that has that guard installed.
+        PolicyCase(
+            "allow-kitty-handoff-of-a-typed-pr-title",
+            "cd /home/banon/projects/er-mods-rs/.worktrees/pr-kitty-tabs && python3 "
+            "scripts/kitty-user-command.py --title 'push python-write guard fix' --why 'The agent "
+            "may not push. ...' -- 'git -C /home/banon/projects/er-mods-rs push -u origin fix/x && "
+            "gh pr create -R Banon-Labs/er-mods-rs --draft --base main --head fix/x --title "
+            "\"fix(cupcake): admit committed scripts in .worktrees checkouts; close six "
+            "scratch-script escapes\" --body-file /tmp/pr.md'",
+            True,
+        ),
+        PolicyCase(
+            "deny-kitty-handoff-of-an-untyped-pr-title",
+            "cd /home/banon/projects/er-mods-rs/.worktrees/pr-kitty-tabs && python3 "
+            "scripts/kitty-user-command.py --title 'push python-write guard fix' --why 'The agent "
+            "may not push. ...' -- 'git -C /home/banon/projects/er-mods-rs push -u origin fix/x && "
+            "gh pr create -R Banon-Labs/er-mods-rs --draft --base main --head fix/x --title "
+            "\"push it\" --body-file /tmp/pr.md'",
+            False,
+            "title : push it",
+        ),
+        PolicyCase(
+            "deny-gh-pr-edit-with-an-untyped-title",
+            'gh pr edit 421 --title "bad"',
+            False,
+            "title : bad",
+        ),
     ])
 
     # The GitHub attribution guard is machine-global (XDG config, Banon-Labs/cupcake-config), not
