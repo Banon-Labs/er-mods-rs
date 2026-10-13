@@ -210,3 +210,94 @@ test_allow_a_gate_whose_name_merely_ends_in_check if {
 test_allow_reading_the_script if {
 	allowed("python3 -c \"print(open('scripts/check.sh').read())\"")
 }
+
+test_allow_shellcheck_of_the_script if {
+	allowed("shellcheck scripts/check.sh")
+}
+
+# --- a shell handed `-n` parses the script and runs none of it ----------------
+# The measured false positive of 2026-10-13, verbatim: a syntax check and a lint of the
+# script, denied as a run of the suite.
+test_allow_measured_syntax_check_and_lint if {
+	allowed(`cd /home/banon/projects/er-mods-rs/.worktrees/pr-push-progress && bash -n scripts/check.sh && echo "syntax ok"; shellcheck scripts/check.sh > /tmp/x/sc.log 2>&1`)
+}
+
+test_allow_syntax_check if {
+	allowed("bash -n scripts/check.sh")
+}
+
+test_allow_syntax_check_by_absolute_path if {
+	allowed("bash -n /home/banon/projects/er-mods-rs/scripts/check.sh")
+}
+
+test_allow_syntax_check_in_a_short_option_cluster if {
+	allowed("bash -xn scripts/check.sh")
+}
+
+test_allow_syntax_check_after_another_shell_option if {
+	allowed("bash --norc -n scripts/check.sh")
+}
+
+test_allow_syntax_check_behind_a_wrapper if {
+	allowed("timeout 30 bash -n scripts/check.sh")
+}
+
+test_allow_syntax_check_by_absolute_shell if {
+	allowed("/usr/bin/bash -n scripts/check.sh")
+}
+
+test_allow_syntax_check_in_zsh_long_form if {
+	allowed("zsh --noexec scripts/check.sh")
+}
+
+# --- and every form where the `-n` does not stop the run ---------------------
+test_deny_trace_flag_without_noexec if {
+	denied("bash -x scripts/check.sh")
+}
+
+# Each mention is judged alone, so a syntax check does not excuse the run chained after it.
+test_deny_run_chained_after_a_syntax_check if {
+	denied("bash -n scripts/check.sh && bash scripts/check.sh")
+}
+
+test_deny_run_after_a_syntax_check_statement if {
+	denied("bash -n scripts/check.sh; bash scripts/check.sh")
+}
+
+# The `-n` belongs to the wrapper, not to the shell that runs the script.
+test_deny_niceness_flag_on_the_wrapper if {
+	denied("nice -n 10 bash scripts/check.sh")
+}
+
+test_deny_non_interactive_sudo if {
+	denied("sudo -n bash scripts/check.sh")
+}
+
+# An argument to the script, read by the script once it is running.
+test_deny_noexec_spelled_after_the_script if {
+	denied("bash scripts/check.sh -n")
+}
+
+# `man bash`: `-n` "is ignored by interactive shells", and `-i` makes one.
+test_deny_syntax_check_in_an_interactive_shell if {
+	denied("bash -n -i scripts/check.sh")
+}
+
+test_deny_syntax_check_clustered_with_interactive if {
+	denied("bash -ni scripts/check.sh")
+}
+
+# The flag applies to the shell it is given to. The second shell has none.
+test_deny_shell_run_by_a_syntax_checked_shell if {
+	denied("bash -n bash scripts/check.sh")
+}
+
+# The outer `-n` would stop the payload too, but the payload is judged as the text it is,
+# and denying is the direction this guard errs in.
+test_deny_payload_of_a_syntax_checked_wrapper if {
+	denied("bash -n -c 'bash scripts/check.sh'")
+}
+
+test_allow_syntax_check_inside_a_payload if {
+	allowed("bash -c 'bash -n scripts/check.sh'")
+}
