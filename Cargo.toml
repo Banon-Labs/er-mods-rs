@@ -143,7 +143,8 @@ members = [
   # Three death conveniences, each one rewritten byte of the game's own code: keep your
   # runes, keep an active rune arc, and end the YOU DIED fade at once. Ported from
   # er-convenient-deaths, whose own offsets are dead on every build here. Each patch is off
-  # until a DLL-adjacent config key asks for it, because the three are separate decisions.
+  # until a key in the game-directory config asks for it, because the three are separate
+  # decisions, and an edit to that file applies or restores a patch while the game runs.
   "crates/er-convenient-deaths",
   # Import a build from an er-build-planner share link: pure host-side data
   # transformation (planner JSON -> item grants), no game or network deps.

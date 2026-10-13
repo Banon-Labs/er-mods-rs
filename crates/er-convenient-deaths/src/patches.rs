@@ -61,9 +61,9 @@ static INSTANT_FADE_OUT_APPLIED: AtomicBool = AtomicBool::new(false);
 
 /// One rewritten instruction byte.
 pub(crate) struct Patch {
-    /// Name used in the install log.
+    /// Name used in the log.
     pub(crate) name: &'static str,
-    /// Key in the DLL-adjacent config that turns this patch on. Off when absent.
+    /// Key in the game-directory config that turns this patch on. Off when absent.
     pub(crate) config_key: &'static str,
     /// 1.16.2 RVA of the `.pdata` function entry that contains the window.
     ///
@@ -84,7 +84,8 @@ pub(crate) struct Patch {
     pub(crate) offset: usize,
     /// What that byte becomes.
     pub(crate) replacement: u8,
-    /// Set once the byte has been written and read back as [`Self::replacement`].
+    /// True while the byte has been written and read back as [`Self::replacement`]; cleared when
+    /// a config edit restores the original.
     pub(crate) applied: &'static AtomicBool,
     /// What the player will notice. Printed at install time.
     pub(crate) effect: &'static str,
