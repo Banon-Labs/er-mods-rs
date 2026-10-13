@@ -2,12 +2,40 @@
 
 This project uses **bd** (beads) for issue tracking. **Invoke the real binary directly at `$HOME/.local/bin/bd`** -- do NOT use the bare `bd` command. The bare `bd` is a shell guard *function* (from the interactive shell snapshot) that errors with `bd guard error: unable to locate real bd binary` unless `BD_REAL_BIN` is exported, and non-interactive/agent shells do not get that function or env var. The local-bin path is the same ELF binary the guard would exec, so calling it directly works across current-user home directories. Run `$HOME/.local/bin/bd prime` for the bounded workflow context (memory search index + newest memories + ready queue); the project rules themselves live in this file.
 
+## A command for the user goes into a kitty tab, never into the reply (user directive 2026-10-13)
+
+When the agent wants the user to run a command, it does not paste a bash block into its
+message. It opens one kitty tab per command block, focused, with the command typed in but not
+submitted, under a `#` comment block that says why it should be run:
+
+```bash
+python3 scripts/kitty-user-command.py --title 'push loading PR' \
+    --why 'The agent may not push; this publishes fix/load-character-from-file.' \
+    -- 'git -C /home/banon/projects/er-mods-rs/.worktrees/pr-x push -u origin fix/x'
+```
+
+The reply then says in prose which tabs it opened and what each one does. The helper wraps
+the command as `bash -c '...'` because the tabs run fish, and it finds kitty through
+`$KITTY_LISTEN_ON` because `kitty.conf` uses a random port (`listen_on tcp:127.0.0.1:0`).
+`--dry-run` shows what it would send; `--selftest` proves the quoting in bash and fish;
+`--live-selftest` sends that quoting through a real fish tab and checks what fish ran. Run the
+live one after touching the helper: on 2026-10-13 the offline test passed while keystroke-typed
+text reached fish mangled, which is why everything now goes in as a bracketed paste. The same day
+two handed-over tabs came up as bare prompts, because the text was sent before fish drew its first
+prompt and its startup ate it; the helper now waits for kitty's `at_prompt` and exits non-zero
+unless the comments and the command are on screen, so a tab it reports is a tab with the command
+in it.
+A long command goes in a file passed as `--command-file <path>`: a `git push && gh pr
+create ... --body-file ...` chain inline ran the policy engine out of memory on 2026-10-13.
+The Stop hook refuses a closing message that carries a shell code block.
+
 ## A command written for the user is spelled absolutely
 
 Every command example in this file, and in every Cupcake block message, is written
 repo-relative because the agent's shell is already in the repo root. **A command the
-user will read is a different artifact and must carry the full path**, because their
-shell is somewhere else and `python3 scripts/er-teardown.py` names nothing there:
+user will read is a different artifact and must carry the full path** -- inside the kitty
+tab above as much as anywhere -- because their shell is somewhere else and
+`python3 scripts/er-teardown.py` names nothing there:
 
 ```bash
 python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py    # hand the user THIS

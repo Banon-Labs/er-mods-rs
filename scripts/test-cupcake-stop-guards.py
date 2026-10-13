@@ -574,6 +574,20 @@ CASES = [
         "it is still needed -- must NOT halt",
     ),
     Case(
+        "inline_user_command.jsonl",
+        "hands the user a command as an inline shell block",
+        "the 2026-10-13 shape: a commit, then the push the agent may not run handed over as a "
+        "bash block. The user's directive is that such a command goes into its own kitty tab "
+        "through scripts/kitty-user-command.py, pre-pasted under a comment saying why",
+    ),
+    Case(
+        "inline_user_command_other_fences.jsonl",
+        None,
+        "a rust block, a text block and an inline `git push` in the same closer -- must NOT halt. "
+        "Only a fence whose info string names a shell is a command block; code and log excerpts "
+        "are not, and inline code is not a block",
+    ),
+    Case(
         "blame_deflection_bare.jsonl",
         "attributed an outcome to a mechanism",
         "'The hook refused the first write.' with no hand of the agent's anywhere -- the mechanism "
