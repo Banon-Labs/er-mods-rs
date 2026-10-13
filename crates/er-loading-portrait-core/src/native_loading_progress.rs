@@ -236,6 +236,73 @@ pub fn cap_fired(epoch: usize, now_ms: u64, composite_ms: u64, cap_ms: u64) -> O
     d.fire.then_some(d)
 }
 
+/// The save picker the cover draws, as far as a stop decision cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverPicker {
+    /// No picker is armed.
+    None,
+    /// A picker is armed and lists something to choose.
+    Presentable,
+    /// A picker is armed with nothing listed. It holds world entry and offers nothing a press can
+    /// act on.
+    Empty,
+}
+
+/// What the cover does about one of its exits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverVerdict {
+    /// Keep drawing the cover.
+    Keep,
+    /// Stop the cover and let the game's own frame show.
+    Stop,
+    /// The load cannot finish: draw the load-error screen.
+    LoadError,
+}
+
+/// Which exit is asking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoverExit {
+    /// The world says it is ready: the release handoff, or the backstop's world-live arm.
+    WorldReady,
+    /// Only a clock has run out: the backstop's lifetime arm.
+    ClockOnly,
+}
+
+/// What the cover does when one of its exits asks to stop it.
+///
+/// Two rules, both from 2026-10-13. A picker the cover draws is never hidden: the cover stopped
+/// over an armed picker, which kept taking presses it no longer drew while the title stayed
+/// suppressed behind it, and the screen was black for good. And a clock is never a reason to
+/// reveal the game: when only time has run out, the load did not finish, and the load-error screen
+/// says so instead of showing whatever is underneath.
+pub fn cover_exit_verdict(exit: CoverExit, picker: CoverPicker) -> CoverVerdict {
+    match (picker, exit) {
+        (CoverPicker::Presentable, _) => CoverVerdict::Keep,
+        (CoverPicker::Empty, _) | (CoverPicker::None, CoverExit::ClockOnly) => {
+            CoverVerdict::LoadError
+        }
+        (CoverPicker::None, CoverExit::WorldReady) => CoverVerdict::Stop,
+    }
+}
+
+/// What the cover does once the composite cap has fired.
+///
+/// A finished gauge, or a frozen one over a loaded character, has a world to reveal. A frozen
+/// gauge with no character loaded is a load that cannot finish. A gauge still moving keeps the
+/// cover. A picker the cover draws is never hidden, and an empty one is a load that cannot go on.
+pub fn cap_verdict(d: &CapDecision, player_loaded: bool, picker: CoverPicker) -> CoverVerdict {
+    let settled = d.bar_terminal || d.bar_stalled;
+    match picker {
+        CoverPicker::Presentable => CoverVerdict::Keep,
+        CoverPicker::Empty if settled => CoverVerdict::LoadError,
+        CoverPicker::None if d.bar_terminal || (d.bar_stalled && player_loaded) => {
+            CoverVerdict::Stop
+        }
+        CoverPicker::None if d.bar_stalled => CoverVerdict::LoadError,
+        CoverPicker::None | CoverPicker::Empty => CoverVerdict::Keep,
+    }
+}
+
 /// The whole diagnostic tail of the bail's log line, built where the decision is made.
 ///
 /// It lives here so the wording can never again outrun the measurement. The old line asserted
@@ -547,6 +614,96 @@ mod tests {
         assert!(!switch_cover_may_release(completed));
         // A gauge-less plate reports nothing and must not count either.
         assert!(!switch_cover_may_release(count_completed_close(0, 0, 0)));
+    }
+
+    fn decision(bar_stalled: bool, bar_terminal: bool) -> CapDecision {
+        CapDecision {
+            fire: true,
+            bar_stalled,
+            deferred_ms: 0,
+            bar_stall_ms: 0,
+            bar_terminal,
+            bar_frame: 0,
+        }
+    }
+
+    const PICKERS: [CoverPicker; 3] = [
+        CoverPicker::None,
+        CoverPicker::Presentable,
+        CoverPicker::Empty,
+    ];
+
+    /// No exit stops the cover while a picker it draws is armed: a presentable one keeps the
+    /// cover, an empty one is a load that cannot go on.
+    #[test]
+    fn no_exit_hides_an_armed_picker() {
+        for exit in [CoverExit::WorldReady, CoverExit::ClockOnly] {
+            assert_eq!(
+                cover_exit_verdict(exit, CoverPicker::Presentable),
+                CoverVerdict::Keep
+            );
+            assert_eq!(
+                cover_exit_verdict(exit, CoverPicker::Empty),
+                CoverVerdict::LoadError
+            );
+        }
+        for (stalled, terminal) in [(true, false), (false, true), (false, false)] {
+            for player_loaded in [false, true] {
+                let d = decision(stalled, terminal);
+                assert_ne!(
+                    cap_verdict(&d, player_loaded, CoverPicker::Presentable),
+                    CoverVerdict::Stop
+                );
+                assert_ne!(
+                    cap_verdict(&d, player_loaded, CoverPicker::Empty),
+                    CoverVerdict::Stop
+                );
+            }
+        }
+    }
+
+    /// Time running out never reveals the game: only the world saying it is ready does.
+    #[test]
+    fn a_clock_alone_never_stops_the_cover() {
+        for picker in PICKERS {
+            assert_ne!(
+                cover_exit_verdict(CoverExit::ClockOnly, picker),
+                CoverVerdict::Stop
+            );
+        }
+        assert_eq!(
+            cover_exit_verdict(CoverExit::WorldReady, CoverPicker::None),
+            CoverVerdict::Stop
+        );
+    }
+
+    /// The cap with no picker up: a world to reveal stops it, a frozen load with nothing loaded is
+    /// the load-error screen, and a moving gauge keeps covering.
+    #[test]
+    fn the_cap_stops_only_onto_a_world() {
+        let none = CoverPicker::None;
+        assert_eq!(
+            cap_verdict(&decision(false, true), false, none),
+            CoverVerdict::Stop
+        );
+        assert_eq!(
+            cap_verdict(&decision(true, false), true, none),
+            CoverVerdict::Stop
+        );
+        assert_eq!(
+            cap_verdict(&decision(true, false), false, none),
+            CoverVerdict::LoadError,
+            "the 2026-10-13 freeze: gauge at frame 1, no character"
+        );
+        assert_eq!(
+            cap_verdict(&decision(false, false), false, none),
+            CoverVerdict::Keep
+        );
+        assert_eq!(
+            cap_verdict(&decision(false, false), false, CoverPicker::Empty),
+            CoverVerdict::Keep,
+            "a gauge still moving is a load still going, even behind an empty picker"
+        );
     }
 
     /// The two sites that ask "is the gauge done" now share one definition, which is the whole

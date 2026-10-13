@@ -145,6 +145,8 @@ DEP_PROBES = {
     "ghidra-8767": lambda root: _port_open(8767),
     # capstone's provisioner. No system pip exists here on purpose.
     "uv": lambda root: shutil.which("uv") is not None,
+    # Lua 5.1 compiler, for the syntax half of check-ai-lua-dialect.py.
+    "luac5.1": lambda root: shutil.which("luac5.1") is not None,
     # A usable `origin/main` baseline -- the ref and a merge base with head. Both halves are load
     # bearing and were learned the hard way: fetching the ref alone left `git merge-base
     # origin/main head` still failing on a shallow clone, and er-dll-closure.py --selftest then

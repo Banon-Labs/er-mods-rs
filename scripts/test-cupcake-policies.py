@@ -122,6 +122,63 @@ FRIDA_EVIDENCE_PROVEN.write_text(
     encoding="utf-8",
 )
 
+
+
+def _make_conflict_fixture(root: Path) -> tuple[Path, Path]:
+    """A repo stopped in a merge with one crate source conflicted and one clean.
+
+    Returns `(conflicted, clean)`, both absolute. The Frida gate admits an Edit to the first --
+    resolving it combines changes that are each already committed -- and must still refuse the
+    second, which sits in the same stopped merge but has nothing to resolve. Built for real rather
+    than described, because the verdict comes from git (`ls-files --unmerged` and the git dir's
+    `MERGE_HEAD`), not from anything in the event.
+    """
+    repo = root / "conflict-repo"
+    conflicted = repo / "crates" / "demo" / "src" / "addr.rs"
+    clean = repo / "crates" / "demo" / "src" / "lib.rs"
+    conflicted.parent.mkdir(parents=True)
+
+    def git(*argv: str, check: bool = True) -> None:
+        subprocess.run(
+            [
+                "git",
+                "-c", "user.name=policy-regression",
+                "-c", "user.email=policy-regression@invalid",
+                "-c", "commit.gpgsign=false",
+                "-c", "core.hooksPath=/dev/null",
+                "-c", "init.defaultBranch=base",
+                "-C", str(repo),
+                *argv,
+            ],
+            capture_output=True,
+            check=check,
+            timeout=10,
+        )
+
+    git("init", "-q")
+    conflicted.write_text("pub const A: u32 = 0;\n", encoding="utf-8")
+    clean.write_text("mod addr;\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    git("checkout", "-q", "-b", "side")
+    conflicted.write_text("pub const A: u32 = 1;\n", encoding="utf-8")
+    git("commit", "-q", "-am", "side")
+    git("checkout", "-q", "base")
+    conflicted.write_text("pub const A: u32 = 2;\n", encoding="utf-8")
+    git("commit", "-q", "-am", "base change")
+    git("merge", "-q", "side", check=False)
+    return conflicted, clean
+
+
+# Under the gitignored `target/` rather than `/tmp`, because a `.rs` path in `/tmp` is refused by
+# the scratch-script guard before the Frida gate is ever asked.
+(REPO_ROOT / "target").mkdir(exist_ok=True)
+_CONFLICT_FIXTURE_DIR = Path(
+    tempfile.mkdtemp(prefix="cupcake-policy-regression-conflict-", dir=REPO_ROOT / "target")
+)
+atexit.register(shutil.rmtree, _CONFLICT_FIXTURE_DIR, True)
+CONFLICTED_RUST, CLEAN_RUST_IN_CONFLICTED_REPO = _make_conflict_fixture(_CONFLICT_FIXTURE_DIR)
+
 # The read-only listing denied on the native-Linux dev box on 2026-09-26, verbatim: a check for
 # running cargo/rustc builds and agent sessions before a disk cleanup deleted Rust target/ dirs.
 # It tripped two guards, neither of whose premise held -- the WSL pgrep false-negative, and a
@@ -365,6 +422,134 @@ def run_runtime_evidence_signal_checks() -> None:
             f"answer UNKNOWN, not a verdict about the caller's own checkout; got "
             f"{verdict.stdout.strip()!r}"
         )
+
+    run_runtime_evidence_long_input_checks()
+
+
+# Long inputs, which is where a `printf ... | grep -q` goes wrong. `-q` exits at its first match, so
+# a `printf` still writing past the pipe buffer hits a closed pipe; under `pipefail` that write error
+# becomes the pipeline's status and the test reads the opposite of what grep found. Measured
+# 2026-10-13 with the piped form: a tip naming 8000 paths under crates/ answered `NOTRUNTIME`, which
+# never denies, and a padded push event redirected at an absent checkout skipped the resolver and
+# was judged against the caller's own tree. Both signals are run twice, once with SIGPIPE at its
+# default and once ignored: ignored is how a Rust parent such as cupcake can leave it, and it is the
+# form that also prints `printf: write error: Broken pipe`.
+LONG_INPUT_LINES = 8000
+NOT_RUNTIME_ANSWERS = {
+    ".cupcake/signals/runtime_evidence_for_head.sh": "NOTRUNTIME",
+    ".cupcake/signals/runtime_evidence_note.sh": "no crate under crates/ changed since origin/main",
+}
+
+
+def _long_crate_diff_repo(root: Path) -> Path:
+    """A throwaway repository whose tip names LONG_INPUT_LINES files under crates/.
+
+    Built with plumbing, one blob under every path, so it writes no files to disk. It has no
+    `origin/main`, so the signals read the tip's own `git show --name-only`.
+    """
+    repo = root / "long-diff"
+    repo.mkdir()
+
+    def git(*args: str, stdin: str | None = None) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=SIGNAL_TIMEOUT_SECONDS,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "base", ".")
+    git("config", "user.email", "selftest@example.invalid")
+    git("config", "user.name", "selftest")
+    git("config", "commit.gpgsign", "false")
+    blob = git("hash-object", "-w", "--stdin", stdin="seed\n")
+    git("update-index", "--add", "--cacheinfo", f"100644,{blob},seed")
+    base = git("commit-tree", "-m", "the base", git("write-tree"))
+    git(
+        "update-index",
+        "--index-info",
+        stdin="".join(
+            f"100644 blob {blob}\tcrates/er-many/src/file-{i:05d}.rs\n"
+            for i in range(1, LONG_INPUT_LINES + 1)
+        ),
+    )
+    tip = git("commit-tree", "-p", base, "-m", "many crate paths", git("write-tree"))
+    git("update-ref", "HEAD", tip)
+    return repo
+
+
+def _run_signal_with(
+    script: str, event: str, cwd: Path, env: dict[str, str], ignore_sigpipe: bool
+) -> subprocess.CompletedProcess[str]:
+    argv = ["bash", str(REPO_ROOT / script)]
+    if ignore_sigpipe:
+        # `exec` keeps an ignored disposition, and bash cannot un-ignore a signal it starts with.
+        argv = ["bash", "-c", "trap '' PIPE; exec bash \"$0\"", str(REPO_ROOT / script)]
+    return subprocess.run(
+        argv,
+        cwd=cwd,
+        input=event,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=SIGNAL_TIMEOUT_SECONDS,
+        env=env,
+    )
+
+
+def run_runtime_evidence_long_input_checks() -> None:
+    absent = "/nonexistent-checkout-cupcake-signal-contract"
+    with tempfile.TemporaryDirectory(prefix="cupcake-long-input-") as tmp:
+        root = Path(tmp)
+        repo = _long_crate_diff_repo(root)
+        # A run root holding one run whose log has no build line, and an empty game directory: the
+        # scan can measure, and nothing in it names the tip. Neither is this machine's real logs.
+        (root / "runs" / "br-nobuild").mkdir(parents=True)
+        (root / "runs" / "br-nobuild" / "er-thing.log").write_text("some other log\n")
+        (root / "nogame").mkdir()
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith("GIT_") and not k.startswith("CUPCAKE_RUNTIME_EVIDENCE")
+        }
+        env["ER_ME3_RUN_ROOT"] = str(root / "runs")
+        env["ER_GAME_DIR"] = str(root / "nogame")
+
+        # The padding is its own JSON lines after the command, so `grep` meets `push` long before
+        # the end of its input. One long line would not do it: grep reads a whole line first.
+        padded_push = json.dumps(
+            {
+                **json.loads(_signal_event(f"cd {absent} && git push -u origin HEAD")),
+                "padding": ["x" * 40] * LONG_INPUT_LINES,
+            },
+            indent=1,
+        )
+        for ignore_sigpipe in (False, True):
+            mode = "SIGPIPE ignored" if ignore_sigpipe else "SIGPIPE default"
+            for script, not_runtime in NOT_RUNTIME_ANSWERS.items():
+                result = _run_signal_with(
+                    script, _signal_event("cargo fmt --check"), repo, env, ignore_sigpipe
+                )
+                answer = result.stdout.strip()
+                if result.returncode != 0 or answer == not_runtime or "Broken pipe" in result.stderr:
+                    raise AssertionError(
+                        f"{script} ({mode}) on a tip naming {LONG_INPUT_LINES} paths under crates/ "
+                        f"exited {result.returncode} and answered {answer!r}; it must exit 0, must "
+                        f"not answer {not_runtime!r}, and must not report a broken pipe.\n"
+                        f"{result.stderr}"
+                    )
+            push = _run_signal_with(
+                RUNTIME_EVIDENCE_SIGNALS[0], padded_push, REPO_ROOT, env, ignore_sigpipe
+            )
+            if push.stdout.strip() != "UNKNOWN" or "Broken pipe" in push.stderr:
+                raise AssertionError(
+                    f"{RUNTIME_EVIDENCE_SIGNALS[0]} ({mode}) on a padded push redirected at "
+                    f"{absent} answered {push.stdout.strip()!r}; it must answer UNKNOWN without "
+                    f"reporting a broken pipe.\n{push.stderr}"
+                )
 
 
 HOST_PLATFORM_SIGNAL = ".cupcake/signals/host_platform.sh"
@@ -2247,6 +2432,33 @@ def main() -> int:
             True,
             extra_env=(("ER_FRIDA_EVIDENCE_LOG", str(FRIDA_EVIDENCE_PROVEN)),),
         ),
+        # A run that has become invalid has produced no measurement, and AGENTS.md obliges the
+        # agent to stop it, so the declared form passes with the verdict pinned absent. The
+        # second case is the command refused on 2026-10-07 with the declaration added; the
+        # deny cases keep chained work and a multi-word reason refused.
+        PolicyCase(
+            "allow-invalid-run-teardown-without-measurement",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py --reason=invalid-run-build-import-did-not-apply",
+            True,
+        ),
+        PolicyCase(
+            "allow-invalid-run-teardown-with-output-trim",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py"
+            " --reason=invalid-run-build-import-did-not-apply 2>&1 | tail -3",
+            True,
+        ),
+        PolicyCase(
+            "deny-invalid-run-teardown-then-build",
+            "python3 scripts/er-teardown.py --reason=invalid-run-wrong-build; cargo build",
+            False,
+            "teardown that does not relaunch",
+        ),
+        PolicyCase(
+            "deny-invalid-run-teardown-multi-word-reason",
+            'python3 scripts/er-teardown.py --reason="invalid-run-import did not apply"',
+            False,
+            "teardown that does not relaunch",
+        ),
         # argparse prints usage and exits before any teardown code runs, like `--status`.
         PolicyCase(
             "allow-teardown-help",
@@ -2267,6 +2479,36 @@ def main() -> int:
         PolicyCase(
             "deny-inline-python-file-write",
             "python3 -c \"open('notes.md','w').write('x')\"",
+            False,
+            "python file write from Bash",
+        ),
+        # A committed script in one of the repo's `.worktrees/<name>/` checkouts, reached through
+        # a variable: the command refused in production on 2026-10-13. Run here because this is
+        # the compiled policy, and the `indexof`/`substring` arithmetic that resolves `$W` is only
+        # proven in the OPA interpreter by the Rego suite.
+        PolicyCase(
+            "allow-worktree-script-through-a-variable",
+            "cd /home/banon/projects/er-mods-rs && S=/tmp/x; W=.worktrees; "
+            "( python3 $W/pr-hook-shim/scripts/test-cupcake-hook-shim.py > $S/hs.log 2>&1; echo done )",
+            True,
+        ),
+        PolicyCase(
+            "deny-worktree-traversal-through-a-variable",
+            "W=.worktrees; python3 $W/../../tmp/scripts/x.py",
+            False,
+            "python file write from Bash",
+        ),
+        # Both allowed until 2026-10-13: a quoted path hid the operand, and a `-c` anywhere in
+        # the command switched the script-file rule off.
+        PolicyCase(
+            "deny-quoted-scratch-script",
+            'python3 "/tmp/claude-1000/scratchpad/patch.py"',
+            False,
+            "python file write from Bash",
+        ),
+        PolicyCase(
+            "deny-scratch-script-inside-bash-c",
+            'bash -c "python3 /tmp/claude-1000/scratchpad/patch.py"',
             False,
             "python file write from Bash",
         ),
@@ -2320,6 +2562,72 @@ def main() -> int:
             "allow-bash-write-of-a-non-rust-file-under-crates",
             "cat > crates/er-title-flow/Cargo.toml <<'EOF'\n[package]\nEOF",
             True,
+        ),
+    ])
+
+    # --- resolving a conflict of a stopped merge --------------------------------------------
+    #
+    # Measured 2026-10-07: a `git rebase --onto` stopped on `crates/er-npc-summons/src/addr.rs`
+    # and the Edit deleting the conflict markers was refused with `UNPROVEN spent-by-commit`.
+    # Both cases run the real signal against a real stopped merge, with the Frida log absent, so
+    # the only thing that can open the gate is the conflict itself.
+    cases.extend([
+        PolicyCase(
+            "allow-edit-resolving-a-conflicted-crate-source",
+            "",
+            True,
+            extra_tool_input={
+                "file_path": str(CONFLICTED_RUST),
+                "old_string": "<<<<<<< HEAD\npub const A: u32 = 2;\n=======\n",
+                "new_string": "pub const A: u32 = 2;\n",
+            },
+            include_timeout=False,
+            tool_name="Edit",
+        ),
+        PolicyCase(
+            "deny-edit-of-an-unconflicted-crate-source-during-the-same-merge",
+            "",
+            False,
+            "no Frida measurement behind it",
+            extra_tool_input={
+                "file_path": str(CLEAN_RUST_IN_CONFLICTED_REPO),
+                "old_string": "mod addr;\n",
+                "new_string": "mod addr;\nmod extra;\n",
+            },
+            include_timeout=False,
+            tool_name="Edit",
+        ),
+        # gh_pr_title_conventional through the live WASM engine (2026-10-13). The kitty hand-off
+        # below was refused naming the helper's own `--title`, not the PR title. The PR title is
+        # the `--title` of the `gh pr create` inside the quoted argument, and that one is typed.
+        # The deny side uses `gh pr edit`: a body-less `gh pr create` is refused by the machine-
+        # global attribution guard before the project policies run, so it would never reach this
+        # rule on a box that has that guard installed.
+        PolicyCase(
+            "allow-kitty-handoff-of-a-typed-pr-title",
+            "cd /home/banon/projects/er-mods-rs/.worktrees/pr-kitty-tabs && python3 "
+            "scripts/kitty-user-command.py --title 'push python-write guard fix' --why 'The agent "
+            "may not push. ...' -- 'git -C /home/banon/projects/er-mods-rs push -u origin fix/x && "
+            "gh pr create -R Banon-Labs/er-mods-rs --draft --base main --head fix/x --title "
+            "\"fix(cupcake): admit committed scripts in .worktrees checkouts; close six "
+            "scratch-script escapes\" --body-file /tmp/pr.md'",
+            True,
+        ),
+        PolicyCase(
+            "deny-kitty-handoff-of-an-untyped-pr-title",
+            "cd /home/banon/projects/er-mods-rs/.worktrees/pr-kitty-tabs && python3 "
+            "scripts/kitty-user-command.py --title 'push python-write guard fix' --why 'The agent "
+            "may not push. ...' -- 'git -C /home/banon/projects/er-mods-rs push -u origin fix/x && "
+            "gh pr create -R Banon-Labs/er-mods-rs --draft --base main --head fix/x --title "
+            "\"push it\" --body-file /tmp/pr.md'",
+            False,
+            "title : push it",
+        ),
+        PolicyCase(
+            "deny-gh-pr-edit-with-an-untyped-title",
+            'gh pr edit 421 --title "bad"',
+            False,
+            "title : bad",
         ),
     ])
 

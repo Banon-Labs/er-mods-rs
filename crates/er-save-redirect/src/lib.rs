@@ -1611,15 +1611,28 @@ pub fn redirect_wide_roaming_eldenring_path(path: &[u16], root_wide: &[u16]) -> 
 /// `observe_path` always runs first so the product can learn the active SteamID even when no redirect
 /// root is active. `ensure_staged_path` runs only after the path is known to redirect, preserving the
 /// old behavior that staging does not fire for non-Roaming/non-EldenRing paths or missing roots.
+///
+/// Only the active account's folder is redirected. `account_is_active` is asked about the SteamID
+/// folder a path names and answers true for the active account, or when the active account is not
+/// known yet. Any other account's folder passes through to the real `%APPDATA%` file. The stage is
+/// filled for the active account alone, so mapping another account's path into it named a file that
+/// could not exist: on 2026-10-13 a stat of a second account's folder failed inside the stage and
+/// armed the "picked save did not load" picker in the middle of a session.
 pub fn redirect_wide_save_path_with_side_effects(
     path: &[u16],
     root_wide: Option<&[u16]>,
     observe_path: impl FnOnce(&[u16]),
+    account_is_active: impl FnOnce(u64) -> bool,
     ensure_staged_path: impl FnOnce(&[u16]),
 ) -> Option<Vec<u16>> {
     observe_path(path);
     let root_wide = root_wide?;
     let redirected = redirect_wide_roaming_eldenring_path(path, root_wide)?;
+    if let Some(steam_id) = steam_id64_from_wide_save_path(path)
+        && !account_is_active(steam_id)
+    {
+        return None;
+    }
     ensure_staged_path(path);
     Some(redirected)
 }
@@ -2320,22 +2333,40 @@ mod tests {
         let config = wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\GraphicsConfig.xml");
 
         // A healthy run fails exactly this open, and must not be interrupted by a picker.
-        assert!(!picker.should_arm(true, &config));
+        assert!(!picker.should_arm(true, &config, false));
         // A missing backup is ordinary on a first boot.
-        assert!(!picker.should_arm(true, &backup));
+        assert!(!picker.should_arm(true, &backup, false));
         // An open that succeeded says nothing.
-        assert!(!picker.should_arm(false, &primary));
+        assert!(!picker.should_arm(false, &primary, false));
         assert!(!picker.armed());
 
         assert!(
-            picker.should_arm(true, &primary),
+            picker.should_arm(true, &primary, false),
             "the first real failure arms"
         );
         assert!(picker.armed());
         // The detour runs millions of times; every later call must be silent.
         for _ in 0..10_000 {
-            assert!(!picker.should_arm(true, &primary));
+            assert!(!picker.should_arm(true, &primary, false));
         }
+    }
+
+    /// Once a world has loaded, a failed primary open is not "the picked save did not load".
+    #[test]
+    fn failed_redirect_picker_never_arms_after_a_world_has_loaded() {
+        let picker = FailedRedirectPicker::new();
+        let primary =
+            wide_path(r"C:\Users\x\AppData\Roaming\EldenRing\76561197960265729\ER0000.sl2");
+        assert!(FailedRedirectPicker::counts(true, &primary));
+        assert!(!picker.should_arm(true, &primary, true));
+        assert!(
+            !picker.armed(),
+            "a refusal in world does not spend the one-shot"
+        );
+        assert!(
+            picker.should_arm(true, &primary, false),
+            "before a world loads the same failure still arms once"
+        );
     }
 
     #[test]
@@ -2454,11 +2485,56 @@ mod tests {
             &source,
             Some(&root),
             |_| events.borrow_mut().push("observe"),
+            |_| true,
             |_| events.borrow_mut().push("ensure"),
         )
         .unwrap();
         assert_eq!(&*events.borrow(), &["observe", "ensure"]);
         assert_eq!(redirected.last(), Some(&0));
+    }
+
+    #[test]
+    fn only_the_active_accounts_folder_is_redirected() {
+        const ACTIVE: u64 = 76_561_197_960_265_729;
+        const OTHER: u64 = 76_561_198_001_067_436;
+        let root = wide_path(r"Z:\tmp\stage");
+        let redirect = |path: &str| {
+            let events = std::cell::RefCell::new(Vec::new());
+            let out = redirect_wide_save_path_with_side_effects(
+                &wide_path(path),
+                Some(&root),
+                |_| events.borrow_mut().push("observe"),
+                |id| id == ACTIVE,
+                |_| events.borrow_mut().push("ensure"),
+            );
+            (out, events.into_inner())
+        };
+
+        let (out, events) = redirect(&format!(
+            r"C:\Users\x\AppData\Roaming\EldenRing\{ACTIVE}\ER0000.sl2"
+        ));
+        assert!(
+            out.is_some(),
+            "the active account's save maps into the stage"
+        );
+        assert_eq!(events, ["observe", "ensure"]);
+
+        let (out, events) = redirect(&format!(
+            r"C:\Users\x\AppData\Roaming\EldenRing\{OTHER}\ER0000.sl2"
+        ));
+        assert_eq!(out, None, "another account's save opens its real file");
+        assert_eq!(events, ["observe"], "and nothing is staged for it");
+
+        let (out, events) = redirect(&format!(r"C:\Users\x\AppData\Roaming\EldenRing\{OTHER}"));
+        assert_eq!(out, None, "another account's folder is not mapped either");
+        assert_eq!(events, ["observe"]);
+
+        let (out, events) = redirect(r"C:\Users\x\AppData\Roaming\EldenRing");
+        assert!(
+            out.is_some(),
+            "a path naming no account still maps to the stage root"
+        );
+        assert_eq!(events, ["observe", "ensure"]);
     }
 
     #[test]
@@ -2471,6 +2547,7 @@ mod tests {
                 &non_save,
                 Some(&root),
                 |_| events.borrow_mut().push("observe"),
+                |_| true,
                 |_| events.borrow_mut().push("ensure"),
             ),
             None
@@ -2483,6 +2560,7 @@ mod tests {
                 &non_save,
                 None,
                 |_| events.borrow_mut().push("observe"),
+                |_| true,
                 |_| events.borrow_mut().push("ensure"),
             ),
             None

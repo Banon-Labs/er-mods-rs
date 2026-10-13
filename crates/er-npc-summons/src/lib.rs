@@ -53,6 +53,8 @@ mod pad;
 mod picker;
 #[cfg(windows)]
 mod team;
+#[cfg(windows)]
+mod void_tech;
 
 #[cfg(windows)]
 use std::sync::Once;
@@ -317,6 +319,7 @@ fn tick(state: &mut TaskState) {
     state.frames = state.frames.wrapping_add(1);
     dress::tick();
     brains::tick();
+    void_tech::tick();
     if finger::take_finger_use() {
         step(state, Event::FingerUsed);
     }
@@ -436,6 +439,7 @@ fn install(module_base: usize) {
     game::install();
     names::install();
     brains::install();
+    void_tech::install();
     cursor::install();
     spawn_game_task();
     overlay::install(module_base);

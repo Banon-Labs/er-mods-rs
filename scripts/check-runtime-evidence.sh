@@ -118,7 +118,13 @@ carried_forward() { # carried_forward <run build sha> <tip>
 	[ -n "$changed" ] || return 1
 	# Every changed path must be under one of the safe roots. `grep -qv` finds the first that is
 	# not, so its failure is what proves the diff is confined.
-	! printf '%s\n' "$changed" | grep -qv '^\(\.github/\|\.cupcake/\|scripts/\)'
+	#
+	# A here-string, never `printf ... | grep -q`. `-q` exits at its first match, so a `printf` still
+	# writing a long list hits a closed pipe. Under `pipefail` that write error becomes the pipeline's
+	# status and the `!` turns it into "confined": a diff with a crate in it carried forward, and
+	# the only visible trace was `printf: write error: Broken pipe` in the push log (git runs the
+	# hook with SIGPIPE ignored, so the write fails loudly instead of killing the subshell).
+	! grep -qv '^\(\.github/\|\.cupcake/\|scripts/\)' <<<"$changed"
 }
 
 selftest() {
@@ -273,10 +279,11 @@ selftest() {
 		local deleted_paths kept_paths
 		deleted_paths="$(git -C "$del" show --name-only --diff-filter=d --format= HEAD)"
 		kept_paths="$(git -C "$del" show --name-only --format= HEAD)"
-		expect 0 "a crates/ deletion leaves no path the gate would ask a run to prove" \
-			bash -c '! printf "%s\n" "$1" | grep -q "^crates/"' _ "$deleted_paths"
+		names_a_crate() { grep -q '^crates/' <<<"$1"; }
+		expect 1 "a crates/ deletion leaves no path the gate would ask a run to prove" \
+			names_a_crate "$deleted_paths"
 		expect 0 "without the filter the same commit does look like changed game code" \
-			bash -c 'printf "%s\n" "$1" | grep -q "^crates/"' _ "$kept_paths"
+			names_a_crate "$kept_paths"
 	else
 		printf '  skip  deletion (a throwaway repository could not be created)\n'
 	fi
@@ -324,6 +331,72 @@ selftest() {
 		printf '  skip  pushed-sha judging (a throwaway repository could not be created)\n'
 	fi
 
+	# A long diff, read the way the pre-push hook reads it. git runs the hook with SIGPIPE ignored,
+	# and the piped `printf "$changed" | grep -q` this file used to have then wrote into a pipe
+	# `grep` had already closed. Past the pipe buffer the write failed, `pipefail` made that failure
+	# the pipeline's status, and the `!` in front read it as the opposite verdict. Measured
+	# 2026-10-13 with 8000 paths under crates/: the piped form carried the diff forward, allowed the
+	# push without reading evidence, and printed `printf: write error: Broken pipe` on the way.
+	# Built with plumbing, one blob under every path, so the fixture writes no files to disk.
+	local many="$tmp/many-paths"
+	mkdir -p "$many"
+	(
+		cd "$many" || exit 1
+		git init -q -b base . 2>/dev/null
+		git config user.email selftest@example.invalid
+		git config user.name selftest
+		git config commit.gpgsign false
+		printf 'seed\n' >seed
+		git add seed && git commit -qm "the base" --no-verify
+		blob="$(git hash-object -w seed)"
+		for heavy in crate:crates/er-many/src script:scripts/many; do
+			git read-tree base
+			for ((i = 1; i <= 8000; i++)); do
+				printf '100644 blob %s\t%s/file-%05d.rs\n' "$blob" "${heavy#*:}" "$i"
+			done | git update-index --index-info
+			git branch "${heavy%%:*}-heavy" \
+				"$(git commit-tree -p base -m "${heavy#*:}" "$(git write-tree)")"
+		done
+	) >/dev/null 2>&1
+	if git -C "$many" rev-parse --verify --quiet crate-heavy >/dev/null 2>&1 &&
+		git -C "$many" rev-parse --verify --quiet script-heavy >/dev/null 2>&1; then
+		# expect_piped <wanted rc> <empty|no-broken-pipe> <description> <command...>
+		# Runs the command in the fixture with SIGPIPE ignored, as git runs the hook, and judges its
+		# stderr as well as its status: `empty` wants nothing at all, `no-broken-pipe` admits the
+		# refusal text the push judge prints but not a write error.
+		expect_piped() {
+			local wanted="$1" stderr_rule="$2" description="$3" err got
+			shift 3
+			err="$(
+				cd "$many" || exit 1
+				trap '' PIPE
+				unset ER_ALLOW_UNPROVEN_PUSH
+				ER_ME3_RUN_ROOT="$tmp/nobuild" ER_GAME_DIR="$tmp/nogame" "$@" 2>&1 >/dev/null
+			)"
+			got=$?
+			local stderr_ok=1
+			case "$stderr_rule" in
+			empty) [ -z "$err" ] || stderr_ok=0 ;;
+			no-broken-pipe) ! grep -q 'Broken pipe' <<<"$err" || stderr_ok=0 ;;
+			esac
+			if [ "$got" = "$wanted" ] && [ "$stderr_ok" -eq 1 ]; then
+				printf '  ok    %s\n' "$description"
+			else
+				printf '  FAIL  %s (wanted rc %s, got %s; stderr: %s)\n' \
+					"$description" "$wanted" "$got" "$(head -1 <<<"$err")"
+				failures=$((failures + 1))
+			fi
+		}
+		expect_piped 1 empty "8000 changed paths under crates/ do not carry forward, silently" \
+			carried_forward base crate-heavy
+		expect_piped 0 empty "8000 changed paths under scripts/ still carry forward, silently" \
+			carried_forward base script-heavy
+		expect_piped 1 no-broken-pipe "a pushed sha with 8000 crate paths is refused" \
+			bash "$repo_root/scripts/check-runtime-evidence.sh" crate-heavy
+	else
+		printf '  skip  long diff (a throwaway repository could not be created)\n'
+	fi
+
 	rm -rf "$tmp"
 	if [ "$failures" -eq 0 ]; then
 		printf 'check-runtime-evidence selftest: PASS\n'
@@ -361,7 +434,9 @@ judge_tip() {
 	else
 		changed="$(git show --name-only --diff-filter=d --format= "$tip" 2>/dev/null)"
 	fi
-	if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
+	# A here-string for the reason given in `carried_forward`: piped, a long diff whose first path is
+	# under crates/ made this condition true and allowed the push without reading any evidence.
+	if ! grep -q '^crates/' <<<"$changed"; then
 		return 0
 	fi
 

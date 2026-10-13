@@ -27,6 +27,16 @@
 --                                           2 for MakeNPCProbArr(self, ai, ...)); default 1.
 --   brain_is_mine(ai)                       true when `ai` runs this brain's think.
 --   brain_log(...)                          one line into er-npc-summons.log.
+--   brain_void()                            opt this brain's think into void tech: from now on
+--                                           every jump its characters make gets the one press
+--                                           their gear can double (a jump cast, or a weapon jump
+--                                           that throws or fires), timed by the DLL to spawn on
+--                                           the landing frame. Gear that cannot double gets none.
+--   brain_void_act(ai, goal [, range])      queue a void tech attempt when the gear can do it and
+--                                           the target is within `range` (default
+--                                           BRAIN_VOID_RANGE): a jump, or first a grip switch when
+--                                           only the other grip doubles. False when it queued
+--                                           nothing, so the caller falls through to its own plan.
 --
 -- Argument roles, read from the decompiled 029999_battle:
 --   Goal.Activate(self, ai, goal)          ai has the Get*/Is* queries, goal has AddSubGoal
@@ -65,6 +75,7 @@ end
 -- Rebuilt on every apply, so deleting a line from a brain undoes it on the next apply.
 BRAIN_OVERRIDES = {}
 BRAIN_THINKS = {}
+BRAIN_VOID_THINKS = {}
 
 -- Our wrappers, so a repeat apply can tell its own function from the game's. Kept across applies.
 BRAIN_WRAPPERS = BRAIN_WRAPPERS or {}
@@ -79,6 +90,52 @@ end
 
 function brain_is_mine(ai)
   return BRAIN ~= nil and think_id(ai) == BRAIN.think
+end
+
+-- Void tech. The DLL sets BRAIN_VOID_OFFERS = { [think] = { one = bool, two = bool } } before the
+-- brains load, from the gear it last read on a character of each opted-in think, and reads
+-- brain_void_list() after them.
+BRAIN_VOID_OFFERS = BRAIN_VOID_OFFERS or {}
+-- Metres. Every doubling action throws, fires or casts at range; the shortest, Bestial Sling,
+-- reaches about 4.
+BRAIN_VOID_RANGE = 4
+-- Seconds after a jump before the next plan, so attempts do not overlap.
+BRAIN_VOID_GAP = 1.2
+
+function brain_void()
+  if BRAIN == nil then
+    brain_log("brain-error", "brain_void outside a brain file")
+    return
+  end
+  BRAIN_VOID_THINKS[BRAIN.think] = true
+end
+
+function brain_void_list()
+  local out = ""
+  for think, _ in pairs(BRAIN_VOID_THINKS) do
+    if out ~= "" then out = out .. "," end
+    out = out .. string.format("%d", think)
+  end
+  return out
+end
+
+function brain_void_act(ai, goal, range)
+  local offer = BRAIN_VOID_OFFERS[think_id(ai)]
+  if offer == nil or not (offer.one or offer.two) then return false end
+  local ok, d = pcall(function() return ai:GetDist(TARGET_ENE_0) end)
+  if not ok or d > (range or BRAIN_VOID_RANGE) then return false end
+  -- -1 is one hand on each weapon.
+  local okh, hands = pcall(function() return ai:GetWeaponBothHandState(TARGET_SELF) end)
+  local one = okh and hands == -1
+  if (one and offer.one) or (not one and offer.two) then
+    goal:AddSubGoal(GOAL_COMMON_AttackTunableSpin, 2, NPC_ATK_Jump, TARGET_ENE_0, 999, 0, 0)
+    goal:AddSubGoal(GOAL_COMMON_Wait, BRAIN_VOID_GAP, TARGET_ENE_0)
+    brain_log("void", "jump", "think", think_id(ai), "dist", math.floor(d * 100 + 0.5) / 100)
+  else
+    goal:AddSubGoal(GOAL_COMMON_AttackTunableSpin, 1, NPC_ATK_ChangeStyleR, TARGET_ENE_0, 999, 0, 0)
+    brain_log("void", "grip", "think", think_id(ai), "to", one and "two" or "one")
+  end
+  return true
 end
 
 -- Several brains may override the same function; they chain in load order, each one's `orig`
