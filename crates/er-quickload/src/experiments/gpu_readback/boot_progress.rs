@@ -257,7 +257,8 @@ const BOOT_VIEW_FADE_MAX_HELD_MS: u64 = 2_000;
 //     asset load is slow-but-progressing under load and must not be torn down early.
 /// Wall-clock lifetime of a single cover window, measured from `BOOT_VIEW_WINDOW_ARM_MS` (the
 /// user's load request, not process start). The pure last resort: it is the only arm that still
-/// works when the world clock itself cannot be read.
+/// works when the world clock itself cannot be read. Expiry raises the load-error screen rather
+/// than fading the cover off, unless the world turned out to be live after all.
 ///
 /// 120 s is ~6x the reported failure's 19.1 s handoff and 6x the own-menu composite cap, matches
 /// the repo's existing 120 s reload-stall backstop, and sits well inside the 300 s boot budget --
@@ -781,6 +782,47 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
     last.saturating_sub(first)
 }
 
+/// The backstop's world-live arm, as of this frame's sample: the world has simulated for
+/// `BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS` with a character loaded.
+///
+/// Switch gate, reusing the q6vk character-load gate rather than inventing a second one. An
+/// own-menu switch arms this window from the in-world System menu, so the outgoing world is still
+/// simulating when the cover goes up and its play_time keeps rising through the return-to-title
+/// teardown. Crediting that as "the world is live underneath our cover" would fire the world-live
+/// arm on the teardown and reveal the exact screen the cover exists to hide. So on a window that is
+/// waiting for a character load, the world-live arm stays shut until that load has actually begun
+/// -- the same fresh-deser advance `boot_view_cover_release_ready` holds its release on. The boot
+/// epoch clears `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM`, so it is unaffected. The wall clock is not
+/// gated this way: it is the last resort and must survive a switch that never deserializes at all.
+fn boot_view_backstop_world_live(world_live_ms: u64) -> bool {
+    let confirm_pending = er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM
+        .load(Ordering::SeqCst)
+        != 0
+        && crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst)
+            <= er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE
+                .load(Ordering::SeqCst);
+    !confirm_pending
+        && world_live_ms >= BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS
+        && boot_view_player_loaded()
+}
+
+/// [`boot_view_backstop_world_live`] as of the last composited frame. The backstop's trigger is
+/// latched per window, so a window whose lifetime arm tripped first reads this to learn that the
+/// world arrived after all.
+static BOOT_VIEW_BACKSTOP_WORLD_LIVE_NOW: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The save picker this cover draws, as its stop decisions see it.
+fn boot_view_cover_picker() -> np::CoverPicker {
+    if save_picker_overlay_presentable() {
+        np::CoverPicker::Presentable
+    } else if save_picker_overlay_active() {
+        np::CoverPicker::Empty
+    } else {
+        np::CoverPicker::None
+    }
+}
+
 /// Absolute BACKSTOP: has this cover window failed so completely that it must be torn down by
 /// force? Returns the per-window latch, so once true it stays true until the window re-arms.
 ///
@@ -817,7 +859,9 @@ fn boot_view_backstop_world_live_dwell_ms(now_ms: u64) -> u64 {
 ///     (`release_render_ready_seen = 1` is exactly such a read succeeding).
 ///
 /// The wall clock is the second arm and the pure last resort: it is the only one left when the
-/// world clock itself cannot be read at all.
+/// world clock itself cannot be read at all. Since 2026-10-13 it never reveals the game by itself:
+/// a window whose only expired arm is this clock gets the load-error screen, because time running
+/// out is not a world arriving (see `np::cover_exit_verdict`).
 ///
 /// It cannot PREEMPT a healthy release. `release_reachable` is `world_handoff`; while that is true
 /// the normal path owns the window and this only samples, never trips. And the thresholds are set
@@ -827,31 +871,14 @@ fn boot_view_absolute_backstop(now_ms: u64, release_reachable: bool) -> bool {
     // Sample every frame, including the frames the healthy path owns: the dwell is the span of a
     // continuous run of rises, so skipping frames would put holes in the run it measures.
     let world_live_ms = boot_view_backstop_world_live_dwell_ms(now_ms);
+    let world_live = boot_view_backstop_world_live(world_live_ms);
+    BOOT_VIEW_BACKSTOP_WORLD_LIVE_NOW.store(world_live, Ordering::SeqCst);
     if BOOT_VIEW_BACKSTOP_TRIPPED_MS.load(Ordering::SeqCst) != 0 {
         return true;
     }
     if release_reachable {
         return false;
     }
-    // Switch gate, reusing the q6vk character-load gate rather than inventing a second one. An
-    // own-menu switch arms this window from the in-world System menu, so the outgoing world is
-    // still simulating when the cover goes up and its play_time keeps rising through the
-    // return-to-title teardown. Crediting that as "the world is live underneath our cover" would
-    // fire the world-live arm on the teardown and reveal the exact screen the cover exists to
-    // hide. So on a window that is waiting for a character load, the world-live arm stays shut
-    // until that load has actually begun -- the same fresh-deser advance
-    // `boot_view_cover_release_ready` holds its release on. The boot epoch clears
-    // `BOOT_VIEW_RELEASE_REQUIRE_CONFIRM`, so it is unaffected. The wall clock below is not gated
-    // this way: it is the last resort and must survive a switch that never deserializes at all.
-    let confirm_pending = er_telemetry_core::counters::BOOT_VIEW_RELEASE_REQUIRE_CONFIRM
-        .load(Ordering::SeqCst)
-        != 0
-        && crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst)
-            <= er_telemetry_core::counters::BOOT_VIEW_RELEASE_CONFIRM_BASELINE
-                .load(Ordering::SeqCst);
-    let world_live = !confirm_pending
-        && world_live_ms >= BOOT_VIEW_BACKSTOP_WORLD_LIVE_MS
-        && boot_view_player_loaded();
     // From the load request, not process start: `BOOT_VIEW_WINDOW_ARM_MS` is 0 until
     // `boot_view_reset_cover_window` stamps it, and on the boot epoch that is the frame the user's
     // load flow was requested. A 0 here means the cover is still over the pre-Continue title,
@@ -2446,7 +2473,6 @@ unsafe fn composite_boot_progress_inner(
         && crate::constants::MOVE_PROBE_EPOCH.load(Ordering::SeqCst) == cur_load_epoch;
     let render_release_handoff = boot_view_cover_release_ready(can_move_handoff);
     let _epoch_world_handoff = render_release_handoff;
-    let world_handoff = render_release_handoff;
     // Absolute BACKSTOP -- see [`boot_view_absolute_backstop`] for the whole argument. False in
     // every healthy window: while `world_handoff` is true the normal path owns the window and this
     // only samples, and its thresholds sit far past any measured legitimate load.
@@ -2455,20 +2481,39 @@ unsafe fn composite_boot_progress_inner(
     // release uses, so the user gets the 640 ms fade rather than a hard pop, and the only thing it
     // overrides on the way is the native-loading hold below -- which cannot be evidence here,
     // because it is a recency read of counters a dead loading-screen detour never writes.
-    let backstop = boot_view_absolute_backstop(boot_view_epoch_ms(), world_handoff);
-    // The lifetime arm of that backstop is a clock, not evidence of a world. When it is the arm that
-    // tripped and no character is loaded, fading the cover off reveals a game with nothing in it --
-    // the black title of 2026-10-13. So a picker with something to choose keeps the cover, because
-    // the player is choosing; otherwise the load never finished, and the load-error screen says so.
-    let backstop_on_nothing = backstop
-        && !world_handoff
+    let backstop_tripped =
+        boot_view_absolute_backstop(boot_view_epoch_ms(), render_release_handoff);
+    // Every exit asks `np::cover_exit_verdict` before it may stop the cover (2026-10-13). A picker
+    // with something to choose keeps the cover, because the player is choosing. An armed picker
+    // with nothing listed, or a lifetime that ran out with no live world behind it, is a load that
+    // cannot finish, and the load-error screen says so. Fading the cover off in either case
+    // revealed a title whose logo and menu this mod hides -- the black screen -- while the picker
+    // kept taking presses it no longer drew.
+    let clock_only = backstop_tripped
+        && !render_release_handoff
         && er_telemetry_core::counters::BOOT_VIEW_BACKSTOP_TRIGGER.load(Ordering::SeqCst)
             == BOOT_VIEW_BACKSTOP_TRIGGER_LIFETIME
-        && !boot_view_player_loaded();
-    if backstop_on_nothing && !save_picker_overlay_presentable() {
-        arm_load_error_screen("cover-lifetime-expired");
+        && !BOOT_VIEW_BACKSTOP_WORLD_LIVE_NOW.load(Ordering::SeqCst);
+    let exit_verdict = (render_release_handoff || backstop_tripped).then(|| {
+        np::cover_exit_verdict(
+            if clock_only {
+                np::CoverExit::ClockOnly
+            } else {
+                np::CoverExit::WorldReady
+            },
+            boot_view_cover_picker(),
+        )
+    });
+    if exit_verdict == Some(np::CoverVerdict::LoadError) {
+        arm_load_error_screen(if clock_only {
+            "cover-lifetime-expired"
+        } else {
+            "picker-armed-with-nothing-listed"
+        });
     }
-    let backstop = backstop && !backstop_on_nothing;
+    let exit_stops = exit_verdict == Some(np::CoverVerdict::Stop);
+    let world_handoff = render_release_handoff && exit_stops;
+    let backstop = backstop_tripped && !render_release_handoff && exit_stops;
     // The world arrived after all, so whatever raised the load-error screen was wrong and the
     // normal release owns the frame again.
     if world_handoff || backstop {
@@ -2777,7 +2822,10 @@ unsafe fn composite_boot_progress_inner(
     //   * the gauge froze with no character loaded: the load cannot finish, so raise the load-error
     //     screen and keep compositing it;
     //   * the gauge froze while a picker with something to choose is up, or the gauge is still
-    //     moving: keep covering, because the player can still act or the load is still going.
+    //     moving: keep covering, because the player can still act or the load is still going;
+    //   * a picker is armed with nothing listed: it holds world entry and offers nothing, so the
+    //     load cannot go on -- the load-error screen. The cover never stops over a picker it draws.
+    // The rules live in `np::cap_verdict`, beside their tests.
     if own_menu_active && !load_error_screen_active() {
         let cur_epoch =
             crate::constants::SYSTEM_QUIT_CONTINUE_CONFIRM_FRESH_DESER_COUNT.load(Ordering::SeqCst);
@@ -2804,19 +2852,29 @@ unsafe fn composite_boot_progress_inner(
         let resumed = BOOT_VIEW_FPS_BAIL_RESUMED.load(Ordering::SeqCst) != 0;
         let decision = np::cap_fired(cur_epoch, now_ms, composite_ms, COMPOSITE_CAP);
         let player_loaded = decision.is_some() && boot_view_player_loaded();
-        if let Some(frozen) = decision
-            && frozen.bar_stalled
-            && !player_loaded
-            && !save_picker_overlay_presentable()
-            && arm_load_error_screen("switch-load-frozen")
-        {
-            append_autoload_debug(format_args!(
-                "boot-view: switch load FROZEN with no character loaded (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} cover_window_ms={}) {} -- raising the load-error screen instead of stopping the cover onto a title with no menu",
-                (now_ms as usize).saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
-                np::bail_detail(&frozen),
-            ));
+        let picker = boot_view_cover_picker();
+        let verdict = decision.map(|d| (d, np::cap_verdict(&d, player_loaded, picker)));
+        if let Some((frozen, np::CoverVerdict::LoadError)) = verdict {
+            let empty_picker = picker == np::CoverPicker::Empty;
+            if arm_load_error_screen(if empty_picker {
+                "picker-armed-with-nothing-listed"
+            } else {
+                "switch-load-frozen"
+            }) {
+                append_autoload_debug(format_args!(
+                    "boot-view: switch load {} (own-menu reload epoch={cur_epoch} permille={permille} composite_ms={composite_ms} cover_window_ms={} player_loaded={player_loaded} picker={picker:?}) {} -- raising the load-error screen instead of stopping the cover onto a title with no menu",
+                    if empty_picker {
+                        "held by an armed picker with nothing listed"
+                    } else {
+                        "FROZEN with no character loaded"
+                    },
+                    (now_ms as usize)
+                        .saturating_sub(BOOT_VIEW_WINDOW_ARM_MS.load(Ordering::SeqCst)),
+                    np::bail_detail(&frozen),
+                ));
+            }
         }
-        let stop = decision.filter(|d| d.bar_terminal || (d.bar_stalled && player_loaded));
+        let stop = verdict.and_then(|(d, v)| (v == np::CoverVerdict::Stop).then_some(d));
         if let Some(cap) = stop {
             if BOOT_VIEW_STOPPED.swap(1, Ordering::SeqCst) == 0 {
                 // Phase-1/2 measurability: stop reason + window duration + the publish-version and

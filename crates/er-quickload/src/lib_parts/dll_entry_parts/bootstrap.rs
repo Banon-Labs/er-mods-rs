@@ -219,6 +219,13 @@ pub unsafe extern "C" fn DllMain(hmodule: HINSTANCE, reason: u32, _reserved: *mu
         // and where this DLL redirects the game's save writer.
         install_msgbox_builder_capture: crate::experiments::install_auto_accept_hook,
         save_redirect_native_source_dir: crate::experiments::save_redirect_native_source_dir,
+        // Where the loaded save is, answered from this DLL's own redirect state. Left to the seam
+        // default, the quit menu searched every account folder under `%APPDATA%\EldenRing` and took
+        // the newest container, so a second Steam account's folder got statted on 2026-10-13; that
+        // stat is what armed the "picked save did not load" picker mid-session. The default could
+        // also have named the other account's file as the save to back up and restore.
+        system_quit_env_save_path: crate::experiments::system_quit_env_save_path,
+        system_quit_env_save_dir: crate::experiments::system_quit_env_save_dir,
         // One route to the summary: the quit menu reads the pointer through the crate that owns
         // the `GameDataMan+0x78` walk, not through a second copy of it.
         system_quit_profile_summary_ptr:
