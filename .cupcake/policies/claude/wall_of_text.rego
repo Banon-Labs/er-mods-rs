@@ -8,10 +8,21 @@
 #   description: >-
 #     User directive 2026-08-21, stated absolutely: "I'll never. Repeat: NEVER read more than a
 #     single paragraph of response text from you. Everything else is a skim."
-#     Every word past the first paragraph is not merely unwanted, it is UNREAD. That makes long
-#     prose actively worse than short prose: the agent believes it has communicated when it has not,
-#     and any caveat, blocker or correction buried past paragraph one has effectively been withheld
-#     from the person who needed it.
+#     Refined by the same user 2026-09-14, after this policy's own wording had been telling the
+#     agent something the user says is untrue: "I read the first word, and then determine if I
+#     should read the next word, and so on." So the unit is not the paragraph -- it is the WORD,
+#     and attention is spent from the first one. A paragraph count is still the right THRESHOLD to
+#     measure, because prose that runs past one paragraph has certainly outlived its welcome, but
+#     the agent must not picture a reader who consumes paragraph one in full.
+#     Whatever the unit, the consequence is the same: long prose is actively worse than short
+#     prose, because the agent believes it has communicated when it has not, and any caveat,
+#     blocker or correction past the stopping point has effectively been withheld.
+#
+#     EMPHASIS BACKFIRES, same directive: "Adding emphasis makes me skip the entire thing because
+#     I think you're being overbearing." Bolding the lead sentence is the natural wrong answer to
+#     a one-paragraph budget, and it is the identical mistake scripts/check-comment-caps.py bans
+#     in source comments -- when everything shouts, the shouting marks nothing. Put the
+#     load-bearing fact in the first few words instead.
 #     Structure is NOT prose: fenced code, tables, lists, headings and captions are exempt in the
 #     signal, because the objection is to READING, and those are scanned. One paragraph plus a table
 #     is fine; two paragraphs are not.
@@ -56,7 +67,7 @@ import rego.v1
 # (1) Standing every-turn rule, so the constraint is in context before the answer is composed.
 add_context contains context if {
 	input.hook_event_name == "UserPromptSubmit"
-	context := "ONE PARAGRAPH. The user reads the first paragraph of your answer and skims the rest, so anything you put after it -- a caveat, a blocker, the thing that actually mattered -- was not read. Lead with the answer. If it will not fit in one paragraph, that is the signal to CUT content, not to add a paragraph: drop the reasoning nobody asked for, and put what remains in a table, a list or a code block, which are scanned rather than read and do not count. Mid-turn one-line narration between tool calls is fine and is not measured; this is about the message you close on."
+	context := "ONE PARAGRAPH. The user reads your first word, decides whether to read the next, and stops the moment it stops being worth it -- so the budget is spent word by word from the very start, not paragraph by paragraph. Lead with the answer in the first few words. If what remains will not fit in one paragraph, that is the signal to CUT content, not to add a paragraph: drop the reasoning nobody asked for, and put what survives in a table, a list or a code block, which are scanned rather than read and do not count. Do NOT bold a whole sentence or shout a word to make it land -- emphasis reads as overbearing and makes the user skip the thing entirely, so it costs you the sentence you were trying to save. Mid-turn one-line narration between tool calls is fine and is not measured; this is about the message you close on."
 }
 
 # (2) Measured correction: the turn that just ended ran long, so name the number and the opener.
@@ -68,7 +79,7 @@ add_context contains context if {
 }
 
 correction_for(h) := msg if {
-	msg := concat("", ["MEASURED: your PREVIOUS answer ran to ", h.count, " paragraphs of prose in one unbroken run, beginning '", h.opener, "'. The user read the first one and skimmed the rest, so paragraphs 2..", h.count, " were not delivered -- if anything load-bearing was in them, it did not reach them. Do not re-send it and do not apologise for it. Answer THIS prompt in a single paragraph, and if something from the unread part still matters, that is what belongs in the one paragraph you get."])
+	msg := concat("", ["MEASURED: your PREVIOUS answer ran to ", h.count, " paragraphs of prose in one unbroken run, beginning '", h.opener, "'. The user stops reading at the first word that is not worth the next one, so everything past that point was not delivered -- and on a run that long the stopping point was nowhere near the end. Do not re-send it and do not apologise for it. Answer THIS prompt in a single paragraph, and if something from the undelivered part still matters, that is what belongs in the one paragraph you get."])
 }
 
 # (3) Measured correction: ONE paragraph, but too many words in it -- the case (2) is blind to.
