@@ -329,7 +329,8 @@ class Game:
         self.session = dev.attach(self.pid)
         say(f"attached to eldenring.exe (windows pid {self.pid})")
 
-    def run_agent(self, source: str, config: dict, seconds: float) -> list[dict]:
+    def run_agent(self, source: str, config: dict, seconds: float,
+                  agent: pathlib.Path = pathlib.Path(__file__).resolve()) -> list[dict]:
         """Load an agent, collect its messages until `done` or `error`, unload it."""
         inbox: queue.Queue = queue.Queue()
         prelude = self.watch.agent_prelude("portrait-batch", self.watch.DEFAULT_ENDPOINT, self.pid, config)
@@ -345,7 +346,8 @@ class Game:
                 inbox.put({"type": "error", "description": f"{type(err).__name__}: {err}"})
 
         threading.Thread(target=run, daemon=True).start()
-        got, deadline = [], time.monotonic() + seconds
+        started = time.monotonic()
+        got, deadline = [], started + seconds
         try:
             while True:
                 left = deadline - time.monotonic()
@@ -364,6 +366,9 @@ class Game:
                 if payload.get("tag") == "error":
                     raise RuntimeError(f"agent error: {payload.get('message')}")
                 if payload.get("tag") == "done":
+                    # The same record `er-frida-watch.py` leaves: an attached pid and the messages
+                    # it answered with, which the repo's guards read as proof the game was measured.
+                    self.watch.record_evidence(agent, self.pid, len(got), time.monotonic() - started)
                     return got
         finally:
             try:
@@ -553,7 +558,8 @@ def photograph(game: Game, build: dict, state: State) -> None:
     source = (HERE / "frida/portrait-shots.js").read_text()
     worn = outfit(build)
     messages = game.run_agent(source, {"name": build["id"], "outdir": windows_path(take), "settle_s": SHOT_SETTLE_SECONDS,
-                                       "outfit": worn, "stream_s": STREAM_SECONDS}, 180)
+                                       "outfit": worn, "stream_s": STREAM_SECONDS}, 180,
+                              agent=HERE / "frida/portrait-shots.js")
     saved = {m["name"] for m in messages if m.get("tag") == "saved"}
     if saved != set(SHOTS):
         raise RuntimeError(f"portrait-shots saved {sorted(saved)}")
@@ -593,7 +599,8 @@ def add_to_library(game: Game, steam: Steam, build: dict, state: State) -> None:
                 game.swap(build)
             caption = f"{build['data']['name']} - {shot.replace('_', ' ')}"
             game.run_agent((HERE / "frida/steam-screenshot.js").read_text(),
-                           {"shots": [{"path": windows_path(path), "width": w, "height": h, "caption": caption}]}, 30)
+                           {"shots": [{"path": windows_path(path), "width": w, "height": h, "caption": caption}]}, 30,
+                           agent=HERE / "frida/steam-screenshot.js")
             # The client copies the file into the library asynchronously; its arrival is the event.
             deadline = time.monotonic() + 30
             while not fresh and time.monotonic() < deadline:
@@ -662,6 +669,7 @@ def main() -> int:
     parser.add_argument("--list", action="store_true", help="print the builds still to do and exit")
     parser.add_argument("--limit", type=int, help="stop after this many builds")
     parser.add_argument("--only", action="append", help="a build id to do (repeatable)")
+    parser.add_argument("--keep-game", action="store_true", help="leave the game running when the batch ends")
     args = parser.parse_args()
 
     planner = Planner()
@@ -702,6 +710,12 @@ def main() -> int:
     publisher.shutdown(wait=True)
     failed += [build["id"] for build, done in published if not done.result()]
     say(f"finished: {len(todo) - len(failed)} done, {len(failed)} failed {failed}, {game.launches} launch(es)")
+    # The game is the batch's instrument, not something left for the player (user's call on
+    # 2026-10-13), so a finished batch ends it unless asked not to.
+    if not args.keep_game and er_run_lib.find_game_pids():
+        done = subprocess.run([sys.executable, str(HERE / "er-teardown.py"), "--reason=portrait-batch-done"],
+                              capture_output=True, text=True, timeout=SUBPROCESS_SECONDS)
+        say(f"tore down the game (er-teardown exit {done.returncode})")
     return 1 if failed else 0
 
 
