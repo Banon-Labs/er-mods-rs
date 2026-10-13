@@ -1,0 +1,10 @@
+# Ashes of war left out of every ash ranking, keyed by in-game name, with the reason.
+# Unique ashes (an EquipParamGem row mountable on fewer than two weapon classes) and unobtainable
+# ones (every EquipParamGem row for the skill has sortId 999999, e.g. Firebreather) are dropped by
+# those rules separately and do not need listing here.
+
+"Golden Slam" = "Opens user up to too much damage"
+"Ground Slam" = "Opens user up to too much damage"
+"Raptor of the Mists" = "No reason to include it (user, 2026-10-08)"
+"Golden Vow" = "The Golden Vow item (goods 2003170 -> SpEffect 20503170: x1.05 damage to players, x0.967 taken, 45 s) beats the ash (1730: x1.025, x0.985, 45 s) and shares its spCategory 160 slot; stock is not a limit (user, 2026-10-12)"
+"Erdtree Slam" = "Opens user up to too much damage: the same jump and slam as Golden Slam and Ground Slam (user, 2026-10-12), and its hits are in a landing clip the cast reaches at an unmeasured time (er-mechanics-ashes.untimed_hits)"

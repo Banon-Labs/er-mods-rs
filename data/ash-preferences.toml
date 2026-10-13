@@ -1,0 +1,75 @@
+# Families of look-alike ashes of war: only one member of a family is ever shown. The one kept is
+# the member that hits first; a tie goes to the one that can be chained (an R2 follow-up). Applied
+# per weapon for a single-weapon table, across the whole build for a build table.
+#
+# The rule came from the user (2026-10-08) on Storm Blade over Vacuum Slice: "it comes out sooner,
+# and can be chained". Same reasoning for the next two families; the rest were added on that pattern.
+
+[[family]]
+members = ["Storm Blade", "Vacuum Slice"]
+note = "slash wave"
+
+[[family]]
+members = ["Flaming Strike", "Flame of the Redmanes"]
+note = "fire burst"
+
+[[family]]
+members = ["Hoarfrost Stomp", "Divine Beast Frost Stomp"]
+note = "frost stomp"
+
+[[family]]
+members = ["Stamp (Upward Cut)", "Stamp (Sweep)"]
+note = "Stamp stance"
+
+[[family]]
+members = ["Impaling Thrust", "Piercing Fang"]
+note = "lunging thrust"
+
+[[family]]
+members = ["Spinning Weapon", "Spinning Slash"]
+note = "spin"
+
+# Within-class weapon picks (`scripts/er-mechanics-class-roles.py`). Each feature is normalised to
+# the class's best wieldable weapon (0..1; for lower-is-better features, best / value) and the
+# weighted sum ranks the class. The scaling role takes the highest `ar` alone; the reach/moveset
+# role takes the highest weighted score with `ar` left out.
+[class_pick_weights]
+r1_recovery = 0.20   # mean frames from each R1 hit to the roll cancel over the R1 chain, lower better
+r1_reach = 0.20      # R1 #1 world reach in metres, lunge included (er-mechanics-reach)
+r1_startup = 0.15    # R1 #1 first hit frame, lower better (user, 2026-10-08: it was not weighted)
+ar = 0.15            # total AR at the build's stats, best grip
+r1_chain_dps = 0.10  # motion value per second over the R1 chain (er-mechanics-moveset-sweep)
+ash_value = 0.15     # best ash `norm` from the sweep; a fixed-skill weapon uses its own skill
+stamina = 0.05       # mean stamina per R1, lower better
+crit = 0.15          # ar x (100 + throwAtkRate) / 100: riposte/backstab damage (user, 2026-10-08:
+                     # "We have no misericorde", "the highest crit in the game")
+parry_cost = 0.15    # riposte HP per attack the corpus's parriers land (er-mechanics-parry.py, user
+                     # 2026-10-10: "Model parrying"), a cost: subtracted as weight x cost / class best
+                     # `ar`. Equal to `ar`'s weight so an HP of riposte taken weighs what an HP of
+                     # hit damage dealt does; both are HP per attack thrown.
+pb_cost = 0.15       # HP per attack the corpus's perfect blockers take off (er-mechanics-perfect-block.py,
+                     # user 2026-10-10: model the PvP perfect block from its effects): damage lost to
+                     # their guard, damage-over-time status dropped, their punish when no later hit
+                     # stops it. A cost like `parry_cost`, with the same weight for the same reason:
+                     # an HP lost to a perfect block is an HP of hit damage not dealt.
+
+# Off-hand role (er-mechanics-class-roles.py `offhand`): the weapon in the left hand, judged on
+# its own L1 chain at each status affinity (user, 2026-10-08: "score each weapon twice").
+[offhand_pick_weights]
+l1_startup = 0.25    # L1 #1 first hit frame, lower better
+l1_recovery = 0.20   # mean frames from each L1 hit to the roll cancel, lower better
+l1_reach = 0.20      # L1 #1 world reach in metres, the weapon on the left hand
+l1_chain_dps = 0.25  # damage plus status HP per second over the L1 chain
+l1_stamina = 0.10    # mean stamina per L1, lower better
+l1_status = 0.0      # mean status HP per L1 hit; already inside l1_chain_dps, so reported only
+l1_parry_cost = 0.25 # riposte HP per L1 the corpus's parriers land, subtracted as weight x cost /
+                     # the class's best L1 #1 hit; equal to l1_chain_dps, the hand's damage weight
+l1_pb_cost = 0.25    # perfect-block HP per L1 (er-mechanics-perfect-block.py), subtracted the same
+                     # way as l1_parry_cost and weighted equal to it for the same reason
+
+# Classes section (`er-mechanics-combo-loadout.py`): extra rows for a class weapon, beyond its one.
+# The weapon's ashes are its own best, outside the three-carrier cap every other row shares, so a
+# good weapon is not left with the leftovers once heavier weapons take an ash (user, 2026-10-12:
+# "The weapon is good enough that we can make space for a second row with lesser ashes").
+[class_extra_rows]
+Shamshir = 1

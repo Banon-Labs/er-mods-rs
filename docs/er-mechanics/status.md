@@ -503,6 +503,15 @@ refills `resistRecoverPoint_*_Player` x 5 s (bleed 35, rot and poison 20, frost 
 build-up below that never procs them one hit at a time. Measuring the 5 s needs a timeline of
 landed hits from real fights (a damage-hook log of invasions, or frame-counted footage).
 
+**The per-hit linear value (`er-mechanics-ash-table.Table.status_hp`).** The ash table, the
+weapon embedding and the R1-string scorer don't run this engagement model. They credit a
+damage-over-time proc with the ticks inside one battle, `BATTLE_SECONDS` = 30 s (user,
+2026-10-13: "We can assume a battle goes 30s not 5s for an engagement"). It used
+`ENGAGEMENT_SECONDS` until then, which cut scarlet rot to 18 HP a hit on Blood Rotten Battle Hammer
+and lost it the Great Hammer comparison to Blood Battle Hammer by 1.5 points. At 30 s, Rotten's R1
+string is 543.7/s (bleed 584 + rot 439 HP) against Battle Hammer's 462.1/s, at STR 51 / DEX 17 /
+ARC 41.
+
 **One live proc (VERIFIED, section 1a).** While a proc's entry is live, its status builds
 nothing. The simulator (`simulate`) refuses those hits and starts the next proc from a full gauge
 once the entry expires.

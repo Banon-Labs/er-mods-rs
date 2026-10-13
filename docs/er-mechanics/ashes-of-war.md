@@ -1214,6 +1214,73 @@ The ash residual barely moves and its CI still includes 0.
 - Buff-only ashes. They still enter only through the corpus-weighted buff alternatives (closed
   by section 16b).
 
+### 15c. Stormcaller belongs on long weapons
+
+User, 2026-10-13: "We have stormcaller on small weapons. I need you to investigate and record
+evidence that it should be prioritized on longer weapons, and deprioritized/ranked on smaller
+weapons."
+
+**What the weapon contributes (TAE + regulation, `VERIFIED`).** `a623_040000` fires three melee
+events (TAE 1, judges 3640/3641/3642, f24/f47/f72) and three bullet events (TAE 2, judges
+3643/3644/3645, f26/f49/f74).
+
+- The swings are AtkParam_Pc 300000640/641/642, `hitSourceType` 0 (weapon). Each has three
+  capsules on the weapon's own dummies: 100-130 at radius 0.35 (the tip), 130-120 at 0.2, and
+  110-120 at 0.1. Their reach is therefore the model's length.
+- The bullets launch from dummy 280, which exists only on the body model c0000. It sits at
+  (0, 0.0005, -0.034) with no attach bone, so it is the character's root, the same on every
+  weapon. Their AtkParam 300000643 has no hit shapes of its own.
+
+Swing extent from the grip, the capsule 100-130 plus its radius (`er-mechanics-reach.shape_extent`
+on the weapon's FLVER dummies, `MEASURED`):
+
+| weapon | swing extent (m) | weapon | swing extent (m) |
+|---|---|---|---|
+| Dagger | 0.71 | Bastard Sword | 1.47 |
+| Short Sword | 0.99 | Claymore | 1.54 |
+| Iron Cleaver | 1.08 | Grave Scythe | 1.97 |
+| Warped Axe | 1.09 | Zweihander | 2.05 |
+| Broadsword | 1.12 | Greatsword | 2.10 |
+| Uchigatana | 1.46 | Halberd | 2.15 |
+
+**What lands (section 15a model, `er-mechanics-ashes.py landing`).** The test used Heavy +25 and
+the corpus poises of RL 140-160, with the defender at 1.5, 2.0, 2.5 and 3.0 m. The first swing
+touches at 1.5 and 2.0 m only on the Dagger and Short Sword. It also touches at 2.5 m from about
+1.08 m of extent (Iron Cleaver, Warped Axe, Broadsword, Uchigatana, Bastard Sword), and at 3.0 m
+from 1.54 m (Claymore, Zweihander, Greatsword, Halberd, Grave Scythe). The bullets touch at every
+distance on every weapon.
+
+Over all 294 Stormcaller carriers of the RL 150 Heavy Knight bleed build's sweeps
+(`er-mechanics-ash-landing.py`, STR 51 / DEX 17 / ARC 41), the landed share of the cast's damage
+has a median of 0.52 and runs from 0.30 to 0.65:
+
+| landed share | carriers |
+|---|---|
+| 0.30-0.34 | Curved Club, Chainlink Flail, Hand Axe |
+| 0.42-0.49 | Short Sword, Iron Cleaver, Pike, Grave Scythe |
+| 0.52-0.57 | Broadsword, Uchigatana, Gargoyle's Twinblade, Warped Axe, Great Mace, Claymore |
+| 0.60-0.65 | Bastard Sword, Halberd, Banished Knight's Halberd, Nightrider Glaive, Vulgar Militia Shotel |
+
+The share is not monotonic in length, because the 15a lock rule also decides it: a long swing
+that lands early can still be escaped before a later one. Pike and Grave Scythe land 2 of 4 hits
+at 2.5 and 3.0 m in spite of their reach.
+
+**Why the ranking missed it.**
+
+- The ash table credits all six hits on every carrier; it never calls `skill_landing`.
+- The loadout's `area_w` (`set_area_weights`) used the union of the bullets' ground and the
+  blade's sweep. The bullets' part is the same on every weapon and dominates the union. On the
+  same pool, Blood 1H carriers ranged only from 0.84 (Chainlink Flail) to 1.26 (Pike).
+- `reach_w` reads Stormcaller's reach as the bullets' 3.1 m on every carrier. Its first term,
+  ln(ash reach / R1 reach), is positive only where the R1 is shorter than 3.1 m. So it gave the
+  short weapons a small bonus and the long ones none.
+
+**Change.** `er-mechanics-combo-loadout.py` now takes `--landing-cache` (`set_landing_weights`,
+step 8b of `er-mechanics-build-pipeline.sh`). It sets `land_w` to the carrier's landed share over
+the ash's median landed share, which runs from x0.58 (Curved Club) to x1.25 (Halberd, Nightrider
+Glaive). Dividing by the median moves the carriers against each other and leaves Stormcaller's
+standing against other ashes unchanged.
+
 ## 16. Reaction, buffs as options, and what a dodge ash buys
 
 On great spears the corpus mounts Bloodhound's Step 30, Braggart's Roar 28, Flaming Strike 23,
