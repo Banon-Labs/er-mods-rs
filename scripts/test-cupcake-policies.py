@@ -423,6 +423,134 @@ def run_runtime_evidence_signal_checks() -> None:
             f"{verdict.stdout.strip()!r}"
         )
 
+    run_runtime_evidence_long_input_checks()
+
+
+# Long inputs, which is where a `printf ... | grep -q` goes wrong. `-q` exits at its first match, so
+# a `printf` still writing past the pipe buffer hits a closed pipe; under `pipefail` that write error
+# becomes the pipeline's status and the test reads the opposite of what grep found. Measured
+# 2026-10-13 with the piped form: a tip naming 8000 paths under crates/ answered `NOTRUNTIME`, which
+# never denies, and a padded push event redirected at an absent checkout skipped the resolver and
+# was judged against the caller's own tree. Both signals are run twice, once with SIGPIPE at its
+# default and once ignored: ignored is how a Rust parent such as cupcake can leave it, and it is the
+# form that also prints `printf: write error: Broken pipe`.
+LONG_INPUT_LINES = 8000
+NOT_RUNTIME_ANSWERS = {
+    ".cupcake/signals/runtime_evidence_for_head.sh": "NOTRUNTIME",
+    ".cupcake/signals/runtime_evidence_note.sh": "no crate under crates/ changed since origin/main",
+}
+
+
+def _long_crate_diff_repo(root: Path) -> Path:
+    """A throwaway repository whose tip names LONG_INPUT_LINES files under crates/.
+
+    Built with plumbing, one blob under every path, so it writes no files to disk. It has no
+    `origin/main`, so the signals read the tip's own `git show --name-only`.
+    """
+    repo = root / "long-diff"
+    repo.mkdir()
+
+    def git(*args: str, stdin: str | None = None) -> str:
+        return subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            input=stdin,
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=SIGNAL_TIMEOUT_SECONDS,
+        ).stdout.strip()
+
+    git("init", "-q", "-b", "base", ".")
+    git("config", "user.email", "selftest@example.invalid")
+    git("config", "user.name", "selftest")
+    git("config", "commit.gpgsign", "false")
+    blob = git("hash-object", "-w", "--stdin", stdin="seed\n")
+    git("update-index", "--add", "--cacheinfo", f"100644,{blob},seed")
+    base = git("commit-tree", "-m", "the base", git("write-tree"))
+    git(
+        "update-index",
+        "--index-info",
+        stdin="".join(
+            f"100644 blob {blob}\tcrates/er-many/src/file-{i:05d}.rs\n"
+            for i in range(1, LONG_INPUT_LINES + 1)
+        ),
+    )
+    tip = git("commit-tree", "-p", base, "-m", "many crate paths", git("write-tree"))
+    git("update-ref", "HEAD", tip)
+    return repo
+
+
+def _run_signal_with(
+    script: str, event: str, cwd: Path, env: dict[str, str], ignore_sigpipe: bool
+) -> subprocess.CompletedProcess[str]:
+    argv = ["bash", str(REPO_ROOT / script)]
+    if ignore_sigpipe:
+        # `exec` keeps an ignored disposition, and bash cannot un-ignore a signal it starts with.
+        argv = ["bash", "-c", "trap '' PIPE; exec bash \"$0\"", str(REPO_ROOT / script)]
+    return subprocess.run(
+        argv,
+        cwd=cwd,
+        input=event,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=SIGNAL_TIMEOUT_SECONDS,
+        env=env,
+    )
+
+
+def run_runtime_evidence_long_input_checks() -> None:
+    absent = "/nonexistent-checkout-cupcake-signal-contract"
+    with tempfile.TemporaryDirectory(prefix="cupcake-long-input-") as tmp:
+        root = Path(tmp)
+        repo = _long_crate_diff_repo(root)
+        # A run root holding one run whose log has no build line, and an empty game directory: the
+        # scan can measure, and nothing in it names the tip. Neither is this machine's real logs.
+        (root / "runs" / "br-nobuild").mkdir(parents=True)
+        (root / "runs" / "br-nobuild" / "er-thing.log").write_text("some other log\n")
+        (root / "nogame").mkdir()
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if not k.startswith("GIT_") and not k.startswith("CUPCAKE_RUNTIME_EVIDENCE")
+        }
+        env["ER_ME3_RUN_ROOT"] = str(root / "runs")
+        env["ER_GAME_DIR"] = str(root / "nogame")
+
+        # The padding is its own JSON lines after the command, so `grep` meets `push` long before
+        # the end of its input. One long line would not do it: grep reads a whole line first.
+        padded_push = json.dumps(
+            {
+                **json.loads(_signal_event(f"cd {absent} && git push -u origin HEAD")),
+                "padding": ["x" * 40] * LONG_INPUT_LINES,
+            },
+            indent=1,
+        )
+        for ignore_sigpipe in (False, True):
+            mode = "SIGPIPE ignored" if ignore_sigpipe else "SIGPIPE default"
+            for script, not_runtime in NOT_RUNTIME_ANSWERS.items():
+                result = _run_signal_with(
+                    script, _signal_event("cargo fmt --check"), repo, env, ignore_sigpipe
+                )
+                answer = result.stdout.strip()
+                if result.returncode != 0 or answer == not_runtime or "Broken pipe" in result.stderr:
+                    raise AssertionError(
+                        f"{script} ({mode}) on a tip naming {LONG_INPUT_LINES} paths under crates/ "
+                        f"exited {result.returncode} and answered {answer!r}; it must exit 0, must "
+                        f"not answer {not_runtime!r}, and must not report a broken pipe.\n"
+                        f"{result.stderr}"
+                    )
+            push = _run_signal_with(
+                RUNTIME_EVIDENCE_SIGNALS[0], padded_push, REPO_ROOT, env, ignore_sigpipe
+            )
+            if push.stdout.strip() != "UNKNOWN" or "Broken pipe" in push.stderr:
+                raise AssertionError(
+                    f"{RUNTIME_EVIDENCE_SIGNALS[0]} ({mode}) on a padded push redirected at "
+                    f"{absent} answered {push.stdout.strip()!r}; it must answer UNKNOWN without "
+                    f"reporting a broken pipe.\n{push.stderr}"
+                )
+
 
 HOST_PLATFORM_SIGNAL = ".cupcake/signals/host_platform.sh"
 HOST_PLATFORM_ANSWERS = {"wsl", "native", "unknown"}
