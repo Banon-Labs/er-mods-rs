@@ -89,6 +89,54 @@ pub unsafe extern "system" fn DirectInput8Create(
     unsafe { forward(hinst, version, riid, out, outer) }
 }
 
+/// Import a build planner link into the character in the world, the way the `Load Build from URL`
+/// link field does when a player accepts one: validate it, start the import, and remember it as
+/// `build_url` so a relaunch lands on the same build.
+///
+/// For tooling that drives the importer without the menu: the portrait batch swaps one build for
+/// the next in place through this. Starting the import only spawns the fetch worker -- the game
+/// task applies it -- so any thread may call it, a Frida RPC thread included. Returns 1 when the
+/// import started and 0 when it was refused (a link that does not validate, or an import already in
+/// flight); the autoload debug log says which.
+///
+/// # Safety
+///
+/// `url` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn er_quickload_request_build_url(url: *const std::ffi::c_char) -> i32 {
+    use er_quit_menu_core::build_url_row::{
+        BuildUrlPress, persist_build_url, system_quit_start_build_import_url,
+    };
+
+    if url.is_null() {
+        return 0;
+    }
+    // Safety: the caller passes a NUL-terminated string.
+    let Ok(text) = unsafe { std::ffi::CStr::from_ptr(url) }.to_str() else {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export refused a link that is not UTF-8"
+        ));
+        return 0;
+    };
+    let url = text.trim();
+    if let Err(rejection) = er_build_import_core::validate_build_url(url) {
+        append_autoload_debug(format_args!(
+            "system-quit-build-url: export REFUSED {url:?} ({})",
+            rejection.indicator()
+        ));
+        return 0;
+    }
+    let press = system_quit_start_build_import_url(url);
+    append_autoload_debug(format_args!("system-quit-build-url: export asked for {url:?} -> {press:?}"));
+    match press {
+        BuildUrlPress::Started(_) => {
+            persist_build_url(url);
+            1
+        }
+        _ => 0,
+    }
+}
+
 fn game_main_window_handle_usize() -> usize {
     game_main_window().0 as usize
 }
