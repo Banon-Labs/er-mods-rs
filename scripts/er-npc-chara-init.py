@@ -9,9 +9,10 @@
 
 A human NPC is a `CharaInitParam` row: armaments, armour, talismans, ammunition, spells,
 items, level and the eight attributes. Its sliders are not in that row; `npcPlayerFaceGenId`
-names the `FaceParam` row that holds them. Only rows with a body are offered -- a face id that
-resolves to a `FaceParam` row -- which leaves out the starting classes, the keepsakes, and NPCs
-such as Melina or Ranni that are not built from a `CharaInitParam` row at all.
+names the `FaceParam` row that holds them. Only rows with a body can be read -- a face id that
+resolves to a `FaceParam` row. A name without one still matches, and is then rejected with the
+reason and exit code 3: the starting classes have no face, and NPCs such as Melina or Ranni are
+not built from a `CharaInitParam` row at all.
 
 Names come from two places, merged by spelling with accents and punctuation folded:
 
@@ -114,11 +115,15 @@ class Npc:
     #: row id -> label: the Smithbox row name, or `by NPC number`.
     rows: dict[int, str] = field(default_factory=dict)
     aliases: set[str] = field(default_factory=set)
+    #: Why a name that matched cannot be used: it has no body behind it.
+    rejected: str = ""
 
 
 def build_index(row_names: dict[int, str], npc_names: dict[int, str], body_rows: set[int]) -> dict[str, Npc]:
-    """{folded name: Npc} over rows that have a body."""
+    """{folded name: Npc}. A name with no body behind it stays in with `rejected` saying why,
+    so asking for Ranni is answered ("no body, and this is why") rather than read as a typo."""
     index: dict[str, Npc] = {}
+    reasons: dict[str, tuple[str, str]] = {}
 
     def entry(name: str) -> Npc:
         key = fold(name)
@@ -128,33 +133,64 @@ def build_index(row_names: dict[int, str], npc_names: dict[int, str], body_rows:
         npc.aliases.add(key)
         return npc
 
+    faceless: dict[str, list[int]] = {}
     for row, label in row_names.items():
-        if row in body_rows and label and base_name(label):
+        if not label or not base_name(label):
+            continue
+        if row in body_rows:
             entry(base_name(label)).rows[row] = label
+        else:
+            faceless.setdefault(base_name(label), []).append(row)
 
     by_number: dict[int, dict[str, str]] = {}
     for text_id, name in npc_names.items():
         if 100000 <= text_id < 200000:
             by_number.setdefault((text_id // 100) % 1000, {})[fold(name)] = name
+        elif fold(name):
+            reasons.setdefault(fold(name), (name, "no CharaInitParam row carries its name"))
     for number, names in by_number.items():
+        span = f"{20000 + number * 10}-{20009 + number * 10}"
+        linked = [r for r in range(20000 + number * 10, 20010 + number * 10) if r in body_rows]
+        named = {fold(base_name(row_names[r])): base_name(row_names[r]) for r in linked if row_names.get(r)}
+        if not linked:
+            for key, name in names.items():
+                reasons[key] = (name, f"no CharaInitParam row carries its name, and none with a body "
+                                      f"exists under its NPC number {number} ({span})")
+            continue
         # A number two NPCs share (Irina and Hyetta are both 310) cannot say whose a row is.
         if len(names) != 1:
+            rows_named = (f"; the rows there are named {', '.join(sorted(set(named.values())))}, which can "
+                          "be asked for by that name") if named else ""
+            for key, name in names.items():
+                others = ", ".join(n for k, n in names.items() if k != key)
+                reasons[key] = (name, f"its NPC number {number} is shared with {others}, so no "
+                                      f"CharaInitParam row ({span}) can be attributed to it{rows_named}")
             continue
         (key, name), = names.items()
-        linked = [r for r in range(20000 + number * 10, 20010 + number * 10) if r in body_rows]
-        named = [fold(base_name(row_names[r])) for r in linked if row_names.get(r)]
         # Every row Smithbox names under this number must be this NPC, or the convention is
         # not holding here: measured on 1.17.1, Hornsent Grandam's number lands on Mimic Tear.
-        if not linked or not all(key in b or b in key for b in named):
+        if not all(key in b or b in key for b in named):
+            reasons[key] = (name, f"the CharaInitParam rows under its NPC number {number} ({span}) "
+                                  f"belong to {', '.join(sorted(set(named.values())))}")
             continue
         unnamed = [r for r in linked if not row_names.get(r)]
-        if not unnamed and key not in index:
-            continue
-        npc = entry(name)
-        npc.name = name  # the game's own spelling, accents and all
-        for row in unnamed:
-            npc.rows[row] = "by NPC number"
-    return {k: v for k, v in index.items() if v.rows}
+        if unnamed or key in index:
+            npc = entry(name)
+            npc.name = name  # the game's own spelling, accents and all
+            for row in unnamed:
+                npc.rows[row] = "by NPC number"
+        for b in named:
+            index[b].aliases.add(key)  # the game's `Roderika` finds Smithbox's `Roderika, Spirit Tuner`
+
+    for name, rows in faceless.items():
+        shown = ", ".join(str(r) for r in sorted(rows)[:6]) + (", ..." if len(rows) > 6 else "")
+        reasons[fold(name)] = (name, f"CharaInitParam {shown} has no face, so it is not a body")
+
+    valid = {k: v for k, v in index.items() if v.rows}
+    for key, (name, why) in reasons.items():
+        if key and key not in valid:
+            valid[key] = Npc(name, aliases={key}, rejected=why)
+    return valid
 
 
 def candidates(query: str, index: dict[str, Npc]) -> tuple[list[Npc], Npc | None]:
@@ -191,31 +227,48 @@ def candidates(query: str, index: dict[str, Npc]) -> tuple[list[Npc], Npc | None
     return [npc for _, npc in scored[:FUZZY_LIMIT]], None
 
 
-def choose(query: str, found: list[Npc], exact: Npc | None, pick: int | None) -> Npc:
-    def listing() -> str:
-        return "\n".join(f"  {i}. {n.name}  ({len(n.rows)} row{'s' * (len(n.rows) != 1)})"
-                         for i, n in enumerate(found, 1))
+#: Exit codes beyond 0 (found) and 1 (nothing matched).
+EXIT_AMBIGUOUS = 2
+EXIT_REJECTED = 3
 
+
+def listing(found: list[Npc]) -> str:
+    """The NPCs with a body, numbered for `--pick`; the rest after them, unnumbered, with why."""
+    valid = [n for n in found if not n.rejected]
+    lines = [f"  {i}. {n.name}  ({len(n.rows)} row{'s' * (len(n.rows) != 1)})" for i, n in enumerate(valid, 1)]
+    lines += [f"  -  {n.name}  (no body: {n.rejected})" for n in found if n.rejected]
+    return "\n".join(lines)
+
+
+def choose(query: str, found: list[Npc], exact: Npc | None, pick: int | None) -> Npc:
+    """The one NPC the query means. A name with no body can be returned; the caller rejects it."""
+    valid = [n for n in found if not n.rejected]
     if not found:
-        raise SystemExit(f"no NPC with a body matches {query!r}")
+        print(f"no NPC matches {query!r}", file=sys.stderr)
+        raise SystemExit(1)
     if pick is not None:
-        if not 1 <= pick <= len(found):
-            raise SystemExit(f"--pick {pick} is out of range; {query!r} matched:\n{listing()}")
-        return found[pick - 1]
-    if len(found) == 1:
-        return found[0]
-    if exact is not None:
-        others = ", ".join(n.name for n in found if n is not exact)
-        print(f"also matched: {others} (use --pick N or a fuller name)", file=sys.stderr)
-        return exact
+        if not 1 <= pick <= len(valid):
+            print(f"--pick {pick} is out of range; {query!r} matched:\n{listing(found)}", file=sys.stderr)
+            raise SystemExit(EXIT_AMBIGUOUS)
+        return valid[pick - 1]
+    # The query names exactly one thing, or spells one name out: answer about that one.
+    single = found[0] if len(found) == 1 else exact if exact is not None else valid[0] if len(valid) == 1 else None
+    if single is not None:
+        others = [n.name for n in found if n is not single]
+        if others:
+            print(f"also matched: {', '.join(others)} (use --pick N or a fuller name)", file=sys.stderr)
+        return single
+    if not valid:
+        print(f"{query!r} matches only NPCs with no body:\n{listing(found)}", file=sys.stderr)
+        raise SystemExit(EXIT_REJECTED)
     if sys.stdin.isatty() and sys.stdout.isatty():
-        print(f"{query!r} matches more than one NPC:\n{listing()}")
+        print(f"{query!r} matches more than one NPC:\n{listing(found)}")
         while True:
-            answer = input(f"Pick 1-{len(found)}: ").strip()
-            if answer.isdigit() and 1 <= int(answer) <= len(found):
-                return found[int(answer) - 1]
-    print(f"{query!r} matches more than one NPC; repeat with --pick N:\n{listing()}", file=sys.stderr)
-    raise SystemExit(2)
+            answer = input(f"Pick 1-{len(valid)}: ").strip()
+            if answer.isdigit() and 1 <= int(answer) <= len(valid):
+                return valid[int(answer) - 1]
+    print(f"{query!r} matches more than one NPC; repeat with --pick N:\n{listing(found)}", file=sys.stderr)
+    raise SystemExit(EXIT_AMBIGUOUS)
 
 
 # --- decoding ------------------------------------------------------------------------------
@@ -352,7 +405,7 @@ def selftest() -> int:
     # Real 1.17.1 NpcName ids, so the NPC-number arithmetic is checked against the game's own.
     npc_names = {131600: "Sorceress Sellen", 130100: "White Mask Varré", 132300: "Dung Eater",
                  110600: "Ranni the Witch", 140200: "Hornsent Grandam",
-                 131000: "Irina of Morne", 131010: "Lightseeker Hyetta"}
+                 131000: "Irina of Morne", 131010: "Lightseeker Hyetta", 90210000: "Messmer the Impaler"}
     body = {23160, 23161, 23162, 23121, 23122, 23120, 2024150, 2024151, 23010, 23011, 23230, 23232,
             24020, 24021, 23100, 23101, 23102}
     index = build_index(row_names, npc_names, body)
@@ -375,12 +428,21 @@ def selftest() -> int:
     check("Dung Eater takes 23230 by number, the puppet keeps its own row",
           index["dung eater"].rows == {23230: "by NPC number"}
           and set(index["dung eater puppet"].rows) == {23232})
-    check("a number whose named row disagrees links nothing (Grandam is not Mimic Tear)",
-          "hornsent grandam" not in index)
-    check("a number two NPCs share links nothing (Irina and Hyetta share 310)",
-          23100 not in index["irina of morne"].rows and "lightseeker hyetta" not in index)
-    check("a class row has no body and is not offered", "class vagabond" not in index)
-    check("Ranni has no CharaInitParam row and is not offered", "ranni the witch" not in index)
+    def rejected(key: str, *words: str) -> bool:
+        npc = index.get(key)
+        return npc is not None and not npc.rows and all(w in npc.rejected for w in words)
+
+    check("Grandam matches, rejected: her number's row is Mimic Tear's",
+          rejected("hornsent grandam", "402", "Mimic Tear"))
+    check("Hyetta's game name matches, rejected: number 310 is shared with Irina",
+          rejected("lightseeker hyetta", "310", "Irina of Morne") and 23100 not in index["irina of morne"].rows)
+    check("a class row matches, rejected: no face", rejected("class vagabond", "3000", "no face"))
+    check("Ranni matches, rejected: no row with a body under number 106",
+          rejected("ranni the witch", "106", "21060-21069"))
+    check("ranni resolves to Ranni, who choose() returns for the caller to reject",
+          resolve("ranni") == (["Ranni the Witch"], None))
+    check("a DLC name with no number convention matches, rejected",
+          rejected("messmer the impaler", "no CharaInitParam row"))
     check("typo selen -> fuzzy Sellen", "Sorceress Sellen" in resolve("selen")[0])
     check("w m varre -> word prefixes", resolve("w m varre")[0] == ["White Mask Varré"])
     weapons = {33000000: "Heavy Thing", 33900000: "Staff"}
@@ -413,11 +475,16 @@ def main(argv: list[str]) -> int:
     found, exact = candidates(query, index)
     if args.list:
         if not found:
-            print(f"no NPC with a body matches {query!r}", file=sys.stderr)
-        for i, npc in enumerate(found, 1):
+            print(f"no NPC matches {query!r}", file=sys.stderr)
+        for i, npc in enumerate((n for n in found if not n.rejected), 1):
             print(f"{i}. {npc.name}: " + ", ".join(f"{r} {lbl}" for r, lbl in sorted(npc.rows.items())))
+        for npc in (n for n in found if n.rejected):
+            print(f"-  {npc.name}: no body: {npc.rejected}")
         return 0 if found else 1
     npc = choose(query, found, exact, args.pick)
+    if npc.rejected:
+        print(f"{npc.name}: matched, but it has no body to read: {npc.rejected}", file=sys.stderr)
+        return EXIT_REJECTED
     described = [decoder.describe(row) for row in sorted(npc.rows)]
     if args.json:
         print(json.dumps({"npc": npc.name, "rows": [
