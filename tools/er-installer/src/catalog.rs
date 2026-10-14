@@ -467,7 +467,7 @@ pub const CATALOG: &[Mod] = &[
         package: "mushroom-man-runtime",
         artifact: "mushroom_man.dll",
         label: "Mushroom Man",
-        blurb: "Replaces a helmet's rows so your character wears the mushroom head. A visible costume change to gear you may already be wearing.",
+        blurb: "Turns your character into the Mushroom Man from Dark Souls, armour hidden. The model is built from your own Dark Souls Remastered: run mushroom-man-builder.exe once before installing this.",
         category: "cosmetic",
         audience: "player",
         default_on: false,

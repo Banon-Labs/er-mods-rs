@@ -44,6 +44,64 @@ pub fn not_embedded(chosen: &[&'static Mod]) -> Vec<&'static Mod> {
         .collect()
 }
 
+/// A mod that is half a DLL and half an ME3 `[[packages]]` folder the player builds on their
+/// own machine, because the folder holds another game's content and cannot be shipped.
+#[derive(Debug)]
+pub struct BuiltPackage {
+    /// The catalog package whose DLL needs the folder.
+    pub package: &'static str,
+    /// The folder, relative to the game directory -- where its builder writes by default.
+    pub folder: &'static str,
+    /// Files whose presence proves the folder was built. The DLL checks the same ones beside
+    /// itself, which is why it is installed inside the folder rather than with the others.
+    pub probes: &'static [&'static str],
+    /// The program that builds it, as a player would look for it.
+    pub builder: &'static str,
+}
+
+/// Mushroom Man's model is converted from the player's own Dark Souls Remastered by
+/// `tools/mushroom-man-builder`; its probes are `MODEL_PAYLOAD_PROBES` in
+/// `crates/mushroom-man-runtime`.
+pub const BUILT_PACKAGES: &[BuiltPackage] = &[BuiltPackage {
+    package: "mushroom-man-runtime",
+    folder: "mushroom-man",
+    probes: &["parts/fc_m_0000.partsbnd.dcx", "facegen/facegen.fgbnd.dcx"],
+    builder: "mushroom-man-builder.exe",
+}];
+
+/// The built package a mod needs, if it is one of those.
+pub fn built_package(entry: &Mod) -> Option<&'static BuiltPackage> {
+    BUILT_PACKAGES
+        .iter()
+        .find(|package| package.package == entry.package)
+}
+
+/// Whether `package` has been built into `game_dir`.
+pub fn package_is_built(package: &BuiltPackage, game_dir: &Path) -> bool {
+    let folder = game_dir.join(package.folder);
+    package
+        .probes
+        .iter()
+        .all(|probe| folder.join(probe).is_file())
+}
+
+/// The chosen mods whose package folder has not been built yet.
+pub fn unbuilt_packages(chosen: &[&'static Mod], game_dir: &Path) -> Vec<&'static BuiltPackage> {
+    chosen
+        .iter()
+        .filter_map(|entry| built_package(entry))
+        .filter(|package| !package_is_built(package, game_dir))
+        .collect()
+}
+
+/// Where a mod's DLL goes: inside its built package when it has one, else `install_dir`.
+pub fn artifact_dir(entry: &Mod, install_dir: &Path, game_dir: &Path) -> PathBuf {
+    match built_package(entry) {
+        Some(package) => game_dir.join(package.folder),
+        None => install_dir.to_path_buf(),
+    }
+}
+
 /// What the game install looks like once it has been found.
 #[derive(Debug)]
 pub struct GameInstall {
@@ -221,8 +279,9 @@ pub fn missing_artifacts(chosen: &[&'static Mod], source: &Path) -> Vec<MissingA
         .collect()
 }
 
-/// Write each chosen DLL into `dest`, returning the absolute path each one now lives at, in
-/// the order given. Existing files are overwritten: reinstalling is how a user updates.
+/// Write each chosen DLL into `dest` -- or, for a mod with a built package, into that package's
+/// folder under `game_dir` -- returning the absolute path each one now lives at, in the order
+/// given. Existing files are overwritten: reinstalling is how a user updates.
 ///
 /// A mod baked into this executable is written from there; `source` supplies anything that is
 /// not, and is `None` in a fully self-contained build. Preferring the embedded copy means a
@@ -232,12 +291,14 @@ pub fn install_artifacts(
     chosen: &[&'static Mod],
     source: Option<&Path>,
     dest: &Path,
+    game_dir: &Path,
 ) -> io::Result<Vec<(&'static Mod, String)>> {
-    fs::create_dir_all(dest)?;
-    let dest = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
     let mut installed = Vec::with_capacity(chosen.len());
     for entry in chosen {
-        let to = dest.join(entry.artifact);
+        let dir = artifact_dir(entry, dest, game_dir);
+        fs::create_dir_all(&dir)?;
+        let dir = dir.canonicalize().unwrap_or(dir);
+        let to = dir.join(entry.artifact);
         let context = |err: io::Error, from: &str| {
             io::Error::new(
                 err.kind(),
@@ -584,7 +645,7 @@ mod tests {
         let product = crate::selection::by_package("er-quickload").unwrap();
         fs::write(source.join(product.artifact), b"stub").unwrap();
 
-        let installed = install_artifacts(&[product], Some(&source), &dest).unwrap();
+        let installed = install_artifacts(&[product], Some(&source), &dest, &dest).unwrap();
         assert_eq!(installed.len(), 1);
         let (_, path) = &installed[0];
         assert!(Path::new(path).is_absolute(), "{path} is not absolute");
@@ -604,10 +665,10 @@ mod tests {
         let dest = temp_dir("recopy-dst");
         let product = crate::selection::by_package("er-quickload").unwrap();
         fs::write(source.join(product.artifact), b"first").unwrap();
-        install_artifacts(&[product], Some(&source), &dest).unwrap();
+        install_artifacts(&[product], Some(&source), &dest, &dest).unwrap();
         let first = fs::read(dest.join(product.artifact)).unwrap();
         fs::write(source.join(product.artifact), b"second").unwrap();
-        install_artifacts(&[product], Some(&source), &dest).unwrap();
+        install_artifacts(&[product], Some(&source), &dest, &dest).unwrap();
         let second = fs::read(dest.join(product.artifact)).unwrap();
 
         if embedded(product.artifact).is_some() {
@@ -630,14 +691,14 @@ mod tests {
 
         match embedded(product.artifact) {
             Some(bytes) => {
-                let installed = install_artifacts(&[product], None, &dest).unwrap();
+                let installed = install_artifacts(&[product], None, &dest, &dest).unwrap();
                 assert_eq!(installed.len(), 1);
                 assert_eq!(fs::read(dest.join(product.artifact)).unwrap(), bytes);
             }
             None => {
                 // A development build carries nothing, and must say so rather than write a
                 // truncated or empty DLL into someone's game directory.
-                let refusal = install_artifacts(&[product], None, &dest).unwrap_err();
+                let refusal = install_artifacts(&[product], None, &dest, &dest).unwrap_err();
                 assert!(
                     refusal.to_string().contains("--dll-dir"),
                     "refusal should say how to fix it: {refusal}"
@@ -696,6 +757,64 @@ mod tests {
         // Installing the same set again leaves nothing behind.
         assert!(orphaned_artifacts(&[product, icons, logging], &dest).is_empty());
         fs::remove_dir_all(&dest).unwrap();
+    }
+
+    #[test]
+    fn every_built_package_names_a_mod_in_the_catalog() {
+        for package in BUILT_PACKAGES {
+            let entry = crate::selection::by_package(package.package);
+            assert!(entry.is_some(), "{} is not in the catalog", package.package);
+            assert_eq!(
+                built_package(entry.unwrap()).unwrap().folder,
+                package.folder
+            );
+        }
+        let product = crate::selection::by_package("er-quickload").unwrap();
+        assert!(built_package(product).is_none());
+    }
+
+    #[test]
+    fn mushroom_man_is_refused_until_its_package_is_built() {
+        let game = temp_dir("unbuilt-game");
+        let mushroom = crate::selection::by_package("mushroom-man-runtime").unwrap();
+        let product = crate::selection::by_package("er-quickload").unwrap();
+        let unbuilt = unbuilt_packages(&[product, mushroom], &game);
+        assert_eq!(unbuilt.len(), 1);
+        assert_eq!(unbuilt[0].folder, "mushroom-man");
+
+        // One probe is not a built package; both are.
+        let folder = game.join("mushroom-man");
+        fs::create_dir_all(folder.join("parts")).unwrap();
+        fs::write(folder.join("parts/fc_m_0000.partsbnd.dcx"), b"stub").unwrap();
+        assert_eq!(unbuilt_packages(&[mushroom], &game).len(), 1);
+        fs::create_dir_all(folder.join("facegen")).unwrap();
+        fs::write(folder.join("facegen/facegen.fgbnd.dcx"), b"stub").unwrap();
+        assert!(unbuilt_packages(&[product, mushroom], &game).is_empty());
+        fs::remove_dir_all(&game).unwrap();
+    }
+
+    #[test]
+    fn mushroom_mans_dll_lands_inside_its_package_and_the_rest_do_not() {
+        let source = temp_dir("package-src");
+        let dest = temp_dir("package-dst");
+        let game = temp_dir("package-game");
+        let mushroom = crate::selection::by_package("mushroom-man-runtime").unwrap();
+        let product = crate::selection::by_package("er-quickload").unwrap();
+        for entry in [mushroom, product] {
+            fs::write(source.join(entry.artifact), b"stub").unwrap();
+        }
+
+        let installed =
+            install_artifacts(&[product, mushroom], Some(&source), &dest, &game).unwrap();
+        assert!(dest.join(product.artifact).is_file());
+        assert!(!dest.join(mushroom.artifact).exists());
+        assert!(game.join("mushroom-man").join(mushroom.artifact).is_file());
+        assert_eq!(installed[0].0.package, product.package, "order is kept");
+        assert!(installed[1].1.ends_with(mushroom.artifact));
+
+        for dir in [source, dest, game] {
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

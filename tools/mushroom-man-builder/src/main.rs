@@ -24,15 +24,17 @@ mushroom-man-builder -- build the Mushroom Man mod from your own Dark Souls Rema
 USAGE:
     mushroom-man-builder [options]
 
-With no options it finds both games through Steam, writes the mod into a `mushroom-man` folder
-inside Elden Ring's `Game` folder, and prints the me3 command that launches it.
+With no options it finds both games through Steam and writes the mod into a `mushroom-man` folder
+inside Elden Ring's `Game` folder. With mushroom_man.dll beside this program it also writes an
+me3 profile for the mod alone and prints the command that launches it; otherwise tick Mushroom Man
+in er-installer, which loads the folder with your other mods.
 
 OPTIONS:
     --er-game <dir>        Elden Ring's `Game` folder (the one holding eldenring.exe).
     --dsr <dir>            The Dark Souls Remastered folder (the one holding `chr`).
     --out <dir>            Where to write the mod. Default: <er-game>/mushroom-man
     --dll <path>           The mushroom_man.dll to install. Default: the one beside this
-                           program, or in a `dlls` folder beside it.
+                           program, or in a `dlls` folder beside it; none is fine.
     --source-obj <path>    Use an authored mesh instead of c2280 as exported by Route A;
     --source-weights <path>   both are needed (the OBJ and weight TSV the Blender export writes).
     --export-obj <dir>     Write c2280's Route A mesh as OBJ + weight TSV into <dir> and stop.
@@ -170,13 +172,12 @@ fn build(options: &Options) -> Result<()> {
     };
     println!("Elden Ring:            {}", er_game.display());
 
+    // Without a DLL the package is still the hard part: er-installer puts its own copy inside
+    // the package folder when Mushroom Man is ticked, and lists the folder in its profile.
     let dll = match &options.dll {
-        Some(path) => path.clone(),
-        None => default_dll().ok_or_else(|| {
-            Error::new(format!(
-                "{DLL_NAME} is not beside this program -- pass --dll <path to {DLL_NAME}>"
-            ))
-        })?,
+        Some(path) if path.is_file() => Some(path.clone()),
+        Some(path) => return Err(Error::new(format!("{} does not exist", path.display()))),
+        None => default_dll(),
     };
     let out = options
         .out
@@ -204,6 +205,23 @@ fn build(options: &Options) -> Result<()> {
         },
         &out,
     )?;
+    println!(
+        "mushroom body: {} vertices, {} triangles into a {}-vertex donor ({} triangles did not fit)",
+        report.source_vertices,
+        report.source_triangles,
+        report.patch_high.vertex_capacity,
+        report.patch_high.triangles_dropped
+    );
+    println!("wrote {} files into {}", report.files.len(), out.display());
+
+    let Some(dll) = dll else {
+        println!(
+            "\n{DLL_NAME} is not beside this program, so no profile was written. Run \
+             er-installer and tick Mushroom Man: it installs the DLL into this folder and loads \
+             it with the rest of your mods."
+        );
+        return Ok(());
+    };
     let installed_dll = out.join(DLL_NAME);
     fs::copy(&dll, &installed_dll).context(format!(
         "copying {} to {}",
@@ -216,15 +234,6 @@ fn build(options: &Options) -> Result<()> {
         profile::profile_text(&profile_path_form(&out), &profile_path_form(&installed_dll)),
     )
     .context(format!("writing {}", profile_path.display()))?;
-
-    println!(
-        "mushroom body: {} vertices, {} triangles into a {}-vertex donor ({} triangles did not fit)",
-        report.source_vertices,
-        report.source_triangles,
-        report.patch_high.vertex_capacity,
-        report.patch_high.triangles_dropped
-    );
-    println!("wrote {} files into {}", report.files.len(), out.display());
     println!("profile: {}", profile_path.display());
     println!(
         "launch:  me3 launch -g eldenring -p \"{}\"",
