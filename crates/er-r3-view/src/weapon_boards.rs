@@ -6,7 +6,7 @@
 //! 548 weapons. Left out:
 //! - none
 
-// inputs-sha256 b0f1e281ec74575e38f75ccec54cfab7848bba39921d5674eeffb040d44cc206
+// inputs-sha256 3e6c2c54cc97481f7888e8a83f825c7313858ee048d246aaaf3fc012fd59b0bb
 // body-sha256 9b883d15eb9f1f85fb3f542c9f7fb2aad95da83e64195f7c36ef3af2e507ac46
 // ---- generated body below; its sha256 is recorded above ----
 use crate::board::{Board, Gear, Line};
