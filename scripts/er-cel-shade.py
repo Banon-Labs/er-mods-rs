@@ -282,6 +282,111 @@ def colour_stores(lines: list[str], defs: dict, text: str) -> dict[int, tuple[in
     return stores
 
 
+def terms_text(text: str) -> tuple[str, dict]:
+    """Make `GXLightComposite` show where each pixel's light comes from instead of summing it.
+
+    The pass computes `SV_Target = irradiance + specular + emissive`. This writes the green
+    channel of each term to its own output channel -- diffuse light to red, specular to green,
+    emissive to blue -- so a capture can be measured for which term lights which part of the frame.
+    Green stands in for luminance because it carries most of it.
+
+    The terms are told apart by the arithmetic, not by load order: the first sum is
+    `specular.x + irradiance.x` and the second adds `emissive.x`, and only emissive has its `.w`
+    read (it scales the second output).
+    """
+    lines = text.split("\n")
+    defs = parse_defs(lines)
+    fetches = [rid for rid, (_, op, _args) in defs.items() if op == "OpImageFetch"]
+    if len(fetches) != 3:
+        raise PatchError(f"expected the three light buffer fetches, found {len(fetches)}")
+    extract = {}
+    for rid, (_, op, args) in defs.items():
+        if op == "OpCompositeExtract" and args[1] in fetches:
+            extract[(args[1], int(args[2]))] = rid
+    stores = colour_stores(lines, defs, text)
+    x_sum = defs[stores[0][2]]
+    # x is NMax(sum, 0); sum is FAdd(FAdd(specular.x, irradiance.x), emissive.x).
+    if x_sum[1] != "OpExtInst" or "NMax" not in x_sum[2]:
+        raise PatchError("SV_Target.x is not max(sum, 0)")
+    outer = defs[x_sum[2][3]]
+    if outer[1] != "OpFAdd":
+        raise PatchError("SV_Target.x is not a sum")
+    inner = defs[outer[2][1]]
+    if inner[1] != "OpFAdd":
+        raise PatchError("SV_Target.x is not a sum of three terms")
+    source = {rid: fetch for (fetch, comp), rid in extract.items() if comp == 0}
+    specular, irradiance, emissive = source.get(inner[2][1]), source.get(inner[2][2]), source.get(outer[2][2])
+    if None in (specular, irradiance, emissive) or (emissive, 3) not in extract:
+        raise PatchError("could not tell irradiance, specular and emissive apart")
+    for component, fetch in zip((0, 1, 2), (irradiance, specular, emissive)):
+        index, pointer, _ = stores[component]
+        lines[index] = re.sub(r"OpStore %\d+ %\d+$", f"OpStore {pointer} {extract[(fetch, 1)]}", lines[index])
+    return "\n".join(lines), {"probe": "terms", "irradiance": irradiance, "specular": specular,
+                              "emissive": emissive}
+
+
+def posterize_channels_text(text: str, params: Params) -> tuple[str, dict]:
+    """Posterize every store to `SV_Target.xyz`, one channel at a time.
+
+    For shaders that write their colour from more than one branch -- the forward hair shader
+    does -- there is no single x/y/z triplet to take a luminance from, so each stored channel is
+    rounded to whole steps of `band_stops` stops on its own. Hue can shift a little where the
+    channels round differently; that is the price of not reconstructing the branches.
+    """
+    params.check()
+    lines = text.split("\n")
+    defs = parse_defs(lines)
+    float_t = next(rid for rid, (_, op, args) in defs.items() if op == "OpTypeFloat" and args == ["32"])
+    glsl = next(rid for rid, (_, op, args) in defs.items()
+                if op == "OpExtInstImport" and args == ['"GLSL.std.450"'])
+    names = dict(re.findall(r'OpName (%\d+) "(\w+)"', text))
+    target = next((rid for rid, name in names.items() if name == "SV_Target"), None)
+    if target is None:
+        raise PatchError("module has no output named SV_Target")
+    int_ts = {rid for rid, (_, op, args) in defs.items() if op == "OpTypeInt" and args[0] == "32"}
+    int_value = {rid: int(args[1]) for rid, (_, op, args) in defs.items() if op == "OpConstant" and args[0] in int_ts}
+    colour_pointers = {rid for rid, (_, op, args) in defs.items()
+                       if op == "OpAccessChain" and len(args) == 3 and args[1] == target
+                       and int_value.get(args[2]) in (0, 1, 2)}
+    next_id = max(int(rid) for rid in re.findall(r"%(\d+)", text)) + 1
+
+    def fresh() -> str:
+        nonlocal next_id
+        rid = f"%{next_id}"
+        next_id += 1
+        return rid
+
+    consts = {name: fresh() for name in ("eps", "inv", "half", "step")}
+    values = {"eps": 1e-6, "inv": 1.0 / params.band_stops, "half": 0.5, "step": params.band_stops}
+    out_lines = []
+    stores = 0
+    for line in lines:
+        match = re.match(r"^(\s*)OpStore (%\d+) (%\d+)$", line)
+        if not (match and match.group(2) in colour_pointers):
+            out_lines.append(line)
+            continue
+        indent, pointer, value = match.groups()
+        m, lg, q, qh, fl, e, out = (fresh() for _ in range(7))
+        out_lines += [indent + body for body in (
+            f"{m} = OpExtInst {float_t} {glsl} NMax {value} {consts['eps']}",
+            f"{lg} = OpExtInst {float_t} {glsl} Log2 {m}",
+            f"{q} = OpFMul {float_t} {lg} {consts['inv']}",
+            f"{qh} = OpFAdd {float_t} {q} {consts['half']}",
+            f"{fl} = OpExtInst {float_t} {glsl} Floor {qh}",
+            f"{e} = OpFMul {float_t} {fl} {consts['step']}",
+            f"{out} = OpExtInst {float_t} {glsl} Exp2 {e}",
+            f"OpStore {pointer} {out}",
+        )]
+        stores += 1
+    if stores < 3:
+        raise PatchError(f"expected colour stores to SV_Target, found {stores}")
+    last_const = max(i for _, (i, op, args) in defs.items() if op == "OpConstant" and args[0] == float_t)
+    out_lines[last_const + 1:last_const + 1] = [f"        {consts[k]} = OpConstant {float_t} {values[k]!r}"
+                                                for k in consts]
+    return "\n".join(out_lines), {"posterize_stops": params.band_stops, "stores_replaced": stores,
+                                  "per_channel": True}
+
+
 def posterize_text(text: str, params: Params) -> tuple[str, dict]:
     """Quantize the luminance of the stored `SV_Target.xyz` to whole steps of `band_stops` stops.
 
@@ -386,32 +491,48 @@ def patch_module(src: Path, dst: Path, params: Params, mode: str = "sun") -> dic
         if not same_module(roundtrip.read_bytes(), src.read_bytes()):
             raise PatchError(f"{src.name}: spirv-dis/spirv-as does not round-trip this module")
     validate(src, env)
-    rewrite = {"sun": lambda: patch_text(text, params), "ao": lambda: posterize_text(text, params),
-               "probe": lambda: probe_text(text)}[mode]
+    def posterize_any() -> tuple[str, dict]:
+        try:
+            return posterize_text(text, params)
+        except PatchError as error:
+            if "more than one store" not in str(error):
+                raise
+            return posterize_channels_text(text, params)
+
+    rewrite = {"sun": lambda: patch_text(text, params), "ao": posterize_any,
+               "probe": lambda: probe_text(text), "terms": lambda: terms_text(text)}[mode]
     patched, report = rewrite()
     assemble(patched, dst, env)
     validate(dst, env)
     return report
 
 
-def build_overrides(dump: Path, out: Path, params: Params, probe: bool = False) -> list[dict]:
+def build_overrides(dump: Path, out: Path, params: Params, probe: bool = False, terms: bool = False,
+                    extra: tuple[str, ...] = ()) -> list[dict]:
+    """`extra` names forward-lit material shaders to posterize as well. A forward shader computes
+    its own lighting and writes finished colour, so it never passes through the deferred AO pass:
+    measured 2026-10-14, the player's hair (`P[ChrCustomize][Hair]_FwdSdw`) reads `cbLight`, the
+    shadow mask, the IBL cubes and the irradiance volumes itself. Posterizing its output bands the
+    hair texture along with the light, because albedo is already in it."""
     out.mkdir(parents=True, exist_ok=True)
     results = []
+    wanted = ("GXLightComposite",) if terms else SUN_SHADERS if probe else TARGET_SHADERS + tuple(extra)
     for dxil in sorted(dump.glob("*.dxil")):
         data = dxil.read_bytes()
         name = dxil_debug_name(data)
-        if name not in (SUN_SHADERS if probe else TARGET_SHADERS):
+        if name not in wanted:
             continue
         digest = f"{fnv1_64(data):016x}"
         if digest != dxil.stem:
             raise PatchError(f"{dxil.name}: FNV-1 of its bytes is {digest}, so the hash model is wrong")
         spv = dump / f"{digest}.spv"
-        mode = "probe" if probe else "sun" if name in SUN_SHADERS else "ao"
+        mode = "terms" if terms else "probe" if probe else "sun" if name in SUN_SHADERS else "ao"
         report = patch_module(spv, out / spv.name, params, mode)
         results.append({"name": name, "hash": digest, "mode": mode, **report})
     if not results:
         raise PatchError(f"no target shader in {dump}; launch once with VKD3D_SHADER_DUMP_PATH set")
-    manifest = {"params": None if probe else params.__dict__, "probe": probe, "shaders": results}
+    manifest = {"params": None if probe or terms else params.__dict__, "probe": probe, "terms": terms,
+                "shaders": results}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     return results
 
@@ -580,6 +701,12 @@ def main() -> int:
                         help="posterize band width in exposure stops for the diffuse light (default 1)")
     parser.add_argument("--probe-magenta", action="store_true",
                         help="instead of cel shading, make the pass write constant magenta, to prove it is drawn")
+    parser.add_argument("--extra", nargs="*", default=(), metavar="NAME",
+                        help="debug names of forward-lit shaders to posterize too, e.g. "
+                             "'P[ChrCustomize][Hair]_FwdSdw'")
+    parser.add_argument("--probe-terms", action="store_true",
+                        help="instead of cel shading, make GXLightComposite show diffuse light as red, "
+                             "specular as green and emissive as blue")
     parser.add_argument("--measure", type=Path, metavar="IMAGE",
                         help="print the magenta pixel share of a capture (needs `uv run --with pillow`)")
     parser.add_argument("--selftest", action="store_true")
@@ -594,12 +721,15 @@ def main() -> int:
     params = Params(*args.terminator, *args.shadow, harden_fill=args.harden_fill, band_stops=args.band_stops)
     try:
         params.check()
-        results = build_overrides(args.dump, args.out, params, args.probe_magenta)
+        results = build_overrides(args.dump, args.out, params, args.probe_magenta, args.probe_terms,
+                                  tuple(args.extra))
     except (PatchError, ValueError) as error:
         print(f"er-cel-shade: {error}", file=sys.stderr)
         return 1
     for result in results:
         detail = {"probe": lambda r: f"probe stores={r['stores_replaced']}",
+                  "terms": lambda r: f"terms irradiance={r['irradiance']} specular={r['specular']} "
+                                     f"emissive={r['emissive']}",
                   "ao": lambda r: f"posterize {r['posterize_stops']} stop(s)",
                   "sun": lambda r: f"terminator={r['terminator_dot']} shadow={r['shadow_min']}"}[result["mode"]](result)
         print(f"{result['hash']}  {result['name']}  {detail}")

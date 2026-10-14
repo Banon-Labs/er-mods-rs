@@ -126,6 +126,8 @@ members = [
   # any of them is an older PUBLISHED release than main's tip.
   "crates/er-build-watermark-core",
   "crates/er-build-watermark",
+  # Cel shading: swaps the deferred-lighting pixel shaders at D3D12 pipeline creation.
+  "crates/er-cel-shade",
   "crates/er-invasion-warp-core",
   "crates/er-invasion-warp",
   # Which mods in this profile are fighting over the same key, and does the game already use it.
