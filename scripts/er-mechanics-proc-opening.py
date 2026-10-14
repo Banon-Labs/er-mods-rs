@@ -865,7 +865,8 @@ def main():
     ap.add_argument('--rl', type=int, default=150)
     ap.add_argument('--window', type=int, default=10)
     ap.add_argument('--mirror', type=Path, default=CACHE / 'builds.jsonl')
-    ap.add_argument('--sweep', type=Path, default=CACHE / 'grease-sweep-dlc-drawstring-150-200.jsonl')
+    # `er-builds-optimize.sweep_cache('grease', 'dlc-drawstring', 150, 200)`.
+    ap.add_argument('--sweep', type=Path, default=CACHE / 'grease-sweep-dlc-drawstring-150-200-cond-floors.jsonl')
     ap.add_argument('--delay', type=int, default=0, help='PvP hit-to-reaction delay in frames (combo.md s12)')
     ap.add_argument('--p-iframe', type=float, default=0.0, help='chance the victim is in i-frames at the proc')
     ap.add_argument('--depletion', type=float, default=0.0, help='gauge already depleted at hit 1 (string mode)')
