@@ -10,7 +10,7 @@ The earlier planning analyses remain historical evidence in PR #193. This docume
 
 | scope | files | lines |
 |---|---:|---:|
-| all `experiments/**` | 76 | 41,970 |
+| all `experiments/**` | 76 | 41,985 |
 | excluding `startup_hooks/**` | 43 | 25,089 |
 | `startup_hooks/**` plus `startup_hooks.rs` | 33 | 24,599 |
 | lifecycle S10 split | 5 | 2,275 |
@@ -270,7 +270,7 @@ Every row below is a current source file. `Current partition` is the exact prese
 | `own_load.rs` | 12 | S11 own-load facade | D5 |
 | `own_load/drive.rs` | 1,746 | native-load, world-resource, and save-byte families | D5 |
 | `own_load/loaders.rs` | 7 | S11 loaders facade | D5 |
-| `own_load/loaders/load_drive.rs` | 941 | load-drive implementation family | D5 |
+| `own_load/loaders/load_drive.rs` | 956 | load-drive implementation family | D5 |
 | `own_load/loaders/switch_reload.rs` | 772 | switch-reload adapter family | D5 |
 | `own_load/request_wait_guard.rs` | 337 | STEP_RequestWait session-end guard | D5 |
 | `own_stepper.rs` | 9 | own-stepper facade | D5 |
