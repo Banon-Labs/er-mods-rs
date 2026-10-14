@@ -48,12 +48,23 @@ unset $(git rev-parse --local-env-vars)
 # Before this, `git-pre-push-block-main.sh` drained stdin and anything after it got nothing.
 pushed=$(cat)
 
-# `%s\n`, NOT `%s`. `$(cat)` strips the trailing newline, and a `while read` loop drops a final
-# unterminated line -- so replaying with `printf '%s'` handed the main-push guard an empty read
-# on every single-ref push and it blocked nothing. Measured 2026-08-31; the guard now also
-# tolerates the unterminated shape, and both halves are covered by
-# scripts/test-git-pre-push-block-main.sh.
-printf '%s\n' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"
+# A trailing newline, which `$(cat)` strips: a `while read` loop drops a final unterminated line,
+# so replaying the bare text handed the main-push guard an empty read on every single-ref push and
+# it blocked nothing. Measured 2026-08-31; the guard now also tolerates the unterminated shape, and
+# both halves are covered by scripts/test-git-pre-push-block-main.sh. The here-string adds it.
+#
+# A here-string and not `printf '%s\n' "$pushed" | bash ...` (bd er-effects-rs-5hyb). A pipe races
+# the writer against the reader: a guard that exits without reading its stdin -- the fixtures'
+# stubs do, and so would a guard that stopped reading early -- can close the read end before the
+# forked printf writes, and under `set -o pipefail` that failure ends this hook. The suite's gates
+# run at SCHED_IDLE, where the order flips often enough to see, so it surfaced only inside real
+# pushes: test-pre-push-gates-pushed-ref.sh and test-pre-push-dirty-tree.sh went red on
+#     scripts/hooks/pre-push: line 56: printf: write error: Broken pipe
+# (exit 1 with SIGPIPE inherited ignored, 141 without) -- measured 2026-10-13 at SCHED_IDLE beside
+# a SCHED_IDLE load on the same cores: pushed-ref 3 of 20 runs, dirty-tree 4 of 100, while every
+# standalone rerun passed. bash writes a here-string into its pipe, or into a temporary file when
+# it is larger than the pipe buffer, before the guard starts, so there is no write left to fail.
+bash scripts/git-pre-push-block-main.sh "$@" <<<"$pushed"
 
 # What this push actually sends, read off git's ref list rather than off the checkout.
 #

@@ -62,10 +62,11 @@ ref_line="refs/heads/work $head refs/heads/work $zero"
 # Run the hook exactly as git does, with the fixture as cwd, and capture what it decided. The
 # scrub at the top of the hook unsets the GIT_* variables, so exporting GIT_DIR here mimics git
 # without letting the hook write anywhere but the fixture.
+hook_under_test=$hook
 run_hook() {
 	(
 		cd "$fixture" || exit 99
-		printf '%s\n' "$ref_line" | bash "$hook" origin https://example.invalid/fixture.git \
+		printf '%s\n' "$ref_line" | bash "$hook_under_test" origin https://example.invalid/fixture.git \
 			>"$tmp/out" 2>"$tmp/err"
 	)
 }
@@ -128,6 +129,52 @@ if grep -q 'the working tree differs from the commit being pushed' "$tmp/err"; t
 else
 	ok "a tip that is not HEAD is not compared against this working tree"
 fi
+
+# --- a main-push guard that leaves its stdin unread cannot end the hook ---------------------
+#
+# The flake this pins, bd er-effects-rs-5hyb. The hook replayed the ref list to the main-push
+# guard through a pipe, and the guard stub above exits without reading it. That is a race the
+# forked printf nearly always wins, so the case above it passed on every standalone run; inside a
+# real push this suite runs at SCHED_IDLE beside the cargo stages, the printf lost one race in a
+# few dozen, and `set -o pipefail` turned its `write error: Broken pipe` into the hook's exit
+# before the refusal ever printed -- "an edited tracked file was allowed through (exit 1)".
+#
+# A ref list larger than the pipe buffer makes that loss certain instead of rare: the writer
+# fills the buffer, the stub exits with bytes still unwritten, and the next write fails. So the
+# case is deterministic, and it is run against the old pipe as well, which must lose.
+big_ref_list=$(for i in $(seq 1 2000); do
+	printf 'refs/heads/w%04d %s refs/heads/w%04d %s\n' "$i" "$head" "$i" "$zero"
+done)
+ref_line=$big_ref_list
+run_hook
+status=$?
+if [[ $status -eq 1 ]] && grep -q 'the working tree differs from the commit being pushed' "$tmp/err"; then
+	ok "the refusal is still reached when the guard leaves a ${#big_ref_list}-byte ref list unread"
+else
+	bad "a guard that did not read its stdin ended the hook before the refusal (exit $status): $(tail -3 "$tmp/err")"
+fi
+# The hook's own line, and the pipe it replaced, as literal source text.
+# shellcheck disable=SC2016
+fed_line='bash scripts/git-pre-push-block-main.sh "$@" <<<"$pushed"'
+# shellcheck disable=SC2016
+piped_line='printf '"'"'%s\n'"'"' "$pushed" | bash scripts/git-pre-push-block-main.sh "$@"'
+if FED=$fed_line PIPED=$piped_line awk '
+	$0 == ENVIRON["FED"] { print ENVIRON["PIPED"]; n++; next }
+	{ print }
+	END { exit n != 1 }' "$hook" >"$tmp/pre-push-piped-replay"; then
+	hook_under_test="$tmp/pre-push-piped-replay"
+	run_hook
+	status=$?
+	hook_under_test=$hook
+	if ! grep -q 'the working tree differs from the commit being pushed' "$tmp/err"; then
+		ok "negative control: the same list piped to the guard ends the hook first (exit $status)"
+	else
+		bad "negative control: the piped replay still reached the refusal -- the case above proves nothing"
+	fi
+else
+	bad "the hook does not feed the ref list to the main-push guard as one here-string"
+fi
+ref_line="refs/heads/work $head refs/heads/work $zero"
 
 # --- position: after the deletion skip, before the gate that reads the tree -----------------
 refusal_line=$(grep -n 'the working tree differs from the commit being pushed' "$hook" | head -1 | cut -d: -f1)
