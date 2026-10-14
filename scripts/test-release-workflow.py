@@ -105,6 +105,19 @@ def check(text: str) -> None:
         require(build, "chmod +x dist/er-installer", "executable bit on the Linux installer")
         for subject in ("dist/er-installer.exe", "dist/er-installer\n"):
             require(build, subject, f"attestation subject {subject.strip()}")
+        # The installer refuses Mushroom Man until this program has built its model, so a
+        # release without it offers a mod nobody can install.
+        require(
+            build,
+            "cargo xwin build --release --target x86_64-pc-windows-msvc -p mushroom-man-builder",
+            "Mushroom Man builder build",
+        )
+        require(
+            build,
+            "cp target/x86_64-pc-windows-msvc/release/mushroom-man-builder.exe dist/",
+            "staged Mushroom Man builder",
+        )
+        require(build, "dist/mushroom-man-builder.exe\n", "attestation subject for the builder")
         require(build, "--notes-file", "release notes from a file")
 
         require(build, 'rolling_tag="main-${GITHUB_SHA}"', "unique rolling tag")
@@ -151,6 +164,11 @@ MUTATIONS: list[tuple[str, str, str]] = [
     ("the executable bit is dropped", "chmod +x dist/er-installer", "true"),
     ("the Windows installer leaves the attestation", "dist/er-installer.exe\n", "dist/gone.exe\n"),
     ("the all-DLL build is dropped", "bash scripts/er-build-dlls.sh --all", "true"),
+    (
+        "the Mushroom Man builder stops being staged",
+        "cp target/x86_64-pc-windows-msvc/release/mushroom-man-builder.exe dist/",
+        "true",
+    ),
     ("the prerelease stops being immutable", 'gh release create "$rolling_tag"', "gh release edit"),
 ]
 

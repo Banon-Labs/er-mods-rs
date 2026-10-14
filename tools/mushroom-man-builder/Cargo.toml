@@ -1,0 +1,35 @@
+# Builds the Mushroom Man package on the player's own machine, out of the player's own games.
+#
+# The model is Dark Souls Remastered's c2280 written into Elden Ring's FC_M_0000 body, and both
+# halves are game files: neither can be committed here or attached to a release. So instead of
+# shipping the model, this ships the conversion. It reads c2280 out of the DSR install, the ER
+# donor parts out of the ER archives, and writes the finished ME3 package beside
+# `mushroom_man.dll`, which stays inert until that package is there.
+#
+# The Windows build is one exe with nothing to install. Every dependency is pure Rust:
+# `miniz_oxide` inflates DSR's zlib DCX files, `aes` and `num-bigint` open the ER archive
+# headers, and `er-tpf` is this workspace's own TPF reader/writer. Kraken -- ER's compression --
+# goes through the Oodle DLL the game already ships (`src/oodle.rs` says why no Rust decoder
+# will do).
+[package]
+name = "mushroom-man-builder"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "mushroom_man_builder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mushroom-man-builder"
+path = "src/main.rs"
+
+[dependencies]
+aes = "0.8"
+er-tpf = { path = "../../crates/er-tpf" }
+miniz_oxide = "0.8"
+num-bigint = "0.4"
+
+[lints]
+workspace = true

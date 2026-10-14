@@ -174,6 +174,10 @@ members = [
   # loads them. Zero dependencies, host-buildable, and the only crate here whose tests assert
   # that a first-run selection can actually be loaded together.
   "tools/er-installer",
+  # Builds the Mushroom Man ME3 package on the player's machine out of their own Dark Souls
+  # Remastered and Elden Ring installs -- the model is game content and cannot ship. Its tests
+  # use no game files; reading the game's Kraken archives needs the Windows build.
+  "tools/mushroom-man-builder",
   "tools/bevy-shader-lab",
   "tools/er-shaderlab",
   "tools/er-shader-viewer",

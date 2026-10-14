@@ -471,6 +471,26 @@ fn run() -> Result<ExitCode, String> {
         return Ok(ExitCode::FAILURE);
     }
 
+    // A mod whose model is built from another game the player owns: without the build, its DLL
+    // only strips armour and puts nothing in its place, so it is refused before anything is
+    // written rather than installed half-working.
+    let unbuilt = install::unbuilt_packages(&chosen, &game.game_dir);
+    if !unbuilt.is_empty() {
+        let mut message = String::new();
+        for package in unbuilt {
+            let label = selection::by_package(package.package).map_or(package.package, |m| m.label);
+            message.push_str(&format!(
+                "{label} needs files built from your own copy of another game, and they are not \
+                 in {} yet.\nRun {} first (it finds the games through Steam), then run this \
+                 installer again.\n",
+                game.game_dir.join(package.folder).display(),
+                package.builder
+            ));
+        }
+        message.push_str("\nNothing was installed.");
+        return Err(message);
+    }
+
     // Read before the two `unwrap_or_else` calls below consume their fields out of `args`.
     let config_mode = args.config_mode();
 
@@ -515,17 +535,25 @@ fn run() -> Result<ExitCode, String> {
             chosen
                 .iter()
                 .map(|entry| {
-                    (
-                        *entry,
-                        install::display_path(&install_dir.join(entry.artifact)),
-                    )
+                    let dir = install::artifact_dir(entry, &install_dir, &game.game_dir);
+                    (*entry, install::display_path(&dir.join(entry.artifact)))
                 })
                 .collect()
         } else {
-            install::install_artifacts(&chosen, source.as_deref(), &install_dir)
+            install::install_artifacts(&chosen, source.as_deref(), &install_dir, &game.game_dir)
                 .map_err(|err| format!("installing the mod files: {err}"))?
         }
     };
+    let packages: Vec<(&'static Mod, String)> = chosen
+        .iter()
+        .filter_map(|entry| {
+            install::built_package(entry).map(|package| {
+                let folder = game.game_dir.join(package.folder);
+                let folder = folder.canonicalize().unwrap_or(folder);
+                (*entry, install::display_path(&folder))
+            })
+        })
+        .collect();
 
     let seamless = if args.no_seamless {
         None
@@ -534,6 +562,7 @@ fn run() -> Result<ExitCode, String> {
     };
     let profile = selection::render_profile(&ProfileInputs {
         natives: &natives,
+        packages: &packages,
         seamless: seamless.as_deref(),
         installer_version: VERSION,
     })
