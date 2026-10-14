@@ -60,12 +60,15 @@ from __future__ import annotations
 
 import argparse
 import collections
+import hashlib
 import html
 import importlib.util
 import json
 import math
+import os
 import statistics
 import sys
+import time
 import tomllib
 import unicodedata
 from pathlib import Path
@@ -439,7 +442,7 @@ def set_ranged_status(rows, r1, stats, cache_path):
             out["status_only"] = hp
         cache[key(x)] = out
         if n and n % 500 == 0:
-            print(f"ranged status: {n} of {len(todo)}", file=sys.stderr, flush=True)
+            print(f"  {n}/{len(todo)} rows", file=sys.stderr, flush=True)
     if todo:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(json.dumps(cache))
@@ -541,7 +544,7 @@ def set_buff_values(rows, stats, cache_path):
                 prof = A.skill_profile(t, sids[x["ash"]], tab.wid, tab.level, two)
                 cache[key(x)] = tab.buff_gain(sids[x["ash"]], prof, two, ctx, *bh)
             if n and n % 50 == 0:
-                print(f"buff values: {n} of {len(groups)} weapons", file=sys.stderr, flush=True)
+                print(f"  {n}/{len(groups)} weapons", file=sys.stderr, flush=True)
         if off:
             print(f"buff values: {off} utility rows' follow-up differs from the sweep by more than 1 HP "
                   f"(sweep stats are not {stats_key}?)", file=sys.stderr)
@@ -752,17 +755,22 @@ def set_multihit_weights(rows, stats, cache_path):
         d = TA.Data()
         succ = d.triggers[MULTIHIT_TALISMAN]["kinds"]["successive"]
         print(f"multihit: {len(todo_w)} weapons, {len(todo_a)} rows to read", file=sys.stderr, flush=True)
-    for w in todo_w:
+    by_wa = collections.defaultdict(list)
+    for x in todo_a:
+        by_wa[x["weapon"], x["affinity"]].append(x)
+    units = len(todo_w) + len(by_wa)
+    for i, w in enumerate(todo_w, 1):
+        if i % 10 == 0 or i == len(todo_w):
+            print(f"  {i}/{units} weapons, then weapon affinities", file=sys.stderr, flush=True)
         f = TA.successive_features(TA.weapon_profile(d, d.find_weapon(w)), succ)
         grips = [f[g] for g in TA.GRIPS if g in f]
         times = [g["cold_start_first_threshold"]["seconds"][0] for g in grips
                  if (g.get("cold_start_first_threshold") or {}).get("seconds")]
         cache[f"weapon|{w}"] = {"rate": max((g["gain_per_s"] or 0.0 for g in grips), default=0.0),
                                 "trigger_s": min(times, default=None)}
-    by_wa = collections.defaultdict(list)
-    for x in todo_a:
-        by_wa[x["weapon"], x["affinity"]].append(x)
     for n, ((w, aff), xs) in enumerate(sorted(by_wa.items())):
+        if n % 10 == 9 or n == len(by_wa) - 1:
+            print(f"  {len(todo_w) + n + 1}/{units} weapons, then weapon affinities", file=sys.stderr, flush=True)
         tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
         sids = skill_ids(tab.t, {x["ash"] for x in xs})
         for x in xs:
@@ -959,8 +967,8 @@ def set_pierce_weights(rows, stats, cache_path, jobs=6):
         with ctx.Pool(jobs, initializer=AI._worker_init, initargs=(workers, ctx.Value("i", 0))) as pool:
             for n, res in enumerate(pool.imap_unordered(_pierce_work, chunks), 1):
                 cache.update(res)
+                print(f"  {n}/{len(chunks)} weapon affinities", file=sys.stderr, flush=True)
                 if n % 20 == 0 or n == len(chunks):
-                    print(f"  pierce: {n}/{len(chunks)}", file=sys.stderr, flush=True)
                     cache_path.write_text(json.dumps(cache))
     for x in dmg:
         share = cache.get(pierce_key(x)) or 0.0
@@ -968,30 +976,41 @@ def set_pierce_weights(rows, stats, cache_path, jobs=6):
         x["pierce_w"] = 1.0 + share * (PIERCE_COUNTER - 1.0) * COUNTER_SHARE
 
 
-def weigh(rows, a, r1, build_stats, report=False):
+def weigh(rows, a, r1, build_stats, report=False, stages=None):
     """Every per-row weight `value` reads, in the pool's order: the interrupt and whiff
     multipliers (`--interrupt-weight`, `--whiff-weight`), `area_w`, `reach_w` and the ranged
-    status proc. The pool and the shield sweep both go through it."""
+    status proc. Each pass starts a stage of `stages` (`Stages`)."""
     pb = bool(getattr(a, "perfect_block", None) and a.perfect_block_weight)
+    stage = stages or (lambda name: None)
     if a.interrupt_weight or a.whiff_weight or pb:
         # The perfect-block term reads the same cast profiles, so it computes them when the
         # interrupt and whiff weights are both off.
+        stage("interrupt")
         got = interrupt_weights(rows, a)
         if a.whiff_weight:
-            whiff_weights(rows, got)
+            stage("whiff")
+            whiff_weights(rows, got, getattr(a, "interrupt_cache", None))
             if report:
                 whiff_report(rows)
+    stage("area")
     set_area_weights(rows)
+    stage("landing")
     set_landing_weights(rows, build_stats, getattr(a, "landing_cache", None))
+    stage("reach")
     set_reach_weights(rows, r1)
+    stage("ranged status")
     set_ranged_status(rows, r1, build_stats, a.ranged_cache)
+    stage("multihit")
     set_multihit_weights(rows, build_stats, a.counter_cache)
+    stage("pierce")
     set_pierce_weights(rows, build_stats, getattr(a, "pierce_cache", PIERCE_CACHE), getattr(a, "interrupt_jobs", 6))
     if a.parry and a.parry_weight:
+        stage("parry")
         parry_weights(rows, a.parry)
         if report:
             parry_report(rows)
     if pb:
+        stage("perfect block")
         pb_weights(rows, got, a.perfect_block, build_stats)
         if report:
             pb_report(rows)
@@ -1232,6 +1251,44 @@ def value(x):
 
 #: Interrupt profiles, keyed by sweep row (`er-mechanics-ash-interrupt.profiles`).
 INTERRUPT_CACHE = Path.home() / ".cache/er-build-planner/ash-interrupt.json"
+#: The run's stages in order. `Stages` prints them for `er-mechanics-pipeline-watch.py`, which
+#: draws its bar and its estimate from them, weighing each by `STAGE_TIMES` from the last run.
+STAGES = ("rows", "interrupt", "whiff", "area", "landing", "reach", "ranged status", "multihit", "pierce",
+          "parry", "perfect block", "rank", "layout", "shields", "ranged", "fun and sets", "partners",
+          "write")
+STAGE_TIMES = Path.home() / ".cache/er-build-planner/loadout-stage-times.json"
+
+
+class Stages:
+    """Prints `stages: [[name, seconds last time], ...]` once, then `stage k/N: name (Ns in)` as
+    each stage starts, and on `finish` records how long each one took. A stage a run skips (parry
+    with no parry file) keeps the time it took the last time it ran."""
+
+    def __init__(self, path: Path | None = STAGE_TIMES):
+        self.path, self.t0, self.cur, self.took = path, time.monotonic(), None, {}
+        try:
+            self.last = json.loads(path.read_text()) if path else {}
+        except (OSError, ValueError):
+            self.last = {}
+        print("stages: " + json.dumps([[n, self.last.get(n)] for n in STAGES]), file=sys.stderr, flush=True)
+
+    def __call__(self, name: str) -> None:
+        now = time.monotonic()
+        if self.cur:
+            self.took[self.cur[0]] = round(now - self.cur[1], 1)
+        self.cur = (name, now)
+        print(f"stage {STAGES.index(name) + 1}/{len(STAGES)}: {name} ({now - self.t0:.0f}s in)",
+              file=sys.stderr, flush=True)
+
+    def finish(self) -> None:
+        if self.cur:
+            self.took[self.cur[0]] = round(time.monotonic() - self.cur[1], 1)
+            self.cur = None
+        if self.path:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_name(f"{self.path.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps({**self.last, **self.took}))
+            os.replace(tmp, self.path)
 DEFAULT_ARMOR = ["Verdigris Gauntlets", "Verdigris Armor", "Verdigris Greaves"]
 
 
@@ -1255,19 +1312,42 @@ def _whiff():
     return sys.modules[key]
 
 
-def whiff_weights(rows, got):
+def whiff_weights(rows, got, cache_path=None):
     """Set `wmult` and `whiff` on every damaging row from its interrupt profile in `got`
     (module docstring of `er-mechanics-ash-whiff.py`). A two-handed row's grip change counts as
     telegraph: the opponent sees the swap start `grip_change` frames before the cast."""
-    W = _whiff()
-    opp = _ai().Opponent()
-    for x in rows:
-        r = got.get(_ai().row_key(x))
-        w = W.from_profile(opp, r, x.get("grip_change", 0.0)) if x["cat"] != "utility" else None
+    W, AI = _whiff(), _ai()
+    opp = W.distinct(AI.Opponent())
+    # Each row is a numpy simulation of the opponents' roll and punish (about 0.02 s over the
+    # distinct moves, 13,000 rows a build), so the results are kept beside the interrupt cache, valid while its settings and the
+    # whiff module are the ones they came from.
+    memo, path, settings = {}, None, None
+    if cache_path and Path(cache_path).exists():
+        path = Path(f"{cache_path}.whiff.json")
+        settings = {**json.loads(Path(cache_path).read_text()).get("settings", {}),
+                    "whiff": hashlib.sha256((HERE / "er-mechanics-ash-whiff.py").read_bytes()).hexdigest()[:16]}
+        doc = json.loads(path.read_text()) if path.exists() else {}
+        memo = doc.get("rows", {}) if doc.get("settings") == settings else {}
+    todo = [x for x in rows if x["cat"] != "utility"]
+    print(f"whiff: {len(todo)} rows, {sum(1 for x in todo if _whiff_key(AI, x) in memo)} cached",
+          file=sys.stderr, flush=True)
+    for i, x in enumerate(todo, 1):
+        key = _whiff_key(AI, x)
+        if key not in memo:
+            memo[key] = W.from_profile(opp, got.get(AI.row_key(x)), x.get("grip_change", 0.0))
+        w = memo[key]
         # A step or buff, or a row with no profile, has no whiff to punish and keeps `imult` alone.
         if w:
             x["wmult"] = W.multiplier(w)
             x["whiff"] = {k: round(v, 3) for k, v in w.items()}
+        if i % 500 == 0 or i == len(todo):
+            print(f"  {i}/{len(todo)} rows", file=sys.stderr, flush=True)
+    if path:
+        path.write_text(json.dumps({"settings": settings, "rows": memo}))
+
+
+def _whiff_key(AI, x):
+    return f"{AI.row_key(x)}|grip{x.get('grip_change', 0.0):g}"
 
 
 def whiff_report(rows, n=10):
@@ -1664,6 +1744,8 @@ def main() -> int:
                     help="er-mechanics-weapon-embed.py output: each weapon's R1 #1 reach per grip for `reach_w` "
                          "(default: the roles' reach, the longer grip's)")
     ap.add_argument("--ranged-cache", type=Path, default=RANGED_CACHE)
+    ap.add_argument("--stage-times", type=Path, default=STAGE_TIMES,
+                    help="each stage's duration, read for the watcher's estimate and written at the end")
     ap.add_argument("--counter-cache", type=Path, default=COUNTER_CACHE,
                     help="successive-counter rates of weapons and ash casts (`set_multihit_weights`)")
     ap.add_argument("--pierce-cache", type=Path, default=PIERCE_CACHE,
@@ -1706,6 +1788,8 @@ def main() -> int:
     a = ap.parse_args()
     if a.throttle:
         _ai().throttle(_ai().allowed_cpus()[:1])
+    stage = Stages(a.stage_times)
+    stage("rows")
     # The sweep already drops blacklisted ashes; reading the list again keeps a sweep made before an
     # entry was added from bringing it back.
     blacklist = tomllib.loads(BLACKLIST.read_text())
@@ -1741,7 +1825,8 @@ def main() -> int:
               f"(first hit <= f{last_first}, reach > {min_reach} m)", file=sys.stderr)
     r1 = r1_reaches(json.loads(a.roles.read_text()) if a.roles else None, a.embed)
     traits = weapon_traits(a.embed)
-    weigh(rows, a, r1, build_stats, report=True)
+    weigh(rows, a, r1, build_stats, report=True, stages=stage)
+    stage("rank")
     for w in a.terms_weapon:
         for x in sorted((x for x in rows if x["weapon"] == w), key=lambda x: -value(x)):
             print(f"terms {w}: {x['affinity']} {x['grip']} {x['ash']}: value {value(x):.0f} = raw "
@@ -1776,6 +1861,7 @@ def main() -> int:
             "string": x.get("string")} for n, x in top.items()}, indent=1))
     cut_rows = [x for x in rows if x["ash"] in cut]
     rows = [x for x in rows if x["ash"] not in cut]
+    stage("layout")
     roles = json.loads(a.roles.read_text()) if a.roles else None
     if roles and a.build:
         keep = {unicodedata.normalize("NFKD", s["name"]).encode("ascii", "ignore").decode()
@@ -2289,6 +2375,7 @@ def main() -> int:
             slots.append(s)
         return start
 
+    stage("shields")
     if a.shields and build and main_w:
         rs = row_start["Combos", main_w]
         main_aff = slots[rs]["affinity"]
@@ -2301,6 +2388,7 @@ def main() -> int:
             extra_sets.append({"name": f"Shield: {main_w} + {best['weapon']}", "right": [rs],
                                "left": [start + k]})
             print(f"Shields: corpus {summary}", file=sys.stderr)
+    stage("ranged")
     if a.ranged and build:
         main_reach = r1.get((main_w, "1H")) if main_w else None
         copies, ammo = ranged_copies(build, build_stats, main_reach)
@@ -2308,6 +2396,7 @@ def main() -> int:
             place_row("Ranged (the viable picks, each with its own skill or assigned ash; the seal)", copies)
         greatbow = next((c for c in copies if c["note"].startswith("greatbow:")), None)
 
+    stage("fun and sets")
     # Fun: each class's fun picks (`er-mechanics-class-roles.py`: a mechanic few weapon, affinity
     # and ash options in the whole game have, carried by the class's strongest wieldable vector),
     # one copy each, class by class, rarest first, skipping a copy already placed above (user,
@@ -2521,6 +2610,7 @@ def main() -> int:
     # within `PARTNER_ROWS` rows. When none is there, the partner's best copy takes the lowest-value
     # slot of the weapon's row that is not an equip set's, a landmark or page, a shield or ranged
     # pick, or the last copy of its weapon.
+    stage("partners")
     if a.embed:
         P = Partners(json.loads(a.embed.read_text()), tables)
         in_set = {i for s in sets for hand in ("right", "left") for i in s[hand]}
@@ -2590,6 +2680,7 @@ def main() -> int:
         for m in missing:
             print(f"Partner: none for {m}", file=sys.stderr)
 
+    stage("write")
     a.out.write_text(json.dumps({"slots": slots, "sets": sets, **({"ammo": ammo} if ammo else {})}, indent=1))
     print(f"{len(slots)} slots, {len(slots) // ROW} rows, {-(-len(slots) // PAGE)} pages, {len(sets)} equip sets -> {a.out}")
     if ammo:
@@ -2601,6 +2692,7 @@ def main() -> int:
     if a.html:
         a.html.write_text(render(slots, layout))
         print(a.html)
+    stage.finish()
     return 0
 
 

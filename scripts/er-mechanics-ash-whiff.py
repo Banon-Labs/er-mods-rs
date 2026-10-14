@@ -60,6 +60,7 @@ import argparse
 import importlib.util
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -165,6 +166,18 @@ def whiff(opp, hits, windows, gate: float, D: float, poise: float, lead: float =
             "out": float((W * out).sum())}
 
 
+def distinct(opp) -> SimpleNamespace:
+    """`opp` with the moves `whiff` cannot tell apart merged into one and their weights summed.
+    `whiff` reads a move only through its reach and its hits' times, poise and mask, and the
+    measured pool of 7729 moves holds 2617 such shapes, so a row costs a third as much."""
+    key = np.concatenate([opp.reach[:, None], np.where(opp.m, opp.t, -1.0),
+                          np.where(opp.m, opp.q, -1.0), opp.m], 1)
+    _, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
+    return SimpleNamespace(offs=opp.offs, k=opp.k, reach=opp.reach[first], t=opp.t[first],
+                           q=opp.q[first], m=opp.m[first],
+                           w=np.bincount(inv.ravel(), opp.w, len(first)))
+
+
 def multiplier(w: dict | None) -> float:
     """Expected delivered net value over the undisturbed value; 1 with nothing to weigh."""
     if not w:
@@ -236,6 +249,17 @@ def selftest() -> int:
     # Out of B's reach: D 4 m against a 3 m reach adds 7.5 frames of running.
     w = whiff(f, [(20.0, 50.0, 100.0, 0.0)], [], 50.0, 4.0, 40.0, roll=(13.0, 20.0))
     check(w["punish_hp"] == 0.0, "closing distance pushes the punish past a short gate")
+    # Three moves, two the same shape but for a masked hit time: merging them changes nothing.
+    pool = SimpleNamespace(offs=f.offs, k=f.k, w=np.array([0.2, 0.3, 0.5]), reach=np.array([3.0, 3.0, 5.0]),
+                           t=np.array([[15.0, 30.0], [15.0, 99.0], [12.0, 40.0]]),
+                           q=np.array([[60.0, 60.0], [60.0, 7.0], [30.0, 30.0]]),
+                           m=np.array([[True, True], [True, False], [True, True]]))
+    pool.m[0, 1] = False
+    d = distinct(pool)
+    a = whiff(pool, late, [(40.0, 50.0, 100.0, 1.0, 0.0, 1.0)], 100.0, 2.5, 40.0, roll=(13.0, 20.0))
+    b = whiff(d, late, [(40.0, 50.0, 100.0, 1.0, 0.0, 1.0)], 100.0, 2.5, 40.0, roll=(13.0, 20.0))
+    check(len(d.w) == 2 and all(abs(a[k] - b[k]) < 1e-12 for k in a),
+          "merging moves whiff cannot tell apart keeps every result")
     try:
         check(measured_roll() == (ROLL_IFRAMES, ROLL_READY), "roll constants match the measured TAE")
     except Exception as exc:  # game files absent: the constants stand as recorded

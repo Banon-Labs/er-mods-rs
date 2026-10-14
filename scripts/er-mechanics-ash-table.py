@@ -813,9 +813,14 @@ class Table:
                     cat, scored = "non-bullet", hits
                 else:
                     scored = [h for h in bullets if self.travel(h["root_bullet"]) > MIN_TRAVEL_M]
-                    if not scored:
-                        continue
                     cat = "bullet"
+                    if not scored:
+                        # Bullets that never leave the blade's reach make a melee cast, scored on
+                        # every hit: Romina's Purification's blooms travel 1.03 m beside its two
+                        # swings, and dropping the cast left Poleblade of the Bud with no row.
+                        if not any(h["kind"] == "melee" for h in hits):
+                            continue
+                        cat, scored = "non-bullet", hits
                 dmg = A.pvp_damage(self.t, self.wid, scored, self.defender, OPT.DEF)
                 A.pvp_damage(self.t, self.wid, hits, self.defender, OPT.DEF)
                 first, last = min(h["frame"] for h in scored), max(h["frame"] for h in scored)
@@ -1095,12 +1100,53 @@ def buff_selftest(check):
           (195, 300, round(45 / 195, 4)))
 
 
+#: What a sweep worker reads: the table and the sweep's options, set before the workers fork.
+_SWEEP = {}
+
+
+def _sweep_one(w):
+    """(weapon, its rows, the untimed casts its rows added) for one weapon of a build sweep."""
+    s, tab = _SWEEP, _SWEEP["tab"]
+    affs = ["Standard"] if w in s["fixed"] else [s["affinity"]] + (variants(tab, w) if s["variants"] else [])
+    if w not in s["fixed"] and w in s["status_ws"]:
+        affs += [x for x in STATUS_AFFINITIES if x not in affs]
+    before, rows = collections.Counter(tab.untimed), []
+    for aff in affs:
+        try:
+            tab.set_weapon(w, aff)
+            rows += tab.rows(s["grips"])
+        except (KeyError, ValueError, SystemExit) as e:
+            print(f"skipped {aff} {w}: {e!r}", file=sys.stderr)
+    return w, rows, tab.untimed - before
+
+
+def _sweep_all(todo, jobs):
+    """`_sweep_one` of every weapon, in order. A weapon's rows read only its own table state, so
+    `jobs` forked workers give the rows one process would, each worker on its own core."""
+    if jobs <= 1 or len(todo) < 2:
+        yield from map(_sweep_one, todo)
+        return
+    import multiprocessing as mp
+    AI = _sibling("er_mechanics_ash_interrupt", "er-mechanics-ash-interrupt.py")
+    cpus = AI.allowed_cpus()
+    workers = cpus[1:] or cpus
+    AI.throttle(cpus[:1])
+    ctx = mp.get_context("fork")
+    with ctx.Pool(min(jobs, len(workers)), initializer=AI._worker_init,
+                  initargs=(workers, ctx.Value("i", 0))) as pool:
+        yield from pool.imap(_sweep_one, todo)
+
+
 def main() -> int:
     if "--selftest" in sys.argv[1:]:
         return selftest()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("weapon", nargs="?", help="one weapon; omit with --build")
-    ap.add_argument("--build", help="planner build id: every weapon in it saved with --affinity, best grip each")
+    ap.add_argument("weapon", nargs="?", help="one weapon; omit with --build or --build-file")
+    src = ap.add_mutually_exclusive_group()
+    src.add_argument("--build", help="planner build id: every weapon in it saved with --affinity, best grip each")
+    src.add_argument("--build-file", type=Path,
+                     help="a planner build document (.json) read from disk instead of fetching --build, swept the "
+                          "same way; an empty inventory.slots means no build weapons")
     ap.add_argument("--affinity", default="Keen")
     ap.add_argument("--grip", choices=("1H", "2H", "both"), default="1H")
     ap.add_argument("--stats", default="str=18,dex=80,int=7,fth=8,arc=9")
@@ -1119,17 +1165,26 @@ def main() -> int:
                          "their innate status (a class role pick on a status affinity, "
                          "er-mechanics-class-roles.py main_hand/offhand)")
     ap.add_argument("--only-fixed", action="store_true",
-                    help="with --build: sweep only the weapons saved Standard (own skill or no --affinity row)")
+                    help="with --build or --build-file: sweep only the weapons saved Standard (own skill or no "
+                         "--affinity row)")
     ap.add_argument("--only-extra", action="store_true",
-                    help="with --build: sweep only the --extra-weapons that are not in the build")
+                    help="with --build or --build-file: sweep only the --extra-weapons that are not in the build")
+    ap.add_argument("--jobs", type=int, default=1,
+                    help="with --build or --build-file: sweep the weapons in this many forked workers, each "
+                         "throttled like the interrupt pass (er-mechanics-ash-interrupt.throttle); the rows "
+                         "come back in sweep order, so the table is the one a single process writes")
     a = ap.parse_args()
     stats = {k: int(v) for k, v in (p.split("=") for p in a.stats.split(","))}
     armor = [n.strip() for n in a.armor.split(",") if n.strip()]
     grips = {"1H": (False,), "2H": (True,), "both": (False, True)}[a.grip]
     status_ws = {w.strip() for w in a.status_weapons.split(",") if w.strip()}
-    if a.build:
-        req = urllib.request.Request(f"{API}/{a.build}", headers=UA)
-        slots = json.load(urllib.request.urlopen(req, timeout=20))["inventory"]["slots"]
+    if a.build or a.build_file:
+        if a.build_file:
+            doc = json.loads(a.build_file.read_text(encoding="utf-8"))
+            slots = (doc.get("inventory") or {}).get("slots") or []
+        else:
+            req = urllib.request.Request(f"{API}/{a.build}", headers=UA)
+            slots = json.load(urllib.request.urlopen(req, timeout=20))["inventory"]["slots"]
         weapons = list(dict.fromkeys(s["name"] for s in slots if (s.get("infusion") or "Standard") == a.affinity))
         if a.only_fixed or a.only_extra:
             weapons = []
@@ -1154,32 +1209,29 @@ def main() -> int:
         weapons = [w for w in weapons if w not in fixed]
         rows = []
         todo = weapons + fixed
-        for i, w in enumerate(todo, 1):
-            affs = ["Standard"] if w in fixed else [a.affinity] + (variants(tab, w) if a.variants else [])
-            if w not in fixed and w in status_ws:
-                affs += [s for s in STATUS_AFFINITIES if s not in affs]
-            before = len(rows)
-            for aff in affs:
-                try:
-                    tab.set_weapon(w, aff)
-                    rows += tab.rows(grips)
-                except (KeyError, ValueError, SystemExit) as e:
-                    print(f"skipped {aff} {w}: {e!r}", file=sys.stderr)
+        _SWEEP.update(tab=tab, fixed=set(fixed), status_ws=status_ws, affinity=a.affinity,
+                      variants=a.variants, grips=grips)
+        for i, (w, got, untimed) in enumerate(_sweep_all(todo, a.jobs), 1):
+            rows += got
+            if a.jobs > 1:
+                tab.untimed.update(untimed)
             # `[i/N]` is the counter `er-mechanics-pipeline-watch.py` draws its bar from.
-            print(f"[{i}/{len(todo)}] swept {w}: +{len(rows) - before} rows", file=sys.stderr, flush=True)
+            print(f"[{i}/{len(todo)}] swept {w}: +{len(got)} rows", file=sys.stderr, flush=True)
         if tab.untimed:
             print(f"left out {sum(tab.untimed.values())} casts whose every hit is in a later clip the cast "
                   "reaches at an unmeasured time (`untimed_hits`): "
                   + ", ".join(f"{n} x{k}" for n, k in tab.untimed.most_common()), file=sys.stderr)
-        title = f"{a.affinity} weapons in build {a.build}, {a.grip}"
+        title = f"{a.affinity} weapons in build {a.build or a.build_file}, {a.grip}"
     else:
         if not a.weapon:
-            raise SystemExit("name a weapon or pass --build")
+            raise SystemExit("name a weapon or pass --build or --build-file")
         tab = Table(a.weapon, a.affinity, stats, armor, a.bull_goat)
         rows = tab.rows(grips)
         title = f"{a.affinity} {a.weapon}, {a.grip}"
-    rows, dropped = drop_superseded(rows, multi=bool(a.build))
-    if not rows:
+    rows, dropped = drop_superseded(rows, multi=bool(a.build or a.build_file))
+    # A build file may hold no weapon the sweep takes (a generated build's inventory is empty
+    # until its upload): that is an empty table, written as `[]`, not a failure.
+    if not rows and not a.build_file:
         raise SystemExit(f"no ash scored for {title} at {stats}")
     sub = (", ".join(f"{k.upper()} {v}" for k, v in stats.items()) + f"; armor {', '.join(armor)} "
            f"({round(tab.armor * 1000)} poise){' + Bull-Goat' + chr(39) + 's' if a.bull_goat else ''}")

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import os
 import re
 import shutil
@@ -29,6 +30,10 @@ FRACTION = re.compile(r"^(\d+)/(\d+)$")
 #: "name: ..." line that names the phase it counts.
 COUNTER = re.compile(r"^\s*(\d+)/(\d+)\s+\w+")
 PHASE = re.compile(r"^(?!warning)([a-z][\w -]{1,30}): ")
+#: The loadout's stages (`er-mechanics-combo-loadout.Stages`): the plan once, each stage with the
+#: seconds it took the last time it ran (null when it never has), then a line as each one starts.
+STAGE_PLAN = re.compile(r"^stages: (\[.*\])$")
+STAGE = re.compile(r"^stage (\d+)/(\d+): (.+) \((\d+)s in\)$")
 ALARM = re.compile(r"Traceback|Error|error:|FAIL", re.I)
 WARN = re.compile(r"\bwarning\b", re.I)
 
@@ -48,7 +53,7 @@ def steps(p: Path) -> list[dict]:
         {"id": "7c", "label": "class roles", "logs": [f"{p}-roles.out"], "kind": None},
         {"id": "8", "label": "status-affinity sweep", "logs": [f"{p}-status.log"], "kind": "swept"},
         {"id": "8b", "label": "landed share (Stormcaller)", "logs": [f"{p}-landing.log"], "kind": "fraction"},
-        {"id": "9", "label": "loadout", "logs": [f"{p}-loadout.log"], "kind": None},
+        {"id": "9", "label": "loadout", "logs": [f"{p}-loadout.log"], "kind": "stages"},
         {"id": "10", "label": "upload", "logs": [], "kind": None},
     ]
 
@@ -100,7 +105,7 @@ def progress(step: dict, p: Path) -> tuple[int, int | None, str]:
                     total = int(n[1]) if n else total
         elif step["kind"] == "combos":
             done = len(lines)
-        elif lines:
+        elif lines and not (step["kind"] == "stages" and any(STAGE.match(x) for x in lines)):
             # A step with no counter of its own: the latest sub-phase counter after the latest
             # phase line, else the latest line.
             last, phase = lines[-1], None
@@ -115,6 +120,55 @@ def progress(step: dict, p: Path) -> tuple[int, int | None, str]:
     if step["id"] == "7a" or (step["id"] == "4" and total is None):
         total = wieldable_count(p)
     return done, total, last
+
+
+def stage_progress(lines: list[str], el: float) -> dict | None:
+    """Where a staged log is, `el` seconds after its step started, or None before its first
+    stage line: `frac` of the step done, `left` seconds (None with no timings to go on), the
+    stage's `k`, `n` and `name`, and a `detail` line. Stages are weighed by how long each took the
+    last time; one never timed counts as the mean of the timed ones."""
+    plan, cur, sub, latest = [], None, None, None
+    for line in lines:
+        m = STAGE_PLAN.match(line)
+        if m:
+            try:
+                plan = [(str(n), s) for n, s in json.loads(m[1])]
+            except (ValueError, TypeError):
+                plan = []
+        elif m := STAGE.match(line):
+            cur, sub, latest = (int(m[1]), int(m[2]), m[3], int(m[4])), None, None
+        elif cur and (c := COUNTER.match(line)):
+            sub = (int(c[1]), int(c[2]), line.strip())
+        elif cur and line.strip() and not WARN.search(line):
+            latest = line.strip()
+    if not cur:
+        return None
+    k, n, name, at = cur
+    timed = [s for _, s in plan if s is not None]
+    mean = sum(timed) / len(timed) if timed else 1.0
+    w = [mean if s is None else s for _, s in plan] if len(plan) == n else [1.0] * n
+    if sum(w) <= 0:
+        w = [1.0] * n
+    last = dict(plan).get(name)
+    in_stage = max(0.0, el - at)
+    sub_frac = sub[0] / sub[1] if sub and sub[1] else None
+    if sub_frac:
+        frac_in, left_in = sub_frac, in_stage / sub_frac * (1 - sub_frac)
+    elif last is not None:
+        frac_in, left_in = (min(0.95, in_stage / last) if last > 0 else 0.95), max(0.0, last - in_stage)
+    else:
+        frac_in, left_in = 0.0, None
+    frac = (sum(w[:k - 1]) + frac_in * w[k - 1]) / sum(w)
+    later = [s for _, s in plan[k:]] if len(plan) == n else []
+    left = left_in + sum(mean if s is None else s for s in later) if left_in is not None and timed else None
+    detail = f"{name}: " + (sub[2] if sub else latest or "") + f"  {clock(in_stage)} in"
+    if left_in is not None:
+        detail += f", ~{clock(left_in)} left" if sub_frac or in_stage <= (last or 0) else ""
+    if last and not sub_frac and in_stage > last:
+        detail += f", over the {clock(last)} it took last time"
+    elif last and not sub_frac:
+        detail += f" (took {clock(last)} last time)"
+    return {"frac": min(1.0, frac), "left": left, "k": k, "n": n, "name": name, "detail": detail}
 
 
 def alarms(step: dict) -> list[tuple[str, str]]:
@@ -177,7 +231,12 @@ def frame(d: Path, prefix: str, now: dt.datetime) -> str:
             else:
                 mark, colour = "✓", GREEN
             line = f" {colour}{mark}{RESET} {sid:>3}  {s['label']:<28}"
-            if is_running and total:
+            sp = stage_progress(read_lines(s["logs"][0]), el) if is_running and s["kind"] == "stages" else None
+            if sp:
+                line += (f" {bar(sp['frac'])} stage {sp['k']}/{sp['n']} {sp['name']}  {clock(el)}"
+                         + (f"  {CYAN}~{clock(sp['left'])} left{RESET}" if sp["left"] is not None else ""))
+                last = sp["detail"]
+            elif is_running and total:
                 frac = min(1.0, done / total) if total else 0.0
                 # A sub-phase counter (`COUNTER`) started part-way through the step, so the step's
                 # elapsed time says nothing about what is left of it.
@@ -205,7 +264,35 @@ def frame(d: Path, prefix: str, now: dt.datetime) -> str:
     return "\n".join(out)
 
 
+def selftest() -> int:
+    fails = []
+
+    def check(cond, msg):
+        print(("ok   " if cond else "FAIL ") + msg)
+        if not cond:
+            fails.append(msg)
+
+    plan = 'stages: [["rows", 10], ["whiff", 100], ["write", 10]]'
+    check(stage_progress(["lead-in: 0 rows", plan], 5.0) is None, "no stage line yet: no stage progress")
+    sp = stage_progress([plan, "stage 1/3: rows (0s in)", "stage 2/3: whiff (10s in)", "whiff: 400 rows",
+                         "  100/400 rows"], 30.0)
+    # rows 10 done, whiff a quarter of 100: 35 of 120. Its counter says 20 s in for a quarter.
+    check(abs(sp["frac"] - 35 / 120) < 1e-9 and sp["k"] == 2 and sp["name"] == "whiff",
+          "the bar weighs each stage by its last time and fills the current one by its counter")
+    check(abs(sp["left"] - (60 + 10)) < 1e-9 and "100/400 rows" in sp["detail"],
+          "time left is the counter's rate for this stage plus the later stages' last times")
+    sp = stage_progress([plan, "stage 2/3: whiff (10s in)", "opponent pool: rebuilding"], 140.0)
+    check(sp["frac"] < 110 / 120 and "over the 1m40s it took last time" in sp["detail"]
+          and "opponent pool: rebuilding" in sp["detail"], "a stage past its last time says so and shows its latest line")
+    sp = stage_progress(['stages: [["rows", null], ["whiff", null]]', "stage 2/2: whiff (3s in)"], 5.0)
+    check(abs(sp["frac"] - 0.5) < 1e-9 and sp["left"] is None, "with no timings each stage is one of N, nothing left estimated")
+    print(f"{len(fails)} failed")
+    return 1 if fails else 0
+
+
 def main() -> int:
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dir", type=Path, required=True)
     ap.add_argument("--prefix", required=True)
