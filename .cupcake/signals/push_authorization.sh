@@ -32,5 +32,10 @@ case "$event" in
 *) exit 0 ;;
 esac
 
-printf '%s' "$event" | timeout 5 python3 "$reader" 2>/dev/null || true
+# cupcake drops a discovered signal that has not answered in 5 s (measured 2026-10-14, cupcake
+# 0.5.2) and does not kill it. 4.5 s ends the reader before that, so a reader that is still waiting
+# for the transcript when cupcake gives up cannot record a spend for a push cupcake has already
+# denied. The reader's own wait stops at 3 s; `LOCATE_DEADLINE_SECONDS` in the reader has the
+# arithmetic.
+printf '%s' "$event" | timeout 4.5 python3 "$reader" 2>/dev/null || true
 exit 0

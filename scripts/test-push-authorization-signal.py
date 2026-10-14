@@ -6,7 +6,9 @@ exactly `authorize <sha>`, the sha is the tip of the one branch the command push
 has not already paid for another push. Each case writes a transcript fixture shaped like the ones
 Claude Code writes (entry fields measured on this project's transcripts, 2026-10-07), builds a
 throwaway git repository with a bare remote, and hands the signal a PreToolUse event on stdin the way
-cupcake does.
+cupcake does. The late cases hold the tool call's own line back and append it only after the reader
+has read the transcript once, because Claude Code starts the hook before that line is on disk
+(measured 2026-10-14).
 
 Nothing is pushed: the signal only reads refs, and the last case runs `cupcake eval`, which decides
 and never executes. The reader and the signal are copied into a temporary root so the spent-
@@ -15,10 +17,12 @@ authorization record it writes lands there, not in this checkout's `.cupcake/sta
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid as uuid_mod
 from pathlib import Path
 
@@ -26,7 +30,54 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 READER = REPO_ROOT / "scripts" / "cupcake_push_authorization.py"
 SIGNAL = REPO_ROOT / ".cupcake" / "signals" / "push_authorization.sh"
 
+sys.path.insert(0, str(READER.parent))
+sys.dont_write_bytecode = True
+import cupcake_push_authorization as reader  # noqa: E402
+
+# What cupcake 0.5.2 gives a signal it discovered in `.cupcake/signals/` (`default_timeout()` in
+# cupcake-core's `engine/rulebook.rs`; measured 2026-10-14: a signal answering after 4.6 s was
+# read, one answering after 5.4 s was dropped).
+CUPCAKE_SIGNAL_SECONDS = 5.0
+
 FAILURES: list[str] = []
+
+
+def signal_cap_seconds() -> float | None:
+    """The `timeout` the signal script puts on the reader, read out of the script itself."""
+    m = re.search(r"timeout ([0-9.]+) python3", SIGNAL.read_text(encoding="utf-8"))
+    return float(m.group(1)) if m else None
+
+
+# Upper bound on waiting for the reader to open the transcript at all; it does so well inside a
+# second, and a reader that never does fails the case through its verdict.
+READ_SEEN_SECONDS = 10.0
+
+
+def run_late(argv: list[str], cwd: Path, event: dict, path: Path, pieces: list[bytes],
+             during=None) -> tuple[str, int, float]:
+    """Run `argv` on `event` while `path` is still being written, as Claude Code does.
+
+    Each time the reader finishes reading the transcript (an inotify close-without-write on it),
+    the next of `pieces` is appended, so the first piece always lands after the reader's first look
+    -- the order measured on 2026-10-14. `during` runs before the first piece. With no pieces the
+    line never lands. Returns stdout, the exit code and the seconds until the process ended.
+    """
+    event_file = path.with_suffix(".event.json")
+    event_file.write_text(json.dumps(event), encoding="utf-8")
+    with reader.FileEvents(str(path), reader.IN_CLOSE_NOWRITE) as reads, \
+            open(event_file, encoding="utf-8") as stdin:
+        started = time.monotonic()
+        proc = subprocess.Popen(argv, cwd=cwd, stdin=stdin, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True)
+        for i, piece in enumerate(pieces):
+            if not reads.wait(READ_SEEN_SECONDS):
+                break
+            if i == 0 and during is not None:
+                during()
+            with open(path, "ab") as fh:
+                fh.write(piece)
+        out, _ = proc.communicate(timeout=25)
+        return out, proc.returncode, time.monotonic() - started
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -118,6 +169,7 @@ class Sandbox:
         sh(["git", "commit", "-q", "--allow-empty", "-m", "base"], self.repo)
         sh(["git", "checkout", "-q", "-b", "feat/x"], self.repo)
         sh(["git", "commit", "-q", "--allow-empty", "-m", "x"], self.repo)
+        sh(["git", "branch", "moving"], self.repo)
         sh(["git", "checkout", "-q", "-b", "other", "main"], self.repo)
         sh(["git", "commit", "-q", "--allow-empty", "-m", "other"], self.repo)
         sh(["git", "remote", "add", "origin", str(bare)], self.repo)
@@ -136,6 +188,23 @@ class Sandbox:
         proc = subprocess.run(["bash", str(self.root / ".cupcake" / "signals" / SIGNAL.name)],
                               input=json.dumps(event), text=True, capture_output=True, timeout=20)
         return proc.stdout.strip().split("\t") if proc.stdout.strip() else []
+
+    def run_late(self, chain: Chain, tool_use_id: str, command: str, pieces: list[bytes],
+                 during=None) -> tuple[list[str], float]:
+        """The signal, with the tool call's own line written only after the reader has looked.
+
+        The tool_use line must be the chain's last entry; it is held back (see `run_late`).
+        Returns the signal's fields and how long it took to answer.
+        """
+        self.n += 1
+        path = self.dir / f"t{self.n}.jsonl"
+        path.write_text("".join(json.dumps(e) + "\n" for e in chain.entries[:-1]), encoding="utf-8")
+        event = {"session_id": "fixture", "transcript_path": str(path), "cwd": str(self.repo),
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": tool_use_id,
+                 "tool_input": {"command": command}}
+        out, _, took = run_late(["bash", str(self.root / ".cupcake" / "signals" / SIGNAL.name)],
+                                self.dir, event, path, pieces, during)
+        return (out.strip().split("\t") if out.strip() else []), took
 
     def close(self) -> None:
         shutil.rmtree(self.dir, ignore_errors=True)
@@ -303,6 +372,44 @@ def main() -> int:
         expect("a tool call missing from the transcript denies", sb.run(c, "toolu_absent", PUSH),
                "DENIED", "not in the transcript")
 
+        # --- the tool call's own line lands after the reader started ----------------------------
+        # Measured 2026-10-14: Claude Code starts the PreToolUse hook before the line is on disk,
+        # and in a busy session it can land later than the reader first looks.
+        cap = signal_cap_seconds()
+        check("the reader's wait fits inside the signal's cap, which fits inside cupcake's",
+              cap is not None and reader.LOCATE_DEADLINE_SECONDS + 1.0 <= cap < CUPCAKE_SIGNAL_SECONDS,
+              f"wait {reader.LOCATE_DEADLINE_SECONDS}, cap {cap}, cupcake {CUPCAKE_SIGNAL_SECONDS}")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        line = json.dumps(c.use("toolu_late1", PUSH)).encode() + b"\n"
+        out, took = sb.run_late(c, "toolu_late1", PUSH, [line])
+        expect("a tool call whose line lands after the reader's first look is read", out, "AUTHORIZED")
+        check("the late line is answered inside the signal's cap", took < (cap or 0), f"{took:.2f}s")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        line = json.dumps(c.use("toolu_late2", PUSH)).encode() + b"\n"
+        out, _ = sb.run_late(c, "toolu_late2", PUSH, [line[:40], line[40:]])
+        expect("a line written in two pieces is read once it is whole", out, "AUTHORIZED")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        c.use("toolu_late3", PUSH)
+        out, took = sb.run_late(c, "toolu_late3", PUSH, [])
+        expect("a tool call whose line never lands denies", out, "DENIED", "not in the transcript")
+        check("the reader waited its full bound and still answered inside the cap",
+              reader.LOCATE_DEADLINE_SECONDS <= took < (cap or 0), f"{took:.2f}s")
+
+        c = Chain()
+        c.human(f"authorize {sb.tip}")
+        line = json.dumps(c.use("toolu_late4", "git push origin moving")).encode() + b"\n"
+        out, _ = sb.run_late(c, "toolu_late4", "git push origin moving", [line],
+                             during=lambda: sh(["git", "update-ref", "refs/heads/moving",
+                                                sb.other_tip], sb.repo))
+        expect("a branch that moves while the reader waits is compared at its new tip",
+               out, "DENIED", "not the tip")
+
         c = Chain()
         c.human(f"authorize {sb.tip}")
         c.use("toolu_sub", PUSH)
@@ -362,6 +469,29 @@ def end_to_end(sb: Sandbox) -> None:
     rc, out = verdict(unauthorized, "toolu_e2")
     check("cupcake denies an unauthorized push and names the phrase",
           f"authorize {sb.tip}" in out and "feat/x" in out, f"rc={rc} {out[:400]}")
+
+    def verdict_late(c: Chain, tool_use_id: str, lands: bool) -> tuple[int, str]:
+        """Like `verdict`, with the tool_use line written only after the reader's first look."""
+        line = (json.dumps(c.use(tool_use_id, PUSH)) + "\n").encode()
+        path = sb.dir / f"e2e-{tool_use_id}.jsonl"
+        path.write_text("".join(json.dumps(e) + "\n" for e in c.entries[:-1]), encoding="utf-8")
+        event = {"session_id": "fixture", "transcript_path": str(path), "cwd": str(sb.repo),
+                 "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_use_id": tool_use_id,
+                 "tool_input": {"command": PUSH, "timeout": 30000}, "permission_mode": "default"}
+        out, rc, _ = run_late(["cupcake", "eval", "--harness", "claude", "--strict", "--log-level", "error"],
+                              root, event, path, [line] if lands else [])
+        return rc, out
+
+    late = Chain()
+    late.human(f"authorize {sb.tip}")
+    rc, out = verdict_late(late, "toolu_e3", True)
+    check("cupcake allows an authorized push whose line lands after the reader's first look",
+          rc == 0 and '"deny"' not in out and "BLOCK-ANY-PUSH" not in out, f"rc={rc} {out[:400]}")
+    never = Chain()
+    never.human(f"authorize {sb.tip}")
+    rc, out = verdict_late(never, "toolu_e4", False)
+    check("cupcake denies when the line never lands, with the reader's own reason inside its budget",
+          "not in the transcript" in out, f"rc={rc} {out[:400]}")
 
 
 if __name__ == "__main__":
