@@ -48,6 +48,7 @@ all_halts contains decision if some decision in data.cupcake.policies.claude.no_
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_mergeable_without_green_ci.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_narrated_action.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_proof_without_observation.halt
+all_halts contains decision if some decision in data.cupcake.policies.claude.no_restating_user_own_rule.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_stall_on_friction.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unbacked_claim.halt
 all_halts contains decision if some decision in data.cupcake.policies.claude.no_unexecuted_promise.halt
@@ -79,6 +80,7 @@ all_denials contains decision if some decision in data.cupcake.policies.claude.n
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_jobs_er_builds_pvp.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.require_scoped_cargo.deny
 all_denials contains decision if some decision in data.cupcake.policies.claude.teardown_must_relaunch.deny
+all_denials contains decision if some decision in data.cupcake.policies.claude.transcript_write_guard.deny
 
 # Block and ask decisions. No current project policy exports these, but keep the shape stable.
 
