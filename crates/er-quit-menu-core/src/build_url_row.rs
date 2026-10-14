@@ -18,9 +18,9 @@
 //! # Where the URL comes from
 //!
 //! The row opens a link field ([`build_url_editor`]) pre-filled from the clipboard, and imports
-//! what the player accepts. `build_url` in the game-directory `er-quickload.toml` is still read -- it
-//! seeds nothing here, but the boot importer uses it, and an accepted link is written back to it so
-//! the next session starts from the last build that worked.
+//! what the player accepts. `build_url` in the game-directory `er-quickload.toml` is also imported
+//! on its own once per session ([`request_configured_import`]), and an accepted link is written
+//! back to it so the next session starts from the last build that worked.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -175,6 +175,27 @@ fn report_session_baseline() {
         return;
     }
     crate::arm::append_build_row_oracle_line("build-url-session-start");
+    request_configured_import();
+}
+
+/// Queue the game-directory `build_url`, once per session, so setting that one line is enough.
+///
+/// Until 2026-10-07 only the standalone `er-build-import` shell did this, and that shell cannot be
+/// loaded beside the product (both own `er-build-import-runtime`'s statics). So with the product
+/// loaded a configured `build_url` imported nothing until someone pressed the row, which is not
+/// what the config file promises. The runtime's own guards still apply: the build only lands once
+/// the character is in the world, and a configured request refuses a character created this
+/// session.
+fn request_configured_import() {
+    match er_build_import_runtime::request_configured() {
+        Ok(true) => append_autoload_debug(format_args!(
+            "system-quit-build-url: configured `build_url` queued at session start; it applies once the character is in the world"
+        )),
+        Ok(false) => {}
+        Err(err) => append_autoload_debug(format_args!(
+            "system-quit-build-url: configured `build_url` refused at session start: {err}"
+        )),
+    }
 }
 
 /// Say once, per press, that a queued link field is not being submitted.

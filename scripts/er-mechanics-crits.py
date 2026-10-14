@@ -252,11 +252,17 @@ def resolve_anim(category, anim):
 
     An import entry keeps a few events of its own (sound, effects) and none of the
     attack events, so its events are the union of its own and the source's (`INFERRED`: the
-    dagger crits would otherwise fire no damage event at all).
+    dagger crits would otherwise fire no damage event at all). An import entry that does carry
+    its own throw-attack events keeps only those: the great katana's a061_031700 fires 510 and
+    511 itself and imports a032_031700, which fires them again, and the union counted every hit
+    twice (Reed Great Katana ripostes 2x too high).
     """
     events = []
     for _ in range(MAX_IMPORT_HOPS):
-        events += tae_events(category, anim) or []
+        own = tae_events(category, anim) or []
+        if any(e.type == TAE_THROW_ATTACK_BEHAVIOR for e in events):
+            own = [e for e in own if e.type != TAE_THROW_ATTACK_BEHAVIOR]
+        events += own
         src = import_source(category, anim)
         if src is None:
             break
@@ -1213,6 +1219,9 @@ def selftest(t=None):
           [(510, 53), (511, 210)])
     check('Greatsword backstab MV', crit_hits(t, 4000000, 'backstab')['mv_total'], 220)
     check('Uchigatana riposte MV', crit_hits(t, 9000000, 'riposte')['mv_total'], 345)
+    gk = t.find_weapon('Reed Great Katana')
+    check('Reed Great Katana riposte: own events, not doubled by its import',
+          [(h['judge'], h['frames']) for h in crit_hits(t, gk, 'riposte')['hits']], [(510, (29, 31)), (511, (102, 104))])
     # Parry: dagger fully exposed; colossal 1H exposed except jump/counter, 2H never.
     dag = parry_exposure(t, 'Dagger')
     check('Dagger contact', dag['contact'], 1.0)

@@ -1550,6 +1550,10 @@ python3 "$repo_root/scripts/test-cupcake-policies.py"
 # trusted on its own say-so.
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py" --selftest
 python3 "$repo_root/scripts/check-cupcake-wasm-builtins.py"
+# A policy the hand-written dispatcher in .cupcake/system/evaluate.rego does not name is compiled,
+# routed, unit-tested and never read by the live hook (measured 2026-10-07 on two policies).
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py" --selftest
+python3 "$repo_root/scripts/check-cupcake-dispatcher.py"
 # Second gate: drive real transcripts through the real hook commands out of .claude/settings.json
 # and assert the halt actually comes back -- plus a clean turn that must still be allowed, because a
 # guard that halts everything wedges every session just as badly as one that halts nothing. It also
@@ -1579,6 +1583,11 @@ python3 "$repo_root/scripts/test-unexplained-running-tasks-signal.py"
 python3 "$repo_root/scripts/test-inline-user-command-signal.py"
 python3 "$repo_root/scripts/test-live-er-run-signal.py"
 opa test "$repo_root/.cupcake/policies/claude/no_ask_without_receiver.rego" "$repo_root/.cupcake/tests/no_ask_without_receiver_test.rego"
+# The push escape hatch (user directive 2026-10-07): the signal against fixture transcripts and a
+# throwaway repository, then the policy, then the guard that keeps transcripts unwritten.
+python3 "$repo_root/scripts/test-push-authorization-signal.py"
+opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/git_block_any_push.rego" "$repo_root/.cupcake/tests/git_block_any_push_test.rego"
+opa test "$repo_root/.cupcake/policies/claude/transcript_write_guard.rego" "$repo_root/.cupcake/tests/transcript_write_guard_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_unexplained_running_tasks.rego" "$repo_root/.cupcake/tests/no_unexplained_running_tasks_test.rego"
 opa test "$repo_root/.cupcake/policies/claude/no_inline_user_command.rego" "$repo_root/.cupcake/tests/no_inline_user_command_test.rego"
 opa test "$repo_root/.cupcake/system/commands.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement.rego" "$repo_root/.cupcake/policies/claude/no_authority_agreement_reminder.rego" "$repo_root/.cupcake/tests/no_authority_agreement_test.rego" "$repo_root/.cupcake/tests/no_authority_agreement_reminder_test.rego" "$repo_root/.cupcake/policies/claude/idle_hold.rego" "$repo_root/.cupcake/policies/claude/idle_hold_reminder.rego" "$repo_root/.cupcake/tests/idle_hold_test.rego" "$repo_root/.cupcake/tests/idle_hold_reminder_test.rego" "$repo_root/.cupcake/policies/claude/native_ownership_vocab_reminder.rego" "$repo_root/.cupcake/tests/native_ownership_vocab_reminder_test.rego" "$repo_root/.cupcake/policies/claude/block_manual_pgrep.rego" "$repo_root/.cupcake/tests/block_manual_pgrep_test.rego" "$repo_root/.cupcake/policies/claude/bash_elden_ring_launch_guard.rego" "$repo_root/.cupcake/tests/bash_elden_ring_launch_guard_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion.rego" "$repo_root/.cupcake/tests/block_askuserquestion_test.rego" "$repo_root/.cupcake/policies/claude/block_askuserquestion_reminder.rego" "$repo_root/.cupcake/tests/block_askuserquestion_reminder_test.rego" "$repo_root/.cupcake/policies/claude/no_stall_on_friction.rego" "$repo_root/.cupcake/tests/no_stall_on_friction_test.rego" "$repo_root/.cupcake/policies/claude/no_unexecuted_promise.rego" "$repo_root/.cupcake/tests/no_unexecuted_promise_test.rego" "$repo_root/.cupcake/policies/claude/wall_of_text.rego" "$repo_root/.cupcake/tests/wall_of_text_test.rego"
@@ -2575,6 +2584,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 # the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons-core --lib
 
+# er-npc-summons: the brains' facts -- lift detection, the world-geometry tree walk, stuck and
+# hit classification. The game reads sit behind `GameMem`, which the tests fake, so they run on
+# the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons --lib
+
 # er-allow-hostile-actions: its address constants and the stateInfo it refuses. No `cfg(windows)`
 # in the tests, so they run on the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-allow-hostile-actions --lib
@@ -2932,6 +2946,11 @@ python3 "$repo_root/scripts/gen-installer-settings.py" --check
 # hash. The selftest holds the text rules to the hand-written Misericorde board.
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
+
+# The planner's own item spellings, which the loadout uploader resolves every name against before
+# it uploads (the stored name is the icon URL, and `Misericorde` has no full-size icon). Offline:
+# the selftest parses a fixture of the bundle's item literals, it does not fetch the site.
+python3 "$repo_root/scripts/planner-item-names.py" --selftest
 
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a

@@ -93,6 +93,16 @@ IGNORED_FILES = {
     # waited for is `0x0e`, whose sole writer is the invade action, so that one became an
     # `Interceptor` and needs no exemption.
     Path("scripts/frida/ersc-session.js"),
+    # Offline analysis worker, not a probe. Its `time.sleep` runs inside a `SIGPROF` handler and is
+    # a CPU duty cycle: every 50 ms of CPU the worker gives up the share that keeps it under 90% of
+    # its core (user, 2026-10-08: never core 0, at most 90% of any other). Nothing is waited for --
+    # the sleep is the throttle -- and the kernel has no unprivileged per-process bandwidth cap to
+    # replace it with (`SCHED_DEADLINE` needs root and reserves CPU rather than capping it).
+    Path("scripts/er-mechanics-ash-interrupt.py"),
+    # Terminal dashboard over a pipeline's log, same class as the samplers above: its `time.sleep`
+    # is the redraw period, which also advances the elapsed clocks it shows, and it stops on an
+    # observation -- the log's header saying finished or failed -- never on a timer.
+    Path("scripts/er-mechanics-pipeline-watch.py"),
 }
 SOURCE_SUFFIXES = {
     ".rs",
