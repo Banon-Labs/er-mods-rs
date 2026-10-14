@@ -141,6 +141,46 @@ test_allow_teardown_then_user_launcher if {
 	not denied("python3 scripts/er-teardown.py; bash /home/banon/Elden/launch.sh")
 }
 
+# A launcher behind a leading `NAME=value` is still the program the shell runs. The exact
+# command refused on 2026-10-14: the `/` in the assigned path made the shared command-slot
+# test read `ME3_PROFILE=/tmp/...` as the program and the launcher as its operand.
+test_allow_teardown_then_env_prefixed_user_launcher if {
+	not denied(`python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1; ME3_PROFILE=/tmp/x/mushroom-man-crashlog.me3 /home/banon/Elden/launch.sh -o > /tmp/x/launch6.log 2>&1; echo "launcher returned exit=$? at $(date +%T)"`)
+}
+
+test_allow_teardown_then_env_prefixed_run_branch if {
+	not denied("python3 scripts/er-teardown.py; ME3_PROFILE=/tmp/x/p.me3 python3 scripts/er-run-branch.py --with er-save-game-row")
+}
+
+test_allow_teardown_then_several_assignments_before_the_launcher if {
+	not denied("python3 scripts/er-teardown.py; A=1 ME3_PROFILE=/tmp/x/p.me3 B_2=/y /home/banon/Elden/launch.sh")
+}
+
+test_allow_teardown_then_env_wrapper_with_path_assignment if {
+	not denied("python3 scripts/er-teardown.py; env ME3_PROFILE=/tmp/x/p.me3 /home/banon/Elden/launch.sh")
+}
+
+# An assignment in front of something that is not a launcher relaunches nothing.
+test_deny_teardown_then_env_prefixed_non_launcher if {
+	denied("python3 scripts/er-teardown.py; FOO=1 ls")
+}
+
+test_deny_teardown_then_path_assigned_non_launcher if {
+	denied("python3 scripts/er-teardown.py; FOO=/x ls")
+}
+
+# A word with `=` whose left side is not a shell name is not an assignment: the shell runs
+# that word as the program, so the launcher after it is an operand.
+test_deny_teardown_then_non_name_assignment_before_launcher if {
+	denied("python3 scripts/er-teardown.py; dir/a=b /home/banon/Elden/launch.sh")
+}
+
+# The teardown itself behind a path-valued assignment is still a teardown. Allowed before
+# 2026-10-14, for the same reason the relaunch above was missed.
+test_deny_path_assigned_teardown_then_build if {
+	denied("FOO=/x python3 scripts/er-teardown.py; cargo build")
+}
+
 # Written across lines, which the live engine collapses before evaluation.
 test_allow_multiline_teardown_and_launch if {
 	not denied("python3 scripts/er-teardown.py \\\n  && python3 scripts/er-run-branch.py --with er-save-game-row")

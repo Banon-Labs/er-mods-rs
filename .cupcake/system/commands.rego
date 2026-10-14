@@ -660,12 +660,39 @@ command_slot_wrapper(word) if {
 
 digit_char(c) if c in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
-# `VAR=value`, which is a prefix to a command rather than a command. Excludes a
-# path-looking operand so `--out=/some/path` is not read as an assignment.
-command_slot_wrapper(word) if {
-	contains(word, "=")
-	not contains(word, "/")
+# `VAR=value`, which is a prefix to a command rather than a command. The test is the
+# shell's own: the text before the first `=` is a name (`[A-Za-z_][A-Za-z0-9_]*`), and
+# the value after it is anything, a path included.
+#
+# This used to be "contains `=` and no `/`", and the `/` half refused every
+# path-valued assignment. Measured 2026-10-14: `teardown_must_relaunch` denied
+# `er-teardown.py ...; ME3_PROFILE=/tmp/x/p.me3 /home/banon/Elden/launch.sh -o` as a
+# teardown that does not relaunch, because `ME3_PROFILE=/tmp/...` stood in the slot and
+# the launcher behind it was read as an operand. The same word hid the program behind it
+# from every deny-on-match guard, so those got stricter, measured the same day against
+# the previous rule: `FOO=/x python3 scripts/er-teardown.py; cargo build`,
+# `CARGO_TARGET_DIR=/tmp/t cargo build`, `PYTHONPATH=/x python3 -c "open('f','w')..."`
+# and `TMPDIR=/tmp/x bash scripts/check.sh` were each allowed before and are denied now.
+#
+# The `/` test was there so `--out=/some/path` would not count as an assignment. The name
+# test keeps that (`--out` is not a name, and the `-` rule above already reads it as an
+# option), and a path that merely contains `=` (`dir/a=b`) is still read as the program.
+command_slot_wrapper(word) if shell_assignment_word(word)
+
+# Token arithmetic rather than `regex.match`, for the reason the command-slot header
+# above records: this runs once per word of every command.
+shell_assignment_word(word) if {
+	cut := indexof(word, "=")
+	cut > 0
+	name := substring(word, 0, cut)
+	not digit_char(substring(name, 0, 1))
+	count([c |
+		some c in split(name, "")
+		not contains(shell_name_chars, c)
+	]) == 0
 }
+
+shell_name_chars := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
 
 # The index just past the nearest separator before `index`, or 0 when there is
 # none: where the command containing `index` begins.

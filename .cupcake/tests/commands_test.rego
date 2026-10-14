@@ -475,6 +475,62 @@ test_odd_backslash_run_is_a_continuation if {
 	commands.continuations_joined("a \\\\\\\nb") == "a \\\\ b"
 }
 
+# --- leading assignments stand aside from the command slot --------------------
+
+test_assignment_word_with_a_plain_value if {
+	commands.shell_assignment_word("FOO=1")
+}
+
+test_assignment_word_with_a_path_value if {
+	commands.shell_assignment_word("ME3_PROFILE=/tmp/x/p.me3")
+}
+
+test_assignment_word_with_an_empty_value if {
+	commands.shell_assignment_word("_X9=")
+}
+
+test_not_assignment_option if {
+	not commands.shell_assignment_word("--out=/some/path")
+}
+
+test_not_assignment_path_containing_equals if {
+	not commands.shell_assignment_word("dir/a=b")
+}
+
+test_not_assignment_name_starting_with_a_digit if {
+	not commands.shell_assignment_word("9X=1")
+}
+
+test_not_assignment_empty_name if {
+	not commands.shell_assignment_word("=x")
+}
+
+test_not_assignment_dotted_name if {
+	not commands.shell_assignment_word("a.b=c")
+}
+
+test_not_assignment_without_equals if {
+	not commands.shell_assignment_word("launch.sh")
+}
+
+test_program_behind_path_assignments_is_in_the_command_slot if {
+	words := commands.command_slot_words("A=1 ME3_PROFILE=/tmp/x/p.me3 /home/u/Elden/launch.sh -o")
+	words[2] == "/home/u/Elden/launch.sh"
+	commands.word_in_command_slot(words, 2)
+}
+
+# The first word that is not an assignment takes the slot, and its operands do not.
+test_operand_after_assigned_program_is_not_in_the_command_slot if {
+	words := commands.command_slot_words("FOO=/x ls -la x")
+	commands.word_in_command_slot(words, 1)
+	not commands.word_in_command_slot(words, 3)
+}
+
+test_program_behind_non_name_assignment_is_an_operand if {
+	words := commands.command_slot_words("dir/a=b /home/u/Elden/launch.sh")
+	not commands.word_in_command_slot(words, 1)
+}
+
 test_executed_texts_see_one_line_across_a_continuation if {
 	texts := commands.executed_texts("cargo build \\\n  -p x")
 	some t in texts
