@@ -473,6 +473,7 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 			printf 'pre-push: the stage selector named no stage at all -- running every one of them.\n' >&2
 		fi
 		printf 'pre-push: running scripts/check.sh (the same stages, and the same step list, CI runs)\n' >&2
+		last_scope=all
 		(cd "$tree" && bash scripts/check.sh)
 		return
 	fi
@@ -487,7 +488,35 @@ run_suite() { # run_suite <pushed sha, or empty when git sent no ref list>
 		printf '  The stages listed "not selected" above did NOT run, and that is not a pass for them.\n' >&2
 		printf '  Force all of them with ER_SCOPE_ALL=1 git push.\n' >&2
 	fi
+	last_scope=${scope_csv%,}
 	(cd "$tree" && ER_CHECK_STAGES="${scope_csv%,}" bash scripts/check.sh)
+}
+
+# A tip that already passed is not run again (2026-10-12). One red tip refuses the whole push, so
+# every tip stays unpushed and the next attempt used to re-run all of them. Measured that day: a
+# 14-tip push spent about two hours, 13 tips green and one red on an intermittent self-test, and a
+# retry would have spent the two hours again to re-learn 13 answers it already had.
+#
+# A green run leaves a marker named by the tip's full sha, holding the stages that ran (`all` for
+# the whole suite). The sha fixes every tracked byte the run read, the gate scripts included. What
+# it cannot see is outside git: the gitignored game images, the toolchain, origin's main. So
+# markers expire after ER_PRE_PUSH_GREEN_TTL_HOURS (default 24), ER_PRE_PUSH_NO_CACHE=1 ignores
+# them, and ER_SCOPE_ALL=1 accepts only a marker from a whole-suite run. They live under the
+# repository's git directory, so a fixture repository in a self-test never sees this checkout's.
+green_dir=${ER_PRE_PUSH_GREEN_DIR:-$(git rev-parse --path-format=absolute --git-common-dir)/er-pre-push-green}
+green_ttl_min=$((${ER_PRE_PUSH_GREEN_TTL_HOURS:-24} * 60))
+if [[ -d $green_dir ]]; then
+	find "$green_dir" -mindepth 1 -maxdepth 1 -type f -mmin +"$green_ttl_min" -delete 2>/dev/null || true
+fi
+
+tip_already_green() { # tip_already_green <sha>
+	local marker=$green_dir/$1 scope
+	[[ ${ER_PRE_PUSH_NO_CACHE:-0} != 1 && -f $marker ]] || return 1
+	scope=$(<"$marker")
+	[[ ${ER_SCOPE_ALL:-0} != 1 || $scope == all ]] || return 1
+	printf 'pre-push: %s CACHED -- green in this checkout %dm ago (stages: %s); not run again.\n' \
+		"${1:0:12}" "$((($(date +%s) - $(stat -c %Y "$marker")) / 60))" "$scope" >&2
+	printf '          ER_PRE_PUSH_NO_CACHE=1 git push runs it again.\n' >&2
 }
 
 suite_failed=0
@@ -496,10 +525,16 @@ if [[ ${#pushed_shas[@]} -eq 0 ]]; then
 	run_suite "" || suite_failed=1
 else
 	for sha in "${pushed_shas[@]}"; do
-		run_suite "$sha" || {
+		tip_already_green "$sha" && continue
+		last_scope=""
+		if run_suite "$sha"; then
+			if [[ -n $last_scope ]] && mkdir -p "$green_dir"; then
+				printf '%s\n' "$last_scope" >"$green_dir/$sha"
+			fi
+		else
 			suite_failed=1
 			failed_tips+=("$sha")
-		}
+		fi
 	done
 fi
 # Repeated at the very end, because on a many-tip push the red tip's own report has scrolled far

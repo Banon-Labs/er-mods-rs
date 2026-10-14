@@ -66,7 +66,7 @@ hook_under_test=$hook
 run_hook() {
 	(
 		cd "$fixture" || exit 99
-		printf '%s\n' "$ref_line" | bash "$hook_under_test" origin https://example.invalid/fixture.git \
+		printf '%s\n' "$ref_line" | ER_PRE_PUSH_NO_CACHE=1 bash "$hook_under_test" origin https://example.invalid/fixture.git \
 			>"$tmp/out" 2>"$tmp/err"
 	)
 }
