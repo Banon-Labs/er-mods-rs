@@ -26,9 +26,16 @@
 //! duel transition with the character's address, and every Mimic Tear summon.
 
 mod addr;
+mod cure;
 mod facts;
+mod hits;
 mod lift;
 mod log;
+mod restock;
+mod stance;
+mod stuck;
+mod swings;
+mod volley;
 mod world;
 
 #[cfg(windows)]
@@ -51,6 +58,8 @@ mod overlay;
 mod pad;
 #[cfg(windows)]
 mod picker;
+#[cfg(windows)]
+mod squad_facts;
 #[cfg(windows)]
 mod team;
 #[cfg(windows)]
@@ -344,6 +353,7 @@ fn tick(state: &mut TaskState) {
     names::prune();
     team::tick();
     lift::live::tick();
+    squad_facts::tick();
     match state.duel.state.clone() {
         State::Hidden { chr, .. } => {
             let seen = alive(state, chr)
@@ -438,6 +448,7 @@ fn install(module_base: usize) {
     mimic_hooks::install();
     game::install();
     names::install();
+    squad_facts::install();
     brains::install();
     void_tech::install();
     cursor::install();

@@ -24,8 +24,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum FactValue {
     Bool(bool),
-    // The lift producer sets no single number; the counters that follow it do.
-    #[allow(dead_code)]
     Number(f64),
     Numbers(Vec<f64>),
 }
@@ -90,7 +88,6 @@ pub(crate) fn set_bool(key: &str, value: bool, notify: Notify) -> bool {
 }
 
 /// [`set`] for a number.
-#[allow(dead_code)]
 pub(crate) fn set_number(key: &str, value: f64, notify: Notify) -> bool {
     set(key, FactValue::Number(value), notify)
 }

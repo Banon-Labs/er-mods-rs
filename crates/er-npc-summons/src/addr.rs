@@ -278,6 +278,83 @@ pub(crate) mod physics {
 pub(crate) const CS_WORLD_GEOM_MAN_GLOBAL_RVA: usize =
     er_game_base::rva::CS_WORLD_GEOM_MAN_GLOBAL_RVA;
 
+/// The rest of the character layout the lab's producers read (`scripts/frida/spawn-npc.js` on
+/// `feat/ai-lab-turtles`, each read live on 1.17.1; the lab names the source of every one).
+pub(crate) mod lab {
+    /// `ChrIns+0x60`: the `NpcParam` id, 0 or below for a real player.
+    pub(crate) const NPC_PARAM: usize = 0x60;
+    /// `ChrIns+0x178` -> `+0x08` first live SpEffect entry: id `+0x08`, next `+0x30`.
+    pub(crate) const SPEFFECTS: usize = 0x178;
+    pub(crate) const SPEFFECTS_FIRST: usize = 0x08;
+    pub(crate) const SPEFFECT_ID: usize = 0x08;
+    pub(crate) const SPEFFECT_NEXT: usize = 0x30;
+    /// `ChrIns+0x6b0`: the lock-on target's `FieldInsHandle`, low dword `0xffffffff` for none.
+    pub(crate) const LOCK_TARGET: usize = 0x6b0;
+    /// `ChrIns+0x580`: `PlayerGameData*`, a `PlayerIns`'s own.
+    pub(crate) const PLAYER_GAME_DATA: usize = 0x580;
+    /// `ChrIns+0x638`: `ChrAsm*`, param ids `+0x7c`, one `i32` per slot; slot 1 is right hand 1.
+    pub(crate) const CHR_ASM: usize = 0x638;
+    pub(crate) const CHR_ASM_PARAM_IDS: usize = 0x7c;
+    pub(crate) const CHR_ASM_RIGHT1: usize = 1;
+    /// Modules (`ChrIns+0x190`): `+0x0` data (HP `+0x138`, max `+0x13c`), `+0x18` TimeAct,
+    /// `+0x20` resist.
+    pub(crate) const MODULE_DATA: usize = 0x0;
+    pub(crate) const DATA_HP: usize = 0x138;
+    pub(crate) const MODULE_TIME_ACT: usize = 0x18;
+    pub(crate) const MODULE_RESIST: usize = 0x20;
+    /// TimeAct: ten `{anim i32, time f32, time f32, length f32}` at `+0x20`, write index `+0xc0`.
+    pub(crate) const TA_QUEUE: usize = 0x20;
+    pub(crate) const TA_SLOT: usize = 16;
+    pub(crate) const TA_SLOTS: usize = 10;
+    pub(crate) const TA_WRITE: usize = 0xc0;
+    /// Resist: gauges `+0x10`, resistances `+0x2c`, seven `i32` each (poison, rot, bleed, ...).
+    pub(crate) const RESIST_GAUGE: usize = 0x10;
+    pub(crate) const RESIST_MAX: usize = 0x2c;
+    /// `WorldChrMan` chr sets: 196 pointers ending 0x10 below `main_player`; set capacity
+    /// `+0x10`, entries `+0x18`, 16 bytes each with the `ChrIns*` first.
+    pub(crate) const CHR_SETS: usize = 0x1e508 - 0x10 - 196 * 8;
+    pub(crate) const CHR_SET_COUNT: usize = 196;
+    pub(crate) const SET_CAPACITY: usize = 0x10;
+    pub(crate) const SET_ENTRIES: usize = 0x18;
+    pub(crate) const SET_ENTRY: usize = 16;
+    /// The AI's enemy search list (bd `ai-target-ene0-chain-1171-static-2026-10-06`): manipulator
+    /// at `EnemyIns+0x580` / `PlayerIns+0x588` -> `+0xc0` `AiIns` -> `+0xc950` targeting system ->
+    /// `+0x20` list head; node next `+0x10`, kind `+0x34` (1 a character), score `+0x38`, handle
+    /// `+0x68`.
+    pub(crate) const AI_MAN_ENEMY: usize = 0x580;
+    pub(crate) const AI_MAN_PLAYER: usize = 0x588;
+    pub(crate) const AI_INS: usize = 0xc0;
+    pub(crate) const AI_TARGETING: usize = 0xc950;
+    pub(crate) const AI_LIST: usize = 0x20;
+    pub(crate) const AI_NODE_NEXT: usize = 0x10;
+    pub(crate) const AI_NODE_KIND: usize = 0x34;
+    pub(crate) const AI_NODE_SCORE: usize = 0x38;
+    pub(crate) const AI_NODE_HANDLE: usize = 0x68;
+    /// `PlayerGameData+0x2b0`: `EquipGameData`; its inventory at `+0x158` (entries `+0x10`, count
+    /// `+0x18`, 24 bytes `{handle, item id, quantity}`), key item capacity `+0x158 + 0x1c`, quick
+    /// slots `{handle u32, index i32}` at `+0x290 + 8N` mirrored as item ids at `+0x3a0 + 4N`.
+    pub(crate) const EQUIP_GAME_DATA: usize = 0x2b0;
+    pub(crate) const INVENTORY: usize = 0x158;
+    pub(crate) const INV_ENTRIES: usize = 0x10;
+    pub(crate) const INV_COUNT: usize = 0x18;
+    pub(crate) const INV_ENTRY: usize = 24;
+    pub(crate) const INV_KEY_CAPACITY: usize = 0x158 + 0x1c;
+    pub(crate) const QUICK_SLOTS: usize = 0x290;
+    pub(crate) const QUICK_ITEM_IDS: usize = 0x3a0;
+}
+
+/// Detour: `CalculateDamage2(CSChrDamageModule* victim, ChrIns* attacker, AttackDamageInfo*,
+/// u64, bool)`, once per landed hit; the victim is `[victim + 0x8]` (1.17.1 `0x140448910`,
+/// `IDENTICAL-WHOLE`; `scripts/frida/spawn-npc.js` `damageHook`).
+pub(crate) const CALCULATE_DAMAGE2: u32 = 0x0044_83b0;
+pub(crate) const DAMAGE_MODULE_OWNER: usize = 0x8;
+/// `EquipGameData::AddInventoryEquip(egd, u32* handle, u32 quantity, bool, bool) -> i32`, the
+/// grant the lab's food and heal restock used (1.17.1 `0x140246480`, unmoved). The build importer
+/// declares it for its own grants.
+#[cfg(windows)]
+pub(crate) const ADD_INVENTORY_EQUIP: u32 =
+    er_build_import_runtime::grant::ADD_INVENTORY_EQUIP_RVA as u32;
+
 /// `CSWorldGeomMan` -> `+0x20` an MSVC `std::map` of loaded blocks (node `+0x28` block data), and
 /// in each block data `+0x340` a `std::map` of entity id (node `+0x20`) -> field-ins handle (node
 /// `+0x28` low, `+0x2c` high). 1.17.1 `0x1406d38f0`, `0x1406a76d0`; read live by

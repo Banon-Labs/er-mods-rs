@@ -57,7 +57,7 @@ const ADD_INVENTORY_EQUIP_BY_ITEM_ID_RVA: usize = 0x246840;
 ///
 /// The half of the call above that takes a handle somebody else minted, which is the only way to
 /// hand the inventory an instance that already carries a gem.
-const ADD_INVENTORY_EQUIP_RVA: usize = 0x246480;
+pub const ADD_INVENTORY_EQUIP_RVA: usize = 0x246480;
 /// `CS::CSGaitemImp::GetGaItemHandleWeaponWithGem(CSGaitemImp*, uint *out, int weaponId,
 /// int gemId)` (Ghidra `FUN_140671ce0`).
 ///
