@@ -42,6 +42,21 @@ is the host written.
     uv run --python 3.14 --with frida --with websocket-client --with pillow --with numpy python3 scripts/er-portrait-batch.py --list
     uv run --python 3.14 --with frida --with websocket-client --with pillow --with numpy python3 scripts/er-portrait-batch.py --limit 1
     uv run --python 3.14 --with frida --with websocket-client --with pillow --with numpy python3 scripts/er-portrait-batch.py
+
+# Save characters (`--saves`)
+
+The same photographs for the characters in the player's own save files (`ER_PORTRAIT_SAVES`, one
+`ER0000.sl2`/`.co2` per folder). Every slot is decoded once with `scripts/save-slot-oracle.py` and
+cached; a character is a name at a level, taken once from its newest copy, and a starting-class
+name at its starting level is a filler slot and skipped. Each one is booted through `save_file` and
+`slot` (no import -- the character is the save), its identity checked against the
+`LOAD-CORRECTNESS` line before anything is taken, and its own planner document written by the
+`er_quickload_request_build_document` export. The publish step stores that document as a new
+private build on the account, named `<name> (RL<level>)`, with the four images on it; the build's
+id is recorded the moment it exists, and an account build of that name is adopted rather than
+duplicated.
+
+    uv run --python 3.14 --with frida --with websocket-client --with pillow --with numpy python3 scripts/er-portrait-batch.py --saves --list
 """
 
 from __future__ import annotations
@@ -94,14 +109,17 @@ SHOT_VERSIONS = {"body": 0, "portrait": 1, "face_three_quarter": 2, "face_profil
 _NPC = {}
 
 
-def outfit(build: dict) -> list[int]:
+def outfit(build: dict) -> list[int] | None:
     """The NPC's own armour: the four `EquipParamProtector` rows of the `CharaInitParam` row its
     name ends in, -1 for an empty slot.
 
     The planner build cannot carry all of it -- `er-npc-planner-link.py` leaves out every piece the
     planner has no entry for, which is most NPC-only armour -- so the photographs put these rows on
-    the portrait model directly instead of trusting what the import equipped.
+    the portrait model directly instead of trusting what the import equipped. A save character
+    wears its own, so it has none.
     """
+    if build.get("save"):
+        return None
     if "decoder" not in _NPC:
         _NPC["mod"] = module("er_npc_chara_init", PLANNER_SCRIPTS / "er-npc-chara-init.py")
         _NPC["decoder"] = _NPC["mod"].Decoder(None)
@@ -112,6 +130,8 @@ def outfit(build: dict) -> list[int]:
 
 def outfit_dropped(build: dict) -> bool:
     """Whether the planner build holds fewer armour pieces than the NPC wears."""
+    if build.get("save"):
+        return False
     worn = sum(1 for row in outfit(build) if row > 0)
     held = sum(len(v.get("slots") or []) for v in (build["data"].get("protectors") or {}).values() if isinstance(v, dict))
     return worn > held
@@ -144,6 +164,16 @@ STREAM_SECONDS = 3
 SHOT_SETTLE_SECONDS = 0.2
 SUBPROCESS_SECONDS = 30
 ATTEMPTS = 3
+# The character the autoload put in the world, as the DLL read it back.
+LOADED = re.compile(r'LOAD-CORRECTNESS .*? name="((?:[^"\\]|\\.)*)" level=(\d+)')
+DOCUMENT_SECONDS = 60
+SAVES_ROOT = pathlib.Path(os.environ.get(
+    "ER_PORTRAIT_SAVES", "/mnt/net/librus-home/Code Projects/Elden Ring Save Manager/data/save-files"))
+# A slot still holding a starting class's name (or the start of one, as in "Astro") at a starting
+# level, or a bare number, is filler the player copied about, not a character.
+STARTING_CLASSES = ("Vagabond", "Warrior", "Hero", "Bandit", "Astrologer", "Prophet", "Samurai", "Prisoner",
+                    "Confessor", "Wretch")
+FILLER_LEVEL = 10
 
 
 def module(name: str, path: pathlib.Path):
@@ -258,19 +288,74 @@ class GameGone(Exception):
     pass
 
 
-def set_build_url(url: str) -> None:
+def set_config(**values) -> None:
+    """Set top-level keys of the game-directory config; a value of `None` removes the key."""
     lines = CONFIG.read_text().splitlines()
-    out, done = [], False
+    out, done = [], set()
     for line in lines:
-        if not line.lstrip().startswith("#") and line.split("=", 1)[0].strip() == "build_url":
-            if not done:
-                out.append(f"build_url = '{url}'")
-                done = True
+        key = line.split("=", 1)[0].strip()
+        if not line.lstrip().startswith("#") and "=" in line and key in values:
+            if key not in done and values[key] is not None:
+                out.append(f"{key} = {toml_value(values[key])}")
+            done.add(key)
             continue
         out.append(line)
-    if not done:
-        out.append(f"build_url = '{url}'")
+    out += [f"{k} = {toml_value(v)}" for k, v in values.items() if k not in done and v is not None]
     CONFIG.write_text("\n".join(out) + "\n")
+
+
+def toml_value(value) -> str:
+    return str(value) if isinstance(value, int) else f"'{value}'"
+
+
+def set_build_url(url: str) -> None:
+    set_config(build_url=url)
+
+
+# ------------------------------------------------------------------ save characters
+
+
+def filler(name: str, level: int) -> bool:
+    return level <= FILLER_LEVEL and (name.isdigit() or any(c.startswith(name) for c in STARTING_CLASSES))
+
+
+def save_characters() -> list[dict]:
+    """One entry per character in the save folders: a name at a level, from its newest copy.
+
+    Each container's ten slots are decoded once and cached against its size and mtime, because a
+    decode reads the whole file over the network share.
+    """
+    cache = SHOTS_ROOT / "saves-inventory.json"
+    known = json.loads(cache.read_text()) if cache.exists() else {}
+    best: dict[tuple, dict] = {}
+    for path in sorted(SAVES_ROOT.glob("*/ER0000.sl2")) + sorted(SAVES_ROOT.glob("*/ER0000.co2")):
+        st = path.stat()
+        stamp = [st.st_size, st.st_mtime_ns]
+        if (known.get(str(path)) or {}).get("stamp") != stamp:
+            slots = []
+            for slot in range(10):
+                out = subprocess.run([sys.executable, str(HERE / "save-slot-oracle.py"), "--save", str(path),
+                                      "--slot", str(slot)], capture_output=True, text=True, check=True,
+                                     timeout=SUBPROCESS_SECONDS)
+                fields = json.loads(out.stdout).get("decoded_fields") or {}
+                slots.append({"name": fields.get("name") or "", "level": int(fields.get("level") or 0)})
+            known[str(path)] = {"stamp": stamp, "slots": slots}
+            SHOTS_ROOT.mkdir(parents=True, exist_ok=True)
+            tmp = cache.with_suffix(".tmp")
+            tmp.write_text(json.dumps(known, indent=1))
+            tmp.replace(cache)
+        for slot, c in enumerate(known[str(path)]["slots"]):
+            if not c["name"] or filler(c["name"], c["level"]):
+                continue
+            key = (c["name"], c["level"])
+            # The newest copy, and the vanilla container over the Seamless one when they tie.
+            rank = (stamp[1], path.suffix == ".sl2")
+            if key not in best or rank > best[key]["rank"]:
+                slug = re.sub(r"[^a-z0-9]+", "-", c["name"].lower()).strip("-") or "unnamed"
+                best[key] = {"id": f"save-{slug}-rl{c['level']}", "save": str(path), "slot": slot,
+                             "level": c["level"], "character": c["name"], "rank": rank,
+                             "data": {"name": f"{c['name']} (RL{c['level']})"}}
+    return sorted(best.values(), key=lambda b: b["data"]["name"].lower())
 
 
 # ------------------------------------------------------------------ game + Frida
@@ -294,8 +379,15 @@ class Game:
         return bool(self.run_lib.find_game_pids()) and self.session is not None and not self.session.is_detached
 
     def launch(self, build: dict) -> None:
-        """Tear down whatever runs, point `build_url` at `build`, launch, and wait for its import."""
-        set_build_url(PLANNER_SITE + build["id"])
+        """Tear down whatever runs, point the config at `build`, launch, and wait for it in the world.
+
+        A planner build is a boot import over the configured save; a save character is that save
+        and slot booted with no import at all.
+        """
+        if build.get("save"):
+            set_config(save_file=build["save"], slot=build["slot"], build_url=None)
+        else:
+            set_build_url(PLANNER_SITE + build["id"])
         self.session, self.current = None, None
         subprocess.run([sys.executable, str(HERE / "er-teardown.py"), "--reason=portrait-batch-relaunch"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=SUBPROCESS_SECONDS)
@@ -305,7 +397,8 @@ class Game:
         subprocess.Popen(["bash", str(LAUNCHER)], env=env, stdout=launch_log, stderr=subprocess.STDOUT,
                          stdin=subprocess.DEVNULL, start_new_session=True)
         self.launches += 1
-        say(f"launched Elden Ring ({ME3_PROFILE}), boot import of {build['data']['name']}")
+        say(f"launched Elden Ring ({ME3_PROFILE}), " + (f"{build['save']} slot {build['slot']}" if build.get("save")
+                                                         else f"boot import of {build['data']['name']}"))
         # The launcher takes a few seconds to start the game, and until then "no game process" is
         # the launch in progress, not the game gone.
         deadline = time.monotonic() + GAME_START_SECONDS
@@ -314,8 +407,48 @@ class Game:
                 raise GameGone(f"no eldenring.exe {GAME_START_SECONDS}s after the launch; see {launch_log.name}")
             # The game's own logs land in this directory as it starts.
             blocking_slice(self.log.watch, 1.0)
-        self.wait_applied(build, BOOT_SECONDS, alive=lambda: bool(self.run_lib.find_game_pids()))
+        if build.get("save"):
+            self.wait_loaded(build)
+        else:
+            self.wait_applied(build, BOOT_SECONDS, alive=lambda: bool(self.run_lib.find_game_pids()))
         self.attach()
+
+    def wait_loaded(self, build: dict) -> None:
+        """The save character in the world, checked by name and level against the decoded slot.
+
+        The photographs and the planner build are both labelled with who the slot was decoded as,
+        so a boot that put anybody else in the world is a failure, not a photograph of them.
+        """
+        found = self.log.wait(lambda line: (m := LOADED.search(line)) and (json.loads(f'"{m.group(1)}"'), int(m.group(2))),
+                              BOOT_SECONDS, alive=lambda: bool(self.run_lib.find_game_pids()))
+        if found != (build["character"], build["level"]):
+            raise RuntimeError(f"{build['save']} slot {build['slot']} loaded {found}, "
+                               f"not {(build['character'], build['level'])}")
+        self.current = build["data"]["name"]
+        say(f"loaded {build['data']['name']} from {build['save']} slot {build['slot']}")
+
+    def document(self, path: pathlib.Path) -> dict:
+        """The character in the world as a planner document, written by the DLL to `path`."""
+        path.unlink(missing_ok=True)
+        watch = er_run_lib.DirectoryWatch(path.parent)
+        reply = self.run_agent(
+            "const f = new NativeFunction(Process.getModuleByName('er_quickload.dll')"
+            ".getExportByName('er_quickload_request_build_document'), 'int', ['pointer']);"
+            "rpc.exports = { run() {"
+            "send({tag: 'requested', ok: f(Memory.allocUtf8String(globalThis.__ER_FRIDA_CONFIG.path))});"
+            "send({tag: 'done'}); } };",
+            {"path": windows_path(path)}, 15)
+        if not any(m.get("tag") == "requested" and m.get("ok") == 1 for m in reply):
+            raise RuntimeError(f"er_quickload_request_build_document refused {path}: {reply}")
+        # The worker renames the finished file into place, so its arrival is the event.
+        deadline = time.monotonic() + DOCUMENT_SECONDS
+        while not path.exists():
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"no planner document at {path} within {DOCUMENT_SECONDS}s")
+            if not self.alive():
+                raise GameGone("the game exited while writing the planner document")
+            blocking_slice(watch, 1.0)
+        return json.loads(path.read_text())
 
     def attach(self) -> None:
         # A server from an earlier game process answers the port and then never lists anything,
@@ -396,6 +529,13 @@ class Game:
 
     def swap(self, build: dict) -> str:
         """Make `build` the character in the world, launching the game when it is not running."""
+        if build.get("save"):
+            # A save character arrives only by booting its save.
+            if self.alive() and self.current == build["data"]["name"]:
+                return "already in the world"
+            self.relaunch = False
+            self.launch(build)
+            return "booted its save"
         if self.relaunch:
             self.relaunch = False
             self.launch(build)
@@ -486,6 +626,11 @@ def framed(path: pathlib.Path) -> dict:
 
 
 def finished(build: dict) -> bool:
+    if build.get("save"):
+        # A save character's page exists only once this batch made it, so its state is the record.
+        path = SHOTS_ROOT / build["id"] / "state.json"
+        state = json.loads(path.read_text()) if path.exists() else {}
+        return bool(state.get("planner") and state.get("planner_id")) and not stale_shots(state, build)
     images = (build["data"].get("sliders") or {}).get("images") or []
     if not (len(images) >= len(SHOTS) and all(i.get("url", "").startswith(IMAGE_HOST) for i in images)):
         return False
@@ -514,8 +659,16 @@ class Planner:
         with urllib.request.urlopen(req, timeout=20) as response:
             return json.load(response)
 
-    def write(self, build: dict, images: list[dict]) -> None:
-        """Store `images` on `build`, whose `data` the listing at start-up already fetched."""
+    def write(self, build: dict, images: list[dict], state: "State | None" = None) -> None:
+        """Store `images` on `build`, whose `data` the listing at start-up already fetched.
+
+        A save character has no build yet: its exported document is stored as a new one, whose id
+        goes into its state before anything else can fail, and an account build already carrying
+        its name is updated instead, so a run that died after the store does not make a second.
+        """
+        if build.get("save"):
+            self.write_save(build, images, state)
+            return
         doc = build["data"]
         if doc["sliders"].get("images") == images:
             return
@@ -525,6 +678,28 @@ class Planner:
             raise RuntimeError(f"the planner stored {build['id']} as {stored}")
         if (self.public(build["id"]).get("sliders") or {}).get("images") != images:
             raise RuntimeError(f"{build['id']}: the planner did not keep the images")
+
+    def by_name(self) -> dict[str, str]:
+        if not hasattr(self, "_names"):
+            self._names = {b["data"].get("name", ""): b["id"] for b in self.link.account_builds(self.session)}
+        return self._names
+
+    def write_save(self, build: dict, images: list[dict], state: "State") -> None:
+        name = build["data"]["name"]
+        planner_id = state["planner_id"] or self.by_name().get(name)
+        if planner_id and (self.public(planner_id).get("sliders") or {}).get("images") == images:
+            state.set(planner_id=planner_id)
+            return
+        doc = json.loads((state.dir / "build.json").read_text())
+        doc["name"] = name
+        doc.setdefault("sliders", {})["images"] = images
+        stored = self.link.store(doc, planner_id or "", self.session)
+        if planner_id and stored != planner_id:
+            raise RuntimeError(f"the planner stored {planner_id} as {stored}")
+        state.set(planner_id=stored)
+        self.by_name()[name] = stored
+        if (self.public(stored).get("sliders") or {}).get("images") != images:
+            raise RuntimeError(f"{stored}: the planner did not keep the images")
 
 
 # ------------------------------------------------------------------ one build
@@ -643,6 +818,11 @@ def shoot(game: Game, steam: Steam, build: dict) -> State:
     """The half of a build that needs the game: swap, photograph, add to the Steam library."""
     state = State(build)
     retake_stale(state, build)
+    document = state.dir / "build.json"
+    if build.get("save") and not document.exists():
+        state.set(imported=game.swap(build))
+        doc = game.document(document)
+        say(f"exported {build['data']['name']}: {len(json.dumps(doc))} bytes of planner document")
     photograph(game, build, state)
     add_to_library(game, steam, build, state)
     return state
@@ -654,9 +834,9 @@ def publish(steam: Steam, planner: Planner, build: dict, state: State) -> bool:
         try:
             upload(steam, build, state)
             images = [{"url": state["steam"][s]["url"], "geometry": framed(state.dir / f"{s}.jpg")} for s in SHOTS]
-            planner.write(build, images)
+            planner.write(build, images, state)
             state.set(planner=True)
-            say(f"DONE {build['data']['name']} {PLANNER_SITE}{build['id']}")
+            say(f"DONE {build['data']['name']} {PLANNER_SITE}{state['planner_id'] or build['id']}")
             return True
         except Exception as err:  # noqa: BLE001 -- retried, then recorded
             say(f"  publish attempt {attempt} for {build['data']['name']} failed: {type(err).__name__}: {err}")
@@ -670,15 +850,19 @@ def main() -> int:
     parser.add_argument("--limit", type=int, help="stop after this many builds")
     parser.add_argument("--only", action="append", help="a build id to do (repeatable)")
     parser.add_argument("--keep-game", action="store_true", help="leave the game running when the batch ends")
+    parser.add_argument("--saves", action="store_true", help="the characters in the save folders, not the NPC builds")
     args = parser.parse_args()
 
     planner = Planner()
-    todo = [b for b in planner.builds() if not finished(b) and (not args.only or b["id"] in args.only)]
-    todo.sort(key=lambda b: b["data"]["name"])
+    builds = save_characters() if args.saves else planner.builds()
+    todo = [b for b in builds if not finished(b) and (not args.only or b["id"] in args.only)]
+    if not args.saves:
+        todo.sort(key=lambda b: b["data"]["name"])
     say(f"{len(todo)} build(s) to do")
     if args.list:
         for b in todo:
-            print(f"  {b['id']}  {b['data']['name']}")
+            where = f"  {b['save']} slot {b['slot']}" if args.saves else ""
+            print(f"  {b['id']}  {b['data']['name']}{where}")
         return 0
     if args.limit:
         todo = todo[: args.limit]

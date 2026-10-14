@@ -91,6 +91,9 @@ static WORKERS_ALIVE: AtomicUsize = AtomicUsize::new(0);
 static LAST_URL: Mutex<Option<String>> = Mutex::new(None);
 /// Why the last export failed.
 static LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// Where the pending export writes its planner document instead of building a link, when it was
+/// asked for through [`request_document`].
+static DOCUMENT_PATH: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 /// Current phase.
 pub fn phase() -> Phase {
@@ -176,6 +179,10 @@ impl core::fmt::Display for RequestError {
 ///
 /// Safe to call from any thread, including a menu action handler: nothing here touches game state.
 pub fn request() -> Result<(), RequestError> {
+    request_with(None)
+}
+
+fn request_with(document: Option<std::path::PathBuf>) -> Result<(), RequestError> {
     if !phase().accepts_request() {
         return Err(RequestError::Busy);
     }
@@ -183,8 +190,38 @@ pub fn request() -> Result<(), RequestError> {
         *slot = None;
     }
     REQUEST_TICK.store(TICKS.load(Ordering::SeqCst), Ordering::SeqCst);
+    // Set before the phase moves, so the game-thread step can never claim the request first and
+    // hand the worker a link to build instead.
+    if let Ok(mut slot) = DOCUMENT_PATH.lock() {
+        *slot = document;
+    }
     PHASE.store(Phase::Reading as usize, Ordering::SeqCst);
     Ok(())
+}
+
+/// Ask for an export whose planner document is written to `path` as JSON, in place of a link.
+///
+/// For tooling that stores the build itself -- the portrait batch puts each save character on the
+/// player's own planner account with its photographs. Nothing touches the network, the clipboard
+/// or a browser. The file appears whole: it is written beside `path` and renamed into place, so a
+/// reader watching for it never sees half a document.
+pub fn request_document(path: std::path::PathBuf) -> Result<(), RequestError> {
+    request_with(Some(path))
+}
+
+/// Write `doc` to `path` through a sibling file and a rename.
+fn write_document(
+    doc: &er_build_export::BuildExportDoc,
+    path: &std::path::Path,
+) -> Result<usize, String> {
+    let json = serde_json::to_string(doc)
+        .map_err(|err| format!("could not encode the document: {err}"))?;
+    let partial = path.with_extension("partial");
+    std::fs::write(&partial, &json)
+        .map_err(|err| format!("could not write {}: {err}", partial.display()))?;
+    std::fs::rename(&partial, path)
+        .map_err(|err| format!("could not rename {} into place: {err}", partial.display()))?;
+    Ok(json.len())
 }
 
 /// What one completed export did. Every field is measured from the document that was actually
@@ -414,6 +451,20 @@ fn export_inner(read: CharacterRead, sinks: Sinks) {
         read.carried_goods,
         read.carried_ammunition,
     ));
+    if let Some(path) = DOCUMENT_PATH.lock().ok().and_then(|mut slot| slot.take()) {
+        match write_document(&doc, &path) {
+            Ok(bytes) => {
+                crate::log_line(&format!(
+                    "[build-export] document for {:?} written to {} ({bytes} bytes); no link built",
+                    read.name,
+                    path.display()
+                ));
+                PHASE.store(Phase::Done as usize, Ordering::SeqCst);
+            }
+            Err(reason) => set_error(reason),
+        }
+        return;
+    }
     let (url, stored) = share_link(&doc);
     let mut report = ExportReport {
         character: read.name.clone(),

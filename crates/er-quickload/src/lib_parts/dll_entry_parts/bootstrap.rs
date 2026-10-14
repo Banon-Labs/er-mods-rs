@@ -137,6 +137,37 @@ pub unsafe extern "C" fn er_quickload_request_build_url(url: *const std::ffi::c_
     }
 }
 
+/// Write the live character's planner document to `path` as JSON, without building a link.
+///
+/// The portrait batch's save mode stores each save character on the player's planner account
+/// through this. The read runs on the game task and the write on a worker, so any thread may call
+/// it; the file appears, whole, once both have run. Returns 1 when the export was latched and 0
+/// when it was refused (no path, or an export already in flight); the debug log says which.
+///
+/// # Safety
+///
+/// `path` is null or a NUL-terminated string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn er_quickload_request_build_document(path: *const std::ffi::c_char) -> i32 {
+    use er_build_import_runtime::export;
+
+    if path.is_null() {
+        return 0;
+    }
+    // Safety: the caller passes a NUL-terminated string.
+    let Ok(text) = unsafe { std::ffi::CStr::from_ptr(path) }.to_str() else {
+        return 0;
+    };
+    if export::phase() != export::Phase::Idle && export::export_latch_is_stale() {
+        export::reset();
+    }
+    let latched = export::request_document(std::path::PathBuf::from(text.trim()));
+    append_autoload_debug(format_args!(
+        "system-quit-generate-link: export asked for the document at {text:?} -> {latched:?}"
+    ));
+    i32::from(latched.is_ok())
+}
+
 fn game_main_window_handle_usize() -> usize {
     game_main_window().0 as usize
 }
