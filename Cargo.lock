@@ -4748,6 +4748,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mushroom-man-builder"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "er-tpf",
+ "miniz_oxide",
+ "num-bigint",
+]
+
+[[package]]
 name = "mushroom-man-runtime"
 version = "0.1.0"
 dependencies = [

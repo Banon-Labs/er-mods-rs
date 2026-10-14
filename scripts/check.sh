@@ -2808,7 +2808,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-build-export
 # their machine; local/CI parity is the whole reason this file exists.
 cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
-	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults
+	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults \
+	-p mushroom-man-builder
+# mushroom-man-builder's 46 tests (archive keys, BND3/BND4, DCX, FLVER export and patch, TPF
+# layout) build their inputs in memory, so they need neither game installed.
+#
 # er-installer is here rather than in a batch of its own because it is host-only by
 # construction: the conflict rules, the picker state machine, the screen layout and the profile
 # writer are all decidable without a game, a Windows target or a terminal. What its tests are
