@@ -23,8 +23,12 @@ at this tool call, and nothing else:
 1. The pending tool call is located in the transcript by its `tool_use_id`, and the chain is walked
    backwards through `parentUuid` from there. Claude Code writes that link from its own memory, so
    a line appended to the transcript by anyone else is never on the chain. A transcript in which
-   any `uuid` occurs twice is refused outright: that is the one way an appended line could stand in
+   any `uuid` occurs twice is refused outright: that is one way an appended line could stand in
    for an entry that is on the chain (none of the 40 newest transcripts in this project had one).
+   The other way is a copy of the pending tool call itself, appended after the real one by
+   something that read its id there and hung off a forged prompt; a transcript in which a second
+   entry holds the pending `tool_use_id` is refused too (no id repeats among the 24,298 tool calls
+   in the 80 newest transcripts and subagent transcripts in this project, measured 2026-10-14).
    The tool call's own line can land after this reader has started (see `LOCATE_DEADLINE_SECONDS`),
    so a missing line is looked for again in what gets appended, for a bounded time, and denies
    when it never arrives.
@@ -82,8 +86,9 @@ SHELL_META = set(";&|<>()`$\n\r\\*?[]{}~!#")
 # a fixture signal that answered after 4.6 s was read and one that answered after 5.4 s was dropped,
 # which denies). `push_authorization.sh` stops this reader at 4.5 s, so that a reader still running
 # when cupcake gives up is never left to record a spend for a push cupcake has already denied. A 3 s
-# wait leaves 1.5 s of that 4.5 s for the rest, which after the line lands is one read of the
-# appended bytes, the chain walk and the spend: under 0.2 s on an 18 MB transcript.
+# wait leaves 1.5 s of that 4.5 s for the rest. The whole decision on the 18 MB transcript that was
+# refused takes 0.25-0.3 s, most of it the first whole read, which comes before the wait; once the
+# line lands there is one read of the appended bytes, the chain walk and the spend.
 #
 # Against the lag it has to cover: in a subagent transcript every tool_use line landed 0.10-0.11 s
 # after its own `timestamp` (14 calls), while in the busy main session that was refused it had not
@@ -297,19 +302,25 @@ def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]
         transcript = Transcript(path)
         transcript.refresh()
         entries = transcript.entries()
-        start = next((e for e in reversed(entries) if holds_tool_use(e, tool_use_id)), None)
-        while (start is None and writes is not None and time.monotonic() < deadline
+        holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
+        while (not holders and writes is not None and time.monotonic() < deadline
                and writes.wait(deadline - time.monotonic())):
             transcript.refresh()
             entries = transcript.entries()
-            start = next((e for e in reversed(entries) if holds_tool_use(e, tool_use_id)), None)
+            holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
     finally:
         if writes is not None:
             writes.close()
-    if start is None:
+    if not holders:
         raise Refused(f"this tool call was still not in the transcript {LOCATE_DEADLINE_SECONDS:g} s "
                       "after the check began, so its conversation cannot be read; run the same "
                       "push again")
+    # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
+    # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
+    # were taken as the start it would carry its own forged parent onto the chain.
+    if len(holders) > 1:
+        raise Refused("the transcript holds this tool call more than once, so it cannot be trusted")
+    start = holders[0]
     by_uuid: dict[str, dict] = {}
     for e in entries:
         uid = e.get("uuid")
