@@ -38,6 +38,11 @@ pub fn mushroom_tpf(dsr_tpf: &[u8], target_prefix: &str, lod_suffix: &str) -> Re
             .ok_or_else(|| Error::new(format!("c2280's TPF has no texture {source_name}")))?
             .dds
             .clone();
+        let dds = if slot == ALBEDO_SLOT {
+            as_srgb_bc1(dds)
+        } else {
+            dds
+        };
         textures.push(TpfTexture {
             name: format!("{target_prefix}{slot}{lod_suffix}"),
             format,
@@ -116,6 +121,32 @@ pub fn write_tpf(tpf: &Tpf) -> Result<Vec<u8>> {
     Ok(out.into_inner())
 }
 
+const ALBEDO_SLOT: &str = "_a";
+const DDS_FOURCC_OFFSET: usize = 0x54;
+const DDS_HEADER_END: usize = 0x80;
+/// `DXGI_FORMAT_BC1_UNORM_SRGB`: how Elden Ring stores its own body albedo, `FC_M_0000_a`.
+const DXGI_BC1_UNORM_SRGB: u32 = 72;
+const DX10_TEXTURE_2D: u32 = 3;
+
+/// c2280's albedo under the header Elden Ring's own body albedo has. c2280's is a legacy `DXT1`
+/// header, which names no colour space; the game's is the same BC1 blocks under a DX10 header
+/// that says sRGB, so colours are not read as linear and washed out. The pixels are unchanged.
+fn as_srgb_bc1(dds: Vec<u8>) -> Vec<u8> {
+    if dds.len() < DDS_HEADER_END
+        || dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) != Some(b"DXT1".as_slice())
+    {
+        return dds;
+    }
+    let mut out = Vec::with_capacity(dds.len() + 20);
+    out.extend_from_slice(&dds[..DDS_HEADER_END]);
+    out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"DX10");
+    for value in [DXGI_BC1_UNORM_SRGB, DX10_TEXTURE_2D, 0, 1, 0] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.extend_from_slice(&dds[DDS_HEADER_END..]);
+    out
+}
+
 /// `dwMipMapCount` out of a DDS header, at least one.
 fn dds_mip_count(dds: &[u8]) -> Result<u8> {
     if dds.get(..4) != Some(DDS_MAGIC.as_slice()) {
@@ -128,6 +159,23 @@ fn dds_mip_count(dds: &[u8]) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_legacy_dxt1_albedo_gets_the_srgb_dx10_header_and_keeps_its_pixels() {
+        let mut legacy = dds(3, 7);
+        legacy[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"DXT1");
+        let srgb = as_srgb_bc1(legacy.clone());
+        assert_eq!(&srgb[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], b"DX10");
+        assert_eq!(
+            crate::bytes::u32_le(&srgb, DDS_HEADER_END).unwrap(),
+            DXGI_BC1_UNORM_SRGB
+        );
+        assert_eq!(&srgb[DDS_HEADER_END + 20..], &legacy[DDS_HEADER_END..]);
+        assert_eq!(dds_mip_count(&srgb).unwrap(), 3);
+        // Anything that is not a legacy DXT1 passes through untouched.
+        let other = dds(3, 9);
+        assert_eq!(as_srgb_bc1(other.clone()), other);
+    }
 
     fn dds(mips: u32, fill: u8) -> Vec<u8> {
         let mut bytes = vec![fill; 0x80 + 16];

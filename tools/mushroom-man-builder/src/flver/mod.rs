@@ -201,6 +201,7 @@ pub struct LayoutMember {
 pub struct Flver {
     pub header: Header,
     pub mesh_table: usize,
+    pub face_set_table: usize,
     pub bones: Vec<Bone>,
     pub meshes: Vec<Mesh>,
     pub face_sets: Vec<FaceSet>,
@@ -228,12 +229,17 @@ impl Flver {
             )?,
             layouts: parse_layouts(bytes, layout_table, header.buffer_layout_count)?,
             mesh_table,
+            face_set_table,
             header,
         })
     }
 
     pub fn mesh_table_offset(&self, mesh_index: usize) -> usize {
         self.mesh_table + mesh_index * MESH_SIZE
+    }
+
+    pub fn face_set_table_offset(&self, face_set_index: usize) -> usize {
+        self.face_set_table + face_set_index * FACE_SET_SIZE
     }
 
     /// The index size a face set actually uses: its own, or the header's when it records none.

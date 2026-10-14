@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""Measure how the Route A export places c2280's arms against Elden Ring's bind skeleton.
+"""Measure how the Mushroom Man export fits c2280 to Elden Ring's skeleton, and how it moves.
 
 Usage: mushroom-arm-fit-probe.py <dir> [<export-dir>]
-       mushroom-arm-fit-probe.py <dir> --human <out-dir> <offset> <cut 0|1>
+       mushroom-arm-fit-probe.py <dir> --human <out-dir> <offset> <cut 0|1> \\
+           [<refit-body 0|1> <fingers 0|1> [<socket 0|1> <spread m> [<blend m>]]]
+
+The second form writes a candidate fit (a Python prototype of the builder's, kept so a change can
+be scored here before it is written into `tools/mushroom-man-builder/src/flver/export.rs`) and
+scores it; `--human <out> 0.08 0 1 1 1 0.08 0.2` is what the builder does today, to within
+0.0000003 m and the same triangles.
 
 <dir> holds the raw `c2280.flver` and the vanilla `FC_M_0000.flver` (both written by
 `mushroom-man-builder extract-inputs`); <export-dir> (default `<dir>/builder-export`) holds
@@ -18,21 +24,25 @@ vertices that end up inside the body: the idle is what a player looks at, not th
 
 import importlib.util
 import math
-import os
 import struct
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 
-# The export's global reshape (`RouteAParams::default` in tools/mushroom-man-builder/src/flver/export.rs).
+# The mushroom's girth (`FitParams::scale` in tools/mushroom-man-builder/src/flver/export.rs); raw
+# edge lengths times this are the shape the distortion counts compare against. `STRETCH` is the
+# fixed height stretch of the first one-scale fit, which `--candidate` and the non-refit `--human`
+# candidates still use.
 SCALE = 1.225
 STRETCH = 1.14
 BAD_STRETCH = 1.5
 BAD_SQUASH = 0.67
 # Metres over which a digit's weight passes from the human finger's first bone to its second.
-FINGER_BLEND = float(os.environ.get("MUSHROOM_FINGER_BLEND", "0.02"))
+FINGER_BLEND = 0.02
 # Which digits (1 thumb, 2, 3) pass to the human finger's second bone; the rest bend at the base.
-SPLIT_DIGITS = os.environ.get("MUSHROOM_SPLIT_DIGITS", "123")
+# None do in the builder: splitting closed the tips 0.005 m more and added 124 stretched edges to
+# the idle loop, most of them in the thumb.
+SPLIT_DIGITS = ""
 
 
 def u32(b, o):
@@ -357,7 +367,8 @@ def candidate(root, out, rise, offset, blend, rigid):
     write_export(out, positions, faces, rows)
 
 
-def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
+def human_candidate(root, out, offset, cut, refit_body=False, fingers=False, socket=False, spread=0.0,
+                    blend=0.0):
     """Rebind c2280 with human-length arms: its shoulder, elbow and wrist land on Elden Ring's
     `UpperArm`, `Forearm` and `Hand` joints, each segment stretched along its own axis to the human
     length (its girth keeps the global scale), and the hand moved whole onto the human hand, so a
@@ -384,6 +395,9 @@ def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
             return tuple(x * SCALE for x in v)
         hip, shoulder_y = src["Pelvis"]["pos"][1], src["LArm1"]["pos"][1]
         er_hip, er_shoulder_y = er["Pelvis"]["pos"][1], er["L_UpperArm"]["pos"][1]
+        # spread: metres each leg trunk moves out at the ground, fading to nothing at the height
+        # c2280's leg bone starts from, so the two trunks stand apart at the feet.
+        leg_top = src["LLeg1"]["pos"][1] * er_hip / hip
 
         def body(v):
             y = v[1]
@@ -393,7 +407,10 @@ def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
                 y = er_hip + (y - hip) * (er_shoulder_y - er_hip) / (shoulder_y - hip)
             else:
                 y = er_shoulder_y + (y - shoulder_y) * SCALE
-            return (v[0] * SCALE, y, v[2] * SCALE)
+            x = v[0] * SCALE
+            if spread and y < leg_top:
+                x += max(-1.0, min(1.0, x / 0.03)) * spread * smoothstep(0.0, 1.0, (leg_top - y) / leg_top)
+            return (x, y, v[2] * SCALE)
         knee, ankle = er["L_Calf"]["pos"][1], er["L_Foot"]["pos"][1]
     else:
         rel = body = scaled
@@ -421,7 +438,9 @@ def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
         axis = normalise(sub(er_hand, er_shoulder))
         out_dir = normalise(sub(up, tuple(dot(up, axis) * a for a in axis)))
         none = (0.0, 0.0, 0.0)
-        upper, _ = segment(shoulder, elbow, er_shoulder, er_elbow, none)
+        # socket: the arm roots where the body put c2280's own shoulder, not on the human joint.
+        root = body(shoulder) if socket else er_shoulder
+        upper, _ = segment(shoulder, elbow, root, er_elbow, none)
         fore, q_fore = segment(elbow, wrist, er_elbow, er_hand, none)
 
         if fingers:
@@ -453,12 +472,18 @@ def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
         # comes back in along the forearm, so the hand, and the weapon in it, stays put.
         u_elbow = dot(sub(er_elbow, er_shoulder), axis)
         u_hand = dot(sub(er_hand, er_shoulder), axis)
+        u_root = dot(sub(root, er_shoulder), axis)
 
-        def lean(fn, er_shoulder=er_shoulder, axis=axis, out_dir=out_dir, u_elbow=u_elbow, u_hand=u_hand):
+        def lean(fn, er_shoulder=er_shoulder, axis=axis, out_dir=out_dir, u_elbow=u_elbow, u_hand=u_hand,
+                 u_root=u_root):
             def place(v):
                 at = fn(v)
                 u = dot(sub(at, er_shoulder), axis)
                 k = offset * smoothstep(0.0, 1.0, (u_hand - u) / (u_hand - u_elbow))
+                if socket:
+                    # Rooted in the socket, the arm starts flush with the body and leans out by
+                    # the elbow.
+                    k *= smoothstep(0.0, 1.0, (u - u_root) / (u_elbow - u_root))
                 return tuple(a + k * o for a, o in zip(at, out_dir))
             return place
         parts[f"{side}Arm1"] = (lean(upper), e + "UpperArm")
@@ -524,6 +549,23 @@ def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
             for k in range(3):
                 place[k] += w * at[k]
         positions.append(tuple(place))
+    if blend and not cut:
+        # Around each socket the body takes a share of the upper arm's turn that fades to nothing
+        # `blend` metres out, half at the socket itself, so the stretch spreads over the shoulder.
+        sockets = {s: body(src[f"{s}Arm1"]["pos"]) for s in "LR"}
+        by_vertex = defaultdict(list)
+        for index, bone, w in rows:
+            by_vertex[index].append((bone, w))
+        rows = []
+        for index, entries in sorted(by_vertex.items()):
+            if not on_arm[index]:
+                side = "L" if positions[index][0] > 0 else "R"
+                d = length(sub(positions[index], sockets[side]))
+                share = 0.5 * smoothstep(0.0, 1.0, 1.0 - d / blend)
+                total = sum(w for _, w in entries) or 1.0
+                if share > 1e-4:
+                    entries = [(b, w * (1 - share) / total) for b, w in entries] + [(f"{side}_UpperArm", share)]
+            rows += [(index, b, w) for b, w in entries]
     if cut:
         # Cap each opening from a new vertex at the middle of its rim, as the builder does.
         for rim in holes:
@@ -684,12 +726,26 @@ def weapon_report(final, faces, weights, palms, tips, raw, hkx, skeleton, bind, 
         grip = idle[skeleton.index[f"{side}_Weapon"]][0]
         mean = sum(length(sub(posed[i], grip)) for i in sel) / len(sel)
         print(f"  idle: {side} digit tips sit {mean:.3f} m from the weapon bone on average")
+    dominant = [ws[0][0] for ws in weights]
+    legs = {s: [i for i, d in enumerate(dominant) if d in (f"{s}_Foot", f"{s}_Calf") and posed[i][1] < 0.3]
+            for s in "LR"}
+    if legs["L"] and legs["R"]:
+        gap = min(length(sub(posed[a], posed[b])) for a in legs["L"] for b in legs["R"])
+        print(f"  idle: the two leg trunks come within {gap:.3f} m of each other below 0.3 m")
+
+    def is_arm(bone):
+        return bone[:2] in ("L_", "R_") and bone[2:].startswith(("UpperArm", "Forearm", "Hand", "Finger"))
+    seam = [f for f in faces if len({is_arm(dominant[i]) for i in f}) == 2]
     for clip, label in ((hkx.IDLE, "idle loop"), (hkx.R1, "R1 a020_030000"), (hkx.RUN_R1, "running R1 a020_030200")):
         frames = len(hkx._frames(hkx.load_animation(*clip)))
-        gaps, worst_bad = Counter(), 0
+        gaps, worst_bad, worst_seam = Counter(), 0, 0
         for frame in range(0, frames, 3):
             pose = hkx.pose_model(*clip, t=frame / 30.0)
             posed = skin(final, weights, bind, pose, skeleton.index, hkx._qrot)
+            worst_seam = max(worst_seam, sum(
+                1 for f in seam for a, b in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0]))
+                if (r := length(sub(final[a], final[b]))) > 1e-6
+                and not BAD_SQUASH <= length(sub(posed[a], posed[b])) / r <= BAD_STRETCH))
             for side, sel in palms.items():
                 palm = tuple(sum(posed[i][k] for i in sel) / len(sel) for k in range(3))
                 gap = length(sub(pose[skeleton.index[f"{side}_Weapon"]][0], palm))
@@ -702,14 +758,18 @@ def weapon_report(final, faces, weights, palms, tips, raw, hkx, skeleton, bind, 
         print(f"  {label}: weapon bone to mushroom palm at most "
               + ", ".join(f"{s} {g:.2f} m" for s, g in sorted(gaps.items()))
               + f"; worst frame has {worst_bad} edges the pose stretches or squashes past"
-              f" {BAD_STRETCH}x against the fitted bind shape")
+              f" {BAD_STRETCH}x against the fitted bind shape, {worst_seam} of {3 * len(seam)}"
+              " across the arm-to-body seam")
 
 
 if __name__ == "__main__":
     if len(sys.argv) > 5 and sys.argv[2] == "--human":
         # <dir> --human <out-dir> <offset> <cut 0|1> [<refit-body 0|1> <fingers 0|1>]
-        flags = [a == "1" for a in sys.argv[5:8]] + [False, False]
-        human_candidate(Path(sys.argv[1]), Path(sys.argv[3]), float(sys.argv[4]), *flags[:3])
+        # ... [<refit-body 0|1> <fingers 0|1> [<socket 0|1> <spread m>]]
+        flags = [a == "1" for a in sys.argv[5:9]] + [False, False, False]
+        spread = float(sys.argv[9]) if len(sys.argv) > 9 else 0.0
+        blend = float(sys.argv[10]) if len(sys.argv) > 10 else 0.0
+        human_candidate(Path(sys.argv[1]), Path(sys.argv[3]), float(sys.argv[4]), *flags[:4], spread, blend)
         sys.argv[2:] = [sys.argv[3]]
     elif len(sys.argv) > 3 and sys.argv[2] == "--candidate":
         # <dir> --candidate <out-dir> <rise> <offset> <blend> <rigid 0|1>

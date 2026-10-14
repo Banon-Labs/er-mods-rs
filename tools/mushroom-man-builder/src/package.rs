@@ -2,7 +2,7 @@
 //!
 //! | output | built from |
 //! |---|---|
-//! | `parts/fc_*.partsbnd.dcx` (29) | Elden Ring's `fc_m_0000` (and `_l`) with c2280 patched into mesh 13 and its textures, renamed per part |
+//! | `parts/fc_*.partsbnd.dcx` (31) | Elden Ring's `fc_m_0000` (and `_l`) with c2280 patched into mesh 13 and its textures, renamed per part |
 //! | `parts/fg_a_0000_m.partsbnd.dcx`, `_f` | Elden Ring's `fg_a_0000_m` with every face hidden |
 //! | `parts/{hd,bd,am,lg}_{m,f}_0000{,_l}.partsbnd.dcx` (16) | each of those vanilla binders with every face hidden |
 //! | `facegen/facegen.fgbnd.dcx` | Elden Ring's facegen binder with `face.flver` hidden |
@@ -42,8 +42,9 @@ use crate::{
 };
 
 /// Every full-body part a character preset can ask for, from the community file list of Elden
-/// Ring's archives (`/parts/fc_*.partsbnd.dcx`).
-pub const FC_PART_NAMES: [&str; 29] = [
+/// Ring's archives (`/parts/fc_*.partsbnd.dcx`), plus `fc_m_0202` and its `_l`, which the game
+/// holds and that list does not name.
+pub const FC_PART_NAMES: [&str; 31] = [
     "fc_f_0000.partsbnd.dcx",
     "fc_f_0000_l.partsbnd.dcx",
     "fc_f_0001.partsbnd.dcx",
@@ -73,6 +74,8 @@ pub const FC_PART_NAMES: [&str; 29] = [
     "fc_m_0102_l.partsbnd.dcx",
     "fc_m_0105.partsbnd.dcx",
     "fc_m_0105_l.partsbnd.dcx",
+    "fc_m_0202.partsbnd.dcx",
+    "fc_m_0202_l.partsbnd.dcx",
 ];
 
 const PART_EXTENSION: &str = ".partsbnd.dcx";
