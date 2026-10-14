@@ -1153,6 +1153,9 @@ mod tests {
     /// reader only checks that something was placed.
     #[test]
     fn the_banner_counters_are_documented_and_a_blank_banner_is_named() {
+        // The notice counters are part of the snapshot the republish test compares, so writing
+        // them unserialised made that test fail about one run in eight.
+        let _serialised = publish_state_guard();
         publish_notice_oracles(7, 2, 0, 3);
         let json = catalog_oracle_json("latched", "totals settled");
         for field in [

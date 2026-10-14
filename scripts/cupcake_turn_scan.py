@@ -604,3 +604,101 @@ def live_background_work(events: list[dict]) -> BackgroundWork:
                 if isinstance(cmd, str) and DETACHED_RE.search(cmd):
                     return BackgroundWork("a detached shell command", True)
     return BackgroundWork()
+
+
+# --- background tasks still running ----------------------------------------------------------
+
+# A launch acknowledgement that names a task id: a backgrounded Bash ("running in background with
+# ID: bx1"), a foreground Bash the harness moved after its timeout ("moved to the background (ID:
+# bx1)"), one the user backgrounded by hand ("manually backgrounded by user with ID: bx1"), and a
+# Monitor ("Monitor started (task bm1, ...").
+RUNNING_TASK_LAUNCH_RE = re.compile(
+    r"(?:running in background|moved to the background|backgrounded by user)[^\n]*?\bID:\s*([A-Za-z0-9_-]+)"
+    r"|\bmonitor\s+started\s*\(\s*task\s+([A-Za-z0-9_-]+)",
+    re.IGNORECASE,
+)
+
+# A Monitor that ran out its timeout sends no finished `<status>`; it sends one last event,
+# "[Monitor expired after 30m with 1 event delivered. ...]" or "[Monitor timed out -- re-arm if
+# needed.]" (both measured in this repo's transcripts).
+MONITOR_END_EVENT_RE = re.compile(r"<event>\s*\[Monitor (?:expired|timed out)\b", re.IGNORECASE)
+
+
+@dataclass
+class RunningTask:
+    task_id: str
+    kind: str        # "bash" or "monitor"
+    command: str
+    launched_at: int  # event index
+
+
+def running_background_tasks(events: list[dict]) -> list[RunningTask]:
+    """Every Bash or Monitor task this session started that is, as far as the transcript shows,
+    still running: its launch acknowledgement named a task id, and since then no finished
+    `<task-notification>` (in any carrier), no finished `task_status` attachment and no TaskStop
+    naming that id has arrived.
+
+    Unlike `live_background_work` this is not generous and has no recency cutoff. It feeds a guard
+    that halts when a task is left running unexplained, so a task must leave the list only on
+    evidence that it ended. A TaskStop counts whatever its result says: a successful stop ended the
+    task, and a refused one ("no such task", "not running") is the harness saying it had already
+    ended -- either way the agent has asked, and nothing is left to stop. Async subagents are not
+    counted: the guard is about monitors and shell loops, and a subagent's own completion always
+    reports back.
+    """
+    candidates: dict[str, tuple[str, str, int]] = {}  # tool_use_id -> (kind, command, index)
+    running: dict[str, RunningTask] = {}               # task id -> task
+    tool_to_task: dict[str, str] = {}
+
+    def close(tool_id: str, task_id: str) -> None:
+        if task_id:
+            running.pop(task_id, None)
+        if tool_id and tool_id in tool_to_task:
+            running.pop(tool_to_task[tool_id], None)
+
+    for index, ev in enumerate(events):
+        for tool_id, task_id in finished_notifications(ev):
+            close(tool_id, task_id)
+        for text in _notification_carriers(ev):
+            for m in TASK_NOTIFICATION_BLOCK_RE.finditer(text):
+                body = m.group(1)
+                if MONITOR_END_EVENT_RE.search(body):
+                    tool_id = TASK_TOOL_USE_ID_RE.search(body)
+                    task_id = TASK_ID_RE.search(body)
+                    close(tool_id.group(1) if tool_id else "", task_id.group(1) if task_id else "")
+        attachment = ev.get("attachment")
+        if isinstance(attachment, dict) and attachment.get("type") == "task_status":
+            if str(attachment.get("status") or "").lower() in FINISHED_STATUSES:
+                close("", str(attachment.get("taskId") or ""))
+
+        msg = ev.get("message")
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "tool_use":
+                name = block.get("name") or ""
+                inp = block.get("input") or {}
+                if not isinstance(inp, dict):
+                    continue
+                cmd = inp.get("command") if isinstance(inp.get("command"), str) else ""
+                if name in ("Bash", "Monitor"):
+                    candidates[block.get("id") or ""] = (name.lower(), cmd, index)
+                elif name in STOP_TOOLS:
+                    close("", str(inp.get("task_id") or inp.get("shell_id") or ""))
+            elif block.get("type") == "tool_result":
+                uid = block.get("tool_use_id") or ""
+                if uid not in candidates:
+                    continue
+                kind, cmd, at = candidates.pop(uid)
+                if block.get("is_error"):
+                    continue  # refused by a hook or failed to start
+                m = RUNNING_TASK_LAUNCH_RE.search(_result_text(block))
+                if not m:
+                    continue  # a foreground Bash that finished, or a Monitor that never started
+                task_id = m.group(1) or m.group(2)
+                running[task_id] = RunningTask(task_id, kind, cmd, at)
+                tool_to_task[uid] = task_id
+    return sorted(running.values(), key=lambda t: t.launched_at)

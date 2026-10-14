@@ -192,6 +192,96 @@ test_absolute_scratch_scripts_dir_is_denied if {
 	}
 }
 
+# --- the same checkout spelled relative to the repo root (2026-10-13) --------
+#
+# The absolute spelling above was admitted and this one was refused. The first command is
+# the one that was refused in production: a committed test run from a PR worktree, reached
+# through `$W`.
+worktree_user_cmd := "cd /home/banon/projects/er-mods-rs && S=/tmp/x; W=.worktrees; ( python3 $W/pr-hook-shim/scripts/test-cupcake-hook-shim.py > $S/hs.log 2>&1; echo done )"
+
+test_worktree_relative_path_script_is_allowed if {
+	every cmd in [
+		"python3 .worktrees/pr-hook-shim/scripts/test-cupcake-hook-shim.py",
+		"python3 ./.worktrees/lab/scripts/ghidra/mcp_query.py getContext",
+		"uv run --with frida python3 .worktrees/lab/scripts/er-frida-watch.py --agent x.js",
+		"(python3 .worktrees/lab/scripts/check-comment-caps.py)",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+test_worktree_script_through_a_variable_is_allowed if {
+	every cmd in [
+		worktree_user_cmd,
+		"W=.worktrees; python3 ${W}/lab/scripts/check-comment-caps.py x.rs",
+		"W=.worktrees/; python3 $W/lab/scripts/check-comment-caps.py",
+		"R=/home/banon/projects/er-mods-rs; python3 $R/.worktrees/lab/scripts/er-teardown.py --status",
+		"W=.worktrees S=/tmp/x; python3 $W/lab/scripts/check-stages.py --selftest > $S/out 2>&1",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+# `..` anywhere, a checkout name that is not exactly one component, and a path that leaves
+# `scripts/` all keep the refusal, written out or through a variable.
+test_worktree_lookalike_or_traversal_is_denied if {
+	every cmd in [
+		"python3 .worktrees/../../tmp/scripts/x.py",
+		"python3 .worktrees/lab/../scripts/x.py",
+		"python3 .worktrees/lab/scripts/../../../tmp/x.py",
+		"python3 .worktrees/scripts/x.py",
+		"python3 .worktrees//scripts/x.py",
+		"python3 .worktrees/./scripts/x.py",
+		"python3 .worktrees/a/b/scripts/x.py",
+		"python3 .worktrees/lab/tools/x.py",
+		"python3 foo/.worktrees/lab/scripts/x.py",
+		"python3 /tmp/.worktrees/lab/scripts/x.py",
+		"W=.worktrees; python3 $W/../../tmp/scripts/x.py",
+		"W=.worktrees/..; python3 $W/tmp/scripts/x.py",
+		"W=/tmp; python3 $W/.worktrees/lab/scripts/x.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# A variable the policy cannot pin to one literal is not resolved, so the operand is judged
+# as `$W/...` and refused the way it was before.
+test_worktree_variable_that_cannot_be_pinned_down_is_denied if {
+	every cmd in [
+		# never assigned in this command
+		"python3 $W/lab/scripts/x.py",
+		# assigned twice
+		"W=.worktrees; W=/tmp; python3 $W/lab/scripts/x.py",
+		# appended to
+		"W=.worktrees; W+=/../../tmp; python3 $W/lab/scripts/x.py",
+		# bound by a builtin rather than an assignment
+		"W=.worktrees; read W; python3 $W/lab/scripts/x.py",
+		# a prefix assignment: bash expands `$W` before it takes effect
+		"W=.worktrees python3 $W/lab/scripts/x.py",
+		# assigned after the invocation
+		"python3 $W/lab/scripts/x.py; W=.worktrees; echo",
+		# assigned in a subshell, which does not bind it here
+		"( W=.worktrees ); python3 $W/lab/scripts/x.py",
+		"(W=.worktrees); python3 $W/lab/scripts/x.py",
+		# a value that is not a literal
+		"W=$HOME/x; python3 $W/lab/scripts/x.py",
+		"W=~/x; python3 $W/lab/scripts/x.py",
+		"W='/tmp'; python3 $W/lab/scripts/x.py",
+		# a second, unassigned variable after the first
+		"W=.worktrees; python3 $W/$N/scripts/x.py",
+		# a parameter expansion with a modifier
+		"W=.worktrees; python3 ${W:-/tmp}/lab/scripts/x.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# The exemption is for the invocation, so an inline program beside it is still refused.
+test_worktree_script_plus_inline_write_is_denied if {
+	cmd := "python3 .worktrees/lab/scripts/ok.py && python3 -c \"open('a','w').write('x')\""
+	count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+}
+
 # --- not a python command at all ------------------------------------------
 
 test_non_python_command_is_allowed if {
@@ -353,6 +443,12 @@ test_unresolved_variable_scratch_script_is_denied if {
 	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, "UNKNOWN $S/sim.py unresolved variable")
 }
 
+# The quoted `"$S/sim.py"` above is inspected, not skipped: without its verdict the same
+# command is refused. Before 2026-10-13 the quote hid the operand and this allowed.
+test_quoted_scratch_script_without_a_verdict_is_denied if {
+	count(bash_no_python_file_write.deny) == 1 with input as bash(selftest_and_sim_cmd)
+}
+
 # One vetted script does not carry another that was not vetted.
 test_read_only_script_beside_an_unvetted_one_is_denied if {
 	cmd := concat("", ["python3 ", scratch, "/analyse.py; python3 ", scratch, "/patch.py"])
@@ -365,4 +461,58 @@ test_read_only_script_plus_inline_write_is_denied if {
 	cmd := concat("", ["python3 ", scratch, "/analyse.py && python3 -c \"open('a','w').write('x')\""])
 	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
 	count(bash_no_python_file_write.deny) == 1 with input as bash_with_signal(cmd, signal)
+}
+
+# --- two ways a scratch script used to run uninspected (2026-10-13) ---------
+#
+# Every command in the two deny tests below was allowed by this policy before that date,
+# measured. A quoted path failed the `.py` suffix test, and a `-c` or stdin `-` anywhere in
+# the command switched off the script-file rule instead of only withholding the exemption.
+
+test_quoted_scratch_script_is_denied if {
+	every cmd in [
+		`python3 "/tmp/patch.py"`,
+		`python3 '/tmp/patch.py'`,
+		`(python3 "/tmp/x/patch.py")`,
+		`timeout 25 python3 "$S/patch.py" | head -9`,
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+test_quoted_committed_script_is_allowed if {
+	every cmd in [
+		`python3 "scripts/check-comment-caps.py" x.rs`,
+		`python3 '/home/banon/projects/er-mods-rs/scripts/er-teardown.py' --status`,
+		`python3 ".worktrees/lab/scripts/check-stages.py" --selftest`,
+		`W=.worktrees; python3 "$W/lab/scripts/check-stages.py" --selftest`,
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+}
+
+test_inline_program_marker_does_not_hide_a_scratch_script if {
+	every cmd in [
+		"wc -c f; python3 /tmp/patch.py",
+		`bash -c "python3 /tmp/patch.py"`,
+		`python3 -c "print(1)"; python3 /tmp/patch.py`,
+		"cat x | python3 - ; python3 /tmp/patch.py",
+	] {
+		count(bash_no_python_file_write.deny) == 1 with input as bash(cmd)
+	}
+}
+
+# The marker still only withholds the exemption: a committed script, or a vetted read-only
+# one, beside a `-c` that writes nothing is allowed as before.
+test_inline_program_marker_beside_admitted_scripts_is_allowed if {
+	every cmd in [
+		`python3 scripts/check-comment-caps.py x.rs; python3 -c "print(1)"`,
+		`bash -c "python3 scripts/check-stages.py --selftest"`,
+		"wc -c f; python3 scripts/check-comment-caps.py f",
+	] {
+		count(bash_no_python_file_write.deny) == 0 with input as bash(cmd)
+	}
+	cmd := concat("", [`python3 -c "print(1)"; python3 "`, scratch, `/analyse.py"`])
+	signal := concat("", ["READONLY ", scratch, "/analyse.py"])
+	count(bash_no_python_file_write.deny) == 0 with input as bash_with_signal(cmd, signal)
 }

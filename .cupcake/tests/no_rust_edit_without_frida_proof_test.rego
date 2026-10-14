@@ -597,3 +597,69 @@ test_allow_the_sed_loop_with_a_frida_verdict if {
 test_deny_the_sed_loop_when_telemetry_licensed_a_different_crate if {
 	denied(bash_event("sed -i 's/a/b/' crates/er-title-flow/src/lib.rs", PROVEN_TELEMETRY))
 }
+
+# --- resolving a conflict of a stopped rebase/merge ---------------------------
+#
+# Measured 2026-10-07: a `git rebase --onto` stopped on a conflict in
+# `crates/er-npc-summons/src/addr.rs`, and the Edit deleting the markers was refused
+# with `UNPROVEN spent-by-commit`. The reader now answers `CONFLICT-RESOLUTION` when
+# git says the file is unmerged in a stopped operation; the policy admits it only for
+# the path the verdict names and only for the single-path write tools.
+
+CONFLICTED := "/home/banon/projects/er-mods-rs/.worktrees/ledge-reveal-check/crates/er-npc-summons/src/addr.rs"
+
+conflict_verdict(op, path) := concat("", ["CONFLICT-RESOLUTION op=", op, " path=", path])
+
+test_allow_edit_resolving_a_rebase_conflict if {
+	not denied(edit_event(CONFLICTED, conflict_verdict("rebase", CONFLICTED)))
+}
+
+test_allow_write_resolving_a_merge_conflict if {
+	not denied({
+		"hook_event_name": "PreToolUse",
+		"tool_name": "Write",
+		"tool_input": {"file_path": "crates/er-npc-summons/src/addr.rs"},
+		"signals": {"frida_evidence": conflict_verdict("merge", "crates/er-npc-summons/src/addr.rs")},
+	})
+}
+
+test_allow_conflict_verdict_with_a_trailing_newline if {
+	not denied(edit_event(CONFLICTED, concat("", [conflict_verdict("cherry-pick", CONFLICTED), "\n"])))
+}
+
+# An ordinary edit with no conflict in progress gets the ordinary verdict and is refused.
+test_deny_ordinary_edit_with_no_conflict_in_progress if {
+	denied(edit_event(CONFLICTED, UNPROVEN_SPENT))
+}
+
+# A verdict about one conflicted file must not open another.
+test_deny_conflict_verdict_naming_a_different_file if {
+	denied(edit_event(
+		"/home/banon/projects/er-mods-rs/.worktrees/ledge-reveal-check/crates/er-npc-summons/src/lib.rs",
+		conflict_verdict("rebase", CONFLICTED),
+	))
+}
+
+test_deny_conflict_verdict_whose_path_is_only_a_prefix if {
+	denied(edit_event(CONFLICTED, conflict_verdict("rebase", "/home/banon/projects/er-mods-rs/.worktrees/ledge-reveal-check/crates/er-npc-summons/src/addr")))
+}
+
+test_deny_conflict_verdict_with_an_unknown_operation if {
+	denied(edit_event(CONFLICTED, conflict_verdict("stash", CONFLICTED)))
+}
+
+test_deny_conflict_verdict_carrying_a_second_line if {
+	denied(edit_event(CONFLICTED, concat("", [conflict_verdict("rebase", CONFLICTED), "\nPROVEN"])))
+}
+
+# The Bash spelling is never admitted by a conflict verdict.
+test_deny_bash_write_with_a_conflict_verdict if {
+	denied(bash_event(
+		"sed -i '/^<<<<<<<\\|^=======\\|^>>>>>>>/d' crates/er-npc-summons/src/addr.rs",
+		conflict_verdict("rebase", "crates/er-npc-summons/src/addr.rs"),
+	))
+}
+
+test_deny_conflict_verdict_from_a_failure_record if {
+	denied(edit_event(CONFLICTED, {"error": "x", "exit_code": 1, "output": conflict_verdict("rebase", CONFLICTED), "success": false}))
+}
