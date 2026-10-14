@@ -2943,6 +2943,11 @@ python3 "$repo_root/scripts/gen-installer-settings.py" --check
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --selftest
 python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
 
+# The planner's own item spellings, which the loadout uploader resolves every name against before
+# it uploads (the stored name is the icon URL, and `Misericorde` has no full-size icon). Offline:
+# the selftest parses a fixture of the bundle's item literals, it does not fetch the site.
+python3 "$repo_root/scripts/planner-item-names.py" --selftest
+
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
 # deny list nobody exercises is a deny list that stopped matching years ago.

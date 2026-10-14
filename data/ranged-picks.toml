@@ -1,0 +1,42 @@
+# Ranged weapons in the weapon plan (`er-mechanics-shields-ranged.ranged_plan`).
+#
+# User, 2026-10-11: "Bone bow, ansbach's, gloem's, greatbow, spread crossbow, and repeating
+# crossbow are all viable picks. We don't want any bow with barrage because Bone Bow gives a unique
+# better version. We want rain of arrows on one greatbow".
+#
+# Each viable pick the build can wield gets one copy with its own skill. A pick that mounts ashes
+# carries the `[[place]]` ash assigned to its class when it can mount it, otherwise its best
+# skill outside `excluded_ashes`.
+
+viable = [
+    "Bone Bow",
+    "Ansbach's Longbow",
+    "Golem Greatbow",
+    "Greatbow",
+    "Spread Crossbow",
+    "Repeating Crossbow",
+]
+
+# Barrage: Bone Bow's own Rancor Shot does its job better (user). Rancor Shot is skill type 371
+# and Barrage 101, so no shared type would have found this.
+excluded_ashes = ["Barrage"]
+
+# User, 2026-10-11: "A build should choose only one greatbow, depending on best stats or
+# requirements, and for spread crossbow, we might as well have 3 total". The greatbow kept is the
+# viable one worth most at the build's stats (`value`); a greatbow the build cannot wield is out
+# already. (A top-level key: under `[[place]]` below it would belong to that table.)
+one_per_class = ["greatbow"]
+
+[[place]]
+ash = "Rain of Arrows"
+class = "greatbow"
+copies = 1
+
+[copies]
+"Spread Crossbow" = 3
+
+# User, 2026-10-11: "we need to add a sacred seal for casting beastial vitality (usually frenzied
+# since 0 weight and 0 requirements)". The seal is the lightest one the build wields, then the one
+# with the fewest attribute points required.
+[seal]
+spell = "Bestial Vitality"

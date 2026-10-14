@@ -520,6 +520,11 @@ DOT_CURE_DELAY = 15.0
 #: landed hits from real fights (a damage-hook log of invasions, or frame-counted footage): the
 #: median time between one cluster of landed hits and the next.
 ENGAGEMENT_SECONDS = 5.0
+#: How long a battle lasts, seconds: the span a damage-over-time proc (poison, scarlet rot) is
+#: credited over in the per-hit status value (`er-mechanics-ash-table.Table.status_hp`). User,
+#: 2026-10-13: "We can assume a battle goes 30s not 5s for an engagement" -- the 5 s engagement
+#: spacing above had cut Blood Rotten Battle Hammer's rot to 18 HP a hit.
+BATTLE_SECONDS = 30.0
 #: Damage per landed hit the fight length is derived from (`MEASURED`): the median `dmg` of the
 #: best slot of the 324 weapons `er-builds-pvp.py --rl 150 --sort score --top 400` ranked before
 #: this model (the mean over the 1074 RL 150 defenders). `Defenders.fight_engagements` = the

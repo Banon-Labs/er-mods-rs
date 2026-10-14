@@ -1,9 +1,10 @@
 //! Item-name folding.
 //!
-//! The planner's own item database stores every name in plain ASCII (verified:
-//! 0 of 2063 entries contain a character above U+007F), but a *saved build* can
-//! carry an accented spelling of the same item -- the build used to develop this
-//! crate stores `Miséricorde` while the database key is `Misericorde`. Matching
+//! The planner's own item database keys every entry in plain ASCII (verified:
+//! 0 of 2063 keys contain a character above U+007F), but the entry's displayed
+//! `name`, and so what a *saved build* carries, can be accented -- the build used
+//! to develop this crate stores `Miséricorde` while the database key is
+//! `Misericorde` (3 such entries on 2026-10-12, all accents). Matching
 //! the two literally drops the weapon silently, which is the worst failure mode
 //! an importer has, so every lookup goes through [`fold`] on both sides.
 //!

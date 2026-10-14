@@ -80,6 +80,40 @@ CACHE = os.path.expanduser('~/.cache/er-build-planner')
 #: Skill TimeAct file = 600 + SwordArtsParam.swordArtsTypeNew (`TAE`: holds for 274 of the 278
 #: rows; the picking code is in the behavior script, not traced).
 SKILL_TAE_BASE = 600
+
+# Which animation of the skill TimeAct plays depends on the weapon and grip. The one-shot skill
+# state `SwordArtsOneShot` (c0000.behbnd) picks one CustomManualSelectorGenerator by the behavior
+# variable `SwordArtsOneShotCategory`; every CMSG resolves `a<600 + swordArtsTypeNew>_<animId>`
+# (offsetType 0x12, `FUN_14041aba0`), so the clip always comes from the skill's own a6xx file
+# and only the animId moves. `ExecAttack` (c0000.hks lines 1853-1886, 1.17.1) writes the variable
+# from `GetSwordArtsDiffCategory(c_SwordArtsID, env(358), env(225, hand))` (common_define.hks
+# lines 888-956), and the follow-up states read `SwordArtsOneShotComboCategory` (line 1901).
+#: `common_define.hks` of the installed build (1.17.1 extract; the 2026-07-13 copy has the same
+#: `SwordArtsCategory` table and `GetSwordArtsDiffCategory` body).
+COMMON_DEFINE_HKS = os.environ.get('ER_COMMON_DEFINE_HKS', os.path.expanduser(
+    '~/er-extract/1171-20261008-common-define/action/script/common_define.hks'))
+#: diff category -> opening animId (`ExecAttack` lines 1856-1876 give the selector index, the
+#: `SwordArtsOneShot CategorySelector` children give the animId; any other category is index 0).
+ONE_SHOT_VARIANT = {2: 40200, 61: 40200, 3: 40300, 20: 42000, 53: 42000, 24: 42400, 28: 42800,
+                    42: 44200, 55: 44200, 56: 44200, 62: 44200, 47: 44700, 48: 44800,
+                    58: 45800, 57: 45900}
+#: diff category -> offset of the follow-up from 040010 / 040020 (`SwordArtsOneShotComboCategory`,
+#: `ExecAttack` lines 1887-1901, and the `SwordArtsOneShotComboEnd(_2) CategorySelector` children;
+#: ComboEnd_2 has no _42 or _59 child, so those fall back to its index-0 child 040020).
+COMBO_VARIANT = {2: 200, 3: 300, 24: 2400, 42: 4200, 55: 4200, 62: 4200, 58: 5800, 57: 5900}
+COMBO2_VARIANT = {2: 200, 3: 300, 24: 2400, 58: 5800}
+#: Constants of `GetSwordArtsDiffCategory` (common_define.hks line 888-947): skill ids that never
+#: vary (170 <= id < 255 except 196, id >= 300 except 305/357/399, 272, 275), the one fixed answer
+#: (169 -> 45), and the categories it special-cases.
+DIFF_FIXED_ZERO = (272, 275)
+DIFF_KEEP_HIGH = (305, 357, 399)
+WEAPON_CATEGORY_CLAW, WEAPON_CATEGORY_FIST = 22, 42
+WEAPON_CATEGORY_LIGHT_LARGE_SWORD, WEAPON_CATEGORY_LARGE_RAPIER = 60, 39
+WEAPON_CATEGORY_DUELING_SHIELD = 57
+WEAPON_CATEGORY_SMALL_SHIELD, WEAPON_CATEGORY_LARGE_SHIELD = 48, 47
+#: Numeric constants the emulation below hard-codes, compared with the bytecode by the selftest.
+DIFF_CONSTANTS = {170, 255, 196, 300, 305, 357, 399, 275, 272, 0, 169, 45, 10, 39, 90, 98, 151, 152,
+                  225, -1, 2, 4, 3, 5, 8, 9, 1, 9000, 99}
 #: TAE event types (WitchyBND template names, handlers per the doc).
 EV_JUMP_TABLE, EV_ATTACK, EV_BULLET, EV_COMMON = 0, 1, 2, 5
 EV_SPEFFECT = (66, 67, 401)
@@ -125,6 +159,7 @@ GEM_FIELDS = (['swordArtsParamId', 'defaultWepAttr', 'isSpecialSwordArt', 'rank'
               + [f'canMountWep_{v}' for v in WEP_TYPE_MOUNT_FLAG.values()])
 WEAPON_EXTRA = ['swordArtsParamId', 'gemMountType', 'disableGemAttr', 'restrictSpecialSwordArt',
                 'wepType', 'isDualBlade', 'atkAttribute', 'atkAttribute2',
+                'wepmotionOneHandId', 'wepmotionBothHandId',
                 'vsPlayerDmgCorrectRate_Physics', 'vsPlayerDmgCorrectRate_Magic',
                 'vsPlayerDmgCorrectRate_Fire', 'vsPlayerDmgCorrectRate_Thunder',
                 'vsPlayerDmgCorrectRate_Dark']
@@ -457,14 +492,84 @@ _SKILL_TAE = {}
 
 
 def skill_tae(t, sword_arts_id):
-    """{anim id: [TaeEvent]} of `a<600 + swordArtsTypeNew>.tae`, or None."""
+    """{anim id: [TaeEvent]} of `a<600 + swordArtsTypeNew>.tae`, or None. An entry that imports
+    another animation (`ImportOtherAnim`) and has no attack event of its own carries the source's
+    events too (`ATK.resolve_events`): Stormcaller's twinblade opening a623_042400 holds no events
+    and imports a623_040000."""
     row = t.arts.get(sword_arts_id)
     if row is None:
         return None
     cat = SKILL_TAE_BASE + row['swordArtsTypeNew']
     if cat not in _SKILL_TAE:
-        _SKILL_TAE[cat] = ATK.tae_animations(cat)
+        raw = ATK.tae_animations(cat)
+        _SKILL_TAE[cat] = None if raw is None else {a: ATK.resolve_events(cat, a)[2] or [] for a in raw}
     return _SKILL_TAE[cat]
+
+
+_ARTS_CATEGORY = {}
+
+
+def sword_arts_categories(path=COMMON_DEFINE_HKS):
+    """{swordArtsTypeNew: [diff categories]}, the `SwordArtsCategory` table of common_define.hks,
+    read by executing its main chunk symbolically (`er-hks-weapon-category-table`). Empty when the
+    file is absent, which leaves every skill on its index-0 animations."""
+    if path not in _ARTS_CATEGORY:
+        table = None
+        if os.path.exists(path):
+            wct = _load('er_hks_weapon_category_table', 'er-hks-weapon-category-table.py')
+            code, consts = wct.parse_main_function(open(path, 'rb').read())
+            table = wct.run_main_chunk(code, consts).get('SwordArtsCategory')
+        _ARTS_CATEGORY[path] = ({int(k): [int(c) for c in v.as_list()] for k, v in table.array.items()}
+                                if table is not None else {})
+    return _ARTS_CATEGORY[path]
+
+
+def is_two_handed(grip):
+    """The grip spellings callers use ('one'/'both', '1H'/'2H', a bool) -> two-handed or not."""
+    return grip in (True, 'both', 'two', '2H', '2h')
+
+
+def diff_category(arts_type, idle_category, weapon_category, categories, one_handed=True):
+    """`GetSwordArtsDiffCategory(c_SwordArtsID, env(358), env(225, c_SwordArtsHand))`
+    (common_define.hks lines 888-956) for a skill used from the hand that holds the weapon.
+
+    `env(225, hand)` is that hand's `wepmotionCategory` and `env(358)` the idle category: the
+    right weapon's `wepmotionOneHandId` while one-handing, the two-handed weapon's
+    `wepmotionBothHandId` otherwise (`VERIFIED`: both are `PlayerIns` vtable +0x248
+    `0x1406568b0`, reading the int[3] that `0x1404d0eb0` [1.17.1 `0x1404d1c80`] fills from
+    EquipParamWeapon +0xe7 / +0xf0 / +0xf1 by ChrAsm arm style). The left-hand shield branch
+    (`c_SwordArtsHand == HAND_LEFT` while one-handing, shield skills cast from the off hand) is not
+    modelled."""
+    a = arts_type
+    if (170 <= a < 255 and a != 196) or (a >= 300 and a not in DIFF_KEEP_HIGH) or a in DIFF_FIXED_ZERO:
+        return 0
+    if a == 169:
+        return 45
+    if weapon_category == WEAPON_CATEGORY_LIGHT_LARGE_SWORD:
+        return 0
+    alt = WEAPON_CATEGORY_FIST if weapon_category == WEAPON_CATEGORY_CLAW else weapon_category
+    idle = idle_category - 10 if idle_category >= 10 else idle_category
+    if weapon_category == WEAPON_CATEGORY_LARGE_RAPIER:
+        idle = 0
+    if a in (90, 98, 151, 152) and weapon_category == WEAPON_CATEGORY_DUELING_SHIELD and one_handed:
+        return 0
+    row = categories.get(a, [])
+    if weapon_category in row:
+        return weapon_category
+    if alt in row:
+        return alt
+    if 90 <= a <= 99:
+        return 0
+    return idle if idle in row else 0
+
+
+def weapon_diff_category(t, sword_arts_id, weapon_id, grip='one'):
+    """`diff_category` for this skill on this weapon held in `grip`."""
+    w = t.reg.weapon[weapon_id]
+    two = is_two_handed(grip)
+    idle = w.get('wepmotionBothHandId' if two else 'wepmotionOneHandId', 0) or 0
+    return diff_category(t.arts[sword_arts_id]['swordArtsTypeNew'], idle, w['wepmotionCategory'],
+                         sword_arts_categories(), one_handed=not two)
 
 
 def _frames(e):
@@ -628,13 +733,94 @@ def anim_actions(t, weapon_id, events, level=0):
     return out
 
 
-def skill_profile(t, sword_arts_id, weapon_id, level=0):
-    """Everything the skill does on this weapon, per animation, plus a classification. Cached on
-    the tables per (skill, weapon, level); callers treat the result as read-only."""
-    key = (sword_arts_id, weapon_id, level)
+def skill_profile(t, sword_arts_id, weapon_id, level=0, grip='one'):
+    """Everything the skill does on this weapon, per animation, plus a classification and the
+    animation this weapon and grip open with (`opening`, read by `main_anim`). Cached on the
+    tables per (skill, weapon, level, grip); callers treat the result as read-only."""
+    two = is_two_handed(grip)
+    key = (sword_arts_id, weapon_id, level, two)
     if key not in t._profiles:
-        t._profiles[key] = _skill_profile(t, sword_arts_id, weapon_id, level)
+        base_key = (sword_arts_id, weapon_id, level)
+        if base_key not in t._profiles:
+            t._profiles[base_key] = _skill_profile(t, sword_arts_id, weapon_id, level)
+        base = t._profiles[base_key]
+        t._profiles[key] = {**base, **_opening(t, base, sword_arts_id, weapon_id, two)}
     return t._profiles[key]
+
+
+def _opening(t, prof, sword_arts_id, weapon_id, two):
+    """The opening and follow-up animation ids for this weapon and grip.
+
+    The index-0 opening is the first animation that charges FP. When that is 040000 the skill
+    enters `SwordArtsOneShot`, which plays `ONE_SHOT_VARIANT[diff category]` instead
+    (Spinning Slash: 040000 on a straight sword, 040200 on a greatsword, 040300 on a halberd,
+    042400 on a twinblade). A variant the skill TimeAct lacks is reported and the index-0
+    animation kept: the graph would fall back to `a000_<id>` or another skill's clip there."""
+    generic = prof['fp_anims'][0] if prof['fp_anims'] else next(iter(prof['anims']), None)
+    cat = weapon_diff_category(t, sword_arts_id, weapon_id, two)
+    out = {'grip': 'both' if two else 'one', 'diff_category': cat, 'generic_opening': generic,
+           'opening': generic, 'one_shot': generic == 40000, 'variant_missing': None}
+    if generic == 40000 and cat in ONE_SHOT_VARIANT:
+        want = ONE_SHOT_VARIANT[cat]
+        if want in prof['anims']:
+            out['opening'] = want
+        else:
+            out['variant_missing'] = want
+    return out
+
+
+def lead_in(t, sword_arts_id, prof):
+    """Real frames the cast plays before `main_anim`, 0 for nearly every skill.
+
+    A held skill whose FP-charging opening is its loop clip (`...1`) starts on the uncharged clip
+    before it (`...0`) and enters the loop when that clip ends: c0000.hks
+    `SwordArtsOneShot_onUpdate` fires `W_SwordArtsLoopLoop` on `env(IsAnimEnd, 0)` while L2 is
+    held. Wild Strikes (110) is the only one of the 278 skills with that shape: a610_040050,
+    32 frames with no hit and its first R1 cancel at f19, then the loop a610_040051 with hits at
+    f5 and f24 whose R1 and roll cancels open at f0. Scored from the loop alone, the cast hit at f5
+    and cost nothing before it (2026-10-12). That the loop starts at the clip's end and not at its
+    f19 flag is the HKS reading, not a measurement."""
+    op = main_anim(prof)
+    anims = {int(a) for a in prof['anims']}
+    if op is None or op % 10 != 1 or op - 1 not in anims or op - 1 in {int(a) for a in prof['fp_anims']}:
+        return 0.0
+    D = sys.modules.get('er_mechanics_disengage')
+    if D is None:
+        D = sys.modules['er_mechanics_disengage'] = _load('er_mechanics_disengage', 'er-mechanics-disengage.py')
+    c = D.clip(SKILL_TAE_BASE + t.arts[sword_arts_id]['swordArtsTypeNew'], op - 1)
+    return float(c['length']) if c and c.get('length') else 0.0
+
+
+def untimed_hits(prof, hits):
+    """Whether every hit of the cast is in a clip other than `main_anim` while the opening itself
+    hits nothing: the hits' frames are then from the start of a clip the cast reaches only later,
+    at a time the clips do not give. Erdtree Slam on the Rotten Staff (skill 1193): the jump
+    a793_040000 (149 frames, no hit), a fall loop 040003, and the landing 040004 with every hit at
+    its f0-f1, which a sweep counting frames from the cast scored at 50780 damage per second."""
+    op = main_anim(prof)
+    return bool(hits) and op is not None and all(h.get('anim') not in (None, op) for h in hits)
+
+
+def lead_in_hyperarmor(prof):
+    """The hyperarmor events of the clip `lead_in` counts, in cast frames (Wild Strikes'
+    a610_040050: f10 to f35, running into the loop's own f0 to f41)."""
+    op = main_anim(prof)
+    an = prof['anims']
+    return [e for e in an.get(op - 1, an.get(str(op - 1), [])) if e['kind'] == 'hyperarmor'] if op else []
+
+
+def lead_in_ha_start(prof, start):
+    """`start`, or the first hyperarmor frame of the lead-in clip when that is earlier."""
+    return min([start] + [e['frames'][0] for e in lead_in_hyperarmor(prof)])
+
+
+def followup_anim(prof, step):
+    """The animation a follow-up press plays: `opening + step`, except after a one-shot opening,
+    where `SwordArtsOneShotComboCategory` picks 040010 / 040020 plus the category's offset."""
+    if not prof.get('one_shot'):
+        return prof['opening'] + step
+    table = COMBO_VARIANT if step == 10 else COMBO2_VARIANT
+    return 40000 + step + table.get(prof.get('diff_category'), 0)
 
 
 def _skill_profile(t, sword_arts_id, weapon_id, level=0):
@@ -712,7 +898,10 @@ def bullet_buffs(t, bt):
 
 
 def main_anim(profile):
-    """The first animation that charges FP (the skill's opening, with FP), else the first."""
+    """The skill's opening with FP on this weapon and grip (`skill_profile` 'opening'); for a
+    profile built without one, the first animation that charges FP, else the first."""
+    if profile.get('opening') is not None:
+        return profile['opening']
     if profile['fp_anims']:
         return profile['fp_anims'][0]
     return next(iter(profile['anims']), None)
@@ -738,6 +927,9 @@ class WeaponContext:
         self.rating = self.AR.attack_rating(self.tables, weapon, affinity, level, stats, two_handed)
         self.reinf = self.tables.reinforce[self.wep['reinforceTypeId'] + level]
         self.two = self.rating['two_handed_bonus']
+        # The grip as held, which picks the skill's animation (`skill_profile`); `two` is the
+        # strength bonus, which some weapons do not get.
+        self.two_handed = bool(two_handed)
         self.ar_by = {el: self.rating['damage'].get(el, {}).get('total', 0.0) for el in ELEMENTS}
         self.base_by = {el: self.rating['damage'].get(el, {}).get('base', 0.0) for el in ELEMENTS}
         self.base_atk_rate = self.reinf['baseAtkRate']
@@ -775,13 +967,18 @@ def hit_attack(ctx, row, from_weapon=True):
     return out
 
 
+def ctx_grip(ctx):
+    """'both' or 'one' for a `WeaponContext` (or any object with `two_handed`)."""
+    return 'both' if getattr(ctx, 'two_handed', False) else 'one'
+
+
 def skill_hits(t, weapon_id, sword_arts_id, ctx, level=0, anim=None):
     """Every damaging hit of one skill animation, with its attack per element before defense.
 
     This is the function a PvP ranking calls. `weapon_id` is the base id (behaviorVariationId and
     saWeaponDamage are the same across affinities); `ctx` is a `WeaponContext` for the weapon as
     built (affinity, level, stats, grip)."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level)
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx))
     anim = anim if anim is not None else main_anim(prof)
     out = []
 
@@ -1289,14 +1486,15 @@ def skill_fp(t, sword_arts_id):
     return l2 if l2 > 0 else max(row[f'useMagicPoint_{h}'] for h in ('L1', 'L2', 'R1', 'R2'))
 
 
-def skill_followups(t, sword_arts_id, weapon_id, level=0):
+def skill_followups(t, sword_arts_id, weapon_id, level=0, grip='one'):
     """The follow-ups a skill's opening offers (section 16): per TAE event 66 carrying a
     `FOLLOW_UP_SPEFFECTS` id, the button, the follow-up animation and the real frames of the
     opening between which that press starts it (where the SpEffect window, the button's input
     window and its cancel window overlap, attacks.md section 4). Flaming Strike on a Lance: 100050
     f30-44, R2 input 87 from f21, R2 cancel 116 f30-35 then 4 from f35, so R2 at f30-44 plays
-    040010, the melee swing that applies the fire buff."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level)
+    040010, the melee swing that applies the fire buff. On a weapon whose diff category moves the
+    opening, the follow-up moves with it (`followup_anim`)."""
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, grip)
     opening = main_anim(prof)
     events = (skill_tae(t, sword_arts_id) or {}).get(opening) or []
     if not events:
@@ -1311,7 +1509,7 @@ def skill_followups(t, sword_arts_id, weapon_id, level=0):
         if sp not in FOLLOW_UP_SPEFFECTS:
             continue
         button, step = FOLLOW_UP_SPEFFECTS[sp]
-        anim = opening + step
+        anim = followup_anim(prof, step)
         if anim not in prof['anims'] or anim in prof['no_fp_anims']:
             continue
         w = rec[button]
@@ -1333,7 +1531,7 @@ def skill_option(t, weapon_id, sword_arts_id, ctx, level, defender=None, def_mod
     With `follow` (one `skill_followups` entry) the option is the opening and then that follow-up,
     pressed at its first frame: both animations' hits, the follow-up's recovery, the FP of both
     presses, and `parts` so each is landed and reacted to on its own (section 16)."""
-    prof = skill_profile(t, sword_arts_id, weapon_id, level)
+    prof = skill_profile(t, sword_arts_id, weapon_id, level, ctx_grip(ctx))
     hits = skill_hits(t, weapon_id, sword_arts_id, ctx, level)
     commit = skill_commit(t, weapon_id, sword_arts_id, prof, hits) if hits else {}
     parts = [{'hits': hits, 'offset': commit.get('first_offset') or 0.0, 'cue': commit.get('cue') or 0.0}]
@@ -3133,7 +3331,7 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
     out = [base]
     follows = []
     try:
-        follows = skill_followups(t, sid, weapon_id, level) if follow_ups or buff_fn else []
+        follows = skill_followups(t, sid, weapon_id, level, ctx_grip(ctx)) if follow_ups or buff_fn else []
     except (SystemExit, KeyError, StopIteration, TypeError):
         follows = []
     for f in follows if follow_ups else []:
@@ -3146,7 +3344,7 @@ def _skill_option_scored(t, weapon_id, sid, ctx, level, best_score, fp_bar, enga
         if v is not None and v.get('score') is not None:
             out.append(v)
     if buff_fn is not None:
-        prof = skill_profile(t, sid, weapon_id, level)
+        prof = skill_profile(t, sid, weapon_id, level, ctx_grip(ctx))
         roots, fp, cast = list(base['buff_roots']), base['fp'], None
         opening = main_anim(prof)
         if opening is not None:
@@ -3219,9 +3417,13 @@ def print_profile(t, prof, level):
     print(f"{prof['name']} (SwordArtsParam {prof['sword_arts_id']}, TimeAct {prof['tae']}) on "
           f"{prof['weapon']} ({prof['weapon_id']}): FP L2 {prof['fp_cost']['L2']} R2 {prof['fp_cost']['R2']}"
           f"; classes {', '.join(prof['classes']) or 'none'}")
-    print('  Every animation of the skill TimeAct is listed; which variant a given weapon and grip '
-          'plays is the behavior script\'s choice (not traced). An id 5 above another without an '
-          'fp line is its without-FP copy.')
+    print(f"  {'2H' if prof.get('grip') == 'both' else '1H'} opens with {main_anim(prof):06d} "
+          f"(diff category {prof.get('diff_category')}, GetSwordArtsDiffCategory)"
+          + (f"; variant {prof['variant_missing']:06d} is not in the TimeAct"
+             if prof.get('variant_missing') else ''))
+    print('  Every animation of the skill TimeAct is listed; the other variants are what other '
+          'weapon classes and grips play. An id 5 above another without an fp line is its '
+          'without-FP copy.')
     for anim, acts in prof['anims'].items():
         if not acts:
             continue
@@ -3297,7 +3499,7 @@ def cmd_skill(t, a):
               f"({t.can_mount(wid, gem, t.gem[gem]['defaultWepAttr'], 25)[1]}); its rows may not resolve")
     elif gem is None and t.reg.weapon[wid]['swordArtsParamId'] != sid:
         print(f"warning: {t.arts_name(sid)} is not an ash and not this weapon's own skill")
-    prof = skill_profile(t, sid, wid, a.level)
+    prof = skill_profile(t, sid, wid, a.level, a.grip)
     if a.json:
         print(json.dumps(prof, indent=1, default=str))
     else:
@@ -3332,6 +3534,87 @@ def _probe_weapon(t, sid, gem_id):
         if gem_id is None and t.reg.weapon[wid]['swordArtsParamId'] == sid:
             return wid
     return None
+
+
+def opening_timing(t, sid, wid, prof, anim):
+    """(first hit clip frame, last hit clip frame, roll real frame, R1 real frame, has TAE 608)
+    of one opening animation; a leap opening takes its hits from the same ten-block."""
+    acts = list(prof['anims'].get(anim, []))
+    if not any(x['kind'] in ('melee', 'bullet') for x in acts):
+        acts = [x for a in prof['anims'] if a // 10 == anim // 10 and a not in prof['no_fp_anims']
+                for x in prof['anims'][a]]
+    hits = [x['frames'][0] for x in acts if x['kind'] in ('melee', 'bullet')]
+    first, last = (min(hits), max(hits)) if hits else (None, None)
+    rec = anim_recovery(t, wid, sid, anim, (last or 0) / TAE_FPS)
+    speed = bool(ATK._reach().speed_windows((skill_tae(t, sid) or {}).get(anim) or []))
+    return first, last, rec.get('dodge'), rec.get('r1'), speed
+
+
+def weapon_category_names():
+    """{wepmotionCategory: 'TWINBLADE', ...} from common_define.hks `WEAPON_CATEGORY_*`."""
+    if not os.path.exists(COMMON_DEFINE_HKS):
+        return {}
+    wct = _load('er_hks_weapon_category_table', 'er-hks-weapon-category-table.py')
+    return {v: n.removeprefix('WEAPON_CATEGORY_') for n, v in wct.extract(COMMON_DEFINE_HKS)['categories'].items()}
+
+
+def opening_variants(t, sid=None):
+    """[row] per (skill, wepmotionCategory, grip, opening): the animation each carrier class opens
+    with and its timing next to the index-0 opening's. Carriers are base weapons that mount the
+    ash or ship with the skill."""
+    gems = t.ash_gems()
+    base = [w for w in sorted(t.reg.weapon) if w % 10000 == 0]
+    names = weapon_category_names()
+    out = []
+    for s in ([sid] if sid is not None else sorted(t.arts)):
+        if s in (0, 1, 10):
+            continue
+        g = gems.get(s)
+        carriers = [w for w in base if (g is not None and t.can_mount(w, g, 0)[0])
+                    or t.reg.weapon[w].get('swordArtsParamId') == s]
+        by_class = collections.defaultdict(list)
+        for w in carriers:
+            by_class[t.reg.weapon[w]['wepmotionCategory']].append(w)
+        for mc, ws in sorted(by_class.items()):
+            for two in (False, True):
+                seen = set()
+                for w in ws:
+                    try:
+                        p = skill_profile(t, s, w, 0, two)
+                    except (SystemExit, KeyError, TypeError):
+                        continue
+                    if p['generic_opening'] is None or (p['opening'], p['variant_missing']) in seen:
+                        continue
+                    seen.add((p['opening'], p['variant_missing']))
+                    gen = opening_timing(t, s, w, p, p['generic_opening'])
+                    var = gen if p['opening'] == p['generic_opening'] else opening_timing(t, s, w, p, p['opening'])
+                    out.append({'skill': t.arts_name(s), 'sword_arts_id': s, 'tae': p['tae'],
+                                'class': mc, 'class_name': names.get(mc, str(mc)),
+                                'grip': '2H' if two else '1H', 'weapon': t.reg.weapon_names.get(w),
+                                'diff_category': p['diff_category'], 'generic': p['generic_opening'],
+                                'opening': p['opening'], 'variant_missing': p['variant_missing'],
+                                'generic_timing': gen, 'timing': var})
+    return out
+
+
+def cmd_variants(t, a):
+    rows = opening_variants(t, t.find_arts(a.skill) if a.skill else None)
+    moved = [r for r in rows if r['opening'] != r['generic']]
+    differ = {(r['sword_arts_id'], r['class']) for r in moved if r['timing'] != r['generic_timing']}
+    pairs = {(r['sword_arts_id'], r['class']) for r in rows}
+    shown = rows if a.skill else moved
+    print('skill\tclass\tgrip\tweapon\tdiff cat\topening\tfirst hit\tlast hit\troll\tR1\t608\t'
+          'index-0 first/last/roll/R1')
+    for r in shown:
+        f = r['timing']
+        g = r['generic_timing']
+        print(f"{r['skill']}\t{r['class']} {r['class_name']}\t{r['grip']}\t{r['weapon']}\t{r['diff_category']}\t"
+              f"{r['opening']:06d}\t{f[0]}\t{f[1]}\t{f[2]}\t{f[3]}\t{'yes' if f[4] else '-'}\t"
+              f"{g[0]}/{g[1]}/{g[2]}/{g[3]}")
+    print(f'{len(pairs)} (skill, class) pairs; {len({(r["sword_arts_id"], r["class"]) for r in moved})} open '
+          f'with a variant; {len(differ)} of those differ in timing from the index-0 opening, across '
+          f'{len({s for s, _ in differ})} skills; {sum(1 for r in rows if r["variant_missing"])} rows name '
+          'a variant the TimeAct lacks')
 
 
 def cmd_adoption(t, a):
@@ -3514,7 +3797,7 @@ def cmd_pvp(t, a):
         level = ctx.level
         hits = skill_hits(t, wid, sid, ctx, level)
         total = pvp_damage(t, wid, hits, defender, def_mod)
-        prof = skill_profile(t, sid, wid, level)
+        prof = skill_profile(t, sid, wid, level, two)
         print(f"\n{t.arts_name(sid)} on {wname} {aff}+{level} {'2H' if two else '1H'} "
               f"STR {st['str']} DEX {st['dex']} INT {st['int']} FTH {st['fth']} ARC {st['arc']}; "
               f"AR {round(sum(ctx.ar_by.values()))}; classes {'+'.join(prof['classes']) or '-'}; "
@@ -3773,6 +4056,53 @@ def cmd_check(t, a):
 # ---------------------------------------------------------------------------------------------
 # selftest
 
+def _selftest_openings(t, check):
+    """The weapon- and grip-dependent opening (`skill_profile` 'opening'), anchored on the
+    behavior script it emulates."""
+    if not os.path.exists(COMMON_DEFINE_HKS):
+        print(f'SKIP opening checks: {COMMON_DEFINE_HKS} not found')
+        return
+    spec = importlib.util.spec_from_file_location('er_hks_disasm', os.path.join(HERE, 'er-hks-disasm.py'))
+    hks = importlib.util.module_from_spec(spec)
+    sys.modules['er_hks_disasm'] = hks          # its dataclasses resolve through sys.modules
+    spec.loader.exec_module(hks)
+    _, _, _, main = hks.parse_file(COMMON_DEFINE_HKS)
+    hks.name_functions(main)
+    fn = next(f for f in hks.walk(main) if f.name == 'GetSwordArtsDiffCategory')
+    check('GetSwordArtsDiffCategory constants match the emulation',
+          {int(c) for c in fn.consts if isinstance(c, (int, float))}, DIFF_CONSTANTS,
+          'HKS common_define.hks GetSwordArtsDiffCategory (lines 888-956)')
+    spin = t.find_arts('Spinning Slash')
+    check('SwordArtsCategory[3] (Spinning Slash, a603)',
+          sword_arts_categories().get(t.arts[spin]['swordArtsTypeNew']), [0, 2, 3, 24, 58],
+          'HKS common_define.hks main chunk line 756')
+    bastard = t.find_weapon('Bastard Sword')
+    check('Bastard Sword idle categories (wepmotionOneHandId, wepmotionBothHandId)',
+          (t.reg.weapon[bastard]['wepmotionOneHandId'], t.reg.weapon[bastard]['wepmotionBothHandId']), (2, 12),
+          'REGULATION EquipParamWeapon +0xf0/+0xf1, read by EXE 0x1404d0eb0 into env(358)')
+    want = {('Longsword', 'one'): (40000, 18), ('Longsword', 'both'): (40000, 18),
+            ('Bastard Sword', 'one'): (40200, 26), ('Bastard Sword', 'both'): (40200, 26),
+            ('Halberd', 'one'): (40300, 27), ('Twinblade', 'both'): (42400, 18),
+            ('Backhand Blade', 'one'): (45800, 18), ('Milady', 'both'): (40000, 18)}
+    got = {}
+    for (name, grip) in want:
+        wid = t.find_weapon(name)
+        p = skill_profile(t, spin, wid, 0, grip)
+        got[(name, grip)] = (main_anim(p), opening_timing(t, spin, wid, p, main_anim(p))[0])
+    check('Spinning Slash opening and first hit frame per weapon class and grip', got, want,
+          'HKS ExecAttack lines 1853-1886 + GetSwordArtsDiffCategory; BEH SwordArtsOneShot CategorySelector; '
+          'TAE a603 040000/040200/040300/042400/045800 (light greatsword returns 0, common_define line 899)')
+    tw = skill_profile(t, spin, t.find_weapon('Twinblade'), 0, 'both')
+    check('Spinning Slash follow-up on a twinblade is 042410', followup_anim(tw, 10), 42410,
+          'HKS ExecAttack line 1901 SwordArtsOneShotComboCategory 24 -> 3; BEH ComboEnd_24_CMSG')
+    sc = t.find_arts('Stormcaller')
+    check('Stormcaller twinblade opening 042400 imports 040000 (same first hit)',
+          [x['frames'][0] for x in skill_profile(t, sc, t.find_weapon('Twinblade'), 0, 'one')['anims'][42400]
+           if x['kind'] == 'melee'][:1],
+          [x['frames'][0] for x in skill_profile(t, sc, t.find_weapon('Twinblade'), 0, 'one')['anims'][40000]
+           if x['kind'] == 'melee'][:1], 'TAE a623 042400 ImportOtherAnim -> 040000')
+
+
 def selftest():
     t = AshTables(None)
     passed = failed = skipped = 0
@@ -3949,10 +4279,15 @@ def selftest():
                [5.24, 4.72, 4.49, 4.58]), 'TAE a756 + hkx root motion')
         check('Quickstep: i-frames f0-9', [m['iframes'] for m in skill_evasion(t, t.find_arts('Quickstep'), claymore)],
               [9.0] * 4, 'TAE a755')
-        dend = defensive_buff(t, endure, claymore)
+        dend = defensive_buff(t, endure, longsword)
         check('Endure: 1650 from f4 for 3 s, x0.6 PvP damage taken, reaction override to the flinch',
               (dend['root'], dend['start'], dend['duration_s'], dend['damage_taken'], dend['uninterruptible']),
               (1650, 4, 3.0, 0.6, True), 'REGULATION 1650 spCategory 1001 dmgLv_* 1 -> REMAP 0 (frame-advantage)')
+        dend = defensive_buff(t, endure, claymore)
+        check('Endure on a greatsword opens 040200: 1655 from f4 for 3.5 s',
+              (main_anim(skill_profile(t, endure, claymore)), dend['root'], dend['start'], dend['duration_s']),
+              (40200, 1655, 4, 3.5), 'HKS GetSwordArtsDiffCategory idle category 2; TAE 040200; REGULATION 1655')
+        _selftest_openings(t, check)
         check('War Cry is not a defensive buff', defensive_buff(t, t.find_arts('War Cry'), claymore), None,
               'REGULATION 1810/1812: attack only')
         far = Opponents([{'w': 1, 'active': 3, 'reach': 99.0, 'hp': 300.0, 'recovery': 0.0}], 'uniform')
@@ -4174,9 +4509,12 @@ def main():
     s.add_argument('skill')
     s.add_argument('--weapon', required=True)
     s.add_argument('--level', type=int, default=0)
+    s.add_argument('--grip', choices=('1H', '2H'), default='1H')
     s.add_argument('--json', action='store_true')
     s = sub.add_parser('list', help='every skill with its FP and class')
     s.add_argument('--mountable', help='only ashes this weapon accepts (Standard affinity)')
+    s = sub.add_parser('variants', help='the opening each weapon class and grip plays (diff category)')
+    s.add_argument('skill', nargs='?', help='one skill, every class shown; omitted: every skill, moved rows only')
     s = sub.add_parser('compare', help='two er-builds-pvp --json rankings side by side (section 15)')
     s.add_argument('--pvp', required=True, help='the new ranking')
     s.add_argument('--before', required=True, help='the ranking to compare against')
@@ -4221,7 +4559,7 @@ def main():
     t = AshTables(None)
     {'skill': cmd_skill, 'list': cmd_list, 'adoption': cmd_adoption, 'pvp': cmd_pvp,
      'term': cmd_term, 'compare': cmd_compare, 'landing': cmd_landing,
-     'ashrank': cmd_ashrank}.get(a.cmd, lambda *_: ap.print_help())(t, a)
+     'ashrank': cmd_ashrank, 'variants': cmd_variants}.get(a.cmd, lambda *_: ap.print_help())(t, a)
     return 0
 
 

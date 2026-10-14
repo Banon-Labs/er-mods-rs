@@ -187,7 +187,7 @@ Category map for the buffs in section 5 (VERIFIED, params):
 | `spCategory` | members | behaviour |
 |---|---|---|
 | 151 | FGMS 1605000, Howl of Shabriri 1733000, Exalted Flesh 3950, Boiled Crab 500820, Boiled Prawn 500830, Flame Protect Me, Black Flame's Protection, Barrier of Gold, Protection of the Erdtree (priority 70), the Fortifications, all Dried/Pickled Livers, Bloodboil Aromatic, Dragon Communion/Dragonscale Flesh, Fingerprint Nostrum, Scorpion Stews, Baldachin's Blessings, Sacred Bloody Flesh setup, Vyke's Dragonbolt body row, Dragonbolt Blessing | one at a time, newest wins |
-| 160 | Golden Vow incantation 1660000, Golden Vow item 20503170, Golden Vow ash 1730, Uplifting Aromatic attack row 503501 | one at a time |
+| 160 | Golden Vow incantation 1660000, Golden Vow item 20503170, Golden Vow ash 1730 (and its unreferenced 5 s row 1736), Uplifting Aromatic attack row 503501, Ancient Dragon's Blessing 20502100, Rallying Standard 1768, Last Rites 1836, Shared Order 1870 (and its unreferenced 8 s row 1875), Dragonbolt of Florissax setup 21691000; enemy bullets 10945 (Warhawk), 14406 (Depraved Perfumer), 4350780's 14496 (Castle Knight), 205840600's 20013500 (Black Knight). Re-scanned 2026-10-12, SpEffectParam where spCategory = 160 | one at a time |
 | 159 | Uplifting Aromatic defense row 503500 | own slot, so it stacks with 160 and 151 |
 | 157 | Rennala's Full Moon / Ranni's Dark Moon debuff rows, Greyoll's Roar, Acid Spraymist | debuffs on others |
 | 162 / 163 | 162: greases (right rows), Bloodflame Blade, Black Flame Blade, Electrify Armament, Vyke's weapon row, Order's Blade, Scholar's Armament, Shield Grease 501690. 163: the left-hand grease rows, Scholar's Shield, Immutable Shield, Shield Grease 501691 | one per category |
