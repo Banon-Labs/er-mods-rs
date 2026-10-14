@@ -60,12 +60,7 @@ pub static REPLACEMENTS: &[Replacement] = &[
     },
 ];
 
-/// vkd3d-proton's `vkd3d_shader_hash`: FNV-1 (multiply, then xor), 64-bit.
-pub fn fnv1_64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &byte| {
-        hash.wrapping_mul(0x0100_0000_01b3) ^ u64::from(byte)
-    })
-}
+pub use er_game_base::fnv1a::fnv1_64;
 
 /// The replacement for this shader, if it is one of ours.
 pub fn find(bytecode: &[u8]) -> Option<&'static Replacement> {
@@ -245,12 +240,6 @@ mod tests {
         stream.resize(start + round_up(4, align), 0);
         stream.extend_from_slice(payload);
         stream.resize(start + round_up(round_up(4, align) + payload.len(), 8), 0);
-    }
-
-    #[test]
-    fn fnv1_matches_the_published_vectors() {
-        assert_eq!(fnv1_64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1_64(b"a"), 0xaf63_bd4c_8601_b7be);
     }
 
     #[test]

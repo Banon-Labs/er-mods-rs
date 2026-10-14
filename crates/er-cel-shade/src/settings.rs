@@ -130,7 +130,12 @@ pub const KNOBS: [Knob; KNOB_COUNT] = [
 pub const KNOB_COUNT: usize = 9;
 
 /// Floats in the GPU block: the knobs padded to a whole number of 16-byte registers.
-pub const GPU_FLOATS: usize = KNOB_COUNT.div_ceil(4) * 4;
+///
+/// A literal, because `scripts/rva_symbols.py` evaluates constants to prove which addresses
+/// nothing declares, and a method call is an expression it cannot evaluate. The assertion below
+/// keeps it equal to `KNOB_COUNT` rounded up to four.
+pub const GPU_FLOATS: usize = 12;
+const _: () = assert!(GPU_FLOATS == KNOB_COUNT.div_ceil(4) * 4);
 
 /// Index of each knob in [`KNOBS`], for code that needs one by name.
 pub mod knob {

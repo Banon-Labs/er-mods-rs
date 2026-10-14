@@ -119,8 +119,8 @@ pub static BINDS: AtomicUsize = AtomicUsize::new(0);
 
 /// Write the look into every device's buffer, and remember it for buffers created later.
 pub fn publish(block: [f32; GPU_FLOATS]) {
-    for (slot, value) in LOOK.iter().zip(block) {
-        slot.store(value.to_bits(), Ordering::Relaxed);
+    for (index, value) in block.into_iter().enumerate() {
+        LOOK[index].store(value.to_bits(), Ordering::Relaxed);
     }
     let Ok(buffers) = BUFFERS.lock() else {
         return;
@@ -133,12 +133,9 @@ pub fn publish(block: [f32; GPU_FLOATS]) {
 fn write_look(mapped: usize) {
     let target = mapped as *mut f32;
     for (index, slot) in LOOK.iter().enumerate() {
+        let value = f32::from_bits(slot.load(Ordering::Relaxed));
         // SAFETY: `mapped` is the start of a live 256-byte upload buffer and `index` is below 16.
-        unsafe {
-            target
-                .add(index)
-                .write_volatile(f32::from_bits(slot.load(Ordering::Relaxed)))
-        };
+        unsafe { target.add(index).write_volatile(value) };
     }
 }
 
