@@ -1,72 +1,125 @@
 //! Dark Souls Remastered's c2280 as a source mesh for the Elden Ring donor: its first mesh's
-//! LOD0 triangles, reshaped by the Route A knobs and weighted to Elden Ring bone names.
+//! LOD0 triangles, fitted to Elden Ring's bind skeleton and weighted to Elden Ring bone names.
 //!
-//! Moved from `scripts/route_a_mushroom_export.rs` with its arithmetic unchanged. The script
-//! wrote an OBJ and a weight TSV for the next tool to read back; here the same values go
-//! straight into a [`SourceMesh`], and [`SourceMesh::to_obj`] / [`SourceMesh::to_weights_tsv`]
-//! still emit the script's exact text for comparison and for the Blender authoring path.
+//! # The fit
+//!
+//! The game skins this mesh with the player's skeleton, so every vertex turns about the joint of
+//! the Elden Ring bone it is weighted to. A part that sits far from that joint swings on a long
+//! lever in every pose but the bind pose -- the standing idle included -- which is what bent the
+//! first version's arms. So the body keeps c2280's own shape under one scale, and each arm is
+//! moved as one rigid piece:
+//!
+//! - turned so it points along Elden Ring's arm (shoulder to hand, 45 degrees down in the bind
+//!   pose) instead of c2280's own 23 degrees, so it hangs where a human arm hangs;
+//! - kept at its own short length, rooted at c2280's shoulder;
+//! - set [`FitParams::arm_offset`] up and out from there, so the wide body does not swallow it
+//!   when the arm hangs;
+//! - weighted wholly to `L_UpperArm` / `R_UpperArm`: it swings from the shoulder and does not
+//!   bend at the human elbow, which falls partway down the short arm.
+//!
+//! Blending the body's and the arm's placements by c2280's own weights keeps the shoulder seam
+//! closed. Measured with `scripts/mushroom-arm-fit-probe.py`, which poses the result into frame 0
+//! of the standing idle the way the game skins it: the hand-tuned reshape this replaces turned
+//! 128 of 1708 triangles inside out before any animation and left 1100 edges stretched or
+//! squashed past 1.5x in the idle; this fit turns none inside out and leaves 212, 143 of them in
+//! the legs, which it does not touch.
+//!
+//! [`SourceMesh::to_obj`] / [`SourceMesh::to_weights_tsv`] still emit the text the old
+//! `scripts/route_a_mushroom_export.rs` wrote, for comparison and for the Blender authoring path.
 
 use std::fmt::Write as _;
 
 use super::{
-    Flver, Header, Vec2, Vec3, parse_face_set_indices, parse_layout_members, parse_u32_list,
-    read_vec3,
+    Flver, Header, Vec2, Vec3, bind_positions, parse_face_set_indices, parse_layout_members,
+    parse_u32_list, read_vec3,
 };
 use crate::{
     bytes::{i8_at, i16_le, u8_at, u16_le},
     error::{Error, Result},
 };
 
-const DEFAULT_SCALE: f32 = 1.225;
 const PRIMITIVE_RESTART_U16: u32 = 0xFFFF;
 /// Weights at or below this are noise in the source skin and are dropped.
 const WEIGHT_FLOOR: f32 = 0.0001;
+const UP: Vec3 = Vec3 {
+    x: 0.0,
+    y: 1.0,
+    z: 0.0,
+};
 
-/// The Route A reshaping knobs, at the values the prototype shipped with.
+/// How c2280 is fitted to Elden Ring's body.
 #[derive(Clone, Copy, Debug)]
-pub struct RouteAParams {
+pub struct FitParams {
+    /// The whole mushroom's scale: c2280 is a child, about 1.26 m to the top of its cap.
     pub scale: f32,
+    /// Extra height on top of `scale`, so the cap clears a human head (1.76 m in all).
     pub vertical_stretch: f32,
-    pub arm_x_swell: f32,
-    pub arm_y_swell: f32,
-    pub arm_z_swell: f32,
-    pub arm_shoulder_outward_offset: f32,
-    pub arm_upper_outward_offset: f32,
-    pub arm_forearm_outward_offset: f32,
-    pub arm_hand_outward_offset: f32,
-    pub arm_upper_to_shoulder_abs_x: f32,
-    pub arm_forearm_to_upper_abs_x: f32,
-    pub arm_forearm_to_hand_abs_x: f32,
-    pub torso_x_scale: f32,
-    pub torso_z_scale: f32,
-    pub cap_x_scale: f32,
-    pub cap_z_scale: f32,
-    pub torso_start_norm_y: f32,
-    pub cap_start_norm_y: f32,
+    /// Metres each arm is set up and out from its shoulder, across Elden Ring's arm axis. At 0
+    /// the hanging arms sink into the body (410 of 571 arm vertices inside it in the idle); at
+    /// 0.2 that falls to 31 with the fewest stretched edges, and past it the seam stretches.
+    pub arm_offset: f32,
 }
 
-impl Default for RouteAParams {
+impl Default for FitParams {
     fn default() -> Self {
         Self {
-            scale: DEFAULT_SCALE,
+            scale: 1.225,
             vertical_stretch: 1.14,
-            arm_x_swell: 1.22,
-            arm_y_swell: 1.08,
-            arm_z_swell: 1.65,
-            arm_shoulder_outward_offset: 0.33,
-            arm_upper_outward_offset: 0.27,
-            arm_forearm_outward_offset: 0.10,
-            arm_hand_outward_offset: 0.02,
-            arm_upper_to_shoulder_abs_x: 0.42,
-            arm_forearm_to_upper_abs_x: 0.52,
-            arm_forearm_to_hand_abs_x: 0.99,
-            torso_x_scale: 1.0,
-            torso_z_scale: 1.0,
-            cap_x_scale: 1.0,
-            cap_z_scale: 1.0,
-            torso_start_norm_y: 0.18,
-            cap_start_norm_y: 0.68,
+            arm_offset: 0.2,
         }
+    }
+}
+
+impl FitParams {
+    fn scaled(&self, v: Vec3) -> Vec3 {
+        Vec3 {
+            x: v.x * self.scale,
+            y: v.y * self.scale * self.vertical_stretch,
+            z: v.z * self.scale,
+        }
+    }
+}
+
+/// One arm's rigid move from c2280's bind pose onto Elden Ring's.
+#[derive(Clone, Copy, Debug)]
+struct ArmFit {
+    /// c2280's shoulder joint, unscaled.
+    joint: Vec3,
+    /// Where that joint lands.
+    root: Vec3,
+    /// Turns the scaled arm onto Elden Ring's arm axis (a quaternion, x y z w).
+    rotation: [f32; 4],
+    target: &'static str,
+}
+
+impl ArmFit {
+    /// `joint` and `tip` are c2280's shoulder and palm; `shoulder` and `hand` are Elden Ring's.
+    fn new(
+        joint: Vec3,
+        tip: Vec3,
+        shoulder: Vec3,
+        hand: Vec3,
+        target: &'static str,
+        params: FitParams,
+    ) -> Result<Self> {
+        let axis = normalized(sub(hand, shoulder)).ok_or("Elden Ring's arm has no length")?;
+        let along =
+            normalized(params.scaled(sub(tip, joint))).ok_or("c2280's arm has no length")?;
+        let out =
+            normalized(sub(UP, mul(axis, dot(UP, axis)))).ok_or("Elden Ring's arm is vertical")?;
+        Ok(Self {
+            joint,
+            root: add(params.scaled(joint), mul(out, params.arm_offset)),
+            rotation: arc_rotation(along, axis),
+            target,
+        })
+    }
+
+    fn place(&self, v: Vec3, params: FitParams) -> Vec3 {
+        add(
+            self.root,
+            rotate(self.rotation, params.scaled(sub(v, self.joint))),
+        )
     }
 }
 
@@ -110,46 +163,92 @@ struct DsrMesh {
     triangles: Vec<[u32; 3]>,
 }
 
-/// c2280's FLVER bytes, as a source mesh in Elden Ring's frame.
-pub fn export_c2280(flver_bytes: &[u8], params: RouteAParams) -> Result<SourceMesh> {
+/// c2280's FLVER bytes, fitted to the bind skeleton of `donor` (Elden Ring's `FC_M_0000.flver`).
+pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Result<SourceMesh> {
     let mesh = parse_first_lod0_mesh(flver_bytes)?;
-    let vertices = mesh
-        .vertices
-        .iter()
-        .map(|vertex| SourceVertex {
-            position: route_a_output_position(&mesh, vertex, params),
-            normal: vertex.normal,
-            uv: vertex.uv,
-        })
-        .collect();
+    let joint = joint_finder(flver_bytes, "c2280")?;
+    let er_joint = joint_finder(donor, "the Elden Ring donor")?;
+    let left = ArmFit::new(
+        joint("LArm1")?,
+        joint("LArmPalm")?,
+        er_joint("L_UpperArm")?,
+        er_joint("L_Hand")?,
+        "L_UpperArm",
+        params,
+    )?;
+    let right = ArmFit::new(
+        joint("RArm1")?,
+        joint("RArmPalm")?,
+        er_joint("R_UpperArm")?,
+        er_joint("R_Hand")?,
+        "R_UpperArm",
+        params,
+    )?;
+    let arm_of = |name: &str| {
+        if name.starts_with("LArm") {
+            Some(&left)
+        } else if name.starts_with("RArm") {
+            Some(&right)
+        } else {
+            None
+        }
+    };
+
+    let mut vertices = Vec::with_capacity(mesh.vertices.len());
     let mut weights = Vec::new();
     for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
+        let body = params.scaled(vertex.position);
+        let mut placed = Vec3::default();
+        let mut total = 0.0;
         for slot in 0..4 {
             let weight = vertex.bone_weights[slot];
             if weight <= WEIGHT_FLOOR {
                 continue;
             }
-            let target = source_bone_name(&mesh, vertex.bone_indices[slot])
-                .map(|name| {
-                    er_target_for_vertex(
-                        er_target_for_source_bone(name),
-                        vertex,
-                        &mesh.header,
-                        params,
-                    )
-                })
-                .unwrap_or("<missing>");
+            let name = source_bone_name(&mesh, vertex.bone_indices[slot]);
+            let (at, target) = match name.and_then(arm_of) {
+                Some(arm) => (arm.place(vertex.position, params), arm.target),
+                None => (
+                    body,
+                    name.map_or("<missing>", |name| body_target(name, vertex, &mesh.header)),
+                ),
+            };
+            placed = add(placed, mul(at, weight));
+            total += weight;
             weights.push(WeightRow {
                 vertex: vertex_index,
                 target_bone: target.to_owned(),
                 weight,
             });
         }
+        vertices.push(SourceVertex {
+            position: if total > 0.0 {
+                mul(placed, 1.0 / total)
+            } else {
+                body
+            },
+            normal: vertex.normal,
+            uv: vertex.uv,
+        });
     }
     Ok(SourceMesh {
         vertices,
         triangles: mesh.triangles,
         weights,
+    })
+}
+
+/// A lookup of one FLVER's bind-pose joints by bone name.
+fn joint_finder(bytes: &[u8], what: &str) -> Result<impl Fn(&str) -> Result<Vec3>> {
+    let bones = Flver::parse(bytes)?.bones;
+    let positions = bind_positions(&bones)?;
+    let what = what.to_owned();
+    Ok(move |name: &str| {
+        bones
+            .iter()
+            .position(|bone| bone.name == name)
+            .map(|index| positions[index])
+            .ok_or_else(|| Error::new(format!("{what} has no bone named {name}")))
     })
 }
 
@@ -279,40 +378,65 @@ fn triangulate(triangle_strip: bool, indices: &[u32]) -> Vec<[u32; 3]> {
     triangles
 }
 
-fn route_a_output_position(mesh: &DsrMesh, vertex: &DsrVertex, params: RouteAParams) -> Vec3 {
-    let mut position = vertex.position;
-    position.y *= params.vertical_stretch;
-
-    let target = dominant_er_target_for_vertex(mesh, vertex, params);
-    if is_arm_target(target) {
-        let side =
-            arm_side_for_target(target).unwrap_or(if position.x >= 0.0 { 1.0 } else { -1.0 });
-        let center = Vec3 {
-            x: side * 0.52,
-            y: 0.78,
-            z: 0.0,
-        };
-        position.x = center.x + (position.x - center.x) * params.arm_x_swell;
-        position.y = center.y + (position.y - center.y) * params.arm_y_swell;
-        position.z = center.z + (position.z - center.z) * params.arm_z_swell;
-        position.x += side * arm_outward_offset_for_target(target, params);
-    } else {
-        let normalized_y = normalized_vertex_y(vertex, &mesh.header);
-        if normalized_y >= params.torso_start_norm_y {
-            let (x_scale, z_scale) = if normalized_y >= params.cap_start_norm_y {
-                (params.cap_x_scale, params.cap_z_scale)
-            } else {
-                (params.torso_x_scale, params.torso_z_scale)
-            };
-            position.x *= x_scale;
-            position.z *= z_scale;
-        }
-    }
+fn add(a: Vec3, b: Vec3) -> Vec3 {
     Vec3 {
-        x: position.x * params.scale,
-        y: position.y * params.scale,
-        z: position.z * params.scale,
+        x: a.x + b.x,
+        y: a.y + b.y,
+        z: a.z + b.z,
     }
+}
+
+fn sub(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3 {
+        x: a.x - b.x,
+        y: a.y - b.y,
+        z: a.z - b.z,
+    }
+}
+
+fn mul(a: Vec3, k: f32) -> Vec3 {
+    Vec3 {
+        x: a.x * k,
+        y: a.y * k,
+        z: a.z * k,
+    }
+}
+
+fn dot(a: Vec3, b: Vec3) -> f32 {
+    a.x * b.x + a.y * b.y + a.z * b.z
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3 {
+        x: a.y * b.z - a.z * b.y,
+        y: a.z * b.x - a.x * b.z,
+        z: a.x * b.y - a.y * b.x,
+    }
+}
+
+fn normalized(a: Vec3) -> Option<Vec3> {
+    let length = dot(a, a).sqrt();
+    (length > f32::EPSILON).then(|| mul(a, 1.0 / length))
+}
+
+/// The shortest rotation taking unit vector `from` onto unit vector `to`, as a quaternion.
+fn arc_rotation(from: Vec3, to: Vec3) -> [f32; 4] {
+    let axis = cross(from, to);
+    let w = 1.0 + dot(from, to);
+    let length = (dot(axis, axis) + w * w).sqrt();
+    [
+        axis.x / length,
+        axis.y / length,
+        axis.z / length,
+        w / length,
+    ]
+}
+
+fn rotate(q: [f32; 4], v: Vec3) -> Vec3 {
+    let [x, y, z, w] = q;
+    let u = Vec3 { x, y, z };
+    let t = mul(cross(u, v), 2.0);
+    add(add(v, mul(t, w)), cross(u, t))
 }
 
 fn normalized_vertex_y(vertex: &DsrVertex, header: &Header) -> f32 {
@@ -324,67 +448,20 @@ fn normalized_vertex_y(vertex: &DsrVertex, header: &Header) -> f32 {
     }
 }
 
-fn dominant_er_target_for_vertex(
-    mesh: &DsrMesh,
-    vertex: &DsrVertex,
-    params: RouteAParams,
-) -> &'static str {
-    let mut best_target = "Spine2";
-    let mut best_weight = 0.0;
-    for slot in 0..4 {
-        let weight = vertex.bone_weights[slot];
-        if weight <= best_weight {
-            continue;
+/// The Elden Ring bone for a weight on one of c2280's body or leg bones (the arms are
+/// [`ArmFit`]'s). c2280 has one bone per leg, so its weight goes to the foot, calf or thigh by
+/// how far up the model the vertex sits.
+fn body_target(source: &str, vertex: &DsrVertex, header: &Header) -> &'static str {
+    let normalized_y = normalized_vertex_y(vertex, header);
+    let leg = |side: &'static [&'static str; 3]| {
+        if normalized_y < 0.10 {
+            side[0]
+        } else if normalized_y < 0.24 {
+            side[1]
+        } else {
+            side[2]
         }
-        let Some(name) = source_bone_name(mesh, vertex.bone_indices[slot]) else {
-            continue;
-        };
-        let base_target = er_target_for_source_bone(name);
-        if base_target.starts_with('<') {
-            continue;
-        }
-        best_target = er_target_for_vertex(base_target, vertex, &mesh.header, params);
-        best_weight = weight;
-    }
-    best_target
-}
-
-fn arm_side_for_target(target: &str) -> Option<f32> {
-    if target.starts_with("L_") {
-        Some(1.0)
-    } else if target.starts_with("R_") {
-        Some(-1.0)
-    } else {
-        None
-    }
-}
-
-fn arm_outward_offset_for_target(target: &str, params: RouteAParams) -> f32 {
-    match target {
-        "L_Shoulder" | "R_Shoulder" => params.arm_shoulder_outward_offset,
-        "L_UpperArm" | "R_UpperArm" => params.arm_upper_outward_offset,
-        "L_Forearm" | "R_Forearm" => params.arm_forearm_outward_offset,
-        "L_Hand" | "R_Hand" => params.arm_hand_outward_offset,
-        _ => 0.0,
-    }
-}
-
-fn is_arm_target(target: &str) -> bool {
-    matches!(
-        target,
-        "L_Shoulder"
-            | "L_UpperArm"
-            | "L_Forearm"
-            | "L_Hand"
-            | "R_Shoulder"
-            | "R_UpperArm"
-            | "R_Forearm"
-            | "R_Hand"
-    )
-}
-
-/// c2280's skeleton mapped onto Elden Ring's player bones.
-fn er_target_for_source_bone(source: &str) -> &'static str {
+    };
     match source {
         "Pelvis" => "Pelvis",
         "Spine1" => "Spine",
@@ -392,43 +469,10 @@ fn er_target_for_source_bone(source: &str) -> &'static str {
         "Spine3" => "Spine2",
         "Neck" => "Neck",
         "Head" => "Head",
-        "LArm1" => "L_UpperArm",
-        "LArm2" => "L_Forearm",
-        "LArmPalm" | "LArmDigit11" | "LArmDigit12" | "LArmDigit21" | "LArmDigit22"
-        | "LArmDigit31" | "LArmDigit32" => "L_Forearm",
-        "RArm1" => "R_UpperArm",
-        "RArm2" => "R_Forearm",
-        "RArmPalm" | "RArmDigit11" | "RArmDigit12" | "RArmDigit21" | "RArmDigit22"
-        | "RArmDigit31" | "RArmDigit32" => "R_Forearm",
-        "LLeg1" => "L_Thigh",
-        "RLeg1" => "R_Thigh",
+        "LLeg1" => leg(&["L_Foot", "L_Calf", "L_Thigh"]),
+        "RLeg1" => leg(&["R_Foot", "R_Calf", "R_Thigh"]),
         "c2280" | "Model_Dmy" | "sfx_dummy" | "固定dmy" | "master" => "<unused>",
         _ => "Spine2",
-    }
-}
-
-/// Splits the coarse source mapping by where the vertex sits: shoulders and hands along the
-/// arms, calves and feet down the single source leg bone.
-fn er_target_for_vertex(
-    base_target: &'static str,
-    vertex: &DsrVertex,
-    header: &Header,
-    params: RouteAParams,
-) -> &'static str {
-    let normalized_y = normalized_vertex_y(vertex, header);
-    let x = vertex.position.x;
-    match base_target {
-        "L_UpperArm" if x < params.arm_upper_to_shoulder_abs_x => "L_Shoulder",
-        "L_Forearm" if x >= params.arm_forearm_to_hand_abs_x => "L_Hand",
-        "L_Forearm" if x < params.arm_forearm_to_upper_abs_x => "L_UpperArm",
-        "R_UpperArm" if x > -params.arm_upper_to_shoulder_abs_x => "R_Shoulder",
-        "R_Forearm" if x <= -params.arm_forearm_to_hand_abs_x => "R_Hand",
-        "R_Forearm" if x > -params.arm_forearm_to_upper_abs_x => "R_UpperArm",
-        "L_Thigh" if normalized_y < 0.10 => "L_Foot",
-        "L_Thigh" if normalized_y < 0.24 => "L_Calf",
-        "R_Thigh" if normalized_y < 0.10 => "R_Foot",
-        "R_Thigh" if normalized_y < 0.24 => "R_Calf",
-        _ => base_target,
     }
 }
 
@@ -632,9 +676,17 @@ mod tests {
         assert_eq!(back, mesh);
     }
 
+    fn v(x: f32, y: f32, z: f32) -> Vec3 {
+        Vec3 { x, y, z }
+    }
+
+    fn close(a: Vec3, b: Vec3) -> bool {
+        let d = sub(a, b);
+        dot(d, d).sqrt() < 1e-5
+    }
+
     #[test]
-    fn source_bones_split_by_position_along_the_arm() {
-        let params = RouteAParams::default();
+    fn the_leg_bone_splits_into_foot_calf_and_thigh_by_height() {
         let header = Header {
             version: 0,
             data_offset: 0,
@@ -644,35 +696,54 @@ mod tests {
             bone_count: 0,
             mesh_count: 0,
             vertex_buffer_count: 0,
-            bbox_min: Vec3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            bbox_max: Vec3 {
-                x: 0.0,
-                y: 2.0,
-                z: 0.0,
-            },
+            bbox_min: v(0.0, 0.0, 0.0),
+            bbox_max: v(0.0, 2.0, 0.0),
             vertex_index_size: 16,
             face_set_count: 0,
             buffer_layout_count: 0,
         };
-        let at = |x: f32| DsrVertex {
-            position: Vec3 { x, y: 1.0, z: 0.0 },
+        let at = |y: f32| DsrVertex {
+            position: v(0.1, y, 0.0),
             ..DsrVertex::default()
         };
-        assert_eq!(
-            er_target_for_vertex("L_Forearm", &at(1.2), &header, params),
-            "L_Hand"
-        );
-        assert_eq!(
-            er_target_for_vertex("L_Forearm", &at(0.3), &header, params),
-            "L_UpperArm"
-        );
-        assert_eq!(
-            er_target_for_vertex("R_UpperArm", &at(-0.1), &header, params),
-            "R_Shoulder"
-        );
+        assert_eq!(body_target("LLeg1", &at(0.1), &header), "L_Foot");
+        assert_eq!(body_target("RLeg1", &at(0.3), &header), "R_Calf");
+        assert_eq!(body_target("LLeg1", &at(1.0), &header), "L_Thigh");
+        assert_eq!(body_target("Spine3", &at(1.0), &header), "Spine2");
+    }
+
+    #[test]
+    fn the_shortest_arc_takes_one_direction_onto_the_other() {
+        let from = normalized(v(1.0, -0.4, 0.1)).unwrap();
+        let to = normalized(v(0.7, -0.7, 0.05)).unwrap();
+        assert!(close(rotate(arc_rotation(from, to), from), to));
+    }
+
+    #[test]
+    fn an_arm_moves_whole_onto_the_elden_ring_arm_at_its_own_length() {
+        let params = FitParams::default();
+        let (joint, tip) = (v(0.2, 0.73, 0.0), v(0.45, 0.62, 0.0));
+        let (shoulder, hand) = (v(0.17, 1.39, 0.03), v(0.53, 1.03, 0.02));
+        let arm = ArmFit::new(joint, tip, shoulder, hand, "L_UpperArm", params).unwrap();
+
+        // The root is the scaled shoulder, moved `arm_offset` up and out across the ER arm.
+        let root = arm.place(joint, params);
+        let offset = sub(root, params.scaled(joint));
+        assert!((dot(offset, offset).sqrt() - params.arm_offset).abs() < 1e-5);
+        assert!(offset.x > 0.0 && offset.y > 0.0);
+
+        // It points down Elden Ring's arm, and keeps its own scaled length.
+        let placed = sub(arm.place(tip, params), root);
+        let axis = normalized(sub(hand, shoulder)).unwrap();
+        let length = dot(placed, placed).sqrt();
+        assert!(close(mul(placed, 1.0 / length), axis));
+        let scaled = params.scaled(sub(tip, joint));
+        assert!((length - dot(scaled, scaled).sqrt()).abs() < 1e-5);
+
+        // Any two points of the arm keep their scaled distance: the move is rigid.
+        let (a, b) = (v(0.3, 0.7, 0.05), v(0.4, 0.6, -0.04));
+        let before = params.scaled(sub(a, b));
+        let after = sub(arm.place(a, params), arm.place(b, params));
+        assert!((dot(before, before).sqrt() - dot(after, after).sqrt()).abs() < 1e-5);
     }
 }

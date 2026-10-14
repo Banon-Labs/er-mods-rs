@@ -33,7 +33,7 @@ use crate::{
     dcx,
     error::{Context, Error, Result},
     flver::{
-        export::{RouteAParams, SourceMesh, export_c2280},
+        export::{FitParams, SourceMesh, export_c2280},
         hide::hide_all_face_sets,
         patch::{PatchReport, patch_donor},
     },
@@ -99,7 +99,7 @@ pub struct Inputs<'a> {
     pub archives: &'a ArchiveSet,
     pub oodle: &'a Oodle,
     pub dsr_dir: &'a Path,
-    /// An authored mesh (OBJ + weight TSV) to use instead of exporting c2280 with Route A.
+    /// An authored mesh (OBJ + weight TSV) to use instead of fitting c2280 here.
     pub source_override: Option<SourceMesh>,
 }
 
@@ -134,10 +134,6 @@ pub fn read_c2280(dsr_dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
 /// Build the whole package into `out_dir` (`parts/` and `facegen/` beneath it).
 pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let (c2280_flver, c2280_tpf) = read_c2280(inputs.dsr_dir)?;
-    let source = match inputs.source_override {
-        Some(mesh) => mesh,
-        None => export_c2280(&c2280_flver, RouteAParams::default()).context("exporting c2280")?,
-    };
     let parts_dir = out_dir.join("parts");
     let facegen_dir = out_dir.join("facegen");
     fs::create_dir_all(&parts_dir).context(format!("creating {}", parts_dir.display()))?;
@@ -145,7 +141,9 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let mut files = Vec::new();
     let oodle = Some(inputs.oodle);
 
-    // The mushroom body, high and low detail.
+    // The mushroom body, high and low detail. The fit is made once, against the high-detail
+    // donor's skeleton; the low-detail one has the same bones.
+    let mut source = inputs.source_override;
     let mut bodies = Vec::new();
     let mut patches = Vec::new();
     for lod in LODS {
@@ -154,8 +152,15 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         let packed = inputs.archives.read(&logical)?;
         let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
         let flver = binder_file(&mut binder, &format!("{stem}.flver"), &logical)?;
+        if source.is_none() {
+            source = Some(
+                export_c2280(&c2280_flver, &flver.data, FitParams::default())
+                    .context("fitting c2280 to the donor")?,
+            );
+        }
+        let source = source.as_ref().ok_or("no source mesh")?;
         patches.push(
-            patch_donor(&mut flver.data, &source, FC_DONOR_MESH_INDEX)
+            patch_donor(&mut flver.data, source, FC_DONOR_MESH_INDEX)
                 .context(format!("patching {stem}.flver"))?,
         );
         let tpf = binder_file(&mut binder, &format!("{stem}.tpf"), &logical)?;
@@ -229,6 +234,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         oodle,
     )?);
 
+    let source = source.ok_or("no source mesh")?;
     Ok(BuildReport {
         files,
         patch_high: patches[0],

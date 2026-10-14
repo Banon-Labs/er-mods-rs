@@ -12,7 +12,7 @@ use mushroom_man_builder::{
     bnd::Bnd4,
     dcx,
     error::{Context, Error, Result},
-    flver::export::{RouteAParams, SourceMesh, export_c2280},
+    flver::export::{FitParams, SourceMesh, export_c2280},
     locate, oodle,
     package::{self, DLL_NAME, Inputs},
     profile,
@@ -35,9 +35,8 @@ OPTIONS:
     --out <dir>            Where to write the mod. Default: <er-game>/mushroom-man
     --dll <path>           The mushroom_man.dll to install. Default: the one beside this
                            program, or in a `dlls` folder beside it; none is fine.
-    --source-obj <path>    Use an authored mesh instead of c2280 as exported by Route A;
+    --source-obj <path>    Use an authored mesh instead of fitting c2280 here;
     --source-weights <path>   both are needed (the OBJ and weight TSV the Blender export writes).
-    --export-obj <dir>     Write c2280's Route A mesh as OBJ + weight TSV into <dir> and stop.
     -h, --help             Show this text.
 ";
 
@@ -48,7 +47,6 @@ struct Options {
     dll: Option<PathBuf>,
     source_obj: Option<PathBuf>,
     source_weights: Option<PathBuf>,
-    export_obj: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -58,6 +56,7 @@ fn main() -> ExitCode {
         Some("roundtrip-er") => roundtrip_er(&args[1..]),
         Some("repack-er") => repack_er(&args[1..]),
         Some("extract-inputs") => extract_inputs(&args[1..]),
+        Some("export-obj") => export_obj(&args[1..]),
         Some("patch-flver") => patch_flver(&args[1..]),
         Some("tpf-roundtrip") => args[1..].iter().try_for_each(|path| {
             let original = fs::read(path).context(path)?;
@@ -104,7 +103,6 @@ fn parse_options(args: &[String]) -> Result<Options> {
         dll: None,
         source_obj: None,
         source_weights: None,
-        export_obj: None,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -120,7 +118,6 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--dll" => options.dll = Some(value()?),
             "--source-obj" => options.source_obj = Some(value()?),
             "--source-weights" => options.source_weights = Some(value()?),
-            "--export-obj" => options.export_obj = Some(value()?),
             other => return Err(Error::new(format!("unknown option {other}\n\n{USAGE}"))),
         }
     }
@@ -147,16 +144,6 @@ fn build(options: &Options) -> Result<()> {
         })?,
     };
     println!("Dark Souls Remastered: {}", dsr.display());
-
-    if let Some(dir) = &options.export_obj {
-        let (flver, _) = package::read_c2280(&dsr)?;
-        let mesh = export_c2280(&flver, RouteAParams::default())?;
-        fs::create_dir_all(dir).context(format!("creating {}", dir.display()))?;
-        fs::write(dir.join("c2280_route_a_scaled.obj"), mesh.to_obj())?;
-        fs::write(dir.join("c2280_route_a_weights.tsv"), mesh.to_weights_tsv())?;
-        println!("wrote the Route A mesh into {}", dir.display());
-        return Ok(());
-    }
 
     let er_game = match &options.er_game {
         Some(dir) if locate::is_er_game_dir(dir) => dir.clone(),
@@ -294,6 +281,24 @@ fn extract_inputs(args: &[String]) -> Result<()> {
         "wrote the c2280 and FC_M_0000 inputs into {}",
         out.display()
     );
+    Ok(())
+}
+
+/// Developer check: the fitted c2280 as OBJ + weight TSV, for `scripts/mushroom-arm-fit-probe.py`
+/// and the Blender authoring path. Needs no Oodle, so it runs on Linux: the donor FLVER comes
+/// from `extract-inputs`.
+fn export_obj(args: &[String]) -> Result<()> {
+    let [dsr, donor, out] = args else {
+        return Err("export-obj <dsr-dir> <FC_M_0000.flver> <out-dir>".into());
+    };
+    let (flver, _) = package::read_c2280(Path::new(dsr))?;
+    let donor = fs::read(donor).context(donor)?;
+    let mesh = export_c2280(&flver, &donor, FitParams::default())?;
+    let out = Path::new(out);
+    fs::create_dir_all(out).context(out.display())?;
+    fs::write(out.join("c2280_route_a_scaled.obj"), mesh.to_obj())?;
+    fs::write(out.join("c2280_route_a_weights.tsv"), mesh.to_weights_tsv())?;
+    println!("wrote the fitted c2280 into {}", out.display());
     Ok(())
 }
 

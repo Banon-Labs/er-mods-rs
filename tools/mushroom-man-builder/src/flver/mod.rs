@@ -72,6 +72,84 @@ pub struct Bone {
     pub name: String,
     pub parent_index: i16,
     pub translation: Vec3,
+    /// Euler angles in radians, applied X, then Z, then Y.
+    pub rotation: Vec3,
+    pub scale: Vec3,
+}
+
+/// A row-vector 4x4 transform, as System.Numerics and SoulsFormats compose them.
+type Mat4 = [[f32; 4]; 4];
+
+fn mat_mul(a: &Mat4, b: &Mat4) -> Mat4 {
+    let mut out = [[0.0; 4]; 4];
+    for (row, out_row) in out.iter_mut().enumerate() {
+        for (col, cell) in out_row.iter_mut().enumerate() {
+            *cell = (0..4).map(|k| a[row][k] * b[k][col]).sum();
+        }
+    }
+    out
+}
+
+impl Bone {
+    /// The bone relative to its parent: `scale * rotX * rotZ * rotY * translation`, the order
+    /// SoulsFormats' `FLVER.Node.ComputeLocalTransform` uses.
+    fn local_transform(&self) -> Mat4 {
+        let s = self.scale;
+        let (sx, cx) = self.rotation.x.sin_cos();
+        let (sy, cy) = self.rotation.y.sin_cos();
+        let (sz, cz) = self.rotation.z.sin_cos();
+        let scale = [
+            [s.x, 0.0, 0.0, 0.0],
+            [0.0, s.y, 0.0, 0.0],
+            [0.0, 0.0, s.z, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let rot_x = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, cx, sx, 0.0],
+            [0.0, -sx, cx, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let rot_z = [
+            [cz, sz, 0.0, 0.0],
+            [-sz, cz, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let rot_y = [
+            [cy, 0.0, -sy, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [sy, 0.0, cy, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let t = self.translation;
+        let mut local = mat_mul(&mat_mul(&mat_mul(&scale, &rot_x), &rot_z), &rot_y);
+        local[3] = [t.x, t.y, t.z, 1.0];
+        local
+    }
+}
+
+/// Where each bone's joint sits in the bind pose, in model space.
+pub fn bind_positions(bones: &[Bone]) -> Result<Vec<Vec3>> {
+    bones
+        .iter()
+        .map(|bone| {
+            let mut world = bone.local_transform();
+            let mut parent = bone.parent_index;
+            for _ in 0..bones.len() {
+                let Ok(index) = usize::try_from(parent) else {
+                    let [x, y, z, _] = world[3];
+                    return Ok(Vec3 { x, y, z });
+                };
+                let up = bones
+                    .get(index)
+                    .ok_or_else(|| Error::new(format!("bone parent {index} out of range")))?;
+                world = mat_mul(&world, &up.local_transform());
+                parent = up.parent_index;
+            }
+            Err(Error::new(format!("bone {} has a parent cycle", bone.name)))
+        })
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -211,6 +289,8 @@ fn parse_bones(bytes: &[u8], offset: usize, count: usize) -> Result<Vec<Bone>> {
                 },
                 parent_index: i16_le(bytes, off + 0x1C)?,
                 translation: read_vec3(bytes, off)?,
+                rotation: read_vec3(bytes, off + 0x10)?,
+                scale: read_vec3(bytes, off + 0x20)?,
             })
         })
         .collect()
@@ -330,4 +410,65 @@ pub fn index_range(
     let start = flver.header.data_offset + face_set.index_offset;
     slice(bytes, start, face_set.index_count * width)?;
     Ok(start..start + face_set.index_count * width)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bone(parent_index: i16, translation: Vec3, rotation: Vec3) -> Bone {
+        Bone {
+            name: String::new(),
+            parent_index,
+            translation,
+            rotation,
+            scale: Vec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        }
+    }
+
+    #[test]
+    fn a_child_joint_is_carried_by_its_parents_turn() {
+        // The parent sits at (0, 1, 0) turned a quarter about Z, so the child's one metre along
+        // its local X points up: it lands at (0, 2, 0).
+        let bones = [
+            bone(
+                -1,
+                Vec3 {
+                    x: 0.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+                Vec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: std::f32::consts::FRAC_PI_2,
+                },
+            ),
+            bone(
+                0,
+                Vec3 {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                Vec3::default(),
+            ),
+        ];
+        let positions = bind_positions(&bones).unwrap();
+        let child = positions[1];
+        assert!(child.x.abs() < 1e-6 && (child.y - 2.0).abs() < 1e-6 && child.z.abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_parent_cycle_is_refused() {
+        let bones = [
+            bone(1, Vec3::default(), Vec3::default()),
+            bone(0, Vec3::default(), Vec3::default()),
+        ];
+        assert!(bind_positions(&bones).is_err());
+    }
 }
