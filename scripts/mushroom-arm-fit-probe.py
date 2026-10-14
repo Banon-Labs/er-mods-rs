@@ -2,6 +2,7 @@
 """Measure how the Route A export places c2280's arms against Elden Ring's bind skeleton.
 
 Usage: mushroom-arm-fit-probe.py <dir> [<export-dir>]
+       mushroom-arm-fit-probe.py <dir> --human <out-dir> <offset> <cut 0|1>
 
 <dir> holds the raw `c2280.flver` and the vanilla `FC_M_0000.flver` (both written by
 `mushroom-man-builder extract-inputs`); <export-dir> (default `<dir>/builder-export`) holds
@@ -17,6 +18,7 @@ vertices that end up inside the body: the idle is what a player looks at, not th
 
 import importlib.util
 import math
+import os
 import struct
 import sys
 from collections import Counter, defaultdict
@@ -27,6 +29,10 @@ SCALE = 1.225
 STRETCH = 1.14
 BAD_STRETCH = 1.5
 BAD_SQUASH = 0.67
+# Metres over which a digit's weight passes from the human finger's first bone to its second.
+FINGER_BLEND = float(os.environ.get("MUSHROOM_FINGER_BLEND", "0.02"))
+# Which digits (1 thumb, 2, 3) pass to the human finger's second bone; the rest bend at the base.
+SPLIT_DIGITS = os.environ.get("MUSHROOM_SPLIT_DIGITS", "123")
 
 
 def u32(b, o):
@@ -185,6 +191,12 @@ def main():
     raw = raw_vertices(root / "c2280.flver")
     export = Path(sys.argv[2]) if len(sys.argv) > 2 else root / "builder-export"
     final, faces = obj(export / "c2280_route_a_scaled.obj")
+    # Vertices past c2280's own are caps the fit added over cut openings: give each the middle of
+    # its rim's own positions, so its edges are measured against what they cover.
+    for extra in range(len(raw), len(final)):
+        rim = sorted({i for f in faces if extra in f for i in f if i < len(raw)})
+        middle = tuple(sum(raw[i][0][k] for i in rim) / len(rim) for k in range(3))
+        raw.append((middle, raw[rim[0]][1], raw[rim[0]][2]))
     assert len(raw) == len(final), (len(raw), len(final))
     weights_path = export / "c2280_route_a_weights.tsv"
     dom = dominant_targets(weights_path, len(final))
@@ -227,7 +239,15 @@ def main():
     for ratio, a, b, pa, pb in worst[:8]:
         print(f"    x{ratio:5.2f}  {a} -> {b}  raw {fmt(pa)} -> {fmt(pb)}")
 
-    idle_report(raw, final, faces, skin_weights(weights_path, len(final)))
+    names = list(src)
+    palms, tips = {}, {}
+    for i, (_, ids, ws) in enumerate(raw):
+        name = names[max(zip(ws, ids))[1]]
+        if name[1:].startswith(("ArmPalm", "ArmDigit")):
+            palms.setdefault(name[0], []).append(i)
+        if name[1:].startswith("ArmDigit") and name.endswith("2"):
+            tips.setdefault(name[0], []).append(i)
+    idle_report(raw, final, faces, skin_weights(weights_path, len(final)), palms, tips)
 
 
 # A candidate rebind, so a fit can be scored here before it is written into the builder.
@@ -334,6 +354,217 @@ def candidate(root, out, rise, offset, blend, rigid):
                 place[k] += w * at[k]
         positions.append(tuple(place))
 
+    write_export(out, positions, faces, rows)
+
+
+def human_candidate(root, out, offset, cut, refit_body=False, fingers=False):
+    """Rebind c2280 with human-length arms: its shoulder, elbow and wrist land on Elden Ring's
+    `UpperArm`, `Forearm` and `Hand` joints, each segment stretched along its own axis to the human
+    length (its girth keeps the global scale), and the hand moved whole onto the human hand, so a
+    weapon the game holds at `R_Weapon` sits in the mushroom's palm. offset: metres the whole arm
+    is set up and out across the human arm axis, which moves the hand off the weapon by as much.
+
+    refit_body: instead of one scale and a fixed height stretch, the body is stretched upright in
+    three bands so c2280's pelvis lands on the human pelvis and its shoulders on the human
+    shoulders, with the neck and cap above keeping their own proportions. fingers: the palm spans
+    the wrist to the human knuckles, and each of c2280's three digits is weighted to a human
+    finger (thumb, middle, ring) split at that finger's middle joint, so the game's grip curls it.
+    """
+    hkx = pose_tool()
+    src = bones(root / "c2280.flver")
+    er = bones(root / "FC_M_0000.flver")
+    names = list(src)
+    raw = raw_vertices(root / "c2280.flver")
+    _, faces = obj(root / "builder-export" / "c2280_route_a_scaled.obj")
+    lo, hi = min(p[1] for p, _, _ in raw), max(p[1] for p, _, _ in raw)
+    up = (0.0, 1.0, 0.0)
+
+    if refit_body:
+        def rel(v):
+            return tuple(x * SCALE for x in v)
+        hip, shoulder_y = src["Pelvis"]["pos"][1], src["LArm1"]["pos"][1]
+        er_hip, er_shoulder_y = er["Pelvis"]["pos"][1], er["L_UpperArm"]["pos"][1]
+
+        def body(v):
+            y = v[1]
+            if y <= hip:
+                y = y * er_hip / hip
+            elif y <= shoulder_y:
+                y = er_hip + (y - hip) * (er_shoulder_y - er_hip) / (shoulder_y - hip)
+            else:
+                y = er_shoulder_y + (y - shoulder_y) * SCALE
+            return (v[0] * SCALE, y, v[2] * SCALE)
+        knee, ankle = er["L_Calf"]["pos"][1], er["L_Foot"]["pos"][1]
+    else:
+        rel = body = scaled
+
+    def segment(a, b, joint_a, joint_b, shift):
+        u_src = normalise(rel(sub(b, a)))
+        stretch = length(sub(joint_b, joint_a)) / length(rel(sub(b, a)))
+        q = arc_rotation(u_src, normalise(sub(joint_b, joint_a)))
+
+        def place(v):
+            w = rel(sub(v, a))
+            w = tuple(x + (stretch - 1) * dot(w, u_src) * u for x, u in zip(w, u_src))
+            return tuple(j + s + m for j, s, m in zip(joint_a, shift, hkx._qrot(q, w)))
+        return place, q
+
+    def mid(a, b):
+        return tuple((x + y) / 2 for x, y in zip(a, b))
+
+    parts = {}
+    digit_split = {}
+    for side in "LR":
+        e = f"{side}_"
+        shoulder, elbow, wrist = (src[f"{side}Arm{k}"]["pos"] for k in ("1", "2", "Palm"))
+        er_shoulder, er_elbow, er_hand = (er[e + k]["pos"] for k in ("UpperArm", "Forearm", "Hand"))
+        axis = normalise(sub(er_hand, er_shoulder))
+        out_dir = normalise(sub(up, tuple(dot(up, axis) * a for a in axis)))
+        none = (0.0, 0.0, 0.0)
+        upper, _ = segment(shoulder, elbow, er_shoulder, er_elbow, none)
+        fore, q_fore = segment(elbow, wrist, er_elbow, er_hand, none)
+
+        if fingers:
+            knuckles = mid(src[f"{side}ArmDigit22"]["pos"], src[f"{side}ArmDigit32"]["pos"])
+            er_knuckles = mid(er[e + "Finger2"]["pos"], er[e + "Finger3"]["pos"])
+            hand, q_hand = segment(wrist, knuckles, er_hand, er_knuckles, none)
+            # Each digit hangs off the hand where the hand put its knuckle, turned with the hand,
+            # and splits between the human finger's first and second bones at that finger's own
+            # first-bone length.
+            for digit, base, prev, first, second in (("1", "Digit12", "Digit11", "Finger01", "Finger02"),
+                                                     ("2", "Digit22", "Digit21", "Finger2", "Finger21"),
+                                                     ("3", "Digit32", "Digit31", "Finger3", "Finger31")):
+                joint = src[f"{side}Arm{base}"]["pos"]
+                anchor = hand(joint)
+                along = normalise(rel(sub(joint, src[f"{side}Arm{prev}"]["pos"])))
+                split = length(sub(er[e + second]["pos"], er[e + first]["pos"]))
+                if digit not in SPLIT_DIGITS:
+                    split = 1.0
+
+                def finger(v, joint=joint, anchor=anchor, q=q_hand):
+                    return tuple(a + m for a, m in zip(anchor, hkx._qrot(q, rel(sub(v, joint)))))
+                parts[f"{side}Digit{digit}"] = (finger, e + first)
+                digit_split[f"{side}Digit{digit}"] = (joint, along, split, e + first, e + second)
+        else:
+            def hand(v, wrist=wrist, er_hand=er_hand, q_fore=q_fore):
+                return tuple(h + m for h, m in zip(er_hand, hkx._qrot(q_fore, rel(sub(v, wrist)))))
+
+        # The arm leans `offset` out across the human arm axis from the shoulder to the elbow and
+        # comes back in along the forearm, so the hand, and the weapon in it, stays put.
+        u_elbow = dot(sub(er_elbow, er_shoulder), axis)
+        u_hand = dot(sub(er_hand, er_shoulder), axis)
+
+        def lean(fn, er_shoulder=er_shoulder, axis=axis, out_dir=out_dir, u_elbow=u_elbow, u_hand=u_hand):
+            def place(v):
+                at = fn(v)
+                u = dot(sub(at, er_shoulder), axis)
+                k = offset * smoothstep(0.0, 1.0, (u_hand - u) / (u_hand - u_elbow))
+                return tuple(a + k * o for a, o in zip(at, out_dir))
+            return place
+        parts[f"{side}Arm1"] = (lean(upper), e + "UpperArm")
+        parts[f"{side}Arm2"] = (lean(fore), e + "Forearm")
+        parts[f"{side}Hand"] = (lean(hand), e + "Hand")
+
+    def arm_key(name):
+        if name in parts:
+            return name
+        if fingers and name[1:].startswith("ArmDigit") and name.endswith("2"):
+            return f"{name[0]}Digit{name[-2]}"
+        return f"{name[0]}Hand" if name[1:].startswith(("ArmPalm", "ArmDigit")) else None
+
+    def arm_share(ws, bone_ids):
+        total = sum(w for w in ws if w > 1e-4) or 1.0
+        return sum(w for b, w in zip(bone_ids, ws) if w > 1e-4 and arm_key(names[b])) / total
+
+    on_arm = [arm_share(ws, ids) >= 0.5 for _, ids, ws in raw]
+    if cut:
+        # The arm now roots at the human shoulder, inside the cap, so the triangles that joined it
+        # to the mushroom's own shoulder would span 0.37 m. Drop them, give each side of the cut
+        # only its own bones, and close both openings with a fan.
+        spots = {}
+        spot = [spots.setdefault(p, len(spots)) for p, _, _ in raw]
+        kept = [f for f in faces if len({on_arm[i] for i in f}) == 1]
+        cut_spots = {spot[i] for f in faces if len({on_arm[i] for i in f}) == 2 for i in f}
+        holes = openings(kept, cut_spots, spot)
+        faces = kept
+
+    positions, rows = [], []
+    for index, (p, bone_ids, ws) in enumerate(raw):
+        place = [0.0, 0.0, 0.0]
+        if cut:
+            ws = [w if bool(arm_key(names[b])) == on_arm[index] else 0.0 for b, w in zip(bone_ids, ws)]
+        total = sum(w for w in ws if w > 1e-4) or 1.0
+        for bone_id, w in zip(bone_ids, ws):
+            if w <= 1e-4:
+                continue
+            w /= total
+            name = names[bone_id] if bone_id < len(names) else ""
+            key = arm_key(name)
+            if key:
+                fn, er_bone = parts[key]
+                at = fn(p)
+                if key in digit_split:
+                    joint, along, split, first, second = digit_split[key]
+                    t = smoothstep(0.0, 1.0, (dot(rel(sub(p, joint)), along) - split) / FINGER_BLEND + 0.5)
+                    rows.append((index, first, w * (1 - t)))
+                    rows.append((index, second, w * t))
+                else:
+                    rows.append((index, er_bone, w))
+            else:
+                at = body(p)
+                if name in ("LLeg1", "RLeg1"):
+                    if refit_body:
+                        part = "Thigh" if at[1] >= knee else "Calf" if at[1] >= ankle else "Foot"
+                    else:
+                        ny = (p[1] - lo) / (hi - lo)
+                        part = "Foot" if ny < 0.10 else "Calf" if ny < 0.24 else "Thigh"
+                    rows.append((index, f"{name[0]}_{part}", w))
+                else:
+                    rows.append((index, TORSO_MAP.get(name, "Spine2"), w))
+            for k in range(3):
+                place[k] += w * at[k]
+        positions.append(tuple(place))
+    if cut:
+        # Cap each opening from a new vertex at the middle of its rim, as the builder does.
+        for rim in holes:
+            middle, corners, seen = len(positions), [], set()
+            for a, _ in rim:
+                if spot[a] not in seen:
+                    seen.add(spot[a])
+                    corners.append(a)
+            positions.append(tuple(sum(positions[c][k] for c in corners) / len(corners) for k in range(3)))
+            bones_at = defaultdict(float)
+            for index, bone, w in rows:
+                if index in corners:
+                    bones_at[bone] += w / len(corners)
+            rows += [(middle, bone, w) for bone, w in bones_at.items()]
+            faces = faces + [(b, a, middle) for a, b in rim]
+    write_export(out, positions, faces, rows)
+
+
+def openings(faces, cut_spots, spot):
+    """The rim edges of every hole whose edges lie wholly on `cut_spots`, one list per hole, traced
+    over positions (`spot[i]` is shared by the copies a texture seam makes of one vertex). A rim
+    edge a->b of an existing triangle is crossed b->a by the cap, so the winding matches."""
+    edges = {(spot[f[k]], spot[f[(k + 1) % 3]]) for f in faces for k in range(3)}
+    rim = [(a, b) for f in faces for a, b in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0]))
+           if (spot[b], spot[a]) not in edges and spot[a] in cut_spots and spot[b] in cut_spots]
+    parent = {s: s for a, b in rim for s in (spot[a], spot[b])}
+
+    def root(s):
+        while parent[s] != s:
+            s = parent[s]
+        return s
+    for a, b in rim:
+        ra, rb = root(spot[a]), root(spot[b])
+        parent[max(ra, rb)] = min(ra, rb)
+    holes = defaultdict(list)
+    for a, b in rim:
+        holes[root(spot[a])].append((a, b))
+    return [holes[k] for k in sorted(holes)]
+
+
+def write_export(out, positions, faces, rows):
     out.mkdir(parents=True, exist_ok=True)
     with open(out / "c2280_route_a_scaled.obj", "w") as f:
         for p in positions:
@@ -388,7 +619,7 @@ def skin(positions, weights, bind, pose, index, qrot):
     return out
 
 
-def idle_report(raw, final, faces, weights):
+def idle_report(raw, final, faces, weights, palms=None, tips=None):
     """The same mesh posed into frame 0 of the standing idle a000_000000."""
     hkx = pose_tool()
     skeleton = hkx.load_skeleton()
@@ -439,10 +670,48 @@ def idle_report(raw, final, faces, weights):
     if left:
         print("  left arm in idle: x {:+.3f}..{:+.3f}  y {:+.3f}..{:+.3f}".format(
             min(p[0] for p in left), max(p[0] for p in left), min(p[1] for p in left), max(p[1] for p in left)))
+    if palms:
+        weapon_report(final, faces, weights, palms, tips or {}, raw, hkx, skeleton, bind, idle)
+
+
+def weapon_report(final, faces, weights, palms, tips, raw, hkx, skeleton, bind, idle):
+    """How far the game's weapon bone (`R_Weapon`, `L_Weapon`) sits from the mushroom's palm, and
+    how many edges a clip stretches: the idle loop, a020_030000 (R1), and a020_030200 (running R1,
+    where the legs move) frame by frame. Then how close the digit tips close on the weapon bone in
+    the idle, where the game curls its own fingers around the grip."""
+    posed = skin(final, weights, bind, idle, skeleton.index, hkx._qrot)
+    for side, sel in sorted(tips.items()):
+        grip = idle[skeleton.index[f"{side}_Weapon"]][0]
+        mean = sum(length(sub(posed[i], grip)) for i in sel) / len(sel)
+        print(f"  idle: {side} digit tips sit {mean:.3f} m from the weapon bone on average")
+    for clip, label in ((hkx.IDLE, "idle loop"), (hkx.R1, "R1 a020_030000"), (hkx.RUN_R1, "running R1 a020_030200")):
+        frames = len(hkx._frames(hkx.load_animation(*clip)))
+        gaps, worst_bad = Counter(), 0
+        for frame in range(0, frames, 3):
+            pose = hkx.pose_model(*clip, t=frame / 30.0)
+            posed = skin(final, weights, bind, pose, skeleton.index, hkx._qrot)
+            for side, sel in palms.items():
+                palm = tuple(sum(posed[i][k] for i in sel) / len(sel) for k in range(3))
+                gap = length(sub(pose[skeleton.index[f"{side}_Weapon"]][0], palm))
+                gaps[side] = max(gaps[side], gap)
+            # Against the fitted bind shape, not the raw one: this is what the pose itself does.
+            bad = sum(1 for f in faces for a, b in ((f[0], f[1]), (f[1], f[2]), (f[2], f[0]))
+                      if (r := length(sub(final[a], final[b]))) > 1e-6
+                      and not BAD_SQUASH <= length(sub(posed[a], posed[b])) / r <= BAD_STRETCH)
+            worst_bad = max(worst_bad, bad)
+        print(f"  {label}: weapon bone to mushroom palm at most "
+              + ", ".join(f"{s} {g:.2f} m" for s, g in sorted(gaps.items()))
+              + f"; worst frame has {worst_bad} edges the pose stretches or squashes past"
+              f" {BAD_STRETCH}x against the fitted bind shape")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 3 and sys.argv[2] == "--candidate":
+    if len(sys.argv) > 5 and sys.argv[2] == "--human":
+        # <dir> --human <out-dir> <offset> <cut 0|1> [<refit-body 0|1> <fingers 0|1>]
+        flags = [a == "1" for a in sys.argv[5:8]] + [False, False]
+        human_candidate(Path(sys.argv[1]), Path(sys.argv[3]), float(sys.argv[4]), *flags[:3])
+        sys.argv[2:] = [sys.argv[3]]
+    elif len(sys.argv) > 3 and sys.argv[2] == "--candidate":
         # <dir> --candidate <out-dir> <rise> <offset> <blend> <rigid 0|1>
         candidate(Path(sys.argv[1]), Path(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5]),
                   float(sys.argv[6]), sys.argv[7] == "1")

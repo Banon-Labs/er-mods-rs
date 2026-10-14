@@ -4,33 +4,43 @@
 //! # The fit
 //!
 //! The game skins this mesh with the player's skeleton, so every vertex turns about the joint of
-//! the Elden Ring bone it is weighted to. A part that sits far from that joint swings on a long
-//! lever in every pose but the bind pose -- the standing idle included -- which is what bent the
-//! first version's arms. So the body keeps c2280's own shape under one scale, and each arm is
-//! moved as one rigid piece:
+//! the Elden Ring bone it is weighted to, and it draws a held weapon at the human hand
+//! (`R_Weapon`, `L_Weapon`), which nothing in this mesh can move. So each part of c2280 is laid
+//! onto the human joints that turn it:
 //!
-//! - turned so it points along Elden Ring's arm (shoulder to hand, 45 degrees down in the bind
-//!   pose) instead of c2280's own 23 degrees, so it hangs where a human arm hangs;
-//! - kept at its own short length, rooted at c2280's shoulder;
-//! - set [`FitParams::arm_offset`] up and out from there, so the wide body does not swallow it
-//!   when the arm hangs;
-//! - weighted wholly to `L_UpperArm` / `R_UpperArm`: it swings from the shoulder and does not
-//!   bend at the human elbow, which falls partway down the short arm.
+//! - the body is stretched upright in three bands ([`BodyFit`]): the legs so c2280's pelvis lands
+//!   on the human pelvis, the trunk so its shoulders land on the human shoulders, and the neck and
+//!   cap above keep their own proportions, about 2.04 m to the top of the cap;
+//! - c2280's shoulder, elbow and wrist land on `UpperArm`, `Forearm` and `Hand`, each segment
+//!   stretched along its own length to the human one while its girth keeps the body's scale, and
+//!   the arm leans [`FitParams::arm_lean`] out from the shoulder to the elbow and comes back in
+//!   along the forearm, so the hanging forearm clears the wide body and the hand stays put;
+//! - the palm spans the wrist to the human knuckles, so a weapon sits in it, and each of c2280's
+//!   three digits is weighted to a human finger (thumb, middle, ring) as one piece from its
+//!   knuckle: the game curls those fingers around the grip, and the digit closes with them;
+//! - the legs go to the foot, calf or thigh by where the human ankle and knee fall.
 //!
-//! Blending the body's and the arm's placements by c2280's own weights keeps the shoulder seam
-//! closed. Measured with `scripts/mushroom-arm-fit-probe.py`, which poses the result into frame 0
-//! of the standing idle the way the game skins it: the hand-tuned reshape this replaces turned
-//! 128 of 1708 triangles inside out before any animation and left 1100 edges stretched or
-//! squashed past 1.5x in the idle; this fit turns none inside out and leaves 212, 143 of them in
-//! the legs, which it does not touch.
+//! The triangles that joined each arm to c2280's shoulder are dropped: each vertex keeps only its
+//! own side's weights (arm or body, whichever holds most of it), and each opening is capped from a
+//! new vertex at the middle of its rim. Left joined, the seam folds as the arm lifts.
+//!
+//! Measured with `scripts/mushroom-arm-fit-probe.py`, which skins the result the way the game
+//! does, as the worst frame's edges stretched or squashed past 1.5x against the fitted shape: 108
+//! in the idle loop, 452 in an R1 and 448 in a running R1, against 150, 492 and 512 with the
+//! body under one scale and 244, 636 and the same legs with the stubby arms before that. The
+//! weapon bone stays within 0.03 m of the palm, the digit tips close from 0.10 m to 0.06 m of it
+//! in the idle, and no triangle is inside out before animation or in the idle.
 //!
 //! [`SourceMesh::to_obj`] / [`SourceMesh::to_weights_tsv`] still emit the text the old
 //! `scripts/route_a_mushroom_export.rs` wrote, for comparison and for the Blender authoring path.
 
-use std::fmt::Write as _;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 
 use super::{
-    Flver, Header, Vec2, Vec3, bind_positions, parse_face_set_indices, parse_layout_members,
+    Flver, Vec2, Vec3, bind_positions, parse_face_set_indices, parse_layout_members,
     parse_u32_list, read_vec3,
 };
 use crate::{
@@ -50,77 +60,225 @@ const UP: Vec3 = Vec3 {
 /// How c2280 is fitted to Elden Ring's body.
 #[derive(Clone, Copy, Debug)]
 pub struct FitParams {
-    /// The whole mushroom's scale: c2280 is a child, about 1.26 m to the top of its cap.
+    /// The mushroom's girth, and the height of its neck and cap: c2280 is a child, about 1.26 m
+    /// to the top of its cap. The legs and trunk take their heights from the human skeleton.
     pub scale: f32,
-    /// Extra height on top of `scale`, so the cap clears a human head (1.76 m in all).
-    pub vertical_stretch: f32,
-    /// Metres each arm is set up and out from its shoulder, across Elden Ring's arm axis. At 0
-    /// the hanging arms sink into the body (410 of 571 arm vertices inside it in the idle); at
-    /// 0.2 that falls to 31 with the fewest stretched edges, and past it the seam stretches.
-    pub arm_offset: f32,
+    /// Metres the upper arm and elbow lean up and out across Elden Ring's arm axis, fading to
+    /// nothing at the hand. At 0 the idle sinks 16 of each forearm's 39 vertices into the body;
+    /// 0.08 leaves 4, and the hand does not move either way.
+    pub arm_lean: f32,
 }
 
 impl Default for FitParams {
     fn default() -> Self {
         Self {
             scale: 1.225,
-            vertical_stretch: 1.14,
-            arm_offset: 0.2,
+            arm_lean: 0.08,
         }
     }
 }
 
 impl FitParams {
     fn scaled(&self, v: Vec3) -> Vec3 {
+        mul(v, self.scale)
+    }
+}
+
+/// c2280's body stretched upright in three bands, so its pelvis and shoulders land at the human
+/// pelvis and shoulder heights; across, and above the shoulders, it keeps [`FitParams::scale`].
+#[derive(Clone, Copy, Debug)]
+struct BodyFit {
+    scale: f32,
+    /// c2280's pelvis and shoulder heights, unscaled.
+    hip: f32,
+    shoulder: f32,
+    /// Elden Ring's.
+    er_hip: f32,
+    er_shoulder: f32,
+}
+
+impl BodyFit {
+    fn new(
+        hip: f32,
+        shoulder: f32,
+        er_hip: f32,
+        er_shoulder: f32,
+        params: FitParams,
+    ) -> Result<Self> {
+        if hip <= 0.0 || shoulder <= hip || er_shoulder <= er_hip {
+            return Err(Error::new(format!(
+                "pelvis and shoulder heights out of order: c2280 {hip}..{shoulder}, Elden Ring {er_hip}..{er_shoulder}"
+            )));
+        }
+        Ok(Self {
+            scale: params.scale,
+            hip,
+            shoulder,
+            er_hip,
+            er_shoulder,
+        })
+    }
+
+    fn place(&self, v: Vec3) -> Vec3 {
+        let y = if v.y <= self.hip {
+            v.y * self.er_hip / self.hip
+        } else if v.y <= self.shoulder {
+            self.er_hip
+                + (v.y - self.hip) * (self.er_shoulder - self.er_hip) / (self.shoulder - self.hip)
+        } else {
+            self.er_shoulder + (v.y - self.shoulder) * self.scale
+        };
         Vec3 {
             x: v.x * self.scale,
-            y: v.y * self.scale * self.vertical_stretch,
+            y,
             z: v.z * self.scale,
         }
     }
 }
 
-/// One arm's rigid move from c2280's bind pose onto Elden Ring's.
+/// One piece of c2280's arm, from joint `from`, laid onto Elden Ring's arm from joint `onto`.
 #[derive(Clone, Copy, Debug)]
-struct ArmFit {
-    /// c2280's shoulder joint, unscaled.
-    joint: Vec3,
-    /// Where that joint lands.
-    root: Vec3,
-    /// Turns the scaled arm onto Elden Ring's arm axis (a quaternion, x y z w).
+struct Segment {
+    /// c2280's joint, unscaled.
+    from: Vec3,
+    /// The Elden Ring joint it lands on.
+    onto: Vec3,
+    /// The piece's own direction after the global scale, along which it is stretched.
+    axis: Vec3,
+    stretch: f32,
+    /// Turns `axis` onto Elden Ring's direction (a quaternion, x y z w).
     rotation: [f32; 4],
-    target: &'static str,
 }
 
-impl ArmFit {
-    /// `joint` and `tip` are c2280's shoulder and palm; `shoulder` and `hand` are Elden Ring's.
-    fn new(
-        joint: Vec3,
-        tip: Vec3,
-        shoulder: Vec3,
-        hand: Vec3,
-        target: &'static str,
+impl Segment {
+    /// c2280's `from`..`to` laid onto Elden Ring's `onto`..`onto_to`, stretched to its length.
+    fn spanning(
+        from: Vec3,
+        to: Vec3,
+        onto: Vec3,
+        onto_to: Vec3,
         params: FitParams,
     ) -> Result<Self> {
-        let axis = normalized(sub(hand, shoulder)).ok_or("Elden Ring's arm has no length")?;
-        let along =
-            normalized(params.scaled(sub(tip, joint))).ok_or("c2280's arm has no length")?;
-        let out =
-            normalized(sub(UP, mul(axis, dot(UP, axis)))).ok_or("Elden Ring's arm is vertical")?;
+        let own = params.scaled(sub(to, from));
+        let own_length = dot(own, own).sqrt();
+        let human = sub(onto_to, onto);
+        let axis = normalized(own).ok_or("c2280's arm segment has no length")?;
+        let target = normalized(human).ok_or("Elden Ring's arm segment has no length")?;
         Ok(Self {
-            joint,
-            root: add(params.scaled(joint), mul(out, params.arm_offset)),
-            rotation: arc_rotation(along, axis),
-            target,
+            from,
+            onto,
+            axis,
+            stretch: dot(human, human).sqrt() / own_length,
+            rotation: arc_rotation(axis, target),
         })
     }
 
     fn place(&self, v: Vec3, params: FitParams) -> Vec3 {
-        add(
-            self.root,
-            rotate(self.rotation, params.scaled(sub(v, self.joint))),
-        )
+        let w = params.scaled(sub(v, self.from));
+        let w = add(w, mul(self.axis, (self.stretch - 1.0) * dot(w, self.axis)));
+        add(self.onto, rotate(self.rotation, w))
     }
+}
+
+/// One arm laid joint on joint onto Elden Ring's.
+#[derive(Clone, Copy, Debug)]
+struct ArmFit {
+    /// Upper arm, forearm, hand, then the three digits (thumb, middle, ring): each lies on, and is
+    /// weighted to, the bone in `targets`.
+    pieces: [Segment; 6],
+    targets: [&'static str; 6],
+    /// Elden Ring's shoulder joint and its unit axis toward the hand.
+    shoulder: Vec3,
+    axis: Vec3,
+    /// Across the arm axis, up and out: the way [`FitParams::arm_lean`] pushes.
+    out: Vec3,
+    /// How far along `axis` the elbow and the hand are.
+    elbow_at: f32,
+    hand_at: f32,
+}
+
+impl ArmFit {
+    /// `own` is c2280's shoulder, elbow, wrist and the knuckles of its thumb, middle and ring
+    /// digits (`XArmDigit12`, `22`, `32`); `human` is Elden Ring's `UpperArm`, `Forearm` and `Hand`
+    /// joints and the middle and ring knuckles (`Finger2`, `Finger3`). `targets` names the bone
+    /// each piece is weighted to.
+    fn new(
+        own: [Vec3; 6],
+        human: [Vec3; 5],
+        targets: [&'static str; 6],
+        params: FitParams,
+    ) -> Result<Self> {
+        let [shoulder, elbow, wrist, thumb, middle, ring] = own;
+        let [er_shoulder, er_elbow, er_hand, er_middle, er_ring] = human;
+        let upper = Segment::spanning(shoulder, elbow, er_shoulder, er_elbow, params)?;
+        let fore = Segment::spanning(elbow, wrist, er_elbow, er_hand, params)?;
+        // The palm spans the wrist to the line between the middle and ring knuckles.
+        let hand = Segment::spanning(
+            wrist,
+            mul(add(middle, ring), 0.5),
+            er_hand,
+            mul(add(er_middle, er_ring), 0.5),
+            params,
+        )?;
+        // Each digit keeps its own size, hangs from where the palm put its knuckle, and turns
+        // with the palm until the game curls its finger.
+        let digit = |knuckle: Vec3| Segment {
+            from: knuckle,
+            onto: hand.place(knuckle, params),
+            stretch: 1.0,
+            ..hand
+        };
+        let axis = normalized(sub(er_hand, er_shoulder)).ok_or("Elden Ring's arm has no length")?;
+        let out =
+            normalized(sub(UP, mul(axis, dot(UP, axis)))).ok_or("Elden Ring's arm is vertical")?;
+        Ok(Self {
+            pieces: [upper, fore, hand, digit(thumb), digit(middle), digit(ring)],
+            targets,
+            shoulder: er_shoulder,
+            axis,
+            out,
+            elbow_at: dot(sub(er_elbow, er_shoulder), axis),
+            hand_at: dot(sub(er_hand, er_shoulder), axis),
+        })
+    }
+
+    /// Where `v`, carried by piece `piece` of c2280's arm, lands.
+    fn place(&self, piece: usize, v: Vec3, params: FitParams) -> Vec3 {
+        let at = self.pieces[piece].place(v, params);
+        if piece >= 3 {
+            return at;
+        }
+        let along = dot(sub(at, self.shoulder), self.axis);
+        let lean = smoothstep((self.hand_at - along) / (self.hand_at - self.elbow_at));
+        add(at, mul(self.out, params.arm_lean * lean))
+    }
+}
+
+/// Which piece of which arm a c2280 bone moves: `XArm1` the upper arm, `XArm2` the forearm,
+/// `XArmPalm` the hand, `XArmDigit12`, `22` and `32` the thumb, middle and ring digits. The
+/// digits' first bones (`11`, `21`, `31`) carry palm, so they go with the hand.
+fn arm_piece<'a>(name: &str, left: &'a ArmFit, right: &'a ArmFit) -> Option<(&'a ArmFit, usize)> {
+    let (arm, rest) = if let Some(rest) = name.strip_prefix("LArm") {
+        (left, rest)
+    } else {
+        (right, name.strip_prefix("RArm")?)
+    };
+    let piece = match rest {
+        "1" => 0,
+        "2" => 1,
+        "Digit12" => 3,
+        "Digit22" => 4,
+        "Digit32" => 5,
+        _ if rest.starts_with("Palm") || rest.starts_with("Digit") => 2,
+        _ => return None,
+    };
+    Some((arm, piece))
+}
+
+/// 0 at or below 0, 1 at or above 1, and a smooth ramp between.
+fn smoothstep(x: f32) -> f32 {
+    let t = x.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -156,7 +314,6 @@ struct DsrVertex {
 }
 
 struct DsrMesh {
-    header: Header,
     bone_names: Vec<String>,
     mesh_bone_indices: Vec<u32>,
     vertices: Vec<DsrVertex>,
@@ -168,49 +325,102 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
     let mesh = parse_first_lod0_mesh(flver_bytes)?;
     let joint = joint_finder(flver_bytes, "c2280")?;
     let er_joint = joint_finder(donor, "the Elden Ring donor")?;
-    let left = ArmFit::new(
-        joint("LArm1")?,
-        joint("LArmPalm")?,
-        er_joint("L_UpperArm")?,
-        er_joint("L_Hand")?,
-        "L_UpperArm",
+    let height = |name: &str, find: &dyn Fn(&str) -> Result<Vec3>| find(name).map(|p| p.y);
+    let body_fit = BodyFit::new(
+        height("Pelvis", &joint)?,
+        height("LArm1", &joint)?,
+        height("Pelvis", &er_joint)?,
+        height("L_UpperArm", &er_joint)?,
         params,
     )?;
-    let right = ArmFit::new(
-        joint("RArm1")?,
-        joint("RArmPalm")?,
-        er_joint("R_UpperArm")?,
-        er_joint("R_Hand")?,
-        "R_UpperArm",
-        params,
-    )?;
-    let arm_of = |name: &str| {
-        if name.starts_with("LArm") {
-            Some(&left)
-        } else if name.starts_with("RArm") {
-            Some(&right)
+    let (knee, ankle) = (height("L_Calf", &er_joint)?, height("L_Foot", &er_joint)?);
+    let arm = |side: &str| -> Result<ArmFit> {
+        let own = [
+            "Arm1",
+            "Arm2",
+            "ArmPalm",
+            "ArmDigit12",
+            "ArmDigit22",
+            "ArmDigit32",
+        ]
+        .map(|bone| joint(&format!("{side}{bone}")));
+        let human = ["UpperArm", "Forearm", "Hand", "Finger2", "Finger3"]
+            .map(|bone| er_joint(&format!("{side}_{bone}")));
+        let targets = if side == "L" {
+            [
+                "L_UpperArm",
+                "L_Forearm",
+                "L_Hand",
+                "L_Finger01",
+                "L_Finger2",
+                "L_Finger3",
+            ]
         } else {
-            None
-        }
+            [
+                "R_UpperArm",
+                "R_Forearm",
+                "R_Hand",
+                "R_Finger01",
+                "R_Finger2",
+                "R_Finger3",
+            ]
+        };
+        let [a, b, c, d, e, f] = own;
+        let [g, h, i, j, k] = human;
+        ArmFit::new(
+            [a?, b?, c?, d?, e?, f?],
+            [g?, h?, i?, j?, k?],
+            targets,
+            params,
+        )
     };
+    let (left, right) = (arm("L")?, arm("R")?);
+    let piece_of = |slot: usize, vertex: &DsrVertex| {
+        source_bone_name(&mesh, vertex.bone_indices[slot])
+            .and_then(|name| arm_piece(name, &left, &right))
+    };
+
+    // A vertex belongs to the arm when the arm's bones hold most of its weight.
+    let on_arm: Vec<bool> = mesh
+        .vertices
+        .iter()
+        .map(|vertex| {
+            let (mut arm_weight, mut total) = (0.0, 0.0);
+            for slot in 0..4 {
+                let weight = vertex.bone_weights[slot];
+                if weight > WEIGHT_FLOOR {
+                    total += weight;
+                    if piece_of(slot, vertex).is_some() {
+                        arm_weight += weight;
+                    }
+                }
+            }
+            total > 0.0 && arm_weight >= 0.5 * total
+        })
+        .collect();
 
     let mut vertices = Vec::with_capacity(mesh.vertices.len());
     let mut weights = Vec::new();
     for (vertex_index, vertex) in mesh.vertices.iter().enumerate() {
-        let body = params.scaled(vertex.position);
+        let body = body_fit.place(vertex.position);
         let mut placed = Vec3::default();
         let mut total = 0.0;
         for slot in 0..4 {
             let weight = vertex.bone_weights[slot];
-            if weight <= WEIGHT_FLOOR {
+            let piece = piece_of(slot, vertex);
+            // Only the weights on the vertex's own side of the cut shoulder seam count.
+            if weight <= WEIGHT_FLOOR || piece.is_some() != on_arm[vertex_index] {
                 continue;
             }
-            let name = source_bone_name(&mesh, vertex.bone_indices[slot]);
-            let (at, target) = match name.and_then(arm_of) {
-                Some(arm) => (arm.place(vertex.position, params), arm.target),
+            let (at, target) = match piece {
+                Some((arm, piece)) => (
+                    arm.place(piece, vertex.position, params),
+                    arm.targets[piece],
+                ),
                 None => (
                     body,
-                    name.map_or("<missing>", |name| body_target(name, vertex, &mesh.header)),
+                    source_bone_name(&mesh, vertex.bone_indices[slot])
+                        .map_or("<missing>", |name| body_target(name, body.y, knee, ankle)),
                 ),
             };
             placed = add(placed, mul(at, weight));
@@ -231,11 +441,112 @@ pub fn export_c2280(flver_bytes: &[u8], donor: &[u8], params: FitParams) -> Resu
             uv: vertex.uv,
         });
     }
+
+    let (mut triangles, seam): (Vec<[u32; 3]>, Vec<[u32; 3]>) =
+        mesh.triangles.iter().partition(|t| {
+            t.iter()
+                .all(|&i| on_arm[i as usize] == on_arm[t[0] as usize])
+        });
+    // c2280 splits a vertex wherever its texture does, so the openings are traced over positions.
+    let mut spots = BTreeMap::new();
+    let spot: Vec<u32> = mesh
+        .vertices
+        .iter()
+        .map(|vertex| {
+            let p = vertex.position;
+            let next = u32::try_from(spots.len()).unwrap_or(u32::MAX);
+            *spots
+                .entry([p.x.to_bits(), p.y.to_bits(), p.z.to_bits()])
+                .or_insert(next)
+        })
+        .collect();
+    let cut: BTreeSet<u32> = seam.iter().flatten().map(|&i| spot[i as usize]).collect();
+    // Each opening is capped from a new vertex at the middle of its rim, which draws no diagonal
+    // across the rim: a fan from one rim vertex doubled two edges at each arm root.
+    for rim in openings(&triangles, &cut, &spot) {
+        let middle = u32::try_from(vertices.len()).map_err(|_| "too many vertices")?;
+        let mut seen = BTreeSet::new();
+        let corners: Vec<usize> = rim
+            .iter()
+            .map(|&(a, _)| a as usize)
+            .filter(|&a| seen.insert(spot[a]))
+            .collect();
+        let share = 1.0 / corners.len() as f32;
+        let mut cap = SourceVertex::default();
+        let mut bones: BTreeMap<&str, f32> = BTreeMap::new();
+        for &corner in &corners {
+            let vertex = vertices[corner];
+            cap.position = add(cap.position, mul(vertex.position, share));
+            cap.normal = add(cap.normal, vertex.normal);
+            cap.uv = Vec2 {
+                x: cap.uv.x + vertex.uv.x * share,
+                y: cap.uv.y + vertex.uv.y * share,
+            };
+            for row in weights.iter().filter(|row| row.vertex == corner) {
+                *bones.entry(&row.target_bone).or_default() += row.weight * share;
+            }
+        }
+        cap.normal = normalized(cap.normal).unwrap_or(vertices[corners[0]].normal);
+        let rows: Vec<WeightRow> = bones
+            .into_iter()
+            .map(|(bone, weight)| WeightRow {
+                vertex: middle as usize,
+                target_bone: bone.to_owned(),
+                weight,
+            })
+            .collect();
+        weights.extend(rows);
+        vertices.push(cap);
+        triangles.extend(rim.iter().map(|&(a, b)| [b, a, middle]));
+    }
     Ok(SourceMesh {
         vertices,
-        triangles: mesh.triangles,
+        triangles,
         weights,
     })
+}
+
+/// The rim of every hole whose edges lie wholly on the positions in `rim`, one list per hole.
+/// `spot[i]` names the position vertex `i` sits at, shared by the copies a texture seam makes of
+/// one vertex. A rim edge runs a->b in the triangle beside it, with no b->a at the same positions;
+/// a cap crosses it b->a, so its winding matches the triangles around it.
+fn openings(triangles: &[[u32; 3]], rim: &BTreeSet<u32>, spot: &[u32]) -> Vec<Vec<(u32, u32)>> {
+    let at = |i: u32| spot[i as usize];
+    let sides = |t: &[u32; 3]| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])];
+    let edges: BTreeSet<(u32, u32)> = triangles
+        .iter()
+        .flat_map(sides)
+        .map(|(a, b)| (at(a), at(b)))
+        .collect();
+    let open: Vec<(u32, u32)> = triangles
+        .iter()
+        .flat_map(sides)
+        .filter(|&(a, b)| {
+            !edges.contains(&(at(b), at(a))) && rim.contains(&at(a)) && rim.contains(&at(b))
+        })
+        .collect();
+
+    // Rim positions joined by an edge ring the same hole.
+    let mut parent: BTreeMap<u32, u32> = open
+        .iter()
+        .flat_map(|&(a, b)| [at(a), at(b)])
+        .map(|s| (s, s))
+        .collect();
+    let root = |parent: &BTreeMap<u32, u32>, mut s: u32| {
+        while parent[&s] != s {
+            s = parent[&s];
+        }
+        s
+    };
+    for &(a, b) in &open {
+        let (ra, rb) = (root(&parent, at(a)), root(&parent, at(b)));
+        parent.insert(ra.max(rb), ra.min(rb));
+    }
+    let mut holes: BTreeMap<u32, Vec<(u32, u32)>> = BTreeMap::new();
+    for &(a, b) in &open {
+        holes.entry(root(&parent, at(a))).or_default().push((a, b));
+    }
+    holes.into_values().collect()
 }
 
 /// A lookup of one FLVER's bind-pose joints by bone name.
@@ -344,7 +655,6 @@ fn parse_first_lod0_mesh(bytes: &[u8]) -> Result<DsrMesh> {
     let indices = parse_face_set_indices(bytes, &flver, lod0)?;
 
     Ok(DsrMesh {
-        header: flver.header,
         bone_names: flver.bones.iter().map(|bone| bone.name.clone()).collect(),
         mesh_bone_indices,
         vertices,
@@ -439,24 +749,14 @@ fn rotate(q: [f32; 4], v: Vec3) -> Vec3 {
     add(add(v, mul(t, w)), cross(u, t))
 }
 
-fn normalized_vertex_y(vertex: &DsrVertex, header: &Header) -> f32 {
-    let height = header.bbox_max.y - header.bbox_min.y;
-    if height.abs() > f32::EPSILON {
-        (vertex.position.y - header.bbox_min.y) / height
-    } else {
-        0.5
-    }
-}
-
 /// The Elden Ring bone for a weight on one of c2280's body or leg bones (the arms are
-/// [`ArmFit`]'s). c2280 has one bone per leg, so its weight goes to the foot, calf or thigh by
-/// how far up the model the vertex sits.
-fn body_target(source: &str, vertex: &DsrVertex, header: &Header) -> &'static str {
-    let normalized_y = normalized_vertex_y(vertex, header);
+/// [`ArmFit`]'s). c2280 has one bone per leg, so its weight goes to the foot below the human
+/// `ankle`, the calf below the `knee`, and the thigh above, by the fitted height `y`.
+fn body_target(source: &str, y: f32, knee: f32, ankle: f32) -> &'static str {
     let leg = |side: &'static [&'static str; 3]| {
-        if normalized_y < 0.10 {
+        if y < ankle {
             side[0]
-        } else if normalized_y < 0.24 {
+        } else if y < knee {
             side[1]
         } else {
             side[2]
@@ -686,30 +986,26 @@ mod tests {
     }
 
     #[test]
-    fn the_leg_bone_splits_into_foot_calf_and_thigh_by_height() {
-        let header = Header {
-            version: 0,
-            data_offset: 0,
-            data_length: 0,
-            dummy_count: 0,
-            material_count: 0,
-            bone_count: 0,
-            mesh_count: 0,
-            vertex_buffer_count: 0,
-            bbox_min: v(0.0, 0.0, 0.0),
-            bbox_max: v(0.0, 2.0, 0.0),
-            vertex_index_size: 16,
-            face_set_count: 0,
-            buffer_layout_count: 0,
-        };
-        let at = |y: f32| DsrVertex {
-            position: v(0.1, y, 0.0),
-            ..DsrVertex::default()
-        };
-        assert_eq!(body_target("LLeg1", &at(0.1), &header), "L_Foot");
-        assert_eq!(body_target("RLeg1", &at(0.3), &header), "R_Calf");
-        assert_eq!(body_target("LLeg1", &at(1.0), &header), "L_Thigh");
-        assert_eq!(body_target("Spine3", &at(1.0), &header), "Spine2");
+    fn the_leg_bone_splits_into_foot_calf_and_thigh_at_the_human_ankle_and_knee() {
+        let (knee, ankle) = (0.527, 0.11);
+        assert_eq!(body_target("LLeg1", 0.05, knee, ankle), "L_Foot");
+        assert_eq!(body_target("RLeg1", 0.3, knee, ankle), "R_Calf");
+        assert_eq!(body_target("LLeg1", 0.6, knee, ankle), "L_Thigh");
+        assert_eq!(body_target("Spine3", 1.0, knee, ankle), "Spine2");
+    }
+
+    #[test]
+    fn the_body_lands_its_pelvis_and_shoulders_on_the_human_ones() {
+        let params = FitParams::default();
+        let body = BodyFit::new(0.381, 0.731, 0.97, 1.391, params).unwrap();
+        assert!(close(body.place(v(0.0, 0.0, 0.0)), v(0.0, 0.0, 0.0)));
+        assert!((body.place(v(0.1, 0.381, 0.0)).y - 0.97).abs() < 1e-5);
+        assert!((body.place(v(0.1, 0.731, 0.0)).y - 1.391).abs() < 1e-5);
+        // Above the shoulders, and across everywhere, it keeps the global scale.
+        let (a, b) = (v(0.2, 0.9, -0.1), v(-0.3, 1.2, 0.2));
+        let placed = sub(body.place(a), body.place(b));
+        assert!(close(placed, params.scaled(sub(a, b))));
+        assert!(BodyFit::new(0.7, 0.3, 0.97, 1.391, params).is_err());
     }
 
     #[test]
@@ -719,31 +1015,162 @@ mod tests {
         assert!(close(rotate(arc_rotation(from, to), from), to));
     }
 
+    fn distance(a: Vec3, b: Vec3) -> f32 {
+        let d = sub(a, b);
+        dot(d, d).sqrt()
+    }
+
+    // c2280's left arm (shoulder, elbow, wrist, thumb, middle and ring knuckles) and Elden Ring's
+    // (shoulder, elbow, hand, middle and ring knuckles), as their bind skeletons place them.
+    const OWN: [[f32; 3]; 6] = [
+        [0.201, 0.731, 0.0],
+        [0.344, 0.667, 0.007],
+        [0.453, 0.624, -0.002],
+        [0.519, 0.569, -0.059],
+        [0.562, 0.579, -0.008],
+        [0.547, 0.573, 0.034],
+    ];
+    const HUMAN: [[f32; 3]; 5] = [
+        [0.172, 1.391, 0.034],
+        [0.371, 1.192, 0.025],
+        [0.534, 1.029, 0.016],
+        [0.609, 0.961, 0.005],
+        [0.605, 0.962, 0.029],
+    ];
+
+    fn at(p: [f32; 3]) -> Vec3 {
+        v(p[0], p[1], p[2])
+    }
+
+    fn left_arm(params: FitParams) -> ArmFit {
+        let targets = [
+            "L_UpperArm",
+            "L_Forearm",
+            "L_Hand",
+            "L_Finger01",
+            "L_Finger2",
+            "L_Finger3",
+        ];
+        ArmFit::new(OWN.map(at), HUMAN.map(at), targets, params).unwrap()
+    }
+
     #[test]
-    fn an_arm_moves_whole_onto_the_elden_ring_arm_at_its_own_length() {
+    fn each_arm_joint_lands_on_its_human_joint_and_the_lean_spares_the_hand() {
         let params = FitParams::default();
-        let (joint, tip) = (v(0.2, 0.73, 0.0), v(0.45, 0.62, 0.0));
-        let (shoulder, hand) = (v(0.17, 1.39, 0.03), v(0.53, 1.03, 0.02));
-        let arm = ArmFit::new(joint, tip, shoulder, hand, "L_UpperArm", params).unwrap();
+        let arm = left_arm(params);
+        let [shoulder, elbow, wrist, _, middle, ring] = OWN.map(at);
+        let [er_shoulder, er_elbow, er_hand, er_middle, er_ring] = HUMAN.map(at);
+        let lean = mul(arm.out, params.arm_lean);
 
-        // The root is the scaled shoulder, moved `arm_offset` up and out across the ER arm.
-        let root = arm.place(joint, params);
-        let offset = sub(root, params.scaled(joint));
-        assert!((dot(offset, offset).sqrt() - params.arm_offset).abs() < 1e-5);
-        assert!(offset.x > 0.0 && offset.y > 0.0);
+        // The palm reaches from the human wrist to the human knuckle line.
+        let knuckles = mul(add(middle, ring), 0.5);
+        let er_knuckles = mul(add(er_middle, er_ring), 0.5);
+        assert!(close(arm.place(2, knuckles, params), er_knuckles));
 
-        // It points down Elden Ring's arm, and keeps its own scaled length.
-        let placed = sub(arm.place(tip, params), root);
-        let axis = normalized(sub(hand, shoulder)).unwrap();
-        let length = dot(placed, placed).sqrt();
-        assert!(close(mul(placed, 1.0 / length), axis));
-        let scaled = params.scaled(sub(tip, joint));
-        assert!((length - dot(scaled, scaled).sqrt()).abs() < 1e-5);
+        // Shoulder and elbow lean out by the full amount; the wrist sits on the human hand.
+        assert!(close(
+            arm.place(0, shoulder, params),
+            add(er_shoulder, lean)
+        ));
+        assert!(close(arm.place(0, elbow, params), add(er_elbow, lean)));
+        assert!(close(arm.place(1, elbow, params), add(er_elbow, lean)));
+        assert!(close(arm.place(1, wrist, params), er_hand));
+        assert!(close(arm.place(2, wrist, params), er_hand));
+        assert!(arm.out.x > 0.0 && arm.out.y > 0.0);
+    }
 
-        // Any two points of the arm keep their scaled distance: the move is rigid.
-        let (a, b) = (v(0.3, 0.7, 0.05), v(0.4, 0.6, -0.04));
-        let before = params.scaled(sub(a, b));
-        let after = sub(arm.place(a, params), arm.place(b, params));
-        assert!((dot(before, before).sqrt() - dot(after, after).sqrt()).abs() < 1e-5);
+    #[test]
+    fn a_digit_hangs_from_where_the_palm_put_its_knuckle_at_its_own_size() {
+        let params = FitParams::default();
+        let arm = left_arm(params);
+        let [_, _, _, thumb, middle, ring] = OWN.map(at);
+        for (piece, knuckle) in [(3, thumb), (4, middle), (5, ring)] {
+            assert!(close(
+                arm.place(piece, knuckle, params),
+                arm.place(2, knuckle, params)
+            ));
+            let tip = add(knuckle, v(0.04, -0.02, 0.01));
+            let own = distance(params.scaled(knuckle), params.scaled(tip));
+            let placed = distance(
+                arm.place(piece, knuckle, params),
+                arm.place(piece, tip, params),
+            );
+            assert!((own - placed).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn bone_names_pick_the_arm_piece_they_move() {
+        let arm = left_arm(FitParams::default());
+        let piece = |name| arm_piece(name, &arm, &arm).map(|(_, piece)| piece);
+        assert_eq!(piece("LArm1"), Some(0));
+        assert_eq!(piece("RArm2"), Some(1));
+        assert_eq!(piece("LArmPalm"), Some(2));
+        assert_eq!(piece("RArmDigit21"), Some(2));
+        assert_eq!(piece("LArmDigit12"), Some(3));
+        assert_eq!(piece("RArmDigit22"), Some(4));
+        assert_eq!(piece("RArmDigit32"), Some(5));
+        assert_eq!(piece("LLeg1"), None);
+        assert_eq!(piece("Spine3"), None);
+    }
+
+    /// A cube with its top face missing, whose top corners 4..7 are the rim.
+    fn open_box(sixth_corner_in_one_triangle: u32) -> Vec<[u32; 3]> {
+        vec![
+            [0, 2, 1],
+            [0, 3, 2],
+            [0, 1, 5],
+            [0, 5, 4],
+            [1, 2, 6],
+            [1, 6, 5],
+            [2, 3, 7],
+            [2, 7, sixth_corner_in_one_triangle],
+            [3, 0, 4],
+            [3, 4, 7],
+        ]
+    }
+
+    /// Every directed edge, over positions, has its reverse and none appears twice.
+    fn closed(triangles: &[[u32; 3]], spot: &[u32]) -> bool {
+        let edges: Vec<_> = triangles
+            .iter()
+            .flat_map(|t| [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])])
+            .map(|(a, b)| (spot[a as usize], spot[b as usize]))
+            .collect();
+        let set: BTreeSet<_> = edges.iter().copied().collect();
+        set.len() == edges.len() && edges.iter().all(|&(a, b)| set.contains(&(b, a)))
+    }
+
+    /// The box capped the way `export_c2280` caps an opening: from a new vertex per hole.
+    fn capped(open: &[[u32; 3]], spot: &[u32]) -> (Vec<[u32; 3]>, Vec<u32>) {
+        let holes = openings(open, &[4, 5, 6, 7].into(), spot);
+        let mut spot = spot.to_vec();
+        let mut all = open.to_vec();
+        for rim in holes {
+            let middle = u32::try_from(spot.len()).unwrap();
+            spot.push(100 + middle);
+            all.extend(rim.iter().map(|&(a, b)| [b, a, middle]));
+        }
+        (all, spot)
+    }
+
+    #[test]
+    fn a_cut_opening_is_capped_with_the_winding_around_it() {
+        let open = open_box(6);
+        let spot: Vec<u32> = (0..8).collect();
+        assert_eq!(openings(&open, &[4, 5, 6, 7].into(), &spot).len(), 1);
+        let (all, spot) = capped(&open, &spot);
+        assert_eq!(all.len(), open.len() + 4);
+        assert!(closed(&all, &spot));
+    }
+
+    #[test]
+    fn an_opening_is_capped_across_a_vertex_the_texture_split() {
+        // Vertex 8 is a copy of corner 6, used by one of the two triangles that meet there.
+        let open = open_box(8);
+        let spot = [0, 1, 2, 3, 4, 5, 6, 7, 6];
+        let (all, spot) = capped(&open, &spot);
+        assert_eq!(all.len(), open.len() + 4);
+        assert!(closed(&all, &spot));
     }
 }
