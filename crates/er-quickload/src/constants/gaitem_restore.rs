@@ -113,7 +113,7 @@ pub(crate) fn runtime_heap_allocator_ptr_or_null() -> usize {
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
 pub(crate) const WORLD_SINGLETON_A_RVA: usize = er_game_base::rva::FIELD_AREA_PTR_RVA;
 #[allow(dead_code)] // Retained RE address: decoded from the game binary, no live caller today.
-pub(crate) const WORLD_SINGLETON_B_RVA: usize = 0x3d69ba8;
+pub(crate) const WORLD_SINGLETON_B_RVA: usize = er_game_base::rva::CS_WORLD_GEOM_MAN_GLOBAL_RVA;
 pub(crate) use er_title_flow::MOVEMAPSTEP_WORLDRES_F0_OFFSET;
 pub(crate) use er_title_flow::WORLDRES_RESMGR_10_OFFSET;
 #[allow(dead_code)] // Retained RE constant: no live reader today, kept with the table it was decoded into.

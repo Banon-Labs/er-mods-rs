@@ -2580,6 +2580,11 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-r3-view --lib
 # the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons-core --lib
 
+# er-npc-summons: the brains' facts -- lift detection, the world-geometry tree walk, stuck and
+# hit classification. The game reads sit behind `GameMem`, which the tests fake, so they run on
+# the host.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-npc-summons --lib
+
 # er-allow-hostile-actions: its address constants and the stateInfo it refuses. No `cfg(windows)`
 # in the tests, so they run on the host.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-allow-hostile-actions --lib

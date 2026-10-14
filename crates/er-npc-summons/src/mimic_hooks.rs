@@ -428,6 +428,7 @@ unsafe extern "system" fn create_detour(
     let named = |chr: usize| {
         if chr != 0 {
             crate::names::name_companion(slot, chr);
+            crate::team::adopt(slot, chr);
         }
         chr
     };
