@@ -4,7 +4,7 @@
 //! `scripts/route_a_mushroom_hide_flver_faces.rs`.
 
 use super::{Flver, index_range};
-use crate::error::Result;
+use crate::{bytes::slice, error::Result};
 
 /// How many face sets were emptied, and how many indices that zeroed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,4 +26,20 @@ pub fn hide_all_face_sets(bytes: &mut [u8]) -> Result<HideReport> {
         report.indices += face_set.index_count;
     }
     Ok(report)
+}
+
+/// Zero every vertex of a FLVER whose faces are already hidden, returning how many bytes that
+/// cleared. Nothing reads them to draw once every index is 0, and zeroes are what Kraken
+/// compresses to nearly nothing: the vertices are most of a hair part's size, and the hidden
+/// face and hair parts are most of the package.
+pub fn blank_vertex_buffers(bytes: &mut [u8]) -> Result<usize> {
+    let flver = Flver::parse(bytes)?;
+    let mut cleared = 0;
+    for buffer in &flver.vertex_buffers {
+        let start = flver.header.data_offset + buffer.buffer_offset;
+        slice(bytes, start, buffer.buffer_length)?;
+        bytes[start..start + buffer.buffer_length].fill(0);
+        cleared += buffer.buffer_length;
+    }
+    Ok(cleared)
 }
