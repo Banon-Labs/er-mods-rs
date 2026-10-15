@@ -139,11 +139,12 @@ jobs:
 
       - name: Stage release assets
         run: |
-          mkdir dist
-          while IFS=: read -r _ artifact; do
-            cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll" dist/
-            cp "target/x86_64-pc-windows-msvc/release/${artifact}.dll.provenance.json" dist/
-          done < <(python3 scripts/me3-dll-list.py --pairs)
+          # Every DLL stays its own asset, so the page shows the whole payload and each one
+          # verifies on its own. The provenance sidecars go into one provenance.json: a release
+          # page cannot hold folders and sorts by file name, so one sidecar per DLL doubled the
+          # list. The grouping by use case is the table the publish step puts in the notes.
+          python3 scripts/release-assets.py stage \
+            --source target/x86_64-pc-windows-msvc/release --dist dist
           # Both installers are attached as plain files rather than inside an archive: the
           # whole point is that one download is the whole thing, and a user who has to unpack
           # a zip to find it has already been asked to do more than run it.
@@ -151,7 +152,7 @@ jobs:
           cp target/release/er-installer dist/er-installer
           chmod +x dist/er-installer
           cp target/x86_64-pc-windows-msvc/release/mushroom-man-builder.exe dist/
-          (cd dist && sha256sum -- *.dll er-installer.exe er-installer mushroom-man-builder.exe > SHA256SUMS)
+          (cd dist && sha256sum -- *.dll provenance.json er-installer.exe er-installer mushroom-man-builder.exe > SHA256SUMS)
 
       # Attest every distributable DLL, not merely the archive/container that
       # carries it, so `gh attestation verify <downloaded-dll>` remains useful.
@@ -167,6 +168,7 @@ jobs:
             dist/er-installer.exe
             dist/er-installer
             dist/mushroom-man-builder.exe
+            dist/provenance.json
             dist/SHA256SUMS
 
       # Transfer the exact staged files to the conditional versioned-release
@@ -188,7 +190,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           rolling_tag="main-${GITHUB_SHA}"
-          # The asset list is 60-odd files and only two of them are for a player. Say which,
+          # The asset list is 30-odd files and only two of them are for a player. Say which,
           # and say that they are complete on their own -- someone who downloads a single
           # 34 MB executable has a fair reason to wonder where the mods are.
           # The prose lives in .github/release-notes-header.md rather than inline here. A
@@ -198,6 +200,8 @@ jobs:
           # is also the half of this that someone might want to edit without reading YAML.
           notes_file="$(mktemp)"
           cat .github/release-notes-header.md > "$notes_file"
+          printf '\n' >> "$notes_file"
+          python3 scripts/release-assets.py notes --repo "$GITHUB_REPOSITORY" --tag "$rolling_tag" >> "$notes_file"
           printf '\nDevelopment build from commit %s. Every main build has its own immutable prerelease; use a numbered release for an immutable stable version.\n' \
             "$GITHUB_SHA" >> "$notes_file"
           gh release create "$rolling_tag" dist/* \
@@ -215,6 +219,10 @@ jobs:
     permissions:
       contents: write # upload release assets
     steps:
+      # For scripts/release-assets.py and the catalog it reads. The assets themselves come
+      # from the build job, never from a second build.
+      - uses: actions/checkout@v4
+
       - name: Retrieve staged release assets
         uses: actions/download-artifact@v4
         with:
@@ -227,4 +235,10 @@ jobs:
         run: |
           tag_name="${{ needs.release-please.outputs.tag_name }}"
           gh release upload "$tag_name" dist/*
-          gh release edit "$tag_name" --draft=false
+          # Release Please wrote the changelog; the mod table goes under it, linking the assets
+          # just uploaded. The draft is still editable here and immutable once published.
+          notes_file="$(mktemp)"
+          gh release view "$tag_name" --json body -q .body > "$notes_file"
+          printf '\n' >> "$notes_file"
+          python3 scripts/release-assets.py notes --repo "$GITHUB_REPOSITORY" --tag "$tag_name" >> "$notes_file"
+          gh release edit "$tag_name" --notes-file "$notes_file" --draft=false
