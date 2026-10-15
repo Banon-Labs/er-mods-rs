@@ -255,6 +255,7 @@ portable	-	gen-r3-weapon-boards.py --selftest	text rules on inline fixtures; rea
 partial	game-install	gen-r3-weapon-boards.py --check	body and repository sources still compared; prints which data files (regulation.bin, the planner cache) it could not compare	product
 portable	-	planner-item-names.py --selftest	parses a fixture of the planner bundle's item literals; fetches nothing	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product
+portable	-	release-assets.py --selftest	source/AST/text analysis only	product
 portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses
 portable	-	er_run_lib.py	source/AST/text analysis only	runtime-tools

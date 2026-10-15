@@ -2961,6 +2961,10 @@ python3 "$repo_root/scripts/planner-item-names.py" --selftest
 # deny list nobody exercises is a deny list that stopped matching years ago.
 python3 "$repo_root/scripts/build-installer-release.py" --selftest
 
+# The release page's per-DLL staging and its use-case table: a DLL with no catalog category would
+# drop out of the table, and one with no provenance sidecar would publish untied to its source.
+python3 "$repo_root/scripts/release-assets.py" --selftest
+
 # ...and the table only helps if it still matches the code. This scans every cdylib for the hook
 # targets it claims and fails on any address two of them claim without a [[conflict]] or [[shared]]
 # row -- then proves each [[shared]] row's mechanism, so neither side can quietly revert to a
