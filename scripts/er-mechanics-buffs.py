@@ -172,6 +172,29 @@ def fight_points(lo=FIGHT_SECONDS_RANGE[0], hi=FIGHT_SECONDS_RANGE[1], step=FIGH
 
 #: The fight lengths, as `fight_seconds` everywhere it is taken (a single number is also taken).
 FIGHT_SECONDS = fight_points()
+#: Fight models (user, 2026-10-14). `duel` is the fight above: one opponent, 3 to 5 minutes.
+#: `invasion` extends it to the current invasion meta and is the default for a generated build:
+#: the invader is hit by three hosts, who cannot hit each other, and by up to two co-invaders
+#: ("co-invaders can literally make it feel like a 5v1"), so five attackers; it has the three
+#: hosts' HP bars and their flasks to get through; an encounter lasts "anywhere between 10 seconds
+#: to 1 hour". How the lengths are spread over that range is not known: the points are spaced
+#: evenly in log time (`INFERRED`), so half the weight lies under two minutes and every tenfold
+#: length counts alike, where an even linear spread would let the hour-long ones decide.
+FIGHT_KINDS = {
+    'duel': {'seconds': FIGHT_SECONDS_RANGE, 'log': False, 'attackers': 1, 'targets': 1, 'role': 'host'},
+    'invasion': {'seconds': (10.0, 3600.0), 'log': True, 'attackers': 5, 'targets': 3, 'role': 'invader'},
+}
+DEFAULT_FIGHT = 'invasion'
+
+
+def fight_kind_points(kind, n=len(FIGHT_SECONDS)):
+    """The fight lengths (s) of fight model `kind` (`FIGHT_KINDS`): the duel's 10 s steps, or `n`
+    points spaced evenly in log time over the invasion's range."""
+    k = FIGHT_KINDS[kind]
+    lo, hi = k['seconds']
+    if not k['log']:
+        return fight_points(lo, hi)
+    return tuple(lo * (hi / lo) ** (i / (n - 1)) for i in range(n))
 #: TAE frames per second (`er-mechanics-status.FPS`), for cast frames -> seconds.
 CAST_FPS = 30.0
 #: Frames one cast of a spell takes from the fight. No spell cast animation is read here (the
@@ -1394,8 +1417,8 @@ def ar_stat_ratio(weapon, affinity, level, stats, two_handed, tables=None):
             for k, v in key:
                 st[k] = st.get(k, 0) + v
             got = rating(st, dict(rkey) or None)
-            cache[key] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
-        return cache[key]
+            cache[key, rkey] = {e: (got[e] / base[e] if base[e] else 1.0) for e in ELEMENT_KEYS}
+        return cache[key, rkey]
     return ratio
 
 

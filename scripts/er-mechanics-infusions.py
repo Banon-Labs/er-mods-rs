@@ -9,8 +9,9 @@ runs only when `report` is given levels.
     python3 scripts/er-mechanics-infusions.py --selftest
 
 Builds come from `er-builds-optimize.py`, not from a second model of how a player levels:
-Vigor, Mind and Endurance are floors from the corpus's PvP builds at that RL (raised for medium
-roll), every requirement is met, every starting class is tried, and the remaining points go where
+Vigor is a floor from the corpus's PvP builds at that RL, Mind and Endurance follow the spread
+(`OPT.spend_floored`: the median of the PvP builds nearest it in INT/FTH and STR/DEX, Endurance at
+least what medium roll needs), every requirement is met, every starting class is tried, and the remaining points go where
 they add the most damage (one motion-value-100 hit on the median defender of the RL window,
 `docs/er-mechanics/defense.md`). A buffable affinity (Standard, Heavy, Keen, Quality on most
 weapons; `isEnhance`) is also tried with each DLC Drawstring grease, +135 of one element added
@@ -81,6 +82,7 @@ class Builder:
         self.base = self.tables.find_weapon(weapon)
         self.mirror = mirror
         self.affs = OPT.affinities(self.tables, self.base)
+        self.pool = None
 
     def setup(self, rl, window=10, min_peers=15):
         rows = OPT.corpus_rows(self.mirror, rl - window, rl + window)
@@ -89,14 +91,17 @@ class Builder:
         arch = OPT.candidate_archetype(self.tables, self.weapon, aff0, lvl0, False,
                                        OPT.requirements(self.tables, self.weapon, aff0, lvl0, False))
         fl, _, _ = OPT.floors(rows, self.weapon, min_peers, 'pvp', arch)
-        need_end = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
-                                       OPT.load_pool(rows, 'pvp', arch, min_peers))
-        fl['vit'] = max(fl['vit'], need_end)
+        # Mind and Endurance follow each spread (`OPT.spend_floored` over `self.pool`); what stays
+        # in `fl` is a minimum, Endurance's the medium-roll requirement.
+        self.pool, _ = OPT.conditioning_pool(rows, 'pvp')
+        fl['mnd'] = 0
+        fl['vit'] = OPT.medium_roll_end(self.tables.weapons[self.base]['weight'],
+                                        OPT.load_pool(rows, 'pvp', arch, min_peers))
         return fl, OPT.bracket_defender(rows)
 
     def best(self, rl, affinity, fl, dfn):
         res = OPT.optimize(self.tables, self.model, self.weapon, rl, False, 'damage', fl, dfn, [affinity], TIER,
-                           keep=1)
+                           keep=1, pool=self.pool)
         if not res:
             return None
         r = res[0]
@@ -124,7 +129,7 @@ def rl_spans(b, rls=RL_SWEEP):
 
 
 def sweep_path(rl=RANK_RL):
-    return OPT.CACHE / f'grease-sweep-{TIER}-{rl}-{rl}-every-class.jsonl'
+    return OPT.sweep_cache('grease', TIER, rl, rl, every_class=True)
 
 
 def load_sweep(rl=RANK_RL):

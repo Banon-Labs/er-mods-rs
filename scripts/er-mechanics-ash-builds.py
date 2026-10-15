@@ -10,7 +10,9 @@ a Heavy one a Strength build, and each is judged at its own best spread. So for 
 weapon can fire (`er-mechanics-ar-export.ash_options`), every affinity the skill allows and both
 grips, the spread is built the way `er-mechanics-ash-stats.optimal` builds it:
 
-* Vigor, Mind and Endurance are the RL window's PvP floors (`er-mechanics-infusions.Builder.setup`).
+* Vigor is the RL window's PvP floor; Mind and Endurance follow the spread, the median of the PvP
+  builds nearest it in INT/FTH and STR/DEX (`er-mechanics-infusions.Builder.setup`,
+  `er-builds-optimize.spend_floored`).
 * Every requirement of the weapon at that affinity and grip is met.
 * The remaining points go where they add the most damage to one cast after PvP defense on the
   window's median defender (`AshScorer`, `er-builds-optimize.spend`). The starting classes tried
@@ -75,12 +77,10 @@ def _build(job):
     best = None
     for points, cls, st in starts[:CLASS_CANDIDATES]:
         scorer = STATS_MOD.AshScorer(levers, weapon, aff, sid, two, dfn, None)
-        scorer.floor = dict(st)
-        st, left = OPT.spend(st, points, scorer)
-        for k in ('vig', 'vit', 'mnd'):
-            add = min(left, OPT.STAT_CAP - st[k])
-            st[k] += add
-            left -= add
+        spent = OPT.spend_floored(st, o['rl'], scorer, b.pool)
+        if spent is None:
+            continue
+        st = spent[0]
         dmg = scorer.score(st)
         if best is None or dmg > best[0]:
             best = (dmg, cls, st)

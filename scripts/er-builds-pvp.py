@@ -142,7 +142,7 @@ and, at the weapon level:
   doc), so the term is computed after every row exists. `--no-skill` leaves it out.
 
 The build per weapon is the grease sweep's winner at this RL
-(`~/.cache/er-build-planner/grease-sweep-<tier>-<lo>-<hi>.jsonl`). The sweep covers every weapon
+(`~/.cache/er-build-planner/grease-sweep-<tier>-<lo>-<hi>-cond-floors.jsonl`). The sweep covers every weapon
 it can build: greasable infusables, ungreasable ones and fixed-affinity uniques (the row's
 `kind`). A fixed-affinity row has no greased or quality configuration, so `--greased` skips it.
 Each row also carries the sweep's equip-weight model (`weight`): `weight.factor` multiplies every
@@ -2013,7 +2013,7 @@ def lower_priority() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rl", type=int, default=150)
-    ap.add_argument("--sweep", type=Path, default=CACHE / "grease-sweep-dlc-drawstring-150-200.jsonl")
+    ap.add_argument("--sweep", type=Path, default=OPT.sweep_cache("grease", "dlc-drawstring", 150, 200))
     ap.add_argument("--grease", choices=list(OPT.GREASES), default="dlc-drawstring")
     ap.add_argument("--slot", help="attack slot key to rank by (r1_1, r2_1c, run_r1, ...); default r1_1, "
                     "and for --sort score each weapon's best-scoring slot")
