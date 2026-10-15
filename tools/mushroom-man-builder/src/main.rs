@@ -199,6 +199,10 @@ fn build(options: &Options) -> Result<()> {
         report.patch_high.vertex_capacity,
         report.patch_high.triangles_dropped
     );
+    println!(
+        "face and hair: {} parts hidden ({} hold no model and were left alone)",
+        report.head_parts, report.head_parts_without_model
+    );
     println!("wrote {} files into {}", report.files.len(), out.display());
 
     let Some(dll) = dll else {

@@ -3,7 +3,8 @@
 //! | output | built from |
 //! |---|---|
 //! | `parts/fc_*.partsbnd.dcx` (31) | Elden Ring's `fc_m_0000` (and `_l`) with c2280 patched into mesh 13 and its textures, renamed per part |
-//! | `parts/fg_a_0000_m.partsbnd.dcx`, `_f` | Elden Ring's `fg_a_0000_m` with every face hidden |
+//! | `parts/fg_a_*.partsbnd.dcx`, `parts/hr_a_*.partsbnd.dcx` | every face part and hair part the archives hold a FLVER for, with every face hidden |
+//! | `parts/fg_a_0000_f.partsbnd.dcx` | the hidden `fg_a_0000_m` under the female name the archives do not carry |
 //! | `parts/{hd,bd,am,lg}_{m,f}_0000{,_l}.partsbnd.dcx` (16) | each of those vanilla binders with every face hidden |
 //! | `facegen/facegen.fgbnd.dcx` | Elden Ring's facegen binder with `face.flver` hidden |
 //!
@@ -11,8 +12,10 @@
 //! its own name -- inside and out -- so the patched body is copied under every name with its
 //! entry paths renamed to match. `mushroom_man.dll` zeroes every armour piece's model id, which
 //! sends the game to the default naked head/body/arm/leg binders; those are emptied so nothing
-//! human is drawn over the mushroom. The face-part and facegen binders would otherwise draw the
-//! character's generated face; they are emptied too.
+//! human is drawn over the mushroom. The head is not part of any of those: a character's face
+//! (`fg_a_01xx`), eyes (`fg_a_15xx`), brows, beard, lashes and eyepatch (`fg_a_2xxx`-`7xxx`)
+//! and hair (`hr_a_*`) are separate parts chosen by its face data, so every one of them is
+//! emptied too, along with the generated face in the facegen binder.
 //!
 //! This is the output of `scripts/route_a_mushroom_build_assets.sh`,
 //! `route_a_mushroom_build_hidden_naked_slots.sh` and `route_a_mushroom_stage_all_model_variants.py`
@@ -34,7 +37,7 @@ use crate::{
     error::{Context, Error, Result},
     flver::{
         export::{FitParams, SourceMesh, export_c2280},
-        hide::hide_all_face_sets,
+        hide::{blank_vertex_buffers, hide_all_face_sets},
         patch::{PatchReport, patch_donor},
     },
     oodle::Oodle,
@@ -87,6 +90,12 @@ const FG_SOURCE: &str = "fg_a_0000_m.partsbnd.dcx";
 /// Requested by female characters but absent from the archives, so it is written as a renamed
 /// copy of the male one, as the scripts did.
 const FG_FEMALE_ALIAS: &str = "fg_a_0000_f.partsbnd.dcx";
+/// The head parts a character's face data picks: `fg_a` is the face and everything on it,
+/// `hr_a` the hair. Their ids are four digits, so every name is tried against the archives
+/// rather than listed here, and a part a game update adds is hidden with the rest.
+const HEAD_PART_PREFIXES: [&str; 2] = ["fg_a", "hr_a"];
+const HEAD_PART_SUFFIXES: [&str; 3] = ["", "_l", "_m"];
+const HEAD_PART_ID_COUNT: u32 = 10_000;
 const NAKED_SLOTS: [&str; 4] = ["hd", "bd", "am", "lg"];
 const GENDERS: [&str; 2] = ["m", "f"];
 const LODS: [&str; 2] = ["", "_l"];
@@ -114,6 +123,10 @@ pub struct BuildReport {
     pub patch_low: PatchReport,
     pub source_vertices: usize,
     pub source_triangles: usize,
+    /// Face and hair parts written with their faces hidden.
+    pub head_parts: usize,
+    /// Face and hair parts left to the game because they hold no model.
+    pub head_parts_without_model: usize,
 }
 
 /// c2280's model and textures out of a Dark Souls Remastered install.
@@ -192,24 +205,37 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         files.push(write_part(&parts_dir.join(name), packed, &renamed, oodle)?);
     }
 
-    // Face parts: the male one emptied, and the female alias the archives do not carry.
-    let fg_logical = format!("/parts/{FG_SOURCE}");
-    let fg_packed = inputs.archives.read(&fg_logical)?;
-    let mut fg = Bnd4::read(&dcx::decompress(&fg_packed, oodle)?).context(&fg_logical)?;
-    hide_every_flver(&mut fg).context(&fg_logical)?;
-    files.push(write_part(
-        &parts_dir.join(FG_SOURCE),
-        &fg_packed,
-        &fg,
-        oodle,
-    )?);
-    let fg_female = renamed(&fg, &[("FG_A_0000_M", "FG_A_0000_F")]);
-    files.push(write_part(
-        &parts_dir.join(FG_FEMALE_ALIAS),
-        &fg_packed,
-        &fg_female,
-        oodle,
-    )?);
+    // Face and hair, every part the archives hold, emptied. A part with no FLVER (the face
+    // decals are textures only) draws nothing once the face under it is hidden, so it is left
+    // to the game's own copy.
+    let mut head_parts = 0;
+    let mut head_parts_without_model = 0;
+    for name in head_part_names().filter(|name| inputs.archives.contains(&format!("/parts/{name}")))
+    {
+        let logical = format!("/parts/{name}");
+        let packed = inputs.archives.read(&logical)?;
+        let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
+        if hide_flvers(&mut binder, Vertices::Blanked).context(&logical)? == 0 {
+            head_parts_without_model += 1;
+            continue;
+        }
+        files.push(write_part(&parts_dir.join(&name), &packed, &binder, oodle)?);
+        head_parts += 1;
+        if name == FG_SOURCE {
+            let female = renamed(&binder, &[("FG_A_0000_M", "FG_A_0000_F")]);
+            files.push(write_part(
+                &parts_dir.join(FG_FEMALE_ALIAS),
+                &packed,
+                &female,
+                oodle,
+            )?);
+        }
+    }
+    if !files.contains(&parts_dir.join(FG_FEMALE_ALIAS)) {
+        return Err(Error::new(format!(
+            "the archives have no /parts/{FG_SOURCE}"
+        )));
+    }
 
     // The default naked slots the DLL's zeroed armour falls back to, emptied.
     for slot in NAKED_SLOTS {
@@ -219,7 +245,9 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                 let logical = format!("/parts/{name}");
                 let packed = inputs.archives.read(&logical)?;
                 let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
-                hide_every_flver(&mut binder).context(&logical)?;
+                if hide_flvers(&mut binder, Vertices::Kept).context(&logical)? == 0 {
+                    return Err(Error::new(format!("{logical} holds no FLVER to hide")));
+                }
                 files.push(write_part(&parts_dir.join(&name), &packed, &binder, oodle)?);
             }
         }
@@ -244,6 +272,20 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         patch_low: patches[1],
         source_vertices: source.vertices.len(),
         source_triangles: source.triangles.len(),
+        head_parts,
+        head_parts_without_model,
+    })
+}
+
+/// Every name a face or hair part could have, `fg_a_0000.partsbnd.dcx` to
+/// `hr_a_9999_m.partsbnd.dcx`.
+fn head_part_names() -> impl Iterator<Item = String> {
+    HEAD_PART_PREFIXES.into_iter().flat_map(|prefix| {
+        (0..HEAD_PART_ID_COUNT).flat_map(move |id| {
+            HEAD_PART_SUFFIXES
+                .into_iter()
+                .map(move |suffix| format!("{prefix}_{id:04}{suffix}{PART_EXTENSION}"))
+        })
     })
 }
 
@@ -253,19 +295,29 @@ fn binder_file<'a>(binder: &'a mut Bnd4, name: &str, context: &str) -> Result<&'
         .ok_or_else(|| Error::new(format!("{context} has no {name}")))
 }
 
-fn hide_every_flver(binder: &mut Bnd4) -> Result<()> {
-    let mut hid_any = false;
+/// What hiding a FLVER does to its vertices. The naked slots keep theirs, as they did when they
+/// were first seen working in game. The face and hair parts are blanked: hidden in place they
+/// made the package 263 MB against 47 MB without them, and their vertices are most of that.
+#[derive(Clone, Copy)]
+enum Vertices {
+    Kept,
+    Blanked,
+}
+
+/// Hide every FLVER in `binder`, returning how many there were.
+fn hide_flvers(binder: &mut Bnd4, vertices: Vertices) -> Result<usize> {
+    let mut hidden = 0;
     for file in &mut binder.files {
-        if file_name(&file.name).to_lowercase().ends_with(".flver") {
-            hide_all_face_sets(&mut file.data).context(file_name(&file.name).to_owned())?;
-            hid_any = true;
+        let name = file_name(&file.name).to_owned();
+        if name.to_lowercase().ends_with(".flver") {
+            hide_all_face_sets(&mut file.data).context(&name)?;
+            if let Vertices::Blanked = vertices {
+                blank_vertex_buffers(&mut file.data).context(&name)?;
+            }
+            hidden += 1;
         }
     }
-    if hid_any {
-        Ok(())
-    } else {
-        Err(Error::new("binder holds no FLVER to hide"))
-    }
+    Ok(hidden)
 }
 
 /// A copy of `binder` with each `(from, to)` replacement applied in order to every entry path,
@@ -371,6 +423,30 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), FC_PART_NAMES.len());
+    }
+
+    #[test]
+    fn head_part_names_cover_face_eyes_and_hair_but_no_body() {
+        let names: Vec<String> = head_part_names().collect();
+        for expected in [
+            FG_SOURCE,
+            "fg_a_0100.partsbnd.dcx",
+            "fg_a_1500_l.partsbnd.dcx",
+            "hr_a_0000.partsbnd.dcx",
+            "hr_a_0125_l.partsbnd.dcx",
+        ] {
+            assert!(names.iter().any(|name| name == expected), "{expected}");
+        }
+        assert!(
+            names
+                .iter()
+                .all(|name| name.starts_with("fg_a_") || name.starts_with("hr_a_"))
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|name| FC_PART_NAMES.contains(&name.as_str()))
+        );
     }
 
     #[test]
