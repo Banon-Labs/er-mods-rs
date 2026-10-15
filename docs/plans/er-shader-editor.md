@@ -549,21 +549,36 @@ Pipelines with depth bias are excluded and listed. Variants are created asynchro
 ## 9. UI (F6, hudhook guest or host as today, no docking)
 
 ```
-+ Shaders -----------------------------------------------------------------------------------+
-| [x] Vanilla  (ctrl+shift+F6)  Preset [Wind Waker    v] [Save] [Revert] (P1: [Import][Export]) |
-| compiler: helper, dxc 1.9 signed | probe live | hooks 0.04 ms/frame                          |
-| [Layers] [Look] [Hunt (P2)] [Diagnostics]                                                    |
-| Lighting                      | Name [Warm grade    ]  Stage [Tonemap post v]                |
-|  o Depth fog       21 ms      | Blend [Normal v]  Opacity ----o--- 0.80  Mask [Everything v] |
-| Tonemap post                  | [Parameters] [Code] [Selector]                               |
-|  o Warm grade   S  24 ms      |  Lift  Shadows [colour]   Strength ---o--- 0.60              |
-|  o Vignette        off        |  File: <absolute Windows path>   (<Unix path>)               |
-| [+ Layer v] [Up] [Down] [Dup] [Del] |  [multiline editor]  [Compile now]  Error (2): last good running |
-|                               |  layers/3-warm-grade.hlsl:4:12 error: undeclared 'Shadow'   |
-+---------------------------------------------------------------------------------------------+
++-------------------------------------------------------------+ Shaders    Dock [Right v] > x +
+|                                                             | [ ] Vanilla  hold ` compare   |
+|                                                             | Preset [Warm dusk v] Save ... |
+|                                                             | dxc 1.9 | probe live | 0.08 ms |
+|                                                             | [Layers] [Look] [Hunt] [Diag] |
+|        the game frame: about three quarters stays clear     | LIGHTING                      |
+|                                                             |  o Depth fog          21 ms   |
+|                                                             | TONEMAP POST                  |
+|                                                             |  o Warm grade     S   24 ms   |
+|                                                             |  o Vignette           off     |
+|                                                             | [+ Layer] Up Down Dup Del     |
+|                                                             | Name [Warm grade] Stage [..v] |
+|                                                             | Blend [..v]      Mask  [..v]  |
+|                                                             | Opacity ---------o----- 0.80  |
+|                                                             | [Parameters] [Code] [Selector]|
+|                                                             |  Shadows [col] R G B          |
+|                                                             |  Strength ------o----- 0.60   |
+|                                                             | o Live: 24 ms, verified 7/7   |
++-------------------------------------------------------------+-------------------------------+
 ```
 
-- **Window.** "Shaders", 1100x700 at 1080p times `OverlayFrame::ui_scale`, centred with `FirstUseEver`. It still takes the game's input while open (`input.rs` is unchanged).
+- **Window.** "Shaders" is a panel pinned to one edge of the screen, never a window in the middle of the frame: an editor whose job is changing pixels must not cover them. (The first draft centred a 1100x700 window; the user's review on 2026-10-15 was that it hid the shader changes being made.)
+  - Docked right by default, full height, 460 px wide at 1080p times `OverlayFrame::ui_scale`, so about three quarters of the frame stays clear. Dock is Right, Left or Floating, saved with the menu key. Position and size are set every frame from the display size (`set_window_pos`/`set_window_size` with `Condition::Always`); this needs no imgui docking.
+  - The inner edge drags to widen it; the Code tab remembers its own width (720 px fits 100 columns).
+  - Collapses to a 40 px strip, which is the state for picking from the world (P4).
+  - Background at 94% opacity.
+  - Hold the backtick key to see vanilla while it is held (a momentary Vanilla checkbox); hold Tab to hide the panel while it is held.
+  - The layout inside is one column: toolbar, status, tabs, layer stack, then the selected layer's inspector.
+  - It still takes the game's input while open (`input.rs` is unchanged).
+  - Mock-ups of every tab: the "ER Shader Editor" Design canvas, https://claude.ai/artifact/3gPst3UxtjK7xzVhpLBvfc.
 - **Glyphs.** Every label is ASCII or inside `GLYPH_RANGES`. Status dots (the `o` above) are draw-list circles: green live, amber compiling or trial, red error (last good running), grey off or suspended. Combo arrows are imgui's own.
 - **Stack rows.** `S` is solo, and Alt+click also solos. `+ Layer` creates a file from a template.
 - **Widgets** come from annotations:
