@@ -8,7 +8,8 @@
 //! checks never hands a player a body nobody has looked at.
 //!
 //! Everything else is derived from the id: the binder is `chr/<id>.chrbnd.dcx`, the model
-//! `<id>.flver`, and the textures are whatever the model's own materials name.
+//! `<id>.flver`, and the textures are whatever the materials of its kept meshes name, read out of
+//! the binder of the character each path points at (c2900's body is drawn with c2909's).
 
 use crate::{
     error::{Error, Result},
@@ -84,7 +85,24 @@ pub const C2650: Character = Character {
     validated: false,
 };
 
-pub const CHARACTERS: &[Character] = &[C2280, C2650];
+/// The plain Skeleton: NpcParam rows 290000-290002, `スケルトン＿曲剣`, `＿弓` and `＿大曲剣`,
+/// the one model with a curved sword, a bow or a curved greatsword. Its sword, greatsword, shield
+/// and bow are four meshes of their own, all cut, so its three body meshes go in, drawn with
+/// c2909's textures. Fitted as c2650 is: the girth scale derived from the pelvis heights (0.864,
+/// its pelvis standing 1.16 times Elden Ring's), and nothing else changed. The fit probe's one
+/// failing gate on it is the grip anchor, 0.036 m from Elden Ring's `R_Weapon` against 0.03: its
+/// `R Weapon` bone sits nearer the wrist than Elden Ring's, mostly along the hand, so no girth
+/// moves it (0.036 at 0.70, 0.037 at 1.05), and the sword on it is cut anyway.
+pub const C2900: Character = Character {
+    id: "c2900",
+    label: "Skeleton",
+    skeleton: Skeleton::Biped,
+    fit: FitConfig::Biped(BipedParams::DEFAULT),
+    writer: Writer::Rebuild,
+    validated: false,
+};
+
+pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900];
 
 /// The character a run with no `--character` builds.
 pub const DEFAULT_ID: &str = "c2280";
@@ -192,6 +210,13 @@ mod tests {
         };
         assert_eq!(params, BipedParams::default());
         assert_eq!(params.scale, None);
+        // The Skeleton starts from c2650's fit, its girth derived the same way.
+        let FitConfig::Biped(skeleton) = C2900.fit else {
+            panic!("c2900 is fitted as a Biped");
+        };
+        assert_eq!(skeleton, params);
+        assert_eq!((C2900.writer, C2900.validated), (Writer::Rebuild, false));
+        assert!(C2900.label.contains("Skeleton"));
     }
 
     #[test]

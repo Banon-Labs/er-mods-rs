@@ -39,7 +39,7 @@ use crate::{
     flver::{
         Bone, Flver, Frame, Vec3, bind_frames,
         skeleton::{self, Role},
-        source::{self, DsrVertex},
+        source::{self, DsrVertex, KeptMesh, Source, StripReport},
     },
 };
 
@@ -831,6 +831,35 @@ fn normalise(rows: &mut [WeightRow]) {
     }
 }
 
+/// The roles the held-item strip reads: the classifier's, or, when held items are kept, the same
+/// with no bone a held item, so nothing is cut.
+fn strip_roles(roles: Vec<Role>, held_items: HeldItems) -> Vec<Role> {
+    match held_items {
+        HeldItems::Strip => roles,
+        HeldItems::Keep => roles
+            .into_iter()
+            .map(|role| {
+                if role == Role::Prop {
+                    Role::Unused
+                } else {
+                    role
+                }
+            })
+            .collect(),
+    }
+}
+
+/// What a fit with `params` keeps of a Biped `source`: each mesh cut down to what its LOD0 still
+/// draws once its held items are gone, a mesh with nothing left dropped. These are the meshes
+/// [`export`] runs together, and so the only ones whose materials a package draws with.
+pub fn kept_meshes(source: &Source, params: BipedParams) -> Result<(Vec<KeptMesh>, StripReport)> {
+    let roles = skeleton::classify(&source.bones)?;
+    Ok(source::strip_props(
+        source,
+        &strip_roles(roles, params.held_items),
+    ))
+}
+
 /// A Biped character's FLVER fitted to the donor's bind skeleton, its held items cut and its
 /// meshes run together in file order, each keeping only what its LOD0 draws.
 pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams) -> Result<Export> {
@@ -843,20 +872,7 @@ pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams)
     let roles = skeleton::classify(&source.bones)?;
     let er_bones = Flver::parse(donor)?.bones;
     let built = build(&source.bones, &roles, &er_bones, params)?;
-    let strip_roles: Vec<Role> = match params.held_items {
-        HeldItems::Strip => roles,
-        HeldItems::Keep => roles
-            .into_iter()
-            .map(|role| {
-                if role == Role::Prop {
-                    Role::Unused
-                } else {
-                    role
-                }
-            })
-            .collect(),
-    };
-    let (kept, strip) = source::strip_props(&source, &strip_roles);
+    let (kept, strip) = source::strip_props(&source, &strip_roles(roles, params.held_items));
 
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();

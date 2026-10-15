@@ -1,5 +1,7 @@
 //! The builder's reading of real Dark Souls Remastered characters: c2650's binder, meshes,
-//! skeleton and held-item strip, and c2280 read through the same multi-mesh parser.
+//! skeleton and held-item strip, c2280 read through the same multi-mesh parser, and c2900, whose
+//! four held items are meshes of their own and whose body is drawn with textures out of c2909's
+//! binder.
 //!
 //! These read the player's own DSR install and skip when it is absent: the install is
 //! `$MMB_DSR_DIR`, by default `$HOME/.local/share/Steam/steamapps/common/DARK SOULS REMASTERED`.
@@ -7,15 +9,17 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::dsr_with_or_skip;
 use mushroom_man_builder::{
-    character::{C2280, C2650},
+    character::{C2280, C2650, C2900},
     flver::{
         skeleton::{self, Role},
         source,
     },
-    package::read_character,
-    textures::TextureSet,
+    package::{kept_materials, read_character},
+    textures::{TextureSet, character_tpf_from},
 };
 
 #[test]
@@ -253,6 +257,264 @@ fn c2650_loses_its_lantern_vertex_by_vertex() {
                 .flatten()
                 .all(|&corner| corner < count)
         );
+    }
+}
+
+/// Per DSR mesh, the vertices the held-item strip cuts, counted by the bone carrying most of each
+/// one's held-item weight, in bone-name order.
+fn stripped_by_bone(source: &source::Source, roles: &[Role]) -> Vec<(usize, Vec<(String, usize)>)> {
+    source
+        .meshes
+        .iter()
+        .enumerate()
+        .map(|(index, mesh)| {
+            let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+            for vertex in &mesh.vertices {
+                let (mut prop, mut total, mut heaviest) = (0.0, 0.0, (0.0, usize::MAX));
+                for (slot, weight) in vertex.bone_indices.iter().zip(vertex.bone_weights) {
+                    if weight <= 0.0 {
+                        continue;
+                    }
+                    total += weight;
+                    let bone = mesh.bone(*slot);
+                    if roles.get(bone) == Some(&Role::Prop) {
+                        prop += weight;
+                        if weight > heaviest.0 {
+                            heaviest = (weight, bone);
+                        }
+                    }
+                }
+                if total > 0.0 && prop >= 0.5 * total {
+                    *counts
+                        .entry(source.bones[heaviest.1].name.clone())
+                        .or_default() += 1;
+                }
+            }
+            (index, counts.into_iter().collect())
+        })
+        .collect()
+}
+
+#[test]
+fn c2900_cuts_its_four_held_items_whole_and_nothing_of_its_body() {
+    let test = "c2900_cuts_its_four_held_items_whole_and_nothing_of_its_body";
+    let Some(dsr) = dsr_with_or_skip(test, "c2900") else {
+        return;
+    };
+    let files = read_character(&dsr, &C2900).unwrap();
+    let source = source::parse(&files.flver).unwrap();
+    let per_mesh =
+        |f: fn(&source::DsrMesh) -> usize| -> Vec<usize> { source.meshes.iter().map(f).collect() };
+    // Meshes 0-2 are the body; 3 the sword, 4 the shield, 5 the bow with its arrow, 6 the
+    // greatsword, each on a material of its own.
+    assert_eq!(
+        per_mesh(|m| m.vertices.len()),
+        [1869, 105, 750, 359, 338, 919, 195]
+    );
+    assert_eq!(per_mesh(|m| m.material_index), [0, 0, 1, 2, 3, 4, 5]);
+    assert_eq!(
+        per_mesh(|m| m.lods[0].len()),
+        [1754, 92, 583, 214, 268, 374, 150]
+    );
+    let roles = skeleton::classify(&source.bones).unwrap();
+    let props: Vec<&str> = roles
+        .iter()
+        .zip(&source.bones)
+        .filter(|(role, _)| **role == Role::Prop)
+        .map(|(_, bone)| bone.name.as_str())
+        .collect();
+    assert_eq!(
+        props,
+        [
+            "L_shield",
+            "L_bow",
+            "L_bow01",
+            "L_bowstring",
+            "R Weapon",
+            "WP_A_0400",
+            "WP_A_1500",
+            "WP_A_1500_dymmy",
+            "WP_A_1500_SFX用",
+            "WP_A_0401"
+        ]
+    );
+    let (kept, report) = source::strip_props(&source, &roles);
+    assert_eq!(
+        (
+            report.stripped_vertices,
+            report.dropped_triangles,
+            report.unreferenced_vertices,
+            report.kept_vertices,
+            report.kept_triangles
+        ),
+        (1811, 1006, 123, 2601, 2429)
+    );
+    // Each body mesh keeps every LOD0 triangle it had; the four items go whole.
+    let kept_shape: Vec<(usize, usize, usize)> = kept
+        .iter()
+        .map(|mesh| (mesh.source_mesh, mesh.vertices.len(), mesh.triangles.len()))
+        .collect();
+    assert_eq!(kept_shape, [(0, 1786, 1754), (1, 100, 92), (2, 715, 583)]);
+    // What was cut, by the bone carrying it: every vertex of meshes 3-6, the bow's bowstring and
+    // the arrow in the right hand among them, and none of meshes 0-2.
+    let by_bone: Vec<(usize, Vec<(String, usize)>)> = stripped_by_bone(&source, &roles);
+    let expected: Vec<(usize, Vec<(String, usize)>)> = [
+        (0, vec![]),
+        (1, vec![]),
+        (2, vec![]),
+        (3, vec![("R Weapon", 359)]),
+        (4, vec![("L_shield", 338)]),
+        (
+            5,
+            vec![
+                ("L_bow", 691),
+                ("L_bow01", 201),
+                ("L_bowstring", 10),
+                ("R Weapon", 17),
+            ],
+        ),
+        (6, vec![("R Weapon", 195)]),
+    ]
+    .into_iter()
+    .map(|(mesh, counts)| {
+        let counts = counts
+            .into_iter()
+            .map(|(bone, count)| (bone.to_owned(), count))
+            .collect();
+        (mesh, counts)
+    })
+    .collect();
+    assert_eq!(by_bone, expected);
+    for (mesh, counts) in &by_bone {
+        let cut: usize = counts.iter().map(|(_, count)| count).sum();
+        assert_eq!(
+            cut == source.meshes[*mesh].vertices.len(),
+            *mesh >= 3,
+            "mesh {mesh}"
+        );
+    }
+}
+
+/// Name, TPF format byte, DDS four-character code and DXGI format of every texture in `tpf`.
+fn formats(tpf: &[u8]) -> Vec<(String, u8, String, Option<u32>)> {
+    er_tpf::Tpf::parse(tpf)
+        .unwrap()
+        .textures
+        .into_iter()
+        .map(|texture| {
+            let fourcc = texture.dds[0x54..0x58].escape_ascii().to_string();
+            let dxgi = (fourcc == "DX10")
+                .then(|| u32::from_le_bytes(texture.dds[0x80..0x84].try_into().unwrap()));
+            (texture.name, texture.format, fourcc, dxgi)
+        })
+        .collect()
+}
+
+#[test]
+fn c2900_draws_with_c2909s_textures_out_of_c2909s_binder() {
+    let test = "c2900_draws_with_c2909s_textures_out_of_c2909s_binder";
+    let (Some(dsr), Some(_)) = (
+        dsr_with_or_skip(test, "c2900"),
+        dsr_with_or_skip(test, "c2909"),
+    ) else {
+        return;
+    };
+    let files = read_character(&dsr, &C2900).unwrap();
+    let source = source::parse(&files.flver).unwrap();
+    // Only the two body materials are kept, and every map they name is in c2909's folder.
+    assert_eq!(kept_materials(&C2900, &source).unwrap(), [0, 1]);
+    for material in &source.materials[..2] {
+        let paths: Vec<&str> = material
+            .textures
+            .iter()
+            .map(|(_, path)| path.as_str())
+            .filter(|path| !path.is_empty())
+            .collect();
+        assert_eq!(
+            paths,
+            ["c2909", "c2909_s", "c2909_n"]
+                .map(|stem| format!(r"N:\FRPG\data\Model\chr\c2909\tex\{stem}.tga"))
+        );
+    }
+    assert_eq!(files.textures, TextureSet::named_after("c2909"));
+    assert_eq!(files.textures.owners(), ["c2909"]);
+    // Read from every material, the weapons' four sets would refuse the build.
+    assert!(TextureSet::of_materials(&source.materials, C2900.id).is_err());
+
+    // c2900's own TPF holds only the weapons' textures; c2909's binder holds the body's.
+    let own: Vec<String> = formats(&files.tpf).into_iter().map(|t| t.0).collect();
+    assert_eq!(own.len(), 12);
+    assert!(
+        own.iter().all(|name| name.starts_with("c2900_WP_A_")),
+        "{own:?}"
+    );
+    let [(owner, lent)] = files.borrowed_tpfs.as_slice() else {
+        panic!(
+            "c2900 borrows from one binder: {:?}",
+            files.borrowed_tpfs.len()
+        );
+    };
+    assert_eq!(owner, "c2909");
+    let lent_textures = formats(lent);
+    // The shape of c2280's set: DXT1 albedo and specular, a BC5 normal map.
+    assert_eq!(
+        lent_textures,
+        [
+            ("c2909_s".to_owned(), 0, "DXT1".to_owned(), None),
+            ("c2909".to_owned(), 0, "DXT1".to_owned(), None),
+            ("c2909_n".to_owned(), 36, "DX10".to_owned(), Some(83)),
+        ]
+    );
+
+    // The body TPF the package carries: c2909's specular and normal map byte for byte, its
+    // albedo under the sRGB header (BC1 sRGB, 72) with the same blocks.
+    let built =
+        character_tpf_from(&files.texture_tpfs(), &files.textures, "FC_M_0000", "").unwrap();
+    assert_eq!(
+        formats(&built),
+        [
+            ("FC_M_0000_3m".to_owned(), 0, "DXT1".to_owned(), None),
+            ("FC_M_0000_a".to_owned(), 0, "DX10".to_owned(), Some(72)),
+            ("FC_M_0000_n".to_owned(), 107, "DX10".to_owned(), Some(83)),
+        ]
+    );
+    let dds = |tpf: &[u8], name: &str| {
+        er_tpf::Tpf::parse(tpf)
+            .unwrap()
+            .textures
+            .into_iter()
+            .find(|texture| texture.name == name)
+            .unwrap()
+            .dds
+    };
+    assert_eq!(dds(&built, "FC_M_0000_3m"), dds(lent, "c2909_s"));
+    assert_eq!(dds(&built, "FC_M_0000_n"), dds(lent, "c2909_n"));
+    assert_eq!(
+        dds(&built, "FC_M_0000_a")[0x80 + 20..],
+        dds(lent, "c2909")[0x80..]
+    );
+}
+
+#[test]
+fn c2280_and_c2650_keep_every_material_they_have() {
+    for character in [&C2280, &C2650] {
+        let Some(dsr) = dsr_with_or_skip(
+            "c2280_and_c2650_keep_every_material_they_have",
+            character.id,
+        ) else {
+            continue;
+        };
+        let files = read_character(&dsr, character).unwrap();
+        let source = source::parse(&files.flver).unwrap();
+        let every: Vec<usize> = (0..source.materials.len()).collect();
+        assert_eq!(
+            kept_materials(character, &source).unwrap(),
+            every,
+            "{}",
+            character.id
+        );
+        assert!(files.borrowed_tpfs.is_empty(), "{}", character.id);
+        assert_eq!(files.textures.owners(), [character.id]);
     }
 }
 

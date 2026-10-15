@@ -8,6 +8,12 @@
 //! The texture list, order and header flags are the ones
 //! `scripts/route_a_mushroom_stage_textures.rs` gave WitchyBND in its `fc` manifest; the mip count
 //! is read from each DDS header, as WitchyBND did, and the format byte from the DDS format.
+//!
+//! A texture need not live in the character's own binder. The path a material names says whose
+//! it is: c2900's body samples `N:\FRPG\data\Model\chr\c2909\tex\c2909.tga`, which is in
+//! `chr/c2909.chrbnd.dcx`, and its own `c2900.tpf` holds only its weapons' textures. So each
+//! texture of a set carries the character its path names ([`TextureRef::owner`]), and
+//! [`character_tpf_from`] looks it up in that character's TPF.
 
 use er_tpf::{TEX_TYPE_TEXTURE, TPF_ENCODING_UTF16, TPF_PLATFORM_PC, Tpf, TpfTexture};
 
@@ -20,32 +26,61 @@ const FLAG2: u8 = 0x03;
 const DDS_MAGIC: &[u8; 4] = b"DDS ";
 const DDS_MIP_COUNT_OFFSET: usize = 0x1C;
 
-/// The three maps a DSR material samples, by texture name (the file stem of its path).
+/// One texture a material samples: its name in a TPF and the character whose binder holds it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureRef {
+    /// The file stem of the material's path, `c2909_n`.
+    pub name: String,
+    /// The character folder the path names, `c2909` for `...\chr\c2909\tex\c2909_n.tga`; for a
+    /// path under no `chr\<id>` folder (c2900's weapons, `...\parts\Weapon\...`), the character
+    /// whose model names it.
+    pub owner: String,
+}
+
+impl TextureRef {
+    fn new(owner: &str, name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            owner: owner.to_lowercase(),
+        }
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        self.name.eq_ignore_ascii_case(&other.name) && self.owner == other.owner
+    }
+}
+
+/// The three maps a DSR material samples.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextureSet {
-    pub albedo: String,
-    pub specular: Option<String>,
-    pub normal: Option<String>,
+    pub albedo: TextureRef,
+    pub specular: Option<TextureRef>,
+    pub normal: Option<TextureRef>,
 }
 
 const DSR_ALBEDO: &str = "g_Diffuse";
 const DSR_SPECULAR: &str = "g_Specular";
 const DSR_NORMAL: &str = "g_Bumpmap";
+/// The folder of a DSR texture path whose next component is the character holding it.
+const CHR_FOLDER: &str = "chr";
 
 impl TextureSet {
-    /// `<prefix>`, `<prefix>_s`, `<prefix>_n`: the names DSR gives a character's own set.
-    pub fn named_after(prefix: &str) -> Self {
+    /// `<id>`, `<id>_s`, `<id>_n` out of character `id`'s own binder: the names DSR gives a
+    /// character's own set.
+    pub fn named_after(id: &str) -> Self {
         Self {
-            albedo: prefix.to_owned(),
-            specular: Some(format!("{prefix}_s")),
-            normal: Some(format!("{prefix}_n")),
+            albedo: TextureRef::new(id, id),
+            specular: Some(TextureRef::new(id, &format!("{id}_s"))),
+            normal: Some(TextureRef::new(id, &format!("{id}_n"))),
         }
     }
 
-    /// The one set every material samples. A character whose materials name two different maps
-    /// for one role carries several sets, which this builder does not write yet.
-    pub fn of_materials(materials: &[SourceMaterial]) -> Result<Self> {
-        let mut found: [Option<String>; 3] = Default::default();
+    /// The one set every one of `materials` samples, as character `id` names it. A character whose
+    /// materials name two different maps for one role carries several sets, which this builder
+    /// does not write yet; the caller passes only the materials it keeps, so a stripped weapon's
+    /// own set is never one of them.
+    pub fn of_materials(materials: &[SourceMaterial], id: &str) -> Result<Self> {
+        let mut found: [Option<TextureRef>; 3] = Default::default();
         for material in materials {
             for (texture_type, path) in &material.textures {
                 let role = [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
@@ -54,15 +89,17 @@ impl TextureSet {
                 let (Some(role), Some(stem)) = (role, texture_stem(path)) else {
                     continue;
                 };
+                let texture = TextureRef::new(texture_owner(path).unwrap_or(id), stem);
                 match &found[role] {
-                    Some(seen) if !seen.eq_ignore_ascii_case(stem) => {
+                    Some(seen) if !seen.same(&texture) => {
                         return Err(Error::new(format!(
-                            "the materials name two {texture_type} maps, {seen} and {stem}: \
-                             characters with more than one texture set are not supported yet"
+                            "the materials name two {texture_type} maps, {}'s {} and {}'s {}: \
+                             characters with more than one texture set are not supported yet",
+                            seen.owner, seen.name, texture.owner, texture.name
                         )));
                     }
                     Some(_) => {}
-                    None => found[role] = Some(stem.to_owned()),
+                    None => found[role] = Some(texture),
                 }
             }
         }
@@ -73,6 +110,24 @@ impl TextureSet {
             normal,
         })
     }
+
+    /// The characters whose binders hold the set, each once, in albedo, specular, normal order.
+    pub fn owners(&self) -> Vec<&str> {
+        let mut owners: Vec<&str> = Vec::new();
+        for texture in [
+            Some(&self.albedo),
+            self.specular.as_ref(),
+            self.normal.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !owners.contains(&texture.owner.as_str()) {
+                owners.push(&texture.owner);
+            }
+        }
+        owners
+    }
 }
 
 /// `N:\FRPG\data\Model\chr\c2650\tex\c2650_n.tga` -> `c2650_n`; an empty path is no texture.
@@ -80,6 +135,16 @@ fn texture_stem(path: &str) -> Option<&str> {
     let file = path.rsplit(['\\', '/']).next()?.trim();
     let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
     (!stem.is_empty()).then_some(stem)
+}
+
+/// `N:\FRPG\data\Model\chr\c2909\tex\c2909.tga` -> `c2909`: the character folder after `chr`, when
+/// the path has one.
+fn texture_owner(path: &str) -> Option<&str> {
+    let mut parts = path.split(['\\', '/']);
+    parts.find(|part| part.eq_ignore_ascii_case(CHR_FOLDER))?;
+    let id = parts.next()?.trim();
+    let digits = id.strip_prefix(['c', 'C'])?;
+    (digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit())).then_some(id)
 }
 
 /// The donor slots in the order the donor manifest lists them.
@@ -107,37 +172,77 @@ pub fn mushroom_tpf(dsr_tpf: &[u8], target_prefix: &str, lod_suffix: &str) -> Re
     )
 }
 
-/// A TPF for `target_prefix` holding `set`, out of the character's own TPF.
+/// A TPF for `target_prefix` holding `set`, every texture of it out of the one TPF `dsr_tpf`.
 pub fn character_tpf(
     dsr_tpf: &[u8],
     set: &TextureSet,
     target_prefix: &str,
     lod_suffix: &str,
 ) -> Result<Vec<u8>> {
-    let source = Tpf::parse(dsr_tpf).map_err(|error| Error::new(format!("DSR TPF: {error}")))?;
-    let lookup = |name: &str| -> Result<Vec<u8>> {
-        source
-            .textures
+    let source = parse_dsr_tpf(dsr_tpf, "the character's")?;
+    let lookup = |texture: &TextureRef| find_texture(&source, texture, "the character's");
+    donor_tpf(lookup, set, target_prefix, lod_suffix)
+}
+
+/// A TPF for `target_prefix` holding `set`, each texture out of the TPF of the character that
+/// holds it: `tpfs` pairs a character id with that character's TPF (`c2909` with `c2909.tpf`).
+pub fn character_tpf_from(
+    tpfs: &[(&str, &[u8])],
+    set: &TextureSet,
+    target_prefix: &str,
+    lod_suffix: &str,
+) -> Result<Vec<u8>> {
+    let sources = tpfs
+        .iter()
+        .map(|&(owner, bytes)| {
+            let whose = format!("{owner}'s");
+            Ok((owner.to_lowercase(), parse_dsr_tpf(bytes, &whose)?))
+        })
+        .collect::<Result<Vec<(String, Tpf)>>>()?;
+    let lookup = |texture: &TextureRef| {
+        let (_, tpf) = sources
             .iter()
-            .find(|texture| texture.name.eq_ignore_ascii_case(name))
-            .map(|texture| texture.dds.clone())
+            .find(|(owner, _)| *owner == texture.owner)
             .ok_or_else(|| {
                 Error::new(format!(
-                    "the character's TPF has no texture {name} (textures kept in another \
-                     character's binder are not read yet)"
+                    "{} is {}'s, and no TPF of {} was read",
+                    texture.name, texture.owner, texture.owner
                 ))
-            })
+            })?;
+        find_texture(tpf, texture, &format!("{}'s", texture.owner))
     };
+    donor_tpf(lookup, set, target_prefix, lod_suffix)
+}
+
+fn parse_dsr_tpf(bytes: &[u8], whose: &str) -> Result<Tpf> {
+    Tpf::parse(bytes).map_err(|error| Error::new(format!("{whose} DSR TPF: {error}")))
+}
+
+fn find_texture(tpf: &Tpf, texture: &TextureRef, whose: &str) -> Result<Vec<u8>> {
+    tpf.textures
+        .iter()
+        .find(|candidate| candidate.name.eq_ignore_ascii_case(&texture.name))
+        .map(|candidate| candidate.dds.clone())
+        .ok_or_else(|| Error::new(format!("{whose} TPF has no texture {}", texture.name)))
+}
+
+/// The donor's three slots filled from `set` through `lookup`.
+fn donor_tpf(
+    lookup: impl Fn(&TextureRef) -> Result<Vec<u8>>,
+    set: &TextureSet,
+    target_prefix: &str,
+    lod_suffix: &str,
+) -> Result<Vec<u8>> {
     let mut textures = Vec::with_capacity(SLOTS.len());
     for (slot, slot_suffix) in SLOTS {
         let dds = match slot {
             Slot::Albedo => as_srgb_albedo(lookup(&set.albedo)?),
             Slot::Mask => match &set.specular {
-                Some(name) => lookup(name)?,
+                Some(texture) => lookup(texture)?,
                 None => flat_mask(),
             },
             Slot::Normal => match &set.normal {
-                Some(name) => lookup(name)?,
+                Some(texture) => lookup(texture)?,
                 None => flat_normal(),
             },
         };
@@ -583,17 +688,14 @@ mod tests {
         ]);
         let edge = full.clone();
         assert_eq!(
-            TextureSet::of_materials(&[full.clone(), edge]).unwrap(),
+            TextureSet::of_materials(&[full.clone(), edge], "c2650").unwrap(),
             TextureSet::named_after("c2650")
         );
         let diffuse_only = material(&[("g_Diffuse", &path("c2650")), ("g_DetailBumpmap", "")]);
-        let set = TextureSet::of_materials(&[diffuse_only]).unwrap();
-        assert_eq!(
-            (set.specular.as_deref(), set.normal.as_deref()),
-            (None, None)
-        );
+        let set = TextureSet::of_materials(&[diffuse_only], "c2650").unwrap();
+        assert_eq!((&set.specular, &set.normal), (&None, &None));
         let weapon = material(&[("g_Diffuse", &path("c2650_WP_A_0200"))]);
-        assert!(TextureSet::of_materials(&[full, weapon]).is_err());
+        assert!(TextureSet::of_materials(&[full, weapon], "c2650").is_err());
 
         let tpf = source_tpf(vec![texture("c2650", dx10_dds(11, 4, dxgi::BC7_UNORM))]);
         let built = Tpf::parse(&character_tpf(&tpf, &set, "FC_M_0000", "").unwrap()).unwrap();
@@ -603,6 +705,108 @@ mod tests {
         assert_eq!(built.textures[2].dds, flat_normal());
         let missing = TextureSet::named_after("c2519");
         assert!(character_tpf(&tpf, &missing, "FC_M_0000", "").is_err());
+    }
+
+    #[test]
+    fn a_texture_belongs_to_the_character_folder_its_path_names() {
+        assert_eq!(
+            texture_owner(r"N:\FRPG\data\Model\chr\c2909\tex\c2909_n.tga"),
+            Some("c2909")
+        );
+        assert_eq!(
+            texture_owner("N:/FRPG/data/Model/CHR/C2519/tex/c2519.tga"),
+            Some("C2519")
+        );
+        for elsewhere in [
+            r"N:\FRPG\data\Model\parts\Weapon\WP_A_0400\tex\ref\c2900_WP_A_0400.tga",
+            r"N:\FRPG\data\Model\chr\tex\c2909.tga",
+            r"N:\FRPG\data\Model\chr\c29\tex\c29.tga",
+            "c2909.tga",
+            "",
+        ] {
+            assert_eq!(texture_owner(elsewhere), None, "{elsewhere}");
+        }
+
+        // c2900's two body materials sample c2909's set; a weapon path names no character
+        // folder, so it is c2900's own.
+        let material = |stems: [&str; 3], dir: &str| SourceMaterial {
+            textures: [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
+                .iter()
+                .zip(stems)
+                .map(|(kind, stem)| ((*kind).to_owned(), format!(r"{dir}\{stem}.tga")))
+                .collect(),
+            ..SourceMaterial::default()
+        };
+        let body = material(
+            ["c2909", "c2909_s", "c2909_n"],
+            r"N:\FRPG\data\Model\chr\c2909\tex",
+        );
+        let set = TextureSet::of_materials(&[body.clone(), body.clone()], "c2900").unwrap();
+        assert_eq!(set, TextureSet::named_after("c2909"));
+        assert_eq!(set.owners(), ["c2909"]);
+        let sword = material(
+            ["c2900_WP_A_0400", "c2900_WP_A_0400_s", "c2900_WP_A_0400_n"],
+            r"N:\FRPG\data\Model\parts\Weapon\WP_A_0400\tex\ref",
+        );
+        let set = TextureSet::of_materials(std::slice::from_ref(&sword), "c2900").unwrap();
+        assert_eq!(set.albedo, TextureRef::new("c2900", "c2900_WP_A_0400"));
+        // Kept together, the body and the sword are two sets.
+        let error = TextureSet::of_materials(&[body, sword], "c2900")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("c2909's c2909 and c2900's c2900_WP_A_0400"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn each_texture_comes_out_of_the_tpf_of_the_character_holding_it() {
+        // The same name in two characters' TPFs: only the owner's copy may be taken.
+        let own = source_tpf(vec![
+            texture("c2909", dx10_dds(1, 0xEE, dxgi::BC7_UNORM)),
+            texture("c2900_WP_A_0400", legacy_dds(1, 5, b"DXT1")),
+        ]);
+        let lender = source_tpf(vec![
+            texture("c2909", dx10_dds(2, 1, dxgi::BC7_UNORM)),
+            texture("c2909_s", legacy_dds(3, 2, b"DXT1")),
+            texture("c2909_n", dx10_dds(4, 3, dxgi::BC5_UNORM)),
+        ]);
+        let set = TextureSet::named_after("c2909");
+        let tpfs = [("c2900", own.as_slice()), ("C2909", lender.as_slice())];
+        let built =
+            Tpf::parse(&character_tpf_from(&tpfs, &set, "FC_M_0000", "_l").unwrap()).unwrap();
+        let shown: Vec<(&str, u8, u8)> = built
+            .textures
+            .iter()
+            .map(|t| (t.name.as_str(), *t.dds.last().unwrap(), t.mip_count))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("FC_M_0000_3m_l", 2, 3),
+                ("FC_M_0000_a_l", 1, 2),
+                ("FC_M_0000_n_l", 3, 4)
+            ]
+        );
+        // The same set out of the one TPF is the same bytes.
+        assert_eq!(
+            character_tpf(&lender, &set, "FC_M_0000", "_l").unwrap(),
+            character_tpf_from(&tpfs, &set, "FC_M_0000", "_l").unwrap()
+        );
+        let unread = character_tpf_from(&tpfs[..1], &set, "FC_M_0000", "")
+            .unwrap_err()
+            .to_string();
+        assert!(unread.contains("no TPF of c2909 was read"), "{unread}");
+        let mut absent = set.clone();
+        absent.normal = Some(TextureRef::new("c2909", "c2909_x"));
+        let error = character_tpf_from(&tpfs, &absent, "FC_M_0000", "")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("c2909's TPF has no texture c2909_x"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -443,8 +443,9 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
     Ok((character, rest))
 }
 
-/// Developer check: write the character's raw FLVER/TPF and the two donor FLVERs into a folder,
-/// so the old `scripts/route_a_mushroom_*.rs` tools can be run on exactly the builder's inputs.
+/// Developer check: write the character's raw FLVER/TPF, the TPF of each character it borrows
+/// textures from, and the two donor FLVERs into a folder, so the old `scripts/route_a_mushroom_*.rs`
+/// tools and the fit probe can be run on exactly the builder's inputs.
 fn extract_inputs(args: &[String]) -> Result<()> {
     let (character, args) = dev_character(args)?;
     let [game, dsr, out] = &args[..] else {
@@ -453,8 +454,11 @@ fn extract_inputs(args: &[String]) -> Result<()> {
     let out = Path::new(out);
     fs::create_dir_all(out)?;
     let files = package::read_character(Path::new(dsr), character)?;
-    fs::write(out.join(format!("{}.flver", character.id)), files.flver)?;
-    fs::write(out.join(format!("{}.tpf", character.id)), files.tpf)?;
+    fs::write(out.join(format!("{}.flver", character.id)), &files.flver)?;
+    fs::write(out.join(format!("{}.tpf", character.id)), &files.tpf)?;
+    for (owner, tpf) in &files.borrowed_tpfs {
+        fs::write(out.join(format!("{owner}.tpf")), tpf)?;
+    }
     let game = Path::new(game);
     let oodle = oodle::load(game)?;
     let archives = ArchiveSet::open(game)?;

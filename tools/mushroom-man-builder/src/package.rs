@@ -46,7 +46,7 @@ use crate::{
     dcx,
     edge::{EDGE_MATERIAL, edge_append},
     error::{Context, Error, Result},
-    fit::{self, Export, SourceMesh, mushroom::export_c2280},
+    fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
     flver::{
         Flver, LayoutMember, VertexBuffer,
         hide::{blank_vertex_buffers, hide_all_face_sets},
@@ -58,7 +58,7 @@ use crate::{
     },
     locate,
     oodle::Oodle,
-    textures::{TextureSet, character_tpf, with_zero_metallic},
+    textures::{TextureSet, character_tpf_from, with_zero_metallic},
 };
 
 /// Every full-body part a character preset can ask for, from the community file list of Elden
@@ -305,40 +305,136 @@ impl BuildReport {
     }
 }
 
-/// A DSR character's model, its TPF, and the texture set its materials name.
+/// A DSR character's model, its TPF, and the texture set its kept materials name, with the TPF of
+/// every other character that set is read out of.
 pub struct CharacterFiles {
+    pub id: &'static str,
     pub flver: Vec<u8>,
+    /// `<id>.tpf`, the character's own.
     pub tpf: Vec<u8>,
+    /// `<owner>.tpf` out of `chr/<owner>.chrbnd.dcx` for each other character the set's paths
+    /// name, by owner id: c2900's body is drawn with c2909's textures.
+    pub borrowed_tpfs: Vec<(String, Vec<u8>)>,
     pub textures: TextureSet,
 }
 
-/// `<id>.flver` and `<id>.tpf` out of `chr/<id>.chrbnd.dcx` in a Dark Souls Remastered install.
+impl CharacterFiles {
+    /// Every TPF [`Self::textures`] is read out of, under the id of the character holding it, as
+    /// [`crate::textures::character_tpf_from`] takes them.
+    pub fn texture_tpfs(&self) -> Vec<(&str, &[u8])> {
+        std::iter::once((self.id, self.tpf.as_slice()))
+            .chain(
+                self.borrowed_tpfs
+                    .iter()
+                    .map(|(owner, tpf)| (owner.as_str(), tpf.as_slice())),
+            )
+            .collect()
+    }
+}
+
+/// `<id>.flver` and `<id>.tpf` out of `chr/<id>.chrbnd.dcx` in a Dark Souls Remastered install,
+/// and the texture set of the materials the build keeps ([`kept_materials`]): a stripped held
+/// item's textures are never asked for. A texture its path puts in another character's folder
+/// is read out of that character's binder.
 pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<CharacterFiles> {
     let id = character.id;
+    let (path, files) = read_chrbnd(
+        dsr_dir,
+        id,
+        &format!("this Dark Souls Remastered install has no {id}"),
+    )?;
+    let flver = binder_entry(&files, &format!("{id}.flver"), &path)?;
+    let source = source::parse(&flver).context(format!("{id}.flver"))?;
+    let kept = kept_materials(character, &source)?
+        .into_iter()
+        .map(|index| {
+            source.materials.get(index).cloned().ok_or_else(|| {
+                Error::new(format!(
+                    "{id}.flver draws with material {index}, which it does not have"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let textures = TextureSet::of_materials(&kept, id).context(format!("{id}.flver"))?;
+    let mut borrowed_tpfs = Vec::new();
+    for owner in textures.owners() {
+        if owner.eq_ignore_ascii_case(id) {
+            continue;
+        }
+        let (path, files) = read_chrbnd(
+            dsr_dir,
+            owner,
+            &format!("{id}'s materials draw with {owner}'s textures"),
+        )?;
+        let tpf = binder_entry(&files, &format!("{owner}.tpf"), &path).map_err(|error| {
+            let split = files
+                .iter()
+                .any(|file| file_name(&file.name).to_lowercase().ends_with(".chrtpfbhd"));
+            if split {
+                Error::new(format!(
+                    "{} keeps its textures in a .chrtpfbhd/.chrtpfbdt pair, which this builder \
+                     does not read yet",
+                    path.display()
+                ))
+            } else {
+                error
+            }
+        })?;
+        borrowed_tpfs.push((owner.to_owned(), tpf));
+    }
+    Ok(CharacterFiles {
+        id,
+        tpf: binder_entry(&files, &format!("{id}.tpf"), &path)?,
+        flver,
+        borrowed_tpfs,
+        textures,
+    })
+}
+
+/// The materials of the meshes `character`'s build keeps, each once, ascending: for a Biped
+/// character, the meshes its held-item strip leaves a triangle in ([`biped::kept_meshes`]); for
+/// c2280, every mesh. c2900's sword, greatsword, shield and bow are four of its six materials,
+/// each with textures of its own, and none of them is kept.
+pub fn kept_materials(character: &Character, source: &Source) -> Result<Vec<usize>> {
+    let mut kept: Vec<usize> = match character.fit {
+        FitConfig::Biped(params) => biped::kept_meshes(source, params)
+            .context(format!("cutting {}'s held items", character.id))?
+            .0
+            .iter()
+            .map(|mesh| mesh.material_index)
+            .collect(),
+        FitConfig::Mushroom(_) => source
+            .meshes
+            .iter()
+            .map(|mesh| mesh.material_index)
+            .collect(),
+    };
+    kept.sort_unstable();
+    kept.dedup();
+    Ok(kept)
+}
+
+/// The entries of `chr/<id>.chrbnd.dcx`, and its path; `why` says what wanted it when it is
+/// missing.
+fn read_chrbnd(dsr_dir: &Path, id: &str, why: &str) -> Result<(PathBuf, Vec<BinderFile>)> {
     let path = locate::chrbnd_path(dsr_dir, id);
     if !path.is_file() {
         return Err(Error::new(format!(
-            "{} is missing -- this Dark Souls Remastered install has no {id}",
+            "{} is missing -- {why}",
             path.display()
         )));
     }
     let packed = fs::read(&path).context(format!("reading {}", path.display()))?;
     let files = read_bnd3(&dcx::decompress(&packed, None)?).context(path.display())?;
-    let find = |name: &str| -> Result<Vec<u8>> {
-        files
-            .iter()
-            .find(|file| file_name(&file.name).eq_ignore_ascii_case(name))
-            .map(|file| file.data.clone())
-            .ok_or_else(|| Error::new(format!("{} has no {name}", path.display())))
-    };
-    let flver = find(&format!("{id}.flver"))?;
-    let textures =
-        TextureSet::of_materials(&source::materials(&flver)?).context(format!("{id}.flver"))?;
-    Ok(CharacterFiles {
-        tpf: find(&format!("{id}.tpf"))?,
-        flver,
-        textures,
-    })
+    Ok((path, files))
+}
+
+fn binder_entry(files: &[BinderFile], name: &str, path: &Path) -> Result<Vec<u8>> {
+    files
+        .iter()
+        .find(|file| file_name(&file.name).eq_ignore_ascii_case(name))
+        .map(|file| file.data.clone())
+        .ok_or_else(|| Error::new(format!("{} has no {name}", path.display())))
 }
 
 /// c2280's model and textures out of a Dark Souls Remastered install.
@@ -452,8 +548,9 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                 }
             }
         }
-        let mut textures = character_tpf(&dsr.tpf, &dsr.textures, FC_SOURCE_STEM, lod)
-            .context(format!("{}.tpf", character.id))?;
+        let mut textures =
+            character_tpf_from(&dsr.texture_tpfs(), &dsr.textures, FC_SOURCE_STEM, lod)
+                .context(format!("{}'s textures", character.id))?;
         // The Edge material samples a metallic map, which no DSR set has.
         if rebuilt.as_ref().is_some_and(|done| done.edge) {
             textures = with_zero_metallic(&textures, FC_SOURCE_STEM, lod)?;
