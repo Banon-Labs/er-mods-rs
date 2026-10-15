@@ -3,8 +3,9 @@
 //! The Steam half is `tools/er-installer/src/steam.rs`, compiled into this crate by path rather
 //! than copied: the installer's reasons for reading the registry, every `libraryfolders.vdf`
 //! and the app manifests -- rather than guessing drive letters -- apply unchanged to a second
-//! game. A Dark Souls Remastered install is accepted only when it holds c2280's binder, and an
-//! Elden Ring one only when it holds `eldenring.exe` and its archives.
+//! game. A Dark Souls Remastered install is accepted when it holds `DarkSoulsRemastered.exe` and
+//! a `chr` folder -- whether the chosen character's binder is in it is a separate question with
+//! its own error -- and an Elden Ring one only when it holds `eldenring.exe` and its archives.
 
 use std::path::{Path, PathBuf};
 
@@ -13,11 +14,17 @@ use crate::steam;
 /// Dark Souls Remastered on Steam.
 pub const DSR_APP_ID: &str = "570940";
 const DSR_DEFAULT_DIR: &str = "DARK SOULS REMASTERED";
-const DSR_PROBE: &str = "chr/c2280.chrbnd.dcx";
+const DSR_EXE: &str = "DarkSoulsRemastered.exe";
+const DSR_CHR_DIR: &str = "chr";
 const ER_PROBES: [&str; 2] = ["eldenring.exe", "Data0.bhd"];
 
 pub fn is_dsr_dir(dir: &Path) -> bool {
-    dir.join(DSR_PROBE).is_file()
+    dir.join(DSR_EXE).is_file() && dir.join(DSR_CHR_DIR).is_dir()
+}
+
+/// `chr/<id>.chrbnd.dcx` under a DSR install.
+pub fn chrbnd_path(dsr_dir: &Path, id: &str) -> PathBuf {
+    dsr_dir.join(DSR_CHR_DIR).join(format!("{id}.chrbnd.dcx"))
 }
 
 pub fn is_er_game_dir(dir: &Path) -> bool {
@@ -55,12 +62,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_folder_without_c2280_is_not_dark_souls_remastered() {
+    fn dark_souls_remastered_is_its_exe_and_a_chr_folder() {
         let dir = std::env::temp_dir().join(format!("mmb-not-dsr-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("chr")).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(DSR_EXE), b"x").unwrap();
         assert!(!is_dsr_dir(&dir));
-        std::fs::write(dir.join(DSR_PROBE), b"x").unwrap();
+        std::fs::create_dir_all(dir.join(DSR_CHR_DIR)).unwrap();
         assert!(is_dsr_dir(&dir));
+        assert_eq!(
+            chrbnd_path(&dir, "c2650"),
+            dir.join("chr").join("c2650.chrbnd.dcx")
+        );
+        std::fs::remove_file(dir.join(DSR_EXE)).unwrap();
+        assert!(!is_dsr_dir(&dir));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

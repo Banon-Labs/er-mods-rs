@@ -1,0 +1,94 @@
+index	c2650_bone	parent	weighted_verts	er_target	kind	via	c2650_joint	er_joint	joint_delta_m
+0	Pelvis		97	Pelvis	direct		0.000,0.945,-0.034	0.000,0.970,0.000	0.042
+1	Spine	Pelvis	115	Spine	direct		0.000,1.070,-0.035	0.000,1.063,-0.000	0.036
+2	Spine1	Spine	294	Spine2	direct (top source spine -> ER chest)		0.000,1.249,-0.035	0.000,1.240,0.000	0.037
+3	Neck	Spine1	36	Neck	direct		0.000,1.515,-0.047	-0.000,1.453,0.025	0.095
+4	Head	Neck	277	Head	direct		0.000,1.553,-0.075	0.000,1.556,0.007	0.082
+5	Jaw	Head	81	Head	nearest mapped ancestor (ER donor has no jaw bone)	Head	0.000,1.609,-0.100	0.000,1.556,0.007	0.119
+6	L Clavicle	Neck	16	L_Clavicle	direct (space->underscore)		0.024,1.464,-0.040	0.022,1.391,0.034	0.104
+7	L UpperArm	L Clavicle	149	L_UpperArm	direct (space->underscore)		0.145,1.444,-0.038	0.172,1.391,0.034	0.093
+8	L Forearm	L UpperArm	97	L_Forearm	direct (space->underscore)		0.405,1.445,-0.031	0.371,1.192,0.038	0.265
+9	L Hand	L Forearm	49	L_Hand	direct (space->underscore)		0.666,1.445,-0.028	0.534,1.029,0.016	0.439
+10	L Finger0	L Hand	23	L_Finger0	direct (space->underscore)		0.755,1.411,-0.081	0.545,1.014,-0.004	0.455
+11	L Finger01	L Finger0	21	L_Finger01	direct (space->underscore)		0.775,1.405,-0.091	0.566,0.975,-0.033	0.481
+12	L Finger1	L Hand	14	L_Finger1	direct (space->underscore)		0.773,1.455,-0.052	0.608,0.961,-0.019	0.521
+13	L Finger11	L Finger1	20	L_Finger11	direct (space->underscore)		0.811,1.461,-0.052	0.640,0.930,-0.019	0.559
+14	L Finger2	L Hand	24	L_Finger2	direct (space->underscore)		0.773,1.459,-0.017	0.609,0.961,0.005	0.525
+15	L Finger21	L Finger2	59	L_Finger21	direct (space->underscore)		0.815,1.460,-0.017	0.642,0.928,0.005	0.560
+16	L_FA_Cloth_a1	L Forearm	23	L_Forearm	nearest mapped ancestor	L Forearm	0.397,1.379,-0.024	0.371,1.192,0.038	0.199
+17	L_FA_Cloth_a2	L_FA_Cloth_a1	14	L_Forearm	nearest mapped ancestor	L_FA_Cloth_a1>L Forearm	0.484,1.351,-0.024	0.371,1.192,0.038	0.205
+18	L_FA_Cloth_b1	L Forearm	12	L_Forearm	nearest mapped ancestor	L Forearm	0.482,1.423,-0.086	0.371,1.192,0.038	0.285
+19	L_FA_Cloth_c1	L Forearm	10	L_Forearm	nearest mapped ancestor	L Forearm	0.482,1.423,0.028	0.371,1.192,0.038	0.256
+20	L_FA_Cloth_d1	L Forearm	8	L_Forearm	nearest mapped ancestor	L Forearm	0.486,1.499,-0.025	0.371,1.192,0.038	0.334
+21	L ForeTwist	L UpperArm	24	L_ForeArmTwist	twist (wrist-end twist; ER centroid 0.025 m from hand)		0.405,1.445,-0.031	0.430,1.133,0.030	0.319
+22	R Clavicle	Neck	19	R_Clavicle	direct (space->underscore)		-0.024,1.464,-0.040	-0.022,1.391,0.034	0.104
+23	R UpperArm	R Clavicle	150	R_UpperArm	direct (space->underscore)		-0.145,1.444,-0.038	-0.172,1.391,0.034	0.093
+24	R Forearm	R UpperArm	94	R_Forearm	direct (space->underscore)		-0.405,1.445,-0.031	-0.371,1.192,0.038	0.265
+25	R Hand	R Forearm	51	R_Hand	direct (space->underscore)		-0.666,1.445,-0.028	-0.534,1.029,0.016	0.439
+26	R Finger0	R Hand	23	R_Finger0	direct (space->underscore)		-0.755,1.411,-0.081	-0.545,1.014,-0.004	0.455
+27	R Finger01	R Finger0	21	R_Finger01	direct (space->underscore)		-0.775,1.405,-0.091	-0.566,0.975,-0.033	0.481
+28	R Finger1	R Hand	15	R_Finger1	direct (space->underscore)		-0.773,1.455,-0.052	-0.608,0.961,-0.019	0.521
+29	R Finger11	R Finger1	21	R_Finger11	direct (space->underscore)		-0.811,1.461,-0.052	-0.640,0.930,-0.019	0.559
+30	R Finger2	R Hand	29	R_Finger2	direct (space->underscore)		-0.773,1.459,-0.017	-0.609,0.961,0.005	0.525
+31	R Finger21	R Finger2	64	R_Finger21	direct (space->underscore)		-0.815,1.460,-0.017	-0.642,0.928,0.005	0.560
+32	R_weapon	R Hand	63	R_Hand	nearest mapped ancestor (held prop: strip, or keep on R_Hand)	R Hand	-0.784,1.445,-0.028	-0.534,1.029,0.016	0.488
+33	R_W_Cloth_a1	R_weapon	102	R_Hand	nearest mapped ancestor (held prop: strip, or keep on R_Hand)	R_weapon>R Hand	-0.785,1.328,-0.021	-0.534,1.029,0.016	0.392
+34	R_W_Cloth_a2	R_W_Cloth_a1	219	R_Hand	nearest mapped ancestor (held prop: strip, or keep on R_Hand)	R_W_Cloth_a1>R_weapon>R Hand	-0.785,1.245,-0.021	-0.534,1.029,0.016	0.333
+35	R_W_Cloth_a3	R_W_Cloth_a2	754	R_Hand	nearest mapped ancestor (held prop: strip, or keep on R_Hand)	R_W_Cloth_a2>R_W_Cloth_a1>R_weapon>R Hand	-0.786,1.168,-0.021	-0.534,1.029,0.016	0.290
+36	R_FA_Cloth_a1	R Forearm	30	R_Forearm	nearest mapped ancestor	R Forearm	-0.397,1.379,-0.024	-0.371,1.192,0.038	0.199
+37	R_FA_Cloth_a2	R_FA_Cloth_a1	23	R_Forearm	nearest mapped ancestor	R_FA_Cloth_a1>R Forearm	-0.484,1.351,-0.024	-0.371,1.192,0.038	0.205
+38	R_FA_Cloth_b1	R Forearm	11	R_Forearm	nearest mapped ancestor	R Forearm	-0.482,1.423,-0.086	-0.371,1.192,0.038	0.284
+39	R_FA_Cloth_c1	R Forearm	14	R_Forearm	nearest mapped ancestor	R Forearm	-0.482,1.423,0.028	-0.371,1.192,0.038	0.256
+40	R_FA_Cloth_d1	R Forearm	14	R_Forearm	nearest mapped ancestor	R Forearm	-0.486,1.499,-0.025	-0.371,1.192,0.038	0.334
+41	R ForeTwist	R UpperArm	24	R_ForeArmTwist	twist (wrist-end twist; ER centroid 0.025 m from hand)		-0.405,1.445,-0.031	-0.430,1.133,0.030	0.319
+42	S_Cloth_b1	Spine1	2	Spine2	nearest mapped ancestor	Spine1	-0.100,1.428,-0.150	0.000,1.240,0.000	0.261
+43	S_Cloth_b2	S_Cloth_b1	10	Spine2	nearest mapped ancestor	S_Cloth_b1>Spine1	-0.146,1.343,-0.208	0.000,1.240,0.000	0.275
+44	S_Cloth_a1	Spine1	4	Spine2	nearest mapped ancestor	Spine1	0.000,1.432,-0.176	0.000,1.240,0.000	0.261
+45	S_Cloth_a2	S_Cloth_a1	8	Spine2	nearest mapped ancestor	S_Cloth_a1>Spine1	0.000,1.333,-0.238	0.000,1.240,0.000	0.256
+46	S_Cloth_c1	Spine1	1	Spine2	nearest mapped ancestor	Spine1	0.100,1.428,-0.150	0.000,1.240,0.000	0.261
+47	S_Cloth_c2	S_Cloth_c1	8	Spine2	nearest mapped ancestor	S_Cloth_c1>Spine1	0.146,1.343,-0.208	0.000,1.240,0.000	0.275
+48	S_Cloth_d1	Spine1	12	Spine2	nearest mapped ancestor	Spine1	0.084,1.478,0.125	0.000,1.240,0.000	0.282
+49	S_Cloth_d2	S_Cloth_d1	12	Spine2	nearest mapped ancestor	S_Cloth_d1>Spine1	0.138,1.368,0.171	0.000,1.240,0.000	0.254
+50	S_Cloth_e1	Spine1	15	Spine2	nearest mapped ancestor	Spine1	0.000,1.478,0.140	0.000,1.240,0.000	0.277
+51	S_Cloth_e2	S_Cloth_e1	12	Spine2	nearest mapped ancestor	S_Cloth_e1>Spine1	0.000,1.346,0.211	0.000,1.240,0.000	0.236
+52	S_Cloth_f1	Spine1	15	Spine2	nearest mapped ancestor	Spine1	-0.084,1.478,0.125	0.000,1.240,0.000	0.282
+53	S_Cloth_f2	S_Cloth_f1	17	Spine2	nearest mapped ancestor	S_Cloth_f1>Spine1	-0.138,1.368,0.171	0.000,1.240,0.000	0.254
+54	S_Cloth_food	Spine1	10	Spine2	nearest mapped ancestor	Spine1	0.000,1.533,0.075	0.000,1.240,0.000	0.303
+55	L Thigh	Spine	50	L_Thigh	direct (space->underscore)		0.084,0.945,-0.034	0.103,0.970,0.000	0.046
+56	L Calf	L Thigh	72	L_Calf	direct (space->underscore)		0.084,0.480,-0.053	0.103,0.527,-0.009	0.067
+57	L Foot	L Calf	52	L_Foot	direct (space->underscore)		0.084,0.099,0.045	0.103,0.110,0.063	0.029
+58	L Toe0	L Foot	14	L_Toe0	direct (space->underscore)		0.084,0.001,-0.105	0.103,-0.001,-0.072	0.038
+59	Cloth_f00	L Calf	9	L_Calf	nearest mapped ancestor	L Calf	0.111,0.445,-0.204	0.103,0.527,-0.009	0.212
+60	Cloth_f01	Cloth_f00	9	L_Calf	nearest mapped ancestor	Cloth_f00>L Calf	0.124,0.233,-0.216	0.103,0.527,-0.009	0.361
+61	Cloth_e00	L Calf	17	L_Calf	nearest mapped ancestor	L Calf	0.256,0.448,-0.017	0.103,0.527,-0.009	0.172
+62	Cloth_e01	Cloth_e00	17	L_Calf	nearest mapped ancestor	Cloth_e00>L Calf	0.281,0.237,-0.012	0.103,0.527,-0.009	0.340
+63	Cloth_d00	L Calf	6	L_Calf	nearest mapped ancestor	L Calf	0.119,0.469,0.115	0.103,0.527,-0.009	0.138
+64	Cloth_d01	Cloth_d00	10	L_Calf	nearest mapped ancestor	Cloth_d00>L Calf	0.139,0.258,0.140	0.103,0.527,-0.009	0.309
+65	LCalfTwist	L Thigh	48	L_CalfTwist	twist (ankle-end twist)		0.084,0.480,-0.053	0.103,0.295,0.031	0.204
+66	R Thigh	Spine	58	R_Thigh	direct (space->underscore)		-0.084,0.945,-0.034	-0.103,0.970,-0.000	0.046
+67	R Calf	R Thigh	83	R_Calf	direct (space->underscore)		-0.084,0.480,-0.053	-0.103,0.527,-0.009	0.067
+68	R Foot	R Calf	49	R_Foot	direct (space->underscore)		-0.084,0.099,0.045	-0.103,0.110,0.063	0.029
+69	R Toe0	R Foot	14	R_Toe0	direct (space->underscore)		-0.084,0.001,-0.105	-0.103,-0.001,-0.072	0.038
+70	Cloth_b00	R Calf	14	R_Calf	nearest mapped ancestor	R Calf	-0.256,0.448,-0.017	-0.103,0.527,-0.009	0.172
+71	Cloth_b01	Cloth_b00	12	R_Calf	nearest mapped ancestor	Cloth_b00>R Calf	-0.281,0.237,-0.012	-0.103,0.527,-0.009	0.340
+72	Cloth_a00	R Calf	14	R_Calf	nearest mapped ancestor	R Calf	-0.111,0.445,-0.204	-0.103,0.527,-0.009	0.212
+73	Cloth_a01	Cloth_a00	15	R_Calf	nearest mapped ancestor	Cloth_a00>R Calf	-0.124,0.233,-0.216	-0.103,0.527,-0.009	0.361
+74	Cloth_c00	R Calf	9	R_Calf	nearest mapped ancestor	R Calf	-0.119,0.469,0.115	-0.103,0.527,-0.009	0.138
+75	Cloth_c01	Cloth_c00	9	R_Calf	nearest mapped ancestor	Cloth_c00>R Calf	-0.139,0.258,0.140	-0.103,0.527,-0.009	0.309
+76	RCalfTwist	R Thigh	46	R_CalfTwist	twist (ankle-end twist)		-0.084,0.480,-0.053	-0.103,0.295,0.031	0.204
+77	c2650		0	<unused>	dummy/nub (root-level, no weights)		0.000,0.000,0.000		
+78	R_Light		0	<unused>	dummy/nub (root-level, no weights)		0.000,0.000,0.000		
+79	Model_Dmy		0	<unused>	dummy/nub (root-level, no weights)		-0.000,0.000,0.000		
+80	sfx_dummy		0	<unused>	dummy/nub (root-level, no weights)		0.000,0.000,0.000		
+81	固定dmy		0	<unused>	dummy/nub (root-level, no weights)		0.000,0.000,0.000		
+82	Master		0	<unused>	dummy/nub (root-level, no weights)		0.000,0.945,-0.034		
+83	HeadNub		0	<unused>	dummy/nub (root-level, no weights)		0.177,0.000,0.000		
+84	JawNub		0	<unused>	dummy/nub (root-level, no weights)		0.092,0.000,0.000		
+85	L Finger0Nub		0	<unused>	dummy/nub (root-level, no weights)		0.028,0.000,0.000		
+86	L Finger1Nub		0	<unused>	dummy/nub (root-level, no weights)		0.045,-0.000,0.000		
+87	L Finger2Nub		0	<unused>	dummy/nub (root-level, no weights)		0.045,0.000,0.000		
+88	R Finger0Nub		0	<unused>	dummy/nub (root-level, no weights)		0.028,-0.000,0.000		
+89	R Finger1Nub		0	<unused>	dummy/nub (root-level, no weights)		0.045,0.000,0.000		
+90	R Finger2Nub		0	<unused>	dummy/nub (root-level, no weights)		0.045,-0.000,0.000		
+91	L Toe0Nub		0	<unused>	dummy/nub (root-level, no weights)		0.079,0.000,0.000		
+92	R Toe0Nub		0	<unused>	dummy/nub (root-level, no weights)		0.079,0.000,0.000		

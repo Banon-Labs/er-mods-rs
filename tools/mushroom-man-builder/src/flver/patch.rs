@@ -7,31 +7,36 @@
 //!
 //! In-place is the reason for both limits this enforces and reports: the source cannot have
 //! more vertices than the donor buffer holds (refused), and triangles past the donor's index
-//! capacity do not fit (counted in [`PatchReport::triangles_dropped`]).
+//! capacity do not fit (counted in [`PatchReport::triangles_dropped`]). The rebuild writer
+//! ([`super::rebuild`]) has neither limit; it takes its vertex bytes from [`skin_to_donor`] and
+//! [`encode_vertices`], the same skinning and encoding this patcher uses.
 
 use std::collections::HashMap;
 
 use super::{
-    FaceSet, Flver, LayoutMember, Vec2, Vec3, export::SourceMesh, index_range,
-    parse_layout_members, parse_u32_list,
+    FaceSet, Flver, LayoutMember, Vec2, Vec3, index_range, parse_layout_members, parse_u32_list,
 };
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    fit::SourceMesh,
+};
 
 /// The FLVER version of Elden Ring's player parts; the patcher refuses anything else.
-const ELDEN_RING_FLVER_VERSION: u32 = 0x2001A;
+pub const ELDEN_RING_FLVER_VERSION: u32 = 0x2001A;
 /// Every vertex needs at least one bone; one with no usable weight goes to the chest.
 const FALLBACK_BONE: &str = "Spine2";
 const MAX_BONES_PER_VERTEX: usize = 4;
 const WEIGHT_FLOOR: f32 = 0.0001;
 
+/// One vertex as the donor's buffers store it, before encoding.
 #[derive(Clone, Copy, Debug, Default)]
-struct SkinnedVertex {
-    position: Vec3,
-    normal: Vec3,
-    tangent: [f32; 4],
-    uv: Vec2,
-    bone_indices: [u8; 4],
-    bone_weights: [f32; 4],
+pub struct SkinnedVertex {
+    pub position: Vec3,
+    pub normal: Vec3,
+    pub tangent: [f32; 4],
+    pub uv: Vec2,
+    pub bone_indices: [u8; 4],
+    pub bone_weights: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,13 +63,7 @@ pub fn patch_donor(
             flver.header.version
         )));
     }
-    let bones: HashMap<String, u16> = flver
-        .bones
-        .iter()
-        .enumerate()
-        .map(|(index, bone)| Ok((bone.name.clone(), u16::try_from(index)?)))
-        .collect::<Result<_>>()?;
-    let vertices = skin(source, &bones)?;
+    let vertices = skin_to_donor(source, &flver)?;
     let (bbox_min, bbox_max) = bbox(&vertices);
 
     let donor_mesh = *flver
@@ -99,11 +98,16 @@ pub fn patch_donor(
     let members = parse_layout_members(donor, layout)?;
     let buffer_start = flver.header.data_offset + vertex_buffer.buffer_offset;
     crate::bytes::slice(donor, buffer_start, vertex_buffer.buffer_length)?;
-    for index in 0..vertex_buffer.vertex_count {
-        let vertex = vertices.get(index).copied().unwrap_or_default();
-        let start = buffer_start + index * vertex_buffer.vertex_size;
-        write_vertex(donor, start, &members, &vertex, flver.header.uv_factor())?;
-    }
+    let padded: Vec<SkinnedVertex> = (0..vertex_buffer.vertex_count)
+        .map(|index| vertices.get(index).copied().unwrap_or_default())
+        .collect();
+    write_vertices(
+        &mut donor[buffer_start..buffer_start + vertex_buffer.buffer_length],
+        &members,
+        vertex_buffer.vertex_size,
+        &padded,
+        flver.header.uv_factor(),
+    )?;
     write_vec3(donor, 0x28, bbox_min)?;
     write_vec3(donor, 0x34, bbox_max)?;
     if donor_mesh.bounding_box_offset != 0 {
@@ -169,6 +173,46 @@ pub fn patch_donor(
         }
     }
     Ok(report)
+}
+
+/// `source` skinned to `donor`'s skeleton by bone name: each vertex with its tangent, its
+/// heaviest four donor bones and their weights.
+pub fn skin_to_donor(source: &SourceMesh, donor: &Flver) -> Result<Vec<SkinnedVertex>> {
+    let bones: HashMap<String, u16> = donor
+        .bones
+        .iter()
+        .enumerate()
+        .map(|(index, bone)| Ok((bone.name.clone(), u16::try_from(index)?)))
+        .collect::<Result<_>>()?;
+    skin(source, &bones)
+}
+
+/// `vertices` as a buffer in the layout `members` describe, `vertex_size` bytes each. A byte no
+/// member covers stays zero.
+pub fn encode_vertices(
+    members: &[LayoutMember],
+    vertex_size: usize,
+    vertices: &[SkinnedVertex],
+    uv_factor: f32,
+) -> Result<Vec<u8>> {
+    let mut buffer = vec![0; vertices.len() * vertex_size];
+    write_vertices(&mut buffer, members, vertex_size, vertices, uv_factor)?;
+    Ok(buffer)
+}
+
+/// Write `vertices` over the start of `buffer`, `vertex_size` bytes each, leaving every byte no
+/// member covers as it was.
+fn write_vertices(
+    buffer: &mut [u8],
+    members: &[LayoutMember],
+    vertex_size: usize,
+    vertices: &[SkinnedVertex],
+    uv_factor: f32,
+) -> Result<()> {
+    for (index, vertex) in vertices.iter().enumerate() {
+        write_vertex(buffer, index * vertex_size, members, vertex, uv_factor)?;
+    }
+    Ok(())
 }
 
 /// Per-vertex Elden Ring bone indices and weights: the source's rows summed per donor bone,
@@ -433,7 +477,7 @@ fn write_indices(
     Ok(())
 }
 
-fn put(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
+pub(super) fn put(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
     let end = offset + value.len();
     bytes
         .get_mut(offset..end)
@@ -442,11 +486,11 @@ fn put(bytes: &mut [u8], offset: usize, value: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<()> {
+pub(super) fn write_u32(bytes: &mut [u8], offset: usize, value: u32) -> Result<()> {
     put(bytes, offset, &value.to_le_bytes())
 }
 
-fn write_vec3(bytes: &mut [u8], offset: usize, value: Vec3) -> Result<()> {
+pub(super) fn write_vec3(bytes: &mut [u8], offset: usize, value: Vec3) -> Result<()> {
     put(bytes, offset, &value.x.to_le_bytes())?;
     put(bytes, offset + 4, &value.y.to_le_bytes())?;
     put(bytes, offset + 8, &value.z.to_le_bytes())
@@ -489,7 +533,7 @@ fn write_unorm8x4(bytes: &mut [u8], offset: usize, values: [f32; 4]) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flver::export::SourceVertex;
+    use crate::fit::{SourceVertex, WeightRow};
 
     #[test]
     fn normals_and_tangents_are_written_biased_as_the_game_reads_them() {
@@ -543,7 +587,7 @@ mod tests {
             .enumerate()
             .map(|(i, name)| ((*name).to_owned(), i as u16))
             .collect();
-        let row = |bone: &str, weight: f32| super::super::export::WeightRow {
+        let row = |bone: &str, weight: f32| WeightRow {
             vertex: 0,
             target_bone: bone.to_owned(),
             weight,

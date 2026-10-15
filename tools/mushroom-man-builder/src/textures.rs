@@ -1,51 +1,149 @@
-//! The mushroom's textures, moved into the TPF the Elden Ring face/body binder carries.
+//! A DSR character's textures, moved into the TPF the Elden Ring face/body binder carries.
 //!
-//! c2280's TPF holds `c2280` (albedo), `c2280_s` (specular) and `c2280_n` (normal). They are
-//! renamed to the donor's slots -- `<PREFIX>_a`, `<PREFIX>_3m`, `<PREFIX>_n`, with `_l` on the
-//! low-detail binder -- and their DDS payloads are copied byte for byte. The texture list, order,
-//! format bytes and header flags are the ones `scripts/route_a_mushroom_stage_textures.rs` gave
-//! WitchyBND in its `fc` manifest; the mip count is read from each DDS header, as WitchyBND did.
+//! The character's materials name an albedo (`g_Diffuse`), a specular (`g_Specular`) and a
+//! normal map (`g_Bumpmap`): for c2280 `c2280`, `c2280_s` and `c2280_n`, all in its own TPF. They
+//! are renamed to the donor's slots -- `<PREFIX>_a`, `<PREFIX>_3m`, `<PREFIX>_n`, with `_l` on the
+//! low-detail binder -- and their DDS payloads are copied byte for byte, apart from the albedo's
+//! colour-space header. A material that names no specular or normal map gets a generated flat one.
+//! The texture list, order and header flags are the ones
+//! `scripts/route_a_mushroom_stage_textures.rs` gave WitchyBND in its `fc` manifest; the mip count
+//! is read from each DDS header, as WitchyBND did, and the format byte from the DDS format.
 
 use er_tpf::{TEX_TYPE_TEXTURE, TPF_ENCODING_UTF16, TPF_PLATFORM_PC, Tpf, TpfTexture};
 
-use crate::error::{Error, Result};
+use crate::{
+    error::{Error, Result},
+    flver::source::SourceMaterial,
+};
 
-const DSR_TEXTURE_PREFIX: &str = "c2280";
 const FLAG2: u8 = 0x03;
-const FORMAT_DEFAULT: u8 = 0;
-const FORMAT_NORMAL: u8 = 107;
 const DDS_MAGIC: &[u8; 4] = b"DDS ";
 const DDS_MIP_COUNT_OFFSET: usize = 0x1C;
 
-/// `(source suffix, target slot, format byte)` in the order the donor manifest lists them.
-const SLOTS: [(&str, &str, u8); 3] = [
-    ("_s", "_3m", FORMAT_DEFAULT),
-    ("", "_a", FORMAT_DEFAULT),
-    ("_n", "_n", FORMAT_NORMAL),
+/// The three maps a DSR material samples, by texture name (the file stem of its path).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureSet {
+    pub albedo: String,
+    pub specular: Option<String>,
+    pub normal: Option<String>,
+}
+
+const DSR_ALBEDO: &str = "g_Diffuse";
+const DSR_SPECULAR: &str = "g_Specular";
+const DSR_NORMAL: &str = "g_Bumpmap";
+
+impl TextureSet {
+    /// `<prefix>`, `<prefix>_s`, `<prefix>_n`: the names DSR gives a character's own set.
+    pub fn named_after(prefix: &str) -> Self {
+        Self {
+            albedo: prefix.to_owned(),
+            specular: Some(format!("{prefix}_s")),
+            normal: Some(format!("{prefix}_n")),
+        }
+    }
+
+    /// The one set every material samples. A character whose materials name two different maps
+    /// for one role carries several sets, which this builder does not write yet.
+    pub fn of_materials(materials: &[SourceMaterial]) -> Result<Self> {
+        let mut found: [Option<String>; 3] = Default::default();
+        for material in materials {
+            for (texture_type, path) in &material.textures {
+                let role = [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
+                    .iter()
+                    .position(|name| texture_type.eq_ignore_ascii_case(name));
+                let (Some(role), Some(stem)) = (role, texture_stem(path)) else {
+                    continue;
+                };
+                match &found[role] {
+                    Some(seen) if !seen.eq_ignore_ascii_case(stem) => {
+                        return Err(Error::new(format!(
+                            "the materials name two {texture_type} maps, {seen} and {stem}: \
+                             characters with more than one texture set are not supported yet"
+                        )));
+                    }
+                    Some(_) => {}
+                    None => found[role] = Some(stem.to_owned()),
+                }
+            }
+        }
+        let [albedo, specular, normal] = found;
+        Ok(Self {
+            albedo: albedo.ok_or("no material names an albedo (g_Diffuse) texture")?,
+            specular,
+            normal,
+        })
+    }
+}
+
+/// `N:\FRPG\data\Model\chr\c2650\tex\c2650_n.tga` -> `c2650_n`; an empty path is no texture.
+fn texture_stem(path: &str) -> Option<&str> {
+    let file = path.rsplit(['\\', '/']).next()?.trim();
+    let stem = file.rsplit_once('.').map_or(file, |(stem, _)| stem);
+    (!stem.is_empty()).then_some(stem)
+}
+
+/// The donor slots in the order the donor manifest lists them.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Mask,
+    Albedo,
+    Normal,
+}
+
+const SLOTS: [(Slot, &str); 3] = [
+    (Slot::Mask, "_3m"),
+    (Slot::Albedo, ALBEDO_SLOT),
+    (Slot::Normal, "_n"),
 ];
 
 /// A TPF for `target_prefix` (`FC_M_0000`) holding c2280's three textures; `lod_suffix` is
 /// `""` for the high-detail binder and `"_l"` for the low one.
 pub fn mushroom_tpf(dsr_tpf: &[u8], target_prefix: &str, lod_suffix: &str) -> Result<Vec<u8>> {
-    let source = Tpf::parse(dsr_tpf).map_err(|error| Error::new(format!("c2280 TPF: {error}")))?;
-    let mut textures = Vec::with_capacity(SLOTS.len());
-    for (source_suffix, slot, format) in SLOTS {
-        let source_name = format!("{DSR_TEXTURE_PREFIX}{source_suffix}");
-        let dds = source
+    character_tpf(
+        dsr_tpf,
+        &TextureSet::named_after("c2280"),
+        target_prefix,
+        lod_suffix,
+    )
+}
+
+/// A TPF for `target_prefix` holding `set`, out of the character's own TPF.
+pub fn character_tpf(
+    dsr_tpf: &[u8],
+    set: &TextureSet,
+    target_prefix: &str,
+    lod_suffix: &str,
+) -> Result<Vec<u8>> {
+    let source = Tpf::parse(dsr_tpf).map_err(|error| Error::new(format!("DSR TPF: {error}")))?;
+    let lookup = |name: &str| -> Result<Vec<u8>> {
+        source
             .textures
             .iter()
-            .find(|texture| texture.name.eq_ignore_ascii_case(&source_name))
-            .ok_or_else(|| Error::new(format!("c2280's TPF has no texture {source_name}")))?
-            .dds
-            .clone();
-        let dds = if slot == ALBEDO_SLOT {
-            as_srgb_bc1(dds)
-        } else {
-            dds
+            .find(|texture| texture.name.eq_ignore_ascii_case(name))
+            .map(|texture| texture.dds.clone())
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "the character's TPF has no texture {name} (textures kept in another \
+                     character's binder are not read yet)"
+                ))
+            })
+    };
+    let mut textures = Vec::with_capacity(SLOTS.len());
+    for (slot, slot_suffix) in SLOTS {
+        let dds = match slot {
+            Slot::Albedo => as_srgb_albedo(lookup(&set.albedo)?),
+            Slot::Mask => match &set.specular {
+                Some(name) => lookup(name)?,
+                None => flat_mask(),
+            },
+            Slot::Normal => match &set.normal {
+                Some(name) => lookup(name)?,
+                None => flat_normal(),
+            },
         };
         textures.push(TpfTexture {
-            name: format!("{target_prefix}{slot}{lod_suffix}"),
-            format,
+            name: format!("{target_prefix}{slot_suffix}{lod_suffix}"),
+            format: tpf_format_byte(&dds)?,
             tex_type: TEX_TYPE_TEXTURE,
             mip_count: dds_mip_count(&dds)?,
             flags1: 0,
@@ -124,33 +222,197 @@ pub fn write_tpf(tpf: &Tpf) -> Result<Vec<u8>> {
 const ALBEDO_SLOT: &str = "_a";
 const DDS_FOURCC_OFFSET: usize = 0x54;
 const DDS_HEADER_END: usize = 0x80;
-/// `DXGI_FORMAT_BC1_UNORM_SRGB`: how Elden Ring stores its own body albedo, `FC_M_0000_a`.
-const DXGI_BC1_UNORM_SRGB: u32 = 72;
+const DX10_HEADER_SIZE: usize = 20;
 const DX10_TEXTURE_2D: u32 = 3;
 
-/// c2280's albedo under the header Elden Ring's own body albedo has. c2280's is a legacy `DXT1`
-/// header, which names no colour space; the game's is the same BC1 blocks under a DX10 header
-/// that says sRGB, so colours are not read as linear and washed out. The pixels are unchanged.
-fn as_srgb_bc1(dds: Vec<u8>) -> Vec<u8> {
-    if dds.len() < DDS_HEADER_END
-        || dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) != Some(b"DXT1".as_slice())
-    {
-        return dds;
-    }
-    let mut out = Vec::with_capacity(dds.len() + 20);
+/// The `DXGI_FORMAT` values this module reads or writes.
+mod dxgi {
+    pub const BC1_UNORM: u32 = 71;
+    /// How Elden Ring stores its own body albedo, `FC_M_0000_a`.
+    pub const BC1_UNORM_SRGB: u32 = 72;
+    pub const BC2_UNORM: u32 = 74;
+    pub const BC2_UNORM_SRGB: u32 = 75;
+    pub const BC3_UNORM: u32 = 77;
+    pub const BC3_UNORM_SRGB: u32 = 78;
+    pub const BC4_UNORM: u32 = 80;
+    pub const BC5_UNORM: u32 = 83;
+    pub const BC7_UNORM: u32 = 98;
+    pub const BC7_UNORM_SRGB: u32 = 99;
+}
+
+/// An albedo under a header that says sRGB, as Elden Ring's own albedos are, so its colours are
+/// not read as linear and washed out. The pixels are unchanged.
+///
+/// A legacy `DXT1`/`DXT3`/`DXT5` header names no colour space, so it becomes a DX10 header naming
+/// the sRGB form of the same blocks (c2280's albedo is `DXT1`). A DX10 header naming a linear
+/// format is switched to its sRGB twin (c2650's is `BC7_UNORM`). Anything else passes through.
+fn as_srgb_albedo(dds: Vec<u8>) -> Vec<u8> {
+    let srgb_of_legacy = match dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) {
+        _ if dds.len() < DDS_HEADER_END => return dds,
+        Some(b"DXT1") => dxgi::BC1_UNORM_SRGB,
+        Some(b"DXT3") => dxgi::BC2_UNORM_SRGB,
+        Some(b"DXT5") => dxgi::BC3_UNORM_SRGB,
+        Some(b"DX10") => {
+            let mut dds = dds;
+            let Ok(format) = crate::bytes::u32_le(&dds, DDS_HEADER_END) else {
+                return dds;
+            };
+            let srgb = match format {
+                dxgi::BC1_UNORM => dxgi::BC1_UNORM_SRGB,
+                dxgi::BC2_UNORM => dxgi::BC2_UNORM_SRGB,
+                dxgi::BC3_UNORM => dxgi::BC3_UNORM_SRGB,
+                dxgi::BC7_UNORM => dxgi::BC7_UNORM_SRGB,
+                other => other,
+            };
+            dds[DDS_HEADER_END..DDS_HEADER_END + 4].copy_from_slice(&srgb.to_le_bytes());
+            return dds;
+        }
+        _ => return dds,
+    };
+    let mut out = Vec::with_capacity(dds.len() + DX10_HEADER_SIZE);
     out.extend_from_slice(&dds[..DDS_HEADER_END]);
     out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"DX10");
-    for value in [DXGI_BC1_UNORM_SRGB, DX10_TEXTURE_2D, 0, 1, 0] {
+    for value in [srgb_of_legacy, DX10_TEXTURE_2D, 0, 1, 0] {
         out.extend_from_slice(&value.to_le_bytes());
     }
     out.extend_from_slice(&dds[DDS_HEADER_END..]);
     out
 }
 
+/// The TPF format byte Elden Ring's own parts give a texture in this DDS format, from the 9524
+/// textures of the extracted parts binders: BC1 0, BC7 sRGB (an albedo) 102, BC4 103, BC7 linear
+/// (a normal map) 107. BC5 is 107 rather than vanilla's 104 because c2280's BC5 normal map
+/// shipped and was approved under 107. DSR's character textures are DXT1, BC5 and BC7 only, so
+/// any other format is refused rather than given a guessed byte.
+fn tpf_format_byte(dds: &[u8]) -> Result<u8> {
+    let fourcc = crate::bytes::slice(dds, DDS_FOURCC_OFFSET, 4)?;
+    let byte = match fourcc {
+        b"DXT1" => Some(0),
+        b"ATI1" | b"BC4U" => Some(103),
+        b"ATI2" | b"BC5U" => Some(107),
+        b"DX10" => match crate::bytes::u32_le(dds, DDS_HEADER_END)? {
+            dxgi::BC1_UNORM | dxgi::BC1_UNORM_SRGB => Some(0),
+            dxgi::BC7_UNORM_SRGB => Some(102),
+            dxgi::BC4_UNORM => Some(103),
+            dxgi::BC5_UNORM | dxgi::BC7_UNORM => Some(107),
+            _ => None,
+        },
+        _ => None,
+    };
+    byte.ok_or_else(|| {
+        Error::new(format!(
+            "no Elden Ring TPF format byte is known for a DDS of fourcc {} (DXGI {:?})",
+            fourcc.escape_ascii(),
+            crate::bytes::u32_le(dds, DDS_HEADER_END).ok()
+        ))
+    })
+}
+
+/// Edge length of a generated stand-in map, with a full mip chain under it.
+const GENERATED_SIZE: u32 = 64;
+const DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_MIPMAPCOUNT_LINEARSIZE: u32 = 0x000A_1007;
+const DDPF_FOURCC: u32 = 0x4;
+const DDSCAPS_COMPLEX_TEXTURE_MIPMAP: u32 = 0x0040_1008;
+const DDS_HEADER_SIZE: u32 = 124;
+const DDS_PIXEL_FORMAT_SIZE: u32 = 32;
+
+/// A zero `_3m` for a material with no specular map: legacy DXT1, every block black, the same
+/// header shape c2280's own `_s` has.
+fn flat_mask() -> Vec<u8> {
+    generated_dds(b"DXT1", None, &[0; 8])
+}
+
+/// A flat `_n` for a material with no normal map: BC5 with red and green both at 0x80, which
+/// decodes to a normal straight out of the surface.
+fn flat_normal() -> Vec<u8> {
+    let half = [0x80, 0x80, 0, 0, 0, 0, 0, 0];
+    generated_dds(b"DX10", Some(dxgi::BC5_UNORM), &[half, half].concat())
+}
+
+const METALLIC_SLOT: &str = "_m";
+
+/// The metallic map a `C[AMSN]` material samples, `_m`, with nothing metallic in it: BC4 under
+/// the legacy `ATI1` code, every block zero. Vanilla `FC_M_0090` ships its `FC_M_0000_m` in the
+/// same size and format. c2650's specular green, the channel a metallic map would come from,
+/// averages 0.1 of 255, so zero is what it holds.
+pub fn zero_metallic() -> Vec<u8> {
+    generated_dds(b"ATI1", None, &[0; 8])
+}
+
+/// `tpf` with [`zero_metallic`] added as `<target_prefix>_m<lod_suffix>`, for a body whose Edge
+/// material samples one (see `edge.rs`). It goes in among the others in name order, as the
+/// three it joins already are; they are kept byte for byte.
+pub fn with_zero_metallic(tpf: &[u8], target_prefix: &str, lod_suffix: &str) -> Result<Vec<u8>> {
+    let mut built = Tpf::parse(tpf).map_err(|error| Error::new(format!("TPF: {error}")))?;
+    let name = format!("{target_prefix}{METALLIC_SLOT}{lod_suffix}");
+    if built
+        .textures
+        .iter()
+        .any(|texture| texture.name.eq_ignore_ascii_case(&name))
+    {
+        return Err(Error::new(format!("the TPF already holds {name}")));
+    }
+    let dds = zero_metallic();
+    let texture = TpfTexture {
+        format: tpf_format_byte(&dds)?,
+        tex_type: TEX_TYPE_TEXTURE,
+        mip_count: dds_mip_count(&dds)?,
+        flags1: 0,
+        dds,
+        name,
+    };
+    let key = texture.name.to_lowercase();
+    let at = built
+        .textures
+        .iter()
+        .position(|other| other.name.to_lowercase() > key)
+        .unwrap_or(built.textures.len());
+    built.textures.insert(at, texture);
+    write_tpf(&built)
+}
+
+/// A square block-compressed DDS of [`GENERATED_SIZE`], every block of every mip level `block`.
+fn generated_dds(fourcc: &[u8; 4], dxgi_format: Option<u32>, block: &[u8]) -> Vec<u8> {
+    let mips = GENERATED_SIZE.ilog2() + 1;
+    let blocks_at = |level: u32| ((GENERATED_SIZE >> level).div_ceil(4)).pow(2) as usize;
+    let mut out = Vec::new();
+    out.extend_from_slice(DDS_MAGIC);
+    for value in [
+        DDS_HEADER_SIZE,
+        DDSD_CAPS_HEIGHT_WIDTH_PIXELFORMAT_MIPMAPCOUNT_LINEARSIZE,
+        GENERATED_SIZE,
+        GENERATED_SIZE,
+        (blocks_at(0) * block.len()) as u32,
+        0,
+        mips,
+    ] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.resize(DDS_HEADER_END - 0x34, 0);
+    for value in [DDS_PIXEL_FORMAT_SIZE, DDPF_FOURCC] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out.extend_from_slice(fourcc);
+    out.resize(DDS_HEADER_END - 0x14, 0);
+    out.extend_from_slice(&DDSCAPS_COMPLEX_TEXTURE_MIPMAP.to_le_bytes());
+    out.resize(DDS_HEADER_END, 0);
+    if let Some(format) = dxgi_format {
+        for value in [format, DX10_TEXTURE_2D, 0, 1, 0] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    for level in 0..mips {
+        for _ in 0..blocks_at(level) {
+            out.extend_from_slice(block);
+        }
+    }
+    out
+}
+
 /// `dwMipMapCount` out of a DDS header, at least one.
 fn dds_mip_count(dds: &[u8]) -> Result<u8> {
     if dds.get(..4) != Some(DDS_MAGIC.as_slice()) {
-        return Err(Error::new("a c2280 texture is not a DDS file"));
+        return Err(Error::new("a DSR texture is not a DDS file"));
     }
     let count = crate::bytes::u32_le(dds, DDS_MIP_COUNT_OFFSET)?;
     Ok(u8::try_from(count.max(1)).unwrap_or(u8::MAX))
@@ -162,19 +424,79 @@ mod tests {
 
     #[test]
     fn a_legacy_dxt1_albedo_gets_the_srgb_dx10_header_and_keeps_its_pixels() {
-        let mut legacy = dds(3, 7);
-        legacy[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"DXT1");
-        let srgb = as_srgb_bc1(legacy.clone());
+        let legacy = legacy_dds(3, 7, b"DXT1");
+        let srgb = as_srgb_albedo(legacy.clone());
         assert_eq!(&srgb[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], b"DX10");
         assert_eq!(
             crate::bytes::u32_le(&srgb, DDS_HEADER_END).unwrap(),
-            DXGI_BC1_UNORM_SRGB
+            dxgi::BC1_UNORM_SRGB
         );
         assert_eq!(&srgb[DDS_HEADER_END + 20..], &legacy[DDS_HEADER_END..]);
         assert_eq!(dds_mip_count(&srgb).unwrap(), 3);
-        // Anything that is not a legacy DXT1 passes through untouched.
-        let other = dds(3, 9);
-        assert_eq!(as_srgb_bc1(other.clone()), other);
+        assert_eq!(
+            crate::bytes::u32_le(&as_srgb_albedo(legacy_dds(1, 7, b"DXT5")), DDS_HEADER_END)
+                .unwrap(),
+            dxgi::BC3_UNORM_SRGB
+        );
+        // A format with no sRGB twin passes through untouched.
+        let other = legacy_dds(3, 9, b"ATI2");
+        assert_eq!(as_srgb_albedo(other.clone()), other);
+    }
+
+    #[test]
+    fn a_dx10_bc7_albedo_becomes_bc7_srgb_with_its_pixels_unchanged() {
+        let linear = dx10_dds(11, 0x5A, dxgi::BC7_UNORM);
+        let srgb = as_srgb_albedo(linear.clone());
+        assert_eq!(srgb.len(), linear.len());
+        assert_eq!(
+            crate::bytes::u32_le(&srgb, DDS_HEADER_END).unwrap(),
+            dxgi::BC7_UNORM_SRGB
+        );
+        assert_eq!(&srgb[..DDS_HEADER_END], &linear[..DDS_HEADER_END]);
+        assert_eq!(&srgb[DDS_HEADER_END + 4..], &linear[DDS_HEADER_END + 4..]);
+        // Already sRGB, and normal-map formats, are left alone.
+        let already = dx10_dds(1, 0, dxgi::BC1_UNORM_SRGB);
+        assert_eq!(as_srgb_albedo(already.clone()), already);
+        let normal = dx10_dds(1, 0, dxgi::BC5_UNORM);
+        assert_eq!(as_srgb_albedo(normal.clone()), normal);
+    }
+
+    #[test]
+    fn the_format_byte_follows_the_dds_format() {
+        let byte = |dds: Vec<u8>| tpf_format_byte(&dds).unwrap();
+        assert_eq!(byte(legacy_dds(1, 0, b"DXT1")), 0);
+        assert_eq!(byte(dx10_dds(1, 0, dxgi::BC1_UNORM_SRGB)), 0);
+        assert_eq!(byte(dx10_dds(1, 0, dxgi::BC7_UNORM_SRGB)), 102);
+        assert_eq!(byte(dx10_dds(1, 0, dxgi::BC7_UNORM)), 107);
+        assert_eq!(byte(dx10_dds(1, 0, dxgi::BC5_UNORM)), 107);
+        assert_eq!(byte(legacy_dds(1, 0, b"ATI2")), 107);
+        assert_eq!(byte(dx10_dds(1, 0, dxgi::BC4_UNORM)), 103);
+        assert_eq!(byte(legacy_dds(1, 0, b"ATI1")), 103);
+        assert!(tpf_format_byte(&legacy_dds(1, 0, b"DXT5")).is_err());
+        assert!(tpf_format_byte(&dx10_dds(1, 0, 28)).is_err());
+    }
+
+    #[test]
+    fn generated_stand_ins_are_full_mip_chains_the_tpf_check_accepts() {
+        for (dds, fourcc, format, block) in [
+            (flat_mask(), b"DXT1", 0, 8),
+            (flat_normal(), b"DX10", 107, 16),
+        ] {
+            assert_eq!(&dds[..4], DDS_MAGIC);
+            assert_eq!(&dds[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], fourcc);
+            assert_eq!(dds_mip_count(&dds).unwrap(), 7, "64, 32, 16, 8, 4, 2, 1");
+            assert_eq!(tpf_format_byte(&dds).unwrap(), format);
+            let header = DDS_HEADER_END
+                + if fourcc == b"DX10" {
+                    DX10_HEADER_SIZE
+                } else {
+                    0
+                };
+            assert_eq!(dds.len(), header + (256 + 64 + 16 + 4 + 1 + 1 + 1) * block);
+            assert_eq!(crate::bytes::u32_le(&dds, 4).unwrap(), DDS_HEADER_SIZE);
+        }
+        assert!(flat_mask()[DDS_HEADER_END..].iter().all(|&b| b == 0));
+        assert_eq!(flat_normal()[DDS_HEADER_END + DX10_HEADER_SIZE], 0x80);
     }
 
     fn dds(mips: u32, fill: u8) -> Vec<u8> {
@@ -184,26 +506,47 @@ mod tests {
         bytes
     }
 
-    #[test]
-    fn the_three_c2280_textures_land_in_the_donor_slots_in_manifest_order() {
-        let source = Tpf {
+    fn legacy_dds(mips: u32, fill: u8, fourcc: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = dds(mips, fill);
+        bytes[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(fourcc);
+        bytes
+    }
+
+    fn dx10_dds(mips: u32, fill: u8, format: u32) -> Vec<u8> {
+        let mut bytes = legacy_dds(mips, fill, b"DX10");
+        bytes[DDS_HEADER_END..DDS_HEADER_END + 4].copy_from_slice(&format.to_le_bytes());
+        bytes
+    }
+
+    fn texture(name: &str, dds: Vec<u8>) -> TpfTexture {
+        TpfTexture {
+            name: name.to_owned(),
+            format: 0,
+            tex_type: TEX_TYPE_TEXTURE,
+            mip_count: 1,
+            flags1: 0,
+            dds,
+        }
+    }
+
+    fn source_tpf(textures: Vec<TpfTexture>) -> Vec<u8> {
+        Tpf {
             platform: TPF_PLATFORM_PC,
             flag2: FLAG2,
             encoding: TPF_ENCODING_UTF16,
-            textures: [("c2280", 1_u8), ("c2280_s", 2), ("c2280_n", 3)]
-                .iter()
-                .map(|&(name, fill)| TpfTexture {
-                    name: name.to_owned(),
-                    format: 0,
-                    tex_type: TEX_TYPE_TEXTURE,
-                    mip_count: 1,
-                    flags1: 0,
-                    dds: dds(u32::from(fill) + 4, fill),
-                })
-                .collect(),
+            textures,
         }
         .build()
-        .unwrap();
+        .unwrap()
+    }
+
+    #[test]
+    fn the_three_c2280_textures_land_in_the_donor_slots_in_manifest_order() {
+        let source = source_tpf(vec![
+            texture("c2280", legacy_dds(5, 1, b"DXT1")),
+            texture("c2280_s", legacy_dds(6, 2, b"DXT1")),
+            texture("c2280_n", dx10_dds(7, 3, dxgi::BC5_UNORM)),
+        ]);
         let bytes = mushroom_tpf(&source, "FC_M_0000", "_l").unwrap();
         let built = Tpf::parse(&bytes).unwrap();
         let names: Vec<&str> = built.textures.iter().map(|t| t.name.as_str()).collect();
@@ -213,12 +556,105 @@ mod tests {
             "specular comes from c2280_s"
         );
         assert_eq!(built.textures[1].mip_count, 5);
-        assert_eq!(built.textures[2].format, FORMAT_NORMAL);
+        let formats: Vec<u8> = built.textures.iter().map(|t| t.format).collect();
+        assert_eq!(formats, [0, 0, 107], "the bytes c2280 shipped with");
         assert_eq!(
             write_tpf(&built).unwrap(),
             bytes,
             "our own output round-trips"
         );
+    }
+
+    #[test]
+    fn a_set_comes_from_the_materials_and_a_missing_map_is_generated() {
+        let material = |textures: &[(&str, &str)]| SourceMaterial {
+            textures: textures
+                .iter()
+                .map(|&(kind, path)| (kind.to_owned(), path.to_owned()))
+                .collect(),
+            ..SourceMaterial::default()
+        };
+        let path = |stem: &str| format!(r"N:\FRPG\data\Model\chr\c2650\tex\{stem}.tga");
+        let full = material(&[
+            ("g_Diffuse", &path("c2650")),
+            ("g_Specular", &path("c2650_s")),
+            ("g_Bumpmap", &path("c2650_n")),
+            ("g_DetailBumpmap", ""),
+        ]);
+        let edge = full.clone();
+        assert_eq!(
+            TextureSet::of_materials(&[full.clone(), edge]).unwrap(),
+            TextureSet::named_after("c2650")
+        );
+        let diffuse_only = material(&[("g_Diffuse", &path("c2650")), ("g_DetailBumpmap", "")]);
+        let set = TextureSet::of_materials(&[diffuse_only]).unwrap();
+        assert_eq!(
+            (set.specular.as_deref(), set.normal.as_deref()),
+            (None, None)
+        );
+        let weapon = material(&[("g_Diffuse", &path("c2650_WP_A_0200"))]);
+        assert!(TextureSet::of_materials(&[full, weapon]).is_err());
+
+        let tpf = source_tpf(vec![texture("c2650", dx10_dds(11, 4, dxgi::BC7_UNORM))]);
+        let built = Tpf::parse(&character_tpf(&tpf, &set, "FC_M_0000", "").unwrap()).unwrap();
+        let formats: Vec<u8> = built.textures.iter().map(|t| t.format).collect();
+        assert_eq!(formats, [0, 102, 107]);
+        assert_eq!(built.textures[0].dds, flat_mask());
+        assert_eq!(built.textures[2].dds, flat_normal());
+        let missing = TextureSet::named_after("c2519");
+        assert!(character_tpf(&tpf, &missing, "FC_M_0000", "").is_err());
+    }
+
+    #[test]
+    fn the_zero_metallic_map_is_a_full_bc4_chain_of_zero_blocks() {
+        let dds = zero_metallic();
+        assert_eq!(&dds[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], b"ATI1");
+        assert_eq!(crate::bytes::u32_le(&dds, 0x0C).unwrap(), 64, "height");
+        assert_eq!(crate::bytes::u32_le(&dds, 0x10).unwrap(), 64, "width");
+        assert_eq!(dds_mip_count(&dds).unwrap(), 7, "64, 32, 16, 8, 4, 2, 1");
+        assert_eq!(tpf_format_byte(&dds).unwrap(), 103, "vanilla's BC4 byte");
+        assert_eq!(
+            dds.len(),
+            DDS_HEADER_END + (256 + 64 + 16 + 4 + 1 + 1 + 1) * 8
+        );
+        assert!(dds[DDS_HEADER_END..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn the_metallic_map_joins_a_body_tpf_in_name_order_and_leaves_the_rest_alone() {
+        let source = source_tpf(vec![
+            texture("c2650", dx10_dds(3, 1, dxgi::BC7_UNORM)),
+            texture("c2650_s", legacy_dds(2, 2, b"DXT1")),
+            texture("c2650_n", dx10_dds(3, 3, dxgi::BC5_UNORM)),
+        ]);
+        let set = TextureSet::named_after("c2650");
+        for lod in ["", "_l"] {
+            let body = character_tpf(&source, &set, "FC_M_0000", lod).unwrap();
+            let with = with_zero_metallic(&body, "FC_M_0000", lod).unwrap();
+            let (before, after) = (Tpf::parse(&body).unwrap(), Tpf::parse(&with).unwrap());
+            let names: Vec<&str> = after.textures.iter().map(|t| t.name.as_str()).collect();
+            let expected = ["_3m", "_a", "_m", "_n"].map(|slot| format!("FC_M_0000{slot}{lod}"));
+            assert_eq!(names, expected);
+            let metallic = &after.textures[2];
+            assert_eq!(metallic.dds, zero_metallic());
+            assert_eq!((metallic.format, metallic.mip_count), (103, 7));
+            for (old, new) in before
+                .textures
+                .iter()
+                .zip([0, 1, 3].map(|i| &after.textures[i]))
+            {
+                assert_eq!(
+                    (&old.name, old.format, old.mip_count, old.flags1, &old.dds),
+                    (&new.name, new.format, new.mip_count, new.flags1, &new.dds)
+                );
+            }
+            assert!(
+                with_zero_metallic(&with, "FC_M_0000", lod)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("already holds")
+            );
+        }
     }
 
     #[test]

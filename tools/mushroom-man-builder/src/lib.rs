@@ -4,11 +4,15 @@
 pub mod archive;
 pub mod bnd;
 pub mod bytes;
+pub mod character;
 pub mod dcx;
+pub mod edge;
 pub mod error;
+pub mod fit;
 pub mod flver;
 pub mod keys;
 pub mod locate;
+pub mod map_report;
 pub mod oodle;
 pub mod package;
 pub mod profile;

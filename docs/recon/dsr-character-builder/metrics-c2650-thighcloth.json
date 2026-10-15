@@ -1,0 +1,68 @@
+{
+ "what": "c2650 generic biped fit, thumbrigid+thighcloth",
+ "idle_inside_out": 9,
+ "idle_inside_out_where": {
+  "L_UpperArm+Spine2": 1,
+  "R_UpperArm+Spine2": 2,
+  "R_Finger2+R_Finger21": 3,
+  "L_Finger2+L_Finger21": 3
+ },
+ "idle_worst_frame_bad_edges": 109,
+ "idle_worst_by_part": {
+  "arm+torso": 13,
+  "arm": 17,
+  "leg": 79
+ },
+ "idle_worst_top_bone_pairs": {
+  "L_Calf+L_Thigh": 24,
+  "L_Calf": 16,
+  "L_Calf+R_Calf": 16,
+  "L_Calf+R_Thigh": 11,
+  "R_UpperArm+Spine2": 10,
+  "L_Thigh+R_Thigh": 6,
+  "L_Thigh": 6,
+  "L_UpperArm+Spine2": 2,
+  "R_UpperArm": 2,
+  "R_Finger0+R_Finger1": 2
+ },
+ "r1_worst_frame_bad_edges": 465,
+ "r1_worst_by_part": {
+  "torso": 93,
+  "arm+torso": 71,
+  "arm": 60,
+  "leg": 234,
+  "leg+torso": 7
+ },
+ "r1_worst_top_bone_pairs": {
+  "R_UpperArm+Spine2": 52,
+  "R_Thigh": 47,
+  "Spine2": 46,
+  "L_Thigh": 43,
+  "L_Calf+L_Thigh": 36,
+  "L_Calf+R_Thigh": 30,
+  "L_Calf": 22,
+  "R_UpperArm": 20,
+  "Head+Neck": 20,
+  "L_Calf+R_Calf": 20
+ },
+ "run_r1_worst_frame_bad_edges": 510,
+ "run_r1_worst_by_part": {
+  "arm+torso": 103,
+  "torso": 86,
+  "arm": 61,
+  "leg": 251,
+  "leg+torso": 9
+ },
+ "run_r1_worst_top_bone_pairs": {
+  "R_Thigh": 67,
+  "R_UpperArm+Spine2": 60,
+  "Spine2": 42,
+  "L_Calf+L_Thigh": 32,
+  "L_Calf+R_Thigh": 30,
+  "R_UpperArm": 28,
+  "L_UpperArm+Spine2": 24,
+  "L_Thigh": 24,
+  "L_Calf": 22,
+  "R_Calf+R_Thigh": 22
+ }
+}

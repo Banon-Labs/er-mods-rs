@@ -2,11 +2,19 @@
 //!
 //! | output | built from |
 //! |---|---|
-//! | `parts/fc_*.partsbnd.dcx` (31) | Elden Ring's `fc_m_0000` (and `_l`) with c2280 patched into mesh 13 and its textures, renamed per part |
+//! | `character.txt` | the id of the DSR character the package was built from, one line |
+//! | `parts/fc_*.partsbnd.dcx` (31) | Elden Ring's `fc_m_0000` (and `_l`) with the character written into it and its textures, renamed per part |
 //! | `parts/fg_a_*.partsbnd.dcx`, `parts/hr_a_*.partsbnd.dcx` | every face part and hair part the archives hold a FLVER for, with every face hidden |
 //! | `parts/fg_a_0000_f.partsbnd.dcx` | the hidden `fg_a_0000_m` under the female name the archives do not carry |
 //! | `parts/{hd,bd,am,lg}_{m,f}_0000{,_l}.partsbnd.dcx` (16) | each of those vanilla binders with every face hidden |
 //! | `facegen/facegen.fgbnd.dcx` | Elden Ring's facegen binder with `face.flver` hidden |
+//!
+//! How the character goes into `FC_M_0000.flver` depends on its writer. c2280 is patched into
+//! mesh 13 in place, as the user approved it. A Biped character is fitted, its held items cut,
+//! and its meshes grouped by DSR material and back-face culling; each group becomes one slot of
+//! the rebuild writer on a donor body mesh laid out as mesh 13 is, drawn with the Body material,
+//! or with the Edge material when its MTD is alpha-tested ([`crate::edge`]), and every other mesh
+//! is hidden. The low-detail binder carries the same FLVER.
 //!
 //! Why each exists. Character presets ask for many `fc_*` bodies, and a binder answers only to
 //! its own name -- inside and out -- so the patched body is copied under every name with its
@@ -26,6 +34,7 @@
 //! loaded.
 
 use std::{
+    fmt::Write as _,
     fs,
     path::{Path, PathBuf},
 };
@@ -33,15 +42,23 @@ use std::{
 use crate::{
     archive::ArchiveSet,
     bnd::{BinderFile, Bnd4, file_name, read_bnd3},
+    character::{C2280, Character, FitConfig, Writer},
     dcx,
+    edge::{EDGE_MATERIAL, edge_append},
     error::{Context, Error, Result},
+    fit::{self, Export, SourceMesh, mushroom::export_c2280},
     flver::{
-        export::{FitParams, SourceMesh, export_c2280},
+        Flver, LayoutMember, VertexBuffer,
         hide::{blank_vertex_buffers, hide_all_face_sets},
-        patch::{PatchReport, patch_donor},
+        mtd::{self, MtdClass},
+        parse_layout_members, parse_u32_list,
+        patch::{PatchReport, encode_vertices, patch_donor, skin_to_donor},
+        rebuild::{HeaderAppend, Obb, Slot, rebuild},
+        source::{self, Source, StripReport},
     },
+    locate,
     oodle::Oodle,
-    textures::mushroom_tpf,
+    textures::{TextureSet, character_tpf, with_zero_metallic},
 };
 
 /// Every full-body part a character preset can ask for, from the community file list of Elden
@@ -86,6 +103,14 @@ const FC_SOURCE_STEM: &str = "FC_M_0000";
 /// The mesh of `FC_M_0000.flver` the mushroom is written into: the largest body mesh, and the
 /// one the Route A prototype and its Blender successor both targeted.
 pub const FC_DONOR_MESH_INDEX: usize = 13;
+/// The donor's first material, `#03#` on `P[FC_M_0000]_Body.matxml`, which every opaque slot
+/// draws with.
+pub const BODY_MATERIAL: u32 = 0;
+/// The donor meshes a Biped character's slots take, first group first: mesh 13, then the other
+/// body meshes from the most vertices down (`FC_M_0000.flver`: 1138, 952, 942, 604, ...). All 15
+/// share mesh 13's vertex layout, which [`slot_buffer`] checks on the donor it is given; the hair
+/// meshes after them do not.
+const SLOT_DONOR_MESHES: [usize; 15] = [13, 14, 10, 8, 9, 3, 0, 11, 5, 12, 6, 4, 7, 2, 1];
 const FG_SOURCE: &str = "fg_a_0000_m.partsbnd.dcx";
 /// Requested by female characters but absent from the archives, so it is written as a renamed
 /// copy of the male one, as the scripts did.
@@ -100,7 +125,11 @@ const NAKED_SLOTS: [&str; 4] = ["hd", "bd", "am", "lg"];
 const GENDERS: [&str; 2] = ["m", "f"];
 const LODS: [&str; 2] = ["", "_l"];
 const FACEGEN: &str = "/facegen/facegen.fgbnd.dcx";
-const DSR_CHRBND: &str = "chr/c2280.chrbnd.dcx";
+const PARTS_DIR: &str = "parts";
+const FACEGEN_DIR: &str = "facegen";
+/// Which character a package folder holds. Its presence also marks the folder as one this
+/// builder wrote, so a rebuild may clear `parts/` and `facegen/` before writing.
+pub const CHARACTER_FILE: &str = "character.txt";
 pub const DLL_NAME: &str = "mushroom_man.dll";
 /// The files `mushroom_man.dll` looks for beside itself before it does anything.
 pub const DLL_PAYLOAD_PROBES: [&str; 2] =
@@ -111,16 +140,116 @@ pub struct Inputs<'a> {
     pub archives: &'a ArchiveSet,
     pub oodle: &'a Oodle,
     pub dsr_dir: &'a Path,
-    /// An authored mesh (OBJ + weight TSV) to use instead of fitting c2280 here.
+    /// The DSR character to build.
+    pub character: &'a Character,
+    /// An authored mesh (OBJ + weight TSV) to use instead of fitting the character here.
     pub source_override: Option<SourceMesh>,
+    /// How the body is written. The character table (`Character.writer`) is meant to choose it,
+    /// with the builder's `--writer` developer flag overriding that choice for an authored mesh.
+    pub writer: Writer,
+    /// What a Biped character's alpha-tested meshes are drawn with.
+    pub cutouts: Cutouts,
+}
+
+/// What a Biped character's alpha-tested (`*_Edge`) meshes are drawn with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cutouts {
+    /// The Edge material ([`crate::edge`]), which cuts them out where the albedo's alpha is low.
+    #[default]
+    EdgeMaterial,
+    /// The Body material, solid where they should have holes: the build before the Edge material
+    /// existed, kept as a fallback (`--no-cutout-material`).
+    BodyMaterial,
+}
+
+/// How the body went into the donor, for the summary line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BodyReport {
+    /// [`Writer::Patch`]: what each donor FLVER's patch did.
+    Patched { high: PatchReport, low: PatchReport },
+    /// [`Writer::Rebuild`]: every slot written, in one FLVER both donor binders carry, and, for a
+    /// fitted Biped character, what cutting its held items left out.
+    Rebuilt {
+        slots: Vec<SlotReport>,
+        strip: Option<StripReport>,
+    },
+}
+
+/// One slot the rebuild wrote.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotReport {
+    pub donor_mesh: usize,
+    /// The donor material it draws with: [`BODY_MATERIAL`], or [`EDGE_MATERIAL`] retargeted.
+    pub material: u32,
+    pub cull_backfaces: bool,
+    /// The DSR meshes it holds; `None` for an authored mesh.
+    pub source: Option<SlotSource>,
+    pub vertices: usize,
+    /// LOD0, LOD1 and LOD2.
+    pub triangles: [usize; 3],
+}
+
+/// The DSR material a slot's meshes share, and which of the character's meshes they are.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SlotSource {
+    pub material: usize,
+    /// The MTD's file name, `C_DullLeather[DSB]_Edge.mtd`.
+    pub mtd: String,
+    pub class: MtdClass,
+    pub meshes: Vec<usize>,
+}
+
+impl SlotReport {
+    /// One line of the build summary.
+    pub fn describe(&self) -> String {
+        let material = match self.material {
+            BODY_MATERIAL => format!("Body material {BODY_MATERIAL}"),
+            EDGE_MATERIAL => format!("Edge material {EDGE_MATERIAL}"),
+            other => format!("material {other}"),
+        };
+        let sides = if self.cull_backfaces {
+            "back faces culled"
+        } else {
+            "double-sided"
+        };
+        let triangles = match self.triangles {
+            [a, b, c] if a == b && b == c => format!("{a} triangles at every distance"),
+            [a, b, c] => format!("{a}/{b}/{c} triangles (LOD0/1/2)"),
+        };
+        let mut line = format!(
+            "mesh {}: {} vertices, {triangles}, {material}, {sides}",
+            self.donor_mesh, self.vertices
+        );
+        if let Some(source) = &self.source {
+            let meshes: Vec<String> = source.meshes.iter().map(usize::to_string).collect();
+            let _ = write!(
+                line,
+                "; from DSR mesh{} {} on material {} ({}, {})",
+                if meshes.len() == 1 { "" } else { "es" },
+                meshes.join(", "),
+                source.material,
+                source.mtd,
+                class_name(source.class)
+            );
+        }
+        line
+    }
+}
+
+fn class_name(class: MtdClass) -> &'static str {
+    match class {
+        MtdClass::Opaque => "opaque",
+        MtdClass::AlphaTest => "alpha-tested",
+        MtdClass::AlphaBlend => "alpha-blended",
+        MtdClass::Unsupported => "unsupported",
+    }
 }
 
 /// What a build wrote, for the summary line and the tests.
 #[derive(Debug)]
 pub struct BuildReport {
     pub files: Vec<PathBuf>,
-    pub patch_high: PatchReport,
-    pub patch_low: PatchReport,
+    pub body: BodyReport,
     pub source_vertices: usize,
     pub source_triangles: usize,
     /// Face and hair parts written with their faces hidden.
@@ -129,13 +258,71 @@ pub struct BuildReport {
     pub head_parts_without_model: usize,
 }
 
-/// c2280's model and textures out of a Dark Souls Remastered install.
-pub fn read_c2280(dsr_dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
-    let path = dsr_dir.join(DSR_CHRBND);
-    let packed = fs::read(&path).context(format!(
-        "reading {} -- is this the Dark Souls Remastered folder?",
-        path.display()
-    ))?;
+impl BuildReport {
+    /// The body's lines of the build summary: what went into the donor, slot by slot, and what
+    /// cutting the held items left out.
+    pub fn body_summary(&self) -> String {
+        match &self.body {
+            BodyReport::Patched { high, .. } => {
+                let mut line = format!(
+                    "body: {} vertices and {} triangles written in place into donor mesh \
+                     {FC_DONOR_MESH_INDEX}, on Body material {BODY_MATERIAL}",
+                    self.source_vertices, self.source_triangles
+                );
+                if high.triangles_dropped > 0 {
+                    let _ = write!(
+                        line,
+                        " ({} triangles did not fit and were left out)",
+                        high.triangles_dropped
+                    );
+                }
+                line
+            }
+            BodyReport::Rebuilt { slots, strip } => {
+                let vertices: usize = slots.iter().map(|slot| slot.vertices).sum();
+                let triangles: usize = slots.iter().map(|slot| slot.triangles[0]).sum();
+                let mut out = format!(
+                    "body: {vertices} vertices and {triangles} triangles in {} slots of a rebuilt \
+                     donor, every other mesh hidden",
+                    slots.len()
+                );
+                for slot in slots {
+                    let _ = write!(out, "\n  {}", slot.describe());
+                }
+                if let Some(strip) = strip {
+                    let _ = write!(
+                        out,
+                        "\n  held items: {} vertices cut and the {} triangles touching them; {} \
+                         vertices only the far LODs drew left out",
+                        strip.stripped_vertices,
+                        strip.dropped_triangles,
+                        strip.unreferenced_vertices
+                    );
+                }
+                out
+            }
+        }
+    }
+}
+
+/// A DSR character's model, its TPF, and the texture set its materials name.
+pub struct CharacterFiles {
+    pub flver: Vec<u8>,
+    pub tpf: Vec<u8>,
+    pub textures: TextureSet,
+}
+
+/// `<id>.flver` and `<id>.tpf` out of `chr/<id>.chrbnd.dcx` in a Dark Souls Remastered install.
+pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<CharacterFiles> {
+    let id = character.id;
+    let path = locate::chrbnd_path(dsr_dir, id);
+    if !path.is_file() {
+        return Err(Error::new(format!(
+            "{} is missing -- this Dark Souls Remastered install has no {id}",
+            path.display()
+        )));
+    }
+    let packed = fs::read(&path).context(format!("reading {}", path.display()))?;
     let files = read_bnd3(&dcx::decompress(&packed, None)?).context(path.display())?;
     let find = |name: &str| -> Result<Vec<u8>> {
         files
@@ -144,43 +331,134 @@ pub fn read_c2280(dsr_dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
             .map(|file| file.data.clone())
             .ok_or_else(|| Error::new(format!("{} has no {name}", path.display())))
     };
-    Ok((find("c2280.flver")?, find("c2280.tpf")?))
+    let flver = find(&format!("{id}.flver"))?;
+    let textures =
+        TextureSet::of_materials(&source::materials(&flver)?).context(format!("{id}.flver"))?;
+    Ok(CharacterFiles {
+        tpf: find(&format!("{id}.tpf"))?,
+        flver,
+        textures,
+    })
 }
 
-/// Build the whole package into `out_dir` (`parts/` and `facegen/` beneath it).
+/// c2280's model and textures out of a Dark Souls Remastered install.
+pub fn read_c2280(dsr_dir: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
+    let files = read_character(dsr_dir, &C2280)?;
+    Ok((files.flver, files.tpf))
+}
+
+/// Why `build` cannot build `character` through `writer` with `cutouts`, if it cannot. Asked
+/// before any archive is opened, so a refusal costs nothing.
+pub fn buildable(character: &Character, writer: Writer, cutouts: Cutouts) -> Result<()> {
+    match (character.fit, writer, cutouts) {
+        (FitConfig::Biped(_), Writer::Patch, _) => Err(Error::new(format!(
+            "{} is a Biped character: its meshes go into the donor through the rebuild writer, \
+             which the patch writer cannot stand in for",
+            character.id
+        ))),
+        (FitConfig::Mushroom(_), _, Cutouts::BodyMaterial) => Err(Error::new(format!(
+            "{} has no cutout meshes to move onto the Body material (--no-cutout-material is for \
+             Biped characters)",
+            character.id
+        ))),
+        _ => Ok(()),
+    }
+}
+
+/// Build the whole package into `out_dir` (`character.txt`, and `parts/` and `facegen/` beneath
+/// it).
 pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
-    let (c2280_flver, c2280_tpf) = read_c2280(inputs.dsr_dir)?;
-    let parts_dir = out_dir.join("parts");
-    let facegen_dir = out_dir.join("facegen");
+    let character = inputs.character;
+    buildable(character, inputs.writer, inputs.cutouts)?;
+    let dsr = read_character(inputs.dsr_dir, character)?;
+    let parts_dir = out_dir.join(PARTS_DIR);
+    let facegen_dir = out_dir.join(FACEGEN_DIR);
+    let mut files = vec![claim_folder(out_dir, character)?];
     fs::create_dir_all(&parts_dir).context(format!("creating {}", parts_dir.display()))?;
     fs::create_dir_all(&facegen_dir).context(format!("creating {}", facegen_dir.display()))?;
-    let mut files = Vec::new();
     let oodle = Some(inputs.oodle);
+    let fitting = format!("fitting {} to the donor", character.id);
 
-    // The mushroom body, high and low detail. The fit is made once, against the high-detail
-    // donor's skeleton; the low-detail one has the same bones.
+    // The body, high and low detail. The fit is made once, against the high-detail donor's
+    // skeleton; the low-detail one has the same bones.
     let mut source = inputs.source_override;
     let mut bodies = Vec::new();
     let mut patches = Vec::new();
+    let mut rebuilt: Option<Rebuilt> = None;
     for lod in LODS {
         let stem = format!("{FC_SOURCE_STEM}{}", lod.to_uppercase());
         let logical = format!("/parts/{}{PART_EXTENSION}", stem.to_lowercase());
         let packed = inputs.archives.read(&logical)?;
         let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
         let flver = binder_file(&mut binder, &format!("{stem}.flver"), &logical)?;
-        if source.is_none() {
-            source = Some(
-                export_c2280(&c2280_flver, &flver.data, FitParams::default())
-                    .context("fitting c2280 to the donor")?,
-            );
+        let rebuilding = format!("rebuilding {stem}.flver");
+        match (&rebuilt, character.fit) {
+            // The high and low donor FLVERs are the same file (sha256 f32ee054...), so the body
+            // is rebuilt once and the result written into both.
+            (Some(done), _) => {
+                if done.donor != flver.data {
+                    return Err(Error::new(format!(
+                        "{stem}.flver differs from the high-detail donor; the rebuilt body is \
+                         shared between them"
+                    )));
+                }
+                flver.data.clone_from(&done.body);
+            }
+            // `buildable` has refused the patch writer for a Biped character.
+            (None, FitConfig::Biped(_)) => {
+                let body = biped_body(&flver.data, character, &dsr.flver, inputs.cutouts)
+                    .context(&fitting)?;
+                let append = if body.edge {
+                    edge_append(inputs.archives, inputs.oodle, &flver.data, character.id)
+                        .context("the Edge material")?
+                } else {
+                    HeaderAppend::default()
+                };
+                let bytes =
+                    rebuild(&flver.data, &body.slots, true, &append).context(&rebuilding)?;
+                rebuilt = Some(Rebuilt {
+                    donor: std::mem::replace(&mut flver.data, bytes.clone()),
+                    body: bytes,
+                    slots: body.reports,
+                    strip: Some(body.strip),
+                    edge: body.edge,
+                    source_vertices: body.source_vertices,
+                    source_triangles: body.source_triangles,
+                });
+            }
+            (None, FitConfig::Mushroom(fit)) => {
+                if source.is_none() {
+                    source = Some(export_c2280(&dsr.flver, &flver.data, fit).context(&fitting)?);
+                }
+                let source = source.as_ref().ok_or("no source mesh")?;
+                match inputs.writer {
+                    Writer::Patch => patches.push(
+                        patch_donor(&mut flver.data, source, FC_DONOR_MESH_INDEX)
+                            .context(format!("patching {stem}.flver"))?,
+                    ),
+                    Writer::Rebuild => {
+                        let (bytes, report) =
+                            rebuild_body(&flver.data, source).context(&rebuilding)?;
+                        rebuilt = Some(Rebuilt {
+                            donor: std::mem::replace(&mut flver.data, bytes.clone()),
+                            body: bytes,
+                            slots: vec![report],
+                            strip: None,
+                            edge: false,
+                            source_vertices: source.vertices.len(),
+                            source_triangles: source.triangles.len(),
+                        });
+                    }
+                }
+            }
         }
-        let source = source.as_ref().ok_or("no source mesh")?;
-        patches.push(
-            patch_donor(&mut flver.data, source, FC_DONOR_MESH_INDEX)
-                .context(format!("patching {stem}.flver"))?,
-        );
-        let tpf = binder_file(&mut binder, &format!("{stem}.tpf"), &logical)?;
-        tpf.data = mushroom_tpf(&c2280_tpf, FC_SOURCE_STEM, lod)?;
+        let mut textures = character_tpf(&dsr.tpf, &dsr.textures, FC_SOURCE_STEM, lod)
+            .context(format!("{}.tpf", character.id))?;
+        // The Edge material samples a metallic map, which no DSR set has.
+        if rebuilt.as_ref().is_some_and(|done| done.edge) {
+            textures = with_zero_metallic(&textures, FC_SOURCE_STEM, lod)?;
+        }
+        binder_file(&mut binder, &format!("{stem}.tpf"), &logical)?.data = textures;
         bodies.push((binder, packed));
     }
     for name in FC_PART_NAMES {
@@ -265,16 +543,342 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         oodle,
     )?);
 
-    let source = source.ok_or("no source mesh")?;
+    let (body, source_vertices, source_triangles) = match (rebuilt, patches.as_slice()) {
+        (Some(done), _) => (
+            BodyReport::Rebuilt {
+                slots: done.slots,
+                strip: done.strip,
+            },
+            done.source_vertices,
+            done.source_triangles,
+        ),
+        (None, &[high, low]) => {
+            let source = source.ok_or("no source mesh")?;
+            (
+                BodyReport::Patched { high, low },
+                source.vertices.len(),
+                source.triangles.len(),
+            )
+        }
+        (None, _) => return Err("the body was neither patched twice nor rebuilt".into()),
+    };
     Ok(BuildReport {
         files,
-        patch_high: patches[0],
-        patch_low: patches[1],
-        source_vertices: source.vertices.len(),
-        source_triangles: source.triangles.len(),
+        body,
+        source_vertices,
+        source_triangles,
         head_parts,
         head_parts_without_model,
     })
+}
+
+/// The donor FLVER as read and as rebuilt, once, with what went into it.
+struct Rebuilt {
+    donor: Vec<u8>,
+    body: Vec<u8>,
+    slots: Vec<SlotReport>,
+    strip: Option<StripReport>,
+    /// A slot draws with the Edge material, so the body's TPFs need its metallic map.
+    edge: bool,
+    source_vertices: usize,
+    source_triangles: usize,
+}
+
+/// `donor` (`FC_M_0000.flver`) with `source` as its mesh 13, through the rebuild writer: one
+/// slot on the Body material, back faces culled, its box around its own vertices, the same
+/// triangles at every distance, and every other mesh hidden.
+pub fn rebuild_body(donor: &[u8], source: &SourceMesh) -> Result<(Vec<u8>, SlotReport)> {
+    let flver = Flver::parse(donor)?;
+    let buffer = slot_buffer(donor, &flver, FC_DONOR_MESH_INDEX)?;
+    let vertices = skin_to_donor(source, &flver)?;
+    let vertex_bytes = encode_vertices(
+        &buffer_members(donor, &flver, &buffer)?,
+        buffer.vertex_size,
+        &vertices,
+        flver.header.uv_factor(),
+    )?;
+    let obb = Obb::around(vertices.iter().map(|vertex| vertex.position))
+        .ok_or("the source mesh has no vertices")?;
+    let triangles = &source.triangles;
+    let slot = Slot {
+        donor_mesh: FC_DONOR_MESH_INDEX,
+        material: BODY_MATERIAL,
+        cull_backfaces: true,
+        vertex_count: vertices.len(),
+        vertex_bytes,
+        lods: [triangles.clone(), triangles.clone(), triangles.clone()],
+        obb,
+    };
+    let report = slot_report(&slot, None);
+    Ok((
+        rebuild(donor, &[slot], true, &HeaderAppend::default())?,
+        report,
+    ))
+}
+
+/// A Biped character fitted onto the donor, as the slots the rebuild writer takes.
+pub struct BipedBody {
+    pub slots: Vec<Slot>,
+    pub reports: Vec<SlotReport>,
+    pub strip: StripReport,
+    /// Some slot draws with [`EDGE_MATERIAL`], so the rebuild needs the Edge material's
+    /// [`HeaderAppend`] (`edge::edge_append`) and the body's TPFs a metallic map.
+    pub edge: bool,
+    pub source_vertices: usize,
+    pub source_triangles: usize,
+}
+
+/// `character` (a Biped one, its model `character_flver`) fitted to `donor` (`FC_M_0000.flver`)
+/// and cut into slots: its kept meshes grouped by DSR material and back-face culling, in the
+/// order the groups first appear, each group on the next of [`SLOT_DONOR_MESHES`]. A group
+/// draws with [`BODY_MATERIAL`], or with [`EDGE_MATERIAL`] when its MTD is alpha-tested and
+/// `cutouts` asks for the Edge material; it keeps its source's culling, its own box, and its
+/// LOD0 triangles at every distance. A kept mesh whose MTD has no Elden Ring route is refused.
+pub fn biped_body(
+    donor: &[u8],
+    character: &Character,
+    character_flver: &[u8],
+    cutouts: Cutouts,
+) -> Result<BipedBody> {
+    let export = fit::export(character, character_flver, donor)?;
+    let strip = export
+        .strip
+        .ok_or("the Biped fit reported no held-item strip")?;
+    let groups = group_by_material(&export, &source::parse(character_flver)?, character.id)?;
+    if groups.len() > SLOT_DONOR_MESHES.len() {
+        return Err(Error::new(format!(
+            "{} material groups, and the donor has {} body meshes to put them on",
+            groups.len(),
+            SLOT_DONOR_MESHES.len()
+        )));
+    }
+    let flver = Flver::parse(donor)?;
+    let layout_of = slot_buffer(donor, &flver, FC_DONOR_MESH_INDEX)?;
+    let skinned = skin_to_donor(&export.mesh, &flver)?;
+    let mut body = BipedBody {
+        slots: Vec::with_capacity(groups.len()),
+        reports: Vec::with_capacity(groups.len()),
+        strip,
+        edge: false,
+        source_vertices: export.mesh.vertices.len(),
+        source_triangles: export.mesh.triangles.len(),
+    };
+    for (group, donor_mesh) in groups.into_iter().zip(SLOT_DONOR_MESHES) {
+        let buffer = slot_buffer(donor, &flver, donor_mesh)?;
+        if (buffer.layout_index, buffer.vertex_size)
+            != (layout_of.layout_index, layout_of.vertex_size)
+        {
+            return Err(Error::new(format!(
+                "the donor's mesh {donor_mesh} is laid out as layout {} ({} bytes a vertex), not \
+                 as mesh {FC_DONOR_MESH_INDEX}'s layout {} ({} bytes)",
+                buffer.layout_index,
+                buffer.vertex_size,
+                layout_of.layout_index,
+                layout_of.vertex_size
+            )));
+        }
+        let material = match (group.source.class, cutouts) {
+            (MtdClass::Opaque, _) | (MtdClass::AlphaTest, Cutouts::BodyMaterial) => BODY_MATERIAL,
+            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => EDGE_MATERIAL,
+            (class, _) => {
+                return Err(Error::new(format!(
+                    "DSR material {} is {}, which has no Elden Ring route",
+                    group.source.material,
+                    class_name(class)
+                )));
+            }
+        };
+        body.edge |= material == EDGE_MATERIAL;
+        let mut remap = vec![u32::MAX; skinned.len()];
+        for (new, &old) in group.vertices.iter().enumerate() {
+            remap[old] = u32::try_from(new)?;
+        }
+        let vertices: Vec<_> = group.vertices.iter().map(|&old| skinned[old]).collect();
+        let triangles: Vec<[u32; 3]> = group
+            .triangles
+            .iter()
+            .map(|triangle| triangle.map(|corner| remap[corner as usize]))
+            .collect();
+        let slot = Slot {
+            donor_mesh,
+            material,
+            cull_backfaces: group.source.cull_backfaces,
+            vertex_count: vertices.len(),
+            vertex_bytes: encode_vertices(
+                &buffer_members(donor, &flver, &buffer)?,
+                buffer.vertex_size,
+                &vertices,
+                flver.header.uv_factor(),
+            )?,
+            lods: [triangles.clone(), triangles.clone(), triangles],
+            obb: Obb::around(vertices.iter().map(|vertex| vertex.position))
+                .ok_or("a material group has no vertices")?,
+        };
+        body.reports.push(slot_report(
+            &slot,
+            Some(SlotSource {
+                material: group.source.material,
+                mtd: group.source.mtd,
+                class: group.source.class,
+                meshes: group.source.meshes,
+            }),
+        ));
+        body.slots.push(slot);
+    }
+    Ok(body)
+}
+
+fn slot_report(slot: &Slot, source: Option<SlotSource>) -> SlotReport {
+    SlotReport {
+        donor_mesh: slot.donor_mesh,
+        material: slot.material,
+        cull_backfaces: slot.cull_backfaces,
+        source,
+        vertices: slot.vertex_count,
+        triangles: slot.lods.each_ref().map(Vec::len),
+    }
+}
+
+/// The one vertex buffer of the donor's mesh `mesh`.
+fn slot_buffer(donor: &[u8], flver: &Flver, mesh: usize) -> Result<VertexBuffer> {
+    let entry = flver
+        .meshes
+        .get(mesh)
+        .ok_or_else(|| Error::new(format!("the donor has no mesh {mesh}")))?;
+    let buffer_index =
+        *parse_u32_list(donor, entry.vertex_buffer_offset, entry.vertex_buffer_count)?
+            .first()
+            .ok_or_else(|| Error::new(format!("the donor's mesh {mesh} has no vertex buffer")))?
+            as usize;
+    flver
+        .vertex_buffers
+        .get(buffer_index)
+        .copied()
+        .ok_or_else(|| {
+            Error::new(format!(
+                "the donor's mesh {mesh} names a missing vertex buffer"
+            ))
+        })
+}
+
+fn buffer_members(donor: &[u8], flver: &Flver, buffer: &VertexBuffer) -> Result<Vec<LayoutMember>> {
+    let layout = *flver
+        .layouts
+        .get(buffer.layout_index)
+        .ok_or("a donor vertex buffer names a missing layout")?;
+    parse_layout_members(donor, layout)
+}
+
+/// One slot's worth of the fitted mesh: the export vertices and triangles of the kept meshes
+/// that share a DSR material and a culling.
+#[derive(Debug)]
+struct Group {
+    source: GroupSource,
+    /// Export vertex indices, in export order.
+    vertices: Vec<usize>,
+    /// Triangles, in export vertex indices.
+    triangles: Vec<[u32; 3]>,
+}
+
+#[derive(Debug)]
+struct GroupSource {
+    material: usize,
+    cull_backfaces: bool,
+    mtd: String,
+    class: MtdClass,
+    meshes: Vec<usize>,
+}
+
+/// The export's vertices and triangles grouped by the DSR material and culling of the mesh each
+/// came from (`Export::source_map`), in the order the groups first appear. Refuses a kept mesh
+/// whose MTD has no Elden Ring route, and a triangle whose corners come from two groups.
+fn group_by_material(export: &Export, source: &Source, id: &str) -> Result<Vec<Group>> {
+    let mut groups: Vec<Group> = Vec::new();
+    let mut group_of = Vec::with_capacity(export.source_map.len());
+    for (vertex, row) in export.source_map.iter().enumerate() {
+        let mesh = source
+            .meshes
+            .get(row.mesh)
+            .ok_or_else(|| Error::new(format!("{id} has no mesh {}", row.mesh)))?;
+        let key = (mesh.material_index, mesh.cull_backfaces);
+        let index = match groups
+            .iter()
+            .position(|group| (group.source.material, group.source.cull_backfaces) == key)
+        {
+            Some(index) => index,
+            None => {
+                let material = source.materials.get(mesh.material_index).ok_or_else(|| {
+                    Error::new(format!(
+                        "{id}'s mesh {} names material {}, which it does not have",
+                        row.mesh, mesh.material_index
+                    ))
+                })?;
+                let file = material
+                    .mtd
+                    .rsplit(['\\', '/'])
+                    .next()
+                    .unwrap_or(&material.mtd);
+                let class = mtd::classify(&material.mtd);
+                if class.route().is_none() {
+                    return Err(Error::new(format!(
+                        "{id}'s mesh {} is drawn with {file:?}, an {} MTD that has no Elden Ring \
+                         route yet",
+                        row.mesh,
+                        class_name(class)
+                    )));
+                }
+                groups.push(Group {
+                    source: GroupSource {
+                        material: mesh.material_index,
+                        cull_backfaces: mesh.cull_backfaces,
+                        mtd: file.to_owned(),
+                        class,
+                        meshes: Vec::new(),
+                    },
+                    vertices: Vec::new(),
+                    triangles: Vec::new(),
+                });
+                groups.len() - 1
+            }
+        };
+        let group = &mut groups[index];
+        if !group.source.meshes.contains(&row.mesh) {
+            group.source.meshes.push(row.mesh);
+        }
+        group.vertices.push(vertex);
+        group_of.push(index);
+    }
+    for triangle in &export.mesh.triangles {
+        let [a, b, c] = triangle.map(|corner| group_of.get(corner as usize).copied());
+        match (a, b, c) {
+            (Some(a), Some(b), Some(c)) if a == b && b == c => groups[a].triangles.push(*triangle),
+            _ => {
+                return Err(Error::new(format!(
+                    "triangle {triangle:?} of the fitted {id} spans two materials"
+                )));
+            }
+        }
+    }
+    Ok(groups)
+}
+
+/// Mark `out_dir` as `character`'s package. A folder an earlier build already marked has its
+/// `parts/` and `facegen/` removed first, so a character whose file set differs from the last one
+/// leaves nothing stale behind; a folder without the mark is never cleared.
+fn claim_folder(out_dir: &Path, character: &Character) -> Result<PathBuf> {
+    let marker = out_dir.join(CHARACTER_FILE);
+    if marker.is_file() {
+        for sub in [PARTS_DIR, FACEGEN_DIR] {
+            let dir = out_dir.join(sub);
+            if dir.is_dir() {
+                fs::remove_dir_all(&dir).context(format!("clearing {}", dir.display()))?;
+            }
+        }
+    }
+    fs::create_dir_all(out_dir).context(format!("creating {}", out_dir.display()))?;
+    fs::write(&marker, format!("{}\n", character.id))
+        .context(format!("writing {}", marker.display()))?;
+    Ok(marker)
 }
 
 /// Every name a face or hair part could have, `fg_a_0000.partsbnd.dcx` to
@@ -362,6 +966,11 @@ pub fn payload_present(dir: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        character::C2650,
+        fit::{MapRole, SourceRow, SourceVertex},
+        flver::source::{DsrMesh, SourceMaterial},
+    };
 
     fn binder(names: &[&str]) -> Bnd4 {
         Bnd4 {
@@ -446,6 +1055,219 @@ mod tests {
             !names
                 .iter()
                 .any(|name| FC_PART_NAMES.contains(&name.as_str()))
+        );
+    }
+
+    #[test]
+    fn a_marked_folder_is_cleared_and_an_unmarked_one_is_not() {
+        let dir = std::env::temp_dir().join(format!("mmb-claim-{}", std::process::id()));
+        let stray = dir.join(PARTS_DIR).join("stray.partsbnd.dcx");
+        let kept = dir.join("mushroom-man.me3");
+        fs::create_dir_all(stray.parent().unwrap()).unwrap();
+        fs::write(&stray, b"x").unwrap();
+        fs::write(&kept, b"x").unwrap();
+        // A folder this builder never marked keeps what is in it.
+        claim_folder(&dir, &C2280).unwrap();
+        assert!(stray.is_file());
+        assert_eq!(
+            fs::read_to_string(dir.join(CHARACTER_FILE)).unwrap(),
+            "c2280\n"
+        );
+        // Once marked, a rebuild starts from empty `parts/`, and leaves the profile alone.
+        claim_folder(&dir, &C2650).unwrap();
+        assert!(!stray.exists() && kept.is_file());
+        assert_eq!(
+            fs::read_to_string(dir.join(CHARACTER_FILE)).unwrap(),
+            "c2650\n"
+        );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_biped_needs_the_rebuild_writer_and_only_a_biped_takes_the_body_fallback() {
+        let refused = |character, writer, cutouts| {
+            buildable(character, writer, cutouts)
+                .expect_err("expected a refusal")
+                .to_string()
+        };
+        buildable(&C2280, Writer::Patch, Cutouts::EdgeMaterial).unwrap();
+        buildable(&C2650, Writer::Rebuild, Cutouts::EdgeMaterial).unwrap();
+        buildable(&C2650, Writer::Rebuild, Cutouts::BodyMaterial).unwrap();
+        assert!(refused(&C2650, Writer::Patch, Cutouts::EdgeMaterial).contains("rebuild writer"));
+        let fallback = refused(&C2280, Writer::Patch, Cutouts::BodyMaterial);
+        assert!(fallback.contains("c2280") && fallback.contains("--no-cutout-material"));
+    }
+
+    #[test]
+    fn the_slot_meshes_start_at_mesh_13_and_none_repeats() {
+        let mut meshes = SLOT_DONOR_MESHES.to_vec();
+        assert_eq!(meshes[0], FC_DONOR_MESH_INDEX);
+        meshes.sort_unstable();
+        meshes.dedup();
+        assert_eq!(meshes, (0..=14).collect::<Vec<_>>());
+    }
+
+    fn material(name: &str) -> SourceMaterial {
+        SourceMaterial {
+            mtd: format!(r"N:\FRPG\data\Material\mtd\character\{name}.mtd"),
+            ..SourceMaterial::default()
+        }
+    }
+
+    fn dsr_mesh(material_index: usize, cull_backfaces: bool) -> DsrMesh {
+        DsrMesh {
+            material_index,
+            cull_backfaces,
+            palette: Vec::new(),
+            vertices: Vec::new(),
+            lods: Default::default(),
+        }
+    }
+
+    /// Three vertices from each of `meshes`, in that order, and `triangles` over them.
+    fn export(meshes: &[usize], triangles: Vec<[u32; 3]>) -> Export {
+        let source_map: Vec<SourceRow> = meshes
+            .iter()
+            .flat_map(|&mesh| {
+                (0..3).map(move |vertex| SourceRow {
+                    mesh,
+                    vertex,
+                    bone: String::new(),
+                    role: MapRole::Other,
+                })
+            })
+            .collect();
+        Export {
+            character: "c2650",
+            mesh: SourceMesh {
+                vertices: vec![SourceVertex::default(); source_map.len()],
+                triangles,
+                weights: Vec::new(),
+            },
+            scale: 1.0,
+            params: Vec::new(),
+            stretch: Vec::new(),
+            grip_anchor: None,
+            source_map,
+            strip: None,
+        }
+    }
+
+    /// c2650's shape: an opaque body on two meshes, an alpha-tested cowl, and an opaque skirt
+    /// drawn double-sided on a material of its own.
+    fn source() -> Source {
+        Source {
+            bones: Vec::new(),
+            materials: vec![
+                material("C_DullLeather[DSB]"),
+                material("C_DullLeather[DSB]_Edge"),
+                material("C_DullLeather[DSB]"),
+            ],
+            meshes: vec![
+                dsr_mesh(0, true),
+                dsr_mesh(0, true),
+                dsr_mesh(1, false),
+                dsr_mesh(2, false),
+            ],
+        }
+    }
+
+    #[test]
+    fn kept_meshes_group_by_material_and_culling_in_the_order_they_first_appear() {
+        // Export vertices 0..3 are mesh 0's, 3..6 mesh 2's, 6..9 mesh 1's, 9..12 mesh 3's.
+        let triangles = vec![[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [2, 1, 0]];
+        let groups =
+            group_by_material(&export(&[0, 2, 1, 3], triangles), &source(), "c2650").unwrap();
+        let keys: Vec<(usize, bool, MtdClass)> = groups
+            .iter()
+            .map(|group| {
+                let source = &group.source;
+                (source.material, source.cull_backfaces, source.class)
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                (0, true, MtdClass::Opaque),
+                (1, false, MtdClass::AlphaTest),
+                (2, false, MtdClass::Opaque),
+            ]
+        );
+        let meshes: Vec<&[usize]> = groups.iter().map(|g| g.source.meshes.as_slice()).collect();
+        assert_eq!(meshes, [&[0, 1][..], &[2], &[3]]);
+        let vertices: Vec<&[usize]> = groups.iter().map(|g| g.vertices.as_slice()).collect();
+        assert_eq!(
+            vertices,
+            [&[0, 1, 2, 6, 7, 8][..], &[3, 4, 5], &[9, 10, 11]]
+        );
+        assert_eq!(groups[0].triangles, [[0, 1, 2], [6, 7, 8], [2, 1, 0]]);
+        assert_eq!(groups[1].triangles, [[3, 4, 5]]);
+        assert_eq!(groups[1].source.mtd, "C_DullLeather[DSB]_Edge.mtd");
+    }
+
+    #[test]
+    fn a_mesh_with_no_route_and_a_triangle_across_materials_are_refused() {
+        let mut ghost = source();
+        ghost.materials[2] = material("Ps_Wander_Ghost");
+        let error = group_by_material(&export(&[0, 3], vec![[0, 1, 2]]), &ghost, "c2650")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("mesh 3") && error.contains("no Elden Ring route"),
+            "{error}"
+        );
+
+        let across = group_by_material(&export(&[0, 2], vec![[0, 1, 3]]), &source(), "c2650")
+            .unwrap_err()
+            .to_string();
+        assert!(across.contains("spans two materials"), "{across}");
+    }
+
+    #[test]
+    fn the_summary_names_each_slot_and_what_the_strip_left_out() {
+        let slot = |donor_mesh, material, cull_backfaces, meshes: Vec<usize>, class| SlotReport {
+            donor_mesh,
+            material,
+            cull_backfaces,
+            source: Some(SlotSource {
+                material: meshes[0],
+                mtd: "C_DullLeather[DSB].mtd".to_owned(),
+                class,
+                meshes,
+            }),
+            vertices: 10,
+            triangles: [7; 3],
+        };
+        let report = BuildReport {
+            files: Vec::new(),
+            body: BodyReport::Rebuilt {
+                slots: vec![
+                    slot(13, BODY_MATERIAL, true, vec![0, 1], MtdClass::Opaque),
+                    slot(14, EDGE_MATERIAL, false, vec![2], MtdClass::AlphaTest),
+                ],
+                strip: Some(StripReport {
+                    stripped_vertices: 817,
+                    dropped_triangles: 811,
+                    unreferenced_vertices: 45,
+                    kept_vertices: 20,
+                    kept_triangles: 14,
+                }),
+            },
+            source_vertices: 20,
+            source_triangles: 14,
+            head_parts: 0,
+            head_parts_without_model: 0,
+        };
+        assert_eq!(
+            report.body_summary(),
+            "body: 20 vertices and 14 triangles in 2 slots of a rebuilt donor, every other mesh \
+             hidden\n  \
+             mesh 13: 10 vertices, 7 triangles at every distance, Body material 0, back faces \
+             culled; from DSR meshes 0, 1 on material 0 (C_DullLeather[DSB].mtd, opaque)\n  \
+             mesh 14: 10 vertices, 7 triangles at every distance, Edge material 14, \
+             double-sided; from DSR mesh 2 on material 2 (C_DullLeather[DSB].mtd, alpha-tested)\n  \
+             held items: 817 vertices cut and the 811 triangles touching them; 45 vertices only \
+             the far LODs drew left out"
         );
     }
 

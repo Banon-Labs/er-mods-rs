@@ -1,0 +1,26 @@
+order	normalised_source_pattern (after trim + casefold + [ _]->'' + strip leading 'bip01')	er_target	chars_seen_in_74	notes
+1	^(c\d{4}|rlight|modeldmy|sfxdummy\d*|固定d(m|ummy)y?|master|ctrl.*|dummy.*|dmy\d*|オブジェクト\d*|体力ゲージ|arrow)$	<unused>	all	root-level dummies and control-rig copies; 0 weighted verts in every Biped chr measured. 'master' is exact-match only: 'Master Neck1..8' (c2690) and 'Master Ponytail*' carry weight
+2	^pelvis$	Pelvis	74	
+3	^spine(\d*)$ and 'spine02','spine4','spine5'	Spine / Spine1 / Spine2 by height	74 (Spine,Spine1); 21 +Spine2; 7 +Spine3; c3210 has Spine02/Spine4/Spine5	ER has exactly 3 spine bones; split source spine weights by fitted height at ER Spine1 (1.151) and Spine2 (1.2395) joints, top source spine -> Spine2
+4	^(master)?neck\d*$	Neck	74 Neck; 8 Neck1; 2 Neck2/3; c2690 'Master Neck1..8'	ER has one Neck bone
+5	^head(01)?$|^uhead$	Head	73 (c2780 has no Head); 'Head01' x1; 'u_head' x1	
+6	^jaw\d*$	Head	36 ('Jaw' 25, 'Jaw ' with trailing space 6, 'jaw' 5); 'Jaw1','Jaw2'	ER c0000.hkx has Jaw (parent Head) but FC_M_0000's bone table does not; patch.rs resolves only donor names
+7	^([lr])clavicle(01)?$	{s}_Clavicle	73 'L Clavicle'; c2940 'L_Clavicle' and 'R_Clavicle01'	orphaned (parent -1, unweighted) in c1200/c1201/c1203/c2570/c3210 and 6 geometry-less chrs: UpperArm then hangs from Neck
+8	^([lr])upperarm(01)?$	{s}_UpperArm	74 L / 73 R; c2940 'R UpperArm01'	
+9	^([lr])uparmtwist(1)?$	{s}_UpArmTwist / {s}_UpArmTwist1	29 / 2	Biped twist link sits at frac 0 of the segment, parent Clavicle; orphaned in 6 chrs (position unusable)
+10	^([lr])forearm(01)?$	{s}_Forearm	74/73	
+11	^([lr])foretwist(1)?$	{s}_ForeArmTwist / {s}_ForeArmTwist1	52 / 1	Biped 'L ForeTwist' keeps the space, unlike the other twist links; parent UpperArm; orphaned in 11 chrs. ER ForeArmTwist weights the wrist end (centroid 85% along), ForeArmTwist1 the middle (48%)
+12	^([lr])hand(01)?$	{s}_Hand	74/73	
+13	^([lr])finger([0-4])$	{s}_Finger{n}	thumb 68, index 66, middle 65, ring 29, pinky 25	Biped and ER both number the thumb 0
+14	^([lr])finger([0-4])([12])$	{s}_Finger{n}{k}	see frequency table	
+15	^([lr])finger([0-4])([3-9])$	{s}_Finger{n}2	Finger13/23/33/43 in 3-4 chrs; R Finger14/15 in c2940	ER fingers have 3 joints
+16	^([lr])thigh(01)?$	{s}_Thigh	74/73	Biped parents Thigh to Spine, ER to Pelvis (66 of 66 parented chrs)
+17	^([lr])thightwist$	{s}_ThighTwist	23	parent Spine
+18	^([lr])calf(01)?$	{s}_Calf	74/73	
+19	^([lr])calftwist$	{s}_CalfTwist	42	ER CalfTwist weights the ankle end (centroid 87% along); parent Thigh; orphaned in 15 chrs
+20	^([lr])horselink$	{s}_Calf above ER knee..ankle midpoint, else {s}_Foot	2 (c4520, c5210)	digitigrade; needs its own leg fit
+21	^([lr])foot(01)?$	{s}_Foot	74/73	
+22	^([lr])toe\d+$	{s}_Toe0	L Toe0 74; Toe01/02/1/11/2/21... in 8; Toe3x 3; Toe4x 2	ER has one toe bone
+23	^([lr]?(weapon|wepon|shield)\d*|c\d{4}weapon.*|c\d{4}shield|modelwe?a?pon\d*|weapon\d+|.*(bow|bpw|sword|lance|wand|knife|stick|arrow).*)$ and every descendant	<prop: strip vertices>	R weapon 53 chrs: 'R_weapon' 40, 'R Weapon' 5, 'R weapon' 4, 'R_Weapon' 3, 'R weapon ' (trailing space) 1; L: 'L_Weapon' 11, 'L_weapon' 8, 'L weapon' 1; shield 'L_shield' 9 / 'L_Shield' 4	descendants matter: c2650's R_W_Cloth_a1..a3 hang from R_weapon and carry 817 of its 2607 vertices; classify per vertex by prop-weight share, not per mesh. Hand-parented prop roots also seen: L_bow (3 chrs), bpw_00 (c2500), sword (c2500), Crossbow (1); no Biped bone name contains "elbow", so the bow substring is safe here
+24	.*nub$	nearest mapped ancestor	nubs weighted in c2360, c2810, c5270 only	never <unused> by name: 18 Nub bones carry weight in those 3 chrs
+25	anything else (cloth, tail, pony, beard, cape, skirt, hair, chain, ...)	nearest mapped ancestor	-	walk parent_index; if the walk ends at -1 without a mapped bone (orphan), fall back to the ER bone nearest the vertex-weighted centroid

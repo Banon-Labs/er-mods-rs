@@ -247,6 +247,7 @@ portable	-	check-me3-dll-catalog.py --selftest	source/AST/text analysis only	pro
 portable	-	check-me3-dll-catalog.py	source/AST/text analysis only	product
 portable	-	check-quit-row-flow-overlap.py --selftest	source/AST/text analysis only	product
 portable	-	check-quit-row-flow-overlap.py	source/AST/text analysis only	product
+portable	-	mushroom-package-manifest.py --selftest	synthetic manifests in memory; reads no package and no game data	product
 portable	-	gen-installer-catalog.py --selftest	source/AST/text analysis only	product
 portable	-	gen-installer-catalog.py --check	source/AST/text analysis only	product
 portable	-	gen-installer-settings.py --selftest	source/AST/text analysis only	product
@@ -254,7 +255,9 @@ portable	-	gen-installer-settings.py --check	source/AST/text analysis only	produ
 portable	-	gen-r3-weapon-boards.py --selftest	text rules on inline fixtures; reads no game data	product
 partial	game-install	gen-r3-weapon-boards.py --check	body and repository sources still compared; prints which data files (regulation.bin, the planner cache) it could not compare	product
 portable	-	planner-item-names.py --selftest	parses a fixture of the planner bundle's item literals; fetches nothing	product
+portable	-	dsr-er-fit-probe.py --selftest	builds its FLVERs, export directory and skeleton in memory; reads no game file	product
 portable	-	build-installer-release.py --selftest	source/AST/text analysis only	product
+portable	-	dsr-chr-census.py --selftest	builds its DCX/BND3/FLVER/TPF fixtures in a temp directory; reads no game install	product
 portable	-	release-assets.py --selftest	source/AST/text analysis only	product
 portable	-	check-shared-hook-rvas.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-hook-rvas.py	source/AST/text analysis only	addresses

@@ -2810,8 +2810,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 	-p er-flver -p er-objectkit -p er-tpf -p erpx-rs -p er-shaderkit \
 	-p er-soulsformats -p er-param-inspect -p er-installer -p er-config-defaults \
 	-p mushroom-man-builder
-# mushroom-man-builder's 46 tests (archive keys, BND3/BND4, DCX, FLVER export and patch, TPF
-# layout) build their inputs in memory, so they need neither game installed.
+# mushroom-man-builder's unit tests (archive keys, BND3/BND4, DCX, FLVER export, patch and
+# rebuild, TPF layout) build their inputs in memory, so they need neither game installed. Its
+# corpus tests -- the c2280 parity fingerprints and the rebuild writer's golden numbers -- read
+# the two games' files from MMB_ER_CORPUS_ROOT and MMB_DSR_DIR and print a `SKIP` line when
+# those are absent, so a runner passes them without asserting anything. No count is written
+# here: the last one ("46") had drifted to 40 before anyone read it.
 #
 # er-installer is here rather than in a batch of its own because it is host-only by
 # construction: the conflict rules, the picker state machine, the screen layout and the profile
@@ -2830,6 +2834,12 @@ cargo test --manifest-path "$repo_root/Cargo.toml" \
 # other half when it is not, so the suite is correct either way rather than silently covering
 # one path. scripts/build-installer-release.py is what proves a release build carries all 31,
 # by running `--selfcheck` against the binary it is about to ship.
+
+# The census of every Dark Souls Remastered chrbnd that mushroom-man-builder's character table
+# was chosen from. Its real run reads the DSR install and so never runs here; the selftest builds
+# two chrbnds in a temp directory (zlib DCX, BND3, a two-mesh FLVER with one mesh on a weapon
+# bone, a TPF, and one binder with no FLVER) and checks every column the census fills.
+python3 "$repo_root/scripts/dsr-chr-census.py" --selftest
 # The two things `scripts/check-er-flver.sh` covered that nothing else did (moved here 2026-08-31,
 # and that script deleted). It was gate-shaped, ran nowhere, and could not have gated anywhere: it
 # had `set -u` but no `set -e`, piped every command into `tail`, and ended on an unconditional
@@ -2930,6 +2940,12 @@ python3 "$repo_root/scripts/check-me3-dll-catalog.py"
 python3 "$repo_root/scripts/check-quit-row-flow-overlap.py" --selftest
 python3 "$repo_root/scripts/check-quit-row-flow-overlap.py"
 
+# The comparison that says a Mushroom Man package is unchanged. The manifests it compares come
+# from `mushroom-man-builder hash-package`, which needs the game's Oodle and so runs under wine,
+# never here; what runs here is the comparison itself, over synthetic manifests: a moved entry, a
+# repack, an added or missing file, an exception that covers it and one that matches nothing.
+python3 "$repo_root/scripts/mushroom-package-manifest.py" --selftest
+
 # ...and that the Rust the installer actually links still says what those two tables say. The
 # catalog is compiled in rather than parsed at runtime, so drift here is an installer shipping
 # a mod list from whenever it was last generated.
@@ -2955,6 +2971,11 @@ python3 "$repo_root/scripts/gen-r3-weapon-boards.py" --check
 # it uploads (the stored name is the icon URL, and `Misericorde` has no full-size icon). Offline:
 # the selftest parses a fixture of the bundle's item literals, it does not fetch the site.
 python3 "$repo_root/scripts/planner-item-names.py" --selftest
+
+# The mushroom-man-builder fit probe, which scores a builder export against the gates the
+# approved c2280 build sets. The selftest builds its FLVERs, export directory and skeleton in
+# memory and reads no game file; scoring a real export needs both games and runs by hand.
+python3 "$repo_root/scripts/dsr-er-fit-probe.py" --selftest
 
 # The release packager's refusal list, proven to refuse rather than assumed to. It is what
 # stands between a download and someone else's `ersc.dll` or a user's save being in it, and a
