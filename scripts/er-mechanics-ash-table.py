@@ -252,6 +252,20 @@ def apply_buff(x, gain):
     return x
 
 
+_DEFENDER = []
+
+
+def window_defender() -> dict:
+    """The RL 150 window's median defender (`er-builds-optimize.bracket_defender` over the corpus's
+    builds of RL 140-160), read once per process. It has no weapon in it; building it through
+    `er-mechanics-infusions.Builder(weapon).setup(150)` on every weapon switch re-decoded the
+    regulation and re-read the corpus, 2 s a switch and 315 switches in one build's sweep
+    (measured 2026-10-14)."""
+    if not _DEFENDER:
+        _DEFENDER.append(OPT.bracket_defender(OPT.corpus_rows(OPT.CACHE / "builds.jsonl", 140, 160)))
+    return _DEFENDER[0]
+
+
 class Table:
     def __init__(self, weapon, affinity, stats, armor_names, bull_goat):
         self.lev = S.LEV.Levers()
@@ -282,7 +296,7 @@ class Table:
         if affinity:
             self.affinity = affinity
         self.wid = self.t.find_weapon(weapon)
-        _, self.defender = S.INF.Builder(weapon).setup(150)
+        self.defender = window_defender()
         self.level = self.art.max_level(self.t.reg.weapon[self.wid]["reinforceTypeId"])
 
     def fixed_skill(self, weapon=None):

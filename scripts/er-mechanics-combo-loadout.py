@@ -768,10 +768,16 @@ def set_multihit_weights(rows, stats, cache_path):
                  if (g.get("cold_start_first_threshold") or {}).get("seconds")]
         cache[f"weapon|{w}"] = {"rate": max((g["gain_per_s"] or 0.0 for g in grips), default=0.0),
                                 "trigger_s": min(times, default=None)}
+    tab = None
     for n, ((w, aff), xs) in enumerate(sorted(by_wa.items())):
         if n % 10 == 9 or n == len(by_wa) - 1:
             print(f"  {len(todo_w) + n + 1}/{units} weapons, then weapon affinities", file=sys.stderr, flush=True)
-        tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+        # One table, switched per weapon: a new one decodes the regulation again, 7 s each and 349
+        # of them in a build's pass (measured 2026-10-14).
+        if tab is None:
+            tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+        else:
+            tab.set_weapon(w, aff)
         sids = skill_ids(tab.t, {x["ash"] for x in xs})
         for x in xs:
             sid, two = sids.get(x["ash"]), x["grip"] == "2H"
@@ -926,7 +932,12 @@ def _pierce_work(item):
     """{pierce_key: share} for one (weapon, affinity)'s rows, in a forked worker."""
     (w, aff), xs = item
     T, stats = _table_mod(), _PIERCE_W["stats"]
-    tab = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+    # One table per worker, switched per weapon (see `set_multihit_weights`).
+    tab = _PIERCE_W.get("tab")
+    if tab is None:
+        tab = _PIERCE_W["tab"] = T.Table(w, aff, stats, DEFAULT_ARMOR, True)
+    else:
+        tab.set_weapon(w, aff)
     sids = skill_ids(tab.t, {x["ash"] for x in xs})
     out = {}
     for x in xs:
