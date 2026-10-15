@@ -128,6 +128,15 @@ members = [
   "crates/er-build-watermark",
   # Cel shading: swaps the deferred-lighting pixel shaders at D3D12 pipeline creation.
   "crates/er-cel-shade",
+  # A lower 3D render resolution with the UI at native resolution, from a small F5 menu: holds
+  # the game's own dynamic resolution at 1/divisor. Opt-in (`[opt_in_only]`).
+  "crates/er-render-scale",
+  # The look every in-game panel shares (tokens, the vendored Plex Sans and JetBrains Mono, the
+  # drawing helpers): was er-cel-shade's `menu/theme.rs`, shared once er-render-scale needed it.
+  "crates/er-overlay-theme",
+  # Taking the game's input while an overlay menu is open (free cursor and still camera,
+  # DirectInput keyboard and mouse, pad 0): was er-cel-shade's `input.rs`, shared the same way.
+  "crates/er-overlay-input",
   # The shader editor's compiler: the pipe protocol er-cel-shade speaks, and
   # `er-shader-compiler.exe`, the helper that runs dxcompiler.dll out of the game's process.
   "crates/er-shader-compiler",

@@ -45,6 +45,9 @@
 // crate, and it is where a wrong answer would come from.
 mod attribution;
 mod census;
+// The defaults this workspace's own shells ship with: a test that no two collide, and the setting
+// the report names beside a collision.
+mod declared;
 mod dik;
 mod game_bindings;
 mod log;

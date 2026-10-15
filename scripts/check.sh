@@ -2510,6 +2510,17 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
 python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
 
+# er-render-scale's host half: which divisors map the scene onto the screen in whole pixels, what
+# the dynamic resolution update is told for each, how the drawn size comes back out of the
+# viewport ratio, the settings file and the telemetry document -- and the two crates its menu
+# shares with er-cel-shade's, the design system and the input capture. A wrong divisor list or a
+# plan that never restores is silent in game, a soft picture nobody can name, so they run here.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-render-scale -p er-overlay-theme -p er-overlay-input
+
+# The render-scale probe checker holds its copies of the telemetry name, the schema and the
+# viewport snap to the Rust, and proves each `--expect` mode can still fail.
+python3 "$repo_root/scripts/check-render-scale-probe.py" --selftest
+
 # The cel ports the DLL embeds: every committed blob must be a signed shader model 6.0 pixel
 # shader, because native D3D12 refuses unsigned DXIL that vkd3d-proton accepts, so a stale or
 # unsigned blob passes every Linux run and fails on Windows. With dxc it also proves the blobs are

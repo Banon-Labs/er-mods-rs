@@ -175,6 +175,19 @@ pub enum Image {
     /// the previous build. Both halves have to move, which is why the version is named here
     /// rather than assumed.
     EldenRing1170,
+    /// `eldenring.exe` 1.17.1 (FileVersion 2.7.1.0), the installed build since 2026-09-08. Ground
+    /// truth is `eldenring-deobf-1.17.1.bin`, flat like the other two.
+    ///
+    /// # When a spec names this rather than [`Image::EldenRing1170`]
+    ///
+    /// For a function at or above rva `0xafefe9`, which 1.17.1 moved by `0x70` while every
+    /// `.data` global stayed put. A RIP-relative operand in such a prologue therefore encodes a
+    /// different displacement on each build, and when the prologue also opens with MSVC's
+    /// redundant REX prefix the generator cannot mask that field (a `db` declines re-encoding, so
+    /// the mask is every byte compared). The bytes are then right for one build only, and naming
+    /// that build here is what lets ground truth say so. er-render-scale's dynamic resolution
+    /// update (`0x141b2e9b0`, `40 53 ..` then `mov rax,[rip+..]`) is the first such spec.
+    EldenRing1171,
     /// `ersc.dll` **v2.0.1**, the one build this workspace supports. The version is named
     /// rather than assumed: `ersc.dll` is third-party, always has the same file name, and the
     /// user replaces it on their own schedule, so [`Image::locate`] reads each candidate and
@@ -187,7 +200,7 @@ pub enum Image {
 impl Image {
     pub fn base(self) -> u64 {
         match self {
-            Self::EldenRing | Self::EldenRing1170 => 0x1_4000_0000,
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => 0x1_4000_0000,
             Self::Ersc201 => 0x1_8000_0000,
         }
     }
@@ -211,6 +224,7 @@ impl Image {
         match self {
             Self::EldenRing => "eldenring-deobf.bin",
             Self::EldenRing1170 => "eldenring-deobf-1.17.bin",
+            Self::EldenRing1171 => "eldenring-deobf-1.17.1.bin",
             Self::Ersc201 => "ersc.dll (Seamless Co-op v2.0.1)",
         }
     }
@@ -219,6 +233,7 @@ impl Image {
         match self {
             Self::EldenRing => "ER_DEOBF_BIN",
             Self::EldenRing1170 => "ER_DEOBF_BIN_1170",
+            Self::EldenRing1171 => "ER_DEOBF_BIN_1171",
             // Two variables, because they list files to consider and the version marker
             // decides whether a file answers for this spec at all. Naming the version in the
             // variable instead would make the caller assert the very thing this code is able
@@ -236,7 +251,7 @@ impl Image {
     /// version resource to read anyway.
     fn supported_version(self) -> Option<&'static str> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 => None,
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => None,
             Self::Ersc201 => Some(ERSC_SUPPORTED_VERSION),
         }
     }
@@ -246,7 +261,7 @@ impl Image {
     /// `ersc.dll` can answer; the game dumps have nothing to read.
     fn declared_version(self, image: &[u8]) -> Option<String> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 => None,
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => None,
             Self::Ersc201 => ersc_declared_version(image),
         }
     }
@@ -257,6 +272,7 @@ impl Image {
             Self::EldenRing | Self::EldenRing1170 => {
                 "python3 scripts/map-rvas-1162-to-1170.py <va>"
             }
+            Self::EldenRing1171 => "python3 scripts/map-rvas-1170-to-1171.py <va>",
             // uv, because the body mapping needs capstone and there is no system pip here.
             Self::Ersc201 => "uv run --with capstone python3 scripts/locate-ersc-entry-points.py",
         }
@@ -266,7 +282,7 @@ impl Image {
     /// downgrades ground truth to a warning rather than breaking the build.
     fn locate(self, manifest_dir: &Path) -> Option<PathBuf> {
         match self {
-            Self::EldenRing | Self::EldenRing1170 => {
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => {
                 if let Some(explicit) = env::var_os(self.env_override()) {
                     let path = PathBuf::from(explicit);
                     return path.is_file().then_some(path);
@@ -301,7 +317,7 @@ impl Image {
     fn bytes_at(self, image: &[u8], va: u64, len: usize) -> Option<Vec<u8>> {
         let rva = va.checked_sub(self.base())?;
         let offset = match self {
-            Self::EldenRing | Self::EldenRing1170 => usize::try_from(rva).ok()?,
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => usize::try_from(rva).ok()?,
             Self::Ersc201 => pe_rva_to_offset(image, u32::try_from(rva).ok()?)?,
         };
         image
@@ -343,7 +359,7 @@ impl Image {
         // would abort a build script over a file this repo does not control.
         let ranges: Vec<(usize, usize, u64)> = match self {
             // Flat: file offset == RVA for every section, so one range covers the image.
-            Self::EldenRing | Self::EldenRing1170 => vec![(0, image.len(), 0)],
+            Self::EldenRing | Self::EldenRing1170 | Self::EldenRing1171 => vec![(0, image.len(), 0)],
             Self::Ersc201 => pe_sections(image)
                 .into_iter()
                 .filter(|section| {
@@ -1242,6 +1258,7 @@ pub fn declare_rerun(build_script_relative_support_path: &str) {
     println!("cargo:rerun-if-changed={build_script_relative_support_path}");
     println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN");
     println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1170");
+    println!("cargo:rerun-if-env-changed=ER_DEOBF_BIN_1171");
     println!("cargo:rerun-if-env-changed=ER_ERSC_DLL");
     println!("cargo:rerun-if-env-changed=ME3_STEAM_DIR");
 }

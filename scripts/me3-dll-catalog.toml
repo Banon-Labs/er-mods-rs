@@ -258,6 +258,15 @@ audience = "player"
 default = false
 caution = "changes how every scene looks"
 
+[er-render-scale]
+label = "Render scale"
+blurb = "Draws the 3D scene at a lower resolution while the menus and HUD stay sharp. F5 in game opens a slider of the sizes that fit your screen exactly, saved to er-render-scale.toml."
+category = "cosmetic"
+audience = "player"
+default = false
+config = "er-render-scale.toml"
+caution = "softens the picture once a scale is set"
+
 [mushroom-man-runtime]
 label = "Mushroom Man"
 blurb = "Turns your character into the Mushroom Man from Dark Souls, armour hidden. The model is built from your own Dark Souls Remastered: run mushroom-man-builder.exe once before installing this."

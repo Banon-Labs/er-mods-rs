@@ -102,6 +102,10 @@ ARTIFACT_ENV: dict[str, str] = {
     # once a second with a write-tmp-then-rename, so the game-directory copy keeps no previous
     # generation at all. It is what the shader editor's probe check and window A/B proof read.
     "ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH": "er-cel-shade-telemetry.json",
+    # er-render-scale's telemetry: the divisor asked for and in force, the size the game drew and
+    # whether it is exact, the GPU time and the menu's input capture, replaced once a second the
+    # same way. It is what `check-render-scale-probe.py` reads.
+    "ER_QUICKLOAD_RENDER_SCALE_TELEMETRY_PATH": "er-render-scale-telemetry.json",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

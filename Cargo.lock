@@ -3001,6 +3001,7 @@ dependencies = [
  "er-build-watermark-core",
  "er-game-base",
  "er-hook",
+ "er-hotkey-config",
  "er-invasion-warp-core",
  "fromsoftware-shared",
  "hudhook",
@@ -3175,6 +3176,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-overlay-input"
+version = "0.1.0"
+dependencies = [
+ "er-dinput-suppress-core",
+ "er-game-base",
+ "er-hook",
+ "iced-x86",
+ "windows 0.62.2",
+]
+
+[[package]]
+name = "er-overlay-theme"
+version = "0.1.0"
+dependencies = [
+ "er-build-watermark-core",
+ "hudhook",
+]
+
+[[package]]
 name = "er-param-inspect"
 version = "0.1.0"
 dependencies = [
@@ -3310,6 +3330,21 @@ version = "0.1.0"
 dependencies = [
  "er-game-base",
  "er-hook",
+]
+
+[[package]]
+name = "er-render-scale"
+version = "0.1.0"
+dependencies = [
+ "er-build-watermark-core",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "er-overlay-input",
+ "er-overlay-theme",
+ "hudhook",
+ "iced-x86",
+ "windows 0.62.2",
 ]
 
 [[package]]
