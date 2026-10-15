@@ -20,15 +20,19 @@
 //!    Toggles, solo, opacity, blend, mask and parameter values go through here alone and never
 //!    recompile.
 //!
-//! [`templates`] are the files "+ Layer" starts from; [`mask`] is a layer's stage-local mask.
+//! [`templates`] are the files "+ Layer" starts from; [`mask`] is a layer's stage-local mask;
+//! [`cel`] is the cel look's stock layers, and the move of its old knobs into the project.
 
 pub mod annotations;
+pub mod cel;
 pub mod codegen;
 pub mod compiler;
+pub mod complete;
 pub mod diagnostics;
 pub mod lint;
 pub mod mask;
 pub mod project;
+pub mod reference;
 pub mod scan;
 pub mod templates;
 pub mod worker;
@@ -43,21 +47,35 @@ use crate::params::{Block, reg};
 use crate::replace::{PortKind, Stage};
 
 /// The stage a layer is attached to (design 7.1). Lighting and Albedo are one stage of their
-/// port each; the two tonemap passes have two, before and after the tone curve.
+/// port each; the two tonemap passes have two, before and after the tone curve. Vertex moves
+/// geometry: its layers are compiled into a carrier and spliced into the game's own vertex
+/// shaders (`docs/plans/er-shader-editor-vertex.md`), not into a port.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum LayerStage {
-    /// The diffuse light in both AO passes, after occlusion and cel.
+    /// The diffuse light in both AO passes, after occlusion and the light bands and outlines.
     Lighting,
-    /// The diffuse albedo in the albedo pass, after cel.
+    /// The diffuse albedo in the albedo pass, as the game computes it.
     Albedo,
     /// The scene in HDR in both tonemap passes, before the vignette and the tone curve.
     TonemapPre,
-    /// The finished picture in both tonemap passes, after cel.
+    /// The finished picture in both tonemap passes.
     TonemapPost,
+    /// The stored position of every vertex of the selected meshes, in every pass that draws them.
+    Vertex,
 }
 
 impl LayerStage {
-    pub const ALL: [Self; 4] = [
+    /// Every stage, in the order the panel lists them: geometry is moved before any pixel runs.
+    pub const ALL: [Self; 5] = [
+        Self::Vertex,
+        Self::Lighting,
+        Self::Albedo,
+        Self::TonemapPre,
+        Self::TonemapPost,
+    ];
+
+    /// The stages that run in a port's pixel shader.
+    pub const PIXEL: [Self; 4] = [
         Self::Lighting,
         Self::Albedo,
         Self::TonemapPre,
@@ -72,7 +90,14 @@ impl LayerStage {
             Self::Albedo => "albedo",
             Self::TonemapPre => "tonemap_pre",
             Self::TonemapPost => "tonemap_post",
+            Self::Vertex => "vertex",
         }
+    }
+
+    /// Is this the vertex stage?
+    #[must_use]
+    pub const fn is_vertex(self) -> bool {
+        matches!(self, Self::Vertex)
     }
 
     #[must_use]
@@ -88,10 +113,12 @@ impl LayerStage {
             Self::Albedo => "Albedo",
             Self::TonemapPre => "Tonemap pre",
             Self::TonemapPost => "Tonemap post",
+            Self::Vertex => "Vertex",
         }
     }
 
-    /// The stage function the port calls, in `editor_layers.hlsli` and the generated source.
+    /// The stage function the port calls, in `editor_layers.hlsli` and the generated source; for
+    /// Vertex, the one the carrier calls.
     #[must_use]
     pub const fn function(self) -> &'static str {
         match self {
@@ -99,6 +126,7 @@ impl LayerStage {
             Self::Albedo => "er_stage_albedo",
             Self::TonemapPre => "er_stage_tonemap_pre",
             Self::TonemapPost => "er_stage_tonemap_post",
+            Self::Vertex => "er_vertex_stage",
         }
     }
 
@@ -109,27 +137,172 @@ impl LayerStage {
             Self::Lighting => "LightingCtx",
             Self::Albedo => "AlbedoCtx",
             Self::TonemapPre | Self::TonemapPost => "TonemapCtx",
+            Self::Vertex => "VertexCtx",
         }
     }
 
-    /// The port stage it runs in, whose bit in `cmdlist::STAGE_ACTIVE` redirects its ports.
+    /// The `apply` a layer of this stage must have, as the lint quotes it.
     #[must_use]
-    pub const fn port_stage(self) -> Stage {
+    pub const fn apply_signature(self) -> &'static str {
         match self {
-            Self::Lighting => Stage::Lighting,
-            Self::Albedo => Stage::Albedo,
-            Self::TonemapPre | Self::TonemapPost => Stage::Tonemap,
+            Self::Lighting => "float3 apply(float3 c, LightingCtx ctx)",
+            Self::Albedo => "float3 apply(float3 c, AlbedoCtx ctx)",
+            Self::TonemapPre | Self::TonemapPost => "float3 apply(float3 c, TonemapCtx ctx)",
+            Self::Vertex => "float3 apply(float3 p, VertexCtx c)",
         }
     }
 
-    /// The port kinds a change at this stage recompiles (design 7.3).
+    /// The port stage it runs in, whose bit in `cmdlist::STAGE_ACTIVE` redirects its ports; none
+    /// for Vertex, which runs in the game's own vertex shaders.
+    #[must_use]
+    pub const fn port_stage(self) -> Option<Stage> {
+        match self {
+            Self::Lighting => Some(Stage::Lighting),
+            Self::Albedo => Some(Stage::Albedo),
+            Self::TonemapPre | Self::TonemapPost => Some(Stage::Tonemap),
+            Self::Vertex => None,
+        }
+    }
+
+    /// This stage's bit in `cmdlist::STAGE_ACTIVE`: its port stage's, or for Vertex
+    /// [`crate::replace::VERTEX_STAGE_BIT`].
+    #[must_use]
+    pub const fn stage_bit(self) -> u32 {
+        match self.port_stage() {
+            Some(stage) => stage.bit(),
+            None => crate::replace::VERTEX_STAGE_BIT,
+        }
+    }
+
+    /// The port kinds a change at this stage recompiles (design 7.3); none for Vertex, whose
+    /// change rebuilds the carrier.
     #[must_use]
     pub const fn port_kinds(self) -> &'static [PortKind] {
         match self {
             Self::Lighting => &[PortKind::Ao, PortKind::AoSsr],
             Self::Albedo => &[PortKind::CmbAlbedo],
             Self::TonemapPre | Self::TonemapPost => &[PortKind::Tonemap, PortKind::TonemapLut],
+            Self::Vertex => &[],
         }
+    }
+}
+
+impl LayerStage {
+    /// Its place in [`LayerStage::ALL`], and its bit in a [`Stages`].
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Vertex => 0,
+            Self::Lighting => 1,
+            Self::Albedo => 2,
+            Self::TonemapPre => 3,
+            Self::TonemapPost => 4,
+        }
+    }
+}
+
+/// A set of layer stages: where a name the Code tab's completion and reference offer can be
+/// written (`complete.rs`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Stages(u8);
+
+impl Stages {
+    pub const NONE: Self = Self(0);
+    pub const ALL: Self = Self((1 << LayerStage::ALL.len()) - 1);
+    /// The stages that run in a port's pixel shader, [`LayerStage::PIXEL`]: every stage but
+    /// Vertex, whose layers see neither a stage context's pixel nor a texture.
+    pub const PIXEL: Self = Self(Self::ALL.0 & !Self::of(LayerStage::Vertex).0);
+
+    /// The one stage `stage`.
+    #[must_use]
+    pub const fn of(stage: LayerStage) -> Self {
+        Self(1 << stage.index())
+    }
+
+    /// The stages whose layers are handed the context type `context`: `TonemapCtx` is both
+    /// tonemap stages. Nothing for another name.
+    #[must_use]
+    pub fn of_context(context: &str) -> Self {
+        LayerStage::ALL
+            .into_iter()
+            .filter(|stage| stage.context() == context)
+            .fold(Self::NONE, |set, stage| set.with(stage))
+    }
+
+    /// The stages compiled into the port whose source file is `file` (`codegen::port_source`).
+    #[must_use]
+    pub fn of_port_file(file: &str) -> Self {
+        LayerStage::ALL
+            .into_iter()
+            .filter(|stage| {
+                stage
+                    .port_kinds()
+                    .iter()
+                    .any(|kind| codegen::port_source(*kind).0 == file)
+            })
+            .fold(Self::NONE, |set, stage| set.with(stage))
+    }
+
+    #[must_use]
+    pub const fn with(self, stage: LayerStage) -> Self {
+        Self(self.0 | Self::of(stage).0)
+    }
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// The stages in both.
+    #[must_use]
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    #[must_use]
+    pub const fn contains(self, stage: LayerStage) -> bool {
+        self.0 & Self::of(stage).0 != 0
+    }
+
+    #[must_use]
+    pub const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+
+    #[must_use]
+    pub const fn is_all(self) -> bool {
+        self.0 == Self::ALL.0
+    }
+
+    /// Its stages, in [`LayerStage::ALL`] order.
+    pub fn iter(self) -> impl Iterator<Item = LayerStage> {
+        LayerStage::ALL
+            .into_iter()
+            .filter(move |stage| self.contains(*stage))
+    }
+
+    /// The set as the panel names it: `every stage`, `every pixel stage`, `no stage`, or the
+    /// stages' labels.
+    #[must_use]
+    pub fn label(self) -> String {
+        if self.is_all() {
+            return "every stage".to_owned();
+        }
+        if self == Self::PIXEL {
+            return "every pixel stage".to_owned();
+        }
+        if self.is_empty() {
+            return "no stage".to_owned();
+        }
+        self.iter()
+            .map(LayerStage::label)
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -239,6 +412,7 @@ pub fn prepare(layer: &Layer, text: &str, slot: usize) -> Result<PreparedLayer, 
         )
     }));
     found.sort_by_key(|d| (d.line, d.column));
+    diagnostics::add_hints(&mut found, |_, line| diagnostics::line_of(text, line));
     if found.iter().any(|d| d.severity == Severity::Error) {
         return Err(found);
     }
@@ -361,7 +535,7 @@ mod tests {
     #[test]
     fn every_stage_function_is_in_editor_layers_with_its_context() {
         let identity = include_str!("../../shaders/editor_layers.hlsli");
-        for stage in LayerStage::ALL {
+        for stage in LayerStage::PIXEL {
             let signature = format!(
                 "float3 {}(float3 x, {} c)",
                 stage.function(),
@@ -370,9 +544,62 @@ mod tests {
             assert!(identity.lines().any(|l| l == signature), "{signature}");
             assert_eq!(LayerStage::from_key(stage.key()), Some(stage));
             for kind in stage.port_kinds() {
-                assert_eq!(kind.stage(), stage.port_stage(), "{stage:?}");
+                assert_eq!(Some(kind.stage()), stage.port_stage(), "{stage:?}");
             }
+            assert_eq!(stage.stage_bit(), kind_stage_bit(stage), "{stage:?}");
         }
+        // The vertex stage has no port and a bit of its own, and its context is the vertex one.
+        let vertex = LayerStage::Vertex;
+        assert_eq!(LayerStage::from_key("vertex"), Some(vertex));
+        assert!(vertex.port_kinds().is_empty());
+        assert_eq!(vertex.port_stage(), None);
+        assert_eq!(vertex.stage_bit(), crate::replace::VERTEX_STAGE_BIT);
+        let context = include_str!("../../shaders/vertex_ctx.hlsli");
+        assert!(context.contains("struct VertexCtx\n"));
+        assert!(LayerStage::ALL.contains(&vertex) && !LayerStage::PIXEL.contains(&vertex));
+        for stage in LayerStage::ALL {
+            assert!(
+                stage.apply_signature().contains(stage.context()),
+                "{stage:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stage_set_names_vertex_apart_from_the_pixel_stages() {
+        for (at, stage) in LayerStage::ALL.into_iter().enumerate() {
+            assert_eq!(stage.index(), at, "{stage:?}");
+            assert_eq!(
+                Stages::PIXEL.contains(stage),
+                LayerStage::PIXEL.contains(&stage),
+                "{stage:?}"
+            );
+        }
+        assert_eq!(
+            Stages::PIXEL.with(LayerStage::Vertex),
+            Stages::ALL,
+            "every stage is a pixel stage or Vertex"
+        );
+        assert_eq!(
+            Stages::of_context("VertexCtx"),
+            Stages::of(LayerStage::Vertex)
+        );
+        assert_eq!(Stages::PIXEL.label(), "every pixel stage");
+        assert_eq!(Stages::of(LayerStage::Vertex).label(), "Vertex");
+        assert_eq!(
+            Stages::ALL.intersection(Stages::of(LayerStage::Albedo)),
+            Stages::of(LayerStage::Albedo)
+        );
+        assert!(
+            Stages::PIXEL
+                .intersection(Stages::of(LayerStage::Vertex))
+                .is_empty()
+        );
+    }
+
+    /// The bit of the port stage a pixel stage's kinds run in.
+    fn kind_stage_bit(stage: LayerStage) -> u32 {
+        stage.port_kinds()[0].stage().bit()
     }
 
     #[test]

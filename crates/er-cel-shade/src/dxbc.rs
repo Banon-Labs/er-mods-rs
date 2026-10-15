@@ -514,6 +514,43 @@ pub struct PsvInterpolation {
     pub patch_constant_or_primitive: Vec<u8>,
 }
 
+/// One signature element as `PSV0` records it: DXC's `PSVSignatureElement0`, without the offsets
+/// of its name and semantic indexes into the part's own tables, which say where the text is
+/// stored rather than what it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PsvElement {
+    pub rows: u8,
+    pub start_row: u8,
+    /// Columns in bits 0 to 3, the start column in bits 4 and 5, allocated in bit 6.
+    pub cols_and_start: u8,
+    /// `PSVSemanticKind`.
+    pub semantic_kind: u8,
+    /// `PSVComponentType`.
+    pub component_type: u8,
+    /// `DXIL::InterpolationMode`.
+    pub interpolation: u8,
+    /// The dynamic index mask in bits 0 to 3, the output stream in bits 4 and 5.
+    pub dynamic_mask_and_stream: u8,
+}
+
+impl PsvElement {
+    /// The register slot the element starts in: its start row and start column. Two elements of
+    /// one signature never start in the same slot unless neither is allocated.
+    #[must_use]
+    pub const fn slot(self) -> (u8, u8) {
+        (self.start_row, (self.cols_and_start >> 4) & 0x3)
+    }
+}
+
+/// The `PSV0` signature elements, in declaration order: inputs, outputs, and patch constants or
+/// primitives.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PsvElements {
+    pub inputs: Vec<PsvElement>,
+    pub outputs: Vec<PsvElement>,
+    pub patch_constant_or_primitive: Vec<PsvElement>,
+}
+
 /// What `PSV0` says about a shader.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Psv0 {
@@ -522,6 +559,11 @@ pub struct Psv0 {
     pub binds: Vec<PsvBind>,
     /// `None` for runtime info version 0, which has no signature elements.
     pub interpolation: Option<PsvInterpolation>,
+    /// The same elements in full; `None` for runtime info version 0.
+    pub elements: Option<PsvElements>,
+    /// The first byte of the runtime info's stage union: for a vertex shader,
+    /// `VSInfo::OutputPositionPresent`.
+    pub stage_info: u8,
 }
 
 /// `sizeof(PSVRuntimeInfo0)`.
@@ -587,11 +629,14 @@ fn parse_psv0(part: &[u8]) -> Result<Psv0, DxbcError> {
             })
             .collect::<Result<_, DxbcError>>()?;
     }
+    let stage_info = runtime.first().copied().unwrap_or_default();
     if runtime_size < PSV_RUNTIME_INFO1_BYTES {
         return Ok(Psv0 {
             shader_stage: None,
             binds,
             interpolation: None,
+            elements: None,
+            stage_info,
         });
     }
     let count_at = |at: usize| usize::from(runtime.get(at).copied().unwrap_or_default());
@@ -602,7 +647,7 @@ fn parse_psv0(part: &[u8]) -> Result<Psv0, DxbcError> {
     at.take(strings)?;
     let indexes = at.size()?;
     at.records(indexes, 4)?;
-    let mut modes = Vec::new();
+    let mut elements: Vec<PsvElement> = Vec::new();
     if inputs + outputs + patch > 0 {
         let record = at.size()?;
         if record < PSV_ELEMENT0_BYTES {
@@ -610,17 +655,30 @@ fn parse_psv0(part: &[u8]) -> Result<Psv0, DxbcError> {
                 "PSV0 signature elements are smaller than version 0",
             ));
         }
-        modes = at
+        const WHAT: &str = "a PSV0 signature element";
+        elements = at
             .records(inputs + outputs + patch, record)?
             .chunks_exact(record)
             .map(|element| {
-                element
-                    .get(PSV_INTERPOLATION_AT)
-                    .copied()
-                    .ok_or(DxbcError::Truncated("a PSV0 signature element"))
+                let byte = |at: usize| element.get(at).copied().ok_or(DxbcError::Truncated(WHAT));
+                Ok(PsvElement {
+                    rows: byte(8)?,
+                    start_row: byte(9)?,
+                    cols_and_start: byte(10)?,
+                    semantic_kind: byte(11)?,
+                    component_type: byte(12)?,
+                    interpolation: byte(PSV_INTERPOLATION_AT)?,
+                    dynamic_mask_and_stream: byte(14)?,
+                })
             })
             .collect::<Result<_, DxbcError>>()?;
     }
+    let modes: Vec<u8> = elements
+        .iter()
+        .map(|element| element.interpolation)
+        .collect();
+    let group =
+        |from: usize, count: usize| elements.iter().copied().skip(from).take(count).collect();
     Ok(Psv0 {
         shader_stage: runtime.get(PSV_SHADER_STAGE_AT).copied(),
         binds,
@@ -629,7 +687,61 @@ fn parse_psv0(part: &[u8]) -> Result<Psv0, DxbcError> {
             outputs: modes.iter().copied().skip(inputs).take(outputs).collect(),
             patch_constant_or_primitive: modes.iter().copied().skip(inputs + outputs).collect(),
         }),
+        elements: Some(PsvElements {
+            inputs: group(0, inputs),
+            outputs: group(inputs, outputs),
+            patch_constant_or_primitive: group(inputs + outputs, patch),
+        }),
+        stage_info,
     })
+}
+
+/// `container` with its part `code` set to `data` -- replaced where it has one, appended where it
+/// has none -- and signed again with [`retail_hash`]. The part table is rewritten and every part
+/// after the changed one moves, so this is the whole container rebuilt.
+///
+/// # Errors
+///
+/// `container` is not a container [`Container::parse`] reads, or the result would not fit a
+/// container's 32-bit sizes.
+pub fn with_part(container: &[u8], code: &[u8; 4], data: &[u8]) -> Result<Vec<u8>, DxbcError> {
+    let parsed = Container::parse(container)?;
+    let mut parts: Vec<([u8; 4], &[u8])> = parsed
+        .parts()
+        .iter()
+        .map(|part| (part.code, part.data))
+        .collect();
+    match parts.iter_mut().find(|(found, _)| found == code) {
+        Some(slot) => slot.1 = data,
+        None => parts.push((*code, data)),
+    }
+    let table = HEADER_BYTES + 4 * parts.len();
+    let total = table
+        + parts
+            .iter()
+            .map(|(_, data)| PART_HEADER_BYTES + data.len())
+            .sum::<usize>();
+    let total32 =
+        u32::try_from(total).map_err(|_| DxbcError::Malformed("a container past 4 GB"))?;
+    let mut out = Vec::with_capacity(total);
+    // The magic, a digest filled in below, the version (bytes 20 to 23) as the original had it,
+    // the size and the part count.
+    out.extend_from_slice(&container[..TOTAL_SIZE_AT]);
+    out.extend_from_slice(&total32.to_le_bytes());
+    out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+    let mut offset = table;
+    for (_, data) in &parts {
+        out.extend_from_slice(&(offset as u32).to_le_bytes());
+        offset += PART_HEADER_BYTES + data.len();
+    }
+    for (part, data) in &parts {
+        out.extend_from_slice(part);
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(data);
+    }
+    let digest = retail_hash(&out);
+    out[DIGEST].copy_from_slice(&digest);
+    Ok(out)
 }
 
 /// `DXIL::ShaderKind`, from the program header.
@@ -1076,6 +1188,75 @@ mod tests {
         assert_eq!(container_part(&blob, PSV0_PART), None);
         let codes: Vec<[u8; 4]> = parse(&blob).parts().iter().map(|p| p.code).collect();
         assert_eq!(codes, [*b"DXIL", *b"RTS0"]);
+    }
+
+    /// An `ILDN` part naming `name`, as DXC writes one: flags, the length, the name, its
+    /// terminator, padded to four bytes.
+    fn debug_name_part(name: &str) -> Vec<u8> {
+        let mut part = vec![0, 0];
+        part.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        part.extend_from_slice(name.as_bytes());
+        part.push(0);
+        while part.len() % 4 != 0 {
+            part.push(0);
+        }
+        part
+    }
+
+    #[test]
+    fn a_part_is_set_and_the_container_signed_again() {
+        for replacement in REPLACEMENTS.iter() {
+            let port = replacement.dxil;
+            let name = "N:\\shader\\C[c4620]_ClearCoat_Gbuf_Skin@[cl].vpo.pdb";
+            let Ok(named) = with_part(port, DEBUG_NAME_PART, &debug_name_part(name)) else {
+                panic!("{}: not rebuilt", replacement.name);
+            };
+            let Ok(parsed) = Container::parse(&named) else {
+                panic!("{}: does not parse", replacement.name);
+            };
+            assert_eq!(parsed.total_size(), named.len());
+            assert!(parsed.is_signed_correctly(), "{}", replacement.name);
+            assert_eq!(parsed.ildn(), Ok(name));
+            // Every other part is the port's own, in its order, with the new one last.
+            let before = Container::parse(port)
+                .map(|c| c.parts())
+                .unwrap_or_default();
+            let after = parsed.parts();
+            assert_eq!(after.len(), before.len() + 1);
+            for (old, new) in before.iter().zip(&after) {
+                assert_eq!((old.code, old.data), (new.code, new.data));
+            }
+            // Setting it again replaces it rather than adding a second.
+            let Ok(renamed) = with_part(&named, DEBUG_NAME_PART, &debug_name_part("other")) else {
+                panic!("{}: not renamed", replacement.name);
+            };
+            let parsed = Container::parse(&renamed)
+                .map(|c| (c.parts().len(), c.ildn().ok().map(str::to_owned)));
+            assert_eq!(parsed, Ok((after.len(), Some("other".to_owned()))));
+            assert!(with_part(b"not a container", DEBUG_NAME_PART, b"x").is_err());
+        }
+    }
+
+    #[test]
+    fn psv0_elements_carry_the_interpolation_and_a_slot_each() {
+        for replacement in REPLACEMENTS.iter() {
+            let Ok(psv0) = Container::parse(replacement.dxil).and_then(|c| c.psv0()) else {
+                panic!("{}: no PSV0", replacement.name);
+            };
+            let (Some(elements), Some(modes)) = (&psv0.elements, &psv0.interpolation) else {
+                panic!("{}: version 0", replacement.name);
+            };
+            let read: Vec<u8> = elements.inputs.iter().map(|e| e.interpolation).collect();
+            assert_eq!(read, modes.inputs, "{}", replacement.name);
+            let read: Vec<u8> = elements.outputs.iter().map(|e| e.interpolation).collect();
+            assert_eq!(read, modes.outputs, "{}", replacement.name);
+            // A pixel shader's outputs are its render targets, each starting in a slot of its own.
+            let mut slots: Vec<(u8, u8)> = elements.outputs.iter().map(|e| e.slot()).collect();
+            slots.sort_unstable();
+            slots.dedup();
+            assert_eq!(slots.len(), elements.outputs.len(), "{}", replacement.name);
+            assert!(elements.inputs.iter().all(|e| e.rows >= 1));
+        }
     }
 
     #[test]

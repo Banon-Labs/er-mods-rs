@@ -44,6 +44,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// numbered below it.
 pub const NO_PORT: u8 = u8::MAX;
 
+/// [`Entry::port`] of a mesh pipeline a vertex layer can move (`docs/plans/er-shader-editor-vertex.md`,
+/// section 7.5). With no redirect it only counts binds, which is how the editor knows which
+/// material groups are on screen; with one, its [`Entry::bits`] is the pipeline's pass, which the
+/// pass-mask export filters on.
+pub const VERTEX_PORT: u8 = u8::MAX - 1;
+
 /// [`Entry::flags`] bits. Reserved in P0.1, which sets none of them.
 pub mod flag {
     /// Skip every draw recorded with this pipeline (P2).
@@ -54,6 +60,10 @@ pub mod flag {
     pub const MASK: u32 = 1 << 2;
     /// The pipeline renders to the main view's G-buffer format: the duplication guard (P3).
     pub const MAIN_VIEW_RT: u32 = 1 << 3;
+    /// A vertex entry's material group is being rebuilt: bind the game's own pipeline. Set with
+    /// an atomic `or` on every entry of the group the moment the game creates a pipeline the group
+    /// has no variant for, so no group ever renders partly moved; a republish clears it.
+    pub const VERTEX_SUSPENDED: u32 = 1 << 4;
     /// The bits that change what the game draws, and so make an entry hold a reference. Blink is
     /// a hide on alternate frames, so it counts as one.
     pub const BEHAVIOUR: u32 = HIDE | BLINK | MASK;
@@ -206,6 +216,8 @@ pub struct Table {
     shift: u32,
     len: usize,
     redirects: usize,
+    /// Entries with port [`VERTEX_PORT`], redirected or counting.
+    vertex: usize,
 }
 
 impl Table {
@@ -249,6 +261,13 @@ impl Table {
     #[must_use]
     pub fn redirects(&self) -> usize {
         self.redirects
+    }
+
+    /// Vertex entries, redirected or only counting binds: nonzero also makes the bind hook worth
+    /// entering, because a counting entry's binds are what orders the editor's builds.
+    #[must_use]
+    pub fn vertex_entries(&self) -> usize {
+        self.vertex
     }
 
     /// Every entry, in slot order.
@@ -319,7 +338,11 @@ impl Builder {
         let mask = capacity - 1;
         let mut slots: Box<[Entry]> = (0..capacity).map(|_| Entry::empty()).collect();
         let mut redirects = 0;
+        let mut vertex = 0;
         for spec in self.specs.values() {
+            if spec.port == VERTEX_PORT {
+                vertex += 1;
+            }
             let entry = Entry::from_spec(spec);
             if let Some(old) = previous.and_then(|table| table.get(spec.key)) {
                 entry
@@ -344,7 +367,18 @@ impl Builder {
             shift,
             len: self.specs.len(),
             redirects,
+            vertex,
         }
+    }
+
+    /// Every key whose entry is a vertex entry.
+    #[must_use]
+    pub fn vertex_keys(&self) -> Vec<usize> {
+        self.specs
+            .values()
+            .filter(|spec| spec.port == VERTEX_PORT)
+            .map(|spec| spec.key)
+            .collect()
     }
 }
 
@@ -445,13 +479,16 @@ pub use process::{
     reap, update, worker_tick,
 };
 
+/// An edit of the table, handed to the next present (`defer`) or run at once.
+pub type Edit = Box<dyn FnOnce(&mut Builder) + Send>;
+
 /// The published table, its writer, and the reaper.
 #[cfg(windows)]
 mod process {
     use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
     use std::sync::{Mutex, PoisonError};
 
-    use super::{Builder, Entry, Table, diff, reap_due, reap_plan};
+    use super::{Builder, Edit, Entry, Table, diff, reap_due, reap_plan};
     use crate::graveyard::{self, Corpse, OwnedCom, com_add_ref, com_release};
     use crate::log;
 
@@ -463,7 +500,7 @@ mod process {
     static WRITER: Mutex<()> = Mutex::new(());
 
     /// An edit handed to the next present.
-    type Deferred = Box<dyn FnOnce(&mut Builder) + Send>;
+    type Deferred = Edit;
 
     /// Edits waiting for the next present, oldest first, each with its ticket.
     static DEFERRED: Mutex<Vec<(u64, Deferred)>> = Mutex::new(Vec::new());
@@ -577,9 +614,17 @@ mod process {
             // longer published; the graveyard frees it once no hook can be probing it.
             graveyard::retire(Corpse::Table(unsafe { Box::from_raw(previous) }));
         }
-        for variant in changes.retire {
-            // SAFETY: the table owned one reference to each variant it named.
-            graveyard::retire(Corpse::Com(unsafe { OwnedCom::from_raw(variant) }));
+        // One grave for every variant this publish retired: a vertex layer's code edit retires
+        // every variant of every live material group at once, thousands of pipelines, which as
+        // single graves would overrun the graveyard and leak (design 7.5, "Graveyard").
+        if !changes.retire.is_empty() {
+            let batch: Vec<OwnedCom> = changes
+                .retire
+                .into_iter()
+                // SAFETY: the table owned one reference to each variant it named.
+                .map(|variant| unsafe { OwnedCom::from_raw(variant) })
+                .collect();
+            graveyard::retire(Corpse::Batch(batch));
         }
         for key in changes.release {
             // SAFETY: the reference taken when this key's entry first held one.

@@ -6,9 +6,10 @@
 //! accumulated into one diffuse light buffer, and `GXLightDeferredAO` (or its screen-space
 //! reflection twin) then multiplies ambient occlusion into it. This DLL ports the pixel shader of
 //! five passes (see [`replace::REPLACEMENTS`]): the two AO passes band the light and ink
-//! outlines, the albedo pass flattens surface colour, and the two tonemap passes posterize and
-//! saturate the finished picture, which is what reaches forward-lit hair and fur and glowing
-//! things.
+//! outlines; the albedo pass and the two tonemap passes run the game's own maths, and the rest of
+//! the cel look -- flattened surfaces, and the finished picture's saturation and brightness steps,
+//! which reach forward-lit hair and fur and glowing things -- is three stock layers of the shader
+//! editor at their stages ([`editor::cel`]).
 //!
 //! # How
 //!
@@ -21,7 +22,9 @@
 //! works on what the game hands D3D12, the same DLL works on native Windows and under Proton.
 //!
 //! The replacement shaders are HLSL in `shaders/`, compiled and signed by
-//! `scripts/build-cel-shaders.py`; the DLL embeds the result and needs no compiler at run time.
+//! `scripts/build-cel-shaders.py`; the DLL embeds the result, so the AO passes' bands and outlines
+//! need no compiler at run time. The cel layers, like every layer, are compiled in game, so they
+//! draw only where the editor has its compiler.
 //! They read the look from a constant buffer this DLL binds ([`look_binding`]), so the Shaders
 //! panel ([`menu`], default key F6, docked to an edge of the screen) changes the picture on the
 //! next frame and saves it to `er-cel-shade.toml` beside the game ([`settings`]); its Layers tab
@@ -37,7 +40,9 @@
 //! the layer files in `er-shader-editor/` beside the game every 250 ms, compiles each changed
 //! stack through `er-shader-compiler.exe`, checks the result against the game's own pixel shader
 //! ([`verify`]), and publishes a new variant of each port in the cel variant's place
-//! ([`editor::worker`]).
+//! ([`editor::worker`]). Vertex layers move geometry ([`vertex`]): their carrier is spliced into
+//! the game's own mesh vertex shaders by the same helper, and each material group's variants are
+//! bound in place of its pipelines once all of them exist.
 //!
 //! # Evidence this rests on
 //!
@@ -52,6 +57,7 @@ pub mod cmdlist;
 pub mod dxbc;
 pub mod editor;
 pub mod exports;
+pub mod gpu_time;
 pub mod graveyard;
 pub mod look_binding;
 pub mod menu;
@@ -63,6 +69,7 @@ pub mod safety;
 pub mod settings;
 pub mod table;
 pub mod verify;
+pub mod vertex;
 
 #[cfg(windows)]
 mod hooks;
@@ -176,8 +183,11 @@ pub unsafe extern "system" fn DllMain(
                 replace::REPLACEMENTS.len(),
                 er_build_watermark_core::overlay_host::OVERLAY_ABI_TAG
             ));
-            // Read before the device exists, so the first frame already has the saved look.
+            // Read before the device exists, so the first frame already has the saved look. The
+            // move of the four knobs that are layers now runs here too, before the editor's worker
+            // first reads the project it writes and before the menu holds the settings it saves.
             let (settings, warnings) = menu::load_settings();
+            let settings = menu::move_cel_knobs(settings);
             menu::init(settings, &warnings);
             // In `DllMain`, not on a thread: the game creates its device during start-up, and a
             // hook that lands after that sees none of the root signatures or pipelines.

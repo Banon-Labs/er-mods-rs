@@ -2,8 +2,16 @@
 //! `shaders/templates/`, embedded here, and written into `layers/` as a new layer's file.
 //!
 //! The two proof layers are what the P0.2a in-game proof stages: `proof_invert` makes the probe
-//! read post = 1 - pre, `proof_red` keeps only red. They have an `apply` for every stage, so one
-//! file proves any stage.
+//! read post = 1 - pre, `proof_red` keeps only red. They have an `apply` for every pixel stage, so
+//! one file proves any of them.
+//!
+//! The three `cel_*` templates are the cel look's surfaces, saturation and brightness steps, which
+//! the albedo and tonemap ports ran as hard-coded maths before (`super::cel`). They are ordinary
+//! templates in the "+ Layer" menu too.
+//!
+//! The vertex templates move geometry (`docs/plans/er-shader-editor-vertex.md`, section 3):
+//! `wobble`, `sway` and `breathe`, and the two proof layers of section 9, `proof_lift` (oracle D)
+//! and `proof_lift_parity` (oracle F).
 
 use super::LayerStage;
 use super::project::{Layer, Project};
@@ -23,7 +31,44 @@ pub struct Template {
 }
 
 /// Every template, in the order the menu lists them.
-pub const TEMPLATES: [Template; 6] = [
+pub const TEMPLATES: [Template; 14] = [
+    Template {
+        key: "proof_lift",
+        label: "Proof: lift",
+        stage: LayerStage::Vertex,
+        summary: "Holds every selected mesh lifted, or steps it up and down about once a second: \
+                  the first vertex layer to try.",
+        text: include_str!("../../shaders/templates/vertex/proof_lift.hlsl"),
+    },
+    Template {
+        key: "wobble",
+        label: "Wobble",
+        stage: LayerStage::Vertex,
+        summary: "Meshes ripple sideways in waves that run up them.",
+        text: include_str!("../../shaders/templates/vertex/wobble.hlsl"),
+    },
+    Template {
+        key: "sway",
+        label: "Sway",
+        stage: LayerStage::Vertex,
+        summary: "Meshes lean to and fro, more the higher a vertex sits, like plants in wind.",
+        text: include_str!("../../shaders/templates/vertex/sway.hlsl"),
+    },
+    Template {
+        key: "breathe",
+        label: "Breathe",
+        stage: LayerStage::Vertex,
+        summary: "Meshes swell and shrink about their own origin.",
+        text: include_str!("../../shaders/templates/vertex/breathe.hlsl"),
+    },
+    Template {
+        key: "proof_lift_parity",
+        label: "Proof: lift on odd frames",
+        stage: LayerStage::Vertex,
+        summary: "Lifts every selected mesh on odd frames only, for checking that every pass of a \
+                  frame agrees.",
+        text: include_str!("../../shaders/templates/vertex/proof_lift_parity.hlsl"),
+    },
     Template {
         key: "colour_grade",
         label: "Colour grade",
@@ -51,6 +96,27 @@ pub const TEMPLATES: [Template; 6] = [
         stage: LayerStage::Lighting,
         summary: "Rounds the light on surfaces into bands.",
         text: include_str!("../../shaders/templates/posterize_light.hlsl"),
+    },
+    Template {
+        key: "cel_surfaces",
+        label: "Cel surfaces",
+        stage: LayerStage::Albedo,
+        summary: "Flattens every surface's colour into painted patches and solid fills.",
+        text: include_str!("../../shaders/templates/cel_surfaces.hlsl"),
+    },
+    Template {
+        key: "cel_saturation",
+        label: "Cel saturation",
+        stage: LayerStage::TonemapPost,
+        summary: "Colour strength of the finished picture.",
+        text: include_str!("../../shaders/templates/cel_saturation.hlsl"),
+    },
+    Template {
+        key: "cel_brightness_steps",
+        label: "Cel brightness steps",
+        stage: LayerStage::TonemapPost,
+        summary: "Rounds the finished picture's brightness to steps, hair and glowing things too.",
+        text: include_str!("../../shaders/templates/cel_brightness_steps.hlsl"),
     },
     Template {
         key: "proof_invert",
@@ -104,16 +170,15 @@ pub fn layer_file_name(id: u32, name: &str) -> String {
 
 /// A new layer from `template` for `project`, with a free id, and the text to write to its file.
 /// The caller writes the file before saving the project, so the project never names a file that
-/// does not exist.
+/// does not exist. The layer records the template it came from ([`Layer::template`]).
 #[must_use]
 pub fn new_layer(project: &Project, template: &Template, name: Option<&str>) -> (Layer, String) {
     let id = project.next_id();
     let name = name.unwrap_or(template.label);
     let file = layer_file_name(id, name);
-    (
-        Layer::new(id, name, &file, template.stage),
-        template.text.to_owned(),
-    )
+    let mut layer = Layer::new(id, name, &file, template.stage);
+    layer.template = template.key.to_owned();
+    (layer, template.text.to_owned())
 }
 
 #[cfg(test)]
@@ -190,6 +255,39 @@ mod tests {
                 };
                 assert_eq!(generated.layers, vec![layer.id], "{}", template.key);
             }
+            if template.stage.is_vertex() {
+                let carrier =
+                    super::super::codegen::generate_carrier(std::slice::from_ref(&prepared));
+                let Ok(Some(carrier)) = carrier else {
+                    panic!("{}: no carrier", template.key);
+                };
+                assert_eq!(carrier.layers, vec![layer.id], "{}", template.key);
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_template_is_the_static_proof_lift() {
+        // The Layers tab lists the templates in this order, and the lift is the first a user
+        // should add: it is the one oracle D measures, and with Hold on nothing in it changes
+        // from frame to frame.
+        assert_eq!(TEMPLATES[0].key, "proof_lift");
+        let Some(lift) = find("proof_lift") else {
+            panic!("proof_lift is missing");
+        };
+        let annotated = annotations::parse(lift.text, 0);
+        let names: Vec<&str> = annotated.params.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Lift", "Hold"]);
+        assert_eq!(annotated.params[0].default[0], 0.5);
+        // Hold is on by default: the lift a new layer makes is static.
+        assert_eq!(annotated.params[1].default[0], 1.0);
+        // The period divides the time wrap, so the steps run on through it.
+        assert!(lift.text.contains("ER_TIME_WRAP / 12.0"));
+        for key in ["wobble", "proof_lift", "proof_lift_parity"] {
+            assert!(
+                find(key).is_some_and(|t| t.stage == LayerStage::Vertex),
+                "{key}"
+            );
         }
     }
 
@@ -199,7 +297,7 @@ mod tests {
             let Some(template) = find(key) else {
                 panic!("{key} is missing");
             };
-            for stage in LayerStage::ALL {
+            for stage in LayerStage::PIXEL {
                 let annotated = annotations::parse(template.text, 0);
                 assert_eq!(
                     lint::lint(&annotated.text, stage),
@@ -212,12 +310,12 @@ mod tests {
             assert_eq!(annotated.params[0].default[0], 1.0, "{key}");
         }
         assert!(
-            LayerStage::ALL
+            LayerStage::PIXEL
                 .iter()
                 .all(|stage| !stage.port_kinds().is_empty())
         );
         assert!(PortKind::ALL.iter().all(|kind| {
-            LayerStage::ALL
+            LayerStage::PIXEL
                 .iter()
                 .any(|stage| stage.port_kinds().contains(kind))
         }));
@@ -232,6 +330,7 @@ mod tests {
         let (layer, text) = new_layer(&project, grade, Some("Warm grade!"));
         assert_eq!((layer.id, layer.file.as_str()), (1, "1-warm-grade.hlsl"));
         assert_eq!(layer.stage, LayerStage::TonemapPost);
+        assert_eq!(layer.template, "colour_grade");
         assert_eq!(text, grade.text);
         project.layers.push(layer);
         let (second, _) = new_layer(&project, grade, Some("  ///  "));

@@ -145,6 +145,10 @@ pub struct Layer {
     /// Values set from the panel, in the order the file lists them. A parameter with no entry
     /// here takes its annotated default.
     pub params: Vec<(String, ParamValue)>,
+    /// The template the layer was made from, a `templates::TEMPLATES` key, or empty. Nothing in
+    /// the build reads it; the Look tab finds the stock cel layers by it (`super::cel`), so a
+    /// preset sets those layers and leaves the player's own alone.
+    pub template: String,
 }
 
 impl Layer {
@@ -162,6 +166,7 @@ impl Layer {
             blend: Blend::Normal,
             select: "everything".to_owned(),
             params: Vec::new(),
+            template: String::new(),
         }
     }
 
@@ -231,14 +236,14 @@ impl Project {
         layer.enabled && (layer.solo || !soloing)
     }
 
-    /// The port stages with a layer that draws, as [`crate::replace::Stage::bit`]s: the layers'
+    /// The stages with a layer that draws, as [`super::LayerStage::stage_bit`]s: the layers'
     /// share of `cmdlist::STAGE_ACTIVE`.
     #[must_use]
     pub fn active_stages(&self) -> u32 {
         self.layers
             .iter()
             .filter(|layer| self.is_on(layer))
-            .fold(0, |bits, layer| bits | layer.stage.port_stage().bit())
+            .fold(0, |bits, layer| bits | layer.stage.stage_bit())
     }
 }
 
@@ -467,6 +472,7 @@ fn set_layer_key(current: &mut Reading, key: &str, value: &str) -> Result<(), St
             })?;
         }
         "select" => layer.select = parse_string(value)?,
+        "template" => layer.template = parse_string(value)?,
         _ => return Err(format!("unknown layer key `{key}`")),
     }
     Ok(())
@@ -495,21 +501,55 @@ pub fn render(project: &Project) -> String {
         }
     }
     for layer in &project.layers {
-        out.push_str("\n[[layer]]\n");
-        out.push_str(&format!("id = {}\n", layer.id));
-        out.push_str(&format!("name = {}\n", quote(&layer.name)));
-        out.push_str(&format!("stage = {}\n", quote(layer.stage.key())));
-        out.push_str(&format!("enabled = {}\n", layer.enabled));
-        out.push_str(&format!("solo = {}\n", layer.solo));
-        out.push_str(&format!("opacity = {:?}\n", layer.opacity));
-        out.push_str(&format!("blend = {}\n", quote(layer.blend.key())));
-        out.push_str(&format!("select = {}\n", quote(&layer.select)));
-        out.push_str(&format!("file = {}\n", quote(&layer.file)));
-        for (name, value) in &layer.params {
-            out.push_str(&format!("param.{name} = {}\n", value.render()));
-        }
+        out.push('\n');
+        out.push_str(&render_layer(layer));
     }
     out
+}
+
+/// One `[[layer]]` section of the project file, from its heading to its last parameter.
+#[must_use]
+pub fn render_layer(layer: &Layer) -> String {
+    let mut out = String::from("[[layer]]\n");
+    out.push_str(&format!("id = {}\n", layer.id));
+    out.push_str(&format!("name = {}\n", quote(&layer.name)));
+    out.push_str(&format!("stage = {}\n", quote(layer.stage.key())));
+    out.push_str(&format!("enabled = {}\n", layer.enabled));
+    out.push_str(&format!("solo = {}\n", layer.solo));
+    out.push_str(&format!("opacity = {:?}\n", layer.opacity));
+    out.push_str(&format!("blend = {}\n", quote(layer.blend.key())));
+    out.push_str(&format!("select = {}\n", quote(&layer.select)));
+    out.push_str(&format!("file = {}\n", quote(&layer.file)));
+    if !layer.template.is_empty() {
+        out.push_str(&format!("template = {}\n", quote(&layer.template)));
+    }
+    for (name, value) in &layer.params {
+        out.push_str(&format!("param.{name} = {}\n", value.render()));
+    }
+    out
+}
+
+/// The line `text` opens its first `[[layer]]` section on, counted from 0, read the way
+/// [`parse`] reads the file: past comments, and never inside an embedded shader section. `None`
+/// when it has none.
+#[must_use]
+pub fn first_layer_line(text: &str) -> Option<usize> {
+    let mut in_shader = false;
+    for (index, raw) in text.lines().enumerate() {
+        let trimmed = raw.trim();
+        if in_shader {
+            in_shader = trimmed != "--- end ---";
+            continue;
+        }
+        if trimmed.starts_with("--- shader ") {
+            in_shader = true;
+            continue;
+        }
+        if strip_comment(raw).trim() == "[[layer]]" {
+            return Some(index);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -533,6 +573,7 @@ mod tests {
         fog.enabled = false;
         fog.blend = Blend::Screen;
         fog.select = "!depth:0..10m ~2px".to_owned();
+        fog.template = "depth_fog".to_owned();
         Project {
             format: FORMAT,
             name: "Warm dusk".to_owned(),

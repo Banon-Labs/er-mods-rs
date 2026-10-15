@@ -229,6 +229,9 @@ pub enum LayerState {
     Error { summary: String, running: bool },
     /// Waiting for a compiler.
     NoCompiler { why: String },
+    /// A vertex layer in the live carrier, which the helper accepted. Meshes move as their
+    /// material groups are built (`crate::vertex`).
+    Carrier { compile_ms: f32 },
 }
 
 impl LayerState {
@@ -243,6 +246,10 @@ impl LayerState {
             } => format!(
                 "Live: compiled in {compile_ms:.0} ms, verified {verified} of {}",
                 crate::verify::Rule::ALL.len()
+            ),
+            Self::Carrier { compile_ms } => format!(
+                "Live: carrier compiled in {compile_ms:.0} ms; meshes move as their groups are \
+                 built"
             ),
             Self::Error { summary, running } => format!(
                 "Error{}: {summary}",
@@ -536,9 +543,12 @@ pub fn silence_layers(block: &mut Block) {
 /// stage is never redirected to a port that does not have the layer. A layer still waiting for its
 /// first compile, or for a compiler, gives its stage nothing. Turning a layer off is a header
 /// write that leaves it compiled in, which is why the project, not `live`, says whether it draws.
+///
+/// The vertex stage's bit ([`crate::replace::VERTEX_STAGE_BIT`]) is set the same way from
+/// `vertex_live`, the layers compiled into the live carrier.
 #[must_use]
-pub fn layer_stages(project: &Project, live: &[&[u32]]) -> u32 {
-    PortKind::ALL
+pub fn layer_stages(project: &Project, live: &[&[u32]], vertex_live: &[u32]) -> u32 {
+    let ports = PortKind::ALL
         .into_iter()
         .zip(live)
         .filter(|(_, ids)| {
@@ -547,7 +557,17 @@ pub fn layer_stages(project: &Project, live: &[&[u32]]) -> u32 {
                 .iter()
                 .any(|layer| project.is_on(layer) && ids.contains(&layer.id))
         })
-        .fold(0, |bits, (kind, _)| bits | kind.stage().bit())
+        .fold(0, |bits, (kind, _)| bits | kind.stage().bit());
+    let vertex = project
+        .layers
+        .iter()
+        .any(|layer| project.is_on(layer) && vertex_live.contains(&layer.id));
+    ports
+        | if vertex {
+            crate::replace::VERTEX_STAGE_BIT
+        } else {
+            0
+        }
 }
 
 /// The probe region a kind's variants write.
@@ -690,6 +710,11 @@ pub struct Status {
     /// this status only while the worker's own packing is still this one (`PACKING`), so a status
     /// read just before the worker staged a new version cannot write the old packing over it.
     pub packing: u64,
+    /// The layers compiled into the live vertex carrier, and the vertex stage's chip for the
+    /// panel, its state and its words (`crate::vertex::chip`).
+    pub vertex_live: Vec<u32>,
+    pub vertex_state: crate::vertex::ChipState,
+    pub vertex_chip: String,
 }
 
 #[cfg(windows)]
@@ -708,17 +733,20 @@ mod process {
     use std::time::{Duration, Instant, SystemTime};
 
     use er_shader_compiler::DXCOMPILER_DLL;
-    use er_shader_compiler::protocol::Request;
+    use er_shader_compiler::protocol::{Op, PatchRequest, Request};
     use windows::Win32::Graphics::Direct3D12::{ID3D12Device2, ID3D12RootSignature};
     use windows::core::Interface;
 
-    use super::super::codegen::{self, Generated, layer_path};
+    use super::super::codegen::{
+        self, CARRIER_ENTRY, CARRIER_FILE, CARRIER_PROFILE, Generated, layer_path,
+    };
     use super::super::compiler::{
         self, CompileError, Compiler, HELPER_EXE, ProcessStarter, Supervisor, VARIANT_ID_DEFINE,
+        source_hash_parts,
     };
     use super::super::diagnostics::{self, Diagnostic, Severity};
     use super::super::project::{self, Layer, Project};
-    use super::super::{prepare, variant_id, write_layers};
+    use super::super::{PreparedLayer, prepare, variant_id, write_layers};
     use super::{
         DEFERRED_TICKS, FIRST_FRAME_TICKS, INTERNAL_DIAG_FILE, JOBS_PER_TICK, LOGGED_DIAGNOSTICS,
         LayerState, Layers, POLL_PERIOD, PrepareKey, Queue, RECENT_TIMINGS, SELFTEST_CRASH_FILE,
@@ -755,6 +783,11 @@ mod process {
         RESCAN.store(true, Ordering::Release);
     }
 
+    /// How long the worker waits between two steps of vertex work: short, so the pipelines a
+    /// present's budget allows are made close to that present, and long enough to leave the
+    /// core to the game between them.
+    const VERTEX_STEP_WAIT: Duration = Duration::from_millis(2);
+
     /// Start the worker. It runs for the life of the process.
     pub fn spawn() {
         let spawned = std::thread::Builder::new()
@@ -764,22 +797,49 @@ mod process {
                 let (_tick_tx, tick_rx) = mpsc::channel::<()>();
                 let mut worker = Worker::new();
                 let mut panicked = false;
+                let mut vertex_panicked = false;
+                let mut next_tick = Instant::now();
+                let mut busy = false;
                 loop {
-                    let _ = tick_rx.recv_timeout(POLL_PERIOD);
-                    // A panic in one tick must not end the editor for the session; the panic hook
-                    // has logged where it came from.
-                    if catch_unwind(AssertUnwindSafe(|| worker.tick())).is_err() && !panicked {
-                        panicked = true;
-                        log(format_args!(
-                            "editor: a worker tick panicked; the worker carries on (logged once)"
-                        ));
+                    let wait = if busy {
+                        VERTEX_STEP_WAIT
+                    } else {
+                        next_tick.saturating_duration_since(Instant::now())
+                    };
+                    let _ = tick_rx.recv_timeout(wait);
+                    if Instant::now() >= next_tick {
+                        next_tick = Instant::now() + POLL_PERIOD;
+                        // A panic in one tick must not end the editor for the session; the panic
+                        // hook has logged where it came from.
+                        if catch_unwind(AssertUnwindSafe(|| worker.tick())).is_err() && !panicked {
+                            panicked = true;
+                            log(format_args!(
+                                "editor: a worker tick panicked; the worker carries on (logged \
+                                 once)"
+                            ));
+                        }
+                    }
+                    // The vertex builder works between the ticks, a bounded step at a time.
+                    match catch_unwind(AssertUnwindSafe(|| worker.vertex_step())) {
+                        Ok(more) => busy = more,
+                        Err(_) => {
+                            busy = false;
+                            if !vertex_panicked {
+                                vertex_panicked = true;
+                                log(format_args!(
+                                    "editor: a vertex build step panicked; the worker carries \
+                                     on (logged once)"
+                                ));
+                            }
+                        }
                     }
                 }
             });
         if let Err(error) = spawned {
             log(format_args!(
                 "editor: worker not started ({error}); layers are not read this session, the \
-                 embedded cel ports still run"
+                 cel layers among them; the embedded ports still run, with the light bands and \
+                 outlines"
             ));
         }
     }
@@ -1122,6 +1182,13 @@ mod process {
         ticket: u64,
     }
 
+    /// A vertex carrier waiting to be compiled and checked.
+    struct VertexJob {
+        layers: Vec<u32>,
+        source: String,
+        hash: u64,
+    }
+
     /// A published variant waiting to show up in the probe.
     struct FirstFrame {
         kind: PortKind,
@@ -1158,6 +1225,17 @@ mod process {
         codegen_failed: bool,
         diag_failed: bool,
         selftest_blocked: bool,
+        /// The vertex stage: the builder, the live carrier's source hash and the one last tried,
+        /// the carrier waiting to be built, and its transient failures in a row.
+        vertex: crate::vertex::Builder,
+        vertex_hash: u64,
+        vertex_attempted: u64,
+        vertex_job: Option<VertexJob>,
+        vertex_retries: (u64, u32),
+        /// The newest swap a carrier change handed to the present.
+        vertex_ticket: u64,
+        /// `vertex-proof` as last read.
+        control_stamp: Option<Stamp>,
     }
 
     impl Worker {
@@ -1222,6 +1300,13 @@ mod process {
                 codegen_failed: false,
                 diag_failed: false,
                 selftest_blocked: false,
+                vertex: crate::vertex::Builder::new(),
+                vertex_hash: 0,
+                vertex_attempted: 0,
+                vertex_job: None,
+                vertex_retries: (0, 0),
+                vertex_ticket: 0,
+                control_stamp: None,
             }
         }
 
@@ -1231,6 +1316,7 @@ mod process {
             };
             self.apply_unpresented();
             self.selftest_crash(&dir);
+            self.read_control(&dir);
             self.watch_compiler_files();
             self.scan(&dir);
             for _ in 0..JOBS_PER_TICK {
@@ -1249,10 +1335,259 @@ mod process {
                 // An edit made during that build replaces what waits behind it.
                 self.scan(&dir);
             }
+            if let Some(job) = self.vertex_job.take() {
+                let layers = job.layers.clone();
+                let hash = job.hash;
+                let built = catch_unwind(AssertUnwindSafe(|| self.process_vertex(&dir, job)));
+                if built.is_err() {
+                    log(format_args!(
+                        "editor: internal (please report): building the vertex carrier panicked; \
+                         the live carrier keeps running"
+                    ));
+                    let changed = self.layers.changed(&layers);
+                    self.layers.fail(&changed, |_, running| LayerState::Error {
+                        summary: "internal (please report): building the carrier panicked"
+                            .to_owned(),
+                        running,
+                    });
+                    self.vertex_attempted = hash;
+                }
+            }
             self.catch_up();
             self.restage();
             self.watch_first_frames();
             self.publish_status();
+        }
+
+        /// The vertex builder's step, between ticks ([`crate::vertex::Builder::step`]). Returns
+        /// whether more vertex work waits.
+        fn vertex_step(&mut self) -> bool {
+            let compiler = &mut self.compiler;
+            let busy = self.vertex.step(&mut |request: PatchRequest| {
+                compiler.patch(request).map_err(|error| error.to_string())
+            });
+            self.log_compiler_events();
+            busy
+        }
+
+        /// Read `vertex-proof` again when it changed, and apply what it asks
+        /// ([`crate::vertex::Control`]). Gone, it is every switch off.
+        fn read_control(&mut self, dir: &Path) {
+            let path = dir.join(crate::vertex::Control::FILE_NAME);
+            let stamp = stamp_of(&path);
+            if stamp == self.control_stamp {
+                return;
+            }
+            self.control_stamp = stamp;
+            let (control, warnings) = match std::fs::read_to_string(&path) {
+                Ok(text) => crate::vertex::Control::parse(&text),
+                Err(_) => (crate::vertex::Control::default(), Vec::new()),
+            };
+            for warning in warnings.iter().take(LOGGED_DIAGNOSTICS) {
+                log(format_args!(
+                    "editor: {}: {warning}",
+                    crate::vertex::Control::FILE_NAME
+                ));
+            }
+            control.apply();
+            menu::restage();
+            log(format_args!(
+                "editor: vertex proof {} proof={} passes={:#05x} vertex={}",
+                if stamp.is_some() {
+                    "switches read"
+                } else {
+                    "switches off (no file)"
+                },
+                control.proof,
+                control.passes,
+                if control.hold_off { "off" } else { "on" }
+            ));
+        }
+
+        /// Compile the vertex carrier, have the helper check it, and hand it to the builder with
+        /// the swap that ends the previous carrier's variants; or blame the layers that broke it.
+        fn process_vertex(&mut self, dir: &Path, job: VertexJob) {
+            let request = Request {
+                id: 0,
+                op: Op::Compile,
+                file_name: CARRIER_FILE.to_owned(),
+                source: job.source.clone(),
+                entry: CARRIER_ENTRY.to_owned(),
+                profile: CARRIER_PROFILE.to_owned(),
+                defines: Vec::new(),
+            };
+            let started = Instant::now();
+            let result = self.compiler.compile(request);
+            let compile_ms = exports::note_compile(started.elapsed());
+            self.log_compiler_events();
+            let blob = match result {
+                Err(error) => {
+                    self.vertex_refused(dir, &job, &error);
+                    return;
+                }
+                Ok(response) if !response.ok => {
+                    self.vertex_compile_failed(dir, &job, &response.diagnostics);
+                    return;
+                }
+                Ok(response) => response.blob,
+            };
+            // The helper holds the carrier to `vsplice::check_carrier`: pure arithmetic, the three
+            // inputs and one output, the parameter block alone.
+            let check = self.compiler.patch(PatchRequest {
+                id: 0,
+                carrier: blob.clone(),
+                previous: true,
+                items: Vec::new(),
+            });
+            self.log_compiler_events();
+            match check {
+                Err(error) => {
+                    self.vertex_refused(dir, &job, &error);
+                    return;
+                }
+                Ok(answer) if !answer.carrier_ok => {
+                    let summary = format!("the carrier was refused: {}", answer.carrier_detail);
+                    log(format_args!(
+                        "editor: vertex layers {:?}: {summary}",
+                        job.layers
+                    ));
+                    self.vertex_blame(dir, &job, &summary);
+                    return;
+                }
+                Ok(_) => {}
+            }
+            push_recent(&mut self.compile_ms, compile_ms);
+            self.vertex_hash = job.hash;
+            self.vertex_attempted = job.hash;
+            self.vertex_retries = (0, 0);
+            self.layers
+                .promote(&job.layers, &LayerState::Carrier { compile_ms });
+            // The builder knows the new layers before the block is packed, so the vertex stage's
+            // bit follows them; nothing of the new carrier is published before the present that
+            // applies this swap.
+            self.vertex
+                .begin(blob, job.hash, job.layers.clone(), 0, compile_ms);
+            let ticket = self.write_block(Vec::new(), Some(crate::vertex::Builder::clear_edit()));
+            self.vertex.set_ticket(ticket);
+            self.vertex_ticket = ticket;
+            for id in job.layers.clone() {
+                let warnings = self
+                    .layers
+                    .candidate(id)
+                    .map(|layer| diagnostics::render(&layer.warnings))
+                    .unwrap_or_default();
+                self.layer_diag(dir, id, &warnings);
+            }
+        }
+
+        /// No vertex layer is left: end the carrier with the block that frees its slots.
+        fn end_vertex(&mut self) {
+            self.vertex_hash = 0;
+            self.vertex_attempted = 0;
+            self.vertex_job = None;
+            self.vertex.end();
+            self.vertex_ticket =
+                self.write_block(Vec::new(), Some(crate::vertex::Builder::clear_edit()));
+        }
+
+        /// The carrier's layers that changed since the live carrier take the blame for `summary`.
+        fn vertex_blame(&mut self, dir: &Path, job: &VertexJob, summary: &str) {
+            let blamed = culprits(&[], &job.layers, &self.layers);
+            self.layers.fail(&blamed, |_, running| LayerState::Error {
+                summary: summary.to_owned(),
+                running,
+            });
+            for id in blamed {
+                self.layer_diag(dir, id, &format!("{summary}\n"));
+            }
+            self.vertex_attempted = job.hash;
+        }
+
+        /// The compiler gave no answer for the carrier, or cannot patch.
+        fn vertex_refused(&mut self, dir: &Path, job: &VertexJob, error: &CompileError) {
+            log(format_args!(
+                "editor: vertex carrier not built: {error}; the live carrier keeps running"
+            ));
+            if let CompileError::Unavailable(why) = error {
+                let changed = self.layers.changed(&job.layers);
+                self.layers
+                    .fail(&changed, |_, _| LayerState::NoCompiler { why: why.clone() });
+                self.vertex_attempted = job.hash;
+                return;
+            }
+            if error.is_transient() {
+                let (seen, tries) = &mut self.vertex_retries;
+                if *seen != job.hash {
+                    *seen = job.hash;
+                    *tries = 0;
+                }
+                *tries += 1;
+                if *tries < TRANSIENT_RETRIES {
+                    return;
+                }
+                self.vertex_retries = (0, 0);
+            }
+            self.vertex_blame(dir, job, &error.to_string());
+        }
+
+        /// The carrier did not compile: each named layer gets its own messages.
+        fn vertex_compile_failed(&mut self, dir: &Path, job: &VertexJob, output: &str) {
+            let mut found = diagnostics::parse(output);
+            let files: Vec<(u32, String)> = job
+                .layers
+                .iter()
+                .filter_map(|id| Some((*id, self.layers.candidate(*id)?.file.clone())))
+                .collect();
+            let pairs: Vec<(u32, &str)> = files.iter().map(|(id, f)| (*id, f.as_str())).collect();
+            diagnostics::attribute(&mut found, &pairs);
+            for diagnostic in found.iter().take(LOGGED_DIAGNOSTICS) {
+                match diagnostic.layer {
+                    Some(id) => log(format_args!("editor: vertex layer {id}: {diagnostic}")),
+                    None => log(format_args!(
+                        "editor: internal (please report): vertex carrier: {diagnostic}"
+                    )),
+                }
+            }
+            if found.is_empty() {
+                for line in output.lines().take(LOGGED_DIAGNOSTICS) {
+                    log(format_args!("editor: vertex compiler: {line}"));
+                }
+            }
+            let named: Vec<u32> = found
+                .iter()
+                .filter(|d| d.severity == Severity::Error)
+                .filter_map(|d| d.layer)
+                .collect::<BTreeSet<u32>>()
+                .into_iter()
+                .collect();
+            let blamed = culprits(&named, &job.layers, &self.layers);
+            for &id in named.iter().chain(&blamed) {
+                let own: Vec<Diagnostic> = found
+                    .iter()
+                    .filter(|d| d.layer == Some(id))
+                    .cloned()
+                    .collect();
+                let text = if own.is_empty() {
+                    format!("{output}\n")
+                } else {
+                    diagnostics::render(&own)
+                };
+                self.layer_diag(dir, id, &text);
+            }
+            let summary_of = |id: u32| {
+                found
+                    .iter()
+                    .find(|d| d.layer == Some(id) && d.severity == Severity::Error)
+                    .map_or_else(
+                        || "the carrier did not compile".to_owned(),
+                        ToString::to_string,
+                    )
+            };
+            self.layers.fail(&blamed, |id, running| LayerState::Error {
+                summary: summary_of(id),
+                running,
+            });
+            self.vertex_attempted = job.hash;
         }
 
         fn log_compiler_events(&mut self) {
@@ -1299,6 +1634,7 @@ mod process {
                 .kinds
                 .iter()
                 .map(|state| state.ticket)
+                .chain(std::iter::once(self.vertex_ticket))
                 .max()
                 .unwrap_or(0);
             if newest == 0 || table::is_applied(newest) {
@@ -1420,12 +1756,7 @@ mod process {
                 }
             }
 
-            let live: Vec<&[u32]> = self
-                .kinds
-                .iter()
-                .map(|state| state.live_layers.as_slice())
-                .collect();
-            let slots = assign_slots_keeping(&self.project, &live, &self.slots);
+            let slots = assign_slots_keeping(&self.project, &self.live_slices(), &self.slots);
             if slots != self.slots {
                 self.slots = slots;
                 self.params_dirty = true;
@@ -1523,6 +1854,49 @@ mod process {
                         lint_ms,
                     },
                 );
+            }
+            self.scan_vertex(&effective);
+        }
+
+        /// The vertex stage's part of a scan: the carrier of the vertex layers, queued when it is
+        /// neither the live one nor the one last tried; no vertex layer ends the live carrier.
+        fn scan_vertex(&mut self, effective: &[PreparedLayer]) {
+            match codegen::generate_carrier(effective) {
+                Ok(Some(carrier)) => {
+                    let hash = source_hash_parts(
+                        CARRIER_FILE,
+                        &carrier.source,
+                        CARRIER_ENTRY,
+                        CARRIER_PROFILE,
+                        &[],
+                    );
+                    if hash == self.vertex_hash {
+                        self.vertex_attempted = hash;
+                        self.vertex_job = None;
+                    } else if hash != self.vertex_attempted {
+                        self.vertex_job = Some(VertexJob {
+                            layers: carrier.layers,
+                            source: carrier.source,
+                            hash,
+                        });
+                    }
+                }
+                Ok(None) => {
+                    self.vertex_job = None;
+                    self.vertex_attempted = 0;
+                    if self.vertex_hash != 0 {
+                        self.end_vertex();
+                    }
+                }
+                Err(error) => {
+                    if !self.codegen_failed {
+                        self.codegen_failed = true;
+                        log(format_args!(
+                            "editor: internal (please report): the vertex carrier could not be \
+                             generated: {error}; the vertex stage is not built (logged once)"
+                        ));
+                    }
+                }
             }
         }
 
@@ -1652,7 +2026,7 @@ mod process {
             };
             self.layers.promote(&job.layers, &live);
             self.retries[stage as usize] = (0, 0);
-            let ticket = self.write_block(made.take());
+            let ticket = self.write_block(made.take(), None);
             if ticket != 0 {
                 // With no pipeline of a kind to swap, a swap still waiting for its present keeps
                 // holding that kind's catch-up back.
@@ -1827,6 +2201,11 @@ mod process {
                 .collect();
             let pairs: Vec<(u32, &str)> = files.iter().map(|(id, f)| (*id, f.as_str())).collect();
             diagnostics::attribute(&mut found, &pairs);
+            // A name pasted from ReShade, D3D9 or GLSL gets a note saying what to write instead.
+            // The layer's text as compiled has its lines where the user wrote them.
+            diagnostics::add_hints(&mut found, |id, line| {
+                diagnostics::line_of(&self.layers.candidate(id)?.body, line)
+            });
             let errors = found
                 .iter()
                 .filter(|d| d.severity == Severity::Error)
@@ -1994,15 +2373,25 @@ mod process {
                 self.params_dirty = true;
             }
             if self.params_dirty {
-                self.write_block(Vec::new());
+                self.write_block(Vec::new(), None);
             }
         }
 
+        /// The layers each live variant has compiled in, every kind in [`PortKind::ALL`] order
+        /// and then the vertex carrier: the slots they read are kept.
+        fn live_slices(&self) -> Vec<&[u32]> {
+            self.kinds
+                .iter()
+                .map(|state| state.live_layers.as_slice())
+                .chain(std::iter::once(self.vertex.live_layers()))
+                .collect()
+        }
+
         /// Pack the live versions' parameters into the staged block and, in the same hold on the
-        /// block, hand `made`'s table swap to the next present, which publishes the block and
-        /// applies the swap together (`params::publish_then`). Then the stages with a drawing
-        /// layer. Returns the swap's ticket, or 0 with nothing to swap.
-        fn write_block(&mut self, made: Vec<Made>) -> u64 {
+        /// block, hand `made`'s table swap and `vertex_edit` to the next present, which publishes
+        /// the block and applies them together (`params::publish_then`). Then the stages with a
+        /// drawing layer. Returns the swap's ticket, or 0 with nothing to swap.
+        fn write_block(&mut self, made: Vec<Made>, vertex_edit: Option<table::Edit>) -> u64 {
             self.params_dirty = false;
             let fidelity = safety::mode() == Mode::Fidelity;
             self.fidelity = fidelity;
@@ -2016,8 +2405,11 @@ mod process {
                     silence_layers(block);
                 }
                 PACKING.fetch_add(1, Ordering::AcqRel);
-                if !made.is_empty() {
+                if !made.is_empty() || vertex_edit.is_some() {
                     ticket = table::defer(move |builder| {
+                        if let Some(edit) = vertex_edit {
+                            edit(builder);
+                        }
                         publish_into(builder, made);
                     });
                 }
@@ -2033,7 +2425,7 @@ mod process {
                 .iter()
                 .map(|state| state.live_layers.as_slice())
                 .collect();
-            let stages = layer_stages(&self.project, &live);
+            let stages = layer_stages(&self.project, &live, self.vertex.live_layers());
             if safety::LAYER_STAGES.swap(stages, Ordering::AcqRel) != stages {
                 // Now, rather than at the next present, which may be a while when no overlay
                 // draws.
@@ -2090,6 +2482,7 @@ mod process {
         }
 
         fn publish_status(&mut self) {
+            let (vertex_state, vertex_chip) = crate::vertex::status().chip();
             let status = Status {
                 compiler: self.compiler.choice().to_string(),
                 in_process: matches!(self.compiler.choice(), compiler::Choice::InProcess { .. }),
@@ -2104,6 +2497,9 @@ mod process {
                 params: self.layers.live_params(),
                 live_layers: std::array::from_fn(|kind| self.kinds[kind].live_layers.clone()),
                 packing: PACKING.load(Ordering::Acquire),
+                vertex_live: self.vertex.live_layers().to_vec(),
+                vertex_state,
+                vertex_chip,
             };
             *STATUS.lock().unwrap_or_else(PoisonError::into_inner) = status;
         }
@@ -2221,9 +2617,12 @@ mod tests {
             .map(|stage| kinds_of(stage).len())
             .sum();
         assert_eq!(all, PortKind::COUNT);
-        // Every layer stage's kinds are one port stage's, so one build carries all of them.
-        for stage in LayerStage::ALL {
-            assert_eq!(stage.port_kinds(), kinds_of(stage.port_stage()));
+        // Every pixel layer stage's kinds are one port stage's, so one build carries all of them.
+        for stage in LayerStage::PIXEL {
+            let Some(port) = stage.port_stage() else {
+                panic!("{stage:?} has no port stage");
+            };
+            assert_eq!(stage.port_kinds(), kinds_of(port));
         }
         // The stage's hash moves with any kind's.
         assert_ne!(stage_hash(&[1, 2]), stage_hash(&[1, 3]));
@@ -2445,17 +2844,17 @@ mod tests {
         // in the albedo port; 2 never compiled.
         let live: [&[u32]; PortKind::COUNT] = [&[], &[], &[3], &[1], &[1]];
         // The lighting layer has no variant and the albedo one is off.
-        assert_eq!(layer_stages(&project, &live), Stage::Tonemap.bit());
+        assert_eq!(layer_stages(&project, &live, &[]), Stage::Tonemap.bit());
         // Turned back on, the albedo layer draws with no recompile.
         project.layers[2].enabled = true;
         assert_eq!(
-            layer_stages(&project, &live),
+            layer_stages(&project, &live, &[]),
             Stage::Tonemap.bit() | Stage::Albedo.bit()
         );
         // A layer soloed elsewhere silences the rest.
         project.layers[0].solo = true;
-        assert_eq!(layer_stages(&project, &live), Stage::Tonemap.bit());
-        assert_eq!(layer_stages(&project, &[]), 0);
+        assert_eq!(layer_stages(&project, &live, &[]), Stage::Tonemap.bit());
+        assert_eq!(layer_stages(&project, &[], &[]), 0);
     }
 
     #[test]
@@ -2468,13 +2867,33 @@ mod tests {
         let live: [&[u32]; PortKind::COUNT] = [&[], &[], &[], &[4], &[4]];
         // The tonemap ports keep it until the move is built, and the AO ports, which do not have
         // it, are not redirected for it.
-        assert_eq!(layer_stages(&project, &live), Stage::Tonemap.bit());
+        assert_eq!(layer_stages(&project, &live, &[]), Stage::Tonemap.bit());
         // Once the lighting build is live, the bits follow it.
         let moved: [&[u32]; PortKind::COUNT] = [&[4], &[4], &[], &[], &[]];
-        assert_eq!(layer_stages(&project, &moved), Stage::Lighting.bit());
+        assert_eq!(layer_stages(&project, &moved, &[]), Stage::Lighting.bit());
         // One kind of a stage is enough for the stage.
         let one: [&[u32]; PortKind::COUNT] = [&[], &[4], &[], &[], &[]];
-        assert_eq!(layer_stages(&project, &one), Stage::Lighting.bit());
+        assert_eq!(layer_stages(&project, &one, &[]), Stage::Lighting.bit());
+    }
+
+    #[test]
+    fn the_vertex_stage_draws_when_an_on_layer_is_in_the_live_carrier() {
+        let mut project = Project {
+            layers: vec![layer(5, LayerStage::Vertex), layer(6, LayerStage::Vertex)],
+            ..Project::default()
+        };
+        let vertex = crate::replace::VERTEX_STAGE_BIT;
+        // Not compiled into the carrier yet: nothing.
+        assert_eq!(layer_stages(&project, &[], &[]), 0);
+        assert_eq!(layer_stages(&project, &[], &[6]), vertex);
+        // Off is a header write; the carrier keeps it, and the stage goes quiet.
+        project.layers[1].enabled = false;
+        assert_eq!(layer_stages(&project, &[], &[6]), 0);
+        assert_eq!(layer_stages(&project, &[], &[5, 6]), vertex);
+        assert_eq!(
+            LayerState::Carrier { compile_ms: 9.4 }.label(),
+            "Live: carrier compiled in 9 ms; meshes move as their groups are built"
+        );
     }
 
     #[test]

@@ -11,7 +11,9 @@
 //!   game's call.
 //! * `SetPipelineState`, `Reset`, `ClearState` and `Close` on command lists, and the device's
 //!   `CreateCommandList`, are [`crate::cmdlist`]'s: they bind a port's cel variant in its game
-//!   pipeline's place, and copy the probe back at `Close`.
+//!   pipeline's place, time each port's pass, and copy the probe back at `Close`.
+//! * `CreateCommandQueue` creates every queue as asked and notes its timestamp rate, which
+//!   [`crate::gpu_time`] converts the ports' GPU time with.
 //! * The pipeline creators create every pipeline as the game described it (design 4.1). The one
 //!   change they make is to give a pipeline created with no root signature the augmented one built
 //!   from its own shaders, so it matches what the game binds for it; that is measured at zero
@@ -39,7 +41,8 @@ use er_hook::{MH_ApplyQueued, MH_Initialize, MH_STATUS, MhHook};
 use windows::Win32::Foundation::{E_INVALIDARG, E_NOINTERFACE, S_OK};
 use windows::Win32::Graphics::Direct3D12::{
     D3D12_BLEND_DESC, D3D12_CACHED_PIPELINE_STATE, D3D12_COMMAND_LIST_TYPE,
-    D3D12_COMMAND_LIST_TYPE_BUNDLE, D3D12_COMMAND_LIST_TYPE_DIRECT,
+    D3D12_COMMAND_LIST_TYPE_BUNDLE, D3D12_COMMAND_LIST_TYPE_DIRECT, D3D12_COMMAND_QUEUE_DESC,
+    D3D12_COMMAND_QUEUE_FLAG_NONE, D3D12_COMMAND_QUEUE_PRIORITY_NORMAL,
     D3D12_COMPUTE_PIPELINE_STATE_DESC, D3D12_DEPTH_STENCIL_DESC, D3D12_DEPTH_STENCIL_DESC1,
     D3D12_DEPTH_STENCIL_DESC2, D3D12_GRAPHICS_PIPELINE_STATE_DESC,
     D3D12_INDEX_BUFFER_STRIP_CUT_VALUE, D3D12_INPUT_LAYOUT_DESC, D3D12_PIPELINE_STATE_FLAGS,
@@ -61,9 +64,9 @@ use windows::Win32::Graphics::Direct3D12::{
     D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VS,
     D3D12_PRIMITIVE_TOPOLOGY_TYPE, D3D12_RASTERIZER_DESC, D3D12_RASTERIZER_DESC1,
     D3D12_RASTERIZER_DESC2, D3D12_RT_FORMAT_ARRAY, D3D12_SHADER_BYTECODE, D3D12_STREAM_OUTPUT_DESC,
-    D3D12_VIEW_INSTANCING_DESC, ID3D12CommandAllocator, ID3D12Device, ID3D12Device1, ID3D12Device2,
-    ID3D12GraphicsCommandList, ID3D12PipelineLibrary, ID3D12PipelineLibrary1, ID3D12PipelineState,
-    ID3D12RootSignature,
+    D3D12_VIEW_INSTANCING_DESC, ID3D12CommandAllocator, ID3D12CommandQueue, ID3D12Device,
+    ID3D12Device1, ID3D12Device2, ID3D12GraphicsCommandList, ID3D12PipelineLibrary,
+    ID3D12PipelineLibrary1, ID3D12PipelineState, ID3D12RootSignature,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -76,10 +79,16 @@ use crate::replace::{
     SUBOBJECT_ROOT_SIGNATURE, Subobject,
 };
 use crate::table::{self, EntrySpec};
-use crate::{cmdlist, log};
+use crate::{cmdlist, gpu_time, log};
 
 type CreateDeviceFn =
     unsafe extern "system" fn(*mut c_void, i32, *const GUID, *mut *mut c_void) -> HRESULT;
+type CreateCommandQueueFn = unsafe extern "system" fn(
+    *mut c_void,
+    *const D3D12_COMMAND_QUEUE_DESC,
+    *const GUID,
+    *mut *mut c_void,
+) -> HRESULT;
 type CreateRootSignatureFn = unsafe extern "system" fn(
     *mut c_void,
     u32,
@@ -129,6 +138,7 @@ type LoadStreamFn = unsafe extern "system" fn(
 ) -> HRESULT;
 
 static CREATE_DEVICE: AtomicUsize = AtomicUsize::new(0);
+static CREATE_COMMAND_QUEUE: AtomicUsize = AtomicUsize::new(0);
 static CREATE_ROOT_SIGNATURE: AtomicUsize = AtomicUsize::new(0);
 static CREATE_GRAPHICS: AtomicUsize = AtomicUsize::new(0);
 static CREATE_COMPUTE: AtomicUsize = AtomicUsize::new(0);
@@ -296,6 +306,13 @@ unsafe fn hook_device(raw: *mut c_void) {
             cmdlist::create_command_list_hook as *const () as usize,
             &cmdlist::CREATE_COMMAND_LIST,
         ));
+        // Before the device is returned to its creator, so the game's first queue passes through.
+        report(detour(
+            "CreateCommandQueue",
+            vtable.CreateCommandQueue as usize,
+            create_command_queue_hook as *const () as usize,
+            &CREATE_COMMAND_QUEUE,
+        ));
     }
     if let Ok(device) = unknown.cast::<ID3D12Device1>() {
         report(detour(
@@ -313,6 +330,65 @@ unsafe fn hook_device(raw: *mut c_void) {
             &CREATE_STREAM,
         ));
     }
+}
+
+/// `ID3D12Device::CreateCommandQueue`: the queue is created as asked, and its timestamp rate noted
+/// for [`gpu_time`], which converts with the game's direct queue's.
+unsafe extern "system" fn create_command_queue_hook(
+    device: *mut c_void,
+    desc: *const D3D12_COMMAND_QUEUE_DESC,
+    riid: *const GUID,
+    queue: *mut *mut c_void,
+) -> HRESULT {
+    let original: CreateCommandQueueFn =
+        unsafe { std::mem::transmute(CREATE_COMMAND_QUEUE.load(Ordering::SeqCst)) };
+    let result = unsafe { original(device, desc, riid, queue) };
+    if result.is_ok() && !desc.is_null() && !queue.is_null() {
+        let created = unsafe { *queue };
+        if !created.is_null() {
+            let kind = unsafe { (*desc).Type };
+            // A panic here must not unwind into the game; the panic hook has logged where.
+            let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+                gpu_time::note_queue(device as usize, kind, created);
+            }));
+        }
+    }
+    result
+}
+
+/// The timestamp rate of a direct queue made on `device` for the purpose and released at once:
+/// [`gpu_time`]'s rate when no queue of the game's was seen. Created through the trampoline, so
+/// [`create_command_queue_hook`] never takes it for the game's.
+///
+/// # Safety
+///
+/// `device` must be a live device.
+pub(crate) unsafe fn own_queue_frequency(device: &ID3D12Device) -> Result<u64, String> {
+    let desc = D3D12_COMMAND_QUEUE_DESC {
+        Type: D3D12_COMMAND_LIST_TYPE_DIRECT,
+        Priority: D3D12_COMMAND_QUEUE_PRIORITY_NORMAL.0,
+        Flags: D3D12_COMMAND_QUEUE_FLAG_NONE,
+        NodeMask: 0,
+    };
+    let queue: ID3D12CommandQueue = match CREATE_COMMAND_QUEUE.load(Ordering::SeqCst) {
+        0 => unsafe { device.CreateCommandQueue(&desc) }
+            .map_err(|error| format!("CreateCommandQueue: {error}"))?,
+        trampoline => {
+            // SAFETY: the trampoline MinHook returned for this exact function.
+            let original: CreateCommandQueueFn = unsafe { std::mem::transmute(trampoline) };
+            let mut raw: *mut c_void = std::ptr::null_mut();
+            unsafe { original(device.as_raw(), &desc, &ID3D12CommandQueue::IID, &mut raw) }
+                .ok()
+                .map_err(|error| format!("CreateCommandQueue: {error}"))?;
+            if raw.is_null() {
+                return Err("CreateCommandQueue returned no queue".to_owned());
+            }
+            // SAFETY: a queue just created for us, whose one reference this takes.
+            unsafe { ID3D12CommandQueue::from_raw(raw) }
+        }
+    };
+    unsafe { queue.GetTimestampFrequency() }
+        .map_err(|error| format!("GetTimestampFrequency: {error}"))
 }
 
 /// Detour `SetGraphicsRootSignature` for direct command lists and for bundles, and the methods
@@ -675,13 +751,28 @@ pub(crate) unsafe fn create_variant(
     record: &PipelineRecord,
     ps: &[u8],
 ) -> Result<usize, HRESULT> {
+    let stream = record.with_ps(ps).ok_or(E_INVALIDARG)?;
+    unsafe { create_from_stream(device, &stream) }
+}
+
+/// Create a pipeline from `stream` through the `CreatePipelineState` trampoline on `device`, so it
+/// never passes through [`create_stream_hook`]: a cel variant, or a vertex variant
+/// (`crate::vertex`). Returns it as a raw `ID3D12PipelineState*` holding one reference.
+///
+/// # Safety
+///
+/// `device` must be a live `ID3D12Device2`, the one the stream's root signature was created on,
+/// and every pointer in `stream` must be valid for the call.
+pub(crate) unsafe fn create_from_stream(
+    device: usize,
+    stream: &record::SerializedStream<'_>,
+) -> Result<usize, HRESULT> {
     let original = CREATE_STREAM.load(Ordering::SeqCst);
     if device == 0 || original == 0 {
         return Err(E_NOINTERFACE);
     }
     // SAFETY: the trampoline MinHook returned for `ID3D12Device2::CreatePipelineState`.
     let original: CreateStreamFn = unsafe { std::mem::transmute(original) };
-    let stream = record.with_ps(ps).ok_or(E_INVALIDARG)?;
     let desc = D3D12_PIPELINE_STATE_STREAM_DESC {
         SizeInBytes: stream.size(),
         pPipelineStateSubobjectStream: stream.pointer().cast_mut().cast(),
@@ -801,6 +892,24 @@ unsafe fn adopt_inner(replacement: &'static Replacement, created: &Created<'_>) 
     }
 }
 
+/// A pipeline the game just created: give it to the vertex registry (`crate::vertex`), which
+/// records it when its vertex shader is a mesh pass's. A panic stays here.
+fn note_mesh(path: crate::vertex::Path, pipeline: *mut *mut c_void, stream: &[u8], root: usize) {
+    if pipeline.is_null() || unsafe { *pipeline }.is_null() {
+        return;
+    }
+    let game = unsafe { pipeline_state_pointer(*pipeline) };
+    if game == 0 {
+        return;
+    }
+    let noted = catch_unwind(AssertUnwindSafe(|| unsafe {
+        crate::vertex::on_created(path, game, stream, root, &subobject_payload);
+    }));
+    if noted.is_err() {
+        crate::vertex::note_panic();
+    }
+}
+
 unsafe extern "system" fn create_graphics_hook(
     device: *mut c_void,
     desc: *const D3D12_GRAPHICS_PIPELINE_STATE_DESC,
@@ -812,15 +921,32 @@ unsafe extern "system" fn create_graphics_hook(
     let seen = SEEN_GRAPHICS.fetch_add(1, Ordering::Relaxed) + 1;
     const PATH: &str = "CreateGraphicsPipelineState";
     let mut result = None;
+    let mut used: Option<D3D12_GRAPHICS_PIPELINE_STATE_DESC> = None;
     if let Some(copy) = calling_device(&device).and_then(|d| unsafe { fill_graphics(d, desc) }) {
         let filled = unsafe { original(device, &copy, riid, pipeline) };
         if filled.is_ok() {
             result = Some(filled);
+            used = Some(copy);
         } else {
             note_refused(PATH, filled, raw_root_signature(&copy.pRootSignature));
         }
     }
     let result = result.unwrap_or_else(|| unsafe { original(device, desc, riid, pipeline) });
+    // A mesh pipeline arriving here is recorded from the description as `LoadGraphicsPipeline`'s
+    // are, so its material group is built whole (`docs/plans/er-shader-editor-vertex.md`, 7.1).
+    if result == S_OK {
+        let created = used.as_ref().or(unsafe { desc.as_ref() });
+        if let Some(created) = created
+            && let Some(stream) = graphics_stream(created)
+        {
+            note_mesh(
+                crate::vertex::Path::GraphicsDesc,
+                pipeline,
+                &stream,
+                raw_root_signature(&created.pRootSignature),
+            );
+        }
+    }
     // This path has never been seen creating a port, so one arriving here is noted and left as the
     // game's own pipeline rather than recorded.
     if result == S_OK
@@ -998,6 +1124,14 @@ unsafe extern "system" fn load_graphics_hook(
     let Some(desc) = (unsafe { desc.as_ref() }) else {
         return result;
     };
+    if let Some(stream) = graphics_stream(desc) {
+        note_mesh(
+            crate::vertex::Path::LoadGraphics,
+            pipeline,
+            &stream,
+            raw_root_signature(&desc.pRootSignature),
+        );
+    }
     let Some(replacement) = (unsafe { bytecode(&desc.PS) }).and_then(replace::find) else {
         return result;
     };
@@ -1042,7 +1176,7 @@ fn payload_of<T>() -> Payload {
 
 /// Payload layout of each `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE`, taken from the `windows` crate's
 /// own definitions rather than written out by hand.
-fn subobject_payload(ty: u32) -> Option<Payload> {
+pub(crate) fn subobject_payload(ty: u32) -> Option<Payload> {
     Some(match ty {
         // ROOT_SIGNATURE: an `ID3D12RootSignature*`.
         0 => payload_of::<usize>(),
@@ -1197,6 +1331,17 @@ unsafe extern "system" fn create_stream_hook(
         };
         let result = unsafe { original(device, &patched, riid, pipeline) };
         if result.is_ok() {
+            if result == S_OK {
+                // SAFETY: `copy` holds `size` initialized bytes.
+                let filled =
+                    unsafe { std::slice::from_raw_parts(copy.as_ptr().cast::<u8>(), size) };
+                note_mesh(
+                    crate::vertex::Path::Stream,
+                    pipeline,
+                    filled,
+                    root_signature,
+                );
+            }
             if let Some(replacement) = port
                 && result == S_OK
             {
@@ -1220,6 +1365,14 @@ unsafe extern "system" fn create_stream_hook(
         note_refused(PATH, result, root_signature);
     }
     let result = unsafe { original(device, desc, riid, pipeline) };
+    if result == S_OK {
+        note_mesh(
+            crate::vertex::Path::Stream,
+            pipeline,
+            walked.stream,
+            walked.root_signature,
+        );
+    }
     if let Some(replacement) = port
         && result == S_OK
     {
@@ -1255,6 +1408,12 @@ unsafe extern "system" fn load_stream_hook(
     let Some(walked) = (unsafe { walk_stream(desc) }) else {
         return result;
     };
+    note_mesh(
+        crate::vertex::Path::LoadStream,
+        pipeline,
+        walked.stream,
+        walked.root_signature,
+    );
     if let Some(replacement) = walked.port() {
         const PATH: &str = "LoadPipeline";
         // Held until `adopt` returns, as in `load_graphics_hook`.

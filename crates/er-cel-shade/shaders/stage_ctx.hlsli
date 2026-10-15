@@ -1,9 +1,9 @@
 // The port side of a stage (design 7.1 and 5.3): what a port hands its stage's layers, how a
 // layer's result is mixed in, and what the port records in the probe.
 //
-// A port computes the game's colour and cel's change to it, fills its stage's context, calls the
-// stage function in `editor_layers.hlsli` to get the colour after the user's layers, and records
-// the two in the probe with `er_probe_record`. Only our variants contain this code, so a probe
+// A port computes the game's colour -- at AO with the light bands and outlines it still draws --
+// fills its stage's context, calls the stage function in `editor_layers.hlsli` to get the colour
+// after the layers, and records the two in the probe with `er_probe_record`. Only our variants contain this code, so a probe
 // region that keeps advancing proves a variant of that port is bound.
 
 #ifndef STAGE_CTX_HLSLI
@@ -43,7 +43,7 @@ struct LightingCtx
 };
 
 // The Albedo stage, in the albedo pass. Its colour is the diffuse albedo the pass writes,
-// `(1 - metalness) * base colour`, after cel.
+// `(1 - metalness) * base colour`, as the game computes it; the cel surfaces are a layer here.
 struct AlbedoCtx
 {
     uint2 px;
@@ -53,7 +53,7 @@ struct AlbedoCtx
 
 // The two tonemap stages, in both tonemap passes. TonemapPre's colour is the scene in HDR, bloom
 // and the colour matrix applied, before the vignette and the tone curve; TonemapPost's is the
-// finished picture after cel's saturation and levels.
+// finished picture, which the cel saturation and brightness steps are layers on.
 struct TonemapCtx
 {
     // The pixel, and the screen coordinate from 0 to 1 (the source texture is read at
@@ -77,6 +77,11 @@ struct TonemapCtx
 // the mask word. `mask` is how much of the layer's selector covers this pixel, 0 to 1: the
 // generated code passes `er_mask(header.w, <the slot's mask register>, x, c)` (design 7.3). A
 // layer that is off, transparent or masked out returns `x` exactly, even when `y` is not a number.
+//
+// A layer at full opacity and fully inside its mask returns its blended result exactly, not
+// through `lerp`: `lerp(x, b, 1)` is `x + (b - x)`, which is not `b` in floating point when `x`
+// and `b` are far apart, so a cel layer would differ in the last bits from the hard-coded cel it
+// replaced (`src/editor/cel.rs`). That is also the common case, a layer left at its defaults.
 float3 er_mix(float3 x, float3 y, float4 header, float mask)
 {
     float amount = saturate(header.x) * saturate(header.y) * saturate(mask);
@@ -93,6 +98,10 @@ float3 er_mix(float3 x, float3 y, float4 header, float mask)
     else if (blend == ER_BLEND_SCREEN)
     {
         blended = 1.0 - (1.0 - x) * (1.0 - y);
+    }
+    if (amount >= 1.0)
+    {
+        return blended;
     }
     return amount > 0.0 ? lerp(x, blended, amount) : x;
 }
@@ -290,10 +299,40 @@ uint er_frame()
     return asuint(er_p[ER_P_FRAME].y);
 }
 
+// Is the vertex proof mode on (`er_p[ER_P_PREVIOUS].z`, design 7.7)?
+bool er_vertex_proof()
+{
+    return asuint(er_p[ER_P_PREVIOUS].z) != 0;
+}
+
+// Record this pixel in the vertex proof region when it is a point of the 8x8 grid over `size`
+// (the same points `er_probe_record` samples): `depth` the view depth in metres or -1 on the sky,
+// `normal_dot` the G-buffer normal's agreement with the depth buffer's own normal, `occlusion` the
+// term the pass multiplies into the light, and `light` the diffuse light's luminance before it.
+// The caller checks `er_vertex_proof()` first.
+void er_probe_vertex_record(uint2 px, uint2 size, float depth, float normal_dot,
+                            float occlusion, float light)
+{
+    uint2 cell = px * ER_PROBE_GRID / max(size, uint2(1, 1));
+    if (any(cell >= ER_PROBE_GRID))
+    {
+        return;
+    }
+    uint2 centre = (cell * 2 + 1) * size / (ER_PROBE_GRID * 2);
+    if (any(px != centre))
+    {
+        return;
+    }
+    uint at = ER_PROBE_VERTEX_SAMPLES + (cell.y * ER_PROBE_GRID + cell.x) * ER_PROBE_VERTEX_SAMPLE_BYTES;
+    uint shadow = (f32tof16(saturate(occlusion)) & 0xffff)
+                  | (f32tof16(clamp(light, 0.0, 65504.0)) << 16);
+    er_probe.Store4(at, uint4(asuint(depth), asuint(normal_dot), shadow, er_frame()));
+}
+
 // Record this pixel in one probe region: `header_at` and `samples_at` are the region's
 // `ER_PROBE_*_HEADER` and `ER_PROBE_*_SAMPLES`, `size` the target the grid is laid over, `pre` the
-// colour after the game's maths and cel, `post` the colour after the layers, `aux` the region's
-// last sample word.
+// colour the port computed before its stage's layers, `post` the colour after them, `aux` the
+// region's last sample word.
 //
 // Every pixel raises the header's largest `SV_Position` seen with `InterlockedMax`, but only a
 // pixel past the value already stored issues the atomic, so a frame costs one load per pixel and

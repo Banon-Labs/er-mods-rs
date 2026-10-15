@@ -9,6 +9,12 @@
 //! unwinds, and after one the panel is hidden for the session (`menu::hide_for_session`). The
 //! per-present staging and publishing run after it in a `catch_unwind` of their own, so the look
 //! and the layers keep drawing whatever became of the panel.
+//!
+//! # Fonts
+//!
+//! The panel's fonts live in the host's atlas, whichever module hosts, so each frame the guest
+//! reads out of the frame the host passed which of them are built (`menu::theme::frame_fonts`)
+//! and hands that to the panel. Until they are, the panel draws in the host's default font.
 
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -32,7 +38,13 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     };
     // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
     let ui_scale = unsafe { (*frame).ui_scale };
-    if catch_unwind(AssertUnwindSafe(|| crate::menu::draw_ui(ui, ui_scale))).is_err() {
+    // SAFETY: the host's pointer for this call, as above.
+    let fonts = unsafe { crate::menu::theme::frame_fonts(frame) };
+    if catch_unwind(AssertUnwindSafe(|| {
+        crate::menu::draw_ui(ui, ui_scale, &fonts);
+    }))
+    .is_err()
+    {
         crate::menu::hide_for_session();
     }
     static END_FAILED: AtomicBool = AtomicBool::new(false);
@@ -89,7 +101,9 @@ pub fn install(hmodule_raw: usize) {
             log(format_args!(
                 "overlay: no game window, so nothing runs once a present: no menu, the saved look \
                  cannot change live, and the present count the probe's clock runs on stays 0. \
-                 Cel still draws with the saved look."
+                 The light bands and outlines still draw with the saved look; layers, the cel \
+                 layers among them, do not, because their parameters are published once a \
+                 present."
             ));
             return;
         }
@@ -113,7 +127,9 @@ pub fn install(hmodule_raw: usize) {
             log(format_args!(
                 "overlay: hudhook install failed ({error:?}), so nothing runs once a present: no \
                  menu, the saved look cannot change live, and the present count the probe's \
-                 clock runs on stays 0. Cel still draws with the saved look."
+                 clock runs on stays 0. The light bands and outlines still draw with the saved \
+                 look; layers, the cel layers among them, do not, because their parameters are \
+                 published once a present."
             ));
         }
     }

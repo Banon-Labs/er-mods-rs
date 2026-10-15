@@ -7,7 +7,8 @@
 //! several lines. The type is one of `float`, `float2`, `float3`, `float4`, `int`, `uint` and
 //! `bool`; a matrix, an array or any other type is an error on its line. The keys are `ui_type`,
 //! `ui_min`, `ui_max`, `ui_step`, `ui_label`, `ui_tooltip`, `ui_category`, `ui_units`,
-//! `ui_items`, `hidden` and `ui_scale = "log"`; another key is a warning and is ignored.
+//! `ui_items`, `hidden` and `ui_scale = "log"`; another key is a warning and is ignored, except
+//! ReShade's `source`, which is an error: the parameter would never take the value it asks for.
 //!
 //! # What happens to the source
 //!
@@ -32,6 +33,30 @@ use super::scan::{self, Kind, Token};
 
 /// Parameter registers in a slot: everything after the header.
 pub const PARAM_REGISTERS: usize = crate::params::reg::LAYER_REGISTERS - 1;
+
+/// The annotation keys the parser reads; any other is a warning and is ignored. The Code tab's
+/// completion suggests exactly these (`complete.rs`).
+pub const ANNOTATION_KEYS: [&str; 11] = [
+    "ui_type",
+    "ui_min",
+    "ui_max",
+    "ui_step",
+    "ui_label",
+    "ui_tooltip",
+    "ui_category",
+    "ui_units",
+    "ui_items",
+    "hidden",
+    "ui_scale",
+];
+
+/// The widgets `ui_type` may name; another is a warning and the type's default widget is used.
+pub const UI_TYPES: [&str; 8] = [
+    "slider", "drag", "input", "color", "combo", "radio", "list", "checkbox",
+];
+
+/// The values `ui_scale` may take.
+pub const UI_SCALES: [&str; 2] = ["linear", "log"];
 
 /// A parameter's HLSL type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -486,14 +511,21 @@ fn read_declaration(tokens: &[Token<'_>], problems: &mut Vec<Problem>) -> Option
             }
             ("hidden", Value::Bool(b)) => decl.hidden = b,
             ("hidden", Value::Numbers(n)) if n.len() == 1 => decl.hidden = n[0] != 0.0,
-            ("ui_scale", Value::Str(s)) if s == "log" => decl.log_scale = true,
-            ("ui_scale", Value::Str(s)) if s == "linear" => decl.log_scale = false,
-            (
-                "ui_type" | "ui_min" | "ui_max" | "ui_step" | "ui_label" | "ui_tooltip"
-                | "ui_category" | "ui_units" | "ui_items" | "hidden" | "ui_scale",
-                _,
-            ) => warn(problems, "its value has the wrong kind"),
-            ("source", _) => warn(problems, "values from a source are not supported yet"),
+            ("ui_scale", Value::Str(s)) if UI_SCALES.contains(&s.as_str()) => {
+                decl.log_scale = s == "log";
+            }
+            (name, _) if ANNOTATION_KEYS.contains(&name) => {
+                warn(problems, "its value has the wrong kind");
+            }
+            // ReShade's `source = "timer"` and the like. Ignored, the parameter would sit at its
+            // default for good, which reads as a layer that does nothing; the hint under this
+            // error says where the time and the frame are.
+            ("source", _) => problems.push(problem(
+                &key,
+                Severity::Error,
+                "`source`: a parameter takes its value from the panel, never from a source; \
+                 `er_p[ER_P_FRAME].x` is the time in seconds and `er_frame()` the frame",
+            )),
             _ => warn(problems, "unknown annotation"),
         }
     }
@@ -569,10 +601,7 @@ fn widget(
         }
     };
     if let Some(kind) = asked
-        && ![
-            "slider", "drag", "input", "color", "combo", "radio", "list", "checkbox",
-        ]
-        .contains(&kind)
+        && !UI_TYPES.contains(&kind)
     {
         refuse(problems, "is not a widget; the default is used");
     }

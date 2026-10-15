@@ -10,6 +10,16 @@
 //! followed by padding ([`Look::gpu_block`]). The menu draws one slider per entry and the file
 //! writes one line per entry, so adding a knob is one row here, one `#define` in the `.hlsli`, and
 //! the shader code that reads it.
+//!
+//! # The knobs that are layers now
+//!
+//! The cel look had nine knobs. Five are still [`KNOBS`]: the light bands and the outlines, which
+//! the AO port draws and no layer can (design 17). The other four -- paint radius, colour levels,
+//! brightness steps and saturation -- are [`LAYER_KNOBS`]: their values live in the editor's
+//! project as parameters of three stock layers (`crate::editor::cel`). The file still names them
+//! in two places. A preset carries all nine ([`Preset::layers`]), because applying one sets the
+//! layers too. And a `[look]` written before the move carries the four, which the first start
+//! after it moves into the project once ([`Settings::moved`], [`Settings::cel_layers`]).
 
 use crate::replace::PortKind;
 
@@ -85,6 +95,15 @@ pub const KNOBS: [Knob; KNOB_COUNT] = [
         integer: false,
         off: 0.7,
     },
+];
+
+/// Number of knobs.
+pub const KNOB_COUNT: usize = 5;
+
+/// The cel knobs that are stock layers now (`crate::editor::cel`), in the order the file and a
+/// [`LayerLook`] keep them. Their ranges and off values are the knobs' before the move, which are
+/// the stock layers' annotated ranges too; a test in `editor::cel` holds the two together.
+pub const LAYER_KNOBS: [Knob; LAYER_KNOB_COUNT] = [
     Knob {
         key: "paint_radius",
         group: "Surfaces",
@@ -129,47 +148,61 @@ pub const KNOBS: [Knob; KNOB_COUNT] = [
     },
 ];
 
-/// Number of knobs.
-pub const KNOB_COUNT: usize = 9;
+/// Number of [`LAYER_KNOBS`].
+pub const LAYER_KNOB_COUNT: usize = 4;
 
 /// Floats in the GPU block: the knobs padded to a whole number of 16-byte registers.
 ///
 /// A literal, because `scripts/rva_symbols.py` evaluates constants to prove which addresses
 /// nothing declares, and a method call is an expression it cannot evaluate. The assertion below
 /// keeps it equal to `KNOB_COUNT` rounded up to four.
-pub const GPU_FLOATS: usize = 12;
+pub const GPU_FLOATS: usize = 8;
 const _: () = assert!(GPU_FLOATS == KNOB_COUNT.div_ceil(4) * 4);
 
 /// Index of each knob in [`KNOBS`], for code that needs one by name.
 pub mod knob {
     pub const LIGHT_BAND_STOPS: usize = 0;
-    pub const SATURATION: usize = 8;
+    pub const OUTLINE_INK: usize = 1;
 }
 
-/// One complete look, one value per [`KNOBS`] entry.
+/// Index of each knob in [`LAYER_KNOBS`](super::LAYER_KNOBS) and a
+/// [`LayerLook`](super::LayerLook).
+pub mod layer_knob {
+    pub const PAINT_RADIUS: usize = 0;
+    pub const COLOUR_LEVELS: usize = 1;
+    pub const SCREEN_LEVELS: usize = 2;
+    pub const SATURATION: usize = 3;
+}
+
+/// `values`, each pulled into its knob's range and rounded where the knob is whole numbers. A file
+/// edited by hand can say anything; the shaders only ever see this.
+fn clamp_knobs<const N: usize>(values: [f32; N], knobs: &[Knob; N]) -> [f32; N] {
+    let mut values = values;
+    for (value, knob) in values.iter_mut().zip(knobs.iter()) {
+        let mut v = if value.is_finite() { *value } else { knob.min };
+        if knob.integer {
+            v = v.round();
+        }
+        *value = v.clamp(knob.min, knob.max);
+    }
+    values
+}
+
+/// One complete look of the knobs the AO port reads, one value per [`KNOBS`] entry.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look(pub [f32; KNOB_COUNT]);
 
 impl Look {
-    /// The game's own picture: every effect off, saturation unchanged.
+    /// The game's own picture: every effect off.
     #[must_use]
     pub fn vanilla() -> Self {
         Self(KNOBS.map(|k| k.off))
     }
 
-    /// Every value pulled into its knob's range and rounded where the knob is whole numbers. A
-    /// file edited by hand can say anything; the shaders only ever see this.
+    /// Every value pulled into its knob's range and rounded where the knob is whole numbers.
     #[must_use]
     pub fn clamped(self) -> Self {
-        let mut values = self.0;
-        for (value, knob) in values.iter_mut().zip(KNOBS.iter()) {
-            let mut v = if value.is_finite() { *value } else { knob.min };
-            if knob.integer {
-                v = v.round();
-            }
-            *value = v.clamp(knob.min, knob.max);
-        }
-        Self(values)
+        Self(clamp_knobs(self.0, &KNOBS))
     }
 
     /// The constant buffer the shaders read. A disabled look is [`Look::vanilla`], so turning the
@@ -187,23 +220,56 @@ impl Look {
     }
 }
 
-/// A named look.
+/// The values of the four [`LAYER_KNOBS`], which live in the editor's project as the stock cel
+/// layers' parameters (`crate::editor::cel`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayerLook(pub [f32; LAYER_KNOB_COUNT]);
+
+impl LayerLook {
+    /// Every effect off, saturation unchanged.
+    #[must_use]
+    pub fn vanilla() -> Self {
+        Self(LAYER_KNOBS.map(|k| k.off))
+    }
+
+    /// Every value pulled into its knob's range and rounded where the knob is whole numbers.
+    #[must_use]
+    pub fn clamped(self) -> Self {
+        Self(clamp_knobs(self.0, &LAYER_KNOBS))
+    }
+}
+
+/// A named look: the knobs the AO port reads, and the values of the stock cel layers, which
+/// applying the preset writes into the project.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preset {
     pub name: String,
     pub look: Look,
+    pub layers: LayerLook,
 }
 
 /// The presets that ship with the DLL. They cannot be overwritten or deleted from the menu.
 ///
 /// "Wind Waker" is the look measured on screen on 2026-10-14 (run `br-20261014-210938-1960`):
-/// the values `scripts/build-cel-shaders.py` compiled in before the look moved to the menu.
+/// the values `scripts/build-cel-shaders.py` compiled in before the look moved to the menu. Each
+/// row is the nine knobs in the order they had before four became layers: the five [`KNOBS`],
+/// then the four [`LAYER_KNOBS`].
 #[must_use]
 pub fn builtin_presets() -> Vec<Preset> {
-    let preset = |name: &str, values: [f32; KNOB_COUNT]| Preset {
-        name: name.to_owned(),
-        look: Look(values),
+    let preset = |name: &str, values: [f32; KNOB_COUNT + LAYER_KNOB_COUNT]| {
+        let mut look = [0.0; KNOB_COUNT];
+        let mut layers = [0.0; LAYER_KNOB_COUNT];
+        look.copy_from_slice(&values[..KNOB_COUNT]);
+        layers.copy_from_slice(&values[KNOB_COUNT..]);
+        Preset {
+            name: name.to_owned(),
+            look: Look(look),
+            layers: LayerLook(layers),
+        }
     };
+    let mut vanilla = [0.0; KNOB_COUNT + LAYER_KNOB_COUNT];
+    vanilla[..KNOB_COUNT].copy_from_slice(&Look::vanilla().0);
+    vanilla[KNOB_COUNT..].copy_from_slice(&LayerLook::vanilla().0);
     vec![
         preset("Wind Waker", [2.0, 0.9, 1.0, 0.04, 0.7, 3.0, 6.0, 6.0, 1.0]),
         preset(
@@ -213,7 +279,7 @@ pub fn builtin_presets() -> Vec<Preset> {
         preset("Soft cel", [1.5, 0.6, 1.0, 0.05, 0.8, 2.0, 10.0, 0.0, 1.1]),
         preset("Comic ink", [2.5, 1.0, 2.0, 0.03, 0.5, 0.0, 0.0, 4.0, 1.0]),
         preset("Painterly", [0.0, 0.3, 1.0, 0.06, 0.9, 5.0, 0.0, 0.0, 1.15]),
-        preset("Vanilla", Look::vanilla().0),
+        preset("Vanilla", vanilla),
     ]
 }
 
@@ -282,6 +348,8 @@ pub struct Settings {
     pub dock: Dock,
     pub panel_width: f32,
     pub code_width: f32,
+    /// Cel on: the knobs below, and the stock cel layers' `enabled` in the project, which the
+    /// Look tab's checkbox sets with it.
     pub enabled: bool,
     /// The preset the look was last taken from. Informational: the look may have been edited
     /// since, and is saved in full under `[look]` either way.
@@ -293,14 +361,23 @@ pub struct Settings {
     /// the game asked whatever the look says, until the menu or this file clears them (design 14,
     /// P0.1 item 5). Written in the file by [`PortKind::key`].
     pub unfaithful_ports: u8,
+    /// The [`LAYER_KNOBS`] have been moved into the editor's project as stock cel layers. False
+    /// for a file written before the move, and for no file at all; the first start that finds it
+    /// false adds the layers from [`Self::moved`] and saves this as true, so the move happens once
+    /// (`crate::editor::cel`).
+    pub cel_layers: bool,
+    /// The [`LAYER_KNOBS`] as a `[look]` written before the move holds them, or the default
+    /// preset's when it holds none: what the move puts into the project. Written back under
+    /// `[look]` only while [`Self::cel_layers`] is false, so a move that could not be made loses
+    /// nothing.
+    pub moved: LayerLook,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        let look = builtin_presets()
+        let preset = builtin_presets()
             .into_iter()
-            .find(|p| p.name == DEFAULT_PRESET)
-            .map_or_else(Look::vanilla, |p| p.look);
+            .find(|p| p.name == DEFAULT_PRESET);
         Self {
             menu_key: DEFAULT_MENU_KEY.to_owned(),
             dock: Dock::Right,
@@ -308,9 +385,11 @@ impl Default for Settings {
             code_width: DEFAULT_CODE_WIDTH,
             enabled: true,
             preset: DEFAULT_PRESET.to_owned(),
-            look,
+            look: preset.as_ref().map_or_else(Look::vanilla, |p| p.look),
             presets: Vec::new(),
             unfaithful_ports: 0,
+            cel_layers: false,
+            moved: preset.map_or_else(LayerLook::vanilla, |p| p.layers),
         }
     }
 }
@@ -375,6 +454,7 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
             settings.presets.push(Preset {
                 name: String::new(),
                 look: settings.look,
+                layers: settings.moved,
             });
             continue;
         }
@@ -401,12 +481,13 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
                 "unfaithful_ports" => parse_string(value)
                     .and_then(|list| parse_ports(&list))
                     .map(|bits| settings.unfaithful_ports = bits),
+                "cel_layers" => parse_bool(value).map(|v| settings.cel_layers = v),
                 _ => Err(format!("unknown key `{key}`")),
             },
-            Section::Look => set_knob(&mut settings.look, key, value),
+            Section::Look => set_knob(&mut settings.look, &mut settings.moved, key, value),
             Section::Preset => match settings.presets.last_mut() {
                 Some(preset) if key == "name" => parse_string(value).map(|v| preset.name = v),
-                Some(preset) => set_knob(&mut preset.look, key, value),
+                Some(preset) => set_knob(&mut preset.look, &mut preset.layers, key, value),
                 None => Err("no preset is open".to_owned()),
             },
         };
@@ -415,6 +496,7 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
         }
     }
     settings.look = settings.look.clamped();
+    settings.moved = settings.moved.clamped();
     let before = settings.presets.len();
     settings
         .presets
@@ -424,6 +506,7 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
     }
     for preset in &mut settings.presets {
         preset.look = preset.look.clamped();
+        preset.layers = preset.layers.clamped();
     }
     (settings, warnings)
 }
@@ -434,12 +517,16 @@ pub fn is_builtin(name: &str) -> bool {
     builtin_presets().iter().any(|p| p.name == name)
 }
 
-fn set_knob(look: &mut Look, key: &str, value: &str) -> Result<(), String> {
-    let index = KNOBS
-        .iter()
-        .position(|k| k.key == key)
-        .ok_or_else(|| format!("unknown key `{key}`"))?;
-    look.0[index] = value
+/// Set the knob `key` names, of [`KNOBS`] in `look` or of [`LAYER_KNOBS`] in `layers`.
+fn set_knob(look: &mut Look, layers: &mut LayerLook, key: &str, value: &str) -> Result<(), String> {
+    let slot = if let Some(index) = KNOBS.iter().position(|k| k.key == key) {
+        &mut look.0[index]
+    } else if let Some(index) = LAYER_KNOBS.iter().position(|k| k.key == key) {
+        &mut layers.0[index]
+    } else {
+        return Err(format!("unknown key `{key}`"));
+    };
+    *slot = value
         .parse::<f32>()
         .map_err(|_| format!("`{key}` wants a number, not `{value}`"))?;
     Ok(())
@@ -526,8 +613,8 @@ pub(crate) fn quote(value: &str) -> String {
     out
 }
 
-fn render_look(out: &mut String, look: &Look, with_help: bool) {
-    for (knob, value) in KNOBS.iter().zip(look.0.iter()) {
+fn render_knobs(out: &mut String, knobs: &[Knob], values: &[f32], with_help: bool) {
+    for (knob, value) in knobs.iter().zip(values.iter()) {
         if with_help {
             out.push_str(&format!("# {} ({} to {})\n", knob.help, knob.min, knob.max));
         }
@@ -564,15 +651,25 @@ pub fn render(settings: &Settings) -> String {
          # says. Empty clears it; names are ao, ao_ssr, cmb_albedo, tonemap and tonemap_lut.\n",
     );
     out.push_str(&format!(
-        "unfaithful_ports = {}\n\n",
+        "unfaithful_ports = {}\n",
         quote(&render_ports(settings.unfaithful_ports))
     ));
+    out.push_str(
+        "# true once the surfaces, saturation and brightness steps knobs live as layers in\n\
+         # er-shader-editor/project.ershade, which the first start after they became layers does.\n",
+    );
+    out.push_str(&format!("cel_layers = {}\n\n", settings.cel_layers));
     out.push_str("[look]\n");
-    render_look(&mut out, &settings.look, true);
+    render_knobs(&mut out, &KNOBS, &settings.look.0, true);
+    if !settings.cel_layers {
+        out.push_str("# Not moved into the editor's project yet; the next start moves them.\n");
+        render_knobs(&mut out, &LAYER_KNOBS, &settings.moved.0, true);
+    }
     for preset in &settings.presets {
         out.push_str("\n[[preset]]\n");
         out.push_str(&format!("name = {}\n", quote(&preset.name)));
-        render_look(&mut out, &preset.look, false);
+        render_knobs(&mut out, &KNOBS, &preset.look.0, false);
+        render_knobs(&mut out, &LAYER_KNOBS, &preset.layers.0, false);
     }
     out
 }
@@ -584,9 +681,28 @@ mod tests {
     #[test]
     fn the_knob_count_matches_the_table() {
         assert_eq!(KNOBS.len(), KNOB_COUNT);
+        assert_eq!(LAYER_KNOBS.len(), LAYER_KNOB_COUNT);
         assert_eq!(GPU_FLOATS % 4, 0);
         assert_eq!(KNOBS[knob::LIGHT_BAND_STOPS].key, "light_band_stops");
-        assert_eq!(KNOBS[knob::SATURATION].key, "saturation");
+        assert_eq!(KNOBS[knob::OUTLINE_INK].key, "outline_ink");
+        assert_eq!(LAYER_KNOBS[layer_knob::PAINT_RADIUS].key, "paint_radius");
+        assert_eq!(LAYER_KNOBS[layer_knob::COLOUR_LEVELS].key, "colour_levels");
+        assert_eq!(LAYER_KNOBS[layer_knob::SCREEN_LEVELS].key, "screen_levels");
+        assert_eq!(LAYER_KNOBS[layer_knob::SATURATION].key, "saturation");
+        // A key names one knob in one table.
+        for knob in &KNOBS {
+            assert!(LAYER_KNOBS.iter().all(|other| other.key != knob.key));
+        }
+    }
+
+    #[test]
+    fn the_abi_header_names_no_knob_that_is_a_layer_now() {
+        // A `cel_*` define for a knob the port no longer reads would let a port read a register
+        // nothing writes.
+        let hlsl = include_str!("../shaders/editor_abi.hlsli");
+        for knob in &LAYER_KNOBS {
+            assert!(!hlsl.contains(&format!("cel_{}", knob.key)), "{}", knob.key);
+        }
     }
 
     #[test]
@@ -633,22 +749,30 @@ mod tests {
     fn every_preset_is_inside_its_ranges() {
         for preset in builtin_presets() {
             assert_eq!(preset.look, preset.look.clamped(), "{}", preset.name);
+            assert_eq!(preset.layers, preset.layers.clamped(), "{}", preset.name);
         }
+        let vanilla = builtin_presets()
+            .into_iter()
+            .find(|p| p.name == "Vanilla")
+            .expect("a Vanilla preset");
+        assert_eq!(
+            (vanilla.look, vanilla.layers),
+            (Look::vanilla(), LayerLook::vanilla())
+        );
     }
 
     #[test]
     fn disabled_uploads_the_vanilla_look() {
         let block = Look(builtin_presets()[0].look.0).gpu_block(false);
         assert_eq!(block[..KNOB_COUNT], Look::vanilla().0);
-        assert_eq!(block[knob::SATURATION], 1.0);
         assert_eq!(block[knob::LIGHT_BAND_STOPS], 0.0);
+        assert_eq!(block[KNOB_COUNT..], [0.0; GPU_FLOATS - KNOB_COUNT]);
     }
 
-    #[test]
-    fn a_saved_file_reads_back_as_it_was() {
+    fn sample() -> Settings {
         let mut look = Settings::default().look;
         look.0[1] = 0.5;
-        let settings = Settings {
+        Settings {
             menu_key: "ctrl+F6".to_owned(),
             dock: Dock::Floating,
             panel_width: 512.5,
@@ -658,18 +782,71 @@ mod tests {
             look,
             presets: vec![Preset {
                 name: "Night \\ ink".to_owned(),
-                look: Look([1.0, 1.0, 2.0, 0.02, 0.4, 0.0, 4.0, 8.0, 1.5]),
+                look: Look([1.0, 1.0, 2.0, 0.02, 0.4]),
+                layers: LayerLook([0.0, 4.0, 8.0, 1.5]),
             }],
             unfaithful_ports: PortKind::AoSsr.bit() | PortKind::TonemapLut.bit(),
-        };
+            cel_layers: true,
+            moved: Settings::default().moved,
+        }
+    }
+
+    #[test]
+    fn a_saved_file_reads_back_as_it_was() {
+        let settings = sample();
         let text = render(&settings);
         assert!(
             text.contains("\nunfaithful_ports = \"ao_ssr,tonemap_lut\"\n"),
             "{text}"
         );
+        // Moved, so `[look]` holds the five knobs the port reads and nothing else; the preset
+        // keeps all nine.
+        assert!(text.contains("\ncel_layers = true\n"), "{text}");
+        let look_section = text
+            .split("[look]")
+            .nth(1)
+            .and_then(|rest| rest.split("[[preset]]").next())
+            .unwrap_or_default();
+        for knob in &LAYER_KNOBS {
+            assert!(!look_section.contains(knob.key), "{}", knob.key);
+            assert!(text.contains(&format!("\n{} = ", knob.key)), "{}", knob.key);
+        }
         let (read, warnings) = parse(&text);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(read, settings);
+        // Not moved yet: the four stay under `[look]`, so a move that failed loses nothing.
+        let waiting = Settings {
+            cel_layers: false,
+            moved: LayerLook([2.0, 7.0, 0.0, 1.25]),
+            ..sample()
+        };
+        let (read, warnings) = parse(&render(&waiting));
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(read, waiting);
+    }
+
+    #[test]
+    fn a_file_from_before_the_move_has_its_four_knobs_read_for_the_move() {
+        // What the nine-knob DLL wrote: every knob under `[look]` and in each preset, and no
+        // `cel_layers` key.
+        let text = "enabled = true\npreset = \"Comic ink\"\n[look]\nlight_band_stops = 4.0\n\
+                    outline_ink = 1.0\noutline_width = 2.0\noutline_depth = 0.03\n\
+                    outline_crease = 0.5\npaint_radius = 0.0\ncolour_levels = 0.0\n\
+                    screen_levels = 10.0\nsaturation = 1.0\n[[preset]]\nname = \"Mine\"\n\
+                    light_band_stops = 1.0\noutline_ink = 0.5\noutline_width = 1.0\n\
+                    outline_depth = 0.04\noutline_crease = 0.7\npaint_radius = 2.6\n\
+                    colour_levels = 5.0\nscreen_levels = 3.0\nsaturation = 1.2\n";
+        let (read, warnings) = parse(text);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(!read.cel_layers);
+        assert_eq!(read.look, Look([4.0, 1.0, 2.0, 0.03, 0.5]));
+        assert_eq!(read.moved, LayerLook([0.0, 0.0, 10.0, 1.0]));
+        assert_eq!(read.presets[0].look, Look([1.0, 0.5, 1.0, 0.04, 0.7]));
+        assert_eq!(read.presets[0].layers, LayerLook([3.0, 5.0, 3.0, 1.2]));
+        // No file at all is the default preset, not moved yet.
+        let fresh = Settings::default();
+        assert!(!fresh.cel_layers);
+        assert_eq!(fresh.moved, builtin_presets()[0].layers);
     }
 
     #[test]
@@ -700,16 +877,19 @@ mod tests {
         let (read, warnings) = parse(text);
         assert_eq!(warnings.len(), 3, "{warnings:?}");
         assert!(read.enabled);
-        assert_eq!(read.look.0[knob::SATURATION], 1.5);
-        assert_eq!(read.look.0[1], Settings::default().look.0[1]);
+        assert_eq!(read.moved.0[layer_knob::SATURATION], 1.5);
+        assert_eq!(
+            read.look.0[knob::OUTLINE_INK],
+            Settings::default().look.0[knob::OUTLINE_INK]
+        );
     }
 
     #[test]
     fn out_of_range_and_fractional_values_are_pulled_in() {
         let (read, _) = parse("[look]\npaint_radius = 2.6\nsaturation = 9\noutline_ink = -1\n");
-        assert_eq!(read.look.0[5], 3.0);
-        assert_eq!(read.look.0[knob::SATURATION], 2.0);
-        assert_eq!(read.look.0[1], 0.0);
+        assert_eq!(read.moved.0[layer_knob::PAINT_RADIUS], 3.0);
+        assert_eq!(read.moved.0[layer_knob::SATURATION], 2.0);
+        assert_eq!(read.look.0[knob::OUTLINE_INK], 0.0);
     }
 
     #[test]

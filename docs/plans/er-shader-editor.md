@@ -18,7 +18,7 @@ Evidence base:
 |---|---|---|
 | One DLL or two | **The editor grows inside `crates/er-cel-shade`.** The DLL keeps the name `er_cel_shade.dll`, and the me3 profiles and `scripts/me3-dll-conflicts.toml` rows stay as they are. The F6 window becomes "Shaders", and today's cel knobs become its "Look" tab. | er-cel-shade already detours `D3D12CreateDevice`, `CreateRootSignature`, every pipeline creator and loader, and `SetGraphicsRootSignature`. A second DLL on the same prologues would overwrite trampolines. The `git mv` rename proposed by robustness-first is rejected: it churns profiles, the conflict table and `check-rust-build.sh` and the user gets nothing visible for it. A rename stays mechanical and can happen at any later time. |
 | Where a shader is swapped | **When the game binds a pipeline.** The game's pipelines are created exactly as the game describes them; the only change is the root parameters appended at root-signature creation, as today. Our variants are separate pipelines. A redirect is applied in detours on `SetPipelineState`, `Reset`, `ClearState` and `ID3D12Device::CreateCommandList`. | Vanilla is then genuinely the game's own pipeline, and a recompile never touches a game pipeline. The critic verified that GX calls `SetPipelineState` whenever its PSO is dirty, so a per-PSO redirect sees every bind. |
-| When a port is redirected | **Only while its stage has content.** Content means a cel knob of that stage away from its off value, an enabled layer at that stage, or (P2 onward) the mask resolve. | From robustness-first. A stage with no content binds the game's own pipeline, so a transcription error in a hand-ported pass can only show when the user has asked for an effect there. |
+| When a port is redirected | **Only while its stage has content.** Content means a cel knob of that stage away from its off value (since section 17, only the AO ports still read knobs), an enabled layer at that stage -- the stock cel layers count like any other -- or (P2 onward) the mask resolve. | From robustness-first. A stage with no content binds the game's own pipeline, so a transcription error in a hand-ported pass can only show when the user has asked for an effect there. |
 | What a user writes | **Layers.** A layer is one `.hlsl` file with ReShade-style annotated `uniform`s, helper functions and `float3 apply(float3 x, <Stage>Ctx c)`. It is attached to one of four stages: Lighting, Albedo, TonemapPre, TonemapPost. | Measured: a generated layer composition compiles signed in 15-25 ms and keeps the game's signatures (section 2). |
 | Compiler | **An out-of-process helper, `er-shader-compiler.exe`.** It runs in a job object that kills it when the game exits, talks over pipes, and loads `dxcompiler.dll` (DXC 1.8.2505 or later). The same compile code runs inside the DLL only if the helper cannot start. `dxil.dll` is never used. | Two judges asked for crash isolation, because an LLVM crash on user input must not end the game. The in-process fallback exists because spawning a PE helper from inside the game under pressure-vessel is unmeasured. The delivery judge asked for the compiler behind one boundary; both paths implement one `Compiler` trait. |
 | Verification | **Seven host-side checks before any `CreatePipelineState` of a runtime blob** (section 7.6): container sanity, signed retail hash, ISG1 and OSG1 equal to the original with interpolation modes, PSV0 resources a subset of the original's plus the space42 parameters this root signature carries, SFI0 a subset, outputs unchanged, and the same root-signature object. | Native D3D12 refuses a bad pipeline with a bare `E_INVALIDARG`, while vkd3d-proton accepts unsigned or mislinked DXIL. The resource rule is the correctness judge's stricter form: a shader may only read descriptors the game populated for that draw. All five existing ports pass it (measured). |
@@ -81,6 +81,8 @@ Draws are recorded on 9 threads. The 6 command-list vtables share every method a
   - Lighting: `light_band_stops` and `outline_*`;
   - Albedo: `paint_radius` and `colour_levels`;
   - Tonemap: `screen_levels` and `saturation`.
+
+  Since section 17 only the Lighting ones are knobs; the Albedo and Tonemap ones are stock layers.
 - **Inputs each port binds:**
   - AO: `t1` depth, G-buffer 0/1/2, shadow, irradiance, specular, SSR, and `cbLightAccParam` with `g_InvProjMatrix`.
   - Albedo: G-buffer 1/2 only.
@@ -135,6 +137,7 @@ New and changed files under `crates/er-cel-shade/`. "Pure" means the module has 
 | `src/look_binding.rs` | P0.1 | The ABI ladder (5.1) and the lock-free root-signature table. Binds parameters A-C after every `SetGraphicsRootSignature`. |
 | `src/params.rs` | P0.1 | The parameter ring (5.2). |
 | `src/probe.rs` | P0.1 | The DEFAULT probe buffer, the READBACK ring, the decoder and the telemetry writer (5.3). |
+| `src/gpu_time.rs` | P2 (landed early) | Port GPU time (section 12): the timestamp query heap, its READBACK ring, the chunk claim, the span tags, and the reader that sums each port kind's spans per frame. Pure apart from the buffers. |
 | `src/table.rs` | P0.1 | Pure core: the immutable open-addressing table and its builder. Windows glue: publish, AddRef, and the reaper. |
 | `src/graveyard.rs` | P0.1 | Pure release policy (6.3) plus the Windows apply step. |
 | `src/dxbc.rs` | P0.1 | Pure. Container part table (`container_part` moves here from `replace.rs`); ISG1, OSG1, PSV0 (resource binds plus interpolation modes), SFI0, ILDN and program-header parsers; the retail hash. Every read is bounds-checked, and bad input returns `Err` rather than panicking. |
@@ -149,12 +152,13 @@ New and changed files under `crates/er-cel-shade/`. "Pure" means the module has 
 | `src/menu/{mod,look_tab,layers_tab,code,diagnostics_tab,widgets}.rs` | P0.2b | Split from `menu.rs`. |
 | `src/menu/hunt_tab.rs` | P2 | The Hunt tab. |
 | `src/replace.rs` | P0.1 | `REPLACEMENTS` gains `kind: PortKind` and `stage: Stage`. The walker is unchanged. |
-| `src/settings.rs` | P0.1 | Menu key, cel enable, cel look, cel presets, and `unfaithful_ports`, the mark the fidelity test leaves on a port that fails (P0.1 item 5). |
+| `src/settings.rs` | P0.1 | Menu key, cel enable, cel look, cel presets, and `unfaithful_ports`, the mark the fidelity test leaves on a port that fails (P0.1 item 5). Section 17 splits the look into the five knobs the AO ports read and the four that are layers. |
+| `src/editor/cel.rs` | 17 | Pure. The stock cel layers: the table, their values in a project, a preset applied to a project, and the once-only move of an old `[look]` into the project. |
 | `shaders/editor_abi.hlsli` | P0.1 | Replaces the body of `cel_look.hlsli`. Holds `er_p`, the `#define`s mapping cel knobs to `er_p` registers, and the probe and mask UAV declarations. |
 | `shaders/stage_ctx.hlsli` | P0.1 | `LightingCtx`, `AlbedoCtx`, `TonemapCtx`, `er_mix()`, `er_mask()` and `er_selected()`. |
 | `shaders/editor_layers.hlsli` | P0.1 | Identity stage functions, which the embedded ports compile with. |
 | `shaders/er/noise.hlsli` | P0.2a | Hash-based value noise and Worley noise, so most "I need a noise texture" layers need no resource. |
-| `shaders/templates/*.hlsl` | P0.2a | `colour_grade`, `vignette`, `depth_fog`, `posterize_light`, `proof_invert`, `proof_red`. |
+| `shaders/templates/*.hlsl` | P0.2a, 17 | `colour_grade`, `vignette`, `depth_fog`, `posterize_light`, `proof_invert`, `proof_red`; and the stock cel layers `cel_surfaces`, `cel_saturation`, `cel_brightness_steps` (section 17). |
 | `shaders/mask_record.hlsl` | P3 | Built with `-D PREFIX=0/1/2`, and with `-D PICK` for P4. |
 
 **New crate `crates/er-shader-compiler`:**
@@ -195,9 +199,10 @@ Telemetry is written to `redirected_artifact_path("ER_CEL_SHADE_TELEMETRY", "er-
 | `CreateGraphicsPipelineState`, `ID3D12Device2::CreatePipelineState`, `CreateComputePipelineState`, library `Load*` (existing) | about 8,900 per session | P0.1 | The new policy (4.1). |
 | `ID3D12Device::CreateCommandList` | rare | P0.1 | Map `pInitialState` through the table. |
 | `SetGraphicsRootSignature`, direct and bundle (existing) | about 1 per list | P0.1 | Bind A, B and C; note the binding in the list slot. |
-| `SetPipelineState` | about 1760 | P0.1 | Redirect (4.2), set the list slot, and from P2 count binds while Hunt is open. |
+| `SetPipelineState` | about 1760 | P0.1 | Redirect (4.2), set the list slot, end the list's open GPU-time span and open one at a port's bind (section 12), and from P2 count binds while Hunt is open. |
 | `Reset`, `ClearState` | about 105, and unmeasured | P0.1 | Map the initial or cleared PSO; reset the list slot. |
-| `Close` | about 105 | P0.1 | If this list bound a port variant: record the probe copy (5.3) and, from P2, resolve timestamp queries. |
+| `Close` | about 105 | P0.1 | If this list bound a port variant: record the probe copy (5.3). If it timed a port: end its open span and resolve its timestamp queries (section 12). |
+| `ID3D12Device::CreateCommandQueue` | load time | P2 | Create as asked; note each queue's `GetTimestampFrequency`, so port GPU time converts with the game's direct queue's rate. |
 | `DrawIndexedInstanced`, `DrawInstanced`, `ExecuteIndirect` | about 1290, 330 and 2 | P2 | Skip hidden draws (P2); duplicate and restore for masks (P3) and picks (P4). |
 | `RSSetViewports` | unmeasured | P3 | Record the viewport size per list, for the main-view guard. |
 
@@ -279,7 +284,7 @@ Variants use the game pipeline's own root-signature object, so the GX root-signa
 
 | Registers | Contents |
 |---|---|
-| `[0..2]` | Cel knobs, exactly `Look::gpu_block` |
+| `[0..2]` | Cel knobs, exactly `Look::gpu_block`. Since section 17, the five the AO ports read in `[0].xyzw` and `[1].x`; `[1].yzw` and `[2]` unused |
 | `[3]` | `(time_s, asfloat(frame), display_w, display_h)` |
 | `[4]` | `(asfloat(mask_pitch), asfloat(mask_rows), asfloat(reverse_z), asfloat(flags))` |
 | `[5..31]` | Selector configuration: family bit colours, screen-mask parameters per layer (P2/P3) |
@@ -306,7 +311,7 @@ Variants use the game pipeline's own root-signature object, so the GX root-signa
 | `0x1100` | Tonemap samples: `{float3 pre, uint frame, float3 post, uint mask_word}` |
 | `0x1900` | Pick record (P4) |
 
-- "pre" is the port's colour after the game's maths and cel; "post" is the colour after the user's layers.
+- "pre" is the port's colour before its stage's layers: the game's maths, and at AO the light bands and outlines the port still draws; "post" is the colour after the layers, the stock cel layers included (section 17.5).
 - Only our variants contain probe code. A probe that keeps advancing proves our variant is bound, and a stalled probe proves the game's own pass is bound.
 - **States.** The probe starts in `COMMON`, and every recording that touches it leaves it there, so every barrier's "before" state is true by construction and none rests on what a draw promoted:
   1. at the first redirect of a recording, before the variant is bound, record `ResourceBarrier(probe, COMMON -> UNORDERED_ACCESS)` and mark the list's slot as owing the probe. A recording that binds a variant and never draws with it still ends where it started. Only a direct list takes the barrier, so a bundle is never redirected;
@@ -410,7 +415,7 @@ Layers may also call the port's own globals. The stage picker shows which inputs
 | HDR source, glare, LUT | no | no | yes |
 | family bits | P3 | P3 | P3 |
 
-**Order inside a port.** The game's maths run first, then cel, then the layers. The one exception is TonemapPost, whose layers run after cel's saturation and levels.
+**Order inside a port.** The game's maths run first, then the layers. In the AO ports the light bands and outlines run between the two; everywhere else the cel look is the stock cel layers, first in their stage's stack (section 17).
 
 ### 7.2 Annotations and packing (`editor/annotations.rs`, pure)
 
@@ -474,7 +479,7 @@ From P2, Geometry, Sky and Depth also work at Albedo and Tonemap through word1 o
   - A broken pipe counts as a crash. Three crashes on one source hash mark that source "crashes the compiler".
   - If the helper cannot be run from the game -- `CreateProcessW` or `ResumeThread` refused, or no handshake within 5 s and then within 20 s -- `InProcessCompiler` loads the same `dxc` module on the worker thread and keeps it loaded. The UI chip then reads "compiler in-process: a compiler crash ends the game". A change to the compiler's files makes the next compile try the helper again, and once it answers every compile goes to it.
   - No helper file, a helper from another build or protocol, and a helper that loaded no compiler are not that case: the editor shows "no compiler" with the reason, and a rebuild or fetch is picked up when the files change.
-  - With no dxcompiler at all, the embedded cel ports still run and layers show "no compiler".
+  - With no dxcompiler at all, the embedded ports still run, with the AO ports' light bands and outlines, and layers show "no compiler" -- the stock cel layers too, so the cel surfaces, saturation and brightness steps need the compiler (section 17.5).
 - **Diagnostics.** dxc output is parsed with `^(.*?):(\d+)(?::(\d+))?: (error|warning|note): (.*)$`. Notes are grouped under their error and attributed to a layer by file name. A diagnostic outside `layers/` is shown as "internal (please report)".
 - **Lint (`editor/lint.rs`, pure).** It exists to give friendly messages; the binary checks in 7.6 are the real gate. It rejects:
   - global resource and cbuffer declarations and `register(`;
@@ -580,8 +585,14 @@ Pipelines with depth bias are excluded and listed. Variants are created asynchro
   - Hold the backtick key to see vanilla while it is held (a momentary Vanilla checkbox); hold Tab to hide the panel while it is held.
   - The layout inside is one column: toolbar, status, tabs, layer stack, then the selected layer's inspector.
   - It still takes the game's input while open (`input.rs` is unchanged).
-  - Mock-ups of every tab: the "ER Shader Editor" Design canvas, https://claude.ai/artifact/3gPst3UxtjK7xzVhpLBvfc.
-- **Glyphs.** Every label is ASCII or inside `GLYPH_RANGES`. Status dots (the `o` above) are draw-list circles: green live, amber compiling or trial, red error (last good running), grey off or suspended. Combo arrows are imgui's own.
+  - Mock-ups of every tab: the "ER Shader Editor" Design canvas, https://claude.ai/artifact/3gPst3UxtjK7xzVhpLBvfc. They are the spec for the look; what follows records where the shipped panel departs from them.
+- **Look.** Every colour and size is a token in `src/menu/theme.rs`, read off the mockups' CSS at 1080p and multiplied by the panel's scale; no other file of the panel writes a colour literal. Dear ImGui has no CSS, so the panel pushes its style and colours around the window and draws the rest on the draw list: the bars, rules, tabs, buttons, key chips, dots, chevrons, the code gutter and the error wave.
+  - Fonts: IBM Plex Sans Regular, Medium and SemiBold and JetBrains Mono Regular, vendored unmodified with their OFL texts under `crates/er-cel-shade/fonts/`, handed to the overlay host through `overlay_host::add_font`: four requests of the process's sixteen. They are asked for once, the first time the panel is drawn open, at that frame's scale, so a game that started windowed has its real display by then and a session that never opens the panel spends nothing. The host cannot give a request back, so a resolution changed after that draws the same glyphs scaled; the telemetry's `panel.font_scale` says so. Until the host has built them, and for good if it refuses the regular face, the panel draws in the host's default font.
+  - Header and toolbar: Dock and its combo, and the toolbar's preset and status lines, are on the Parameters sub-tab and the Look tab only, as the Main mockup has them. The Code and Selector sub-tabs, Hunt and Diagnostics keep the header to its title and the toolbar to one line, as theirs do; the Code sub-tab's header says the panel was widened.
+  - Controls a later phase brings are drawn where the mockups put them, faded and unpressable, each with a tooltip naming its phase: the Selector's family chips' `+ Family`, Instance, Preview mask, Blink matches and Pick from the world (P3, P4), Measure cost (P1), and Hunt's filter and options (P2). Data that does not exist yet is not faked: the Selector's sample chips and its info card's counts are left out.
+  - The collapsed strip reads "Shaders" until picking exists. The Pick mockup's Picked card and click crosshair are not drawn: picking from the world is P4 (8.2), and there is nothing to show in them before it.
+  - `scripts/check-shader-panel-look.py` holds a capture of the game to the tokens, by numbers: the telemetry's `panel` object says where each part landed, and the oracle samples its fill. The bars and the nav on every tab, and each tab's own parts on the tab shown (Layers' selected row, + Layer and Compile now; Look's Save as preset and first slider track; Diagnostics' faded Measure cost; Hunt's unfilled list box). Text, rules and borders are below what its 854x480 capture can resolve.
+- **Glyphs.** Every label is ASCII or inside `GLYPH_RANGES`. Status dots (the `o` above) are draw-list circles: green live, amber compiling or trial, red error (last good running), grey off or suspended. Combo arrows are imgui's own, on the field's colour.
 - **Stack rows.** `S` is solo, and Alt+click also solos. `+ Layer` creates a file from a template.
 - **Widgets** come from annotations:
 
@@ -597,12 +608,13 @@ Pipelines with depth bias are excluded and listed. Variants are created asynchro
 - **Code tab.**
   - `input_text_multiline` with `allow_tab_input` and the `ALWAYS | EDIT` callbacks; an edit counter goes to telemetry.
   - The file path is shown both as the Windows path and as the Unix path. The Unix path comes from `wine_get_unix_file_name`, resolved with `GetProcAddress` and shown only when that export exists.
-  - P1 adds a line-number gutter drawn with the draw list, click-to-jump, and a monospace OFL font (JetBrains Mono, about 270 KB, not game-derived) requested through `overlay_host::add_font`.
-- **Hunt (P2).** A table through the `imgui-tables-api` feature and `ListClipper`, with a text filter.
-  - Columns: Family, Pass, PSOs, binds/frame, draws/frame, and Hide / Blink / Make selector buttons.
+  - Shipped with P0.2b rather than P1, as the Code mockup draws it: the line-number gutter, syntax colours (keywords, types where one is declared, strings, comments), the first error's red line and the wave under the name it names, all drawn under an invisible field at the same positions, in JetBrains Mono at 22-pixel lines; and the compiler messages card, whose locations in this file are underlined links that put the cursor there.
+- **Hunt (P2).** Until P2 the tab is the Hunt mockup's frame: the filter and its options faded, the family list's bordered box holding a line on what it will list, and the mockup's paragraph on Hide, Blink and Make selector. The canvas draws the list as bordered rows of a family, its passes and its three buttons rather than a table; P2 follows the canvas. The rest of this bullet is the plan the canvas refines.
+  - A list through `ListClipper`, with a text filter.
+  - Each row: Family, Pass, PSOs, binds/frame, draws/frame, and Hide / Blink / Make selector buttons.
   - "Families on screen" sorts by draws this frame.
   - Hide and Blink act on every pass of the family: Gbuf, GBufDpt, Dpt, DptA, Velo, and optionally Sdw.
-- **Diagnostics.**
+- **Diagnostics.** Laid out as its mockup: uppercase section headings, mono tables with right-aligned values, costs green within section 12's budgets and red over them, and the compiler in a footer pinned to the bottom under a rule. Figures the mockup has no place for are in the tooltip of the row they belong to, two more Lifetime entries, and a Panel section of the editor's own counters.
   - Root-signature ladder counts.
   - Catalogue size.
   - Each variant's rule-by-rule verification report.
@@ -610,9 +622,10 @@ Pipelines with depth bias are excluded and listed. Variants are created asynchro
   - Compile and create time p50, p95 and max.
   - Live redirects and graveyard size.
   - Probe frame age per port kind.
+  - GPU time a frame per port kind (the Ports table's GPU column, amber above 1.5 ms) and per stage (the line under it).
   - Sampled hook ns per call.
   - Thread-local list-slot misses.
-  - P1 adds a "Measure cost" button: it alternates vanilla and modified every 60 frames and reports the mean change in `io.delta_time`.
+  - P1 adds a "Measure cost" button: it alternates vanilla and modified every 60 frames and reports the mean change in `io.delta_time`. Until then it is drawn faded where the mockup has it.
 - **Panic containment.** `guest_draw` wraps the UI in `catch_unwind`. imgui-rs tokens end their windows while unwinding. After a caught panic the window is hidden for the session and the panic is logged. `igErrorCheckEndWindowRecover` is bound only in the docking imgui-sys, so it is not used.
 
 ---
@@ -644,8 +657,8 @@ param.Shadows = [0.0, 0.02, 0.05]
 - **Parsing.** The hand parser follows `settings.rs`'s style: quoted strings, `#` comments, a warning per bad line, and it never fails on the whole file.
 - **Project and presets.** The project file references layer files, while a preset embeds them. Importing a preset (P1) writes its files under `layers/` and offers Replace or Append, listing the layers it adds. Export writes `presets/<name>.ershade` and shows the absolute path.
 - **Selectors** are stored as glob text. An optional `pin_fnv` marks a layer "inactive: shader changed by a game update" when it is not seen.
-- **Built-in presets.** The cel presets ("Wind Waker" and the rest) become built-in presets with zero layers and cannot be deleted.
-- **What stays in `er-cel-shade.toml`.** The menu key, cel enable, the cel look and the unfaithful-port mark (P0.1 item 5).
+- **Built-in presets.** The cel presets ("Wind Waker" and the rest) cannot be deleted. Since section 17 each is the five AO knobs plus the values of the stock cel layers, and applying one sets those layers in the project (17.6).
+- **What stays in `er-cel-shade.toml`.** The menu key, cel enable, the five knobs the AO ports read, the presets, `cel_layers` (17.6) and the unfaithful-port mark (P0.1 item 5).
 - **What release behaviour reads.** Only these files and the UI, never an environment variable.
 
 ---
@@ -669,10 +682,10 @@ param.Shadows = [0.0, 0.02, 0.05]
 ### 11.1 Diagnostic exports (always present; release behaviour does not depend on them)
 
 - **`er_shader_editor_stats_v1(out: *mut StatsV1) -> u32`.** Fields: presents, mode, vanilla, `rs_full`/`rs_cbv_probe`/`rs_cbv`/`rs_none`, `ports_ready[5]`, `redirected_binds`, `passthrough_port_binds`, `set_pso_calls`, `hook_ns_sum`/`hook_ns_samples`, `list_slot_misses`, `graveyard_len`, `leaked`, `game_psos_released`, `probe_frame[3]`, `variant_id[3]`, `compile_ms_last`, `create_ms_last`, `unfaithful_ports`, `ports_off`. 200 bytes.
-- **`er_shader_editor_set_mode_v1(mode: u32) -> u32`.** Mode 0 is normal. Mode 1 is vanilla. Mode 2 redirects ports with cel forced to its off values; that is the port-fidelity test. The low byte is the mode; for mode 2 the next byte holds the port kinds to redirect, one bit per kind, and 0 there means every kind. The stats report the mode the same way.
+- **`er_shader_editor_set_mode_v1(mode: u32) -> u32`.** Mode 0 is normal. Mode 1 is vanilla. Mode 2 redirects ports with the knobs forced to their off values and every layer off, the stock cel layers among them; that is the port-fidelity test. The low byte is the mode; for mode 2 the next byte holds the port kinds to redirect, one bit per kind, and 0 there means every kind. The stats report the mode the same way.
 - **`er_shader_editor_set_unfaithful_v1(ports: u32) -> u32`.** Marks exactly these port kinds unfaithful (P0.1 item 5), keeps the mark in `er-cel-shade.toml`, and returns the mark before. Outside a fidelity test a marked kind is bound as the game asked whatever its stage holds; the menu clears the mark.
 
-`scripts/frida/shader-editor-stats.js` calls all three through `Module.getExportByName`. The telemetry carries what `StatsV1` sums per detour: each detour's timed nanoseconds and calls, a `Close` that records the probe copy apart from a plain one, the timer floor and the sampling rate.
+`scripts/frida/shader-editor-stats.js` calls all three through `Module.getExportByName`. The telemetry carries what `StatsV1` sums per detour: each detour's timed nanoseconds and calls, a `Close` that records the probe copy (or resolves timestamps) apart from a plain one, the timer floor and the sampling rate. It also carries `gpu_time`: the tick rate and its source, and per port kind and per stage the last frame's and the mean GPU microseconds, with the spans begun, late, refused and dropped; `scripts/check-shader-editor-probe.py --expect gpu-cost` reads it.
 
 ---
 
@@ -686,7 +699,7 @@ param.Shadows = [0.0, 0.02, 0.05]
 | Total hook CPU | <= 0.2 ms per frame | Diagnostics and telemetry |
 | UI | <= 1 ms per frame open, <= 5 us closed | QPC around `guest_draw` |
 | Probe | 3 x 64 pixel writes plus a <= 24 KB copy per frame | -- |
-| Port GPU time (P2) | <= 1.5 ms each; shown amber above | `EndQuery(TIMESTAMP)` when a port variant is bound and at the list's next `SetPipelineState` or its `Close`; resolved at `Close` into a READBACK ring |
+| Port GPU time (P2, landed early) | <= 1.5 ms each; shown amber above | `EndQuery(TIMESTAMP)` when a port's pipeline is bound on a direct list -- its variant, or the game's own while its stage is off -- and at the list's next `SetPipelineState`, `ClearState` or its `Close`; resolved at `Close` into an 8-present READBACK ring read 5 presents behind with no fence; ticks converted at the game's direct queue's `GetTimestampFrequency` (`src/gpu_time.rs` says what the number means and its limits) |
 | Resolve (P2 onward) | about 16 B/px of traffic; estimate about 0.3 ms at 4K (unmeasured) | Measure cost A/B |
 | Mask duplicates (P3) | <= 400 per frame per selector by default; above the cap the selector stops duplicating and says so. Characters are expected to be tens of draws; Map may cost 1-2 ms (estimate) | duplicates per frame per selector; Measure cost |
 | Memory | params 128 KB; probe 8 KB + 64 KB readback; mask 8 B/px only when used; records up to about 37 MB of vertex bytes (P3) | byte counters in Diagnostics |
@@ -751,7 +764,7 @@ python3 scripts/check-stages.py --selftest     # when a scripts/*.py gate is add
 2. **Probe (`check-shader-editor-probe.py --expect live`).** The variant id and frame advance every frame for each redirected port kind. This can only happen through the redirect, because the game's own pipelines are unmodified.
 3. **Vanilla.** `set_mode(1)` through the export makes the probe frame age grow for every port and leaves the redirected-binds delta at 0. `set_mode(0)` resumes.
 4. **Rendered output.** `er-shader-ab-proof.py` alternates mode 0 and mode 1 six times and captures the validated window each time. It passes when the smallest cel-versus-vanilla difference is at least 3x the largest same-state difference.
-5. **Port fidelity.** In mode 2 (ports redirected, cel at off) against mode 1, the cross-state difference must be at most 1.5x the same-state difference. `er-shader-ab-proof.py` runs it one port kind at a time, so a failure names its port, and skips a kind the scene does not draw. A port that fails is marked unfaithful through `er_shader_editor_set_unfaithful_v1`, which keeps the mark in `er-cel-shade.toml`, and is never redirected outside a fidelity test.
+5. **Port fidelity.** In mode 2 (ports redirected, knobs at off, every layer off) against mode 1, the cross-state difference must be at most 1.5x the same-state difference. `er-shader-ab-proof.py` runs it one port kind at a time, so a failure names its port, and skips a kind the scene does not draw. A port that fails is marked unfaithful through `er_shader_editor_set_unfaithful_v1`, which keeps the mark in `er-cel-shade.toml`, and is never redirected outside a fidelity test.
 6. **Hook cost** is within section 12, read from the telemetry's per-detour timings by `check-shader-editor-probe.py --expect cost`.
 7. **Panic chord.** One press, asked of the user as an outcome while a `Monitor` watches the log for `panic: vanilla`. The redirected-binds delta must then be 0.
 
@@ -765,7 +778,7 @@ python3 scripts/check-stages.py --selftest     # when a scripts/*.py gate is add
 1. **Compiler.** The log shows the helper handshake (DXC version) or that the fallback was chosen.
 2. **Invert.** With `proof_invert` staged at tonemap-post, `--expect invert` passes: post = 1 - pre within 2/255 on at least 48 of 64 samples, pre has nonzero variance, and the variant id is the latest published.
 3. **Red.** Rewriting the layer to `return c * float3(1,0,0);` makes `--expect red` pass on a new variant id. The log carries edit-to-pixels latency, compile ms and create ms.
-4. **Identity.** With the layer disabled and cel's tonemap knobs at off, the tonemap probe frame stops advancing, because the stage is not redirected.
+4. **Identity.** With every tonemap layer off -- the stock cel layers included, since section 17 -- the tonemap probe frame stops advancing, because the stage is not redirected. The colour proofs above stage their layer soloed, or with the cel layers of its stage off, so `post` is the proof layer's work alone.
 5. **Lighting mask.** A Lighting proof layer limited to `depth:0..10m` makes the AO probe show post == invert(pre) exactly on samples whose depth lies in range, and post == pre elsewhere.
 6. **Refusals.** Each of these leaves the live variant id unchanged and logs the rule name:
    - a syntax error, with the user's line listed in `diag/<id>.txt`;
@@ -904,3 +917,80 @@ python3 scripts/check-stages.py --selftest     # when a scripts/*.py gate is add
 | HDR tonemap and BlendUI pass names | Offline shader-bundle listing; a Windows HDR run | HDR |
 | Shader-visible descriptor heap sizes and free space | Log of `CreateDescriptorHeap`; static read on `:8767` | user textures (waits) |
 | Scope of the dxcompiler license | Read the DXC release licences | bundling in a release |
+
+---
+
+## 17. Cel as layers
+
+The user's decision of 2026-10-15: the cel look becomes ordinary shader-editor layers, if it fits. This section is the fit analysis and what moved. Worktree `.worktrees/er-shader-cel-layers`, branch `feat/er-shader-cel-layers`, on `72ef6a9b`, the last commit whose ports ran all nine knobs as hard-coded maths.
+
+### 17.1 What fits
+
+A layer reads what its stage hands it (`LightingCtx`, `AlbedoCtx`, `TonemapCtx`) and, because `editor_layers.hlsli` is included after the port's declarations, every texture, sampler and constant buffer the port binds. A layer returns one `float3`: the stage's colour. Its stage function runs after everything the port computes before it.
+
+| Effect | Knobs | Where the port ran it | Stage it runs at | What it reads | Same maths as a layer? | Blocker | Verdict |
+|---|---|---|---|---|---|---|---|
+| Light bands | `light_band_stops` | AO and AO+SSR `ps_main`, on `diffuse` after occlusion, before the outline ink | Lighting | the diffuse light only | Alone, yes: `posterize(x, stops)` of the stage colour | Order. The outline inks after the bands and before every Lighting layer; a layer runs after all of the port, so a band layer would band the inked light. `posterize(d * ink) != posterize(d) * ink` wherever the ink is fractional: the outline's 8x-steep edge and the crease term (`saturate((1 - facing - t) * 4)`) are fractional over wide areas. Applying the ink after the stage instead would make the cel-only stack identical but change how outlines compose with the player's own Lighting layers (a Depth fog layer would stop covering the lines). | **Stays** in the AO port and the Look tab |
+| Outlines | `outline_ink`, `outline_width`, `outline_depth`, `outline_crease` | AO, after the bands; inks `diffuse` and `specular_out` | Lighting | neighbouring depth (`g_DepthTexture` t1 `.Load` at +/-radius texels, `GetDimensions`), neighbouring normals (`g_GBuffer0Texture` t0), `g_InvProjMatrix` (`cbLightAccParam` b0), `ctx.normal`, `ctx.px`. All are port globals declared before the layers, so a layer can read them | The diffuse half, yes. The specular half, no | A Lighting layer's result is the diffuse light alone: `LightingCtx` is passed by value and the port writes `output.specular` from its own `specular_out`. Inking only the diffuse leaves no line on metal, whose diffuse albedo `(1 - metalness) * base` is near 0, and on every specular highlight. Making it fit means changing the layer ABI so a Lighting layer can also write the specular (an `inout` context or an `apply_specular`), which is not an ordinary layer | **Stays** in the AO port and the Look tab |
+| Paint (Kuwahara) | `paint_radius` | CmbAlbedo, replacing the base-colour sample before `(1 - metalness)` | Albedo | the base colour's neighbourhood: `g_GBuffer2Texture` t4 with `SS_ClampPoint` s7 (`SampleLevel`, `GetDimensions`); `ctx.uv`, `ctx.metalness` | Yes, once the layer returns the whole product: the stage colour has the metalness multiplied in already, so the layer reads the base colour again from G-buffer 2 and multiplies `(1 - ctx.metalness)` itself | none | **Moved**: `templates/cel_surfaces.hlsl` |
+| Colour levels | `colour_levels` | CmbAlbedo, on the base colour after paint, before `(1 - metalness)` | Albedo | the base colour after paint | Only in the same layer as paint. Alone it would have to divide the metalness back out of the stage colour, which is not exact (and the levels' `floor` turns a last-bit error into a whole step) and undefined at metalness 1; reading G-buffer 2 itself would lose paint's result | must share paint's layer | **Moved**, in `cel_surfaces` |
+| Saturation | `saturation` | Tonemap and TonemapLUT, after the LUT and HDR branch, right before `er_stage_tonemap_post` | TonemapPost | the stage colour | Yes | none | **Moved**: `templates/cel_saturation.hlsl` |
+| Brightness steps | `screen_levels` | same place, after saturation | TonemapPost | the stage colour | Yes | none | **Moved**: `templates/cel_brightness_steps.hlsl`, after saturation |
+
+The two Albedo knobs and the two Tonemap knobs ran exactly where their stage function is called: the albedo port's cel sat between its G-buffer reads and `er_stage_albedo`, and the tonemap port's between the LUT/HDR branch and `er_stage_tonemap_post`. So a stock layer placed first in its stage's stack runs at the same point in the pass, and the layers the player had there run after it as they did after the hard-coded cel. The Lighting stage is called after both the bands and the ink, which is the order problem in the first two rows.
+
+### 17.2 One change to every layer: `er_mix` at full opacity
+
+`er_mix` returned `lerp(x, blended, amount)`. At `amount == 1` that is `x + (blended - x)`, which is not `blended` in floating point when the two are far apart (light bands of 4 stops scale a colour by up to 4x), and dxc marks every floating-point instruction `fast`, so it may also reassociate the sum. `er_mix` now returns `blended` itself when `amount >= 1`. A layer at full opacity, inside its mask, is then exactly its own result; this changes nothing else, and an opaque layer of the player's moves only in its last bits, towards what it computes.
+
+### 17.3 The proof
+
+`tests/compile_templates.rs` `the_cel_layers_compile_to_the_retired_cel_maths` compiles, for 12 looks (the six built-in presets, Wind Waker with cel off, the look in this machine's settings file, and the ends of every range) and for each of CmbAlbedo, Tonemap and TonemapLut:
+
+- the retired port, from `git show 72ef6a9b:crates/er-cel-shade/shaders/...`, with the nine knobs where the retired `Look::gpu_block` put them;
+- the new port as the worker generates it (`codegen::generate`) with the stock cel layers `cel::apply` builds for that look, at the slots `assign_slots` gives them, and the block `write_layers` packs.
+
+On both sides the parameter block is turned into constants (a `switch` the calls fold through; a 1024-entry `static const` array is not folded by dxc), so every knob, every layer header and every mask folds, and what is compared is what each side computes from the pass's textures. The probe's `pre` store writes `post` on both sides, because `pre` is the one value that changes on purpose (17.5). dxc 1.9.0.5191, the runtime's arguments.
+
+Result, 36 comparisons:
+
+- Tonemap and TonemapLut, 24 of 24: **identical bytes**, the retail hash included.
+- CmbAlbedo, 12 of 12: **the same computation** by a canonical comparison of the two `ps_main`s (every value written as a hash of the expression computing it, phis anchored to their block, commutative operands in one order): the same blocks, the same phis, the same branches, outputs and probe writes in the same order reading the same expressions, and the same multiset of pure instructions. The bytes differ in two ways only. With paint on (7 looks), four pure instructions sit before the Kuwahara loops instead of after them -- the metalness `sample` of G-buffer 1, its `extractvalue`, and the two `fptoui` of the pixel position -- because the port now fills the stage context before calling the stage, where the retired port read them after its filter. With paint off (5 looks), only the order of two function declarations in the module differs. The interfaces (ISG1, OSG1, PSV0 binds, SFI0) are equal in all 12.
+- A control: the layers at Bright toon's values against the retired port at Wind Waker's are told apart.
+
+What the test does not cover, and the argument for it. At run time the knobs are read from the parameter block, not folded. Each layer computes the same expression on the same inputs as the retired code; the only run-time machinery a layer adds is its header test, its mask and `er_mix`, which for the header the move and the presets write -- on, opacity 1, Normal, mask Everything -- reduce exactly to the layer's result (17.2), since the Everything mask is 1.0 whatever the pixel. The integer parameters are read as integers where the retired port rounded floats to the same integers, and a float parameter's value reaches the block with the same bits (the project file stores the shortest decimal that reads back as the same `f32`; `editor::cel` tests it). The moved `sample` uses implicit derivatives; the control flow before it depends on knobs alone, so it is uniform either way.
+
+### 17.4 What changed in the code
+
+- Ports: `light_cmb_albedo.hlsl` and `tonemap.hlsl` lose their cel maths and `cel_look.hlsli`; with no layers they are the game's maths, and their embedded blobs were rebuilt (`build-cel-shaders.py`; both still link like their originals in the vkd3d dump). `light_deferred_ao.hlsl` is unchanged apart from a comment: its blobs are byte-identical to before.
+- `editor_abi.hlsli`: the `cel_*` defines of the four moved knobs are gone; `ER_P_CEL_REGISTERS` is 2 and `er_p[1].yzw`, `er_p[2]` are unused.
+- Templates: `cel_surfaces` (Albedo; `PaintRadius` int 0..6, `ColourLevels` int 0..16), `cel_saturation` (TonemapPost; `Saturation` 0..2), `cel_brightness_steps` (TonemapPost; `Steps` int 0..16), each the knob's old range, label and help; `editor::cel` tests the ranges against `settings::LAYER_KNOBS`. They are in the "+ Layer" menu too.
+- Project file: a layer has an optional `template = "<key>"`, which "+ Layer" writes and Dup does not copy. The stock cel layers are the layers whose template is a `CEL_LAYERS` key.
+- `settings.rs`: `KNOBS` is the five the AO ports read; `LAYER_KNOBS` the four that are layers; `Preset` carries both (`look`, `layers`); `Settings` gains `cel_layers` and `moved` (17.6).
+- `safety.rs`: `KNOB_STAGES` is Lighting only; Albedo and Tonemap get stage content from `LAYER_STAGES` like any layer.
+
+### 17.5 What each mechanism becomes
+
+| Mechanism | Before | Now |
+|---|---|---|
+| Probe `pre`/`post` | `pre` = the game's maths plus cel, `post` = after the user's layers | `pre` = what the port computes before its stage's layers: the game's maths, plus at AO the bands and outlines. At albedo and tonemap the cel is in `post`. A colour proof (`--expect invert`, `red`, `masked-invert`) at those stages solos its layer, or turns the cel layers off, so `post` is the proof layer alone |
+| Mode 2, fidelity ("port alone") | ports redirected, cel knobs at off | ports redirected, the five knobs at off (`Look::vanilla`), every layer off (`silence_layers`, the cel layers among them). The albedo and tonemap ports now carry no cel at all, so their fidelity is a test of the transcription and nothing else |
+| Vanilla (mode 1, checkbox, compare key) | game pipelines | unchanged: game pipelines, so the cel layers go with everything else |
+| Panic chord | sets vanilla | unchanged |
+| Stage content | a cel knob of the stage away from off | AO: a knob away from off. Albedo, Tonemap: a cel layer that draws, compiled into a live variant -- so these stages are redirected only once the editor has compiled them |
+| P0.1 proofs (`check-shader-editor-probe.py --expect live`, `er-shader-ab-proof.py --phases cel`) | cel at every stage from the embedded blobs | the AO stage as before; the albedo and tonemap regions are live once the worker has built the cel layers. Without dxcompiler they are not redirected, `--expect live` expects only AO, and the `cel` phase measures the bands and outlines alone |
+| P0.2 proofs | identity: the layer off and cel's tonemap knobs at off | identity: every tonemap layer off, the cel layers included |
+| Unfaithful mark | the kind bound as the game asked whatever cel says | unchanged, and it now also covers the cel layers of that kind |
+| No compiler | the embedded cel ports still run | the bands and outlines still run; the surfaces, saturation and brightness steps do not, and their layers show "no compiler" |
+| A session whose overlay never draws | cel from the embedded blobs and the staged knobs | the bands and outlines as before; layers -- the cel layers among them -- need the present-time publish of the parameter block and do not draw |
+| First frames of a session | all cel from the first redirected bind | the bands and outlines from the first bind; the rest once the worker's first build of each stage is published |
+
+### 17.6 Settings, the move, presets and the Look tab
+
+- **`er-cel-shade.toml`.** `[look]` holds the five knobs. A new top-level key, `cel_layers = true`, says the four layer knobs live in the project. A file written before the move has no such key and nine knobs under `[look]`; those four are read into `Settings::moved` and written back under `[look]` only while `cel_layers` is false, so a move that could not be made loses nothing. Each `[[preset]]` keeps all nine keys.
+- **The move, once.** In `DllMain`, after the settings are read and before the menu or the editor's worker start (`menu::move_cel_knobs`, `editor::cel::move_into_project`). When `cel_layers` is false it adds to `<Game>/er-shader-editor/project.ershade` one layer for each stock layer whose values are away from off: its file made from the template under the first free name (never over an existing file), its parameters the old knob values, its `enabled` the old "Cel shading on". Then the settings file is saved with `cel_layers = true`. No settings file at all is the default preset, so a first start gets Wind Waker's surfaces and brightness steps as layers, as it got them as knobs.
+- **The order, decided.** The new `[[layer]]` sections are inserted as text before the project's first `[[layer]]` (at its end when it has none), so every byte the project had stays: its name, comments, its own layers and their order. Placing them first puts each cel layer first at its stage, which is where the hard-coded cel ran -- before the stage's layers -- and order across stages means nothing. A project the user already has, such as one with a "Wobble" layer, keeps it, after the cel layers of its stage.
+- **Run again.** A template the project already has a layer of is not added again, so a move repeated because the settings file could not be saved adds nothing; a move that fails (a file that cannot be written) is logged and tried at the next start, with the settings file untouched.
+- **Presets.** A preset is the five knobs plus the values of the three stock layers. Applying one sets the knobs and, in the project, sets each cel layer's parameters, enables it when cel is on and its values draw, and makes the cel layers the values need and the project lacks (from their templates, at the head of their stage). A layer at off values stays in the project, disabled. The built-in presets keep their values; "Save as preset" stores the current knobs and the cel layers' values. The toolbar's "(edited)" compares both.
+- **Look tab.** "Cel shading on" is the knobs' enable and the cel layers' enable: it sets every cel layer's `enabled` to on-and-drawing. The Light and Outlines sliders stay. The surfaces, saturation and brightness steps are listed with their values and on/off, each with a Show button that opens it in the Layers tab, instead of a second set of sliders for the same parameters. Reload of a hand-edited nine-knob `[look]` moves its four layer knobs into the cel layers the same way.
+- **Downgrade.** An older DLL reading a moved settings file warns on `cel_layers`, finds no layer knobs under `[look]` and draws the default preset's surfaces and steps from its own ports, while its editor also compiles the cel layers: those effects would apply twice until the newer DLL is back.

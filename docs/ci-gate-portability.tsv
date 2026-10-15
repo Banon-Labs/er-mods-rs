@@ -311,6 +311,7 @@ portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addre
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools
 portable	-	check-shader-editor-probe.py --selftest	synthetic telemetry documents and the er-cel-shade sources only	runtime-tools
 portable	-	er-shader-ab-proof.py --selftest	synthetic images, the Frida agent and the er-cel-shade sources; the node and ImageMagick cases print that they were skipped where those tools are absent	runtime-tools
+portable	-	check-shader-panel-look.py --selftest	synthetic telemetry, pictures built in Python, the er-cel-shade sources and vendored fonts; the rendered-panel half prints that it was skipped where Pillow is not importable, and its ImageMagick pipelines where magick is absent	runtime-tools
 portable	-	build-cel-shaders.py --selftest	synthetic containers built and signed in Python; needs neither dxc nor the dump	product
 partial	dxc,vkd3d-dump	build-cel-shaders.py --check	still proves every committed blob is a signed shader model 6.0 pixel shader with no root signature; prints that the staleness comparison (no dxc) and the linkage against the game's originals (no dump) were skipped	product
 portable	-	fetch-dxcompiler.py --selftest	synthetic zips with their own pins, written under a temp dir; no network; also asserts the checkout tracks no compiler file and ignores a fetched one	product

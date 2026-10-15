@@ -11,8 +11,11 @@ the exact window and fails closed rather than photograph anything else. Two phas
 
 * `cel`: mode 0 (normal) against mode 1 (vanilla), alternated `--alternations` (6) times. Passes
   when the smallest difference between a cel and a vanilla photograph is at least 3x the largest
-  difference between two photographs of the same mode.
-* `fidelity`: mode 2 (ports redirected with cel at their off values) against mode 1, one port kind
+  difference between two photographs of the same mode. Cel is the AO ports' light bands and
+  outlines and the stock cel layers (design 17); a look whose only content is a layer needs the
+  editor's compiler to have built it, or the phase sees no stage content.
+* `fidelity`: mode 2 (ports redirected with the knobs at their off values and every layer off, the
+  cel layers among them) against mode 1, one port kind
   at a time, so a failure names its port: the mode value carries the kind's bit in its second
   byte, and the DLL then redirects that kind alone. A kind passes when the largest cross-mode
   difference is at most 1.5x the largest same-mode one: its hand-ported pass then draws what the
@@ -916,6 +919,13 @@ def pack_stats(layout, values: dict) -> bytes:
     return bytes(out)
 
 
+# The line of node's output the harness's answer is on. Twice in about twenty selftests on
+# 2026-10-15 node's stdout held a second line beside the harness's JSON, which the parse refused
+# as `Extra data: line 2 column 1 (char 165)`; what wrote it was not caught (`node` on this
+# machine is a proto shim, `~/.proto/shims/node`). So the answer is the one line that starts with
+# this, and anything else on stdout is left alone.
+NODE_RESULT_LINE = "er-shader-ab-proof-result "
+
 # Runs the agent in node with Frida's globals stubbed: the export table, NativeFunction calls that
 # copy a StatsV1 the selftest packed, a set-mode that writes the mode field, and a set-unfaithful
 # that writes the unfaithful field at the offset the selftest passes.
@@ -984,8 +994,9 @@ const refused = sandbox.rpc.exports.setMode(7);
 const kind = sandbox.rpc.exports.setMode(2 | (8 << 8));
 const marked = sandbox.rpc.exports.setUnfaithful(2);
 const unmarked = sandbox.rpc.exports.setUnfaithful(64);
-process.stdout.write(JSON.stringify({ stats, switched, refused, kind, marked, unmarked, sent }));
-"""
+process.stdout.write('\n' + NODE_RESULT_PREFIX
+  + JSON.stringify({ stats, switched, refused, kind, marked, unmarked, sent }) + '\n');
+""".replace("NODE_RESULT_PREFIX", repr(NODE_RESULT_LINE))
 
 
 def run_agent_in_node(source: str, stats_bytes: bytes, unfaithful_at: int) -> dict | None:
@@ -1004,7 +1015,14 @@ def run_agent_in_node(source: str, stats_bytes: bytes, unfaithful_at: int) -> di
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip()[-400:])
-    return json.loads(result.stdout)
+    answers = [
+        line[len(NODE_RESULT_LINE):]
+        for line in result.stdout.splitlines()
+        if line.startswith(NODE_RESULT_LINE)
+    ]
+    if len(answers) != 1:
+        raise RuntimeError(f"node printed {len(answers)} answers: {result.stdout[-400:]!r}")
+    return json.loads(answers[0])
 
 
 class Lcg:
