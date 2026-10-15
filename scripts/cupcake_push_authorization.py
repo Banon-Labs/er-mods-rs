@@ -23,8 +23,15 @@ at this tool call, and nothing else:
 1. The pending tool call is located in the transcript by its `tool_use_id`, and the chain is walked
    backwards through `parentUuid` from there. Claude Code writes that link from its own memory, so
    a line appended to the transcript by anyone else is never on the chain. A transcript in which
-   any `uuid` occurs twice is refused outright: that is the one way an appended line could stand in
+   any `uuid` occurs twice is refused outright: that is one way an appended line could stand in
    for an entry that is on the chain (none of the 40 newest transcripts in this project had one).
+   The other way is a copy of the pending tool call itself, appended after the real one by
+   something that read its id there and hung off a forged prompt; a transcript in which a second
+   entry holds the pending `tool_use_id` is refused too (no id repeats among the 24,298 tool calls
+   in the 80 newest transcripts and subagent transcripts in this project, measured 2026-10-14).
+   The tool call's own line can land after this reader has started (see `LOCATE_DEADLINE_SECONDS`),
+   so a missing line is looked for again in what gets appended, for a bounded time, and denies
+   when it never arrives.
 2. A genuine prompt is a `type: user` entry with `origin.kind == "human"` and `promptSource` of
    `typed` or `queued`, not `isMeta`, not `isCompactSummary`, not a sidechain, whose content is a
    string or text blocks only. Measured over every transcript in this project: tool results,
@@ -51,10 +58,12 @@ file re-arms a spent authorization; it cannot create one.
 """
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import json
 import os
 import re
+import select
 import shlex
 import subprocess
 import sys
@@ -68,6 +77,30 @@ AUTH_RE = re.compile(r"authorize ([0-9a-fA-F]{7,40})")
 PROTECTED_BRANCHES = {"main", "master", "HEAD"}
 HUMAN_PROMPT_SOURCES = {"typed", "queued"}
 SHELL_META = set(";&|<>()`$\n\r\\*?[]{}~!#")
+
+# How long the locate step keeps watching the transcript for the pending tool call, counted from
+# this reader's start. It re-reads when inotify reports a write, never on a timer. The budget this
+# has to fit, measured 2026-10-14:
+# cupcake 0.5.2 gives a signal it discovers in `.cupcake/signals/` 5 s (`default_timeout()` in
+# cupcake-core's `engine/rulebook.rs`; a rulebook entry could change it, a discovered signal cannot;
+# a fixture signal that answered after 4.6 s was read and one that answered after 5.4 s was dropped,
+# which denies). `push_authorization.sh` stops this reader at 4.5 s, so that a reader still running
+# when cupcake gives up is never left to record a spend for a push cupcake has already denied. A 3 s
+# wait leaves 1.5 s of that 4.5 s for the rest. The whole decision on the 18 MB transcript that was
+# refused takes 0.25-0.3 s, most of it the first whole read, which comes before the wait; once the
+# line lands there is one read of the appended bytes, the chain walk and the spend.
+#
+# Against the lag it has to cover: in a subagent transcript every tool_use line landed 0.10-0.11 s
+# after its own `timestamp` (14 calls), while in the busy main session that was refused it had not
+# landed when a reader that answered within 1.06 s looked for it (see `last_prompt`). 3 s is about
+# thirty times the first and nearly three times the second.
+LOCATE_DEADLINE_SECONDS = 3.0
+
+# inotify(7) constants from <sys/inotify.h> (x86-64 Linux).
+IN_MODIFY = 0x00000002
+IN_CLOSE_NOWRITE = 0x00000010
+IN_NONBLOCK = 0o4000
+IN_CLOEXEC = 0o2000000
 
 
 def emit(verdict: str, branch: str | None, tip: str | None, detail: str) -> None:
@@ -129,20 +162,86 @@ def parse_push(command: str, cwd: str) -> tuple[str, str, str]:
 
 # --- the transcript ----------------------------------------------------------------------------
 
-def load_entries(path: str) -> list[dict]:
-    entries = []
-    with open(path, encoding="utf-8", errors="replace") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(entry, dict):
-                entries.append(entry)
-    return entries
+def parse_line(raw: bytes) -> dict | None:
+    line = raw.decode("utf-8", errors="replace").strip()
+    if not line:
+        return None
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return None
+    return entry if isinstance(entry, dict) else None
+
+
+class Transcript:
+    """The transcript's entries, kept current by reading only the bytes appended since last time.
+
+    Lines are split the way a text-mode read splits them (`\\r\\n`, `\\r` and `\\n` all end a line),
+    so the entries are the ones a single whole-file read would have produced. A trailing line with
+    no newline yet counts when it already parses, as it would in a whole-file read, and is read
+    again once more bytes arrive. A file that shrank or was replaced is read again from its start.
+    """
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.identity: tuple[int, int] | None = None
+        self.offset = 0
+        self.tail = b""
+        self.complete: list[dict] = []
+
+    def refresh(self) -> None:
+        with open(self.path, "rb") as fh:
+            st = os.fstat(fh.fileno())
+            identity = (st.st_dev, st.st_ino)
+            if identity != self.identity or st.st_size < self.offset:
+                self.identity, self.offset, self.tail, self.complete = identity, 0, b"", []
+            fh.seek(self.offset)
+            data = fh.read()
+        self.offset += len(data)
+        data = (self.tail + data).replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+        *lines, self.tail = data.split(b"\n")
+        self.complete.extend(e for e in map(parse_line, lines) if e is not None)
+
+    def entries(self) -> list[dict]:
+        last = parse_line(self.tail)
+        return self.complete + ([last] if last is not None else [])
+
+
+class FileEvents:
+    """inotify on one file, through libc: `wait(seconds)` is true once an event in `mask` arrives.
+
+    Raises `OSError` when inotify is unavailable. Add the watch before the read it guards, so a
+    write landing between the two still wakes the next `wait`.
+    """
+
+    def __init__(self, path: str, mask: int) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        self.fd = libc.inotify_init1(IN_NONBLOCK | IN_CLOEXEC)
+        if self.fd < 0:
+            raise OSError(ctypes.get_errno(), "inotify_init1")
+        if libc.inotify_add_watch(self.fd, os.fsencode(path), mask) < 0:
+            err = ctypes.get_errno()
+            os.close(self.fd)
+            raise OSError(err, "inotify_add_watch")
+
+    def wait(self, seconds: float) -> bool:
+        ready, _, _ = select.select([self.fd], [], [], max(0.0, seconds))
+        if not ready:
+            return False
+        try:
+            os.read(self.fd, 65536)  # drain, so the next wait blocks until a new event
+        except BlockingIOError:
+            pass
+        return True
+
+    def close(self) -> None:
+        os.close(self.fd)
+
+    def __enter__(self) -> FileEvents:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
 
 
 def holds_tool_use(entry: dict, tool_use_id: str) -> bool:
@@ -177,16 +276,51 @@ def prompt_text(entry: dict) -> str | None:
     return None
 
 
-def last_prompt(path: str, tool_use_id: str) -> tuple[str, str]:
+def last_prompt(path: str, tool_use_id: str, deadline: float) -> tuple[str, str]:
     """(message uuid, text) of the last genuine prompt on the chain ending at this tool call."""
-    # Claude Code writes the tool_use line before the hook runs (measured 2026-10-07: the entry
-    # was on disk ~1.1 s before the PreToolUse hook finished). If it is not there, deny; a retry
-    # of the same command is a new tool call that will be.
-    entries = load_entries(path)
-    start = next((e for e in reversed(entries) if holds_tool_use(e, tool_use_id)), None)
-    if start is None:
-        raise Refused("this tool call is not in the transcript yet, so its conversation cannot be "
-                      "read; run the same push again")
+    # Claude Code does not write the tool_use line before it starts the PreToolUse hook; the hook
+    # and the write race. Measured 2026-10-14 on Claude Code 2.1.281 by recording when each line
+    # of a subagent transcript landed: tool_use lines landed 0.10-0.11 s after their `timestamp`,
+    # and the hooks for the same calls had started within 10 ms of it, so the hook is already
+    # running when the line arrives. The main session can be later still. On 2026-10-14 two
+    # consecutive authorized pushes were refused because this reader did not find the line; their
+    # refusals are timestamped 1.06 s and 1.36 s after the call they refused, so the line was
+    # still missing when the reader looked, some time before that. A third call was found, and
+    # spent, 1.12 s after its own. The 2026-10-07 reading this comment used to cite (the line on
+    # disk about 1.1 s before the hook finished) was one sample of that race, not an ordering
+    # Claude Code promises.
+    #
+    # So a missing line is looked for again in what gets appended, each time inotify reports a
+    # write, until `deadline`. Without inotify there is one read and no wait, as before. Waiting
+    # changes nothing else: the chain is still walked from the line Claude Code wrote, and a line
+    # that never arrives still denies.
+    try:
+        writes: FileEvents | None = FileEvents(path, IN_MODIFY)
+    except OSError:
+        writes = None
+    try:
+        transcript = Transcript(path)
+        transcript.refresh()
+        entries = transcript.entries()
+        holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
+        while (not holders and writes is not None and time.monotonic() < deadline
+               and writes.wait(deadline - time.monotonic())):
+            transcript.refresh()
+            entries = transcript.entries()
+            holders = [e for e in entries if holds_tool_use(e, tool_use_id)]
+    finally:
+        if writes is not None:
+            writes.close()
+    if not holders:
+        raise Refused(f"this tool call was still not in the transcript {LOCATE_DEADLINE_SECONDS:g} s "
+                      "after the check began, so its conversation cannot be read; run the same "
+                      "push again")
+    # The id is unknown to anyone until Claude Code writes it, so the first entry holding it is
+    # Claude Code's. A second one can only be a copy appended by whoever read the first, and if it
+    # were taken as the start it would carry its own forged parent onto the chain.
+    if len(holders) > 1:
+        raise Refused("the transcript holds this tool call more than once, so it cannot be trusted")
+    start = holders[0]
     by_uuid: dict[str, dict] = {}
     for e in entries:
         uid = e.get("uuid")
@@ -235,7 +369,12 @@ def spend(message_uuid: str, tool_use_id: str, branch: str, tip: str) -> bool:
 
 # --- the decision ------------------------------------------------------------------------------
 
-def decide(event: dict) -> None:
+def branch_tip(repo: str, branch: str) -> str | None:
+    tip = git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"], repo)
+    return tip if tip and re.fullmatch(r"[0-9a-f]{40}", tip) else None
+
+
+def decide(event: dict, started: float) -> None:
     tool_input = event.get("tool_input") if isinstance(event.get("tool_input"), dict) else {}
     command = tool_input.get("command") if isinstance(tool_input.get("command"), str) else ""
     if "push" not in command:
@@ -244,8 +383,8 @@ def decide(event: dict) -> None:
         raise Refused("only the main session can push on the user's authorization, never a subagent")
     cwd = event.get("cwd") if isinstance(event.get("cwd"), str) else os.getcwd()
     repo, _remote, branch = parse_push(command.strip(), cwd)
-    tip = git(["rev-parse", "--verify", "--quiet", f"refs/heads/{branch}^{{commit}}"], repo)
-    if not tip or not re.fullmatch(r"[0-9a-f]{40}", tip):
+    tip = branch_tip(repo, branch)
+    if tip is None:
         raise Refused(f"no local branch `{branch}` in {repo}", branch)
     path, tool_use_id = event.get("transcript_path"), event.get("tool_use_id")
     if not isinstance(path, str) or not os.path.isfile(path):
@@ -253,9 +392,14 @@ def decide(event: dict) -> None:
     if not isinstance(tool_use_id, str) or not tool_use_id:
         raise Refused("the event names no tool call", branch, tip)
     try:
-        message_uuid, text = last_prompt(path, tool_use_id)
+        message_uuid, text = last_prompt(path, tool_use_id, started + LOCATE_DEADLINE_SECONDS)
     except Refused as r:
         raise Refused(r.reason, branch, tip)
+    # Read the tip again: the transcript step may have waited seconds, and the tip compared with
+    # the authorization must be the one the push is about to send, not the one from before.
+    tip = branch_tip(repo, branch)
+    if tip is None:
+        raise Refused(f"no local branch `{branch}` in {repo}", branch)
     m = AUTH_RE.fullmatch(text.strip())
     if m is None:
         raise Refused("the user's last message is not an authorization", branch, tip)
@@ -268,6 +412,7 @@ def decide(event: dict) -> None:
 
 
 def main() -> int:
+    started = time.monotonic()
     try:
         event = json.loads(sys.stdin.read() or "{}")
     except ValueError:
@@ -275,7 +420,7 @@ def main() -> int:
     if not isinstance(event, dict):
         return 0
     try:
-        decide(event)
+        decide(event, started)
     except Refused as r:
         emit("DENIED", r.branch, r.tip, r.reason)
     except Exception as exc:  # noqa: BLE001 -- any failure must deny, and say so
