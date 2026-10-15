@@ -12,8 +12,13 @@
 //   between patches stay sharp, which is what a painted cel looks like.
 // * `cel_colour_levels` -- each channel then rounded to that many levels in gamma space, where
 //   the steps are even to the eye, turning the patches into solid fills.
+//
+// The albedo the pass writes, after cel, is the Albedo stage's colour: the user's Albedo layers run
+// on it last, and the probe's albedo region records it before and after them. This pass binds no
+// depth, so the region's last sample word is 0 here.
 
 #include "cel_look.hlsli"
+#include "stage_ctx.hlsli"
 
 SamplerState SS_ClampPoint : register(s7);
 Texture2D<float4> g_GBuffer1Texture : register(t3);
@@ -68,6 +73,8 @@ float3 kuwahara(float2 uv, int radius)
     return best.rgb;
 }
 
+#include "editor_layers.hlsli"
+
 float4 ps_main(PsIn input) : SV_Target0
 {
     int radius = clamp((int)round(cel_paint_radius), 0, MAX_PAINT_RADIUS);
@@ -82,5 +89,19 @@ float4 ps_main(PsIn input) : SV_Target0
         encoded = floor(encoded * cel_colour_levels + 0.5) / cel_colour_levels;
         albedo = pow(encoded, 2.2);
     }
-    return float4((1.0 - metalness) * albedo, 1.0);
+    float3 colour = (1.0 - metalness) * albedo;
+
+    AlbedoCtx ctx;
+    ctx.px = uint2(input.position.xy);
+    ctx.uv = input.uv;
+    ctx.metalness = metalness;
+    float3 layered = er_stage_albedo(colour, ctx);
+
+    // The grid is laid over G-buffer 2, the base colour this pass reads; it binds no depth.
+    uint width, height;
+    g_GBuffer2Texture.GetDimensions(width, height);
+    er_probe_record(ER_PROBE_ALBEDO_HEADER, ER_PROBE_ALBEDO_SAMPLES, ctx.px, uint2(width, height),
+                    colour, layered, 0);
+
+    return float4(layered, 1.0);
 }

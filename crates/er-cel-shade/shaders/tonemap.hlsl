@@ -18,8 +18,14 @@
 // then rounds its luminance to that many steps between black and white, in display space where
 // steps are even to the eye, and scales the channels by one factor so hue survives. The darkest
 // step is left as it was, so shadow detail is not crushed to black.
+//
+// Two stages run here. TonemapPre takes the scene in HDR, after the bloom and the colour matrix
+// and before the vignette and the tone curve; TonemapPost takes the finished picture after cel.
+// The probe's tonemap region records the picture before and after the TonemapPost layers, so a
+// TonemapPre layer shows in both.
 
 #include "cel_look.hlsli"
+#include "stage_ctx.hlsli"
 
 cbuffer cbToneMap : register(b1)
 {
@@ -74,6 +80,8 @@ float3 posterize_screen(float3 colour, float levels)
     return banded > 0.0 && luma > 1e-4 ? colour * (banded / luma) : colour;
 }
 
+#include "editor_layers.hlsli"
+
 float4 ps_main(PsIn input) : SV_Target0
 {
     float2 uv = pp[0].xy * input.uv.xy;
@@ -90,6 +98,15 @@ float4 ps_main(PsIn input) : SV_Target0
     vignette = vignette * vignette * (3.0 - vignette * 2.0);
     vignette = vignette * vignette;
     vignette = vignette * vignette;
+
+    TonemapCtx ctx;
+    ctx.px = uint2(input.position.xy);
+    ctx.uv = input.uv.xy;
+    ctx.source = source.xyz;
+    ctx.glare = glare.xyz;
+    ctx.vignette = vignette;
+    mixed = er_stage_tonemap_pre(mixed, ctx);
+
     float3 toned = vignette * float3(table(mixed.x), table(mixed.y), table(mixed.z));
 
     bool hdr = asuint(tm[16].z) != 0;
@@ -112,5 +129,13 @@ float4 ps_main(PsIn input) : SV_Target0
     {
         result = posterize_screen(result, cel_screen_levels);
     }
-    return float4(result, 1.0);
+    float3 layered = er_stage_tonemap_post(result, ctx);
+
+    // The grid is laid over the HDR source's size; no mask exists yet, so the last word is 0.
+    uint width, height;
+    g_SourceTexture.GetDimensions(width, height);
+    er_probe_record(ER_PROBE_TONEMAP_HEADER, ER_PROBE_TONEMAP_SAMPLES, ctx.px, uint2(width, height),
+                    result, layered, 0);
+
+    return float4(layered, 1.0);
 }

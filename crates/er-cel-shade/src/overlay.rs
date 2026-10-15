@@ -65,7 +65,9 @@ pub fn install(hmodule_raw: usize) {
         er_build_watermark_core::OverlayClaim::NoWindow => {
             INSTALLED.store(false, Ordering::SeqCst);
             log(format_args!(
-                "overlay: no game window, so the menu cannot be drawn"
+                "overlay: no game window, so nothing runs once a present: no menu, the saved look \
+                 cannot change live, and the present count the probe's clock runs on stays 0. \
+                 Cel still draws with the saved look."
             ));
             return;
         }
@@ -86,7 +88,11 @@ pub fn install(hmodule_raw: usize) {
         }
         Err(error) => {
             INSTALLED.store(false, Ordering::SeqCst);
-            log(format_args!("overlay: hudhook install failed: {error:?}"));
+            log(format_args!(
+                "overlay: hudhook install failed ({error:?}), so nothing runs once a present: no \
+                 menu, the saved look cannot change live, and the present count the probe's \
+                 clock runs on stays 0. Cel still draws with the saved look."
+            ));
         }
     }
 }

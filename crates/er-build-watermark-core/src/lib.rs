@@ -34,6 +34,10 @@ pub mod texture_request;
 #[cfg(windows)]
 mod overlay;
 
+/// The system clipboard behind every overlay text field; installed by the host.
+#[cfg(windows)]
+mod clipboard;
+
 /// One imgui host per process, and a way for every other module to draw on it.
 #[cfg(windows)]
 pub mod overlay_host;

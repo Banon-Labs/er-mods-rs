@@ -1,7 +1,130 @@
-//! Which shaders are swapped, how a game shader is recognised, and how a pipeline state stream is
-//! walked to its pixel shader. Nothing here touches D3D12, so all of it is tested on the host.
+//! Which game passes have a cel port, how a game shader is recognised, and how a pipeline state
+//! stream is walked and written. Nothing here touches D3D12, so all of it is tested on the host.
 
-/// One pass this crate replaces.
+/// The stage a port's pass belongs to: the cel knobs and editor layers of a stage are what decide
+/// whether its ports are redirected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum Stage {
+    /// The deferred light buffer, after the game's lighting and ambient occlusion.
+    Lighting = 0,
+    /// The base colour the light buffer is multiplied by.
+    Albedo = 1,
+    /// The finished picture, around the tone curve.
+    Tonemap = 2,
+}
+
+impl Stage {
+    pub const ALL: [Self; 3] = [Self::Lighting, Self::Albedo, Self::Tonemap];
+
+    /// This stage's bit in a set of stages.
+    #[must_use]
+    pub const fn bit(self) -> u32 {
+        1 << self as u32
+    }
+
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Lighting => "lighting",
+            Self::Albedo => "albedo",
+            Self::Tonemap => "tonemap",
+        }
+    }
+}
+
+/// One cel port, numbered by its place in [`REPLACEMENTS`]. The number is also the top byte of
+/// the `ER_VARIANT_ID` the port is compiled with (`scripts/build-cel-shaders.py`), which the probe
+/// header carries back, and the [`crate::table::Entry::port`] of its redirect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum PortKind {
+    Ao = 0,
+    AoSsr = 1,
+    CmbAlbedo = 2,
+    Tonemap = 3,
+    TonemapLut = 4,
+}
+
+impl PortKind {
+    pub const COUNT: usize = 5;
+    pub const ALL: [Self; Self::COUNT] = [
+        Self::Ao,
+        Self::AoSsr,
+        Self::CmbAlbedo,
+        Self::Tonemap,
+        Self::TonemapLut,
+    ];
+
+    /// The kind numbered `value`, as a table entry's `port` byte stores it.
+    #[must_use]
+    pub const fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Ao),
+            1 => Some(Self::AoSsr),
+            2 => Some(Self::CmbAlbedo),
+            3 => Some(Self::Tonemap),
+            4 => Some(Self::TonemapLut),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn stage(self) -> Stage {
+        match self {
+            Self::Ao | Self::AoSsr => Stage::Lighting,
+            Self::CmbAlbedo => Stage::Albedo,
+            Self::Tonemap | Self::TonemapLut => Stage::Tonemap,
+        }
+    }
+
+    /// This kind's entry in [`REPLACEMENTS`].
+    #[must_use]
+    pub fn replacement(self) -> &'static Replacement {
+        &REPLACEMENTS[self as usize]
+    }
+
+    /// The kind's bit in a set of kinds: the unfaithful ports, the kinds a fidelity test
+    /// redirects, the kinds a command list bound.
+    #[must_use]
+    pub const fn bit(self) -> u8 {
+        1 << self as u8
+    }
+
+    /// Every kind's [`PortKind::bit`].
+    pub const ALL_BITS: u8 = (1 << Self::COUNT) - 1;
+
+    /// The kind's name where a person writes one: `unfaithful_ports` in the settings file, and
+    /// `--kinds` in `scripts/check-shader-editor-probe.py` and `scripts/er-shader-ab-proof.py`,
+    /// whose selftests read these names.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Ao => "ao",
+            Self::AoSsr => "ao_ssr",
+            Self::CmbAlbedo => "cmb_albedo",
+            Self::Tonemap => "tonemap",
+            Self::TonemapLut => "tonemap_lut",
+        }
+    }
+
+    /// The kind whose [`PortKind::key`] is `key`.
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.key() == key)
+    }
+
+    /// The kinds a set of [`PortKind::bit`]s names, in order.
+    pub fn in_set(bits: u8) -> impl Iterator<Item = Self> {
+        Self::ALL
+            .into_iter()
+            .filter(move |kind| bits & kind.bit() != 0)
+    }
+}
+
+const _: () = assert!(PortKind::COUNT < u8::BITS as usize);
+
+/// One game pass with a cel port.
 pub struct Replacement {
     /// The original's debug name, for logs.
     pub name: &'static str,
@@ -11,11 +134,17 @@ pub struct Replacement {
     /// FNV-1 64 of the original container. It is vkd3d-proton's shader hash too, which is how
     /// these values were measured: a dump named `f6f6f959abff547f.dxil` hashed to that value.
     pub original_fnv1: u64,
-    /// The signed replacement, compiled by `scripts/build-cel-shaders.py`.
+    /// Equal to this entry's index; `scripts/build-cel-shaders.py` numbers the blobs the same way.
+    pub kind: PortKind,
+    /// Equal to `kind.stage()`, written out so the table reads as the design does.
+    pub stage: Stage,
+    /// The signed cel port, compiled by `scripts/build-cel-shaders.py`. The game's pipeline is
+    /// never given it: it is the pixel shader of a separate pipeline, the cel variant, which the
+    /// command-list hooks bind in the game pipeline's place.
     pub dxil: &'static [u8],
 }
 
-/// The passes swapped today.
+/// The passes with a cel port.
 ///
 /// The two AO passes multiply ambient occlusion into the finished diffuse light buffer, which by
 /// then holds the sun, the tiled point and spot lights and the ambient term, so posterizing and
@@ -32,30 +161,40 @@ pub static REPLACEMENTS: &[Replacement] = &[
         name: "GXLightDeferredAO",
         original_len: 9264,
         original_fnv1: 0xf6f6_f959_abff_547f,
+        kind: PortKind::Ao,
+        stage: Stage::Lighting,
         dxil: include_bytes!("../shaders/compiled/light_deferred_ao.dxil"),
     },
     Replacement {
         name: "GXLightDeferredAOWithSsr",
         original_len: 9684,
         original_fnv1: 0x2f89_244e_8be2_18a4,
+        kind: PortKind::AoSsr,
+        stage: Stage::Lighting,
         dxil: include_bytes!("../shaders/compiled/light_deferred_ao_ssr.dxil"),
     },
     Replacement {
         name: "GXLightCmbAlbedo",
         original_len: 5860,
         original_fnv1: 0x1c86_07a4_4475_d4f0,
+        kind: PortKind::CmbAlbedo,
+        stage: Stage::Albedo,
         dxil: include_bytes!("../shaders/compiled/light_cmb_albedo.dxil"),
     },
     Replacement {
         name: "ToneMap_TabledToneMapPS",
         original_len: 9591,
         original_fnv1: 0xaab9_d49c_8bb5_3daf,
+        kind: PortKind::Tonemap,
+        stage: Stage::Tonemap,
         dxil: include_bytes!("../shaders/compiled/tonemap.dxil"),
     },
     Replacement {
         name: "ToneMap_TabledToneMapLUTPS",
         original_len: 10219,
         original_fnv1: 0x2fb4_c417_54c0_7c18,
+        kind: PortKind::TonemapLut,
+        stage: Stage::Tonemap,
         dxil: include_bytes!("../shaders/compiled/tonemap_lut.dxil"),
     },
 ];
@@ -73,6 +212,24 @@ pub fn find(bytecode: &[u8]) -> Option<&'static Replacement> {
 pub const SUBOBJECT_ROOT_SIGNATURE: u32 = 0;
 /// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS`.
 pub const SUBOBJECT_PS: u32 = 2;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT`.
+pub const SUBOBJECT_STREAM_OUTPUT: u32 = 7;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT`.
+pub const SUBOBJECT_INPUT_LAYOUT: u32 = 12;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO`.
+pub const SUBOBJECT_CACHED_PSO: u32 = 19;
+/// `D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING`.
+pub const SUBOBJECT_VIEW_INSTANCING: u32 = 22;
+
+/// Subobject types that carry shader bytecode, in the order a root signature is looked for:
+/// `VS`, `PS`, `DS`, `HS`, `GS`, `CS`, `AS`, `MS`.
+pub const SHADER_SUBOBJECTS: [u32; 8] = [1, 2, 3, 4, 5, 6, 24, 25];
+
+/// Subobject types whose payload holds no pointer, so a bitwise copy of it is a complete copy.
+/// Every other type the layout table knows is either one [`crate::record`] copies deeply or one it
+/// refuses.
+pub const POINTER_FREE_SUBOBJECTS: [u32; 15] =
+    [8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20, 21, 26, 27, 28];
 
 /// Size and alignment of one subobject's payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +300,21 @@ pub fn subobjects(
     Ok(found)
 }
 
+/// Append one subobject to a stream, laid out as [`subobjects`] reads it: the type, the payload at
+/// `align`, and the whole padded to pointer alignment. `stream` must already end on that alignment,
+/// which every earlier call leaves it on.
+pub fn push_subobject(stream: &mut Vec<u8>, ty: u32, payload: &[u8], align: usize) {
+    let pointer_align = core::mem::align_of::<usize>().max(align);
+    let start = stream.len();
+    stream.extend_from_slice(&ty.to_le_bytes());
+    stream.resize(start + round_up(4, align), 0);
+    stream.extend_from_slice(payload);
+    stream.resize(
+        start + round_up(round_up(4, align) + payload.len(), pointer_align),
+        0,
+    );
+}
+
 /// Walk a `D3D12_PIPELINE_STATE_STREAM_DESC` stream to the payload of subobject `wanted`.
 pub fn find_subobject(stream: &[u8], wanted: u32, layout: &dyn Fn(u32) -> Option<Payload>) -> Walk {
     match subobjects(stream, layout) {
@@ -153,35 +325,6 @@ pub fn find_subobject(stream: &[u8], wanted: u32, layout: &dyn Fn(u32) -> Option
         Err(walk) => walk,
     }
 }
-
-/// The bytes of one part of a DXBC container, by four-character code.
-///
-/// A container is `DXBC`, a 16-byte digest, a version, the total size, a part count at offset 28
-/// and that many part offsets after it; each part is its code, its size, then its bytes. Shader
-/// bytecode and serialized root signatures are both containers, which is how an `RTS0` part can be
-/// found in either.
-#[must_use]
-pub fn container_part<'a>(container: &'a [u8], code: &[u8; 4]) -> Option<&'a [u8]> {
-    let read = |at: usize| -> Option<usize> {
-        let bytes = container.get(at..at + 4)?;
-        Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
-    };
-    if container.get(..4)? != b"DXBC" {
-        return None;
-    }
-    let count = read(28)?;
-    for index in 0..count {
-        let part = read(32 + index * 4)?;
-        if container.get(part..part + 4)? == code {
-            let size = read(part + 4)?;
-            return container.get(part + 8..part + 8 + size);
-        }
-    }
-    None
-}
-
-/// The root signature part's code.
-pub const ROOT_SIGNATURE_PART: &[u8; 4] = b"RTS0";
 
 /// How much of the 64-`DWORD` root signature budget a parameter uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,11 +337,9 @@ pub enum RootParameterCost {
     Descriptor,
 }
 
-/// The size limit of a root signature, in `DWORD`s.
+/// The size limit of a root signature, in `DWORD`s. How much of the rest the editor's parameters
+/// take is `look_binding::ladder`'s choice.
 pub const MAX_ROOT_SIGNATURE_DWORDS: u32 = 64;
-
-/// What appending the look's root CBV costs.
-pub const LOOK_PARAMETER_DWORDS: u32 = 2;
 
 /// Total `DWORD`s a root signature's parameters use.
 pub fn root_signature_dwords(params: impl IntoIterator<Item = RootParameterCost>) -> u32 {
@@ -212,34 +353,127 @@ pub fn root_signature_dwords(params: impl IntoIterator<Item = RootParameterCost>
         .sum()
 }
 
-/// Does a root signature of this size still have room for the look's parameter?
-#[must_use]
-pub fn has_room_for_look(dwords: u32) -> bool {
-    dwords + LOOK_PARAMETER_DWORDS <= MAX_ROOT_SIGNATURE_DWORDS
+/// The synthetic streams the walker and [`crate::record`] are tested on.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::Payload;
+    use crate::record::{
+        CachedPipelineState, InputLayoutDesc, ShaderBytecode, StreamOutputDesc, ViewInstancingDesc,
+    };
+
+    pub use super::push_subobject as push;
+
+    fn payload_of<T>() -> Option<Payload> {
+        Some(Payload {
+            size: size_of::<T>(),
+            align: align_of::<T>(),
+        })
+    }
+
+    /// The payload layouts of the subobject types the tests build, as the walker sees them on a
+    /// 64-bit target.
+    pub fn test_layout(ty: u32) -> Option<Payload> {
+        match ty {
+            // root signature pointer
+            0 => payload_of::<usize>(),
+            // shader bytecode: pointer + length
+            1..=6 | 24 | 25 => payload_of::<ShaderBytecode>(),
+            7 => payload_of::<StreamOutputDesc>(),
+            12 => payload_of::<InputLayoutDesc>(),
+            // a 4-byte enum, like the primitive topology
+            14 => payload_of::<u32>(),
+            19 => payload_of::<CachedPipelineState>(),
+            22 => payload_of::<ViewInstancingDesc>(),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::{push, test_layout};
     use super::*;
 
-    fn test_layout(ty: u32) -> Option<Payload> {
-        match ty {
-            // root signature pointer
-            0 => Some(Payload { size: 8, align: 8 }),
-            // shader bytecode: pointer + length
-            1 | 2 => Some(Payload { size: 16, align: 8 }),
-            // a 4-byte enum, like the primitive topology
-            14 => Some(Payload { size: 4, align: 4 }),
-            _ => None,
+    #[test]
+    fn each_replacement_is_numbered_by_its_place_and_staged_by_its_kind() {
+        assert_eq!(REPLACEMENTS.len(), PortKind::COUNT);
+        for (index, replacement) in REPLACEMENTS.iter().enumerate() {
+            assert_eq!(replacement.kind as usize, index, "{}", replacement.name);
+            assert_eq!(
+                replacement.kind,
+                PortKind::ALL[index],
+                "{}",
+                replacement.name
+            );
+            assert_eq!(
+                replacement.stage,
+                replacement.kind.stage(),
+                "{}",
+                replacement.name
+            );
+            assert!(std::ptr::eq(replacement.kind.replacement(), replacement));
         }
     }
 
-    fn push(stream: &mut Vec<u8>, ty: u32, payload: &[u8], align: usize) {
-        let start = stream.len();
-        stream.extend_from_slice(&ty.to_le_bytes());
-        stream.resize(start + round_up(4, align), 0);
-        stream.extend_from_slice(payload);
-        stream.resize(start + round_up(round_up(4, align) + payload.len(), 8), 0);
+    #[test]
+    fn port_kinds_round_trip_through_their_byte_and_stay_below_no_port() {
+        for kind in PortKind::ALL {
+            assert_eq!(PortKind::from_u8(kind as u8), Some(kind));
+            assert!((kind as u8) < crate::table::NO_PORT, "{kind:?}");
+        }
+        assert_eq!(PortKind::from_u8(PortKind::COUNT as u8), None);
+        assert_eq!(PortKind::from_u8(crate::table::NO_PORT), None);
+    }
+
+    #[test]
+    fn port_kinds_have_a_bit_and_a_name_each() {
+        // Written out: the settings file and both proof scripts spell kinds this way.
+        let named: Vec<(&str, u8)> = PortKind::ALL
+            .iter()
+            .map(|kind| (kind.key(), kind.bit()))
+            .collect();
+        assert_eq!(
+            named,
+            vec![
+                ("ao", 1),
+                ("ao_ssr", 2),
+                ("cmb_albedo", 4),
+                ("tonemap", 8),
+                ("tonemap_lut", 16)
+            ]
+        );
+        assert_eq!(PortKind::ALL_BITS, 0b1_1111);
+        for kind in PortKind::ALL {
+            assert_eq!(PortKind::from_key(kind.key()), Some(kind));
+        }
+        assert_eq!(PortKind::from_key("AO"), None);
+        assert_eq!(PortKind::from_key(""), None);
+        let kinds: Vec<PortKind> = PortKind::in_set(0b1_0010 | 0b1110_0000).collect();
+        assert_eq!(kinds, vec![PortKind::AoSsr, PortKind::TonemapLut]);
+    }
+
+    #[test]
+    fn stages_have_distinct_bits() {
+        let bits: Vec<u32> = Stage::ALL.iter().map(|stage| stage.bit()).collect();
+        assert_eq!(bits, vec![1, 2, 4]);
+    }
+
+    #[test]
+    fn pointer_free_and_pointer_carrying_types_do_not_overlap() {
+        for ty in POINTER_FREE_SUBOBJECTS {
+            assert!(!SHADER_SUBOBJECTS.contains(&ty), "{ty}");
+            assert!(
+                ![
+                    SUBOBJECT_ROOT_SIGNATURE,
+                    SUBOBJECT_STREAM_OUTPUT,
+                    SUBOBJECT_INPUT_LAYOUT,
+                    SUBOBJECT_CACHED_PSO,
+                    SUBOBJECT_VIEW_INSTANCING,
+                ]
+                .contains(&ty),
+                "{ty}"
+            );
+        }
     }
 
     #[test]
@@ -304,56 +538,19 @@ mod tests {
         );
     }
 
-    /// A container with the given parts, in the layout `container_part` reads.
-    fn container(parts: &[(&[u8; 4], &[u8])]) -> Vec<u8> {
-        let header = 32 + 4 * parts.len();
-        let mut out = b"DXBC".to_vec();
-        out.extend_from_slice(&[0; 16]);
-        out.extend_from_slice(&1_u32.to_le_bytes());
-        out.extend_from_slice(&0_u32.to_le_bytes());
-        out.extend_from_slice(&(parts.len() as u32).to_le_bytes());
-        let mut at = header;
-        for (_, data) in parts {
-            out.extend_from_slice(&(at as u32).to_le_bytes());
-            at += 8 + data.len();
-        }
-        for (code, data) in parts {
-            out.extend_from_slice(*code);
-            out.extend_from_slice(&(data.len() as u32).to_le_bytes());
-            out.extend_from_slice(data);
-        }
-        out
-    }
-
     #[test]
-    fn container_part_finds_the_root_signature_among_others() {
-        let blob = container(&[(b"DXIL", &[1, 2, 3]), (b"RTS0", &[9, 8, 7, 6])]);
-        assert_eq!(
-            container_part(&blob, ROOT_SIGNATURE_PART),
-            Some(&[9_u8, 8, 7, 6][..])
-        );
-        assert_eq!(container_part(&blob, b"PSV0"), None);
-    }
-
-    #[test]
-    fn container_part_refuses_what_is_not_a_container() {
-        assert_eq!(container_part(b"nope", ROOT_SIGNATURE_PART), None);
-        let mut blob = container(&[(b"RTS0", &[1, 2, 3, 4])]);
-        blob.truncate(blob.len() - 2);
-        assert_eq!(container_part(&blob, ROOT_SIGNATURE_PART), None);
-    }
-
-    #[test]
-    fn the_look_fits_until_the_budget_is_spent() {
+    fn each_parameter_kind_costs_its_dwords() {
         let tables = std::iter::repeat_n(RootParameterCost::Table, 10);
         let used = root_signature_dwords(tables.chain([
             RootParameterCost::Constants(4),
             RootParameterCost::Descriptor,
         ]));
         assert_eq!(used, 16);
-        assert!(has_room_for_look(used));
-        assert!(has_room_for_look(62));
-        assert!(!has_room_for_look(63));
+        // The game's raster root signature: 36 descriptor tables.
+        assert_eq!(
+            root_signature_dwords(std::iter::repeat_n(RootParameterCost::Table, 36)),
+            36
+        );
     }
 
     #[test]

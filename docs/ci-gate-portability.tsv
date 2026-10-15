@@ -309,3 +309,7 @@ portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against 
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools
+portable	-	check-shader-editor-probe.py --selftest	synthetic telemetry documents and the er-cel-shade sources only	runtime-tools
+portable	-	er-shader-ab-proof.py --selftest	synthetic images, the Frida agent and the er-cel-shade sources; the node and ImageMagick cases print that they were skipped where those tools are absent	runtime-tools
+portable	-	build-cel-shaders.py --selftest	synthetic containers built and signed in Python; needs neither dxc nor the dump	product
+partial	dxc,vkd3d-dump	build-cel-shaders.py --check	still proves every committed blob is a signed shader model 6.0 pixel shader with no root signature; prints that the staleness comparison (no dxc) and the linkage against the game's originals (no dump) were skipped	product

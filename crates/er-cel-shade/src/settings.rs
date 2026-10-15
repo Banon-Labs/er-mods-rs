@@ -5,10 +5,13 @@
 //!
 //! # One table drives everything
 //!
-//! [`KNOBS`] is in the order of the `CelLook` constant buffer in `shaders/cel_look.hlsli`, so the
-//! block the GPU reads is the knob values followed by padding ([`Look::gpu_block`]). The menu
-//! draws one slider per entry and the file writes one line per entry, so adding a knob is one row
-//! here, one field in the `.hlsli`, and the shader code that reads it.
+//! [`KNOBS`] is in the order of the `cel_*` names `shaders/editor_abi.hlsli` defines onto the first
+//! registers of the editor's parameter block, so the block the GPU reads is the knob values
+//! followed by padding ([`Look::gpu_block`]). The menu draws one slider per entry and the file
+//! writes one line per entry, so adding a knob is one row here, one `#define` in the `.hlsli`, and
+//! the shader code that reads it.
+
+use crate::replace::PortKind;
 
 /// One knob: its key in the file, its label and help in the menu, and its range.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -30,7 +33,7 @@ pub struct Knob {
     pub off: f32,
 }
 
-/// Every knob, in `CelLook` order.
+/// Every knob, in the order the shaders' `cel_*` names read them.
 pub const KNOBS: [Knob; KNOB_COUNT] = [
     Knob {
         key: "light_band_stops",
@@ -234,6 +237,10 @@ pub struct Settings {
     pub look: Look,
     /// The player's own presets, after the built-in ones in the menu.
     pub presets: Vec<Preset>,
+    /// The ports the fidelity test found unfaithful, one [`PortKind::bit`] each: they are bound as
+    /// the game asked whatever the look says, until the menu or this file clears them (design 14,
+    /// P0.1 item 5). Written in the file by [`PortKind::key`].
+    pub unfaithful_ports: u8,
 }
 
 impl Default for Settings {
@@ -248,8 +255,36 @@ impl Default for Settings {
             preset: DEFAULT_PRESET.to_owned(),
             look,
             presets: Vec::new(),
+            unfaithful_ports: 0,
         }
     }
+}
+
+/// The ports a comma list of [`PortKind::key`]s names, as [`PortKind::bit`]s. An empty list is
+/// none.
+pub fn parse_ports(list: &str) -> Result<u8, String> {
+    let mut bits = 0;
+    for word in list
+        .split(',')
+        .map(str::trim)
+        .filter(|word| !word.is_empty())
+    {
+        let kind = PortKind::from_key(word).ok_or_else(|| {
+            let known: Vec<&str> = PortKind::ALL.iter().map(|kind| kind.key()).collect();
+            format!("`{word}` is no port; one of {}", known.join(", "))
+        })?;
+        bits |= kind.bit();
+    }
+    Ok(bits)
+}
+
+/// The comma list of [`PortKind::key`]s that `bits` names, in [`PortKind::ALL`] order.
+#[must_use]
+pub fn render_ports(bits: u8) -> String {
+    PortKind::in_set(bits)
+        .map(PortKind::key)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// The settings file's name, beside the game executable.
@@ -298,6 +333,9 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
                 "menu_key" => parse_string(value).map(|v| settings.menu_key = v),
                 "enabled" => parse_bool(value).map(|v| settings.enabled = v),
                 "preset" => parse_string(value).map(|v| settings.preset = v),
+                "unfaithful_ports" => parse_string(value)
+                    .and_then(|list| parse_ports(&list))
+                    .map(|bits| settings.unfaithful_ports = bits),
                 _ => Err(format!("unknown key `{key}`")),
             },
             Section::Look => set_knob(&mut settings.look, key, value),
@@ -422,7 +460,16 @@ pub fn render(settings: &Settings) -> String {
     out.push_str("# false shows the game's own picture without unloading anything.\n");
     out.push_str(&format!("enabled = {}\n", settings.enabled));
     out.push_str("# The preset the look below was last taken from.\n");
-    out.push_str(&format!("preset = {}\n\n", quote(&settings.preset)));
+    out.push_str(&format!("preset = {}\n", quote(&settings.preset)));
+    out.push_str(
+        "# Passes whose cel port drew differently from the game's own with cel at its off values,\n\
+         # found by the fidelity test. They are drawn as the game draws them whatever the look\n\
+         # says. Empty clears it; names are ao, ao_ssr, cmb_albedo, tonemap and tonemap_lut.\n",
+    );
+    out.push_str(&format!(
+        "unfaithful_ports = {}\n\n",
+        quote(&render_ports(settings.unfaithful_ports))
+    ));
     out.push_str("[look]\n");
     render_look(&mut out, &settings.look, true);
     for preset in &settings.presets {
@@ -446,17 +493,43 @@ mod tests {
     }
 
     #[test]
-    fn the_cbuffer_declares_the_knobs_in_table_order() {
-        // `shaders/cel_look.hlsli` is the other half of the GPU block's layout. A knob added to one
-        // and not the other would shift every value after it.
-        let hlsl = include_str!("../shaders/cel_look.hlsli");
-        let declared: Vec<&str> = hlsl
+    fn the_abi_header_reads_each_knob_where_gpu_block_puts_it() {
+        // `shaders/editor_abi.hlsli` is the other half of the GPU block's layout: one
+        // `#define cel_<key> (er_p[register].component)` per knob. A knob added, moved or reordered
+        // on one side only would make a shader read another knob's value.
+        let hlsl = include_str!("../shaders/editor_abi.hlsli");
+        let declared: Vec<(String, String)> = hlsl
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("float cel_"))
-            .map(|l| l.trim_end_matches(';'))
+            .filter_map(|l| l.trim().strip_prefix("#define cel_"))
+            .filter_map(|l| l.split_once(char::is_whitespace))
+            .map(|(key, place)| (key.to_owned(), place.trim().to_owned()))
             .collect();
-        let expected: Vec<&str> = KNOBS.iter().map(|k| k.key).collect();
+        let expected: Vec<(String, String)> = KNOBS
+            .iter()
+            .enumerate()
+            .map(|(index, knob)| {
+                let component = ["x", "y", "z", "w"][index % 4];
+                let place = format!("(er_p[{}].{component})", index / 4);
+                (knob.key.to_owned(), place)
+            })
+            .collect();
         assert_eq!(declared, expected);
+        // The cel registers begin the block, so a knob's place in `er_p` is its place in
+        // `gpu_block` counted in registers.
+        assert!(hlsl.lines().any(|l| l.trim() == "#define ER_P_CEL 0"));
+    }
+
+    #[test]
+    fn cel_look_is_the_abi_header() {
+        // The ports include `cel_look.hlsli` for the look; it must bring the ABI header's names and
+        // declare nothing of its own, or a knob could exist in two places.
+        let hlsl = include_str!("../shaders/cel_look.hlsli");
+        let code: Vec<&str> = hlsl
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with("//"))
+            .collect();
+        assert_eq!(code, ["#include \"editor_abi.hlsli\""]);
     }
 
     #[test]
@@ -487,10 +560,38 @@ mod tests {
                 name: "Night \\ ink".to_owned(),
                 look: Look([1.0, 1.0, 2.0, 0.02, 0.4, 0.0, 4.0, 8.0, 1.5]),
             }],
+            unfaithful_ports: PortKind::AoSsr.bit() | PortKind::TonemapLut.bit(),
         };
-        let (read, warnings) = parse(&render(&settings));
+        let text = render(&settings);
+        assert!(
+            text.contains("\nunfaithful_ports = \"ao_ssr,tonemap_lut\"\n"),
+            "{text}"
+        );
+        let (read, warnings) = parse(&text);
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(read, settings);
+    }
+
+    #[test]
+    fn unfaithful_ports_are_named_by_their_keys() {
+        assert_eq!(parse_ports(""), Ok(0));
+        assert_eq!(parse_ports(" ao , tonemap ,"), Ok(1 | 8));
+        assert_eq!(parse_ports("ao,ao"), Ok(1));
+        assert!(parse_ports("ao,sky").is_err());
+        assert_eq!(render_ports(0), "");
+        assert_eq!(
+            render_ports(PortKind::ALL_BITS),
+            "ao,ao_ssr,cmb_albedo,tonemap,tonemap_lut"
+        );
+        for bits in 0..=PortKind::ALL_BITS {
+            assert_eq!(parse_ports(&render_ports(bits)), Ok(bits), "{bits:#b}");
+        }
+        // A name the file cannot read costs its line, and the ports stay as they were.
+        let (read, warnings) = parse("unfaithful_ports = \"ao,fog\"\nenabled = false\n");
+        assert_eq!(read.unfaithful_ports, 0);
+        assert!(!read.enabled);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert_eq!(parse("unfaithful_ports = \"\"\n").0.unfaithful_ports, 0);
     }
 
     #[test]

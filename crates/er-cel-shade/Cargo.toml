@@ -4,13 +4,23 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Cel shading for Elden Ring as one me3 native: it swaps the pixel shader of five lighting and
-# tonemap passes for posterizing ports at D3D12 pipeline creation, and an in-game menu (F6) tunes
-# them live. Works on Windows and under Proton alike, because it replaces the DXIL the game hands
-# D3D12 rather than anything below it.
+# Cel shading for Elden Ring as one me3 native: beside five lighting and tonemap pipelines the game
+# creates, it creates a cel variant with a posterizing port as its pixel shader and binds the
+# variant whenever the game binds the original, and an in-game menu (F6) tunes the ports live. The
+# game's own pipelines are never changed. Works on Windows and under Proton alike, because it works
+# on what the game hands D3D12 rather than anything below it.
 [lib]
 name = "er_cel_shade"
 crate-type = ["cdylib", "rlib"]
+
+[features]
+# For development builds only, to run the native Windows gate W1 (design section 13). The
+# `D3D12CreateDevice` detour switches on D3D12's debug layer with GPU-based validation, and DRED,
+# before the game's device exists, and writes every message the debug layer raises to
+# `er-cel-shade.log`. Needs a Windows machine with the Graphics Tools optional feature. It is a
+# compile-time switch and nothing else: no environment variable or file turns it on, and
+# `scripts/er-build-dlls.sh` never passes it.
+d3d12-debug = []
 
 [dependencies]
 er-game-base = { path = "../er-game-base" }

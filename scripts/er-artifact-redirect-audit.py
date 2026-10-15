@@ -163,6 +163,9 @@ NO_ROTATION_KNOB_ARTIFACTS = frozenset(
         # the target, so nothing is ever rotated aside. This is the run-stopping oracle of a
         # save-suppression proof, and it was the least recoverable artifact in the table.
         "er-save-disable-telemetry.json",
+        # `er-cel-shade/src/exports.rs` replaces it once a second through
+        # `er_hotkey_config::write_atomic`, a write-tmp-then-rename.
+        "er-cel-shade-telemetry.json",
     }
 )
 

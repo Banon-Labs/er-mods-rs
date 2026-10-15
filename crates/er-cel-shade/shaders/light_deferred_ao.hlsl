@@ -5,17 +5,21 @@
 //
 // Every register, the `cbLightAccParam` layout and the I/O signature are copied from the original
 // container's reflection (`dxc -dumpbin`), and the body follows its decompiled SPIR-V line for
-// line, so with every knob in `cel_look.hlsli` at its off value this is the vanilla pass. No root
-// signature is declared here: the game passes its own (with `CelLook` appended by the DLL) when
-// it creates the pipeline.
+// line, so with every knob in `cel_look.hlsli` at its off value and no layers this is the vanilla
+// pass. No root signature is declared here: the DLL creates this variant with the game pipeline's
+// own, which carries the editor's space42 parameters (`editor_abi.hlsli`) appended.
 //
 // With `cel_light_band_stops` above 0, the diffuse output is posterized: its Rec. 709 luminance
 // is rounded to whole steps of that many exposure stops and all three channels are scaled by one
 // factor, so hue survives and the bands sit where the eye sees them at any exposure. The diffuse
 // buffer at this point already holds the sun, the tiled point and spot lights and the ambient
 // term, which is why this one pass reaches every light in the scene.
+//
+// The diffuse light after cel is the Lighting stage's colour: the user's Lighting layers run on it
+// last, and the probe's AO region records it before and after them, with the raw depth.
 
 #include "cel_look.hlsli"
+#include "stage_ctx.hlsli"
 
 cbuffer cbLightAccParam : register(b0)
 {
@@ -124,6 +128,8 @@ float outline(int2 texel, float2 clip, float3 normal)
     return max(silhouette, crease);
 }
 
+#include "editor_layers.hlsli"
+
 PsOut ps_main(PsIn input)
 {
     int3 texel = int3(int2(input.position.xy), 0);
@@ -172,7 +178,27 @@ PsOut ps_main(PsIn input)
         diffuse *= ink;
         specular_out *= ink;
     }
-    output.diffuse = float4(diffuse, 1.0);
+
+    LightingCtx ctx;
+    ctx.px = uint2(input.position.xy);
+    ctx.uv = input.uv;
+    ctx.depth = depth;
+    ctx.view_pos = view.xyz / view.w;
+    ctx.normal = normal;
+    ctx.view_normal = view_normal;
+    ctx.gbuffer1 = gbuffer1;
+    ctx.gbuffer2 = gbuffer2;
+    ctx.specular = specular_out;
+    ctx.occlusion = occlusion;
+    float3 lit = er_stage_lighting(diffuse, ctx);
+
+    // The grid is laid over the depth buffer, the texture this pass reads at `SV_Position`.
+    uint width, height;
+    g_DepthTexture.GetDimensions(width, height);
+    er_probe_record(ER_PROBE_AO_HEADER, ER_PROBE_AO_SAMPLES, ctx.px, uint2(width, height), diffuse,
+                    lit, asuint(depth));
+
+    output.diffuse = float4(lit, 1.0);
     output.specular = float4(specular_out, 1.0);
     return output;
 }

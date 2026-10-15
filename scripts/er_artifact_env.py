@@ -98,6 +98,10 @@ ARTIFACT_ENV: dict[str, str] = {
     # own artifact-log knobs went with them.
     "ER_QUICKLOAD_QUIT_MENU_LOG_PATH": "er-quit-menu.log",
     "ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH": "er-focus-input.log",
+    # er-cel-shade's telemetry: its stats, the decoded pixel probe and the hook timings, replaced
+    # once a second with a write-tmp-then-rename, so the game-directory copy keeps no previous
+    # generation at all. It is what the shader editor's probe check and window A/B proof read.
+    "ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH": "er-cel-shade-telemetry.json",
 }
 
 # The name a watcher reads to find this run's artifacts. A reader still on the fixed game-directory

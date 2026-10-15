@@ -2502,6 +2502,21 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
 # float -- so they run here rather than waiting for someone to notice the picture.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
 
+# The shader editor's proof tools hold their copies of the DLL's layouts to the Rust, and nothing
+# else does: the probe checker reads the probe geometry, port kinds, stage bits, telemetry name,
+# schema and hook timings out of the sources, and the A/B proof holds the Frida agent's `StatsV1`
+# layout and exports to `exports.rs`. Without these an edit to `StatsV1`, `probe.rs` or
+# `replace.rs` passes the suite while the agent or the checker reads the wrong offsets in game.
+python3 "$repo_root/scripts/check-shader-editor-probe.py" --selftest
+python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
+
+# The cel ports the DLL embeds: every committed blob must be a signed shader model 6.0 pixel
+# shader, because native D3D12 refuses unsigned DXIL that vkd3d-proton accepts, so a stale or
+# unsigned blob passes every Linux run and fails on Windows. With dxc it also proves the blobs are
+# what the HLSL compiles to, and with the vkd3d dump that each links like the game's original.
+python3 "$repo_root/scripts/build-cel-shaders.py" --selftest
+python3 "$repo_root/scripts/build-cel-shaders.py" --check
+
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
