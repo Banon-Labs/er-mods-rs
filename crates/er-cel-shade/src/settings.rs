@@ -225,11 +225,63 @@ pub const DEFAULT_PRESET: &str = "Wind Waker";
 /// function key.
 pub const DEFAULT_MENU_KEY: &str = "F6";
 
+/// The screen edge the Shaders panel is pinned to (design 9), or none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dock {
+    Right,
+    Left,
+    /// A window the player moves and sizes, over the frame.
+    Floating,
+}
+
+impl Dock {
+    pub const ALL: [Self; 3] = [Self::Right, Self::Left, Self::Floating];
+
+    /// The name in the settings file.
+    #[must_use]
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+            Self::Floating => "floating",
+        }
+    }
+
+    /// The name the panel's Dock combo shows.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Right => "Right",
+            Self::Left => "Left",
+            Self::Floating => "Floating",
+        }
+    }
+
+    #[must_use]
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|dock| dock.key() == key)
+    }
+}
+
+/// The docked panel's width in pixels at 1080p, before the display's scale: about a quarter of a
+/// 1920-wide frame, so three quarters of the picture stays clear (design 9).
+pub const DEFAULT_PANEL_WIDTH: f32 = 460.0;
+/// The width the panel takes while the Code tab is shown, which fits 100 columns of the default
+/// font.
+pub const DEFAULT_CODE_WIDTH: f32 = 720.0;
+/// The narrowest and widest a panel width may be saved as, at 1080p.
+pub const MIN_PANEL_WIDTH: f32 = 320.0;
+pub const MAX_PANEL_WIDTH: f32 = 1600.0;
+
 /// Everything the settings file holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     /// The key that opens and closes the menu, in `er-hotkey-config`'s spelling.
     pub menu_key: String,
+    /// Where the Shaders panel sits, and its widths at 1080p, saved with the menu key.
+    pub dock: Dock,
+    pub panel_width: f32,
+    pub code_width: f32,
     pub enabled: bool,
     /// The preset the look was last taken from. Informational: the look may have been edited
     /// since, and is saved in full under `[look]` either way.
@@ -251,6 +303,9 @@ impl Default for Settings {
             .map_or_else(Look::vanilla, |p| p.look);
         Self {
             menu_key: DEFAULT_MENU_KEY.to_owned(),
+            dock: Dock::Right,
+            panel_width: DEFAULT_PANEL_WIDTH,
+            code_width: DEFAULT_CODE_WIDTH,
             enabled: true,
             preset: DEFAULT_PRESET.to_owned(),
             look,
@@ -331,6 +386,16 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
         let result = match section {
             Section::Top => match key {
                 "menu_key" => parse_string(value).map(|v| settings.menu_key = v),
+                "dock" => parse_string(value).and_then(|key| {
+                    let dock = Dock::from_key(&key).ok_or_else(|| {
+                        let known: Vec<&str> = Dock::ALL.iter().map(|d| d.key()).collect();
+                        format!("`{key}` is no dock; one of {}", known.join(", "))
+                    })?;
+                    settings.dock = dock;
+                    Ok(())
+                }),
+                "panel_width" => parse_width(key, value).map(|v| settings.panel_width = v),
+                "code_width" => parse_width(key, value).map(|v| settings.code_width = v),
                 "enabled" => parse_bool(value).map(|v| settings.enabled = v),
                 "preset" => parse_string(value).map(|v| settings.preset = v),
                 "unfaithful_ports" => parse_string(value)
@@ -380,7 +445,30 @@ fn set_knob(look: &mut Look, key: &str, value: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_bool(value: &str) -> Result<bool, String> {
+/// A panel width at 1080p, pulled into [`MIN_PANEL_WIDTH`]..=[`MAX_PANEL_WIDTH`].
+fn parse_width(key: &str, value: &str) -> Result<f32, String> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|width| width.is_finite())
+        .map(clamp_panel_width)
+        .ok_or_else(|| format!("`{key}` wants a width in pixels, not `{value}`"))
+}
+
+/// `width` pulled into the range a panel width is kept in; a value that is not a number is the
+/// default.
+#[must_use]
+pub fn clamp_panel_width(width: f32) -> f32 {
+    if width.is_finite() {
+        width.clamp(MIN_PANEL_WIDTH, MAX_PANEL_WIDTH)
+    } else {
+        DEFAULT_PANEL_WIDTH
+    }
+}
+
+/// `true` or `false`. Shared with the editor's project file (`editor::project`), which follows
+/// this file's hand-parser style.
+pub(crate) fn parse_bool(value: &str) -> Result<bool, String> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -388,7 +476,8 @@ fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-fn parse_string(value: &str) -> Result<String, String> {
+/// A quoted string, with `\"` and `\\` the only escapes.
+pub(crate) fn parse_string(value: &str) -> Result<String, String> {
     let inner = value
         .strip_prefix('"')
         .and_then(|v| v.strip_suffix('"'))
@@ -409,7 +498,7 @@ fn parse_string(value: &str) -> Result<String, String> {
 }
 
 /// The line up to a `#` that is not inside a quoted string.
-fn strip_comment(line: &str) -> &str {
+pub(crate) fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
     let mut escaped = false;
     for (at, c) in line.char_indices() {
@@ -424,7 +513,8 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-fn quote(value: &str) -> String {
+/// `value` as a quoted string [`parse_string`] reads back.
+pub(crate) fn quote(value: &str) -> String {
     let mut out = String::from("\"");
     for c in value.chars() {
         if matches!(c, '"' | '\\') {
@@ -457,6 +547,13 @@ pub fn render(settings: &Settings) -> String {
     );
     out.push_str("# The key that opens the menu: a name such as F6, Home or ctrl+F6.\n");
     out.push_str(&format!("menu_key = {}\n", quote(&settings.menu_key)));
+    out.push_str(
+        "# The edge the Shaders panel is pinned to: right, left or floating. The widths are in\n\
+         # pixels at 1080p; code_width is the width while the Code tab is shown.\n",
+    );
+    out.push_str(&format!("dock = {}\n", quote(settings.dock.key())));
+    out.push_str(&format!("panel_width = {:?}\n", settings.panel_width));
+    out.push_str(&format!("code_width = {:?}\n", settings.code_width));
     out.push_str("# false shows the game's own picture without unloading anything.\n");
     out.push_str(&format!("enabled = {}\n", settings.enabled));
     out.push_str("# The preset the look below was last taken from.\n");
@@ -553,6 +650,9 @@ mod tests {
         look.0[1] = 0.5;
         let settings = Settings {
             menu_key: "ctrl+F6".to_owned(),
+            dock: Dock::Floating,
+            panel_width: 512.5,
+            code_width: 800.0,
             enabled: false,
             preset: "My \"good\" one # really".to_owned(),
             look,
@@ -622,5 +722,31 @@ mod tests {
     #[test]
     fn an_empty_file_is_the_default() {
         assert_eq!(parse("").0, Settings::default());
+    }
+
+    #[test]
+    fn the_panel_docks_right_at_460_unless_the_file_says_otherwise() {
+        let default = Settings::default();
+        assert_eq!(default.dock, Dock::Right);
+        assert_eq!(
+            (default.panel_width, default.code_width),
+            (DEFAULT_PANEL_WIDTH, DEFAULT_CODE_WIDTH)
+        );
+        for dock in Dock::ALL {
+            assert_eq!(Dock::from_key(dock.key()), Some(dock));
+        }
+        let (read, warnings) =
+            parse("dock = \"left\"\npanel_width = 9999\ncode_width = 12\nenabled = false\n");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(read.dock, Dock::Left);
+        assert_eq!(read.panel_width, MAX_PANEL_WIDTH);
+        assert_eq!(read.code_width, MIN_PANEL_WIDTH);
+        // A dock or width the file cannot read costs its line, and the panel keeps its default.
+        let (read, warnings) = parse("dock = \"top\"\npanel_width = wide\ncode_width = NaN\n");
+        assert_eq!(warnings.len(), 3, "{warnings:?}");
+        assert_eq!(read.dock, Dock::Right);
+        assert_eq!(read.panel_width, DEFAULT_PANEL_WIDTH);
+        assert_eq!(read.code_width, DEFAULT_CODE_WIDTH);
+        assert_eq!(clamp_panel_width(f32::INFINITY), DEFAULT_PANEL_WIDTH);
     }
 }

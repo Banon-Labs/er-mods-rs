@@ -22,15 +22,22 @@
 //!
 //! The replacement shaders are HLSL in `shaders/`, compiled and signed by
 //! `scripts/build-cel-shaders.py`; the DLL embeds the result and needs no compiler at run time.
-//! They read the look from a constant buffer this DLL binds ([`look_binding`]), so the menu
-//! ([`menu`], default key F6) changes the picture on the next frame and saves it to
-//! `er-cel-shade.toml` beside the game ([`settings`]).
+//! They read the look from a constant buffer this DLL binds ([`look_binding`]), so the Shaders
+//! panel ([`menu`], default key F6, docked to an edge of the screen) changes the picture on the
+//! next frame and saves it to `er-cel-shade.toml` beside the game ([`settings`]); its Layers tab
+//! edits the editor's layers in game.
 //!
 //! The game's own picture is always one switch away ([`safety`]): the menu's Vanilla checkbox,
 //! ctrl+shift+F6 from anywhere in the game, or a stage with no content binds the game's own
 //! pipelines. A worker thread runs the redirect table's reaper and writes the counters to the log
 //! and to a telemetry file once a second, and two exports report and set the same state for Frida
 //! ([`exports`]).
+//!
+//! The shader editor ([`editor`]) has a worker of its own, `er-shader-editor-worker`, which reads
+//! the layer files in `er-shader-editor/` beside the game every 250 ms, compiles each changed
+//! stack through `er-shader-compiler.exe`, checks the result against the game's own pixel shader
+//! ([`verify`]), and publishes a new variant of each port in the cel variant's place
+//! ([`editor::worker`]).
 //!
 //! # Evidence this rests on
 //!
@@ -43,9 +50,11 @@
 
 pub mod cmdlist;
 pub mod dxbc;
+pub mod editor;
 pub mod exports;
 pub mod graveyard;
 pub mod look_binding;
+pub mod menu;
 pub mod params;
 pub mod probe;
 pub mod record;
@@ -53,13 +62,12 @@ pub mod replace;
 pub mod safety;
 pub mod settings;
 pub mod table;
+pub mod verify;
 
 #[cfg(windows)]
 mod hooks;
 #[cfg(windows)]
 mod input;
-#[cfg(windows)]
-mod menu;
 #[cfg(windows)]
 mod overlay;
 
@@ -177,9 +185,12 @@ pub unsafe extern "system" fn DllMain(
                 Ok(()) => log(format_args!("waiting for D3D12CreateDevice")),
                 Err(error) => log(format_args!("not installed: {error}")),
             }
-            // Neither runs until the loader lock is released; the panic chord's thread is its own
-            // so it answers even when the worker or the overlay is stuck.
+            // None runs until the loader lock is released; the panic chord's thread is its own
+            // so it answers even when a worker or the overlay is stuck. The editor's worker is
+            // apart from the cel worker because a compile can take seconds, and the reaper and
+            // the telemetry must not wait for one.
             spawn_worker();
+            editor::worker::spawn();
             safety::spawn_panic_thread();
             // The overlay and the cursor hook take locks and enumerate modules, neither of which
             // belongs under the loader lock.

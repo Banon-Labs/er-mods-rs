@@ -2517,6 +2517,24 @@ python3 "$repo_root/scripts/er-shader-ab-proof.py" --selftest
 python3 "$repo_root/scripts/build-cel-shaders.py" --selftest
 python3 "$repo_root/scripts/build-cel-shaders.py" --check
 
+# The shader editor's compiler: the pipe protocol er-cel-shade and `er-shader-compiler.exe` speak,
+# the dxc argument list, the oldest dxcompiler accepted and the handshake that refuses a helper
+# from another build. A frame both sides read differently fails in game as a dead or confused
+# helper, with nothing on screen to say why.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-shader-compiler
+
+# dxcompiler.dll is Microsoft's and is fetched, never committed: nothing named like it or its
+# release zip may be tracked, `.gitignore` must keep a fetched copy out wherever it lands, and a
+# fetched copy beside the built DLL must be the pinned release's.
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --selftest
+python3 "$repo_root/scripts/fetch-dxcompiler.py" --check
+
+# ...and er_cel_shade.dll must load where dxcompiler.dll is absent, so it may never import it:
+# the `windows` crate's `DxcCreateInstance` is a link-time import, and one call to it would add
+# one silently. The import-table reader's own cases here; the built DLL itself is read below,
+# once check-rust-build.sh has linked it.
+python3 "$repo_root/scripts/check-dll-imports.py" --selftest
+
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
@@ -3087,6 +3105,10 @@ bash "$repo_root/scripts/check-rust-build.sh"
 # DLL at .../er_crash_logging.dll" while the change under test was fine, which is a gate teaching
 # people to read past it. Above the link this step is a property of the checkout, not of the code.
 bash "$repo_root/scripts/er-dll-freshness.sh" --selftest
+
+# The linked er_cel_shade.dll imports neither dxcompiler.dll nor dxil.dll (see the selftest's
+# step above): read off the import and delay-load tables of the DLL check-rust-build.sh just made.
+python3 "$repo_root/scripts/check-dll-imports.py"
 
 # Does the committed state compile -- not "does my working tree compile", which is the only
 # question every gate above this one, this file included, is able to ask. A pathspec commit is

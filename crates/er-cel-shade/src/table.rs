@@ -17,6 +17,11 @@
 //! which frees it once no hook can still be probing it. Writers are rare -- a port's creation, a
 //! publish from the worker, Hunt opening -- and take one mutex.
 //!
+//! An edit can also be handed to the next present instead (`defer`), which applies it right after
+//! that present publishes its parameter block (`crate::params::publish_then`). The editor's worker
+//! publishes a new layer variant that way: the variant reads the block's layer registers, which
+//! the worker staged for it in the same breath, so the two must change on the same present.
+//!
 //! # References
 //!
 //! An entry that changes behaviour holds one `AddRef` on the game's pipeline, so that pipeline's
@@ -436,7 +441,8 @@ pub fn reap_due(last_ms: u64, now_ms: u64) -> bool {
 
 #[cfg(windows)]
 pub use process::{
-    GAME_PSOS_RELEASED, PUBLISHES, REAPED_LOST, get, published, reap, update, worker_tick,
+    GAME_PSOS_RELEASED, PUBLISHES, REAPED_LOST, apply_deferred, defer, get, is_applied, published,
+    reap, update, worker_tick,
 };
 
 /// The published table, its writer, and the reaper.
@@ -452,8 +458,65 @@ mod process {
     /// The published table, or null before the first publish.
     static TABLE: AtomicPtr<Table> = AtomicPtr::new(std::ptr::null_mut());
 
-    /// Serialises writers. Readers never take it.
+    /// Serialises writers. Readers never take it. Lock order: the port registry, then this, then
+    /// [`DEFERRED`].
     static WRITER: Mutex<()> = Mutex::new(());
+
+    /// An edit handed to the next present.
+    type Deferred = Box<dyn FnOnce(&mut Builder) + Send>;
+
+    /// Edits waiting for the next present, oldest first, each with its ticket.
+    static DEFERRED: Mutex<Vec<(u64, Deferred)>> = Mutex::new(Vec::new());
+    /// The newest ticket handed out, and the newest applied.
+    static ISSUED: AtomicU64 = AtomicU64::new(0);
+    static APPLIED: AtomicU64 = AtomicU64::new(0);
+
+    /// Hand `edit` to the next present, which runs it as [`update`] would, right after it publishes
+    /// the parameter block. Returns the edit's ticket, for [`is_applied`]. A variant `edit`
+    /// inserts belongs to the table from that publish; until then it is the edit's.
+    pub fn defer(edit: impl FnOnce(&mut Builder) + Send + 'static) -> u64 {
+        let mut deferred = DEFERRED.lock().unwrap_or_else(PoisonError::into_inner);
+        let ticket = ISSUED.fetch_add(1, Ordering::AcqRel) + 1;
+        deferred.push((ticket, Box::new(edit)));
+        ticket
+    }
+
+    /// Apply every deferred edit in the order it was handed over, each as a publish of its own, so
+    /// a variant one edit inserts and the next replaces is retired like any other. For the
+    /// present, and for the editor's worker when no present comes. Returns how many were applied.
+    pub fn apply_deferred() -> usize {
+        // Most presents have nothing to apply, and those take no lock.
+        if APPLIED.load(Ordering::Acquire) >= ISSUED.load(Ordering::Acquire) {
+            return 0;
+        }
+        let _writer = WRITER.lock().unwrap_or_else(PoisonError::into_inner);
+        let edits = std::mem::take(&mut *DEFERRED.lock().unwrap_or_else(PoisonError::into_inner));
+        let count = edits.len();
+        // Every edit taken counts as applied even if one panics, which drops the rest with their
+        // variants: a ticket that can never be applied would hold the worker's catch-up back for
+        // good, and take this lock on every present after.
+        let _done = MarkApplied(edits.last().map_or(0, |(ticket, _)| *ticket));
+        for (ticket, edit) in edits {
+            update_locked(edit, &[]);
+            APPLIED.fetch_max(ticket, Ordering::AcqRel);
+        }
+        count
+    }
+
+    /// Marks every ticket up to its own applied when dropped, unwinding included.
+    struct MarkApplied(u64);
+
+    impl Drop for MarkApplied {
+        fn drop(&mut self) {
+            APPLIED.fetch_max(self.0, Ordering::AcqRel);
+        }
+    }
+
+    /// Has the edit with this ticket been applied?
+    #[must_use]
+    pub fn is_applied(ticket: u64) -> bool {
+        APPLIED.load(Ordering::Acquire) >= ticket
+    }
 
     /// When the reaper last ran, in [`graveyard::now_ms`] time.
     static LAST_REAP_MS: AtomicU64 = AtomicU64::new(0);

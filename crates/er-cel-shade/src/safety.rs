@@ -4,20 +4,24 @@
 //! # Vanilla
 //!
 //! [`crate::cmdlist::VANILLA`] is the one flag the bind hooks read: while it is set every pipeline
-//! is bound as the game asked. Three things ask for it, and [`Switches`] keeps them apart so that
+//! is bound as the game asked. Four things ask for it, and [`Switches`] keeps them apart so that
 //! clearing one cannot clear another:
 //!
 //! * the mode ([`Mode::Vanilla`]), set through the `er_shader_editor_set_mode_v1` export;
 //! * the user: the panic chord ([`PANIC_CHORD`]) and the menu's Vanilla checkbox. The chord only
 //!   ever sets it; the checkbox is the one way back;
+//! * the compare key, held in the panel ([`Event::Compare`]), which clears only what it set: a
+//!   panic chord or a mode export that arrives while it is held outlasts the key;
 //! * a detour that caught a panic ([`crate::cmdlist::HOOK_FAULTED`]), which nothing clears.
 //!
 //! # Stage content
 //!
 //! A port is redirected only while its stage has content (design 1): a cel knob read by that
-//! stage's ports away from its off value. [`stages_with_content`] answers that from the look, and
-//! the menu stores the answer in [`crate::cmdlist::STAGE_ACTIVE`] at start-up, once per present
-//! and whenever the mode export changes the mode ([`staged`]).
+//! stage's ports away from its off value, or an editor layer there that draws.
+//! [`stages_with_content`] answers the first from the look, the editor's worker keeps the second
+//! in [`LAYER_STAGES`], and the menu stores the two together in
+//! [`crate::cmdlist::STAGE_ACTIVE`] at start-up, once per present and whenever the mode export
+//! changes the mode ([`staged`]).
 //!
 //! # Fidelity
 //!
@@ -205,12 +209,21 @@ pub struct Staged {
     pub ports_off: u32,
 }
 
-/// What a present stages under `setting` for the menu's look and the ports marked `unfaithful`.
-/// [`Mode::Fidelity`] redirects every stage of the kinds under test, every other kind off, and
-/// publishes [`Look::vanilla`]; the other modes follow the look and keep the unfaithful ports off.
-/// Vanilla needs nothing here: the bind hooks check [`crate::cmdlist::VANILLA`] before the stages.
+/// What a present stages under `setting` for the menu's look, the ports marked `unfaithful` and
+/// the stages with a drawing editor layer, `layer_stages` ([`LAYER_STAGES`]). [`Mode::Fidelity`]
+/// redirects every stage of the kinds under test, every other kind off, and publishes
+/// [`Look::vanilla`]; the other modes follow the look and the layers and keep the unfaithful
+/// ports off. Layers give their stage content whether or not cel is enabled, because the
+/// checkbox turns cel off and not the editor. Vanilla needs nothing here: the bind hooks check
+/// [`crate::cmdlist::VANILLA`] before the stages.
 #[must_use]
-pub fn staged(setting: ModeSetting, look: &Look, enabled: bool, unfaithful: u8) -> Staged {
+pub fn staged(
+    setting: ModeSetting,
+    look: &Look,
+    enabled: bool,
+    unfaithful: u8,
+    layer_stages: u32,
+) -> Staged {
     match setting.mode {
         Mode::Fidelity => Staged {
             look: Look::vanilla().gpu_block(true),
@@ -219,11 +232,16 @@ pub fn staged(setting: ModeSetting, look: &Look, enabled: bool, unfaithful: u8) 
         },
         Mode::Normal | Mode::Vanilla => Staged {
             look: look.gpu_block(enabled),
-            stages: stages_with_content(look, enabled),
+            stages: stages_with_content(look, enabled) | (layer_stages & ALL_STAGES),
             ports_off: u32::from(unfaithful & PortKind::ALL_BITS),
         },
     }
 }
+
+/// The port stages with an editor layer that draws, one [`Stage::bit`] each: the editor's share
+/// of [`crate::cmdlist::STAGE_ACTIVE`]. Written by the editor's worker whenever the stack changes,
+/// and read by every present's [`staged`].
+pub static LAYER_STAGES: AtomicU32 = AtomicU32::new(0);
 
 /// The requests for vanilla other than a hook fault, which [`crate::cmdlist::HOOK_FAULTED`] holds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,6 +249,8 @@ pub struct Switches {
     pub mode: ModeSetting,
     /// Set by the panic chord or the checkbox, cleared only by the checkbox.
     pub user_vanilla: bool,
+    /// The compare key is held in the panel. Set and cleared by that key alone.
+    pub compare: bool,
 }
 
 /// One thing that changes [`Switches`].
@@ -242,12 +262,15 @@ pub enum Event {
     Checkbox(bool),
     /// The panic chord.
     PanicChord,
+    /// The compare key went down or came up.
+    Compare(bool),
 }
 
 impl Switches {
     pub const START: Self = Self {
         mode: ModeSetting::NORMAL,
         user_vanilla: false,
+        compare: false,
     };
 
     /// The switches after `event`.
@@ -260,13 +283,19 @@ impl Switches {
                 ..self
             },
             // The checkbox shows vanilla however it was asked for, so clearing it clears the
-            // mode's request as well as the user's.
+            // mode's request as well as the user's. The compare key is not a request the
+            // checkbox made, and it ends when the key comes up.
             Event::Checkbox(false) => Self {
                 mode: match self.mode.mode {
                     Mode::Vanilla => ModeSetting::NORMAL,
                     _ => self.mode,
                 },
                 user_vanilla: false,
+                ..self
+            },
+            Event::Compare(held) => Self {
+                compare: held,
+                ..self
             },
         }
     }
@@ -275,7 +304,7 @@ impl Switches {
     /// [`crate::cmdlist::HOOK_FAULTED`].
     #[must_use]
     pub fn vanilla(self, faulted: bool) -> bool {
-        faulted || self.user_vanilla || self.mode.mode == Mode::Vanilla
+        faulted || self.user_vanilla || self.compare || self.mode.mode == Mode::Vanilla
     }
 }
 
@@ -357,6 +386,12 @@ pub fn set_mode(setting: ModeSetting) -> ModeSetting {
 pub fn set_vanilla(on: bool) -> bool {
     apply(Event::Checkbox(on));
     VANILLA.load(Ordering::Acquire) == on
+}
+
+/// The panel's compare key went down (`true`) or came up. Coming up clears only the key's own
+/// request: a checkbox, a panic chord or a mode export made while it was held still stands.
+pub fn set_compare(held: bool) {
+    apply(Event::Compare(held));
 }
 
 /// The panic chord. Returns whether vanilla was already set.
@@ -645,7 +680,7 @@ mod tests {
             for enabled in [false, true] {
                 for unfaithful in [0, PortKind::AoSsr.bit(), PortKind::ALL_BITS] {
                     for mode in Mode::ALL {
-                        let staged = staged(mode.into(), &look, enabled, unfaithful);
+                        let staged = staged(mode.into(), &look, enabled, unfaithful, 0);
                         match mode {
                             Mode::Fidelity => {
                                 assert_eq!(staged.stages, ALL_STAGES);
@@ -667,6 +702,7 @@ mod tests {
                             &look,
                             enabled,
                             unfaithful,
+                            0,
                         );
                         assert_eq!(one.ports_off, all & !u32::from(kind.bit()), "{kind:?}");
                         assert_eq!(one.stages, ALL_STAGES);
@@ -674,6 +710,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn editor_layers_give_their_stage_content_whatever_cel_says() {
+        let comic_ink = builtin_presets()[3].look;
+        let lighting = Stage::Lighting.bit();
+        let albedo = Stage::Albedo.bit();
+        for (look, enabled, from_cel) in [
+            (Look::vanilla(), true, 0),
+            (comic_ink, true, 0b101),
+            // Cel turned off leaves the layers' stages on.
+            (comic_ink, false, 0),
+        ] {
+            for layers in [0, albedo, albedo | lighting, ALL_STAGES] {
+                for mode in [Mode::Normal, Mode::Vanilla] {
+                    let staged = staged(mode.into(), &look, enabled, 0, layers);
+                    assert_eq!(staged.stages, from_cel | layers, "{layers:#b} {mode:?}");
+                    // The layers move no knob.
+                    assert_eq!(staged.look, look.gpu_block(enabled));
+                }
+                // A fidelity test redirects every stage anyway.
+                let fidelity = staged(Mode::Fidelity.into(), &look, enabled, 0, layers);
+                assert_eq!(fidelity.stages, ALL_STAGES);
+            }
+        }
+        // Bits past the three stages are not stages.
+        let stray = staged(Mode::Normal.into(), &Look::vanilla(), true, 0, 0b1000);
+        assert_eq!(stray.stages, 0);
     }
 
     #[test]
@@ -762,9 +826,38 @@ mod tests {
             Event::SetMode(normal),
             Event::SetMode(fidelity_all),
             Event::Checkbox(false),
+            Event::Compare(false),
         ] {
             assert!(start.after(event).vanilla(true), "{event:?}");
         }
+    }
+
+    #[test]
+    fn releasing_the_compare_key_clears_only_what_the_key_set() {
+        let held = Switches::START.after(Event::Compare(true));
+        assert!(held.vanilla(false));
+        assert!(!held.after(Event::Compare(false)).vanilla(false));
+
+        // The panic chord while the key is held outlasts the key.
+        let panicked = held.after(Event::PanicChord).after(Event::Compare(false));
+        assert!(panicked.vanilla(false));
+        assert!(panicked.user_vanilla && !panicked.compare);
+
+        // So does a mode 1 export, and the export's mode is left as it was.
+        let vanilla = ModeSetting::from(Mode::Vanilla);
+        let exported = held
+            .after(Event::SetMode(vanilla))
+            .after(Event::Compare(false));
+        assert!(exported.vanilla(false));
+        assert_eq!(exported.mode, vanilla);
+
+        // The checkbox cleared while the key is held leaves the key's request until it comes up.
+        let cleared = Switches::START
+            .after(Event::Checkbox(true))
+            .after(Event::Compare(true))
+            .after(Event::Checkbox(false));
+        assert!(cleared.vanilla(false));
+        assert!(!cleared.after(Event::Compare(false)).vanilla(false));
     }
 
     #[test]
@@ -781,8 +874,20 @@ mod tests {
     #[test]
     fn every_menu_label_is_ascii() {
         // The overlay's font has glyphs for ASCII, Latin-1 and Latin Extended-A and general
-        // punctuation only, so anything else draws as a box. The menu's text lives in these two.
-        assert!(include_str!("menu.rs").is_ascii());
-        assert!(include_str!("settings.rs").is_ascii());
+        // punctuation only, so anything else draws as a box. The panel's text lives in `menu/`
+        // and in the settings; `menu`'s own test holds every literal there to the font's ranges,
+        // and these files are plain ASCII throughout.
+        for source in [
+            include_str!("menu/mod.rs"),
+            include_str!("menu/code.rs"),
+            include_str!("menu/diagnostics_tab.rs"),
+            include_str!("menu/files.rs"),
+            include_str!("menu/layers_tab.rs"),
+            include_str!("menu/look_tab.rs"),
+            include_str!("menu/widgets.rs"),
+            include_str!("settings.rs"),
+        ] {
+            assert!(source.is_ascii());
+        }
     }
 }

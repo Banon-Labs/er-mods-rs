@@ -16,7 +16,8 @@
 // term, which is why this one pass reaches every light in the scene.
 //
 // The diffuse light after cel is the Lighting stage's colour: the user's Lighting layers run on it
-// last, and the probe's AO region records it before and after them, with the raw depth.
+// last, and the probe's AO region records it before and after them, with the view depth in metres
+// that the layers' Depth mask compares, or -1 on the sky (`er_probe_lighting_aux`).
 
 #include "cel_look.hlsli"
 #include "stage_ctx.hlsli"
@@ -196,7 +197,7 @@ PsOut ps_main(PsIn input)
     uint width, height;
     g_DepthTexture.GetDimensions(width, height);
     er_probe_record(ER_PROBE_AO_HEADER, ER_PROBE_AO_SAMPLES, ctx.px, uint2(width, height), diffuse,
-                    lit, asuint(depth));
+                    lit, er_probe_lighting_aux(ctx));
 
     output.diffuse = float4(lit, 1.0);
     output.specular = float4(specular_out, 1.0);

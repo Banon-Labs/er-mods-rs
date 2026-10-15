@@ -301,7 +301,7 @@ Variants use the game pipeline's own root-signature object, so the GX root-signa
 | `0x0020` | Albedo header, same shape |
 | `0x0040` | Tonemap header: `{frame, variant_id, source_w, source_h}` and max position |
 | `0x0060` | Counters: P3 coverage (sampled valid-record pixels and geometry pixels), and marked and changed pixels per selector bit |
-| `0x0100` | AO samples: 64 x 32 B `{float3 pre, uint frame, float3 post, uint depth_bits}` on an 8x8 grid |
+| `0x0100` | AO samples: 64 x 32 B `{float3 pre, uint frame, float3 post, uint view_depth_bits}` on an 8x8 grid. `view_depth_bits` is `asfloat` of the view depth in metres, `abs(view_pos.z)`, the quantity the Depth mask compares, or -1 on the sky (`er_probe_lighting_aux`) |
 | `0x0900` | Albedo samples, same shape |
 | `0x1100` | Tonemap samples: `{float3 pre, uint frame, float3 post, uint mask_word}` |
 | `0x1900` | Pick record (P4) |
@@ -455,7 +455,7 @@ From P2, Geometry, Sky and Depth also work at Albedo and Tonemap through word1 o
 
 ### 7.5 Compiler (`crates/er-shader-compiler` and `editor/compiler.rs`)
 
-- **Files.** The helper and dxcompiler sit in the DLL's own directory (`GetModuleHandleExW(FROM_ADDRESS)` plus `GetModuleFileNameW`), which is where cargo and `fetch-dxcompiler.py` put them. The second place searched is `<Game>/er-shader-editor/compiler/`.
+- **Files.** The helper and dxcompiler are each looked for in the DLL's own directory (`GetModuleHandleExW(FROM_ADDRESS)` plus `GetModuleFileNameW`), which is where `scripts/er-build-dlls.sh er-cel-shade` puts the helper (it builds `er-shader-compiler.exe` with the DLL and records its provenance) and `fetch-dxcompiler.py` puts the compiler by default, and then in `<Game>/er-shader-editor/compiler/`. They need not share a directory: the compiler's full path goes on the helper's command line (`--dxcompiler <path>`), and the handshake reports the path it loaded.
 - **Spawn**, on the first compile:
   1. `CreateProcessW` with `CREATE_NO_WINDOW | CREATE_SUSPENDED`.
   2. `AssignProcessToJobObject` on a job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
@@ -465,13 +465,15 @@ From P2, Geometry, Sky and Depth also work at Albedo and Tonemap through word1 o
 - **Protocol.** Every frame is a little-endian u32 length followed by the payload.
   - Request: `{id, op, file_name, source, entry, profile, defines[]}`.
   - Response: `{id, ok, blob, diagnostics, dxc_version}`.
-  - The handshake carries the protocol version, the DXC version and the helper's build id. A mismatch refuses the helper.
-  - `op = selftest-crash` makes the helper abort. It exists only to prove respawn.
+  - The handshake carries the protocol version, the DXC version, the helper's build id and the dxcompiler path it loaded. A mismatch refuses the helper.
+  - `op = selftest-crash` makes the helper exit at once, unanswered, with its own status. It exists only to prove respawn.
+  - The helper sets its error mode and Windows Error Reporting's UI off at start, and installs an unhandled-exception filter that ends it with the exception code, so a compiler crash shows no dialog and starts no `AeDebug` debugger; its standard handles are not inheritable.
 - **Arguments.** `-T ps_6_0 -E ps_main -O3 -Qstrip_debug -HV 2021 -validator-version 1.6 -D ER_VARIANT_ID=<n> [-D CEL_SSR | -D CEL_LUT]`. `-Vd` is never passed.
 - **Failure handling.**
   - A compile that takes more than 10 s gets the helper killed and respawned.
   - A broken pipe counts as a crash. Three crashes on one source hash mark that source "crashes the compiler".
-  - If the handshake fails, `InProcessCompiler` loads the same `dxc` module on the worker thread and keeps it loaded. The UI chip then reads "compiler in-process: a compiler crash ends the game".
+  - If the helper cannot be run from the game -- `CreateProcessW` or `ResumeThread` refused, or no handshake within 5 s and then within 20 s -- `InProcessCompiler` loads the same `dxc` module on the worker thread and keeps it loaded. The UI chip then reads "compiler in-process: a compiler crash ends the game". A change to the compiler's files makes the next compile try the helper again, and once it answers every compile goes to it.
+  - No helper file, a helper from another build or protocol, and a helper that loaded no compiler are not that case: the editor shows "no compiler" with the reason, and a rebuild or fetch is picked up when the files change.
   - With no dxcompiler at all, the embedded cel ports still run and layers show "no compiler".
 - **Diagnostics.** dxc output is parsed with `^(.*?):(\d+)(?::(\d+))?: (error|warning|note): (.*)$`. Notes are grouped under their error and attributed to a layer by file name. A diagnostic outside `layers/` is shown as "internal (please report)".
 - **Lint (`editor/lint.rs`, pure).** It exists to give friendly messages; the binary checks in 7.6 are the real gate. It rejects:
@@ -499,7 +501,7 @@ From P2, Geometry, Sky and Depth also work at Albedo and Tonemap through word1 o
 
 - The worker polls layer-file modification times every 250 ms, so edits from a Linux editor reload.
 - In-game edits write the file 300 ms after the last keystroke, so the file stays the single source of truth.
-- At most one compile is in flight per port kind, and a newer edit replaces one still queued.
+- At most one build is in flight per port stage, and a newer edit replaces one still queued. A stage's kinds (both AO passes, both tonemaps) are compiled, verified and created together and published in one table swap, handed to the next present with the parameter block packed for them, so the two passes of a stage never carry different versions of a layer and a variant never reads a block packed for another version. The block is always packed from the versions in the live variants.
 - The target is p95 under 1 s from edit to pixels. Compile is measured at 15-50 ms; in-game PSO creation and helper start-up are unmeasured, and the worker logs each step (lint, compile, verify, create, publish).
 
 ---

@@ -1,8 +1,17 @@
 //! Joining the process's one imgui overlay, hosting it only if nothing else does, the way
 //! `er-npc-summons` does: two `Hudhook::apply()` calls in one process double-hook `Present` and the
 //! second renders nothing, which is why `er_build_watermark_core::overlay_host` exists.
+//!
+//! # A panic in the panel
+//!
+//! [`guest_draw`] is `extern "C"`, so a panic unwinding out of it would abort the game. The
+//! Shaders panel is drawn inside `catch_unwind`: imgui-rs's tokens end its windows as the panic
+//! unwinds, and after one the panel is hidden for the session (`menu::hide_for_session`). The
+//! per-present staging and publishing run after it in a `catch_unwind` of their own, so the look
+//! and the layers keep drawing whatever became of the panel.
 
 use std::ffi::c_void;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use er_build_watermark_core::overlay_host::{
@@ -21,7 +30,20 @@ unsafe extern "C" fn guest_draw(frame: *const OverlayFrame) {
     let Some(ui) = (unsafe { adopt_frame(frame) }) else {
         return;
     };
-    crate::menu::draw(ui);
+    // SAFETY: `adopt_frame` returned a frame, so the pointer is live for this call.
+    let ui_scale = unsafe { (*frame).ui_scale };
+    if catch_unwind(AssertUnwindSafe(|| crate::menu::draw_ui(ui, ui_scale))).is_err() {
+        crate::menu::hide_for_session();
+    }
+    static END_FAILED: AtomicBool = AtomicBool::new(false);
+    if catch_unwind(AssertUnwindSafe(|| crate::menu::end_frame(ui))).is_err()
+        && !END_FAILED.swap(true, Ordering::Relaxed)
+    {
+        log(format_args!(
+            "overlay: a panic while staging the frame's parameters; logged once, the panic hook \
+             has where"
+        ));
+    }
 }
 
 struct CelShadeOverlay;

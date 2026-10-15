@@ -1,0 +1,55 @@
+# The shader editor's HLSL compiler, behind one boundary (design `docs/plans/er-shader-editor.md`,
+# section 7.5).
+#
+# Two targets. The lib is what er-cel-shade links: the frame protocol the DLL and the helper speak,
+# which is pure and tested on the host, and under `cfg(windows)` the `dxc` module, which loads
+# dxcompiler.dll by path. The DLL uses that module on its own worker thread only when the helper
+# cannot start. The bin, `er-shader-compiler.exe`, is the helper: a stdin/stdout loop the DLL
+# spawns in a job object, so a compiler crash on a user's source ends the helper and never the
+# game.
+#
+# Not an me3 native, but er-cel-shade's companion (`COMPANIONS` in `scripts/me3-dll-list.py`): cargo
+# never builds a dependency's bin, so `scripts/er-build-dlls.sh er-cel-shade` builds this package
+# with the DLL and records the helper's provenance, `scripts/check-rust-build.sh` links it, and
+# `scripts/er-run-branch.py` refuses a launch whose helper is stale. dxcompiler.dll is fetched by
+# `scripts/fetch-dxcompiler.py` and is never committed or linked: it is loaded by full path with
+# `LoadLibraryExW` and `GetProcAddress`, so neither the helper nor the DLL imports it and both
+# start without it.
+[package]
+name = "er-shader-compiler"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_shader_compiler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "er-shader-compiler"
+path = "src/main.rs"
+
+[dependencies]
+# The build id hashes this crate's sources with the workspace's one FNV-1a.
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  # The interfaces and constants only. Its `DxcCreateInstance` is a link-time import of
+  # dxcompiler.dll and is never called; `dxc.rs` resolves the export by name instead.
+  "Win32_Graphics_Direct3D_Dxc",
+  # `CoTaskMemFree`, for the version strings DXC allocates.
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  # The helper's crash handling (main.rs): its standard handles' inheritance, the error mode and
+  # the unhandled-exception filter, which needs `EXCEPTION_POINTERS` from the kernel types, and
+  # Windows Error Reporting's UI.
+  "Win32_System_Console",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_ErrorReporting",
+  "Win32_System_Kernel",
+] }
+
+[lints]
+workspace = true

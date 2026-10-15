@@ -15,10 +15,25 @@ Modes:
     --cargo-args   ->  -p er-quickload -p er-armament-icons ...
     --artifacts    ->  er_quickload.dll er_armament_icons.dll ...
     --pairs        ->  er-quickload:er_quickload ...   (one per line)
+    --companions   ->  er-cel-shade:er-shader-compiler:er-shader-compiler.exe
+                       (shell:package:file, one per line; see `COMPANIONS`)
 
 Note the artifact name is not the package name with dashes swapped for
 underscores -- four crates override `[lib] name` (er-better-refills produces
 er_better_refills.dll, and so on), which is why the array stores both halves.
+
+Companions
+----------
+A shell may need an executable of another package beside it at run time. Cargo
+never builds a dependency's `[[bin]]`, so `cargo xwin build -p er-cel-shade`
+compiles `er-shader-compiler` as a library only, and whatever
+`er-shader-compiler.exe` an earlier build left in `target/` stays there. That
+helper then fails the DLL's build-id handshake after any change to its sources,
+and the shader editor has no compiler. So `COMPANIONS` names such executables
+once, here, for every tool that builds or launches the shell:
+`er-build-dlls.sh` builds and attests them with it, `check-rust-build.sh` links
+and attests them, and `er-run-branch.py` refuses a launch whose companion is
+stale, as it does for the shell itself.
 """
 
 from __future__ import annotations
@@ -31,6 +46,25 @@ import sys
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 CHECK_SCRIPT = REPO_ROOT / "scripts" / "check-rust-build.sh"
 COVERAGE_CHECK = REPO_ROOT / "scripts" / "check-me3-shell-coverage.py"
+
+# shell package -> [(companion package, the file cargo writes beside the shell's DLL)].
+COMPANIONS: dict[str, list[tuple[str, str]]] = {
+    # The shader editor's compiler helper, which er_cel_shade.dll spawns (design 7.5).
+    "er-cel-shade": [("er-shader-compiler", "er-shader-compiler.exe")],
+}
+
+
+def companions() -> list[tuple[str, str, str]]:
+    """Return [(shell, companion package, companion file), ...], shells in `dll_pairs` order."""
+    shells = [package for package, _ in dll_pairs()]
+    unknown = sorted(set(COMPANIONS) - set(shells))
+    if unknown:
+        raise SystemExit(f"COMPANIONS names packages that ship no shell: {', '.join(unknown)}")
+    return [
+        (shell, package, artifact)
+        for shell in shells
+        for package, artifact in COMPANIONS.get(shell, [])
+    ]
 
 
 def _coverage_module():
@@ -61,7 +95,13 @@ def main() -> int:
     group.add_argument("--cargo-args", action="store_true")
     group.add_argument("--artifacts", action="store_true")
     group.add_argument("--pairs", action="store_true")
+    group.add_argument("--companions", action="store_true")
     args = parser.parse_args()
+
+    if args.companions:
+        for shell, package, artifact in companions():
+            print(f"{shell}:{package}:{artifact}")
+        return 0
 
     pairs = dll_pairs()
     if args.cargo_args:

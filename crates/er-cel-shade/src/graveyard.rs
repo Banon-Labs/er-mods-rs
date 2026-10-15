@@ -14,8 +14,8 @@
 //!
 //! # The present clock
 //!
-//! The render thread reports each present through [`on_present`], called from `menu::draw`, which
-//! the overlay runs every frame. When no present has been reported for [`WALL_ONLY_MS`] -- the
+//! The render thread reports each present through [`on_present`], called from `menu::end_frame`,
+//! which the overlay runs every frame. When no present has been reported for [`WALL_ONLY_MS`] -- the
 //! overlay never drew, or the game stopped presenting -- the worker's [`wall_tick`] releases on wall
 //! time alone, [`WALL_ONLY_MS`] after retirement.
 //!
@@ -287,7 +287,7 @@ mod process {
     }
 
     /// The present tick: `present` is the caller's count of presents so far. Called once per
-    /// present from `menu::draw`.
+    /// present from `menu::end_frame`.
     pub fn on_present(present: u64) {
         let now = now_ms();
         PRESENT.store(present, Ordering::Release);

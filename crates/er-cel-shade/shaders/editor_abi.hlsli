@@ -60,8 +60,13 @@ cbuffer EditorParams : register(b0, space42)
 #define ER_P_CAPSULES 64
 #define ER_P_CAPSULE_REGISTERS 128
 
+// er_p[192..239]: one register per layer slot, the bounds of the slot's stage-local mask
+// (design 7.4): a range's ends in `.xy`, or a screen rectangle's corners. The slot header's mask
+// word says which kind they belong to (`stage_ctx.hlsli`).
+#define ER_P_LAYER_MASKS 192
+
 // er_p[256..1023]: 48 layer slots of 16 registers. Each slot is a header register
-// (on, opacity, blend, mask id) and up to 15 parameter registers (P0.2a).
+// (on, opacity, blend, mask word) and up to 15 parameter registers (P0.2a).
 #define ER_P_LAYERS 256
 #define ER_P_LAYER_SLOTS 48
 #define ER_P_LAYER_REGISTERS 16

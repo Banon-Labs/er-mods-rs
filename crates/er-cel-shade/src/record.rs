@@ -689,13 +689,13 @@ fn nonempty_pointer<T>(array: &[T]) -> *const T {
 }
 
 #[cfg(windows)]
-pub use process::{PortRecord, adopt, capture, prune, with_ports};
+pub use process::{PortRecord, adopt, capture, ports_of, prune, with_ports};
 
 /// The shared shader store, and the records of the ports this process has variants for.
 #[cfg(windows)]
 mod process {
     use std::mem::offset_of;
-    use std::sync::{LazyLock, Mutex, PoisonError};
+    use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
     use windows::Win32::Graphics::Direct3D12::{
         D3D12_CACHED_PIPELINE_STATE, D3D12_IA_VERTEX_INPUT_STRUCTURE_ELEMENT_COUNT,
@@ -891,7 +891,12 @@ mod process {
     static SHADERS: LazyLock<Mutex<ShaderStore>> = LazyLock::new(|| Mutex::new(ShaderStore::new()));
 
     /// The ports with a published redirect. Lock order: this before the table's writer.
-    static PORTS: Mutex<Vec<PortRecord>> = Mutex::new(Vec::new());
+    ///
+    /// Each record is shared, so a reader clones the ones it needs out and lets go: the game's
+    /// creation detour takes this lock synchronously in [`adopt`], and the editor's worker must
+    /// never hold it across a `CreatePipelineState` (design 11.10). A record cloned out keeps its
+    /// root signature's reference alive for as long as the clone lives, pruned or not.
+    static PORTS: Mutex<Vec<Arc<PortRecord>>> = Mutex::new(Vec::new());
 
     /// Copy a stream D3D12 has just accepted, sharing its shaders with every other record.
     ///
@@ -950,7 +955,7 @@ mod process {
         let game = port.game;
         publish();
         prune_locked(&mut ports, Some(game));
-        ports.push(port);
+        ports.push(Arc::new(port));
     }
 
     /// Drop the records whose game pipeline no longer has an entry in the published table, which
@@ -961,26 +966,42 @@ mod process {
         prune_locked(&mut ports, None)
     }
 
-    /// Read every kept record, under the registry's lock.
-    pub fn with_ports<R>(read: impl FnOnce(&[PortRecord]) -> R) -> R {
+    /// Read every kept record, under the registry's lock. For quick reads only; anything that
+    /// creates a pipeline takes its records out with [`ports_of`] first.
+    pub fn with_ports<R>(read: impl FnOnce(&[Arc<PortRecord>]) -> R) -> R {
         let ports = PORTS.lock().unwrap_or_else(PoisonError::into_inner);
         read(&ports)
     }
 
-    fn prune_locked(ports: &mut Vec<PortRecord>, replacing: Option<usize>) -> usize {
-        let (kept, gone): (Vec<PortRecord>, Vec<PortRecord>) = std::mem::take(ports)
+    /// The kept records of one port kind, cloned out so the lock is held only for the copy.
+    #[must_use]
+    pub fn ports_of(kind: PortKind) -> Vec<Arc<PortRecord>> {
+        with_ports(|ports| {
+            ports
+                .iter()
+                .filter(|port| port.kind == kind)
+                .cloned()
+                .collect()
+        })
+    }
+
+    fn prune_locked(ports: &mut Vec<Arc<PortRecord>>, replacing: Option<usize>) -> usize {
+        let (kept, gone): (Vec<Arc<PortRecord>>, Vec<Arc<PortRecord>>) = std::mem::take(ports)
             .into_iter()
             .partition(|port| Some(port.game) != replacing && table::get(port.game).is_some());
         *ports = kept;
-        let count = gone.len();
-        for port in gone {
+        gone.len()
+    }
+
+    impl Drop for PortRecord {
+        fn drop(&mut self) {
             // The root signature reference goes to the graveyard rather than straight to the
-            // driver, like everything else a variant still in flight may depend on.
-            if let Some(root_signature) = port.root_signature {
+            // driver, like everything else a variant still in flight may depend on. It happens
+            // when the last clone of a pruned record goes, which may be the worker's.
+            if let Some(root_signature) = self.root_signature.take() {
                 graveyard::retire(Corpse::Com(root_signature));
             }
         }
-        count
     }
 }
 

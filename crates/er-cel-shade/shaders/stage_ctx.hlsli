@@ -74,9 +74,9 @@ struct TonemapCtx
 
 // `x` with a layer's result `y` mixed in. `header` is the layer slot's header register
 // (design 5.2) as plain floats: on (0 or 1), opacity (0 to 1), blend (one of `ER_BLEND_*`) and
-// mask id. `mask` is how much of the layer's selector covers this pixel, 0 to 1: the generated
-// code passes `er_mask(header.w, c)` (design 7.3). A layer that is off, transparent or masked out
-// returns `x` exactly, even when `y` is not a number.
+// the mask word. `mask` is how much of the layer's selector covers this pixel, 0 to 1: the
+// generated code passes `er_mask(header.w, <the slot's mask register>, x, c)` (design 7.3). A
+// layer that is off, transparent or masked out returns `x` exactly, even when `y` is not a number.
 float3 er_mix(float3 x, float3 y, float4 header, float mask)
 {
     float amount = saturate(header.x) * saturate(header.y) * saturate(mask);
@@ -97,25 +97,173 @@ float3 er_mix(float3 x, float3 y, float4 header, float mask)
     return amount > 0.0 ? lerp(x, blended, amount) : x;
 }
 
-// How much of mask `id`, the one a layer chose, covers this pixel, 0 to 1 (design 7.4): the
-// stage-local masks -- depth range, sky, facing, luminance, screen rectangle -- with their invert
-// flag and feather. One overload per stage context, because each stage binds different inputs.
-// Mask 0 is Everything. These are the identity until P0.2a evaluates the masks, so every id
-// covers the whole screen; the generated code calls them already, so a layer compiles the same
-// before and after.
-float er_mask(float id, LightingCtx c)
+// The stage-local masks (design 7.4): where on screen a layer applies, from what its own pass
+// binds. `src/editor/mask.rs` writes them and a host test there reads these numbers.
+//
+// A layer's mask is two values in the parameter block. The slot header's last component is the
+// mask word, a whole number held in a float: the kind in its low four bits, the invert flag above
+// them, and above that the feather in eighths of a pixel. The register `er_p[ER_P_LAYER_MASKS +
+// slot]` holds the kind's bounds: a range's low and high ends in `.xy`, or a rectangle's corners
+// `(x0, y0, x1, y1)` in screen coordinates from 0 to 1.
+#define ER_MASK_EVERYTHING 0
+#define ER_MASK_GEOMETRY 1
+#define ER_MASK_SKY 2
+#define ER_MASK_DEPTH 3
+#define ER_MASK_FACING 4
+#define ER_MASK_LUMA 5
+#define ER_MASK_RECT 6
+#define ER_MASK_KIND_BITS 15
+#define ER_MASK_INVERT 16
+#define ER_MASK_FEATHER_SHIFT 5
+#define ER_MASK_FEATHER_STEPS 8
+
+// Rec. 709 weights, the luminance the Luma mask reads.
+static const float3 ER_MASK_LUMA_WEIGHTS = float3(0.2126, 0.7152, 0.0722);
+
+// The mask word's kind, invert flag and feather in pixels.
+uint er_mask_kind(float word)
 {
-    return 1.0;
+    return (uint)max(word, 0.0) & ER_MASK_KIND_BITS;
 }
 
-float er_mask(float id, AlbedoCtx c)
+bool er_mask_inverted(float word)
 {
-    return 1.0;
+    return ((uint)max(word, 0.0) & ER_MASK_INVERT) != 0;
 }
 
-float er_mask(float id, TonemapCtx c)
+float er_mask_feather(float word)
 {
-    return 1.0;
+    return (float)((uint)max(word, 0.0) >> ER_MASK_FEATHER_SHIFT) / ER_MASK_FEATHER_STEPS;
+}
+
+// How much of `range` covers the value `v`: 1 inside, and outside falling to 0 over `feather`
+// pixels, measured with `per_pixel`, how much `v` changes from one pixel to the next. With no
+// feather, or where that change is not finite (beside the sky), the edge is hard. A value that is
+// not a number, or infinite as the sky's depth is, lies in no range.
+//
+// The caller takes `per_pixel` with `fwidth` before it branches on the mask kind, so the
+// derivative is taken in uniform control flow.
+float er_mask_range(float v, float per_pixel, float2 range, float feather)
+{
+    float outside = max(range.x - v, v - range.y);
+    bool inside = outside <= 0.0;
+    float width = feather * per_pixel;
+    if (!(width > 0.0) || isinf(width))
+    {
+        return inside ? 1.0 : 0.0;
+    }
+    return inside ? 1.0 : saturate(1.0 - outside / width);
+}
+
+// How much of the rectangle `rect`, `(x0, y0, x1, y1)` in screen coordinates, covers `uv`: 1
+// inside, and outside falling to 0 over `feather` pixels. `per_pixel` is `fwidth(uv)`.
+float er_mask_rect(float2 uv, float2 per_pixel, float4 rect, float feather)
+{
+    float2 outside = max(rect.xy - uv, uv - rect.zw);
+    bool inside = all(outside <= 0.0);
+    float2 pixels = outside / max(per_pixel, 1e-9);
+    float distance = max(pixels.x, pixels.y);
+    if (!(feather > 0.0))
+    {
+        return inside ? 1.0 : 0.0;
+    }
+    return inside ? 1.0 : saturate(1.0 - distance / feather);
+}
+
+// The sky, at the Lighting stage: a pixel whose depth is still at either end of the depth range,
+// which no geometry is drawn at, or whose view position does not come out finite. Either end,
+// because the depth direction is not read until P2 (`er_p[4].z`), and geometry never sits exactly
+// on the near plane, where the other end is.
+bool er_is_sky(LightingCtx c)
+{
+    return c.depth <= 0.0 || c.depth >= 1.0 || !all(isfinite(c.view_pos));
+}
+
+// The last word of a Lighting probe sample: the pixel's view depth in metres, `abs(view_pos.z)`,
+// which is what the Depth mask below compares, or -1 on the sky, where Depth, Facing and Geometry
+// select nothing and Sky everything. `scripts/check-shader-editor-probe.py` evaluates a layer's
+// mask from it.
+uint er_probe_lighting_aux(LightingCtx c)
+{
+    return asuint(er_is_sky(c) ? -1.0 : abs(c.view_pos.z));
+}
+
+// How much of a layer's mask covers this pixel, 0 to 1 (design 7.4). `word` is the slot
+// header's mask word, `bounds` the slot's mask register, `x` the stage's colour as it reaches the
+// layer, which the Luma mask reads. One overload per stage context, because each stage binds
+// different inputs: Lighting binds depth and the G-buffer, so it has every mask; Albedo and
+// Tonemap have Luma and Rect, and treat a kind they cannot evaluate as Everything (the editor
+// never writes one there). Geometry and Sky are exact per pixel and take no feather. Every
+// derivative is taken before the branch on the kind.
+float er_mask(float word, float4 bounds, float3 x, LightingCtx c)
+{
+    float depth = abs(c.view_pos.z);
+    float facing = saturate(abs(dot(normalize(c.view_pos), c.view_normal)));
+    float luma = dot(x, ER_MASK_LUMA_WEIGHTS);
+    float depth_step = fwidth(depth);
+    float facing_step = fwidth(facing);
+    float luma_step = fwidth(luma);
+    float2 uv_step = fwidth(c.uv);
+
+    uint kind = er_mask_kind(word);
+    float feather = er_mask_feather(word);
+    float covered = 1.0;
+    if (kind == ER_MASK_GEOMETRY)
+    {
+        covered = er_is_sky(c) ? 0.0 : 1.0;
+    }
+    else if (kind == ER_MASK_SKY)
+    {
+        covered = er_is_sky(c) ? 1.0 : 0.0;
+    }
+    else if (kind == ER_MASK_DEPTH)
+    {
+        covered = er_is_sky(c) ? 0.0 : er_mask_range(depth, depth_step, bounds.xy, feather);
+    }
+    else if (kind == ER_MASK_FACING)
+    {
+        covered = er_is_sky(c) ? 0.0 : er_mask_range(facing, facing_step, bounds.xy, feather);
+    }
+    else if (kind == ER_MASK_LUMA)
+    {
+        covered = er_mask_range(luma, luma_step, bounds.xy, feather);
+    }
+    else if (kind == ER_MASK_RECT)
+    {
+        covered = er_mask_rect(c.uv, uv_step, bounds, feather);
+    }
+    return er_mask_inverted(word) ? 1.0 - covered : covered;
+}
+
+// Luma and Rect, the masks every stage has.
+float er_mask_screen(float word, float4 bounds, float3 x, float2 uv)
+{
+    float luma = dot(x, ER_MASK_LUMA_WEIGHTS);
+    float luma_step = fwidth(luma);
+    float2 uv_step = fwidth(uv);
+
+    uint kind = er_mask_kind(word);
+    float feather = er_mask_feather(word);
+    float covered = 1.0;
+    if (kind == ER_MASK_LUMA)
+    {
+        covered = er_mask_range(luma, luma_step, bounds.xy, feather);
+    }
+    else if (kind == ER_MASK_RECT)
+    {
+        covered = er_mask_rect(uv, uv_step, bounds, feather);
+    }
+    return er_mask_inverted(word) ? 1.0 - covered : covered;
+}
+
+float er_mask(float word, float4 bounds, float3 x, AlbedoCtx c)
+{
+    return er_mask_screen(word, bounds, x, c.uv);
+}
+
+float er_mask(float word, float4 bounds, float3 x, TonemapCtx c)
+{
+    return er_mask_screen(word, bounds, x, c.uv);
 }
 
 // How much of selector `id`'s family and instance terms (design 8) cover this pixel, 0 to 1: the

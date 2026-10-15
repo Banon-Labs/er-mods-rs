@@ -313,3 +313,7 @@ portable	-	check-shader-editor-probe.py --selftest	synthetic telemetry documents
 portable	-	er-shader-ab-proof.py --selftest	synthetic images, the Frida agent and the er-cel-shade sources; the node and ImageMagick cases print that they were skipped where those tools are absent	runtime-tools
 portable	-	build-cel-shaders.py --selftest	synthetic containers built and signed in Python; needs neither dxc nor the dump	product
 partial	dxc,vkd3d-dump	build-cel-shaders.py --check	still proves every committed blob is a signed shader model 6.0 pixel shader with no root signature; prints that the staleness comparison (no dxc) and the linkage against the game's originals (no dump) were skipped	product
+portable	-	fetch-dxcompiler.py --selftest	synthetic zips with their own pins, written under a temp dir; no network; also asserts the checkout tracks no compiler file and ignores a fetched one	product
+portable	-	fetch-dxcompiler.py --check	git ls-files and git check-ignore only; with nothing fetched it says so and the tracking and ignore assertions still run	product
+portable	-	check-dll-imports.py --selftest	synthetic PE files built in memory by the script; needs no DLL and no toolchain	product
+partial	build-artifact	check-dll-imports.py	still runs the synthetic PE cases; prints that the import table of er_cel_shade.dll was not read when none is built	cargo-build

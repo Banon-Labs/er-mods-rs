@@ -58,7 +58,10 @@ pub mod reg {
     /// Capsule anchors, two registers each (P4).
     pub const CAPSULES: usize = 64;
     pub const CAPSULE_REGISTERS: usize = 128;
-    /// Layer slots: a header register `(on, opacity, blend, mask_id)` and up to 15 parameters
+    /// One register per layer slot: the bounds of the slot's stage-local mask (P0.2a,
+    /// `crate::editor::mask`).
+    pub const LAYER_MASKS: usize = 192;
+    /// Layer slots: a header register `(on, opacity, blend, mask word)` and up to 15 parameters
     /// (P0.2a).
     pub const LAYERS: usize = 256;
     pub const LAYER_SLOTS: usize = 48;
@@ -68,7 +71,8 @@ pub mod reg {
 const _: () = assert!(reg::CEL_REGISTERS * 4 == GPU_FLOATS);
 const _: () = assert!(reg::CEL + reg::CEL_REGISTERS == reg::FRAME);
 const _: () = assert!(reg::SELECTOR + reg::SELECTOR_REGISTERS == 32);
-const _: () = assert!(reg::CAPSULES + reg::CAPSULE_REGISTERS == 192);
+const _: () = assert!(reg::CAPSULES + reg::CAPSULE_REGISTERS == reg::LAYER_MASKS);
+const _: () = assert!(reg::LAYER_MASKS + reg::LAYER_SLOTS <= reg::LAYERS);
 const _: () = assert!(reg::LAYERS + reg::LAYER_SLOTS * reg::LAYER_REGISTERS == REGISTERS);
 
 /// What `er_p[3]` says about this present.
@@ -211,7 +215,7 @@ pub(crate) fn abi_header_register(name: &str) -> Option<String> {
 }
 
 #[cfg(windows)]
-pub use process::{create, current_address, presents, publish, set_look, stage};
+pub use process::{create, current_address, presents, publish, publish_then, set_look, stage};
 
 /// The ring buffer, the staged block, and the present count.
 #[cfg(windows)]
@@ -328,7 +332,8 @@ mod process {
     }
 
     /// Stage any registers. The seam for what later phases publish: mask configuration, selector
-    /// configuration, capsules and layer slots.
+    /// configuration, capsules and layer slots. `edit` runs under the staged block's lock, which
+    /// [`publish_then`] holds from the block's publish through its `after`.
     pub fn stage(edit: impl FnOnce(&mut Block)) {
         edit(&mut staged().block);
     }
@@ -336,6 +341,15 @@ mod process {
     /// Once per present: count it, write the next block in full from what is staged, and make that
     /// block current. Returns the present count, starting at 1.
     pub fn publish(display: [f32; 2]) -> u64 {
+        publish_then(display, || {})
+    }
+
+    /// [`publish`], then `after`, both under the staged block's lock, so nothing staged in a
+    /// [`stage`] call can land between the two. The editor's worker stages a new layer packing
+    /// and hands the table swap to its variants over in one [`stage`] call
+    /// (`crate::table::defer`), and the present applies that swap here, with the block that
+    /// carries the packing: the redirect and the parameters change on the same present.
+    pub fn publish_then(display: [f32; 2], after: impl FnOnce()) -> u64 {
         let present = PRESENTS.fetch_add(1, Ordering::AcqRel) + 1;
         let mut staged = staged();
         staged.block.set_frame(FrameInfo {
@@ -344,15 +358,15 @@ mod process {
             display,
         });
         let mapped = RING_MAPPED.load(Ordering::Acquire);
-        if mapped == 0 {
-            return present;
+        if mapped != 0 {
+            let slot = next_slot(staged.slot);
+            // SAFETY: the ring is mapped for the life of the process and `slot` is inside it.
+            unsafe { write_block(mapped + slot * BLOCK_BYTES, &staged.block) };
+            staged.slot = slot;
+            let gpu = RING_GPU.load(Ordering::Acquire) + (slot * BLOCK_BYTES) as u64;
+            CURRENT.store(gpu, Ordering::Release);
         }
-        let slot = next_slot(staged.slot);
-        // SAFETY: the ring is mapped for the life of the process and `slot` is inside it.
-        unsafe { write_block(mapped + slot * BLOCK_BYTES, &staged.block) };
-        staged.slot = slot;
-        let gpu = RING_GPU.load(Ordering::Acquire) + (slot * BLOCK_BYTES) as u64;
-        CURRENT.store(gpu, Ordering::Release);
+        after();
         present
     }
 
@@ -387,6 +401,7 @@ mod tests {
             ("ER_P_SELECTOR_REGISTERS", reg::SELECTOR_REGISTERS),
             ("ER_P_CAPSULES", reg::CAPSULES),
             ("ER_P_CAPSULE_REGISTERS", reg::CAPSULE_REGISTERS),
+            ("ER_P_LAYER_MASKS", reg::LAYER_MASKS),
             ("ER_P_LAYERS", reg::LAYERS),
             ("ER_P_LAYER_SLOTS", reg::LAYER_SLOTS),
             ("ER_P_LAYER_REGISTERS", reg::LAYER_REGISTERS),

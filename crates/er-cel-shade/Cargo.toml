@@ -24,6 +24,10 @@ d3d12-debug = []
 
 [dependencies]
 er-game-base = { path = "../er-game-base" }
+# The shader editor's compiler: the pipe protocol `er-shader-compiler.exe` speaks, and on Windows
+# the dxc loader the editor falls back to in process when the helper cannot start. Neither links
+# dxcompiler.dll; `scripts/check-dll-imports.py` holds the built DLL to that.
+er-shader-compiler = { path = "../er-shader-compiler" }
 
 [target.'cfg(windows)'.dependencies]
 er-hook = { path = "../er-hook" }
@@ -43,7 +47,14 @@ windows = { version = "0.62", features = [
   "Win32_Graphics_Direct3D",
   "Win32_Graphics_Direct3D12",
   "Win32_Graphics_Dxgi_Common",
+  # The compiler helper: its pipes' inheritance, the job that kills it with the game, and its
+  # process (`editor/compiler.rs`).
+  "Win32_Security",
+  "Win32_System_JobObjects",
   "Win32_System_LibraryLoader",
+  # `HeapFree` for the string Wine's `wine_get_unix_file_name` returns (`menu/files.rs`).
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_WindowsAndMessaging",
@@ -51,6 +62,11 @@ windows = { version = "0.62", features = [
 
 [lints]
 workspace = true
+
+# The glyph ranges the overlay host's font has, for the test that every string the Shaders panel
+# draws is inside them (`menu/mod.rs`). The crate's layout half builds on the host.
+[dev-dependencies]
+er-build-watermark-core = { path = "../er-build-watermark-core" }
 
 # Assembles the byte-checked prologue of the cursor predicate from named instructions in
 # `build.rs`. See `build-support/prologue_build.rs`.

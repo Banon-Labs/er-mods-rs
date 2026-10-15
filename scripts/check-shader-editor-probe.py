@@ -60,16 +60,28 @@ the exact id, or the same port kind with a larger build number in the low 24 bit
 
 # Masks
 
-Terms joined by `&`, each optionally negated with a leading `!`:
+The selector text a layer's `select` holds, as `crates/er-cel-shade/src/editor/mask.rs` writes
+and reads it, so a proof can be given the very text the layer uses: terms separated by spaces or
+`&`, each optionally negated with a leading `!`, all of which must select a sample. A `~<n>px`
+feather is read and left out; a feathered edge blends the samples on it, which `--max-mismatch`
+can allow for.
 
 * `everything`
-* `depth:<lo>..<hi>` -- the depth the region's aux carries, compared in its own units: at `ao`
-  the aux is the raw depth buffer value (`asuint(depth)`), at `albedo` and `tonemap` the resolved
-  plane's view depth as a half float in the high 16 bits (design 5.4, from P2).
-* `sky`, `geometry` -- the resolved plane's flags, bits 9 and 8 of the aux (design 5.4, from P2).
-* `bits:<mask>` -- any of the selector bits in the aux's low byte (P3).
+* `depth:<lo>..<hi>`, with an optional `m` -- at `ao`, the pixel's view depth in metres, which the
+  Lighting port writes into the aux (`er_probe_lighting_aux`, `-1` on the sky, which no depth range
+  selects); at `albedo` and `tonemap`, the resolved plane's view depth as a half float in the high
+  16 bits (design 5.4, from P2).
+* `sky`, `geometry` -- at `ao`, the aux's sky marker, exactly as the Lighting stage's own sky test
+  decides; at `albedo` and `tonemap`, the resolved plane's flags, bits 9 and 8 of the aux (design
+  5.4, from P2).
 * `luma:<lo>..<hi>` -- the Rec. 709 luminance of `pre`.
-* `rect:<x0>,<y0>,<x1>,<y1>` -- the sample's grid centre, as a screen coordinate from 0 to 1.
+* `rect:<x0>,<y0>..<x1>,<y1>` (or `rect:<x0>,<y0>,<x1>,<y1>`) -- the sample's grid centre, as a
+  screen coordinate from 0 to 1.
+* `facing:<lo>..<hi>` -- read, but the probe carries no normal, so every sample is undecided and
+  the run inconclusive.
+* `bits:<mask>` -- any of the selector bits in the aux's low byte (P3); the checker's own.
+
+A low bound above the high one is swapped, as the editor does.
 
 # Output and exit code
 
@@ -413,6 +425,10 @@ def collect(
 # Masks
 
 
+# What the Lighting port writes in an `ao` sample's aux on the sky (`er_probe_lighting_aux`).
+AO_SKY_DEPTH = -1.0
+
+
 def depth_of(region: str, aux: int) -> float:
     """The depth a sample's aux carries in `region`'s units (see the module docs)."""
     if region == "ao":
@@ -420,21 +436,57 @@ def depth_of(region: str, aux: int) -> float:
     return struct.unpack("<e", struct.pack("<H", (aux >> 16) & 0xFFFF))[0]
 
 
+def is_sky(region: str, aux: int) -> bool:
+    """Whether the sample is on the sky: at `ao` the Lighting stage's own test, which the port
+    writes as a negative depth, and elsewhere the resolved plane's flag."""
+    if region == "ao":
+        return depth_of(region, aux) < 0
+    return bool(aux & RESOLVED_SKY_FLAG)
+
+
+def is_geometry(region: str, aux: int) -> bool:
+    if region == "ao":
+        depth = depth_of(region, aux)
+        return depth >= 0 and math.isfinite(depth)
+    return bool(aux & RESOLVED_GEOMETRY_FLAG)
+
+
 def luma(colour: tuple[float, float, float]) -> float:
     return 0.2126 * colour[0] + 0.7152 * colour[1] + 0.0722 * colour[2]
+
+
+def _number(text: str, term: str) -> float:
+    try:
+        value = float(text.strip())
+    except ValueError as error:
+        raise ValueError(f"{term}: {error}") from None
+    if not math.isfinite(value):
+        raise ValueError(f"{term}: {text!r} is not a finite number")
+    return value
 
 
 def _range(text: str, term: str) -> tuple[float, float]:
     low, sep, high = text.partition("..")
     if not sep:
         raise ValueError(f"{term}: expected <lo>..<hi>")
-    try:
-        bounds = (float(low), float(high))
-    except ValueError as error:
-        raise ValueError(f"{term}: {error}") from None
-    if not bounds[0] <= bounds[1]:
-        raise ValueError(f"{term}: the low bound is above the high one")
-    return bounds
+    low_value, high_value = _number(low, term), _number(high, term)
+    return (min(low_value, high_value), max(low_value, high_value))
+
+
+def _rect(text: str, term: str) -> tuple[float, float, float, float]:
+    """`x0,y0..x1,y1`, as the editor writes it, or the four numbers comma-separated."""
+    if ".." in text:
+        start, _, end = text.partition("..")
+        corners = [start.split(","), end.split(",")]
+        if any(len(corner) != 2 for corner in corners):
+            raise ValueError(f"{term}: expected rect:<x0>,<y0>..<x1>,<y1>")
+        parts = corners[0] + corners[1]
+    else:
+        parts = text.split(",")
+        if len(parts) != 4:
+            raise ValueError(f"{term}: expected rect:<x0>,<y0>..<x1>,<y1>")
+    x0, y0, x1, y1 = (_number(part, term) for part in parts)
+    return (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
 
 
 @dataclass(frozen=True)
@@ -450,7 +502,12 @@ class Term:
             hit = True
         elif self.kind == "depth":
             depth = depth_of(region, sample.aux)
-            hit = None if math.isnan(depth) else self.args[0] <= depth <= self.args[1]
+            if math.isnan(depth):
+                hit = None
+            elif is_sky(region, sample.aux):
+                hit = False
+            else:
+                hit = self.args[0] <= depth <= self.args[1]
         elif self.kind == "luma":
             hit = None if sample.pre is None else self.args[0] <= luma(sample.pre) <= self.args[1]
         elif self.kind == "rect":
@@ -458,9 +515,11 @@ class Term:
             x0, y0, x1, y1 = self.args
             hit = x0 <= u <= x1 and y0 <= v <= y1
         elif self.kind == "sky":
-            hit = bool(sample.aux & RESOLVED_SKY_FLAG)
+            hit = is_sky(region, sample.aux)
         elif self.kind == "geometry":
-            hit = bool(sample.aux & RESOLVED_GEOMETRY_FLAG)
+            hit = is_geometry(region, sample.aux)
+        elif self.kind == "facing":
+            hit = None
         elif self.kind == "bits":
             hit = bool(sample.aux & self.args[0] & RESOLVED_BITS_MASK)
         else:
@@ -485,30 +544,33 @@ class Mask:
         return result
 
 
+FEATHER = re.compile(r"~(\d+(?:\.\d*)?|\.\d+)(?:px)?")
+
+
 def parse_mask(text: str) -> Mask:
+    """A selector in the editor's text form (see the module docs)."""
     terms = []
-    for raw in text.split("&"):
-        term = raw.strip()
+    for term in text.replace("&", " & ").split():
+        if term == "&":
+            continue
+        if term.startswith("~"):
+            if not FEATHER.fullmatch(term):
+                raise ValueError(f"{term!r} is not a feather like ~2px")
+            continue
         negate = term.startswith("!")
-        term = term[1:].strip() if negate else term
+        term = term[1:] if negate else term
         name, _, rest = term.partition(":")
         if name in ("everything", "sky", "geometry"):
             if rest:
                 raise ValueError(f"{name} takes no argument")
             terms.append(Term(name, negate))
-        elif name in ("depth", "luma"):
+        elif name == "depth":
+            # Metres, as the editor writes it; the `m` is optional.
+            terms.append(Term(name, negate, _range(rest.removesuffix("m"), term)))
+        elif name in ("luma", "facing"):
             terms.append(Term(name, negate, _range(rest, term)))
         elif name == "rect":
-            parts = rest.split(",")
-            if len(parts) != 4:
-                raise ValueError(f"{term}: expected rect:<x0>,<y0>,<x1>,<y1>")
-            try:
-                x0, y0, x1, y1 = (float(part) for part in parts)
-            except ValueError as error:
-                raise ValueError(f"{term}: {error}") from None
-            if x0 > x1 or y0 > y1:
-                raise ValueError(f"{term}: the rectangle is empty")
-            terms.append(Term(name, negate, (x0, y0, x1, y1)))
+            terms.append(Term(name, negate, _rect(rest, term)))
         elif name == "bits":
             try:
                 bits = int(rest, 0)
@@ -1619,6 +1681,91 @@ def selftest() -> int:
         == "pass",
     )
 
+    # Design 14, P0.2a item 5: a Lighting layer limited to `depth:0..10m`, as the editor writes
+    # the selector, checked against what the AO port writes in its aux -- the view depth in
+    # metres, -1 on the sky (`er_probe_lighting_aux`). The top row is sky; the rest runs 0 to 30 m.
+    def metres(index: int) -> float:
+        return AO_SKY_DEPTH if index < GRID else (index - GRID) * 30 / (SAMPLES - GRID - 1)
+
+    def metres_aux(index: int) -> int:
+        return struct.unpack("<I", struct.pack("<f", metres(index)))[0]
+
+    def within_10m(index: int) -> bool:
+        return 0 <= metres(index) <= 10
+
+    lighting = colour_series(masked(within_10m), metres_aux, region="ao", kind=0)
+    check(
+        "masked-invert: the editor's depth:0..10m at ao passes, the sky left out",
+        verdict("masked-invert:depth:0..10m", lighting, regions=["ao"]) == "pass",
+    )
+    check(
+        "masked-invert: the editor's inverted, feathered form reads the same mask",
+        verdict(
+            "masked-invert:!depth:0..10m ~2px",
+            colour_series(masked(lambda i: not within_10m(i)), metres_aux, region="ao", kind=0),
+            regions=["ao"],
+        )
+        == "pass",
+    )
+    check(
+        "masked-invert: a depth range read as raw depth would fail",
+        verdict("masked-invert:depth:0..1", lighting, regions=["ao"]) == "fail",
+    )
+    check(
+        "masked-invert: at ao the sky and geometry come from the aux's sky marker",
+        verdict(
+            "masked-invert:sky",
+            colour_series(masked(lambda i: i < GRID), metres_aux, region="ao", kind=0),
+            regions=["ao"],
+        )
+        == "pass"
+        and verdict(
+            "masked-invert:geometry",
+            colour_series(masked(lambda i: i >= GRID), metres_aux, region="ao", kind=0),
+            regions=["ao"],
+        )
+        == "pass",
+    )
+    check(
+        "masked-invert: the editor's rect form passes like the comma form",
+        verdict("masked-invert:rect:0,0..0.5,1", left) == "pass",
+    )
+    check(
+        "masked-invert: facing cannot be told from the probe, inconclusive",
+        verdict("masked-invert:facing:0..0.3", lighting, regions=["ao"]) == "inconclusive",
+    )
+
+    # One grammar with the editor: every selector `editor/mask.rs` holds itself to reads here,
+    # with the same bounds where its own test states them.
+    mask_rs = (REPO / "crates/er-cel-shade/src/editor/mask.rs").read_text(encoding="utf-8")
+
+    def test_body(name: str) -> str:
+        return mask_rs.partition(f"fn {name}")[2].partition("#[test]")[0]
+
+    # The two tests that assert the editor reads their selectors with no warning.
+    rendered_texts = re.findall(
+        r'"([^"]*)"', test_body("every_mask_renders_back_to_itself").partition("]")[0]
+    )
+    parsed_texts = re.findall(r'parse\("([^"]+)"\)', test_body("the_design_examples_parse"))
+    check(
+        "the editor's mask tests hold selectors to read",
+        len(rendered_texts) >= 7 and len(parsed_texts) >= 4,
+    )
+    unread = []
+    for text in rendered_texts + parsed_texts:
+        try:
+            parse_mask(text)
+        except ValueError as error:
+            unread.append(f"{text}: {error}")
+    check(f"every selector the editor writes reads here ({'; '.join(unread)})", not unread)
+    check(
+        "the editor's own bounds read the same",
+        parse_mask("depth:0..10m").terms[0].args == (0.0, 10.0)
+        and parse_mask("rect:0.5,1..0,0").terms[0].args == (0.0, 0.0, 0.5, 1.0)
+        and parse_mask("!luma:0.5..2 ~2px").terms[0].negate
+        and parse_mask("depth:1..0").terms[0].args == (0.0, 1.0),
+    )
+
     # tint
     def tinted(bit):
         def post(index, pre):
@@ -1703,9 +1850,11 @@ def selftest() -> int:
     # Parsing refuses what it cannot mean.
     for bad in (
         "masked-invert:",
-        "masked-invert:depth:1..0",
         "masked-invert:depth:0.5",
+        "masked-invert:depth:0..inf",
         "masked-invert:rect:0,0,1",
+        "masked-invert:rect:0,0..1",
+        "masked-invert:depth:0..1 ~two",
         "masked-invert:bits:256",
         "masked-invert:fog",
         "tint:8",

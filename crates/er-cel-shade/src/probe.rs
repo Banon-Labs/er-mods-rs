@@ -453,16 +453,20 @@ mod tests {
 
     #[test]
     fn every_stage_context_has_its_mask_and_selector_functions() {
-        // Design 3.1 and 7.3: the generated code calls `er_mask(header.w, c)` for every stage, so
-        // each context needs both overloads before P0.2a fills them in.
+        // Design 3.1 and 7.3: the generated code calls `er_mask` for every stage with the slot's
+        // mask word, its mask register and the colour reaching the layer (`editor::codegen`), and
+        // `er_selected` is the seam for P3, so each context needs both overloads.
         let stage_ctx = include_str!("../shaders/stage_ctx.hlsli");
         for context in ["LightingCtx", "AlbedoCtx", "TonemapCtx"] {
             assert!(
                 stage_ctx.contains(&format!("struct {context}\n")),
                 "{context}"
             );
-            for function in ["er_mask", "er_selected"] {
-                let signature = format!("float {function}(float id, {context} c)\n");
+            let signatures = [
+                format!("float er_mask(float word, float4 bounds, float3 x, {context} c)\n"),
+                format!("float er_selected(float id, {context} c)\n"),
+            ];
+            for signature in signatures {
                 assert!(stage_ctx.contains(&signature), "{signature}");
             }
         }

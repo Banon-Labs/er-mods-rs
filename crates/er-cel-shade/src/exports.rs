@@ -645,6 +645,10 @@ mod process {
             ("records", relaxed(&RECORDS)),
             ("record_bytes", relaxed(&RECORD_BYTES)),
         ]
+        .into_iter()
+        // The Shaders panel's own: edit callbacks, pastes, saves, edits, panics, its frame time.
+        .chain(menu::telemetry_counters())
+        .collect()
     }
 
     /// What the stats line watches: a change logs it at once.
