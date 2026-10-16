@@ -50,21 +50,25 @@ const BODY_STEM: &str = "FC_M_0000";
 /// c3511) are turned down for heels in front of their toes, c5220 Nito for 20 materials against 15
 /// donor body meshes, c4500 Manus for a calf twist off its calf, and c5310 Gwynevere for a root
 /// bone `ex` carrying her dress.
+///
+/// Legs shorter than the trunk are refused as too far from a human's proportions: c2270 Mushroom
+/// Parent, which the user left out after seeing it in game, and c3450 Stone Dragon. Folding
+/// materials that draw alike into one slot fits Nito.
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 80),
+    ("maps", 78),
     ("no model", 8),
     ("not biped", 89),
     ("own fit", 1),
-    ("refused", 14),
+    ("refused", 16),
     ("textures", 1),
 ];
 const FITTED: [(&str, usize); 7] = [
-    ("fit", 12),
-    ("fits", 68),
+    ("fit", 11),
+    ("fits", 67),
     ("no model", 8),
     ("not biped", 89),
     ("own fit", 1),
-    ("refused", 14),
+    ("refused", 16),
     ("textures", 1),
 ];
 
@@ -121,6 +125,12 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
     assert_eq!(verdict(&hits, "c2280"), Verdict::OwnFit);
     // Quelaag's lettered limb sets (`W_LArm11`, `LLeg_d_1`) are not a Biped's.
     assert_eq!(verdict(&hits, "c5280"), Verdict::NotBiped);
+    for id in ["c2270", "c3450"] {
+        assert!(
+            matches!(verdict(&hits, id), Verdict::Refused(why) if why.contains("shorter than its trunk")),
+            "{id}"
+        );
+    }
     // Split textures, its own (c2320) and borrowed (c2230 draws with c2239's).
     assert!(verdict(&hits, "c2320").maps());
     assert!(verdict(&hits, "c2230").maps());
@@ -232,16 +242,13 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
         verdict(&hits, "c2730"),
         Verdict::Maps { fitted: true, .. }
     ));
-    // FromSoft-named and Bloathead-named rigs.
-    for id in ["c4130", "c4150", "c4160"] {
+    // FromSoft-named and Bloathead-named rigs, and Nito, whose 20 materials draw 8 ways.
+    for id in ["c4130", "c4150", "c4160", "c5220"] {
         assert!(
             matches!(verdict(&hits, id), Verdict::Maps { fitted: true, .. }),
             "{id}"
         );
     }
-    assert!(
-        matches!(verdict(&hits, "c5220"), Verdict::Fit(why) if why.contains("material groups"))
-    );
 
     let offered: Vec<&str> = hits
         .iter()

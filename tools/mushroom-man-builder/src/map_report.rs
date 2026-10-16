@@ -52,6 +52,19 @@ pub struct Posture {
     pub toe_dz: Option<f32>,
     /// Pelvis height over Elden Ring's.
     pub pelvis_scale: Option<f32>,
+    /// The pelvis height and the shoulder's above it: the legs' length and the trunk's.
+    pub legs_and_trunk: Option<(f32, f32)>,
+}
+
+impl Posture {
+    /// Legs shorter than the trunk: too far from a human's proportions for the player's
+    /// animations. c2270 Mushroom Parent's legs are 0.67 m to a 0.85 m trunk, and its belly stands
+    /// 0.47 m in front of its spine, so the player's idle holds its hands and weapon inside it
+    /// (456 of its 550 arm vertices, rescaled); the user left it out (2026-10-15). Every character
+    /// checked in game has legs longer than its trunk.
+    pub fn short_legs(&self) -> Option<(f32, f32)> {
+        self.legs_and_trunk.filter(|(legs, trunk)| legs < trunk)
+    }
 }
 
 #[derive(Debug)]
@@ -167,6 +180,7 @@ fn posture(bones: &[crate::flver::Bone], roles: &[Role]) -> Posture {
             .map(|index| positions[index])
     };
     let pelvis = at("Pelvis");
+    let shoulder = at("L_UpperArm");
     let neck = at("Neck").or_else(|| at("Head"));
     let degrees = |radians: f32| radians.to_degrees();
     Posture {
@@ -175,17 +189,18 @@ fn posture(bones: &[crate::flver::Bone], roles: &[Role]) -> Posture {
             let length = length(up);
             (length > f32::EPSILON).then(|| degrees((up.y / length).clamp(-1.0, 1.0).acos()))
         }),
-        upper_arm: at("L_UpperArm")
-            .zip(at("L_Forearm"))
-            .and_then(|(shoulder, elbow)| {
-                let arm = sub(elbow, shoulder);
-                let length = length(arm);
-                (length > f32::EPSILON).then(|| degrees((-arm.y / length).clamp(-1.0, 1.0).asin()))
-            }),
+        upper_arm: shoulder.zip(at("L_Forearm")).and_then(|(shoulder, elbow)| {
+            let arm = sub(elbow, shoulder);
+            let length = length(arm);
+            (length > f32::EPSILON).then(|| degrees((-arm.y / length).clamp(-1.0, 1.0).asin()))
+        }),
         toe_dz: at("L_Foot")
             .zip(at("L_Toe0"))
             .map(|(foot, toe)| toe.z - foot.z),
         pelvis_scale: pelvis.map(|pelvis| pelvis.y / ER_PELVIS_HEIGHT),
+        legs_and_trunk: pelvis
+            .zip(shoulder)
+            .map(|(pelvis, shoulder)| (pelvis.y, shoulder.y - pelvis.y)),
     }
 }
 

@@ -225,6 +225,8 @@ pub struct SlotSource {
     pub mtd: String,
     pub class: MtdClass,
     pub meshes: Vec<usize>,
+    /// Further DSR materials drawn the same way and folded into this slot.
+    pub merged: Vec<usize>,
     /// The character's texture set the material samples ([`TextureSets`]).
     pub texture_set: usize,
 }
@@ -262,6 +264,15 @@ impl SlotReport {
                 source.mtd,
                 class_name(source.class)
             );
+            if !source.merged.is_empty() {
+                let merged: Vec<String> = source.merged.iter().map(usize::to_string).collect();
+                let _ = write!(
+                    line,
+                    ", with material{} {} drawn the same",
+                    if merged.len() == 1 { "" } else { "s" },
+                    merged.join(", ")
+                );
+            }
             if source.texture_set > 0 {
                 let _ = write!(line, ", texture set {}", source.texture_set);
             }
@@ -957,7 +968,9 @@ impl BipedBody {
 
 /// `character` (a Biped one, its model `character_flver`, its texture sets `sets`) fitted to
 /// `donor` (`FC_M_0000.flver`) and cut into slots: its kept meshes grouped by DSR material and
-/// back-face culling, in the order the groups first appear, each group on the next of
+/// back-face culling, groups that draw alike folded together when there are more groups than
+/// slots ([`merge_if_over`]), in the order the
+/// groups first appear, each group on the next of
 /// [`SLOT_DONOR_MESHES`]. A group drawing set 0 draws with [`BODY_MATERIAL`], or with
 /// [`EDGE_MATERIAL`] when its MTD is alpha-tested and `cutouts` asks for the Edge material; a group
 /// drawing another set, or dithered because its MTD is alpha-blended, draws with the next free one
@@ -988,7 +1001,13 @@ pub fn biped_body_from(
     let strip = export
         .strip
         .ok_or("the Biped fit reported no held-item strip")?;
-    let groups = group_by_material(export, &source::parse(character_flver)?, character.id)?;
+    let groups = merge_if_over(
+        group_by_material(export, &source::parse(character_flver)?, character.id)?,
+        SLOT_DONOR_MESHES.len(),
+        sets,
+        cutouts,
+        character.id,
+    )?;
     if groups.len() > SLOT_DONOR_MESHES.len() {
         return Err(Error::new(format!(
             "{} material groups, and the donor has {} body meshes to put them on",
@@ -1105,6 +1124,7 @@ pub fn biped_body_from(
                 mtd: group.source.mtd,
                 class: group.source.class,
                 meshes: group.source.meshes,
+                merged: group.source.merged,
                 texture_set: set,
             }),
         ));
@@ -1209,6 +1229,7 @@ fn tail_slots(
             taken.push(index);
         }
     }
+    let groups = merge_if_over(groups, taken.len(), sets, cutouts, character.id)?;
     if groups.len() > taken.len() {
         return Err(Error::new(format!(
             "{}'s tail has {} material groups, and the cloth part has {} meshes to put them on",
@@ -1290,6 +1311,7 @@ fn tail_slots(
                 mtd: group.source.mtd,
                 class: group.source.class,
                 meshes: group.source.meshes,
+                merged: group.source.merged,
                 texture_set: set,
             }),
         );
@@ -1361,6 +1383,80 @@ struct GroupSource {
     mtd: String,
     class: MtdClass,
     meshes: Vec<usize>,
+    /// Further DSR materials [`merge_alike`] put in this group.
+    merged: Vec<usize>,
+}
+
+/// The texture set, blend and culling a group draws with: everything about its slot but its
+/// geometry.
+fn draw_key(
+    group: &Group,
+    sets: &TextureSets,
+    cutouts: Cutouts,
+    id: &str,
+) -> Result<(usize, Blend, bool)> {
+    let material = group.source.material;
+    let set = sets.set_of(material).ok_or_else(|| {
+        Error::new(format!(
+            "DSR material {material} samples none of {id}'s texture sets"
+        ))
+    })?;
+    Ok((
+        set,
+        blend_of(group.source.class, cutouts, material)?,
+        group.source.cull_backfaces,
+    ))
+}
+
+/// `groups` with every group that draws as an earlier one does folded into it, in the order the
+/// groups first appear. DSR splits a character into a material per piece where Elden Ring needs
+/// only one per way of drawing: c5220 Nito's materials 0, 1, 3, 4 and 5 are all
+/// `C_DullLeather[DSB]` on `c5220_02`, and its 20 come to 8 groups. The shading families DSR tells
+/// apart (`DullLeather`, `Leather`, `Metal`) all draw with the same Elden Ring material, so the
+/// fold changes no pixel.
+fn merge_alike(
+    groups: Vec<Group>,
+    sets: &TextureSets,
+    cutouts: Cutouts,
+    id: &str,
+) -> Result<Vec<Group>> {
+    let mut merged: Vec<((usize, Blend, bool), Group)> = Vec::with_capacity(groups.len());
+    for group in groups {
+        let key = draw_key(&group, sets, cutouts, id)?;
+        match merged.iter_mut().find(|(taken, _)| *taken == key) {
+            Some((_, into)) => {
+                into.source.merged.push(group.source.material);
+                for mesh in group.source.meshes {
+                    if !into.source.meshes.contains(&mesh) {
+                        into.source.meshes.push(mesh);
+                    }
+                }
+                into.vertices.extend(group.vertices);
+                into.vertices.sort_unstable();
+                into.triangles.extend(group.triangles);
+            }
+            None => merged.push((key, group)),
+        }
+    }
+    Ok(merged.into_iter().map(|(_, group)| group).collect())
+}
+
+/// `groups` as they are when there are no more than `slots` of them, or [`merge_alike`]d when
+/// there are. Folding moves groups onto other donor meshes and so changes a build's bytes, and
+/// every character checked in game fits without it: measured 2026-10-15, folding always would
+/// have moved 33 of the 66 the search offered, Priscilla from 6 slots to 3 and Artorias from 15
+/// to 9, with not a vertex changed.
+fn merge_if_over(
+    groups: Vec<Group>,
+    slots: usize,
+    sets: &TextureSets,
+    cutouts: Cutouts,
+    id: &str,
+) -> Result<Vec<Group>> {
+    if groups.len() <= slots {
+        return Ok(groups);
+    }
+    merge_alike(groups, sets, cutouts, id)
 }
 
 /// The export's vertices and triangles grouped by the DSR material and culling of the mesh each
@@ -1408,6 +1504,7 @@ fn group_by_material(export: &Export, source: &Source, id: &str) -> Result<Vec<G
                         mtd: file.to_owned(),
                         class,
                         meshes: Vec::new(),
+                        merged: Vec::new(),
                     },
                     vertices: Vec::new(),
                     triangles: Vec::new(),
@@ -1894,6 +1991,44 @@ mod tests {
     }
 
     #[test]
+    fn groups_that_draw_alike_fold_into_the_first() {
+        // Material 2 is material 0 again on a mesh that culls too, as Nito's five are.
+        let mut source = source();
+        source.meshes[3].cull_backfaces = true;
+        let groups = group_by_material(
+            &export(
+                &[0, 2, 3, 1],
+                vec![[0, 1, 2], [3, 4, 5], [6, 7, 8], [11, 10, 9]],
+            ),
+            &source,
+            "c2650",
+        )
+        .unwrap();
+        assert_eq!(groups.len(), 3);
+        let sets = TextureSets::single(crate::textures::TextureSet::named_after("c2650"));
+        let merged = merge_alike(groups, &sets, Cutouts::EdgeMaterial, "c2650").unwrap();
+        assert_eq!(merged.len(), 2);
+        let body = &merged[0];
+        assert_eq!(body.source.material, 0);
+        assert_eq!(body.source.merged, [2]);
+        assert_eq!(body.source.meshes, [0, 1, 3]);
+        assert_eq!(body.vertices, [0, 1, 2, 6, 7, 8, 9, 10, 11]);
+        assert_eq!(body.triangles, [[0, 1, 2], [11, 10, 9], [6, 7, 8]]);
+        // The cutout cowl draws another way and keeps its own slot.
+        assert_eq!(merged[1].source.material, 1);
+        assert!(merged[1].source.merged.is_empty());
+        // Drawn with the Body material, the cowl still keeps its slot: it is double-sided.
+        let groups = group_by_material(
+            &export(&[0, 2], vec![[0, 1, 2], [3, 4, 5]]),
+            &source,
+            "c2650",
+        )
+        .unwrap();
+        let cull_differs = merge_alike(groups, &sets, Cutouts::BodyMaterial, "c2650").unwrap();
+        assert_eq!(cull_differs.len(), 2);
+    }
+
+    #[test]
     fn kept_meshes_group_by_material_and_culling_in_the_order_they_first_appear() {
         // Export vertices 0..3 are mesh 0's, 3..6 mesh 2's, 6..9 mesh 1's, 9..12 mesh 3's.
         let triangles = vec![[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11], [2, 1, 0]];
@@ -1956,6 +2091,7 @@ mod tests {
                 mtd: "C_DullLeather[DSB].mtd".to_owned(),
                 class,
                 meshes,
+                merged: Vec::new(),
                 texture_set: 0,
             }),
             vertices: 10,

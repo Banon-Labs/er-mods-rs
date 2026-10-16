@@ -220,6 +220,12 @@ pub fn verdict_of(report: &MapReport) -> Verdict {
     if report.strip.kept_triangles == 0 {
         return Verdict::Refused("cutting its held items leaves no triangle".to_owned());
     }
+    if let Some((legs, trunk)) = report.posture.short_legs() {
+        return Verdict::Refused(format!(
+            "its legs are shorter than its trunk ({legs:.2} m against {trunk:.2} m), too far from \
+             a human's proportions for the player's animations"
+        ));
+    }
     Verdict::Maps {
         vertices: report.strip.kept_vertices,
         triangles: report.strip.kept_triangles,
