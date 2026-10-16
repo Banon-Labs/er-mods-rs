@@ -53,7 +53,7 @@ use crate::{
     error::{Context, Error, Result},
     fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
     flver::{
-        Flver, LayoutMember, VertexBuffer,
+        Flver, LayoutMember, VertexBuffer, bind_frames,
         hide::{blank_vertex_buffers, hide_all_face_sets},
         mtd::{self, MtdClass},
         parse_layout_members, parse_u32_list,
@@ -172,10 +172,11 @@ pub struct Inputs<'a> {
     /// (see [`crate::tail`]), unless this is welded through and through or `cloth_test_body` takes
     /// the slots.
     pub tail_rigidity: tail::Rigidity,
-    /// How stiff a Biped character's skirt is (`--rigidity skirt=<base>:<tip>`). A character with
-    /// skirt bones and no tail has its skirt cut out of the body and built into the naked body
-    /// slots on [`skirt::CLOTH_PART_ID`]'s cloth chains (see [`crate::skirt`]), unless this is
-    /// welded through and through or `cloth_test_body` takes the slots.
+    /// How stiff a Biped character's hanging cloth is (`--rigidity skirt=<base>:<tip>`). A
+    /// character with cloth chains off its pelvis or spine and no tail has that cloth cut out of
+    /// the body and built into the naked body slots on a vanilla part's cloth chains, a skirt's or
+    /// a cape's ([`hanging_cloth`], [`crate::skirt`]), unless this is welded through and through
+    /// or `cloth_test_body` takes the slots.
     pub skirt_rigidity: tail::Rigidity,
 }
 
@@ -789,23 +790,25 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                 let tail_swings = free
                     && !inputs.tail_rigidity.welded()
                     && !tail::tail_bones(&source::parse(&dsr.flver)?.bones).is_empty();
-                let skirt_swings =
-                    free && !tail_swings && skirt_swings(&dsr.flver, inputs.skirt_rigidity)?;
+                let hanging = match free && !tail_swings {
+                    true => hanging_cloth(&dsr.flver, inputs.skirt_rigidity)?,
+                    false => None,
+                };
                 let split = if tail_swings {
                     Some((
                         Cloth::Tail,
                         tail_split(character, &dsr.flver, &flver.data, inputs.tail_rigidity),
                     ))
-                } else if skirt_swings {
-                    let logical = format!("/parts/bd_m_{}{PART_EXTENSION}", skirt::CLOTH_PART_ID);
+                } else if let Some(cloth) = hanging {
+                    let logical = format!("/parts/bd_m_{}{PART_EXTENSION}", cloth.part_id());
                     let mut part =
                         Bnd4::read(&dcx::decompress(&inputs.archives.read(&logical)?, oodle)?)
                             .context(&logical)?;
-                    let name = format!("BD_M_{}.flver", skirt::CLOTH_PART_ID);
+                    let name = format!("BD_M_{}.flver", cloth.part_id());
                     let cloth_part = binder_file(&mut part, &name, &logical)?.data.clone();
                     Some((
-                        Cloth::Skirt,
-                        skirt_split(
+                        cloth,
+                        hanging_split(
                             character,
                             &dsr.flver,
                             &flver.data,
@@ -1324,20 +1327,22 @@ fn blend_of(class: MtdClass, cutouts: Cutouts, material: usize) -> Result<Blend>
     }
 }
 
-/// What a cloth part carries in the naked body slot: a tail on [`tail::CLOTH_PART_ID`]'s cape, or
-/// a skirt on [`skirt::CLOTH_PART_ID`]'s chains. The slot holds one part, so a character with a
-/// tail swings its tail and keeps any skirt in the body.
+/// What a cloth part carries in the naked body slot: a tail on [`tail::CLOTH_PART_ID`]'s cape, a
+/// skirt on [`skirt::CLOTH_PART_ID`]'s chains, or a cape on the tail's cape (see
+/// [`crate::skirt`]). The slot holds one part, so a character with a tail swings its tail and
+/// keeps any other hanging cloth in the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Cloth {
     Tail,
     Skirt,
+    Cape,
 }
 
 impl Cloth {
     /// The vanilla body part whose cloth it hangs from: `bd_<gender>_<id>`.
     pub fn part_id(self) -> &'static str {
         match self {
-            Self::Tail => tail::CLOTH_PART_ID,
+            Self::Tail | Self::Cape => tail::CLOTH_PART_ID,
             Self::Skirt => skirt::CLOTH_PART_ID,
         }
     }
@@ -1346,6 +1351,7 @@ impl Cloth {
         match self {
             Self::Tail => "tail",
             Self::Skirt => "skirt",
+            Self::Cape => "cape",
         }
     }
 }
@@ -1896,10 +1902,13 @@ pub fn tail_split(
     tail::split(&full)
 }
 
-/// `character`'s fit against `donor` with its skirt shared onto the cloth bones of
-/// `cloth_part` (the male [`skirt::CLOTH_PART_ID`] model) as `rigidity` says, cut into body and
-/// skirt ([`tail::split`]). Refused for a character with no skirt bones.
-pub fn skirt_split(
+/// Elden Ring's pelvis and spine bones that hanging cloth can hang at, bottom up.
+const TRUNK_BONES: [&str; 4] = ["Pelvis", "Spine", "Spine1", "Spine2"];
+
+/// `character`'s fit against `donor` with its hanging cloth shared onto the cloth bones of
+/// `cloth_part` (the male model of [`hanging_cloth`]'s part) as `rigidity` says, cut into body
+/// and cloth ([`tail::split`]). Refused for a character with no hanging cloth.
+pub fn hanging_split(
     character: &Character,
     character_flver: &[u8],
     donor: &[u8],
@@ -1908,32 +1917,54 @@ pub fn skirt_split(
 ) -> Result<(Export, Export)> {
     let FitConfig::Biped(params) = character.fit else {
         return Err(Error::new(format!(
-            "{} is not fitted as a Biped, so it has no skirt bones",
+            "{} is not fitted as a Biped, so it has no hanging cloth",
             character.id
         )));
     };
     let bones = source::parse(character_flver)?.bones;
-    let skirt_bones = skirt::skirt_bones(&bones)?;
-    if skirt_bones.is_empty() {
+    let hanging = skirt::hanging_bones(&bones)?;
+    if hanging.is_empty() {
         return Err(Error::new(format!(
-            "{} has no skirt bones (no chain hangs from its pelvis)",
+            "{} has no hanging cloth (no chain hangs from its pelvis or spine)",
             character.id
         )));
     }
     let joints = fit::biped::fitted_joints(character.id, character_flver, donor, params)?;
     let cloth = skirt::cloth_bones(&Flver::parse(cloth_part)?.bones)?;
-    let targets = skirt::skirt_targets(&skirt_bones, &joints, &cloth, rigidity)?;
+    let donor_bones = Flver::parse(donor)?.bones;
+    let frames = bind_frames(&donor_bones)?;
+    let trunk = TRUNK_BONES
+        .iter()
+        .map(|name| {
+            donor_bones
+                .iter()
+                .position(|bone| bone.name == *name)
+                .map(|index| ((*name).to_owned(), frames[index].origin.y))
+                .ok_or_else(|| Error::new(format!("the donor has no {name}")))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let targets = skirt::hanging_targets(&hanging, &joints, &cloth, &trunk, rigidity)?;
     let full = fit::export_with_targets(character, character_flver, donor, &targets)?;
     tail::split(&full)
 }
 
-/// Whether `character`'s skirt goes onto cloth: a Biped with skirt bones ([`skirt::skirt_bones`])
-/// and no tail, since the one naked body slot carries one cloth part, unless `rigidity` welds it.
-pub fn skirt_swings(character_flver: &[u8], rigidity: tail::Rigidity) -> Result<bool> {
+/// What `character`'s hanging cloth ([`skirt::hanging_bones`]) goes onto, if anything: a skirt's
+/// part when every chain hangs from the pelvis, the cape's when one hangs from the spine. Nothing
+/// for a character with a tail, since the one naked body slot carries one cloth part, or when
+/// `rigidity` welds it.
+pub fn hanging_cloth(character_flver: &[u8], rigidity: tail::Rigidity) -> Result<Option<Cloth>> {
     let bones = source::parse(character_flver)?.bones;
-    Ok(!rigidity.welded()
-        && tail::tail_bones(&bones).is_empty()
-        && !skirt::skirt_bones(&bones)?.is_empty())
+    if rigidity.welded() || !tail::tail_bones(&bones).is_empty() {
+        return Ok(None);
+    }
+    let hanging = skirt::hanging_bones(&bones)?;
+    Ok(if hanging.is_empty() {
+        None
+    } else if hanging.iter().any(|bone| bone.root == skirt::Root::Spine) {
+        Some(Cloth::Cape)
+    } else {
+        Some(Cloth::Skirt)
+    })
 }
 
 /// The naked body slot `bd_<gender>_0000<lod>` written to `path` as `cloth`'s part with `tail`

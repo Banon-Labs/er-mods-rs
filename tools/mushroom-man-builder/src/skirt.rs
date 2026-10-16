@@ -1,26 +1,31 @@
-//! A Biped character's skirt, built into the naked body slot on a vanilla skirt's cloth chains so
-//! it follows the legs and Elden Ring's cloth simulation swings it.
+//! A Biped character's hanging cloth -- a skirt, a cape -- built into the naked body slot on a
+//! vanilla part's cloth chains so Elden Ring's cloth simulation swings it.
 //!
-//! Dark Souls II hangs a skirt from bone chains under the pelvis that its physics moves: the Gyrm
-//! c1350's are `Xtra01` to `Xtra12`, four bones each, all round the hips from the belt to above
-//! the knee. The fit knows them only as followers of the pelvis ([`crate::flver::skeleton`]'s
-//! `Ancestor` role), so they rode it rigidly and hung straight down in front of the legs as they
-//! walked: the user saw that on Lonesome Gavlan (2026-10-16). Elden Ring hangs its own skirts
-//! from `[cloth]` chains on the thighs, calves and pelvis, which its cloth simulation drives and
-//! which move with the legs because they are the legs' children.
+//! Dark Souls II hangs its cloth from bone chains that its physics moves: the Gyrm c1350's skirt
+//! is `Xtra01` to `Xtra12` under the pelvis, four bones each, all round the hips from the belt to
+//! above the knee, and Velstadt's (c3330) cape is `L_Cloth4` to `L_Cloth403` and its fellows off
+//! his upper spine, down to 0.29 m behind his calves. The fit knows them only as followers of the
+//! bone they hang from ([`crate::flver::skeleton`]'s `Ancestor` role), so they rode it rigidly:
+//! Lonesome Gavlan's skirt hung straight down in front of his legs as he walked, and Velstadt's
+//! cape stood off his back like a board (the user saw both, 2026-10-16). Elden Ring hangs its own
+//! skirts and capes from `[cloth]` chains, which its cloth simulation drives.
 //!
-//! So the skirt goes there, the way [`crate::tail`] puts a tail on a cape:
+//! So the cloth goes there, the way [`crate::tail`] puts a tail on a cape:
 //!
-//! - **The part.** [`CLOTH_PART_ID`], `bd_<gender>_1380`, hangs 18 cloth chains all round the hips
-//!   from 0.98 m down to 0.23 m, no gap wider than 57 degrees, from the thighs (`L_ThighTwist`,
-//!   `L_ThighTwist1`, `L_Thigh`), the calves and the pelvis. Both genders' parts name their
-//!   chains after the male one, `[cloth]BD_M_1380_*`.
-//! - **The weights.** Each skirt bone ([`skirt_bones`]) is shared out by where the fit puts its
-//!   joint ([`skirt_targets`]): between the two cloth bones nearest it, by inverse distance, and
-//!   the bones those hang from. How much stays put is the player's [`Rigidity`], stiffer at the
-//!   belt than the hem; of that, the pelvis keeps it all at the belt, and the legs the cloth bones
-//!   hang from take it over toward the hem.
-//! - **The cut.** A triangle with a corner on a cloth bone is the skirt's ([`crate::tail::split`]);
+//! - **The part.** A skirt, every chain hanging from the pelvis, goes on [`CLOTH_PART_ID`],
+//!   `bd_<gender>_1380`, which hangs 18 cloth chains all round the hips from 0.98 m down to
+//!   0.23 m, no gap wider than 57 degrees, from the thighs (`L_ThighTwist`, `L_ThighTwist1`,
+//!   `L_Thigh`), the calves and the pelvis. Cloth with a chain hanging from the spine is a cape
+//!   and goes on the cape the tail hangs from, `bd_<gender>_2240` ([`crate::tail::CLOTH_PART_ID`]):
+//!   three chains off `Spine` across the upper back from 1.20 m down, three off the pelvis behind
+//!   down to 0.04 m, two panels on each thigh in front and a rope. Both genders' parts name their
+//!   chains after the male one.
+//! - **The weights.** Each hanging bone ([`hanging_bones`]) is shared out by where the fit puts
+//!   its joint ([`hanging_targets`]): between the two cloth bones nearest it, by inverse
+//!   distance, and the bones those hang from. How much stays put is the player's [`Rigidity`],
+//!   stiffer at the root than the hem; of that, the trunk bone the chain hangs at keeps it all at
+//!   the root, and the bones the cloth hangs from take it over toward the hem.
+//! - **The cut.** A triangle with a corner on a cloth bone is the cloth's ([`crate::tail::split`]);
 //!   the seam vertices weigh only on the body's own bones, so both halves move them alike.
 
 use crate::{
@@ -32,7 +37,7 @@ use crate::{
     tail::{CLOTH_PREFIX, Rigidity},
 };
 
-/// The vanilla body part whose cloth the skirt hangs from: `bd_<gender>_1380`.
+/// The vanilla body part whose cloth a skirt hangs from: `bd_<gender>_1380`.
 pub const CLOTH_PART_ID: &str = "1380";
 const PELVIS: &str = "Pelvis";
 /// How far apart, in metres, two cloth bones may be from a skirt joint and both count: a share
@@ -43,27 +48,48 @@ const NEAREST_FLOOR: f32 = 0.01;
 /// [`crate::fit::export_with_targets`] takes them.
 pub type BoneShares = (String, Vec<(String, f32)>);
 
-/// The skirt's stiffness by default: 80% at the belt, 20% at the hem.
+/// Hanging cloth's stiffness by default: 80% at the root, 20% at the hem.
 pub const DEFAULT_RIGIDITY: Rigidity = Rigidity {
     base: 0.8,
     tip: 0.2,
 };
 
-/// The source's skirt bones and how far down their chain each hangs, 0 at the root and 1 at the
-/// last: every bone of a chain hanging straight from the pelvis whose bones all follow it
-/// ([`Role::Ancestor`]), except a tail ([`crate::tail::tail_bones`]). c1350's `Xtra13` hangs from
-/// its head, a hood, and is not one.
-pub fn skirt_bones(bones: &[Bone]) -> Result<Vec<(String, f32)>> {
+/// What a chain of hanging cloth hangs from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Root {
+    Pelvis,
+    /// A spine link; which of Elden Ring's trunk bones holds it depends on where the fit puts
+    /// the chain's first joint ([`hanging_targets`]).
+    Spine,
+}
+
+/// A bone of a chain of hanging cloth.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HangingBone {
+    pub name: String,
+    /// How far down its chain it hangs, 0 at the root and 1 at the last.
+    pub t: f32,
+    /// The chain's first bone, whose joint says where on the trunk the chain hangs.
+    pub chain_root: String,
+    pub root: Root,
+}
+
+/// The source's hanging cloth: every bone of a chain hanging straight from the pelvis or a spine
+/// link whose bones all follow it ([`Role::Ancestor`]), except a tail
+/// ([`crate::tail::tail_bones`]). c1350's `Xtra13` hangs from its head, a hood, and is not one;
+/// nor are Velstadt's `L_Cloth2` and `R_Cloth2`, tassels hanging from his pauldrons.
+pub fn hanging_bones(bones: &[Bone]) -> Result<Vec<HangingBone>> {
     let roles = skeleton::classify(bones)?;
     let tail = crate::tail::tail_bones(bones);
-    let pelvis = roles
-        .iter()
-        .position(|role| *role == Role::Direct(PELVIS.to_owned()));
     let parent = |index: usize| usize::try_from(bones[index].parent_index).ok();
     let mut out = Vec::new();
     for (root, role) in roles.iter().enumerate() {
-        let hangs_from_pelvis = matches!(role, Role::Ancestor(_)) && parent(root) == pelvis;
-        if !hangs_from_pelvis || pelvis.is_none() || tail.contains(&bones[root].name) {
+        let from = match parent(root).map(|up| &roles[up]) {
+            Some(Role::Direct(name)) if name == PELVIS => Root::Pelvis,
+            Some(Role::SpineChain(_)) => Root::Spine,
+            _ => continue,
+        };
+        if !matches!(role, Role::Ancestor(_)) || tail.contains(&bones[root].name) {
             continue;
         }
         // The chain down from the root, one child at a time.
@@ -78,12 +104,12 @@ pub fn skirt_bones(bones: &[Bone]) -> Result<Vec<(String, f32)>> {
             }
         }
         let last = (chain.len() - 1).max(1) as f32;
-        out.extend(
-            chain
-                .iter()
-                .enumerate()
-                .map(|(depth, &index)| (bones[index].name.clone(), depth as f32 / last)),
-        );
+        out.extend(chain.iter().enumerate().map(|(depth, &index)| HangingBone {
+            name: bones[index].name.clone(),
+            t: depth as f32 / last,
+            chain_root: bones[root].name.clone(),
+            root: from,
+        }));
     }
     Ok(out)
 }
@@ -131,31 +157,55 @@ pub fn cloth_bones(bones: &[Bone]) -> Result<Vec<ClothBone>> {
     Ok(out)
 }
 
-/// Where each skirt bone weighs: `skirt` from [`skirt_bones`], `joints` where the fit puts each
-/// source bone ([`crate::fit::biped::fitted_joints`]), `cloth` the part's [`cloth_bones`].
+/// Where each hanging bone weighs: `hanging` from [`hanging_bones`], `joints` where the fit puts
+/// each source bone ([`crate::fit::biped::fitted_joints`]), `cloth` the part's [`cloth_bones`],
+/// and `trunk` Elden Ring's pelvis and spine bones with their joint heights, rising.
 ///
-/// A bone `t` down its chain keeps what `rigidity` says there: `1 - t` of that on the pelvis and
-/// `t` on the bones its two nearest cloth bones hang from. The rest goes to those two cloth bones.
-/// The two split everything by inverse distance to the joint.
-pub fn skirt_targets(
-    skirt: &[(String, f32)],
+/// A bone `t` down its chain keeps what `rigidity` says there: `1 - t` of that on the trunk bone
+/// its chain hangs at and `t` on the bones its two nearest cloth bones hang from. The rest goes
+/// to those two cloth bones. The two split everything by inverse distance to the joint. A chain
+/// off the pelvis hangs at the pelvis; one off a spine link at the highest of `trunk` whose joint
+/// is not above the chain's first joint.
+pub fn hanging_targets(
+    hanging: &[HangingBone],
     joints: &[(String, Vec3)],
     cloth: &[ClothBone],
+    trunk: &[(String, f32)],
     rigidity: Rigidity,
 ) -> Result<Vec<BoneShares>> {
     if cloth.len() < 2 {
         return Err(Error::new(format!(
-            "the cloth part has {} cloth bones; a skirt needs at least two",
+            "the cloth part has {} cloth bones; hanging cloth needs at least two",
             cloth.len()
         )));
     }
-    let mut out = Vec::with_capacity(skirt.len());
-    for (bone, t) in skirt {
-        let at = joints
+    let joint = |bone: &str| {
+        joints
             .iter()
             .find(|(name, _)| name == bone)
             .map(|(_, at)| *at)
-            .ok_or_else(|| Error::new(format!("the fit does not place skirt bone {bone}")))?;
+            .ok_or_else(|| Error::new(format!("the fit does not place hanging bone {bone}")))
+    };
+    let mut out = Vec::with_capacity(hanging.len());
+    for HangingBone {
+        name: bone,
+        t,
+        chain_root,
+        root,
+    } in hanging
+    {
+        let at = joint(bone)?;
+        let root_bone = match root {
+            Root::Pelvis => PELVIS.to_owned(),
+            Root::Spine => {
+                let height = joint(chain_root)?.y;
+                trunk
+                    .iter()
+                    .rev()
+                    .find(|(_, y)| *y <= height)
+                    .map_or_else(|| PELVIS.to_owned(), |(name, _)| name.clone())
+            }
+        };
         let distance = |cloth: &ClothBone| {
             let (dx, dy, dz) = (cloth.at.x - at.x, cloth.at.y - at.y, cloth.at.z - at.z);
             (dx * dx + dy * dy + dz * dz).sqrt()
@@ -167,13 +217,13 @@ pub fn skirt_targets(
         let inverse = pair.map(|(distance, _)| 1.0 / distance.max(NEAREST_FLOOR));
         let total = inverse[0] + inverse[1];
         let stiff = 1.0 - rigidity.chain_share(*t);
-        let mut shares: Vec<(String, f32)> = vec![(PELVIS.to_owned(), stiff * (1.0 - t))];
+        let mut shares: Vec<(String, f32)> = vec![(root_bone, stiff * (1.0 - t))];
         for ((_, cloth), inverse) in pair.iter().zip(inverse) {
             let part = inverse / total;
             shares.push((cloth.anchor.clone(), stiff * t * part));
             shares.push((cloth.name.clone(), (1.0 - stiff) * part));
         }
-        // One row per bone: the pelvis may also be a cloth bone's anchor.
+        // One row per bone: the trunk bone may also be a cloth bone's anchor.
         let mut merged: Vec<(String, f32)> = Vec::new();
         for (name, share) in shares {
             match merged.iter_mut().find(|(seen, _)| *seen == name) {
@@ -210,9 +260,10 @@ mod tests {
     }
 
     #[test]
-    fn a_skirt_is_the_chains_hanging_from_the_pelvis_and_not_a_tail_or_a_hood() {
+    fn hanging_cloth_is_the_chains_off_the_pelvis_and_spine_and_not_a_tail_hood_or_tassel() {
         // A minimal Biped: pelvis, spine, neck, head, both arms and legs, then a two-bone skirt
-        // chain and a one-bone one off the pelvis, a tail, and a hood off the head.
+        // chain and a one-bone one off the pelvis, a tail, a hood off the head, a two-bone cape
+        // off the spine and a tassel off a clavicle.
         let names: [(&str, i16); 22] = [
             ("Pelvis", -1),
             ("Spine", 0),
@@ -242,19 +293,29 @@ mod tests {
             .map(|&(name, parent)| bone(name, parent, 0.0))
             .collect();
         bones.push(bone("Xtra02", 0, 0.0));
-        let skirt = skirt_bones(&bones).unwrap();
+        bones.push(bone("L_Cloth4", 1, 0.0));
+        bones.push(bone("L_Cloth402", 23, 0.0));
+        bones.push(bone("L_Cloth2", 4, 0.0));
+        let hanging = |name: &str, t: f32, chain_root: &str, root: Root| HangingBone {
+            name: name.to_owned(),
+            t,
+            chain_root: chain_root.to_owned(),
+            root,
+        };
         assert_eq!(
-            skirt,
+            hanging_bones(&bones).unwrap(),
             [
-                ("Xtra01".to_owned(), 0.0),
-                ("Xtra0102".to_owned(), 1.0),
-                ("Xtra02".to_owned(), 0.0)
+                hanging("Xtra01", 0.0, "Xtra01", Root::Pelvis),
+                hanging("Xtra0102", 1.0, "Xtra01", Root::Pelvis),
+                hanging("Xtra02", 0.0, "Xtra02", Root::Pelvis),
+                hanging("L_Cloth4", 0.0, "L_Cloth4", Root::Spine),
+                hanging("L_Cloth402", 1.0, "L_Cloth4", Root::Spine),
             ]
         );
     }
 
     #[test]
-    fn a_skirt_bone_shares_out_to_its_nearest_cloth_and_the_legs_take_over_down_the_chain() {
+    fn a_hanging_bone_shares_out_to_its_nearest_cloth_and_its_anchors_take_over_down_the_chain() {
         let cloth = [
             ClothBone {
                 name: "[cloth]Front_L".to_owned(),
@@ -275,12 +336,30 @@ mod tests {
         let joints = [
             ("Xtra01".to_owned(), v(0.09, 0.89, -0.13)),
             ("Xtra0104".to_owned(), v(0.0, 0.89, -0.13)),
+            ("L_Cloth4".to_owned(), v(0.0, 1.15, 0.2)),
         ];
+        let trunk = [
+            ("Pelvis".to_owned(), 0.97),
+            ("Spine".to_owned(), 1.06),
+            ("Spine1".to_owned(), 1.15),
+            ("Spine2".to_owned(), 1.24),
+        ];
+        let hanging = |name: &str, t: f32, root: Root| HangingBone {
+            name: name.to_owned(),
+            t,
+            chain_root: name.to_owned(),
+            root,
+        };
         let rigidity = DEFAULT_RIGIDITY;
-        let targets = skirt_targets(
-            &[("Xtra01".to_owned(), 0.0), ("Xtra0104".to_owned(), 1.0)],
+        let targets = hanging_targets(
+            &[
+                hanging("Xtra01", 0.0, Root::Pelvis),
+                hanging("Xtra0104", 1.0, Root::Pelvis),
+                hanging("L_Cloth4", 0.0, Root::Spine),
+            ],
             &joints,
             &cloth,
+            &trunk,
             rigidity,
         )
         .unwrap();
@@ -310,8 +389,13 @@ mod tests {
             (1.0 - rigidity.tip) / 2.0
         ));
         assert_eq!(share(1, "[cloth]Back"), 0.0);
+        // A cape's root hangs at the trunk bone its first joint is at, not the pelvis.
+        assert!(close(share(2, "Spine1"), rigidity.base));
+        assert!(close(share(2, "Pelvis"), 0.0));
+        assert!(share(2, "[cloth]Back") > 0.1);
         // Too few cloth bones, or a bone the fit does not place, is refused.
-        assert!(skirt_targets(&[], &joints, &cloth[..1], rigidity).is_err());
-        assert!(skirt_targets(&[("Xtra09".to_owned(), 0.5)], &joints, &cloth, rigidity).is_err());
+        let unplaced = [hanging("Xtra09", 0.5, Root::Pelvis)];
+        assert!(hanging_targets(&[], &joints, &cloth[..1], &trunk, rigidity).is_err());
+        assert!(hanging_targets(&unplaced, &joints, &cloth, &trunk, rigidity).is_err());
     }
 }

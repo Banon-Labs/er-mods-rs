@@ -79,8 +79,10 @@ OPTIONS:
                            100 is welded to the body, 0 swings freely with Elden Ring's cloth.
                            `tail`, default 95:55: a character with tail bones swings its tail on a
                            cloth chain. `skirt`, default 80:20: a character with chains hanging
-                           from its pelvis and no tail hangs its skirt on a vanilla skirt's cloth,
-                           so it follows the legs and swings. `<feature>=100:100` keeps it welded.
+                           from its pelvis or spine and no tail hangs them on a vanilla part's
+                           cloth, a skirt's when they all hang from the pelvis (so it follows the
+                           legs) and a cape's otherwise, and they swing. `<feature>=100:100` keeps
+                           it welded.
     --trunk-girth <share>  How much of its own width and depth a Biped character's trunk keeps,
                            0 to 1, from the hips to the shoulders, instead of its table entry's
                            (Lonesome Gavlan's is 0.45). Narrower keeps the player's arms out of a

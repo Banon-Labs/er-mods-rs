@@ -18,7 +18,7 @@ use mushroom_man_builder::{
     character::{self, Game},
     edge::{OPAQUE_TEMPLATE_FLVER, TEMPLATE_FLVER, Templates, edge_template, opaque_template},
     flver::{Flver, verify::check_flver},
-    package::{Cloth, Cutouts, cloth_model, read_ds2_character, skirt_split, skirt_swings},
+    package::{Cloth, Cutouts, cloth_model, hanging_cloth, hanging_split, read_ds2_character},
     skirt::{self, DEFAULT_RIGIDITY},
     tail::CLOTH_PREFIX,
 };
@@ -51,10 +51,14 @@ fn gavlans_skirt_goes_onto_the_skirt_chains_and_every_part_checks() {
     };
     let gavlan = character::resolve_in(Game::Ds2, "c1350", true).unwrap();
     let files = read_ds2_character(&archives, gavlan).unwrap();
-    assert!(skirt_swings(&files.flver, DEFAULT_RIGIDITY).unwrap());
+    assert_eq!(
+        hanging_cloth(&files.flver, DEFAULT_RIGIDITY).unwrap(),
+        Some(Cloth::Skirt)
+    );
 
     let full = mushroom_man_builder::fit::export(gavlan, &files.flver, &donor).unwrap();
-    let (body, skirt) = skirt_split(gavlan, &files.flver, &donor, &male, DEFAULT_RIGIDITY).unwrap();
+    let (body, skirt) =
+        hanging_split(gavlan, &files.flver, &donor, &male, DEFAULT_RIGIDITY).unwrap();
     assert_eq!(
         body.mesh.triangles.len() + skirt.mesh.triangles.len(),
         full.mesh.triangles.len(),
