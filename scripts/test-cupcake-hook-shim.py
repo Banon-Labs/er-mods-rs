@@ -724,6 +724,93 @@ def check_abort_is_not_an_allow() -> list[str]:
     return failures
 
 
+# An engine that cannot start is the case Claude Code hides from the agent (bd er-effects-rs-rafi):
+# cupcake exits 1 with nothing on stdout, and a hook's exit other than 0 or 2 reaches the user
+# alone. A TMPDIR that does not exist stops the engine before any policy loads, the same way the
+# full /tmp of 2026-10-16 did, and its stderr names that cause:
+#
+#     Fatal: Cupcake engine failed to initialize: Failed to create temp directory for OPA ...
+FAILING_ENGINE = {"TMPDIR": "/nonexistent-cupcake-hook-test-dir"}
+FAILURE_CAUSE = "Failed to create temp directory"
+
+
+def hook_event(name: str, **fields: object) -> dict:
+    return {
+        "session_id": "shim-test",
+        "transcript_path": "/tmp/does-not-exist.jsonl",
+        "cwd": str(REPO),
+        "hook_event_name": name,
+        "permission_mode": "default",
+        **fields,
+    }
+
+
+@dataclass
+class FailureCase:
+    name: str
+    payload: dict
+    # The field of the reply Claude Code delivers to the agent for this event, and the
+    # decision that must accompany it ("" for none).
+    field: str
+    decision: str
+
+
+ENGINE_FAILURE_CASES = [
+    FailureCase(
+        "tool call",
+        hook_event("PreToolUse", tool_name="Bash", tool_input={"command": ALLOWED_COMMAND}),
+        "permissionDecisionReason",
+        "deny",
+    ),
+    FailureCase("prompt", hook_event("UserPromptSubmit", prompt="hello"), "additionalContext", ""),
+    FailureCase(
+        "edit",
+        hook_event(
+            "PostToolUse",
+            tool_name="Write",
+            tool_input={"file_path": str(REPO / "x.txt"), "content": "x"},
+            tool_response={"success": True},
+        ),
+        "additionalContext",
+        "",
+    ),
+    FailureCase("session start", hook_event("SessionStart", source="startup"), "additionalContext", ""),
+    FailureCase("stop", hook_event("Stop", stop_hook_active=False), "reason", "block"),
+    # The re-entry after that block: let it through, or a lasting failure holds the turn open.
+    FailureCase("stop re-entry", hook_event("Stop", stop_hook_active=True), "systemMessage", ""),
+]
+
+
+def check_engine_failure_reaches_agent(shim: Path = SHIM) -> list[str]:
+    """A run with no verdict must come back in a field the agent reads, naming the cause."""
+    failures: list[str] = []
+    env = signal_env(FAILING_ENGINE)
+    for case in ENGINE_FAILURE_CASES:
+        code, stdout, _ = run_bounded(["bash", str(shim)], json.dumps(case.payload).encode(), env)
+        label = f"engine failure, {case.name}"
+        if code != 0:
+            failures.append(f"{label}: exited {code}, which Claude Code shows the user alone")
+            continue
+        try:
+            reply = json.loads(stdout)
+        except ValueError:
+            failures.append(f"{label}: stdout is not JSON: {stdout[:200]!r}")
+            continue
+        specific = reply.get("hookSpecificOutput") or {}
+        text = specific.get(case.field) or reply.get(case.field) or ""
+        if FAILURE_CAUSE not in text:
+            failures.append(f"{label}: {case.field} does not name the cause: {text[:200]!r}")
+        if specific and specific.get("hookEventName") != case.payload["hook_event_name"]:
+            failures.append(
+                f"{label}: hookEventName {specific.get('hookEventName')!r} does not match the "
+                "event, so Claude Code drops the reply"
+            )
+        got = specific.get("permissionDecision") or reply.get("decision") or ""
+        if got != case.decision:
+            failures.append(f"{label}: decision {got!r}, expected {case.decision!r}")
+    return failures
+
+
 def print_table() -> int:
     """Before (raw event straight to cupcake) beside after (through the shim)."""
     width = max(len(case.name) for case in DECISION_CASES)
@@ -747,15 +834,37 @@ def main() -> int:
         action="store_true",
         help="print the before/after decision table instead of asserting",
     )
+    parser.add_argument(
+        "--engine-failure-only",
+        metavar="WRAPPER",
+        type=Path,
+        help="run only the engine-failure cases, against WRAPPER (for the global hook's copy)",
+    )
     args = parser.parse_args()
 
+    if args.engine_failure_only:
+        failures = check_engine_failure_reaches_agent(args.engine_failure_only)
+        for failure in failures:
+            print(f"[test-cupcake-hook-shim] FAIL: {failure}")
+        if not failures:
+            print(
+                f"[test-cupcake-hook-shim] ok ({len(ENGINE_FAILURE_CASES)} engine-failure "
+                f"replies from {args.engine_failure_only})"
+            )
+        return 1 if failures else 0
     if not SHIM.exists():
         print(f"[test-cupcake-hook-shim] FAIL: missing {SHIM}")
         return 1
     if args.table:
         return print_table()
 
-    failures = check_modes() + check_rewrites() + check_decisions() + check_abort_is_not_an_allow()
+    failures = (
+        check_modes()
+        + check_rewrites()
+        + check_decisions()
+        + check_abort_is_not_an_allow()
+        + check_engine_failure_reaches_agent()
+    )
     if failures:
         for failure in failures:
             print(f"[test-cupcake-hook-shim] FAIL: {failure}")
