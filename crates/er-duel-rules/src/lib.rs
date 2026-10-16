@@ -85,10 +85,11 @@ fn wait_for_task_instance() -> Option<&'static CSTaskImp> {
 #[cfg(windows)]
 fn build_line(p: &PlayerSnapshot) -> String {
     format!(
-        "level={} end={} arm_style={:?} slots=L{}/R{} right={:?} left={:?} armor={:?} \
-         talismans={:?} physick={:?}",
+        "level={} attributes={:?} rune_arc={} arm_style={:?} slots=L{}/R{} right={:?} left={:?} \
+         armor={:?} talismans={:?} physick={:?}",
         p.level,
-        p.endurance,
+        p.attributes,
+        p.rune_arc_active(),
         p.arm_style,
         p.left_slot,
         p.right_slot,

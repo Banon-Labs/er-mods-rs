@@ -42,7 +42,8 @@ UPSTREAM_SOLO_PARAMS = os.path.join(os.path.dirname(ROOT), 'fromsoftware-rs', 'c
 # The param columns the agent reads, by param.
 FRIDA_PARAM_FIELDS = {
     'EquipParamWeapon': ('wepType', 'weight', 'physGuardCutRate', 'reinforceTypeId',
-                         'spEffectBehaviorId0', 'spEffectBehaviorId1', 'spEffectBehaviorId2'),
+                         'spEffectBehaviorId0', 'spEffectBehaviorId1', 'spEffectBehaviorId2',
+                         'isEnhance'),
     'ReinforceParamWeapon': ('physicsGuardCutRate',),
     'EquipParamProtector': ('weight', 'residentSpEffectId', 'residentSpEffectId2',
                             'residentSpEffectId3'),
@@ -141,6 +142,10 @@ TALISMANS = {
     'RED_FEATHER': 'Red-Feathered Branchsword',
     'TWO_HANDED_SWORD': 'Two-Handed Sword Talisman',
     'SPEAR': 'Spear Talisman',
+    # Skill damage: x1.10 / x1.15 on magicSubCategory 111/112 (Warrior Jar Shard, Shard of
+    # Alexander), charged skills and spells (Godfrey Icon), and the stance chain Rellana's Cameo
+    # adds through the skill's TimeAct.
+    'WARRIOR_JAR_SHARD': 'Warrior Jar Shard',
     'SHARD_OF_ALEXANDER': 'Shard of Alexander',
     'RELLANAS_CAMEO': "Rellana's Cameo",
     'GODFREY_ICON': 'Godfrey Icon',
@@ -177,11 +182,12 @@ SKILLS = {
 # Skills whose TimeAct carries JumpTable 119, the contact parry, are exactly a692..a699 (full c0000
 # TAE scan, bd parry-model-static-facts-2026-10-10). "All Parries" is that range.
 PARRY_TYPE_RANGE = range(92, 100)
-# Sword Dance clips the light weapons fall back to: a624 ships 040000/040200/040300/042400/045800
-# and Shamshir (wepmotionCategory 28) has no variant of its own, so it plays 040000 and its
-# no-FP / follow-up copies. `INFERRED` from the clip list and the category table in bd
-# skill-opening-varies-by-weapon-class-diffcategory-2026-10-08, not traced live.
-SWORD_DANCE_FAST_CLIPS = (40000, 40005, 40010, 40015)
+# The fast Sword Dance: a624's 040000 family (dagger, straight and curved sword -- Shamshir --,
+# katana, axe, light greatsword) and 045800 family (backhand blade), whose TimeAct events match
+# 040000's frame for frame (hits on frames 23/35). 040200 (great weapons, 30/42), 040300 (spears,
+# halberds, scythes) and 042400 (twinblades) are the slow ones. From `er-mechanics-ashes.py
+# variants "Sword Dance"` and bd skill-opening-varies-by-weapon-class-diffcategory-2026-10-08.
+SWORD_DANCE_FAST_CLIPS = (40000, 40005, 40010, 40015, 45800, 45805, 45810, 45815)
 # On-hit heals the ruleset keeps legal by name ("manually triggerable").
 ALLOWED_HEAL_SKILLS = ('Blood Tax', 'Prayerful Strike', 'Lifesteal Fist', "Taker's Flames",
                        'Devourer of Worlds')
@@ -197,6 +203,12 @@ CRIMSON_FLASK = r'^Flask of Crimson Tears'
 CERULEAN_FLASK = r'^Flask of Cerulean Tears'
 WONDROUS_PHYSICK = r'^Flask of Wondrous Physick'
 FAN_DAGGERS = 'Fan Daggers'
+# `EquipParamGoods.goodsType` of spirit ashes: 7 plain, 8 renowned (measured on 1.17.1: these two
+# types name 84 of the 94 BuddyParam trigger SpEffects and nothing else does).
+SPIRIT_ASH_GOODS_TYPES = (7, 8)
+# SpEffectParam row names of an active Rune Arc: "Rune Arc" (490, 491, 499) and
+# "[Item] <name>'s Great Rune: Effect N"; group 1 is the rune's name.
+RUNE_ARC_ROW = r"^(?:Rune Arc$|\[Item\] (.+?Great Rune): Effect \d+$)"
 SPELLS = {
     'GRAVITATIONAL_MISSILE': 'Gravitational Missile',
     'NIGHT_MAIDENS_MIST': "Night Maiden's Mist",
@@ -204,7 +216,8 @@ SPELLS = {
     'FLAME_OF_FRENZY': 'The Flame of Frenzy',
     'ROAR_OF_RUGALEA': 'Roar of Rugalea',
 }
-GREASE_STATUS = {'ROT': 'Rot', 'SLEEP': 'Sleep', 'POISON': 'Poison'}
+# The grease names that inflict each status: Soporific Grease and Eternal Sleep Grease both sleep.
+GREASE_STATUS = {'ROT': ('Rot',), 'SLEEP': ('Sleep', 'Soporific'), 'POISON': ('Poison',)}
 
 ATTACK_FIELDS = ('AttackPowerRate', 'AttackRate', 'AttackPower', 'atkPlayerDmgCorrectRate')
 STAT_FIELDS = ('addLifeForceStatus', 'addWillpowerStatus', 'addEndureStatus',
@@ -222,6 +235,19 @@ ELEMENT_ATTACK_POWER_FIELDS = ('physicsAttackPower', 'magicAttackPower', 'fireAt
                                'blowAttackPower', 'thrustAttackPower', 'neutralAttackPower')
 # stateInfo values that are a buff on their own. 8 is the invisibility Unseen Form applies.
 BUFF_STATES = (8,)
+# Status resistance a row adds to its holder (the cured meats, Dragonbolt Blessing).
+RESIST_POINT_FIELDS = tuple(f'change{s}ResistPoint' for s in
+                            ('Poison', 'Disease', 'Blood', 'Curse', 'Freeze', 'Sleep', 'Madness'))
+RESIST_RATE_FIELDS = tuple(f'regist{s}ChangeRate' for s in
+                           ('Poizon', 'Disease', 'Blood', 'Curse', 'Freeze', 'Sleep', 'Madness'))
+STATUS_DISABLE_FIELDS = tuple(f'disable{s}' for s in
+                              ('Poison', 'Disease', 'Blood', 'Curse', 'Freeze', 'Sleep', 'Madness'))
+# `BehaviorParam_PC.refType`.
+BEHAVIOR_REF_BULLET = 1
+BEHAVIOR_REF_SPEFFECT = 2
+# Area buffs re-applied every second or so while the player stands in them, whose rows are
+# therefore shorter than BUFF_MIN_SECONDS. Holy Ground's row lasts 2.9 s and passes on its own.
+AREA_BUFF_SPELLS = ('Terra Magica',)
 
 
 class Missing(Exception):
@@ -250,6 +276,13 @@ class Game:
         # does not load.
         self.sp = rows('SpEffectParam')
         self.sp_names = self.PR.row_names('SpEffectParam')
+        self.behavior = rows('BehaviorParam_PC', {'refType', 'refId'})
+        missing = [f for f in RESIST_POINT_FIELDS + RESIST_RATE_FIELDS + STATUS_DISABLE_FIELDS
+                   + ('fallDamageRate', 'toughnessDamageCutRate', 'behaviorId',
+                      'cycleOccurrenceSpEffectId')
+                   if f not in next(iter(self.sp.values()))]
+        if missing:
+            raise Missing(f'SpEffectParam has no {missing}')
         self.text = {s: self.IN.game_names(s) for s in (
             'WeaponName', 'AccessoryName', 'ProtectorName', 'GoodsName', 'ArtsName')}
         self.weapon_rows = self.PR.row_names('EquipParamWeapon')
@@ -293,7 +326,44 @@ class Game:
 
     # -- links the game follows ----------------------------------------------------------------
     def closure(self, sp=(), bullets=()):
-        return [i for i, _ in self.buffs._closure(sp, bullets)]
+        """Every SpEffect reachable from the roots, including through a row's `behaviorId`
+        (BehaviorParam_PC refType 1 is a bullet, 2 a SpEffect): the Crimsonburst Dried Tear heals
+        through 20511011 -> behavior 6010 -> bullet 211101000 -> 20511012."""
+        sp, bullets = list(sp), list(bullets)
+        while True:
+            rows = [i for i, _ in self.buffs._closure(sp, bullets)]
+            more_sp, more_b = [], []
+            for s in rows:
+                beh = self.behavior.get(self.sp[s]['behaviorId'])
+                if beh is None:
+                    continue
+                if beh['refType'] == BEHAVIOR_REF_BULLET and beh['refId'] not in bullets:
+                    more_b.append(beh['refId'])
+                elif beh['refType'] == BEHAVIOR_REF_SPEFFECT and beh['refId'] not in sp:
+                    more_sp.append(beh['refId'])
+            if not more_sp and not more_b:
+                return rows
+            sp += more_sp
+            bullets += more_b
+
+    def heal_rows(self, sp=(), bullets=()):
+        """The rows in `closure` that heal, plus heals a bullet lands on friends including the
+        user (`effectTargetSelf` with `effectTargetFriendlyTarget`, not `effectTargetSelfTarget`):
+        the Crimsonburst Dried Tear's 20511012 reaches its user that way."""
+        rows = self.closure(sp, bullets)
+        out = {s for s in rows if self.heals(s)}
+        shot = list(bullets)
+        for s in rows:
+            beh = self.behavior.get(self.sp[s]['behaviorId'])
+            if beh is not None and beh['refType'] == BEHAVIOR_REF_BULLET:
+                shot.append(beh['refId'])
+        for b in self.bullet_closure(shot):
+            for f in self.B.BULLET_SP:
+                s = self.buffs.bullet[b][f]
+                if (s in self.sp and self.sp[s]['effectTargetSelf']
+                        and self.sp[s]['effectTargetFriendlyTarget'] and self.heals(s)):
+                    out.add(s)
+        return sorted(out)
 
     def goods_refs(self, gid):
         g = self.goods[gid]
@@ -408,7 +478,29 @@ class Game:
                 return f
         if r['motionInterval'] > 0 and (r['changeMpPoint'] < 0 or r['changeMpRate'] < 0):
             return 'changeMp (FP over time)'
+        # Status resistance: the cured meats, boluses' long rows, Dragonbolt Blessing.
+        for f in RESIST_POINT_FIELDS:
+            if r[f] > 0:
+                return f
+        for f in RESIST_RATE_FIELDS:
+            if r[f] > 1 + 1e-6:
+                return f
+        for f in STATUS_DISABLE_FIELDS:
+            if r[f]:
+                return f
+        # Fall damage (Assassin's Approach, Soft Cotton) and poise damage taken.
+        for f in ('fallDamageRate', 'toughnessDamageCutRate'):
+            if 0 <= r[f] < 1 - 1e-6:
+                return f
         return None
+
+    def cycled_benefit(self, sid, depth=0):
+        """The benefit of the short row a long parent re-applies on a cycle (Ironjar Aromatic's
+        40 s 503520 carries its damage cut in the 0.2 s 503522), or None."""
+        c = self.sp[sid]['cycleOccurrenceSpEffectId']
+        if depth > 6 or c <= 0 or c not in self.sp:
+            return None
+        return self.benefit(c) or self.cycled_benefit(c, depth + 1)
 
     def body_buff(self, sid):
         """A buff that stays on the player whatever they hold: it helps, it does not hurt, it
@@ -420,7 +512,8 @@ class Game:
         d = r['effectEndurance']
         if 0 <= d < BUFF_MIN_SECONDS:
             return False
-        return self.benefit(sid) is not None or r['stateInfo'] in BUFF_STATES
+        return (self.benefit(sid) is not None or self.cycled_benefit(sid) is not None
+                or r['stateInfo'] in BUFF_STATES)
 
     def boosts_attack(self, sid):
         r = self.sp[sid]
@@ -519,7 +612,7 @@ def build(g):
             why.append('Stat')
         if any(g.boosts_attack(s) for s in rows):
             why.append('Damage')
-        if name not in TEARS_ON_HIT_HEAL and any(g.heals(s) for s in rows):
+        if name not in TEARS_ON_HIT_HEAL and g.heal_rows(*g.goods_refs(gid)):
             why.append('Heal')
         if why:
             tear_ban.append((gid, name, why[0]))
@@ -542,19 +635,39 @@ def build(g):
             sp, bl = g.goods_refs(gid)
         else:
             continue
-        for s in g.closure(sp, bl):
+        rows = g.closure(sp, bl)
+        # A weapon-buff spell's own self rows (Vyke's Dragonbolt's equip-load row) go with the
+        # weapon buff, which the ruleset restricts by setup rather than bans.
+        weapon_buff = any(g.sp[s]['spCategory'] in CAT_WEAPON_BUFF for s in rows)
+        area = name in AREA_BUFF_SPELLS
+        for s in rows:
             if s in allowed:
                 continue
             if g.heals(s):
                 heals.setdefault(s, name)
-            elif g.body_buff(s):
+            elif not weapon_buff and (g.body_buff(s) or (area and g.benefit(s) is not None)):
                 buffs.setdefault(s, name)
-    # Skills: body buffs and heals the TimeAct applies.
+        for s in g.heal_rows(sp, bl):
+            if s not in allowed:
+                heals.setdefault(s, name)
+    for name in AREA_BUFF_SPELLS:
+        if name not in buffs.values():
+            raise Missing(f'area buff {name!r} reaches no benefit row')
+    # Skills: body buffs and heals the TimeAct applies. A buff skill's TimeAct applies both hands'
+    # weapon chains, so a weapon buff here does not excuse a body buff the way it does for spells.
+    status_skills = {}
     for aid in sorted(g.arts):
         name = g.text['ArtsName'].get(aid)
         if not name:
             continue
-        for s in g.skill_speffects(aid):
+        rows = g.skill_speffects(aid)
+        # Status a skill applies through its bullets and its own events (Poisonous Mist's cloud,
+        # Hoarfrost Stomp's frost). Melee hits of a skill carry none on a Club or Stone Club: all
+        # 164 AtkParam rows of the 45 skills they can mount have no status on-hit row (measured
+        # on 1.17.1).
+        if any(g.sp[s][f] > 0 for s in rows for f in STATUS_BUILDUP_FIELDS):
+            status_skills.setdefault(g.arts[aid]['swordArtsTypeNew'], name)
+        for s in rows:
             if s in allowed:
                 continue
             if g.heals(s):
@@ -564,6 +677,10 @@ def build(g):
                 buffs.setdefault(s, name)
     out['body_buff'] = sorted(buffs.items())
     out['heal'] = sorted(heals.items())
+    out['status_skills'] = sorted(status_skills.items())
+    for need in ('Poisonous Mist', 'Hoarfrost Stomp'):
+        if need not in status_skills.values():
+            raise Missing(f'status skill {need!r} not found')
 
     # Equipment that regenerates HP on its own: talismans, armour, shields.
     shield_types = {out['wep_type'][c][0] for c in ('SMALL_SHIELD', 'MEDIUM_SHIELD', 'GREATSHIELD',
@@ -585,15 +702,25 @@ def build(g):
 
     # Greases.
     greases = {}
-    for const, word in GREASE_STATUS.items():
-        rows = set()
-        for gid, name in g.goods_matching(rf'\b{word}\b.*Grease$'):
-            rows |= {s for s in g.closure(*g.goods_refs(gid))
-                     if g.sp[s]['spCategory'] in CAT_WEAPON_BUFF}
-        if not rows:
-            raise Missing(f'{word} grease')
-        greases[const] = sorted(rows)
-    out['grease'] = greases
+    for const, words in GREASE_STATUS.items():
+        for word in words:
+            rows = set()
+            for gid, name in g.goods_matching(rf'\b{word}\b.*Grease$'):
+                rows |= {s for s in g.closure(*g.goods_refs(gid))
+                         if g.sp[s]['spCategory'] in CAT_WEAPON_BUFF}
+            if not rows:
+                raise Missing(f'{word} grease')
+            greases.setdefault(const, set()).update(rows)
+    out['grease'] = {c: sorted(rows) for c, rows in greases.items()}
+    # Every grease's weapon buff rows: a grease can only be applied to a weapon whose row has
+    # isEnhance set (CanUseGoods), so one on any other weapon was carried there.
+    every = set()
+    for gid, name in g.goods_matching(r'Grease$'):
+        every |= {s for s in g.closure(*g.goods_refs(gid))
+                  if g.sp[s]['spCategory'] in CAT_WEAPON_BUFF}
+    if not every:
+        raise Missing('no grease applies a weapon buff')
+    out['grease_all'] = sorted(every)
 
     # Projectiles.
     fan = g.one('GoodsName', FAN_DAGGERS, lambda i: i in g.goods)
@@ -621,6 +748,34 @@ def build(g):
         if not own:
             raise Missing(f'{name}: no bullet of its own')
         out['spell_bullets'][const] = (name, sorted(own))
+
+    # Rune Arc: the item's own rows and every Great Rune effect row it switches on (ApplyRuneArcEffects
+    # applies "<rune>: Effect 0..9" for the equipped rune). Any of them on a player means an active
+    # Rune Arc; the activation SFX row is a one-off and left out.
+    rune_arc = []
+    for sid, row_name in sorted(g.sp_names.items()):
+        m = re.match(RUNE_ARC_ROW, row_name or '')
+        if m and sid in g.sp:
+            rune_arc.append((sid, m.group(1) or 'Rune Arc'))
+    if not any(n == 'Rune Arc' for _, n in rune_arc) or len({n for _, n in rune_arc}) < 2:
+        raise Missing('Rune Arc or Great Rune effect rows')
+    out['rune_arc'] = rune_arc
+
+    # Spirit Ashes: summoning applies the BuddyParam row's trigger SpEffect to the summoner, the
+    # key of WorldChrMan's SummonBuddyManager trigger map. Named by the spirit ash item
+    # (goodsType 7 or 8) whose effect reference is that row.
+    buddy = g.PR.rows(g.PR.param_bytes(g.files, 'BuddyParam'), {'triggerSpEffectId'})[0]
+    triggers = {r['triggerSpEffectId'] for r in buddy if r['triggerSpEffectId'] > 0}
+    named_by = {}
+    for gid, r in sorted(g.goods.items()):
+        if r['goodsType'] not in SPIRIT_ASH_GOODS_TYPES or gid not in g.text['GoodsName']:
+            continue
+        for k in ('refId_default', 'refId_1'):
+            if r[k] in triggers:
+                named_by.setdefault(r[k], g.text['GoodsName'][gid])
+    if not named_by:
+        raise Missing('no spirit ash names a BuddyParam trigger SpEffect')
+    out['spirit_ash'] = sorted((s, named_by.get(s, 'spirit summon')) for s in triggers)
     return out
 
 
@@ -733,8 +888,16 @@ def render(t):
     ids('ROT_GREASE', 'Weapon buff rows of the rot greases.', t['grease']['ROT'])
     ids('SLEEP_GREASE', 'Weapon buff rows of the sleep greases.', t['grease']['SLEEP'])
     ids('POISON_GREASE', 'Weapon buff rows of the poison greases.', t['grease']['POISON'])
+    ids('GREASE_BUFFS', 'Weapon buff rows of every grease. A grease takes only on a weapon row with '
+        '`isEnhance` set.', t['grease_all'])
     ids('CERULEAN_FLASK', 'SpEffect rows a Flask of Cerulean Tears applies.', t['cerulean'])
     ids('FAN_DAGGER_BULLETS', 'Bullets Fan Daggers fire.', t['fan_dagger_bullets'])
+    named('RUNE_ARC_EFFECTS', 'SpEffect rows of an active Rune Arc: the item\'s own and every Great '
+          'Rune effect it switches on.', t['rune_arc'])
+    named('STATUS_SKILLS', 'Skills that apply status (swordArtsTypeNew), for the 2H Stone Club/Club '
+          'status ban.', t['status_skills'])
+    named('SPIRIT_ASH_TRIGGERS', 'SpEffect rows that summon a spirit (`BuddyParam.triggerSpEffectId`), '
+          'named by the spirit ash that applies them.', t['spirit_ash'])
     p('/// Bullets only the banned spells fire: (spell, bullets).')
     p('pub const SPELL_BULLETS: &[(&str, &[i32])] = &[')
     for c, (n, bl) in t['spell_bullets'].items():
@@ -766,9 +929,15 @@ def frida_param_fields(g):
         cols = {}
         for name in wanted:
             f = by_name.get(name)
-            if f is None or f['bits']:
-                raise Missing(f'{param_type}.{name}: absent or a bitfield')
-            cols[name] = [f['off'], f['type']]
+            if f is None:
+                raise Missing(f'{param_type}.{name}: absent')
+            if f['bits']:
+                # A one-bit flag in a u8 unit: [byte offset, 'bit', bit index].
+                if f['bits'] != 1 or f['bty'] not in ('u8', 'dummy8'):
+                    raise Missing(f'{param_type}.{name}: a {f["bits"]}-bit field in {f["bty"]}')
+                cols[name] = [f['off'], 'bit', f['shift']]
+            else:
+                cols[name] = [f['off'], f['type']]
         if m.group(1) != param_type:
             raise Missing(f'{stem}: upstream says {m.group(1)}, the regulation says {param_type}')
         out[stem] = {'index': int(m.group(2)), 'struct': param_type, 'fields': cols}
@@ -797,8 +966,12 @@ def render_js(t, params):
         'rotGrease': t['grease']['ROT'],
         'sleepGrease': t['grease']['SLEEP'],
         'poisonGrease': t['grease']['POISON'],
+        'greaseBuffs': t['grease_all'],
         'ceruleanFlask': t['cerulean'],
         'fanDaggerBullets': t['fan_dagger_bullets'],
+        'spiritAshTriggers': named(t['spirit_ash']),
+        'statusSkills': named(t['status_skills']),
+        'runeArcEffects': named(t['rune_arc']),
         'spellBullets': [[n, bl] for n, bl in t['spell_bullets'].values()],
     }
     return (f'{FRIDA_BEGIN}\n'

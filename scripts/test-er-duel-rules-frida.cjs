@@ -35,7 +35,8 @@ const w = (wepType, weight = 3, extra = {}) => Object.assign({ wepType, weight, 
 
 function player(over = {}) {
     return Object.assign({
-        key: '1', name: 'p', isLocal: false, level: 125, endurance: 0, armStyle: 1, leftSlot: 0, rightSlot: 0,
+        key: '1', name: 'p', isLocal: false, level: 125, endurance: 0, attributes: [0, 0, 0, 0, 0, 0, 0, 0], localSettings: null,
+        armStyle: 1, leftSlot: 0, rightSlot: 0,
         weaponsLeft: [-1, -1, -1], weaponsRight: [-1, -1, -1], armor: [HEAVY_ARMOR, -1, -1, -1],
         talismans: [-1, -1, -1, -1], physick: [-1, -1, -1], speffects: [], newAnims: [], bullets: [], hp: 1, riding: false,
     }, over);
@@ -195,8 +196,103 @@ test('a full lap between reads is read as ten frames', () => {
 });
 
 test('listed effects and tears fire', () => {
-    const got = rules(player({ speffects: [T.bodyBuffs[0][0], T.heals[0][0]], physick: [T.bannedTears[0][0], -1, -1] }), facts());
-    assert.ok(got.includes('PlayerBuff') && got.includes('Healing'));
+    const got = rules(player({ speffects: [T.bodyBuffs[0][0], T.heals[0][0], T.spiritAshTriggers[0][0]], physick: [T.bannedTears[0][0], -1, -1] }), facts());
+    assert.ok(got.includes('PlayerBuff') && got.includes('Healing') && got.includes('SpiritAshes'));
+});
+
+test('a grease on a weapon that takes none was carried there', () => {
+    const FIRE_LONGSWORD = LONGSWORD + 400;
+    const grease = T.greaseBuffs[0];
+    const effects = { [grease]: { category: 162, equipWeightRate: 1, addEndurance: 0 } };
+    const p = player({ weaponsRight: [FIRE_LONGSWORD, -1, -1], speffects: [grease] });
+    assert.ok(rules(p, facts({ [FIRE_LONGSWORD]: w(3, 3.5, { takesGrease: false }) }, effects)).includes('BuffTransfer'));
+    assert.ok(!rules(p, facts({ [FIRE_LONGSWORD]: w(3, 3.5, { takesGrease: true }) }, effects)).includes('BuffTransfer'));
+});
+
+test('a status skill from a two-handed club breaks the status ban', () => {
+    const [status, name] = T.statusSkills[0];
+    const f = facts({ [T.weapon.STONE_CLUB]: w(21, 9) });
+    const p = player({ weaponsRight: [T.weapon.STONE_CLUB, -1, -1], newAnims: [(600 + status) * 1000000 + 40000] });
+    assert.ok(!rules(p, f).includes('StoneClubStatus'), 'one-handed is legal');
+    p.armStyle = 3;
+    assert.ok(A.check(p, f).some((v) => v.rule === 'StoneClubStatus' && v.detail === name));
+});
+
+test('local settings break the rules they name', () => {
+    const s = { manualAttackAiming: true, betterMultiplayer: false, targetFps: 60, measuredFps: 41 };
+    assert.deepStrictEqual(rules(player({ localSettings: s }), facts()), [], "the aiming rule is Better Multiplayer's");
+    s.betterMultiplayer = true;
+    assert.deepStrictEqual(rules(player({ localSettings: s }), facts()), ['ManualAttackAiming']);
+    s.manualAttackAiming = false; s.targetFps = 120;
+    assert.deepStrictEqual(rules(player({ localSettings: s }), facts()), ['UnlockedFps']);
+});
+
+test('a build is fixed once an opponent shares the world', () => {
+    const r = new A.Referee();
+    const f = facts();
+    const p = player({ key: '1', attributes: [40, 20, 25, 20, 40, 9, 9, 7], weaponsRight: [LONGSWORD, -1, -1] });
+    const other = player({ key: '2' });
+    const ruleOf = (alerts) => alerts.map((a) => a.rule);
+    r.observe(0, [p], f);
+    p.weaponsRight[0] = ESTOC;
+    assert.deepStrictEqual(r.observe(100, [p], f), [], 'alone: preparation');
+    assert.deepStrictEqual(r.observe(200, [p, other], f), []);
+    p.weaponsRight[1] = LONGSWORD;
+    let a = r.observe(300, [p, other], f);
+    assert.deepStrictEqual(ruleOf(a), ['SwitchingBuilds']);
+    assert.strictEqual(a[0].detail, `right weapon 2: -1 -> ${LONGSWORD}`);
+    p.weaponsRight[1] = -1; p.attributes[0] = 45;
+    a = r.observe(400, [p, other], f);
+    assert.deepStrictEqual(ruleOf(a), ['Respec']);
+    assert.strictEqual(a[0].detail, 'Vigor 40 -> 45');
+    r.observe(500, [p], f);
+    assert.deepStrictEqual(r.observe(600, [p, other], f), [], 'a new opponent, a new match');
+});
+
+test('armor taken off and put back is the poise reset', () => {
+    const r = new A.Referee();
+    const f = facts();
+    const p = player({ key: '1', armor: [HEAVY_ARMOR, HEAVY_ARMOR, -1, -1] });
+    const other = player({ key: '2' });
+    r.observe(0, [p, other], f);
+    p.armor[0] = -1;
+    assert.deepStrictEqual(r.observe(100, [p, other], f).map((a) => a.rule), ['SwitchingBuilds']);
+    p.armor[0] = HEAVY_ARMOR;
+    assert.deepStrictEqual(r.observe(200, [p, other], f).map((a) => a.rule), ['ArmorSwapPoiseReset']);
+    assert.deepStrictEqual(r.observe(300, [p, other], f), []);
+});
+
+test('in Better Multiplayer everyone lights a Rune Arc', () => {
+    const r = new A.Referee();
+    const f = facts();
+    const GRACE = 20000;
+    const me = player({ key: '1', isLocal: true, runeArcFlag: true,
+        localSettings: { manualAttackAiming: false, betterMultiplayer: true, targetFps: 60, measuredFps: 60 } });
+    const other = player({ key: '2' });
+    r.observe(0, [me, other], f);
+    assert.deepStrictEqual(r.observe(GRACE - 1, [me, other], f), [], 'still time to light one');
+    const a = r.observe(GRACE, [me, other], f);
+    assert.deepStrictEqual(a.map((x) => [x.rule, x.key]), [['RuneArc', '2']]);
+    other.speffects = [T.runeArcEffects[0][0]];
+    assert.deepStrictEqual(r.observe(GRACE + 100, [me, other], f), [], 'a Great Rune effect row counts as lit');
+    me.localSettings = null; other.speffects = [];
+    assert.deepStrictEqual(r.observe(GRACE * 3, [me, other], f), [], 'outside Better Multiplayer nobody is asked to');
+});
+
+test('a weapon buff kept across a weapon change is a buff transfer', () => {
+    const r = new A.Referee();
+    const buff = 9001;
+    const f = facts({}, { [buff]: { category: 162, equipWeightRate: 1, addEndurance: 0 } });
+    const p = player({ isLocal: true, weaponsRight: [LONGSWORD, ESTOC, -1], speffects: [buff] });
+    r.observe(0, [p], f);
+    p.rightSlot = 1; p.speffects = [];
+    r.observe(16, [p], f);
+    assert.deepStrictEqual(r.observe(400, [p], f), [], 'the game stripped it');
+    p.rightSlot = 0; p.speffects = [buff];
+    r.observe(500, [p], f);
+    p.rightSlot = 1;
+    assert.deepStrictEqual(r.observe(516, [p], f), [], 'grace');
+    assert.deepStrictEqual(r.observe(800, [p], f).map((a) => a.rule), ['BuffTransfer']);
 });
 
 test('spell bullets name the spell', () => {

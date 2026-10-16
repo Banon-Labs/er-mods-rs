@@ -16,17 +16,21 @@
 // It refuses to start on any game build but the one it was written against, because every address
 // and offset below belongs to that build.
 //
-// WHAT IT CANNOT SEE: macros or third-party tools, hidden ping, the BMP aim setting, smurfing or
-// faked results, respeccing between rounds, spirit ashes, and every glitch except offhand poison
-// grease. None of those leave anything in the game's memory to read.
+// WHAT ONLY YOUR OWN COPY SEES: the BMP manual attack aiming setting and an unlocked frame rate
+// are not sent to other players, so each player's copy judges only that player.
+//
+// WHAT IT CANNOT SEE: macros or third-party tools other than an FPS unlocker, hidden ping (BMP
+// keeps it where this script cannot find it yet), smurfing or faked results, transmog consent,
+// block desync, effect-duration tricks, bugged weapon states, void tech and pre-buffs. Rune Arc
+// needs no check: in vanilla the game only lets the host's Great Rune work.
 //
 // Generated data lives between the GENERATED markers below and is rewritten by
 // scripts/er-duel-rules-gen.py --write; everything else is written by hand.
 'use strict';
 
 // --- BEGIN GENERATED (scripts/er-duel-rules-gen.py --write) ---
-const T = {"affinity": {"COLD": 900, "LIGHTNING": 600}, "bannedArmor": [[210000, "Briar Helm"], [210100, "Briar Armor"], [210200, "Briar Gauntlets"], [210300, "Briar Greaves"], [211100, "Briar Armor (Altered)"], [5160000, "Rakshasa Helm"], [5160100, "Rakshasa Armor"], [5160200, "Rakshasa Gauntlets"], [5160300, "Rakshasa Greaves"]], "bannedTears": [[11002, "Crimson Crystal Tear", "Heal"], [11003, "Crimson Crystal Tear", "Heal"], [11007, "Crimson Bubbletear", "Heal"], [11009, "Crimsonburst Crystal Tear", "Heal"], [11012, "Winged Crystal Tear", "Named"], [11013, "Thorny Cracked Tear", "Damage"], [11014, "Spiked Cracked Tear", "Damage"], [11015, "Windy Crystal Tear", "Named"], [11018, "Leaden Hardtear", "Named"], [11020, "Crimsonwhorl Bubbletear", "Heal"], [11021, "Strength-knot Crystal Tear", "Stat"], [11022, "Dexterity-knot Crystal Tear", "Stat"], [11023, "Intelligence-knot Crystal Tear", "Stat"], [11024, "Faith-knot Crystal Tear", "Stat"], [11026, "Stonebarb Cracked Tear", "Named"], [11028, "Flame-Shrouding Cracked Tear", "Damage"], [11029, "Magic-Shrouding Cracked Tear", "Damage"], [11030, "Lightning-Shrouding Cracked Tear", "Damage"], [11031, "Holy-Shrouding Cracked Tear", "Damage"], [2011050, "Bloodsucking Cracked Tear", "Damage"], [2011070, "Deflecting Hardtear", "Named"]], "bodyBuffs": [[1586, "Contagious Fury"], [1588, "Contagious Fury"], [1640, "Holy Ground"], [1650, "Endure"], [1655, "Endure"], [1730, "Golden Vow"], [1768, "Rallying Standard"], [1836, "Last Rites"], [1850, "Oath of Vengeance"], [1851, "Oath of Vengeance"], [3910, "Spellproof Dried Liver"], [3920, "Fireproof Dried Liver"], [3930, "Lightningproof Dried Liver"], [3950, "Exalted Flesh"], [3953, "Pickled Turtle Neck"], [19980, "Rock Heart"], [19981, "Priestess Heart"], [500139, "Phantom Great Rune"], [500820, "Boiled Crab"], [500830, "Boiled Prawn"], [501180, "Holyproof Dried Liver"], [501290, "Starlight Shards"], [503355, "Baldachin's Blessing"], [503361, "Radiant Baldachin's Blessing"], [503500, "Uplifting Aromatic"], [503501, "Uplifting Aromatic"], [503550, "Bloodboil Aromatic"], [1467000, "Unseen Form"], [1467002, "Unseen Form"], [1605000, "Flame, Grant Me Strength"], [1606000, "Flame, Protect Me"], [1627000, "Black Flame's Protection"], [1633000, "Barrier of Gold"], [1634000, "Protection of the Erdtree"], [1645000, "Flame Fortification"], [1646000, "Magic Fortification"], [1647000, "Lightning Fortification"], [1648000, "Divine Fortification"], [1649000, "Lord's Divine Fortification"], [1660000, "Golden Vow"], [1697001, "Vyke's Dragonbolt"], [1733000, "Howl of Shabriri"], [1790300, "Golden Lightning Fortification"], [20000980, "Light"], [20500910, "Lulling Branch"], [20501100, "Dragon Communion Flesh"], [20501105, "Dragonscale Flesh"], [20501110, "Fingerprint Nostrum"], [20501120, "Spellproof Pickled Liver"], [20501130, "Fireproof Pickled Liver"], [20501140, "Lightningproof Pickled Liver"], [20501150, "Holyproof Pickled Liver"], [20501160, "Opaline Pickled Liver"], [20501170, "Well-Pickled Turtle Neck"], [20501201, "Scorpion Stew"], [20501206, "Gourmet Scorpion Stew"], [20501210, "Sacred Bloody Flesh"], [20501212, "Sacred Bloody Flesh"], [20503170, "Golden Vow"], [21490000, "Mantle of Thorns"]], "ceruleanFlask": [501050, 501051, 501052, 501053, 501054, 501055, 501056, 501057, 501058, 501059, 501060, 501061, 501062], "chillingMistBuffs": [826, 828], "fanDaggerBullets": [10175000], "heals": [[1641, "Holy Ground"], [3360, "Warming Stone"], [501235, "Raw Meat Dumpling"], [503311, "Frenzyflame Stone"], [1642000, "Urgent Heal"], [1642100, "Heal"], [1642200, "Great Heal"], [1642300, "Lord's Heal"], [1642400, "Erdtree Heal"], [1643000, "Blessing's Boon"], [1643100, "Blessing of the Erdtree"], [1685000, "Bestial Vitality"], [20500901, "Blessing of Marika"], [20501202, "Scorpion Stew"], [20501207, "Gourmet Scorpion Stew"], [20503310, "Sunwarmth Stone"], [21640000, "Heal from Afar"], [21667000, "Minor Erdtree"]], "parrySkills": [[92, "Parry"], [93, "Buckler Parry"], [95, "Carian Retaliation"], [96, "Storm Wall"], [97, "Golden Parry"], [99, "Thops's Barrier"]], "poisonGrease": [3175, 3177, 3179, 3181], "regenEquipment": [["Armor", 690000, "Royal Remains Helm"], ["Armor", 690100, "Royal Remains Armor"], ["Armor", 690200, "Royal Remains Gauntlets"], ["Armor", 690300, "Royal Remains Greaves"], ["Shield", 32140000, "Icon Shield"], ["Talisman", 5020, "Blessed Dew Talisman"]], "rippleWeapons": [[14050000, "Ripple Blade"], [18060000, "Ripple Crescent Halberd"]], "rotGrease": [3310, 3312, 3314, 3316], "skill": {"BARBARIC_ROAR": 140, "BLIND_SPOT": 276, "BLOODHOUNDS_STEP": 156, "CHILLING_MIST": 75, "DETERMINATION": 130, "ENDURE": 150, "FLAMING_STRIKE": 63, "MULETA": 372, "NEEDLE_PIERCER": 301, "OATH_OF_VENGEANCE": 242, "PAINFUL_STRIKE": 269, "QUICKSTEP": 155, "RAPTOR_OF_THE_MISTS": 157, "RED_BEAR_HUNT": 275, "ROYAL_KNIGHTS_RESOLVE": 131, "SAVAGE_CLAWS": 274, "SHRIEK_OF_SORROW": 286, "SPINNING_SLASH": 3, "STORMCALLER": 23, "STORM_ASSAULT": 22, "STORM_STOMP": 111, "SWIFT_SLASH": 277, "SWORD_DANCE": 24}, "sleepGrease": [102310, 102312, 102314, 102316], "spellBullets": [["Gravitational Missile", [210471000, 210471001, 210471002, 210471003, 210471004, 210471005, 210471006, 210471007, 210471050, 210471051, 210471052, 210471053, 210471054, 210471055, 210471056, 210471057, 210471058, 210471059, 210471060]], ["Night Maiden's Mist", [10650000, 10650001, 10650002, 10650050, 10650051, 10650052]], ["The Flame of Frenzy", [10731000, 10731001, 10731002, 10731005, 10731006, 10731010, 10731050, 10731051, 10731052, 10731055, 10731056, 10731060]], ["Roar of Rugalea", [210680000, 210680050]]], "swordDanceFastClips": [40000, 40005, 40010, 40015], "talisman": {"ALL_CRUCIBLES": 8240, "CRUCIBLE_FEATHER": 4070, "FINE_CRUCIBLE_FEATHER": 8010, "GODFREY_ICON": 3090, "RED_FEATHER": 2040, "RELLANAS_CAMEO": 8220, "SHARD_OF_ALEXANDER": 1231, "SPEAR": 2060, "TWO_HANDED_SWORD": 8040}, "weapon": {"BACKHAND_BLADE": 64500000, "CLAWS_OF_NIGHT": 22500000, "CLEANROT_KNIGHTS_SWORD": 5010000, "CLUB": 11010000, "IDUS_SWORD": 67530000, "LEONTIELS_GREATSWORD": 3560000, "MILADY": 67500000, "MOHGWYNS_SACRED_SPEAR": 17010000, "PATA": 21510000, "RAPTOR_TALONS": 22030000, "REVERSE_BLADED_SWORD": 64530000, "SHAMSHIR": 7030000, "SMITHSCRIPT_CIRQUE": 64510000, "SMITHSCRIPT_DAGGER": 63500000, "SMITHSCRIPT_SHIELD": 30510000, "SPREAD_CROSSBOW": 43510000, "STAR_FIST": 21080000, "STONE_CLUB": 11140000, "SWORD_LANCE": 3500000, "WAKIZASHI": 1100000}, "wepType": {"AXE": 17, "BACKHAND_BLADE": 92, "CLAW": 37, "CURVED_SWORD": 9, "DAGGER": 1, "FIST": 35, "GREATSHIELD": 69, "GREAT_SPEAR": 28, "HEAVY_THRUSTING_SWORD": 16, "LIGHT_GREATSWORD": 93, "MEDIUM_SHIELD": 67, "SMALL_SHIELD": 65, "THRUSTING_SHIELD": 90, "THRUSTING_SWORD": 15, "TWINBLADE": 14}};
-const PARAM_FIELDS = {"CalcCorrectGraph": {"fields": {"adjPt_maxGrowVal0": [40, "f32"], "adjPt_maxGrowVal1": [44, "f32"], "adjPt_maxGrowVal2": [48, "f32"], "adjPt_maxGrowVal3": [52, "f32"], "adjPt_maxGrowVal4": [56, "f32"], "stageMaxGrowVal0": [20, "f32"], "stageMaxGrowVal1": [24, "f32"], "stageMaxGrowVal2": [28, "f32"], "stageMaxGrowVal3": [32, "f32"], "stageMaxGrowVal4": [36, "f32"], "stageMaxVal0": [0, "f32"], "stageMaxVal1": [4, "f32"], "stageMaxVal2": [8, "f32"], "stageMaxVal3": [12, "f32"], "stageMaxVal4": [16, "f32"]}, "index": 30, "struct": "CACL_CORRECT_GRAPH_ST"}, "EquipParamAccessory": {"fields": {"refCategory": [49, "u8"], "refId": [4, "s32"], "residentSpEffectId1": [76, "s32"], "residentSpEffectId2": [80, "s32"], "residentSpEffectId3": [84, "s32"], "residentSpEffectId4": [88, "s32"], "weight": [12, "f32"]}, "index": 2, "struct": "EQUIP_PARAM_ACCESSORY_ST"}, "EquipParamProtector": {"fields": {"residentSpEffectId": [40, "s32"], "residentSpEffectId2": [44, "s32"], "residentSpEffectId3": [48, "s32"], "weight": [36, "f32"]}, "index": 1, "struct": "EQUIP_PARAM_PROTECTOR_ST"}, "EquipParamWeapon": {"fields": {"physGuardCutRate": [52, "f32"], "reinforceTypeId": [218, "s16"], "spEffectBehaviorId0": [68, "s32"], "spEffectBehaviorId1": [72, "s32"], "spEffectBehaviorId2": [76, "s32"], "weight": [16, "f32"], "wepType": [422, "u16"]}, "index": 0, "struct": "EQUIP_PARAM_WEAPON_ST"}, "ReinforceParamWeapon": {"fields": {"physicsGuardCutRate": [44, "f32"]}, "index": 4, "struct": "REINFORCE_PARAM_WEAPON_ST"}, "SpEffectParam": {"fields": {"addEndureStatus": [800, "s8"], "equipWeightChangeRate": [228, "f32"], "spCategory": [318, "u16"]}, "index": 15, "struct": "SP_EFFECT_PARAM_ST"}};
+const T = {"affinity": {"COLD": 900, "LIGHTNING": 600}, "bannedArmor": [[210000, "Briar Helm"], [210100, "Briar Armor"], [210200, "Briar Gauntlets"], [210300, "Briar Greaves"], [211100, "Briar Armor (Altered)"], [5160000, "Rakshasa Helm"], [5160100, "Rakshasa Armor"], [5160200, "Rakshasa Gauntlets"], [5160300, "Rakshasa Greaves"]], "bannedTears": [[11002, "Crimson Crystal Tear", "Heal"], [11003, "Crimson Crystal Tear", "Heal"], [11007, "Crimson Bubbletear", "Heal"], [11009, "Crimsonburst Crystal Tear", "Heal"], [11012, "Winged Crystal Tear", "Named"], [11013, "Thorny Cracked Tear", "Damage"], [11014, "Spiked Cracked Tear", "Damage"], [11015, "Windy Crystal Tear", "Named"], [11018, "Leaden Hardtear", "Named"], [11020, "Crimsonwhorl Bubbletear", "Heal"], [11021, "Strength-knot Crystal Tear", "Stat"], [11022, "Dexterity-knot Crystal Tear", "Stat"], [11023, "Intelligence-knot Crystal Tear", "Stat"], [11024, "Faith-knot Crystal Tear", "Stat"], [11026, "Stonebarb Cracked Tear", "Named"], [11028, "Flame-Shrouding Cracked Tear", "Damage"], [11029, "Magic-Shrouding Cracked Tear", "Damage"], [11030, "Lightning-Shrouding Cracked Tear", "Damage"], [11031, "Holy-Shrouding Cracked Tear", "Damage"], [2011010, "Crimsonburst Dried Tear", "Heal"], [2011050, "Bloodsucking Cracked Tear", "Damage"], [2011070, "Deflecting Hardtear", "Named"]], "bodyBuffs": [[1586, "Contagious Fury"], [1588, "Contagious Fury"], [1640, "Holy Ground"], [1650, "Endure"], [1655, "Endure"], [1730, "Golden Vow"], [1768, "Rallying Standard"], [1836, "Last Rites"], [1850, "Oath of Vengeance"], [1851, "Oath of Vengeance"], [1870, "Shared Order"], [3910, "Spellproof Dried Liver"], [3920, "Fireproof Dried Liver"], [3930, "Lightningproof Dried Liver"], [3950, "Exalted Flesh"], [3953, "Pickled Turtle Neck"], [3960, "Immunizing Cured Meat"], [3961, "Invigorating Cured Meat"], [3962, "Clarifying Cured Meat"], [3963, "Dappled Cured Meat"], [19980, "Rock Heart"], [19981, "Priestess Heart"], [500138, "Phantom Great Rune"], [500139, "Phantom Great Rune"], [500820, "Boiled Crab"], [500830, "Boiled Prawn"], [501180, "Holyproof Dried Liver"], [501290, "Starlight Shards"], [501310, "Immunizing White Cured Meat"], [501320, "Invigorating White Cured Meat"], [501330, "Clarifying White Cured Meat"], [501340, "Dappled White Cured Meat"], [502100, "Soft Cotton"], [503355, "Baldachin's Blessing"], [503361, "Radiant Baldachin's Blessing"], [503500, "Uplifting Aromatic"], [503501, "Uplifting Aromatic"], [503520, "Ironjar Aromatic"], [503550, "Bloodboil Aromatic"], [1413000, "Terra Magica"], [1467000, "Unseen Form"], [1467002, "Unseen Form"], [1605000, "Flame, Grant Me Strength"], [1606000, "Flame, Protect Me"], [1627000, "Black Flame's Protection"], [1633000, "Barrier of Gold"], [1634000, "Protection of the Erdtree"], [1645000, "Flame Fortification"], [1646000, "Magic Fortification"], [1647000, "Lightning Fortification"], [1648000, "Divine Fortification"], [1649000, "Lord's Divine Fortification"], [1651000, "Assassin's Approach"], [1660000, "Golden Vow"], [1697100, "Dragonbolt Blessing"], [1733000, "Howl of Shabriri"], [1790300, "Golden Lightning Fortification"], [20000851, "Flare, O Serpent"], [20000856, "Flare, O Serpent"], [20000980, "Light"], [20500910, "Lulling Branch"], [20501100, "Dragon Communion Flesh"], [20501105, "Dragonscale Flesh"], [20501110, "Fingerprint Nostrum"], [20501120, "Spellproof Pickled Liver"], [20501130, "Fireproof Pickled Liver"], [20501140, "Lightningproof Pickled Liver"], [20501150, "Holyproof Pickled Liver"], [20501160, "Opaline Pickled Liver"], [20501170, "Well-Pickled Turtle Neck"], [20501201, "Scorpion Stew"], [20501206, "Gourmet Scorpion Stew"], [20501210, "Sacred Bloody Flesh"], [20501212, "Sacred Bloody Flesh"], [20502100, "Ancient Dragon's Blessing"], [20503170, "Golden Vow"], [21490000, "Mantle of Thorns"], [21691000, "Dragonbolt of Florissax"]], "ceruleanFlask": [501050, 501051, 501052, 501053, 501054, 501055, 501056, 501057, 501058, 501059, 501060, 501061, 501062], "chillingMistBuffs": [826, 828], "fanDaggerBullets": [10175000], "greaseBuffs": [3140, 3144, 3150, 3152, 3154, 3156, 3160, 3161, 3162, 3163, 3165, 3166, 3167, 3168, 3170, 3171, 3172, 3173, 3175, 3177, 3179, 3181, 3185, 3186, 3187, 3188, 3190, 3192, 3194, 3196, 3260, 3262, 3310, 3312, 3314, 3316, 102310, 102312, 102314, 102316, 501690, 501691, 20501400, 20501401, 20501402, 20501403, 20501410, 20501411, 20501412, 20501413, 20501420, 20501421, 20501422, 20501423, 20501430, 20501431, 20501432, 20501433, 20501480, 20501481, 20501620, 20501622], "heals": [[1641, "Holy Ground"], [3360, "Warming Stone"], [501235, "Raw Meat Dumpling"], [503311, "Frenzyflame Stone"], [1642000, "Urgent Heal"], [1642100, "Heal"], [1642101, "Heal"], [1642200, "Great Heal"], [1642201, "Great Heal"], [1642300, "Lord's Heal"], [1642301, "Lord's Heal"], [1642400, "Erdtree Heal"], [1642401, "Erdtree Heal"], [1643000, "Blessing's Boon"], [1643001, "Blessing's Boon"], [1643100, "Blessing of the Erdtree"], [1643101, "Blessing of the Erdtree"], [1685000, "Bestial Vitality"], [20500901, "Blessing of Marika"], [20501202, "Scorpion Stew"], [20501207, "Gourmet Scorpion Stew"], [20503310, "Sunwarmth Stone"], [21640000, "Heal from Afar"], [21640001, "Heal from Afar"], [21667000, "Minor Erdtree"]], "parrySkills": [[92, "Parry"], [93, "Buckler Parry"], [95, "Carian Retaliation"], [96, "Storm Wall"], [97, "Golden Parry"], [99, "Thops's Barrier"]], "poisonGrease": [3175, 3177, 3179, 3181], "regenEquipment": [["Armor", 690000, "Royal Remains Helm"], ["Armor", 690100, "Royal Remains Armor"], ["Armor", 690200, "Royal Remains Gauntlets"], ["Armor", 690300, "Royal Remains Greaves"], ["Shield", 32140000, "Icon Shield"], ["Talisman", 5020, "Blessed Dew Talisman"]], "rippleWeapons": [[14050000, "Ripple Blade"], [18060000, "Ripple Crescent Halberd"]], "rotGrease": [3310, 3312, 3314, 3316], "runeArcEffects": [[490, "Rune Arc"], [491, "Rune Arc"], [499, "Rune Arc"], [600, "Godrick's Great Rune"], [601, "Godrick's Great Rune"], [602, "Godrick's Great Rune"], [603, "Godrick's Great Rune"], [604, "Godrick's Great Rune"], [605, "Godrick's Great Rune"], [606, "Godrick's Great Rune"], [607, "Godrick's Great Rune"], [609, "Godrick's Great Rune"], [610, "Radahn's Great Rune"], [611, "Radahn's Great Rune"], [612, "Radahn's Great Rune"], [613, "Radahn's Great Rune"], [614, "Radahn's Great Rune"], [615, "Radahn's Great Rune"], [616, "Radahn's Great Rune"], [617, "Radahn's Great Rune"], [619, "Radahn's Great Rune"], [620, "Morgott's Great Rune"], [621, "Morgott's Great Rune"], [622, "Morgott's Great Rune"], [623, "Morgott's Great Rune"], [624, "Morgott's Great Rune"], [625, "Morgott's Great Rune"], [626, "Morgott's Great Rune"], [627, "Morgott's Great Rune"], [629, "Morgott's Great Rune"], [630, "Rykard's Great Rune"], [631, "Rykard's Great Rune"], [632, "Rykard's Great Rune"], [633, "Rykard's Great Rune"], [634, "Rykard's Great Rune"], [635, "Rykard's Great Rune"], [636, "Rykard's Great Rune"], [637, "Rykard's Great Rune"], [639, "Rykard's Great Rune"], [640, "Mohg's Great Rune"], [641, "Mohg's Great Rune"], [642, "Mohg's Great Rune"], [643, "Mohg's Great Rune"], [644, "Mohg's Great Rune"], [645, "Mohg's Great Rune"], [646, "Mohg's Great Rune"], [647, "Mohg's Great Rune"], [649, "Mohg's Great Rune"], [650, "Malenia's Great Rune"], [651, "Malenia's Great Rune"], [652, "Malenia's Great Rune"], [653, "Malenia's Great Rune"], [654, "Malenia's Great Rune"], [655, "Malenia's Great Rune"], [656, "Malenia's Great Rune"], [657, "Malenia's Great Rune"], [659, "Malenia's Great Rune"]], "skill": {"BARBARIC_ROAR": 140, "BLIND_SPOT": 276, "BLOODHOUNDS_STEP": 156, "CHILLING_MIST": 75, "DETERMINATION": 130, "ENDURE": 150, "FLAMING_STRIKE": 63, "MULETA": 372, "NEEDLE_PIERCER": 301, "OATH_OF_VENGEANCE": 242, "PAINFUL_STRIKE": 269, "QUICKSTEP": 155, "RAPTOR_OF_THE_MISTS": 157, "RED_BEAR_HUNT": 275, "ROYAL_KNIGHTS_RESOLVE": 131, "SAVAGE_CLAWS": 274, "SHRIEK_OF_SORROW": 286, "SPINNING_SLASH": 3, "STORMCALLER": 23, "STORM_ASSAULT": 22, "STORM_STOMP": 111, "SWIFT_SLASH": 277, "SWORD_DANCE": 24}, "sleepGrease": [3150, 3152, 3154, 3156, 102310, 102312, 102314, 102316], "spellBullets": [["Gravitational Missile", [210471000, 210471001, 210471002, 210471003, 210471004, 210471005, 210471006, 210471007, 210471050, 210471051, 210471052, 210471053, 210471054, 210471055, 210471056, 210471057, 210471058, 210471059, 210471060]], ["Night Maiden's Mist", [10650000, 10650001, 10650002, 10650050, 10650051, 10650052]], ["The Flame of Frenzy", [10731000, 10731001, 10731002, 10731005, 10731006, 10731010, 10731050, 10731051, 10731052, 10731055, 10731056, 10731060]], ["Roar of Rugalea", [210680000, 210680050]]], "spiritAshTriggers": [[200000, "Black Knife Tiche"], [201000, "Banished Knight Oleg"], [202000, "Banished Knight Engvall"], [203000, "Fanged Imp Ashes"], [204000, "Latenna the Albinauric"], [205000, "Nomad Ashes"], [206000, "Nightmaiden & Swordstress Puppets"], [207000, "Mimic Tear Ashes"], [208000, "Crystalian Ashes"], [209000, "Ancestral Follower Ashes"], [210000, "Winged Misbegotten Ashes"], [211000, "Albinauric Ashes"], [212000, "Skeletal Militiaman Ashes"], [213000, "Skeletal Bandit Ashes"], [214000, "Oracle Envoy Ashes"], [215000, "Putrid Corpse Ashes"], [216000, "Depraved Perfumer Carmaan"], [217000, "Perfumer Tricia"], [218000, "Glintstone Sorcerer Ashes"], [219000, "Twinsage Sorcerer Ashes"], [220000, "Page Ashes"], [221000, "Battlemage Hugues"], [222000, "Clayman Ashes"], [223000, "Cleanrot Knight Finlay"], [224000, "Kindred of Rot Ashes"], [225000, "Marionette Soldier Ashes"], [226000, "Avionette Soldier Ashes"], [227000, "Fire Monk Ashes"], [228000, "Blackflame Monk Amon"], [229000, "Man-Serpent Ashes"], [230000, "Azula Beastman Ashes"], [231000, "Kaiden Sellsword Ashes"], [232000, "Lone Wolf Ashes"], [233000, "Giant Rat Ashes"], [233100, "spirit summon"], [233200, "spirit summon"], [234000, "Demi-Human Ashes"], [235000, "Rotten Stray Ashes"], [236000, "Spirit Jellyfish Ashes"], [237000, "Warhawk Ashes"], [238000, "Stormhawk Deenh"], [239000, "Bloodhound Knight Floh"], [240000, "Wandering Noble Ashes"], [241000, "Noble Sorcerer Ashes"], [242000, "Vulgar Militia Ashes"], [243000, "Mad Pumpkin Head Ashes"], [244000, "Land Squirt Ashes"], [245000, "Miranda Sprout Ashes"], [246000, "Soldjars of Fortune Ashes"], [247000, "Omenkiller Rollo"], [248000, "Greatshield Soldier Ashes"], [249000, "Archer Ashes"], [250000, "Godrick Soldier Ashes"], [251000, "Raya Lucaria Soldier Ashes"], [252000, "Leyndell Soldier Ashes"], [253000, "Radahn Soldier Ashes"], [254000, "Mausoleum Soldier Ashes"], [255000, "Haligtree Soldier Ashes"], [256000, "Ancient Dragon Knight Kristoff"], [257000, "Redmane Knight Ogha"], [258000, "Lhutel the Headless"], [259000, "Nepheli Loux Puppet"], [260000, "Dung Eater Puppet"], [261000, "Finger Maiden Therolina Puppet"], [262000, "Dolores the Sleeping Arrow Puppet"], [263000, "Jarwight Puppet"], [20200000, "Curseblade Meera"], [20201000, "Bloodfiend Hexer's Ashes"], [20202000, "Gravebird Ashes"], [20203000, "Fire Knight Hilde"], [20204000, "Spider Scorpion Ashes"], [20205000, "Inquisitor Ashes"], [20206000, "Demi-Human Swordsman Yosh"], [20207000, "Messmer Soldier Ashes"], [20208000, "Black Knight Commander Andreas"], [20209000, "Black Knight Captain Huw"], [20210000, "Bigmouth Imp Ashes"], [20211000, "Man-Fly Ashes"], [20212000, "Taylew the Golem Smith"], [20213000, "Divine Bird Warrior Ornis"], [20214000, "Horned Warrior Ashes"], [20215000, "Ancient Dragon Florissax"], [20217000, "Fingercreeper Ashes"], [20218000, "Fire Knight Queelign"], [20219000, "Swordhand of Night Jol\u00e1n"], [20220000, "Jol\u00e1n and Anna"], [20223000, "spirit summon"], [20224000, "spirit summon"], [20225000, "spirit summon"], [20226000, "spirit summon"], [20227000, "spirit summon"], [20228000, "spirit summon"], [20229000, "spirit summon"], [20230000, "spirit summon"]], "statusSkills": [[52, "Ice Spear"], [72, "Blood Blade"], [75, "Chilling Mist"], [76, "Poisonous Mist"], [110, "Hoarfrost Stomp"], [136, "Seppuku"], [168, "Zamor Ice Storm"], [174, "Death Flare"], [216, "Reduvia Blood Blade"], [223, "Mists of Slumber"], [225, "Wolf's Assault"], [234, "Bloodboon Ritual"], [243, "Ice Lightning Sword"], [248, "Ghostflame Ignition"], [250, "Frenzyflame Thrust"], [283, "Divine Beast Frost Stomp"], [311, "Mists of Eternal Sleep"], [334, "Feeble Lord's Frenzied Flame"], [358, "Deadly Poison Spray"], [364, "Ghostflame Call"], [365, "Rancor Slash"], [366, "Rancor Slash"]], "swordDanceFastClips": [40000, 40005, 40010, 40015, 45800, 45805, 45810, 45815], "talisman": {"ALL_CRUCIBLES": 8240, "CRUCIBLE_FEATHER": 4070, "FINE_CRUCIBLE_FEATHER": 8010, "GODFREY_ICON": 3090, "RED_FEATHER": 2040, "RELLANAS_CAMEO": 8220, "SHARD_OF_ALEXANDER": 1231, "SPEAR": 2060, "TWO_HANDED_SWORD": 8040, "WARRIOR_JAR_SHARD": 1230}, "weapon": {"BACKHAND_BLADE": 64500000, "CLAWS_OF_NIGHT": 22500000, "CLEANROT_KNIGHTS_SWORD": 5010000, "CLUB": 11010000, "IDUS_SWORD": 67530000, "LEONTIELS_GREATSWORD": 3560000, "MILADY": 67500000, "MOHGWYNS_SACRED_SPEAR": 17010000, "PATA": 21510000, "RAPTOR_TALONS": 22030000, "REVERSE_BLADED_SWORD": 64530000, "SHAMSHIR": 7030000, "SMITHSCRIPT_CIRQUE": 64510000, "SMITHSCRIPT_DAGGER": 63500000, "SMITHSCRIPT_SHIELD": 30510000, "SPREAD_CROSSBOW": 43510000, "STAR_FIST": 21080000, "STONE_CLUB": 11140000, "SWORD_LANCE": 3500000, "WAKIZASHI": 1100000}, "wepType": {"AXE": 17, "BACKHAND_BLADE": 92, "CLAW": 37, "CURVED_SWORD": 9, "DAGGER": 1, "FIST": 35, "GREATSHIELD": 69, "GREAT_SPEAR": 28, "HEAVY_THRUSTING_SWORD": 16, "LIGHT_GREATSWORD": 93, "MEDIUM_SHIELD": 67, "SMALL_SHIELD": 65, "THRUSTING_SHIELD": 90, "THRUSTING_SWORD": 15, "TWINBLADE": 14}};
+const PARAM_FIELDS = {"CalcCorrectGraph": {"fields": {"adjPt_maxGrowVal0": [40, "f32"], "adjPt_maxGrowVal1": [44, "f32"], "adjPt_maxGrowVal2": [48, "f32"], "adjPt_maxGrowVal3": [52, "f32"], "adjPt_maxGrowVal4": [56, "f32"], "stageMaxGrowVal0": [20, "f32"], "stageMaxGrowVal1": [24, "f32"], "stageMaxGrowVal2": [28, "f32"], "stageMaxGrowVal3": [32, "f32"], "stageMaxGrowVal4": [36, "f32"], "stageMaxVal0": [0, "f32"], "stageMaxVal1": [4, "f32"], "stageMaxVal2": [8, "f32"], "stageMaxVal3": [12, "f32"], "stageMaxVal4": [16, "f32"]}, "index": 30, "struct": "CACL_CORRECT_GRAPH_ST"}, "EquipParamAccessory": {"fields": {"refCategory": [49, "u8"], "refId": [4, "s32"], "residentSpEffectId1": [76, "s32"], "residentSpEffectId2": [80, "s32"], "residentSpEffectId3": [84, "s32"], "residentSpEffectId4": [88, "s32"], "weight": [12, "f32"]}, "index": 2, "struct": "EQUIP_PARAM_ACCESSORY_ST"}, "EquipParamProtector": {"fields": {"residentSpEffectId": [40, "s32"], "residentSpEffectId2": [44, "s32"], "residentSpEffectId3": [48, "s32"], "weight": [36, "f32"]}, "index": 1, "struct": "EQUIP_PARAM_PROTECTOR_ST"}, "EquipParamWeapon": {"fields": {"isEnhance": [262, "bit", 7], "physGuardCutRate": [52, "f32"], "reinforceTypeId": [218, "s16"], "spEffectBehaviorId0": [68, "s32"], "spEffectBehaviorId1": [72, "s32"], "spEffectBehaviorId2": [76, "s32"], "weight": [16, "f32"], "wepType": [422, "u16"]}, "index": 0, "struct": "EQUIP_PARAM_WEAPON_ST"}, "ReinforceParamWeapon": {"fields": {"physicsGuardCutRate": [44, "f32"]}, "index": 4, "struct": "REINFORCE_PARAM_WEAPON_ST"}, "SpEffectParam": {"fields": {"addEndureStatus": [800, "s8"], "equipWeightChangeRate": [228, "f32"], "spCategory": [318, "u16"]}, "index": 15, "struct": "SP_EFFECT_PARAM_ST"}};
 // --- END GENERATED ---
 
 // ============================================================================================
@@ -43,6 +47,8 @@ const RVA = {
     worldChrMan: 0x3d69ff8,
     soloParamRepository: 0x3d85f58,
     bulletManager: 0x3d667a8,
+    // CSFlipperImp's singleton pointer (1.16.2 0x4589ad8, crates/er-telemetry-core/src/lib.rs).
+    flipper: 0x458db58,
     // Hooks, with the bytes each must start with (eldenring-deobf-1.17.1.bin).
     frameTick: 0x773900,
     speffectApply: 0x4fb6b0,
@@ -79,6 +85,17 @@ const OFF = {
     speEntryNext: 0x30,
     pgdLevel: 0x68,
     pgdEndurance: 0x44,
+    pgdAttributes: 0x3c,
+    // PlayerGameData.rune_arc_active, between upstream's offset-named unkfe..unk100 fields.
+    pgdRuneArcActive: 0xff,
+    // GameDataMan +0x58 GameSettings; +0x16 manual attack aiming (+0x17 auto target), read live on
+    // 1.17.1 and pinned by fromsoftware-rs game_data_man.rs.
+    gdmGameSettings: 0x58,
+    settingsManualAttackAiming: 0x16,
+    // CSFlipper +0x1c seconds per frame at the target rate (0.016667 = 60 fps), +0x2b8 the game's
+    // measured frame rate.
+    flipperTargetSpf: 0x1c,
+    flipperMeasuredFps: 0x2b8,
     pgdName: 0x9c,
     pgdNameChars: 17,
     pgdSize: 0xaf0,
@@ -114,6 +131,17 @@ const CERULEAN_FLASK_LIMIT = 2;
 const SHIELD_PHYS_GUARD_CAP = 90.0;
 const LIGHT_LOAD_CEILING = Math.fround(0.3);
 const REARM_MS = 10000;
+// A weapon buff the game did not strip within this long of its hand's weapon changing was carried
+// across (referee.rs BUFF_TRANSFER_GRACE_MS).
+const BUFF_TRANSFER_GRACE_MS = 250;
+// The game caps at 60; a higher target, or a measured rate this far past it, is an unlocker.
+const UNLOCKED_TARGET_FPS = 61;
+const UNLOCKED_MEASURED_FPS = 65;
+// Time a player has from entering the match or respawning to light a Rune Arc in Better
+// Multiplayer (referee.rs RUNE_ARC_GRACE_MS). A death puts the arc out.
+const RUNE_ARC_GRACE_MS = 20000;
+// The game's flag, or any Rune Arc / Great Rune effect row (port of rune_arc_active).
+const runeArcActive = (p) => p.runeArcFlag === true || p.speffects.some((id) => lookup(T.runeArcEffects, id) !== null);
 const CATEGORY_RIGHT_WEAPON_BUFF = 162;
 const CATEGORY_LEFT_WEAPON_BUFF = 163;
 const ARM = { EMPTY: 0, ONE: 1, LEFT_BOTH: 2, RIGHT_BOTH: 3 };
@@ -124,6 +152,14 @@ const RULE_TEXT = {
     PassiveRegen: 'Passive tick-based HP Regen via Armour/Talismans/Shields',
     Healing: 'HP Recovery via Spells/Crystal Tears/Consumables',
     SpectralSteed: 'Spectral Steed Whistle',
+    SpiritAshes: 'Spirit Ashes',
+    Respec: 'Respecing or swapping character during a match is not allowed',
+    SwitchingBuilds: 'Switching builds is prohibited once you enter the same world as your opponent',
+    ArmorSwapPoiseReset: 'Armor swap poise reset',
+    BuffTransfer: 'Buff Transfers',
+    ManualAttackAiming: 'Manual attack aiming setting must be disabled when in the BMP mod',
+    UnlockedFps: 'Adhere to the Elden Ring Terms of Service (unlocked FPS)',
+    RuneArc: 'Rune Arc (in Better Multiplayer every player has one active)',
     CeruleanFlasks: 'Blue flasks limited to 2',
     FanDaggers: 'Fan Daggers',
     ShieldGuard: 'Blocking With Shields above 90% physical absorption',
@@ -370,6 +406,8 @@ function check(p, facts) {
         const heal = lookup(T.heals, id);
         if (heal) v('Healing', heal);
         if (T.rotGrease.includes(id)) v('RotGrease', 'rot grease');
+        const spirit = lookup(T.spiritAshTriggers, id);
+        if (spirit) v('SpiritAshes', spirit);
         const e = facts.effect(id);
         const hand = !e ? null : e.category === CATEGORY_RIGHT_WEAPON_BUFF ? 'right' : e.category === CATEGORY_LEFT_WEAPON_BUFF ? 'left' : null;
         if (hand === null) continue;
@@ -377,6 +415,11 @@ function check(p, facts) {
         const wid = active(p, hand);
         if (wid < 0) continue;
         const base = weaponBase(wid);
+        // A grease takes only on an isEnhance row, so one on any other weapon was carried there.
+        if (T.greaseBuffs.includes(id)) {
+            const wf = facts.weapon(wid);
+            if (wf && wf.takesGrease === false) v('BuffTransfer', `grease on weapon ${wid}, which takes none`);
+        }
         if (T.sleepGrease.includes(id)) { const r = lookup(T.rippleWeapons, base); if (r) v('SleepGreaseRipple', r); }
         if (T.poisonGrease.includes(id)) {
             if (hand === 'left') v('OffhandPoisonGrease', 'poison grease on the left weapon');
@@ -398,7 +441,7 @@ function check(p, facts) {
         [S.STORMCALLER, 'Stormcaller'], [S.SWIFT_SLASH, 'Swift Slash'], [S.BLIND_SPOT, 'Blind Spot'],
         [S.NEEDLE_PIERCER, 'Needle Piercer'], [S.RED_BEAR_HUNT, 'Red Bear Hunt'], [S.BARBARIC_ROAR, 'Barbaric Roar'],
         [S.SHRIEK_OF_SORROW, 'Shriek of Sorrow'], [S.PAINFUL_STRIKE, 'Painful Strikes'], [S.SAVAGE_CLAWS, 'Savage Claws']];
-    const ashTalismans = [TAL.SHARD_OF_ALEXANDER, TAL.RELLANAS_CAMEO, TAL.GODFREY_ICON];
+    const ashTalismans = [TAL.WARRIOR_JAR_SHARD, TAL.SHARD_OF_ALEXANDER, TAL.RELLANAS_CAMEO, TAL.GODFREY_ICON];
     for (const anim of p.newAnims) {
         const sc = skillClip(anim);
         if (sc === null) continue;
@@ -411,6 +454,10 @@ function check(p, facts) {
         if (typeNew === S.SPINNING_SLASH && classOf(facts, nonShieldSkillWeapon(p)) === C.LIGHT_GREATSWORD) {
             v('SpinningSlashLightGreatsword', 'used');
         }
+        // "2H Stone Club/Club: Any Status Application", through a skill's own status.
+        const statusSkill = lookup(T.statusSkills, typeNew);
+        const skillBase = weaponBase(nonShieldSkillWeapon(p));
+        if (statusSkill && twoHanded(p) !== null && (skillBase === W.STONE_CLUB || skillBase === W.CLUB)) v('StoneClubStatus', statusSkill);
         if (typeNew === S.MULETA && p.talismans.some((id) => ashTalismans.includes(id))) v('MuletaTalismans', 'used');
     }
 
@@ -421,25 +468,90 @@ function check(p, facts) {
     }
 
     if (p.riding) v('SpectralSteed', 'riding Torrent');
+    // Settings only this machine can read about its own player (LocalSettings in player.rs).
+    const s = p.localSettings;
+    if (s) {
+        if (s.betterMultiplayer && s.manualAttackAiming) v('ManualAttackAiming', 'enabled');
+        if (s.targetFps > UNLOCKED_TARGET_FPS || s.measuredFps > UNLOCKED_MEASURED_FPS) {
+            v('UnlockedFps', `target ${s.targetFps.toFixed(0)} fps, running at ${s.measuredFps.toFixed(0)}`);
+        }
+    }
     const load = equipLoad(p, facts);
     if (load && load.light) v('LightRoll', `${(load.ratio * 100).toFixed(1)}% equip load`);
     return out;
 }
 
-/// Which breaks become a notice, and the blue flask count per round (referee.rs).
+const ATTRIBUTE_NAMES = ['Vigor', 'Mind', 'Endurance', 'Strength', 'Dexterity', 'Intelligence', 'Faith', 'Arcane'];
+const slotChanges = (name, old, now) => old.flatMap((o, i) => (o === now[i] ? [] : [`${name} ${i + 1}: ${o} -> ${now[i]}`]));
+const buildOf = (p) => ({ level: p.level, attributes: p.attributes.slice(), weaponsLeft: p.weaponsLeft.slice(), weaponsRight: p.weaponsRight.slice(),
+    armor: p.armor.slice(), talismans: p.talismans.slice(), physick: p.physick.slice() });
+
+/// Which breaks become a notice, the blue flask count per round, and a build that changes once two
+/// players share a world (referee.rs).
 class Referee {
-    constructor() { this.lastSeen = new Map(); this.flasks = new Map(); this.alive = new Map(); }
+    constructor() { this.lastSeen = new Map(); this.flasks = new Map(); this.alive = new Map(); this.entered = new Map(); this.hands = {}; this.aliveSince = new Map(); }
+
+    // Port of Referee::carried_buffs: the local player only.
+    carriedBuffs(nowMs, p, facts) {
+        const out = [];
+        for (const hand of ['left', 'right']) {
+            const cat = hand === 'left' ? CATEGORY_LEFT_WEAPON_BUFF : CATEGORY_RIGHT_WEAPON_BUFF;
+            const buffs = p.speffects.filter((id) => { const e = facts.effect(id); return e !== null && e.category === cat; });
+            const weapon = active(p, hand);
+            const h = this.hands[hand] || (this.hands[hand] = { weapon, buffs: [], carried: [], changedAt: 0 });
+            if (weapon !== h.weapon) { h.carried = h.buffs; h.changedAt = nowMs; }
+            if (h.carried.length && nowMs - h.changedAt >= BUFF_TRANSFER_GRACE_MS) {
+                if (h.carried.some((id) => buffs.includes(id))) out.push({ rule: 'BuffTransfer', detail: `weapon buff kept across a weapon change to ${weapon}` });
+                h.carried = [];
+            }
+            h.weapon = weapon;
+            h.buffs = buffs;
+        }
+        return out;
+    }
+
+    // Port of Referee::build_changes.
+    buildChanges(p) {
+        if (p.level === 0) return [];
+        const now = buildOf(p);
+        const entered = this.entered.get(p.key);
+        if (!entered) { this.entered.set(p.key, { build: now, armorChanged: false }); return []; }
+        const old = entered.build;
+        const out = [];
+        const stats = ATTRIBUTE_NAMES.flatMap((n, i) => (old.attributes[i] === now.attributes[i] ? [] : [`${n} ${old.attributes[i]} -> ${now.attributes[i]}`]));
+        if (old.level !== now.level) stats.unshift(`level ${old.level} -> ${now.level}`);
+        if (stats.length) out.push({ rule: 'Respec', detail: stats.join(', ') });
+        const gear = slotChanges('right weapon', old.weaponsRight, now.weaponsRight)
+            .concat(slotChanges('left weapon', old.weaponsLeft, now.weaponsLeft), slotChanges('talisman', old.talismans, now.talismans),
+                slotChanges('tear', old.physick, now.physick));
+        const armor = slotChanges('armor', old.armor, now.armor);
+        if (armor.length === 0) {
+            if (entered.armorChanged) { entered.armorChanged = false; out.push({ rule: 'ArmorSwapPoiseReset', detail: 'armor taken off and put back on' }); }
+        } else {
+            entered.armorChanged = true;
+            gear.push(...armor);
+        }
+        if (gear.length) out.push({ rule: 'SwitchingBuilds', detail: gear.join(', ') });
+        return out;
+    }
 
     observe(nowMs, players, facts) {
         const present = new Set(players.map((p) => p.key));
         for (const k of [...this.alive.keys()]) if (!present.has(k)) this.alive.delete(k);
         for (const k of [...this.flasks.keys()]) if (!present.has(k)) this.flasks.delete(k);
+        const inMatch = players.length >= 2;
+        if (inMatch) { for (const k of [...this.entered.keys()]) if (!present.has(k)) this.entered.delete(k); } else this.entered.clear();
+        for (const k of [...this.aliveSince.keys()]) if (!present.has(k)) this.aliveSince.delete(k);
         let roundOver = false;
         for (const p of players) {
             const alive = p.hp > 0;
-            if (this.alive.get(p.key) === true && !alive) roundOver = true;
+            const was = this.alive.get(p.key);
+            if (was === true && !alive) roundOver = true;
+            if (alive && was !== true) this.aliveSince.set(p.key, nowMs);
             this.alive.set(p.key, alive);
         }
+        // A session is Better Multiplayer when the local game has the module loaded.
+        const betterMultiplayer = players.some((p) => p.localSettings && p.localSettings.betterMultiplayer);
         if (roundOver) for (const f of this.flasks.values()) f.used = 0;
         const alerts = [];
         for (const p of players) {
@@ -450,6 +562,12 @@ class Referee {
             f.drinking = drinking;
             this.flasks.set(p.key, f);
             if (f.used > CERULEAN_FLASK_LIMIT) violations.push({ rule: 'CeruleanFlasks', detail: `Flask of Cerulean Tears number ${f.used} this round` });
+            if (inMatch) violations.push(...this.buildChanges(p));
+            const since = this.aliveSince.get(p.key);
+            if (inMatch && betterMultiplayer && p.hp > 0 && !runeArcActive(p) && since !== undefined && nowMs - since >= RUNE_ARC_GRACE_MS) {
+                violations.push({ rule: 'RuneArc', detail: `no active Rune Arc ${RUNE_ARC_GRACE_MS / 1000} s into the round` });
+            }
+            if (p.isLocal) violations.push(...this.carriedBuffs(nowMs, p, facts));
             for (const vio of violations) {
                 const key = `${p.key}|${vio.rule}|${vio.detail}`;
                 const last = this.lastSeen.get(key);
@@ -566,6 +684,7 @@ function main() {
             case 'u16': return p.readU16();
             case 's16': return p.readS16();
             case 'u32': return p.readU32();
+            case 'bit': return (p.readU8() >> d[2]) & 1;
             default: return p.readS32();
         }
     }
@@ -582,6 +701,7 @@ function main() {
                 physGuardCut: Math.fround(field('EquipParamWeapon', r, 'physGuardCutRate') * rate),
                 inflictsStatus: ['spEffectBehaviorId0', 'spEffectBehaviorId1', 'spEffectBehaviorId2']
                     .some((f) => field('EquipParamWeapon', r, f) > 0),
+                takesGrease: field('EquipParamWeapon', r, 'isEnhance') === 1,
             };
         },
         armorWeight(id) { const r = row('EquipParamProtector', id); return r === null ? null : field('EquipParamProtector', r, 'weight'); },
@@ -625,6 +745,28 @@ function main() {
     const applied = new Map();
     let playerAddresses = new Map();
     let pending = 0;
+
+    // Better Multiplayer can be injected after the agent attaches, so the module is looked up
+    // again every few seconds rather than once.
+    const BETTER_MULTIPLAYER_MODULE = 'bettermultiplayer.dll';
+    let bmp = { at: -Infinity, loaded: false };
+    let lastSettings = '';
+    function localSettings(gdm) {
+        const now = Date.now();
+        if (now - bmp.at > 5000) bmp = { at: now, loaded: Process.findModuleByName(BETTER_MULTIPLAYER_MODULE) !== null };
+        const settings = gdm.add(OFF.gdmGameSettings).readPointer();
+        const flipper = at(RVA.flipper).readPointer();
+        const spf = flipper.isNull() ? 0 : flipper.add(OFF.flipperTargetSpf).readFloat();
+        const s = {
+            manualAttackAiming: !settings.isNull() && settings.add(OFF.settingsManualAttackAiming).readU8() !== 0,
+            betterMultiplayer: bmp.loaded,
+            targetFps: spf > 0 ? 1 / spf : 0,
+            measuredFps: flipper.isNull() ? 0 : flipper.add(OFF.flipperMeasuredFps).readFloat(),
+        };
+        const line = `manual_attack_aiming=${s.manualAttackAiming} better_multiplayer=${s.betterMultiplayer} target_fps=${s.targetFps.toFixed(1)}`;
+        if (line !== lastSettings) { say(`settings: ${line} measured_fps=${s.measuredFps.toFixed(1)}`); lastSettings = line; }
+        return s;
+    }
 
     function readPlayers() {
         const wcm = at(RVA.worldChrMan).readPointer();
@@ -700,6 +842,7 @@ function main() {
                     isLocal,
                     level: pgd.add(OFF.pgdLevel).readU32(),
                     endurance: pgd.add(OFF.pgdEndurance).readU32(),
+                    attributes: Array.from({ length: 8 }, (_, k) => pgd.add(OFF.pgdAttributes + k * 4).readU32()),
                     armStyle: asm.add(OFF.asmArmStyle).readU32(),
                     leftSlot: asm.add(OFF.asmLeftSlot).readU32(),
                     rightSlot: asm.add(OFF.asmRightSlot).readU32(),
@@ -713,6 +856,8 @@ function main() {
                     bullets: bullets.get(key) || [],
                     hp: modules.add(OFF.modData).readPointer().add(OFF.dataHp).readS32(),
                     riding: rideNode.isNull() ? false : rideNode.add(OFF.rideState).readU32() !== 0,
+                    localSettings: isLocal ? localSettings(gdm) : null,
+                    runeArcFlag: pgd.add(OFF.pgdRuneArcActive).readU8() !== 0,
                 });
             } catch (e) {
                 // A character torn down under the read; it is simply not judged this tick.
@@ -746,7 +891,7 @@ function main() {
         let players;
         try { players = readPlayers(); } catch (e) { errors += 1; return; }
         for (const p of players) {
-            const build = `level=${p.level} end=${p.endurance} arm=${p.armStyle} slots=L${p.leftSlot}/R${p.rightSlot} ` +
+            const build = `level=${p.level} attributes=[${p.attributes}] rune_arc=${runeArcActive(p)} arm=${p.armStyle} slots=L${p.leftSlot}/R${p.rightSlot} ` +
                 `right=[${p.weaponsRight}] left=[${p.weaponsLeft}] armor=[${p.armor}] talismans=[${p.talismans}] physick=[${p.physick}]`;
             if (loggedBuilds.get(p.key) !== build) {
                 say(`player: ${p.name}${p.isLocal ? ' (you)' : ''} ${build}`);

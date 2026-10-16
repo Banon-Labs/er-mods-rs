@@ -15,9 +15,36 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eldenring::cs::{CSBulletManager, FieldInsHandle, GameDataMan, PlayerGameData, WorldChrMan};
-use er_duel_rules_core::player::{AnimCursor, ArmStyle, NO_ITEM, PlayerSnapshot, anim_starts};
+use eldenring::cs::{
+    CSBulletManager, CSFlipper, FieldInsHandle, GameDataMan, PlayerGameData, WorldChrMan,
+};
+use er_duel_rules_core::player::{
+    AnimCursor, ArmStyle, LocalSettings, NO_ITEM, PlayerSnapshot, anim_starts,
+};
 use fromsoftware_shared::FromStatic;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::core::w;
+
+/// Better Multiplayer's module, injected by its launcher or a me3 profile.
+const BETTER_MULTIPLAYER_MODULE: windows::core::PCWSTR = w!("bettermultiplayer.dll");
+
+/// What only this machine can know about its own player.
+fn local_settings(game_data: &GameDataMan) -> LocalSettings {
+    // SAFETY: game thread; the flipper singleton outlives every game task.
+    let (target_fps, measured_fps) = unsafe { CSFlipper::instance() }.map_or((0.0, 0.0), |f| {
+        // Upstream calls +0x1c `fixed_fps`, but it holds seconds per frame: 0.016667 at the
+        // 60 fps cap, read live on 1.17.1.
+        let spf = f.fixed_fps;
+        (if spf > 0.0 { 1.0 / spf } else { 0.0 }, f.calculated_fps)
+    });
+    LocalSettings {
+        manual_attack_aiming: game_data.game_settings.manual_attack_aiming,
+        // SAFETY: a lookup of a loaded module by name; nothing is loaded or freed.
+        better_multiplayer: unsafe { GetModuleHandleW(BETTER_MULTIPLAYER_MODULE) }.is_ok(),
+        target_fps,
+        measured_fps,
+    }
+}
 
 /// `RemotePlayerDataSlotState::FullySynced`: base data, equipment and type all received.
 const REMOTE_FULLY_SYNCED: u8 = 0xF;
@@ -187,6 +214,16 @@ pub(crate) unsafe fn read_players(reader: &mut Reader) -> (Vec<PlayerSnapshot>, 
             is_local,
             level: pgd.level,
             endurance: pgd.endurance,
+            attributes: [
+                pgd.vigor,
+                pgd.mind,
+                pgd.endurance,
+                pgd.strength,
+                pgd.dexterity,
+                pgd.intelligence,
+                pgd.faith,
+                pgd.arcane,
+            ],
             arm_style: ArmStyle::from_raw(arm_style),
             left_slot: slots.left_weapon_slot as usize,
             right_slot: slots.right_weapon_slot as usize,
@@ -200,6 +237,8 @@ pub(crate) unsafe fn read_players(reader: &mut Reader) -> (Vec<PlayerSnapshot>, 
             bullets: owned,
             hp: chr.modules.data.hp,
             riding: chr.modules.ride.ride_node.ride_state != RIDE_STATE_NONE,
+            local_settings: is_local.then(|| local_settings(game_data)),
+            rune_arc_flag: pgd.rune_arc_active,
         });
     }
     reader.anims.retain(|key, _| seen.contains(key));

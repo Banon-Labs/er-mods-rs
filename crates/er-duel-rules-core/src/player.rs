@@ -3,6 +3,18 @@
 /// An empty equipment slot.
 pub const NO_ITEM: i32 = -1;
 
+/// The attributes as `PlayerGameData` stores them, from +0x3c.
+pub const ATTRIBUTE_NAMES: [&str; 8] = [
+    "Vigor",
+    "Mind",
+    "Endurance",
+    "Strength",
+    "Dexterity",
+    "Intelligence",
+    "Faith",
+    "Arcane",
+];
+
 /// Skill clips live in TimeAct `a<600 + swordArtsTypeNew>`, and a runtime animation id is
 /// `<TimeAct> * 1_000_000 + <clip>` (`a610_040051` plays as `610040051`, bd
 /// active-skill-lives-in-cmsg-argtaeid-not-chrins-2026-10-04).
@@ -37,6 +49,20 @@ pub enum Hand {
     Right,
 }
 
+/// Settings only the machine running the referee can read about its own player: none of them
+/// is replicated to other players.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocalSettings {
+    /// `GameDataMan` +0x58 `GameSettings` +0x16, which Better Multiplayer repurposes.
+    pub manual_attack_aiming: bool,
+    /// `bettermultiplayer.dll` is loaded in this game.
+    pub better_multiplayer: bool,
+    /// `CSFlipperImp` target frame rate, `1 / fixed_spf` (+0x1c); 60 unless something unlocked it.
+    pub target_fps: f32,
+    /// `CSFlipperImp` +0x2b8, the game's own measured frame rate.
+    pub measured_fps: f32,
+}
+
 /// Everything the rules read about one player on one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlayerSnapshot {
@@ -47,6 +73,8 @@ pub struct PlayerSnapshot {
     pub level: u32,
     /// The endurance attribute before talismans and armour.
     pub endurance: u32,
+    /// The eight attributes in [`ATTRIBUTE_NAMES`] order (`PlayerGameData` +0x3c..+0x5c).
+    pub attributes: [u32; 8],
     pub arm_style: ArmStyle,
     /// Active slot per hand, 0..=2.
     pub left_slot: usize,
@@ -69,6 +97,11 @@ pub struct PlayerSnapshot {
     pub hp: i32,
     /// Mounted, mounting or dismounting.
     pub riding: bool,
+    /// Set on the local player only.
+    pub local_settings: Option<LocalSettings>,
+    /// `PlayerGameData.rune_arc_active` (+0xff). Whether the game fills it for a remote player is
+    /// not measured, so [`PlayerSnapshot::rune_arc_active`] also reads the effect rows.
+    pub rune_arc_flag: bool,
 }
 
 impl Default for PlayerSnapshot {
@@ -79,6 +112,7 @@ impl Default for PlayerSnapshot {
             is_local: false,
             level: 0,
             endurance: 0,
+            attributes: [0; 8],
             arm_style: ArmStyle::OneHanded,
             left_slot: 0,
             right_slot: 0,
@@ -92,6 +126,8 @@ impl Default for PlayerSnapshot {
             bullets: Vec::new(),
             hp: 1,
             riding: false,
+            local_settings: None,
+            rune_arc_flag: false,
         }
     }
 }
@@ -131,6 +167,16 @@ impl PlayerSnapshot {
             Some(hand) => self.active(hand),
             None => self.active(Hand::Right),
         }
+    }
+
+    /// A Rune Arc is active: the game's flag, or any of its effect rows (a remote player's
+    /// self-applied effects are replicated, packet 38).
+    pub fn rune_arc_active(&self) -> bool {
+        self.rune_arc_flag
+            || self
+                .speffects
+                .iter()
+                .any(|&id| crate::lookup(crate::tables::RUNE_ARC_EFFECTS, id).is_some())
     }
 
     /// Both active weapons, each held in its own hand (no two-handing).

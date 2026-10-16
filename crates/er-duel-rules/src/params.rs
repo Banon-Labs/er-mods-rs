@@ -71,6 +71,7 @@ impl GameFacts for LiveFacts {
             ]
             .iter()
             .any(|&behavior| behavior > 0),
+            takes_grease: row.is_enhance(),
         })
     }
 

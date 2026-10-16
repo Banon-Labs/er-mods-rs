@@ -106,6 +106,8 @@ pub mod talisman {
     pub const TWO_HANDED_SWORD: i32 = 8040;
     /// Spear Talisman
     pub const SPEAR: i32 = 2060;
+    /// Warrior Jar Shard
+    pub const WARRIOR_JAR_SHARD: i32 = 1230;
     /// Shard of Alexander
     pub const SHARD_OF_ALEXANDER: i32 = 1231;
     /// Rellana's Cameo
@@ -245,7 +247,8 @@ pub const PARRY_SKILLS: &[Named] = &[
 ];
 
 /// Sword Dance clips the light weapons play (clip id inside a624).
-pub const SWORD_DANCE_FAST_CLIPS: &[i32] = &[40000, 40005, 40010, 40015];
+pub const SWORD_DANCE_FAST_CLIPS: &[i32] =
+    &[40000, 40005, 40010, 40015, 45800, 45805, 45810, 45815];
 
 /// Weapon buff rows Chilling Mist puts on the user's weapon.
 pub const CHILLING_MIST_BUFFS: &[i32] = &[826, 828];
@@ -400,6 +403,13 @@ pub const BANNED_TEARS: &[(Named, TearBan)] = &[
     ),
     (
         Named {
+            id: 2011010,
+            name: "Crimsonburst Dried Tear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        Named {
             id: 2011050,
             name: "Bloodsucking Cracked Tear",
         },
@@ -457,6 +467,10 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Oath of Vengeance",
     },
     Named {
+        id: 1870,
+        name: "Shared Order",
+    },
+    Named {
         id: 3910,
         name: "Spellproof Dried Liver",
     },
@@ -477,12 +491,32 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Pickled Turtle Neck",
     },
     Named {
+        id: 3960,
+        name: "Immunizing Cured Meat",
+    },
+    Named {
+        id: 3961,
+        name: "Invigorating Cured Meat",
+    },
+    Named {
+        id: 3962,
+        name: "Clarifying Cured Meat",
+    },
+    Named {
+        id: 3963,
+        name: "Dappled Cured Meat",
+    },
+    Named {
         id: 19980,
         name: "Rock Heart",
     },
     Named {
         id: 19981,
         name: "Priestess Heart",
+    },
+    Named {
+        id: 500138,
+        name: "Phantom Great Rune",
     },
     Named {
         id: 500139,
@@ -505,6 +539,26 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Starlight Shards",
     },
     Named {
+        id: 501310,
+        name: "Immunizing White Cured Meat",
+    },
+    Named {
+        id: 501320,
+        name: "Invigorating White Cured Meat",
+    },
+    Named {
+        id: 501330,
+        name: "Clarifying White Cured Meat",
+    },
+    Named {
+        id: 501340,
+        name: "Dappled White Cured Meat",
+    },
+    Named {
+        id: 502100,
+        name: "Soft Cotton",
+    },
+    Named {
         id: 503355,
         name: "Baldachin's Blessing",
     },
@@ -521,8 +575,16 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Uplifting Aromatic",
     },
     Named {
+        id: 503520,
+        name: "Ironjar Aromatic",
+    },
+    Named {
         id: 503550,
         name: "Bloodboil Aromatic",
+    },
+    Named {
+        id: 1413000,
+        name: "Terra Magica",
     },
     Named {
         id: 1467000,
@@ -573,12 +635,16 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Lord's Divine Fortification",
     },
     Named {
+        id: 1651000,
+        name: "Assassin's Approach",
+    },
+    Named {
         id: 1660000,
         name: "Golden Vow",
     },
     Named {
-        id: 1697001,
-        name: "Vyke's Dragonbolt",
+        id: 1697100,
+        name: "Dragonbolt Blessing",
     },
     Named {
         id: 1733000,
@@ -587,6 +653,14 @@ pub const BODY_BUFFS: &[Named] = &[
     Named {
         id: 1790300,
         name: "Golden Lightning Fortification",
+    },
+    Named {
+        id: 20000851,
+        name: "Flare, O Serpent",
+    },
+    Named {
+        id: 20000856,
+        name: "Flare, O Serpent",
     },
     Named {
         id: 20000980,
@@ -649,12 +723,20 @@ pub const BODY_BUFFS: &[Named] = &[
         name: "Sacred Bloody Flesh",
     },
     Named {
+        id: 20502100,
+        name: "Ancient Dragon's Blessing",
+    },
+    Named {
         id: 20503170,
         name: "Golden Vow",
     },
     Named {
         id: 21490000,
         name: "Mantle of Thorns",
+    },
+    Named {
+        id: 21691000,
+        name: "Dragonbolt of Florissax",
     },
 ];
 
@@ -685,7 +767,15 @@ pub const HEALS: &[Named] = &[
         name: "Heal",
     },
     Named {
+        id: 1642101,
+        name: "Heal",
+    },
+    Named {
         id: 1642200,
+        name: "Great Heal",
+    },
+    Named {
+        id: 1642201,
         name: "Great Heal",
     },
     Named {
@@ -693,7 +783,15 @@ pub const HEALS: &[Named] = &[
         name: "Lord's Heal",
     },
     Named {
+        id: 1642301,
+        name: "Lord's Heal",
+    },
+    Named {
         id: 1642400,
+        name: "Erdtree Heal",
+    },
+    Named {
+        id: 1642401,
         name: "Erdtree Heal",
     },
     Named {
@@ -701,7 +799,15 @@ pub const HEALS: &[Named] = &[
         name: "Blessing's Boon",
     },
     Named {
+        id: 1643001,
+        name: "Blessing's Boon",
+    },
+    Named {
         id: 1643100,
+        name: "Blessing of the Erdtree",
+    },
+    Named {
+        id: 1643101,
         name: "Blessing of the Erdtree",
     },
     Named {
@@ -726,6 +832,10 @@ pub const HEALS: &[Named] = &[
     },
     Named {
         id: 21640000,
+        name: "Heal from Afar",
+    },
+    Named {
+        id: 21640001,
         name: "Heal from Afar",
     },
     Named {
@@ -784,10 +894,19 @@ pub const REGEN_EQUIPMENT: &[(crate::EquipKind, Named)] = &[
 pub const ROT_GREASE: &[i32] = &[3310, 3312, 3314, 3316];
 
 /// Weapon buff rows of the sleep greases.
-pub const SLEEP_GREASE: &[i32] = &[102310, 102312, 102314, 102316];
+pub const SLEEP_GREASE: &[i32] = &[3150, 3152, 3154, 3156, 102310, 102312, 102314, 102316];
 
 /// Weapon buff rows of the poison greases.
 pub const POISON_GREASE: &[i32] = &[3175, 3177, 3179, 3181];
+
+/// Weapon buff rows of every grease. A grease takes only on a weapon row with `isEnhance` set.
+pub const GREASE_BUFFS: &[i32] = &[
+    3140, 3144, 3150, 3152, 3154, 3156, 3160, 3161, 3162, 3163, 3165, 3166, 3167, 3168, 3170, 3171,
+    3172, 3173, 3175, 3177, 3179, 3181, 3185, 3186, 3187, 3188, 3190, 3192, 3194, 3196, 3260, 3262,
+    3310, 3312, 3314, 3316, 102310, 102312, 102314, 102316, 501690, 501691, 20501400, 20501401,
+    20501402, 20501403, 20501410, 20501411, 20501412, 20501413, 20501420, 20501421, 20501422,
+    20501423, 20501430, 20501431, 20501432, 20501433, 20501480, 20501481, 20501620, 20501622,
+];
 
 /// SpEffect rows a Flask of Cerulean Tears applies.
 pub const CERULEAN_FLASK: &[i32] = &[
@@ -797,6 +916,710 @@ pub const CERULEAN_FLASK: &[i32] = &[
 
 /// Bullets Fan Daggers fire.
 pub const FAN_DAGGER_BULLETS: &[i32] = &[10175000];
+
+/// SpEffect rows of an active Rune Arc: the item's own and every Great Rune effect it switches on.
+pub const RUNE_ARC_EFFECTS: &[Named] = &[
+    Named {
+        id: 490,
+        name: "Rune Arc",
+    },
+    Named {
+        id: 491,
+        name: "Rune Arc",
+    },
+    Named {
+        id: 499,
+        name: "Rune Arc",
+    },
+    Named {
+        id: 600,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 601,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 602,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 603,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 604,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 605,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 606,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 607,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 609,
+        name: "Godrick's Great Rune",
+    },
+    Named {
+        id: 610,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 611,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 612,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 613,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 614,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 615,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 616,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 617,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 619,
+        name: "Radahn's Great Rune",
+    },
+    Named {
+        id: 620,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 621,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 622,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 623,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 624,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 625,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 626,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 627,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 629,
+        name: "Morgott's Great Rune",
+    },
+    Named {
+        id: 630,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 631,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 632,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 633,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 634,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 635,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 636,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 637,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 639,
+        name: "Rykard's Great Rune",
+    },
+    Named {
+        id: 640,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 641,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 642,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 643,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 644,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 645,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 646,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 647,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 649,
+        name: "Mohg's Great Rune",
+    },
+    Named {
+        id: 650,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 651,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 652,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 653,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 654,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 655,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 656,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 657,
+        name: "Malenia's Great Rune",
+    },
+    Named {
+        id: 659,
+        name: "Malenia's Great Rune",
+    },
+];
+
+/// Skills that apply status (swordArtsTypeNew), for the 2H Stone Club/Club status ban.
+pub const STATUS_SKILLS: &[Named] = &[
+    Named {
+        id: 52,
+        name: "Ice Spear",
+    },
+    Named {
+        id: 72,
+        name: "Blood Blade",
+    },
+    Named {
+        id: 75,
+        name: "Chilling Mist",
+    },
+    Named {
+        id: 76,
+        name: "Poisonous Mist",
+    },
+    Named {
+        id: 110,
+        name: "Hoarfrost Stomp",
+    },
+    Named {
+        id: 136,
+        name: "Seppuku",
+    },
+    Named {
+        id: 168,
+        name: "Zamor Ice Storm",
+    },
+    Named {
+        id: 174,
+        name: "Death Flare",
+    },
+    Named {
+        id: 216,
+        name: "Reduvia Blood Blade",
+    },
+    Named {
+        id: 223,
+        name: "Mists of Slumber",
+    },
+    Named {
+        id: 225,
+        name: "Wolf's Assault",
+    },
+    Named {
+        id: 234,
+        name: "Bloodboon Ritual",
+    },
+    Named {
+        id: 243,
+        name: "Ice Lightning Sword",
+    },
+    Named {
+        id: 248,
+        name: "Ghostflame Ignition",
+    },
+    Named {
+        id: 250,
+        name: "Frenzyflame Thrust",
+    },
+    Named {
+        id: 283,
+        name: "Divine Beast Frost Stomp",
+    },
+    Named {
+        id: 311,
+        name: "Mists of Eternal Sleep",
+    },
+    Named {
+        id: 334,
+        name: "Feeble Lord's Frenzied Flame",
+    },
+    Named {
+        id: 358,
+        name: "Deadly Poison Spray",
+    },
+    Named {
+        id: 364,
+        name: "Ghostflame Call",
+    },
+    Named {
+        id: 365,
+        name: "Rancor Slash",
+    },
+    Named {
+        id: 366,
+        name: "Rancor Slash",
+    },
+];
+
+/// SpEffect rows that summon a spirit (`BuddyParam.triggerSpEffectId`), named by the spirit ash that applies them.
+pub const SPIRIT_ASH_TRIGGERS: &[Named] = &[
+    Named {
+        id: 200000,
+        name: "Black Knife Tiche",
+    },
+    Named {
+        id: 201000,
+        name: "Banished Knight Oleg",
+    },
+    Named {
+        id: 202000,
+        name: "Banished Knight Engvall",
+    },
+    Named {
+        id: 203000,
+        name: "Fanged Imp Ashes",
+    },
+    Named {
+        id: 204000,
+        name: "Latenna the Albinauric",
+    },
+    Named {
+        id: 205000,
+        name: "Nomad Ashes",
+    },
+    Named {
+        id: 206000,
+        name: "Nightmaiden & Swordstress Puppets",
+    },
+    Named {
+        id: 207000,
+        name: "Mimic Tear Ashes",
+    },
+    Named {
+        id: 208000,
+        name: "Crystalian Ashes",
+    },
+    Named {
+        id: 209000,
+        name: "Ancestral Follower Ashes",
+    },
+    Named {
+        id: 210000,
+        name: "Winged Misbegotten Ashes",
+    },
+    Named {
+        id: 211000,
+        name: "Albinauric Ashes",
+    },
+    Named {
+        id: 212000,
+        name: "Skeletal Militiaman Ashes",
+    },
+    Named {
+        id: 213000,
+        name: "Skeletal Bandit Ashes",
+    },
+    Named {
+        id: 214000,
+        name: "Oracle Envoy Ashes",
+    },
+    Named {
+        id: 215000,
+        name: "Putrid Corpse Ashes",
+    },
+    Named {
+        id: 216000,
+        name: "Depraved Perfumer Carmaan",
+    },
+    Named {
+        id: 217000,
+        name: "Perfumer Tricia",
+    },
+    Named {
+        id: 218000,
+        name: "Glintstone Sorcerer Ashes",
+    },
+    Named {
+        id: 219000,
+        name: "Twinsage Sorcerer Ashes",
+    },
+    Named {
+        id: 220000,
+        name: "Page Ashes",
+    },
+    Named {
+        id: 221000,
+        name: "Battlemage Hugues",
+    },
+    Named {
+        id: 222000,
+        name: "Clayman Ashes",
+    },
+    Named {
+        id: 223000,
+        name: "Cleanrot Knight Finlay",
+    },
+    Named {
+        id: 224000,
+        name: "Kindred of Rot Ashes",
+    },
+    Named {
+        id: 225000,
+        name: "Marionette Soldier Ashes",
+    },
+    Named {
+        id: 226000,
+        name: "Avionette Soldier Ashes",
+    },
+    Named {
+        id: 227000,
+        name: "Fire Monk Ashes",
+    },
+    Named {
+        id: 228000,
+        name: "Blackflame Monk Amon",
+    },
+    Named {
+        id: 229000,
+        name: "Man-Serpent Ashes",
+    },
+    Named {
+        id: 230000,
+        name: "Azula Beastman Ashes",
+    },
+    Named {
+        id: 231000,
+        name: "Kaiden Sellsword Ashes",
+    },
+    Named {
+        id: 232000,
+        name: "Lone Wolf Ashes",
+    },
+    Named {
+        id: 233000,
+        name: "Giant Rat Ashes",
+    },
+    Named {
+        id: 233100,
+        name: "spirit summon",
+    },
+    Named {
+        id: 233200,
+        name: "spirit summon",
+    },
+    Named {
+        id: 234000,
+        name: "Demi-Human Ashes",
+    },
+    Named {
+        id: 235000,
+        name: "Rotten Stray Ashes",
+    },
+    Named {
+        id: 236000,
+        name: "Spirit Jellyfish Ashes",
+    },
+    Named {
+        id: 237000,
+        name: "Warhawk Ashes",
+    },
+    Named {
+        id: 238000,
+        name: "Stormhawk Deenh",
+    },
+    Named {
+        id: 239000,
+        name: "Bloodhound Knight Floh",
+    },
+    Named {
+        id: 240000,
+        name: "Wandering Noble Ashes",
+    },
+    Named {
+        id: 241000,
+        name: "Noble Sorcerer Ashes",
+    },
+    Named {
+        id: 242000,
+        name: "Vulgar Militia Ashes",
+    },
+    Named {
+        id: 243000,
+        name: "Mad Pumpkin Head Ashes",
+    },
+    Named {
+        id: 244000,
+        name: "Land Squirt Ashes",
+    },
+    Named {
+        id: 245000,
+        name: "Miranda Sprout Ashes",
+    },
+    Named {
+        id: 246000,
+        name: "Soldjars of Fortune Ashes",
+    },
+    Named {
+        id: 247000,
+        name: "Omenkiller Rollo",
+    },
+    Named {
+        id: 248000,
+        name: "Greatshield Soldier Ashes",
+    },
+    Named {
+        id: 249000,
+        name: "Archer Ashes",
+    },
+    Named {
+        id: 250000,
+        name: "Godrick Soldier Ashes",
+    },
+    Named {
+        id: 251000,
+        name: "Raya Lucaria Soldier Ashes",
+    },
+    Named {
+        id: 252000,
+        name: "Leyndell Soldier Ashes",
+    },
+    Named {
+        id: 253000,
+        name: "Radahn Soldier Ashes",
+    },
+    Named {
+        id: 254000,
+        name: "Mausoleum Soldier Ashes",
+    },
+    Named {
+        id: 255000,
+        name: "Haligtree Soldier Ashes",
+    },
+    Named {
+        id: 256000,
+        name: "Ancient Dragon Knight Kristoff",
+    },
+    Named {
+        id: 257000,
+        name: "Redmane Knight Ogha",
+    },
+    Named {
+        id: 258000,
+        name: "Lhutel the Headless",
+    },
+    Named {
+        id: 259000,
+        name: "Nepheli Loux Puppet",
+    },
+    Named {
+        id: 260000,
+        name: "Dung Eater Puppet",
+    },
+    Named {
+        id: 261000,
+        name: "Finger Maiden Therolina Puppet",
+    },
+    Named {
+        id: 262000,
+        name: "Dolores the Sleeping Arrow Puppet",
+    },
+    Named {
+        id: 263000,
+        name: "Jarwight Puppet",
+    },
+    Named {
+        id: 20200000,
+        name: "Curseblade Meera",
+    },
+    Named {
+        id: 20201000,
+        name: "Bloodfiend Hexer's Ashes",
+    },
+    Named {
+        id: 20202000,
+        name: "Gravebird Ashes",
+    },
+    Named {
+        id: 20203000,
+        name: "Fire Knight Hilde",
+    },
+    Named {
+        id: 20204000,
+        name: "Spider Scorpion Ashes",
+    },
+    Named {
+        id: 20205000,
+        name: "Inquisitor Ashes",
+    },
+    Named {
+        id: 20206000,
+        name: "Demi-Human Swordsman Yosh",
+    },
+    Named {
+        id: 20207000,
+        name: "Messmer Soldier Ashes",
+    },
+    Named {
+        id: 20208000,
+        name: "Black Knight Commander Andreas",
+    },
+    Named {
+        id: 20209000,
+        name: "Black Knight Captain Huw",
+    },
+    Named {
+        id: 20210000,
+        name: "Bigmouth Imp Ashes",
+    },
+    Named {
+        id: 20211000,
+        name: "Man-Fly Ashes",
+    },
+    Named {
+        id: 20212000,
+        name: "Taylew the Golem Smith",
+    },
+    Named {
+        id: 20213000,
+        name: "Divine Bird Warrior Ornis",
+    },
+    Named {
+        id: 20214000,
+        name: "Horned Warrior Ashes",
+    },
+    Named {
+        id: 20215000,
+        name: "Ancient Dragon Florissax",
+    },
+    Named {
+        id: 20217000,
+        name: "Fingercreeper Ashes",
+    },
+    Named {
+        id: 20218000,
+        name: "Fire Knight Queelign",
+    },
+    Named {
+        id: 20219000,
+        name: "Swordhand of Night Jolán",
+    },
+    Named {
+        id: 20220000,
+        name: "Jolán and Anna",
+    },
+    Named {
+        id: 20223000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20224000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20225000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20226000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20227000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20228000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20229000,
+        name: "spirit summon",
+    },
+    Named {
+        id: 20230000,
+        name: "spirit summon",
+    },
+];
 
 /// Bullets only the banned spells fire: (spell, bullets).
 pub const SPELL_BULLETS: &[(&str, &[i32])] = &[

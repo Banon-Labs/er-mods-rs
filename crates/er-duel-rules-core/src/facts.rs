@@ -15,6 +15,9 @@ pub struct WeaponFacts {
     pub phys_guard_cut: f32,
     /// Whether the row's hit effects put status on a target (`spEffectBehaviorId0..2`).
     pub inflicts_status: bool,
+    /// `isEnhance`: a grease can be applied to it (`CanUseGoods`). Set only on the Standard,
+    /// Heavy, Keen and Quality rows (bd buff-ashes-share-grease-slot-162-isenhance-2026-09-29).
+    pub takes_grease: bool,
 }
 
 /// One SpEffect row, as the rules read it.
@@ -186,6 +189,7 @@ pub(crate) mod test_support {
                     weight,
                     phys_guard_cut: 50.0,
                     inflicts_status: false,
+                    takes_grease: true,
                 },
             );
             self

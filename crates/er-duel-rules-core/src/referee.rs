@@ -1,11 +1,74 @@
-//! Which rule breaks become a popup, and the one rule that needs history: blue flasks per round.
+//! Which rule breaks become a popup, and the rules that need history: blue flasks per round, and
+//! a build that changes once two players share a world.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::facts::GameFacts;
-use crate::player::PlayerSnapshot;
+use crate::facts::{CATEGORY_LEFT_WEAPON_BUFF, CATEGORY_RIGHT_WEAPON_BUFF, GameFacts};
+use crate::player::{ATTRIBUTE_NAMES, Hand, PlayerSnapshot};
 use crate::rules::{CERULEAN_FLASK_LIMIT, Rule, Violation, check};
 use crate::tables;
+
+/// A build as the ruleset means it: level, attributes and everything equipped.
+#[derive(Clone, Debug, PartialEq)]
+struct Build {
+    level: u32,
+    attributes: [u32; 8],
+    weapons_left: [i32; 3],
+    weapons_right: [i32; 3],
+    armor: [i32; 4],
+    talismans: [i32; 4],
+    physick: [i32; 3],
+}
+
+impl Build {
+    fn of(p: &PlayerSnapshot) -> Self {
+        Self {
+            level: p.level,
+            attributes: p.attributes,
+            weapons_left: p.weapons_left,
+            weapons_right: p.weapons_right,
+            armor: p.armor,
+            talismans: p.talismans,
+            physick: p.physick,
+        }
+    }
+}
+
+/// The build a player entered the match with.
+struct Entered {
+    build: Build,
+    /// The armour has differed from `build.armor` since the last time it matched.
+    armor_changed: bool,
+}
+
+/// How long a weapon buff may outlive a change of the weapon in its hand. The game strips the
+/// hand's buffs in the same pre-update pass that takes the new weapon (1.16.2 `FUN_140660120` ->
+/// `FUN_1404f6c00` right, `RemoveWepParam2And6SpEffects` left), so anything past a few frames of
+/// read order was carried across: a buff transfer.
+pub const BUFF_TRANSFER_GRACE_MS: u64 = 250;
+
+/// How long a player has, from entering the match or respawning, to light a Rune Arc before the
+/// Better Multiplayer Rune Arc rule calls it missing. A death puts the arc out, so every round
+/// starts without one.
+pub const RUNE_ARC_GRACE_MS: u64 = 20_000;
+
+/// One hand of the local player: its weapon and weapon buffs last frame.
+#[derive(Default)]
+struct HandBuffs {
+    weapon: i32,
+    buffs: Vec<i32>,
+    /// The buffs the hand held when its weapon last changed, until judged.
+    carried: Vec<i32>,
+    changed_at: u64,
+}
+
+/// `slot: old -> new` for every slot of `name` that differs.
+fn slot_changes<const N: usize>(name: &str, old: &[i32; N], new: &[i32; N]) -> Vec<String> {
+    (0..N)
+        .filter(|&i| old[i] != new[i])
+        .map(|i| format!("{name} {}: {} -> {}", i + 1, old[i], new[i]))
+        .collect()
+}
 
 /// A break that has been continuously present, or seen again within this long, does not pop
 /// again: a grease on a restricted weapon is one popup, not one per frame. Once it has been gone
@@ -35,6 +98,13 @@ pub struct Referee {
     last_seen: HashMap<(u64, Rule, String), u64>,
     flasks: HashMap<u64, Flasks>,
     alive: HashMap<u64, bool>,
+    /// When each player last came alive: entered the world or respawned.
+    alive_since: HashMap<u64, u64>,
+    /// Builds fixed at the first frame a player shared the world with an opponent.
+    entered: HashMap<u64, Entered>,
+    /// The local player's hands, by `Hand as usize`. Remote players are left out: their buff
+    /// removal arrives over the network, and how late is not measured.
+    hands: [Option<HandBuffs>; 2],
 }
 
 impl Referee {
@@ -48,15 +118,34 @@ impl Referee {
         let present: HashSet<u64> = players.iter().map(|p| p.key).collect();
         self.alive.retain(|key, _| present.contains(key));
         self.flasks.retain(|key, _| present.contains(key));
+        // "Switching builds is prohibited once you enter the same world as your opponent": with
+        // nobody to fight there is no match, and the next opponent starts a new one.
+        let in_match = players.len() >= 2;
+        if in_match {
+            self.entered.retain(|key, _| present.contains(key));
+        } else {
+            self.entered.clear();
+        }
 
         // A round ends when someone dies; everybody's flasks are refilled for the next one.
+        self.alive_since.retain(|key, _| present.contains(key));
         let mut round_over = false;
         for p in players {
             let alive = p.hp > 0;
-            if self.alive.insert(p.key, alive) == Some(true) && !alive {
+            let was = self.alive.insert(p.key, alive);
+            if was == Some(true) && !alive {
                 round_over = true;
             }
+            if alive && was != Some(true) {
+                self.alive_since.insert(p.key, now_ms);
+            }
         }
+        // Better Multiplayer lets every player light a Rune Arc, and the ruleset's reason for
+        // allowing it is that a duel where only one side has one is not fair. A session is BMP when
+        // the local game has the module loaded: every player in it runs BMP.
+        let better_multiplayer = players
+            .iter()
+            .any(|p| p.local_settings.is_some_and(|s| s.better_multiplayer));
         if round_over {
             for flasks in self.flasks.values_mut() {
                 flasks.used = 0;
@@ -68,6 +157,29 @@ impl Referee {
             let mut violations = check(p, facts);
             if let Some(v) = self.count_flask(p) {
                 violations.push(v);
+            }
+            if in_match {
+                violations.extend(self.build_changes(p));
+            }
+            if in_match
+                && better_multiplayer
+                && p.hp > 0
+                && !p.rune_arc_active()
+                && self
+                    .alive_since
+                    .get(&p.key)
+                    .is_some_and(|&since| now_ms.saturating_sub(since) >= RUNE_ARC_GRACE_MS)
+            {
+                violations.push(Violation {
+                    rule: Rule::RuneArc,
+                    detail: format!(
+                        "no active Rune Arc {} s into the round",
+                        RUNE_ARC_GRACE_MS / 1000
+                    ),
+                });
+            }
+            if p.is_local {
+                violations.extend(self.carried_buffs(now_ms, p, facts));
             }
             for v in violations {
                 let key = (p.key, v.rule, v.detail.clone());
@@ -106,6 +218,123 @@ impl Referee {
             rule: Rule::CeruleanFlasks,
             detail: format!("Flask of Cerulean Tears number {} this round", flasks.used),
         })
+    }
+
+    /// A weapon buff the local player kept across a change of the weapon in its hand.
+    fn carried_buffs(
+        &mut self,
+        now_ms: u64,
+        p: &PlayerSnapshot,
+        facts: &impl GameFacts,
+    ) -> Vec<Violation> {
+        let mut out = Vec::new();
+        for hand in [Hand::Left, Hand::Right] {
+            let buffs: Vec<i32> = p
+                .speffects
+                .iter()
+                .copied()
+                .filter(|&id| {
+                    facts.effect(id).is_some_and(|e| {
+                        e.category
+                            == match hand {
+                                Hand::Left => CATEGORY_LEFT_WEAPON_BUFF,
+                                Hand::Right => CATEGORY_RIGHT_WEAPON_BUFF,
+                            }
+                    })
+                })
+                .collect();
+            let weapon = p.active(hand);
+            let h = self.hands[hand as usize].get_or_insert_with(|| HandBuffs {
+                weapon,
+                ..HandBuffs::default()
+            });
+            if weapon != h.weapon {
+                h.carried = std::mem::take(&mut h.buffs);
+                h.changed_at = now_ms;
+            }
+            if !h.carried.is_empty()
+                && now_ms.saturating_sub(h.changed_at) >= BUFF_TRANSFER_GRACE_MS
+            {
+                if h.carried.iter().any(|id| buffs.contains(id)) {
+                    out.push(Violation {
+                        rule: Rule::BuffTransfer,
+                        detail: format!("weapon buff kept across a weapon change to {weapon}"),
+                    });
+                }
+                h.carried.clear();
+            }
+            h.weapon = weapon;
+            h.buffs = buffs;
+        }
+        out
+    }
+
+    /// What has changed in `p`'s build since they entered the match.
+    fn build_changes(&mut self, p: &PlayerSnapshot) -> Vec<Violation> {
+        // Level 0 is a remote player whose data has not arrived yet: not a build to fix.
+        if p.level == 0 {
+            return Vec::new();
+        }
+        let now = Build::of(p);
+        let Some(entered) = self.entered.get_mut(&p.key) else {
+            self.entered.insert(
+                p.key,
+                Entered {
+                    build: now,
+                    armor_changed: false,
+                },
+            );
+            return Vec::new();
+        };
+        let old = &entered.build;
+        let mut out = Vec::new();
+        let mut stats: Vec<String> = (0..ATTRIBUTE_NAMES.len())
+            .filter(|&i| old.attributes[i] != now.attributes[i])
+            .map(|i| {
+                format!(
+                    "{} {} -> {}",
+                    ATTRIBUTE_NAMES[i], old.attributes[i], now.attributes[i]
+                )
+            })
+            .collect();
+        if old.level != now.level {
+            stats.insert(0, format!("level {} -> {}", old.level, now.level));
+        }
+        if !stats.is_empty() {
+            out.push(Violation {
+                rule: Rule::Respec,
+                detail: stats.join(", "),
+            });
+        }
+        let mut gear = slot_changes("right weapon", &old.weapons_right, &now.weapons_right);
+        gear.extend(slot_changes(
+            "left weapon",
+            &old.weapons_left,
+            &now.weapons_left,
+        ));
+        gear.extend(slot_changes("talisman", &old.talismans, &now.talismans));
+        gear.extend(slot_changes("tear", &old.physick, &now.physick));
+        let armor = slot_changes("armor", &old.armor, &now.armor);
+        if armor.is_empty() {
+            // Pieces taken off and put back: the poise reset the ruleset blacklists.
+            if entered.armor_changed {
+                entered.armor_changed = false;
+                out.push(Violation {
+                    rule: Rule::ArmorSwapPoiseReset,
+                    detail: "armor taken off and put back on".to_owned(),
+                });
+            }
+        } else {
+            entered.armor_changed = true;
+            gear.extend(armor);
+        }
+        if !gear.is_empty() {
+            out.push(Violation {
+                rule: Rule::SwitchingBuilds,
+                detail: gear.join(", "),
+            });
+        }
+        out
     }
 
     /// Blue flasks `key` has started this round.
@@ -188,6 +417,149 @@ mod tests {
         dead.hp = 0;
         referee.observe(10_000, &[p.clone(), dead], &facts);
         assert_eq!(referee.flasks_used(1), 0);
+    }
+
+    fn rules_of(alerts: &[Alert]) -> Vec<Rule> {
+        alerts.iter().map(|a| a.rule).collect()
+    }
+
+    #[test]
+    fn a_build_is_fixed_once_an_opponent_shares_the_world() {
+        let facts = facts();
+        let mut referee = Referee::default();
+        let mut p = player(1);
+        p.attributes = [40, 20, 25, 20, 40, 9, 9, 7];
+        p.weapons_right = [2_000_000, NO_ITEM, NO_ITEM];
+        let other = player(2);
+        // Alone: no match, so changing everything is preparation.
+        referee.observe(0, std::slice::from_ref(&p), &facts);
+        p.weapons_right[0] = 3_000_000;
+        assert!(
+            referee
+                .observe(100, std::slice::from_ref(&p), &facts)
+                .is_empty()
+        );
+        // The opponent arrives: this is the build p entered with.
+        assert!(
+            referee
+                .observe(200, &[p.clone(), other.clone()], &facts)
+                .is_empty()
+        );
+        p.weapons_right[1] = 2_000_000;
+        let a = referee.observe(300, &[p.clone(), other.clone()], &facts);
+        assert_eq!(rules_of(&a), vec![Rule::SwitchingBuilds]);
+        assert_eq!(a[0].detail, "right weapon 2: -1 -> 2000000");
+        p.weapons_right[1] = NO_ITEM;
+        p.attributes[0] = 45;
+        let a = referee.observe(400, &[p.clone(), other.clone()], &facts);
+        assert_eq!(rules_of(&a), vec![Rule::Respec]);
+        assert_eq!(a[0].detail, "Vigor 40 -> 45");
+        // The opponent leaves; the next one starts a new match from the build p has now.
+        referee.observe(500, std::slice::from_ref(&p), &facts);
+        assert!(referee.observe(600, &[p.clone(), other], &facts).is_empty());
+    }
+
+    #[test]
+    fn armor_taken_off_and_put_back_is_the_poise_reset() {
+        let facts = facts();
+        let mut referee = Referee::default();
+        let mut p = player(1);
+        // A second heavy piece, so the swap itself never drops p into a light roll.
+        p.armor[1] = 1;
+        let other = player(2);
+        referee.observe(0, &[p.clone(), other.clone()], &facts);
+        p.armor[0] = NO_ITEM;
+        let a = referee.observe(100, &[p.clone(), other.clone()], &facts);
+        assert_eq!(rules_of(&a), vec![Rule::SwitchingBuilds]);
+        p.armor[0] = 1;
+        let a = referee.observe(200, &[p.clone(), other.clone()], &facts);
+        assert_eq!(rules_of(&a), vec![Rule::ArmorSwapPoiseReset]);
+        assert!(referee.observe(300, &[p, other], &facts).is_empty());
+    }
+
+    #[test]
+    fn a_weapon_buff_kept_across_a_weapon_change_is_a_buff_transfer() {
+        let mut facts = facts();
+        let buff = 9001;
+        facts.effects.insert(
+            buff,
+            crate::facts::EffectFacts {
+                category: CATEGORY_RIGHT_WEAPON_BUFF,
+                ..Default::default()
+            },
+        );
+        let mut referee = Referee::default();
+        let mut p = player(1);
+        p.is_local = true;
+        p.weapons_right = [2_000_000, 3_000_000, NO_ITEM];
+        p.speffects = vec![buff];
+        referee.observe(0, std::slice::from_ref(&p), &facts);
+        // The game strips the buff with the change: nothing to report.
+        p.right_slot = 1;
+        p.speffects.clear();
+        referee.observe(16, std::slice::from_ref(&p), &facts);
+        assert!(
+            referee
+                .observe(400, std::slice::from_ref(&p), &facts)
+                .is_empty()
+        );
+        // Back to slot 0, buffed again, then a switch that keeps it.
+        p.right_slot = 0;
+        p.speffects = vec![buff];
+        referee.observe(500, std::slice::from_ref(&p), &facts);
+        p.right_slot = 1;
+        assert!(
+            referee
+                .observe(516, std::slice::from_ref(&p), &facts)
+                .is_empty(),
+            "grace"
+        );
+        let a = referee.observe(800, std::slice::from_ref(&p), &facts);
+        assert_eq!(rules_of(&a), vec![Rule::BuffTransfer]);
+    }
+
+    #[test]
+    fn in_better_multiplayer_everyone_lights_a_rune_arc() {
+        let facts = facts();
+        let mut referee = Referee::default();
+        let mut me = player(1);
+        me.is_local = true;
+        me.local_settings = Some(crate::player::LocalSettings {
+            better_multiplayer: true,
+            target_fps: 60.0,
+            ..Default::default()
+        });
+        me.rune_arc_flag = true;
+        let mut other = player(2);
+        referee.observe(0, &[me.clone(), other.clone()], &facts);
+        assert!(
+            referee
+                .observe(RUNE_ARC_GRACE_MS - 1, &[me.clone(), other.clone()], &facts)
+                .is_empty(),
+            "still time to light one"
+        );
+        let a = referee.observe(RUNE_ARC_GRACE_MS, &[me.clone(), other.clone()], &facts);
+        assert_eq!(rules_of(&a), vec![Rule::RuneArc]);
+        assert_eq!(a[0].key, 2);
+        // A Great Rune effect row counts as lit, the flag or not.
+        other.speffects = vec![tables::RUNE_ARC_EFFECTS[0].id];
+        assert!(
+            referee
+                .observe(
+                    RUNE_ARC_GRACE_MS + 100,
+                    &[me.clone(), other.clone()],
+                    &facts
+                )
+                .is_empty()
+        );
+        // Outside Better Multiplayer nobody is asked to.
+        me.local_settings = None;
+        other.speffects.clear();
+        assert!(
+            referee
+                .observe(RUNE_ARC_GRACE_MS * 3, &[me, other], &facts)
+                .is_empty()
+        );
     }
 
     #[test]

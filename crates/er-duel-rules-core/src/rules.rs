@@ -6,9 +6,25 @@
 //! fire only when the skill's clip plays. Spells are not replicated as equipment at all, so they
 //! fire on the projectiles only that spell fires.
 //!
-//! Rules that leave nothing in the game's memory are not checked: macros and third-party tools,
-//! hidden ping, the Better Multiplayer aim setting, result falsification, respeccing between
-//! rounds, and the glitches other than the offhand poison grease.
+//! Respeccing, switching builds and the armour-swap poise reset need history and live in
+//! [`crate::referee`], as do the blue flask count and a buff carried across a weapon change.
+//!
+//! # Rules no check covers, and why
+//!
+//! - Rune Arc outside Better Multiplayer: the game itself applies a Great Rune only to host-like
+//!   characters (1.17.1 `IsHostLike` 0x1404c85c0: Local and GrayPhantom), so in vanilla only the
+//!   host gains one. In Better Multiplayer the referee requires every player to have one lit
+//!   ([`crate::referee::RUNE_ARC_GRACE_MS`]).
+//! - Macros, third-party tools other than an FPS unlocker, transmog without consent, falsified
+//!   results and smurfing: nothing in game memory records them.
+//! - Hiding ping (Better Multiplayer's "Latency Overlay" option): where BMP stores it is not
+//!   found; it needs BMP loaded and a before/after diff of that one option.
+//! - Block desync, circumventing an effect's duration or tick rate, bugged weapon states and void
+//!   tech: no replicated signal is traced for them, and what void tech is is not known here.
+//! - Pre-buffs (pre-loading a crossbow, bow or ash): the ruleset gives no moment a round starts.
+//!
+//! The manual-aiming and unlocked-FPS rules read settings no other player replicates, so each
+//! machine can only judge its own player.
 
 use crate::facts::{CATEGORY_LEFT_WEAPON_BUFF, CATEGORY_RIGHT_WEAPON_BUFF, GameFacts, equip_load};
 use crate::player::{Hand, PlayerSnapshot, skill_clip, weapon_affinity, weapon_base};
@@ -21,6 +37,10 @@ pub const RUNE_LEVEL: u32 = 125;
 pub const CERULEAN_FLASK_LIMIT: u32 = 2;
 /// Physical guard absorption a shield may block with, in percent.
 pub const SHIELD_PHYS_GUARD_CAP: f32 = 90.0;
+/// A frame-rate target above the game's 60 cap means an unlocker set it.
+const UNLOCKED_TARGET_FPS: f32 = 61.0;
+/// The game's measured rate can overshoot 60 briefly; this far past it is not overshoot.
+const UNLOCKED_MEASURED_FPS: f32 = 65.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Rule {
@@ -29,6 +49,14 @@ pub enum Rule {
     PassiveRegen,
     Healing,
     SpectralSteed,
+    SpiritAshes,
+    Respec,
+    SwitchingBuilds,
+    ArmorSwapPoiseReset,
+    BuffTransfer,
+    ManualAttackAiming,
+    UnlockedFps,
+    RuneArc,
     CeruleanFlasks,
     FanDaggers,
     ShieldGuard,
@@ -76,6 +104,18 @@ impl Rule {
             Self::PassiveRegen => "Passive tick-based HP Regen via Armour/Talismans/Shields",
             Self::Healing => "HP Recovery via Spells/Crystal Tears/Consumables",
             Self::SpectralSteed => "Spectral Steed Whistle",
+            Self::SpiritAshes => "Spirit Ashes",
+            Self::Respec => "Respecing or swapping character during a match is not allowed",
+            Self::SwitchingBuilds => {
+                "Switching builds is prohibited once you enter the same world as your opponent"
+            }
+            Self::ArmorSwapPoiseReset => "Armor swap poise reset",
+            Self::BuffTransfer => "Buff Transfers",
+            Self::ManualAttackAiming => {
+                "Manual attack aiming setting must be disabled when in the BMP mod"
+            }
+            Self::UnlockedFps => "Adhere to the Elden Ring Terms of Service (unlocked FPS)",
+            Self::RuneArc => "Rune Arc (in Better Multiplayer every player has one active)",
             Self::CeruleanFlasks => "Blue flasks limited to 2",
             Self::FanDaggers => "Fan Daggers",
             Self::ShieldGuard => "Blocking With Shields above 90% physical absorption",
@@ -155,6 +195,7 @@ const BANNED_SKILLS: &[(i32, &str)] = &[
 
 /// Talismans that add damage to a skill (the Muleta restriction).
 const ASH_DAMAGE_TALISMANS: &[i32] = &[
+    talisman::WARRIOR_JAR_SHARD,
     talisman::SHARD_OF_ALEXANDER,
     talisman::RELLANAS_CAMEO,
     talisman::GODFREY_ICON,
@@ -262,6 +303,22 @@ pub fn check(p: &PlayerSnapshot, facts: &impl GameFacts) -> Vec<Violation> {
     check_bullets(p, &mut out);
     if p.riding {
         out.push(violation(Rule::SpectralSteed, "riding Torrent"));
+    }
+    if let Some(s) = p.local_settings {
+        if s.better_multiplayer && s.manual_attack_aiming {
+            out.push(violation(Rule::ManualAttackAiming, "enabled"));
+        }
+        // The game caps at 60 (fixed_spf 1/60, flip mode VsyncOn60Fps); a target above it, or a
+        // measured rate past it with margin, is an unlocker.
+        if s.target_fps > UNLOCKED_TARGET_FPS || s.measured_fps > UNLOCKED_MEASURED_FPS {
+            out.push(violation(
+                Rule::UnlockedFps,
+                format!(
+                    "target {:.0} fps, running at {:.0}",
+                    s.target_fps, s.measured_fps
+                ),
+            ));
+        }
     }
     if let Some(load) = equip_load(p, facts)
         && load.is_light()
@@ -419,6 +476,9 @@ fn check_effects(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Viola
         if tables::ROT_GREASE.contains(&id) {
             out.push(violation(Rule::RotGrease, "rot grease"));
         }
+        if let Some(name) = lookup(tables::SPIRIT_ASH_TRIGGERS, id) {
+            out.push(violation(Rule::SpiritAshes, name));
+        }
         let Some(hand) = facts.effect(id).and_then(|e| hand_of_category(e.category)) else {
             continue;
         };
@@ -428,6 +488,15 @@ fn check_effects(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Viola
             continue;
         }
         let base = weapon_base(weapon_id);
+        // A grease takes only on an `isEnhance` row, so one on any other weapon was carried there.
+        if tables::GREASE_BUFFS.contains(&id)
+            && facts.weapon(weapon_id).is_some_and(|w| !w.takes_grease)
+        {
+            out.push(violation(
+                Rule::BuffTransfer,
+                format!("grease on weapon {weapon_id}, which takes none"),
+            ));
+        }
         if tables::SLEEP_GREASE.contains(&id)
             && let Some(name) = lookup(tables::RIPPLE_WEAPONS, base)
         {
@@ -482,6 +551,14 @@ fn check_skills(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violat
         {
             out.push(violation(Rule::SpinningSlashLightGreatsword, "used"));
         }
+        // "2H Stone Club/Club: Any Status Application", through a skill's own status.
+        let skill_weapon = p.non_shield_skill_weapon();
+        if p.two_handed().is_some()
+            && matches!(weapon_base(skill_weapon), weapon::STONE_CLUB | weapon::CLUB)
+            && let Some(name) = lookup(tables::STATUS_SKILLS, type_new)
+        {
+            out.push(violation(Rule::StoneClubStatus, name));
+        }
         if type_new == skill::MULETA
             && p.talismans
                 .iter()
@@ -510,7 +587,7 @@ mod tests {
     use super::*;
     use crate::facts::test_support::Table;
     use crate::facts::{EffectFacts, WeaponFacts};
-    use crate::player::{ArmStyle, NO_ITEM};
+    use crate::player::{ArmStyle, LocalSettings, NO_ITEM};
 
     fn rules(p: &PlayerSnapshot, facts: &Table) -> Vec<Rule> {
         check(p, facts).into_iter().map(|v| v.rule).collect()
@@ -627,6 +704,7 @@ mod tests {
                 weight: 4.0,
                 phys_guard_cut: 100.0,
                 inflicts_status: false,
+                takes_grease: true,
             },
         );
         let p = PlayerSnapshot {
@@ -641,6 +719,7 @@ mod tests {
                 weight: 4.0,
                 phys_guard_cut: 90.0,
                 inflicts_status: false,
+                takes_grease: true,
             },
         );
         assert!(!rules(&p, &facts).contains(&Rule::ShieldGuard));
@@ -771,16 +850,94 @@ mod tests {
     }
 
     #[test]
+    fn a_grease_on_a_weapon_that_takes_none_was_carried_there() {
+        let grease = tables::GREASE_BUFFS[0];
+        // Fire Longsword: an elemental row, isEnhance 0.
+        const FIRE_LONGSWORD: i32 = LONGSWORD + 400;
+        let mut facts = table().with(
+            FIRE_LONGSWORD,
+            WeaponFacts {
+                wep_type: 3,
+                weight: 3.5,
+                phys_guard_cut: 50.0,
+                inflicts_status: false,
+                takes_grease: false,
+            },
+        );
+        facts.effects.insert(
+            grease,
+            EffectFacts {
+                category: crate::facts::CATEGORY_RIGHT_WEAPON_BUFF,
+                ..EffectFacts::default()
+            },
+        );
+        let p = PlayerSnapshot {
+            weapons_right: [FIRE_LONGSWORD, NO_ITEM, NO_ITEM],
+            speffects: vec![grease],
+            ..rune_125()
+        };
+        assert!(rules(&p, &facts).contains(&Rule::BuffTransfer));
+        let facts = facts.weapon(FIRE_LONGSWORD, 3, 3.5);
+        assert!(!rules(&p, &facts).contains(&Rule::BuffTransfer));
+    }
+
+    #[test]
+    fn a_status_skill_from_a_two_handed_club_breaks_the_status_ban() {
+        let facts = table().weapon(weapon::STONE_CLUB, 21, 9.0);
+        let (status_skill, name) = (tables::STATUS_SKILLS[0].id, tables::STATUS_SKILLS[0].name);
+        let mut p = PlayerSnapshot {
+            weapons_right: [weapon::STONE_CLUB, NO_ITEM, NO_ITEM],
+            new_anims: vec![(600 + status_skill) * 1_000_000 + 40_000],
+            ..rune_125()
+        };
+        assert!(
+            !rules(&p, &facts).contains(&Rule::StoneClubStatus),
+            "one-handed is legal"
+        );
+        p.arm_style = ArmStyle::RightBothHands;
+        assert!(check(&p, &facts).contains(&violation(Rule::StoneClubStatus, name)));
+    }
+
+    #[test]
+    fn local_settings_break_the_rules_they_name() {
+        let facts = table();
+        let mut s = LocalSettings {
+            manual_attack_aiming: true,
+            better_multiplayer: false,
+            target_fps: 60.0,
+            measured_fps: 41.0,
+        };
+        let p = |s| PlayerSnapshot {
+            local_settings: Some(s),
+            ..rune_125()
+        };
+        assert!(
+            rules(&p(s), &facts).is_empty(),
+            "the aiming rule is Better Multiplayer's"
+        );
+        s.better_multiplayer = true;
+        assert_eq!(rules(&p(s), &facts), vec![Rule::ManualAttackAiming]);
+        s.manual_attack_aiming = false;
+        s.target_fps = 120.0;
+        assert_eq!(rules(&p(s), &facts), vec![Rule::UnlockedFps]);
+    }
+
+    #[test]
     fn listed_effects_and_tears_fire() {
         let facts = table();
         let p = PlayerSnapshot {
-            speffects: vec![tables::BODY_BUFFS[0].id, tables::HEALS[0].id],
+            speffects: vec![
+                tables::BODY_BUFFS[0].id,
+                tables::HEALS[0].id,
+                tables::SPIRIT_ASH_TRIGGERS[0].id,
+            ],
             physick: [tables::BANNED_TEARS[0].0.id, NO_ITEM, NO_ITEM],
             ..rune_125()
         };
         let got = rules(&p, &facts);
         assert!(got.contains(&Rule::PlayerBuff));
         assert!(got.contains(&Rule::Healing));
+        assert!(got.contains(&Rule::SpiritAshes));
     }
 
     #[test]
