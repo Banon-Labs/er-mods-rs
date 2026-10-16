@@ -16,6 +16,10 @@
 # from a given source tree needs a content hash taken while that tree was the one being
 # compiled. scripts/er-run-branch.py refuses to launch an artifact without it.
 #
+# A shell's fetched files (scripts/me3-dll-list.py --fetched, today er-cel-shade's
+# dxcompiler.dll) are fetched beside it after the build and required: the build fails without
+# them. The first fetch on a machine downloads 32 MB; later ones copy the machine's cache.
+#
 # Usage:
 #   scripts/er-build-dlls.sh er-quickload er-armament-icons     # named packages
 #   scripts/er-build-dlls.sh --all                               # every shipped shell
@@ -63,7 +67,7 @@ fi
 TARGET="${ER_BUILD_TARGET:-x86_64-pc-windows-msvc}"
 PROFILE_DIR="$REPO_ROOT/target/$TARGET/release"
 
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
 
 packages=()
 case "${1:-}" in
@@ -105,7 +109,22 @@ for pkg in "${packages[@]}"; do
   cargo_args+=(-p "$pkg")
 done
 
-echo "er-build-dlls: building ${#packages[@]} package(s): ${packages[*]}"
+# Executables a shell needs beside it (scripts/me3-dll-list.py `COMPANIONS`): built in the same cargo
+# call, because cargo never builds a dependency's [[bin]] -- `-p er-cel-shade` alone compiles
+# er-shader-compiler as a library and leaves whatever er-shader-compiler.exe an earlier build left,
+# which the DLL then refuses for its build id -- and attested below like the shells.
+companion_pkgs=()
+companion_files=()
+while IFS=: read -r shell companion file; do
+  for pkg in "${packages[@]}"; do
+    [[ "$pkg" == "$shell" ]] || continue
+    companion_pkgs+=("$companion")
+    companion_files+=("$file")
+    cargo_args+=(-p "$companion")
+  done
+done < <(python3 "$REPO_ROOT/scripts/me3-dll-list.py" --companions)
+
+echo "er-build-dlls: building ${#packages[@]} package(s): ${packages[*]}${companion_pkgs[*]:+ (with ${companion_pkgs[*]})}"
 ( cd "$REPO_ROOT" && cargo xwin build --release --target "$TARGET" "${cargo_args[@]}" )
 
 status=0
@@ -118,5 +137,34 @@ for pkg in "${packages[@]}"; do
   fi
   python3 "$REPO_ROOT/scripts/er-dll-provenance.py" write --package "$pkg" --artifact "$dll"
 done
+for i in "${!companion_pkgs[@]}"; do
+  file="$PROFILE_DIR/${companion_files[$i]}"
+  if [[ ! -f "$file" ]]; then
+    echo "er-build-dlls: BUILD REPORTED SUCCESS BUT $file DOES NOT EXIST (${companion_pkgs[$i]})" >&2
+    status=1
+    continue
+  fi
+  python3 "$REPO_ROOT/scripts/er-dll-provenance.py" write --package "${companion_pkgs[$i]}" --artifact "$file"
+done
+
+# Files a shell needs beside it that nobody here builds (scripts/me3-dll-list.py `FETCHED`): today
+# the shader editor's dxcompiler.dll. A fresh worktree has none, and er_cel_shade.dll then loads
+# fine and compiles nothing, which reads as an editor bug rather than a missing file. So each is
+# fetched here, from the pinned release or the machine's cache of it, and then required: a build
+# that leaves a shell without its file fails, loudly, instead of handing over a DLL that cannot do
+# its job.
+while IFS=: read -r shell fetched_file script; do
+  for pkg in "${packages[@]}"; do
+    [[ "$pkg" == "$shell" ]] || continue
+    echo "er-build-dlls: $shell needs $fetched_file beside it; fetching with scripts/$script"
+    if ! python3 "$REPO_ROOT/scripts/$script" --dest "$PROFILE_DIR" ||
+       ! python3 "$REPO_ROOT/scripts/$script" --check --require --dest "$PROFILE_DIR"; then
+      echo "er-build-dlls: $shell WAS BUILT BUT $PROFILE_DIR/$fetched_file IS NOT THE PINNED FILE OR IS MISSING;" >&2
+      echo "  $shell cannot work without it. The lines above say why; fetch it with" >&2
+      echo "  python3 $REPO_ROOT/scripts/$script --dest $PROFILE_DIR" >&2
+      status=1
+    fi
+  done
+done < <(python3 "$REPO_ROOT/scripts/me3-dll-list.py" --fetched)
 
 exit "$status"

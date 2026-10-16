@@ -1,0 +1,66 @@
+[package]
+name = "er-vsplice-proto"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# The vertex-layer splicer's offline measurement tools (V0 of `docs/plans/er-shader-editor-vertex.md`,
+# section 11). The splicer itself is `crates/er-shader-compiler/src/vsplice.rs`, which the
+# compiler helper runs; the binaries here measure it over a vkd3d-proton shader dump on Linux
+# (`vsplice_sweep`) and under Wine with the pinned dxcompiler.dll (`vsplice_windows`).
+#
+# Standalone and not a workspace member, like `scripts/oodle-dcx-probe`: it is a measurement tool,
+# and nothing the game loads links it.
+#
+#   cargo run --release --manifest-path scripts/vsplice/Cargo.toml --bin vsplice_sweep -- --help
+#   cargo xwin build --release --target x86_64-pc-windows-msvc \
+#       --manifest-path scripts/vsplice/Cargo.toml --bin vsplice_windows
+
+[workspace]
+
+[lib]
+name = "vsplice_proto"
+path = "src/lib.rs"
+
+# Host only: it reads containers through er-cel-shade's host half.
+[[bin]]
+name = "vsplice_sweep"
+path = "src/bin/vsplice_sweep.rs"
+
+[[bin]]
+name = "vsplice_bench"
+path = "src/bin/vsplice_bench.rs"
+
+[[bin]]
+name = "vsplice_one"
+path = "src/bin/vsplice_one.rs"
+
+[[bin]]
+name = "vsplice_windows"
+path = "src/bin/vsplice_windows.rs"
+
+[dependencies]
+# FNV-1a, for the group-consistency hash.
+er-game-base = { path = "../../crates/er-game-base" }
+# The splicer, as the helper runs it.
+er-shader-compiler = { path = "../../crates/er-shader-compiler" }
+
+# The sweep reads containers with er-cel-shade's own reader and generates carriers with its own
+# annotation parser, so the prototype checks what the product checks. Host only: the Windows probe
+# needs neither, and er-cel-shade's Windows half pulls in the overlay.
+[target.'cfg(not(windows))'.dependencies]
+er-cel-shade = { path = "../../crates/er-cel-shade" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D_Dxc",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+] }
+
+[lints.rust]
+warnings = { level = "deny", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }

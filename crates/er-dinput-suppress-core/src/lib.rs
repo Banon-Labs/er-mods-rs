@@ -112,6 +112,26 @@ pub fn suppressed_keys() -> usize {
 /// Set while this module's overlay owns the pointer. Per-DLL by design; see the module docs.
 static POINTER_OVER_OVERLAY: AtomicBool = AtomicBool::new(false);
 
+/// Set while this module's overlay takes the whole mouse: a modal menu, where neither a click nor
+/// a movement may reach the game wherever the pointer is. Per-DLL, like the flag above.
+static MOUSE_TAKEN: AtomicBool = AtomicBool::new(false);
+
+/// Mouse reads this module zeroed whole.
+static SUPPRESSED_MOUSE_READS: AtomicUsize = AtomicUsize::new(0);
+
+/// Take the whole mouse from the game, or give it back: while taken, every DirectInput mouse read
+/// comes back with all axes, the wheel and every button at rest. The overlay still sees the mouse,
+/// because hudhook feeds imgui from the window procedure.
+pub fn set_mouse_taken(taken: bool) {
+    MOUSE_TAKEN.store(taken, Ordering::Relaxed);
+}
+
+/// How many mouse reads were zeroed whole.
+#[must_use]
+pub fn suppressed_mouse_reads() -> usize {
+    SUPPRESSED_MOUSE_READS.load(Ordering::Relaxed)
+}
+
 /// Mouse reads whose left button this module blanked.
 static SUPPRESSED_MOUSE_CLICKS: AtomicUsize = AtomicUsize::new(0);
 
@@ -147,10 +167,16 @@ pub fn pointer_over_overlay() -> bool {
 ///
 /// `data` must be the state buffer DirectInput just filled, valid for `size` bytes.
 pub unsafe fn blank_overlay_mouse_click(hr: i32, size: u32, data: *mut u8) {
-    if hr < 0 || data.is_null() || !POINTER_OVER_OVERLAY.load(Ordering::Relaxed) {
+    if hr < 0 || data.is_null() || !dinput_state::is_mouse_state(size) {
         return;
     }
-    if !dinput_state::is_mouse_state(size) {
+    if MOUSE_TAKEN.load(Ordering::Relaxed) {
+        // SAFETY: the caller's contract: `data` is valid for `size` bytes.
+        unsafe { std::ptr::write_bytes(data, 0, size as usize) };
+        SUPPRESSED_MOUSE_READS.fetch_add(1, Ordering::Relaxed);
+        return;
+    }
+    if !POINTER_OVER_OVERLAY.load(Ordering::Relaxed) {
         return;
     }
     let button = unsafe { data.add(dinput_state::MOUSE_BUTTON0_OFFSET) };
@@ -271,6 +297,49 @@ mod tests {
         unsafe { blank_taken_keys(0, dinput_state::MOUSE_STATE_BYTES as u32, buf.as_mut_ptr()) };
         assert_eq!(buf[dinput_state::MOUSE_BUTTON0_OFFSET], 0x80);
         set_keys_taken(&[]);
+    }
+
+    #[test]
+    fn a_taken_mouse_reads_as_still_wherever_the_pointer_is() {
+        let _serialized = SERIALIZE.lock().unwrap_or_else(|e| e.into_inner());
+        set_pointer_over_overlay(false);
+        set_mouse_taken(true);
+        let before = suppressed_mouse_reads();
+        // DIMOUSESTATE2: three axes, then eight buttons; movement on every axis, two buttons down.
+        let mut buf = [0u8; dinput_state::MOUSE_STATE2_BYTES];
+        buf[..12].copy_from_slice(&[5, 0, 0, 0, 0xfb, 0xff, 0xff, 0xff, 120, 0, 0, 0]);
+        buf[dinput_state::MOUSE_BUTTON0_OFFSET] = 0x80;
+        buf[dinput_state::MOUSE_BUTTON0_OFFSET + 1] = 0x80;
+        unsafe {
+            blank_overlay_mouse_click(0, dinput_state::MOUSE_STATE2_BYTES as u32, buf.as_mut_ptr());
+        }
+        assert!(buf.iter().all(|b| *b == 0), "{buf:?}");
+        assert_eq!(suppressed_mouse_reads(), before + 1);
+
+        // A keyboard read through a shared vtable is still left alone.
+        let mut dik = [0x80u8; dinput_state::KEYBOARD_STATE_BYTES];
+        unsafe {
+            blank_overlay_mouse_click(
+                0,
+                dinput_state::KEYBOARD_STATE_BYTES as u32,
+                dik.as_mut_ptr(),
+            );
+        }
+        assert!(dik.iter().all(|b| *b == 0x80));
+
+        set_mouse_taken(false);
+        let mut moving = [7u8; dinput_state::MOUSE_STATE_BYTES];
+        unsafe {
+            blank_overlay_mouse_click(
+                0,
+                dinput_state::MOUSE_STATE_BYTES as u32,
+                moving.as_mut_ptr(),
+            );
+        }
+        assert!(
+            moving.iter().all(|b| *b == 7),
+            "given back, the mouse is the game's"
+        );
     }
 
     #[test]
