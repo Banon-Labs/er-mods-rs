@@ -118,6 +118,8 @@ env \
 	ER_QUICKLOAD_CRASH_LOGGING_MODULES_PATH="$ARTIFACT_DIR/er-crash-modules.txt" \
 	ER_QUICKLOAD_FOCUS_INPUT_LOG_PATH="$ARTIFACT_DIR/er-focus-input.log" \
 	ER_QUICKLOAD_QUIT_MENU_LOG_PATH="$ARTIFACT_DIR/er-quit-menu.log" \
+	ER_QUICKLOAD_CEL_SHADE_TELEMETRY_PATH="$ARTIFACT_DIR/er-cel-shade-telemetry.json" \
+	ER_QUICKLOAD_RENDER_SCALE_TELEMETRY_PATH="$ARTIFACT_DIR/er-render-scale-telemetry.json" \
 	ER_QUICKLOAD_BUILD_IMPORT_LOG_PATH="$ARTIFACT_DIR/er-build-import.log" \
 	"$ME3" launch -g eldenring --online false -p "$(wslpath -w "$PROFILE")" >"$ARTIFACT_DIR/me3-launch.log" 2>&1 &
 ME3_PID=$!

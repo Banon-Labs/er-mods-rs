@@ -105,7 +105,22 @@ for pkg in "${packages[@]}"; do
   cargo_args+=(-p "$pkg")
 done
 
-echo "er-build-dlls: building ${#packages[@]} package(s): ${packages[*]}"
+# Executables a shell needs beside it (scripts/me3-dll-list.py `COMPANIONS`): built in the same cargo
+# call, because cargo never builds a dependency's [[bin]] -- `-p er-cel-shade` alone compiles
+# er-shader-compiler as a library and leaves whatever er-shader-compiler.exe an earlier build left,
+# which the DLL then refuses for its build id -- and attested below like the shells.
+companion_pkgs=()
+companion_files=()
+while IFS=: read -r shell companion file; do
+  for pkg in "${packages[@]}"; do
+    [[ "$pkg" == "$shell" ]] || continue
+    companion_pkgs+=("$companion")
+    companion_files+=("$file")
+    cargo_args+=(-p "$companion")
+  done
+done < <(python3 "$REPO_ROOT/scripts/me3-dll-list.py" --companions)
+
+echo "er-build-dlls: building ${#packages[@]} package(s): ${packages[*]}${companion_pkgs[*]:+ (with ${companion_pkgs[*]})}"
 ( cd "$REPO_ROOT" && cargo xwin build --release --target "$TARGET" "${cargo_args[@]}" )
 
 status=0
@@ -117,6 +132,15 @@ for pkg in "${packages[@]}"; do
     continue
   fi
   python3 "$REPO_ROOT/scripts/er-dll-provenance.py" write --package "$pkg" --artifact "$dll"
+done
+for i in "${!companion_pkgs[@]}"; do
+  file="$PROFILE_DIR/${companion_files[$i]}"
+  if [[ ! -f "$file" ]]; then
+    echo "er-build-dlls: BUILD REPORTED SUCCESS BUT $file DOES NOT EXIST (${companion_pkgs[$i]})" >&2
+    status=1
+    continue
+  fi
+  python3 "$REPO_ROOT/scripts/er-dll-provenance.py" write --package "${companion_pkgs[$i]}" --artifact "$file"
 done
 
 exit "$status"

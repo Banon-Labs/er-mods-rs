@@ -75,6 +75,37 @@ pub fn validate(ttf: &[u8], sizes_px: &[f32]) -> Result<(), FontRejection> {
     check_sfnt(ttf).map_err(FontRejection::NotAFont)
 }
 
+/// What makes two font requests the same request: the bytes (their length and FNV-1a 64) and the
+/// exact sizes, bit for bit and in order.
+///
+/// # Why the host compares requests
+///
+/// A process gets [`MAX_FONT_REQUESTS`] for every overlay in it. Two panels built on
+/// `er-overlay-theme` ask for the same four faces at the same sizes whenever they are drawn at the
+/// same scale, and without this each would spend four of the sixteen on fonts the atlas already
+/// holds -- and the atlas would hold every glyph twice. The host hands an identical request the
+/// handle it already gave out ([`crate::overlay_host::add_font_v1`]), so the second panel costs no
+/// request and no atlas space, and both read the same `ImFont*`s.
+///
+/// Sizes are compared as bits rather than as floats so that the key is a plain equality: two sizes
+/// that print alike but differ in the last bit are two sizes, which is what the atlas would build.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontRequestKey {
+    pub len: usize,
+    pub hash: u64,
+    pub sizes: Vec<u32>,
+}
+
+/// The [`FontRequestKey`] of a request.
+#[must_use]
+pub fn request_key(ttf: &[u8], sizes_px: &[f32]) -> FontRequestKey {
+    FontRequestKey {
+        len: ttf.len(),
+        hash: er_game_base::fnv1a::fnv1a64(ttf),
+        sizes: sizes_px.iter().map(|size| size.to_bits()).collect(),
+    }
+}
+
 /// `display_h / 1080`, the factor a guest multiplies its 1080p layout by. A degenerate height
 /// answers `1.0` so a guest never divides or scales by zero.
 pub fn ui_scale(display_h: f32) -> f32 {
@@ -307,6 +338,26 @@ mod tests {
         for pair in GLYPH_RANGES[..GLYPH_RANGES.len() - 1].chunks(2) {
             assert!(pair[0] <= pair[1]);
         }
+    }
+
+    #[test]
+    fn a_request_is_the_same_request_only_with_the_same_bytes_and_sizes() {
+        let font = sfnt(TAG_TRUETYPE, &good_tables());
+        let key = request_key(&font, &[16.9, 22.1]);
+        assert_eq!(key, request_key(&font.clone(), &[16.9, 22.1]));
+        // Other sizes, the same sizes in another order, or one more size: another request.
+        assert_ne!(key, request_key(&font, &[16.9]));
+        assert_ne!(key, request_key(&font, &[22.1, 16.9]));
+        assert_ne!(
+            key,
+            request_key(&font, &[16.9, f32::from_bits(22.1_f32.to_bits() + 1)])
+        );
+        // Other bytes of the same length: another request.
+        let mut other = font.clone();
+        let last = other.len() - 1;
+        other[last] ^= 0xff;
+        assert_ne!(key, request_key(&other, &[16.9, 22.1]));
+        assert_eq!(key.len, font.len());
     }
 
     #[test]

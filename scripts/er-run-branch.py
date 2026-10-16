@@ -176,6 +176,28 @@ def run_script(script: str, *args: str) -> tuple[int, str, str]:
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def companion_artifacts(packages: list[str]) -> list[tuple[str, str]]:
+    """`(package, file)` of every executable a shell in `packages` spawns beside it.
+
+    `scripts/me3-dll-list.py --companions` names them: today `er-shader-compiler.exe`, which
+    er_cel_shade.dll starts as the shader editor's compiler. A launch verifies their provenance as
+    it verifies the DLLs', because a helper left from an earlier build fails the DLL's build-id
+    handshake and leaves the editor with no compiler -- evidence for code that is not the code
+    under test, the same as a stale DLL.
+    """
+    code, out, err = run_script("me3-dll-list.py", "--companions")
+    if code != 0:
+        raise RuntimeError(f"me3-dll-list.py --companions failed: {err.strip() or out.strip()}")
+    wanted = set(packages)
+    found: list[tuple[str, str]] = []
+    for line in out.splitlines():
+        shell, _, rest = line.strip().partition(":")
+        package, _, artifact = rest.partition(":")
+        if shell in wanted and package and artifact and (package, artifact) not in found:
+            found.append((package, artifact))
+    return found
+
+
 # A booting Elden Ring took 17 X11 client slots before the server cut it off mid-boot, so it
 # wants more than that. This is the refusal threshold, not the game's measured appetite.
 X11_CLIENTS_REQUIRED = 40
@@ -687,6 +709,18 @@ def preflight(args) -> tuple[dict, dict | None]:
         )
         if code != 0:
             stale.append((err or out).strip())
+    # The executables those DLLs spawn, which `er-build-dlls.sh` builds and attests with them.
+    for package, artifact in companion_artifacts(closure["packages"]):
+        code, out, err = run_script(
+            "er-dll-provenance.py",
+            "verify",
+            "--package",
+            package,
+            "--artifact",
+            str(target_dir() / artifact),
+        )
+        if code != 0:
+            stale.append((err or out).strip())
     if stale:
         raise RuntimeError(
             "REFUSING TO LAUNCH -- staged DLLs do not match this source tree:\n"
@@ -1127,6 +1161,16 @@ def selftest() -> int:
         "the sidecar path is parsed and normalises to the staged path",
     )
     check(parse_loaded_line("runtime-config: loaded 'x'") == {}, "a line with no fields yields none")
+
+    # A shell's companion executable is verified with it: er_cel_shade.dll's compiler helper.
+    check(
+        companion_artifacts(["er-cel-shade"]) == [("er-shader-compiler", "er-shader-compiler.exe")],
+        "the shader editor's compiler helper is verified with er_cel_shade.dll",
+    )
+    check(
+        companion_artifacts(["er-quickload", "er-crash-logging"]) == [],
+        "a shell with no companion adds nothing to verify",
+    )
 
     # The silent no-op this refusal closes, measured on br-20260911-163835-032f: the mode was
     # accepted, the marker files were written, and the harness was excluded by the closure, so the

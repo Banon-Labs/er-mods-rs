@@ -1,0 +1,77 @@
+[package]
+name = "er-cel-shade"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Cel shading for Elden Ring as one me3 native: beside five lighting and tonemap pipelines the game
+# creates, it creates a cel variant with a posterizing port as its pixel shader and binds the
+# variant whenever the game binds the original, and an in-game menu (F6) tunes the ports live. The
+# game's own pipelines are never changed. Works on Windows and under Proton alike, because it works
+# on what the game hands D3D12 rather than anything below it.
+[lib]
+name = "er_cel_shade"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# For development builds only, to run the native Windows gate W1 (design section 13). The
+# `D3D12CreateDevice` detour switches on D3D12's debug layer with GPU-based validation, and DRED,
+# before the game's device exists, and writes every message the debug layer raises to
+# `er-cel-shade.log`. Needs a Windows machine with the Graphics Tools optional feature. It is a
+# compile-time switch and nothing else: no environment variable or file turns it on, and
+# `scripts/er-build-dlls.sh` never passes it.
+d3d12-debug = []
+
+[dependencies]
+er-game-base = { path = "../er-game-base" }
+# The shader editor's compiler: the pipe protocol `er-shader-compiler.exe` speaks, and on Windows
+# the dxc loader the editor falls back to in process when the helper cannot start. Neither links
+# dxcompiler.dll; `scripts/check-dll-imports.py` holds the built DLL to that.
+er-shader-compiler = { path = "../er-shader-compiler" }
+
+[target.'cfg(windows)'.dependencies]
+er-hook = { path = "../er-hook" }
+# The one-imgui-host-per-process arbitration: the menu draws as a guest of whichever overlay shell
+# hosts, and hosts only when none does, so exactly one `Present` hook exists in the process.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+# Taking the mouse and the keyboard from the game while the menu is open, chained on the shared
+# `GetDeviceState` union with every other shell that blanks input.
+er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
+# The menu key's spelling, and the atomic rename the settings file is saved with.
+er-hotkey-config = { path = "../er-hotkey-config" }
+# Pinned to the same hudhook every other overlay shell carries: the `ui` pointer crosses a DLL
+# boundary and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi_Common",
+  # The compiler helper: its pipes' inheritance, the job that kills it with the game, and its
+  # process (`editor/compiler.rs`).
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_LibraryLoader",
+  # `HeapFree` for the string Wine's `wine_get_unix_file_name` returns (`menu/files.rs`).
+  "Win32_System_Memory",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[lints]
+workspace = true
+
+# The glyph ranges the overlay host's font has, for the test that every string the Shaders panel
+# draws is inside them (`menu/mod.rs`). The crate's layout half builds on the host.
+[dev-dependencies]
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+
+# Assembles the byte-checked prologue of the cursor predicate from named instructions in
+# `build.rs`. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }

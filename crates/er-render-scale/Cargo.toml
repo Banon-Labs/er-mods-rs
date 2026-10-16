@@ -1,0 +1,53 @@
+[package]
+name = "er-render-scale"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A lower 3D render resolution with the UI left at native resolution, as one me3 native, set from a
+# small in-game menu (F5 by default). It holds Elden Ring's own dynamic resolution at a fixed scale:
+# the per-frame update (1.17.1 `0x141b2e9b0`) is detoured to pin the controller's minimum and
+# maximum to `1/divisor`, which the view setup turns into a smaller scene viewport, and the final
+# composite already upsamples the scene under a native-resolution UI. Mechanism: bd
+# `er-dynamic-resolution-chain-static-2026-10-15` and `er-dynamic-resolution-runtime-proof-2026-10-15`,
+# prototyped as `scripts/frida/render-scale.js`.
+[lib]
+name = "er_render_scale"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The menu key's spelling and the atomic write the settings file is saved with; host-buildable.
+er-hotkey-config = { path = "../er-hotkey-config" }
+# The look the menu draws in, shared with er-cel-shade's Shaders panel. Its per-frame record and
+# font state are pure, so the telemetry renderer that writes them is tested on the host.
+er-overlay-theme = { path = "../er-overlay-theme" }
+# Taking the mouse, the keyboard and the pad from the game while the menu is open, chained on the
+# same unions as every other shell that does. Its counters are reported in the telemetry.
+er-overlay-input = { path = "../er-overlay-input" }
+
+[target.'cfg(windows)'.dependencies]
+er-game-base = { path = "../er-game-base" }
+er-hook = { path = "../er-hook" }
+# The one-imgui-host-per-process arbitration: the menu draws as a guest of whichever overlay shell
+# hosts, and hosts only when none does, so exactly one `Present` hook exists in the process.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+# Pinned to the same hudhook every other overlay shell carries: the `ui` pointer crosses a DLL
+# boundary and `OVERLAY_ABI_TAG` refuses the pair if they ever diverge.
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+# Assembles the byte-checked prologue of the dynamic resolution update from named instructions in
+# `build.rs`. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
+[lints]
+workspace = true
