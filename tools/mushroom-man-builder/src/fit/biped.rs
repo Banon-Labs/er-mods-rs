@@ -12,7 +12,12 @@
 //! The rest, as measured against `scripts/dsr-er-fit-probe.py` on c2650:
 //!
 //! - `k` is Elden Ring's pelvis height over the source's, 1.027 for c2650, where c2280 needed a
-//!   hand-tuned 1.225; every joint-on-joint stretch comes out near 1 with it;
+//!   hand-tuned 1.225; every joint-on-joint stretch comes out near 1 with it. A source whose legs
+//!   are shorter than its trunk is scaled by the shoulder instead and keeps its trunk's shape, its
+//!   pelvis landing below Elden Ring's: c2270 Mushroom Parent's pelvis is 0.67 m up and its
+//!   shoulder 1.52 m, so the pelvis scale of 1.456 stood it about 2.9 m tall with the trunk
+//!   squeezed to half its height, and the shoulder's 0.916 stands it 2.34 m. Every character
+//!   checked in game has legs longer than its trunk, so none of their fits moves;
 //! - a bone's length runs from its joint to its mapped child's along X; the hand's runs to the
 //!   knuckle line, the middle of the long fingers' roots; a last segment stretches by `k`;
 //! - the pelvis, spine, neck and head are laid upright by [`AxialFit`], knotted at the pelvis and
@@ -498,17 +503,33 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
         .find(|&index| roles[index] == Role::Direct("Pelvis".to_owned()))
         .ok_or("the source has no pelvis")?;
     let er_pelvis = er_frame("Pelvis")?.origin;
-    let girth = params
-        .scale
-        .unwrap_or(er_pelvis.y / frames[pelvis].origin.y);
+    let source_pelvis = frames[pelvis].origin;
+    // Legs shorter than the trunk: the shoulder sets the scale and the body keeps its own shape.
+    let short_legs = direct("L_UpperArm")
+        .is_some_and(|shoulder| source_pelvis.y < frames[shoulder].origin.y - source_pelvis.y);
+    let girth = match (params.scale, direct("L_UpperArm")) {
+        (Some(scale), _) => scale,
+        (None, Some(shoulder)) if short_legs => {
+            er_frame("L_UpperArm")?.origin.y / frames[shoulder].origin.y
+        }
+        _ => er_pelvis.y / source_pelvis.y,
+    };
     if !(girth.is_finite() && girth > 0.0) {
         return Err(Error::new(format!("girth scale {girth} is not usable")));
     }
     check_facing(&frames, &direct, named)?;
 
     let shoulder = direct("L_UpperArm").ok_or("the source has no left upper arm")?;
+    let pelvis_lands = if short_legs {
+        Vec3 {
+            y: source_pelvis.y * girth,
+            ..er_pelvis
+        }
+    } else {
+        er_pelvis
+    };
     let mut knots = vec![
-        (frames[pelvis].origin, er_pelvis),
+        (source_pelvis, pelvis_lands),
         (frames[shoulder].origin, er_frame("L_UpperArm")?.origin),
     ];
     if params.head_band {
@@ -1060,6 +1081,31 @@ mod tests {
     fn carried(built: &Built, bone: usize, p: Vec3) -> Vec3 {
         let fit = built.fit.bones[bone].as_ref().unwrap();
         built.fit.carry_point(fit.carrier, p)
+    }
+
+    #[test]
+    fn legs_shorter_than_the_trunk_take_the_shoulder_scale_and_keep_the_trunk_shape() {
+        // c2270's proportions: the pelvis 0.3 m up and the shoulder 0.85 m.
+        let mut bones = source();
+        bones[0].translation.y = 0.3;
+        let roles = skeleton::classify(&bones).unwrap();
+        let built = build(&bones, &roles, &er(), BipedParams::DEFAULT).unwrap();
+        let (shoulder, er_shoulder) = (joint(&bones, "L UpperArm").y, joint(&er(), "L_UpperArm").y);
+        let k = er_shoulder / shoulder;
+        assert!(
+            (built.girth - k).abs() < 1e-5,
+            "{} against {k}",
+            built.girth
+        );
+        // Pelvis, belly and shoulder rise in proportion, not pinned to Elden Ring's pelvis.
+        for y in [0.3, 0.55, shoulder] {
+            let placed = built.fit.axial.place(v(0.0, y, 0.0));
+            assert!((placed.y - y * k).abs() < 1e-5, "{y}: {}", placed.y);
+        }
+        // A human-shaped source still lands its pelvis on Elden Ring's.
+        let (human, _) = fitted(BipedParams::DEFAULT);
+        assert!((human.girth - 0.97 / 0.9).abs() < 1e-5);
+        assert!((human.fit.axial.place(v(0.0, 0.9, 0.0)).y - 0.97).abs() < 1e-5);
     }
 
     #[test]
