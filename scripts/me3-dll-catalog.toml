@@ -237,10 +237,11 @@ default = false
 
 [er-duel-rules]
 label = "Duel ruleset referee"
-blurb = "A popup names the player and the rule whenever anyone in the session breaks the competitive duel ruleset: gear, tears, buffs, heals, skills, spells. Reads only; changes nothing."
+blurb = "A list names the player and the rule whenever anyone in the session breaks the competitive duel ruleset: gear, tears, buffs, heals, skills, spells. F2 in game opens a menu to switch rules off and add bans of your own; ctrl+F2 hides the list. Every break is also written to er-duel-rules-breaks.txt. Changes nothing in the game."
 category = "multiplayer"
 audience = "player"
 default = false
+config = "er-duel-rules.toml"
 
 [er-npc-summons]
 label = "NPC duels and custom Mimic Tear"

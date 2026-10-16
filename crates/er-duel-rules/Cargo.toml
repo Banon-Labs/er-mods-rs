@@ -2,10 +2,11 @@
 # duel ruleset: rune level, banned weapons, talismans, armour and tears, buffs, heals, banned
 # Ashes of War on use, banned spells by their projectiles, blue flasks per round.
 #
-# Standalone shell: its own `[[natives]]` entry, no product dependency, no detours, no param
-# edits and no writes to game memory. A FrameBegin game task reads every PlayerIns in the world's
-# player ChrSet, the live param tables and the bullet manager, and draws through the process's one
-# imgui overlay.
+# Standalone shell: its own `[[natives]]` entry, no product dependency, no param edits and no
+# writes to game memory. A FrameBegin game task reads every PlayerIns in the world's player ChrSet,
+# the live param tables and the bullet manager, and draws through the process's one imgui overlay.
+# F2 opens a menu that sets the rules (`er-duel-rules.json`, shared with the Cheat Engine table and
+# the Frida agent); while it is open it takes the game's input through `er-overlay-input`.
 [package]
 name = "er-duel-rules"
 version = "0.1.0"
@@ -19,8 +20,15 @@ crate-type = ["cdylib"]
 [dependencies]
 er-duel-rules-core = { path = "../er-duel-rules-core" }
 er-game-base = { path = "../er-game-base" }
+# The two keys' spelling, the settings file's in-place rewrite and its reread; host-buildable, so
+# `settings.rs` is tested with `cargo test`.
+er-hotkey-config = { path = "../er-hotkey-config" }
 
 [target.'cfg(windows)'.dependencies]
+# Taking the mouse, the keys and the pad from the game while the menu is open, chained on the same
+# unions as every other shell that does.
+er-overlay-input = { path = "../er-overlay-input" }
+er-hook = { path = "../er-hook" }
 eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
 fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
 # The one-imgui-host-per-process arbitration: this DLL draws as a guest when another module hosts
@@ -32,6 +40,9 @@ windows = { version = "0.62", features = [
   "Win32_System_LibraryLoader",
   "Win32_System_SystemInformation",
   "Win32_System_SystemServices",
+  "Win32_System_Threading",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 [lints]

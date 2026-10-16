@@ -628,6 +628,13 @@ pub extern "C" fn er_invasion_warp_adopt_menu_object(menu_object: usize) -> i32 
     ))
 }
 
+// This module can win the overlay claim (`overlay::install`), and a guest finds the host only by
+// this export. Without it the host answers nobody: on run br-20261016-203753-6e0e this DLL hosted,
+// and er_duel_rules.dll and er_net_effects.dll spun in `register_with_host_retrying` with nothing
+// on screen, the duel-rules install thread's stack read by Frida at that function.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();
+
 #[cfg(test)]
 mod tests {
     use super::*;

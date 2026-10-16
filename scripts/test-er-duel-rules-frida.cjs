@@ -437,6 +437,15 @@ test('a rules file reads back the way it was written', () => {
     assert.deepStrictEqual(A.configWith.rule(cfg, 'LightRoll', true).off, []);
 });
 
+// The DLL's writer (crates/er-duel-rules-core/src/config.rs) is held to the same bytes, so a file
+// saved from its menu and one saved here are the same file.
+test('a rules file written here reads back to the very bytes the DLL writes', () => {
+    const golden = require('fs').readFileSync(path.join(__dirname, 'test-er-duel-rules-written.json'), 'utf8');
+    const { config, problems } = A.readConfig(golden);
+    assert.deepStrictEqual(problems, []);
+    assert.strictEqual(A.writeConfig(config), golden);
+});
+
 test('the catalog finds names and refuses ones it does not have', () => {
     const hits = A.searchCatalog(A.CATALOG, 'katana').map((h) => `${h.pick}: ${h.name}`);
     assert.ok(hits.includes('class: Katana') && hits.includes('class: Great Katana'), hits.join(', '));

@@ -2926,6 +2926,9 @@ dependencies = [
  "er-build-watermark-core",
  "er-duel-rules-core",
  "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "er-overlay-input",
  "fromsoftware-shared",
  "hudhook",
  "windows 0.62.2",
@@ -2934,6 +2937,9 @@ dependencies = [
 [[package]]
 name = "er-duel-rules-core"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
 
 [[package]]
 name = "er-enemynpc-effects"
@@ -3174,6 +3180,17 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "wgpu",
+]
+
+[[package]]
+name = "er-overlay-input"
+version = "0.1.0"
+dependencies = [
+ "er-dinput-suppress-core",
+ "er-game-base",
+ "er-hook",
+ "iced-x86",
+ "windows 0.62.2",
 ]
 
 [[package]]

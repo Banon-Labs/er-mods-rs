@@ -286,7 +286,16 @@ STAGES: tuple[Stage, ...] = (
     Stage(
         "cargo-test",
         "the host-runnable cargo tests and checks",
-        ("crates/**/*", "Cargo.toml", "Cargo.lock", "build-support/**/*"),
+        (
+            "crates/**/*",
+            "Cargo.toml",
+            "Cargo.lock",
+            "build-support/**/*",
+            # er-duel-rules-core's tests `include_str!` the rules-file cases every referee port
+            # runs, and the file the agent writes, so an edit to either is a change to those tests.
+            "scripts/test-er-duel-rules-bans.json",
+            "scripts/test-er-duel-rules-written.json",
+        ),
     ),
     Stage(
         "cargo-build",

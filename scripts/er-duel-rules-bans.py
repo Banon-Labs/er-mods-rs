@@ -15,9 +15,10 @@ its numbers, and add bans of your own built from anything in the game.
     python3 scripts/er-duel-rules-bans.py unban "No Comet Azur"
 
 The file is er-duel-rules.json beside eldenring.exe (`ER_GAME_DIR`, else this machine's Steam
-install; `--file` names another). The Frida agent and the Cheat Engine table read it again within
-two seconds of a change, so a running referee picks an edit up without a restart. The Cheat
-Engine table's Rules window edits the same file with a picker.
+install; `--file` names another). The Frida agent, the Cheat Engine table and er_duel_rules.dll
+read it again within two seconds of a change, so a running referee picks an edit up without a
+restart. The Cheat Engine table's Rules window and the DLL's F2 menu edit the same file with a
+picker.
 
 A ban breaks when every condition holds for one player at once; a condition is one `kind=value`
 term, and `|` inside a value lists alternatives, any one of which will do. `where=`, `buff=yes`,

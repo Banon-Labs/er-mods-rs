@@ -602,6 +602,120 @@ itself they are one, and both handlers are union-registered, so they chain eithe
 evidence = """crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput` -> `arm(.., \
 hook_xinput_get_state, &XINPUT_GET_STATE_ORIG, ..)`; crates/er-npc-summons/src/pad.rs."""
 
+# er-duel-rules' rules menu takes the game's input while open through `er-overlay-input`, the
+# crate er-render-scale's menu and er-cel-shade's Shaders panel share: the same three handlers,
+# registered the same way, so it shares every entry er-npc-summons' picker shares, with the same
+# partners, and the cursor predicate with er-npc-summons itself.
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-duel-rules"
+target = "the 1.17.1 menu-has-the-mouse predicate, `bool(CSMenuManImp*)` at rva 0x766650"
+mechanism = "hook-union"
+handler_a = "menu_has_mouse_union"
+handler_b = "menu_has_mouse_union"
+reason = """er-duel-rules answers the game's "a menu has the mouse" predicate with true while its \
+rules menu is open, which frees and shows the cursor and stops the camera turning with the mouse, \
+and asks the next handler otherwise, as er-npc-summons' picker does. Both register through \
+`er_hook::register_union_hook_runtime_derived_following_arxan` after checking the same generated \
+1.17.1 prologue, so one MinHook instance owns the entry and the handlers chain: either menu open \
+is enough and neither closes the other's."""
+evidence = """crates/er-npc-summons/src/cursor.rs `install`; crates/er-overlay-input/src/hooks.rs \
+`install_cursor`, called from crates/er-duel-rules/src/lib.rs; the prologue generated from the \
+same spec in crates/er-overlay-input/build.rs."""
+
+[[shared]]
+a = "er-quickload"
+b = "er-duel-rules"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """er-duel-rules takes every key from the game while its rules menu is open, through the \
+same `er-dinput-suppress-core` handler er-npc-summons uses, registered through \
+`register_shared_hook_with_budget`, so it chains on the union every other shell on this slot uses. \
+A key held when the menu closes stays blanked until it is released."""
+evidence = """crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`, armed \
+from crates/er-overlay-input/src/hooks.rs `try_install_dinput`, called from \
+crates/er-duel-rules/src/menu.rs."""
+
+[[shared]]
+a = "er-net-effects"
+b = "er-duel-rules"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "dinput_kb_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-duel-rules row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-enemynpc-effects"
+b = "er-duel-rules"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "get_device_state_union"
+handler_b = "keyboard_get_state_hook"
+reason = "See the er-quickload / er-duel-rules row on this slot: the same handler, the same union."
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-duel-rules"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "hook_get_device_state"
+handler_b = "keyboard_get_state_hook"
+reason = """See the er-quickload / er-duel-rules row on this slot. While the menu is open \
+er-hotkey-conflicts sees every key already blanked, which is the read the game gets."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-duel-rules"
+target = "IDirectInputDevice8::GetDeviceState (dinput8.dll device vtable slot 9)"
+mechanism = "hook-union"
+handler_a = "keyboard_get_state_hook"
+handler_b = "keyboard_get_state_hook"
+reason = """The same `er-dinput-suppress-core` handler linked into both DLLs, each with its own \
+taken-key set, chained on one union: either DLL taking a key blanks it."""
+evidence = "crates/er-dinput-suppress-core/src/install.rs `install_keyboard_suppression`"
+
+[[shared]]
+a = "er-quickload"
+b = "er-duel-rules"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "xinput_get_state_detour"
+handler_b = "xinput_get_state"
+reason = """er-duel-rules centres the sticks, releases the triggers and clears every button of pad \
+0 while its rules menu is open, keeping a button cleared after close until it is released. It \
+follows the forwarding thunk as er-npc-summons does and registers through \
+`register_shared_hook_with_budget`, so it chains on er-quickload's union like the others."""
+evidence = """crates/er-overlay-input/src/hooks.rs `try_install_pad` \
+`register_shared_hook_with_budget(target, xinput_get_state, &PAD_ORIG, 1, 0)`."""
+
+[[shared]]
+a = "er-npc-summons"
+b = "er-duel-rules"
+target = "xinput1_x.dll!XInputGetState, followed past the Wine forwarding thunk"
+mechanism = "hook-union"
+handler_a = "picker_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = "See the er-quickload / er-duel-rules row on this function: the handlers chain on one union."
+evidence = "crates/er-npc-summons/src/pad.rs; crates/er-overlay-input/src/hooks.rs `try_install_pad`."
+
+[[shared]]
+a = "er-hotkey-conflicts"
+b = "er-duel-rules"
+target = "xinput1_x.dll!XInputGetState (the export itself, where there is no forwarding thunk)"
+mechanism = "hook-union"
+handler_a = "hook_xinput_get_state"
+handler_b = "xinput_get_state"
+reason = """The same shape as the er-hotkey-conflicts / er-npc-summons row: two prologues under \
+Wine, one where the export is the function itself, union-registered on both sides either way."""
+evidence = "crates/er-hotkey-conflicts/src/hooks.rs `try_install_xinput`; crates/er-overlay-input/src/hooks.rs."
+
 [[conflict]]
 a = "er-quickload"
 b = "er-reload-trace"
@@ -1044,8 +1158,10 @@ that owns it by walking the world's ChrSets (the same walk er-npc-possess and \
 er-enemynpc-effects make), and reads its data, super armor, resist and SpEffect state. It draws \
 as a guest of the overlay host when one exists (er-build-watermark), and hosts only when nothing \
 else does, so the process keeps one Present hook either way."""
-"er-duel-rules" = """Co-loadable with everything: it installs no detour and writes no game \
-memory. A FrameBegin game task walks WorldChrMan's player ChrSet, reads each player's \
+"er-duel-rules" = """Co-loadable with everything: it writes no game memory, and its only detours \
+are the three input hooks its rules menu shares with every other menu through `er-overlay-input` \
+(the [[shared]] rows above), each union-registered and passing everything through while the menu \
+is shut. A FrameBegin game task walks WorldChrMan's player ChrSet, reads each player's \
 PlayerGameData (level, attributes, ChrAsm, physick tears), SpEffect list, TimeAct queue, data \
 and ride modules, GameDataMan's remote slot states and the CSBulletManager list, and answers its \
 param questions from SoloParamRepository after checking every holder is loaded. It draws as a \

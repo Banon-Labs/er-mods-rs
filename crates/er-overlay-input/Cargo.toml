@@ -1,0 +1,41 @@
+# Taking the game's input while an in-game overlay menu is open, and giving it back: the free
+# cursor and still camera ("a menu has the mouse"), the DirectInput keyboard and mouse, and pad 0.
+# It was er-cel-shade's `input.rs`; it moved here when er-render-scale's menu needed the same four
+# pieces, so both DLLs register the same handlers on the same unions instead of two copies.
+#
+# Each DLL that links it gets its own statics, which is the point: each menu takes input for
+# itself, and the hook unions chain the handlers, so the game sees input taken while any menu has
+# it. Host-buildable: the key table and the pad's held-until-released rule are `cargo test`-able.
+[package]
+name = "er-overlay-input"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_overlay_input"
+
+[dependencies]
+# The per-DLL taken-key set, the mouse blanking and their counters. Host-buildable itself.
+er-dinput-suppress-core = { path = "../er-dinput-suppress-core" }
+
+[target.'cfg(windows)'.dependencies]
+er-game-base = { path = "../er-game-base" }
+# Every detour goes through the cross-DLL hook union, so er-npc-summons' picker, er-cel-shade's
+# Shaders panel and er-render-scale's menu chain on one MinHook instance per entry.
+er-hook = { path = "../er-hook" }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+] }
+
+# Assembles the byte-checked prologue of the cursor predicate from named instructions in
+# `build.rs`. See `build-support/prologue_build.rs`.
+[build-dependencies]
+iced-x86 = { version = "1.21", default-features = false, features = [
+  "std",
+  "code_asm",
+] }
+
+[lints]
+workspace = true

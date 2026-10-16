@@ -1,5 +1,5 @@
 {
-  "about": "Rules-file cases both ports of the referee must agree on: scripts/test-er-duel-rules-frida.cjs runs them against the Frida agent and scripts/test-er-duel-rules-ce.lua against the Cheat Engine port. Each case reads `config` (or the raw `configText`) as a rules file, expects `problems` complaints about it (0 when absent), then plays `steps` -- player 1's frame at time `t`, with a clean opponent when `match` -- and expects exactly the alerts listed for player 1, in order. Every step gets a new referee unless `oneReferee`, so a build changed between steps is not a build switch.",
+  "about": "Rules-file cases every port of the referee must agree on: scripts/test-er-duel-rules-frida.cjs runs them against the Frida agent, scripts/test-er-duel-rules-ce.lua against the Cheat Engine port, and `cargo test -p er-duel-rules-core` against the DLL's core. Each case reads `config` (or the raw `configText`) as a rules file, expects `problems` complaints about it (0 when absent), then plays `steps` -- player 1's frame at time `t`, with a clean opponent when `match` -- and expects exactly the alerts listed for player 1, in order. Every step gets a new referee unless `oneReferee`, so a build changed between steps is not a build switch.",
   "facts": {
     "weapons": {
       "9040000": {"wepType": 13}, "9041100": {"wepType": 13}, "9000000": {"wepType": 13},

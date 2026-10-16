@@ -88,6 +88,9 @@ SOURCES: dict[str, dict] = {
         "literal": ("crates/er-quickload/src/config.rs", "boilerplate_config"),
         "substitute": {"picker_block": PICKER_BLOCK},
     },
+    "er-duel-rules.toml": {
+        "literal": ("crates/er-duel-rules/src/settings.rs", "DEFAULT_CONFIG_TOML"),
+    },
     "er-quit-menu.toml": {"computed": True},
     "er-invasion-warp.toml": {"computed": True},
 }

@@ -1,0 +1,145 @@
+{
+  "off": [
+    "LightRoll"
+  ],
+  "runeLevel": 150,
+  "blueFlasks": 2,
+  "shieldGuardCap": 92.5,
+  "bans": [
+    {
+      "name": "No 2H Rivers",
+      "on": true,
+      "all": [
+        {
+          "kind": "weapon",
+          "items": [
+            {
+              "name": "Rivers of Blood",
+              "ids": [
+                9040000
+              ],
+              "bullets": [],
+              "effects": []
+            }
+          ],
+          "classes": [],
+          "affinities": [],
+          "where": "twoHanded",
+          "buff": false
+        }
+      ]
+    },
+    {
+      "name": "Blood katanas with Lord of Blood",
+      "on": true,
+      "all": [
+        {
+          "kind": "weapon",
+          "items": [],
+          "classes": [
+            {
+              "name": "Katana",
+              "ids": [
+                13
+              ],
+              "bullets": [],
+              "effects": []
+            }
+          ],
+          "affinities": [
+            {
+              "name": "Blood",
+              "ids": [
+                1100
+              ],
+              "bullets": [],
+              "effects": []
+            }
+          ],
+          "where": "held",
+          "buff": true
+        },
+        {
+          "kind": "talisman",
+          "items": [
+            {
+              "name": "Lord of Blood's Exultation",
+              "ids": [
+                2160
+              ],
+              "bullets": [],
+              "effects": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "High arcane \"over\" 125",
+      "on": true,
+      "all": [
+        {
+          "kind": "level",
+          "op": ">",
+          "value": 125
+        },
+        {
+          "kind": "stat",
+          "stat": 7,
+          "op": ">=",
+          "value": 45
+        }
+      ]
+    },
+    {
+      "name": "No Comet Azur",
+      "on": true,
+      "all": [
+        {
+          "kind": "spell",
+          "items": [
+            {
+              "name": "Comet Azur",
+              "ids": [],
+              "bullets": [
+                10420000,
+                10420001,
+                10420002,
+                10420003,
+                10420004
+              ],
+              "effects": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Rot grease effect",
+      "on": false,
+      "all": [
+        {
+          "kind": "effect",
+          "items": [
+            {
+              "name": "effect 3310",
+              "ids": [
+                3310
+              ],
+              "bullets": [],
+              "effects": []
+            },
+            {
+              "name": "effect 3314",
+              "ids": [
+                3314
+              ],
+              "bullets": [],
+              "effects": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
