@@ -1,5 +1,6 @@
 //! Priscilla's tail cut out of her body and built onto `BD_*_2240`'s cloth chain, against the
-//! games' own files: what `--tail-cloth` does short of the archives.
+//! games' own files: what a build does with a tailed character, short of the archives, at the
+//! default rigidity.
 //!
 //! Holds the cut to two promises: every triangle lands in exactly one half, and no vertex the two
 //! halves share weighs on the chain, so the seam cannot open. Then the body is rebuilt as before
@@ -18,7 +19,7 @@ use mushroom_man_builder::{
     edge::{OPAQUE_TEMPLATE_FLVER, TEMPLATE_FLVER, Templates, edge_template, opaque_template},
     flver::{Flver, parse_layout_members, parse_u32_list, verify::check_flver},
     package::{Cutouts, biped_body_from, read_character, tail_model, tail_split},
-    tail::CHAIN,
+    tail::{CHAIN, Rigidity},
 };
 
 fn tpf_names(tpf: &[u8]) -> Vec<String> {
@@ -49,7 +50,7 @@ fn priscillas_tail_goes_onto_the_cape_chain_and_every_part_checks() {
     let priscilla = character::resolve("c2730", true).unwrap();
     let files = read_character(&dsr, priscilla).unwrap();
     let full = mushroom_man_builder::fit::export(priscilla, &files.flver, &donor).unwrap();
-    let (body, tail) = tail_split(priscilla, &files.flver, &donor).unwrap();
+    let (body, tail) = tail_split(priscilla, &files.flver, &donor, Rigidity::DEFAULT).unwrap();
     assert_eq!(
         body.mesh.triangles.len() + tail.mesh.triangles.len(),
         full.mesh.triangles.len(),

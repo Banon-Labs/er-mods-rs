@@ -165,10 +165,12 @@ pub struct Inputs<'a> {
     /// and all, instead of emptied. It asks whether the slot `mushroom_man.dll` sends the game to
     /// runs a part's cloth simulation, before a character's tail is built into it.
     pub cloth_test_body: Option<String>,
-    /// Developer flag `--tail-cloth`: a Biped character's tail cut out of the body and built into
-    /// the naked body slots on the back-cape cloth chain of [`tail::CLOTH_PART_ID`]'s part, so the
-    /// cloth simulation swings it (see [`crate::tail`]). Refused for a character with no tail.
-    pub tail_cloth: bool,
+    /// How stiff a Biped character's tail is (`--rigidity tail=<base>:<tip>`). A character with
+    /// tail bones has its tail cut out of the body and built into the naked body slots on the
+    /// back-cape cloth chain of [`tail::CLOTH_PART_ID`]'s part, so the cloth simulation swings it
+    /// (see [`crate::tail`]), unless this is welded through and through or `cloth_test_body` takes
+    /// the slots.
+    pub tail_rigidity: tail::Rigidity,
 }
 
 /// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
@@ -288,7 +290,7 @@ pub struct BuildReport {
     pub head_parts: usize,
     /// Face and hair parts left to the game because they hold no model.
     pub head_parts_without_model: usize,
-    /// The tail's slots in the male high-detail cloth part, when `--tail-cloth` built one.
+    /// The tail's slots in the male high-detail cloth part, when the character's tail swings.
     pub tail: Vec<SlotReport>,
 }
 
@@ -603,7 +605,8 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let mut bodies = Vec::new();
     let mut patches = Vec::new();
     let mut rebuilt: Option<Rebuilt> = None;
-    // With `--tail-cloth`, the tail half of the fit, built into the naked body slots below.
+    // For a character whose tail swings, the tail half of the fit, built into the naked body
+    // slots below.
     let mut tail: Option<Export> = None;
     let mut tail_reports = Vec::new();
     for lod in LODS {
@@ -627,9 +630,13 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
             }
             // `buildable` has refused the patch writer for a Biped character.
             (None, FitConfig::Biped(_)) => {
-                let body = if inputs.tail_cloth {
-                    let (body, cut) = tail_split(character, &dsr.flver, &flver.data)
-                        .context(format!("cutting {}'s tail out", character.id))?;
+                let swings = inputs.cloth_test_body.is_none()
+                    && !inputs.tail_rigidity.welded()
+                    && !tail::tail_bones(&source::parse(&dsr.flver)?.bones).is_empty();
+                let body = if swings {
+                    let (body, cut) =
+                        tail_split(character, &dsr.flver, &flver.data, inputs.tail_rigidity)
+                            .context(format!("cutting {}'s tail out", character.id))?;
                     tail = Some(cut);
                     biped_body_from(
                         &flver.data,
@@ -1554,12 +1561,13 @@ fn cloth_test_body(
     write_part(path, &packed, &renamed, oodle)
 }
 
-/// `character`'s fit against `donor` with its tail on [`tail::CHAIN`], cut into body and tail
-/// ([`tail::split`]). Refused for a character with no tail bones.
+/// `character`'s fit against `donor` with its tail shared onto [`tail::CHAIN`] as `rigidity`
+/// says, cut into body and tail ([`tail::split`]). Refused for a character with no tail bones.
 pub fn tail_split(
     character: &Character,
     character_flver: &[u8],
     donor: &[u8],
+    rigidity: tail::Rigidity,
 ) -> Result<(Export, Export)> {
     let bones = source::parse(character_flver)?.bones;
     let tail_bones = tail::tail_bones(&bones);
@@ -1573,7 +1581,7 @@ pub fn tail_split(
         character,
         character_flver,
         donor,
-        &tail::chain_targets(&tail_bones),
+        &tail::chain_targets(&tail_bones, rigidity),
     )?;
     tail::split(&full)
 }

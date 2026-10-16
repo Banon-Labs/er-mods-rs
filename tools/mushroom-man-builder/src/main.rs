@@ -20,7 +20,7 @@ use mushroom_man_builder::{
     map_report::map_report,
     oodle,
     package::{self, Cutouts, DLL_NAME, Inputs},
-    profile, search,
+    profile, search, tail,
     textures::{TextureSet, character_tpf},
 };
 
@@ -66,6 +66,11 @@ OPTIONS:
     --no-cutout-material   Draw a character's cutout meshes (cowls, hems, torn cloth: the ones
                            Dark Souls cuts holes into) with the solid Body material instead of
                            the cutout material. A fallback for testing; not for c2280.
+    --rigidity <feature>=<base>:<tip>
+                           How stiff a loose feature is, in percent at its base and at its tip:
+                           100 is welded to the body, 0 swings freely with Elden Ring's cloth.
+                           The one feature so far is `tail`, default 95:55 (a character with tail
+                           bones swings its tail on a cloth chain); `tail=100:100` keeps it welded.
     -h, --help             Show this text.
 ";
 
@@ -91,8 +96,8 @@ struct Options {
     cutouts: Cutouts,
     /// Developer flag `--cloth-test-body <id>` ([`package::Inputs::cloth_test_body`]).
     cloth_test_body: Option<String>,
-    /// Developer flag `--tail-cloth` ([`package::Inputs::tail_cloth`]).
-    tail_cloth: bool,
+    /// `--rigidity tail=<base>:<tip>` ([`package::Inputs::tail_rigidity`]).
+    tail_rigidity: tail::Rigidity,
 }
 
 fn main() -> ExitCode {
@@ -161,7 +166,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         writer: None,
         cutouts: Cutouts::EdgeMaterial,
         cloth_test_body: None,
-        tail_cloth: false,
+        tail_rigidity: tail::Rigidity::DEFAULT,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -190,7 +195,21 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 }
                 options.cloth_test_body = Some(id);
             }
-            "--tail-cloth" => options.tail_cloth = true,
+            "--rigidity" => {
+                let setting = value()?.display().to_string();
+                match setting.split_once('=') {
+                    Some((feature, stiffness)) if feature.trim() == "tail" => {
+                        options.tail_rigidity = tail::Rigidity::parse(stiffness)
+                            .map_err(|error| error.context("--rigidity tail"))?;
+                    }
+                    _ => {
+                        return Err(Error::new(format!(
+                            "--rigidity takes <feature>=<base>:<tip>, and the one feature so far \
+                             is tail (tail=95:55); got {setting:?}"
+                        )));
+                    }
+                }
+            }
             "--writer" => {
                 options.writer = Some(match value()?.to_str() {
                     Some("patch") => Writer::Patch,
@@ -208,9 +227,6 @@ fn parse_options(args: &[String]) -> Result<Options> {
         return Err(
             "--writer is a developer flag: it needs --source-obj and --source-weights".into(),
         );
-    }
-    if options.tail_cloth && options.cloth_test_body.is_some() {
-        return Err("--tail-cloth and --cloth-test-body both write the naked body slot".into());
     }
     if options.all && !options.list_characters {
         return Err("--all goes with --list-characters".into());
@@ -451,7 +467,7 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
             writer: options.writer.unwrap_or(character.writer),
             cutouts: options.cutouts,
             cloth_test_body: options.cloth_test_body.clone(),
-            tail_cloth: options.tail_cloth,
+            tail_rigidity: options.tail_rigidity,
         },
         &out,
     )?;
@@ -1121,6 +1137,24 @@ mod tests {
             parse(&["--no-cutout-material"]).unwrap().cutouts,
             Cutouts::BodyMaterial
         );
+    }
+
+    #[test]
+    fn rigidity_is_set_per_feature_and_only_for_the_tail_so_far() {
+        let parse = |args: &[&str]| {
+            parse_options(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(parse(&[]).unwrap().tail_rigidity, tail::Rigidity::DEFAULT);
+        let stiff = parse(&["--rigidity", "tail=100:80"]).unwrap().tail_rigidity;
+        assert_eq!((stiff.base, stiff.tip), (1.0, 0.8));
+        for bad in [
+            &["--rigidity", "sleeve=90:50"][..],
+            &["--rigidity", "tail"],
+            &["--rigidity", "tail=90"],
+            &["--rigidity"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

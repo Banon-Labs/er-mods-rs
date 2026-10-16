@@ -15,12 +15,10 @@
 //!   [`CHAIN`], from 0.78 m down to 0.19 m behind. The female part names its chain after the male
 //!   one, so one table serves both.
 //! - **The weights.** Each tail bone, root first ([`tail_bones`]), is shared between the pelvis
-//!   and the chain ([`chain_targets`]): the chain's part grows from [`ROOT_SHARE`] at the root to
-//!   [`TIP_SHARE`] at the tip with the square of the bone's place along the tail, and is split
-//!   between the two cloth bones nearest that place, so it bends smoothly. The fit carries them as before and only their weight
-//!   moves ([`crate::fit::export_with_targets`]). Seen in game 2026-10-15 with every tail bone
-//!   wholly on one cloth bone: the tail swung like the light cape it borrowed, the tip flipped
-//!   straight up in the wind, and it kinked hard where it changed cloth bone.
+//!   and the chain ([`chain_targets`]) as the player's [`Rigidity`] says, stiffer at the base than
+//!   the tip, the chain's part split between the two cloth bones nearest the bone's place along
+//!   the tail so it bends smoothly. The fit carries them as before and only their weight moves
+//!   ([`crate::fit::export_with_targets`]).
 //! - **The cut.** A triangle with a corner weighing on the chain is the tail's ([`split`]). A
 //!   vertex the tail and the body share therefore weighs on no chain bone, so both halves move it
 //!   alike and the seam cannot open; the tail bends from the first ring of vertices past it.
@@ -44,15 +42,69 @@ pub const CHAIN: [&str; 3] = [
     "[cloth]BD_M_2240_Mant_017",
 ];
 const TAIL_PREFIX: &str = "tail";
-/// How much of the tail root's weight the cloth chain takes; the rest stays on the pelvis.
-pub const ROOT_SHARE: f32 = 0.05;
-/// How much of the tail tip's weight the cloth chain takes. Between the root and the tip it grows
-/// with the square of the bone's place along the tail, so the base stays heavy and the swing
-/// gathers toward the tip. Seen in game 2026-10-15: 0.25 rising evenly to 0.6 was "quite a bit
-/// better" than the whole tail on the chain, but a quarter too light, and wanted much heavier at
-/// the base than at the tip.
-pub const TIP_SHARE: f32 = 0.45;
 const PELVIS: &str = "Pelvis";
+
+/// How stiff the tail is, at its base and at its tip, each from 0 (it swings wholly with the
+/// cloth) to 1 (welded to the pelvis): the part of a tail bone's weight the pelvis keeps, the
+/// rest going to the cloth chain. Between base and tip it eases with the square of the bone's
+/// place along the tail, so the base stays stiff and the swing gathers toward the tip. Players set
+/// it with `--rigidity tail=<base>:<tip>` in percent.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rigidity {
+    pub base: f32,
+    pub tip: f32,
+}
+
+impl Rigidity {
+    /// 95% at the base, 55% at the tip. Seen in game 2026-10-15 (Priscilla): the whole tail on
+    /// the chain swung like the light cape it came from and kinked where it changed cloth bone;
+    /// 75% rising evenly to 40% was "quite a bit better" but a quarter too light and wanted much
+    /// heavier at the base than the tip; this was accepted.
+    pub const DEFAULT: Self = Self {
+        base: 0.95,
+        tip: 0.55,
+    };
+
+    /// `95:55`, base and tip in percent, each 0 to 100.
+    pub fn parse(text: &str) -> Result<Self> {
+        let percent = |part: &str| -> Result<f32> {
+            let value: f32 = part.trim().parse().map_err(|_| {
+                Error::new(format!("{part:?} is not a number of percent (0 to 100)"))
+            })?;
+            if !(0.0..=100.0).contains(&value) {
+                return Err(Error::new(format!("{value} is not between 0 and 100")));
+            }
+            Ok(value / 100.0)
+        };
+        let (base, tip) = text.split_once(':').ok_or_else(|| {
+            Error::new(format!(
+                "{text:?} is not <base>:<tip>, percent stiff at each end (95:55)"
+            ))
+        })?;
+        Ok(Self {
+            base: percent(base)?,
+            tip: percent(tip)?,
+        })
+    }
+
+    /// Welded through and through: nothing for the cloth to swing, so the tail stays in the body.
+    pub fn welded(&self) -> bool {
+        self.base >= 1.0 && self.tip >= 1.0
+    }
+
+    /// The part of the weight the cloth chain takes at `t` along the tail, 0 at the base to 1 at
+    /// the tip.
+    fn chain_share(&self, t: f32) -> f32 {
+        let (base, tip) = (1.0 - self.base, 1.0 - self.tip);
+        base + (tip - base) * t * t
+    }
+}
+
+impl Default for Rigidity {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 /// The source's tail bones, root first: every bone with a parent whose name starts with `tail`,
 /// ordered by how many tail bones it hangs below. Priscilla's are `tail_00` to `tail_08`; her
@@ -85,16 +137,16 @@ pub fn tail_bones(bones: &[Bone]) -> Vec<String> {
 }
 
 /// Where each of `tail` (root first) weighs. The `i`th of `n` sits at `t = i / (n - 1)` along the
-/// tail: the chain takes [`ROOT_SHARE`] to [`TIP_SHARE`] of it by `t` squared, split between the
-/// two [`CHAIN`] bones either side of `t` laid along the chain, and `Pelvis` takes the rest.
-pub fn chain_targets(tail: &[String]) -> Vec<(String, Vec<(String, f32)>)> {
+/// tail: the chain takes what `rigidity` leaves it there, split between the two [`CHAIN`] bones
+/// either side of `t` laid along the chain, and `Pelvis` takes the rest.
+pub fn chain_targets(tail: &[String], rigidity: Rigidity) -> Vec<(String, Vec<(String, f32)>)> {
     let last = tail.len().saturating_sub(1).max(1) as f32;
     let links = (CHAIN.len() - 1) as f32;
     tail.iter()
         .enumerate()
         .map(|(i, bone)| {
             let t = i as f32 / last;
-            let share = ROOT_SHARE + (TIP_SHARE - ROOT_SHARE) * t * t;
+            let share = rigidity.chain_share(t);
             let along = t * links;
             let low = (along.floor() as usize).min(CHAIN.len() - 1);
             let frac = along - low as f32;
@@ -175,7 +227,9 @@ mod tests {
         // tail_02 is the child of tail_00 here only through index 3.
         assert_eq!(tail_bones(&bones), ["tail_00", "tail_02", "tail_03"]);
         let nine: Vec<String> = (0..9).map(|i| format!("tail_0{i}")).collect();
-        let targets = chain_targets(&nine);
+        let rigidity = Rigidity::DEFAULT;
+        let (root_share, tip_share) = (1.0 - rigidity.base, 1.0 - rigidity.tip);
+        let targets = chain_targets(&nine, rigidity);
         let share_of = |shares: &[(String, f32)], bone: &str| {
             shares
                 .iter()
@@ -188,20 +242,45 @@ mod tests {
             assert!(close(total, 1.0), "{bone} adds up to {total}");
         }
         // The root: mostly pelvis, the rest on the first cloth bone.
-        assert!(close(share_of(&targets[0].1, "Pelvis"), 1.0 - ROOT_SHARE));
-        assert!(close(share_of(&targets[0].1, CHAIN[0]), ROOT_SHARE));
+        assert!(close(share_of(&targets[0].1, "Pelvis"), rigidity.base));
+        assert!(close(share_of(&targets[0].1, CHAIN[0]), root_share));
         // Half way along: the middle cloth bone alone, a quarter of the way from the root's share
         // to the tip's, since the share grows with the square.
-        let middle = ROOT_SHARE + (TIP_SHARE - ROOT_SHARE) / 4.0;
+        let middle = root_share + (tip_share - root_share) / 4.0;
         assert!(close(share_of(&targets[4].1, CHAIN[1]), middle));
         assert_eq!(targets[4].1.len(), 2);
         // A quarter along: split evenly between the first two.
-        let quarter = ROOT_SHARE + (TIP_SHARE - ROOT_SHARE) / 16.0;
+        let quarter = root_share + (tip_share - root_share) / 16.0;
         assert!(close(share_of(&targets[2].1, CHAIN[0]), quarter / 2.0));
         assert!(close(share_of(&targets[2].1, CHAIN[1]), quarter / 2.0));
         // The tip: the last cloth bone takes the tip share.
-        assert!(close(share_of(&targets[8].1, CHAIN[2]), TIP_SHARE));
-        assert!(chain_targets(&[]).is_empty());
+        assert!(close(share_of(&targets[8].1, CHAIN[2]), tip_share));
+        assert!(chain_targets(&[], rigidity).is_empty());
+    }
+
+    #[test]
+    fn rigidity_reads_as_percent_stiff_at_base_and_tip() {
+        assert_eq!(
+            Rigidity::parse("95:55").unwrap(),
+            Rigidity {
+                base: 0.95,
+                tip: 0.55
+            }
+        );
+        assert_eq!(Rigidity::parse(" 100 : 0 ").unwrap().tip, 0.0);
+        assert!(Rigidity::parse("100:100").unwrap().welded());
+        assert!(!Rigidity::DEFAULT.welded());
+        for bad in ["95", "95:", "x:55", "101:50", "50:-1"] {
+            assert!(Rigidity::parse(bad).is_err(), "{bad}");
+        }
+        // Fully loose at the tip: the tip bone is wholly the cloth's.
+        let loose = Rigidity {
+            base: 1.0,
+            tip: 0.0,
+        };
+        let targets = chain_targets(&["a".to_owned(), "b".to_owned()], loose);
+        assert_eq!(targets[0].1[0], ("Pelvis".to_owned(), 1.0));
+        assert_eq!(targets[1].1[1], (CHAIN[2].to_owned(), 1.0));
     }
 
     fn export(weights: &[(usize, &str)], triangles: Vec<[u32; 3]>) -> Export {
