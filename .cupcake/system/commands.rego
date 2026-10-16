@@ -411,6 +411,14 @@ shell_payloads_deep(text) := deep if {
 # Heredoc bodies are DATA for the command reading them, so their contents get
 # the same treatment as a quoted operand -- unless a shell is what reads them,
 # in which case the body stays raw (fail closed) and its separators keep working.
+#
+# The body starts on the line after the opener. The rest of the opener's own line is
+# code -- `git commit -F - <<'EOF' > log 2>&1; tail -n 12 log` -- and until 2026-10-15
+# it was blanked with the body, so its separators vanished. Measured that day: the
+# `tail -n` above was read as `git commit -n` by `git_block_no_verify`, and by the same
+# cut a `; git push origin main` on the opener line lost its command position for every
+# guard. A shell named on the opener line (`cat <<'EOF' | bash`) reads the body as a
+# program, so that body stays raw as well.
 heredoc_body_blanked(text) := out if {
 	parts := split(text, "<<")
 	count(parts) == 2
@@ -418,7 +426,16 @@ heredoc_body_blanked(text) := out if {
 	tag := heredoc_tag(parts[1])
 	segments := split(parts[1], concat("", ["\n", tag]))
 	count(segments) == 2
-	out := concat("", [parts[0], " ", blanked_anchors(segments[0]), " ", tag, segments[1]])
+	lines := split(segments[0], "\n")
+	opener := lines[0]
+	not opener_line_feeds_a_shell(opener)
+	body := concat("\n", array.slice(lines, 1, count(lines)))
+	out := concat("", [parts[0], "<<", opener, " ", blanked_anchors(body), " ", tag, segments[1]])
+}
+
+opener_line_feeds_a_shell(opener) if {
+	some word in command_slot_words(opener)
+	heredoc_shell_name(word)
 }
 
 heredoc_tag(after_marker) := tag if {
@@ -476,7 +493,76 @@ scannable(text) := stripped if {
 
 scan_text(text) := out if {
 	out := operands_blanked(text)
+} else := out if {
+	out := substitution_single_quotes_blanked(text)
 } else := text
+
+# ---------------------------------------------------------------------------
+# SINGLE QUOTES BESIDE A SUBSTITUTION (2026-10-15)
+#
+# `scannable` above gives up on any text carrying `$(` or a backtick, which is right for double
+# quotes -- a substitution inside them runs -- and wrong for single quotes, which nothing inside can
+# escape. Giving up kept the whole text raw, so a regex in single quotes stood in command position.
+# Measured 2026-10-15: `F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)` was
+# refused by `no_grep_for_build_errors` as a build piped into grep, because the `(` in front of
+# `go` was read as a subshell and `go` as the Go toolchain.
+#
+# So such a text keeps everything raw except the single-quoted spans, whose anchors are blanked as
+# they are everywhere else. Double-quoted spans stay raw, substitutions included. The reading is a
+# left-to-right lexer done without a loop: every `'` is taken as a delimiter, and that is accepted
+# only when no `'` falls inside a double-quoted span. The count of `"` outside single quotes must
+# be even before every opening `'`, and since that holds at each one in turn, it is the same as
+# every stretch between single-quoted spans holding an even number of `"` -- a linear check. A `'`
+# inside double quotes is literal in bash unless a substitution inside them reopens quoting, and
+# this cannot tell those apart, so either one leaves the text raw.
+#
+# Everything this cannot read leaves the text raw, which is what it was before:
+#   * a heredoc, whose body may be literal or expanded and whose apostrophes are prose;
+#   * `\'` once `\\` is set aside, because inside single quotes the backslash is literal and the
+#     quote closes the span, so deleting the pair the way `escaped_quotes_stripped` does would move
+#     every span after it;
+#   * an unbalanced quote of either style;
+#   * a word that opens a comment outside single quotes, because an apostrophe in a comment is not
+#     a quote and the newline that ends the comment is a space by the time a policy sees it.
+substitution_single_quotes_blanked(text) := out if {
+	carries_substitution(text)
+	not contains(text, "<<")
+	parked := replace(text, `\\`, escaped_backslash_marker)
+	not contains(parked, `\'`)
+	parts := split(replace(parked, `\"`, ""), "'")
+	count(parts) > 1
+	count(parts) % 2 == 1
+	every i, part in parts {
+		single_quote_reading_holds(i, part)
+	}
+	blanked := concat("'", [span |
+		some i, part in parts
+		span := odd_span_blanked(i, part)
+	])
+	out := replace(blanked, escaped_backslash_marker, `\\`)
+}
+
+carries_substitution(text) if contains(text, "$(")
+
+carries_substitution(text) if contains(text, "`")
+
+# Inside a single-quoted span nothing needs checking.
+single_quote_reading_holds(i, _) if i % 2 == 1
+
+# Outside one, the stretch must close every double quote it opens, so the next `'` is not inside
+# one, and must not open a comment.
+single_quote_reading_holds(i, part) if {
+	i % 2 == 0
+	count(split(part, `"`)) % 2 == 1
+	not opens_comment(i, part)
+}
+
+opens_comment(0, part) if startswith(part, "#")
+
+opens_comment(_, part) if {
+	some lead in [" #", "\t#", "\n#", ";#", "&#", "|#", "(#"]
+	contains(part, lead)
+}
 
 # Quoted spans DELETED rather than neutralised, for unanchored substring tests.
 quotes_removed(text) := out if {

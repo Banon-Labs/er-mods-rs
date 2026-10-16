@@ -181,6 +181,19 @@ test_shell_read_heredoc_body_keeps_its_separators if {
 	regex.match(`(?m)^git push`, single_text(commands.executed_texts(text)))
 }
 
+# The rest of the opener's line is code, not body (2026-10-15). It used to be blanked with
+# the body, which took the `;` in front of this push and with it the push's command position.
+test_heredoc_opener_line_tail_keeps_its_separators if {
+	text := concat("", ["cat <<'EOF' > notes.md; ", push_main, "\nit's a note\nEOF"])
+	contains(single_text(commands.executed_texts(text)), concat("", ["; ", push_main]))
+}
+
+# A shell on the opener's line reads the body as a program, so the body keeps its separators.
+test_heredoc_piped_into_a_shell_keeps_its_body if {
+	text := concat("", ["cat <<'EOF' | bash\necho hi; ", push_main, "\nEOF"])
+	contains(single_text(commands.executed_texts(text)), concat("", ["; ", push_main]))
+}
+
 single_text(texts) := t if {
 	count(texts) == 1
 	some t in texts
@@ -234,6 +247,59 @@ test_backtick_leaves_text_raw if {
 test_unbalanced_quotes_leave_text_raw if {
 	text := concat("", [`echo "unclosed `, push_main])
 	commands.executed_texts(text) == {text}
+}
+
+# --- single quotes beside a substitution (2026-10-15) --------------------------
+#
+# Nothing escapes single quotes, so a substitution elsewhere in the text is no reason to keep
+# them raw. Before this, `\.(go|rs)$` below kept its `(` and `|`, and `go` read as the Go
+# toolchain in command position.
+
+test_single_quoted_span_beside_a_substitution_is_neutralised if {
+	commands.executed_texts(`F=$(git diff --name-only | grep -E '\.(go|rs)$' | grep -v vendor)`) == {
+		`F=$(git diff --name-only | grep -E '\. go rs $' | grep -v vendor)`,
+	}
+}
+
+test_single_quoted_span_beside_a_backtick_is_neutralised if {
+	commands.executed_texts("F=`git diff | grep -E '(go|rs)$'`") == {"F=`git diff | grep -E ' go rs $'`"}
+}
+
+# Everything outside the single quotes stays raw, substitution and separators included.
+test_separators_beside_the_neutralised_span_survive if {
+	texts := commands.executed_texts(concat("", ["x=$(date); echo 'a;b'; ", push_main]))
+	texts == {concat("", ["x=$(date); echo 'a b'; ", push_main])}
+}
+
+# A `'` inside double quotes is literal, and taking it for a delimiter would pair it with a later
+# one and blank the real command between them. Any such text stays raw.
+test_apostrophes_inside_double_quotes_beside_a_substitution_leave_text_raw if {
+	text := concat("", [`x=$(date); echo "a'b"; `, push_main, `; echo "c'd"`])
+	commands.executed_texts(text) == {text}
+}
+
+# Inside single quotes `\'` is a literal backslash and a closing quote, so deleting the pair would
+# move every span after it -- here, onto the push.
+test_backslash_quote_beside_a_substitution_leaves_text_raw if {
+	text := concat("", [`x=$(date); echo 'C:\'; `, push_main, `; echo 'D:\'`])
+	commands.executed_texts(text) == {text}
+}
+
+# An apostrophe in a comment is not a quote.
+test_comment_beside_a_substitution_leaves_text_raw if {
+	text := concat("", ["x=$(date) # it's here\n", push_main, " # don't"])
+	commands.executed_texts(text) == {text}
+}
+
+test_heredoc_beside_a_substitution_leaves_text_raw if {
+	text := concat("", ["x=$(date); cat <<EOF\nit's\nEOF\n", push_main, "\necho 'z'"])
+	commands.executed_texts(text) == {text}
+}
+
+# A substitution inside single quotes is literal text and is neutralised with the rest.
+test_substitution_inside_single_quotes_is_neutralised if {
+	texts := commands.executed_texts(concat("", ["x=$(date); echo '$(", push_main, ")'"]))
+	texts == {concat("", ["x=$(date); echo '$ ", push_main, " '"])}
 }
 
 # --- quote-scrubbed view, for unanchored substring tests ----------------------
