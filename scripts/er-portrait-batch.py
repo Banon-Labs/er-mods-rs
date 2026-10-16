@@ -154,6 +154,8 @@ RERENDERED = "profile-portrait: slot 0 re-rendered"
 IMPORT_FAILED = ("the queued import FAILED", "boot import of the configured `build_url` REFUSED", "export REFUSED")
 GAME_START_SECONDS = 120
 BOOT_SECONDS = 300
+# Ten times the longest silence in a healthy boot's log.
+BOOT_STALL_SECONDS = 30
 IMPORT_SECONDS = 90
 RERENDER_SECONDS = 60
 # How long the agent lets textures for freshly equipped gear stream in before the first shot. The
@@ -253,11 +255,23 @@ class LogFollower:
         self.offset += end
         return chunk[:end].decode("utf-8", "replace").splitlines()
 
-    def wait(self, accept, seconds: float, alive=lambda: True, fatal=None):
-        """The first `accept(line)` that is not None, else `TimeoutError`."""
+    def wait(self, accept, seconds: float, alive=lambda: True, fatal=None, stall: float | None = None):
+        """The first `accept(line)` that is not None, else `TimeoutError`.
+
+        `stall` bounds how long the log may stay silent. A healthy boot writes a line at least every
+        3 s (measured on a whole boot, 2026-10-13); one that wedges in its hook installs stops
+        writing at once while its process lives on, and is otherwise waited on for the full boot
+        allowance.
+        """
         deadline = time.monotonic() + seconds
+        heard = time.monotonic()
         while time.monotonic() < deadline:
-            self.unread += self.lines()
+            fresh = self.lines()
+            if fresh:
+                heard = time.monotonic()
+            elif stall is not None and time.monotonic() - heard > stall:
+                raise GameGone(f"the autoload log has been silent for {stall:.0f}s; the game is wedged")
+            self.unread += fresh
             while self.unread:
                 line = self.unread.pop(0)
                 for marker in IMPORT_FAILED if fatal is None else fatal:
@@ -420,7 +434,7 @@ class Game:
         so a boot that put anybody else in the world is a failure, not a photograph of them.
         """
         found = self.log.wait(lambda line: (m := LOADED.search(line)) and (json.loads(f'"{m.group(1)}"'), int(m.group(2))),
-                              BOOT_SECONDS, alive=lambda: bool(self.run_lib.find_game_pids()))
+                              BOOT_SECONDS, alive=lambda: bool(self.run_lib.find_game_pids()), stall=BOOT_STALL_SECONDS)
         if found != (build["character"], build["level"]):
             raise RuntimeError(f"{build['save']} slot {build['slot']} loaded {found}, "
                                f"not {(build['character'], build['level'])}")
