@@ -438,6 +438,13 @@ fn spawn_catalog_task() {
         });
 }
 
+// If this module wins the imgui context, every other overlay in the process has to find it.
+// Measured 2026-10-14 (run br-20261014-214503-8296): with no watermark shell in the profile this
+// DLL hosted, and er-net-effects and er-cel-shade each spun in `register_with_host_retrying`
+// because no loaded module answered `er_overlay_register_guest_v1` -- both overlays invisible.
+#[cfg(windows)]
+er_build_watermark_core::export_overlay_host!();
+
 #[cfg(windows)]
 #[unsafe(no_mangle)]
 /// # Safety

@@ -2837,6 +2837,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-cel-shade"
+version = "0.1.0"
+dependencies = [
+ "eldenring",
+ "er-build-watermark-core",
+ "er-dinput-suppress-core",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "er-shader-compiler",
+ "fromsoftware-shared",
+ "hudhook",
+ "iced-x86",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-config-defaults"
 version = "0.1.0"
 dependencies = [
@@ -3375,6 +3392,14 @@ dependencies = [
  "er-game-base",
  "er-hook",
  "iced-x86",
+]
+
+[[package]]
+name = "er-shader-compiler"
+version = "0.1.0"
+dependencies = [
+ "er-game-base",
+ "windows 0.62.2",
 ]
 
 [[package]]

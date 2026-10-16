@@ -56,6 +56,10 @@ def summary(w: dict) -> dict:
 
 
 def main() -> int:
+    # Without this, `--help` was taken as the output path and wrote `--help.txt` into the cwd.
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help"):
+        print(__doc__)
+        return 0
     out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("er-window.jpg")
     note = out.with_suffix(".txt")
     hyprctl = shutil.which("hyprctl")
