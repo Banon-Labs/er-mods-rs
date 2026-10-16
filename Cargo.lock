@@ -2837,6 +2837,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "er-cel-shade"
+version = "0.1.0"
+dependencies = [
+ "er-build-watermark-core",
+ "er-dinput-suppress-core",
+ "er-game-base",
+ "er-hook",
+ "er-hotkey-config",
+ "hudhook",
+ "iced-x86",
+ "windows 0.62.2",
+]
+
+[[package]]
 name = "er-config-defaults"
 version = "0.1.0"
 dependencies = [

@@ -250,6 +250,14 @@ category = "cosmetic"
 audience = "player"
 default = false
 
+[er-cel-shade]
+label = "Cel shading"
+blurb = "A Wind Waker cartoon look: hard bands of light, inked outlines, flat painted colour. F6 in game opens a menu of presets and live sliders, saved to er-cel-shade.toml."
+category = "cosmetic"
+audience = "player"
+default = false
+caution = "changes how every scene looks"
+
 [mushroom-man-runtime]
 label = "Mushroom Man"
 blurb = "Turns your character into the Mushroom Man from Dark Souls, armour hidden. The model is built from your own Dark Souls Remastered: run mushroom-man-builder.exe once before installing this."

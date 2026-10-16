@@ -2495,6 +2495,13 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-net-effects --lib
 # 256-byte DIK table arriving through a shared vtable is left untouched.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-dinput-suppress-core
 
+# er-cel-shade's host half: the settings file parser and its presets, the root-signature budget
+# arithmetic that decides whether the look parameter fits, the pipeline-stream walker, and the
+# check that the HLSL cbuffer declares the knobs in the order the menu writes them. A wrong
+# answer from any of those is silent in game -- a pass left vanilla, or a slider moving the wrong
+# float -- so they run here rather than waiting for someone to notice the picture.
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-cel-shade
+
 # er-invasion-path's host-portable half: the world->screen projection, the distance ramp, the
 # per-player colour assignment and the config parser. Every one of those can be wrong without
 # crashing anything -- a projection off by the aspect ratio just looks like "the overlay is
