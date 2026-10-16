@@ -119,8 +119,12 @@ fi
 # regression is caught as one: `run_runtime_evidence_signal_checks` in
 # `scripts/test-cupcake-policies.py` runs both signals and fails on any non-zero status, whatever
 # they answer.
+repo_args=()
+if [ -n "$target_dir" ]; then
+  repo_args=(--repo "$target_dir")
+fi
 note="$(printf '%s\n' "$changed" |
-  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null |
+  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" "${repo_args[@]}" 2>/dev/null |
   sed -n 's/^note //p' |
   head -1 |
   tr -d '\n')"

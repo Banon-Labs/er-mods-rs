@@ -131,9 +131,15 @@ if ! printf '%s\n' "$changed" | grep -q '^crates/'; then
 fi
 
 # The changed paths go in on stdin because the scan needs them: a `+dirty` log is only accepted
-# when the shell that wrote it compiles every crate this push changes.
+# when the shell that wrote it compiles every crate this push changes. `--repo` names the
+# checkout being pushed, because a worktree builds into its own `target/` and the scan looks there
+# for the binary that ran when it reads that binary's provenance record.
+repo_args=()
+if [ -n "$target_dir" ]; then
+  repo_args=(--repo "$target_dir")
+fi
 evidence="$(printf '%s\n' "$changed" |
-  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" 2>/dev/null)"
+  python3 "$repo_root/scripts/er-runtime-evidence.py" --head "$head_sha" "${repo_args[@]}" 2>/dev/null)"
 status=$?
 
 case "$status" in
