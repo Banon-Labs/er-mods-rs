@@ -1883,6 +1883,26 @@ mod tests {
         out
     }
 
+    /// A test's scratch directory, deleted with everything in it when the guard drops.
+    ///
+    /// Dropping runs on a panic as well as on a pass, so a failing assertion cleans up too. It
+    /// derefs to `Path`, so `dir.join(..)` and `Some(&dir)` read as they would on a `PathBuf`.
+    struct ScratchDir(PathBuf);
+
+    impl std::ops::Deref for ScratchDir {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Scratch directory for one test, keyed by process as well as by `tag`.
     ///
     /// The pid is what makes these tests independent of each other's runs. `std::env::temp_dir()`
@@ -1900,14 +1920,19 @@ mod tests {
     /// `MissingOrNotFile` for one it had already deleted, and `scratch dir must be creatable:
     /// AlreadyExists` when two processes raced the `create_dir_all`. Nothing in the product was
     /// wrong either time. With the pid in the name, eight of eight are green.
-    fn scratch_dir(tag: &str) -> PathBuf {
+    ///
+    /// The returned guard deletes the directory when the test ends, because the pid makes every
+    /// run's directory a new one: nothing used to remove them, each run left the 28 MB container
+    /// `validation_rejects_wrong_size_or_non_bnd4_files` writes behind, and by 2026-10-16 189 of
+    /// them had helped fill the host `/tmp` until a check run failed with `No space left on device`.
+    fn scratch_dir(tag: &str) -> ScratchDir {
         let dir = std::env::temp_dir().join(format!(
             "er-save-redirect-{tag}-p{pid}",
             pid = std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir must be creatable");
-        dir
+        ScratchDir(dir)
     }
 
     #[test]
@@ -2731,7 +2756,7 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let root = std::env::temp_dir().join(unique);
+        let root = ScratchDir(std::env::temp_dir().join(unique));
         let steam_id = 76561197960265729_u64;
         let sl2 = root
             .join("EldenRing")
@@ -2789,8 +2814,6 @@ mod tests {
                 bytes: None
             }
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -2838,7 +2861,9 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         );
-        let file = std::env::temp_dir().join(unique);
+        let dir = ScratchDir(std::env::temp_dir().join(unique));
+        std::fs::create_dir_all(&*dir).unwrap();
+        let file = dir.join("ER0000.sl2");
         std::fs::write(&file, b"save").unwrap();
         assert!(!save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
@@ -2847,16 +2872,15 @@ mod tests {
         assert!(save_file_is_readonly(&file));
         let mut perms = std::fs::metadata(&file).unwrap().permissions();
         // Restoring write permission on the throwaway temp file this test created, so the
-        // `remove_file` below succeeds. Deliberately not narrowed to owner-write: the value under
-        // test is `save_file_is_readonly`, and the repo rule that the live game-owned save must stay
-        // writable makes "clear the readonly bit" the exact semantics to exercise here.
+        // guard's `remove_dir_all` can delete it. Deliberately not narrowed to owner-write: the
+        // value under test is `save_file_is_readonly`, and the repo rule that the live game-owned
+        // save must stay writable makes "clear the readonly bit" the exact semantics to exercise.
         #[allow(
             clippy::permissions_set_readonly_false,
-            reason = "test-local temp file: clearing the readonly bit is the behaviour under test and the file is deleted on the next line"
+            reason = "test-local temp file: clearing the readonly bit is the behaviour under test and the file is deleted when its scratch directory guard drops"
         )]
         perms.set_readonly(false);
         std::fs::set_permissions(&file, perms).unwrap();
-        let _ = std::fs::remove_file(&file);
     }
 
     #[test]
