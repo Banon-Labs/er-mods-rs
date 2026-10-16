@@ -10,7 +10,7 @@ use std::{
 
 use mushroom_man_builder::{
     archive::ArchiveSet,
-    bnd::{Bnd4, file_name, read_bnd3},
+    bnd::Bnd4,
     character::{self, C2280, Character, Writer},
     dcx,
     error::{Context, Error, Result},
@@ -20,7 +20,7 @@ use mushroom_man_builder::{
     map_report::map_report,
     oodle,
     package::{self, Cutouts, DLL_NAME, Inputs},
-    profile,
+    profile, search,
     textures::{TextureSet, character_tpf},
 };
 
@@ -46,9 +46,15 @@ The folder gets a `character.txt` naming the character it holds.
 
 OPTIONS:
     --character <id>       The Dark Souls character to build, by its model id. Default: c2280.
+                           Any Biped character the install holds can be built; --search finds
+                           one by name.
+    --search <text>        Find characters by name (`hollow`, `black knight`) or the start of a
+                           model id (`c29`), say which this install holds and whether each one's
+                           rig maps onto Elden Ring's, then stop.
     --list-characters      List the characters this builder makes, then stop. With --all, also
                            the ones not yet checked in game.
-    --unvalidated          Build a --character that has not been checked in game yet.
+    --unvalidated          Build a --character that has not been checked in game yet: every
+                           one found by --search but c2280.
     --er-game <dir>        Elden Ring's `Game` folder (the one holding eldenring.exe).
     --dsr <dir>            The Dark Souls Remastered folder (the one holding
                            DarkSoulsRemastered.exe and `chr`).
@@ -67,6 +73,7 @@ struct Options {
     /// No arguments at all: the case a double-click produces, and the only one that prompts.
     bare: bool,
     character: Option<String>,
+    search: Option<String>,
     list_characters: bool,
     all: bool,
     unvalidated: bool,
@@ -137,6 +144,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut options = Options {
         bare: args.is_empty(),
         character: None,
+        search: None,
         list_characters: false,
         all: false,
         unvalidated: false,
@@ -158,6 +166,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         };
         match flag.as_str() {
             "--character" => options.character = Some(value()?.display().to_string()),
+            "--search" => options.search = Some(value()?.display().to_string()),
             "--list-characters" => options.list_characters = true,
             "--all" => options.all = true,
             "--unvalidated" => options.unvalidated = true,
@@ -197,9 +206,83 @@ fn run_options(options: &Options) -> Result<()> {
         print!("{}", character::listing(options.all));
         return Ok(());
     }
+    if let Some(query) = &options.search {
+        return run_search(options, query);
+    }
     let character = choose_character(options)?;
     build(options, character)
         .map_err(|error| error.context(format!("{} ({})", character.id, character.label)))
+}
+
+/// `--search <text>`: every character it finds, and what the builder makes of each.
+fn run_search(options: &Options, query: &str) -> Result<()> {
+    let dsr = find_dsr(options)?;
+    // The donor is what the fit is tried against; without it a search still says everything
+    // else.
+    let donor = find_er(options)
+        .and_then(|er_game| {
+            let oodle = oodle::load(&er_game)?;
+            package::read_donor(&ArchiveSet::open(&er_game)?, &oodle)
+        })
+        .map_err(|error| {
+            println!("(the fit is not tried: Elden Ring's body could not be read -- {error})\n");
+        })
+        .ok();
+    let hits = search::search(&dsr, query, donor.as_deref())?;
+    if hits.is_empty() {
+        println!("nothing matches {query:?}");
+        return Ok(());
+    }
+    for hit in &hits {
+        println!("{}", hit.line());
+    }
+    let buildable: Vec<&str> = hits
+        .iter()
+        .filter(|hit| hit.verdict.maps())
+        .map(|hit| hit.id.as_str())
+        .collect();
+    match buildable.as_slice() {
+        [] => println!("\nnone of these can be built"),
+        [only] => println!("\nbuild it with: --character {only} --unvalidated"),
+        _ => println!(
+            "\n{} of these can be built, each with --character <id> --unvalidated: {}",
+            buildable.len(),
+            buildable.join(" ")
+        ),
+    }
+    Ok(())
+}
+
+/// `--er-game`, checked, or the install Steam knows about.
+fn find_er(options: &Options) -> Result<PathBuf> {
+    match &options.er_game {
+        Some(dir) if locate::is_er_game_dir(dir) => Ok(dir.clone()),
+        Some(dir) => Err(Error::new(format!(
+            "{} is not Elden Ring's `Game` folder (no eldenring.exe and Data0.bhd)",
+            dir.display()
+        ))),
+        None => locate::find_er().ok_or_else(|| {
+            Error::new("could not find Elden Ring through Steam -- pass --er-game <Game folder>")
+        }),
+    }
+}
+
+/// `--dsr`, checked, or the install Steam knows about.
+fn find_dsr(options: &Options) -> Result<PathBuf> {
+    match &options.dsr {
+        Some(dir) if locate::is_dsr_dir(dir) => Ok(dir.clone()),
+        Some(dir) => Err(Error::new(format!(
+            "{} is not the Dark Souls Remastered folder (no DarkSoulsRemastered.exe and `chr`) \
+             -- point --dsr at it",
+            dir.display()
+        ))),
+        None => locate::find_dsr().ok_or_else(|| {
+            Error::new(
+                "could not find Dark Souls Remastered through Steam -- pass --dsr <folder> (the \
+                 folder that holds DarkSoulsRemastered.exe and `chr`)",
+            )
+        }),
+    }
 }
 
 /// `--character`, or a choice asked of a player who double-clicked the exe, or c2280.
@@ -291,22 +374,7 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
         options.writer.unwrap_or(character.writer),
         options.cutouts,
     )?;
-    let dsr = match &options.dsr {
-        Some(dir) if locate::is_dsr_dir(dir) => dir.clone(),
-        Some(dir) => {
-            return Err(Error::new(format!(
-                "{} is not the Dark Souls Remastered folder (no DarkSoulsRemastered.exe and \
-                 `chr`) -- point --dsr at it",
-                dir.display()
-            )));
-        }
-        None => locate::find_dsr().ok_or_else(|| {
-            Error::new(
-                "could not find Dark Souls Remastered through Steam -- pass --dsr <folder> \
-                 (the folder that holds DarkSoulsRemastered.exe and `chr`)",
-            )
-        })?,
-    };
+    let dsr = find_dsr(options)?;
     println!("Dark Souls Remastered: {}", dsr.display());
     let chrbnd = locate::chrbnd_path(&dsr, character.id);
     if !chrbnd.is_file() {
@@ -316,19 +384,20 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
             character.id
         )));
     }
-
-    let er_game = match &options.er_game {
-        Some(dir) if locate::is_er_game_dir(dir) => dir.clone(),
-        Some(dir) => {
+    // A character outside the table was never looked at, so its rig is checked before any of
+    // Elden Ring's archives are opened.
+    if character::by_id(character.id).is_none() {
+        // The fit itself is made by the build, against the donor it reads.
+        let verdict = search::verdict(&dsr, character.id, None);
+        if !verdict.maps() {
             return Err(Error::new(format!(
-                "{} is not Elden Ring's `Game` folder (no eldenring.exe and Data0.bhd)",
-                dir.display()
+                "it cannot be built: {}",
+                verdict.describe()
             )));
         }
-        None => locate::find_er().ok_or_else(|| {
-            Error::new("could not find Elden Ring through Steam -- pass --er-game <Game folder>")
-        })?,
-    };
+    }
+
+    let er_game = find_er(options)?;
     println!("Elden Ring:            {}", er_game.display());
 
     // Without a DLL the package is still the hard part: er-installer puts its own copy inside
@@ -426,7 +495,7 @@ fn profile_path_form(path: &Path) -> PathBuf {
 }
 
 /// `--character <id>` taken out of a developer subcommand's arguments, and the rest in order.
-/// Any id in the table is accepted, checked in game or not: these commands build no package, so
+/// Any model id is accepted, checked in game or not: these commands build no package, so
 /// `--unvalidated` is taken and changes nothing.
 fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
     let mut character = character::default_character();
@@ -567,20 +636,12 @@ fn run_map_report(args: &[String]) -> Result<()> {
 
 /// `<id>.flver` (or the binder's first FLVER) out of `chr/<id>.chrbnd.dcx`.
 fn chrbnd_flver(dsr: &Path, id: &str) -> Result<Vec<u8>> {
-    let path = locate::chrbnd_path(dsr, id);
-    let packed = fs::read(&path).context(path.display())?;
-    let files = read_bnd3(&dcx::decompress(&packed, None)?).context(path.display())?;
-    let wanted = format!("{id}.flver");
-    files
-        .iter()
-        .find(|file| file_name(&file.name).eq_ignore_ascii_case(&wanted))
-        .or_else(|| {
-            files
-                .iter()
-                .find(|file| file_name(&file.name).to_lowercase().ends_with(".flver"))
-        })
-        .map(|file| file.data.clone())
-        .ok_or_else(|| Error::new(format!("{} holds no FLVER", path.display())))
+    search::chrbnd_flver(dsr, id)?.ok_or_else(|| {
+        Error::new(format!(
+            "{} holds no FLVER",
+            locate::chrbnd_path(dsr, id).display()
+        ))
+    })
 }
 
 fn map_report_all_biped(dsr: &Path) -> Result<()> {
@@ -1053,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn developer_commands_take_any_table_character() {
+    fn developer_commands_take_any_model_id() {
         let args: Vec<String> = ["a", "--character", "c2650", "--unvalidated", "b"]
             .iter()
             .map(|a| (*a).to_owned())
@@ -1063,7 +1124,9 @@ mod tests {
             (character.id, rest),
             ("c2650", vec!["a".to_owned(), "b".to_owned()])
         );
-        assert!(dev_character(&["--character".to_owned(), "c9999".to_owned()]).is_err());
+        let (generic, _) = dev_character(&["--character".to_owned(), "c2500".to_owned()]).unwrap();
+        assert_eq!((generic.id, generic.label), ("c2500", "Hollow"));
+        assert!(dev_character(&["--character".to_owned(), "hollow".to_owned()]).is_err());
         assert_eq!(dev_character(&[]).unwrap().0.id, "c2280");
     }
 }

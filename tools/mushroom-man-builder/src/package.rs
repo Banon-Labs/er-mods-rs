@@ -41,7 +41,7 @@ use std::{
 
 use crate::{
     archive::ArchiveSet,
-    bnd::{BinderFile, Bnd4, file_name, read_bnd3},
+    bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
     character::{C2280, Character, FitConfig, Writer},
     dcx,
     edge::{EDGE_MATERIAL, edge_append},
@@ -58,7 +58,7 @@ use crate::{
     },
     locate,
     oodle::Oodle,
-    textures::{TextureSet, character_tpf_from, with_zero_metallic},
+    textures::{self, TextureSet, character_tpf_from, with_zero_metallic},
 };
 
 /// Every full-body part a character preset can ask for, from the community file list of Elden
@@ -366,29 +366,62 @@ pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<Character
             owner,
             &format!("{id}'s materials draw with {owner}'s textures"),
         )?;
-        let tpf = binder_entry(&files, &format!("{owner}.tpf"), &path).map_err(|error| {
-            let split = files
-                .iter()
-                .any(|file| file_name(&file.name).to_lowercase().ends_with(".chrtpfbhd"));
-            if split {
-                Error::new(format!(
-                    "{} keeps its textures in a .chrtpfbhd/.chrtpfbdt pair, which this builder \
-                     does not read yet",
-                    path.display()
-                ))
-            } else {
-                error
-            }
-        })?;
-        borrowed_tpfs.push((owner.to_owned(), tpf));
+        borrowed_tpfs.push((
+            owner.to_owned(),
+            character_textures(dsr_dir, owner, &files, &path)?,
+        ));
     }
-    Ok(CharacterFiles {
+    let mut read = CharacterFiles {
         id,
-        tpf: binder_entry(&files, &format!("{id}.tpf"), &path)?,
+        tpf: character_textures(dsr_dir, id, &files, &path)?,
         flver,
         borrowed_tpfs,
         textures,
-    })
+    };
+    read.textures = read
+        .textures
+        .clone()
+        .without_absent_maps(&read.texture_tpfs())?;
+    Ok(read)
+}
+
+/// Character `id`'s textures as one TPF: `<id>.tpf` out of its binder `files`, or, for a
+/// character that keeps them split, every `<texture>.tpf.dcx` of the `<id>.chrtpfbhd` header in
+/// its binder and the `chr/<id>.chrtpfbdt` data beside it, merged. c2320's are split six ways,
+/// one texture to a TPF.
+fn character_textures(
+    dsr_dir: &Path,
+    id: &str,
+    files: &[BinderFile],
+    path: &Path,
+) -> Result<Vec<u8>> {
+    let header_name = format!("{id}.chrtpfbhd");
+    let Some(header) = files
+        .iter()
+        .find(|file| file_name(&file.name).eq_ignore_ascii_case(&header_name))
+    else {
+        return binder_entry(files, &format!("{id}.tpf"), path);
+    };
+    let data_path = locate::chrtpfbdt_path(dsr_dir, id);
+    let data = fs::read(&data_path).context(format!(
+        "reading {}, the textures {} indexes",
+        data_path.display(),
+        path.display()
+    ))?;
+    let entries = read_bxf3(&header.data, &data).context(data_path.display())?;
+    textures::merge_tpfs(
+        &entries
+            .iter()
+            .map(|entry| {
+                dcx::decompress(&entry.data, None).context(format!(
+                    "{} in {}",
+                    file_name(&entry.name),
+                    data_path.display()
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?,
+    )
+    .context(data_path.display())
 }
 
 /// The materials of the meshes `character`'s build keeps, each once, ascending: for a Biped
@@ -435,6 +468,34 @@ fn binder_entry(files: &[BinderFile], name: &str, path: &Path) -> Result<Vec<u8>
         .find(|file| file_name(&file.name).eq_ignore_ascii_case(name))
         .map(|file| file.data.clone())
         .ok_or_else(|| Error::new(format!("{} has no {name}", path.display())))
+}
+
+/// The donor body, `FC_M_0000.flver`, out of the installed game's archives: what every fit is
+/// made against.
+pub fn read_donor(archives: &ArchiveSet, oodle: &Oodle) -> Result<Vec<u8>> {
+    let logical = format!("/parts/{}{PART_EXTENSION}", FC_SOURCE_STEM.to_lowercase());
+    let packed = archives.read(&logical)?;
+    let binder = Bnd4::read(&dcx::decompress(&packed, Some(oodle))?).context(&logical)?;
+    let name = format!("{FC_SOURCE_STEM}.flver");
+    binder
+        .file_named(&name)
+        .map(|file| file.data.clone())
+        .ok_or_else(|| Error::new(format!("{logical} has no {name}")))
+}
+
+/// Everything [`build`] does to `character` that needs no archive: the fit against `donor`, the
+/// slots, the rebuilt FLVER and the body TPF. Returns the slot count.
+pub fn trial_build(donor: &[u8], character: &Character, files: &CharacterFiles) -> Result<usize> {
+    let FitConfig::Biped(_) = character.fit else {
+        return Err(Error::new(format!(
+            "{} is not fitted as a Biped",
+            character.id
+        )));
+    };
+    let body = biped_body(donor, character, &files.flver, Cutouts::EdgeMaterial)?;
+    rebuild(donor, &body.slots, true, &HeaderAppend::default())?;
+    character_tpf_from(&files.texture_tpfs(), &files.textures, FC_SOURCE_STEM, "")?;
+    Ok(body.slots.len())
 }
 
 /// c2280's model and textures out of a Dark Souls Remastered install.

@@ -1,11 +1,14 @@
 //! The Dark Souls characters this builder can turn the player into, and which of them have been
 //! checked in game.
 //!
-//! An id that is not in [`CHARACTERS`] is refused outright, and that refusal -- not `map-report`
-//! -- is what keeps a character whose rig cannot be fitted out of a package. A character that is
-//! in the table but not yet `validated` is built only on request (`--unvalidated`), and is never
-//! offered by the prompt or by a plain `--list-characters`, so an exe built between two in-game
-//! checks never hands a player a body nobody has looked at.
+//! [`CHARACTERS`] holds the ones with settings of their own: c2280 and its fit, and the Biped
+//! characters measured one by one. Any other model id is a [`generic`] Biped character, fitted
+//! with the defaults those were measured with. Whether its rig can be fitted at all is decided
+//! when it is built, by its [`crate::map_report`]: a skeleton that is not Biped leaves weight on
+//! bones that map to nothing, and the build refuses it before any archive is opened. Nothing
+//! outside the table is `validated`, and a character that is not is built only on request
+//! (`--unvalidated`) and is never offered by the prompt or by a plain `--list-characters`, so an
+//! exe built between two in-game checks never hands a player a body nobody has looked at.
 //!
 //! Everything else is derived from the id: the binder is `chr/<id>.chrbnd.dcx`, the model
 //! `<id>.flver`, and the textures are whatever the materials of its kept meshes name, read out of
@@ -14,6 +17,7 @@
 use crate::{
     error::{Error, Result},
     fit::{biped::BipedParams, mushroom::FitParams},
+    names,
 };
 
 /// Whose bone names the source skeleton uses, which decides how it is fitted.
@@ -122,18 +126,49 @@ pub fn validated() -> impl Iterator<Item = &'static Character> {
     CHARACTERS.iter().filter(|character| character.validated)
 }
 
-/// The character `--character <id>` names, refused when it is not in the table, or when it has
-/// not been checked in game and `allow_unvalidated` was not given.
+/// Whether `id` is spelled as a model id: `c` and four digits.
+pub fn is_model_id(id: &str) -> bool {
+    let id = id.trim();
+    id.len() == 5
+        && id.as_bytes()[0].eq_ignore_ascii_case(&b'c')
+        && id[1..].bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// A character outside [`CHARACTERS`]: model `id`, fitted as c2650 and c2900 are, through the
+/// rebuild writer, under its name from [`names`] when it has one. Never validated.
+///
+/// It is leaked so that it is `'static` like the table's entries: a run resolves one character.
+pub fn generic(id: &str) -> &'static Character {
+    let id = id.trim().to_ascii_lowercase();
+    let label =
+        names::name_of(&id).map_or_else(|| format!("Dark Souls character {id}"), str::to_owned);
+    Box::leak(Box::new(Character {
+        id: Box::leak(id.into_boxed_str()),
+        label: Box::leak(label.into_boxed_str()),
+        skeleton: Skeleton::Biped,
+        fit: FitConfig::Biped(BipedParams::DEFAULT),
+        writer: Writer::Rebuild,
+        validated: false,
+    }))
+}
+
+/// The character `--character <id>` names: its table entry, or a [`generic`] one for any other
+/// model id. Refused when `id` is not a model id, or when the character has not been checked in
+/// game and `allow_unvalidated` was not given.
 pub fn resolve(id: &str, allow_unvalidated: bool) -> Result<&'static Character> {
-    let Some(character) = by_id(id) else {
-        let offered: Vec<String> = validated()
-            .map(|character| format!("{} ({})", character.id, character.label))
-            .collect();
-        return Err(Error::new(format!(
-            "there is no character {id} -- this builder makes {} (--list-characters --all lists \
-             the ones not yet checked in game)",
-            offered.join(", ")
-        )));
+    let character = match by_id(id) {
+        Some(character) => character,
+        None if is_model_id(id) => generic(id),
+        None => {
+            let offered: Vec<String> = validated()
+                .map(|character| format!("{} ({})", character.id, character.label))
+                .collect();
+            return Err(Error::new(format!(
+                "{id} is not a model id -- a character is named by c and four digits, like {} \
+                 (--search <name> finds one by name)",
+                offered.join(", ")
+            )));
+        }
     };
     if !character.validated && !allow_unvalidated {
         return Err(Error::new(format!(
@@ -228,8 +263,25 @@ mod tests {
             assert_eq!(resolve(character.id, true).unwrap().id, character.id);
         }
         assert_eq!(resolve("C2280", false).unwrap().id, "c2280");
-        let unknown = resolve("c9999", true).unwrap_err().to_string();
-        assert!(unknown.contains("c9999") && unknown.contains("c2280"));
+        let unknown = resolve("hollow", true).unwrap_err().to_string();
+        assert!(unknown.contains("hollow") && unknown.contains("c2280"));
+    }
+
+    #[test]
+    fn any_other_model_id_is_a_generic_biped_that_needs_the_flag() {
+        assert!(resolve("c2500", false).is_err());
+        let hollow = resolve(" C2500 ", true).unwrap();
+        assert_eq!((hollow.id, hollow.label), ("c2500", "Hollow"));
+        assert_eq!((hollow.writer, hollow.validated), (Writer::Rebuild, false));
+        assert_eq!(hollow.skeleton, Skeleton::Biped);
+        assert!(matches!(hollow.fit, FitConfig::Biped(params) if params == BipedParams::DEFAULT));
+        assert_eq!(
+            resolve("c9999", true).unwrap().label,
+            "Dark Souls character c9999"
+        );
+        for id in ["c250", "c25000", "x2500", "c25o0", ""] {
+            assert!(!is_model_id(id), "{id:?}");
+        }
     }
 
     #[test]

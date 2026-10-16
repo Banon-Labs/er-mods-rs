@@ -111,6 +111,35 @@ impl TextureSet {
         })
     }
 
+    /// The set without a specular or normal map that none of `tpfs` holds, as [`character_tpf_from`]
+    /// takes them, so the generated flat one stands in. A missing albedo has no stand-in and is
+    /// refused: c4091's materials name `c4090` and `c4090_s`, and c4090's TPF holds neither.
+    pub fn without_absent_maps(mut self, tpfs: &[(&str, &[u8])]) -> Result<Self> {
+        let mut held: Vec<(String, String)> = Vec::new();
+        for &(owner, bytes) in tpfs {
+            let tpf = parse_dsr_tpf(bytes, &format!("{owner}'s"))?;
+            held.extend(
+                tpf.textures
+                    .into_iter()
+                    .map(|texture| (owner.to_lowercase(), texture.name.to_lowercase())),
+            );
+        }
+        let present = |texture: &TextureRef| {
+            held.iter().any(|(owner, name)| {
+                *owner == texture.owner && name.eq_ignore_ascii_case(&texture.name)
+            })
+        };
+        if !present(&self.albedo) {
+            return Err(Error::new(format!(
+                "its albedo {} is in no TPF of {}",
+                self.albedo.name, self.albedo.owner
+            )));
+        }
+        self.specular = self.specular.filter(present);
+        self.normal = self.normal.filter(present);
+        Ok(self)
+    }
+
     /// The characters whose binders hold the set, each once, in albedo, specular, normal order.
     pub fn owners(&self) -> Vec<&str> {
         let mut owners: Vec<&str> = Vec::new();
@@ -212,6 +241,34 @@ pub fn character_tpf_from(
         find_texture(tpf, texture, &format!("{}'s", texture.owner))
     };
     donor_tpf(lookup, set, target_prefix, lod_suffix)
+}
+
+/// One TPF holding every texture of `tpfs`, in order, with the first one's header: a character
+/// that keeps its textures split, one to a TPF, as [`character_tpf_from`] takes a character's.
+/// Two textures with one name are refused, since a lookup by name could take either.
+pub fn merge_tpfs(tpfs: &[Vec<u8>]) -> Result<Vec<u8>> {
+    let mut merged: Option<Tpf> = None;
+    for (index, bytes) in tpfs.iter().enumerate() {
+        let tpf = parse_dsr_tpf(bytes, &format!("split texture {index}'s"))?;
+        let Some(into) = merged.as_mut() else {
+            merged = Some(tpf);
+            continue;
+        };
+        for texture in tpf.textures {
+            if into
+                .textures
+                .iter()
+                .any(|seen| seen.name.eq_ignore_ascii_case(&texture.name))
+            {
+                return Err(Error::new(format!(
+                    "two split TPFs hold a texture named {}",
+                    texture.name
+                )));
+            }
+            into.textures.push(texture);
+        }
+    }
+    write_tpf(&merged.ok_or("no split TPF to merge")?)
 }
 
 fn parse_dsr_tpf(bytes: &[u8], whose: &str) -> Result<Tpf> {
@@ -643,6 +700,31 @@ mod tests {
         }
         .build()
         .unwrap()
+    }
+
+    #[test]
+    fn split_tpfs_merge_into_one_a_set_is_read_out_of() {
+        let split = [
+            source_tpf(vec![texture("c2320", legacy_dds(5, 1, b"DXT1"))]),
+            source_tpf(vec![texture("c2320_n", dx10_dds(7, 3, dxgi::BC5_UNORM))]),
+            source_tpf(vec![texture("c2320_s", legacy_dds(6, 2, b"DXT1"))]),
+        ];
+        let merged = merge_tpfs(&split).unwrap();
+        let parsed = Tpf::parse(&merged).unwrap();
+        let names: Vec<&str> = parsed.textures.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["c2320", "c2320_n", "c2320_s"]);
+        let built = character_tpf_from(
+            &[("c2320", merged.as_slice())],
+            &TextureSet::named_after("c2320"),
+            "FC_M_0000",
+            "",
+        )
+        .unwrap();
+        assert_eq!(Tpf::parse(&built).unwrap().textures.len(), 3);
+        // One name twice is refused, and so is nothing at all.
+        let twice = [split[0].clone(), split[0].clone()];
+        assert!(merge_tpfs(&twice).is_err());
+        assert!(merge_tpfs(&[]).is_err());
     }
 
     #[test]

@@ -27,6 +27,12 @@ pub fn chrbnd_path(dsr_dir: &Path, id: &str) -> PathBuf {
     dsr_dir.join(DSR_CHR_DIR).join(format!("{id}.chrbnd.dcx"))
 }
 
+/// `chr/<id>.chrtpfbdt`: the texture data a character with split textures keeps beside its
+/// binder, indexed by the `<id>.chrtpfbhd` inside it.
+pub fn chrtpfbdt_path(dsr_dir: &Path, id: &str) -> PathBuf {
+    dsr_dir.join(DSR_CHR_DIR).join(format!("{id}.chrtpfbdt"))
+}
+
 pub fn is_er_game_dir(dir: &Path) -> bool {
     ER_PROBES.iter().all(|probe| dir.join(probe).is_file())
 }

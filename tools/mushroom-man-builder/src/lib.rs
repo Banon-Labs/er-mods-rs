@@ -13,9 +13,11 @@ pub mod flver;
 pub mod keys;
 pub mod locate;
 pub mod map_report;
+pub mod names;
 pub mod oodle;
 pub mod package;
 pub mod profile;
+pub mod search;
 pub mod textures;
 
 /// The installer's Steam discovery, shared by path; see [`locate`].
