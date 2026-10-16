@@ -51,7 +51,8 @@ pub struct DsrMesh {
     pub cull_backfaces: bool,
     /// The global bone each vertex bone slot names. Empty when the slots are global already.
     pub palette: Vec<u32>,
-    /// Every vertex of the mesh's first buffer, including the ones only LOD1 and LOD2 use.
+    /// Every vertex of the mesh, read across all its buffers, including the ones only LOD1 and
+    /// LOD2 use.
     pub vertices: Vec<DsrVertex>,
     /// LOD0, LOD1 and LOD2, strip-decoded; motion-blur copies are skipped. A LOD the mesh has no
     /// face set for is empty.
@@ -139,29 +140,52 @@ pub fn materials(bytes: &[u8]) -> Result<Vec<SourceMaterial>> {
 fn parse_mesh(bytes: &[u8], flver: &Flver, index: usize) -> Result<DsrMesh> {
     let mesh = flver.meshes[index];
     let palette = parse_u32_list(bytes, mesh.bone_offset, mesh.bone_count)?;
+    // A vertex can be spread over several buffers, each with its own layout and stride: Dark
+    // Souls II keeps the positions and normals of some meshes in one and their bones, weights
+    // and UVs in another (c1020 mesh 6). Every member is read from whichever buffer has it, the
+    // first buffer winning when two carry the same semantic.
     let vertex_buffer_indices =
         parse_u32_list(bytes, mesh.vertex_buffer_offset, mesh.vertex_buffer_count)?;
-    let first_vb = *vertex_buffer_indices
-        .first()
-        .ok_or("mesh has no vertex buffers")? as usize;
-    let vertex_buffer = *flver
-        .vertex_buffers
-        .get(first_vb)
-        .ok_or("mesh vertex buffer index out of range")?;
-    let layout = *flver
-        .layouts
-        .get(vertex_buffer.layout_index)
-        .ok_or("vertex buffer layout index out of range")?;
-    let members = parse_layout_members(bytes, layout)?;
+    if vertex_buffer_indices.is_empty() {
+        return Err("mesh has no vertex buffers".into());
+    }
+    let mut vertex_count = None;
+    let mut reads = Vec::new();
+    let mut taken = Vec::new();
+    for &buffer_index in &vertex_buffer_indices {
+        let vertex_buffer = *flver
+            .vertex_buffers
+            .get(buffer_index as usize)
+            .ok_or("mesh vertex buffer index out of range")?;
+        match vertex_count {
+            Some(count) if count != vertex_buffer.vertex_count => {
+                return Err(Error::new(format!(
+                    "the mesh's vertex buffers disagree on its vertex count ({count} and {})",
+                    vertex_buffer.vertex_count
+                )));
+            }
+            _ => vertex_count = Some(vertex_buffer.vertex_count),
+        }
+        let layout = *flver
+            .layouts
+            .get(vertex_buffer.layout_index)
+            .ok_or("vertex buffer layout index out of range")?;
+        let buffer_start = flver.header.data_offset + vertex_buffer.buffer_offset;
+        let buffer = crate::bytes::slice(bytes, buffer_start, vertex_buffer.buffer_length)?;
+        for member in parse_layout_members(bytes, layout)? {
+            let key = (member.semantic_id, member.index);
+            if !taken.contains(&key) {
+                taken.push(key);
+                reads.push((buffer, vertex_buffer.vertex_size, member));
+            }
+        }
+    }
 
-    let buffer_start = flver.header.data_offset + vertex_buffer.buffer_offset;
-    let buffer = crate::bytes::slice(bytes, buffer_start, vertex_buffer.buffer_length)?;
     let uv_factor = flver.header.uv_factor();
-    let mut vertices = vec![DsrVertex::default(); vertex_buffer.vertex_count];
+    let mut vertices = vec![DsrVertex::default(); vertex_count.unwrap_or(0)];
     for (index, vertex) in vertices.iter_mut().enumerate() {
-        let start = index * vertex_buffer.vertex_size;
-        for member in &members {
-            let off = start + member.struct_offset;
+        for &(buffer, stride, ref member) in &reads {
+            let off = index * stride + member.struct_offset;
             match (member.semantic_id, member.format_id, member.index) {
                 (0, 0x02, _) => vertex.position = read_vec3(buffer, off)?,
                 (1, 0x1A, _) | (1, 0x16, _) => {

@@ -788,8 +788,9 @@ fn extract_inputs(args: &[String]) -> Result<()> {
 }
 
 /// Developer check: the fitted character as OBJ + weight TSV, for `scripts/dsr-er-fit-probe.py`
-/// and the Blender authoring path, with the probe's `fit.json` and `source-map.tsv` beside them.
-/// Needs no Oodle, so it runs on Linux: the donor FLVER comes from `extract-inputs`.
+/// and the Blender authoring path, with the probe's `fit.json` and `source-map.tsv` and the raw
+/// `<id>.flver` beside them. Needs no Oodle, so it runs on Linux: the donor FLVER comes from
+/// `extract-inputs`.
 fn export_obj(args: &[String]) -> Result<()> {
     let (character, args) = dev_character(args)?;
     let [dsr, donor, out] = &args[..] else {
@@ -810,6 +811,8 @@ fn export_obj(args: &[String]) -> Result<()> {
     fs::write(out.join(&weights), export.mesh.to_weights_tsv())?;
     fs::write(out.join(FIT_JSON), export.fit_json(&obj, &weights))?;
     fs::write(out.join(SOURCE_MAP), export.source_map_tsv())?;
+    // The probe's other input, so a survey needs no Elden Ring archives beside the donor.
+    fs::write(out.join(format!("{id}.flver")), &files.flver)?;
     println!(
         "wrote the fitted {id} ({} vertices, {} triangles, girth scale {}) into {}",
         export.mesh.vertices.len(),
