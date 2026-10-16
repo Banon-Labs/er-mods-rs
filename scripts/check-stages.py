@@ -229,6 +229,12 @@ STAGES: tuple[Stage, ...] = (
             # the installer still offers the defaults those mods ship.
             "tools/er-config-defaults/**/*",
             "tools/er-installer/config-defaults.txt",
+            # The duel referee's Cheat Engine port and the tests of both shareable referees:
+            # `er-duel-rules-gen.py --check` rebuilds the table from the Lua and `--test-agent`
+            # runs node and lua over them, and the rules-file editor's selftest.
+            "scripts/cheat-engine/er-duel-rules*",
+            "scripts/test-er-duel-rules-*",
+            "scripts/er-duel-rules-bans.py",
         ),
     ),
     Stage(

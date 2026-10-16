@@ -1168,6 +1168,13 @@ that owns it by walking the world's ChrSets (the same walk er-npc-possess and \
 er-enemynpc-effects make), and reads its data, super armor, resist and SpEffect state. It draws \
 as a guest of the overlay host when one exists (er-build-watermark), and hosts only when nothing \
 else does, so the process keeps one Present hook either way."""
+"er-duel-rules" = """Co-loadable with everything: it installs no detour and writes no game \
+memory. A FrameBegin game task walks WorldChrMan's player ChrSet, reads each player's \
+PlayerGameData (level, attributes, ChrAsm, physick tears), SpEffect list, TimeAct queue, data \
+and ride modules, GameDataMan's remote slot states and the CSBulletManager list, and answers its \
+param questions from SoloParamRepository after checking every holder is loaded. It draws as a \
+guest of the overlay host when one exists, and hosts only when nothing else does, so the process \
+keeps one Present hook either way."""
 "er-invasion-path" = """Co-loadable with everything, because it detours nothing at all and \
 writes no game memory. It reads WorldChrMan's player ChrSet plus CSCamera, calls two engine \
 QUERIES -- CSPhysWorld::CastRay for line of sight and the CSHkAiWorld navmesh path request \

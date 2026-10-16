@@ -1,0 +1,38 @@
+# A popup naming the player and the rule whenever anyone in the session breaks the competitive
+# duel ruleset: rune level, banned weapons, talismans, armour and tears, buffs, heals, banned
+# Ashes of War on use, banned spells by their projectiles, blue flasks per round.
+#
+# Standalone shell: its own `[[natives]]` entry, no product dependency, no detours, no param
+# edits and no writes to game memory. A FrameBegin game task reads every PlayerIns in the world's
+# player ChrSet, the live param tables and the bullet manager, and draws through the process's one
+# imgui overlay.
+[package]
+name = "er-duel-rules"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "er_duel_rules"
+crate-type = ["cdylib"]
+
+[dependencies]
+er-duel-rules-core = { path = "../er-duel-rules-core" }
+er-game-base = { path = "../er-game-base" }
+
+[target.'cfg(windows)'.dependencies]
+eldenring = { path = "../../../fromsoftware-rs/crates/eldenring" }
+fromsoftware-shared = { path = "../../../fromsoftware-rs/crates/shared" }
+# The one-imgui-host-per-process arbitration: this DLL draws as a guest when another module hosts
+# and hosts only when nothing else does, so the process keeps exactly one `Present` hook.
+er-build-watermark-core = { path = "../er-build-watermark-core" }
+hudhook = { version = "0.9.2", default-features = false, features = ["dx12"] }
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+] }
+
+[lints]
+workspace = true
