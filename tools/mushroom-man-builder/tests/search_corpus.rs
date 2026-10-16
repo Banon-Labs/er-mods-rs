@@ -44,21 +44,27 @@ const BODY_STEM: &str = "FC_M_0000";
 /// Biped rig (the four rats, Sif and Young Sif) or have no left upper arm (Four Kings). The one
 /// texture refusal is c4091, whose albedo is in no binder. Before characters with several texture
 /// sets were built, 26 more stopped there; before alpha blending had a route, 13 more were refused.
+///
+/// FromSoft's own rig names and the Bloatheads' numbered ones let 11 more in as Biped: six fit
+/// (c2260, c2270, c2830, c4130 Scarecrow, c4150 and c4160 the Bloatheads), the two crows (c3510,
+/// c3511) are turned down for heels in front of their toes, c5220 Nito for 20 materials against 15
+/// donor body meshes, c4500 Manus for a calf twist off its calf, and c5310 Gwynevere for a root
+/// bone `ex` carrying her dress.
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 71),
+    ("maps", 80),
     ("no model", 8),
-    ("not biped", 100),
+    ("not biped", 89),
     ("own fit", 1),
-    ("refused", 12),
+    ("refused", 14),
     ("textures", 1),
 ];
 const FITTED: [(&str, usize); 7] = [
-    ("fit", 9),
-    ("fits", 62),
+    ("fit", 12),
+    ("fits", 68),
     ("no model", 8),
-    ("not biped", 100),
+    ("not biped", 89),
     ("own fit", 1),
-    ("refused", 12),
+    ("refused", 14),
     ("textures", 1),
 ];
 
@@ -113,7 +119,8 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
         "the counts the c2500 build reported"
     );
     assert_eq!(verdict(&hits, "c2280"), Verdict::OwnFit);
-    assert_eq!(verdict(&hits, "c5220"), Verdict::NotBiped);
+    // Quelaag's lettered limb sets (`W_LArm11`, `LLeg_d_1`) are not a Biped's.
+    assert_eq!(verdict(&hits, "c5280"), Verdict::NotBiped);
     // Split textures, its own (c2320) and borrowed (c2230 draws with c2239's).
     assert!(verdict(&hits, "c2320").maps());
     assert!(verdict(&hits, "c2230").maps());
@@ -225,6 +232,16 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
         verdict(&hits, "c2730"),
         Verdict::Maps { fitted: true, .. }
     ));
+    // FromSoft-named and Bloathead-named rigs.
+    for id in ["c4130", "c4150", "c4160"] {
+        assert!(
+            matches!(verdict(&hits, id), Verdict::Maps { fitted: true, .. }),
+            "{id}"
+        );
+    }
+    assert!(
+        matches!(verdict(&hits, "c5220"), Verdict::Fit(why) if why.contains("material groups"))
+    );
 
     let offered: Vec<&str> = hits
         .iter()

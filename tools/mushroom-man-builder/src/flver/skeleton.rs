@@ -21,13 +21,22 @@
 //! - everything else -- cloth chains, Nubs, tails -- goes to its nearest mapped ancestor
 //!   ([`Role::Ancestor`]), and a bone with no such ancestor is [`Role::Unused`].
 //!
+//! FromSoft's own rigs name the same joints another way, and take the same roles. In c5310
+//! Gwynevere, c5220 Nito and c4130 Scarecrow `LArm11` is the shoulder and `LArm21` (Nito's
+//! `LArm2`) the elbow, with `LArm12`, `LArm22` and `LArm23` evenly spaced down their segments, so
+//! twist links; `LArmPalm` is the hand and `LArmDigit<digit><joint>` a finger, the thumb first;
+//! `LLeg1` is the hip, `LLeg2` the knee, `LLegAnkle` the foot, and Nito's `LLeg3`, a second shin
+//! link, is a Biped horselink. The Bloatheads (c4150, c4160) spell the Biped words with a number,
+//! `LUpperarm1` the shoulder and `LUpperarm2` halfway to `LForearm1`, with `LCollarbone`, `LPalm`
+//! and `LDigit11`.
+//!
 //! No joint position is read here except to check a twist link against its core segment, and
 //! then only when the twist bone has a parent: an orphaned bone's bind is a local offset, not a
 //! place. The first link of a chain sits on the core joint itself (`L ForeTwist` on `L Forearm`);
 //! a numbered one sits partway down the segment (c2370's `LUpArmTwist1` halfway from `L UpperArm`
 //! to `L Forearm`, c3450's `L ForeTwist1` halfway to `L Hand`).
 
-use super::{Bone, Vec3, bind_positions};
+use super::{Bone, Frame, Vec3, bind_frames, bind_positions};
 use crate::error::{Error, Result};
 
 /// A twist link lies on its core segment; further off it than this and the name lied.
@@ -90,7 +99,25 @@ pub fn normalise(name: &str) -> String {
 /// underscored, with an optional `Bip01 ` in front and digits after. [`normalise`] drops the
 /// underscore, so the `L_UpperArm` rigs (c2390 Darkwraith, the Black Knights, c2410) take the same
 /// rules as the spaced ones; letting them through on 2026-10-15 added 6 rigs that fit.
+///
+/// FromSoft's own rigs count when they have a shoulder, a palm and a hip (`LArm11` or `LArm1`,
+/// `LArmPalm`, `LLeg1`), and the Bloatheads' when they have `LUpperarm1`, `LPalm` and `LThigh1`.
+/// Asking for all three keeps out the ones with no hands (c2330 Demonic Foliage), no legs (c2430
+/// Demonic Statue) or a lettered limb set of each (c2700 Serpent Mage's four arms, `LArm_a_11` and
+/// `LArm_b_11`).
 pub fn is_biped(bones: &[Bone]) -> bool {
+    let names: Vec<String> = bones.iter().map(|bone| normalise(&bone.name)).collect();
+    let any = |wanted: &[&str]| names.iter().any(|name| wanted.contains(&name.as_str()));
+    let fromsoft = any(&["larm1", "rarm1", "larm11", "rarm11"])
+        && any(&["larmpalm", "rarmpalm"])
+        && any(&["lleg1", "rleg1"]);
+    let numbered = any(&["lupperarm1", "rupperarm1"])
+        && any(&["lpalm", "rpalm"])
+        && any(&["lthigh1", "rthigh1"]);
+    fromsoft || numbered || biped_upper_arm(bones)
+}
+
+fn biped_upper_arm(bones: &[Bone]) -> bool {
     bones.iter().any(|bone| {
         let name = bone.name.trim();
         let name = name.strip_prefix("Bip01 ").unwrap_or(name);
@@ -114,6 +141,12 @@ enum NameRule {
     Spine,
     /// A twist link and the Elden Ring name of the core bone it rides with.
     Twist(String),
+    /// A FromSoft-named finger: its digit and joint, both counted from 1.
+    Digit {
+        side: &'static str,
+        digit: u32,
+        joint: u32,
+    },
     Prop,
     Nub,
     Other,
@@ -169,6 +202,18 @@ fn name_rule(name: &str, raw: &str) -> NameRule {
             return NameRule::Direct(target);
         }
     }
+    // The Bloatheads' numbered long bones: the first starts the segment, the second is halfway.
+    for word in ["upperarm", "forearm", "thigh", "calf"] {
+        if let Some(target) = core(word, &["1"]) {
+            return NameRule::Direct(target);
+        }
+        if let Some(target) = core(word, &["2"]) {
+            return NameRule::Twist(target);
+        }
+    }
+    if let Some(rule) = fromsoft_rule(name) {
+        return rule;
+    }
     for (word, twin, suffixes) in [
         ("uparmtwist", "upperarm", &["", "1"][..]),
         ("foretwist", "forearm", &["", "1"][..]),
@@ -209,6 +254,90 @@ fn name_rule(name: &str, raw: &str) -> NameRule {
         return NameRule::Nub;
     }
     NameRule::Other
+}
+
+/// A FromSoft-named limb bone (`larm11`, `larmpalm`, `larmdigit23`, `lleg3`, `llegankle`) or a
+/// Bloathead one (`lcollarbone`, `lpalm`, `ldigit11`), or `None`.
+fn fromsoft_rule(name: &str) -> Option<NameRule> {
+    let direct = |side: &str, joint: &str| Some(NameRule::Direct(format!("{side}_{joint}")));
+    if let Some((side, rest)) = sided(name, "arm") {
+        return match rest {
+            "collarbone" => direct(side, "Clavicle"),
+            "1" | "11" => direct(side, "UpperArm"),
+            "12" => Some(NameRule::Twist(format!("{side}_UpperArm"))),
+            "2" | "21" => direct(side, "Forearm"),
+            "22" | "23" => Some(NameRule::Twist(format!("{side}_Forearm"))),
+            "palm" => direct(side, "Hand"),
+            _ => rest
+                .strip_prefix("digit")
+                .and_then(|digit| finger(side, digit)),
+        };
+    }
+    if let Some((side, rest)) = sided(name, "leg") {
+        return match rest {
+            "1" => direct(side, "Thigh"),
+            "2" | "3" => direct(side, "Calf"),
+            "ankle" => direct(side, "Foot"),
+            _ => rest
+                .strip_prefix("digit")
+                .filter(|toe| !toe.is_empty() && digits(toe))
+                .and_then(|_| direct(side, "Toe0")),
+        };
+    }
+    match sided(name, "collarbone").or_else(|| sided(name, "palm")) {
+        Some((side, "")) if name.ends_with("collarbone") => return direct(side, "Clavicle"),
+        Some((side, "")) => return direct(side, "Hand"),
+        _ => {}
+    }
+    let (side, rest) = sided(name, "digit")?;
+    finger(side, rest)
+}
+
+/// `digit` `23`: the second digit's third joint. Which Elden Ring finger it becomes is decided by
+/// where it sits on the hand, in [`classify`].
+fn finger(side: &'static str, digit: &str) -> Option<NameRule> {
+    let mut parts = digit.chars().map(|c| c.to_digit(10));
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Some(digit @ 1..=9)), Some(Some(joint @ 1..=9)), None) => {
+            Some(NameRule::Digit { side, digit, joint })
+        }
+        _ => None,
+    }
+}
+
+/// Elden Ring's finger for each numbered digit of one hand: the digit whose root lies least far
+/// down the hand's X axis is the thumb, finger 0, and the rest take fingers 1 to 4 in their
+/// numbered order. A lone digit is a mitten, finger 1. The numbering alone does not say which is
+/// the thumb: digit 1 is in c5310 Gwynevere's five and the Bloatheads', but c4130 Scarecrow's
+/// thumb is digit 2, 0.015 m along the palm against its mitten's 0.162 m.
+fn digit_fingers(hand: Frame, roots: &[(u32, Vec3)]) -> Vec<(u32, u32)> {
+    let along = |at: Vec3| {
+        let axis = hand.axes[0];
+        let offset = sub(at, hand.origin);
+        offset.x * axis.x + offset.y * axis.y + offset.z * axis.z
+    };
+    let mut numbered: Vec<(u32, Vec3)> = roots.to_vec();
+    numbered.sort_by_key(|(digit, _)| *digit);
+    if let [(digit, _)] = numbered[..] {
+        return vec![(digit, 1)];
+    }
+    let thumb = numbered
+        .iter()
+        .min_by(|a, b| along(a.1).total_cmp(&along(b.1)))
+        .map(|(digit, _)| *digit);
+    let mut next = 1;
+    numbered
+        .iter()
+        .map(|&(digit, _)| {
+            if Some(digit) == thumb {
+                (digit, 0)
+            } else {
+                let finger = next.min(4);
+                next += 1;
+                (digit, finger)
+            }
+        })
+        .collect()
 }
 
 fn er_word(word: &str) -> &'static str {
@@ -336,6 +465,57 @@ pub fn classify(bones: &[Bone]) -> Result<Vec<Role>> {
             _ => None,
         })
         .collect();
+
+    // Numbered digits become fingers by where they sit on their hand.
+    let frames = bind_frames(bones)?;
+    let hand_of = |roles: &[Option<Role>], index: usize, side: &str| {
+        ancestors(index).into_iter().find(
+            |&up| matches!(&roles[up], Some(Role::Direct(name)) if *name == format!("{side}_Hand")),
+        )
+    };
+    let mut fingers: Vec<((usize, u32), u32)> = Vec::new();
+    let mut hands: Vec<(usize, Vec<(u32, Vec3)>)> = Vec::new();
+    for (index, rule) in rules.iter().enumerate() {
+        if let NameRule::Digit {
+            side,
+            digit,
+            joint: 1,
+        } = *rule
+            && roles[index].is_none()
+            && let Some(hand) = hand_of(&roles, index, side)
+        {
+            match hands.iter_mut().find(|(at, _)| *at == hand) {
+                Some((_, roots)) => roots.push((digit, positions[index])),
+                None => hands.push((hand, vec![(digit, positions[index])])),
+            }
+        }
+    }
+    for (hand, roots) in &hands {
+        for (digit, finger) in digit_fingers(frames[*hand], roots) {
+            fingers.push(((*hand, digit), finger));
+        }
+    }
+    for (index, rule) in rules.iter().enumerate() {
+        let NameRule::Digit { side, digit, joint } = *rule else {
+            continue;
+        };
+        if roles[index].is_some() {
+            continue;
+        }
+        let finger = hand_of(&roles, index, side)
+            .and_then(|hand| {
+                fingers
+                    .iter()
+                    .find(|(key, _)| *key == (hand, digit))
+                    .map(|(_, finger)| *finger)
+            })
+            .unwrap_or((digit - 1).min(4));
+        let joint = match joint {
+            1 => String::new(),
+            more => (more - 1).min(2).to_string(),
+        };
+        roles[index] = Some(Role::Direct(format!("{side}_Finger{finger}{joint}")));
+    }
 
     // Twist links ride the core bone of the segment they lie on.
     let first_direct = |roles: &[Option<Role>], target: &str| {
@@ -562,5 +742,98 @@ mod tests {
         assert!(!is_biped(&named("L_UpperArmPad")));
         assert!(!is_biped(&named("CTRL_L UpperArm")));
         assert!(!is_biped(&named("LArm1")));
+    }
+
+    #[test]
+    fn fromsoft_and_numbered_names_take_the_biped_roles() {
+        let twist = |target: &str| NameRule::Twist(target.to_owned());
+        assert_eq!(rule("LArmCollarbone"), direct("L_Clavicle"));
+        assert_eq!(rule("LArm11"), direct("L_UpperArm"));
+        assert_eq!(rule("RArm1"), direct("R_UpperArm"));
+        assert_eq!(rule("LArm12"), twist("L_UpperArm"));
+        assert_eq!(rule("LArm21"), direct("L_Forearm"));
+        assert_eq!(rule("LArm2"), direct("L_Forearm"));
+        assert_eq!(rule("LArm23"), twist("L_Forearm"));
+        assert_eq!(rule("LArmPalm"), direct("L_Hand"));
+        let digit = |side, digit, joint| NameRule::Digit { side, digit, joint };
+        assert_eq!(rule("LArmDigit11"), digit("L", 1, 1));
+        assert_eq!(rule("LArmDigit23"), digit("L", 2, 3));
+        assert_eq!(rule("RArmDigit52"), digit("R", 5, 2));
+        assert_eq!(rule("LLeg1"), direct("L_Thigh"));
+        assert_eq!(rule("LLeg2"), direct("L_Calf"));
+        assert_eq!(rule("LLeg3"), direct("L_Calf"));
+        assert_eq!(rule("LLegAnkle"), direct("L_Foot"));
+        assert_eq!(rule("RLegDigit21"), direct("R_Toe0"));
+        assert_eq!(rule("LUpperarm1"), direct("L_UpperArm"));
+        assert_eq!(rule("LUpperarm2"), twist("L_UpperArm"));
+        assert_eq!(rule("RForearm2"), twist("R_Forearm"));
+        assert_eq!(rule("LThigh1"), direct("L_Thigh"));
+        assert_eq!(rule("LCalf2"), twist("L_Calf"));
+        assert_eq!(rule("LCollarbone"), direct("L_Clavicle"));
+        assert_eq!(rule("RPalm"), direct("R_Hand"));
+        assert_eq!(rule("LDigit13"), digit("L", 1, 3));
+        // Anything else that starts the same way is left to the later rules.
+        assert_eq!(rule("LArm_a_11"), NameRule::Other);
+        assert_eq!(rule("LLeg11"), NameRule::Other);
+        assert_eq!(rule("LArmDigit11Nub"), NameRule::Nub);
+        assert_eq!(rule("LArm3"), NameRule::Other);
+        assert_eq!(rule("R_W_Arm1"), NameRule::Prop);
+
+        let named = |names: &[&str]| -> Vec<Bone> {
+            names.iter().map(|name| bone(name, -1, [0.0; 3])).collect()
+        };
+        assert!(is_biped(&named(&["LArm11", "LArmPalm", "LLeg1"])));
+        assert!(is_biped(&named(&["RUpperarm1", "RPalm", "LThigh1"])));
+        // No palm, no hip, or lettered limbs.
+        assert!(!is_biped(&named(&["LArm1", "LArm2", "LLeg1"])));
+        assert!(!is_biped(&named(&["LArm1", "LArmPalm"])));
+        assert!(!is_biped(&named(&["LArm_a_11", "LArm_a_Palm", "LLeg1"])));
+    }
+
+    #[test]
+    fn the_digit_nearest_the_wrist_is_the_thumb() {
+        let finger = |roles: &[Role], index: usize| match &roles[index] {
+            Role::Direct(name) => name.clone(),
+            other => panic!("{other:?}"),
+        };
+        // Scarecrow's hand: a long mitten numbered first and a stub of a thumb numbered second.
+        let scarecrow = vec![
+            bone("Pelvis", -1, [0.0, 1.0, 0.0]),
+            bone("LArmPalm", 0, [1.0, 0.0, 0.0]),
+            bone("LArmDigit11", 1, [0.16, 0.0, 0.0]),
+            bone("LArmDigit21", 1, [0.015, -0.04, 0.0]),
+            bone("LArmDigit22", 3, [0.0, -0.03, 0.0]),
+        ];
+        let roles = classify(&scarecrow).unwrap();
+        assert_eq!(finger(&roles, 2), "L_Finger1");
+        assert_eq!(finger(&roles, 3), "L_Finger0");
+        assert_eq!(finger(&roles, 4), "L_Finger01");
+        // A five-digit hand with the thumb first, as Gwynevere's and the Bloatheads' are.
+        let mut five = vec![
+            bone("Pelvis", -1, [0.0, 1.0, 0.0]),
+            bone("RArmPalm", 0, [-1.0, 0.0, 0.0]),
+            bone("RArmDigit11", 1, [0.05, 0.0, 0.03]),
+        ];
+        for digit in 2..=5 {
+            five.push(bone(
+                &format!("RArmDigit{digit}1"),
+                1,
+                [0.1, 0.0, 0.02 * digit as f32],
+            ));
+        }
+        five.push(bone("RArmDigit53", 6, [0.02, 0.0, 0.0]));
+        let roles = classify(&five).unwrap();
+        let names: Vec<String> = (2..=7).map(|index| finger(&roles, index)).collect();
+        assert_eq!(
+            names,
+            [
+                "R_Finger0",
+                "R_Finger1",
+                "R_Finger2",
+                "R_Finger3",
+                "R_Finger4",
+                "R_Finger42"
+            ]
+        );
     }
 }

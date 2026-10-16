@@ -481,10 +481,14 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
                 && matches!(&roles[index], Role::Direct(name) if name == target)
         })
     };
+    // The bone mapped to `target` hanging from `parent`, directly or through `parent`'s own twist
+    // links: FromSoft's rigs put `LArm12` between the shoulder `LArm11` and the elbow `LArm21`.
     let child_of = |parent: usize, target: &str| {
         (0..bones.len()).find(|&index| {
-            usize::try_from(bones[index].parent_index) == Ok(parent)
-                && matches!(&roles[index], Role::Direct(name) if name == target)
+            matches!(&roles[index], Role::Direct(name) if name == target)
+                && ancestors(bones, index)
+                    .find(|&up| roles[up] != Role::Twist(parent))
+                    .is_some_and(|up| up == parent)
         })
     };
     let named = |index: usize| bones[index].name.as_str();

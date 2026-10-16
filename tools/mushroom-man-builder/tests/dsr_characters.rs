@@ -534,5 +534,7 @@ fn c2280_through_the_multi_mesh_parser_keeps_its_whole_buffer() {
     assert_eq!(source.meshes.len(), 1);
     assert_eq!(source.meshes[0].vertices.len(), 1108);
     assert_eq!(source.meshes[0].lods[0].len(), 1708);
-    assert!(!skeleton::is_biped(&source.bones));
+    // FromSoft's own names (`LArm1`, `LArmPalm`, `LLeg1`) now read as a rig the Biped fit takes;
+    // c2280 keeps the fit of its own the user approved, through its `FitConfig::Mushroom`.
+    assert!(skeleton::is_biped(&source.bones));
 }
