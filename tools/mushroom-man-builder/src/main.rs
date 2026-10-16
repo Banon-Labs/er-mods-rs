@@ -14,7 +14,10 @@ use mushroom_man_builder::{
     character::{self, C2280, Character, FitConfig, Game, Writer},
     dcx,
     error::{Context, Error, Result},
-    fit::{self, FIT_JSON, SOURCE_MAP, SourceMesh, biped::BipedParams},
+    fit::{
+        self, FIT_JSON, SOURCE_MAP, SourceMesh,
+        biped::{BipedParams, Thumb},
+    },
     flver::{Flver, skeleton, verify::check_flver},
     locate,
     map_report::map_report,
@@ -78,6 +81,12 @@ OPTIONS:
                            cloth chain. `skirt`, default 80:20: a character with chains hanging
                            from its pelvis and no tail hangs its skirt on a vanilla skirt's cloth,
                            so it follows the legs and swings. `<feature>=100:100` keeps it welded.
+    --trunk-girth <share>  How much of its own width and depth a Biped character's trunk keeps,
+                           0 to 1, from the hips to the shoulders, instead of its table entry's
+                           (Lonesome Gavlan's is 0.45). Narrower keeps the player's arms out of a
+                           wide body; the head and limbs keep their size.
+    --skirt-girth <share>  The same below the hips, where a skirt hangs over the legs (Gavlan's
+                           is 0.75). Narrower than the legs and they show through it.
     -h, --help             Show this text.
 ";
 
@@ -110,6 +119,10 @@ struct Options {
     tail_rigidity: tail::Rigidity,
     /// `--rigidity skirt=<base>:<tip>` ([`package::Inputs::skirt_rigidity`]).
     skirt_rigidity: tail::Rigidity,
+    /// `--trunk-girth`, `--skirt-girth`: the character's trunk and skirt shares for this build
+    /// instead of its table entry's ([`with_girths`]).
+    trunk_girth: Option<f32>,
+    skirt_girth: Option<f32>,
 }
 
 fn main() -> ExitCode {
@@ -182,6 +195,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
         cloth_test_body: None,
         tail_rigidity: tail::Rigidity::DEFAULT,
         skirt_rigidity: skirt::DEFAULT_RIGIDITY,
+        trunk_girth: None,
+        skirt_girth: None,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -235,6 +250,23 @@ fn parse_options(args: &[String]) -> Result<Options> {
                              (tail=95:55) and skirt (skirt=80:20); got {setting:?}"
                         )));
                     }
+                }
+            }
+            "--trunk-girth" | "--skirt-girth" => {
+                let text = value()?.display().to_string();
+                let share = text
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|share| *share > 0.0 && *share <= 1.0)
+                    .ok_or_else(|| {
+                        Error::new(format!(
+                            "{flag} takes a share of the girth, 0 to 1; got {text}"
+                        ))
+                    })?;
+                if flag == "--trunk-girth" {
+                    options.trunk_girth = Some(share);
+                } else {
+                    options.skirt_girth = Some(share);
                 }
             }
             "--writer" => {
@@ -401,7 +433,8 @@ fn find_dsr(options: &Options) -> Result<PathBuf> {
 /// `--character`, or a choice asked of a player who double-clicked the exe, or c2280.
 fn choose_character(options: &Options) -> Result<&'static Character> {
     if let Some(id) = &options.character {
-        return character::resolve_in(options.game, id, options.unvalidated);
+        let character = character::resolve_in(options.game, id, options.unvalidated)?;
+        return with_girths(character, options.trunk_girth, options.skirt_girth);
     }
     let offered: Vec<&'static Character> = character::validated().collect();
     // One character is no choice, so the prompt waits until a second one is approved.
@@ -617,11 +650,19 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
     let mut game = Game::Dsr;
     let mut trunk_girth = None;
     let mut skirt_girth = None;
+    let mut thumb = None;
     let mut rest = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
             "--character" => id = Some(iter.next().ok_or("--character needs a value")?),
+            "--thumb" => {
+                thumb = Some(match iter.next().map(String::as_str) {
+                    Some("hand") => Thumb::Hand,
+                    Some("frame") => Thumb::Frame,
+                    _ => return Err("--thumb is hand or frame".into()),
+                });
+            }
             flag @ ("--trunk-girth" | "--skirt-girth") => {
                 let value = iter
                     .next()
@@ -651,12 +692,35 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
         None if game == Game::Dsr => character::default_character(),
         None => return Err("--game ds2 needs a --character".into()),
     };
-    // `--trunk-girth`, `--skirt-girth`: the character's Biped fit with the trunk or the skirt
-    // keeping that share of the girth, for measuring a value before it goes in the character's
-    // table entry.
-    let character = match (trunk_girth.or(skirt_girth), character.fit) {
+    let character = with_girths(character, trunk_girth, skirt_girth)?;
+    // `--thumb`: carry the thumb the other way, to measure it before it goes in a table entry.
+    let character = match (thumb, character.fit) {
         (None, _) => character,
-        (Some(_), FitConfig::Biped(params)) => Box::leak(Box::new(Character {
+        (Some(thumb), FitConfig::Biped(params)) => Box::leak(Box::new(Character {
+            game: character.game,
+            id: character.id,
+            label: character.label,
+            skeleton: character.skeleton,
+            fit: FitConfig::Biped(BipedParams { thumb, ..params }),
+            writer: character.writer,
+            validated: character.validated,
+        })),
+        (Some(_), _) => return Err("--thumb needs a Biped character".into()),
+    };
+    Ok((character, rest))
+}
+
+/// `--trunk-girth`, `--skirt-girth`: `character`'s Biped fit with the trunk or the skirt keeping
+/// that share of the girth instead of its table entry's, to try a value in game or measure it
+/// before it goes into the entry. Neither given leaves the character as it is.
+fn with_girths(
+    character: &'static Character,
+    trunk_girth: Option<f32>,
+    skirt_girth: Option<f32>,
+) -> Result<&'static Character> {
+    match (trunk_girth.or(skirt_girth), character.fit) {
+        (None, _) => Ok(character),
+        (Some(_), FitConfig::Biped(params)) => Ok(Box::leak(Box::new(Character {
             game: character.game,
             id: character.id,
             label: character.label,
@@ -668,10 +732,9 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
             }),
             writer: character.writer,
             validated: character.validated,
-        })),
-        (Some(_), _) => return Err("--trunk-girth and --skirt-girth need a Biped character".into()),
-    };
-    Ok((character, rest))
+        }))),
+        (Some(_), _) => Err("--trunk-girth and --skirt-girth need a Biped character".into()),
+    }
 }
 
 /// What the build reads of `character` out of `dir`: a Dark Souls Remastered folder, or Dark
@@ -1279,6 +1342,37 @@ mod tests {
             parse(&["--no-cutout-material"]).unwrap().cutouts,
             Cutouts::BodyMaterial
         );
+    }
+
+    #[test]
+    fn girth_shares_override_the_table_entry_for_one_build() {
+        let parse = |args: &[&str]| {
+            parse_options(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>())
+        };
+        let options = parse(&[
+            "--character",
+            "c1350",
+            "--game",
+            "ds2",
+            "--unvalidated",
+            "--trunk-girth",
+            "0.55",
+        ])
+        .unwrap();
+        assert_eq!(
+            (options.trunk_girth, options.skirt_girth),
+            (Some(0.55), None)
+        );
+        let gavlan = choose_character(&options).unwrap();
+        let FitConfig::Biped(params) = gavlan.fit else {
+            panic!("Gavlan is a Biped")
+        };
+        // The trunk share given, the skirt's kept from the table entry.
+        assert_eq!((params.trunk_girth, params.skirt_girth), (0.55, 0.75));
+        for bad in ["0", "1.5", "x"] {
+            assert!(parse(&["--trunk-girth", bad]).is_err(), "{bad}");
+        }
+        assert!(parse(&["--skirt-girth"]).is_err());
     }
 
     #[test]

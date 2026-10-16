@@ -16,7 +16,10 @@
 
 use crate::{
     error::{Error, Result},
-    fit::{biped::BipedParams, mushroom::FitParams},
+    fit::{
+        biped::{BipedParams, Thumb},
+        mushroom::FitParams,
+    },
     names,
 };
 
@@ -146,6 +149,14 @@ pub const C2900: Character = Character {
 /// at the median, which leaves the cloth simulation room, and 343 arm vertices are buried (17%).
 /// At 1 the skirt clears the legs everywhere but stands 1 m wide and buries the hands (814, 41%);
 /// at 0.65 the median clearance is 0.03 m.
+///
+/// A Gyrm's hand is twice a human's (0.19 m from wrist to knuckles against 0.10 m) and its thumb
+/// reaches 0.18 m across the palm. Carried on the hand's map, which halves the palm's length and
+/// keeps its width, the thumb sat 0.1 m out from Elden Ring's thumb joints and swung wide of the
+/// hilt when the grip curled it: the user saw it stretched and not wrapping (2026-10-16), its tip
+/// 0.16 m from the weapon bone in the idle against the vanilla hand's 0.043 m. Mapped bone by bone
+/// like the other fingers ([`Thumb::Frame`]) it closes to 0.045 m, and the idle has fewer
+/// triangles inside out (22 against 27); the extra ones the frame maps make are at bind only.
 pub const DS2_C1350: Character = Character {
     game: Game::Ds2,
     id: "c1350",
@@ -154,6 +165,7 @@ pub const DS2_C1350: Character = Character {
     fit: FitConfig::Biped(BipedParams {
         trunk_girth: 0.45,
         skirt_girth: 0.75,
+        thumb: Thumb::Frame,
         ..BipedParams::DEFAULT
     }),
     writer: Writer::Rebuild,
