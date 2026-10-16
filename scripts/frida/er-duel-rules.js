@@ -208,6 +208,9 @@ function twoHanded(p) {
 }
 
 const twoHandedWeapon = (p) => (twoHanded(p) === null ? NO_ITEM : active(p, twoHanded(p)));
+// c0000.hks GetSwordArtInfo: a skill that is neither a shield nor an arrow-stance skill plays from
+// the two-handed weapon, or one-handed from the right (port of non_shield_skill_weapon).
+const nonShieldSkillWeapon = (p) => active(p, twoHanded(p) || 'right');
 const weapons = (p) => p.weaponsLeft.concat(p.weaponsRight).filter((id) => id >= 0);
 const lookup = (rows, id) => { const r = rows.find((row) => row[0] === id); return r ? r[1] : null; };
 const classOf = (facts, id) => { if (id < 0) return null; const w = facts.weapon(id); return w ? w.wepType : null; };
@@ -405,7 +408,7 @@ function check(p, facts) {
         const parry = lookup(T.parrySkills, typeNew);
         if (parry) v('BannedAsh', `All Parries: ${parry}`);
         if (typeNew === S.SWORD_DANCE && T.swordDanceFastClips.includes(clip)) v('BannedAsh', 'Fast Sword Dance');
-        if (typeNew === S.SPINNING_SLASH && ['right', 'left'].some((h) => classOf(facts, active(p, h)) === C.LIGHT_GREATSWORD)) {
+        if (typeNew === S.SPINNING_SLASH && classOf(facts, nonShieldSkillWeapon(p)) === C.LIGHT_GREATSWORD) {
             v('SpinningSlashLightGreatsword', 'used');
         }
         if (typeNew === S.MULETA && p.talismans.some((id) => ashTalismans.includes(id))) v('MuletaTalismans', 'used');

@@ -120,6 +120,19 @@ impl PlayerSnapshot {
         self.two_handed().map_or(NO_ITEM, |hand| self.active(hand))
     }
 
+    /// The weapon a skill plays from, for any skill that is not a shield or arrow-stance skill.
+    ///
+    /// c0000.hks `GetSwordArtInfo` (1.17.1): two-handed, the skill is the held weapon's; one-handed,
+    /// it is the right weapon's unless the left weapon's skill passes `IsShieldArts` (types 90-99
+    /// and a fixed list) or `IsArrowStanceArts` (100-108 and a fixed list), and then it is the
+    /// left's. So a skill outside those two sets never plays from a one-handed left weapon.
+    pub fn non_shield_skill_weapon(&self) -> i32 {
+        match self.two_handed() {
+            Some(hand) => self.active(hand),
+            None => self.active(Hand::Right),
+        }
+    }
+
     /// Both active weapons, each held in its own hand (no two-handing).
     pub fn one_handed_pair(&self) -> Option<(i32, i32)> {
         (self.arm_style == ArmStyle::OneHanded)

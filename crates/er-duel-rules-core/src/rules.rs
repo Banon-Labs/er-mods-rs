@@ -475,13 +475,12 @@ fn check_skills(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violat
         if type_new == skill::SWORD_DANCE && tables::SWORD_DANCE_FAST_CLIPS.contains(&clip) {
             out.push(violation(Rule::BannedAsh, "Fast Sword Dance"));
         }
-        if type_new == skill::SPINNING_SLASH {
-            let lgs = [Hand::Right, Hand::Left]
-                .iter()
-                .any(|&hand| class_of(facts, p.active(hand)) == Some(wep_type::LIGHT_GREATSWORD));
-            if lgs {
-                out.push(violation(Rule::SpinningSlashLightGreatsword, "used"));
-            }
+        // Spinning Slash is neither a shield nor an arrow-stance skill, so it is the two-handed
+        // weapon's or the right weapon's; a Light Greatsword idle in the left hand did not use it.
+        if type_new == skill::SPINNING_SLASH
+            && class_of(facts, p.non_shield_skill_weapon()) == Some(wep_type::LIGHT_GREATSWORD)
+        {
+            out.push(violation(Rule::SpinningSlashLightGreatsword, "used"));
         }
         if type_new == skill::MULETA
             && p.talismans
@@ -734,6 +733,41 @@ mod tests {
         assert_eq!(check(&p, &facts)[0].detail, "Fast Sword Dance");
         p.new_anims = vec![(600 + tables::PARRY_SKILLS[0].id) * 1_000_000 + 40_000];
         assert!(check(&p, &facts)[0].detail.starts_with("All Parries"));
+    }
+
+    #[test]
+    fn spinning_slash_is_judged_on_the_weapon_that_used_it() {
+        // Hefty Scimitar: a Curved Greatsword, whose Spinning Slash plays clip 040200.
+        const HEFTY_SCIMITAR: i32 = 8_530_000;
+        const CURVED_GREATSWORD: u16 = 11;
+        let facts = table()
+            .weapon(HEFTY_SCIMITAR, CURVED_GREATSWORD, 15.0)
+            .weapon(weapon::IDUS_SWORD, wep_type::LIGHT_GREATSWORD, 7.0);
+        let spun = |p: &PlayerSnapshot, clip: i32| {
+            let p = PlayerSnapshot {
+                new_anims: vec![(600 + skill::SPINNING_SLASH) * 1_000_000 + clip],
+                ..p.clone()
+            };
+            rules(&p, &facts).contains(&Rule::SpinningSlashLightGreatsword)
+        };
+        // Measured live 2026-10-16: two-handing the Hefty Scimitar, nothing in the left hand.
+        let mut p = PlayerSnapshot {
+            arm_style: ArmStyle::RightBothHands,
+            weapons_right: [HEFTY_SCIMITAR, NO_ITEM, NO_ITEM],
+            ..rune_125()
+        };
+        assert!(!spun(&p, 40_200));
+        // An Idus Sword idle in the left hand did not do the spinning.
+        p.weapons_left[0] = weapon::IDUS_SWORD;
+        assert!(!spun(&p, 40_200));
+        p.arm_style = ArmStyle::OneHanded;
+        assert!(!spun(&p, 40_200));
+        // The Light Greatsword's own Spinning Slash: right hand, or held in both.
+        p.weapons_right[0] = weapon::IDUS_SWORD;
+        assert!(spun(&p, 40_000));
+        p.weapons_right[0] = HEFTY_SCIMITAR;
+        p.arm_style = ArmStyle::LeftBothHands;
+        assert!(spun(&p, 40_000));
     }
 
     #[test]

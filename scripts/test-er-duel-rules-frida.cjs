@@ -132,6 +132,24 @@ test('skills fire on use, not on equip', () => {
     assert.ok(A.check(p, f)[0].detail.startsWith('All Parries'));
 });
 
+test('spinning slash is judged on the weapon that used it', () => {
+    const HEFTY_SCIMITAR = 8530000, CURVED_GREATSWORD = 11;
+    const f = facts({ [HEFTY_SCIMITAR]: w(CURVED_GREATSWORD, 15), [T.weapon.IDUS_SWORD]: w(T.wepType.LIGHT_GREATSWORD, 7) });
+    const spun = (p, clip) => rules(Object.assign({}, p, { newAnims: [(600 + T.skill.SPINNING_SLASH) * 1000000 + clip] }), f)
+        .includes('SpinningSlashLightGreatsword');
+    // Measured live 2026-10-16: two-handing the Hefty Scimitar, nothing in the left hand.
+    const p = player({ armStyle: 3, weaponsRight: [HEFTY_SCIMITAR, -1, -1] });
+    assert.ok(!spun(p, 40200));
+    p.weaponsLeft = [T.weapon.IDUS_SWORD, -1, -1];
+    assert.ok(!spun(p, 40200), 'an idle offhand Light Greatsword did not spin');
+    p.armStyle = 1;
+    assert.ok(!spun(p, 40200));
+    p.weaponsRight = [T.weapon.IDUS_SWORD, -1, -1];
+    assert.ok(spun(p, 40000));
+    p.weaponsRight = [HEFTY_SCIMITAR, -1, -1]; p.armStyle = 2;
+    assert.ok(spun(p, 40000));
+});
+
 const IDLE = 12000000, SKILL = 603040200;
 const idleRing = () => Array.from({ length: 10 }, (_, i) => [IDLE, 1 + i * 0.03]);
 
