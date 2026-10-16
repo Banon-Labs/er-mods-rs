@@ -1,0 +1,1114 @@
+# The c2280 Mushroom Man package as the user approved it in game: origin/main 6c74c523 (builder
+# byte-identical to 46c5c54d), built twice under wine into scratch folders with identical bytes,
+# and identical to the installed Game/mushroom-man apart from mushroom_man.dll and the profile.
+# Compare a new build with scripts/mushroom-package-manifest.py diff <this> <new manifest>.
+# mushroom-man-builder hash-package: file <path> <length> <sha256>,
+# entry <binder> <entry path> <length> <sha256> (decompressed)
+file	facegen/facegen.fgbnd.dcx	4815068	e53bf4505609c1097f2023e36f1c044cec5dff586494dcf9f39c7470bbaff77d
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\si.ctl	340349	8575f79a7a3b3df314ecb90997aa4832ccf0fdde15262d9114e4d5686a78b404
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.tri	44248	798ba78a1941886de8f48607791289d1c8ddaa968cbbf3b153e427f8b9fdf625
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.egm	525024	601d2f98a1eb1e684b7148c233b79c2ae70f02f5fbca998379ea1a978f4cfdd5
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.bmp	196664	9558720d134a949ca08ee4d31c5c14024d29cd897af98ca55636e7782ba34f1c
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.egt	9830664	1f37ee69478ad6c5746a7e1b6514abb5e6ce59d194054aa50a56681e7937d0ea
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\eye.tri	3912	b07b187d72d38a7505a93b83748f7780c554f674c8fd15a943261d5a1ac82b4d
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\eye.egm	37824	4ff02cf3ab9457e556fd80b6dac097fdaa105ff5d3a7cd43348d9667428a7f5b
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.flver	105280	52595c558c376c01cd8efa069049ca4885c4b120ad612eb874e0191934830e0b
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face.flver2tri	2246	398bd77e4f4b03bef700adc8d115abd23a33e673e0f65d5f247a6dc1208528f8
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\FG_A_0000.anibnd	10240	a87874431e39f923f43675f1b844952e1829e28851d9558e353bb519d2c59350
+entry	facegen/facegen.fgbnd.dcx	N:\FDP\data\INTERROOT_win64\facegen\GameData\face_M.bmp	196664	b2ff627df669f0dad3f8d477b95a7cd0bc3a606cea794fc69ef48fe52353609d
+file	parts/am_f_0000.partsbnd.dcx	3984	94c40358fb63942908355cc175917f0830851d41cb43eba4cf07cfcae4fe8ca9
+entry	parts/am_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\AM_F_0000\AM_F_0000.flver	21232	8402de3fd978c5a1fc18f7ba6facee9a4a93ae2850eb336becc469b3bfc2eb13
+file	parts/am_f_0000_l.partsbnd.dcx	4035	504461e5cc5ab36343834cf2be706a02bf868339b4e00cec7483da9d930deeb1
+entry	parts/am_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\AM_F_0000\AM_F_0000_L.flver	21232	8402de3fd978c5a1fc18f7ba6facee9a4a93ae2850eb336becc469b3bfc2eb13
+file	parts/am_m_0000.partsbnd.dcx	3955	42ea5353e082f69b76e3c786cf4955521475001c94c105eb3c69207dc4363d61
+entry	parts/am_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\AM_M_0000\AM_M_0000.flver	21232	22c2f80bf9f12849e8a5d974ee479b445836160467a6ba85c700866942129f11
+file	parts/am_m_0000_l.partsbnd.dcx	3964	b0a21ef1f63efc96d07bbc2f15666a617d613853a10fe46c3a5677bf917386aa
+entry	parts/am_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\AM_M_0000\AM_M_0000_L.flver	21232	22c2f80bf9f12849e8a5d974ee479b445836160467a6ba85c700866942129f11
+file	parts/bd_f_0000.partsbnd.dcx	2490898	6d706017570f5a783f951c9f0b8d4f9e15e0badae9396066fb82433c72b0976f
+entry	parts/bd_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000.tpf	4194760	00456f823dd7adce61665f32d080940590fa69e48562d265f053917ac657a8b6
+entry	parts/bd_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000.flver	97120	f3bcf4004acfb81127de2b732e9ddae043cfe3038459a960356331f3155b85c9
+entry	parts/bd_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_c.clm2	72	1c7f3f3607425e3dfab5d5bc582f77c876bd652901cc18f484728f5b0982eddc
+entry	parts/bd_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_c.hkx	64756	135b153d1ee8b83d691f977d03c001789d89264a8a68a8a40e8a553115180641
+file	parts/bd_f_0000_l.partsbnd.dcx	686127	d9cc18719ca4ff2f15de99dede9a77906244b5c126dab703adbc85eb9b4f3a7a
+entry	parts/bd_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_L.tpf	1049040	f456fba143ba483d79dec84ef5841aafa30c24c51f21f3e0879a72292cfba9d9
+entry	parts/bd_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_L.flver	97120	f3bcf4004acfb81127de2b732e9ddae043cfe3038459a960356331f3155b85c9
+entry	parts/bd_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_c.clm2	72	1c7f3f3607425e3dfab5d5bc582f77c876bd652901cc18f484728f5b0982eddc
+entry	parts/bd_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_F_0000\BD_F_0000_c.hkx	64756	135b153d1ee8b83d691f977d03c001789d89264a8a68a8a40e8a553115180641
+file	parts/bd_m_0000.partsbnd.dcx	5698	52fb66d5624c1335812fddd1a31e74cc15644cb2997eac43261754155a894de2
+entry	parts/bd_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_M_0000\BD_M_0000.flver	24784	4573e649eb9fecb18a316efa5c4349a788d7c6b7c0b233961a515ceb6dddf371
+file	parts/bd_m_0000_l.partsbnd.dcx	5703	32e55255aacf08bbbdc499e34a96ece03a263f5fbea1cedfe77e0073ac54c3c6
+entry	parts/bd_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\BD_M_0000\BD_M_0000_L.flver	24784	4573e649eb9fecb18a316efa5c4349a788d7c6b7c0b233961a515ceb6dddf371
+file	parts/fc_f_0000.partsbnd.dcx	1078238	8301ad11e4f013623ff5987f37bce647ed08bfc32c93d04a30b7009fdd84326d
+entry	parts/fc_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0000\FC_F_0000.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0000\FC_F_0000.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0000_l.partsbnd.dcx	1078569	adfa220d82e88d9830a131d3a16f7bec124251331b258db5dc844508641133cc
+entry	parts/fc_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0000\FC_F_0000_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0000\FC_F_0000_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0001.partsbnd.dcx	1078321	f1759e81a5287e3a55cd595f34b5b4d27c431a75822f4a8672201e2a7150d662
+entry	parts/fc_f_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0001\FC_F_0001.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0001\FC_F_0001.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0001_l.partsbnd.dcx	1078147	9204f7ea36c9783ba18f9ba202806ef0e2dae26f4db405e81ade7ce653eff700
+entry	parts/fc_f_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0001\FC_F_0001_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0001\FC_F_0001_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0002.partsbnd.dcx	1078321	e2e7c581a96374bc00a6ba76706116457371534bbccae54b13f93b967ef46cd7
+entry	parts/fc_f_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0002\FC_F_0002.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0002\FC_F_0002.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0002_l.partsbnd.dcx	1078529	d516666b8126ce45da80301d40ea98d8ba60523a7fde4bd1535c48a3a4da92f7
+entry	parts/fc_f_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0002\FC_F_0002_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0002\FC_F_0002_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0100.partsbnd.dcx	1078245	e174c2761272467292c91bfc9eee2dd24c1c98eaae5fc0ab8f7d78c8831c85ca
+entry	parts/fc_f_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0100\FC_F_0100.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0100\FC_F_0100.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0100_l.partsbnd.dcx	1078460	0f3e7a3aa34e4eaeeaaab606d4e67dbceca18917799feffd17c62bf2cdb60485
+entry	parts/fc_f_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0100\FC_F_0100_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0100\FC_F_0100_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0101.partsbnd.dcx	1078156	944614cc20f6514ee1ab15421941cf8b5af8a24ced3b9e4d30c1820d4d96b2eb
+entry	parts/fc_f_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0101\FC_F_0101.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0101\FC_F_0101.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0101_l.partsbnd.dcx	1078461	74463f993ff7697d782dfc0ac040913265458c40199538b665199ca08e582f17
+entry	parts/fc_f_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0101\FC_F_0101_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0101\FC_F_0101_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0102.partsbnd.dcx	1078158	9f1a4c6bff30bf59ea359ce623fd620efc95d8c89b7d12261a5945c9a19c78b9
+entry	parts/fc_f_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0102\FC_F_0102.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_f_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0102\FC_F_0102.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_f_0102_l.partsbnd.dcx	1078361	fa68159009ea9512984ab4bea9644a3fdb7710963e2db59d6f11986cf5c8f463
+entry	parts/fc_f_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0102\FC_F_0102_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_f_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_F_0102\FC_F_0102_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0000.partsbnd.dcx	1078261	20f9923d32c3449157eb24014723ba30724e04083c8f415b9a471482d4a49c1c
+entry	parts/fc_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000\FC_M_0000.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000\FC_M_0000.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0000_l.partsbnd.dcx	1078373	efe784ab1324d52917de2b23bbac0f1dc47863590590e3e650696a106c1be17c
+entry	parts/fc_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000\FC_M_0000_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000\FC_M_0000_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0000_m.partsbnd.dcx	1078420	cd2ec05760ece38193cf09dfa3632b854faa0b2b5c1fcb9a65a4a1b4b0ffdad7
+entry	parts/fc_m_0000_m.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000_M\FC_M_0000_M.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0000_m.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0000_M\FC_M_0000_M.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0001.partsbnd.dcx	1078155	82c4c6e7d7a0258e48ad54e1172c0b02aa6cf96c1ccf5066bcbe58780644e5fd
+entry	parts/fc_m_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0001\FC_M_0001.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0001\FC_M_0001.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0001_l.partsbnd.dcx	1078450	cb510813a1816c1f1a18c91e76a65e155daa5c0794ff215949e0c5b414725f30
+entry	parts/fc_m_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0001\FC_M_0001_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0001\FC_M_0001_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0002.partsbnd.dcx	1078314	f4fba806b01e4c0dbd5bc5419fb96e984105446f4be87c0400f8cb36d5ccd2a7
+entry	parts/fc_m_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0002\FC_M_0002.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0002\FC_M_0002.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0002_l.partsbnd.dcx	1078247	5e4d7ee1b90612bade72f24664bc0ee4ca971e71826e7db5b08115ff04e33444
+entry	parts/fc_m_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0002\FC_M_0002_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0002\FC_M_0002_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0090.partsbnd.dcx	1078233	216a48d40a8e71799005860dde81b5f9d9041e5b318960274ca18a306f1e67f7
+entry	parts/fc_m_0090.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0090\FC_M_0090.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0090.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0090\FC_M_0090.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0090_l.partsbnd.dcx	1078417	fcfbffec02d85a0cf403bbbee680154b8e282542ae206625cefc2f72ae137fa1
+entry	parts/fc_m_0090_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0090\FC_M_0090_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0090_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0090\FC_M_0090_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0100.partsbnd.dcx	1078279	13cee3e066d4cb63157dc6f61257d8f8a079285829226325337bc2886990ca01
+entry	parts/fc_m_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0100\FC_M_0100.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0100\FC_M_0100.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0100_l.partsbnd.dcx	1078507	bd3b7a22e0f1f631741473fa22d1208b82b4bba8f91e4794a5594c4a75ececc3
+entry	parts/fc_m_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0100\FC_M_0100_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0100\FC_M_0100_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0101.partsbnd.dcx	1078196	eb930b5f85ddf545cb1eff6a684ca61925fa1f129e68d6814db3ecb1c46f99f7
+entry	parts/fc_m_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0101\FC_M_0101.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0101\FC_M_0101.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0101_l.partsbnd.dcx	1078440	984aaf6d28d7eb4bea8c434f43794601735cb721c5cb2e06e3ab445518ae315e
+entry	parts/fc_m_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0101\FC_M_0101_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0101\FC_M_0101_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0102.partsbnd.dcx	1078169	71abb33fbf3ec8fb3d72b745da6e67e263ed653c745f54c99442048a17a74f9b
+entry	parts/fc_m_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0102\FC_M_0102.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0102\FC_M_0102.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0102_l.partsbnd.dcx	1078441	6e31c5e6c3ba5ed2119bcd5285e0d4334225e3122fff86d11a0c3939f79d3366
+entry	parts/fc_m_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0102\FC_M_0102_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0102\FC_M_0102_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0105.partsbnd.dcx	1078239	bc97a744ff07b51c1dd0b5b4edd9cbeef20b3d41f03c81edfcb8d0d0686c593b
+entry	parts/fc_m_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0105\FC_M_0105.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0105\FC_M_0105.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0105_l.partsbnd.dcx	1078439	aed7155943d19ead07787a69ba509ec67dfdce41c9500b3cc828d69a62f9a77c
+entry	parts/fc_m_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0105\FC_M_0105_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0105\FC_M_0105_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0202.partsbnd.dcx	1078169	4647e0301e6a5eca809d1f98653a718e3315fc6d83fa5bc493818143fe03c30f
+entry	parts/fc_m_0202.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0202\FC_M_0202.tpf	699678	8cb08f41c60d29899ff2a06524837760458769ab2e8649c3a880fe5106195b95
+entry	parts/fc_m_0202.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0202\FC_M_0202.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fc_m_0202_l.partsbnd.dcx	1078441	aacb397e7be1e0d9623b967be4f382cac9b44f26b39a1291e38f7970ea610dd5
+entry	parts/fc_m_0202_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0202\FC_M_0202_L.tpf	699690	95ab6cae7d2f137c22f94454cc91f55a2a5b0c9e010005c40d20dab2a93c0d82
+entry	parts/fc_m_0202_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FC_M_0202\FC_M_0202_L.flver	1826832	12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c
+file	parts/fg_a_0000_f.partsbnd.dcx	5897	ad1398afc8d3d39388d4de67cb6af6b015667697be0988685df0fa6ec9512793
+entry	parts/fg_a_0000_f.partsbnd.dcx	N:\FDP\data\INTERROOT_win64\parts\Face\FG_A_0000\FG_A_0000_F.flver	97184	8a6456b35580e519705300d77a776668bab86f4edfb78bc7d627609b921edf48
+entry	parts/fg_a_0000_f.partsbnd.dcx	N:\FDP\data\INTERROOT_win64\parts\Face\FG_A_0000\FG_A_0000.anibnd	10432	fbd48b1f4bbabdadaa19954a0821f645c46900e00aadc2c43a7cad76aeb2507e
+file	parts/fg_a_0000_m.partsbnd.dcx	5898	39417bd31f299015f7a8ba954d23ae4d008906bc211a6dd32f181ff2f9a6e4a9
+entry	parts/fg_a_0000_m.partsbnd.dcx	N:\FDP\data\INTERROOT_win64\parts\Face\FG_A_0000\FG_A_0000_M.flver	97184	8a6456b35580e519705300d77a776668bab86f4edfb78bc7d627609b921edf48
+entry	parts/fg_a_0000_m.partsbnd.dcx	N:\FDP\data\INTERROOT_win64\parts\Face\FG_A_0000\FG_A_0000.anibnd	10432	fbd48b1f4bbabdadaa19954a0821f645c46900e00aadc2c43a7cad76aeb2507e
+file	parts/fg_a_0100.partsbnd.dcx	1609292	099c3ca88f6f5e12a83b8c04fc80e4b551ea106a2ae6cf1a5bfca4572b140f8a
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.egm	924384	8389eabeba7f1de9a8ff8eaa4a8265cf66d7bf5f8b62c07d7d67c7b6f5e9b76b
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.tri	97732	ebd324a96f9f0aad39c10c685e55d1b7b259424fea1266ac753e03d2f2b0d140
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.flver2tri	21016	200ffecfce035d303047105fcac58b96013b2b4f37cb04985af95b4e6fafb7d5
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.tpf	1224362	44a2656de9983280c026482c268b24dbbd1261d9e861a31a0f18843a40788eee
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.flver	919936	2fb4b5cfde7341470929ddb490aeb728f061a138114123688365f3a7b7f0dc81
+entry	parts/fg_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.anibnd	15468	686c16547303a71c0cd72e6ff9e713731fdabefe14c05ca2fff45f7657dd462c
+file	parts/fg_a_0100_l.partsbnd.dcx	199991	818ecef3d57c6edf486a8a0fd66c333329c7768d9e899d03a12b142de48deecf
+entry	parts/fg_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100_L.tpf	306878	e3f197012a0efd05125d9009b830e06118ce4cb8578c8d26411b8b44464af706
+entry	parts/fg_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100_L.flver	919936	2fb4b5cfde7341470929ddb490aeb728f061a138114123688365f3a7b7f0dc81
+entry	parts/fg_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0100\FG_A_0100.anibnd	15468	686c16547303a71c0cd72e6ff9e713731fdabefe14c05ca2fff45f7657dd462c
+file	parts/fg_a_0101.partsbnd.dcx	3186506	c8cdb964104ed1f96aad27c948e163c729ca3c82ec684010e74c29e43f1ee74b
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.egm	924384	2561875e4503639796d3ef647e39e5614e073c858870bbf1d3e2bf6c97112681
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.tri	97732	b57134869aed2fdd19063905b4894aada13d5f88cf2a9f48cd2b9c7a82301853
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.flver2tri	8792	099c3ddbc0cad3904ecdb37081a4cdac8a3443c8db2c9399577181fcb5d5a04b
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.tpf	3321514	f0590e95f72d1c4f4c8ced8c304bcc415b62cd5d68eb49e6cfaede331443ed65
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.flver	420384	cd9c0bd361a23316d24b2865c8863553817c813b936d64676ab186edbc45f0a2
+entry	parts/fg_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.anibnd	15372	aba904a0878256895a2f0403eac94f33c4284a8cca110abcba9964dce9d7150d
+file	parts/fg_a_0101_l.partsbnd.dcx	614060	a47a003d39acbb406a2e6f9b1eb40297e857953666c3b8f3d2c474fdfef3cf4a
+entry	parts/fg_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101_L.tpf	831166	6f5db67ce3b9deafeb0be4da98e4179b2026993c901b09fbe57bda06a9f3a0f9
+entry	parts/fg_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101_L.flver	420384	cd9c0bd361a23316d24b2865c8863553817c813b936d64676ab186edbc45f0a2
+entry	parts/fg_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0101\FG_A_0101.anibnd	15372	aba904a0878256895a2f0403eac94f33c4284a8cca110abcba9964dce9d7150d
+file	parts/fg_a_0102.partsbnd.dcx	2478868	84e922d50dbe0c1b2a764892d99492e301a783281038fc72a8308a24995012a2
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.egm	924384	7022b39b575d33f35cc249e6bc723f2b45bafd1e9d55c3ea0eb7fb134fe79326
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.tri	97732	234bd9d66174096dfcec8e1a7b3c924a476fe44abfb962c05eab3e1a929c3ada
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.flver2tri	5984	679dc5c7f964eb4507b634c2339b3f0f7100f397c7261ce611e06750e5c11ffc
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.tpf	2272938	50f5e3464d941bb191556eae22e3405d2321c77c0dfe6d94043e72493136ccf4
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.flver	275520	0f3e10d14a4ab947976075325a2871a7a7f3dc321eb6079bed33300dc3888d50
+entry	parts/fg_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.anibnd	14604	00929d5055720a13d3a1ad852eb879b5fc5d14111e235c1a3527ed7565d2af6c
+file	parts/fg_a_0102_l.partsbnd.dcx	427285	e614f66190b154636761aa43e1105c945c3a99bd49a9ac81d3dbce3b945bfe00
+entry	parts/fg_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102_L.tpf	569022	268aaf695c7fb0aee7133c84c8398f6ba9e39882a9879b8fe24a136261916507
+entry	parts/fg_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102_L.flver	275520	0f3e10d14a4ab947976075325a2871a7a7f3dc321eb6079bed33300dc3888d50
+entry	parts/fg_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0102\FG_A_0102.anibnd	14604	00929d5055720a13d3a1ad852eb879b5fc5d14111e235c1a3527ed7565d2af6c
+file	parts/fg_a_0110.partsbnd.dcx	1616801	58c5fd3f073490ccac84624d3a99985125674810853696841c62c72721154ad3
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.egm	933984	80b431b71362dd657f00acdc8a773788cd6bf8e85a26c25e4702cc6eea33afae
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.tri	98876	5e472874a9f1171d52a75aa16231b61c8dcfac687ad284978129e3e3031e44b3
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.flver2tri	6104	cbb75d645aa80090ae40184d8e6883978d88aba77d000d4de331d4914538a3f4
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.tpf	1224362	ba8714a1b269b6a4517c8180b53187f44ef62338c211642b70ab50c292e411a1
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.flver	279424	52d2c4f576fa3a87497d52b51cb445607052a665e0c38d53b39b1dd59dc7033c
+entry	parts/fg_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.anibnd	15372	286db58f64f2b53530f6a6c8ccc05e8088a2452b3f0fb7e9d830d4db41e8031b
+file	parts/fg_a_0110_l.partsbnd.dcx	197361	0714f0d264be00499e069251fd1cab6538dc2684994b49a0b92aa9760373833b
+entry	parts/fg_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110_L.tpf	306878	90e6430900de8b15639dcf890d520f1a2bcefc239f90abf2fa22a98f48afc062
+entry	parts/fg_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110_L.flver	279424	52d2c4f576fa3a87497d52b51cb445607052a665e0c38d53b39b1dd59dc7033c
+entry	parts/fg_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0110\FG_A_0110.anibnd	15372	286db58f64f2b53530f6a6c8ccc05e8088a2452b3f0fb7e9d830d4db41e8031b
+file	parts/fg_a_0111.partsbnd.dcx	1626720	4c469926bbe2520b66e6cf9f697c4d1c0237b9b2f6f22d4808adb78fec05551b
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.egm	933984	ad3f5d3b6dfd970dba811cb38eb064a0830d23aad83247061392c28369e54953
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.tri	98876	264634f3755eaf046265a3d4dc080506d4efabfd50695b86abc9b7b19e1cc671
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.flver2tri	6008	cf26e7c2a5128cb6cf4315e2308ab57bcea1957e95f575d4f790a4aa08e82126
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.tpf	1224362	57d54544255e625da1923443f4472f1d07fdc3acc6c0b640f08945ae1fc6b559
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.flver	276400	4d0003eb310e03a8a762224f52c82e5b339a46c82b75a93f824e1bde594568dc
+entry	parts/fg_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.anibnd	15372	e0c8ce3dec5c6a50827c7ffa808d7436142f155d39ffef132b5ac775e6461dca
+file	parts/fg_a_0111_l.partsbnd.dcx	199734	a4e7a68a346959e2b5eea9dc98e4eca8f61cb5b4a7df26efaccd064917e21df1
+entry	parts/fg_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111_L.tpf	306878	05593ca70fe16b04f6e6fe33e7539070441c4c7a9ce382fd43a94f7ec73c4d39
+entry	parts/fg_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111_L.flver	276400	4d0003eb310e03a8a762224f52c82e5b339a46c82b75a93f824e1bde594568dc
+entry	parts/fg_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0111\FG_A_0111.anibnd	15372	e0c8ce3dec5c6a50827c7ffa808d7436142f155d39ffef132b5ac775e6461dca
+file	parts/fg_a_0112.partsbnd.dcx	1655494	754a7fbf47e6522d4f58ef232eb4c371029dd208b4aea4af1ad558e8328de092
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.egm	933984	894df35fee743c55ecb7bf567c41126dc73d49f9d3c2290d1e314e9a9645d599
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.tri	98876	7f86ee68319ff359f1dea699e36e4f157bc64b8bbd098b60b2dba8cbe1065359
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.flver2tri	6012	85ef35aba4a2f9404bfa86701a549807b6f705ea98fe333aed8edc4a1a39e47a
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.tpf	1224362	68041bff0ff1eda669f9ced1a00c34218371d7b7dbb7600fe2fab6bc1c8ab4f4
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.flver	272880	1b38c4ac87656330cf02b860b20d258b9d095bf3dedf05989309b6cdfa31492a
+entry	parts/fg_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.anibnd	15372	824186c9cdce41dafe2b009dafa97bdacfa5ff67d782b9cfc169a74ed1c80019
+file	parts/fg_a_0112_l.partsbnd.dcx	206359	5b71466870878f5d89369060aae2ad77a43483ebf1a8e3b77578b493db74ffe4
+entry	parts/fg_a_0112_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112_L.tpf	306878	ea1495847e79b9bfb1ba1a005896cad5390386a3e010422f759cf92aeed81eda
+entry	parts/fg_a_0112_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112_L.flver	272880	1b38c4ac87656330cf02b860b20d258b9d095bf3dedf05989309b6cdfa31492a
+entry	parts/fg_a_0112_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0112\FG_A_0112.anibnd	15372	824186c9cdce41dafe2b009dafa97bdacfa5ff67d782b9cfc169a74ed1c80019
+file	parts/fg_a_0120.partsbnd.dcx	1618360	18758ed3489805537ad8978006ca55edde5a45392805f24684ac3de6e0f77229
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.egm	938784	04b14cbab2d7892cba0a0f0e029edbe78c2ca348c9c871850c471df243d5b455
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.tri	99684	65946310eec22f9a3df4a19ce0c65fc0a9d48fb1d83046eebce922009eb6eff7
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.flver2tri	6012	7c75d14b8337a589a97119570fc165068d071c4bffe13f43fe7765926199a6ac
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.tpf	1224362	1b33eddf1ef083c6b5513beb329ef230556e59632cac8bdd74e0ff40cde43198
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.flver	277616	960d1c232d98f82ebd417a9cca5d775353a4cbef44e14be5a93321771e5ddf60
+entry	parts/fg_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.anibnd	15372	fc876781b8c05428b4bd6d33b07baf32fd5b3b33ac12ee0b3b0c15f8b49644cd
+file	parts/fg_a_0120_l.partsbnd.dcx	193958	67e768980de4fcd8f5d34715109fca88d7d6e20f9e479faab05706c7fe5e4363
+entry	parts/fg_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120_L.tpf	306878	bf5f977360045a6b3abd9832e655c9e3f7bd9a6d51ccc14216cc7ca859fede0a
+entry	parts/fg_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120_L.flver	277616	960d1c232d98f82ebd417a9cca5d775353a4cbef44e14be5a93321771e5ddf60
+entry	parts/fg_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0120\FG_A_0120.anibnd	15372	fc876781b8c05428b4bd6d33b07baf32fd5b3b33ac12ee0b3b0c15f8b49644cd
+file	parts/fg_a_0121.partsbnd.dcx	1616955	d94416799dc39180d001f28dac18a18ce6902ebab1d605ae6358e20522c5c236
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.egm	938784	489efec6ae24dcbf17a40294a36818d4cb44bbd352643a0c9bc3c373924ef1eb
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.tri	99684	89e040033fbf1dbc56274d8af2cebb4ab2042d47631fc68a0091c8e9e48c26b1
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.flver2tri	8160	892374e8807775e2f1e61a34d53b9953785acc16046a168c9113a14f70c8babf
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.tpf	1224362	e3f401b5047112acc425226d2ea90366524764669a937b6720756fa2367e7663
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.flver	307248	292839c464076ff7fb9f75b4828e807d43b8e9f8a838d8baed70af5a713be3ad
+entry	parts/fg_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.anibnd	15372	fbfebdacd04a51019d71c63890950d7b350ee1ed800d8368f646166975ce2d29
+file	parts/fg_a_0121_l.partsbnd.dcx	194837	e8c41958976f0aef7b544e195bc9df114f7d1fe232a4983c9b201c9b1d2cbfca
+entry	parts/fg_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121_L.tpf	306878	18b67d4dd7dbe14bed3259d92755beed13b381f609ee019860e8adba89f306a2
+entry	parts/fg_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121_L.flver	307248	292839c464076ff7fb9f75b4828e807d43b8e9f8a838d8baed70af5a713be3ad
+entry	parts/fg_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0121\FG_A_0121.anibnd	15372	fbfebdacd04a51019d71c63890950d7b350ee1ed800d8368f646166975ce2d29
+file	parts/fg_a_0122.partsbnd.dcx	1632101	5ae45e9bb1cec60389527fa08973a49d1c1e825a07393a5137fe8d59391bc49a
+entry	parts/fg_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122.egm	938784	00d4f40aa375a688ae66e8637ec6e7533c298475fd704c7b215b64357212aaf6
+entry	parts/fg_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122.tri	99684	42db1ba5b288503b50f2a3518c6cb24c529a702aa44b78e1a38f4ef23e7c4b7f
+entry	parts/fg_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122.flver2tri	6004	07a7b62d527b4a4badc03d4fc32276c6ce7a56c455f4d1b310280cb7d9c02117
+entry	parts/fg_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122.tpf	1224362	b4975def416c74243d695cc169daeadf23a9543ebc772587b99f86c51ac52400
+entry	parts/fg_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122.flver	277648	fa1eb520b79fc01d96a44554c490ecbe6c36572ff2528eeb238383173a08cc28
+file	parts/fg_a_0122_l.partsbnd.dcx	196765	e807844bd911e1183ac8674826cfb119648a5c12a58336461e501eb811c29173
+entry	parts/fg_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122_L.tpf	306878	87eb994c2d6a60fa4daef8d978cb03765257f952c56d81eacf46253e1657c4fe
+entry	parts/fg_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0122\FG_A_0122_L.flver	277648	fa1eb520b79fc01d96a44554c490ecbe6c36572ff2528eeb238383173a08cc28
+file	parts/fg_a_0130.partsbnd.dcx	1607374	e108415cfafc12891299e10701490495a6ff623ce4cf6304edbe7c2817c1acc7
+entry	parts/fg_a_0130.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130.egm	924384	1d4823bd101009e840149d6fef68cf0bdb5b3ef02974e80a4e4ac6082bf6ac65
+entry	parts/fg_a_0130.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130.tri	97724	0465039eebc20ed59f13febf32eeb8f75a636b8d31bde47fcc4d1cb895619824
+entry	parts/fg_a_0130.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130.flver2tri	8148	5d6a3e73c5cf845ec1354ff251ff93197fe481f9f21cc9020864c35a21b98319
+entry	parts/fg_a_0130.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130.tpf	1224362	c72f82625a7f0188d9b20a7df8ac470494e6a8a95a9f53b63c94d026a151ced9
+entry	parts/fg_a_0130.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130.flver	303344	95ae0b948b9acd293cb9d9f8e6f18c19e340cc513947e2edf4bcaba955fe7ce6
+file	parts/fg_a_0130_l.partsbnd.dcx	193554	40629bb6789d2005f013527523d873ec9ced4f1c0eba6d6f214c306cbf968d51
+entry	parts/fg_a_0130_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130_L.tpf	306878	00e391f47c11d151eddfc5f508673fb4899b2be0d5b9af711e73ad009e9c9fb6
+entry	parts/fg_a_0130_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0130\FG_A_0130_L.flver	303344	95ae0b948b9acd293cb9d9f8e6f18c19e340cc513947e2edf4bcaba955fe7ce6
+file	parts/fg_a_0131.partsbnd.dcx	1637429	800054ef5c82edbd66166d034a80589a43b07a1a8149eb659f091b3c9fb1e3ac
+entry	parts/fg_a_0131.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131.egm	938784	a0f7834359b5f8f7e97cd9df668cc33d445e6465debcbda7acf52bce725f62f8
+entry	parts/fg_a_0131.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131.tri	97644	41035874127dec23d9517442c8f5581e624c3afcbc96f41bcaabfe96f2e10206
+entry	parts/fg_a_0131.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131.flver2tri	6144	566fa204926027b2c0befda1e1e557def1e2e0f50f4894c34c771ce50b86df7b
+entry	parts/fg_a_0131.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131.tpf	1224362	74a3996bbd482a0206490b94c26d0b7ce6343b157a84c095aa134895efe457bd
+entry	parts/fg_a_0131.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131.flver	279072	f34b4827cb01f0d87661ff64a4d69a4ab23138fafe11bc6b1cb44e5289f832d6
+file	parts/fg_a_0131_l.partsbnd.dcx	197254	a93aa81f5b52d768260427d4974a3575107968f07216276c16c09dd3d8a62323
+entry	parts/fg_a_0131_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131_L.tpf	306878	19011c6dc768d976986a15ed3ce9444e1f1ed87d6c6f9cba2ee70063fe4b2eb9
+entry	parts/fg_a_0131_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0131\FG_A_0131_L.flver	279072	f34b4827cb01f0d87661ff64a4d69a4ab23138fafe11bc6b1cb44e5289f832d6
+file	parts/fg_a_0132.partsbnd.dcx	1655915	3e147716efb4533c5227952819fceecc7e28705102edffd8a40911f0d20048b1
+entry	parts/fg_a_0132.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132.egm	924384	92725488eca9d17165a1568b941540014c757c6b7d593bbcaea6266aa850828c
+entry	parts/fg_a_0132.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132.tri	97724	3b8f6c472498a5987ce2ba0cd3136e1fca7e1d49dfc363ec2d54956e6a3e976b
+entry	parts/fg_a_0132.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132.flver2tri	5932	2608c84a37cbadbff689cd0f3d98c30abd8d783001beae5e62c2cbb041d9d76d
+entry	parts/fg_a_0132.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132.tpf	1224362	8e727d1ab837195151081a34cb5b5f54131c65bde6049b1a1e22ff98fefc5418
+entry	parts/fg_a_0132.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132.flver	272352	10f5effa067777119103638a3c50b3ca4ec3d9276f1662274dc19a3186bcd016
+file	parts/fg_a_0132_l.partsbnd.dcx	206710	9eece47bb253d79f11383b7a526ae529922ab65e2bd95c56d2c48dedb4029f2e
+entry	parts/fg_a_0132_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132_L.tpf	306878	b3968a558d24a222142c3d81a70cfac62052167348010c4c1720858befd1efb6
+entry	parts/fg_a_0132_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0132\FG_A_0132_L.flver	272352	10f5effa067777119103638a3c50b3ca4ec3d9276f1662274dc19a3186bcd016
+file	parts/fg_a_0140.partsbnd.dcx	1599140	0cd0b7962703707eedf68e27843bb9366b3fbeb85880f68627b2be9442097e5d
+entry	parts/fg_a_0140.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140.egm	924384	c506fff669c54ab468254894dee22824a565cdb02c85d4c73a9fe1ee0b7a91d6
+entry	parts/fg_a_0140.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140.tri	97732	98d3f6dee0b689937824a924a914c8c1acf34c8c1703523e7ebd1a5bed72b54c
+entry	parts/fg_a_0140.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140.flver2tri	5928	1ce5cb73bddeaf52989d69a5720bdca60956db873fc6bb70d411b745c286bd0b
+entry	parts/fg_a_0140.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140.tpf	1224362	843bfdd63aa540b333f0e1fa2850b28a3b9e8058e06cc3acf3d2368c022e54dc
+entry	parts/fg_a_0140.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140.flver	272288	73b59967e745e59aef63b4f3ffd936ee82bccb5142da7ca671016f44a194935f
+file	parts/fg_a_0140_l.partsbnd.dcx	189564	0c6f028d79357c0556cc427211ed94db54958e723100cce1301f411d7fae39b0
+entry	parts/fg_a_0140_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140_L.tpf	306878	c333c9f89c6038c4e163ea349c5639c62a805dbefff6b37347228cddcf974efe
+entry	parts/fg_a_0140_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0140\FG_A_0140_L.flver	272288	73b59967e745e59aef63b4f3ffd936ee82bccb5142da7ca671016f44a194935f
+file	parts/fg_a_0141.partsbnd.dcx	1619311	8e1b4789b68761ccaf4fbee43ada127ce1637d49257b8caccfc1a3429c4dd1b2
+entry	parts/fg_a_0141.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141.egm	924384	1e65720af45f91d40a7c9a179c7a3c2ac2bb6720af95dce0dbc0bd81622c949d
+entry	parts/fg_a_0141.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141.tri	97724	a057a9ca048bfca8fe472bb9d05b630593cd7ab3b390bee45bfb0925d566366d
+entry	parts/fg_a_0141.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141.flver2tri	5932	213f17e22452a97725f9c2463ba97a28083edc6809302d1a6d218bdaf31dad9c
+entry	parts/fg_a_0141.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141.tpf	1224362	f7de1492ad7c5aecd00bac40c330fee62ceb5c40c66b3585bdd1bd096ee2e6cd
+entry	parts/fg_a_0141.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141.flver	272208	e8e257d2b0ba0e1a94234bf982934e875090ea210f04fe938378021183709556
+file	parts/fg_a_0141_l.partsbnd.dcx	194992	71aa4c558bde0b153197ab03b79560b6a54e0fd51b339b55a5b3a0edc2046c57
+entry	parts/fg_a_0141_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141_L.tpf	306878	5404079a5eaca860c24137709f4055e04b8f75b4c41d11cb84628bd11380e8c3
+entry	parts/fg_a_0141_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0141\FG_A_0141_L.flver	272208	e8e257d2b0ba0e1a94234bf982934e875090ea210f04fe938378021183709556
+file	parts/fg_a_0142.partsbnd.dcx	1648154	1fe6ad8d23d0a110f83938820729c54237f56e8ff723afd61d540c3eb6efc28b
+entry	parts/fg_a_0142.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142.egm	924384	071f6e109e9058d392643d6194912c033baf899f7a24326849d3be628c58cd5e
+entry	parts/fg_a_0142.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142.tri	97732	c80b4e32f0ef8802163e0b3aa673546942e5a11e9d624ae84d7a8d736d09ad00
+entry	parts/fg_a_0142.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142.flver2tri	5940	3c4735070813a2c15e1e7051899c003e6b76bf132af9a1c9bbd05d4ec3cb8e12
+entry	parts/fg_a_0142.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142.tpf	1224362	0a9157b6ac234b458ea957de1930b2f992aaaeeacbe51cba85e09d3957ee55fe
+entry	parts/fg_a_0142.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142.flver	272576	8f0cf5f21f3bc275bfa6ec19e4ab086819c6a9d5f935a35f520a9182e73ecc30
+file	parts/fg_a_0142_l.partsbnd.dcx	202780	daae5adb29acd4f16da76cd803f308c9114556cbbfae4eba4b20b69fa860993b
+entry	parts/fg_a_0142_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142_L.tpf	306878	fbc876a88738facad5bc3cf1ff9b24443dfee2ce5987749cc48dfb1a582f5750
+entry	parts/fg_a_0142_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0142\FG_A_0142_L.flver	272576	8f0cf5f21f3bc275bfa6ec19e4ab086819c6a9d5f935a35f520a9182e73ecc30
+file	parts/fg_a_0150.partsbnd.dcx	1624420	98103f0fecd8de4f05dbf0bfc3815f24cdd0ced4759d574743529da08cdfbb24
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.egm	938784	5759afb862fd9954e0101d97fdee63658ef580ffa6b9f41a22ef908add4ca3d8
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.tri	99532	4098b323d5c4ca03e105c86dddc2622a369b68de813c08bd9be1923e93ed4279
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.flver2tri	6136	2f30e3caeec2e7425de772904e24d059fb8d389e922813f77b3a2976cfd97a9a
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.tpf	1224362	e9789ac7ceb9e57564bf2495ecf02a157c81ca251e4823a07c67276282e87967
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.flver	279072	54bcf8cd02381755bfb5b9ef648660a63b5d0f68a316233c7a61f5ccc66b7d21
+entry	parts/fg_a_0150.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.anibnd	14604	1a5a5f334e5664a2b980aaafa5ece18398b9d352b24444b4ba7b98a50edacca6
+file	parts/fg_a_0150_l.partsbnd.dcx	199651	a9371b57a65b17403aea21a0069fa343ab35e38a4ceb42cb696eced47a6a0952
+entry	parts/fg_a_0150_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150_L.tpf	306878	1bf739a91e85422803fb1f5119700dfaf2d89446b2ebf9834a67fb8e7eff9f27
+entry	parts/fg_a_0150_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150_L.flver	279072	54bcf8cd02381755bfb5b9ef648660a63b5d0f68a316233c7a61f5ccc66b7d21
+entry	parts/fg_a_0150_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0150\FG_A_0150.anibnd	14604	1a5a5f334e5664a2b980aaafa5ece18398b9d352b24444b4ba7b98a50edacca6
+file	parts/fg_a_0151.partsbnd.dcx	1627814	685f3ea9e424a0b16492d94cc55b104243a38d42083cd10c3887809542fc51f8
+entry	parts/fg_a_0151.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151.egm	938784	aa2fa5ed555b3d69fdd70167098909fb677129a439cc99eec95bef6c49aee29f
+entry	parts/fg_a_0151.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151.tri	99532	d114e99385c929d863448646fd58959b8331328e3170aef790681bc52eea5d5a
+entry	parts/fg_a_0151.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151.flver2tri	6156	4d9ddf281a14732c8ab9a313a9ce3b0d90c317d0688a353411dd6f9343ee7734
+entry	parts/fg_a_0151.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151.tpf	1224362	4d348b067bb970c68e0c0956fdf5571b3f97b39f8161158023eedf8a00c998f6
+entry	parts/fg_a_0151.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151.flver	279360	b8bfb3dfa04d3e4ca7aade20774b281385219f1abc30749533e9a8da900438a6
+file	parts/fg_a_0151_l.partsbnd.dcx	195213	da1dfa3e72fb5dc3ef055b61bfd23d69cf0b3d2cf338970994302b3f78cb661d
+entry	parts/fg_a_0151_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151_L.tpf	306878	9522702db22b742679e6592abfb9bdfc244331f1c86d85efe23f757ba21eceda
+entry	parts/fg_a_0151_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0151\FG_A_0151_L.flver	279360	b8bfb3dfa04d3e4ca7aade20774b281385219f1abc30749533e9a8da900438a6
+file	parts/fg_a_0152.partsbnd.dcx	1666260	78c4b81644fd5ab35d680ee7a7e62c6a3b03adf0a3924ecda8d720791faf963d
+entry	parts/fg_a_0152.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152.egm	938784	a8d8fc910d4a2569a99aaee3de7f63cf626e09f419a2323c75bac3b7cb014428
+entry	parts/fg_a_0152.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152.tri	99524	f2475fd7ec5791ef4d65b5fa090ee447ee3f8ec92c4a06059c9e8976fc71e523
+entry	parts/fg_a_0152.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152.flver2tri	6156	15d5dcdedb161ef898fb01e396cc5c11e63428d89aeaa602a1c2463c70a9d1d9
+entry	parts/fg_a_0152.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152.tpf	1224362	fe3cdd1a3971831d1e5abd50f814f3f21ef6545bd14e8a524cc23867e28907cc
+entry	parts/fg_a_0152.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152.flver	279472	956ac124de060d3d75a64349228457011d9c82584064f69da6a5dbeeea0b8eec
+file	parts/fg_a_0152_l.partsbnd.dcx	203820	e7ff905ae05e005b260935828d71f4fcb3ac89ed033434fe52d01f5d66fef134
+entry	parts/fg_a_0152_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152_L.tpf	306878	ec8744580c16fcdd3dc9d87c16926108dcdbb848f4e9521258829087d4ad7c43
+entry	parts/fg_a_0152_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_0152\FG_A_0152_L.flver	279472	956ac124de060d3d75a64349228457011d9c82584064f69da6a5dbeeea0b8eec
+file	parts/fg_a_1500.partsbnd.dcx	992990	9f54079c7f32f1cccc7e411a4aaf7f30e1fa85835f59acca8d9e18e560ea2b68
+entry	parts/fg_a_1500.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500.egm	554304	e3ea4afb786e30a8395c871f423458836a4ce328903eddab14f60d46608acc6c
+entry	parts/fg_a_1500.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500.tri	58744	7f5a2ea54ee5a80561ccff5b0924583e351121ffd900162074f217778691737e
+entry	parts/fg_a_1500.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500.flver2tri	2468	49b304196e55cc34e7f0bdd4bb18ec8834a46fa27edb81add7917c5c2c03e6ac
+entry	parts/fg_a_1500.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500.tpf	874660	416a15840043e295643aaef7165028333e03d57bee26bc90e798f55e24962b59
+entry	parts/fg_a_1500.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500.flver	108272	8a8102e260b66b731e9efe5e425e04252469a1691a973d01baa6e7e513fa0ec3
+file	parts/fg_a_1500_l.partsbnd.dcx	114886	f88cfd9ea7a24150348c799ecd01607cd90648a411b7ff1cf4dc0f8e1511b0ad
+entry	parts/fg_a_1500_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500_L.tpf	219316	05893f88f10860d0b8fd8b4f0724137c5921972303b5b1188ba9e83d7ab7e1b0
+entry	parts/fg_a_1500_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1500\FG_A_1500_L.flver	108272	8a8102e260b66b731e9efe5e425e04252469a1691a973d01baa6e7e513fa0ec3
+file	parts/fg_a_1510.partsbnd.dcx	602232	e86a3966c61b78776e73a9cb536ba95fd2c54a4187533eeb0d5114d9cdda8c28
+entry	parts/fg_a_1510.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510.egm	554304	e3ea4afb786e30a8395c871f423458836a4ce328903eddab14f60d46608acc6c
+entry	parts/fg_a_1510.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510.tri	58744	7f5a2ea54ee5a80561ccff5b0924583e351121ffd900162074f217778691737e
+entry	parts/fg_a_1510.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510.flver2tri	2596	ee0e5e815b0bd0452ca484209779b1c190d3968d6fc9aa298e2ff76c259bcacc
+entry	parts/fg_a_1510.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510.tpf	43922	5c2f3efbee4115e2b93e45836ba86bb3b078e3f03b2b811ed12da0584fd0802d
+entry	parts/fg_a_1510.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510.flver	100848	79dbc3ba90b1d00a0c4cd9c0f15e9d036b2d5cb928818b1f51018c262222f2ae
+file	parts/fg_a_1510_l.partsbnd.dcx	9021	4946a74d59a898d5aa580998c9a033313462055508f8282ee0c27aa0739866b5
+entry	parts/fg_a_1510_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510_L.tpf	11158	b35a78bac14d3737dc75904e53b0fa7f11d51c5821ee89cfb38be5a6f0067b33
+entry	parts/fg_a_1510_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1510\FG_A_1510_L.flver	100848	79dbc3ba90b1d00a0c4cd9c0f15e9d036b2d5cb928818b1f51018c262222f2ae
+file	parts/fg_a_1511.partsbnd.dcx	923478	8adbb9f0087891faacdf92c2d3703d169a57e445e483c115f87851195217af46
+entry	parts/fg_a_1511.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511.egm	554304	e3ea4afb786e30a8395c871f423458836a4ce328903eddab14f60d46608acc6c
+entry	parts/fg_a_1511.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511.tri	58744	7f5a2ea54ee5a80561ccff5b0924583e351121ffd900162074f217778691737e
+entry	parts/fg_a_1511.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511.flver2tri	2596	955f2a855944056613d0dfad16eadc0ad4cf2bbac75891f69ec6c42c4eea69d5
+entry	parts/fg_a_1511.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511.tpf	874660	e68e47362962451a38fce4218bd5cdb0333f5efb500b6929983c5e8fced4f3f1
+entry	parts/fg_a_1511.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511.flver	111344	07485f707f8160ad875b3b29916758ae9ebe53c6977ef0532317c269bb10104a
+file	parts/fg_a_1511_l.partsbnd.dcx	93632	d702b5cb4756d18b26de8ecaef5959b7911c944553879b747eddb0ed46eff5b3
+entry	parts/fg_a_1511_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511_L.tpf	219316	820cbd2ec8a987abdb43407465d06a3a585f9ea04f0c2cbb28e0fc3e97d729af
+entry	parts/fg_a_1511_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1511\FG_A_1511_L.flver	111344	07485f707f8160ad875b3b29916758ae9ebe53c6977ef0532317c269bb10104a
+file	parts/fg_a_1512.partsbnd.dcx	994866	71f9280deb277d09e1329d5b8e7914a0cfda0115ca71847d67486c0db23f527c
+entry	parts/fg_a_1512.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512.egm	554304	e3ea4afb786e30a8395c871f423458836a4ce328903eddab14f60d46608acc6c
+entry	parts/fg_a_1512.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512.tri	58744	7f5a2ea54ee5a80561ccff5b0924583e351121ffd900162074f217778691737e
+entry	parts/fg_a_1512.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512.flver2tri	2596	fdc3a4a7a17e56f962c0fc1432d3e31b76f3b0d249802460b0543b4b5cf057e3
+entry	parts/fg_a_1512.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512.tpf	874660	083fd87a984b6e11af0fd42ec3d599e2b86af89ca606c0df586fc2a491fa5a31
+entry	parts/fg_a_1512.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512.flver	111344	b61857ea9acd6e18ef4aa21554232782bf5a3419b79b8de949f6b79a20c6cc4e
+file	parts/fg_a_1512_l.partsbnd.dcx	115224	283c8e9f61e765fdd2c82d91508b8ca700176abc2560c1ed607017896d465a6f
+entry	parts/fg_a_1512_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512_L.tpf	219316	d158a46b13ccd1fc1be08b9ecf067e840c4de0f315c1e427fba56cc2f8f0eb21
+entry	parts/fg_a_1512_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_1512\FG_A_1512_L.flver	111344	b61857ea9acd6e18ef4aa21554232782bf5a3419b79b8de949f6b79a20c6cc4e
+file	parts/fg_a_2000.partsbnd.dcx	603	34b0f9f82366b1f4023f31dda639ba9ed113114ee4ebfe25fb2a7a5b10a109e1
+entry	parts/fg_a_2000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2000\FG_A_2000.flver	1392	73ffd09ff62e0dd51c78d7068d9b284a4adbefe38c341741284ea29d6db0087d
+file	parts/fg_a_2000_l.partsbnd.dcx	607	f0a007d42138bb9ab826175daaafe704ddfebd63d8d952603e8571f626912a84
+entry	parts/fg_a_2000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2000\FG_A_2000_L.flver	1392	73ffd09ff62e0dd51c78d7068d9b284a4adbefe38c341741284ea29d6db0087d
+file	parts/fg_a_2001.partsbnd.dcx	363532	595a3acbc3f303c4bb9dfac0663f51ca8e9f53cb9c71487aee0d8510647f8fc7
+entry	parts/fg_a_2001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001.egm	295104	5cf0ced90c2f0585452cb8eeecfd45194c6770fa1ab471d8fd7f7112f2271fc1
+entry	parts/fg_a_2001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001.tri	16512	b6585d9c1ffcb229ac53e0981466ab85f38842542deb30f27d8b66130eb3f281
+entry	parts/fg_a_2001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001.flver2tri	1388	c5c9bb8209da2adf0dd9de27bc933fd709a7910ed47cd91051f6e7b6e35087ba
+entry	parts/fg_a_2001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001.tpf	262582	79548c0b30bac0ef2ce6bec568205b96bd1adc0dc5674022aa4ce769780cbf79
+entry	parts/fg_a_2001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001.flver	41952	526b8adf137bb62011ae205573b4f5af035d582dbb8f7bc2c888ac2a1b381ad7
+file	parts/fg_a_2001_l.partsbnd.dcx	18765	1a134dfac5b2dc5abb8251bad2661950198d8b2f0929a418fcdad0a82cad2a26
+entry	parts/fg_a_2001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001_L.tpf	65982	dff41839d209f619408ff66511e3d772fa772ac142e980dac007453f7bda2235
+entry	parts/fg_a_2001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2001\FG_A_2001_L.flver	41952	526b8adf137bb62011ae205573b4f5af035d582dbb8f7bc2c888ac2a1b381ad7
+file	parts/fg_a_2002.partsbnd.dcx	328177	cf3998b8143ca5eeb2996eee24a9d0dba0bb505a71cc9a73947dd8e85ecac57c
+entry	parts/fg_a_2002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002.egm	248064	2413f5f7170a9800f1009f5b0628a4d954692de6fd26afbe3b148a4c2f6d1508
+entry	parts/fg_a_2002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002.tri	13080	28afe96d19f4889b9a0dd61a2a72d63a6b3ec45108b1d09fc9674a00f2addc77
+entry	parts/fg_a_2002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002.flver2tri	1192	d68316c5d5e97441a8c52be148a5f0b3825bb506b65506921e974c6931bc204c
+entry	parts/fg_a_2002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002.tpf	262582	56f69557712ee869aff971aa75e6c17ad1177d5c5e0164fb63ed88dfec8a0600
+entry	parts/fg_a_2002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002.flver	35040	2b95c58e2cc258c72fda3923e2cbadaeefa3ed1179b6212a690b0e63b9f09f55
+file	parts/fg_a_2002_l.partsbnd.dcx	24269	89238153c5180e0891cbd063d2c00689c33c7eff6ca15184b93ec49ebb24e80d
+entry	parts/fg_a_2002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002_L.tpf	65982	c9f97b64dca62daefc10d2d3c8b0d69f4a5940271beb05e36f7cb92e24563850
+entry	parts/fg_a_2002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2002\FG_A_2002_L.flver	35040	2b95c58e2cc258c72fda3923e2cbadaeefa3ed1179b6212a690b0e63b9f09f55
+file	parts/fg_a_2003.partsbnd.dcx	573314	2c5d2f50856e06f8c0a8c0903a921cc8723210f9260bc6eacd2069339c22bedd
+entry	parts/fg_a_2003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003.egm	485664	5abadc0fb838779cdd40365680abf3b5a7e2e90dcf2c736eb71d695c7aa0c8da
+entry	parts/fg_a_2003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003.tri	25708	9038c2babbb72c6bdad946a80bd8baa6315337cd5102f3a09b0b1bed6a766af5
+entry	parts/fg_a_2003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003.flver2tri	2212	fd690eb3d7d75a1753ccfb0c2e65324f1ba6766b485745a9b47f2762c0c8f799
+entry	parts/fg_a_2003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003.tpf	262582	00a22f860e2b6ba82ceb59ae433565a0ffb30f7fb823dd1ecd2ee2f1b5038b41
+entry	parts/fg_a_2003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003.flver	139536	7e91f62e2f8f83606ef6f6d22c88cd32a28c8460b390ca148cb081db8ff58f41
+file	parts/fg_a_2003_l.partsbnd.dcx	30528	627f887affde494ec0e6dbf45d8296f0e6c7575528b3569de32a78250b6dcbee
+entry	parts/fg_a_2003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003_L.tpf	65982	22af9690d4229838b9cfe093e1c034b57cbe02dcef412de8fb635286c6e3ef2c
+entry	parts/fg_a_2003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2003\FG_A_2003_L.flver	139536	7e91f62e2f8f83606ef6f6d22c88cd32a28c8460b390ca148cb081db8ff58f41
+file	parts/fg_a_2004.partsbnd.dcx	555588	9f01786c2ae7e3ad456f1fad5ea4578956686665ea2ebdd30290ff6d75d45650
+entry	parts/fg_a_2004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004.egm	452544	29fbdce3d23f4f0ed7f50cdcb91ed965e4b579f2766daedc49bc29214d6aef54
+entry	parts/fg_a_2004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004.tri	22888	8bb0526e56555277f8317c446ea14603d8e7b3eedc87cbd436f597a769be948a
+entry	parts/fg_a_2004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004.flver2tri	2044	64ca90b928a5616cf01cd2b45b24c34789e2eae1ff43cf168201c827ddc78f08
+entry	parts/fg_a_2004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004.tpf	262582	8cd11ff89989e2412f8db18d7161bb7f9e261033cf786e5ef5778cee8664b3af
+entry	parts/fg_a_2004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004.flver	132864	fa44c7e5212e30533f4353f8b98750ff5d24b47961722e3103bebf4fffd156da
+file	parts/fg_a_2004_l.partsbnd.dcx	36430	49b6c43df684341666142bada380ea7ecd23c0b14b7a181fdbd4d95b9f836f84
+entry	parts/fg_a_2004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004_L.tpf	65982	b5d93d80d2a409ce1ff9e9863cbfd97f98335ef39761ad060bd7ef91e271f4e8
+entry	parts/fg_a_2004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2004\FG_A_2004_L.flver	132864	fa44c7e5212e30533f4353f8b98750ff5d24b47961722e3103bebf4fffd156da
+file	parts/fg_a_2005.partsbnd.dcx	369958	55a1c851347f90756bd83444848e50888ba059803c77ea8bba12f1a9b6abea53
+entry	parts/fg_a_2005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005.egm	273984	45b1148a5ddc8bf4abedca4b533b4141f7c1cf17331ba406453016f2dcd29ab3
+entry	parts/fg_a_2005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005.tri	15896	628a432e3c58162d0dce2377cbba57f3cfe9ed603a05273262ead7008d636cd8
+entry	parts/fg_a_2005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005.flver2tri	1300	3d77c629717bf0db70d8c7589c8a2212b72d7dc95cb71fa230898a0a6f2f781f
+entry	parts/fg_a_2005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005.tpf	262582	432e52c3df6f32dfbf5fb083e0974eec16db71fc454a82d9422772e8e112c7f9
+entry	parts/fg_a_2005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005.flver	113136	990f323781c44b08be4efe50eb41a9c64b03430fddb95bc484606f5de11a28df
+file	parts/fg_a_2005_l.partsbnd.dcx	35903	08e23e1af05afdc0f651853c54df5736ff23da5e7ea1f074bc92a6dde70cd483
+entry	parts/fg_a_2005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005_L.tpf	65982	d18e6f2cdf98ff0d94dda172a8efe481a88cba499083841809e2823e7c68f148
+entry	parts/fg_a_2005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2005\FG_A_2005_L.flver	113136	990f323781c44b08be4efe50eb41a9c64b03430fddb95bc484606f5de11a28df
+file	parts/fg_a_2006.partsbnd.dcx	617840	9e8c24f2a453a97607db0c5608f7bf5cba50ade0f0418247767e1008c34945a4
+entry	parts/fg_a_2006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006.egm	517344	1c276bcb4446e53f1eef0d49b1b15440408b5347b40113a190e8c1898f4c513a
+entry	parts/fg_a_2006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006.tri	27244	1258b713fc5047dce6015583bdbec6f77b1f47963114ba1f0b4b3d975beea77f
+entry	parts/fg_a_2006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006.flver2tri	2316	dfdcbd0b2f70c9eeb9b027b706534799f20ee7af703c02e0ca5c4dc7df7feb1d
+entry	parts/fg_a_2006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006.tpf	262582	f01fc994437370988967a21de05fe3ac9e3d78952d3bfdb53ee02475717f3f45
+entry	parts/fg_a_2006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006.flver	142016	af5cb8c57b71b3810dcfbe64395043388db22e071d401315117fbac7f83ed2a6
+file	parts/fg_a_2006_l.partsbnd.dcx	34456	ccff9d0c7941c87eb3e640d2d283b43c656336e3a4018dad62515e719582af79
+entry	parts/fg_a_2006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006_L.tpf	65982	641c0b097934cfc0f6edf3f47023c6ac439df30f4b57cc71f759028f73c7bb15
+entry	parts/fg_a_2006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2006\FG_A_2006_L.flver	142016	af5cb8c57b71b3810dcfbe64395043388db22e071d401315117fbac7f83ed2a6
+file	parts/fg_a_2007.partsbnd.dcx	640361	541224b35282251cbd3e60c98938fd00bc12b4394efa69282f42d2e74fef85dc
+entry	parts/fg_a_2007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007.egm	537984	9784a12f3f0e78e2c691d07d7120a96a9c40013fa793e56c36e921a86d267edb
+entry	parts/fg_a_2007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007.tri	27928	efe328dcacba70c11b6e43cc9a07701558aa3dba04d2d3a87a4b247d404dea6a
+entry	parts/fg_a_2007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007.flver2tri	2404	bc7333106127553eb300eb7a03d37c7f4d912d4cacbb6ce895c0acc2ef8a80ff
+entry	parts/fg_a_2007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007.tpf	262582	03fa3a87e744852ef82cac060c03cb5586580c10f10b379f0b26c8dd01ebb0c7
+entry	parts/fg_a_2007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007.flver	145296	8ab175aa1a5dbf76888a9f2f2d3a26bd6bfec16f8bc0d86fc4b58dc1733d7d94
+file	parts/fg_a_2007_l.partsbnd.dcx	36864	3fcc4e670a0f013ca4141f1671746a89b9e0a9107065237df95816196ea00629
+entry	parts/fg_a_2007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007_L.tpf	65982	6d0f9d49d05015c92f55c5e0c59ae6a895fe225d0440c03aa194ace2c8a4d591
+entry	parts/fg_a_2007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2007\FG_A_2007_L.flver	145296	8ab175aa1a5dbf76888a9f2f2d3a26bd6bfec16f8bc0d86fc4b58dc1733d7d94
+file	parts/fg_a_2008.partsbnd.dcx	626643	1c1171158bc3bcc3617ac9b7c75b4290d4ce1b741baf512fa38d4df22f7ef3f6
+entry	parts/fg_a_2008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008.egm	527424	02788e06b400c55be8dfd6356e1f87ec8ccc0425a67e4d81ef00729dbaf645b6
+entry	parts/fg_a_2008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008.tri	27864	edf8f015062d73160441c0d731fd00a191660a34800ffd8d881b35de8efe38e8
+entry	parts/fg_a_2008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008.flver2tri	2356	1c992c5d9a1083be879cb8c646c40988102519b73662c7e105fee90169487c2f
+entry	parts/fg_a_2008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008.tpf	262582	99a8b477ef12194348da60a0a938029725c0e27971e90951593a8a18e021ec08
+entry	parts/fg_a_2008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008.flver	143888	0ad482d3a43a8e92fcd211115c73f633b417688ddf1779ffb4abce550ebaef7f
+file	parts/fg_a_2008_l.partsbnd.dcx	36335	2176d868b38268facf456a1c66444c0541d8f9a3389edc40c098a6b7ee6dfb94
+entry	parts/fg_a_2008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008_L.tpf	65982	d0c8fc8fe177593e40eb396d66ade8a4c50b5a1e6fabcc961366c3cbad9231bc
+entry	parts/fg_a_2008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2008\FG_A_2008_L.flver	143888	0ad482d3a43a8e92fcd211115c73f633b417688ddf1779ffb4abce550ebaef7f
+file	parts/fg_a_2009.partsbnd.dcx	588054	bc6b307b01f2d0e378657c5af90b61b85478a49f4a37153a2c5687316815f44b
+entry	parts/fg_a_2009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009.egm	492864	82731c41c3693ae98216f8298913d1e5097ca01f60b7d83f32e5baaeb9524593
+entry	parts/fg_a_2009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009.tri	26232	d4615af601523121d9f0a86a67da96984c57d86c932584866cdeb831ed34f1dc
+entry	parts/fg_a_2009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009.flver2tri	2212	498520be4c500dcbbd421079977280f74cb06d286f42c36688d5acfc3c260626
+entry	parts/fg_a_2009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009.tpf	262582	7323e8b6e73ee806a408689c7d8f83d844f673a007656e7efe2556826552de15
+entry	parts/fg_a_2009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009.flver	139888	e47ad191cd93af8a3161c9feba0b205468a950e7c99f314548656b544668e4b8
+file	parts/fg_a_2009_l.partsbnd.dcx	34310	ba684f89a12b6efc39b0f084cba5afe41f7096a9b9e083a00be32b3c3d7c5f63
+entry	parts/fg_a_2009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009_L.tpf	65982	c248b1a7898b77c96ffeeb6dfee4d5661d14ae627901467ca2b92a796d9bd750
+entry	parts/fg_a_2009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2009\FG_A_2009_L.flver	139888	e47ad191cd93af8a3161c9feba0b205468a950e7c99f314548656b544668e4b8
+file	parts/fg_a_2010.partsbnd.dcx	851056	e5e302c91aa658e289ae9e9afb5a0c9ff79ec1172b5108a2da370e31dae52636
+entry	parts/fg_a_2010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010.egm	740544	ae757004f755bda1ec3bc61834df748779cbbe3a95169d5df297dee46688bbe8
+entry	parts/fg_a_2010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010.tri	38464	c233481f8d830f2efdd18619590ae25f7f0f1869cf5b71747e7c983e7612bb89
+entry	parts/fg_a_2010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010.flver2tri	3276	d56924c4e384f67f92e80db0b95ffbb85ea0947a0ff32e8880cb9982ab8bf8b3
+entry	parts/fg_a_2010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010.tpf	262582	4fbbcdd5454a442145cd7ea8b9a241c415c8bb31c57f48a53d92cf168b44ba4e
+entry	parts/fg_a_2010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010.flver	170656	5229b76f2992cb27ebe4d095305852e94cdbd56c6311bfb0f50f1fe128a674ef
+file	parts/fg_a_2010_l.partsbnd.dcx	34807	8f5b63abdd7d7764d25ca49a0a0b5e54cfa65800ab0d1b154c0988ea92593d91
+entry	parts/fg_a_2010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010_L.tpf	65982	4d4c7e95e2b46e95b54caa0de1aa12e4f05254e0e83fa032768165ee4a04c498
+entry	parts/fg_a_2010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2010\FG_A_2010_L.flver	170656	5229b76f2992cb27ebe4d095305852e94cdbd56c6311bfb0f50f1fe128a674ef
+file	parts/fg_a_2011.partsbnd.dcx	375933	2386513e2c52f3df7a35335d95c44ca878c8f60e906e7c55c7b5c40c5995b5e3
+entry	parts/fg_a_2011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011.egm	292704	dd6370738a636f2ea4a085eb32c5396c6c42eb7a4466ef5474c29241733f3343
+entry	parts/fg_a_2011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011.tri	15204	0d346a758668361bc7cba856225f5c0e2c3d09ba1649d1ea81d1651483d1e0f7
+entry	parts/fg_a_2011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011.flver2tri	1380	8a03e075090b882289594ad68fc002b32912a866c5001b939b6dbc23f507ee79
+entry	parts/fg_a_2011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011.tpf	262582	60ef723397a46b83c090b496422da6375dd6cb61db4133f7537c42595fb93602
+entry	parts/fg_a_2011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011.flver	40224	8626ef943b896d307f605cf7976a6664e2ee71d232362d659fe723a28704a2d1
+file	parts/fg_a_2011_l.partsbnd.dcx	24590	8dbd961731b2650c263dcb3724c23e2d288310c2dc48d5ba7ee816d847a240a2
+entry	parts/fg_a_2011_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011_L.tpf	65982	8c7ef2d44be31e257e5fb47450e0eea6194773e59f5fdede4affd39ce6587c37
+entry	parts/fg_a_2011_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2011\FG_A_2011_L.flver	40224	8626ef943b896d307f605cf7976a6664e2ee71d232362d659fe723a28704a2d1
+file	parts/fg_a_2012.partsbnd.dcx	417141	5fd55c13065a588713ee56b117c5a4d98edaf9dafc35314eba134a400a1c47a2
+entry	parts/fg_a_2012.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012.egm	329664	0d7ff62b7a2c91fe2c7d7239a5f31c512ae791351b18df0241859717b84193dc
+entry	parts/fg_a_2012.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012.tri	16960	fe7b67c9dde0973592c60e959bdd39e3fc186bc0405fc559151e058139e4a93f
+entry	parts/fg_a_2012.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012.flver2tri	1532	2ed9d93d3175cbbc3fe73d7b37e2d10f291d78dd0cd0af28b4a034bc862ead12
+entry	parts/fg_a_2012.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012.tpf	262582	7012159b61f8b75195ced9d0db935241832c28f91bf6f6569727d2d6bb38d5a5
+entry	parts/fg_a_2012.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012.flver	44624	cd0d5b4f1b8f6d85dbe064597d3f881485b20b304b535f1d27117bd335f9ccad
+file	parts/fg_a_2012_l.partsbnd.dcx	25299	48943f2a91401c981cca058f14f2d1613d941f104f9230e7e968aa7db1744c77
+entry	parts/fg_a_2012_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012_L.tpf	65982	d8fbcf2764bb00dd0e26257664f09ea8c2e03e3977e946d5e783b09e59f8f9bd
+entry	parts/fg_a_2012_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2012\FG_A_2012_L.flver	44624	cd0d5b4f1b8f6d85dbe064597d3f881485b20b304b535f1d27117bd335f9ccad
+file	parts/fg_a_2013.partsbnd.dcx	490389	c9a7d5a174029467e6ad75ea94dd61ad11fecdf3e25afb2a195fec956246c0c3
+entry	parts/fg_a_2013.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013.egm	394944	2414023f108cf7acf62a9109a3df4e2d75af8938c12871daab82c3dc834522c8
+entry	parts/fg_a_2013.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013.tri	21608	9139becbd2f88d1664cdde136fb6f1f078383508527bfda317ca9afb9fb45b97
+entry	parts/fg_a_2013.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013.flver2tri	1804	95e2b3d2a1c07636079d0b95bcd49946d75a3dde7e1b482d5a3d4315c6dc8b2f
+entry	parts/fg_a_2013.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013.tpf	262582	23b8bff00118ffd6cf5ae3356f925e6d201ae07fc3711121a107d56a539e5aa0
+entry	parts/fg_a_2013.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013.flver	127776	54187f827a15db2f45bf58149242d8ebee6f67f57566f56d92c73c3cc459336a
+file	parts/fg_a_2013_l.partsbnd.dcx	32322	19c062744d8279619ea209e12f45b4a8a6fc461489e709e41f43a391c339a31e
+entry	parts/fg_a_2013_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013_L.tpf	65982	9d44d522024167383ac9d2f70837f5343d2ceacea220ef95aadb20818e4d92ad
+entry	parts/fg_a_2013_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2013\FG_A_2013_L.flver	127776	54187f827a15db2f45bf58149242d8ebee6f67f57566f56d92c73c3cc459336a
+file	parts/fg_a_2014.partsbnd.dcx	564418	bff8d550f57730d7dd4d220a426712525ad860cd677533c8cc2cfd48dc97095a
+entry	parts/fg_a_2014.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014.egm	492864	8cb38309639a97ad80f8fb46b0a0be7153171c9d213f8738d3159ad9bea13021
+entry	parts/fg_a_2014.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014.tri	26232	d80911120ee5ca14bf158e547ded877c912305092d97cb7ceb11c5b02e06c8e9
+entry	parts/fg_a_2014.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014.flver2tri	2212	2fdff2fd0dc4e8afb36c137bafc0d4103ecb43a07d093b4292e4ac22abc58b9d
+entry	parts/fg_a_2014.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014.tpf	262582	35d589a763c1ae3f136dece7487fbf997f5e32e4812a876d7408f86e56c2ad09
+entry	parts/fg_a_2014.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014.flver	139696	513c53221d94b0aba2699a07a25b0876d2bacf988ef411eb41dcb90c5cdb5e18
+file	parts/fg_a_2014_l.partsbnd.dcx	25682	7a1d86bbd5d532960f6acd4e5a818925f4141e0ffdf286500b57f868103e0175
+entry	parts/fg_a_2014_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014_L.tpf	65982	46826605490e0a9859689bea8889671ceaf2c428a9b5c455c3d3b79f776b5dac
+entry	parts/fg_a_2014_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2014\FG_A_2014_L.flver	139696	513c53221d94b0aba2699a07a25b0876d2bacf988ef411eb41dcb90c5cdb5e18
+file	parts/fg_a_2015.partsbnd.dcx	169000	aaa4ab7d4f486d33b4ff771e930855946cc031031fecd30d4e93dc61d49797d2
+entry	parts/fg_a_2015.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015.egm	120384	62b11a5d0a96265da92f0ec2137c94ebd818c7465abeceaf529a16d674829243
+entry	parts/fg_a_2015.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015.tri	7440	7afa283bcc9c0e303b287a65cb7090505bb10e84a4c34e91f5611561e1e33239
+entry	parts/fg_a_2015.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015.flver2tri	660	be8cb4376626b6941608ab2bc5ac040268a7b5b618ffa77960bf44459069af80
+entry	parts/fg_a_2015.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015.tpf	262582	d942ac6f018a2c91ad391648976ac0bf5500b3e9230dc3b935ef33cc99c1b913
+entry	parts/fg_a_2015.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015.flver	20256	0e953cf89007fc319b8e3900a2594505c3f2de75797d83bccb798258dd1751dd
+file	parts/fg_a_2015_l.partsbnd.dcx	13901	d783b68c313396257f7b0c8a336a19c0574e60e810d3b452bd96fbd177b67947
+entry	parts/fg_a_2015_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015_L.tpf	65982	cd26692076cf7eff57b92dc7743c5dab1098122f3bcfcc61f4daa217f7a2a202
+entry	parts/fg_a_2015_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2015\FG_A_2015_L.flver	20256	0e953cf89007fc319b8e3900a2594505c3f2de75797d83bccb798258dd1751dd
+file	parts/fg_a_2016.partsbnd.dcx	260893	5d6271bfc38d80d2b8849a52f45a0aae2bfde7784a90999e3f1163ea1069ee87
+entry	parts/fg_a_2016.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016.egm	199104	062bf1eb9fd862409d1b847a7aa62491233a1a878cf3892df595e2313cd03c5e
+entry	parts/fg_a_2016.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016.tri	12000	9780275649455fce87f86e08f4ff77e53a3340ce3a278ff6ed0d08447ec4a701
+entry	parts/fg_a_2016.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016.flver2tri	988	0d1e81007a775f744146827f9f293bf9b474731438309c0700291390e2ec0996
+entry	parts/fg_a_2016.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016.tpf	262582	297a755cc9ea4ae21f7466705dbad3606aa803ce4cf145549a99ae48163e8155
+entry	parts/fg_a_2016.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016.flver	103872	4d40ec143cd9733999792de235aff413ee18efa298095234b28ac3809238da10
+file	parts/fg_a_2016_l.partsbnd.dcx	24543	ee49d4bb62cd829c0468e177886b0c47d70c1bd5a6407cf0009c16bab4239356
+entry	parts/fg_a_2016_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016_L.tpf	65982	8906a834af5680892153e8b20a0fff319fc857b42b48225c6a254473830a5348
+entry	parts/fg_a_2016_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_2016\FG_A_2016_L.flver	103872	4d40ec143cd9733999792de235aff413ee18efa298095234b28ac3809238da10
+file	parts/fg_a_3000.partsbnd.dcx	602	7a6de3339f7e1079935fa7d779656c544618925c8fdf0502cb79a358d96d2d12
+entry	parts/fg_a_3000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3000\FG_A_3000.flver	1392	e7b69a3e38a101835738c13760cc07652898fa0b1231507b8775df01019e6f28
+file	parts/fg_a_3000_l.partsbnd.dcx	607	92a08af56b2e088bd21329f356154eb2f4b231133a2d2d26f58b7d5596a5cb24
+entry	parts/fg_a_3000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3000\FG_A_3000_L.flver	1392	e7b69a3e38a101835738c13760cc07652898fa0b1231507b8775df01019e6f28
+file	parts/fg_a_3001.partsbnd.dcx	2103781	575967b7a5f0825be296a84d55492cff451a9a1774b2b041405c90f0ec2972f5
+entry	parts/fg_a_3001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001.egm	1890624	2f3429b36964e9d67aeb41ac1731b23cf6486d6736599074e22d93f1332b3f9f
+entry	parts/fg_a_3001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001.tri	96048	0db73b4c28470a993cbe58a084d4841de9e65ce67767dc0848efb2fcf2833ad3
+entry	parts/fg_a_3001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001.flver2tri	8132	6a13e3c827062b9f95d26c8127a72516d99c024bc93b010e78b99d1df6471c9e
+entry	parts/fg_a_3001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001.tpf	1573286	f5ee9ffe17117beba40ac7f1d14a400413f9593b4b015128f19273d8725667c9
+entry	parts/fg_a_3001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001.flver	319312	21e3292a042a8f1e21602f1ec73e48a287feace470b8aaecef3ae5cda942ff48
+file	parts/fg_a_3001_l.partsbnd.dcx	72331	a75684eb2b18e34c04ee9fb2ecef256fcad8a68c81000aadeb79223e75d8e139
+entry	parts/fg_a_3001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001_L.tpf	393646	ef6183350e901d6c2339c611be6b45673c9fac110e5c1686ed7ed21a795929b9
+entry	parts/fg_a_3001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3001\FG_A_3001_L.flver	319312	21e3292a042a8f1e21602f1ec73e48a287feace470b8aaecef3ae5cda942ff48
+file	parts/fg_a_3002.partsbnd.dcx	4826142	6bfb5ab2c1663add5c919f92e53fc53b4cb271e5dffcfd829d8d43cd6d81ac8d
+entry	parts/fg_a_3002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002.egm	4065504	4fc66ebb22722b4d215163ca250df585995b90f35bbd0a7c7a66794e437e067f
+entry	parts/fg_a_3002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002.tri	180724	c0ad5fabcebe538d006513cc95c86fbd6bac8cc46a4a523ab2214f9b98cc8e67
+entry	parts/fg_a_3002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002.flver2tri	17244	908c278b2b43b6f74301f2e1ee138d4e225b151543d87b4a60e516cd09df830f
+entry	parts/fg_a_3002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002.tpf	1223968	d277270138c5c75e395af62fb80d3643bf6bf2357d96d3d64de6d4be5b6ad8fc
+entry	parts/fg_a_3002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002.flver	561872	2f8e8dd31a849b85d5b41345e2a21562c0310e1f1fc48936fdbaf9af3f5ebe6f
+file	parts/fg_a_3002_l.partsbnd.dcx	232209	eb61bb41a0e67abf0c2f2a9e4897d25da41716dc90bbf7525ac81da59d13a328
+entry	parts/fg_a_3002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002_L.tpf	306476	91bc59c3b8d8d9b0cd51a3b756344ccbf5e81454578ba853dd484739e6fa8ab2
+entry	parts/fg_a_3002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3002\FG_A_3002_L.flver	561872	2f8e8dd31a849b85d5b41345e2a21562c0310e1f1fc48936fdbaf9af3f5ebe6f
+file	parts/fg_a_3003.partsbnd.dcx	4364105	c62b6f435312bfe9a60135cb5765349b1ee55f16e7954f71fbe373d1d51196fe
+entry	parts/fg_a_3003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003.egm	3959424	d08e2e64f87fcfeaedb23a8ccdfa4bb3a924931b0762e6e78897a32fb706864e
+entry	parts/fg_a_3003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003.tri	180808	61c3eb6a8a0560ece1cd0f142469d5f7af6f9716e4a4b90abba704fcb9d09d99
+entry	parts/fg_a_3003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003.flver2tri	16668	0403c6cffa94775b9b2bcbfefb7ce60238a65281da330c43a760b2f48a8c49a6
+entry	parts/fg_a_3003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003.tpf	1573286	4b1670edce76bd86cd979874277a2a99429330b5f9b73c96a4e6fa436c167712
+entry	parts/fg_a_3003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003.flver	552656	c8ace74d37a8de4966448fd0e80f31559479efc424c8f8fe68675c94bae660f6
+file	parts/fg_a_3003_l.partsbnd.dcx	120054	d4873a06a40ac3df8cce104dab44913020facc3fe0da3313805302d8f49170f8
+entry	parts/fg_a_3003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003_L.tpf	393646	9cef48faa74c9eb4f29df872501928f9025e71ffdb9a3f7ee6d880f7da2b78c9
+entry	parts/fg_a_3003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3003\FG_A_3003_L.flver	552656	c8ace74d37a8de4966448fd0e80f31559479efc424c8f8fe68675c94bae660f6
+file	parts/fg_a_3004.partsbnd.dcx	3243673	d46614e9c0ce1bab394fe969ea980c9b047007ae958cb28dfa4d769ac1e0b1a9
+entry	parts/fg_a_3004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004.egm	2434944	a567e3be016bfa3742c71552b7293220630c02bc84bc22f7d9a6dea685932642
+entry	parts/fg_a_3004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004.tri	117784	c93064fb5935d406ff5e45390252c91380f4adecb8b967499551c9dc7c9ccc46
+entry	parts/fg_a_3004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004.flver2tri	10452	2ea58c29716a352123671a874d71468e6cc4f9b3a8688f0feb7390a9cd53cdea
+entry	parts/fg_a_3004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004.tpf	1223968	a433f21a65ae09966fa90832365e99a478d358e313af313bf2d9473c14030674
+entry	parts/fg_a_3004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004.flver	380544	e2b7886d000e01212ac1f1215d0f552199e15eb4a701e223ddf5c3f2b930b646
+file	parts/fg_a_3004_l.partsbnd.dcx	214997	f273edcb4f67e416f9cd7a820666b3acfc6575a1f4b225854f7f9112d3abe367
+entry	parts/fg_a_3004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004_L.tpf	306476	ba06015c821f680d5593c96031a1fc9ba52fdaaddf6d0d9b5b68c5afe673ccd7
+entry	parts/fg_a_3004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3004\FG_A_3004_L.flver	380544	e2b7886d000e01212ac1f1215d0f552199e15eb4a701e223ddf5c3f2b930b646
+file	parts/fg_a_3005.partsbnd.dcx	3890329	d417ef01ef3df2b9f292ec30410767bbdf6f9287590bb9bf046437ff77eff6d9
+entry	parts/fg_a_3005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005.egm	3088224	836950f19b0b68548f2edbfaa61f9ee3da5e711151742a8cbb1c8232c1b5bad6
+entry	parts/fg_a_3005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005.tri	145812	42472b6d82b3b9f9cb55890b447621ffc332f3488c8fc73908e0a2285f0fa879
+entry	parts/fg_a_3005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005.flver2tri	13184	84df0edab09dd62c358adfa2f16fd35c3d600b74e92807377282d609ef8d4d33
+entry	parts/fg_a_3005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005.tpf	1223968	e2b65c4282916d55db5b681dc89753bba3891019c91da62c8d2db5be3d879e77
+entry	parts/fg_a_3005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005.flver	455392	4a35fee331d2b853d52173eb88b306e59db84b115c291f3849db122f5f813193
+file	parts/fg_a_3005_l.partsbnd.dcx	216832	d9a6c9cf806f34f98e7c95e1e793844f75d860da4855bf60155b586866931f12
+entry	parts/fg_a_3005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005_L.tpf	306476	3c209bd8695f73800f754a7e9232623444141c3c28ebac33f05e0508a432b13b
+entry	parts/fg_a_3005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3005\FG_A_3005_L.flver	455392	4a35fee331d2b853d52173eb88b306e59db84b115c291f3849db122f5f813193
+file	parts/fg_a_3006.partsbnd.dcx	3112272	dbdd4f0a3ecf3e35c816e33c30e75226738035d339eb92b6b5b20ca2c862cf70
+entry	parts/fg_a_3006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006.egm	2412384	af10852d805b7c383ecf2de0a483d022d9366f06671783a8b0bcb1834942f38e
+entry	parts/fg_a_3006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006.tri	117316	deb23609023b4a52634c4384fe1e28169d3f9699e9d741522460367f89bc59a0
+entry	parts/fg_a_3006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006.flver2tri	10360	f3401eb2febd975c51111450d75989c44eddce1f959ba4adf2c76b9c432e8ec3
+entry	parts/fg_a_3006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006.tpf	1223968	cf4f47434df1a67353dff2ec017f441d8ccefb7f892265d2af2ab688b850d585
+entry	parts/fg_a_3006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006.flver	378912	8ed34d46d999ea03b7d48e06676737971d2be445fcc1d01ff0e4b2e4e532f6e7
+file	parts/fg_a_3006_l.partsbnd.dcx	202936	1635f441cc742727414ddd654fffb86ccd3ce138760d473b5eb72c70dfaad766
+entry	parts/fg_a_3006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006_L.tpf	306476	6e02ea125b4fc30b6e278316a8b4719f48c5bfa77a5c3dc9fce06be332b61ad1
+entry	parts/fg_a_3006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3006\FG_A_3006_L.flver	378912	8ed34d46d999ea03b7d48e06676737971d2be445fcc1d01ff0e4b2e4e532f6e7
+file	parts/fg_a_3007.partsbnd.dcx	2559141	fa3709c11bdf3d0eddf40c7837dee90b78cc25eec25e1cc0a01b51a4e0dd28f2
+entry	parts/fg_a_3007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007.egm	1839264	7f7d2481a8dc7455678479cbe37610113b1b9863cee466fee216aa8e698af90d
+entry	parts/fg_a_3007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007.tri	92380	14fd97dfe5468d52b518aa28656b40364b6a1b8c8bffc5e9321538b2d688c919
+entry	parts/fg_a_3007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007.flver2tri	7904	0f4df8e87454a0f346a0e3f26478d30755f584e6a7ace27f4364f5d83a1e6499
+entry	parts/fg_a_3007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007.tpf	1223968	9d5b0e318aa47bb2d1d848a084cc8f8d62b986ed9635f217b4a83efdbab9758d
+entry	parts/fg_a_3007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007.flver	311424	7352b093c5a733eed79c5aabfa5ae15dacdc9d8d9848e0b3672c64e77438c2e9
+file	parts/fg_a_3007_l.partsbnd.dcx	201765	479c7abae5ace100161d1c2b95b7eac417c748d444289ab3763dd4de8b55bb78
+entry	parts/fg_a_3007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007_L.tpf	306476	45240fab96a3d1dc4e6620bae632aabb10c2d3eab31e43f7101735ceaba6e145
+entry	parts/fg_a_3007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3007\FG_A_3007_L.flver	311424	7352b093c5a733eed79c5aabfa5ae15dacdc9d8d9848e0b3672c64e77438c2e9
+file	parts/fg_a_3008.partsbnd.dcx	1586791	7871791a21e2bf98e696cd229a221cbf800bc1c5e710c8b8eb83e009f8d2e4f9
+entry	parts/fg_a_3008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008.egm	899904	e954c10e38c3a9e4bf3cd7e4e7ab07322f4fa3124cfe3d3dcb342fa9e972aa33
+entry	parts/fg_a_3008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008.tri	53952	5e219a09c518ad8eaf46dc86dfabafedb5ad2cfd86a0a13b2d56282b27621dca
+entry	parts/fg_a_3008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008.flver2tri	3928	fd6f2bbe5ec60ce3f2e665b791d9333fec7eb775754d18a2a6ffd2ae14d5bcd9
+entry	parts/fg_a_3008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008.tpf	1223968	84a91ea99fe64cf7d86ec85754e18c98f1f47305a81cd4d730041d090cdf9857
+entry	parts/fg_a_3008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008.flver	203824	270a06e1c9e2c33015c7f784d37df3aa8c109228d044f3dad45927de37d5103d
+file	parts/fg_a_3008_l.partsbnd.dcx	193728	8a5d88a14a6218c5cd0e0f53f8d8eda759dc44191639c78c567be1f1c6533f00
+entry	parts/fg_a_3008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008_L.tpf	306476	872ece09f4aa4f8437433ed39dfce112586931e304e9690f4943c7626e156a26
+entry	parts/fg_a_3008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3008\FG_A_3008_L.flver	203824	270a06e1c9e2c33015c7f784d37df3aa8c109228d044f3dad45927de37d5103d
+file	parts/fg_a_3009.partsbnd.dcx	4488533	5a8ad1cab46a7d428bf001a2ffadc6fce2ec68883b789d19bf9e9dc81be8499f
+entry	parts/fg_a_3009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009.egm	3758304	7f559adaab162dc775fb7231689e57e46478944898f8d8896edc0f9f33ddf949
+entry	parts/fg_a_3009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009.tri	174148	010d7868f80ba7113c12c8211dd80a648ebfff871ffac9a766791770b0042a58
+entry	parts/fg_a_3009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009.flver2tri	15976	57dd642a1e20a70456b9793a748a83db4e1a4e910cdb14894bf3d3d9d49a0267
+entry	parts/fg_a_3009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009.tpf	1223968	f8f63468c403008ce332e89a15877c449f1c8da2f0ed241850e5ba7e2a0d4064
+entry	parts/fg_a_3009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009.flver	532128	b6a777ce6cdc8ef6f11ce0cf97e0e6b6121b7bdfacf5956b1c03d9dfc3d1b578
+file	parts/fg_a_3009_l.partsbnd.dcx	211062	c87e3e976ff6f84372a97a2c9bca48d2deda93a92a618fab217974c4da214b4b
+entry	parts/fg_a_3009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009_L.tpf	306476	a290393b75236013ffd8dd6f22f9ea631c1d370b52535a99b0062358d29d9029
+entry	parts/fg_a_3009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3009\FG_A_3009_L.flver	532128	b6a777ce6cdc8ef6f11ce0cf97e0e6b6121b7bdfacf5956b1c03d9dfc3d1b578
+file	parts/fg_a_3010.partsbnd.dcx	1614415	9483306cf4610ca8189e33847de80e111ab9ba57e3d6d146e98b26ceb6f1c68f
+entry	parts/fg_a_3010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010.egm	998784	4f4f228fd5c5e9ced57f39a797cc4f8e9ce5c30b0678b6ef8a58948e24cff0ba
+entry	parts/fg_a_3010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010.tri	58232	c4e7fa8ba9c3263805c3a667a8d5df12ba9316b3f859368ab59d709e1a2f51eb
+entry	parts/fg_a_3010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010.flver2tri	4332	21449a4318492a1c32760f41aa0ee9e7be3914c57a773c86833f44453888a3de
+entry	parts/fg_a_3010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010.tpf	1223968	0216d3ae3f2ca6674d985bf53a93e3a2578c40f0f74ebde3a8b314e4dba336a6
+entry	parts/fg_a_3010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010.flver	214976	fc6138a021e6857d9ed79fc72fc7393a259595d9df81faf9c65cfcb685b0b627
+file	parts/fg_a_3010_l.partsbnd.dcx	182254	f4ae53154352937db635fd5f5cd80bbd6348e03f4b261d89ce124b910a7bcc1a
+entry	parts/fg_a_3010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010_L.tpf	306476	9fd126844dd821479c7284e1fe6e09b2277e0c1033636f74ad5a2284eced679c
+entry	parts/fg_a_3010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3010\FG_A_3010_L.flver	214976	fc6138a021e6857d9ed79fc72fc7393a259595d9df81faf9c65cfcb685b0b627
+file	parts/fg_a_3011.partsbnd.dcx	4389517	b85039fe6fce14bd0d23cfca2eb916e62a4a259e6f39c8f13f6f433078528a3e
+entry	parts/fg_a_3011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011.egm	3668544	5dc5d23da25ea0a77e1276047dd42d6c258e44f75b7d347f2a5a04853d65b2e0
+entry	parts/fg_a_3011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011.tri	170488	51fceb6cc6f84ad5ab762c3de420b3dadcf054c4f1c95a9d051145afd9034c6a
+entry	parts/fg_a_3011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011.flver2tri	15612	78faf0b003a60ae947ef84a763673a217fc814de9efc05a7be959a2854bc8c57
+entry	parts/fg_a_3011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011.tpf	1223968	97325219dc7c007aefabdcdab22c8b617ba3a5951602780478aab2c9fb23a13a
+entry	parts/fg_a_3011.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011.flver	521968	4cbd09dbaafd7d25a7cdb582019fb9b633e33847c37792ee6815b27262d68d40
+file	parts/fg_a_3011_l.partsbnd.dcx	209026	fc2493dbdeda190c8fe7fdb6970159097f47b3482be20a8729653718d6c0ec67
+entry	parts/fg_a_3011_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011_L.tpf	306476	64b3fab5fb9fc69699a7b394c85a8c4061383aef19f7823b2a8c1588c290a6e5
+entry	parts/fg_a_3011_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_3011\FG_A_3011_L.flver	521968	4cbd09dbaafd7d25a7cdb582019fb9b633e33847c37792ee6815b27262d68d40
+file	parts/fg_a_5000.partsbnd.dcx	468	86c074871fb15cb48aa7eb95eec695bdcc05ab54188a111a2aa5dd08ccca6a3c
+entry	parts/fg_a_5000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5000\FG_A_5000.flver	512	161f9ffb9f71b86bf942653412237a8a9245a6cb622e3cfcee4f5f26153fd181
+file	parts/fg_a_5000_l.partsbnd.dcx	468	564f1296620f8de57493d09f9805a31d08bf955df8324532fb88ebbf0cbc8642
+entry	parts/fg_a_5000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5000\FG_A_5000_L.flver	512	161f9ffb9f71b86bf942653412237a8a9245a6cb622e3cfcee4f5f26153fd181
+file	parts/fg_a_5001.partsbnd.dcx	355778	65cc8772f66dc94855320ef8d598a679be1200ae528d3a69927e257449631dcd
+entry	parts/fg_a_5001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001.egm	228384	61a5df230ae39ed190b5a290f3abfd087fa6ef8945766f2ee640561292d20b47
+entry	parts/fg_a_5001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001.tri	25332	7eeb3610ec15c654fe87865dde0e2a1771eac0eed438931a99fefaf42e45f1f1
+entry	parts/fg_a_5001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001.flver2tri	1292	6dc0538505af58367b306c86ce9aa05d44eebd8206d0deeea5797f9e1ae65de9
+entry	parts/fg_a_5001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001.tpf	284638	13fd76c8c04c0c3ccd37e1b433a18e887a76c431426f8c56faab0adfd84ec684
+entry	parts/fg_a_5001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001.flver	121696	2116c6b9fdb371f311103e85cd55df7e62570a44fadfa25afa4bd22bfa0ca92c
+file	parts/fg_a_5001_l.partsbnd.dcx	69711	48433fdc68ddc2d03dfc6e4e9ad654845a9d4997de5b6e105da3bb19d0609c11
+entry	parts/fg_a_5001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001_L.tpf	71658	3b80b6949b046206a143c7bffe2986445b76fbbc505c99978caf5d2b59ee2204
+entry	parts/fg_a_5001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5001\FG_A_5001_L.flver	121696	2116c6b9fdb371f311103e85cd55df7e62570a44fadfa25afa4bd22bfa0ca92c
+file	parts/fg_a_5002.partsbnd.dcx	355900	60e99916465b71230552d3a5bd059f81dac6c68131acb248f3551211c1ec02b6
+entry	parts/fg_a_5002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002.egm	228384	8516125e1d9d36d7547660c4f070b55b0949bd5c8de50584065cc571d71be6df
+entry	parts/fg_a_5002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002.tri	25332	1fdb165990676facd42dd6614c8603120e9626d6f1e874bec94aef8eff939e29
+entry	parts/fg_a_5002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002.flver2tri	1292	1549c02446a5ccb0aca98b03d74a44c3d5baf553cc55a0ddc4ebabb56bfab8fd
+entry	parts/fg_a_5002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002.tpf	284638	c21dd38712339e235c26d3c8208951832cbb007d7ac470702c478a177523c282
+entry	parts/fg_a_5002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002.flver	121696	56c899370c658f417abce1223c7acc6b1c42ef8fdb10932e71fa6eaf081c01c2
+file	parts/fg_a_5002_l.partsbnd.dcx	69699	6a8559db7bf17d2f439ba6c34f1780e5f3a6e7a1e76a6e69d8a97f60202a2607
+entry	parts/fg_a_5002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002_L.tpf	71658	bdf46a38fbc054cd07e6c84c657e89f0c677994075fe7cd91e4745b2c1437561
+entry	parts/fg_a_5002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5002\FG_A_5002_L.flver	121696	56c899370c658f417abce1223c7acc6b1c42ef8fdb10932e71fa6eaf081c01c2
+file	parts/fg_a_5010.partsbnd.dcx	414802	4ec94b35472b83004a91c14b8e10df9f307e73956702fd40707a0165c8cfbbab
+entry	parts/fg_a_5010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010.egm	428544	b804a59229be8bdfc71b317229df2306ae7d47604b6ec1e1cea41bb29a4fdfee
+entry	parts/fg_a_5010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010.tri	44320	265efd13caeaeb4b106ff1325e929195939ab78bd43aeb5d788160e5fe0bebdd
+entry	parts/fg_a_5010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010.flver2tri	1888	ed366a8d4569b0c73f2dcd0155a0e06463255a1784fedb4a8ae1c5707600325e
+entry	parts/fg_a_5010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010.tpf	264158	bef68d307b604e7f6ca10003d02ddb07ffa192918216c66eec0b63b114d1171b
+entry	parts/fg_a_5010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010.flver	148992	20ddba2cf944465bf62ba65862c4dc872ba09646f7768fc4f199d9c273ef284f
+file	parts/fg_a_5010_l.partsbnd.dcx	53283	7ec00efa65423bd8c506e14ffa7dbe7c86ae8834d184d283782b6b722c0eb9fe
+entry	parts/fg_a_5010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010_L.tpf	66538	ebd746ed9e3f0d5e47227ac41a7e8f6d14ea9578b534f3deba503a24bc182b96
+entry	parts/fg_a_5010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_5010\FG_A_5010_L.flver	148992	20ddba2cf944465bf62ba65862c4dc872ba09646f7768fc4f199d9c273ef284f
+file	parts/fg_a_7000.partsbnd.dcx	603	038b11b5ea8ee66c8e3498c59c32616dc6907bde8e3cabbeb62ddb544795ad6e
+entry	parts/fg_a_7000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7000\FG_A_7000.flver	1392	9f7b09a1d61237e093d760bf9ecbf050303c75e8bf40f17cee6079e9a338ff64
+file	parts/fg_a_7000_l.partsbnd.dcx	607	048c2750df5c0dc6ad473ce4689bc07fac6809080905cd4cc4027da7685f4c49
+entry	parts/fg_a_7000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7000\FG_A_7000_L.flver	1392	9f7b09a1d61237e093d760bf9ecbf050303c75e8bf40f17cee6079e9a338ff64
+file	parts/fg_a_7001.partsbnd.dcx	1379515	8df6b8968ccaee36b3547c1b9e20ef70176ec3af369cc3c994b3190716c46eb5
+entry	parts/fg_a_7001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.egm	1359744	6fdd9446b33ab2f3a96a3a8e549e2630ccffc2978c3fd94d2468188229b2636a
+entry	parts/fg_a_7001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.tri	67472	46205fd18e28f1fe748a950406f7c372df63f473044f468c8377b54d5316b02e
+entry	parts/fg_a_7001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.flver2tri	5788	48900389a8bf9667e27d0c542d0cc997f2ee1138bedd4cfc60ee4ade566b22a1
+entry	parts/fg_a_7001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.flver	173744	511ad97b4a46dfbeca4c52c523729be470c39deb6abd72b64a857812cdeb59f4
+entry	parts/fg_a_7001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.anibnd	14604	9b7a323878b040db64ed1a382aaca5fae7ceec09ef9743b0530162b433333edd
+file	parts/fg_a_7001_l.partsbnd.dcx	6786	59239560cb4f81924e9712f5b93c469a81928bf8e0c50a6fbfde7862832c11c5
+entry	parts/fg_a_7001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001_L.flver	173744	511ad97b4a46dfbeca4c52c523729be470c39deb6abd72b64a857812cdeb59f4
+entry	parts/fg_a_7001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7001\FG_A_7001.anibnd	14604	9b7a323878b040db64ed1a382aaca5fae7ceec09ef9743b0530162b433333edd
+file	parts/fg_a_7002.partsbnd.dcx	1426109	f4f7cbeb36de660cbecdc4804a5df23b7c186cfbe64a5ca29e1a7ceb529a81bd
+entry	parts/fg_a_7002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.egm	1408704	59c69df0465f59d4cea70d1aa6def13c90d757eae4959b02d39a07f09c5ea9f7
+entry	parts/fg_a_7002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.tri	69544	f747a24c846ec260065782fe3ae50768e737347c078ff45d191e4d7ab4318047
+entry	parts/fg_a_7002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.flver2tri	5980	842cc867a8648560ee3845247c15e19415f48cd2ee4468d634ae88168be4e7d0
+entry	parts/fg_a_7002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.flver	178752	6b0abd45a20323b752cdf1d72c4fb809e6dad8205ce040425805474d93e46199
+entry	parts/fg_a_7002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.anibnd	14604	ab7be66930bbc448ba918018b655328f6151f79f616f383ebd3a0d868db440d8
+file	parts/fg_a_7002_l.partsbnd.dcx	6762	cd2b4b20757cabf418720a0493c8c3739b2edd31b3ea40323c3b6b67a09e837e
+entry	parts/fg_a_7002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002_L.flver	178752	6b0abd45a20323b752cdf1d72c4fb809e6dad8205ce040425805474d93e46199
+entry	parts/fg_a_7002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7002\FG_A_7002.anibnd	14604	ab7be66930bbc448ba918018b655328f6151f79f616f383ebd3a0d868db440d8
+file	parts/fg_a_7003.partsbnd.dcx	1568870	9a71f29dea3739b779fc9fa2c52e7fef7bbe690f69c36fad6cd21046ab686948
+entry	parts/fg_a_7003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.egm	1539264	4336ed7f0e8747c560d732cb5a199d1bbe407304459c649d3ed99b7ae0beb9f8
+entry	parts/fg_a_7003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.tri	79752	0374abb18f8c25deafdec2bd675086feea03c30103b0ffa55d13a5b0688e333c
+entry	parts/fg_a_7003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.flver2tri	6508	a30f55db49f7b609b3f63a8357331b1004d2d799373ec6a83ee1cd170054d90f
+entry	parts/fg_a_7003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.flver	199616	249cddee5944521b865037758d8ad333e11f7ee9c227a87768d8a93544c75e0b
+entry	parts/fg_a_7003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.anibnd	14604	4020303ff9464addc14b662179374bef0bbcacfdba84bbde32c90450d43e524f
+file	parts/fg_a_7003_l.partsbnd.dcx	6744	33e6a6c164e2b6e85d441b0e1597b46b5a970cfde2561a4adfcdb22a7d99a864
+entry	parts/fg_a_7003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003_L.flver	199616	249cddee5944521b865037758d8ad333e11f7ee9c227a87768d8a93544c75e0b
+entry	parts/fg_a_7003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Face\FG_A_7003\FG_A_7003.anibnd	14604	4020303ff9464addc14b662179374bef0bbcacfdba84bbde32c90450d43e524f
+file	parts/hd_f_0000.partsbnd.dcx	3986	2758df96ff612ca566906757c1496e5df3876a9148d3648825a2241b8f7606f3
+entry	parts/hd_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\HD_F_0000\HD_F_0000.flver	21232	07768d17f0840f6bad95fa906b265ff5e0b84b40688804958668430682ec827b
+file	parts/hd_f_0000_l.partsbnd.dcx	4039	2c766ca7310a9914666975963076f54e12f9e641e9e250a23872d0e922998630
+entry	parts/hd_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\HD_F_0000\HD_F_0000_L.flver	21232	07768d17f0840f6bad95fa906b265ff5e0b84b40688804958668430682ec827b
+file	parts/hd_m_0000.partsbnd.dcx	3955	d7cce31fe1ab3975653985b8c5970c4875495ae1cb042c9e5745a795d750c096
+entry	parts/hd_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\HD_M_0000\HD_M_0000.flver	21232	09605adc2288c465b11a548899b7e0585064fa75cd7d39699b9e2d1508f0b9d6
+file	parts/hd_m_0000_l.partsbnd.dcx	3967	3f2a606b12952e2263a6fdcbf47446b05a74ae4414869d3ddcdeea4d0fc68aa7
+entry	parts/hd_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\HD_M_0000\HD_M_0000_L.flver	21232	09605adc2288c465b11a548899b7e0585064fa75cd7d39699b9e2d1508f0b9d6
+file	parts/hr_a_0000.partsbnd.dcx	7214	e1cfc9bcda9e8ac33c839e29cdff73f6175c0539b65a323fa14307154a50505f
+entry	parts/hr_a_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0000\HR_A_0000.flver	42208	0d550e1ad93af5604de2ceec29331d767767d083af8688c08a7f152dbdbb40d2
+file	parts/hr_a_0000_l.partsbnd.dcx	7210	c493db4badd69bf1ca01255d4e81e7e5e8b1b6588b5aa54f55ebae6098b06d94
+entry	parts/hr_a_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0000\HR_A_0000_L.flver	42208	0d550e1ad93af5604de2ceec29331d767767d083af8688c08a7f152dbdbb40d2
+file	parts/hr_a_0001.partsbnd.dcx	691876	a01d41bc0b1041da985d4413b9a21aad5f513c334dfd3574acfe629a7787248a
+entry	parts/hr_a_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001.tpf	699274	adaad976d25635cfd7818d5e722c1ef83cabf5bca01919481a7302a9d0cf1d5d
+entry	parts/hr_a_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001.flver	4166944	f918c72c237de5a3269b60cc2259f74a9809fb358d68654d98e7f494aa5ef84d
+entry	parts/hr_a_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001.anibnd	21196	e3805dc4d34157b4129ad7a109a786b9cd896a8dadacb6c1ade97294543380f3
+entry	parts/hr_a_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0001.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_c.hkx	49676	1dc8db45eac3e7fc80ea6bfd98e624882517e6c33df41b2e0df3d749490711da
+file	parts/hr_a_0001_l.partsbnd.dcx	201773	a2b1069e2582f00e98e5064a35cdc3f69de1424e9c71efdd2b8cbad520fb3a96
+entry	parts/hr_a_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_L.tpf	174990	8f4611f90ef64af01ff24302417e14d908d347e3bc33a62c2c3db8f816d4ed98
+entry	parts/hr_a_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_L.flver	4166944	f918c72c237de5a3269b60cc2259f74a9809fb358d68654d98e7f494aa5ef84d
+entry	parts/hr_a_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001.anibnd	21196	e3805dc4d34157b4129ad7a109a786b9cd896a8dadacb6c1ade97294543380f3
+entry	parts/hr_a_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0001_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0001\HR_A_0001_c.hkx	49676	1dc8db45eac3e7fc80ea6bfd98e624882517e6c33df41b2e0df3d749490711da
+file	parts/hr_a_0002.partsbnd.dcx	720879	954f8ae38c588e44ba1e1e87d77e65f8f3869ba5aa1baea7e4daf7c9936a1c95
+entry	parts/hr_a_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002.tpf	699274	3b46d1c64d7e3081f99abeb779707f0af1a1e083a7844b15b75c27280e2746e8
+entry	parts/hr_a_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002.flver	2948560	ba5968b38672a2e0b275be0d98f1752439a23e5ed57fab93abe01504beb972b3
+entry	parts/hr_a_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002.anibnd	20988	d76847cb286f553921fe05c86c6a6a6567d709cbd69b8610201f6b8813e0f521
+entry	parts/hr_a_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0002.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_c.hkx	106236	e269999ad99fdde8965ccbb96048389d56b3ce7ae11b762d301e4b9539f6ea26
+file	parts/hr_a_0002_l.partsbnd.dcx	230868	12a3e9d639a488a7a77c5c7e7ebcc3429239908702ffeea669bd6f5df0d4951c
+entry	parts/hr_a_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_L.tpf	174990	90b180d67bff2a071cf9b742f5d14407de3432bd6c14ee644f9dace03c326502
+entry	parts/hr_a_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_L.flver	2948560	ba5968b38672a2e0b275be0d98f1752439a23e5ed57fab93abe01504beb972b3
+entry	parts/hr_a_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002.anibnd	20988	d76847cb286f553921fe05c86c6a6a6567d709cbd69b8610201f6b8813e0f521
+entry	parts/hr_a_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0002_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0002\HR_A_0002_c.hkx	106236	e269999ad99fdde8965ccbb96048389d56b3ce7ae11b762d301e4b9539f6ea26
+file	parts/hr_a_0003.partsbnd.dcx	1645078	3dade8d2b9a9da9b9a32340043bc5a5a6fdad17d5974ba0feecf658c00b3fe39
+entry	parts/hr_a_0003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003.tpf	2796824	6a5576ee98f585ada7edaccfb2bfa42857628717c35130be45b8335d5f1cbeeb
+entry	parts/hr_a_0003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003.flver	3841232	f4123587df1fedf1531e5428eb9014ec8a2619dbbf7bfdcd345f8e96ba7d6dfd
+entry	parts/hr_a_0003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003.anibnd	21196	edeff25dfd397fbc15f8901c0efd170dc2637a55d95991043abf09a02ea36cf7
+entry	parts/hr_a_0003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_c.clm2	264	e5486523596011e2fc05b2f34e19ea9442c3a64fce98c9533314a9793a39b190
+entry	parts/hr_a_0003.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_c.hkx	49372	507946fae1b9313991940274dac4a9cd5481f8c67b48c3842339ab0e8a284e24
+file	parts/hr_a_0003_l.partsbnd.dcx	440621	f7cf7a90420b56f18b95c85af7ed3c7e6301b6535043391fcd8da2df0fd352ad
+entry	parts/hr_a_0003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_L.tpf	699684	ae91bf2efc734d3d5d49eebeb9c26d04ce4deed1b4393393fa1c7f44209e5200
+entry	parts/hr_a_0003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_L.flver	3841232	f4123587df1fedf1531e5428eb9014ec8a2619dbbf7bfdcd345f8e96ba7d6dfd
+entry	parts/hr_a_0003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003.anibnd	21196	edeff25dfd397fbc15f8901c0efd170dc2637a55d95991043abf09a02ea36cf7
+entry	parts/hr_a_0003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_c.clm2	264	e5486523596011e2fc05b2f34e19ea9442c3a64fce98c9533314a9793a39b190
+entry	parts/hr_a_0003_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0003\HR_A_0003_c.hkx	49372	507946fae1b9313991940274dac4a9cd5481f8c67b48c3842339ab0e8a284e24
+file	parts/hr_a_0004.partsbnd.dcx	666680	71696692bb794f8052c28b1afd5e6bfefe5310ecc2ee812d4192c6e3bfa3a628
+entry	parts/hr_a_0004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004.tpf	699274	211f4a13e83401937df2c64f276422eae65ca1f43fd763197a2987ffaab160ab
+entry	parts/hr_a_0004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004.flver	2813472	2f76eeb2a741fdfdf218958706d146aa93584bd6600c7344d0e78cd5ac17270d
+entry	parts/hr_a_0004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004.anibnd	21820	551452e29193f6ec3851b063bc24fb06962dbac680ac7d9af935ac4e695c5816
+entry	parts/hr_a_0004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_c.clm2	168	1d26d90150e5cac92be05de91815411d232ad5ff1cfd1e888ef059084b4ff809
+entry	parts/hr_a_0004.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_c.hkx	55008	278a1cc0abff95d50b2b2a0739371671704f2d58ac8fab139eb431d1e055880d
+file	parts/hr_a_0004_l.partsbnd.dcx	196979	0e96908cb8a508c48e916d61bd4065155e47940fe8a8e0ad78b34aef1b0d6cb5
+entry	parts/hr_a_0004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_L.tpf	174990	c7027a831fff94ba672d79dd100b2943275691eeea2b5fed7b8ee13fd2847953
+entry	parts/hr_a_0004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_L.flver	2813472	2f76eeb2a741fdfdf218958706d146aa93584bd6600c7344d0e78cd5ac17270d
+entry	parts/hr_a_0004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004.anibnd	21820	551452e29193f6ec3851b063bc24fb06962dbac680ac7d9af935ac4e695c5816
+entry	parts/hr_a_0004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_c.clm2	168	1d26d90150e5cac92be05de91815411d232ad5ff1cfd1e888ef059084b4ff809
+entry	parts/hr_a_0004_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0004\HR_A_0004_c.hkx	55008	278a1cc0abff95d50b2b2a0739371671704f2d58ac8fab139eb431d1e055880d
+file	parts/hr_a_0005.partsbnd.dcx	680961	5d0f099dba6e2dfa40e88e4368cce85c011fe02e746dcd2e111896761aace491
+entry	parts/hr_a_0005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005.tpf	699274	a06b84a247f5769cdba1897bd9651cde0e9ab83e98e6166f9b72d65e3f516d48
+entry	parts/hr_a_0005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005.flver	4441152	e073b8f2ebbd50960ad1136d59818ba8fae307c946a4d6a22c77e23d8d6e2f98
+entry	parts/hr_a_0005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005.anibnd	21724	5067130d5d3af34173801f3649d6b83e81e7b4286fb451339041e7f8a47423f4
+entry	parts/hr_a_0005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0005.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_c.hkx	64320	73ac01487f70a1bedf5d988143cb59352db60d76476be43cc813ebb390c07103
+file	parts/hr_a_0005_l.partsbnd.dcx	200034	07be48397ff3c8ea0c286de6f538d1c977f69d7a0b9df44e616a082aa117ec3b
+entry	parts/hr_a_0005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_L.tpf	174990	08574fc44927dd799d7122a2ca6dca0e0b32089d97926a5408029c666b5536ab
+entry	parts/hr_a_0005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_L.flver	4441152	e073b8f2ebbd50960ad1136d59818ba8fae307c946a4d6a22c77e23d8d6e2f98
+entry	parts/hr_a_0005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005.anibnd	21724	5067130d5d3af34173801f3649d6b83e81e7b4286fb451339041e7f8a47423f4
+entry	parts/hr_a_0005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0005_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0005\HR_A_0005_c.hkx	64320	73ac01487f70a1bedf5d988143cb59352db60d76476be43cc813ebb390c07103
+file	parts/hr_a_0006.partsbnd.dcx	715458	98da81e193c7c3671c00822fe2533ca4967187afe1304aa6ff1a7ffc7a09ab76
+entry	parts/hr_a_0006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006.tpf	699274	d168a22bef1795b90204fb1473f7cce4754b15a8f0ec01d7e6a624b8018f0df5
+entry	parts/hr_a_0006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006.flver	4113360	c82d135774e80fe98d119c9e8e337e8904a1bf9d588cf8ac610d9e5b538a12e7
+entry	parts/hr_a_0006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006.anibnd	22124	5b11b5116eb5e6dc74c868e8814da5154b41c2d059ce22328252331ccd84e107
+entry	parts/hr_a_0006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0006.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_c.hkx	150792	22c4f718a17d73f18c347dbfa883f454daf1fb60c3bbcddf9f54040ed668faea
+file	parts/hr_a_0006_l.partsbnd.dcx	236526	4ab5a2107b10a6cb96446e21d6f30eea367cea9f934a64f335f68fef83708c10
+entry	parts/hr_a_0006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_L.tpf	174990	3c8a8b21feb9b90ee27360bf473ff4c0493217c19c4a56de2ad8cbdc0274495b
+entry	parts/hr_a_0006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_L.flver	4113360	c82d135774e80fe98d119c9e8e337e8904a1bf9d588cf8ac610d9e5b538a12e7
+entry	parts/hr_a_0006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006.anibnd	22124	5b11b5116eb5e6dc74c868e8814da5154b41c2d059ce22328252331ccd84e107
+entry	parts/hr_a_0006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0006_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0006\HR_A_0006_c.hkx	150792	22c4f718a17d73f18c347dbfa883f454daf1fb60c3bbcddf9f54040ed668faea
+file	parts/hr_a_0007.partsbnd.dcx	738206	f18806ffdb479c93fd096b366c79495ca738820a95b1f7035494a105b743b4ec
+entry	parts/hr_a_0007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007.tpf	699274	dce769d11a3f411cdbf57eb8e28f4304a713b9e0a43d0443397130f5e0de468d
+entry	parts/hr_a_0007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007.flver	3804976	54cbbd8c959400654ae7b7ef1e2828f03dff6c8383fc9f7c3a65c0f969583c32
+entry	parts/hr_a_0007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007.anibnd	21724	916d58d237be5fd42ef7babe4c447bc884c192650ef732f77a441ea4ff89d691
+entry	parts/hr_a_0007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0007.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_c.hkx	153820	dc7123d3a1c90090439dbc4636869847af6940ab92ad31a564df3aab3b4e68f2
+file	parts/hr_a_0007_l.partsbnd.dcx	244105	9e194c12979c1de194a86ee29d3e383fe5bfe76a1388da00d7678262ac045693
+entry	parts/hr_a_0007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_L.tpf	174990	4c2b10e1c15e2b4b5d86c4f2b95c359a3d65be0804f911f4734efbfc4c086e43
+entry	parts/hr_a_0007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_L.flver	3804976	54cbbd8c959400654ae7b7ef1e2828f03dff6c8383fc9f7c3a65c0f969583c32
+entry	parts/hr_a_0007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007.anibnd	21724	916d58d237be5fd42ef7babe4c447bc884c192650ef732f77a441ea4ff89d691
+entry	parts/hr_a_0007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0007_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0007\HR_A_0007_c.hkx	153820	dc7123d3a1c90090439dbc4636869847af6940ab92ad31a564df3aab3b4e68f2
+file	parts/hr_a_0008.partsbnd.dcx	748903	face582eed41300cf5b2a3c44f6e7876658946f4102d55592f252633c6adb60c
+entry	parts/hr_a_0008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008.tpf	699274	378a177b2c60e119605320c8cecf174fd0a009d6009dc61194fcf6fba1ac16e9
+entry	parts/hr_a_0008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008.flver	4219232	c1e26afa1a65482c50c1b27816745bc43bb40211099e0e50970dff0de56536f3
+entry	parts/hr_a_0008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008.anibnd	21516	e585ddc366baf31e9053e4ef615cb13f628335e0ce69512682b7f1ed8751939e
+entry	parts/hr_a_0008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_c.clm2	264	e5486523596011e2fc05b2f34e19ea9442c3a64fce98c9533314a9793a39b190
+entry	parts/hr_a_0008.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_c.hkx	174312	c034448ea16490d3ebbea32be04c1f8460a20b7a627d64dc2fafe1982b563624
+file	parts/hr_a_0008_l.partsbnd.dcx	254026	a5594294d57d7384170432df409535b84d7ec1a9f3ff1a53c9fa2546250a9d3a
+entry	parts/hr_a_0008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_L.tpf	174990	b9cd3f6192f21081e4c8550f8bf88e0089b9abde7901150e65820d3844720ba3
+entry	parts/hr_a_0008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_L.flver	4219232	c1e26afa1a65482c50c1b27816745bc43bb40211099e0e50970dff0de56536f3
+entry	parts/hr_a_0008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008.anibnd	21516	e585ddc366baf31e9053e4ef615cb13f628335e0ce69512682b7f1ed8751939e
+entry	parts/hr_a_0008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_c.clm2	264	e5486523596011e2fc05b2f34e19ea9442c3a64fce98c9533314a9793a39b190
+entry	parts/hr_a_0008_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0008\HR_A_0008_c.hkx	174312	c034448ea16490d3ebbea32be04c1f8460a20b7a627d64dc2fafe1982b563624
+file	parts/hr_a_0009.partsbnd.dcx	719413	e53f065e8e5904041b6c7f30b50a01950567f24dcddea5283adfec0b638bbd95
+entry	parts/hr_a_0009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009.tpf	699274	6fdf6988182d6b1a6cf98c28dd353cc6c577cdf5f6af4b049c01b2e1160648f2
+entry	parts/hr_a_0009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009.flver	4025904	1ea204235dd9ae8e58cb95a764fedc5c217cf15bd0764fec78cce54e39fa5977
+entry	parts/hr_a_0009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009.anibnd	21212	dd17acb08e614580dfa862b27cde81e2c08629258144c5cac0ba1ad2557104dd
+entry	parts/hr_a_0009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0009.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_c.hkx	165272	84c95e872bb3b86c51746b4bf772b8fc7063512da8b2c444ddc43d72dc709d51
+file	parts/hr_a_0009_l.partsbnd.dcx	242632	da84d6b0419a3b983e192a09dbdfe859c30604a5026a8f1f0e11ee7b62443727
+entry	parts/hr_a_0009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_L.tpf	174990	3e2c66c4f1ce192a7f1eaad28c3982ff49954597d30a40be1e3f05111c55eac6
+entry	parts/hr_a_0009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_L.flver	4025904	1ea204235dd9ae8e58cb95a764fedc5c217cf15bd0764fec78cce54e39fa5977
+entry	parts/hr_a_0009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009.anibnd	21212	dd17acb08e614580dfa862b27cde81e2c08629258144c5cac0ba1ad2557104dd
+entry	parts/hr_a_0009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0009_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0009\HR_A_0009_c.hkx	165272	84c95e872bb3b86c51746b4bf772b8fc7063512da8b2c444ddc43d72dc709d51
+file	parts/hr_a_0010.partsbnd.dcx	731309	cf6d1215e50769d0e5ca99a80169b10774739758aca469785c1cca717f4c9867
+entry	parts/hr_a_0010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010.tpf	699274	1f1bc13af0c7bbb6fb74436f8d894458fbdea4c6c69a5aa97d30038382e39761
+entry	parts/hr_a_0010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010.flver	3911888	1f8cdd49d05e79730c1f5bacfa137a579adb5f607ee48363b3cda0bb9c4fcfc8
+entry	parts/hr_a_0010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010.anibnd	21628	bb53488566bed6adfa6e555ce0282740e5e98f188ccc10e7a7d0c145f49b881a
+entry	parts/hr_a_0010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_c.clm2	232	83b9a87a70ff88e37e7fff2ecd945cd804601a400097835cbfa54e0bbca00250
+entry	parts/hr_a_0010.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_c.hkx	142376	625c145d9b9bf9f75175beadeecbedc217741711fa458b47b2a211fc06eec382
+file	parts/hr_a_0010_l.partsbnd.dcx	245329	ea654849ddd3db4fa3753cb77929e983f7d5cbac017bfce964e44f9ba46379db
+entry	parts/hr_a_0010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_L.tpf	174990	921e6b18230fbe1d9f43010b68e9ab2baac8be2146cace55e094d7c17a74a6f1
+entry	parts/hr_a_0010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_L.flver	3911888	1f8cdd49d05e79730c1f5bacfa137a579adb5f607ee48363b3cda0bb9c4fcfc8
+entry	parts/hr_a_0010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010.anibnd	21628	bb53488566bed6adfa6e555ce0282740e5e98f188ccc10e7a7d0c145f49b881a
+entry	parts/hr_a_0010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_c.clm2	232	83b9a87a70ff88e37e7fff2ecd945cd804601a400097835cbfa54e0bbca00250
+entry	parts/hr_a_0010_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0010\HR_A_0010_c.hkx	142376	625c145d9b9bf9f75175beadeecbedc217741711fa458b47b2a211fc06eec382
+file	parts/hr_a_0100.partsbnd.dcx	695491	56bf85008ec1cc9669c8ba8154264d2bd03c0c81938e8ad5da5bca2a424836ed
+entry	parts/hr_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100.tpf	699274	6f6157164d49b3abe738cc8b51f5ca16696588645e2522d0a636bf13213560fd
+entry	parts/hr_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100.flver	4209456	d2c18484d16db30ebe5c26fb6aeb312c982db0aa48c568952b474fb99c7fab01
+entry	parts/hr_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100.anibnd	21196	7dac9e10846570e6a9a4686db9fb979143d41ca8542cac7b8352ab7e8bd382ac
+entry	parts/hr_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_c.clm2	376	38b88a671e4ee8294aed577aa9599312a0fa015a4a522866466959c3cf726c69
+entry	parts/hr_a_0100.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_c.hkx	51136	c95e19d3a264428d9065bf2277a4b9c37cbc63dc86b6d9e837eee862661a3dc9
+file	parts/hr_a_0100_l.partsbnd.dcx	204335	282f0f697546d9368a347bb679019ad42e4f6e97c4d54e4db48d1cb1af391c2f
+entry	parts/hr_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_L.tpf	174990	3256170345f0ac3db2487538d540555fb14f2f26b664a4dd9950666aad5a5304
+entry	parts/hr_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_L.flver	4209456	d2c18484d16db30ebe5c26fb6aeb312c982db0aa48c568952b474fb99c7fab01
+entry	parts/hr_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100.anibnd	21196	7dac9e10846570e6a9a4686db9fb979143d41ca8542cac7b8352ab7e8bd382ac
+entry	parts/hr_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_c.clm2	376	38b88a671e4ee8294aed577aa9599312a0fa015a4a522866466959c3cf726c69
+entry	parts/hr_a_0100_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0100\HR_A_0100_c.hkx	51136	c95e19d3a264428d9065bf2277a4b9c37cbc63dc86b6d9e837eee862661a3dc9
+file	parts/hr_a_0101.partsbnd.dcx	692752	2119edd58a9d7dbd5deb4a19adf9afaff788730dbce93744e57dc114f862acd2
+entry	parts/hr_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101.tpf	699274	60154aea514d1d808b4126cad2b3c1f2149ed7f99dabe31b4cf338fde8468228
+entry	parts/hr_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101.flver	4322736	d871170cbcbc631d72bfe5cb4701558116947fa37dcbbce816e0ea32617a2925
+entry	parts/hr_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101.anibnd	21196	121d418b85af380996dca2058fc104e52173fee55bb4d1f36405ac3b406dadfd
+entry	parts/hr_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_c.clm2	472	4c5d6e0af2f6a94730c31b265e00c4559642941040112d51065469ad4ea44ad0
+entry	parts/hr_a_0101.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_c.hkx	132704	dad5a29f3ad22d06c7e9c8e273c3561125f88b5a2a633df2e412ac85ec42f889
+file	parts/hr_a_0101_l.partsbnd.dcx	229381	3c9e1cb99308e1d32b42cd2eed615051616ae66bbdd5b61250539cceae1d02eb
+entry	parts/hr_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_L.tpf	174990	7fa5035e4f620f408aac6306439d1a18f4eb1bf9f00f93c5a2202aba033ad275
+entry	parts/hr_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_L.flver	4322736	d871170cbcbc631d72bfe5cb4701558116947fa37dcbbce816e0ea32617a2925
+entry	parts/hr_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101.anibnd	21196	121d418b85af380996dca2058fc104e52173fee55bb4d1f36405ac3b406dadfd
+entry	parts/hr_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_c.clm2	472	4c5d6e0af2f6a94730c31b265e00c4559642941040112d51065469ad4ea44ad0
+entry	parts/hr_a_0101_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0101\HR_A_0101_c.hkx	132704	dad5a29f3ad22d06c7e9c8e273c3561125f88b5a2a633df2e412ac85ec42f889
+file	parts/hr_a_0102.partsbnd.dcx	719788	98e4414b30d1ca64b2efe3dd487171eb71996b950a807d3de83ceed148b6f1c6
+entry	parts/hr_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102.tpf	699274	cc4a00340235cce9f0339f610359048c90ba5c2b6b6f1fd4bc8c483250d6b037
+entry	parts/hr_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102.flver	3105232	880af056436d0a0f4ab576f03941387f15b7d72194b013551afd81a9d1065a7e
+entry	parts/hr_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102.anibnd	21820	fcbb59e0c306033d465eab5facd9635fb92fb04904e7f135c702af2f1602f59c
+entry	parts/hr_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0102.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_c.hkx	144656	4ea8802cd8d38ca5c3ca9621af3b3a6ca11dae26f853ea428ec3dfb5c268bf4e
+file	parts/hr_a_0102_l.partsbnd.dcx	242821	3231f97ed1714382c876e7f28c2fe0673857b99e9e662cea174ad1ae1f380ef6
+entry	parts/hr_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_L.tpf	174990	ea4a62828e1f5982bef3a043f78f0677d0cb8061ca52e6f0fb3d976722ad3c13
+entry	parts/hr_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_L.flver	3105232	880af056436d0a0f4ab576f03941387f15b7d72194b013551afd81a9d1065a7e
+entry	parts/hr_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102.anibnd	21820	fcbb59e0c306033d465eab5facd9635fb92fb04904e7f135c702af2f1602f59c
+entry	parts/hr_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0102_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0102\HR_A_0102_c.hkx	144656	4ea8802cd8d38ca5c3ca9621af3b3a6ca11dae26f853ea428ec3dfb5c268bf4e
+file	parts/hr_a_0103.partsbnd.dcx	707961	aa9943efb5ca8e12b13445f79fb3a59662769e65da740da7bfdbbf3cc649bfc6
+entry	parts/hr_a_0103.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103.tpf	699274	fb7faecce6ea613c6ed50040f405248c08d047c621e622b123078f3691144342
+entry	parts/hr_a_0103.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103.flver	3162976	77f1e47fcf2dd23e8e221006606bb877b7de6168177165a24202f4bd2e06a258
+entry	parts/hr_a_0103.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103.anibnd	22124	aabcf60dfcb579331c600b3bd7fa4aa6c422b2cd5bd1400ab26bab84eb6c02da
+entry	parts/hr_a_0103.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0103.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_c.hkx	142344	2c014d0ae3c69ebfca6c8b7f1a67bcdd5efe558ed454dcdbecdcdbff6ba1f0b3
+file	parts/hr_a_0103_l.partsbnd.dcx	240026	1a4c11a49a0f5b8d9dd354f21befeecb6943b0109772721f000109cf72fb734b
+entry	parts/hr_a_0103_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_L.tpf	174990	e29ee3d9e342b6ca17f5fb2a1386f41605540593d4d47623b82241c5a5c9423f
+entry	parts/hr_a_0103_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_L.flver	3162976	77f1e47fcf2dd23e8e221006606bb877b7de6168177165a24202f4bd2e06a258
+entry	parts/hr_a_0103_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103.anibnd	22124	aabcf60dfcb579331c600b3bd7fa4aa6c422b2cd5bd1400ab26bab84eb6c02da
+entry	parts/hr_a_0103_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0103_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0103\HR_A_0103_c.hkx	142344	2c014d0ae3c69ebfca6c8b7f1a67bcdd5efe558ed454dcdbecdcdbff6ba1f0b3
+file	parts/hr_a_0104.partsbnd.dcx	696710	ff2ee06aa862da460bbff58e08388320e5292135506013ae5ac9b66383b07abf
+entry	parts/hr_a_0104.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104.tpf	699274	37847ffe21ad2a5acdb342806804a8ab57f1689d59ec823a2863e0a03f076d2b
+entry	parts/hr_a_0104.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104.flver	2726304	15e0190c8a9950c3481bf60948f0124327c381a9e60b8ea26387da558dd1af1e
+entry	parts/hr_a_0104.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104.anibnd	22124	dba07031e6c6e314b5c1915f4bb1e31faa614da1eb3be664574e8c7663d26fc7
+entry	parts/hr_a_0104.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0104.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_c.hkx	128160	103a75d9cba635766344750de5ffb9b5236423da3da14a4b9be951600f677e7a
+file	parts/hr_a_0104_l.partsbnd.dcx	229402	597369337b6bec9acde9b7c8297d2f89c5a3e194a9249b43d92be686756d2339
+entry	parts/hr_a_0104_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_L.tpf	174990	f0ba2cd4761da030932f1b6b8748b6909a6a47653d0606750174b6a8bfc669bb
+entry	parts/hr_a_0104_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_L.flver	2726304	15e0190c8a9950c3481bf60948f0124327c381a9e60b8ea26387da558dd1af1e
+entry	parts/hr_a_0104_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104.anibnd	22124	dba07031e6c6e314b5c1915f4bb1e31faa614da1eb3be664574e8c7663d26fc7
+entry	parts/hr_a_0104_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0104_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0104\HR_A_0104_c.hkx	128160	103a75d9cba635766344750de5ffb9b5236423da3da14a4b9be951600f677e7a
+file	parts/hr_a_0105.partsbnd.dcx	723097	7f2e4268064d6ee2fc61b70747bc079594fd0774148d8131109bd63a1e8c2012
+entry	parts/hr_a_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105.tpf	699274	68ee6493441ff171305b407072e75469dae7dafb0b1d5855df7174629cf9c3fa
+entry	parts/hr_a_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105.flver	3549264	b25df49988d832db9f3852f353d9dde18431db5e86bf1aedcfc911c08ba8aec6
+entry	parts/hr_a_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105.anibnd	21820	82ee2bf47ea1d34813604cd4eea7fa580df829169361b9f2415facd2bbce4b78
+entry	parts/hr_a_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0105.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_c.hkx	156152	d547f084d483e29763b9a6aad9e4cb98bec8a4644fdc5e13804bdbaec6e2a47b
+file	parts/hr_a_0105_l.partsbnd.dcx	246730	aa9e103feb33edccfedb477094f07281aeca91bb41f1c3bf4e354797c4106278
+entry	parts/hr_a_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_L.tpf	174990	53eb82ed0d7050bbb661598330b756f112875fbfe3e1e1e07d282b5500a3e562
+entry	parts/hr_a_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_L.flver	3549264	b25df49988d832db9f3852f353d9dde18431db5e86bf1aedcfc911c08ba8aec6
+entry	parts/hr_a_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105.anibnd	21820	82ee2bf47ea1d34813604cd4eea7fa580df829169361b9f2415facd2bbce4b78
+entry	parts/hr_a_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_c.clm2	184	0cca9fc8cc5a0d57a991deedf5ec6620a75caad94bb620db9eafb172276657f0
+entry	parts/hr_a_0105_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0105\HR_A_0105_c.hkx	156152	d547f084d483e29763b9a6aad9e4cb98bec8a4644fdc5e13804bdbaec6e2a47b
+file	parts/hr_a_0106.partsbnd.dcx	746286	b6f1c55b464c204dfed0a4083d5c8f3e4bc4f0865e63e1d46d26985759c5ba14
+entry	parts/hr_a_0106.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106.tpf	699274	2d6a7383f8452952a22b7af1582bd77aea42f65c3f612e77d7440079279291e8
+entry	parts/hr_a_0106.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106.flver	3770384	d649779afc446cef92b691fd75e1960dbbf97b3606e01645c3655027129e57dd
+entry	parts/hr_a_0106.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106.anibnd	22348	1188fd7f7b218c7fc71f142c994f4ae8b303da3546441e5825e2d31581f5a29e
+entry	parts/hr_a_0106.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0106.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_c.hkx	190144	f4e89d25aaea66e1b023a76ab6a5484b545249b7744594839365040d06f024b8
+file	parts/hr_a_0106_l.partsbnd.dcx	262993	ace7ada8fb174dfaa86c6d07f306ffb1a0ab978ac00c8fe9b4de91c605f80508
+entry	parts/hr_a_0106_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_L.tpf	174990	c4e7b656e53164d3932062c6e9e5476a0afe76da669dac05841b88b2f17145df
+entry	parts/hr_a_0106_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_L.flver	3770384	d649779afc446cef92b691fd75e1960dbbf97b3606e01645c3655027129e57dd
+entry	parts/hr_a_0106_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106.anibnd	22348	1188fd7f7b218c7fc71f142c994f4ae8b303da3546441e5825e2d31581f5a29e
+entry	parts/hr_a_0106_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0106_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0106\HR_A_0106_c.hkx	190144	f4e89d25aaea66e1b023a76ab6a5484b545249b7744594839365040d06f024b8
+file	parts/hr_a_0107.partsbnd.dcx	734023	7f973b352ba9d078d29780ef51e1895538eb0c9621da242efe7e2f3e3b70d1eb
+entry	parts/hr_a_0107.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107.tpf	699274	3fbe5a761c3c9e6bc2c391f2e6f7b7cd8ae67bc119c72f2b12b13d9b1b8bf1fe
+entry	parts/hr_a_0107.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107.flver	4394960	d70ab09a21b9471af3d84cd30a2d12b0e8e864e2de25ce7937ad1b5bd930c0c5
+entry	parts/hr_a_0107.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107.anibnd	21420	daa88eb2c2d04d688b3fa389ae5cb2935c964e3d37001dbca53aa5ca7f5e7fea
+entry	parts/hr_a_0107.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0107.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_c.hkx	163184	44e1370d2dc89fdc0ec074d49c5f952e5d1e799945b5fa0ddc5880e4cf272e34
+file	parts/hr_a_0107_l.partsbnd.dcx	250599	676393cb399e3ecca3a7fb7eee5b42d50ce24db1ff216800befd59070c966b11
+entry	parts/hr_a_0107_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_L.tpf	174990	c3b58af872b376c338a08ee3877da72b657d23e5fe6af125bc7089411898a8fc
+entry	parts/hr_a_0107_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_L.flver	4394960	d70ab09a21b9471af3d84cd30a2d12b0e8e864e2de25ce7937ad1b5bd930c0c5
+entry	parts/hr_a_0107_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107.anibnd	21420	daa88eb2c2d04d688b3fa389ae5cb2935c964e3d37001dbca53aa5ca7f5e7fea
+entry	parts/hr_a_0107_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0107_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0107\HR_A_0107_c.hkx	163184	44e1370d2dc89fdc0ec074d49c5f952e5d1e799945b5fa0ddc5880e4cf272e34
+file	parts/hr_a_0108.partsbnd.dcx	710754	00e8b29e905d13077558ee50c79547742becc717be472cc8f0a23db08abbf839
+entry	parts/hr_a_0108.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108.tpf	699274	2c44afa300b5b3d5c63c815614b556885defe8818181144ac3e2eb05d65f0029
+entry	parts/hr_a_0108.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108.flver	3140000	e1fe899be6bb3fbb7208f4cfe49e128dcf8634ffab88cc1222473c07c4308fbe
+entry	parts/hr_a_0108.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108.anibnd	21292	bb8512c4774a7682304745c526c780792c4fc396c8230685d343ad7be925d5c6
+entry	parts/hr_a_0108.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0108.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_c.hkx	139604	1ccab7a0361231ebc911451110e9abcff446649dc1505064d0c1282ca2a68b9b
+file	parts/hr_a_0108_l.partsbnd.dcx	235571	2c2b0fc1bdf11d257473d6b6484a53bd2ce9d11bb5e9c501e29117ab6b6d3639
+entry	parts/hr_a_0108_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_L.tpf	174990	28e63f09257d255ed70d6ab245e4b75e8f416c82139b0b1163edfad11aeac6fd
+entry	parts/hr_a_0108_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_L.flver	3140000	e1fe899be6bb3fbb7208f4cfe49e128dcf8634ffab88cc1222473c07c4308fbe
+entry	parts/hr_a_0108_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108.anibnd	21292	bb8512c4774a7682304745c526c780792c4fc396c8230685d343ad7be925d5c6
+entry	parts/hr_a_0108_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0108_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0108\HR_A_0108_c.hkx	139604	1ccab7a0361231ebc911451110e9abcff446649dc1505064d0c1282ca2a68b9b
+file	parts/hr_a_0109.partsbnd.dcx	720228	b257ae53d2ca7658f466e14f2bd490bd6c3c168bbf63625202be422fc977d770
+entry	parts/hr_a_0109.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109.tpf	699274	c50d1408b8d695f18d72d7de72766663938ad33c2889b24cf30d194b9823077f
+entry	parts/hr_a_0109.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109.flver	4803152	2279a98e7f9ab3593022661d7fbc35199d0284af2693188ddfff2c824e46d4f6
+entry	parts/hr_a_0109.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109.anibnd	21628	98aa87ef03ff4c6db1fcf833822e014e0250b7b8c4a2a049885eb995adc79359
+entry	parts/hr_a_0109.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0109.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_c.hkx	162368	ebf0a7d121b40fdd3ce68f5fb023b4c42254db4f321c049904f9e0f28fe3ecb8
+file	parts/hr_a_0109_l.partsbnd.dcx	245070	e0cb53f50612c941c5b9a6a46eeddb79865b4db497638b4e9234b5ed1356029e
+entry	parts/hr_a_0109_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_L.tpf	174990	d3eea52b18b7d3e6c6a33cb94b91f16f2958909fc745e4b27844f1140c8face6
+entry	parts/hr_a_0109_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_L.flver	4803152	2279a98e7f9ab3593022661d7fbc35199d0284af2693188ddfff2c824e46d4f6
+entry	parts/hr_a_0109_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109.anibnd	21628	98aa87ef03ff4c6db1fcf833822e014e0250b7b8c4a2a049885eb995adc79359
+entry	parts/hr_a_0109_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0109_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0109\HR_A_0109_c.hkx	162368	ebf0a7d121b40fdd3ce68f5fb023b4c42254db4f321c049904f9e0f28fe3ecb8
+file	parts/hr_a_0110.partsbnd.dcx	707503	b8db52571670b117ea262f22d9a6ea66af7d07d4b0b25cd32c501ab7d3678752
+entry	parts/hr_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110.tpf	699274	e59ff07a202b1e246b1ec96e27c6e22fc9d16b6136a5f33cb7d3e73f66d58bb9
+entry	parts/hr_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110.flver	3942544	63602fecfe8dd7854363c438d7844d0fca856b5734f48f1f9ffa1b25e220dde6
+entry	parts/hr_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110.anibnd	21196	a7efe9ccda7a7a55c9d07f1f0539825ff13f5b1d5107b0f0a94df5b4f81b349f
+entry	parts/hr_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0110.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_c.hkx	98776	76dfadac5f6d8a2b5bf7d8ea77df49847d6bf9cdc21c5f8273403b76ac8d45f8
+file	parts/hr_a_0110_l.partsbnd.dcx	223991	74cbd1762c70d29926541569f3a7d93811647faef76315a29cdfb3687d3aa37b
+entry	parts/hr_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_L.tpf	174990	af289f30f23a2b24ee5f9c7202642302178e6da496e9096b02daad5419d6166f
+entry	parts/hr_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_L.flver	3942544	63602fecfe8dd7854363c438d7844d0fca856b5734f48f1f9ffa1b25e220dde6
+entry	parts/hr_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110.anibnd	21196	a7efe9ccda7a7a55c9d07f1f0539825ff13f5b1d5107b0f0a94df5b4f81b349f
+entry	parts/hr_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0110_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0110\HR_A_0110_c.hkx	98776	76dfadac5f6d8a2b5bf7d8ea77df49847d6bf9cdc21c5f8273403b76ac8d45f8
+file	parts/hr_a_0111.partsbnd.dcx	699750	76b830d756f684b029ec3d616c182bb14997cb760c0f6915e52b35877c2c183c
+entry	parts/hr_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111.tpf	699274	41f6d1cd7b70839849b55975738bf55fc3669f5916993167461d21e134c23c7f
+entry	parts/hr_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111.flver	3945824	ade89b69e9dfe386440e76f02c699b4311cdd24c4938906ee022a7bde6270c33
+entry	parts/hr_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111.anibnd	21196	213c4a0f44a9160ccbf6cfde447d2a3e39e6f777878a996a79246f561f05cc95
+entry	parts/hr_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0111.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_c.hkx	142832	af7d997bbd61679dda2f8e727b070aa203c6ada770dd73556d9ac9e859abec1f
+file	parts/hr_a_0111_l.partsbnd.dcx	236444	5a9b76128babc66c26cfebec9c6c7dbf26d8e1ba6b1e3b3ce6b72c7cf79c1d6d
+entry	parts/hr_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_L.tpf	174990	d42a76d375adea426f44a041183e44ead3c94629cbe606a35a626e2f4852f4f2
+entry	parts/hr_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_L.flver	3945824	ade89b69e9dfe386440e76f02c699b4311cdd24c4938906ee022a7bde6270c33
+entry	parts/hr_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111.anibnd	21196	213c4a0f44a9160ccbf6cfde447d2a3e39e6f777878a996a79246f561f05cc95
+entry	parts/hr_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0111_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0111\HR_A_0111_c.hkx	142832	af7d997bbd61679dda2f8e727b070aa203c6ada770dd73556d9ac9e859abec1f
+file	parts/hr_a_0112.partsbnd.dcx	1320576	ebb88e38cf0750190e87ef2efdbe17c7e146ebfb6657c131cbc91757cea30610
+entry	parts/hr_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0112\HR_A_0112.tpf	2796812	75533bba964327ba27334d982dcd1d8d1a634dcffe433c7a33afff48ab48682f
+entry	parts/hr_a_0112.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0112\HR_A_0112.flver	4782176	bfd8384a94f4d48c7ea8fe214084d5ca47234f17906d3406f5dc52d42c6a8fd1
+file	parts/hr_a_0112_l.partsbnd.dcx	346513	c0a5eb1e11e668de2cc65143120d00bebeea4acfaa81e539502247d1c7bd472e
+entry	parts/hr_a_0112_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0112\HR_A_0112_L.tpf	699672	74eac1c2092ab7fd36f610e3c2513bc33436a00f480073a2e0c883415d58d24b
+entry	parts/hr_a_0112_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0112\HR_A_0112_L.flver	4782176	bfd8384a94f4d48c7ea8fe214084d5ca47234f17906d3406f5dc52d42c6a8fd1
+file	parts/hr_a_0113.partsbnd.dcx	1465575	9039efef8b654dbe67f4a2b91fb7a0511c6d83f786731cd3a032dce9c05329b6
+entry	parts/hr_a_0113.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0113\HR_A_0113.tpf	2796812	467314659023c2bfa11975592aaf0c096efc4ca909dec0ad63a8e0c96fb4a3e7
+entry	parts/hr_a_0113.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0113\HR_A_0113.flver	339904	d8b3a4ca996f473bb684d30f205cb1be49e695837f4ea9236409f541592bb0f8
+file	parts/hr_a_0113_l.partsbnd.dcx	387557	a6d14ee3fc27325ed491b6cea49e6deaf3e366eec13df2964f367805a0ede209
+entry	parts/hr_a_0113_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0113\HR_A_0113_L.tpf	699672	9d167de03a57ae927b39353b0f79199aa458358cd65b4961e8a929ba7d50d090
+entry	parts/hr_a_0113_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0113\HR_A_0113_L.flver	339904	d8b3a4ca996f473bb684d30f205cb1be49e695837f4ea9236409f541592bb0f8
+file	parts/hr_a_0114.partsbnd.dcx	379070	9a7e48a546803b1353f06d40fcc285af738e2faafc50c186ca56ffc856163cb1
+entry	parts/hr_a_0114.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114.tpf	699274	fcc1982db5071230a6a0ae9d091d4e9a943c5f4582a7f2e03ea752e901d9bc52
+entry	parts/hr_a_0114.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114.flver	3843408	9164161dfac966c9b31dbe7b14d8d829e5d7adb4432f3c9037e934253fa8c75e
+entry	parts/hr_a_0114.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114.anibnd	21100	5128affd5031d2060a3cb4b117946b774be25ffc70013f2b034f33b9d2cffe98
+entry	parts/hr_a_0114.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0114.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_c.hkx	62156	0030c83a804490f2892c033fd97bf91767bef29524c637e42bccb20a05355b18
+file	parts/hr_a_0114_l.partsbnd.dcx	149469	1d1b782274e82f971b7b160d0641a99a1961a2f1ed666d4cb3a31182ee96f248
+entry	parts/hr_a_0114_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_L.tpf	174990	396435f7c26d39c168b371d827ef618b086ab4676e3ba30f8e08354638ee1bc3
+entry	parts/hr_a_0114_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_L.flver	3843408	9164161dfac966c9b31dbe7b14d8d829e5d7adb4432f3c9037e934253fa8c75e
+entry	parts/hr_a_0114_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114.anibnd	21100	5128affd5031d2060a3cb4b117946b774be25ffc70013f2b034f33b9d2cffe98
+entry	parts/hr_a_0114_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0114_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0114\HR_A_0114_c.hkx	62156	0030c83a804490f2892c033fd97bf91767bef29524c637e42bccb20a05355b18
+file	parts/hr_a_0115.partsbnd.dcx	485880	ba566a6985c0e4f514abc54905735a37a0e7ab5169eedd0c2305fe464ca7a564
+entry	parts/hr_a_0115.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0115\HR_A_0115.tpf	699274	140a4d529635c0354cab345f86aa8612001ef9ba13213e772f8dc25ac8d3dfd4
+entry	parts/hr_a_0115.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0115\HR_A_0115.flver	5142576	815e057330c907afe05f9b1b353106444f4e7c68d3876a0eb1683f82698393d9
+file	parts/hr_a_0115_l.partsbnd.dcx	149761	27e5dde35049cf8c348d072e370d3e4adfb80cdc95277c011cf7c225756f5dbb
+entry	parts/hr_a_0115_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0115\HR_A_0115_L.tpf	174990	d24ef9fce73b6a72a4f4bef2cea3083c65380e2e098c518e5f9f0d9b93ae1956
+entry	parts/hr_a_0115_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0115\HR_A_0115_L.flver	5142576	815e057330c907afe05f9b1b353106444f4e7c68d3876a0eb1683f82698393d9
+file	parts/hr_a_0116.partsbnd.dcx	628396	e4ff9c2b4c0e8dbba0828224cee39494e874894dd15f8876ead01812e3eb5edf
+entry	parts/hr_a_0116.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116.tpf	699274	92e2ab2ff5122fb9dd826bc4f8253fc6407e2c433a89a19da49391d14d98a2b7
+entry	parts/hr_a_0116.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116.flver	4792720	fbfc023861bdae220aa9860886a73413f5af3c92006020b004a345cb2b9caae5
+entry	parts/hr_a_0116.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116.anibnd	21628	c303179ef73ae30b05453bf2bbfeecb34fd06261e17dbed939883111f3311ceb
+entry	parts/hr_a_0116.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0116.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_c.hkx	66916	8a8024848e65ef45366139e5f174b609b9304ba31da64b3950dac6cf8147977d
+file	parts/hr_a_0116_l.partsbnd.dcx	203295	6041922c96dd1741ea31e81fcfa89fba446d3c92dc239a91d187cf0593261e71
+entry	parts/hr_a_0116_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_L.tpf	174990	e9655325c5c576cf717bd64fd34309580b0e603d2fc460204a788de230d5f4de
+entry	parts/hr_a_0116_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_L.flver	4792720	fbfc023861bdae220aa9860886a73413f5af3c92006020b004a345cb2b9caae5
+entry	parts/hr_a_0116_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116.anibnd	21628	c303179ef73ae30b05453bf2bbfeecb34fd06261e17dbed939883111f3311ceb
+entry	parts/hr_a_0116_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0116_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0116\HR_A_0116_c.hkx	66916	8a8024848e65ef45366139e5f174b609b9304ba31da64b3950dac6cf8147977d
+file	parts/hr_a_0117.partsbnd.dcx	1937498	8161f9a4bdb304afc6b3c68572573d3490f15720250e1df623c7d70d120ddcf9
+entry	parts/hr_a_0117.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117.tpf	2796832	5e1a117ecc4461c46f54005b56d3a0b1c50b00cc0fe6f889f3955b6c4ac1a198
+entry	parts/hr_a_0117.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117.flver	5164864	f085624f330eb8c17f818ce283e04cf4c7cee3aee0b9fbf7e50a6742af41a796
+entry	parts/hr_a_0117.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117.anibnd	21868	8cd7be217b485777b74c8068c2631d7316dc0a32d3c420a6a7f854fb4189659d
+entry	parts/hr_a_0117.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_c.clm2	296	f1e22f23066c0f989883a094b9369bf6377f67519ed76250205713fd86a9b7d7
+entry	parts/hr_a_0117.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_c.hkx	63912	50c12eb9a873e25b68c77d13a43e1efb4a17cff9c1c520b55e0732e4814360ab
+file	parts/hr_a_0117_l.partsbnd.dcx	529727	777199b1b061ccaff80e44f03a1fe9c52ab86367001fa83c78dc7d85ada268ce
+entry	parts/hr_a_0117_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_L.tpf	699692	7a95a0ca0bfd6eca17c2252e2bc28de6d06da76bab45f0e2ad668828986f6016
+entry	parts/hr_a_0117_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_L.flver	5164864	f085624f330eb8c17f818ce283e04cf4c7cee3aee0b9fbf7e50a6742af41a796
+entry	parts/hr_a_0117_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117.anibnd	21868	8cd7be217b485777b74c8068c2631d7316dc0a32d3c420a6a7f854fb4189659d
+entry	parts/hr_a_0117_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_c.clm2	296	f1e22f23066c0f989883a094b9369bf6377f67519ed76250205713fd86a9b7d7
+entry	parts/hr_a_0117_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0117\HR_A_0117_c.hkx	63912	50c12eb9a873e25b68c77d13a43e1efb4a17cff9c1c520b55e0732e4814360ab
+file	parts/hr_a_0118.partsbnd.dcx	601321	18e3fa044b561a15466a5550046ed20d19cf05168f6a4507024567c8baacabeb
+entry	parts/hr_a_0118.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118.tpf	699274	1cb3238e064e34f87fb7c759131cd11716f6647288dcb0c34223d6805455ad3f
+entry	parts/hr_a_0118.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118.flver	3832976	b9021ab7bfa8ab7323c4fcd6cc0cf6b262c3a6912af72f32a2e030c58c53c6d8
+entry	parts/hr_a_0118.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118.anibnd	21868	c096a1888c9e45037a1c12e13d2ba4831743cc0029a3d5e29e7c98cceb287598
+entry	parts/hr_a_0118.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0118.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_c.hkx	75076	6c352fc04af4be79f9072be4868ebab139ef5b1bf7f05bc49e11e66f8a17ff64
+file	parts/hr_a_0118_l.partsbnd.dcx	190574	068cf36807d111feee63c0c3ee845b2544549b6105ed5fbe274d8d31945d7b71
+entry	parts/hr_a_0118_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_L.tpf	174990	b2ac6eb8d150a380f622e1d2ab71c950eab9988e9bce61a0d60ad4cec6614562
+entry	parts/hr_a_0118_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_L.flver	3832976	b9021ab7bfa8ab7323c4fcd6cc0cf6b262c3a6912af72f32a2e030c58c53c6d8
+entry	parts/hr_a_0118_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118.anibnd	21868	c096a1888c9e45037a1c12e13d2ba4831743cc0029a3d5e29e7c98cceb287598
+entry	parts/hr_a_0118_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_c.clm2	216	5b62fa3f4f2509cce92e9153449407b7f13f33032c40c335e57750457b462f36
+entry	parts/hr_a_0118_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0118\HR_A_0118_c.hkx	75076	6c352fc04af4be79f9072be4868ebab139ef5b1bf7f05bc49e11e66f8a17ff64
+file	parts/hr_a_0119.partsbnd.dcx	593115	6dcd8f97714238e1fc078d88e6260f00e78ee3ff63c88859a65e61088ae5b454
+entry	parts/hr_a_0119.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119.tpf	699274	99b6dd3415f883eac9eb1f0b4628b42ec0b634acbc35080977a382315b7ff724
+entry	parts/hr_a_0119.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119.flver	4537728	c5a11da298c4ccd2b5f85aa99f3f830c2b0173f428692e971488b770dce43d7f
+entry	parts/hr_a_0119.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119.anibnd	21324	1242827b46e350a0812a3d6bc856dc13f5df6b239d70c109af91d75fa5ea06ce
+entry	parts/hr_a_0119.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_c.clm2	296	f1e22f23066c0f989883a094b9369bf6377f67519ed76250205713fd86a9b7d7
+entry	parts/hr_a_0119.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_c.hkx	61496	e62fa67c90ab82cdc4e9f07d8856363120e7d3f0d2698f26ba9ff9236a933da9
+file	parts/hr_a_0119_l.partsbnd.dcx	185574	3328e42418d88481f6f9951f0f10595ea1403827bd63c93c29db3353539070c6
+entry	parts/hr_a_0119_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_L.tpf	174990	f66a245729d7003700f519d036376c23558571c691179769ef3ef66f7e8e66fd
+entry	parts/hr_a_0119_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_L.flver	4537728	c5a11da298c4ccd2b5f85aa99f3f830c2b0173f428692e971488b770dce43d7f
+entry	parts/hr_a_0119_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119.anibnd	21324	1242827b46e350a0812a3d6bc856dc13f5df6b239d70c109af91d75fa5ea06ce
+entry	parts/hr_a_0119_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_c.clm2	296	f1e22f23066c0f989883a094b9369bf6377f67519ed76250205713fd86a9b7d7
+entry	parts/hr_a_0119_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0119\HR_A_0119_c.hkx	61496	e62fa67c90ab82cdc4e9f07d8856363120e7d3f0d2698f26ba9ff9236a933da9
+file	parts/hr_a_0120.partsbnd.dcx	615776	5a3ccbb9fcc7a19af581714876f943ea430c6ab3187477b83fd014c0976ae1a7
+entry	parts/hr_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120.tpf	699274	f126b374d3f015329f8c0c3644e62a16e821b542319bbc5ac0b1683bd101aede
+entry	parts/hr_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120.flver	5235984	99804f53f04df6dc69eaab07716763357336949ed79031c24466ea3a7ad14fc2
+entry	parts/hr_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120.anibnd	22092	9c8b654cbfc6eb63f01daf1d9a0cc4b744da1674bf1f83f9f928d144c2448aef
+entry	parts/hr_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0120.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_c.hkx	83388	e3fc51441c067f5a0331607606065723507794deca70a1ad759b949a72090fee
+file	parts/hr_a_0120_l.partsbnd.dcx	200242	a10aec6ccb60682f13c67c50ef7c0eada0deaad5c6bcfba2c110adb533b24ee5
+entry	parts/hr_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_L.tpf	174990	0ff52c411dcb1e05619b2ecdd228b9a09d7c221cb8a5d1b7c17edcdf78146903
+entry	parts/hr_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_L.flver	5235984	99804f53f04df6dc69eaab07716763357336949ed79031c24466ea3a7ad14fc2
+entry	parts/hr_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120.anibnd	22092	9c8b654cbfc6eb63f01daf1d9a0cc4b744da1674bf1f83f9f928d144c2448aef
+entry	parts/hr_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0120_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0120\HR_A_0120_c.hkx	83388	e3fc51441c067f5a0331607606065723507794deca70a1ad759b949a72090fee
+file	parts/hr_a_0121.partsbnd.dcx	630522	608cb5cf03f7a4cf304afe6eb439d1c0d969acca2988cad4e6246eb14b865a41
+entry	parts/hr_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121.tpf	699274	e85204a839019bd3df806f1e4c01f45819197315fe94b51053a96c06aeb248ee
+entry	parts/hr_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121.flver	3326464	044760320fd6e21c1c2a3eb3e339ae6f5bc086a0ad6da7259988cc8011642f96
+entry	parts/hr_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121.anibnd	21628	094f1ae0543f1d979bbba3e04e68d75cf8f036acf5d77baf7a6d53016a79acc1
+entry	parts/hr_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0121.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_c.hkx	68248	f52cfa85e683f07fb8ff1026a536ec7e1b64d0e6dfdf489fed3ca5bc9fcfe463
+file	parts/hr_a_0121_l.partsbnd.dcx	201809	20c10150a30128f6618e558f1cb99976785cf8dc86efec28e3f2154b9a58d7cb
+entry	parts/hr_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_L.tpf	174990	2b35603366677d6007f6986ab3c48e6146b5aef3a4e01d9abe11398a5b1d339e
+entry	parts/hr_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_L.flver	3326464	044760320fd6e21c1c2a3eb3e339ae6f5bc086a0ad6da7259988cc8011642f96
+entry	parts/hr_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121.anibnd	21628	094f1ae0543f1d979bbba3e04e68d75cf8f036acf5d77baf7a6d53016a79acc1
+entry	parts/hr_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_c.clm2	200	fbb3f59d4b28fcc894a73eeac5ac9ec94a139001f2af09198ed4c2b0249e311f
+entry	parts/hr_a_0121_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0121\HR_A_0121_c.hkx	68248	f52cfa85e683f07fb8ff1026a536ec7e1b64d0e6dfdf489fed3ca5bc9fcfe463
+file	parts/hr_a_0122.partsbnd.dcx	694083	366695564be8f3ed5f5a189ed819ad57b11a2a9e584e508a327a15b4970c9ebc
+entry	parts/hr_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122.tpf	699274	f191aaf129a78310dbb089be56eaf2ffb8589881752f779f56b86bfbb99189ab
+entry	parts/hr_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122.flver	4675536	c1ad6c9a2a60ed47faa45fc798e0cac4c4ef1cb0b38b976c1b8a4559d499ec0e
+entry	parts/hr_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122.anibnd	22012	023eeebc959d86175661543bb6586aa59a8b5c1b03c48262a2a276903c5736e7
+entry	parts/hr_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_c.clm2	520	ad8430ff7ba5a9486acbba69d8a308005fcccf14fb961c49331232da021cfe1c
+entry	parts/hr_a_0122.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_c.hkx	57796	c9066d1747f81d6dca52402d5814fe265ff775658fed214987a11abff1694765
+file	parts/hr_a_0122_l.partsbnd.dcx	210144	03914a3d432741c7ec0ed56410d19f78495d8c42a4c6b66da7af2b47d0e0bb7d
+entry	parts/hr_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_L.tpf	174990	dc947a8a71c545aa4feb4427cd4f19f0c5856a3b6764d21bf9ef14d87b69ebce
+entry	parts/hr_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_L.flver	4675536	c1ad6c9a2a60ed47faa45fc798e0cac4c4ef1cb0b38b976c1b8a4559d499ec0e
+entry	parts/hr_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122.anibnd	22012	023eeebc959d86175661543bb6586aa59a8b5c1b03c48262a2a276903c5736e7
+entry	parts/hr_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_c.clm2	520	ad8430ff7ba5a9486acbba69d8a308005fcccf14fb961c49331232da021cfe1c
+entry	parts/hr_a_0122_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0122\HR_A_0122_c.hkx	57796	c9066d1747f81d6dca52402d5814fe265ff775658fed214987a11abff1694765
+file	parts/hr_a_0123.partsbnd.dcx	715037	361734b5227cb6cf74c333470abeb53d4e5dd6a8b79b1d139cda48936d0fbb11
+entry	parts/hr_a_0123.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123.tpf	699274	69d737296168cb97c91d99d614696657fa9ec82092eaed818e8bcb727cbd3b59
+entry	parts/hr_a_0123.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123.flver	6231248	d7b819771434266ae9f9e191ad9f79ac14d34b03002eb93cb5957ebca3aa9bbc
+entry	parts/hr_a_0123.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123.anibnd	22860	19fb936c992def20332ab29c71e844ebc6e38e143201ab70e3e0040a5da70804
+entry	parts/hr_a_0123.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_c.clm2	424	cc70231c12d0f14d618ade67a47cd32c8678d8f2855bf2fe84cc505baeab9c93
+entry	parts/hr_a_0123.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_c.hkx	139320	9cec6d6f01d85168dcf511767989e57e5fa21881a0fc4ff1d98c12e45e6d75c7
+file	parts/hr_a_0123_l.partsbnd.dcx	227732	f0a61ff78f654c354bab59b15e288b07483684cb3f3af0507fc078423430a6eb
+entry	parts/hr_a_0123_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_L.tpf	174990	75ef135d4e5b83c833a74a228f43784c42cfb7cd53a7d4a981e4f65804e3db03
+entry	parts/hr_a_0123_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_L.flver	6231248	d7b819771434266ae9f9e191ad9f79ac14d34b03002eb93cb5957ebca3aa9bbc
+entry	parts/hr_a_0123_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123.anibnd	22860	19fb936c992def20332ab29c71e844ebc6e38e143201ab70e3e0040a5da70804
+entry	parts/hr_a_0123_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_c.clm2	424	cc70231c12d0f14d618ade67a47cd32c8678d8f2855bf2fe84cc505baeab9c93
+entry	parts/hr_a_0123_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0123\HR_A_0123_c.hkx	139320	9cec6d6f01d85168dcf511767989e57e5fa21881a0fc4ff1d98c12e45e6d75c7
+file	parts/hr_a_0124.partsbnd.dcx	270276	ef6765e15eb942669104e4ffa75e607fb0ebdce3d4259b0757ec367b166871af
+entry	parts/hr_a_0124.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124.tpf	699274	ec229e4761315ccf967b7bf28d7748f365092607c17a2205eb483c006ba15d72
+entry	parts/hr_a_0124.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124.flver	3739744	be1dc458c1b1db9044cf113a496f8feb7bd048b38f9c90838b8588b19858cddd
+entry	parts/hr_a_0124.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124.anibnd	22588	e54bd913df35c0ee2120741e56605fdbc464cf7f7d22fbc6a5a771166757e79e
+entry	parts/hr_a_0124.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0124.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_c.hkx	74256	9d341d98517ff42e673fe9460bb0ccfee199c8559caa7125f5f7125e5d00a90b
+file	parts/hr_a_0124_l.partsbnd.dcx	124740	4406c7d3bfa6fbac17356eabae24a50fc479b830c210ac704a1601632830fbbe
+entry	parts/hr_a_0124_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_L.tpf	174990	519e3724c3448811eb04090830c249cb0a9b42c964e0d2cabdc4185fcb46865e
+entry	parts/hr_a_0124_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_L.flver	3739744	be1dc458c1b1db9044cf113a496f8feb7bd048b38f9c90838b8588b19858cddd
+entry	parts/hr_a_0124_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124.anibnd	22588	e54bd913df35c0ee2120741e56605fdbc464cf7f7d22fbc6a5a771166757e79e
+entry	parts/hr_a_0124_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_c.clm2	248	52e7e16b8122bba0dc641d9a007d2d256961865d9d76e92b653b5155838ffa6b
+entry	parts/hr_a_0124_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0124\HR_A_0124_c.hkx	74256	9d341d98517ff42e673fe9460bb0ccfee199c8559caa7125f5f7125e5d00a90b
+file	parts/hr_a_0125.partsbnd.dcx	361902	04e7cad483d26bccbac19a8c3a2e55bdbe4dc1100c889889d9df009e6334a392
+entry	parts/hr_a_0125.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125.tpf	699274	6016f294508d555e9db478dc7bc82bdfb9dfbc8bd8fe63b72294b93bbddf3dab
+entry	parts/hr_a_0125.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125.flver	2949248	565db1079e271727ad27d2558196bd912034b6882724f07534f8a4532668d036
+entry	parts/hr_a_0125.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125.anibnd	21772	733e745bd5c7a97279a9838b10d8f078d02bce3aea38db41e0a0d6afc49d96ae
+entry	parts/hr_a_0125.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0125.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_c.hkx	78156	65a665830da6139e7b7c443f713f287c059e302cba86137a74826dfb74fc65a2
+file	parts/hr_a_0125_l.partsbnd.dcx	152422	68d6ca901d50140eb1dd737b4b98dea0e646fb44e877b0d972740322c3aa278a
+entry	parts/hr_a_0125_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_L.tpf	174990	7f7d22125cf4538f828c3311e42a23f065889a6de0e1537b58ed70d9c47e5303
+entry	parts/hr_a_0125_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_L.flver	2949248	565db1079e271727ad27d2558196bd912034b6882724f07534f8a4532668d036
+entry	parts/hr_a_0125_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125.anibnd	21772	733e745bd5c7a97279a9838b10d8f078d02bce3aea38db41e0a0d6afc49d96ae
+entry	parts/hr_a_0125_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_c.clm2	280	f16b20bc347a791eb84fcc521845c98ddeb702740b1afa914e1bbf09178cfa36
+entry	parts/hr_a_0125_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\Hair\HR_A_0125\HR_A_0125_c.hkx	78156	65a665830da6139e7b7c443f713f287c059e302cba86137a74826dfb74fc65a2
+file	parts/lg_f_0000.partsbnd.dcx	2799742	a972de5bed3f05cb2adfaef4593ab3012f9a1729473fbccc68711de4fe578f40
+entry	parts/lg_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000.tpf	4194760	8760f36ab41fa79b9f9b9c0e3fd784ef53bfc96528dffda8425ee763de52f3df
+entry	parts/lg_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000.flver	96800	49737ec33245467343e2a82a2d47a9dc4f2c7beb23168012a4ec3110798b8336
+entry	parts/lg_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_c.clm2	88	9a11e3980a42bafb03f7e6905d8d53e8a3cf393a7b83c89b50ae3fe329f1dae1
+entry	parts/lg_f_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_c.hkx	64468	653726f76f9e3531b148a030c0ff0d1f6493cdb7c12343339bb74019ee5f01b1
+file	parts/lg_f_0000_l.partsbnd.dcx	761806	55c3ad208653787895450707ab4dfb11b8b88e39a6647515a43c6387a40d67a5
+entry	parts/lg_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_L.tpf	1049040	ae15140bf524f92e077a8ec8908cfed77a3b216ae58a2bbdb14792f72c211000
+entry	parts/lg_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_L.flver	96800	49737ec33245467343e2a82a2d47a9dc4f2c7beb23168012a4ec3110798b8336
+entry	parts/lg_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_c.clm2	88	9a11e3980a42bafb03f7e6905d8d53e8a3cf393a7b83c89b50ae3fe329f1dae1
+entry	parts/lg_f_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_F_0000\LG_F_0000_c.hkx	64468	653726f76f9e3531b148a030c0ff0d1f6493cdb7c12343339bb74019ee5f01b1
+file	parts/lg_m_0000.partsbnd.dcx	2553213	bfe5f0b962b6fefa432ec0f98352a2c087e94637ff66241c7eba919309e1b029
+entry	parts/lg_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000.tpf	4194760	8fde73ff044c6b9db1dd11c0fbdc2ea423ce738ddb197d85e3820f7e3002d9cd
+entry	parts/lg_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000.flver	99360	e3536150bad9aeba7ba3e2b32bda79cfb73a436e1bb5e7bde376e24ee0d7d795
+entry	parts/lg_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_c.clm2	88	9a11e3980a42bafb03f7e6905d8d53e8a3cf393a7b83c89b50ae3fe329f1dae1
+entry	parts/lg_m_0000.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_c.hkx	64580	9f3b1f4bbdfebc6ca6fd5c14d8423f0f52e97d6eb96a7f1facbdfb16a39024b6
+file	parts/lg_m_0000_l.partsbnd.dcx	727355	4c4b9db2a72494cc6dca935bb27b7985dcbf01505d3bf05df7c2c3b03c2e0aed
+entry	parts/lg_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_L.tpf	1049040	54e1924f43b86aeb73447579f2938d539ec885b85bb5833d189e5568a6bfcc28
+entry	parts/lg_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_L.flver	99360	e3536150bad9aeba7ba3e2b32bda79cfb73a436e1bb5e7bde376e24ee0d7d795
+entry	parts/lg_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_c.clm2	88	9a11e3980a42bafb03f7e6905d8d53e8a3cf393a7b83c89b50ae3fe329f1dae1
+entry	parts/lg_m_0000_l.partsbnd.dcx	N:\GR\data\INTERROOT_win64\parts\FullBody\LG_M_0000\LG_M_0000_c.hkx	64580	9f3b1f4bbdfebc6ca6fd5c14d8423f0f52e97d6eb96a7f1facbdfb16a39024b6

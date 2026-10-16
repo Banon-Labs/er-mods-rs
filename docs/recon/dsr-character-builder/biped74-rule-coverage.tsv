@@ -1,0 +1,69 @@
+chr	tier	weight_total	direct_pct	ancestor_pct	prop_pct	orphan_pct	unused_but_weighted	sample_bones_resolved_by_ancestor
+c1200	D(non-humanoid posture or broken rig)	3111	75.2	24.8	0.0	0.0		Cloth_a01,nose,L_eye,R_eye,R_ear,L_ear,Cloth_a02,Cloth_a03
+c1201	D(non-humanoid posture or broken rig)	3112	74.9	25.1	0.0	0.0		Cloth_a01,nose,L_eye,R_eye,R_ear,L_ear,Cloth_a02,Cloth_a03
+c1202	D(non-humanoid posture or broken rig)	15586	75.6	24.4	0.0	0.0		Cloth_a01,nose,R_eye,R_ear,L_ear,Cloth_a02,Cloth_a03,Cloth_a04
+c1203	D(non-humanoid posture or broken rig)	3112	74.9	25.1	0.0	0.0		Cloth_a01,nose,L_eye,R_eye,R_ear,L_ear,Cloth_a02,Cloth_a03
+c2060	B(humanoid, other proportions)	4589	50.4	0.5	49.1	0.0		Tangue,Tangue1
+c2230	C(giant)	15754	72.7	23.0	4.4	0.0		tail_00,tail_01,tail_02,tail_03,tail_04,tail_05,tail_06,tail_07
+c2231	C(giant)	15757	72.6	22.9	4.4	0.0		tail_00,tail_01,tail_02,tail_03,tail_04,tail_05,tail_06,tail_07
+c2232	C(giant)	15882	72.1	22.7	5.1	0.0		tail_00,tail_01,tail_02,tail_03,tail_04,tail_05,tail_06,tail_07
+c2240	B(humanoid, other proportions)	8444	49.9	40.7	9.4	0.0		Tail,Tail1,Tail2,Tail3,Tail4,Tail5,Tail6
+c2250	C(giant)	17004	93.2	2.2	4.6	0.0		Tail,Tail1,Tail2,Tail3,Tail4,Tail5
+c2320	D(non-humanoid posture or broken rig)	19836	92.0	5.5	2.5	0.0		L_Armor,R_Armor,M_Armor
+c2360	C(giant)	7804	80.6	3.7	15.7	0.0		L Finger0Nub,L Finger1Nub,L Finger2Nub,R Finger0Nub,R Finger2Nub,ChanesBase,Cloth_BoneC01,Cloth_BoneL1_01
+c2370	B(humanoid, other proportions)	11997	46.8	41.2	12.1	0.0		SL_c1,SL_c102,SL_b1,SL_b102,SL_b103,SL_a1,SL_a102,SR_c1
+c2380	C(giant)	8346	86.7	0.8	12.5	0.0		Cloth_R_Arm_A01,Cloth_R_Arm_A02,Cloth_L_Leg_A01,Cloth_L_Leg_B01,Cloth_R_Leg_B01,Cloth_R_Leg_B02,Cloth_R_Leg_A01
+c2500	A-(c2650 rig, small offsets)	2558	80.3	0.0	19.7	0.0		
+c2510	A-(c2650 rig, small offsets)	2534	89.3	0.8	9.9	0.0		Master Ponytail1,Master Ponytail11,Master Ponytail12,Master Ponytail2,Master Ponytail21,Master Ponytail22
+c2511	A-(c2650 rig, small offsets)	2371	88.5	0.8	10.7	0.0		Master Ponytail1,Master Ponytail11,Master Ponytail12,Master Ponytail2,Master Ponytail21,Master Ponytail22
+c2520	A-(c2650 rig, small offsets)	4647	86.0	1.3	12.7	0.0		Cloth_L,Cloth_R
+c2530	A-(c2650 rig, small offsets)	2684	94.0	0.0	6.0	0.0		
+c2540	A-(c2650 rig, small offsets)	3266	64.7	0.0	35.3	0.0		
+c2550	A-(c2650 rig, small offsets)	4422	55.5	10.4	34.1	0.0		L_Pad,Cloth_t1,Cloth_s1,Cloth_r1,Cloth_r2,Cloth_n1,Cloth_o1,Cloth_o2
+c2560	B(humanoid, other proportions)	5877	43.6	15.6	40.8	0.0		L_Pad,Cloth_a00,Cloth_a01,Cloth_a02,Cloth_a03,Cloth_a04,Cloth_a05,Cloth_b00
+c2570	B(humanoid, other proportions)	12578	76.0	11.1	12.9	0.0		L_Pad,R_Pad,Cloth_c00,Cloth_c01,Cloth_c02,Cloth_c03,Cloth_b00,Cloth_b01
+c2590	B(humanoid, other proportions)	11762	85.4	2.2	12.4	0.0		Cloth_b00,Cloth_b01,Cloth_a00,Cloth_a01,Cloth_c00,Cloth_c01,Cloth_d00,Cloth_d01
+c2591	B(humanoid, other proportions)	7431	94.9	0.0	5.1	0.0		
+c2600	B(humanoid, other proportions)	4029	73.0	15.0	12.0	0.0		Cloth_H_n00,Cloth_H_n01,Cloth_H_n02,Cloth_H_n03,Cloth_H_n04,Cloth_H_m00,Cloth_H_m01,Cloth_H_m02
+c2640	B(humanoid, other proportions)	6401	69.2	29.1	1.7	0.0		pony_00,pony_01,pony_02,pony_03,Hair_a_00,Hair_a_01,Hair_a_02,Hair_b_00
+c2650	A(c2650 rig)	2608	61.2	7.5	31.3	0.0		L_FA_Cloth_a1,L_FA_Cloth_a2,L_FA_Cloth_b1,L_FA_Cloth_c1,L_FA_Cloth_d1,R_FA_Cloth_a1,R_FA_Cloth_a2,R_FA_Cloth_b1
+c2660	B(humanoid, other proportions)	3053	91.2	0.0	8.8	0.0		
+c2670	B(humanoid, other proportions)	4447	69.2	23.6	7.2	0.0		Cloth_H_e00,Cloth_H_e01,Cloth_H_e02,Cloth_H_e03,Cloth_H_e05,Cloth_H_e06,Cloth_H_c00,Cloth_H_c01
+c2680	B(humanoid, other proportions)	4063	48.5	41.5	10.0	0.0		Cloth_H_g00,Cloth_H_g01,Cloth_H_g02,Cloth_H_g03,Cloth_H_g04,Cloth_H_d00,Cloth_H_d01,Cloth_H_d02
+c2690	C(giant)	3408	79.5	5.3	15.2	0.0		Bone01,Bone02,Bone03,Bone04
+c2710	B(humanoid, other proportions)	8803	100.0	0.0	0.0	0.0		
+c2711	C(giant)	25130	100.0	0.0	0.0	0.0		
+c2730	C(giant)	42865	46.0	52.4	1.6	0.0		L_sode_a_00,L_sode_a_01,L_sode_a_02,L_sode_a_03,L_sode_a_04,L_sode_b_00,L_sode_b_01,L_sode_b_02
+c2780	D(non-humanoid posture or broken rig)	5736	49.2	50.8	0.0	0.0		Tang01,Tang02,Tang03,Tang04,Tang05,Tang06,Tang07,Tang08
+c2800	A-(c2650 rig, small offsets)	6817	83.0	0.0	17.0	0.0		
+c2810	B(humanoid, other proportions)	5997	95.6	2.5	1.9	0.0		HeadNub,Cloth_R01,Cloth_R02,Cloth_R03,Cloth_R04,Cloth_L01
+c2811	B(humanoid, other proportions)	6212	93.2	2.5	4.3	0.0		Cloth_R01,Cloth_R02,Cloth_R03,Cloth_R04,Cloth_L01,Cloth_L02,tare_00,tare_01
+c2820	A-(c2650 rig, small offsets)	2678	71.6	28.4	0.0	0.0		R_arm_a00,R_arm_a01,R_arm_a02,R_arm_a03,R_arm_a04,L_arm_a00,L_arm_a01,L_arm_a02
+c2840	A-(c2650 rig, small offsets)	3439	75.0	23.0	2.0	0.0		f00,f01,f02,f03,f04,f05,f06,f07
+c2860	C(giant)	28822	92.5	2.5	5.0	0.0		armor_00,armor_01,armor_02,armor_03
+c2861	C(giant)	27472	96.9	2.6	0.5	0.0		armor_00,armor_01,armor_02,armor_03
+c2870	C(giant)	20329	82.4	8.1	9.5	0.0		L_pad,R_pad,Front_00,Front_01,Front_02,Front_03,Front_04,Front_05
+c2900	B(humanoid, other proportions)	4535	60.1	0.0	39.9	0.0		
+c2910	C(giant)	3882	87.8	0.0	12.2	0.0		
+c2920	B(humanoid, other proportions)	6334	62.5	16.1	21.4	0.0		Beard_c00,Beard_c01,Beard_c02,Beard_c03,Beard_c04,Beard_c05,Beard_d00,Beard_d01
+c2921	B(humanoid, other proportions)	6367	62.2	16.0	21.8	0.0		Beard_c00,Beard_c01,Beard_c02,Beard_c03,Beard_c04,Beard_c05,Beard_d00,Beard_d01
+c2930	B(humanoid, other proportions)	6652	57.8	0.0	0.0	42.2		
+c2940	D(non-humanoid posture or broken rig)	1864	100.0	0.0	0.0	0.0		
+c2950	D(non-humanoid posture or broken rig)	3798	98.6	0.0	0.0	1.4		
+c3110	D(non-humanoid posture or broken rig)	3084	81.8	18.2	0.0	0.0		Tongue,Tongue1,tail,tail1,tail2
+c3210	B(humanoid, other proportions)	4604	65.7	34.3	0.0	0.0		master egg_01,LLeg_a_1,LLeg_a_2,LLeg_a_Ankle,RLeg_a_1,RLeg_a_2,RLeg_a_Ankle,LLeg_b_1
+c3450	C(giant)	34199	52.5	47.5	0.0	0.0		L_wing_a_00,L_wing_a_01,L_wing_a_02,L_wing_a_03,L_wing_a_04,L_wing_a_05,L_wing_a_digit_a_00,L_wing_a_digit_a_01
+c4090	B(humanoid, other proportions)	9362	80.4	3.9	15.7	0.0		Cloth_b00,Cloth_b01,Cloth_a00,Cloth_a01,Cloth_c00,Cloth_c01,Cloth_d00,Cloth_d01
+c4091	B(humanoid, other proportions)	7431	94.9	0.0	5.1	0.0		
+c4095	B(humanoid, other proportions)	9375	80.9	3.4	15.7	0.0		Cloth_b00,Cloth_b01,Cloth_a00,Cloth_a01,Cloth_c00,Cloth_c01,Cloth_d00,Cloth_d01
+c4100	C(giant)	20927	75.4	17.7	7.0	0.0		L_pad,Cloth_R_Clavicle_c00,Cloth_R_Clavicle_c01,Cloth_R_Clavicle_b00,Cloth_R_Clavicle_b01,Cloth_R_Clavicle_a00,Cloth_R_Clavicle_a01,Tail_b00
+c4110	C(giant)	28764	60.4	31.9	7.7	0.0		L_Shoulder_Pad,Cape_a_00,Cape_a_01,Cape_b_00,Cape_b_01,Cape_c_00,Cape_c_01,L_Shoulder_Pad_a01
+c4115	C(giant)	25067	63.8	35.4	0.8	0.0		L_Shoulder_Pad,Cape_a_00,Cape_a_01,Cape_b_00,Cape_b_01,Cape_c_00,Cape_c_01,L_Shoulder_Pad_a01
+c4120	C(giant)	10505	80.2	12.1	7.6	0.0		Shoulder_Pad_L,Skirt_F_00,Skirt_F_0002,Skirt_B_00,Skirt_B_0002,bag_00
+c4520	D(non-humanoid posture or broken rig)	11395	69.6	30.4	0.0	0.0		L_ear,R_ear,Nose,ForeHead1,ForeHead2,R_eye,L_eye,R_blink
+c5210	D(non-humanoid posture or broken rig)	19256	72.5	27.5	0.0	0.0		L_ear,R_ear,Nose,ForeHead1,ForeHead2,R_eye,L_eye,R_blink
+c5270	B(humanoid, other proportions)	17589	65.0	30.3	4.7	0.0		L Finger1Nub,L Finger2Nub,L Finger4Nub,R Finger1Nub,R Finger2Nub,R Finger4Nub,Tail_b00,Tail_b01
+c5271	C(giant)	17756	69.1	22.3	8.5	0.0		L_pad,R_pad,Tail_a00,Tail_b00,Tail_b01,Tail_b02,Tail_b03,Tail_b04
+c5300	C(giant)	13723	97.3	1.4	1.3	0.0		Cloth_d00,Cloth_d01,Cloth_d02,Cloth_d03,Cloth_d04,Cloth_d05,Cloth_d06,Cloth_d07
+c5370	B(humanoid, other proportions)	18299	77.5	15.9	6.6	0.0		L_Cloth00,L_Cloth01,L_Cloth02,L_Cloth03,L_Cloth04,L_Cloth05,L_Cloth06,Hair_00
+c5390	D(non-humanoid posture or broken rig)	25149	58.3	38.5	3.3	0.0		L_shoulder2,L_shoulder202,L_shoulder203,L_shoulder3,L_hair00,L_hair01,R_hair00,R_hair01

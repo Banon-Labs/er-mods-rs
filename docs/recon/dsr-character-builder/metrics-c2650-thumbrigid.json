@@ -1,0 +1,88 @@
+{
+ "what": "c2650 generic biped fit, thumbrigid",
+ "meta": {
+  "variant": "thumbrigid",
+  "k": 1.0268176847939317,
+  "stretch": {
+   "L Clavicle": 1.221,
+   "L UpperArm": 1.084,
+   "L Forearm": 0.889,
+   "L Hand": 0.939,
+   "L Finger1": 1.128,
+   "L Finger11": 1.027,
+   "L Finger2": 1.098,
+   "L Finger21": 1.027,
+   "L Thigh": 0.953,
+   "L Calf": 1.076,
+   "L Foot": 1.132,
+   "L Toe0": 1.027
+  },
+  "kept_vertices": 1790,
+  "kept_triangles": 2456,
+  "bind_inside_out_by_source_bones": {}
+ },
+ "vertices": 1790,
+ "triangles": 2456,
+ "bind_bad_edges_vs_source_x_scale": 150,
+ "bind_bad_by_part": {
+  "leg": 10,
+  "arm": 53,
+  "arm+torso": 73,
+  "torso": 14
+ },
+ "bind_inside_out": 0,
+ "idle_bad_edges_vs_source_x_scale": 292,
+ "idle_inside_out": 9,
+ "idle_inside_out_where": {
+  "L_UpperArm+Spine2": 1,
+  "R_UpperArm+Spine2": 2,
+  "R_Finger2+R_Finger21": 3,
+  "L_Finger2+L_Finger21": 3
+ },
+ "idle_arm_buried": 85,
+ "arm_vertices": 685,
+ "idle_L_tip_to_weapon_m": 0.049,
+ "bind_L_tip_to_weapon_m": 0.092,
+ "idle_R_tip_to_weapon_m": 0.044,
+ "bind_R_tip_to_weapon_m": 0.093,
+ "bind_L_palm_to_weapon_m": 0.048,
+ "bind_R_palm_to_weapon_m": 0.048,
+ "seam_edges": 282,
+ "idle_worst_frame_bad_edges": 100,
+ "idle_worst_by_part": {
+  "arm+torso": 13,
+  "arm": 17,
+  "leg": 70
+ },
+ "idle_worst_seam_bad_edges": 13,
+ "idle_max_palm_to_weapon_m": {
+  "L": 0.027,
+  "R": 0.021
+ },
+ "r1_worst_frame_bad_edges": 451,
+ "r1_worst_by_part": {
+  "torso": 93,
+  "arm+torso": 71,
+  "arm": 60,
+  "leg": 220,
+  "leg+torso": 7
+ },
+ "r1_worst_seam_bad_edges": 77,
+ "r1_max_palm_to_weapon_m": {
+  "L": 0.052,
+  "R": 0.048
+ },
+ "run_r1_worst_frame_bad_edges": 482,
+ "run_r1_worst_by_part": {
+  "arm+torso": 103,
+  "torso": 86,
+  "arm": 61,
+  "leg": 223,
+  "leg+torso": 9
+ },
+ "run_r1_worst_seam_bad_edges": 103,
+ "run_r1_max_palm_to_weapon_m": {
+  "L": 0.052,
+  "R": 0.049
+ }
+}

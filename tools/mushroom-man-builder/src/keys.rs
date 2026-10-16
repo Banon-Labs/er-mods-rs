@@ -1,4 +1,4 @@
-//! The RSA public keys Elden Ring's archive headers are encrypted with.
+//! The RSA public keys Elden Ring's and Dark Souls III's archive headers are encrypted with.
 //!
 //! Each `Data*.bhd` is RSA-"encrypted" with a private key, which only means the matching public
 //! key reads it. These five public keys are the ones every Souls unpacker carries (UXM, BinderTool,
@@ -52,10 +52,66 @@ pub const ARCHIVE_KEYS: &[ArchiveKey] = &[
     },
 ];
 
+/// Dark Souls III's archives beside `DarkSoulsIII.exe`, from the same `ArchiveKeys.cs`
+/// (`DarkSouls3Keys`). `Data0` is the regulation, not a `BHD5` archive, so it has no key here.
+pub const DS3_ARCHIVE_KEYS: &[ArchiveKey] = &[
+    ArchiveKey {
+        name: "Data1",
+        der_base64: "MIIBCwKCAQEA05hqyboW/qZaJ3GBIABFVt1X1aa0/sKINklvpkTRC+5Ytbxvp18LM1gN6gjTgSJiPUgdlaMbptVa66MzvilEk60aHyVVEhtFWy+HzUZ3xRQm6r/2qsK38wXndgEU5JIT2jrBXZcZfYDCkUkjsGVkYqjBNKfp+c5jlnNwbieUihWTSEO+DA8naaCCzZD3e7rKhDQyLCkpdsGmuqBvl02Ou7QeehbPPno78mOYs2XkP6NGqbFFGQwaswyyyXlQ23N15ZaFGRRR0xYjrX4LSe6OJ8Mx/Zkec0o7L28CgwCTmcD2wO8TEATEAUbbV+1Su9uq2+wQxgnsAp+xzhn9og9hmwIEC35bSQ==",
+        required: true,
+    },
+    ArchiveKey {
+        name: "Data2",
+        der_base64: "MIIBCwKCAQEAvCZAK9UfPdk5JaTlG7n1r0LSVzIan3h0BSLaMXQHOwO7tTGpvtdXm2ZLY9y8SVmOxWTQqRq14aVGLTKDyH87hPuKd47Y0E5K5erTqBbXW6AD4El1eir2VJz/pwHt73FVziOlAnao1A5MsAylZ9B5QJyzHJQG+LxzMzmWScyeXlQLOKudfiIG0qFw/xhRMLNAI+iypkzO5NKblYIySUV5Dx7649XdsZ5UIwJUhxONsKuGS+MbeTFBmTMehtNj5EwPxGdT4CBPAWdeyPhpoHJHCbgrtnN9akwQmpwdBBxT/sTD16Adn9B+TxuGDQQALed4S4KvM+fadx27pQz8pP9VLwIEL67iCQ==",
+        required: true,
+    },
+    ArchiveKey {
+        name: "Data3",
+        der_base64: "MIIBCwKCAQEAqLytWD20TSXPeAA1RGDwPW18nJwe2rBX+0HPtdzFmQc/KmQlWrP+94k6KClK5f7m0xUHwT8+yFGLxPdRvUPyOhBEnRA6tkObVDSxij5y0Jh4h4ilAO73I8VMcmscS71UKkck4444+eR4vVd+SPlzIu8VgqLefvEn/sX/pAevDp7w+gD0NgvOe9U6iWEXKwTOPB97X+Y2uB03gSSognmV8h2dtUFJ4Ryn5jrpWmsuUbdvGp0CWBKHCFruNXnfsG0hlf9LqbVmEzbFl/MhjBmbVjjtelorZsoLPK+OiPTHW5EcwwnPh1vHFFGM7qRMc0yvHqJnniEWDsSz8Bvg+GxpgQIEC8XNVw==",
+        required: true,
+    },
+    ArchiveKey {
+        name: "Data4",
+        der_base64: "MIIBCwKCAQEArfUaZWjYAUaZ0q+5znpX55GeyepawCZ5NnsMjIW9CA3vrOgUGRkh6aAU9frlafQ81LQMRgAznOnQGE7K3ChfySDpq6b47SKm4bWPqd7Ulh2DTxIgi6QPqm4UUJL2dkLaCnuoya/pGMOOvhT1LD/0CKo/iKwfBcYf/OAnwSnxMRC3SNRugyvFylCet9DEdL5L8uBEa4sV4U288ZxZSZLg2tB10xy5SHAsm1VNP4Eqw5iJbqHEDKZWn2LJP5t5wpEJvV2ACiA4U5fyjQLDzRwtCKzeK7yFkKiZI95JJhU/3DnVvssjIxkugYZkS9D3k9m+tkNe0VVrd4mBEmqVxg+V9wIEL6Y6tw==",
+        required: true,
+    },
+    ArchiveKey {
+        name: "Data5",
+        der_base64: "MIIBCwKCAQEAvKTlU3nka4nQesRnYg1NWovCCTLhEBAnjmXwI69lFYfc4lvZsTrQE0Y25PtoP0ZddA3nzflJNz1rBwAkqfBRGTeeTCAyoNp/iel3EAkid/pKOt3JEkHxrojRuWYSQ0EQawcBbzCfdLEjizmREepRKHIUSDWgu0HTmwSFHHeCFbpBA1h99L2XizH5XFTOu0UIcUmBLsK6DYsIj5QGrWaxwwXcTJN/X+/syJ/TbQK9W/TCGaGiirGM1u2wvZXSZ7uVM3CHwgNhAMiqLvqORygcDeNqxgq+dXDTxka43j7iPJWdHs8b25fyaH3kbUxKlDGaEENNNyZQcQrgz8Q76jIE0QIEFUsz9w==",
+        required: true,
+    },
+    ArchiveKey {
+        name: "DLC1",
+        der_base64: "MIIBCwKCAQEAsCGM9dFwzaIOUIin3DXy7xrmI2otKGLZJQyKi5X3znKhSTywpcFcKoW6hgjeh4fJW24jhzwBosG6eAzDINm+K02pHCG8qZ/D/hIbu+ui0ENDKqrVyFhnQtX5/QJkVQtj8M4a0FIfdtE3wkxaKtP6IXWIy4DesSdGWONVWLfi2eq62A5ts5MFqMoSV3XjTYuCgXqZQ6eOE+NIBQRqpZxLNFSzbJwWXpAg2kBMkpy5+ywOByjmWzUwjnIFl1T17R8DpTU/93ojx+/q1p+b1o5is5KcoP7QwjOqzjHJH8bTytzRbgmRcDMW3ahxgI070d45TMXK2YwRzI6/JbM1P29anQIEFezyYw==",
+        required: false,
+    },
+    ArchiveKey {
+        name: "DLC2",
+        der_base64: "MIIBCwKCAQEAtCXU9a/GBMVoqtpQox9p0/5sWPaIvDp8avLFnIBhN7vkgTwulZHiu64vZAiUAdVeFX4F+Qtk+5ivK488Mu2CzAMJcz5RvyMQJtOQXuDDqzIv21Tr5zuusswoErHxxP8TZNxkHm7Ram7Oqtn7LQnMTYxsBgZZ34yJkRtAmZnGoCu5YaUR5euk8lF75idi97ssczUNV212tLzIMa1YOV7sxOb7+gc0VTIqs3pa+OXLPI/bMfwUc/KNjur5aLDDntQHGx5zuNtc78gMGwlmPqDhgTusKPO4VyKvoL0kITYvukoXJATaa1HIWVUjhLm+/uj8r8PNgolerDeS+8FM5Bpe9QIEHwCZLw==",
+        required: false,
+    },
+];
+
 impl ArchiveKey {
     pub fn decode(&self) -> Result<RsaPublicKey> {
         parse_pkcs1(&base64_decode(self.der_base64)?)
             .map_err(|error| error.context(format!("archive key {}", self.name)))
+    }
+}
+
+const PEM_BEGIN: &str = "-----BEGIN RSA PUBLIC KEY-----";
+const PEM_END: &str = "-----END RSA PUBLIC KEY-----";
+
+impl RsaPublicKey {
+    /// A PKCS#1 `RSA PUBLIC KEY` PEM file, the form Dark Souls II ships its archive keys in.
+    pub fn from_pem(text: &str) -> Result<Self> {
+        let body = text
+            .split_once(PEM_BEGIN)
+            .and_then(|(_, rest)| rest.split_once(PEM_END))
+            .map(|(body, _)| body)
+            .ok_or_else(|| Error::new("not an `RSA PUBLIC KEY` PEM file"))?;
+        let base64: String = body.split_whitespace().collect();
+        parse_pkcs1(&base64_decode(&base64)?)
     }
 }
 
@@ -136,7 +192,7 @@ mod tests {
 
     #[test]
     fn every_archive_key_is_a_2048_bit_modulus_with_its_exponent() {
-        for key in ARCHIVE_KEYS {
+        for key in ARCHIVE_KEYS.iter().chain(DS3_ARCHIVE_KEYS) {
             let decoded = key.decode().unwrap();
             assert_eq!(decoded.modulus.bits(), 2048, "{}", key.name);
             assert!(decoded.exponent.bits() > 1, "{}", key.name);
