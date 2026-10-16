@@ -29,10 +29,11 @@ const DONOR_TRIANGLES: usize = 2498;
 /// The canary FLVER as this test builds it, in memory; later changes to the writer must leave
 /// it as it is. The M2 package's own (the same 1995488 bytes, sha256 `ca2eb994...`) was built
 /// from this construction written out as OBJ and weight TSV, whose decimal text rounds the
-/// vertices; `rebuild-flver` on those two files reproduces that one.
+/// vertices; `rebuild-flver` on those two files reproduced that one until 2026-10-15, when vertex
+/// colour 1 became the donor's (255, 0, 0, 255) and the third UV zero.
 const CANARY_FLVER: (usize, &str) = (
     1_995_488,
-    "0edba983f2d7b467c22e908a41d5b05f4633f0d5c7be80bfe6c4b591d5ba59eb",
+    "ec3d586b401ef705f863d3add991854970f597f2d58aa7368b7e5c65930ec72c",
 );
 
 /// `mesh` behind `DONOR_VERTICES` copies of its first vertex (each weighted as that vertex is)

@@ -25,6 +25,7 @@ use mushroom_man_builder::{
     character::C2650,
     edge::{EDGE_MATERIAL, TEMPLATE_FLVER, edge_material, edge_template},
     flver::{
+        Flver, parse_layout_members, parse_u32_list,
         rebuild::{HeaderAppend, rebuild},
         verify::check_flver,
     },
@@ -46,14 +47,16 @@ const CUTOUT_SLOTS: [SlotShape; 3] = [
 ];
 
 /// The rebuilt FLVER with the Edge material, and with the fallback. The Windows build's package
-/// carries the first byte for byte as both `FC_M_0000.flver` and `FC_M_0000_L.flver`.
+/// carries the first byte for byte as both `FC_M_0000.flver` and `FC_M_0000_L.flver`. Moved on
+/// 2026-10-15 when vertex colour 1 became the donor's (255, 0, 0, 255) and the third UV zero,
+/// and the Edge slot's 416 vertices took the 40-byte `C[AMSN]_e` layout (4992 bytes fewer).
 const CUTOUT_FLVER: (usize, &str) = (
-    1_708_848,
-    "d604b82cb05abd9469e5ab923fa56404b21a947e33e8c99300781e9d0ab43a57",
+    1_703_856,
+    "6c9659c0093dd5efaf5c82803647b6186b7dcb88aa6014bf3b2fd2a3f5390b90",
 );
 const BODY_FLVER: (usize, &str) = (
     1_708_080,
-    "9a8c20fe61f41d33bf84e1927d1d9be8b5b37250a19afe0e5f7ff9b25f77545e",
+    "5b90b8549d1b3488a0fd13be3dbcea0ebfd22566cd90ec0cbf45e4ebb291dfce",
 );
 
 /// The body TPFs, high and low detail, with the Edge material's metallic map and without it: the
@@ -144,6 +147,22 @@ fn write_for_the_oracle(name: &str, bytes: &[u8]) {
     }
 }
 
+/// Mesh `mesh`'s vertex size and its layout's members as (semantic, index, format, offset).
+fn buffer_layout(bytes: &[u8], mesh: usize) -> (usize, Vec<(u32, u32, u32, usize)>) {
+    let flver = Flver::parse(bytes).unwrap();
+    let entry = flver.meshes[mesh];
+    let buffer_index = parse_u32_list(bytes, entry.vertex_buffer_offset, 1).unwrap()[0];
+    let buffer = flver.vertex_buffers[buffer_index as usize];
+    let members = parse_layout_members(bytes, flver.layouts[buffer.layout_index]).unwrap();
+    (
+        buffer.vertex_size,
+        members
+            .iter()
+            .map(|m| (m.semantic_id, m.index, m.format_id, m.struct_offset))
+            .collect(),
+    )
+}
+
 fn assert_fingerprint(what: &str, bytes: &[u8], expected: (usize, &str)) {
     let (len, sha) = fingerprint(bytes);
     assert_eq!(
@@ -206,6 +225,19 @@ fn c2650_rebuilds_into_three_material_slots_with_its_cutouts_on_the_edge_materia
     }
     assert_eq!(model.materials[EDGE_MATERIAL as usize].name, "c2650_edge");
     assert_eq!(model.materials[BODY_MATERIAL as usize].name, "#03#");
+    // Each slot's buffer is laid out as vanilla meshes of its material are: the Edge slot as
+    // `BD_F_1451`'s `C[AMSN]_e` mesh 0, the Body slots as the donor's own body meshes.
+    let edge_layout = buffer_layout(&template, 0);
+    let body_layout = buffer_layout(&donor, 13);
+    assert_eq!(edge_layout.0, 40);
+    for (mesh, material, ..) in CUTOUT_SLOTS {
+        let expected = if material == EDGE_MATERIAL {
+            &edge_layout
+        } else {
+            &body_layout
+        };
+        assert_eq!(&buffer_layout(&out, mesh), expected, "mesh {mesh}");
+    }
 }
 
 #[test]

@@ -97,6 +97,7 @@ fn grown_slot(donor: &[u8]) -> Slot {
         lods,
         obb: Obb::around(positions).unwrap(),
         vertex_bytes,
+        layout: None,
     }
 }
 

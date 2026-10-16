@@ -124,6 +124,7 @@ fn own_slot(donor: &[u8], mesh: usize, material: u32) -> Slot {
         lods,
         obb: Obb::around(positions).unwrap(),
         vertex_bytes,
+        layout: None,
     }
 }
 

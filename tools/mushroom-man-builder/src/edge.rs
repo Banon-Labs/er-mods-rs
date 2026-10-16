@@ -34,6 +34,14 @@ use crate::{
 
 /// The donor material the Edge slot draws with.
 pub const EDGE_MATERIAL: u32 = 14;
+/// The donor mesh whose buffer layout an Edge slot's vertices are written in: mesh 15, the
+/// first hair mesh, whose 40-byte layout (position, normal, one tangent, bone indices and
+/// weights, colour, one packed UV) is the one vanilla `C[AMSN]_e` meshes use, `BD_F_1451`'s
+/// mesh 0 among them. The body meshes' 52-byte layout, used for Edge slots until 2026-10-15,
+/// adds a second tangent and two more UVs, and those slots drew pitch black under ray tracing
+/// while the Body-material slots beside them did not. Vamos (c2920) drew right under ray tracing
+/// once his cloak took this layout, seen in game 2026-10-15.
+pub const EDGE_LAYOUT_DONOR_MESH: usize = 15;
 /// The donor mesh that, alone, draws with [`EDGE_MATERIAL`].
 const EDGE_MATERIAL_OWNER: usize = 14;
 pub const EDGE_MTD: &str = r"N:\GR\data\Material\mtd\Chr_Base\matxml\C[AMSN]_e.matxml";

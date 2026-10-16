@@ -442,7 +442,12 @@ fn write_vertex(
                     put(bytes, off + i * 2, &value.to_le_bytes())?;
                 }
             }
-            (10, 0x10 | 0x11 | 0x13 | 0x2F) => put(bytes, off, &[255; 4])?,
+            // Every vertex of the donor's 15 body meshes and of `BD_F_1451`'s armour holds
+            // (255, 0, 0, 255) here; the donor's hair varies only the alpha. White was written here
+            // until 2026-10-15, when ported bodies drew pitch black under ray tracing.
+            (10, 0x10 | 0x11 | 0x13 | 0x2F) => put(bytes, off, &[255, 0, 0, 255])?,
+            // The third UV is zero on every donor body vertex, so it stays zero.
+            (5, _) if member.index == 2 => {}
             (5, 0x10 | 0x11 | 0x12 | 0x13 | 0x15) => write_uv(bytes, off, vertex.uv, uv_factor)?,
             (5, 0x16 | 0x2E) => {
                 write_uv(bytes, off, vertex.uv, uv_factor)?;
@@ -569,6 +574,31 @@ mod tests {
             assert!(x.abs() < 1e-5 && (y + 1.0).abs() < 1e-5 && z.abs() < 1e-5);
             assert_eq!(w, 1.0);
         }
+    }
+
+    #[test]
+    fn vertex_colour_and_the_third_uv_hold_what_the_donor_body_holds() {
+        // `FC_M_0000`'s body layout from its colour onward: colour 1, then UVs 0, 1 and 2.
+        let member = |struct_offset, semantic_id, format_id, index| LayoutMember {
+            struct_offset,
+            format_id,
+            semantic_id,
+            index,
+        };
+        let members = [
+            member(0, 10, 0x13, 1),
+            member(4, 5, 0x16, 0),
+            member(12, 5, 0x15, 1),
+            member(16, 5, 0x13, 2),
+        ];
+        let vertex = SkinnedVertex {
+            uv: Vec2 { x: 0.5, y: 0.25 },
+            ..SkinnedVertex::default()
+        };
+        let bytes = encode_vertices(&members, 20, &[vertex], 1024.0).unwrap();
+        assert_eq!(bytes[0..4], [255, 0, 0, 255]);
+        assert_ne!(bytes[4..8], [0; 4], "the first UV is written");
+        assert_eq!(bytes[16..20], [0; 4]);
     }
 
     #[test]

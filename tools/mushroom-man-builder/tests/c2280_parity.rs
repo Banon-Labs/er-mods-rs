@@ -30,9 +30,11 @@ const WEIGHTS_TSV: (usize, &str) = (
     73_978,
     "f8a8b1df40c334506d4a7147b6e9dd9cf3c5b55f362c810894e0b7c89817a9ec",
 );
+/// Moved on 2026-10-15 when vertex colour 1 became the donor's (255, 0, 0, 255), from white, and
+/// the third UV zero.
 const PATCHED_DONOR: (usize, &str) = (
     1_826_832,
-    "12041fd8f3e73811472b78a1a0edd4aa8cfe65ab34e6521c80f96233f78a1d0c",
+    "ca364e98242fe1f969a8dd4da28d0f0e69ca3b83a9c1d3752658cd27eba38ebf",
 );
 const TPF_HIGH: (usize, &str) = (
     699_678,

@@ -44,7 +44,7 @@ use crate::{
     bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
     character::{C2280, Character, FitConfig, Writer},
     dcx,
-    edge::{EDGE_MATERIAL, edge_append},
+    edge::{EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, edge_append},
     error::{Context, Error, Result},
     fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
     flver::{
@@ -53,7 +53,7 @@ use crate::{
         mtd::{self, MtdClass},
         parse_layout_members, parse_u32_list,
         patch::{PatchReport, encode_vertices, patch_donor, skin_to_donor},
-        rebuild::{HeaderAppend, Obb, Slot, rebuild},
+        rebuild::{HeaderAppend, Obb, Slot, SlotLayout, rebuild},
         source::{self, Source, StripReport},
     },
     locate,
@@ -764,6 +764,7 @@ pub fn rebuild_body(donor: &[u8], source: &SourceMesh) -> Result<(Vec<u8>, SlotR
         cull_backfaces: true,
         vertex_count: vertices.len(),
         vertex_bytes,
+        layout: None,
         lods: [triangles.clone(), triangles.clone(), triangles.clone()],
         obb,
     };
@@ -812,6 +813,7 @@ pub fn biped_body(
     }
     let flver = Flver::parse(donor)?;
     let layout_of = slot_buffer(donor, &flver, FC_DONOR_MESH_INDEX)?;
+    let edge_buffer = slot_buffer(donor, &flver, EDGE_LAYOUT_DONOR_MESH)?;
     let skinned = skin_to_donor(&export.mesh, &flver)?;
     let mut body = BipedBody {
         slots: Vec::with_capacity(groups.len()),
@@ -847,6 +849,17 @@ pub fn biped_body(
             }
         };
         body.edge |= material == EDGE_MATERIAL;
+        let (layout, layout_buffer) = if material == EDGE_MATERIAL {
+            (
+                Some(SlotLayout {
+                    layout_index: edge_buffer.layout_index,
+                    vertex_size: edge_buffer.vertex_size,
+                }),
+                edge_buffer,
+            )
+        } else {
+            (None, buffer)
+        };
         let mut remap = vec![u32::MAX; skinned.len()];
         for (new, &old) in group.vertices.iter().enumerate() {
             remap[old] = u32::try_from(new)?;
@@ -863,11 +876,12 @@ pub fn biped_body(
             cull_backfaces: group.source.cull_backfaces,
             vertex_count: vertices.len(),
             vertex_bytes: encode_vertices(
-                &buffer_members(donor, &flver, &buffer)?,
-                buffer.vertex_size,
+                &buffer_members(donor, &flver, &layout_buffer)?,
+                layout_buffer.vertex_size,
                 &vertices,
                 flver.header.uv_factor(),
             )?,
+            layout,
             lods: [triangles.clone(), triangles.clone(), triangles],
             obb: Obb::around(vertices.iter().map(|vertex| vertex.position))
                 .ok_or("a material group has no vertices")?,

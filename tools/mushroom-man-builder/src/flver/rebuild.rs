@@ -44,8 +44,8 @@
 //! as written; every other header offset points before the strings and does not move.
 
 use super::{
-    BONE_SIZE, Flver, LayoutMember, MATERIAL_SIZE, TEXTURE_SIZE, Texture, Vec3, index_range,
-    parse_layout_members, parse_materials, parse_textures, parse_u32_list,
+    BONE_SIZE, Flver, LayoutMember, MATERIAL_SIZE, TEXTURE_SIZE, Texture, Vec3, VertexBuffer,
+    index_range, parse_layout_members, parse_materials, parse_textures, parse_u32_list,
     patch::{ELDEN_RING_FLVER_VERSION, put, write_u32, write_vec3},
 };
 use crate::{
@@ -95,6 +95,8 @@ const FACE_SET_CULL: usize = 0x05;
 const FACE_SET_INDEX_COUNT: usize = 0x08;
 const FACE_SET_INDEX_OFFSET: usize = 0x0C;
 const FACE_SET_BYTE_LENGTH: usize = 0x10;
+const VERTEX_BUFFER_LAYOUT: usize = 0x04;
+const VERTEX_BUFFER_VERTEX_SIZE: usize = 0x08;
 const VERTEX_BUFFER_COUNT: usize = 0x0C;
 const VERTEX_BUFFER_LENGTH: usize = 0x18;
 const VERTEX_BUFFER_OFFSET: usize = 0x1C;
@@ -164,12 +166,32 @@ pub struct Slot {
     pub material: u32,
     pub cull_backfaces: bool,
     pub vertex_count: usize,
-    /// `vertex_count` vertices, already encoded in the layout of the donor mesh's buffer.
+    /// `vertex_count` vertices, already encoded in [`Slot::layout`], or else in the layout of
+    /// the donor mesh's buffer.
     pub vertex_bytes: Vec<u8>,
+    /// Another of the donor's vertex layouts for this mesh's buffer, written into its entry.
+    pub layout: Option<SlotLayout>,
     /// The triangles each distance draws, LOD0 to LOD2. A face set draws the list of its own
     /// distance; its motion-blur copy gets a copy of the same list.
     pub lods: [Vec<[u32; 3]>; 3],
     pub obb: Obb,
+}
+
+/// One of the donor's buffer layouts and the vertex size buffers in it have.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SlotLayout {
+    pub layout_index: usize,
+    pub vertex_size: usize,
+}
+
+impl Slot {
+    /// The layout and vertex size this slot's vertices are in, given its donor mesh's buffer.
+    fn layout_or(&self, buffer: &VertexBuffer) -> SlotLayout {
+        self.layout.unwrap_or(SlotLayout {
+            layout_index: buffer.layout_index,
+            vertex_size: buffer.vertex_size,
+        })
+    }
 }
 
 /// What the header region gains (see the module docs): bytes after the donor's last string, and
@@ -595,6 +617,18 @@ pub fn rebuild(
                 }
             };
             let entry = flver.vertex_buffer_table_offset(buffer_index);
+            if let Some(layout) = slot.and_then(|slot| slot.layout) {
+                write_u32(
+                    &mut out,
+                    entry + VERTEX_BUFFER_LAYOUT,
+                    u32::try_from(layout.layout_index)?,
+                )?;
+                write_u32(
+                    &mut out,
+                    entry + VERTEX_BUFFER_VERTEX_SIZE,
+                    u32::try_from(layout.vertex_size)?,
+                )?;
+            }
             write_u32(
                 &mut out,
                 entry + VERTEX_BUFFER_COUNT,
@@ -701,12 +735,26 @@ fn check_slot(donor: &[u8], flver: &Flver, slot: &Slot, slots: &[Slot]) -> Resul
         .vertex_buffers
         .get(*buffer_index as usize)
         .ok_or("slot mesh names a missing vertex buffer")?;
-    if slot.vertex_bytes.len() != slot.vertex_count * buffer.vertex_size {
+    let SlotLayout {
+        layout_index,
+        vertex_size,
+    } = slot.layout_or(buffer);
+    if slot.vertex_bytes.len() != slot.vertex_count * vertex_size {
         return Err(Error::new(format!(
             "slot for mesh {at}: {} vertex bytes for {} vertices of {} bytes",
             slot.vertex_bytes.len(),
             slot.vertex_count,
-            buffer.vertex_size
+            vertex_size
+        )));
+    }
+    if let Some(layout) = slot.layout
+        && !flver.vertex_buffers.iter().any(|other| {
+            (other.layout_index, other.vertex_size) == (layout.layout_index, layout.vertex_size)
+        })
+    {
+        return Err(Error::new(format!(
+            "slot for mesh {at}: no donor buffer is laid out as layout {} of {} bytes",
+            layout.layout_index, layout.vertex_size
         )));
     }
     for face_set_index in parse_u32_list(donor, mesh.face_set_offset, mesh.face_set_count)? {
@@ -745,12 +793,12 @@ fn check_slot(donor: &[u8], flver: &Flver, slot: &Slot, slots: &[Slot]) -> Resul
     }
     let layout = flver
         .layouts
-        .get(buffer.layout_index)
+        .get(layout_index)
         .ok_or("slot mesh's vertex buffer names a missing layout")?;
     check_bone_indices(
         slot,
         &parse_layout_members(donor, *layout)?,
-        buffer.vertex_size,
+        vertex_size,
         flver.bones.len(),
     )
 }
@@ -844,6 +892,7 @@ mod tests {
             cull_backfaces: false,
             vertex_count,
             vertex_bytes: (0..vertex_count).flat_map(synthetic::vertex).collect(),
+            layout: None,
             lods: counts.map(lod),
             obb: Obb {
                 min: Vec3 {
