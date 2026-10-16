@@ -1,5 +1,6 @@
-//! A popup whenever anyone in the session breaks the competitive duel ruleset:
-//! "Attention: Rule break: <player>. <rule>", with what broke it underneath.
+//! A list in the top-right corner of every time anyone in the session breaks the competitive duel
+//! ruleset: the newest ten, one line each with the time, the player and the rule. Every break is
+//! also appended to `er-duel-rules-breaks.txt` beside the game, with the date and what broke it.
 //!
 //! Every check and every decision about when a popup fires lives in `er-duel-rules-core`, where
 //! `cargo test` proves it. This DLL only reads the game into that crate's `PlayerSnapshot`s,
@@ -8,8 +9,8 @@
 //! # What this DLL does to the game
 //!
 //! Nothing. No detours, no memory writes, no param edits, no input. A `FrameBegin` game task
-//! reads the players, the param tables and the bullet manager; the overlay draws what that task
-//! queued.
+//! reads the players, the param tables and the bullet manager; the overlay draws the list that
+//! task keeps.
 //!
 //! # The log is the oracle
 //!
@@ -25,6 +26,8 @@ mod game;
 mod params;
 #[cfg(windows)]
 mod render;
+#[cfg(windows)]
+mod steam;
 
 #[cfg(windows)]
 use std::collections::HashMap;

@@ -2,8 +2,10 @@
 """The duel ruleset's ban lists, resolved against the installed game, as a Rust table.
 
     python3 scripts/er-duel-rules-gen.py            # print the table
-    python3 scripts/er-duel-rules-gen.py --write    # rewrite crates/er-duel-rules-core/src/tables.rs
-    python3 scripts/er-duel-rules-gen.py --check    # exit 1 when that file no longer matches
+    python3 scripts/er-duel-rules-gen.py --write    # rewrite crates/er-duel-rules-core/src/tables.rs,
+                                                    # the Frida agent's and the Cheat Engine port's
+                                                    # data blocks, and er-duel-rules.CT
+    python3 scripts/er-duel-rules-gen.py --check    # exit 1 when any of them no longer matches
     python3 scripts/er-duel-rules-gen.py --selftest
 
 The ruleset names things in English ("Bloodhound's Step", "Rot Greases", "Winged Crystal Tear").
@@ -25,6 +27,7 @@ import importlib.util
 import io
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -35,6 +38,20 @@ OUT = os.path.join(ROOT, 'crates', 'er-duel-rules-core', 'src', 'tables.rs')
 FRIDA_OUT = os.path.join(HERE, 'frida', 'er-duel-rules.js')
 FRIDA_BEGIN = '// --- BEGIN GENERATED (scripts/er-duel-rules-gen.py --write) ---'
 FRIDA_END = '// --- END GENERATED ---'
+# The Cheat Engine port: its data block is written into the Lua source, and the table that
+# carries that source (with the SpEffect apply hook) is assembled from it.
+CE_LUA = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.lua')
+CE_TABLE = os.path.join(HERE, 'cheat-engine', 'er-duel-rules.CT')
+LUA_BEGIN = '-- --- BEGIN GENERATED (scripts/er-duel-rules-gen.py --write) ---'
+LUA_END = '-- --- END GENERATED ---'
+# The hook sits right after SpecialEffect::Apply's inner apply call (1.17.1 0x1404fb799), where
+# EAX is the result, EBP the effect id and R14 the owner -- the values the Frida agent reads off
+# the function's arguments and return. The 17 bytes it replaces run to the `jmp` to the
+# epilogue, short of 0x1404fb7af, which the early-failure branch jumps to; nothing jumps inside
+# them (the function's whole listing on the 1.17 dump, 2026-10-16).
+CE_HOOK_RVA = 0x4fb79e
+CE_HOOK_BYTES = '48 8B 9C 24 80 00 00 00 85 C0 0F 49 F8 8B C7 EB 04'
+CE_HOOK_RESUME_RVA = 0x4fb7b3
 # Where each param sits in SoloParamRepository and its struct name, read from the same upstream
 # list the DLL compiles against, so the agent and the DLL cannot disagree about a slot.
 UPSTREAM_SOLO_PARAMS = os.path.join(os.path.dirname(ROOT), 'fromsoftware-rs', 'crates', 'eldenring',
@@ -601,6 +618,7 @@ def build(g):
     tears = sorted((i, t) for i, t in g.text['GoodsName'].items()
                    if i in g.goods and g.goods[i]['goodsType'] == GOODS_TYPE_TEAR
                    and not t.startswith('['))
+    flask_rows = set(allowed)
     tear_ban, tear_rows = [], {}
     for gid, name in tears:
         rows = g.closure(*g.goods_refs(gid))
@@ -621,6 +639,19 @@ def build(g):
         if not any(n == name for _, n, _ in tear_ban):
             raise Missing(f'tear {name!r}')
     out['tear_ban'] = tear_ban
+    # What a banned tear puts on its drinker when the physick is drunk: every row its closure
+    # reaches that no allowed tear and no flask also reaches, so a row names one tear's use.
+    banned_ids = {gid for gid, _, _ in tear_ban}
+    shared = set(flask_rows)
+    for gid, rows in tear_rows.items():
+        if gid not in banned_ids:
+            shared |= set(rows)
+    tear_effects = {}
+    for gid, name, why in tear_ban:
+        for s in tear_rows[gid]:
+            if s not in shared:
+                tear_effects.setdefault(s, (gid, name, why))
+    out['tear_effects'] = sorted((s, gid, name, why) for s, (gid, name, why) in tear_effects.items())
 
     # Spells and consumables: body buffs and heals.
     buffs, heals = {}, {}
@@ -875,6 +906,13 @@ def render(t):
         p(f'    (Named {{ id: {i}, name: {rust_str(n)} }}, TearBan::{why}),')
     p('];')
     p()
+    p('/// SpEffect rows a banned tear puts on its drinker, and that tear: (SpEffect id, tear, why).')
+    p('/// Only rows no allowed tear or flask also reaches, so each one names a use of that tear.')
+    p('pub const TEAR_EFFECTS: &[(i32, Named, TearBan)] = &[')
+    for s, i, n, why in t['tear_effects']:
+        p(f'    ({s}, Named {{ id: {i}, name: {rust_str(n)} }}, TearBan::{why}),')
+    p('];')
+    p()
     named('BODY_BUFFS', 'SpEffect rows that buff the player whatever they hold, with the spell, '
           'item or skill that applies them.', t['body_buff'])
     named('HEALS', 'SpEffect rows that restore HP outside the Crimson flask and the on-hit heals '
@@ -944,11 +982,10 @@ def frida_param_fields(g):
     return out
 
 
-def render_js(t, params):
-    """The agent's data block: the same tables as tables.rs, in JS."""
-    import json
+def agent_data(t):
+    """The tables the Frida agent and the Cheat Engine port read, keyed as they read them."""
     named = lambda rows: [[i, n] for i, n in rows]
-    data = {
+    return {
         'wepType': {c: v for c, (v, _) in t['wep_type'].items()},
         'weapon': {c: v for c, (v, _) in t['weapon'].items()},
         'affinity': {c: v for c, (v, _) in t['affinity'].items()},
@@ -960,6 +997,7 @@ def render_js(t, params):
         'swordDanceFastClips': list(SWORD_DANCE_FAST_CLIPS),
         'chillingMistBuffs': t['chilling_mist'],
         'bannedTears': [[i, n, why] for i, n, why in t['tear_ban']],
+        'tearEffects': [[s, i, n, why] for s, i, n, why in t['tear_effects']],
         'bodyBuffs': named(t['body_buff']),
         'heals': named(t['heal']),
         'regenEquipment': [[k, i, n] for k, i, n in t['regen_equipment']],
@@ -974,10 +1012,163 @@ def render_js(t, params):
         'runeArcEffects': named(t['rune_arc']),
         'spellBullets': [[n, bl] for n, bl in t['spell_bullets'].values()],
     }
+
+
+def render_js(t, params):
+    """The agent's data block: the same tables as tables.rs, in JS."""
+    import json
+    data = agent_data(t)
     return (f'{FRIDA_BEGIN}\n'
             f'const T = {json.dumps(data, sort_keys=True)};\n'
             f'const PARAM_FIELDS = {json.dumps(params, sort_keys=True)};\n'
             f'{FRIDA_END}')
+
+
+LUA_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*$')
+
+
+def lua_literal(value):
+    """`value` as a Lua constructor; lists become 1-based arrays, as the port indexes them."""
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, str):
+        escaped = value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+        return f'"{escaped}"'
+    if isinstance(value, (list, tuple)):
+        return '{' + ', '.join(lua_literal(v) for v in value) + '}'
+    if isinstance(value, dict):
+        parts = []
+        for k in sorted(value):
+            key = k if LUA_NAME.match(k) else f'[{lua_literal(k)}]'
+            parts.append(f'{key} = {lua_literal(value[k])}')
+        return '{' + ', '.join(parts) + '}'
+    raise TypeError(f'no Lua form for {value!r}')
+
+
+def render_lua(t, params):
+    """The Cheat Engine port's data block: the same tables as the agent's, in Lua."""
+    return (f'{LUA_BEGIN}\n'
+            f'M.T = {lua_literal(agent_data(t))}\n'
+            f'M.PARAM_FIELDS = {lua_literal(params)}\n'
+            f'{LUA_END}')
+
+
+def with_block(text, begin_marker, end_marker, block, where):
+    begin, end = text.find(begin_marker), text.find(end_marker)
+    if begin < 0 or end < begin:
+        raise SystemExit(f'{where}: generated-block markers missing')
+    return text[:begin] + block + text[end + len(end_marker):]
+
+
+def render_ct(lua_source):
+    """The Cheat Engine table: one entry whose Auto Assembler script runs the Lua referee and
+    places the SpEffect apply hook that feeds it."""
+    if ']]>' in lua_source:
+        raise SystemExit(f'{CE_LUA}: contains a CDATA terminator')
+    hook = f'eldenring.exe+{CE_HOOK_RVA:X}'
+    script = f'''[ENABLE]
+{{$lua}}
+if syntaxcheck then return end
+local function load_referee()
+{lua_source.rstrip()}
+end
+if ER_DUEL_RULES and ER_DUEL_RULES_RUNNING then ER_DUEL_RULES.stop(ER_DUEL_RULES_RUNNING) end
+ER_DUEL_RULES_RUNNING = nil
+ER_DUEL_RULES = load_referee()
+if getOpenedProcessID() == 0 or getAddressSafe('eldenring.exe') == nil then
+  openProcess('eldenring.exe')
+  if getOpenedProcessID() == 0 then error('er-duel-rules: start Elden Ring first, then tick this again') end
+  reinitializeSymbolhandler(true)
+end
+-- A hook an earlier Cheat Engine left behind (closed without unticking) is adopted rather than
+-- refused, so the entry can be ticked again without restarting the game.
+local leftover = ER_DUEL_RULES.preflight(0x{CE_HOOK_RVA:X}, '{CE_HOOK_BYTES}')
+ER_DUEL_RULES_ADOPTED = leftover ~= nil
+if leftover ~= nil then
+  unregisterSymbol('duel_apply_ring')
+  registerSymbol('duel_apply_ring', leftover, true)
+end
+ER_DUEL_RULES_RUNNING = ER_DUEL_RULES.start()
+if leftover ~= nil then return '' end
+return [==[
+assert({hook},{CE_HOOK_BYTES})
+alloc(duel_apply_cave,$100,{hook})
+alloc(duel_apply_ring,$1010,{hook})
+label(duel_apply_skip)
+registersymbol(duel_apply_ring)
+
+// Every SpEffect that took hold: owner and id into a 256-entry ring, the count after the write
+// stored last (er-duel-rules.lua ringEntries), then the replaced instructions. leftoverRing
+// recognises this cave by its first four instructions, so they change together.
+duel_apply_cave:
+  test eax,eax
+  js duel_apply_skip
+  mov ecx,1
+  lock xadd [duel_apply_ring],ecx
+  mov edx,ecx
+  and edx,FF
+  shl edx,4
+  lea r8,[duel_apply_ring+10]
+  inc ecx
+  mov [r8+rdx],r14
+  mov [r8+rdx+8],ebp
+  mov [r8+rdx+C],ecx
+duel_apply_skip:
+  mov rbx,[rsp+80]
+  test eax,eax
+  cmovns edi,eax
+  mov eax,edi
+  jmp eldenring.exe+{CE_HOOK_RESUME_RVA:X}
+
+{hook}:
+  jmp duel_apply_cave
+]==]
+{{$asm}}
+
+[DISABLE]
+{{$lua}}
+if syntaxcheck then return end
+if ER_DUEL_RULES and ER_DUEL_RULES_RUNNING then ER_DUEL_RULES.stop(ER_DUEL_RULES_RUNNING) end
+ER_DUEL_RULES_RUNNING = nil
+local restore = [==[
+{hook}:
+  db {CE_HOOK_BYTES}
+]==]
+-- An adopted hook's memory belongs to no allocation of this script; it stays, unused.
+if ER_DUEL_RULES_ADOPTED then
+  unregisterSymbol('duel_apply_ring')
+  return restore
+end
+return restore .. [==[
+unregistersymbol(duel_apply_ring)
+dealloc(duel_apply_cave)
+dealloc(duel_apply_ring)
+]==]
+{{$asm}}
+'''
+    comment = ('Elden Ring duel ruleset referee, generated by scripts/er-duel-rules-gen.py from '
+               'scripts/cheat-engine/er-duel-rules.lua. Start Elden Ring, then tick the entry: '
+               'every rule break goes to er-duel-rules-breaks.txt beside eldenring.exe and to the '
+               'window it opens; er-duel-rules-ce.log beside it is the file to send back.')
+    return f'''<?xml version="1.0" encoding="utf-8"?>
+<CheatTable CheatEngineTableVersion="45">
+  <CheatEntries>
+    <CheatEntry>
+      <ID>0</ID>
+      <Description>"Duel rules referee (Elden Ring 1.17.1)"</Description>
+      <Color>0080FF</Color>
+      <VariableType>Auto Assembler Script</VariableType>
+      <AssemblerScript><![CDATA[{script}]]></AssemblerScript>
+    </CheatEntry>
+  </CheatEntries>
+  <UserdefinedSymbols/>
+  <Comments>{comment}</Comments>
+</CheatTable>
+'''
 
 
 def with_frida_block(agent, block):
@@ -1010,10 +1201,17 @@ def main():
     if a.test_agent:
         test = os.path.join(HERE, 'test-er-duel-rules-frida.cjs')
         try:
-            return subprocess.run(['node', test], timeout=25).returncode
+            code = subprocess.run(['node', test], timeout=25).returncode
         except OSError as e:
             print(f'er-duel-rules-gen: node is required to test the Frida agent: {e}', file=sys.stderr)
             return 1
+        # The Cheat Engine port is Lua 5.3 (Cheat Engine's own); 5.4 and later run it unchanged.
+        lua = next((shutil.which(n) for n in ('lua', 'lua5.4', 'lua5.3') if shutil.which(n)), None)
+        if lua is None:
+            print('er-duel-rules-gen: SKIP the Cheat Engine port tests (no lua 5.3+ on PATH)')
+            return code
+        ce = subprocess.run([lua, os.path.join(HERE, 'test-er-duel-rules-ce.lua')], timeout=25).returncode
+        return code or ce
     try:
         g = Game()
     except SystemExit as e:
@@ -1026,11 +1224,18 @@ def main():
     params = frida_param_fields(g)
     agent_now = open(FRIDA_OUT, encoding='utf-8').read()
     agent = with_frida_block(agent_now, render_js(t, params))
+    lua_now = open(CE_LUA, encoding='utf-8').read()
+    lua = with_block(lua_now, LUA_BEGIN, LUA_END, render_lua(t, params), CE_LUA)
+    table_now = open(CE_TABLE, encoding='utf-8').read() if os.path.exists(CE_TABLE) else ''
+    table = render_ct(lua)
     if a.selftest:
         assert t['wep_type']['THRUSTING_SHIELD'][0] != t['wep_type']['MEDIUM_SHIELD'][0]
         assert t['skill']['BLOODHOUNDS_STEP'][0] == 156, t['skill']['BLOODHOUNDS_STEP']
         assert any(n == 'Parry' for _, n in t['parry'])
         assert t['body_buff'] and t['heal'] and t['tear_ban']
+        # Crimson Bubbletear's own row (goods 11007 refId_default), the one equipped on 2026-10-16.
+        assert any(s == 3512 and n == 'Crimson Bubbletear' and why == 'Heal'
+                   for s, _, n, why in t['tear_effects']), t['tear_effects']
         assert params['EquipParamWeapon']['index'] == 0, params['EquipParamWeapon']
         assert params['SpEffectParam']['fields']['spCategory'][1] == 'u16'
         print('er-duel-rules-gen selftest: PASS')
@@ -1038,7 +1243,9 @@ def main():
     if a.check:
         stale = [path for path, have, want in ((OUT, open(OUT, encoding='utf-8').read()
                                                 if os.path.exists(OUT) else '', text),
-                                               (FRIDA_OUT, agent_now, agent)) if have != want]
+                                               (FRIDA_OUT, agent_now, agent),
+                                               (CE_LUA, lua_now, lua),
+                                               (CE_TABLE, table_now, table)) if have != want]
         for path in stale:
             print(f'er-duel-rules-gen: {path} is stale; rerun with --write', file=sys.stderr)
         if stale:
@@ -1051,7 +1258,11 @@ def main():
             f.write(text)
         with open(FRIDA_OUT, 'w', encoding='utf-8') as f:
             f.write(agent)
-        print(f'wrote {OUT}\nwrote {FRIDA_OUT}')
+        with open(CE_LUA, 'w', encoding='utf-8') as f:
+            f.write(lua)
+        with open(CE_TABLE, 'w', encoding='utf-8') as f:
+            f.write(table)
+        print(f'wrote {OUT}\nwrote {FRIDA_OUT}\nwrote {CE_LUA}\nwrote {CE_TABLE}')
         return 0
     sys.stdout.write(text)
     return 0

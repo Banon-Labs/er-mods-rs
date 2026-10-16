@@ -424,6 +424,355 @@ pub const BANNED_TEARS: &[(Named, TearBan)] = &[
     ),
 ];
 
+/// SpEffect rows a banned tear puts on its drinker, and that tear: (SpEffect id, tear, why).
+/// Only rows no allowed tear or flask also reaches, so each one names a use of that tear.
+pub const TEAR_EFFECTS: &[(i32, Named, TearBan)] = &[
+    (
+        3505,
+        Named {
+            id: 11002,
+            name: "Crimson Crystal Tear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3512,
+        Named {
+            id: 11007,
+            name: "Crimson Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3513,
+        Named {
+            id: 11007,
+            name: "Crimson Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3515,
+        Named {
+            id: 11021,
+            name: "Strength-knot Crystal Tear",
+        },
+        TearBan::Stat,
+    ),
+    (
+        3516,
+        Named {
+            id: 11022,
+            name: "Dexterity-knot Crystal Tear",
+        },
+        TearBan::Stat,
+    ),
+    (
+        3517,
+        Named {
+            id: 11023,
+            name: "Intelligence-knot Crystal Tear",
+        },
+        TearBan::Stat,
+    ),
+    (
+        3518,
+        Named {
+            id: 11024,
+            name: "Faith-knot Crystal Tear",
+        },
+        TearBan::Stat,
+    ),
+    (
+        3519,
+        Named {
+            id: 11018,
+            name: "Leaden Hardtear",
+        },
+        TearBan::Named,
+    ),
+    (
+        3550,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3551,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3552,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3553,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3554,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3555,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3556,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3557,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3558,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3559,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3560,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3561,
+        Named {
+            id: 11013,
+            name: "Thorny Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        3580,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3581,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3582,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3583,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3584,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3585,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3586,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        3587,
+        Named {
+            id: 11020,
+            name: "Crimsonwhorl Bubbletear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        102000,
+        Named {
+            id: 2011070,
+            name: "Deflecting Hardtear",
+        },
+        TearBan::Named,
+    ),
+    (
+        511009,
+        Named {
+            id: 11009,
+            name: "Crimsonburst Crystal Tear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        511012,
+        Named {
+            id: 11012,
+            name: "Winged Crystal Tear",
+        },
+        TearBan::Named,
+    ),
+    (
+        511014,
+        Named {
+            id: 11014,
+            name: "Spiked Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        511015,
+        Named {
+            id: 11015,
+            name: "Windy Crystal Tear",
+        },
+        TearBan::Named,
+    ),
+    (
+        511016,
+        Named {
+            id: 11015,
+            name: "Windy Crystal Tear",
+        },
+        TearBan::Named,
+    ),
+    (
+        511026,
+        Named {
+            id: 11026,
+            name: "Stonebarb Cracked Tear",
+        },
+        TearBan::Named,
+    ),
+    (
+        511028,
+        Named {
+            id: 11028,
+            name: "Flame-Shrouding Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        511029,
+        Named {
+            id: 11029,
+            name: "Magic-Shrouding Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        511030,
+        Named {
+            id: 11030,
+            name: "Lightning-Shrouding Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        511031,
+        Named {
+            id: 11031,
+            name: "Holy-Shrouding Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        20511010,
+        Named {
+            id: 2011010,
+            name: "Crimsonburst Dried Tear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        20511011,
+        Named {
+            id: 2011010,
+            name: "Crimsonburst Dried Tear",
+        },
+        TearBan::Heal,
+    ),
+    (
+        20511050,
+        Named {
+            id: 2011050,
+            name: "Bloodsucking Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+    (
+        20511051,
+        Named {
+            id: 2011050,
+            name: "Bloodsucking Cracked Tear",
+        },
+        TearBan::Damage,
+    ),
+];
+
 /// SpEffect rows that buff the player whatever they hold, with the spell, item or skill that applies them.
 pub const BODY_BUFFS: &[Named] = &[
     Named {

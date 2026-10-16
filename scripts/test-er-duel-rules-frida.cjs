@@ -297,15 +297,18 @@ test('a weapon buff kept across a weapon change is a buff transfer', () => {
 
 test('spell bullets name the spell', () => {
     const [spell, bullets] = T.spellBullets[0];
-    assert.deepStrictEqual(A.check(player({ bullets: [bullets[0]] }), facts()), [{ rule: 'BannedSpell', detail: spell }]);
+    assert.deepStrictEqual(A.check(player({ bullets: [bullets[0]] }), facts()),
+        [{ rule: 'BannedSpell', detail: spell, onEquipment: false, event: false }]);
 });
 
-test('light roll needs a known load at or under thirty percent', () => {
+test('light roll is a roll at or under thirty percent', () => {
     const f = facts({ [LONGSWORD]: w(3, 3.5) });
     const p = player({ endurance: 40, weaponsRight: [LONGSWORD, -1, -1], armor: [-1, -1, -1, -1] });
+    assert.ok(!rules(p, f).includes('LightRoll'), 'light, but no roll');
+    p.newAnims = [27100];
     assert.ok(rules(p, f).includes('LightRoll'));
     p.armor[0] = HEAVY_ARMOR;
-    assert.ok(!rules(p, f).includes('LightRoll'));
+    assert.ok(!rules(p, f).includes('LightRoll'), 'a roll at medium load');
     assert.strictEqual(A.equipLoad(player({ weaponsRight: [LONGSWORD, -1, -1] }), facts()), null, 'unknown item -> no load');
 });
 
@@ -313,12 +316,46 @@ test('a lasting break pops once, and again only after it was gone', () => {
     const r = new A.Referee();
     const f = facts();
     const p = player({ level: 150 });
-    assert.strictEqual(r.observe(0, [p], f).length, 1);
-    for (let t = 16; t < 30000; t += 16) assert.strictEqual(r.observe(t, [p], f).length, 0);
-    p.level = 125; r.observe(30000, [p], f);
-    p.level = 150; assert.strictEqual(r.observe(35000, [p], f).length, 0);
-    p.level = 125; r.observe(36000, [p], f);
-    p.level = 150; assert.strictEqual(r.observe(50000, [p], f).length, 1);
+    const opponent = player({ key: '8', name: 'opponent' });
+    const both = () => [p, opponent];
+    assert.strictEqual(r.observe(0, both(), f).length, 1);
+    for (let t = 16; t < 30000; t += 16) assert.strictEqual(r.observe(t, both(), f).length, 0);
+    p.level = 125; r.observe(30000, both(), f);
+    p.level = 150; assert.strictEqual(r.observe(30500, both(), f).length, 0, 'gone only 0.5 s');
+    p.level = 125; r.observe(31000, both(), f);
+    p.level = 150; assert.strictEqual(r.observe(33000, both(), f).length, 1);
+});
+
+test('equipment is judged once an opponent shares the world, and acts always', () => {
+    const r = new A.Referee();
+    const f = facts();
+    const p = player({ level: 9, isLocal: true });
+    assert.strictEqual(r.observe(0, [p], f).length, 0);
+    p.speffects = [T.spiritAshTriggers[0][0]];
+    assert.deepStrictEqual(r.observe(100, [p], f).map((a) => a.rule), ['SpiritAshes']);
+    p.speffects = [];
+    assert.deepStrictEqual(r.observe(200, [p, player({ key: '8', name: 'opponent' })], f).map((a) => a.rule), ['RuneLevel']);
+});
+
+test('every use of a banned skill is its own break', () => {
+    const r = new A.Referee();
+    const p = player({});
+    let uses = 0;
+    for (const t of [0, 300, 600]) {
+        p.newAnims = [(600 + T.skill.BLOODHOUNDS_STEP) * 1000000];
+        uses += r.observe(t, [p], facts()).length;
+        p.newAnims = [];
+        r.observe(t + 16, [p], facts());
+    }
+    assert.strictEqual(uses, 3);
+});
+
+test('a tear equipped waits for a match, and a tear drunk does not', () => {
+    const p = player({ physick: [11007, -1, -1] });
+    assert.deepStrictEqual(A.check(p, facts()), [{ rule: 'Healing', detail: 'Crimson Bubbletear', onEquipment: true, event: false }]);
+    p.physick = [-1, -1, -1];
+    p.speffects = [3512];
+    assert.deepStrictEqual(A.check(p, facts()), [{ rule: 'Healing', detail: 'Crimson Bubbletear', onEquipment: false, event: false }]);
 });
 
 test('the third blue flask of a round breaks the rule and a death refills', () => {
@@ -337,15 +374,23 @@ test('the third blue flask of a round breaks the rule and a death refills', () =
 });
 
 test('the headline reads the way the popup does', () => {
-    assert.strictEqual(A.headline({ player: 'Vagabond', isLocal: true, rule: 'RuneLevel' }), 'Attention: Rule break: Vagabond (you). Rune Level: 125');
+    const a = { player: 'Vagabond', isLocal: true, rule: 'RuneLevel' };
+    assert.strictEqual(A.headline(a, 'The Nut Wizard'), 'Attention: Rule break: Vagabond (The Nut Wizard). Rune Level: 125');
+    assert.strictEqual(A.headline(a, null), 'Attention: Rule break: Vagabond (you). Rune Level: 125');
 });
 
 test('a break is filed as the DLL files it (feed::Entry::file_line)', () => {
     const when = { year: 2026, month: 10, day: 16, hour: 16, minute: 12, second: 5 };
-    assert.strictEqual(A.breakLine(when, { player: 'Lil Chud', isLocal: true, rule: 'SpiritAshes', detail: 'Noble Sorcerer Ashes' }),
-        '2026-10-16 16:12:05  Lil Chud (you)  Spirit Ashes  --  Noble Sorcerer Ashes');
-    assert.strictEqual(A.breakLine(when, { player: 'Opponent', isLocal: false, rule: 'SpiritAshes', detail: '' }),
+    assert.strictEqual(A.breakLine(when, { player: 'Lil Chud', isLocal: true, rule: 'SpiritAshes', detail: 'Noble Sorcerer Ashes' }, 'The Nut Wizard'),
+        '2026-10-16 16:12:05  Lil Chud (The Nut Wizard)  Spirit Ashes  --  Noble Sorcerer Ashes');
+    assert.strictEqual(A.breakLine(when, { player: 'Opponent', isLocal: false, rule: 'SpiritAshes', detail: '' }, 'The Nut Wizard'),
         '2026-10-16 16:12:05  Opponent  Spirit Ashes');
+});
+
+test('the local player is named by Steam, and marked (you) only without it (feed::player_label)', () => {
+    assert.strictEqual(A.playerLabel('Lion Stronk', true, 'The Nut Wizard'), 'Lion Stronk (The Nut Wizard)');
+    assert.strictEqual(A.playerLabel('Lion Stronk', true, ''), 'Lion Stronk (you)');
+    assert.strictEqual(A.playerLabel('Opponent', false, 'The Nut Wizard'), 'Opponent');
 });
 
 console.log(`test-er-duel-rules-frida: ${passed} passed`);

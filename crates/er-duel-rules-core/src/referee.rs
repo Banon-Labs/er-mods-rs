@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::facts::{CATEGORY_LEFT_WEAPON_BUFF, CATEGORY_RIGHT_WEAPON_BUFF, GameFacts};
 use crate::player::{ATTRIBUTE_NAMES, Hand, PlayerSnapshot};
-use crate::rules::{CERULEAN_FLASK_LIMIT, Rule, Violation, check};
+use crate::rules::{CERULEAN_FLASK_LIMIT, Rule, Violation, check, violation};
 use crate::tables;
 
 /// A build as the ruleset means it: level, attributes and everything equipped.
@@ -70,10 +70,13 @@ fn slot_changes<const N: usize>(name: &str, old: &[i32; N], new: &[i32; N]) -> V
         .collect()
 }
 
-/// A break that has been continuously present, or seen again within this long, does not pop
-/// again: a grease on a restricted weapon is one popup, not one per frame. Once it has been gone
-/// this long, its return is news.
-pub const REARM_MS: u64 = 10_000;
+/// A lasting break -- an effect on the player, a grip, equipment in a match -- that has been
+/// continuously present, or seen again within this long, is the same break: a grease on a
+/// restricted weapon is one row, not one per frame. Once it has been gone this long, its return is
+/// a new break with its own row. Long enough to ride out a frame or two an effect goes unseen, short
+/// enough that a second use is its own row. An event ([`crate::rules::Violation::event`]) is never
+/// merged at all.
+pub const REARM_MS: u64 = 1_000;
 
 /// One popup.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,24 +173,32 @@ impl Referee {
                     .get(&p.key)
                     .is_some_and(|&since| now_ms.saturating_sub(since) >= RUNE_ARC_GRACE_MS)
             {
-                violations.push(Violation {
-                    rule: Rule::RuneArc,
-                    detail: format!(
+                violations.push(violation(
+                    Rule::RuneArc,
+                    format!(
                         "no active Rune Arc {} s into the round",
                         RUNE_ARC_GRACE_MS / 1000
                     ),
-                });
+                ));
             }
             if p.is_local {
                 violations.extend(self.carried_buffs(now_ms, p, facts));
             }
             for v in violations {
-                let key = (p.key, v.rule, v.detail.clone());
-                let fresh = self
-                    .last_seen
-                    .get(&key)
-                    .is_none_or(|&last| now_ms.saturating_sub(last) >= REARM_MS);
-                self.last_seen.insert(key, now_ms);
+                if v.on_equipment && !in_match {
+                    continue;
+                }
+                let fresh = if v.event {
+                    true
+                } else {
+                    let key = (p.key, v.rule, v.detail.clone());
+                    let fresh = self
+                        .last_seen
+                        .get(&key)
+                        .is_none_or(|&last| now_ms.saturating_sub(last) >= REARM_MS);
+                    self.last_seen.insert(key, now_ms);
+                    fresh
+                };
                 if fresh {
                     alerts.push(Alert {
                         key: p.key,
@@ -214,9 +225,11 @@ impl Referee {
             flasks.used += 1;
         }
         flasks.drinking = drinking;
-        (flasks.used > CERULEAN_FLASK_LIMIT).then(|| Violation {
-            rule: Rule::CeruleanFlasks,
-            detail: format!("Flask of Cerulean Tears number {} this round", flasks.used),
+        (flasks.used > CERULEAN_FLASK_LIMIT).then(|| {
+            violation(
+                Rule::CeruleanFlasks,
+                format!("Flask of Cerulean Tears number {} this round", flasks.used),
+            )
         })
     }
 
@@ -256,10 +269,10 @@ impl Referee {
                 && now_ms.saturating_sub(h.changed_at) >= BUFF_TRANSFER_GRACE_MS
             {
                 if h.carried.iter().any(|id| buffs.contains(id)) {
-                    out.push(Violation {
-                        rule: Rule::BuffTransfer,
-                        detail: format!("weapon buff kept across a weapon change to {weapon}"),
-                    });
+                    out.push(violation(
+                        Rule::BuffTransfer,
+                        format!("weapon buff kept across a weapon change to {weapon}"),
+                    ));
                 }
                 h.carried.clear();
             }
@@ -301,10 +314,7 @@ impl Referee {
             stats.insert(0, format!("level {} -> {}", old.level, now.level));
         }
         if !stats.is_empty() {
-            out.push(Violation {
-                rule: Rule::Respec,
-                detail: stats.join(", "),
-            });
+            out.push(violation(Rule::Respec, stats.join(", ")));
         }
         let mut gear = slot_changes("right weapon", &old.weapons_right, &now.weapons_right);
         gear.extend(slot_changes(
@@ -319,20 +329,17 @@ impl Referee {
             // Pieces taken off and put back: the poise reset the ruleset blacklists.
             if entered.armor_changed {
                 entered.armor_changed = false;
-                out.push(Violation {
-                    rule: Rule::ArmorSwapPoiseReset,
-                    detail: "armor taken off and put back on".to_owned(),
-                });
+                out.push(violation(
+                    Rule::ArmorSwapPoiseReset,
+                    "armor taken off and put back on",
+                ));
             }
         } else {
             entered.armor_changed = true;
             gear.extend(armor);
         }
         if !gear.is_empty() {
-            out.push(Violation {
-                rule: Rule::SwitchingBuilds,
-                detail: gear.join(", "),
-            });
+            out.push(violation(Rule::SwitchingBuilds, gear.join(", ")));
         }
         out
     }
@@ -371,22 +378,65 @@ mod tests {
         let facts = facts();
         let mut referee = Referee::default();
         let mut p = player(7);
+        let opponent = player(8);
         p.level = 150;
-        assert_eq!(referee.observe(0, &[p.clone()], &facts).len(), 1);
+        let both = |p: &PlayerSnapshot| [p.clone(), opponent.clone()];
+        assert_eq!(referee.observe(0, &both(&p), &facts).len(), 1);
         for t in (16..30_000).step_by(16) {
-            assert!(referee.observe(t, &[p.clone()], &facts).is_empty(), "t={t}");
+            assert!(referee.observe(t, &both(&p), &facts).is_empty(), "t={t}");
         }
         p.level = RUNE_LEVEL;
-        referee.observe(30_000, &[p.clone()], &facts);
+        referee.observe(30_000, &both(&p), &facts);
         p.level = 150;
         assert!(
-            referee.observe(35_000, &[p.clone()], &facts).is_empty(),
-            "gone only 5 s"
+            referee.observe(30_500, &both(&p), &facts).is_empty(),
+            "gone only 0.5 s"
         );
         p.level = RUNE_LEVEL;
-        referee.observe(36_000, &[p.clone()], &facts);
+        referee.observe(31_000, &both(&p), &facts);
         p.level = 150;
-        assert_eq!(referee.observe(50_000, &[p], &facts).len(), 1);
+        assert_eq!(referee.observe(33_000, &both(&p), &facts).len(), 1);
+    }
+
+    #[test]
+    fn every_use_of_a_banned_skill_is_its_own_break() {
+        let facts = facts();
+        let mut referee = Referee::default();
+        let mut p = player(7);
+        // a<600 + swordArtsTypeNew>_<clip>: Bloodhound's Step (156).
+        let bloodhounds_step = (600 + tables::skill::BLOODHOUNDS_STEP) * 1_000_000;
+        let mut uses = 0;
+        for t in [0, 300, 600] {
+            p.new_anims = vec![bloodhounds_step];
+            uses += referee.observe(t, &[p.clone()], &facts).len();
+            p.new_anims.clear();
+            referee.observe(t + 16, &[p.clone()], &facts);
+        }
+        assert_eq!(uses, 3);
+    }
+
+    #[test]
+    fn equipment_is_judged_once_an_opponent_shares_the_world_and_acts_always() {
+        let facts = facts();
+        let mut referee = Referee::default();
+        // Measured 2026-10-16: a base RL9 character judged on its first frame in the world, 176 ms
+        // before a build import made it RL125.
+        let mut p = player(7);
+        p.level = 9;
+        p.is_local = true;
+        assert!(referee.observe(0, &[p.clone()], &facts).is_empty());
+        p.speffects = vec![tables::SPIRIT_ASH_TRIGGERS[0].id];
+        let alone = referee.observe(100, &[p.clone()], &facts);
+        assert_eq!(
+            alone.iter().map(|a| a.rule).collect::<Vec<_>>(),
+            [Rule::SpiritAshes]
+        );
+        p.speffects.clear();
+        let met = referee.observe(200, &[p.clone(), player(8)], &facts);
+        assert_eq!(
+            met.iter().map(|a| a.rule).collect::<Vec<_>>(),
+            [Rule::RuneLevel]
+        );
     }
 
     #[test]

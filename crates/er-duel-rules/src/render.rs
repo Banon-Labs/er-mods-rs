@@ -1,5 +1,6 @@
-//! The popup: a stack of rule-break notices at the top of the screen, through whatever imgui
-//! already exists in the process.
+//! The rule-break list: the newest breaks in the top-right corner, one line each with the time,
+//! drawn through whatever imgui already exists in the process. Every break also goes to
+//! `er-duel-rules-breaks.txt` (`crate::log::record_break`), so what scrolls off is kept.
 //!
 //! This DLL never installs a second `Present` hook. If another module hosts the overlay it
 //! registers as a guest and draws through it; if nobody does, it hosts and dispatches guests
@@ -15,34 +16,27 @@ use std::time::Instant;
 use er_build_watermark_core::overlay_host::{
     OVERLAY_ABI_TAG, OverlayFrame, adopt_frame, register_guest, register_with_host,
 };
+use er_duel_rules_core::feed::{Feed, Stamp, player_label};
 use er_duel_rules_core::referee::Alert;
 use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Condition, Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
-use crate::log::rules_log;
+use crate::log::{record_break, rules_log};
 
-/// How long one notice stays up.
-const NOTICE_MS: u64 = 8_000;
-/// Notices shown at once; older ones wait their turn off screen.
-const MAX_SHOWN: usize = 4;
-/// The notice is authored for a 1080-line display and scaled from there.
+/// The list is authored for a 1080-line display and scaled from there.
 const REFERENCE_HEIGHT: f32 = 1080.0;
-const FONT_SCALE_AT_1080: f32 = 1.6;
-/// Top edge of the stack, as a fraction of the display height: under the boss bar's row of the
-/// HUD and clear of the compass.
-const TOP_FRACTION: f32 = 0.11;
+const FONT_SCALE_AT_1080: f32 = 1.1;
+/// Gap between the list and the screen's top and right edges, as a fraction of its height.
+const EDGE_FRACTION: f32 = 0.015;
+const BACKGROUND_ALPHA: f32 = 0.55;
 
-const ATTENTION: [f32; 4] = [1.0, 0.27, 0.22, 1.0];
-const BODY: [f32; 4] = [1.0, 0.96, 0.88, 1.0];
-const DETAIL: [f32; 4] = [0.75, 0.72, 0.66, 1.0];
+const TITLE: [f32; 4] = [1.0, 0.27, 0.22, 1.0];
+const TIME: [f32; 4] = [0.62, 0.60, 0.55, 1.0];
+const PLAYER: [f32; 4] = [1.0, 0.96, 0.88, 1.0];
+const RULE: [f32; 4] = [1.0, 0.55, 0.45, 1.0];
 
-struct Notice {
-    alert: Alert,
-    shown_ms: u64,
-}
-
-static NOTICES: Mutex<Vec<Notice>> = Mutex::new(Vec::new());
+static FEED: Mutex<Feed> = Mutex::new(Feed::new());
 static EPOCH: Mutex<Option<Instant>> = Mutex::new(None);
 static INSTALLED: AtomicUsize = AtomicUsize::new(0);
 static DRAWS: AtomicUsize = AtomicUsize::new(0);
@@ -56,16 +50,44 @@ pub(crate) fn now_ms() -> u64 {
     u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// `Notice::shown_ms` of a notice still waiting for room on screen.
-const NOT_SHOWN: u64 = u64::MAX;
+/// The local wall-clock time, which is what a player reading the list or the file goes by.
+fn local_stamp() -> Stamp {
+    // SAFETY: `GetLocalTime` only fills and returns a `SYSTEMTIME`.
+    let now = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
+    let byte = |v: u16| u8::try_from(v).unwrap_or(u8::MAX);
+    Stamp {
+        year: now.wYear,
+        month: byte(now.wMonth),
+        day: byte(now.wDay),
+        hour: byte(now.wHour),
+        minute: byte(now.wMinute),
+        second: byte(now.wSecond),
+    }
+}
 
-/// Queue a notice. Called from the game thread.
+/// The local Steam name, asked of Steam until it first answers and kept from then on.
+fn steam_name(feed: &mut Feed) -> Option<String> {
+    if feed.steam_name().is_none()
+        && let Some(name) = crate::steam::persona_name()
+    {
+        rules_log(format_args!(
+            "steam: the local player is listed as {name:?}"
+        ));
+        feed.set_steam_name(Some(name));
+    }
+    feed.steam_name().map(str::to_owned)
+}
+
+/// List a break and append it to the text file. Called from the game thread.
 pub(crate) fn push(alert: Alert) {
-    if let Ok(mut notices) = NOTICES.lock() {
-        notices.push(Notice {
-            alert,
-            shown_ms: NOT_SHOWN,
-        });
+    let stamp = local_stamp();
+    let Ok(mut feed) = FEED.lock() else {
+        return;
+    };
+    steam_name(&mut feed);
+    feed.push(stamp, alert);
+    if let Some(entry) = feed.shown().next() {
+        record_break(&entry.file_line());
     }
 }
 
@@ -79,39 +101,25 @@ pub(crate) fn draws() -> usize {
 
 /// "Attention: Rule break: <player>. <rule>" as one line.
 pub(crate) fn headline(alert: &Alert) -> String {
-    let who = if alert.is_local {
-        format!("{} (you)", alert.player)
-    } else {
-        alert.player.clone()
-    };
+    let steam = FEED.lock().ok().and_then(|mut feed| steam_name(&mut feed));
+    let who = player_label(&alert.player, alert.is_local, steam.as_deref());
     format!("Attention: Rule break: {who}. {}", alert.rule.text())
 }
 
 fn draw(ui: &Ui) {
-    let now = now_ms();
-    let Ok(mut notices) = NOTICES.lock() else {
+    let Ok(feed) = FEED.lock() else {
         return;
     };
-    // A notice's clock starts when it first reaches the screen, so a burst is read in turn
-    // rather than expiring unseen behind the first four.
-    notices.retain(|n| n.shown_ms == NOT_SHOWN || now.saturating_sub(n.shown_ms) < NOTICE_MS);
-    for notice in notices.iter_mut().take(MAX_SHOWN) {
-        if notice.shown_ms == NOT_SHOWN {
-            notice.shown_ms = now;
-        }
-    }
-    if notices.is_empty() {
+    if feed.is_empty() {
         return;
     }
     let display = ui.io().display_size;
     let scale = FONT_SCALE_AT_1080 * (display[1] / REFERENCE_HEIGHT).max(0.5);
+    let edge = display[1] * EDGE_FRACTION;
     ui.window("##er-duel-rules")
-        .position(
-            [display[0] * 0.5, display[1] * TOP_FRACTION],
-            Condition::Always,
-        )
-        .position_pivot([0.5, 0.0])
-        .bg_alpha(0.82)
+        .position([display[0] - edge, edge], Condition::Always)
+        .position_pivot([1.0, 0.0])
+        .bg_alpha(BACKGROUND_ALPHA)
         .no_decoration()
         .no_inputs()
         .no_nav()
@@ -119,26 +127,23 @@ fn draw(ui: &Ui) {
         .always_auto_resize(true)
         .build(|| {
             ui.set_window_font_scale(scale);
-            for (index, notice) in notices.iter().take(MAX_SHOWN).enumerate() {
-                if index > 0 {
-                    ui.separator();
-                }
-                let alert = &notice.alert;
-                ui.text_colored(ATTENTION, "Attention: Rule break");
-                let who = if alert.is_local {
-                    format!("{} (you)", alert.player)
-                } else {
-                    alert.player.clone()
-                };
-                ui.text_colored(BODY, format!("{who}. {}", alert.rule.text()));
-                if !alert.detail.is_empty() {
-                    ui.text_colored(DETAIL, &alert.detail);
+            ui.text_colored(TITLE, "Rule breaks");
+            for entry in feed.shown() {
+                ui.text_colored(TIME, entry.stamp.time());
+                ui.same_line();
+                ui.text_colored(PLAYER, entry.who());
+                ui.same_line();
+                ui.text_colored(RULE, entry.rule());
+                // What broke it, so a rule worded "Spells/Crystal Tears/Consumables" names the one.
+                if !entry.alert.detail.is_empty() {
+                    ui.same_line();
+                    ui.text_colored(TIME, &entry.alert.detail);
                 }
             }
         });
     if DRAWS.fetch_add(1, Ordering::Relaxed) == 0 {
         rules_log(format_args!(
-            "overlay: first notice drawn, display {}x{}, font scale {scale:.2}",
+            "overlay: first rule-break list drawn, display {}x{}, font scale {scale:.2}",
             display[0], display[1]
         ));
     }

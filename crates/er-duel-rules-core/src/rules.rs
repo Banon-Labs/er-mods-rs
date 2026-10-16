@@ -1,10 +1,13 @@
 //! Which rules one player breaks on one frame.
 //!
 //! The ruleset's own wording ("For banned content, equipping them will be treated as intended
-//! use") makes most bans a question of what is equipped, so those fire on equipment alone. Ashes
-//! of War are the stated exception ("Equipping a banned AoW but not using it is an exception") and
-//! fire only when the skill's clip plays. Spells are not replicated as equipment at all, so they
-//! fire on the projectiles only that spell fires.
+//! use") makes most bans a question of what is equipped, so those fire on equipment alone -- but
+//! only once an opponent shares the world ([`Violation::on_equipment`]): alone, a character that
+//! is loading, being imported or changing gear breaks nothing. Ashes of War are the stated
+//! exception ("Equipping a banned AoW but not using it is an exception") and fire only when the
+//! skill's clip plays. Spells are not replicated as equipment at all, so they fire on the
+//! projectiles only that spell fires. A crystal tear fires when drunk as well as when equipped in a
+//! match, and a light roll only when a roll is performed at that load.
 //!
 //! Respeccing, switching builds and the armour-swap poise reset need history and live in
 //! [`crate::referee`], as do the blue flask count and a buff carried across a weapon change.
@@ -161,12 +164,40 @@ impl Rule {
 pub struct Violation {
     pub rule: Rule,
     pub detail: String,
+    /// Broken by what the player has equipped or set rather than by something they did. The
+    /// ruleset counts equipping banned content as using it, but a build is free until an opponent
+    /// shares the world ("Switching builds is prohibited once you enter the same world as your
+    /// opponent"), so [`crate::referee::Referee`] judges these only then. Alone, a character
+    /// loading, being imported or changing gear breaks nothing.
+    pub on_equipment: bool,
+    /// One discrete act -- an animation that started this frame -- so every occurrence is its own
+    /// rule break, however soon after the last; the referee never merges two of them.
+    pub event: bool,
 }
 
-fn violation(rule: Rule, detail: impl Into<String>) -> Violation {
+/// A rule broken by something the player did.
+pub(crate) fn violation(rule: Rule, detail: impl Into<String>) -> Violation {
     Violation {
         rule,
         detail: detail.into(),
+        on_equipment: false,
+        event: false,
+    }
+}
+
+/// A rule broken by one discrete act, seen on the frame it started.
+pub(crate) fn event(rule: Rule, detail: impl Into<String>) -> Violation {
+    Violation {
+        event: true,
+        ..violation(rule, detail)
+    }
+}
+
+/// A rule broken by what the player has equipped, their level, or their settings.
+pub(crate) fn equipped(rule: Rule, detail: impl Into<String>) -> Violation {
+    Violation {
+        on_equipment: true,
+        ..violation(rule, detail)
     }
 }
 
@@ -290,10 +321,7 @@ pub fn check(p: &PlayerSnapshot, facts: &impl GameFacts) -> Vec<Violation> {
     let mut out = Vec::new();
     // Level 0 is a remote player whose data has not arrived yet.
     if p.level != 0 && p.level != RUNE_LEVEL {
-        out.push(violation(
-            Rule::RuneLevel,
-            format!("Rune Level {}", p.level),
-        ));
+        out.push(equipped(Rule::RuneLevel, format!("Rune Level {}", p.level)));
     }
     check_weapons(p, facts, &mut out);
     check_armor_and_talismans(p, &mut out);
@@ -306,12 +334,12 @@ pub fn check(p: &PlayerSnapshot, facts: &impl GameFacts) -> Vec<Violation> {
     }
     if let Some(s) = p.local_settings {
         if s.better_multiplayer && s.manual_attack_aiming {
-            out.push(violation(Rule::ManualAttackAiming, "enabled"));
+            out.push(equipped(Rule::ManualAttackAiming, "enabled"));
         }
         // The game caps at 60 (fixed_spf 1/60, flip mode VsyncOn60Fps); a target above it, or a
         // measured rate past it with margin, is an unlocker.
         if s.target_fps > UNLOCKED_TARGET_FPS || s.measured_fps > UNLOCKED_MEASURED_FPS {
-            out.push(violation(
+            out.push(equipped(
                 Rule::UnlockedFps,
                 format!(
                     "target {:.0} fps, running at {:.0}",
@@ -320,15 +348,27 @@ pub fn check(p: &PlayerSnapshot, facts: &impl GameFacts) -> Vec<Violation> {
             ));
         }
     }
-    if let Some(load) = equip_load(p, facts)
+    // "Light Roll (<30% Equip Load)": a roll performed at that load, each one its own break.
+    if p.new_anims.iter().any(|&anim| is_roll(anim))
+        && let Some(load) = equip_load(p, facts)
         && load.is_light()
     {
-        out.push(violation(
+        out.push(event(
             Rule::LightRoll,
-            format!("{:.1}% equip load", load.ratio() * 100.0),
+            format!("rolled at {:.1}% equip load", load.ratio() * 100.0),
         ));
     }
     out
+}
+
+/// The player's roll animations: `c0000`'s `a00.tae` defines them in blocks of eight directions,
+/// a000_0271x0..=271x7 (x = 0..3), 027140..=027143, 027500..=027507 and 027600..=027607. Measured
+/// live 2026-10-16: every roll started 27100 (once 27110), at no armor and at a full set alike, so
+/// the weight class does not pick the animation and only the load tells a light roll. The
+/// single-direction 027000..=027030 beside them are left out: a backstep is not a roll.
+pub fn is_roll(anim: i32) -> bool {
+    matches!(anim, 27_100..=27_137 | 27_140..=27_143 | 27_500..=27_507 | 27_600..=27_607)
+        && anim % 10 <= 7
 }
 
 fn check_weapons(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violation>) {
@@ -336,26 +376,26 @@ fn check_weapons(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Viola
         let base = weapon_base(id);
         for &(banned, rule) in BANNED_WEAPONS {
             if base == banned {
-                out.push(violation(rule, "equipped"));
+                out.push(equipped(rule, "equipped"));
             }
         }
         let Some(w) = facts.weapon(id) else {
             continue;
         };
         if w.wep_type == wep_type::THRUSTING_SHIELD {
-            out.push(violation(Rule::ThrustingShield, "equipped"));
+            out.push(equipped(Rule::ThrustingShield, "equipped"));
         }
         if SHIELD_CLASSES.contains(&w.wep_type)
             && w.wep_type != wep_type::THRUSTING_SHIELD
             && w.phys_guard_cut > SHIELD_PHYS_GUARD_CAP
         {
-            out.push(violation(
+            out.push(equipped(
                 Rule::ShieldGuard,
                 format!("{:.0}% physical guard", w.phys_guard_cut),
             ));
         }
         if let Some(name) = regen_name(EquipKind::Shield, base) {
-            out.push(violation(Rule::PassiveRegen, name));
+            out.push(equipped(Rule::PassiveRegen, name));
         }
     }
     let two_handed = p.two_handed_weapon();
@@ -413,10 +453,10 @@ fn regen_name(kind: EquipKind, id: i32) -> Option<&'static str> {
 fn check_armor_and_talismans(p: &PlayerSnapshot, out: &mut Vec<Violation>) {
     for &id in p.armor.iter().filter(|&&id| id >= 0) {
         if let Some(name) = lookup(tables::BANNED_ARMOR, id) {
-            out.push(violation(Rule::BannedArmor, name));
+            out.push(equipped(Rule::BannedArmor, name));
         }
         if let Some(name) = regen_name(EquipKind::Armor, id) {
-            out.push(violation(Rule::PassiveRegen, name));
+            out.push(equipped(Rule::PassiveRegen, name));
         }
     }
     let holds_sword_lance = [Hand::Right, Hand::Left]
@@ -424,19 +464,19 @@ fn check_armor_and_talismans(p: &PlayerSnapshot, out: &mut Vec<Violation>) {
         .any(|&hand| weapon_base(p.active(hand)) == weapon::SWORD_LANCE);
     for &id in p.talismans.iter().filter(|&&id| id >= 0) {
         if IFRAME_TALISMANS.contains(&id) {
-            out.push(violation(Rule::IFrameTalisman, talisman_name(id)));
+            out.push(equipped(Rule::IFrameTalisman, talisman_name(id)));
         }
         if id == talisman::RED_FEATHER {
-            out.push(violation(Rule::RedFeather, "equipped"));
+            out.push(equipped(Rule::RedFeather, "equipped"));
         }
         if id == talisman::TWO_HANDED_SWORD {
-            out.push(violation(Rule::TwoHandedSwordTalisman, "equipped"));
+            out.push(equipped(Rule::TwoHandedSwordTalisman, "equipped"));
         }
         if id == talisman::SPEAR && holds_sword_lance {
-            out.push(violation(Rule::SpearTalismanSwordLance, "equipped"));
+            out.push(equipped(Rule::SpearTalismanSwordLance, "equipped"));
         }
         if let Some(name) = regen_name(EquipKind::Talisman, id) {
-            out.push(violation(Rule::PassiveRegen, name));
+            out.push(equipped(Rule::PassiveRegen, name));
         }
     }
 }
@@ -450,16 +490,19 @@ fn talisman_name(id: i32) -> &'static str {
     }
 }
 
+fn tear_rule(why: TearBan) -> Rule {
+    match why {
+        TearBan::Named => Rule::NamedTear,
+        TearBan::Stat => Rule::StatTear,
+        TearBan::Damage => Rule::DamageTear,
+        TearBan::Heal => Rule::Healing,
+    }
+}
+
 fn check_tears(p: &PlayerSnapshot, out: &mut Vec<Violation>) {
     for &id in p.physick.iter().filter(|&&id| id >= 0) {
         if let Some((row, why)) = tables::BANNED_TEARS.iter().find(|(row, _)| row.id == id) {
-            let rule = match why {
-                TearBan::Named => Rule::NamedTear,
-                TearBan::Stat => Rule::StatTear,
-                TearBan::Damage => Rule::DamageTear,
-                TearBan::Heal => Rule::Healing,
-            };
-            out.push(violation(rule, row.name));
+            out.push(equipped(tear_rule(*why), row.name));
         }
     }
 }
@@ -467,6 +510,10 @@ fn check_tears(p: &PlayerSnapshot, out: &mut Vec<Violation>) {
 fn check_effects(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violation>) {
     let mut buffed = [false; 2];
     for &id in &p.speffects {
+        // A banned tear in use: the physick put its effect on the player.
+        if let Some((_, tear, why)) = tables::TEAR_EFFECTS.iter().find(|(s, _, _)| *s == id) {
+            out.push(violation(tear_rule(*why), tear.name));
+        }
         if let Some(name) = lookup(tables::BODY_BUFFS, id) {
             out.push(violation(Rule::PlayerBuff, name));
         }
@@ -536,20 +583,20 @@ fn check_skills(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violat
             continue;
         };
         if let Some(&(_, name)) = BANNED_SKILLS.iter().find(|(t, _)| *t == type_new) {
-            out.push(violation(Rule::BannedAsh, name));
+            out.push(event(Rule::BannedAsh, name));
         }
         if let Some(name) = lookup(tables::PARRY_SKILLS, type_new) {
-            out.push(violation(Rule::BannedAsh, format!("All Parries: {name}")));
+            out.push(event(Rule::BannedAsh, format!("All Parries: {name}")));
         }
         if type_new == skill::SWORD_DANCE && tables::SWORD_DANCE_FAST_CLIPS.contains(&clip) {
-            out.push(violation(Rule::BannedAsh, "Fast Sword Dance"));
+            out.push(event(Rule::BannedAsh, "Fast Sword Dance"));
         }
         // Spinning Slash is neither a shield nor an arrow-stance skill, so it is the two-handed
         // weapon's or the right weapon's; a Light Greatsword idle in the left hand did not use it.
         if type_new == skill::SPINNING_SLASH
             && class_of(facts, p.non_shield_skill_weapon()) == Some(wep_type::LIGHT_GREATSWORD)
         {
-            out.push(violation(Rule::SpinningSlashLightGreatsword, "used"));
+            out.push(event(Rule::SpinningSlashLightGreatsword, "used"));
         }
         // "2H Stone Club/Club: Any Status Application", through a skill's own status.
         let skill_weapon = p.non_shield_skill_weapon();
@@ -557,14 +604,14 @@ fn check_skills(p: &PlayerSnapshot, facts: &impl GameFacts, out: &mut Vec<Violat
             && matches!(weapon_base(skill_weapon), weapon::STONE_CLUB | weapon::CLUB)
             && let Some(name) = lookup(tables::STATUS_SKILLS, type_new)
         {
-            out.push(violation(Rule::StoneClubStatus, name));
+            out.push(event(Rule::StoneClubStatus, name));
         }
         if type_new == skill::MULETA
             && p.talismans
                 .iter()
                 .any(|id| ASH_DAMAGE_TALISMANS.contains(id))
         {
-            out.push(violation(Rule::MuletaTalismans, "used"));
+            out.push(event(Rule::MuletaTalismans, "used"));
         }
     }
 }
@@ -895,7 +942,7 @@ mod tests {
             "one-handed is legal"
         );
         p.arm_style = ArmStyle::RightBothHands;
-        assert!(check(&p, &facts).contains(&violation(Rule::StoneClubStatus, name)));
+        assert!(check(&p, &facts).contains(&event(Rule::StoneClubStatus, name)));
     }
 
     #[test]
@@ -941,6 +988,27 @@ mod tests {
     }
 
     #[test]
+    fn a_tear_equipped_waits_for_a_match_and_a_tear_drunk_does_not() {
+        let facts = table();
+        // Crimson Bubbletear (goods 11007), equipped but never drunk on 2026-10-16.
+        let mut p = PlayerSnapshot {
+            physick: [11007, NO_ITEM, NO_ITEM],
+            ..rune_125()
+        };
+        assert_eq!(
+            check(&p, &facts),
+            vec![equipped(Rule::Healing, "Crimson Bubbletear")]
+        );
+        // Drunk: the physick puts the tear's row 3512 on the player.
+        p.physick = [NO_ITEM; 3];
+        p.speffects = vec![3512];
+        assert_eq!(
+            check(&p, &facts),
+            vec![violation(Rule::Healing, "Crimson Bubbletear")]
+        );
+    }
+
+    #[test]
     fn spell_bullets_name_the_spell() {
         let facts = table();
         let (spell, bullets) = tables::SPELL_BULLETS[0];
@@ -953,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn light_roll_needs_a_known_load_at_or_under_thirty_percent() {
+    fn light_roll_is_a_roll_at_or_under_thirty_percent() {
         let facts = table().weapon(LONGSWORD, 3, 3.5);
         let mut p = PlayerSnapshot {
             endurance: 40,
@@ -961,8 +1029,18 @@ mod tests {
             armor: [NO_ITEM; 4],
             ..rune_125()
         };
+        assert!(
+            !rules(&p, &facts).contains(&Rule::LightRoll),
+            "light, but no roll"
+        );
+        p.new_anims = vec![27_100];
         assert!(rules(&p, &facts).contains(&Rule::LightRoll));
         p.armor[0] = HEAVY_ARMOR;
-        assert!(!rules(&p, &facts).contains(&Rule::LightRoll));
+        assert!(
+            !rules(&p, &facts).contains(&Rule::LightRoll),
+            "a roll at medium load"
+        );
+        assert!(is_roll(27_110) && is_roll(27_607));
+        assert!(!is_roll(27_000) && !is_roll(27_108) && !is_roll(27_144));
     }
 }

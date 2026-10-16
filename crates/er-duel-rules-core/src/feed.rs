@@ -42,21 +42,34 @@ impl fmt::Display for Stamp {
     }
 }
 
+/// A player as listed: the character's name, and for whoever runs this copy their Steam name
+/// beside it, so a file read later says which account broke the rule. "(you)" stands in only
+/// when Steam could not be asked.
+pub fn player_label(player: &str, is_local: bool, steam_name: Option<&str>) -> String {
+    match (is_local, steam_name) {
+        (false, _) => player.to_owned(),
+        (true, Some(steam)) if !steam.is_empty() => format!("{player} ({steam})"),
+        (true, _) => format!("{player} (you)"),
+    }
+}
+
 /// One break as listed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub stamp: Stamp,
     pub alert: Alert,
+    /// The local Steam name when the break was listed.
+    pub steam_name: Option<String>,
 }
 
 impl Entry {
-    /// The player as listed: their name, marked when it is whoever runs this copy.
+    /// The player as listed ([`player_label`]).
     pub fn who(&self) -> String {
-        if self.alert.is_local {
-            format!("{} (you)", self.alert.player)
-        } else {
-            self.alert.player.clone()
-        }
+        player_label(
+            &self.alert.player,
+            self.alert.is_local,
+            self.steam_name.as_deref(),
+        )
     }
 
     /// The rule's own words.
@@ -79,17 +92,33 @@ impl Entry {
 #[derive(Debug, Default)]
 pub struct Feed {
     entries: VecDeque<Entry>,
+    steam_name: Option<String>,
 }
 
 impl Feed {
     pub const fn new() -> Self {
         Self {
             entries: VecDeque::new(),
+            steam_name: None,
         }
     }
 
+    /// The local Steam name every later entry is listed with.
+    pub fn set_steam_name(&mut self, name: Option<String>) {
+        self.steam_name = name;
+    }
+
+    pub fn steam_name(&self) -> Option<&str> {
+        self.steam_name.as_deref()
+    }
+
     pub fn push(&mut self, stamp: Stamp, alert: Alert) {
-        self.entries.push_front(Entry { stamp, alert });
+        let steam_name = self.steam_name.clone();
+        self.entries.push_front(Entry {
+            stamp,
+            alert,
+            steam_name,
+        });
         self.entries.truncate(SHOWN);
     }
 
@@ -144,19 +173,35 @@ mod tests {
         let entry = Entry {
             stamp: at(5),
             alert: alert("Lil Chud", true, "Noble Sorcerer Ashes"),
+            steam_name: Some("The Nut Wizard".to_owned()),
         };
         assert_eq!(entry.stamp.time(), "16:12:05");
         assert_eq!(
             entry.file_line(),
-            "2026-10-16 16:12:05  Lil Chud (you)  Spirit Ashes  --  Noble Sorcerer Ashes"
+            "2026-10-16 16:12:05  Lil Chud (The Nut Wizard)  Spirit Ashes  --  Noble Sorcerer Ashes"
         );
         let remote = Entry {
             stamp: at(5),
             alert: alert("Opponent", false, ""),
+            steam_name: Some("The Nut Wizard".to_owned()),
         };
         assert_eq!(
             remote.file_line(),
             "2026-10-16 16:12:05  Opponent  Spirit Ashes"
+        );
+    }
+
+    #[test]
+    fn the_local_player_is_named_by_steam_and_marked_you_only_without_it() {
+        let mut feed = Feed::default();
+        feed.push(at(1), alert("Lion Stronk", true, ""));
+        feed.set_steam_name(Some("The Nut Wizard".to_owned()));
+        feed.push(at(2), alert("Lion Stronk", true, ""));
+        let who: Vec<String> = feed.shown().map(Entry::who).collect();
+        assert_eq!(who, ["Lion Stronk (The Nut Wizard)", "Lion Stronk (you)"]);
+        assert_eq!(
+            player_label("Lion Stronk", true, Some("")),
+            "Lion Stronk (you)"
         );
     }
 }
