@@ -417,7 +417,7 @@ pub fn body_tpf(
             ))
         })?;
         let prefix = set_prefix(target_prefix, set);
-        let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
+        let albedo = as_er_albedo(lookup_in(&sources, &texture_set.albedo)?)?;
         let normal = match &texture_set.normal {
             Some(texture) => as_er_normal(lookup_in(&sources, texture)?)?,
             None => flat_normal(),
@@ -474,7 +474,7 @@ pub fn part_tpf(
             ))
         })?;
         let set_prefix = part_set_prefix(prefix, set);
-        let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
+        let albedo = as_er_albedo(lookup_in(&sources, &texture_set.albedo)?)?;
         let normal = match &texture_set.normal {
             Some(texture) => as_er_normal(lookup_in(&sources, texture)?)?,
             None => flat_normal(),
@@ -598,9 +598,9 @@ fn donor_tpf(
     let mut textures = Vec::with_capacity(SLOTS.len());
     for (slot, slot_suffix) in SLOTS {
         let dds = match slot {
-            Slot::Albedo => as_srgb_albedo(lookup(&set.albedo)?),
+            Slot::Albedo => as_er_albedo(lookup(&set.albedo)?)?,
             Slot::Mask => match &set.specular {
-                Some(texture) => lookup(texture)?,
+                Some(texture) => as_er_mask(lookup(texture)?)?,
                 None => flat_mask(),
             },
             Slot::Normal => match &set.normal {
@@ -839,11 +839,231 @@ fn bc4_block(values: &[u8; 16]) -> [u8; BC4_HALF] {
     block
 }
 
+/// Whether `dds` is block-compressed BC3 (`DXT5`), under a legacy or a DX10 header.
+fn is_bc3(dds: &[u8]) -> bool {
+    match dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) {
+        Some(b"DXT5") => true,
+        Some(b"DX10") => matches!(
+            crate::bytes::u32_le(dds, DDS_HEADER_END),
+            Ok(dxgi::BC3_UNORM | dxgi::BC3_UNORM_SRGB)
+        ),
+        _ => false,
+    }
+}
+
+/// The 16-byte blocks of a BC3 `dds`, after its header.
+fn bc3_blocks(dds: &[u8]) -> Result<&[[u8; BC_BLOCK]]> {
+    let start = if dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) == Some(b"DX10".as_slice()) {
+        DDS_HEADER_END + DX10_HEADER_SIZE
+    } else {
+        DDS_HEADER_END
+    };
+    let data = dds
+        .get(start..)
+        .filter(|data| !data.is_empty() && data.len().is_multiple_of(BC_BLOCK))
+        .ok_or("a BC3 texture whose data is not whole 16-byte blocks")?;
+    Ok(data.as_chunks::<BC_BLOCK>().0)
+}
+
+/// An albedo in a form Elden Ring's parts ship: [`as_srgb_albedo`], and BC3 carried into BC7.
+///
+/// No Elden Ring TPF holds BC3 -- none of the 9524 part textures, and none of the whole extracted
+/// game -- while some Dark Souls II albedos are BC3, under a legacy `DXT5` header (Velstadt,
+/// c3330) or a DX10 `BC3_UNORM_SRGB` one (Vendrick, c6840). Each block becomes a BC7 mode 5 one
+/// ([`bc3_block_as_bc7`]): the same 16 bytes, so the header keeps its sizes and names
+/// `BC7_UNORM_SRGB`, the format of Elden Ring's own albedos.
+fn as_er_albedo(dds: Vec<u8>) -> Result<Vec<u8>> {
+    let dds = as_srgb_albedo(dds);
+    if !is_bc3(&dds) {
+        return Ok(dds);
+    }
+    let blocks = bc3_blocks(&dds)?;
+    let start = dds.len() - blocks.len() * BC_BLOCK;
+    let mut out = dds[..start].to_vec();
+    out[DDS_HEADER_END..DDS_HEADER_END + 4].copy_from_slice(&dxgi::BC7_UNORM_SRGB.to_le_bytes());
+    for block in blocks {
+        out.extend_from_slice(&bc3_block_as_bc7(block));
+    }
+    Ok(out)
+}
+
+/// `dwPitchOrLinearSize` and the pixel format's flags in a DDS header.
+const DDS_LINEAR_SIZE_OFFSET: usize = 0x14;
+const DDS_PIXEL_FORMAT_FLAGS_OFFSET: usize = 0x50;
+const DDPF_ALPHAPIXELS: u32 = 0x1;
+
+/// A specular map in the format Elden Ring's parts give their `_3m`, legacy `DXT1`.
+///
+/// Some Dark Souls II specular maps are BC3 (`DXT5`), which no Elden Ring TPF holds. A BC3 block's
+/// colour half is a BC1 block that always decodes as four colours, so it is kept, put into the
+/// four-colour order BC1 reads ([`bc1_four_colour`]), and the alpha half is dropped: the `DXT1`
+/// specular maps most Dark Souls II characters carry have no alpha either. Every other map passes
+/// through.
+fn as_er_mask(dds: Vec<u8>) -> Result<Vec<u8>> {
+    if !is_bc3(&dds) {
+        return Ok(dds);
+    }
+    let blocks = bc3_blocks(&dds)?;
+    let mut out = dds[..DDS_HEADER_END].to_vec();
+    out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"DXT1");
+    let flags = crate::bytes::u32_le(&out, DDS_PIXEL_FORMAT_FLAGS_OFFSET)? & !DDPF_ALPHAPIXELS;
+    out[DDS_PIXEL_FORMAT_FLAGS_OFFSET..DDS_PIXEL_FORMAT_FLAGS_OFFSET + 4]
+        .copy_from_slice(&flags.to_le_bytes());
+    let size = crate::bytes::u32_le(&out, DDS_LINEAR_SIZE_OFFSET)? / 2;
+    out[DDS_LINEAR_SIZE_OFFSET..DDS_LINEAR_SIZE_OFFSET + 4].copy_from_slice(&size.to_le_bytes());
+    for block in blocks {
+        out.extend_from_slice(&bc1_four_colour(&block[BC4_HALF..]));
+    }
+    Ok(out)
+}
+
+/// A colour block that BC1 decodes to the four colours BC3 decodes it to. BC1 reads its own
+/// four-colour mode only when the first endpoint is the greater; otherwise it draws three colours
+/// and transparent black. The endpoints are swapped when they are the wrong way round, with each
+/// index pointing at the same colour again, and equal endpoints, one colour, take index 0.
+fn bc1_four_colour(color: &[u8]) -> [u8; BC4_HALF] {
+    let c0 = u16::from_le_bytes([color[0], color[1]]);
+    let c1 = u16::from_le_bytes([color[2], color[3]]);
+    let indices = u32::from_le_bytes([color[4], color[5], color[6], color[7]]);
+    let (c0, c1, indices) = match c0.cmp(&c1) {
+        std::cmp::Ordering::Greater => (c0, c1, indices),
+        std::cmp::Ordering::Equal => (c0, c1, 0),
+        // Swapped, colour 0 and 1 trade places and so do the two between them: 0<->1, 2<->3.
+        std::cmp::Ordering::Less => (c1, c0, indices ^ 0x5555_5555),
+    };
+    let mut out = [0; BC4_HALF];
+    out[..2].copy_from_slice(&c0.to_le_bytes());
+    out[2..4].copy_from_slice(&c1.to_le_bytes());
+    out[4..].copy_from_slice(&indices.to_le_bytes());
+    out
+}
+
+/// The 16 alphas of a BC3 alpha block, in either of its two modes.
+fn bc3_alphas(half: &[u8]) -> [u8; 16] {
+    let (a0, a1) = (u32::from(half[0]), u32::from(half[1]));
+    let palette: [u32; 8] = if a0 > a1 {
+        std::array::from_fn(|i| match i {
+            0 => a0,
+            1 => a1,
+            _ => ((8 - i as u32) * a0 + (i as u32 - 1) * a1) / 7,
+        })
+    } else {
+        std::array::from_fn(|i| match i {
+            0 => a0,
+            1 => a1,
+            6 => 0,
+            7 => 255,
+            _ => ((6 - i as u32) * a0 + (i as u32 - 1) * a1) / 5,
+        })
+    };
+    let mut bits = [0_u8; 8];
+    bits[..6].copy_from_slice(&half[2..8]);
+    let bits = u64::from_le_bytes(bits);
+    std::array::from_fn(|texel| palette[(bits >> (3 * texel)) as usize & 7] as u8)
+}
+
+/// BC7's weights for a 2-bit index, out of 64.
+const BC7_WEIGHTS_2: [u32; 4] = [0, 21, 43, 64];
+const BC7_MODE_5: u32 = 1 << 5;
+
+/// A BC3 block as a BC7 mode 5 block. Mode 5 keeps colour and alpha apart, as BC3 does: 7-bit
+/// RGB endpoints (BC3's are 5-6-5) with a 2-bit index each, which BC7 weights 0, 21, 43 and 64 of
+/// 64 where BC3 weights 0, 1/3, 2/3 and 1, so the colours carry over within a step of 255; and
+/// 8-bit alpha endpoints with a 2-bit index, so an alpha block's eight levels become four, at the
+/// block's own lightest and darkest. Cutouts keep their edge and a blend keeps its gradient to a
+/// quarter of each block's range.
+fn bc3_block_as_bc7(block: &[u8; BC_BLOCK]) -> [u8; BC_BLOCK] {
+    let lerp = |e0: u32, e1: u32, w: u32| ((64 - w) * e0 + w * e1 + 32) >> 6;
+
+    let alphas = bc3_alphas(&block[..BC4_HALF]);
+    let mut alpha_ends = [
+        u32::from(*alphas.iter().min().unwrap_or(&0)),
+        u32::from(*alphas.iter().max().unwrap_or(&0)),
+    ];
+    let mut alpha_indices: [u32; 16] = std::array::from_fn(|texel| {
+        (0..4)
+            .min_by_key(|&i| {
+                lerp(alpha_ends[0], alpha_ends[1], BC7_WEIGHTS_2[i])
+                    .abs_diff(u32::from(alphas[texel]))
+            })
+            .unwrap_or(0) as u32
+    });
+
+    let color = &block[BC4_HALF..];
+    let rgb = |at: usize| {
+        let c = u32::from(u16::from_le_bytes([color[at], color[at + 1]]));
+        let (r, g, b) = ((c >> 11) & 0x1F, (c >> 5) & 0x3F, c & 0x1F);
+        [
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ]
+    };
+    // The 7-bit value whose expansion, `(v << 1) | (v >> 6)`, is nearest each channel.
+    let seven = |x: u32| {
+        (x.saturating_sub(1) >> 1..=(x >> 1) + 1)
+            .filter(|&v| v < 128)
+            .min_by_key(|&v| ((v << 1) | (v >> 6)).abs_diff(x))
+            .unwrap_or(0)
+    };
+    let mut color_ends = [rgb(0).map(seven), rgb(2).map(seven)];
+    let dxt = u32::from_le_bytes([color[4], color[5], color[6], color[7]]);
+    // BC3's order is endpoint 0, endpoint 1, then the third toward 1 and the two thirds; BC7's
+    // runs from endpoint 0 to endpoint 1.
+    let mut color_indices: [u32; 16] =
+        std::array::from_fn(|texel| [0, 3, 1, 2][(dxt >> (2 * texel)) as usize & 3]);
+
+    // Texel 0's index has no top bit in the block; where it would be set, the endpoints swap.
+    if color_indices[0] >= 2 {
+        color_ends.swap(0, 1);
+        color_indices = color_indices.map(|i| 3 - i);
+    }
+    if alpha_indices[0] >= 2 {
+        alpha_ends.swap(0, 1);
+        alpha_indices = alpha_indices.map(|i| 3 - i);
+    }
+
+    let mut bits = 0_u128;
+    let mut at = 0;
+    let mut put = |value: u32, width: u32| {
+        bits |= u128::from(value & ((1 << width) - 1)) << at;
+        at += width;
+    };
+    put(BC7_MODE_5, 6);
+    put(0, 2);
+    for (first, second) in color_ends[0].into_iter().zip(color_ends[1]) {
+        put(first, 7);
+        put(second, 7);
+    }
+    put(alpha_ends[0], 8);
+    put(alpha_ends[1], 8);
+    for indices in [color_indices, alpha_indices] {
+        for (texel, index) in indices.into_iter().enumerate() {
+            put(index, if texel == 0 { 1 } else { 2 });
+        }
+    }
+    bits.to_le_bytes()
+}
+
+/// What a build makes of a source texture in one slot, `albedo`, `mask` or `normal`, for a
+/// developer check that decodes both outside the builder.
+pub fn as_er_slot(slot: &str, dds: Vec<u8>) -> Result<Vec<u8>> {
+    match slot {
+        "albedo" => as_er_albedo(dds),
+        "mask" => as_er_mask(dds),
+        "normal" => as_er_normal(dds),
+        other => Err(Error::new(format!(
+            "slot {other}: the slots are albedo, mask and normal"
+        ))),
+    }
+}
+
 /// The TPF format byte Elden Ring's own parts give a texture in this DDS format, from the 9524
 /// textures of the extracted parts binders: BC1 0, BC7 sRGB (an albedo) 102, BC4 103, BC7 linear
 /// (a normal map) 107. BC5 is 107 rather than vanilla's 104 because c2280's BC5 normal map
-/// shipped and was approved under 107. DSR's character textures are DXT1, BC5 and BC7 only, so
-/// any other format is refused rather than given a guessed byte.
+/// shipped and was approved under 107. A BC3 texture has been carried into BC1 or BC7 before it
+/// gets here ([`as_er_albedo`], [`as_er_mask`], [`as_er_normal`]), so any other format is refused
+/// rather than given a guessed byte.
 fn tpf_format_byte(dds: &[u8]) -> Result<u8> {
     let fourcc = crate::bytes::slice(dds, DDS_FOURCC_OFFSET, 4)?;
     let byte = match fourcc {
@@ -860,10 +1080,17 @@ fn tpf_format_byte(dds: &[u8]) -> Result<u8> {
         _ => None,
     };
     byte.ok_or_else(|| {
+        // Only a DX10 header has a DXGI format; a legacy one's next bytes are pixels.
+        let dxgi = match fourcc {
+            b"DX10" => format!(
+                " (DXGI {:?})",
+                crate::bytes::u32_le(dds, DDS_HEADER_END).ok()
+            ),
+            _ => String::new(),
+        };
         Error::new(format!(
-            "no Elden Ring TPF format byte is known for a DDS of fourcc {} (DXGI {:?})",
-            fourcc.escape_ascii(),
-            crate::bytes::u32_le(dds, DDS_HEADER_END).ok()
+            "no Elden Ring TPF format byte is known for a DDS of fourcc {}{dxgi}",
+            fourcc.escape_ascii()
         ))
     })
 }
@@ -1012,6 +1239,209 @@ mod tests {
         assert_eq!(byte(legacy_dds(1, 0, b"ATI1")), 103);
         assert!(tpf_format_byte(&legacy_dds(1, 0, b"DXT5")).is_err());
         assert!(tpf_format_byte(&dx10_dds(1, 0, 28)).is_err());
+    }
+
+    /// BC3 blocks covering both alpha modes, colour endpoints in either order and equal, and
+    /// texel 0 on every index, from a fixed generator.
+    fn bc3_test_blocks() -> Vec<[u8; BC_BLOCK]> {
+        let mut seed = 0x2545_F491_u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        let mut blocks: Vec<[u8; BC_BLOCK]> = (0..64)
+            .map(|_| std::array::from_fn(|_| next() as u8))
+            .collect();
+        // Equal colour endpoints, and an alpha block that is all one endpoint.
+        blocks[0][8..12].copy_from_slice(&[0x34, 0x12, 0x34, 0x12]);
+        blocks[1][..2].copy_from_slice(&[200, 10]);
+        blocks[1][2..8].fill(0);
+        blocks
+    }
+
+    fn bc3_dds(header: &[u8; 4], format: Option<u32>, blocks: &[[u8; BC_BLOCK]]) -> Vec<u8> {
+        let mut dds = vec![0; DDS_HEADER_END];
+        dds[..4].copy_from_slice(DDS_MAGIC);
+        dds[DDS_MIP_COUNT_OFFSET..DDS_MIP_COUNT_OFFSET + 4].copy_from_slice(&1_u32.to_le_bytes());
+        let size = (blocks.len() * BC_BLOCK) as u32;
+        dds[DDS_LINEAR_SIZE_OFFSET..DDS_LINEAR_SIZE_OFFSET + 4]
+            .copy_from_slice(&size.to_le_bytes());
+        dds[DDS_PIXEL_FORMAT_FLAGS_OFFSET..DDS_PIXEL_FORMAT_FLAGS_OFFSET + 4]
+            .copy_from_slice(&(DDPF_FOURCC | DDPF_ALPHAPIXELS).to_le_bytes());
+        dds[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(header);
+        if let Some(format) = format {
+            for value in [format, DX10_TEXTURE_2D, 0, 1, 0] {
+                dds.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        dds.extend(blocks.iter().flatten());
+        dds
+    }
+
+    fn lerp64(e0: u32, e1: u32, w: u32) -> u32 {
+        ((64 - w) * e0 + w * e1 + 32) >> 6
+    }
+
+    fn rgb565(color: &[u8], at: usize) -> [u32; 3] {
+        let c = u32::from(u16::from_le_bytes([color[at], color[at + 1]]));
+        let (r, g, b) = ((c >> 11) & 0x1F, (c >> 5) & 0x3F, c & 0x1F);
+        [
+            (r << 3) | (r >> 2),
+            (g << 2) | (g >> 4),
+            (b << 3) | (b >> 2),
+        ]
+    }
+
+    /// The 16 colours of a BC1 block, in its four- or three-colour mode as its endpoints say, or
+    /// in four-colour mode always, as BC3 reads its colour half. Transparent black is `None`.
+    fn bc1_texels(color: &[u8], always_four: bool) -> [Option<[u32; 3]>; 16] {
+        let (c0, c1) = (rgb565(color, 0), rgb565(color, 2));
+        let four = always_four
+            || u16::from_le_bytes([color[0], color[1]]) > u16::from_le_bytes([color[2], color[3]]);
+        let mix = |a: u32, b: u32, num: u32, den: u32| ((den - num) * a + num * b) / den;
+        let palette: [Option<[u32; 3]>; 4] = if four {
+            [
+                Some(c0),
+                Some(c1),
+                Some(std::array::from_fn(|i| mix(c0[i], c1[i], 1, 3))),
+                Some(std::array::from_fn(|i| mix(c0[i], c1[i], 2, 3))),
+            ]
+        } else {
+            [
+                Some(c0),
+                Some(c1),
+                Some(std::array::from_fn(|i| mix(c0[i], c1[i], 1, 2))),
+                None,
+            ]
+        };
+        let indices = u32::from_le_bytes([color[4], color[5], color[6], color[7]]);
+        std::array::from_fn(|texel| palette[(indices >> (2 * texel)) as usize & 3])
+    }
+
+    /// The 16 RGBA texels of a BC7 block, which must be mode 5 with no rotation.
+    fn bc7_mode5_texels(block: &[u8; BC_BLOCK]) -> [[u32; 4]; 16] {
+        let bits = u128::from_le_bytes(*block);
+        let mut at = 0;
+        let mut take = |width: u32| {
+            let value = ((bits >> at) & ((1 << width) - 1)) as u32;
+            at += width;
+            value
+        };
+        assert_eq!(take(6), BC7_MODE_5, "mode 5");
+        assert_eq!(take(2), 0, "no rotation");
+        let mut ends = [[0_u32; 4]; 2];
+        for channel in 0..3 {
+            for end in &mut ends {
+                let v = take(7);
+                end[channel] = (v << 1) | (v >> 6);
+            }
+        }
+        for end in &mut ends {
+            end[3] = take(8);
+        }
+        let mut indices = [[0_u32; 16]; 2];
+        for set in &mut indices {
+            for (texel, index) in set.iter_mut().enumerate() {
+                *index = take(if texel == 0 { 1 } else { 2 });
+            }
+        }
+        std::array::from_fn(|texel| {
+            let mut out = [0; 4];
+            for (channel, value) in out.iter_mut().enumerate() {
+                let set = usize::from(channel == 3);
+                *value = lerp64(
+                    ends[0][channel],
+                    ends[1][channel],
+                    BC7_WEIGHTS_2[indices[set][texel] as usize],
+                );
+            }
+            out
+        })
+    }
+
+    #[test]
+    fn a_bc3_albedo_becomes_bc7_srgb_that_draws_the_same_texels() {
+        let blocks = bc3_test_blocks();
+        for (input, header_growth) in [
+            (bc3_dds(b"DXT5", None, &blocks), DX10_HEADER_SIZE),
+            (bc3_dds(b"DX10", Some(dxgi::BC3_UNORM_SRGB), &blocks), 0),
+        ] {
+            let out = as_er_albedo(input.clone()).unwrap();
+            assert_eq!(out.len(), input.len() + header_growth);
+            assert_eq!(&out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], b"DX10");
+            assert_eq!(
+                crate::bytes::u32_le(&out, DDS_HEADER_END).unwrap(),
+                dxgi::BC7_UNORM_SRGB
+            );
+            assert_eq!(tpf_format_byte(&out).unwrap(), 102);
+            let converted = out[DDS_HEADER_END + DX10_HEADER_SIZE..]
+                .as_chunks::<BC_BLOCK>()
+                .0;
+            for (index, (bc3, bc7)) in blocks.iter().zip(converted).enumerate() {
+                let alphas = bc3_alphas(&bc3[..BC4_HALF]);
+                let colors = bc1_texels(&bc3[BC4_HALF..], true);
+                let (low, high) = (alphas.iter().min().unwrap(), alphas.iter().max().unwrap());
+                // Four alpha levels where BC3 has eight: at most a sixth of the block's range off.
+                let alpha_slack = u32::from(high - low) / 6 + 1;
+                for (texel, drawn) in bc7_mode5_texels(bc7).into_iter().enumerate() {
+                    let color = colors[texel].unwrap();
+                    for channel in 0..3 {
+                        assert!(
+                            drawn[channel].abs_diff(color[channel]) <= 2,
+                            "block {index} texel {texel} channel {channel}: {} for {}",
+                            drawn[channel],
+                            color[channel]
+                        );
+                    }
+                    assert!(
+                        drawn[3].abs_diff(u32::from(alphas[texel])) <= alpha_slack,
+                        "block {index} texel {texel} alpha: {} for {}",
+                        drawn[3],
+                        alphas[texel]
+                    );
+                }
+            }
+        }
+        // A block whose alpha is one value keeps it exactly.
+        let flat = bc7_mode5_texels(&bc3_block_as_bc7(&blocks[1]));
+        assert!(flat.iter().all(|texel| texel[3] == 200));
+        // Every other albedo is only what as_srgb_albedo makes of it.
+        let dxt1 = legacy_dds(1, 7, b"DXT1");
+        assert_eq!(as_er_albedo(dxt1.clone()).unwrap(), as_srgb_albedo(dxt1));
+    }
+
+    #[test]
+    fn a_bc3_specular_map_becomes_dxt1_drawing_its_colour_half() {
+        let blocks = bc3_test_blocks();
+        for input in [
+            bc3_dds(b"DXT5", None, &blocks),
+            bc3_dds(b"DX10", Some(dxgi::BC3_UNORM), &blocks),
+        ] {
+            let out = as_er_mask(input).unwrap();
+            assert_eq!(&out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4], b"DXT1");
+            assert_eq!(out.len(), DDS_HEADER_END + blocks.len() * BC4_HALF);
+            assert_eq!(
+                crate::bytes::u32_le(&out, DDS_LINEAR_SIZE_OFFSET).unwrap() as usize,
+                blocks.len() * BC4_HALF
+            );
+            assert_eq!(
+                crate::bytes::u32_le(&out, DDS_PIXEL_FORMAT_FLAGS_OFFSET).unwrap(),
+                DDPF_FOURCC
+            );
+            assert_eq!(tpf_format_byte(&out).unwrap(), 0);
+            let converted = out[DDS_HEADER_END..].as_chunks::<BC4_HALF>().0;
+            for (bc3, bc1) in blocks.iter().zip(converted) {
+                assert_eq!(
+                    bc1_texels(bc1, false),
+                    bc1_texels(&bc3[BC4_HALF..], true),
+                    "{bc3:02x?}"
+                );
+            }
+        }
+        let dxt1 = legacy_dds(1, 7, b"DXT1");
+        assert_eq!(as_er_mask(dxt1.clone()).unwrap(), dxt1);
     }
 
     #[test]

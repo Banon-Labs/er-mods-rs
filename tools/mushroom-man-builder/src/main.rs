@@ -159,6 +159,7 @@ fn run() -> ExitCode {
         Some("verify-package") => verify_package(&args[1..]),
         Some("hash-package") => hash_package(&args[1..]),
         Some("make-tpf") => make_tpf(&args[1..]),
+        Some("convert-dds") => convert_dds(&args[1..]),
         Some("-h" | "--help") => {
             print!("{USAGE}");
             Ok(())
@@ -834,6 +835,18 @@ fn make_tpf(args: &[String]) -> Result<()> {
     let tpf = fs::read(source).context(source)?;
     let set = TextureSet::named_after(character.id);
     fs::write(out, character_tpf(&tpf, &set, "FC_M_0000", lod)?).context(out)?;
+    Ok(())
+}
+
+/// Developer check: `convert-dds <albedo|mask|normal> <in.dds> <out.dds>`, one source texture as
+/// a build converts it for that slot, so an independent decoder can compare the two.
+fn convert_dds(args: &[String]) -> Result<()> {
+    let [slot, source, out] = args else {
+        return Err("convert-dds <albedo|mask|normal> <in.dds> <out.dds>".into());
+    };
+    let dds = fs::read(source).context(source)?;
+    let converted = mushroom_man_builder::textures::as_er_slot(slot, dds)?;
+    fs::write(out, converted).context(out)?;
     Ok(())
 }
 
