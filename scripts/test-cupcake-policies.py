@@ -2213,6 +2213,27 @@ def main() -> int:
             'git commit -m "guard: the agent no longer runs bash scripts/check.sh"',
             True,
         ),
+        # `cap_parallel_fanout`, live for the same reason: its reading of a quoted `bash -c`
+        # payload inside a `systemd-run` scope goes through the shared decomposition, which is
+        # where the wasm runtime and `opa test` have disagreed before. The first case is the
+        # fan-out measured 2026-10-15 before systemd-oomd killed the kitty terminal scope; the
+        # second is the capped form the deny message offers; the third names the first in prose.
+        PolicyCase(
+            "fanout-guard-denies-the-measured-xargs-run",
+            "ls work/*/orig.ll | xargs -n 200 -P 8 python3 $P/pos_slice.py",
+            False,
+            "fan-out of more than 4 parallel workers",
+        ),
+        PolicyCase(
+            "fanout-guard-allows-a-memory-capped-scope",
+            'systemd-run --user --scope -p MemoryMax=8G -- bash -c "ls work/*/orig.ll | xargs -n 200 -P 12 python3 x.py"',
+            True,
+        ),
+        PolicyCase(
+            "allow-commit-message-naming-the-fanout",
+            'git commit -m "guard: ls work/*/orig.ll | xargs -P 8 python3 pos_slice.py took the terminal down"',
+            True,
+        ),
     ])
 
     # --- payload versus command (bd er-effects-rs-ak3q, bd er-effects-rs-if5l) -------------
