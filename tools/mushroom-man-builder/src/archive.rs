@@ -8,6 +8,11 @@
 //!
 //! Only the handful of files the builder asks for are ever read out of the `.bdt` -- each one a
 //! seek and a read -- so opening the archives costs the header decryption and nothing more.
+//!
+//! Dark Souls II: Scholar of the First Sin packs its files the same way, in `GameDataEbl` and the
+//! `Lq*Ebl` archives beside `DarkSoulsII.exe`, each with its public key shipped beside it as
+//! `<name>KeyCode.pem`. Its records are narrower: a 32-bit path hash (multiplier 37), the padded
+//! size, the offset, and the hash and key offsets, with no unpadded size.
 
 use std::{
     collections::HashMap,
@@ -31,9 +36,57 @@ use crate::{
 const BHD5_MAGIC: &[u8; 4] = b"BHD5";
 const LITTLE_ENDIAN_MARKER: u8 = 0xFF;
 const BUCKET_RECORD_SIZE: usize = 8;
-const FILE_RECORD_SIZE: usize = 0x28;
 const AES_BLOCK: usize = 16;
 const PATH_HASH_PRIME: u64 = 0x85;
+const DS2_PATH_HASH_PRIME: u32 = 37;
+/// The archive every Dark Souls II install has; the `Lq*Ebl` ones are read when present.
+const DS2_REQUIRED_ARCHIVE: &str = "GameDataEbl";
+const DS2_ARCHIVE_SUFFIX: &str = "Ebl";
+const DS2_KEY_SUFFIX: &str = "KeyCode.pem";
+
+/// Which game's `BHD5` records an archive holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layout {
+    EldenRing,
+    DarkSouls2,
+}
+
+impl Layout {
+    fn hash(self, logical_path: &str) -> u64 {
+        match self {
+            Self::EldenRing => path_hash(logical_path),
+            Self::DarkSouls2 => u64::from(ds2_path_hash(logical_path)),
+        }
+    }
+
+    fn record_size(self) -> usize {
+        match self {
+            Self::EldenRing => 0x28,
+            Self::DarkSouls2 => 0x20,
+        }
+    }
+
+    /// `(hash, padded size, unpadded size, offset, AES key offset)` of the record at `at`; a
+    /// Dark Souls II record has no unpadded size and reads as 0.
+    fn record(self, plain: &[u8], at: usize) -> Result<(u64, u32, u32, u64, u64)> {
+        Ok(match self {
+            Self::EldenRing => (
+                u64_le(plain, at)?,
+                u32_le(plain, at + 0x08)?,
+                u32_le(plain, at + 0x0C)?,
+                u64_le(plain, at + 0x10)?,
+                u64_le(plain, at + 0x20)?,
+            ),
+            Self::DarkSouls2 => (
+                u64::from(u32_le(plain, at)?),
+                u32_le(plain, at + 0x04)?,
+                0,
+                u64_le(plain, at + 0x08)?,
+                u64_le(plain, at + 0x18)?,
+            ),
+        })
+    }
+}
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -49,9 +102,10 @@ struct Archive {
     entries: HashMap<u64, Entry>,
 }
 
-/// Every archive of one Elden Ring install, searchable by logical path.
+/// Every archive of one install, searchable by logical path.
 pub struct ArchiveSet {
     archives: Vec<Archive>,
+    layout: Layout,
 }
 
 impl ArchiveSet {
@@ -75,14 +129,61 @@ impl ArchiveSet {
             let encrypted = std::fs::read(&bhd).context(format!("reading {}", bhd.display()))?;
             let plain = rsa_decrypt(&encrypted, &key.decode()?)
                 .context(format!("decrypting {}", bhd.display()))?;
-            let entries = parse_bhd5(&plain).context(format!("parsing {}", bhd.display()))?;
+            let entries = parse_bhd5(&plain, Layout::EldenRing)
+                .context(format!("parsing {}", bhd.display()))?;
             archives.push(Archive { bdt, entries });
         }
-        Ok(Self { archives })
+        Ok(Self {
+            archives,
+            layout: Layout::EldenRing,
+        })
+    }
+
+    /// Open the archives beside `DarkSoulsII.exe`: every `<name>Ebl.bhd` with its `.bdt` and the
+    /// `<name>KeyCode.pem` the game ships to read it. `GameDataEbl` must be one of them.
+    pub fn open_ds2(game_dir: &Path) -> Result<Self> {
+        let mut stems: Vec<String> = std::fs::read_dir(game_dir)
+            .context(game_dir.display())?
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().into_string().ok()?;
+                let stem = name.strip_suffix(".bhd")?;
+                stem.ends_with(DS2_ARCHIVE_SUFFIX).then(|| stem.to_owned())
+            })
+            .collect();
+        stems.sort();
+        if !stems.iter().any(|stem| stem == DS2_REQUIRED_ARCHIVE) {
+            return Err(Error::new(format!(
+                "{DS2_REQUIRED_ARCHIVE}.bhd is missing from {} -- is this the Dark Souls II \
+                 `Game` folder?",
+                game_dir.display()
+            )));
+        }
+        let mut archives = Vec::new();
+        for stem in stems {
+            let bhd = game_dir.join(format!("{stem}.bhd"));
+            let bdt = game_dir.join(format!("{stem}.bdt"));
+            let key_name = stem.strip_suffix(DS2_ARCHIVE_SUFFIX).unwrap_or(&stem);
+            let pem = game_dir.join(format!("{key_name}{DS2_KEY_SUFFIX}"));
+            if !bdt.is_file() || !pem.is_file() {
+                continue;
+            }
+            let key_text = std::fs::read_to_string(&pem).context(pem.display())?;
+            let key = RsaPublicKey::from_pem(&key_text).context(pem.display())?;
+            let encrypted = std::fs::read(&bhd).context(format!("reading {}", bhd.display()))?;
+            let plain =
+                rsa_decrypt(&encrypted, &key).context(format!("decrypting {}", bhd.display()))?;
+            let entries = parse_bhd5(&plain, Layout::DarkSouls2)
+                .context(format!("parsing {}", bhd.display()))?;
+            archives.push(Archive { bdt, entries });
+        }
+        Ok(Self {
+            archives,
+            layout: Layout::DarkSouls2,
+        })
     }
 
     pub fn contains(&self, logical_path: &str) -> bool {
-        let hash = path_hash(logical_path);
+        let hash = self.layout.hash(logical_path);
         self.archives
             .iter()
             .any(|archive| archive.entries.contains_key(&hash))
@@ -91,7 +192,7 @@ impl ArchiveSet {
     /// The file at `logical_path` (`/parts/fc_m_0000.partsbnd.dcx`), decrypted but still in
     /// whatever container it was stored in -- for parts, a DCX.
     pub fn read(&self, logical_path: &str) -> Result<Vec<u8>> {
-        let hash = path_hash(logical_path);
+        let hash = self.layout.hash(logical_path);
         let (archive, entry) = self
             .archives
             .iter()
@@ -109,7 +210,7 @@ impl ArchiveSet {
 
     /// Where a file sits and which of its byte ranges are encrypted, for diagnostics.
     pub fn describe(&self, logical_path: &str) -> Option<String> {
-        let hash = path_hash(logical_path);
+        let hash = self.layout.hash(logical_path);
         self.archives.iter().find_map(|archive| {
             archive.entries.get(&hash).map(|entry| {
                 format!(
@@ -134,16 +235,33 @@ impl ArchiveSet {
     }
 }
 
-/// The archive hash of a logical path: lower-cased, forward slashes, rooted at `/`.
-pub fn path_hash(logical_path: &str) -> u64 {
+/// A logical path as both games hash it: lower-cased, forward slashes, rooted at `/`.
+fn normalized_path(logical_path: &str) -> String {
     let mut normalized = logical_path.trim().replace('\\', "/").to_lowercase();
     if !normalized.starts_with('/') {
         normalized.insert(0, '/');
     }
-    normalized.bytes().fold(0_u64, |hash, byte| {
-        hash.wrapping_mul(PATH_HASH_PRIME)
-            .wrapping_add(u64::from(byte))
-    })
+    normalized
+}
+
+/// The Elden Ring archive hash of a logical path.
+pub fn path_hash(logical_path: &str) -> u64 {
+    normalized_path(logical_path)
+        .bytes()
+        .fold(0_u64, |hash, byte| {
+            hash.wrapping_mul(PATH_HASH_PRIME)
+                .wrapping_add(u64::from(byte))
+        })
+}
+
+/// The Dark Souls II archive hash of a logical path.
+pub fn ds2_path_hash(logical_path: &str) -> u32 {
+    normalized_path(logical_path)
+        .bytes()
+        .fold(0_u32, |hash, byte| {
+            hash.wrapping_mul(DS2_PATH_HASH_PRIME)
+                .wrapping_add(u32::from(byte))
+        })
 }
 
 /// Raw RSA with the public key, block by block: `m = c^e mod n`, written big-endian into
@@ -194,16 +312,14 @@ fn rsa_decrypt(encrypted: &[u8], key: &RsaPublicKey) -> Result<Vec<u8>> {
     Ok(plain)
 }
 
-fn parse_bhd5(plain: &[u8]) -> Result<HashMap<u64, Entry>> {
+fn parse_bhd5(plain: &[u8], layout: Layout) -> Result<HashMap<u64, Entry>> {
     if plain.get(..4) != Some(BHD5_MAGIC.as_slice()) {
         return Err(Error::new(
-            "decrypted header is not BHD5 -- wrong key, or not an Elden Ring archive",
+            "decrypted header is not BHD5 -- wrong key, or not this game's archive",
         ));
     }
     if u8_at(plain, 4)? != LITTLE_ENDIAN_MARKER {
-        return Err(Error::new(
-            "big-endian BHD5 is not an Elden Ring PC archive",
-        ));
+        return Err(Error::new("big-endian BHD5 is a console archive, not PC"));
     }
     let bucket_count = usize::try_from(i32_le(plain, 0x10)?).context("bucket count")?;
     let buckets_offset = usize::try_from(i32_le(plain, 0x14)?).context("bucket offset")?;
@@ -214,12 +330,9 @@ fn parse_bhd5(plain: &[u8]) -> Result<HashMap<u64, Entry>> {
         let file_count = u32_le(plain, record)? as usize;
         let files_offset = u32_le(plain, record + 4)? as usize;
         for index in 0..file_count {
-            let file = files_offset + index * FILE_RECORD_SIZE;
-            let hash = u64_le(plain, file)?;
-            let padded_size = u32_le(plain, file + 0x08)?;
-            let size = u32_le(plain, file + 0x0C)?;
-            let offset = u64_le(plain, file + 0x10)?;
-            let aes_offset = u64_le(plain, file + 0x20)? as usize;
+            let (hash, padded_size, size, offset, aes_offset) =
+                layout.record(plain, files_offset + index * layout.record_size())?;
+            let aes_offset = aes_offset as usize;
             let mut aes_key = [0_u8; 16];
             let mut encrypted_ranges = Vec::new();
             if aes_offset != 0 {

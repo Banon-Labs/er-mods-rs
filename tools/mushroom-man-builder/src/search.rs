@@ -15,13 +15,14 @@ use std::{fs, path::Path};
 
 use crate::{
     bnd::{file_name, read_bnd3},
-    character::{self, FitConfig},
+    character::{self, FitConfig, Game},
     dcx,
     error::{Context, Error, Result},
     flver::{Flver, skeleton},
     locate,
     map_report::{MapReport, map_report},
-    names, package,
+    names,
+    package::{self, Install},
 };
 
 /// What [`verdict`] found for one model.
@@ -144,16 +145,17 @@ pub fn chrbnd_flver(dsr_dir: &Path, id: &str) -> Result<Option<Vec<u8>>> {
         .map(|file| file.data.clone()))
 }
 
-/// What the builder makes of model `id` in the install at `dsr_dir`, fitting it to `donor`
-/// (`FC_M_0000.flver`) when there is one.
-pub fn verdict(dsr_dir: &Path, id: &str, donor: Option<&[u8]>) -> Verdict {
-    if !locate::chrbnd_path(dsr_dir, id).is_file() {
+/// What the builder makes of model `id` in `install`, fitting it to `donor` (`FC_M_0000.flver`)
+/// when there is one.
+pub fn verdict(install: Install<'_>, id: &str, donor: Option<&[u8]>) -> Verdict {
+    if !install.has_model(id) {
         return Verdict::Missing;
     }
-    if character::by_id(id).is_some_and(|known| matches!(known.fit, FitConfig::Mushroom(_))) {
+    let known = character::by_id_in(install.game(), id);
+    if known.is_some_and(|known| matches!(known.fit, FitConfig::Mushroom(_))) {
         return Verdict::OwnFit;
     }
-    let flver = match chrbnd_flver(dsr_dir, id) {
+    let flver = match install.model_flver(id) {
         Ok(Some(flver)) => flver,
         Ok(None) => return Verdict::NoModel,
         Err(error) => return Verdict::Unreadable(error.to_string()),
@@ -171,8 +173,8 @@ pub fn verdict(dsr_dir: &Path, id: &str, donor: Option<&[u8]>) -> Verdict {
         return mapped;
     }
     // The textures the kept materials name, out of every binder holding them, then the fit.
-    let character = character::by_id(id).unwrap_or_else(|| character::generic(id));
-    let files = match package::read_character(dsr_dir, character) {
+    let character = known.unwrap_or_else(|| character::generic_in(install.game(), id));
+    let files = match install.read_character(character) {
         Ok(files) => files,
         Err(error) => return Verdict::Textures(error.to_string()),
     };
@@ -240,18 +242,29 @@ pub fn verdict_of(report: &MapReport) -> Verdict {
     }
 }
 
-/// The ids `query` finds: named ones whose name or id it matches, then installed ones without a
-/// name whose id it starts. Table order, then id order.
-pub fn matching_ids(query: &str, installed: &[String]) -> Vec<(String, Option<&'static str>)> {
-    let mut found: Vec<(String, Option<&'static str>)> = names::search(query)
-        .into_iter()
-        .map(|(id, name)| (id.to_owned(), Some(name)))
+/// The ids `query` finds: the character table's own entries for `game` whose label or id it
+/// matches (c1350 is the Gyrm Warrior to Smithbox and Lonesome Gavlan here), then named ones,
+/// then installed ones without a name whose id it starts. Table order, then id order.
+pub fn matching_ids(
+    game: Game,
+    query: &str,
+    installed: &[String],
+) -> Vec<(String, Option<&'static str>)> {
+    let mut found: Vec<(String, Option<&'static str>)> = character::CHARACTERS
+        .iter()
+        .filter(|known| known.game == game && names::matches(query, known.id, known.label))
+        .map(|known| (known.id.to_owned(), Some(known.label)))
         .collect();
+    for (id, name) in names::search(game, query) {
+        if !found.iter().any(|(seen, _)| seen == id) {
+            found.push((id.to_owned(), Some(name)));
+        }
+    }
     let query = query.trim().to_ascii_lowercase();
     for id in installed {
         if !query.is_empty()
             && id.starts_with(&query)
-            && names::name_of(id).is_none()
+            && names::name_of(game, id).is_none()
             && !found.iter().any(|(seen, _)| seen == id)
         {
             found.push((id.clone(), None));
@@ -260,21 +273,22 @@ pub fn matching_ids(query: &str, installed: &[String]) -> Vec<(String, Option<&'
     found
 }
 
-/// Every hit for `query` in the install at `dsr_dir`, each with its [`Verdict`], fitted to
-/// `donor` when there is one.
-pub fn search(dsr_dir: &Path, query: &str, donor: Option<&[u8]>) -> Result<Vec<Hit>> {
+/// Every hit for `query` in `install`, each with its [`Verdict`], fitted to `donor` when there
+/// is one.
+pub fn search(install: Install<'_>, query: &str, donor: Option<&[u8]>) -> Result<Vec<Hit>> {
     if query.trim().is_empty() {
         return Err(Error::new(
             "--search needs some text: part of a name (`skeleton`, `black knight`) or the start \
              of a model id (`c29`)",
         ));
     }
-    let installed = installed_ids(dsr_dir)?;
-    Ok(matching_ids(query, &installed)
+    let installed = install.installed_ids()?;
+    Ok(matching_ids(install.game(), query, &installed)
         .into_iter()
         .map(|(id, name)| Hit {
-            verdict: verdict(dsr_dir, &id, donor),
-            validated: character::by_id(&id).is_some_and(|known| known.validated),
+            verdict: verdict(install, &id, donor),
+            validated: character::by_id_in(install.game(), &id)
+                .is_some_and(|known| known.validated),
             name,
             id,
         })
@@ -291,7 +305,7 @@ mod tests {
             .into_iter()
             .map(str::to_owned)
             .collect();
-        let found = matching_ids("c290", &installed);
+        let found = matching_ids(Game::Dsr, "c290", &installed);
         assert_eq!(
             found,
             [
@@ -299,8 +313,8 @@ mod tests {
                 ("c2909".to_owned(), None)
             ]
         );
-        assert!(matching_ids("", &installed).is_empty());
-        let skeletons = matching_ids("skeleton", &installed);
+        assert!(matching_ids(Game::Dsr, "", &installed).is_empty());
+        let skeletons = matching_ids(Game::Dsr, "skeleton", &installed);
         assert!(skeletons.iter().all(|(_, name)| name.is_some()));
     }
 

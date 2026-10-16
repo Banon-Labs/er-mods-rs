@@ -1,24 +1,33 @@
-//! What players call Dark Souls Remastered's characters, by model id, so one can be found by name.
+//! What players call each game's characters, by model id, so one can be found by name.
 //!
-//! The game itself names almost none of them: its English text carries a name only for a
-//! character the player talks to or fights as a boss (`NPC_name` 5220 is Gravelord Nito), and its
-//! param rows are labelled in Japanese. So the names come from Smithbox's alias list, the one the
-//! modding tools show, embedded as `data/dsr-character-names.tsv` with its MIT license beside it.
+//! The games themselves name almost none of them: Dark Souls Remastered's English text carries a
+//! name only for a character the player talks to or fights as a boss (`NPC_name` 5220 is Gravelord
+//! Nito), and the param rows are labelled in Japanese. So the names come from Smithbox's alias
+//! lists, the ones the modding tools show, embedded as `data/dsr-character-names.tsv` and
+//! `data/ds2-character-names.tsv` with their MIT license beside them. A model id means a
+//! different character in each game: c1000 is a Firebomb Hollow in one and a Goblin in the other.
 
-const TABLE: &str = include_str!("../data/dsr-character-names.tsv");
+use crate::character::Game;
 
-/// Every `(id, name)` in the table, in its order.
-pub fn entries() -> impl Iterator<Item = (&'static str, &'static str)> {
-    TABLE
+const DSR_TABLE: &str = include_str!("../data/dsr-character-names.tsv");
+const DS2_TABLE: &str = include_str!("../data/ds2-character-names.tsv");
+
+/// Every `(id, name)` in `game`'s table, in its order.
+pub fn entries(game: Game) -> impl Iterator<Item = (&'static str, &'static str)> {
+    let table = match game {
+        Game::Dsr => DSR_TABLE,
+        Game::Ds2 => DS2_TABLE,
+    };
+    table
         .lines()
         .filter(|line| !line.starts_with('#') && !line.trim().is_empty())
         .filter_map(|line| line.split_once('\t'))
 }
 
-/// The name of model `id`, ignoring case.
-pub fn name_of(id: &str) -> Option<&'static str> {
+/// The name of `game`'s model `id`, ignoring case.
+pub fn name_of(game: Game, id: &str) -> Option<&'static str> {
     let id = id.trim();
-    entries()
+    entries(game)
         .find(|(entry, _)| entry.eq_ignore_ascii_case(id))
         .map(|(_, name)| name)
 }
@@ -35,9 +44,9 @@ pub fn matches(query: &str, id: &str, name: &str) -> bool {
         || query.split_whitespace().all(|word| name.contains(word))
 }
 
-/// The `(id, name)` entries [`matches`] finds for `query`, in table order.
-pub fn search(query: &str) -> Vec<(&'static str, &'static str)> {
-    entries()
+/// The `(id, name)` entries [`matches`] finds for `query` in `game`'s table, in table order.
+pub fn search(game: Game, query: &str) -> Vec<(&'static str, &'static str)> {
+    entries(game)
         .filter(|(id, name)| matches(query, id, name))
         .collect()
 }
@@ -47,27 +56,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_table_parses_with_unique_model_ids() {
-        let all: Vec<_> = entries().collect();
-        assert_eq!(all.len(), 170);
-        let mut ids: Vec<&str> = all.iter().map(|(id, _)| *id).collect();
-        assert!(ids.iter().all(|id| crate::character::is_model_id(id)));
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), all.len());
-        assert!(all.iter().all(|(_, name)| !name.trim().is_empty()));
+    fn each_table_parses_with_unique_model_ids() {
+        for (game, count) in [(Game::Dsr, 170), (Game::Ds2, 204)] {
+            let all: Vec<_> = entries(game).collect();
+            assert_eq!(all.len(), count, "{game:?}");
+            let mut ids: Vec<&str> = all.iter().map(|(id, _)| *id).collect();
+            assert!(ids.iter().all(|id| crate::character::is_model_id(id)));
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(ids.len(), all.len(), "{game:?}");
+            assert!(all.iter().all(|(_, name)| !name.trim().is_empty()));
+        }
     }
 
     #[test]
     fn the_characters_built_so_far_have_their_names() {
-        assert_eq!(name_of("c2280"), Some("Mushroom Child"));
-        assert_eq!(name_of("C2900"), Some("Skeleton"));
-        assert_eq!(name_of("c2650"), Some("Necromancer"));
-        assert_eq!(name_of("c2501"), None);
+        assert_eq!(name_of(Game::Dsr, "c2280"), Some("Mushroom Child"));
+        assert_eq!(name_of(Game::Dsr, "C2900"), Some("Skeleton"));
+        assert_eq!(name_of(Game::Dsr, "c2650"), Some("Necromancer"));
+        assert_eq!(name_of(Game::Dsr, "c2501"), None);
+        assert_eq!(name_of(Game::Ds2, "c3180"), Some("The Pursuer"));
+        assert_eq!(name_of(Game::Ds2, "c1000"), Some("Goblin"));
     }
 
     #[test]
     fn a_search_takes_words_in_any_order_or_the_start_of_an_id() {
+        let search = |query: &str| search(Game::Dsr, query);
         let ids = |query: &str| -> Vec<&str> { search(query).into_iter().map(|e| e.0).collect() };
         assert_eq!(ids("knight axe black"), ["c2794"]);
         assert!(ids("SKELETON").starts_with(&["c2900", "c2910"]));

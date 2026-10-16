@@ -109,6 +109,14 @@ pub struct BipedParams {
     /// For c2650 that stretches the neck about 1.5 times; without it the head joint sits about
     /// 0.05 m below Elden Ring's.
     pub head_band: bool,
+    /// The share of the girth the trunk keeps across and in depth up to the shoulder, rising to
+    /// all of it at the head joint ([`AxialFit::with_trunk`]); 1 keeps the trunk's own shape.
+    /// Only the trunk narrows: the limbs and the head keep the girth.
+    pub trunk_girth: f32,
+    /// The share of the girth kept below the pelvis, where a skirt hangs over the legs, eased into
+    /// from the trunk's just under the pelvis joint; 1 keeps the skirt's own width. The legs keep
+    /// the full girth, so a skirt narrowed with the trunk can sink into them.
+    pub skirt_girth: f32,
 }
 
 impl BipedParams {
@@ -121,6 +129,8 @@ impl BipedParams {
         cloth: Cloth::Ancestor,
         twist: Twist::Main,
         head_band: false,
+        trunk_girth: 1.0,
+        skirt_girth: 1.0,
     };
 
     /// The parameters as `fit.json` records them, with the girth this fit resolved.
@@ -160,6 +170,11 @@ impl BipedParams {
             ),
             ("head_band", self.head_band.to_string()),
         ]
+        .into_iter()
+        // Written only when it narrows anything, so an untouched fit's file is as it was.
+        .chain((self.trunk_girth != 1.0).then(|| ("trunk_girth", self.trunk_girth.to_string())))
+        .chain((self.skirt_girth != 1.0).then(|| ("skirt_girth", self.skirt_girth.to_string())))
+        .collect()
     }
 }
 
@@ -532,18 +547,27 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
         (source_pelvis, pelvis_lands),
         (frames[shoulder].origin, er_frame("L_UpperArm")?.origin),
     ];
+    // The head itself, not the jaw that also maps to it.
+    let head = (0..bones.len()).find(|&index| {
+        roles[index] == Role::Direct("Head".to_owned())
+            && usize::try_from(bones[index].parent_index)
+                .is_ok_and(|up| roles[up] != Role::Direct("Head".to_owned()))
+    });
     if params.head_band {
-        // The head itself, not the jaw that also maps to it.
-        let head = (0..bones.len())
-            .find(|&index| {
-                roles[index] == Role::Direct("Head".to_owned())
-                    && usize::try_from(bones[index].parent_index)
-                        .is_ok_and(|up| roles[up] != Role::Direct("Head".to_owned()))
-            })
-            .ok_or("head_band needs a head bone")?;
+        let head = head.ok_or("head_band needs a head bone")?;
         knots.push((frames[head].origin, er_frame("Head")?.origin));
     }
-    let axial = AxialFit::new(knots, girth)?;
+    let mut axial = AxialFit::new(knots, girth)?;
+    if params.trunk_girth != 1.0 || params.skirt_girth != 1.0 {
+        let head = head.ok_or("trunk_girth needs a head bone to rise back to the girth by")?;
+        axial = axial.with_trunk(
+            params.trunk_girth,
+            params.skirt_girth,
+            source_pelvis.y,
+            frames[shoulder].origin.y,
+            frames[head].origin.y,
+        )?;
+    }
 
     let mut fits: Vec<Option<BoneFit>> = vec![None; bones.len()];
     let mut maps = Vec::new();
@@ -900,6 +924,40 @@ pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams)
 /// bones the donor need not have. `crate::tail` shares a tail chain between the pelvis and a
 /// vanilla part's cloth bones this way. A named bone the fit has nowhere to put carries no weight
 /// (the fit would refuse a vertex on it), so it is left.
+/// Where the fit puts each source bone's joint in Elden Ring's bind space, carried as that bone's
+/// vertices are: `(name, place)` for every bone the fit carries, in bone order. A bone's weight
+/// can be sent onto the Elden Ring bones nearest where it lands from this.
+pub fn fitted_joints(
+    id: &str,
+    flver: &[u8],
+    donor: &[u8],
+    params: BipedParams,
+) -> Result<Vec<(String, Vec3)>> {
+    let source = source::parse(flver)?;
+    if !skeleton::is_biped(&source.bones) {
+        return Err(Error::new(format!(
+            "{id} does not name its bones the Biped way"
+        )));
+    }
+    let roles = skeleton::classify(&source.bones)?;
+    let er_bones = Flver::parse(donor)?.bones;
+    let built = build(&source.bones, &roles, &er_bones, params)?;
+    let frames = bind_frames(&source.bones)?;
+    Ok(source
+        .bones
+        .iter()
+        .zip(&built.fit.bones)
+        .zip(&frames)
+        .filter_map(|((bone, fit), frame)| {
+            let fit = fit.as_ref()?;
+            Some((
+                bone.name.clone(),
+                built.fit.carry_point(fit.carrier, frame.origin),
+            ))
+        })
+        .collect())
+}
+
 pub fn export_with_targets(
     id: &'static str,
     flver: &[u8],

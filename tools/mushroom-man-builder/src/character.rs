@@ -20,6 +20,26 @@ use crate::{
     names,
 };
 
+/// The game a character's model is read from. A model id names a different character in each:
+/// c1000 is a Firebomb Hollow in Dark Souls Remastered and a Goblin in Dark Souls II.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Game {
+    /// Dark Souls Remastered: `chr/<id>.chrbnd.dcx` in the install folder.
+    Dsr,
+    /// Dark Souls II: Scholar of the First Sin: `/model/chr/<id>.bnd` and `<id>.texbnd` in the
+    /// archives beside `DarkSoulsII.exe`.
+    Ds2,
+}
+
+impl Game {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dsr => "Dark Souls Remastered",
+            Self::Ds2 => "Dark Souls II",
+        }
+    }
+}
+
 /// Whose bone names the source skeleton uses, which decides how it is fitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Skeleton {
@@ -50,7 +70,9 @@ pub enum Writer {
 
 #[derive(Debug)]
 pub struct Character {
-    /// The DSR model id, `c2280`.
+    /// The game its model is read from.
+    pub game: Game,
+    /// The model id in that game, `c2280`.
     pub id: &'static str,
     /// What a player calls it.
     pub label: &'static str,
@@ -63,6 +85,7 @@ pub struct Character {
 
 /// The Mushroom Man, as the user approved it in game: `FitParams::default()` on the patch path.
 pub const C2280: Character = Character {
+    game: Game::Dsr,
     id: "c2280",
     label: "Mushroom Man",
     skeleton: Skeleton::MushroomChild,
@@ -81,6 +104,7 @@ pub const C2280: Character = Character {
 /// girth scale derived from the pelvis heights (1.027), no arm lean, the thumb on the hand, the
 /// lantern cut, cloth and twist links on their Biped bones.
 pub const C2650: Character = Character {
+    game: Game::Dsr,
     id: "c2650",
     label: "Dark Souls character c2650",
     skeleton: Skeleton::Biped,
@@ -98,6 +122,7 @@ pub const C2650: Character = Character {
 /// `R Weapon` bone sits nearer the wrist than Elden Ring's, mostly along the hand, so no girth
 /// moves it (0.036 at 0.70, 0.037 at 1.05), and the sword on it is cut anyway.
 pub const C2900: Character = Character {
+    game: Game::Dsr,
     id: "c2900",
     label: "Skeleton",
     skeleton: Skeleton::Biped,
@@ -106,7 +131,36 @@ pub const C2900: Character = Character {
     validated: false,
 };
 
-pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900];
+/// Lonesome Gavlan, Dark Souls II's travelling merchant: his EnemyParam rows 726000-726006 name
+/// chr 1350, the Gyrm model he shares with the Gyrm Warriors, so this builds that model with its
+/// axes, shield and the thrown axe cut. A Gyrm's trunk fits 0.84 m wide and 0.80 m deep at the
+/// belly, against Elden Ring's 0.34 m and 0.23 m, and the player's arms sank into it: the user
+/// liked how he looked and saw the arms clip (2026-10-16), and the fit probe counted 1819 of 1982
+/// arm vertices buried in the idle. Keeping 0.45 of the girth across and in depth brings that to
+/// 235 (12%, under the probe's 14% gate; 0.55 left 21%, 0.65 31%), the trunk to 0.38 m by 0.36 m,
+/// still wider and deeper than a human's, with the arms, legs and head at the full girth.
+///
+/// His skirt hangs from the pelvis, so it narrowed with the trunk, and his legs, at the full
+/// girth, stood through it at rest in 37 of 46 places by height and direction, up to 0.09 m. The
+/// skirt keeps 0.75 instead: the legs reach past it in 2 places by 0.02 m and clear it by 0.07 m
+/// at the median, which leaves the cloth simulation room, and 343 arm vertices are buried (17%).
+/// At 1 the skirt clears the legs everywhere but stands 1 m wide and buries the hands (814, 41%);
+/// at 0.65 the median clearance is 0.03 m.
+pub const DS2_C1350: Character = Character {
+    game: Game::Ds2,
+    id: "c1350",
+    label: "Lonesome Gavlan",
+    skeleton: Skeleton::Biped,
+    fit: FitConfig::Biped(BipedParams {
+        trunk_girth: 0.45,
+        skirt_girth: 0.75,
+        ..BipedParams::DEFAULT
+    }),
+    writer: Writer::Rebuild,
+    validated: false,
+};
+
+pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900, DS2_C1350];
 
 /// The character a run with no `--character` builds.
 pub const DEFAULT_ID: &str = "c2280";
@@ -115,11 +169,16 @@ pub fn default_character() -> &'static Character {
     &CHARACTERS[0]
 }
 
-/// The table entry for `id`, ignoring case.
+/// The Dark Souls Remastered table entry for `id`, ignoring case.
 pub fn by_id(id: &str) -> Option<&'static Character> {
+    by_id_in(Game::Dsr, id)
+}
+
+/// The table entry for `game`'s model `id`, ignoring case.
+pub fn by_id_in(game: Game, id: &str) -> Option<&'static Character> {
     CHARACTERS
         .iter()
-        .find(|character| character.id.eq_ignore_ascii_case(id.trim()))
+        .find(|character| character.game == game && character.id.eq_ignore_ascii_case(id.trim()))
 }
 
 pub fn validated() -> impl Iterator<Item = &'static Character> {
@@ -139,10 +198,16 @@ pub fn is_model_id(id: &str) -> bool {
 ///
 /// It is leaked so that it is `'static` like the table's entries: a run resolves one character.
 pub fn generic(id: &str) -> &'static Character {
+    generic_in(Game::Dsr, id)
+}
+
+/// [`generic`], for model `id` of `game`.
+pub fn generic_in(game: Game, id: &str) -> &'static Character {
     let id = id.trim().to_ascii_lowercase();
-    let label =
-        names::name_of(&id).map_or_else(|| format!("Dark Souls character {id}"), str::to_owned);
+    let label = names::name_of(game, &id)
+        .map_or_else(|| format!("{} character {id}", game.name()), str::to_owned);
     Box::leak(Box::new(Character {
+        game,
         id: Box::leak(id.into_boxed_str()),
         label: Box::leak(label.into_boxed_str()),
         skeleton: Skeleton::Biped,
@@ -156,9 +221,15 @@ pub fn generic(id: &str) -> &'static Character {
 /// model id. Refused when `id` is not a model id, or when the character has not been checked in
 /// game and `allow_unvalidated` was not given.
 pub fn resolve(id: &str, allow_unvalidated: bool) -> Result<&'static Character> {
-    let character = match by_id(id) {
+    resolve_in(Game::Dsr, id, allow_unvalidated)
+}
+
+/// [`resolve`], for a model id of `game`. Every table entry is a Dark Souls Remastered one, so a
+/// Dark Souls II id is always [`generic_in`].
+pub fn resolve_in(game: Game, id: &str, allow_unvalidated: bool) -> Result<&'static Character> {
+    let character = match by_id_in(game, id) {
         Some(character) => character,
-        None if is_model_id(id) => generic(id),
+        None if is_model_id(id) => generic_in(game, id),
         None => {
             let offered: Vec<String> = validated()
                 .map(|character| format!("{} ({})", character.id, character.label))
@@ -186,7 +257,10 @@ pub fn listing(all: bool) -> String {
         .filter(|character| all || character.validated)
         .map(|character| {
             let mut line = format!("{:<7} {}", character.id, character.label);
-            if character.id == DEFAULT_ID {
+            if character.game == Game::Ds2 {
+                line.push_str(" (Dark Souls II; --game ds2)");
+            }
+            if character.game == Game::Dsr && character.id == DEFAULT_ID {
                 line.push_str(" (default)");
             }
             if !character.validated {
@@ -277,8 +351,18 @@ mod tests {
         assert!(matches!(hollow.fit, FitConfig::Biped(params) if params == BipedParams::DEFAULT));
         assert_eq!(
             resolve("c9999", true).unwrap().label,
-            "Dark Souls character c9999"
+            "Dark Souls Remastered character c9999"
         );
+        // The same id is another character in Dark Souls II, and no table entry answers for it.
+        let goblin = resolve_in(Game::Ds2, "c1000", true).unwrap();
+        assert_eq!((goblin.game, goblin.label), (Game::Ds2, "Goblin"));
+        assert_eq!(resolve("c1000", true).unwrap().game, Game::Dsr);
+        let not_c2280 = resolve_in(Game::Ds2, "c2280", true).unwrap();
+        assert_eq!(
+            (not_c2280.game, not_c2280.skeleton),
+            (Game::Ds2, Skeleton::Biped)
+        );
+        assert!(resolve_in(Game::Ds2, "c1350", false).is_err());
         for id in ["c250", "c25000", "x2500", "c25o0", ""] {
             assert!(!is_model_id(id), "{id:?}");
         }

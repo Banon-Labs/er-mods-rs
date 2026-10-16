@@ -10,8 +10,14 @@
 //! it and its head 0.075 m, where Elden Ring's sit at 0 and 0.007. So the depth is laid by the
 //! knots too, `z' = ze(y) + (z - zs(y)) * k`, with `zs` and `ze` the source and Elden Ring knot
 //! depths interpolated at the vertex's height. Across, `x' = x * k`.
+//!
+//! A trunk far wider and deeper than a human's can keep only a share of the girth across and in
+//! depth ([`AxialFit::with_trunk`]), up to the shoulder and rising back to all of it at the head,
+//! so the head keeps its size. The Gyrm c1350 fits 0.84 m wide and 0.80 m deep at the belly where
+//! Elden Ring's body is 0.34 m and 0.23 m, and the player's arms, which hang where a human's do,
+//! sank into it (1819 of its 1982 arm vertices in the idle, 2026-10-16).
 
-use super::Vec3;
+use super::{Vec3, add, cross, mul, smoothstep, sub};
 use crate::error::{Error, Result};
 
 #[derive(Clone, Debug)]
@@ -20,7 +26,27 @@ pub struct AxialFit {
     girth: f32,
     /// Source joint and Elden Ring joint, rising.
     knots: Vec<(Vec3, Vec3)>,
+    trunk: Option<TrunkGirth>,
 }
+
+/// The share of the girth the trunk keeps across and in depth, and the source heights it holds
+/// to and rises back to all of the girth by; and the share below the pelvis, where a skirt hangs.
+#[derive(Clone, Copy, Debug)]
+struct TrunkGirth {
+    share: f32,
+    shoulder_y: f32,
+    head_y: f32,
+    skirt: f32,
+    pelvis_y: f32,
+}
+
+/// The part of the pelvis height below the pelvis joint over which the trunk's share eases into
+/// the skirt's.
+const HIP_FADE: f32 = 0.15;
+
+/// The step, in source metres, of the differences [`AxialFit::normal`] takes the slope from
+/// where the trunk keeps a share of the girth.
+const NORMAL_STEP: f32 = 1e-4;
 
 /// Where one height lands, and how fast the map changes with it there.
 struct Band {
@@ -54,7 +80,57 @@ impl AxialFit {
                 heights.join(", ")
             )));
         }
-        Ok(Self { girth, knots })
+        Ok(Self {
+            girth,
+            knots,
+            trunk: None,
+        })
+    }
+
+    /// Keep `share` of the girth across and in depth from the source height `pelvis_y` up to
+    /// `shoulder_y`, rising smoothly to all of it at `head_y`, and `skirt` of it below the pelvis,
+    /// eased into over [`HIP_FADE`] of the pelvis height. Shares of 1 change nothing.
+    ///
+    /// The skirt keeps its own share because it hangs over the legs, which the limb maps carry at
+    /// the full girth: c1350's skirt, narrowed with its trunk to 0.45, sat inside its legs at rest
+    /// in 37 of the 46 places, by height and direction, where both are (up to 0.09 m in).
+    pub fn with_trunk(
+        mut self,
+        share: f32,
+        skirt: f32,
+        pelvis_y: f32,
+        shoulder_y: f32,
+        head_y: f32,
+    ) -> Result<Self> {
+        let usable = |share: f32| share.is_finite() && share > 0.0 && share <= 1.0;
+        if !usable(share) || !usable(skirt) || head_y <= shoulder_y || shoulder_y <= pelvis_y {
+            return Err(Error::new(format!(
+                "trunk girth {share} (skirt {skirt}) from {pelvis_y} m through {shoulder_y} m to \
+                 {head_y} m: the shares must be in (0, 1] and the joints rising"
+            )));
+        }
+        self.trunk = (share < 1.0 || skirt < 1.0).then_some(TrunkGirth {
+            share,
+            shoulder_y,
+            head_y,
+            skirt,
+            pelvis_y,
+        });
+        Ok(self)
+    }
+
+    /// The scale across and in depth at source height `y`.
+    fn across(&self, y: f32) -> f32 {
+        match self.trunk {
+            None => self.girth,
+            Some(trunk) => {
+                let rise = smoothstep((y - trunk.shoulder_y) / (trunk.head_y - trunk.shoulder_y));
+                let fade = trunk.pelvis_y * HIP_FADE;
+                let down = smoothstep((trunk.pelvis_y - y) / fade);
+                let held = trunk.share + (trunk.skirt - trunk.share) * down;
+                self.girth * (held + (1.0 - held) * rise)
+            }
+        }
     }
 
     fn band(&self, y: f32) -> Band {
@@ -95,16 +171,48 @@ impl AxialFit {
 
     pub fn place(&self, p: Vec3) -> Vec3 {
         let band = self.band(p.y);
+        let across = self.across(p.y);
         Vec3 {
-            x: p.x * self.girth,
+            x: p.x * across,
             y: band.y,
-            z: band.er_z + (p.z - band.source_z) * self.girth,
+            z: band.er_z + (p.z - band.source_z) * across,
         }
     }
 
     /// The normal at `p` once [`Self::place`] has moved it: the inverse transpose of the map's
     /// slope there. Unnormalised.
+    ///
+    /// Where the trunk keeps a share of the girth the scale across changes with height, so the
+    /// slope is taken by central differences, and the normal is the slope's cofactor matrix
+    /// (the inverse transpose times its positive determinant) applied to `n`.
     pub fn normal(&self, p: Vec3, n: Vec3) -> Vec3 {
+        if self.trunk.is_some() {
+            let column = |axis: Vec3| {
+                let step = mul(axis, NORMAL_STEP);
+                mul(
+                    sub(self.place(add(p, step)), self.place(sub(p, step))),
+                    0.5 / NORMAL_STEP,
+                )
+            };
+            let (a, b, c) = (
+                column(Vec3 {
+                    x: 1.0,
+                    ..Vec3::default()
+                }),
+                column(Vec3 {
+                    y: 1.0,
+                    ..Vec3::default()
+                }),
+                column(Vec3 {
+                    z: 1.0,
+                    ..Vec3::default()
+                }),
+            );
+            return add(
+                add(mul(cross(b, c), n.x), mul(cross(c, a), n.y)),
+                mul(cross(a, b), n.z),
+            );
+        }
         let band = self.band(p.y);
         let k = self.girth;
         Vec3 {
@@ -214,6 +322,93 @@ mod tests {
                 assert!(dot(moved, n).abs() < 1e-5, "height {height}");
             }
         }
+    }
+
+    #[test]
+    fn a_trunk_share_narrows_below_the_shoulder_and_the_head_keeps_the_girth() {
+        let k = 1.027;
+        let [(pelvis, er_pelvis), (shoulder, _)] = [knots()[0], knots()[1]];
+        let head_y = 1.6;
+        let full = AxialFit::new(knots(), k).unwrap();
+        let narrow = AxialFit::new(knots(), k)
+            .unwrap()
+            .with_trunk(0.5, 0.5, pelvis.y, shoulder.y, head_y)
+            .unwrap();
+        // The knots still land on their joints.
+        assert!(close(narrow.place(pelvis), er_pelvis));
+        // Across and in depth from the knot line, a belly point keeps half its offset.
+        let belly = v(0.3, 1.1, -0.25);
+        let (placed, kept) = (narrow.place(belly), full.place(belly));
+        assert!((placed.x - kept.x * 0.5).abs() < 1e-5);
+        assert!((placed.y - kept.y).abs() < 1e-6, "heights are untouched");
+        let line = narrow
+            .place(v(0.0, 1.1, belly.z - narrow.depth_offset(belly)))
+            .z;
+        assert!(((placed.z - line) - (kept.z - line) * 0.5).abs() < 1e-5);
+        // At and above the head joint nothing changes.
+        for p in [v(0.1, head_y, 0.05), v(-0.08, 1.75, -0.1)] {
+            assert!(close(narrow.place(p), full.place(p)));
+        }
+        // A share of 1 is no share at all, and a share out of range is refused.
+        let same = AxialFit::new(knots(), k)
+            .unwrap()
+            .with_trunk(1.0, 1.0, pelvis.y, shoulder.y, head_y)
+            .unwrap();
+        assert!(same.trunk.is_none());
+        for (share, top) in [(0.0, head_y), (1.5, head_y), (0.5, shoulder.y)] {
+            assert!(
+                AxialFit::new(knots(), k)
+                    .unwrap()
+                    .with_trunk(share, 0.5, pelvis.y, shoulder.y, top)
+                    .is_err()
+            );
+        }
+        // Normals stay square to the surface below, through and above the rise to the head.
+        let normal = v(0.3, 0.5, -0.8);
+        let along = [v(0.5, 0.0, 0.1875), v(0.0, 0.8, 0.5)];
+        for height in [0.8, 1.2, 1.5, 1.7] {
+            let p = v(0.12, height, -0.08);
+            let n = narrow.normal(p, normal);
+            for tangent in along {
+                let step = 1e-3;
+                let moved = sub(narrow.place(add(p, mul(tangent, step))), narrow.place(p));
+                let cosine = dot(moved, n) / (dot(moved, moved).sqrt() * dot(n, n).sqrt());
+                assert!(cosine.abs() < 1e-3, "height {height}: {cosine}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_skirt_share_holds_below_the_pelvis_and_eases_into_the_trunks() {
+        let k = 1.027;
+        let [(pelvis, _), (shoulder, _)] = [knots()[0], knots()[1]];
+        let full = AxialFit::new(knots(), k).unwrap();
+        let fit = AxialFit::new(knots(), k)
+            .unwrap()
+            .with_trunk(0.5, 0.75, pelvis.y, shoulder.y, 1.6)
+            .unwrap();
+        let share = |y: f32| {
+            let p = v(0.2, y, 0.0);
+            fit.place(p).x / full.place(p).x
+        };
+        // The belly keeps the trunk's share, and the skirt below the hip fade its own.
+        assert!((share(1.2) - 0.5).abs() < 1e-5);
+        assert!((share(pelvis.y) - 0.5).abs() < 1e-5);
+        assert!((share(pelvis.y * (1.0 - HIP_FADE)) - 0.75).abs() < 1e-5);
+        assert!((share(0.4) - 0.75).abs() < 1e-5);
+        // In the fade it eases from one to the other.
+        let middle = share(pelvis.y * (1.0 - HIP_FADE / 2.0));
+        assert!(middle > 0.55 && middle < 0.7, "{middle}");
+        // A skirt share alone narrows only the skirt.
+        let skirt_only = AxialFit::new(knots(), k)
+            .unwrap()
+            .with_trunk(1.0, 0.75, pelvis.y, shoulder.y, 1.6)
+            .unwrap();
+        assert!(close(
+            skirt_only.place(v(0.2, 1.2, 0.0)),
+            full.place(v(0.2, 1.2, 0.0))
+        ));
+        assert!(skirt_only.trunk.is_some());
     }
 
     #[test]

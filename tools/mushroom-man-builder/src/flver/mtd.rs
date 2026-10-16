@@ -1,4 +1,4 @@
-//! Which Elden Ring material a Dark Souls Remastered MTD can be drawn with.
+//! Which Elden Ring material a Dark Souls Remastered or Dark Souls II MTD can be drawn with.
 //!
 //! DSR names a material's shading in its MTD file name: the family (`C_DullLeather`, `P_Metal`,
 //! `C_Wet`), the texture slots in brackets (`[DSB]` diffuse, specular, bump; `[D]` diffuse only),
@@ -10,6 +10,11 @@
 //! own, and alpha blending another, the dithered `C[AMSN]_Dither`. Everything else -- the additive
 //! ghosts, hair, an unbracketed or blank name -- has no route yet and is refused rather than drawn
 //! wrong.
+//!
+//! Dark Souls II names its materials the same way with its lighting bracketed first
+//! (`C[Ibl][DSB]`, `Cskin[Ibl_s][DSB]`), `[DB]` for a diffuse and normal map without specular, and
+//! `_Alp_1bit` for a cutout, so it takes the same routes. Its eyes, hair and stone skins
+//! (`C[Eye][Ibl]`, `C[Hair][Ibl]`, `C[stone]`) name no texture slots and are refused.
 
 /// How a DSR material blends, and so which Elden Ring material can draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,14 +52,30 @@ pub fn classify(mtd_path: &str) -> MtdClass {
     {
         return MtdClass::Unsupported;
     }
+    // Dark Souls II puts its lighting first (`C[Ibl][DSB]`), so the texture slots are whichever
+    // bracket names them, and a 1-bit alpha is a cutout. `[DB]` is a diffuse and a normal map
+    // with no specular, unless an `[M]` blends a second diffuse in, as DSR's map materials do.
+    let groups: Vec<&str> = stem
+        .split('[')
+        .skip(1)
+        .filter_map(|group| group.split_once(']').map(|(slots, _)| slots))
+        .collect();
+    let has_slots = groups.iter().any(|slots| match *slots {
+        "dsb" | "dsbt" | "ds" | "d" => true,
+        "db" => !groups.contains(&"m"),
+        _ => false,
+    });
+    if stem.contains("_alp_1bit") {
+        return if has_slots {
+            MtdClass::AlphaTest
+        } else {
+            MtdClass::Unsupported
+        };
+    }
     if stem.contains("_alp") {
         return MtdClass::AlphaBlend;
     }
-    let slots = stem
-        .split_once('[')
-        .and_then(|(_, rest)| rest.split_once(']'))
-        .map(|(slots, _)| slots);
-    if !matches!(slots, Some("dsb" | "dsbt" | "ds" | "d")) {
+    if !has_slots {
         return MtdClass::Unsupported;
     }
     if stem.contains("_edge") {
@@ -87,8 +108,24 @@ mod tests {
             ("C_2680_Ghost[DSB]_Add_Depth_Edge", MtdClass::Unsupported),
             ("Ps_Hair[DS]", MtdClass::Unsupported),
             ("M[DB][M]", MtdClass::Unsupported),
+            ("C_Wet[DSB][M]", MtdClass::Opaque),
         ] {
             assert_eq!(classify(&path(name)), class, "{name}");
+        }
+        let ds2 = |name: &str| format!(r"N:\FRPG2\data\Material\mtd\common\{name}.mtd");
+        for (name, class) in [
+            ("C[Ibl][DSB]", MtdClass::Opaque),
+            ("Cskin[Ibl_s][DSB]", MtdClass::Opaque),
+            ("C[Ibl][DSB]_Alp_1bit", MtdClass::AlphaTest),
+            ("Cloth[Ibl][DSB]_Alp_1bit", MtdClass::AlphaTest),
+            ("M[DB]_Alp_1bit", MtdClass::AlphaTest),
+            ("C[Ibl][DSB]_Alp", MtdClass::AlphaBlend),
+            ("C[Ibl][DSB]_Add", MtdClass::Unsupported),
+            ("C[Eye][Ibl]", MtdClass::Unsupported),
+            ("C[Hair][Ibl]_Alp_1bit", MtdClass::Unsupported),
+            ("C[stone]", MtdClass::Unsupported),
+        ] {
+            assert_eq!(classify(&ds2(name)), class, "{name}");
         }
         assert_eq!(classify(""), MtdClass::Unsupported);
         assert!(MtdClass::Opaque.route().is_some() && MtdClass::AlphaTest.route().is_some());

@@ -29,7 +29,7 @@ use mushroom_man_builder::{
         rebuild::{HeaderAppend, rebuild},
         verify::check_flver,
     },
-    package::{Cutouts, biped_body, read_character},
+    package::{Cutouts, Install, biped_body, read_character},
     search::{self, Hit, Verdict},
     textures::body_tpf,
 };
@@ -112,7 +112,7 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
     let Some(dsr) = dsr_with_or_skip(test, "c2500") else {
         return;
     };
-    let hits = search::search(&dsr, "c", None).unwrap();
+    let hits = search::search(Install::Dsr(&dsr), "c", None).unwrap();
     assert_eq!(hits.len(), 193, "one hit per chrbnd");
     assert_eq!(tally(&hits), UNFITTED);
     assert_eq!(
@@ -149,7 +149,7 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
     assert!(verdict(&hits, "c2060").maps());
     assert!(verdict(&hits, "c2792").maps());
 
-    let hollows = search::search(&dsr, "hollow", None).unwrap();
+    let hollows = search::search(Install::Dsr(&dsr), "hollow", None).unwrap();
     let found: Vec<(&str, Option<&str>, bool)> = hollows
         .iter()
         .map(|hit| (hit.id.as_str(), hit.name, hit.verdict.maps()))
@@ -236,7 +236,7 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
         cutout: edge_template(&cutout).unwrap(),
         opaque: opaque_template(&opaque).unwrap(),
     };
-    let hits = search::search(&dsr, "c", Some(&donor)).unwrap();
+    let hits = search::search(Install::Dsr(&dsr), "c", Some(&donor)).unwrap();
     for hit in &hits {
         if let Verdict::Fit(why) = &hit.verdict {
             eprintln!("{}: the fit fails: {why}", hit.id);

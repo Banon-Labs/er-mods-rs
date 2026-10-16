@@ -18,6 +18,7 @@ pub mod oodle;
 pub mod package;
 pub mod profile;
 pub mod search;
+pub mod skirt;
 pub mod tail;
 pub mod textures;
 

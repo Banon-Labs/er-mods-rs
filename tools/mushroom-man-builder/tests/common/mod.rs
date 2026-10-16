@@ -3,12 +3,14 @@
 //!
 //! No game bytes are versioned here. A test that needs Elden Ring's donor body or a Dark Souls
 //! Remastered character reads them from the local machine and skips, out loud, when they are
-//! absent; it commits only lengths and sha256 fingerprints. Both roots are overridable:
+//! absent; it commits only lengths and sha256 fingerprints. Every root is overridable:
 //!
 //! - `MMB_ER_CORPUS_ROOT`: an unpacked Elden Ring tree, default
 //!   `$HOME/er-extract/LOOK_HERE_WITCHY_RECURSIVE_20260713`.
 //! - `MMB_DSR_DIR`: the Dark Souls Remastered install, default
 //!   `$HOME/.local/share/Steam/steamapps/common/DARK SOULS REMASTERED`.
+//! - `MMB_DS2_DIR`: Dark Souls II's `Game` folder, default
+//!   `$HOME/.local/share/Steam/steamapps/common/Dark Souls II Scholar of the First Sin/Game`.
 
 // PARITY: `mod common;` is compiled into every test binary, and not every binary uses every
 // helper, so a helper is dead in whichever binaries skip it.
@@ -131,6 +133,34 @@ pub fn dsr_with_or_skip(test: &str, id: &str) -> Option<PathBuf> {
         return None;
     }
     Some(dsr)
+}
+
+/// Dark Souls II's `Game` folder: `MMB_DS2_DIR`, default
+/// `$HOME/.local/share/Steam/steamapps/common/Dark Souls II Scholar of the First Sin/Game`.
+pub fn ds2_dir() -> Option<PathBuf> {
+    env_dir(
+        "MMB_DS2_DIR",
+        ".local/share/Steam/steamapps/common/Dark Souls II Scholar of the First Sin/Game",
+    )
+}
+
+/// Dark Souls II's archives, opened, or `None` (and a skip line) when the install is absent.
+pub fn ds2_archives_or_skip(test: &str) -> Option<mushroom_man_builder::archive::ArchiveSet> {
+    let Some(dir) = ds2_dir() else {
+        eprintln!("SKIP {test}: no HOME and no MMB_DS2_DIR");
+        return None;
+    };
+    if !dir.join("GameDataEbl.bhd").is_file() {
+        eprintln!(
+            "SKIP {test}: no GameDataEbl.bhd under {} (set MMB_DS2_DIR)",
+            dir.display()
+        );
+        return None;
+    }
+    Some(
+        mushroom_man_builder::archive::ArchiveSet::open_ds2(&dir)
+            .expect("open Dark Souls II's archives"),
+    )
 }
 
 /// c2280's FLVER and TPF out of the Dark Souls Remastered install, or `None` (and a skip line).

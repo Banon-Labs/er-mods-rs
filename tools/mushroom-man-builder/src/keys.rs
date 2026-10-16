@@ -59,6 +59,22 @@ impl ArchiveKey {
     }
 }
 
+const PEM_BEGIN: &str = "-----BEGIN RSA PUBLIC KEY-----";
+const PEM_END: &str = "-----END RSA PUBLIC KEY-----";
+
+impl RsaPublicKey {
+    /// A PKCS#1 `RSA PUBLIC KEY` PEM file, the form Dark Souls II ships its archive keys in.
+    pub fn from_pem(text: &str) -> Result<Self> {
+        let body = text
+            .split_once(PEM_BEGIN)
+            .and_then(|(_, rest)| rest.split_once(PEM_END))
+            .map(|(body, _)| body)
+            .ok_or_else(|| Error::new("not an `RSA PUBLIC KEY` PEM file"))?;
+        let base64: String = body.split_whitespace().collect();
+        parse_pkcs1(&base64_decode(&base64)?)
+    }
+}
+
 /// `RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }`, DER.
 fn parse_pkcs1(der: &[u8]) -> Result<RsaPublicKey> {
     let (tag, body, _) = der_element(der)?;

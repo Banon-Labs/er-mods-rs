@@ -66,6 +66,8 @@ pub struct TextureSet {
 const DSR_ALBEDO: &str = "g_Diffuse";
 const DSR_SPECULAR: &str = "g_Specular";
 const DSR_NORMAL: &str = "g_Bumpmap";
+/// `g_DiffuseTexture`: Dark Souls II's spelling of `g_Diffuse`, and of the other two.
+const DS2_SAMPLER_SUFFIX: &str = "Texture";
 /// The folder of a DSR texture path whose next component is the character holding it.
 const CHR_FOLDER: &str = "chr";
 
@@ -100,9 +102,18 @@ impl TextureSet {
     fn roles_of(material: &SourceMaterial, id: &str) -> [Option<TextureRef>; 3] {
         let mut found: [Option<TextureRef>; 3] = Default::default();
         for (texture_type, path) in &material.textures {
+            // Dark Souls II names the same samplers with `Texture` after them.
+            let sampler = texture_type
+                .len()
+                .checked_sub(DS2_SAMPLER_SUFFIX.len())
+                .filter(|&at| {
+                    texture_type.is_char_boundary(at)
+                        && texture_type[at..].eq_ignore_ascii_case(DS2_SAMPLER_SUFFIX)
+                })
+                .map_or(texture_type.as_str(), |at| &texture_type[..at]);
             let role = [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
                 .iter()
-                .position(|name| texture_type.eq_ignore_ascii_case(name));
+                .position(|name| sampler.eq_ignore_ascii_case(name));
             if let (Some(role), Some(stem)) = (role, texture_stem(path)) {
                 let owner = texture_owner(path)
                     .or_else(|| stem_owner(stem))
@@ -408,7 +419,7 @@ pub fn body_tpf(
         let prefix = set_prefix(target_prefix, set);
         let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
         let normal = match &texture_set.normal {
-            Some(texture) => lookup_in(&sources, texture)?,
+            Some(texture) => as_er_normal(lookup_in(&sources, texture)?)?,
             None => flat_normal(),
         };
         for (slot_suffix, dds) in [(ALBEDO_SLOT, albedo), (NORMAL_SLOT, normal)] {
@@ -465,7 +476,7 @@ pub fn part_tpf(
         let set_prefix = part_set_prefix(prefix, set);
         let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
         let normal = match &texture_set.normal {
-            Some(texture) => lookup_in(&sources, texture)?,
+            Some(texture) => as_er_normal(lookup_in(&sources, texture)?)?,
             None => flat_normal(),
         };
         for (slot_suffix, dds) in [(ALBEDO_SLOT, albedo), (NORMAL_SLOT, normal)] {
@@ -593,7 +604,7 @@ fn donor_tpf(
                 None => flat_mask(),
             },
             Slot::Normal => match &set.normal {
-                Some(texture) => lookup(texture)?,
+                Some(texture) => as_er_normal(lookup(texture)?)?,
                 None => flat_normal(),
             },
         };
@@ -734,6 +745,98 @@ fn as_srgb_albedo(dds: Vec<u8>) -> Vec<u8> {
     }
     out.extend_from_slice(&dds[DDS_HEADER_END..]);
     out
+}
+
+/// Bytes per block of BC3 (`DXT5`) and of BC5 (`ATI2`), and per half of either.
+const BC_BLOCK: usize = 16;
+const BC4_HALF: usize = 8;
+/// The mean red of a DXT5 normal map's colour endpoints above which it is DXT5nm: Dark Souls II's
+/// sit at 1.00 in every map measured (c1350, c3010, c3180, c1020), with X in alpha.
+const DXT5NM_MIN_RED: f64 = 0.9;
+
+/// A normal map in a layout Elden Ring reads, X in red and Y in green.
+///
+/// Dark Souls II stores its normal maps as DXT5nm: a `DXT5` whose red and blue are held at full,
+/// with Y in green and X in alpha. Read as they are, every normal leans along X. Each block becomes
+/// a BC5 one, the format c2280's normal map shipped in: DXT5's alpha half is a BC4 block already
+/// and becomes red as it is, and green is read out of the colour half and written as a BC4 block
+/// of its own. Both formats take 16 bytes a block, so the header keeps its sizes and only its
+/// fourcc changes. Every other normal map passes through.
+fn as_er_normal(dds: Vec<u8>) -> Result<Vec<u8>> {
+    if dds.get(DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4) != Some(b"DXT5".as_slice()) {
+        return Ok(dds);
+    }
+    let blocks = dds
+        .get(DDS_HEADER_END..)
+        .filter(|data| !data.is_empty() && data.len().is_multiple_of(BC_BLOCK))
+        .ok_or("a DXT5 normal map whose data is not whole 16-byte blocks")?;
+    let blocks = blocks.as_chunks::<BC_BLOCK>().0;
+    let red: f64 = blocks
+        .iter()
+        .flat_map(|block| [&block[8..10], &block[10..12]])
+        .map(|color| f64::from(u16::from_le_bytes([color[0], color[1]]) >> 11) / 31.0)
+        .sum::<f64>()
+        / (blocks.len() * 2) as f64;
+    if red < DXT5NM_MIN_RED {
+        return Err(Error::new(format!(
+            "a DXT5 normal map whose red averages {red:.2}, so not the DXT5nm layout (X in alpha) \
+             Dark Souls II uses; its X channel is not known"
+        )));
+    }
+    let mut out = dds.clone();
+    out[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4].copy_from_slice(b"ATI2");
+    for (from, to) in blocks
+        .iter()
+        .zip(out[DDS_HEADER_END..].as_chunks_mut::<BC_BLOCK>().0)
+    {
+        to[..BC4_HALF].copy_from_slice(&from[..BC4_HALF]);
+        to[BC4_HALF..].copy_from_slice(&bc4_block(&dxt_green(&from[BC4_HALF..])));
+    }
+    Ok(out)
+}
+
+/// The 16 greens of a DXT colour block, read as DXT5 reads it: four colours, whatever the order
+/// of its endpoints.
+fn dxt_green(color: &[u8]) -> [u8; 16] {
+    let green = |at: usize| {
+        let six = (u16::from_le_bytes([color[at], color[at + 1]]) >> 5) & 0x3F;
+        ((six << 2) | (six >> 4)) as u8
+    };
+    let (g0, g1) = (u16::from(green(0)), u16::from(green(2)));
+    let palette = [g0, g1, (2 * g0 + g1) / 3, (g0 + 2 * g1) / 3];
+    let indices = u32::from_le_bytes([color[4], color[5], color[6], color[7]]);
+    std::array::from_fn(|texel| palette[(indices >> (2 * texel)) as usize & 3] as u8)
+}
+
+/// A BC4 block holding `values`: their maximum and minimum as the endpoints, in the eight-value
+/// order, and each texel at the nearest of the eight.
+fn bc4_block(values: &[u8; 16]) -> [u8; BC4_HALF] {
+    let (high, low) = (
+        *values.iter().max().unwrap_or(&0),
+        *values.iter().min().unwrap_or(&0),
+    );
+    let mut block = [0_u8; BC4_HALF];
+    block[0] = high;
+    block[1] = low;
+    if high == low {
+        return block;
+    }
+    let (a0, a1) = (u32::from(high), u32::from(low));
+    let mut palette = [0_u32; 8];
+    palette[0] = a0;
+    palette[1] = a1;
+    for step in 1..7 {
+        palette[step + 1] = ((7 - step as u32) * a0 + step as u32 * a1) / 7;
+    }
+    let mut bits = 0_u64;
+    for (texel, &value) in values.iter().enumerate() {
+        let nearest = (0..8)
+            .min_by_key(|&index| palette[index].abs_diff(u32::from(value)))
+            .unwrap_or(0) as u64;
+        bits |= nearest << (3 * texel);
+    }
+    block[2..].copy_from_slice(&bits.to_le_bytes()[..6]);
+    block
 }
 
 /// The TPF format byte Elden Ring's own parts give a texture in this DDS format, from the 9524
@@ -1060,6 +1163,97 @@ mod tests {
         assert_eq!(built.textures[2].dds, flat_normal());
         let missing = TextureSet::named_after("c2519");
         assert!(character_tpf(&tpf, &missing, "FC_M_0000", "").is_err());
+    }
+
+    #[test]
+    fn dark_souls_ii_samplers_carry_texture_after_their_names() {
+        let path = |stem: &str| format!(r"N:\FRPG2\data\Model\chr\c1350\tex\{stem}.tga");
+        let material = SourceMaterial {
+            textures: [
+                ("g_DiffuseTexture", path("HD_c1350_d")),
+                ("g_SpecularTexture", path("HD_c1350_s")),
+                ("g_BumpmapTexture", path("HD_c1350_n")),
+                (
+                    "g_DetailBumpmapTexture",
+                    r"N:\LiveTokyo\data\model\common\tex\dummy128.tga".to_owned(),
+                ),
+            ]
+            .into_iter()
+            .map(|(kind, path)| (kind.to_owned(), path))
+            .collect(),
+            ..SourceMaterial::default()
+        };
+        let set = TextureSet::of_materials(&[material], "c1350").unwrap();
+        assert_eq!(
+            (
+                set.albedo.name.as_str(),
+                set.specular.unwrap().name,
+                set.normal.unwrap().name
+            ),
+            (
+                "HD_c1350_d",
+                "HD_c1350_s".to_owned(),
+                "HD_c1350_n".to_owned()
+            )
+        );
+        assert_eq!(set.albedo.owner, "c1350");
+    }
+
+    /// One DXT5nm block: alpha (X) from 40 to 200 on its own indices, red and blue held at
+    /// full, and green (Y) between endpoints 63 and 0 of six bits, indices 0, 1, 2, 3 repeating.
+    fn dxt5nm_block() -> [u8; 16] {
+        let mut block = [0_u8; 16];
+        block[..8].copy_from_slice(&[200, 40, 0x24, 0x92, 0x49, 0x24, 0x92, 0x49]);
+        let c0: u16 = (31 << 11) | (63 << 5) | 31;
+        let c1: u16 = (31 << 11) | 31;
+        block[8..10].copy_from_slice(&c0.to_le_bytes());
+        block[10..12].copy_from_slice(&c1.to_le_bytes());
+        block[12..16].copy_from_slice(&0xE4E4_E4E4_u32.to_le_bytes());
+        block
+    }
+
+    #[test]
+    fn a_dxt5nm_normal_map_becomes_bc5_with_x_out_of_alpha() {
+        let mut dds = legacy_dds(1, 0, b"DXT5");
+        dds[DDS_HEADER_END..].copy_from_slice(&dxt5nm_block());
+        let converted = as_er_normal(dds.clone()).unwrap();
+        assert_eq!(
+            &converted[DDS_FOURCC_OFFSET..DDS_FOURCC_OFFSET + 4],
+            b"ATI2"
+        );
+        assert_eq!(converted.len(), dds.len());
+        assert_eq!(
+            converted[DDS_HEADER_END..DDS_HEADER_END + 8],
+            dds[DDS_HEADER_END..DDS_HEADER_END + 8],
+            "X is the alpha block as it was"
+        );
+        let green = &converted[DDS_HEADER_END + 8..];
+        assert_eq!((green[0], green[1]), (255, 0), "Y spans its two endpoints");
+        let bits = u64::from_le_bytes([
+            green[2], green[3], green[4], green[5], green[6], green[7], 0, 0,
+        ]);
+        let first_four: Vec<u64> = (0..4).map(|texel| (bits >> (3 * texel)) & 7).collect();
+        // 255, 0, 170 and 85 land on palette entries 0, 1, 3 (219), 5 (146) or their neighbours:
+        // the nearest of the eight to each.
+        let palette = |index: u64| match index {
+            0 => 255,
+            1 => 0,
+            step => (255 * (8 - step)) / 7,
+        };
+        for (texel, want) in first_four.iter().zip([255_u64, 0, 170, 85]) {
+            assert!(
+                palette(*texel).abs_diff(want) <= 255 / 14 + 1,
+                "{texel} for {want}"
+            );
+        }
+
+        let not_swizzled = legacy_dds(1, 0, b"DXT5");
+        assert!(
+            as_er_normal(not_swizzled).is_err(),
+            "a red of 0 is not DXT5nm"
+        );
+        let bc5 = legacy_dds(1, 7, b"ATI2");
+        assert_eq!(as_er_normal(bc5.clone()).unwrap(), bc5);
     }
 
     #[test]

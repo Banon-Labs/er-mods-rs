@@ -2,7 +2,7 @@
 //!
 //! | output | built from |
 //! |---|---|
-//! | `character.txt` | the id of the DSR character the package was built from, one line |
+//! | `character.txt` | the id of the character the package was built from, one line: `c2280`, or `ds2 c1350` for a Dark Souls II one |
 //! | `parts/fc_*.partsbnd.dcx` (31) | Elden Ring's `fc_m_0000` (and `_l`) with the character written into it and its textures, renamed per part |
 //! | `parts/fg_a_*.partsbnd.dcx`, `parts/hr_a_*.partsbnd.dcx` | every face part and hair part the archives hold a FLVER for, with every face hidden |
 //! | `parts/fg_a_0000_f.partsbnd.dcx` | the hidden `fg_a_0000_m` under the female name the archives do not carry |
@@ -44,7 +44,7 @@ use std::{
 use crate::{
     archive::ArchiveSet,
     bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
-    character::{C2280, Character, FitConfig, Writer},
+    character::{C2280, Character, FitConfig, Game, Writer},
     dcx,
     edge::{
         Blend, EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, Templates,
@@ -63,7 +63,7 @@ use crate::{
     },
     locate,
     oodle::Oodle,
-    tail,
+    skirt, tail,
     textures::{self, TextureSets, body_tpf},
 };
 
@@ -150,7 +150,8 @@ pub const DLL_PAYLOAD_PROBES: [&str; 2] =
 pub struct Inputs<'a> {
     pub archives: &'a ArchiveSet,
     pub oodle: &'a Oodle,
-    pub dsr_dir: &'a Path,
+    /// The install the character is read from.
+    pub install: Install<'a>,
     /// The DSR character to build.
     pub character: &'a Character,
     /// An authored mesh (OBJ + weight TSV) to use instead of fitting the character here.
@@ -171,6 +172,11 @@ pub struct Inputs<'a> {
     /// (see [`crate::tail`]), unless this is welded through and through or `cloth_test_body` takes
     /// the slots.
     pub tail_rigidity: tail::Rigidity,
+    /// How stiff a Biped character's skirt is (`--rigidity skirt=<base>:<tip>`). A character with
+    /// skirt bones and no tail has its skirt cut out of the body and built into the naked body
+    /// slots on [`skirt::CLOTH_PART_ID`]'s cloth chains (see [`crate::skirt`]), unless this is
+    /// welded through and through or `cloth_test_body` takes the slots.
+    pub skirt_rigidity: tail::Rigidity,
 }
 
 /// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
@@ -301,8 +307,8 @@ pub struct BuildReport {
     pub head_parts: usize,
     /// Face and hair parts left to the game because they hold no model.
     pub head_parts_without_model: usize,
-    /// The tail's slots in the male high-detail cloth part, when the character's tail swings.
-    pub tail: Vec<SlotReport>,
+    /// What hangs on a cloth part, and its slots in the male high-detail one, when anything does.
+    pub cloth: Option<(Cloth, Vec<SlotReport>)>,
 }
 
 impl BuildReport {
@@ -346,16 +352,17 @@ impl BuildReport {
                         strip.unreferenced_vertices
                     );
                 }
-                if !self.tail.is_empty() {
-                    let vertices: usize = self.tail.iter().map(|slot| slot.vertices).sum();
+                if let Some((cloth, slots)) = &self.cloth {
+                    let vertices: usize = slots.iter().map(|slot| slot.vertices).sum();
                     let _ = write!(
                         out,
-                        "\n  tail: {vertices} vertices in {} slots of bd_*_0000, on the cloth \
-                         chain of bd_*_{}",
-                        self.tail.len(),
-                        tail::CLOTH_PART_ID
+                        "\n  {}: {vertices} vertices in {} slots of bd_*_0000, on the cloth \
+                         chains of bd_*_{}",
+                        cloth.label(),
+                        slots.len(),
+                        cloth.part_id()
                     );
-                    for slot in &self.tail {
+                    for slot in slots {
                         let _ = write!(out, "\n    {}", slot.describe());
                     }
                 }
@@ -403,38 +410,175 @@ pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<Character
         id,
         &format!("this Dark Souls Remastered install has no {id}"),
     )?;
-    let flver = binder_entry(&files, &format!("{id}.flver"), &path)?;
-    let source = source::parse(&flver).context(format!("{id}.flver"))?;
+    let flver_name = format!("{id}.flver");
+    let flver = binder_entry(&files, &flver_name, &path)?;
+    let tpf = character_textures(dsr_dir, id, &files, &path)?;
+    character_files(character, flver, &flver_name, tpf, |owner, why| {
+        let (path, files) = read_chrbnd(dsr_dir, owner, why)?;
+        character_textures(dsr_dir, owner, &files, &path)
+    })
+}
+
+/// Where a character's model is read from: a Dark Souls Remastered folder, or Dark Souls II's
+/// archives.
+#[derive(Clone, Copy)]
+pub enum Install<'a> {
+    Dsr(&'a Path),
+    Ds2(&'a ArchiveSet),
+}
+
+impl Install<'_> {
+    pub fn game(&self) -> Game {
+        match self {
+            Self::Dsr(_) => Game::Dsr,
+            Self::Ds2(_) => Game::Ds2,
+        }
+    }
+
+    /// Whether the install holds model `id`'s binder.
+    pub fn has_model(&self, id: &str) -> bool {
+        match self {
+            Self::Dsr(dir) => locate::chrbnd_path(dir, id).is_file(),
+            Self::Ds2(archives) => archives.contains(&ds2_chr_path(id, "bnd")),
+        }
+    }
+
+    /// Every model id the install holds a binder for, sorted.
+    pub fn installed_ids(&self) -> Result<Vec<String>> {
+        match self {
+            Self::Dsr(dir) => crate::search::installed_ids(dir),
+            Self::Ds2(archives) => Ok((0..10_000)
+                .map(|number| format!("c{number:04}"))
+                .filter(|id| archives.contains(&ds2_chr_path(id, "bnd")))
+                .collect()),
+        }
+    }
+
+    /// Model `id`'s FLVER out of its binder, `None` when the binder holds none.
+    pub fn model_flver(&self, id: &str) -> Result<Option<Vec<u8>>> {
+        match self {
+            Self::Dsr(dir) => crate::search::chrbnd_flver(dir, id),
+            Self::Ds2(archives) => {
+                let path = ds2_chr_path(id, "bnd");
+                let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path)?;
+                let wanted = format!("{id}.flv");
+                Ok(binder
+                    .files
+                    .into_iter()
+                    .find(|file| file_name(&file.name).eq_ignore_ascii_case(&wanted))
+                    .map(|file| file.data))
+            }
+        }
+    }
+
+    /// What the build reads of `character` from this install.
+    pub fn read_character(&self, character: &Character) -> Result<CharacterFiles> {
+        match self {
+            Self::Dsr(dir) => read_character(dir, character),
+            Self::Ds2(archives) => read_ds2_character(archives, character),
+        }
+    }
+}
+
+/// `<id>.flv` out of `/model/chr/<id>.bnd` in a Dark Souls II install's archives, and its
+/// textures out of `/model/chr/<id>.texbnd`, which holds one TPF per texture.
+pub fn read_ds2_character(archives: &ArchiveSet, character: &Character) -> Result<CharacterFiles> {
+    let id = character.id;
+    let path = ds2_chr_path(id, "bnd");
+    if !archives.contains(&path) {
+        return Err(Error::new(format!(
+            "{path} is not in this Dark Souls II install's archives -- it has no {id}"
+        )));
+    }
+    let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path.clone())?;
+    let flver_name = format!("{id}.flv");
+    let flver = binder_entry(&binder.files, &flver_name, Path::new(&path))?;
+    let tpf = ds2_textures(archives, id, &format!("{id} draws with them"))?;
+    character_files(character, flver, &flver_name, tpf, |owner, why| {
+        ds2_textures(archives, owner, why)
+    })
+}
+
+/// `/model/chr/<id>.<extension>`, as Dark Souls II's archives hash it.
+pub fn ds2_chr_path(id: &str, extension: &str) -> String {
+    format!("/model/chr/{id}.{extension}")
+}
+
+/// A file out of Dark Souls II's archives, out of its DCX when it is in one.
+fn ds2_file(archives: &ArchiveSet, path: &str) -> Result<Vec<u8>> {
+    let bytes = archives.read(path)?;
+    if dcx::is_dcx(&bytes) {
+        dcx::decompress(&bytes, None).context(path.to_owned())
+    } else {
+        Ok(bytes)
+    }
+}
+
+/// Every TPF of `/model/chr/<owner>.texbnd`, merged into one.
+fn ds2_textures(archives: &ArchiveSet, owner: &str, why: &str) -> Result<Vec<u8>> {
+    let path = ds2_chr_path(owner, "texbnd");
+    if !archives.contains(&path) {
+        return Err(Error::new(format!(
+            "{path} is not in this Dark Souls II install's archives -- {why}"
+        )));
+    }
+    let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path.clone())?;
+    let tpfs = binder
+        .files
+        .iter()
+        .filter(|file| file_name(&file.name).to_lowercase().ends_with(".tpf"))
+        .map(|file| {
+            if dcx::is_dcx(&file.data) {
+                dcx::decompress(&file.data, None).context(file.name.clone())
+            } else {
+                Ok(file.data.clone())
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    textures::merge_tpfs(&tpfs).context(path)
+}
+
+/// What the build reads of `character`, from its FLVER (`flver_name`) and its own textures:
+/// the texture sets of the materials it keeps ([`kept_materials`]), so a stripped held item's
+/// textures are never asked for, and the textures of every other character those sets name,
+/// through `textures_of(owner, why)`.
+fn character_files(
+    character: &Character,
+    flver: Vec<u8>,
+    flver_name: &str,
+    tpf: Vec<u8>,
+    textures_of: impl Fn(&str, &str) -> Result<Vec<u8>>,
+) -> Result<CharacterFiles> {
+    let id = character.id;
+    let source = source::parse(&flver).context(flver_name.to_owned())?;
     let kept = kept_materials(character, &source)?
         .into_iter()
         .map(|index| {
             let material = source.materials.get(index).cloned().ok_or_else(|| {
                 Error::new(format!(
-                    "{id}.flver draws with material {index}, which it does not have"
+                    "{flver_name} draws with material {index}, which it does not have"
                 ))
             })?;
             Ok((index, material))
         })
         .collect::<Result<Vec<_>>>()?;
-    let textures = TextureSets::of_materials(&kept, id).context(format!("{id}.flver"))?;
+    let textures = TextureSets::of_materials(&kept, id).context(flver_name.to_owned())?;
     let mut borrowed_tpfs = Vec::new();
     for owner in textures.owners() {
         if owner.eq_ignore_ascii_case(id) {
             continue;
         }
-        let (path, files) = read_chrbnd(
-            dsr_dir,
-            owner,
-            &format!("{id}'s materials draw with {owner}'s textures"),
-        )?;
         borrowed_tpfs.push((
             owner.to_owned(),
-            character_textures(dsr_dir, owner, &files, &path)?,
+            textures_of(
+                owner,
+                &format!("{id}'s materials draw with {owner}'s textures"),
+            )?,
         ));
     }
     let mut read = CharacterFiles {
         id,
-        tpf: character_textures(dsr_dir, id, &files, &path)?,
+        tpf,
         flver,
         borrowed_tpfs,
         textures,
@@ -601,7 +745,7 @@ pub fn buildable(character: &Character, writer: Writer, cutouts: Cutouts) -> Res
 pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let character = inputs.character;
     buildable(character, inputs.writer, inputs.cutouts)?;
-    let dsr = read_character(inputs.dsr_dir, character)?;
+    let dsr = inputs.install.read_character(character)?;
     let parts_dir = out_dir.join(PARTS_DIR);
     let facegen_dir = out_dir.join(FACEGEN_DIR);
     let mut files = vec![claim_folder(out_dir, character)?];
@@ -616,9 +760,9 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let mut bodies = Vec::new();
     let mut patches = Vec::new();
     let mut rebuilt: Option<Rebuilt> = None;
-    // For a character whose tail swings, the tail half of the fit, built into the naked body
-    // slots below.
-    let mut tail: Option<Export> = None;
+    // For a character whose tail or skirt swings, that half of the fit, built into the naked
+    // body slots below.
+    let mut tail: Option<(Cloth, Export)> = None;
     let mut tail_reports = Vec::new();
     for lod in LODS {
         let stem = format!("{FC_SOURCE_STEM}{}", lod.to_uppercase());
@@ -641,14 +785,44 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
             }
             // `buildable` has refused the patch writer for a Biped character.
             (None, FitConfig::Biped(_)) => {
-                let swings = inputs.cloth_test_body.is_none()
+                let free = inputs.cloth_test_body.is_none();
+                let tail_swings = free
                     && !inputs.tail_rigidity.welded()
                     && !tail::tail_bones(&source::parse(&dsr.flver)?.bones).is_empty();
-                let body = if swings {
-                    let (body, cut) =
-                        tail_split(character, &dsr.flver, &flver.data, inputs.tail_rigidity)
-                            .context(format!("cutting {}'s tail out", character.id))?;
-                    tail = Some(cut);
+                let skirt_swings =
+                    free && !tail_swings && skirt_swings(&dsr.flver, inputs.skirt_rigidity)?;
+                let split = if tail_swings {
+                    Some((
+                        Cloth::Tail,
+                        tail_split(character, &dsr.flver, &flver.data, inputs.tail_rigidity),
+                    ))
+                } else if skirt_swings {
+                    let logical = format!("/parts/bd_m_{}{PART_EXTENSION}", skirt::CLOTH_PART_ID);
+                    let mut part =
+                        Bnd4::read(&dcx::decompress(&inputs.archives.read(&logical)?, oodle)?)
+                            .context(&logical)?;
+                    let name = format!("BD_M_{}.flver", skirt::CLOTH_PART_ID);
+                    let cloth_part = binder_file(&mut part, &name, &logical)?.data.clone();
+                    Some((
+                        Cloth::Skirt,
+                        skirt_split(
+                            character,
+                            &dsr.flver,
+                            &flver.data,
+                            &cloth_part,
+                            inputs.skirt_rigidity,
+                        ),
+                    ))
+                } else {
+                    None
+                };
+                let body = if let Some((cloth, split)) = split {
+                    let (body, cut) = split.context(format!(
+                        "cutting {}'s {} out",
+                        character.id,
+                        cloth.label()
+                    ))?;
+                    tail = Some((cloth, cut));
                     biped_body_from(
                         &flver.data,
                         character,
@@ -798,8 +972,10 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         for gender in GENDERS {
             for lod in LODS {
                 let name = format!("{slot}_{gender}_0000{lod}{PART_EXTENSION}");
-                if let (BODY_SLOT, Some(cut), Some(templates)) = (slot, &tail, &templates) {
+                if let (BODY_SLOT, Some((cloth, cut)), Some(templates)) = (slot, &tail, &templates)
+                {
                     let (path, reports) = tail_part(
+                        *cloth,
                         inputs.archives,
                         inputs.oodle,
                         character,
@@ -811,7 +987,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                         lod,
                         &parts_dir.join(&name),
                     )
-                    .context(format!("building {name} around the tail"))?;
+                    .context(format!("building {name} around the {}", cloth.label()))?;
                     files.push(path);
                     if tail_reports.is_empty() {
                         tail_reports = reports;
@@ -878,7 +1054,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         source_triangles,
         head_parts,
         head_parts_without_model,
-        tail: tail_reports,
+        cloth: tail.map(|(cloth, _)| (cloth, tail_reports)),
     })
 }
 
@@ -1148,6 +1324,32 @@ fn blend_of(class: MtdClass, cutouts: Cutouts, material: usize) -> Result<Blend>
     }
 }
 
+/// What a cloth part carries in the naked body slot: a tail on [`tail::CLOTH_PART_ID`]'s cape, or
+/// a skirt on [`skirt::CLOTH_PART_ID`]'s chains. The slot holds one part, so a character with a
+/// tail swings its tail and keeps any skirt in the body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cloth {
+    Tail,
+    Skirt,
+}
+
+impl Cloth {
+    /// The vanilla body part whose cloth it hangs from: `bd_<gender>_<id>`.
+    pub fn part_id(self) -> &'static str {
+        match self {
+            Self::Tail => tail::CLOTH_PART_ID,
+            Self::Skirt => skirt::CLOTH_PART_ID,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Tail => "tail",
+            Self::Skirt => "skirt",
+        }
+    }
+}
+
 /// What [`tail_slots`] makes of a tail for one part model.
 struct TailSlots {
     slots: Vec<Slot>,
@@ -1162,9 +1364,11 @@ struct TailSlots {
 /// next of the donor's meshes laid out in the 40-byte `C[AMSN]` layout (most vertices first, no
 /// two sharing a material), that mesh's material retargeted onto the group's [`Blend`] with
 /// textures named `<prefix>_<set>_a`, `<prefix>_m` and `<prefix>_<set>_n` under the part's own
-/// folder. Refused unless the donor has [`tail::CHAIN`] hanging from its pelvis.
+/// folder. For a tail, refused unless the donor has [`tail::CHAIN`] hanging from its pelvis; a
+/// skirt's cloth bones are looked up by name when its vertices are skinned to the donor.
 #[allow(clippy::too_many_arguments)]
 fn tail_slots(
+    cloth: Cloth,
     donor: &[u8],
     tail: &Export,
     character_flver: &[u8],
@@ -1177,7 +1381,12 @@ fn tail_slots(
 ) -> Result<TailSlots> {
     let flver = Flver::parse(donor)?;
     let bone = |name: &str| flver.bones.iter().position(|bone| bone.name == name);
-    for (index, link) in tail::CHAIN.iter().enumerate() {
+    let chain: &[&str] = if cloth == Cloth::Tail {
+        &tail::CHAIN
+    } else {
+        &[]
+    };
+    for (index, link) in chain.iter().enumerate() {
         let parent = if index == 0 {
             "Pelvis"
         } else {
@@ -1232,8 +1441,9 @@ fn tail_slots(
     let groups = merge_if_over(groups, taken.len(), sets, cutouts, character.id)?;
     if groups.len() > taken.len() {
         return Err(Error::new(format!(
-            "{}'s tail has {} material groups, and the cloth part has {} meshes to put them on",
+            "{}'s {} has {} material groups, and the cloth part has {} meshes to put them on",
             character.id,
+            cloth.label(),
             groups.len(),
             taken.len()
         )));
@@ -1260,7 +1470,7 @@ fn tail_slots(
             set,
             blend,
         }
-        .name(&format!("{}_tail", character.id));
+        .name(&format!("{}_{}", character.id, cloth.label()));
         retarget_any(
             &mut out.append,
             templates,
@@ -1273,7 +1483,7 @@ fn tail_slots(
                 prefix,
             ),
         )
-        .context(format!("the tail's material {name}"))?;
+        .context(format!("the {}'s material {name}", cloth.label()))?;
         if !out.sets.contains(&set) {
             out.sets.push(set);
         }
@@ -1547,8 +1757,11 @@ fn claim_folder(out_dir: &Path, character: &Character) -> Result<PathBuf> {
         }
     }
     fs::create_dir_all(out_dir).context(format!("creating {}", out_dir.display()))?;
-    fs::write(&marker, format!("{}\n", character.id))
-        .context(format!("writing {}", marker.display()))?;
+    let line = match character.game {
+        Game::Dsr => character.id.to_owned(),
+        Game::Ds2 => format!("ds2 {}", character.id),
+    };
+    fs::write(&marker, format!("{line}\n")).context(format!("writing {}", marker.display()))?;
     Ok(marker)
 }
 
@@ -1683,12 +1896,54 @@ pub fn tail_split(
     tail::split(&full)
 }
 
-/// The naked body slot `bd_<gender>_0000<lod>` written to `path` as [`tail::CLOTH_PART_ID`]'s
-/// part with `tail` built into its model ([`tail_slots`]) and a TPF of the sets it draws
-/// ([`textures::part_tpf`]), every entry renamed onto the slot as `--cloth-test-body` renames
-/// them, so the part's cloth files come along unchanged. Returns the tail's slots too.
+/// `character`'s fit against `donor` with its skirt shared onto the cloth bones of
+/// `cloth_part` (the male [`skirt::CLOTH_PART_ID`] model) as `rigidity` says, cut into body and
+/// skirt ([`tail::split`]). Refused for a character with no skirt bones.
+pub fn skirt_split(
+    character: &Character,
+    character_flver: &[u8],
+    donor: &[u8],
+    cloth_part: &[u8],
+    rigidity: tail::Rigidity,
+) -> Result<(Export, Export)> {
+    let FitConfig::Biped(params) = character.fit else {
+        return Err(Error::new(format!(
+            "{} is not fitted as a Biped, so it has no skirt bones",
+            character.id
+        )));
+    };
+    let bones = source::parse(character_flver)?.bones;
+    let skirt_bones = skirt::skirt_bones(&bones)?;
+    if skirt_bones.is_empty() {
+        return Err(Error::new(format!(
+            "{} has no skirt bones (no chain hangs from its pelvis)",
+            character.id
+        )));
+    }
+    let joints = fit::biped::fitted_joints(character.id, character_flver, donor, params)?;
+    let cloth = skirt::cloth_bones(&Flver::parse(cloth_part)?.bones)?;
+    let targets = skirt::skirt_targets(&skirt_bones, &joints, &cloth, rigidity)?;
+    let full = fit::export_with_targets(character, character_flver, donor, &targets)?;
+    tail::split(&full)
+}
+
+/// Whether `character`'s skirt goes onto cloth: a Biped with skirt bones ([`skirt::skirt_bones`])
+/// and no tail, since the one naked body slot carries one cloth part, unless `rigidity` welds it.
+pub fn skirt_swings(character_flver: &[u8], rigidity: tail::Rigidity) -> Result<bool> {
+    let bones = source::parse(character_flver)?.bones;
+    Ok(!rigidity.welded()
+        && tail::tail_bones(&bones).is_empty()
+        && !skirt::skirt_bones(&bones)?.is_empty())
+}
+
+/// The naked body slot `bd_<gender>_0000<lod>` written to `path` as `cloth`'s part with `tail`
+/// (the tail or skirt half of the fit) built into its model ([`tail_slots`]) and a TPF of the
+/// sets it draws ([`textures::part_tpf`]), every entry renamed onto the slot as
+/// `--cloth-test-body` renames them, so the part's cloth files come along unchanged. Returns its
+/// slots too.
 #[allow(clippy::too_many_arguments)]
 fn tail_part(
+    cloth: Cloth,
     archives: &ArchiveSet,
     oodle: &Oodle,
     character: &Character,
@@ -1700,7 +1955,7 @@ fn tail_part(
     lod: &str,
     path: &Path,
 ) -> Result<(PathBuf, Vec<SlotReport>)> {
-    let id = tail::CLOTH_PART_ID;
+    let id = cloth.part_id();
     let oodle = Some(oodle);
     let logical = format!("/parts/bd_{gender}_{id}{lod}{PART_EXTENSION}");
     let packed = archives.read(&logical)?;
@@ -1713,8 +1968,8 @@ fn tail_part(
     let donor = binder_file(&mut binder, &flver_name, &logical)?
         .data
         .clone();
-    let part = tail_model(
-        &donor, tail, dsr, character, cutouts, templates, &gender, lod,
+    let part = cloth_model(
+        cloth, &donor, tail, dsr, character, cutouts, templates, &gender, lod,
     )
     .context(format!("rebuilding {flver_name}"))?;
     binder_file(&mut binder, &flver_name, &logical)?.data = part.flver;
@@ -1753,9 +2008,38 @@ pub fn tail_model(
     gender: &str,
     lod: &str,
 ) -> Result<TailModel> {
+    cloth_model(
+        Cloth::Tail,
+        donor,
+        tail,
+        dsr,
+        character,
+        cutouts,
+        templates,
+        gender,
+        lod,
+    )
+}
+
+/// [`tail_model`] for either thing a cloth part carries: `hung` is the tail or skirt half of the
+/// fit, and its slots, materials and textures are named after `cloth`.
+#[allow(clippy::too_many_arguments)]
+pub fn cloth_model(
+    cloth: Cloth,
+    donor: &[u8],
+    hung: &Export,
+    dsr: &CharacterFiles,
+    character: &Character,
+    cutouts: Cutouts,
+    templates: &Templates,
+    gender: &str,
+    lod: &str,
+) -> Result<TailModel> {
+    let tail = hung;
     let target_stem = format!("BD_{}_0000", gender.to_uppercase());
-    let prefix = format!("{target_stem}_tail");
+    let prefix = format!("{target_stem}_{}", cloth.label());
     let part = tail_slots(
+        cloth,
         donor,
         tail,
         &dsr.flver,
@@ -1769,7 +2053,7 @@ pub fn tail_model(
     Ok(TailModel {
         flver: rebuild(donor, &part.slots, true, &part.append)?,
         tpf: textures::part_tpf(&dsr.texture_tpfs(), &dsr.textures, &part.sets, &prefix, lod)
-            .context(format!("{}'s tail textures", character.id))?,
+            .context(format!("{}'s {} textures", character.id, cloth.label()))?,
         reports: part.reports,
     })
 }
@@ -2116,7 +2400,7 @@ mod tests {
             source_triangles: 14,
             head_parts: 0,
             head_parts_without_model: 0,
-            tail: Vec::new(),
+            cloth: None,
         };
         assert_eq!(
             report.body_summary(),

@@ -43,6 +43,8 @@ pub const CHAIN: [&str; 3] = [
 ];
 const TAIL_PREFIX: &str = "tail";
 const PELVIS: &str = "Pelvis";
+/// What every cloth bone of a part's skeleton is named with: `[cloth]BD_M_2240_Mant_002`.
+pub const CLOTH_PREFIX: &str = "[cloth]";
 
 /// How stiff the tail is, at its base and at its tip, each from 0 (it swings wholly with the
 /// cloth) to 1 (welded to the pelvis): the part of a tail bone's weight the pelvis keeps, the
@@ -94,7 +96,7 @@ impl Rigidity {
 
     /// The part of the weight the cloth chain takes at `t` along the tail, 0 at the base to 1 at
     /// the tip.
-    fn chain_share(&self, t: f32) -> f32 {
+    pub(crate) fn chain_share(&self, t: f32) -> f32 {
         let (base, tip) = (1.0 - self.base, 1.0 - self.tip);
         base + (tip - base) * t * t
     }
@@ -162,13 +164,13 @@ pub fn chain_targets(tail: &[String], rigidity: Rigidity) -> Vec<(String, Vec<(S
         .collect()
 }
 
-/// `export` cut into the body and the tail: a triangle with a corner weighing on a [`CHAIN`] bone
-/// is the tail's, every other triangle the body's, and each keeps only the vertices it uses.
-/// Refused when nothing weighs on the chain.
+/// `export` cut into the body and what hangs on cloth: a triangle with a corner weighing on a
+/// cloth bone (the tail's [`CHAIN`], a skirt's chains) is the cloth part's, every other triangle
+/// the body's, and each keeps only the vertices it uses. Refused when nothing weighs on cloth.
 pub fn split(export: &Export) -> Result<(Export, Export)> {
     let mut on_chain = vec![false; export.mesh.vertices.len()];
     for row in &export.mesh.weights {
-        if row.weight > 0.0 && CHAIN.contains(&row.target_bone.as_str()) {
+        if row.weight > 0.0 && row.target_bone.starts_with(CLOTH_PREFIX) {
             *on_chain.get_mut(row.vertex).ok_or_else(|| {
                 Error::new(format!("a weight names missing vertex {}", row.vertex))
             })? = true;

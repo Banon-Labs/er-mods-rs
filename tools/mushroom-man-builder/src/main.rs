@@ -11,16 +11,16 @@ use std::{
 use mushroom_man_builder::{
     archive::ArchiveSet,
     bnd::Bnd4,
-    character::{self, C2280, Character, Writer},
+    character::{self, C2280, Character, FitConfig, Game, Writer},
     dcx,
     error::{Context, Error, Result},
-    fit::{self, FIT_JSON, SOURCE_MAP, SourceMesh},
+    fit::{self, FIT_JSON, SOURCE_MAP, SourceMesh, biped::BipedParams},
     flver::{Flver, skeleton, verify::check_flver},
     locate,
     map_report::map_report,
     oodle,
-    package::{self, Cutouts, DLL_NAME, Inputs},
-    profile, search, tail,
+    package::{self, Cutouts, DLL_NAME, Inputs, Install},
+    profile, search, skirt, tail,
     textures::{TextureSet, character_tpf},
 };
 
@@ -51,6 +51,9 @@ OPTIONS:
     --search <text>        Find characters by name (`hollow`, `black knight`) or the start of a
                            model id (`c29`), say which this install holds and whether each one's
                            rig maps onto Elden Ring's, then stop.
+    --game <dsr|ds2>       Which game --character and --search read: Dark Souls Remastered (the
+                           default) or Dark Souls II: Scholar of the First Sin. A model id names
+                           a different character in each.
     --list-characters      List the characters this builder makes, then stop. With --all, also
                            the ones not yet checked in game.
     --unvalidated          Build a --character that has not been checked in game yet: every
@@ -58,6 +61,8 @@ OPTIONS:
     --er-game <dir>        Elden Ring's `Game` folder (the one holding eldenring.exe).
     --dsr <dir>            The Dark Souls Remastered folder (the one holding
                            DarkSoulsRemastered.exe and `chr`).
+    --ds2 <dir>            Dark Souls II's `Game` folder (the one holding DarkSoulsII.exe and
+                           GameDataEbl.bhd).
     --out <dir>            Where to write the mod. Default: <er-game>/mushroom-man
     --dll <path>           The mushroom_man.dll to install. Default: the one beside this
                            program, or in a `dlls` folder beside it; none is fine.
@@ -69,8 +74,10 @@ OPTIONS:
     --rigidity <feature>=<base>:<tip>
                            How stiff a loose feature is, in percent at its base and at its tip:
                            100 is welded to the body, 0 swings freely with Elden Ring's cloth.
-                           The one feature so far is `tail`, default 95:55 (a character with tail
-                           bones swings its tail on a cloth chain); `tail=100:100` keeps it welded.
+                           `tail`, default 95:55: a character with tail bones swings its tail on a
+                           cloth chain. `skirt`, default 80:20: a character with chains hanging
+                           from its pelvis and no tail hangs its skirt on a vanilla skirt's cloth,
+                           so it follows the legs and swings. `<feature>=100:100` keeps it welded.
     -h, --help             Show this text.
 ";
 
@@ -84,6 +91,9 @@ struct Options {
     unvalidated: bool,
     er_game: Option<PathBuf>,
     dsr: Option<PathBuf>,
+    /// `--game`: which game `--character` and `--search` read.
+    game: Game,
+    ds2: Option<PathBuf>,
     out: Option<PathBuf>,
     dll: Option<PathBuf>,
     source_obj: Option<PathBuf>,
@@ -98,6 +108,8 @@ struct Options {
     cloth_test_body: Option<String>,
     /// `--rigidity tail=<base>:<tip>` ([`package::Inputs::tail_rigidity`]).
     tail_rigidity: tail::Rigidity,
+    /// `--rigidity skirt=<base>:<tip>` ([`package::Inputs::skirt_rigidity`]).
+    skirt_rigidity: tail::Rigidity,
 }
 
 fn main() -> ExitCode {
@@ -159,6 +171,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
         unvalidated: false,
         er_game: None,
         dsr: None,
+        game: Game::Dsr,
+        ds2: None,
         out: None,
         dll: None,
         source_obj: None,
@@ -167,6 +181,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         cutouts: Cutouts::EdgeMaterial,
         cloth_test_body: None,
         tail_rigidity: tail::Rigidity::DEFAULT,
+        skirt_rigidity: skirt::DEFAULT_RIGIDITY,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -183,6 +198,14 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--unvalidated" => options.unvalidated = true,
             "--er-game" => options.er_game = Some(value()?),
             "--dsr" => options.dsr = Some(value()?),
+            "--ds2" => options.ds2 = Some(value()?),
+            "--game" => {
+                options.game = match value()?.to_str().map(str::to_ascii_lowercase).as_deref() {
+                    Some("dsr") => Game::Dsr,
+                    Some("ds2") => Game::Ds2,
+                    _ => return Err("--game is dsr or ds2".into()),
+                };
+            }
             "--out" => options.out = Some(value()?),
             "--dll" => options.dll = Some(value()?),
             "--source-obj" => options.source_obj = Some(value()?),
@@ -202,10 +225,14 @@ fn parse_options(args: &[String]) -> Result<Options> {
                         options.tail_rigidity = tail::Rigidity::parse(stiffness)
                             .map_err(|error| error.context("--rigidity tail"))?;
                     }
+                    Some((feature, stiffness)) if feature.trim() == "skirt" => {
+                        options.skirt_rigidity = tail::Rigidity::parse(stiffness)
+                            .map_err(|error| error.context("--rigidity skirt"))?;
+                    }
                     _ => {
                         return Err(Error::new(format!(
-                            "--rigidity takes <feature>=<base>:<tip>, and the one feature so far \
-                             is tail (tail=95:55); got {setting:?}"
+                            "--rigidity takes <feature>=<base>:<tip>, and the features are tail \
+                             (tail=95:55) and skirt (skirt=80:20); got {setting:?}"
                         )));
                     }
                 }
@@ -249,7 +276,7 @@ fn run_options(options: &Options) -> Result<()> {
 
 /// `--search <text>`: every character it finds, and what the builder makes of each.
 fn run_search(options: &Options, query: &str) -> Result<()> {
-    let dsr = find_dsr(options)?;
+    let source = SourceInstall::open(options, options.game)?;
     // The donor is what the fit is tried against; without it a search still says everything
     // else.
     let donor = find_er(options)
@@ -261,9 +288,9 @@ fn run_search(options: &Options, query: &str) -> Result<()> {
             println!("(the fit is not tried: Elden Ring's body could not be read -- {error})\n");
         })
         .ok();
-    let hits = search::search(&dsr, query, donor.as_deref())?;
+    let hits = search::search(source.install(), query, donor.as_deref())?;
     if hits.is_empty() {
-        println!("nothing matches {query:?}");
+        println!("nothing matches {query:?} in {}", options.game.name());
         return Ok(());
     }
     for hit in &hits {
@@ -274,16 +301,69 @@ fn run_search(options: &Options, query: &str) -> Result<()> {
         .filter(|hit| hit.verdict.maps())
         .map(|hit| hit.id.as_str())
         .collect();
+    let game_flag = match options.game {
+        Game::Dsr => "",
+        Game::Ds2 => " --game ds2",
+    };
     match buildable.as_slice() {
         [] => println!("\nnone of these can be built"),
-        [only] => println!("\nbuild it with: --character {only} --unvalidated"),
+        [only] => println!("\nbuild it with: --character {only}{game_flag} --unvalidated"),
         _ => println!(
-            "\n{} of these can be built, each with --character <id> --unvalidated: {}",
+            "\n{} of these can be built, each with --character <id>{game_flag} --unvalidated: {}",
             buildable.len(),
             buildable.join(" ")
         ),
     }
     Ok(())
+}
+
+/// The install a character is read from, opened: a Dark Souls Remastered folder, or Dark Souls
+/// II's archives, whose headers are decrypted once here.
+enum SourceInstall {
+    Dsr(PathBuf),
+    Ds2(ArchiveSet),
+}
+
+impl SourceInstall {
+    fn open(options: &Options, game: Game) -> Result<Self> {
+        Ok(match game {
+            Game::Dsr => {
+                let dsr = find_dsr(options)?;
+                println!("Dark Souls Remastered: {}", dsr.display());
+                Self::Dsr(dsr)
+            }
+            Game::Ds2 => {
+                let dir = find_ds2(options)?;
+                println!("Dark Souls II:         {}", dir.display());
+                Self::Ds2(ArchiveSet::open_ds2(&dir)?)
+            }
+        })
+    }
+
+    fn install(&self) -> Install<'_> {
+        match self {
+            Self::Dsr(dir) => Install::Dsr(dir),
+            Self::Ds2(archives) => Install::Ds2(archives),
+        }
+    }
+}
+
+/// `--ds2`, checked, or the install Steam knows about.
+fn find_ds2(options: &Options) -> Result<PathBuf> {
+    match &options.ds2 {
+        Some(dir) if locate::is_ds2_game_dir(dir) => Ok(dir.clone()),
+        Some(dir) => Err(Error::new(format!(
+            "{} is not Dark Souls II's `Game` folder (no DarkSoulsII.exe and GameDataEbl.bhd) -- \
+             point --ds2 at it",
+            dir.display()
+        ))),
+        None => locate::find_ds2().ok_or_else(|| {
+            Error::new(
+                "could not find Dark Souls II: Scholar of the First Sin through Steam -- pass \
+                 --ds2 <folder> (its `Game` folder, holding DarkSoulsII.exe)",
+            )
+        }),
+    }
 }
 
 /// `--er-game`, checked, or the install Steam knows about.
@@ -321,7 +401,7 @@ fn find_dsr(options: &Options) -> Result<PathBuf> {
 /// `--character`, or a choice asked of a player who double-clicked the exe, or c2280.
 fn choose_character(options: &Options) -> Result<&'static Character> {
     if let Some(id) = &options.character {
-        return character::resolve(id, options.unvalidated);
+        return character::resolve_in(options.game, id, options.unvalidated);
     }
     let offered: Vec<&'static Character> = character::validated().collect();
     // One character is no choice, so the prompt waits until a second one is approved.
@@ -407,21 +487,20 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
         options.writer.unwrap_or(character.writer),
         options.cutouts,
     )?;
-    let dsr = find_dsr(options)?;
-    println!("Dark Souls Remastered: {}", dsr.display());
-    let chrbnd = locate::chrbnd_path(&dsr, character.id);
-    if !chrbnd.is_file() {
+    let source = SourceInstall::open(options, character.game)?;
+    let install = source.install();
+    if !install.has_model(character.id) {
         return Err(Error::new(format!(
-            "{} is missing -- this Dark Souls Remastered install has no {}",
-            chrbnd.display(),
+            "this {} install has no {}",
+            character.game.name(),
             character.id
         )));
     }
     // A character outside the table was never looked at, so its rig is checked before any of
     // Elden Ring's archives are opened.
-    if character::by_id(character.id).is_none() {
+    if character::by_id_in(character.game, character.id).is_none() {
         // The fit itself is made by the build, against the donor it reads.
-        let verdict = search::verdict(&dsr, character.id, None);
+        let verdict = search::verdict(install, character.id, None);
         if !verdict.maps() {
             return Err(Error::new(format!(
                 "it cannot be built: {}",
@@ -461,13 +540,14 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
         Inputs {
             archives: &archives,
             oodle: &oodle,
-            dsr_dir: &dsr,
+            install,
             character,
             source_override,
             writer: options.writer.unwrap_or(character.writer),
             cutouts: options.cutouts,
             cloth_test_body: options.cloth_test_body.clone(),
             tail_rigidity: options.tail_rigidity,
+            skirt_rigidity: options.skirt_rigidity,
         },
         &out,
     )?;
@@ -529,22 +609,78 @@ fn profile_path_form(path: &Path) -> PathBuf {
     }
 }
 
-/// `--character <id>` taken out of a developer subcommand's arguments, and the rest in order.
-/// Any model id is accepted, checked in game or not: these commands build no package, so
-/// `--unvalidated` is taken and changes nothing.
+/// `--character <id>` and `--game <dsr|ds2>` taken out of a developer subcommand's arguments, and
+/// the rest in order. Any model id is accepted, checked in game or not: these commands build no
+/// package, so `--unvalidated` is taken and changes nothing.
 fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
-    let mut character = character::default_character();
+    let mut id = None;
+    let mut game = Game::Dsr;
+    let mut trunk_girth = None;
+    let mut skirt_girth = None;
     let mut rest = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
-        if arg == "--character" {
-            let id = iter.next().ok_or("--character needs a value")?;
-            character = character::resolve(id, true)?;
-        } else if arg != "--unvalidated" {
-            rest.push(arg.clone());
+        match arg.as_str() {
+            "--character" => id = Some(iter.next().ok_or("--character needs a value")?),
+            flag @ ("--trunk-girth" | "--skirt-girth") => {
+                let value = iter
+                    .next()
+                    .ok_or_else(|| Error::new(format!("{flag} needs a value")))?;
+                let share = value
+                    .parse::<f32>()
+                    .map_err(|_| Error::new(format!("{flag} {value}: not a number")))?;
+                if flag == "--trunk-girth" {
+                    trunk_girth = Some(share);
+                } else {
+                    skirt_girth = Some(share);
+                }
+            }
+            "--game" => {
+                game = match iter.next().map(|game| game.to_ascii_lowercase()).as_deref() {
+                    Some("dsr") => Game::Dsr,
+                    Some("ds2") => Game::Ds2,
+                    _ => return Err("--game is dsr or ds2".into()),
+                };
+            }
+            "--unvalidated" => {}
+            _ => rest.push(arg.clone()),
         }
     }
+    let character = match id {
+        Some(id) => character::resolve_in(game, id, true)?,
+        None if game == Game::Dsr => character::default_character(),
+        None => return Err("--game ds2 needs a --character".into()),
+    };
+    // `--trunk-girth`, `--skirt-girth`: the character's Biped fit with the trunk or the skirt
+    // keeping that share of the girth, for measuring a value before it goes in the character's
+    // table entry.
+    let character = match (trunk_girth.or(skirt_girth), character.fit) {
+        (None, _) => character,
+        (Some(_), FitConfig::Biped(params)) => Box::leak(Box::new(Character {
+            game: character.game,
+            id: character.id,
+            label: character.label,
+            skeleton: character.skeleton,
+            fit: FitConfig::Biped(BipedParams {
+                trunk_girth: trunk_girth.unwrap_or(params.trunk_girth),
+                skirt_girth: skirt_girth.unwrap_or(params.skirt_girth),
+                ..params
+            }),
+            writer: character.writer,
+            validated: character.validated,
+        })),
+        (Some(_), _) => return Err("--trunk-girth and --skirt-girth need a Biped character".into()),
+    };
     Ok((character, rest))
+}
+
+/// What the build reads of `character` out of `dir`: a Dark Souls Remastered folder, or Dark
+/// Souls II's `Game` folder.
+fn read_dev_character(character: &Character, dir: &str) -> Result<package::CharacterFiles> {
+    match character.game {
+        Game::Dsr => package::read_character(Path::new(dir), character),
+        Game::Ds2 => package::read_ds2_character(&ArchiveSet::open_ds2(Path::new(dir))?, character),
+    }
 }
 
 /// Developer check: write the character's raw FLVER/TPF, the TPF of each character it borrows
@@ -553,11 +689,14 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
 fn extract_inputs(args: &[String]) -> Result<()> {
     let (character, args) = dev_character(args)?;
     let [game, dsr, out] = &args[..] else {
-        return Err("extract-inputs [--character <id>] <er-game-dir> <dsr-dir> <out-dir>".into());
+        return Err(
+            "extract-inputs [--character <id>] [--game ds2] <er-game-dir> <source-dir> <out-dir>"
+                .into(),
+        );
     };
     let out = Path::new(out);
     fs::create_dir_all(out)?;
-    let files = package::read_character(Path::new(dsr), character)?;
+    let files = read_dev_character(character, dsr)?;
     fs::write(out.join(format!("{}.flver", character.id)), &files.flver)?;
     fs::write(out.join(format!("{}.tpf", character.id)), &files.tpf)?;
     for (owner, tpf) in &files.borrowed_tpfs {
@@ -591,9 +730,12 @@ fn extract_inputs(args: &[String]) -> Result<()> {
 fn export_obj(args: &[String]) -> Result<()> {
     let (character, args) = dev_character(args)?;
     let [dsr, donor, out] = &args[..] else {
-        return Err("export-obj [--character <id>] <dsr-dir> <FC_M_0000.flver> <out-dir>".into());
+        return Err(
+            "export-obj [--character <id>] [--game ds2] <source-dir> <FC_M_0000.flver> <out-dir>"
+                .into(),
+        );
     };
-    let files = package::read_character(Path::new(dsr), character)?;
+    let files = read_dev_character(character, dsr)?;
     let donor = fs::read(donor).context(donor)?;
     let export = fit::export(character, &files.flver, &donor)?;
     let out = Path::new(out);
@@ -1140,13 +1282,17 @@ mod tests {
     }
 
     #[test]
-    fn rigidity_is_set_per_feature_and_only_for_the_tail_so_far() {
+    fn rigidity_is_set_per_feature_for_the_tail_and_the_skirt() {
         let parse = |args: &[&str]| {
             parse_options(&args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>())
         };
         assert_eq!(parse(&[]).unwrap().tail_rigidity, tail::Rigidity::DEFAULT);
+        assert_eq!(parse(&[]).unwrap().skirt_rigidity, skirt::DEFAULT_RIGIDITY);
         let stiff = parse(&["--rigidity", "tail=100:80"]).unwrap().tail_rigidity;
         assert_eq!((stiff.base, stiff.tip), (1.0, 0.8));
+        let both = parse(&["--rigidity", "skirt=100:100", "--rigidity", "tail=90:50"]).unwrap();
+        assert!(both.skirt_rigidity.welded());
+        assert_eq!(both.tail_rigidity.tip, 0.5);
         for bad in [
             &["--rigidity", "sleeve=90:50"][..],
             &["--rigidity", "tail"],
