@@ -58,7 +58,7 @@ fn gavlans_skirt_goes_onto_the_skirt_chains_and_every_part_checks() {
 
     let full = mushroom_man_builder::fit::export(gavlan, &files.flver, &donor).unwrap();
     let (body, skirt) =
-        hanging_split(gavlan, &files.flver, &donor, &male, DEFAULT_RIGIDITY).unwrap();
+        hanging_split(gavlan, &files.flver, &donor, &male, &[], DEFAULT_RIGIDITY).unwrap();
     assert_eq!(
         body.mesh.triangles.len() + skirt.mesh.triangles.len(),
         full.mesh.triangles.len(),

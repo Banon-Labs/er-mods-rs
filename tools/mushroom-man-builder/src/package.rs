@@ -913,6 +913,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                             &dsr.flver,
                             &flver.data,
                             &cloth_part,
+                            cloth.bones(),
                             match cloth {
                                 Cloth::Cape => inputs.cape_rigidity,
                                 Cloth::Skirt | Cloth::Tail => inputs.skirt_rigidity,
@@ -1448,6 +1449,14 @@ impl Cloth {
             Self::Tail => tail::CLOTH_PART_ID,
             Self::Skirt => skirt::CLOTH_PART_ID,
             Self::Cape => skirt::CAPE_PART_ID,
+        }
+    }
+
+    /// The part's cloth bones it hangs on, by name prefix; empty for every one of them.
+    pub fn bones(self) -> &'static [&'static str] {
+        match self {
+            Self::Cape => &skirt::CAPE_BONES,
+            Self::Tail | Self::Skirt => &[],
         }
     }
 
@@ -2010,7 +2019,7 @@ pub fn tail_split(
         .into_iter()
         .map(|(bone, shares)| (bone, skirt::Share::Fixed(shares)))
         .collect();
-    let full = fit::export_with_targets(character, character_flver, donor, &targets)?;
+    let full = fit::export_with_targets(character, character_flver, donor, &targets, &[])?;
     tail::split(&full)
 }
 
@@ -2019,12 +2028,14 @@ const TRUNK_BONES: [&str; 4] = ["Pelvis", "Spine", "Spine1", "Spine2"];
 
 /// `character`'s fit against `donor` with its hanging cloth shared onto the cloth bones of
 /// `cloth_part` (the male model of [`hanging_cloth`]'s part) as `rigidity` says, cut into body
-/// and cloth ([`tail::split`]). Refused for a character with no hanging cloth.
+/// and cloth ([`tail::split`]). Only the cloth bones named with one of `only` are used, or every
+/// one when it is empty ([`Cloth::bones`]). Refused for a character with no hanging cloth.
 pub fn hanging_split(
     character: &Character,
     character_flver: &[u8],
     donor: &[u8],
     cloth_part: &[u8],
+    only: &[&str],
     rigidity: tail::Rigidity,
 ) -> Result<(Export, Export)> {
     let FitConfig::Biped(params) = character.fit else {
@@ -2034,14 +2045,17 @@ pub fn hanging_split(
         )));
     };
     let hanging = skirt::hanging_cloth_of(&source::parse(character_flver)?)?;
-    if hanging.is_empty() {
+    if hanging.bones.is_empty() {
         return Err(Error::new(format!(
             "{} has no hanging cloth (no chain hangs from its pelvis, or below it from its spine)",
             character.id
         )));
     }
     let joints = fit::biped::fitted_joints(character.id, character_flver, donor, params)?;
-    let cloth = skirt::cloth_bones(&Flver::parse(cloth_part)?.bones)?;
+    let mut cloth = skirt::cloth_bones(&Flver::parse(cloth_part)?.bones)?;
+    if !only.is_empty() {
+        cloth.retain(|bone| only.iter().any(|prefix| bone.name.starts_with(prefix)));
+    }
     let donor_bones = Flver::parse(donor)?.bones;
     let frames = bind_frames(&donor_bones)?;
     let trunk = TRUNK_BONES
@@ -2054,8 +2068,9 @@ pub fn hanging_split(
                 .ok_or_else(|| Error::new(format!("the donor has no {name}")))
         })
         .collect::<Result<Vec<_>>>()?;
-    let targets = skirt::hanging_targets(&hanging, &joints, &cloth, &trunk, rigidity)?;
-    let full = fit::export_with_targets(character, character_flver, donor, &targets)?;
+    let targets = skirt::hanging_targets(&hanging.bones, &joints, &cloth, &trunk, rigidity)?;
+    let full =
+        fit::export_with_targets(character, character_flver, donor, &targets, &hanging.riding)?;
     tail::split(&full)
 }
 
@@ -2072,7 +2087,7 @@ pub fn hanging_cloth(
     if !tail::tail_bones(&source.bones).is_empty() {
         return Ok(None);
     }
-    let hanging = skirt::hanging_cloth_of(&source)?;
+    let hanging = skirt::hanging_cloth_of(&source)?.bones;
     let (cloth, rigidity) = if hanging.is_empty() {
         return Ok(None);
     } else if hanging.iter().any(|bone| bone.root == skirt::Root::Spine) {

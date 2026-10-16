@@ -934,7 +934,9 @@ fn export_cloth(args: &[String]) -> Result<()> {
         Some(package::Cloth::Cape) => skirt::CAPE_RIGIDITY,
         _ => skirt::DEFAULT_RIGIDITY,
     };
-    let (_, cloth) = package::hanging_split(character, &files.flver, &donor, &part, rigidity)?;
+    let only = kind.map_or(&[][..], package::Cloth::bones);
+    let (_, cloth) =
+        package::hanging_split(character, &files.flver, &donor, &part, only, rigidity)?;
     let out = Path::new(out);
     fs::create_dir_all(out).context(out.display())?;
     let id = character.id;

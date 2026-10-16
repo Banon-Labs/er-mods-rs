@@ -1001,7 +1001,7 @@ pub fn kept_meshes(source: &Source, params: BipedParams) -> Result<(Vec<KeptMesh
 /// A Biped character's FLVER fitted to the donor's bind skeleton, its held items cut and its
 /// meshes run together in file order, each keeping only what its LOD0 draws.
 pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams) -> Result<Export> {
-    export_with_targets(id, flver, donor, params, &[])
+    export_with_targets(id, flver, donor, params, &[], &[])
 }
 
 /// [`export`], with the weight of each source bone `retargets` names shared out among its Elden
@@ -1049,6 +1049,7 @@ pub fn export_with_targets(
     donor: &[u8],
     params: BipedParams,
     retargets: &[BoneShares],
+    riding: &[(usize, usize)],
 ) -> Result<Export> {
     let source = source::parse(flver)?;
     if !skeleton::is_biped(&source.bones) {
@@ -1082,6 +1083,25 @@ pub fn export_with_targets(
         }
     }
     let (kept, strip) = source::strip_props(&source, &strip_roles(roles, params.held_items));
+    // A `riding` vertex's shared-out bones give their weight to the first bone above them that
+    // is not shared out.
+    let shared: Vec<bool> = source
+        .bones
+        .iter()
+        .map(|bone| retargets.iter().any(|(name, _)| *name == bone.name))
+        .collect();
+    let steady = |mut index: usize| {
+        for _ in 0..source.bones.len() {
+            if !shared.get(index).copied().unwrap_or(false) {
+                break;
+            }
+            match usize::try_from(source.bones[index].parent_index) {
+                Ok(parent) => index = parent,
+                Err(_) => break,
+            }
+        }
+        index
+    };
 
     let mut vertices = Vec::new();
     let mut triangles = Vec::new();
@@ -1090,7 +1110,12 @@ pub fn export_with_targets(
         let palette = &source.meshes[mesh.source_mesh];
         let base = u32::try_from(vertices.len()).map_err(|_| "too many vertices")?;
         for (vertex, &buffer_index) in mesh.vertices.iter().zip(&mesh.source_vertex) {
-            let global = vertex.bone_indices.map(|slot| palette.bone(slot));
+            let mut global = vertex.bone_indices.map(|slot| palette.bone(slot));
+            if riding.contains(&(mesh.source_mesh, buffer_index)) {
+                for index in &mut global {
+                    *index = steady(*index);
+                }
+            }
             let bone = dominant_bone(global, vertex.bone_weights);
             source_map.push(SourceRow {
                 mesh: mesh.source_mesh,

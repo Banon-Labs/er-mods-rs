@@ -318,16 +318,18 @@ impl Export {
 /// Fit `character`'s FLVER to the donor's bind skeleton (Elden Ring's `FC_M_0000.flver`) the way
 /// its table entry says.
 pub fn export(character: &Character, flver: &[u8], donor: &[u8]) -> Result<Export> {
-    export_with_targets(character, flver, donor, &[])
+    export_with_targets(character, flver, donor, &[], &[])
 }
 
-/// [`export`] with source bones' weight sent elsewhere ([`biped::export_with_targets`]). A Biped
-/// fit only: c2280's own fit has no bone to send.
+/// [`export`] with source bones' weight sent elsewhere ([`biped::export_with_targets`]), except
+/// on the `riding` `(mesh, vertex)` of the source, which keep riding. A Biped fit only: c2280's
+/// own fit has no bone to send.
 pub fn export_with_targets(
     character: &Character,
     flver: &[u8],
     donor: &[u8],
     retargets: &[BoneShares],
+    riding: &[(usize, usize)],
 ) -> Result<Export> {
     let fitted = match (character.fit, retargets) {
         (FitConfig::Mushroom(params), []) => mushroom::export(character.id, flver, donor, params),
@@ -336,7 +338,7 @@ pub fn export_with_targets(
             character.id
         ))),
         (FitConfig::Biped(params), _) => {
-            biped::export_with_targets(character.id, flver, donor, params, retargets)
+            biped::export_with_targets(character.id, flver, donor, params, retargets, riding)
         }
     };
     let export = fitted.map_err(|e| e.context(format!("fitting {}", character.id)))?;

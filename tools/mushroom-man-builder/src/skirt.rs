@@ -31,6 +31,8 @@
 //! - **The cut.** A triangle with a corner on a cloth bone is the cloth's ([`crate::tail::split`]);
 //!   the seam vertices weigh only on the body's own bones, so both halves move them alike.
 
+use std::collections::HashMap;
+
 use crate::{
     error::{Error, Result},
     flver::{
@@ -48,8 +50,11 @@ pub const CLOTH_PART_ID: &str = "1380";
 /// `L_UpArmTwist` and `R_UpArmTwist` (`scripts/er-cloth-collidables.py`), so the upper arms push
 /// it aside. The tail's cape on `bd_<gender>_2240`, where capes hung before, collides with the
 /// pelvis and legs only, and Velstadt's (c3330) triceps went through his cape (the user,
-/// 2026-10-16).
+/// 2026-10-16). `bd_m_2750`'s mantle simulates lower (to 0.63 m against this cape's 1.06 m) but
+/// moves 8 bones, and Velstadt's cape on it looked worse to the user the same day.
 pub const CAPE_PART_ID: &str = "1485";
+/// The cloth bones of [`CAPE_PART_ID`] its cape moves, and so the only ones a cape hangs on.
+pub const CAPE_BONES: [&str; 1] = ["[cloth]BD_M_1485_cape_"];
 const PELVIS: &str = "Pelvis";
 /// How a body part's own cloth bones are named after `[cloth]`: `BD_M_1485_cape_001`.
 const BODY_PART_PREFIX: &str = "BD_";
@@ -181,33 +186,56 @@ pub fn hanging_bones(bones: &[Bone]) -> Result<Vec<HangingBone>> {
     Ok(out)
 }
 
-/// The source's hanging cloth as it is skinned ([`hanging_bones`], then by its vertices): a chain
-/// off the spine is a cape only if its vertices hang below the pelvis's joint, and anything
-/// shorter -- the Black Knight's `L_pad` and `R_pad`, plates at his shoulders -- rides its spine
-/// link as the rest of his armour does. A chain of one bone carries how far its piece hangs.
-pub fn hanging_cloth_of(source: &Source) -> Result<Vec<HangingBone>> {
+/// The source's hanging cloth ([`hanging_cloth_of`]): its bones, and the vertices on them that
+/// ride rigidly all the same.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HangingCloth {
+    pub bones: Vec<HangingBone>,
+    /// `(mesh, vertex)` of the source: armour on a short spine chain ([`hanging_cloth_of`]),
+    /// which rides the first bone above it that does not hang.
+    pub riding: Vec<(usize, usize)>,
+}
+
+/// The source's hanging cloth as it is skinned ([`hanging_bones`], then by its vertices).
+///
+/// A chain off the spine is a cape when its vertices hang below the pelvis's joint. A shorter
+/// one is armour at the shoulders unless a cape hangs beside it: the Black Knight's (Dark Souls
+/// III c1300) `L_pad` and `R_pad` are plates and ride `Spine1` as the rest of his armour does.
+/// Velstadt's (Dark Souls II c3330) `L_Cloth1` carries both his pauldron and the top of his cape,
+/// which the user saw needs to bend where the pauldron must not (2026-10-16); the two are
+/// separate islands of separate materials. So a short chain beside a cape stays cloth only in an
+/// island that is mostly hanging cloth and joins a full-length chain's vertices -- his cape top,
+/// 15 of its 24 vertices on `L_Cloth1` -- and rides rigidly everywhere else (his pauldron, 16 of
+/// 48). A chain of one bone carries how far its piece hangs.
+pub fn hanging_cloth_of(source: &Source) -> Result<HangingCloth> {
     let bones = &source.bones;
     let frames = bind_frames(bones)?;
     let index_of = |name: &str| bones.iter().position(|bone| bone.name == name);
-    // The lowest vertex each bone carries the most of.
+    // The bone each vertex carries the most of, and the lowest vertex each bone carries the most
+    // of.
     let mut lowest: Vec<Option<f32>> = vec![None; bones.len()];
-    for mesh in &source.meshes {
-        for vertex in &mesh.vertices {
-            let Some((slot, _)) = vertex
-                .bone_weights
+    let dominant: Vec<Vec<Option<usize>>> = source
+        .meshes
+        .iter()
+        .map(|mesh| {
+            mesh.vertices
                 .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.total_cmp(b.1))
-            else {
-                continue;
-            };
-            let bone = mesh.bone(vertex.bone_indices[slot]);
-            if let Some(low) = lowest.get_mut(bone) {
-                let y = vertex.position.y;
-                *low = Some(low.map_or(y, |low: f32| low.min(y)));
-            }
-        }
-    }
+                .map(|vertex| {
+                    let (slot, _) = vertex
+                        .bone_weights
+                        .iter()
+                        .enumerate()
+                        .max_by(|a, b| a.1.total_cmp(b.1))?;
+                    let bone = mesh.bone(vertex.bone_indices[slot]);
+                    if let Some(low) = lowest.get_mut(bone) {
+                        let y = vertex.position.y;
+                        *low = Some(low.map_or(y, |low: f32| low.min(y)));
+                    }
+                    Some(bone)
+                })
+                .collect()
+        })
+        .collect();
     let pelvis = skeleton::classify(bones)?
         .iter()
         .position(|role| matches!(role, Role::Direct(name) if name == PELVIS))
@@ -227,7 +255,47 @@ pub fn hanging_cloth_of(source: &Source) -> Result<Vec<HangingBone>> {
         .filter(|bone| chain_lowest(&bone.chain_root, &hanging).is_none_or(|low| low >= pelvis))
         .map(|bone| bone.chain_root.clone())
         .collect();
-    hanging.retain(|bone| !short_capes.contains(&bone.chain_root));
+    let bone_set = |keep: &dyn Fn(&HangingBone) -> bool| -> Vec<usize> {
+        hanging
+            .iter()
+            .filter(|bone| keep(bone))
+            .filter_map(|bone| index_of(&bone.name))
+            .collect()
+    };
+    let short = bone_set(&|bone| short_capes.contains(&bone.chain_root));
+    let capes =
+        bone_set(&|bone| bone.root == Root::Spine && !short_capes.contains(&bone.chain_root));
+    let all = bone_set(&|_| true);
+    let mut riding = Vec::new();
+    if capes.is_empty() {
+        hanging.retain(|bone| !short_capes.contains(&bone.chain_root));
+    } else if !short.is_empty() {
+        for (index, mesh) in source.meshes.iter().enumerate() {
+            let island = islands(mesh.vertices.len(), &mesh.lods[0]);
+            let on = |vertex: usize, set: &[usize]| {
+                dominant[index][vertex].is_some_and(|bone| set.contains(&bone))
+            };
+            let mut tally: HashMap<usize, (usize, usize, bool)> = HashMap::new();
+            for (vertex, &id) in island.iter().enumerate() {
+                let entry = tally.entry(id).or_default();
+                entry.0 += 1;
+                entry.1 += usize::from(on(vertex, &all));
+                entry.2 |= on(vertex, &capes);
+            }
+            for (vertex, (&id, carried)) in island.iter().zip(&mesh.vertices).enumerate() {
+                let (count, hung, joins_cape) = tally[&id];
+                let cloth = joins_cape && 2 * hung > count;
+                let on_short = carried
+                    .bone_indices
+                    .iter()
+                    .zip(carried.bone_weights)
+                    .any(|(&slot, weight)| weight > 0.0 && short.contains(&mesh.bone(slot)));
+                if on_short && !cloth {
+                    riding.push((index, vertex));
+                }
+            }
+        }
+    }
     let lengths: Vec<usize> = hanging
         .iter()
         .map(|bone| {
@@ -248,7 +316,35 @@ pub fn hanging_cloth_of(source: &Source) -> Result<Vec<HangingBone>> {
             });
         }
     }
-    Ok(hanging)
+    Ok(HangingCloth {
+        bones: hanging,
+        riding,
+    })
+}
+
+/// Which connected piece of a mesh each of its `count` vertices is in, by the triangles that
+/// join them: vertices that only share a position (a texture seam) are in separate pieces, and
+/// a vertex no triangle uses is a piece of its own.
+fn islands(count: usize, triangles: &[[u32; 3]]) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..count).collect();
+    fn root(parent: &mut [usize], mut at: usize) -> usize {
+        while parent[at] != at {
+            parent[at] = parent[parent[at]];
+            at = parent[at];
+        }
+        at
+    }
+    for triangle in triangles {
+        let [a, b, c] = triangle.map(|corner| corner as usize);
+        if a.max(b).max(c) >= count {
+            continue;
+        }
+        for (x, y) in [(a, b), (b, c)] {
+            let (x, y) = (root(&mut parent, x), root(&mut parent, y));
+            parent[x] = y;
+        }
+    }
+    (0..count).map(|vertex| root(&mut parent, vertex)).collect()
 }
 
 /// One `[cloth]` bone of the cloth part: its name, the first bone above it that is not cloth (a
@@ -630,5 +726,16 @@ mod tests {
         assert!(share(&hem, "R_ThighTwist") < 0.01, "{hem:?}");
         // Below its lowest vertex it is still at the hem.
         assert_eq!(graded.shares(0.5, v(0.15, 0.6, -0.05)), hem);
+    }
+
+    #[test]
+    fn islands_part_where_no_triangle_joins_even_at_a_shared_position() {
+        // Two quads (0-3, 4-7) and a vertex no triangle uses; a triangle past the end is ignored.
+        let triangles = [[0, 1, 2], [2, 1, 3], [4, 5, 6], [6, 5, 7], [7, 9, 4]];
+        let island = islands(9, &triangles);
+        assert!(island[..4].iter().all(|&id| id == island[0]));
+        assert!(island[4..8].iter().all(|&id| id == island[4]));
+        assert_ne!(island[0], island[4]);
+        assert!(island[..8].iter().all(|&id| id != island[8]));
     }
 }
