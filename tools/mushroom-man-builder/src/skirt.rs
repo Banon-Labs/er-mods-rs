@@ -16,10 +16,8 @@
 //!   `bd_<gender>_1380`, which hangs 18 cloth chains all round the hips from 0.98 m down to
 //!   0.23 m, no gap wider than 57 degrees, from the thighs (`L_ThighTwist`, `L_ThighTwist1`,
 //!   `L_Thigh`), the calves and the pelvis. Cloth with a chain hanging from the spine is a cape
-//!   and goes on the cape the tail hangs from, `bd_<gender>_2240` ([`crate::tail::CLOTH_PART_ID`]):
-//!   three chains off `Spine` across the upper back from 1.20 m down, three off the pelvis behind
-//!   down to 0.04 m, two panels on each thigh in front and a rope. Both genders' parts name their
-//!   chains after the male one.
+//!   and goes on [`CAPE_PART_ID`], `bd_m_1485`, whose cape collides with the upper arms; the
+//!   female slot takes the male part.
 //! - **The weights.** Each hanging bone ([`hanging_bones`]) is shared out by where the fit puts
 //!   its joint ([`hanging_targets`]): between the two cloth bones nearest it, by inverse
 //!   distance, and the bones those hang from. How much stays put is the player's [`Rigidity`],
@@ -39,7 +37,16 @@ use crate::{
 
 /// The vanilla body part whose cloth a skirt hangs from: `bd_<gender>_1380`.
 pub const CLOTH_PART_ID: &str = "1380";
+/// The vanilla body part whose cloth a cape hangs from: `bd_m_1485`, male only. Its cape is 20
+/// cloth bones across the back whose simulation collides with `Spine`, `Spine1`, `Spine2`,
+/// `L_UpArmTwist` and `R_UpArmTwist` (`scripts/er-cloth-collidables.py`), so the upper arms push
+/// it aside. The tail's cape on `bd_<gender>_2240`, where capes hung before, collides with the
+/// pelvis and legs only, and Velstadt's (c3330) triceps went through his cape (the user,
+/// 2026-10-16).
+pub const CAPE_PART_ID: &str = "1485";
 const PELVIS: &str = "Pelvis";
+/// How a body part's own cloth bones are named after `[cloth]`: `BD_M_1485_cape_001`.
+const BODY_PART_PREFIX: &str = "BD_";
 /// How far apart, in metres, two cloth bones may be from a skirt joint and both count: a share
 /// by inverse distance cannot divide by nothing.
 const NEAREST_FLOOR: f32 = 0.01;
@@ -48,10 +55,19 @@ const NEAREST_FLOOR: f32 = 0.01;
 /// [`crate::fit::export_with_targets`] takes them.
 pub type BoneShares = (String, Vec<(String, f32)>);
 
-/// Hanging cloth's stiffness by default: 80% at the root, 20% at the hem.
+/// A skirt's stiffness by default: 80% at the belt, 20% at the hem, so it follows the legs.
 pub const DEFAULT_RIGIDITY: Rigidity = Rigidity {
     base: 0.8,
     tip: 0.2,
+};
+
+/// A cape's stiffness by default: 50% at the root, 10% at the hem. Hung with the skirt's, the
+/// cloth moved only 16% to 53% of each of Velstadt's (c3330) cape vertices from his shoulders to
+/// his waist, 1.3 m down to 0.9 m, where his chains are a root bone and a middle one, and the
+/// user saw the cape stiff across the middle of his back (2026-10-16).
+pub const CAPE_RIGIDITY: Rigidity = Rigidity {
+    base: 0.5,
+    tip: 0.1,
 };
 
 /// What a chain of hanging cloth hangs from.
@@ -123,12 +139,18 @@ pub struct ClothBone {
     pub at: Vec3,
 }
 
-/// Every `[cloth]` bone of `bones`, the cloth part's skeleton.
+/// Every `[cloth]` bone of `bones`, the body part's skeleton, that the body's own cloth moves:
+/// `bd_m_1485` also carries its helmet's hair (`[cloth]HD_M_1485_Hair_001`), which only the
+/// helmet's cloth moves.
 pub fn cloth_bones(bones: &[Bone]) -> Result<Vec<ClothBone>> {
     let frames = bind_frames(bones)?;
     let mut out = Vec::new();
     for (index, bone) in bones.iter().enumerate() {
-        if !bone.name.starts_with(CLOTH_PREFIX) {
+        if !bone
+            .name
+            .strip_prefix(CLOTH_PREFIX)
+            .is_some_and(|name| name.starts_with(BODY_PART_PREFIX))
+        {
             continue;
         }
         let mut up = bone.parent_index;

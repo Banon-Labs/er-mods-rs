@@ -117,6 +117,17 @@ pub struct BipedParams {
     /// from the trunk's just under the pelvis joint; 1 keeps the skirt's own width. The legs keep
     /// the full girth, so a skirt narrowed with the trunk can sink into them.
     pub skirt_girth: f32,
+    /// How much deeper, front to back, a bone riding a limb is drawn than its own shape, about its
+    /// joint ([`LimbMap::riding`]); 1 keeps its shape. Velstadt's pauldrons kept his own depth
+    /// (0.275 m against 0.274 m) and still read thin over Elden Ring's shoulders to the user
+    /// (2026-10-16), who asked for slightly more.
+    pub riding_depth: f32,
+    /// The share of the girth kept by cloth hanging from a spine link, a cape, across and in depth,
+    /// as [`Self::trunk_girth`] is for the trunk; 1 keeps the cape's own width. A cape hangs
+    /// behind the arms, which the limb maps carry at the full girth: Velstadt's (c3330), narrowed
+    /// with his trunk to 0.6, hung inside them, and in the idle 99 upper-arm vertices came out
+    /// behind it, up to 0.064 m, where the user saw his triceps through the cape (2026-10-16).
+    pub cape_girth: f32,
 }
 
 impl BipedParams {
@@ -131,6 +142,8 @@ impl BipedParams {
         head_band: false,
         trunk_girth: 1.0,
         skirt_girth: 1.0,
+        riding_depth: 1.0,
+        cape_girth: 1.0,
     };
 
     /// The parameters as `fit.json` records them, with the girth this fit resolved.
@@ -174,6 +187,8 @@ impl BipedParams {
         // Written only when it narrows anything, so an untouched fit's file is as it was.
         .chain((self.trunk_girth != 1.0).then(|| ("trunk_girth", self.trunk_girth.to_string())))
         .chain((self.skirt_girth != 1.0).then(|| ("skirt_girth", self.skirt_girth.to_string())))
+        .chain((self.riding_depth != 1.0).then(|| ("riding_depth", self.riding_depth.to_string())))
+        .chain((self.cape_girth != 1.0).then(|| ("cape_girth", self.cape_girth.to_string())))
         .collect()
     }
 }
@@ -196,6 +211,9 @@ struct LimbMap {
     scale: [f32; 3],
     /// The side whose arm lean pushes what this map places: upper arms and forearms only.
     lean: Option<usize>,
+    /// How much deeper, front to back, a riding bone is drawn about its joint
+    /// ([`BipedParams::riding_depth`]); 1 on a limb's own map.
+    depth: f32,
 }
 
 impl LimbMap {
@@ -208,17 +226,24 @@ impl LimbMap {
             onto_axes: unit(er.axes)?,
             scale: [stretch, girth, girth],
             lean: None,
+            depth: 1.0,
         })
     }
 
     fn place(&self, v: Vec3) -> Vec3 {
         let d = sub(v, self.from);
-        (0..3).fold(self.onto, |at, i| {
+        let mut at = (0..3).fold(self.onto, |at, i| {
             add(
                 at,
                 mul(self.onto_axes[i], dot(d, self.from_axes[i]) * self.scale[i]),
             )
-        })
+        });
+        // Elden Ring's model space runs front to back along Z. Skipped at 1, where the sum and
+        // difference would still round the coordinate away from what every other map writes.
+        if self.depth != 1.0 {
+            at.z = self.onto.z + (at.z - self.onto.z) * self.depth;
+        }
+        at
     }
 
     /// A map for a bone that rides this one without being part of the limb, its joint at `joint`:
@@ -227,25 +252,29 @@ impl LimbMap {
     /// length between two joints; what hangs off it has no such span. Velstadt's (c3330)
     /// pauldrons hang off his clavicles, which stretch 1.25 times to reach Elden Ring's shoulders:
     /// carried on the clavicle's map they came out 1.31 times as wide as his own, on a trunk kept
-    /// at 0.6 of its width, and the user saw them oversized in game (2026-10-16).
-    fn riding(&self, joint: Vec3, girth: f32) -> Self {
+    /// at 0.6 of its width, and the user saw them oversized in game (2026-10-16). `depth` deepens
+    /// it front to back about its joint ([`BipedParams::riding_depth`]).
+    fn riding(&self, joint: Vec3, girth: f32, depth: f32) -> Self {
         Self {
             from: joint,
             onto: self.place(joint),
             scale: [girth; 3],
+            depth,
             ..*self
         }
     }
 
     /// A normal carried by this map: turned with the frames, each component scaled by the inverse
-    /// of the map's scale along it. Unnormalised.
+    /// of the map's scale along it, the depth's too. Unnormalised.
     fn normal(&self, n: Vec3) -> Vec3 {
-        (0..3).fold(Vec3::default(), |out, i| {
+        let mut out = (0..3).fold(Vec3::default(), |out, i| {
             add(
                 out,
                 mul(self.onto_axes[i], dot(n, self.from_axes[i]) / self.scale[i]),
             )
-        })
+        });
+        out.z /= self.depth;
+        out
     }
 }
 
@@ -289,6 +318,9 @@ impl Lean {
 enum Carrier {
     /// The body fit.
     Axial,
+    /// The body fit at the cape's share of the girth ([`BipedParams::cape_girth`]): cloth
+    /// hanging from a spine link.
+    Cape,
     /// This limb map.
     Limb(usize),
 }
@@ -313,6 +345,8 @@ struct BoneFit {
 /// The whole fit: every source bone's carrier and weight.
 struct BipedFit {
     axial: AxialFit,
+    /// `axial` with the cape's share of the girth in place of the trunk's.
+    cape: AxialFit,
     maps: Vec<LimbMap>,
     leans: [Option<Lean>; 2],
     /// Per source bone; `None` for a bone with nowhere to go.
@@ -326,6 +360,7 @@ impl BipedFit {
     fn carry_point(&self, carrier: Carrier, p: Vec3) -> Vec3 {
         match carrier {
             Carrier::Axial => self.axial.place(p),
+            Carrier::Cape => self.cape.place(p),
             Carrier::Limb(index) => {
                 let map = &self.maps[index];
                 let at = map.place(p);
@@ -369,6 +404,10 @@ impl Placement for BipedFit {
             })?;
         let (at, normal) = match fit.carrier {
             Carrier::Axial => (rest, rest_normal),
+            Carrier::Cape => (
+                self.cape.place(vertex.position),
+                self.cape.normal(vertex.position, vertex.normal),
+            ),
             Carrier::Limb(index) => (
                 self.carry_point(fit.carrier, vertex.position),
                 self.maps[index].normal(vertex.normal),
@@ -573,17 +612,23 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
         let head = head.ok_or("head_band needs a head bone")?;
         knots.push((frames[head].origin, er_frame("Head")?.origin));
     }
-    let mut axial = AxialFit::new(knots, girth)?;
-    if params.trunk_girth != 1.0 || params.skirt_girth != 1.0 {
+    let mut axial = AxialFit::new(knots.clone(), girth)?;
+    let mut cape = AxialFit::new(knots, girth)?;
+    let narrowed = |fit: AxialFit, share: f32, skirt: f32| -> Result<AxialFit> {
+        if share == 1.0 && skirt == 1.0 {
+            return Ok(fit);
+        }
         let head = head.ok_or("trunk_girth needs a head bone to rise back to the girth by")?;
-        axial = axial.with_trunk(
-            params.trunk_girth,
-            params.skirt_girth,
+        fit.with_trunk(
+            share,
+            skirt,
             source_pelvis.y,
             frames[shoulder].origin.y,
             frames[head].origin.y,
-        )?;
-    }
+        )
+    };
+    axial = narrowed(axial, params.trunk_girth, params.skirt_girth)?;
+    cape = narrowed(cape, params.cape_girth, params.cape_girth)?;
 
     let mut fits: Vec<Option<BoneFit>> = vec![None; bones.len()];
     let mut maps = Vec::new();
@@ -726,13 +771,22 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
                 };
                 match fit.carrier {
                     Carrier::Limb(limb) => {
-                        maps.push(maps[limb].riding(frames[index].origin, girth));
+                        maps.push(maps[limb].riding(
+                            frames[index].origin,
+                            girth,
+                            params.riding_depth,
+                        ));
                         BoneFit {
                             carrier: Carrier::Limb(maps.len() - 1),
                             ..fit
                         }
                     }
-                    Carrier::Axial => fit,
+                    // Cloth hanging from a spine link, a cape, takes the cape's share of the girth.
+                    Carrier::Axial if matches!(roles[*up], Role::SpineChain(_)) => BoneFit {
+                        carrier: Carrier::Cape,
+                        ..fit
+                    },
+                    Carrier::Axial | Carrier::Cape => fit,
                 }
             }),
             // A vertex the strip left with some weight on the item, or a kept item, goes with the
@@ -756,6 +810,7 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
     }
     let fit = BipedFit {
         axial,
+        cape,
         maps,
         leans,
         bones: fits,
@@ -1293,14 +1348,27 @@ mod tests {
         );
         assert!((length(along(7)) - 0.1 * stretch).abs() < 1e-5);
         assert!((length(along(16)) - 0.1 * built.girth).abs() < 1e-5);
-        // Cloth on the spine follows the spine into the trunk split.
+        // Cloth on the spine follows the spine into the trunk split, on the cape's share of the
+        // girth, which with the trunk unnarrowed places it where the body fit does.
         assert_eq!(
             built.fit.bones[21],
             Some(BoneFit {
-                carrier: Carrier::Axial,
+                carrier: Carrier::Cape,
                 weight: WeightTo::Trunk
             })
         );
+        let back = v(0.1, 1.2, -0.1);
+        assert!(close(
+            built.fit.carry_point(Carrier::Cape, back),
+            built.fit.carry_point(Carrier::Axial, back)
+        ));
+        // With the trunk narrowed the cape keeps its width: its share is the cape's.
+        let (narrow, _) = fitted(BipedParams {
+            trunk_girth: 0.5,
+            ..BipedParams::DEFAULT
+        });
+        let width = |carrier| narrow.fit.carry_point(carrier, back).x;
+        assert!((width(Carrier::Cape) - 2.0 * width(Carrier::Axial)).abs() < 1e-4);
         assert_eq!(built.map_roles[16], MapRole::Cloth);
         assert_eq!(built.map_roles[14], MapRole::Arm);
         assert_eq!(built.map_roles[10], MapRole::Finger);

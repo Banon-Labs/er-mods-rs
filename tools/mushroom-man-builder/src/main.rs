@@ -78,11 +78,11 @@ OPTIONS:
                            How stiff a loose feature is, in percent at its base and at its tip:
                            100 is welded to the body, 0 swings freely with Elden Ring's cloth.
                            `tail`, default 95:55: a character with tail bones swings its tail on a
-                           cloth chain. `skirt`, default 80:20: a character with chains hanging
-                           from its pelvis or spine and no tail hangs them on a vanilla part's
-                           cloth, a skirt's when they all hang from the pelvis (so it follows the
-                           legs) and a cape's otherwise, and they swing. `<feature>=100:100` keeps
-                           it welded.
+                           cloth chain. A character with chains hanging from its pelvis or spine
+                           and no tail hangs them on a vanilla part's cloth, and they swing:
+                           `skirt`, default 80:20, when they all hang from the pelvis, on a
+                           skirt's cloth so it follows the legs; `cape`, default 50:10, when one
+                           hangs from the spine, on a cape's. `<feature>=100:100` keeps it welded.
     --trunk-girth <share>  How much of its own width and depth a Biped character's trunk keeps,
                            0 to 1, from the hips to the shoulders, instead of its table entry's
                            (Lonesome Gavlan's is 0.45). Narrower keeps the player's arms out of a
@@ -121,6 +121,8 @@ struct Options {
     tail_rigidity: tail::Rigidity,
     /// `--rigidity skirt=<base>:<tip>` ([`package::Inputs::skirt_rigidity`]).
     skirt_rigidity: tail::Rigidity,
+    /// `--rigidity cape=<base>:<tip>` ([`package::Inputs::cape_rigidity`]).
+    cape_rigidity: tail::Rigidity,
     /// `--trunk-girth`, `--skirt-girth`: the character's trunk and skirt shares for this build
     /// instead of its table entry's ([`with_girths`]).
     trunk_girth: Option<f32>,
@@ -143,6 +145,7 @@ fn run() -> ExitCode {
         Some("repack-er") => repack_er(&args[1..]),
         Some("extract-inputs") => extract_inputs(&args[1..]),
         Some("export-obj") => export_obj(&args[1..]),
+        Some("export-cloth") => export_cloth(&args[1..]),
         Some("map-report") => run_map_report(&args[1..]),
         Some("patch-flver") => patch_flver(&args[1..]),
         Some("rebuild-flver") => rebuild_flver(&args[1..]),
@@ -198,6 +201,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         cloth_test_body: None,
         tail_rigidity: tail::Rigidity::DEFAULT,
         skirt_rigidity: skirt::DEFAULT_RIGIDITY,
+        cape_rigidity: skirt::CAPE_RIGIDITY,
         trunk_girth: None,
         skirt_girth: None,
     };
@@ -247,10 +251,15 @@ fn parse_options(args: &[String]) -> Result<Options> {
                         options.skirt_rigidity = tail::Rigidity::parse(stiffness)
                             .map_err(|error| error.context("--rigidity skirt"))?;
                     }
+                    Some((feature, stiffness)) if feature.trim() == "cape" => {
+                        options.cape_rigidity = tail::Rigidity::parse(stiffness)
+                            .map_err(|error| error.context("--rigidity cape"))?;
+                    }
                     _ => {
                         return Err(Error::new(format!(
                             "--rigidity takes <feature>=<base>:<tip>, and the features are tail \
-                             (tail=95:55) and skirt (skirt=80:20); got {setting:?}"
+                             (tail=95:55), skirt (skirt=80:20) and cape (cape=50:10); got \
+                             {setting:?}"
                         )));
                     }
                 }
@@ -584,6 +593,7 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
             cloth_test_body: options.cloth_test_body.clone(),
             tail_rigidity: options.tail_rigidity,
             skirt_rigidity: options.skirt_rigidity,
+            cape_rigidity: options.cape_rigidity,
         },
         &out,
     )?;
@@ -821,6 +831,45 @@ fn export_obj(args: &[String]) -> Result<()> {
         export.mesh.vertices.len(),
         export.mesh.triangles.len(),
         export.scale,
+        out.display()
+    );
+    Ok(())
+}
+
+/// Developer check: `export-cloth [--character <id>] [--game ds2] <source-dir> <FC_M_0000.flver>
+/// <cloth-part.flver> <out-dir>`, the hanging-cloth half of the fit ([`package::hanging_split`])
+/// on the cloth bones of a vanilla part's male model (`BD_M_1380.flver` for a skirt,
+/// `BD_M_2240.flver` for a cape), as OBJ, weight TSV and source map, to see where its weight
+/// went. Needs no Oodle.
+fn export_cloth(args: &[String]) -> Result<()> {
+    let (character, args) = dev_character(args)?;
+    let [dsr, donor, part, out] = &args[..] else {
+        return Err("export-cloth [--character <id>] [--game ds2] <source-dir> \
+                    <FC_M_0000.flver> <cloth-part.flver> <out-dir>"
+            .into());
+    };
+    let files = read_dev_character(character, dsr)?;
+    let donor = fs::read(donor).context(donor)?;
+    let part = fs::read(part).context(part)?;
+    let kind = package::hanging_cloth(&files.flver, skirt::DEFAULT_RIGIDITY, skirt::CAPE_RIGIDITY)?;
+    let rigidity = match kind {
+        Some(package::Cloth::Cape) => skirt::CAPE_RIGIDITY,
+        _ => skirt::DEFAULT_RIGIDITY,
+    };
+    let (_, cloth) = package::hanging_split(character, &files.flver, &donor, &part, rigidity)?;
+    let out = Path::new(out);
+    fs::create_dir_all(out).context(out.display())?;
+    let id = character.id;
+    fs::write(out.join(format!("{id}_cloth.obj")), cloth.mesh.to_obj())?;
+    fs::write(
+        out.join(format!("{id}_cloth_weights.tsv")),
+        cloth.mesh.to_weights_tsv(),
+    )?;
+    fs::write(out.join(SOURCE_MAP), cloth.source_map_tsv())?;
+    println!(
+        "wrote {id}'s hanging cloth ({} vertices, {} triangles) into {}",
+        cloth.mesh.vertices.len(),
+        cloth.mesh.triangles.len(),
         out.display()
     );
     Ok(())
@@ -1404,6 +1453,9 @@ mod tests {
         assert_eq!((stiff.base, stiff.tip), (1.0, 0.8));
         let both = parse(&["--rigidity", "skirt=100:100", "--rigidity", "tail=90:50"]).unwrap();
         assert!(both.skirt_rigidity.welded());
+        assert_eq!(parse(&[]).unwrap().cape_rigidity, skirt::CAPE_RIGIDITY);
+        let cape = parse(&["--rigidity", "cape=60:30"]).unwrap().cape_rigidity;
+        assert_eq!((cape.base, cape.tip), (0.6, 0.3));
         assert_eq!(both.tail_rigidity.tip, 0.5);
         for bad in [
             &["--rigidity", "sleeve=90:50"][..],

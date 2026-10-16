@@ -52,7 +52,7 @@ fn gavlans_skirt_goes_onto_the_skirt_chains_and_every_part_checks() {
     let gavlan = character::resolve_in(Game::Ds2, "c1350", true).unwrap();
     let files = read_ds2_character(&archives, gavlan).unwrap();
     assert_eq!(
-        hanging_cloth(&files.flver, DEFAULT_RIGIDITY).unwrap(),
+        hanging_cloth(&files.flver, DEFAULT_RIGIDITY, skirt::CAPE_RIGIDITY).unwrap(),
         Some(Cloth::Skirt)
     );
 

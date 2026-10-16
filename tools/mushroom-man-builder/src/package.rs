@@ -178,6 +178,9 @@ pub struct Inputs<'a> {
     /// a cape's ([`hanging_cloth`], [`crate::skirt`]), unless this is welded through and through
     /// or `cloth_test_body` takes the slots.
     pub skirt_rigidity: tail::Rigidity,
+    /// How stiff hanging cloth with a chain off the spine, a cape, is (`--rigidity
+    /// cape=<base>:<tip>`); a skirt takes `skirt_rigidity`.
+    pub cape_rigidity: tail::Rigidity,
 }
 
 /// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
@@ -791,7 +794,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                     && !inputs.tail_rigidity.welded()
                     && !tail::tail_bones(&source::parse(&dsr.flver)?.bones).is_empty();
                 let hanging = match free && !tail_swings {
-                    true => hanging_cloth(&dsr.flver, inputs.skirt_rigidity)?,
+                    true => hanging_cloth(&dsr.flver, inputs.skirt_rigidity, inputs.cape_rigidity)?,
                     false => None,
                 };
                 let split = if tail_swings {
@@ -813,7 +816,10 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                             &dsr.flver,
                             &flver.data,
                             &cloth_part,
-                            inputs.skirt_rigidity,
+                            match cloth {
+                                Cloth::Cape => inputs.cape_rigidity,
+                                Cloth::Skirt | Cloth::Tail => inputs.skirt_rigidity,
+                            },
                         ),
                     ))
                 } else {
@@ -1328,7 +1334,7 @@ fn blend_of(class: MtdClass, cutouts: Cutouts, material: usize) -> Result<Blend>
 }
 
 /// What a cloth part carries in the naked body slot: a tail on [`tail::CLOTH_PART_ID`]'s cape, a
-/// skirt on [`skirt::CLOTH_PART_ID`]'s chains, or a cape on the tail's cape (see
+/// skirt on [`skirt::CLOTH_PART_ID`]'s chains, or a cape on [`skirt::CAPE_PART_ID`]'s (see
 /// [`crate::skirt`]). The slot holds one part, so a character with a tail swings its tail and
 /// keeps any other hanging cloth in the body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1342,8 +1348,18 @@ impl Cloth {
     /// The vanilla body part whose cloth it hangs from: `bd_<gender>_<id>`.
     pub fn part_id(self) -> &'static str {
         match self {
-            Self::Tail | Self::Cape => tail::CLOTH_PART_ID,
+            Self::Tail => tail::CLOTH_PART_ID,
             Self::Skirt => skirt::CLOTH_PART_ID,
+            Self::Cape => skirt::CAPE_PART_ID,
+        }
+    }
+
+    /// The gender of the part a `gender` (`m` or `f`) slot is built from: the cape's part is
+    /// male only, so both slots take the male one.
+    pub fn part_gender(self, gender: &str) -> &str {
+        match self {
+            Self::Cape => "m",
+            Self::Tail | Self::Skirt => gender,
         }
     }
 
@@ -1951,20 +1967,25 @@ pub fn hanging_split(
 /// What `character`'s hanging cloth ([`skirt::hanging_bones`]) goes onto, if anything: a skirt's
 /// part when every chain hangs from the pelvis, the cape's when one hangs from the spine. Nothing
 /// for a character with a tail, since the one naked body slot carries one cloth part, or when
-/// `rigidity` welds it.
-pub fn hanging_cloth(character_flver: &[u8], rigidity: tail::Rigidity) -> Result<Option<Cloth>> {
+/// the rigidity for its kind welds it.
+pub fn hanging_cloth(
+    character_flver: &[u8],
+    skirt_rigidity: tail::Rigidity,
+    cape_rigidity: tail::Rigidity,
+) -> Result<Option<Cloth>> {
     let bones = source::parse(character_flver)?.bones;
-    if rigidity.welded() || !tail::tail_bones(&bones).is_empty() {
+    if !tail::tail_bones(&bones).is_empty() {
         return Ok(None);
     }
     let hanging = skirt::hanging_bones(&bones)?;
-    Ok(if hanging.is_empty() {
-        None
+    let (cloth, rigidity) = if hanging.is_empty() {
+        return Ok(None);
     } else if hanging.iter().any(|bone| bone.root == skirt::Root::Spine) {
-        Some(Cloth::Cape)
+        (Cloth::Cape, cape_rigidity)
     } else {
-        Some(Cloth::Skirt)
-    })
+        (Cloth::Skirt, skirt_rigidity)
+    };
+    Ok((!rigidity.welded()).then_some(cloth))
 }
 
 /// The naked body slot `bd_<gender>_0000<lod>` written to `path` as `cloth`'s part with `tail`
@@ -1988,11 +2009,12 @@ fn tail_part(
 ) -> Result<(PathBuf, Vec<SlotReport>)> {
     let id = cloth.part_id();
     let oodle = Some(oodle);
-    let logical = format!("/parts/bd_{gender}_{id}{lod}{PART_EXTENSION}");
+    let source_gender = cloth.part_gender(gender);
+    let logical = format!("/parts/bd_{source_gender}_{id}{lod}{PART_EXTENSION}");
     let packed = archives.read(&logical)?;
     let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
     let (gender, lod_upper) = (gender.to_uppercase(), lod.to_uppercase());
-    let source_stem = format!("BD_{gender}_{id}");
+    let source_stem = format!("BD_{}_{id}", source_gender.to_uppercase());
     let target_stem = format!("BD_{gender}_0000");
     let flver_name = format!("{source_stem}{lod_upper}.flver");
     let tpf_name = format!("{source_stem}{lod_upper}.tpf");

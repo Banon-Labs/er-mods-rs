@@ -172,7 +172,32 @@ pub const DS2_C1350: Character = Character {
     validated: false,
 };
 
-pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900, DS2_C1350];
+/// Velstadt, the Royal Aegis, Dark Souls II's bell-helmed knight of Vendrick's crypt. At the full
+/// girth his armoured trunk buried 1547 of 2665 arm vertices in the idle (58%); keeping 0.6 of
+/// it brings that to 448 (17%) with nothing turned inside out (0.45 left 11% but turned 7
+/// triangles inside out at bind). His pauldrons hang off his clavicles and his cape off his upper
+/// spine; they ride the body at his own proportions and the cape swings on a vanilla cape's cloth
+/// (see [`crate::skirt`]). At his own depth, 0.275 m front to back, the pauldrons read thin over
+/// Elden Ring's shoulders to the user (2026-10-16), who asked for slightly more: they are drawn
+/// a quarter deeper. His triceps went through the cape in the idle while it was narrowed with
+/// his trunk and hung on the tail's cape, whose cloth ignores the arms; at its full width on
+/// `bd_m_1485`'s cape, which the upper arms push aside, the user saw only his own armour clip
+/// his arms a little.
+pub const DS2_C3330: Character = Character {
+    game: Game::Ds2,
+    id: "c3330",
+    label: "Velstadt, the Royal Aegis",
+    skeleton: Skeleton::Biped,
+    fit: FitConfig::Biped(BipedParams {
+        trunk_girth: 0.6,
+        riding_depth: 1.25,
+        ..BipedParams::DEFAULT
+    }),
+    writer: Writer::Rebuild,
+    validated: false,
+};
+
+pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900, DS2_C1350, DS2_C3330];
 
 /// The character a run with no `--character` builds.
 pub const DEFAULT_ID: &str = "c2280";

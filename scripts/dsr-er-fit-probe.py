@@ -697,13 +697,19 @@ def idle_inside_out(rig, pose, bind_shape, posed, faces, dominant):
     return creases, outside, where
 
 
-def buried(rig, posed, dominant):
-    """Arm vertices whose |x| and |z| sit inside 90% of the body's within 0.05 m of their height."""
+def buried(rig, posed, dominant, not_body=()):
+    """Arm vertices whose |x| and |z| sit inside 90% of the body's within 0.05 m of their height.
+
+    `not_body` are vertices left out of the body: hanging cloth, which drapes round the arms
+    rather than holding them. Velstadt's (c3330) cape, kept at its full width behind arms it hangs
+    clear of, widened the body to 1515 buried arm vertices of 2665 where 20 sit inside his trunk.
+    """
     arm = [i for i, d in enumerate(dominant) if rig.part(d) == "arm"]
     arm_set = set(arm)
+    skip = set(not_body)
     bands = defaultdict(list)
     for j in range(len(posed)):
-        if j not in arm_set:
+        if j not in arm_set and j not in skip:
             bands[math.floor(posed[j][1] / BAND_M)].append(posed[j])
     count = 0
     for i in arm:
@@ -763,7 +769,8 @@ def measure(source, export, rig):
     m.update(idle_inside_out=sum(where.values()), idle_inside_out_outside_creases=outside,
              idle_inside_out_creases={s: creases[s] for s in "LR"},
              idle_inside_out_where=dict(where.most_common(10)))
-    m["idle_arm_buried"], m["arm_vertices"] = buried(rig, posed, dominant)
+    cloth = [i for i, (_, _, _, role) in enumerate(export.source_map) if role == "cloth"]
+    m["idle_arm_buried"], m["arm_vertices"] = buried(rig, posed, dominant, cloth)
 
     tips, palms = defaultdict(list), defaultdict(list)
     for i, (_, _, bone, role) in enumerate(export.source_map):
@@ -1243,6 +1250,13 @@ def selftest():
     body = [(0.3 * math.cos(a), 1.2, 0.3 * math.sin(a)) for a in (0, 1.6, 3.2, 4.8)]
     count, arm = buried(rig, body + [(0.1, 1.2, 0.05), (0.5, 1.2, 0.0)], ["Spine2"] * 4 + ["L_UpperArm"] * 2)
     check("an arm vertex inside the body band is buried, one outside is not", (count, arm) == (1, 2), f"{count}/{arm}")
+    # A cape twice as wide behind the body widens the band past the arm unless it is left out.
+    caped = body + [(0.1, 1.2, 0.05), (0.5, 1.2, 0.0), (-0.8, 1.2, 0.6), (0.8, 1.2, 0.6)]
+    doms = ["Spine2"] * 4 + ["L_UpperArm"] * 2 + ["Spine2"] * 2
+    widened, _ = buried(rig, caped, doms)
+    left_out, _ = buried(rig, caped, doms, not_body=[6, 7])
+    check("hanging cloth left out of the body buries no arm vertex", (widened, left_out) == (2, 1),
+          f"{widened} with the cape, {left_out} without")
 
     # A whole run through the export directory, every file the builder writes.
     src_bones = [("Pelvis", -1), ("L Hand", 0), ("L Finger1", 1), ("L Finger11", 2),
