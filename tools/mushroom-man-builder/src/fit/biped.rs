@@ -221,6 +221,22 @@ impl LimbMap {
         })
     }
 
+    /// A map for a bone that rides this one without being part of the limb, its joint at `joint`:
+    /// the joint goes where this map puts it, and the bone's own shape turns with the limb at the
+    /// body's scale, `girth`, rather than stretching with it. A limb bone's stretch fits its
+    /// length between two joints; what hangs off it has no such span. Velstadt's (c3330)
+    /// pauldrons hang off his clavicles, which stretch 1.25 times to reach Elden Ring's shoulders:
+    /// carried on the clavicle's map they came out 1.31 times as wide as his own, on a trunk kept
+    /// at 0.6 of its width, and the user saw them oversized in game (2026-10-16).
+    fn riding(&self, joint: Vec3, girth: f32) -> Self {
+        Self {
+            from: joint,
+            onto: self.place(joint),
+            scale: [girth; 3],
+            ..*self
+        }
+    }
+
     /// A normal carried by this map: turned with the frames, each component scaled by the inverse
     /// of the map's scale along it. Unnormalised.
     fn normal(&self, n: Vec3) -> Vec3 {
@@ -700,15 +716,25 @@ fn build(bones: &[Bone], roles: &[Role], er_bones: &[Bone], params: BipedParams)
     }
     for (index, role) in roles.iter().enumerate() {
         let followed = match role {
-            Role::Ancestor(up) => fits[*up]
-                .clone()
-                .map(|fit| match (&fit.weight, params.cloth) {
+            Role::Ancestor(up) => fits[*up].clone().map(|fit| {
+                let fit = match (&fit.weight, params.cloth) {
                     (WeightTo::Bone(calf), Cloth::Thigh) if calf.ends_with("_Calf") => BoneFit {
                         weight: WeightTo::Bone(calf.replace("_Calf", "_Thigh")),
                         ..fit
                     },
                     _ => fit,
-                }),
+                };
+                match fit.carrier {
+                    Carrier::Limb(limb) => {
+                        maps.push(maps[limb].riding(frames[index].origin, girth));
+                        BoneFit {
+                            carrier: Carrier::Limb(maps.len() - 1),
+                            ..fit
+                        }
+                    }
+                    Carrier::Axial => fit,
+                }
+            }),
             // A vertex the strip left with some weight on the item, or a kept item, goes with the
             // bone that holds it.
             Role::Prop => ancestors(bones, index)
@@ -1236,7 +1262,37 @@ mod tests {
             (roles[15].clone(), roles[16].clone()),
             (Role::Ancestor(7), Role::Ancestor(7))
         );
-        assert_eq!(built.fit.bones[16], built.fit.bones[7]);
+        let (cloth, forearm) = (
+            built.fit.bones[16].clone().unwrap(),
+            built.fit.bones[7].clone().unwrap(),
+        );
+        assert_eq!(cloth.weight, forearm.weight);
+        // Its joint goes where the forearm puts it, and its own shape keeps the body's scale
+        // rather than the forearm's stretch.
+        let s = source();
+        let at = joint(&s, "L_FA_Cloth_a2");
+        assert!(close(carried(&built, 16, at), carried(&built, 7, at)));
+        // A step along the forearm, which the forearm's own map stretches.
+        let step = v(0.1, 0.0, 0.0);
+        let along = |bone| {
+            sub(
+                carried(&built, bone, add(at, step)),
+                carried(&built, bone, at),
+            )
+        };
+        let length = |d: Vec3| dot(d, d).sqrt();
+        let stretch = built
+            .stretch
+            .iter()
+            .find(|(n, _)| n == "L Forearm")
+            .unwrap()
+            .1;
+        assert!(
+            (stretch - built.girth).abs() > 0.01,
+            "the forearm does stretch"
+        );
+        assert!((length(along(7)) - 0.1 * stretch).abs() < 1e-5);
+        assert!((length(along(16)) - 0.1 * built.girth).abs() < 1e-5);
         // Cloth on the spine follows the spine into the trunk split.
         assert_eq!(
             built.fit.bones[21],

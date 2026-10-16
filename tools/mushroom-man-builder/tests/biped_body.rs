@@ -49,14 +49,16 @@ const CUTOUT_SLOTS: [SlotShape; 3] = [
 /// The rebuilt FLVER with the Edge material, and with the fallback. The Windows build's package
 /// carries the first byte for byte as both `FC_M_0000.flver` and `FC_M_0000_L.flver`. Moved on
 /// 2026-10-15 when vertex colour 1 became the donor's (255, 0, 0, 255) and the third UV zero,
-/// and the Edge slot's 416 vertices took the 40-byte `C[AMSN]_e` layout (4992 bytes fewer).
+/// and the Edge slot's 416 vertices took the 40-byte `C[AMSN]_e` layout (4992 bytes fewer). Moved
+/// again on 2026-10-16 when a bone riding a limb kept the body's scale instead of the limb's
+/// stretch: 171 vertices of c2650's sleeve and coat cloth moved, none by more than 0.012 m.
 const CUTOUT_FLVER: (usize, &str) = (
     1_703_856,
-    "6c9659c0093dd5efaf5c82803647b6186b7dcb88aa6014bf3b2fd2a3f5390b90",
+    "e60b122a32ac7a10ee3232d252a3bfd348f84fc13c55bf71302b6b3142e7ebf9",
 );
 const BODY_FLVER: (usize, &str) = (
     1_708_080,
-    "5b90b8549d1b3488a0fd13be3dbcea0ebfd22566cd90ec0cbf45e4ebb291dfce",
+    "21b185c077d5cf6f660acc98a40393e1ab98d084cfb921d39890b9be1f908919",
 );
 
 /// The body TPFs, high and low detail, with the Edge material's metallic map and without it: the
