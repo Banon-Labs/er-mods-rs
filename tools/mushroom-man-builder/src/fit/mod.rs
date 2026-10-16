@@ -205,6 +205,63 @@ pub struct Export {
 }
 
 impl Export {
+    /// The export cut down to the triangles `keep` takes, with only the vertices they use, in
+    /// export order, and those vertices' weights and source rows.
+    pub fn subset(&self, keep: impl Fn(&[u32; 3]) -> bool) -> Result<Self> {
+        let triangles: Vec<[u32; 3]> = self
+            .mesh
+            .triangles
+            .iter()
+            .copied()
+            .filter(|t| keep(t))
+            .collect();
+        let mut used = vec![false; self.mesh.vertices.len()];
+        for corner in triangles.iter().flatten() {
+            *used.get_mut(*corner as usize).ok_or_else(|| {
+                Error::new(format!("triangle corner {corner} past the vertices"))
+            })? = true;
+        }
+        let mut remap = vec![u32::MAX; used.len()];
+        for (new, (old, _)) in used
+            .iter()
+            .enumerate()
+            .filter(|(_, used)| **used)
+            .enumerate()
+        {
+            remap[old] = u32::try_from(new)?;
+        }
+        let pick = |old: usize| used[old];
+        Ok(Self {
+            mesh: SourceMesh {
+                vertices: (0..used.len())
+                    .filter(|&v| pick(v))
+                    .map(|v| self.mesh.vertices[v])
+                    .collect(),
+                triangles: triangles
+                    .iter()
+                    .map(|t| t.map(|corner| remap[corner as usize]))
+                    .collect(),
+                weights: self
+                    .mesh
+                    .weights
+                    .iter()
+                    .filter(|row| pick(row.vertex))
+                    .map(|row| WeightRow {
+                        vertex: remap[row.vertex] as usize,
+                        ..row.clone()
+                    })
+                    .collect(),
+            },
+            source_map: (0..used.len())
+                .filter(|&v| pick(v))
+                .map(|v| self.source_map[v].clone())
+                .collect(),
+            ..self.clone()
+        })
+    }
+}
+
+impl Export {
     /// `fit.json`, naming the OBJ and weight TSV written beside it.
     pub fn fit_json(&self, obj: &str, weights: &str) -> String {
         let params: Vec<String> = self
@@ -260,9 +317,26 @@ impl Export {
 /// Fit `character`'s FLVER to the donor's bind skeleton (Elden Ring's `FC_M_0000.flver`) the way
 /// its table entry says.
 pub fn export(character: &Character, flver: &[u8], donor: &[u8]) -> Result<Export> {
-    let fitted = match character.fit {
-        FitConfig::Mushroom(params) => mushroom::export(character.id, flver, donor, params),
-        FitConfig::Biped(params) => biped::export(character.id, flver, donor, params),
+    export_with_targets(character, flver, donor, &[])
+}
+
+/// [`export`] with source bones' weight sent elsewhere ([`biped::export_with_targets`]). A Biped
+/// fit only: c2280's own fit has no bone to send.
+pub fn export_with_targets(
+    character: &Character,
+    flver: &[u8],
+    donor: &[u8],
+    retargets: &[(String, Vec<(String, f32)>)],
+) -> Result<Export> {
+    let fitted = match (character.fit, retargets) {
+        (FitConfig::Mushroom(params), []) => mushroom::export(character.id, flver, donor, params),
+        (FitConfig::Mushroom(_), _) => Err(Error::new(format!(
+            "{} is not fitted as a Biped, so it has no bone weight to send elsewhere",
+            character.id
+        ))),
+        (FitConfig::Biped(params), _) => {
+            biped::export_with_targets(character.id, flver, donor, params, retargets)
+        }
     };
     let export = fitted.map_err(|e| e.context(format!("fitting {}", character.id)))?;
     if export.source_map.len() != export.mesh.vertices.len() {

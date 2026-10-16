@@ -186,21 +186,58 @@ pub fn edge_textures() -> Vec<Texture> {
 /// order: the set's albedo and normal map under [`crate::textures::set_prefix`], and the one zero
 /// metallic map every set shares.
 pub fn set_textures(set: usize) -> Vec<Texture> {
-    let prefix = crate::textures::set_prefix(TEXTURE_PREFIX, set);
+    named_textures(
+        TEXTURE_DIR,
+        &crate::textures::set_prefix(TEXTURE_PREFIX, set),
+        TEXTURE_PREFIX,
+    )
+}
+
+/// The three texture entries of a `C[AMSN]` material, in [`SAMPLERS`] order, by path under `dir`:
+/// `<set_prefix>_a`, `<metallic_prefix>_m` and `<set_prefix>_n`.
+pub fn named_textures(dir: &str, set_prefix: &str, metallic_prefix: &str) -> Vec<Texture> {
     SAMPLERS
         .iter()
         .map(|(sampler, suffix)| {
             let owner = if *suffix == METALLIC_SUFFIX {
-                TEXTURE_PREFIX
+                metallic_prefix
             } else {
-                &prefix
+                set_prefix
             };
             Texture {
-                path: format!(r"{TEXTURE_DIR}\{owner}{suffix}.tif"),
+                path: format!(r"{dir}\{owner}{suffix}.tif"),
                 sampler: (*sampler).to_owned(),
             }
         })
         .collect()
+}
+
+/// Point `material` of any Elden Ring FLVER at `blend`'s matxml in `append`, after its template of
+/// `templates`, named `name` and sampling `textures`. The caller answers for no visible mesh but
+/// its own drawing with it: the tail part hides every other mesh of the cape it is built into.
+pub fn retarget_any(
+    append: &mut HeaderAppend,
+    templates: &Templates,
+    blend: Blend,
+    material: usize,
+    name: &str,
+    textures: &[Texture],
+) -> Result<()> {
+    let probe = Retarget {
+        material: EDGE_MATERIAL,
+        set: 0,
+        blend,
+    };
+    let (template, template_mtd, context) = templates.for_retarget(&probe);
+    check_template(template, template_mtd, &context)?;
+    append.retarget_material(
+        material,
+        name,
+        blend.mtd(),
+        textures,
+        &template.gx,
+        template.flags,
+    )
 }
 
 /// `BD_F_1451.flver`'s material 0 out of the installed game's archives.

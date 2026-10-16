@@ -47,7 +47,8 @@ use crate::{
     character::{C2280, Character, FitConfig, Writer},
     dcx,
     edge::{
-        Blend, EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, retarget_append,
+        Blend, EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, Templates,
+        named_textures, read_templates, retarget_any, retarget_append,
     },
     error::{Context, Error, Result},
     fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
@@ -62,6 +63,7 @@ use crate::{
     },
     locate,
     oodle::Oodle,
+    tail,
     textures::{self, TextureSets, body_tpf},
 };
 
@@ -127,6 +129,10 @@ const HEAD_PART_SUFFIXES: [&str; 3] = ["", "_l", "_m"];
 const HEAD_PART_ID_COUNT: u32 = 10_000;
 const NAKED_SLOTS: [&str; 4] = ["hd", BODY_SLOT, "am", "lg"];
 const BODY_SLOT: &str = "bd";
+/// A cloth part mesh a tail group can take: one buffer of this many bytes a vertex, the 40-byte
+/// layout every `C[AMSN]` mesh has, and 16-bit triangle lists.
+const C_AMSN_VERTEX_SIZE: usize = 40;
+const TAIL_INDEX_SIZE: u32 = 16;
 const GENDERS: [&str; 2] = ["m", "f"];
 const LODS: [&str; 2] = ["", "_l"];
 const FACEGEN: &str = "/facegen/facegen.fgbnd.dcx";
@@ -159,6 +165,10 @@ pub struct Inputs<'a> {
     /// and all, instead of emptied. It asks whether the slot `mushroom_man.dll` sends the game to
     /// runs a part's cloth simulation, before a character's tail is built into it.
     pub cloth_test_body: Option<String>,
+    /// Developer flag `--tail-cloth`: a Biped character's tail cut out of the body and built into
+    /// the naked body slots on the back-cape cloth chain of [`tail::CLOTH_PART_ID`]'s part, so the
+    /// cloth simulation swings it (see [`crate::tail`]). Refused for a character with no tail.
+    pub tail_cloth: bool,
 }
 
 /// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
@@ -194,6 +204,9 @@ pub struct SlotReport {
     /// The donor material it draws with: [`BODY_MATERIAL`], or [`EDGE_MATERIAL`] or one of
     /// [`SET_MATERIALS`] retargeted.
     pub material: u32,
+    /// What to call that material when its number says nothing in the body donor's terms: a
+    /// tail slot's, in the cloth part ([`tail_slots`]).
+    pub material_name: Option<String>,
     pub cull_backfaces: bool,
     /// The DSR meshes it holds; `None` for an authored mesh.
     pub source: Option<SlotSource>,
@@ -217,10 +230,11 @@ pub struct SlotSource {
 impl SlotReport {
     /// One line of the build summary.
     pub fn describe(&self) -> String {
-        let material = match self.material {
-            BODY_MATERIAL => format!("Body material {BODY_MATERIAL}"),
-            EDGE_MATERIAL => format!("Edge material {EDGE_MATERIAL}"),
-            other => format!("set material {other}"),
+        let material = match (&self.material_name, self.material) {
+            (Some(name), _) => name.clone(),
+            (None, BODY_MATERIAL) => format!("Body material {BODY_MATERIAL}"),
+            (None, EDGE_MATERIAL) => format!("Edge material {EDGE_MATERIAL}"),
+            (None, other) => format!("set material {other}"),
         };
         let sides = if self.cull_backfaces {
             "back faces culled"
@@ -274,6 +288,8 @@ pub struct BuildReport {
     pub head_parts: usize,
     /// Face and hair parts left to the game because they hold no model.
     pub head_parts_without_model: usize,
+    /// The tail's slots in the male high-detail cloth part, when `--tail-cloth` built one.
+    pub tail: Vec<SlotReport>,
 }
 
 impl BuildReport {
@@ -316,6 +332,19 @@ impl BuildReport {
                         strip.dropped_triangles,
                         strip.unreferenced_vertices
                     );
+                }
+                if !self.tail.is_empty() {
+                    let vertices: usize = self.tail.iter().map(|slot| slot.vertices).sum();
+                    let _ = write!(
+                        out,
+                        "\n  tail: {vertices} vertices in {} slots of bd_*_0000, on the cloth \
+                         chain of bd_*_{}",
+                        self.tail.len(),
+                        tail::CLOTH_PART_ID
+                    );
+                    for slot in &self.tail {
+                        let _ = write!(out, "\n    {}", slot.describe());
+                    }
                 }
                 out
             }
@@ -574,6 +603,9 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     let mut bodies = Vec::new();
     let mut patches = Vec::new();
     let mut rebuilt: Option<Rebuilt> = None;
+    // With `--tail-cloth`, the tail half of the fit, built into the naked body slots below.
+    let mut tail: Option<Export> = None;
+    let mut tail_reports = Vec::new();
     for lod in LODS {
         let stem = format!("{FC_SOURCE_STEM}{}", lod.to_uppercase());
         let logical = format!("/parts/{}{PART_EXTENSION}", stem.to_lowercase());
@@ -595,13 +627,27 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
             }
             // `buildable` has refused the patch writer for a Biped character.
             (None, FitConfig::Biped(_)) => {
-                let body = biped_body(
-                    &flver.data,
-                    character,
-                    &dsr.flver,
-                    &dsr.textures,
-                    inputs.cutouts,
-                )
+                let body = if inputs.tail_cloth {
+                    let (body, cut) = tail_split(character, &dsr.flver, &flver.data)
+                        .context(format!("cutting {}'s tail out", character.id))?;
+                    tail = Some(cut);
+                    biped_body_from(
+                        &flver.data,
+                        character,
+                        &dsr.flver,
+                        &body,
+                        &dsr.textures,
+                        inputs.cutouts,
+                    )
+                } else {
+                    biped_body(
+                        &flver.data,
+                        character,
+                        &dsr.flver,
+                        &dsr.textures,
+                        inputs.cutouts,
+                    )
+                }
                 .context(&fitting)?;
                 let append = if body.retargets.is_empty() {
                     HeaderAppend::default()
@@ -726,10 +772,34 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
     }
 
     // The default naked slots the DLL's zeroed armour falls back to, emptied.
+    let templates = match tail {
+        Some(_) => Some(read_templates(inputs.archives, inputs.oodle)?),
+        None => None,
+    };
     for slot in NAKED_SLOTS {
         for gender in GENDERS {
             for lod in LODS {
                 let name = format!("{slot}_{gender}_0000{lod}{PART_EXTENSION}");
+                if let (BODY_SLOT, Some(cut), Some(templates)) = (slot, &tail, &templates) {
+                    let (path, reports) = tail_part(
+                        inputs.archives,
+                        inputs.oodle,
+                        character,
+                        inputs.cutouts,
+                        templates,
+                        &dsr,
+                        cut,
+                        gender,
+                        lod,
+                        &parts_dir.join(&name),
+                    )
+                    .context(format!("building {name} around the tail"))?;
+                    files.push(path);
+                    if tail_reports.is_empty() {
+                        tail_reports = reports;
+                    }
+                    continue;
+                }
                 if let (BODY_SLOT, Some(part)) = (slot, inputs.cloth_test_body.as_deref()) {
                     files.push(cloth_test_body(
                         inputs.archives,
@@ -790,6 +860,7 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         source_triangles,
         head_parts,
         head_parts_without_model,
+        tail: tail_reports,
     })
 }
 
@@ -894,10 +965,23 @@ pub fn biped_body(
     cutouts: Cutouts,
 ) -> Result<BipedBody> {
     let export = fit::export(character, character_flver, donor)?;
+    biped_body_from(donor, character, character_flver, &export, sets, cutouts)
+}
+
+/// [`biped_body`] from a fit already made: the body half of a character whose tail
+/// [`crate::tail::split`] has cut out.
+pub fn biped_body_from(
+    donor: &[u8],
+    character: &Character,
+    character_flver: &[u8],
+    export: &Export,
+    sets: &TextureSets,
+    cutouts: Cutouts,
+) -> Result<BipedBody> {
     let strip = export
         .strip
         .ok_or("the Biped fit reported no held-item strip")?;
-    let groups = group_by_material(&export, &source::parse(character_flver)?, character.id)?;
+    let groups = group_by_material(export, &source::parse(character_flver)?, character.id)?;
     if groups.len() > SLOT_DONOR_MESHES.len() {
         return Err(Error::new(format!(
             "{} material groups, and the donor has {} body meshes to put them on",
@@ -932,19 +1016,7 @@ pub fn biped_body(
                 layout_of.vertex_size
             )));
         }
-        let blend = match (group.source.class, cutouts) {
-            (MtdClass::Opaque, _)
-            | (MtdClass::AlphaTest | MtdClass::AlphaBlend, Cutouts::BodyMaterial) => Blend::Opaque,
-            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => Blend::Cutout,
-            (MtdClass::AlphaBlend, Cutouts::EdgeMaterial) => Blend::Dither,
-            (class, _) => {
-                return Err(Error::new(format!(
-                    "DSR material {} is {}, which has no Elden Ring route",
-                    group.source.material,
-                    class_name(class)
-                )));
-            }
-        };
+        let blend = blend_of(group.source.class, cutouts, group.source.material)?;
         let set = sets.set_of(group.source.material).ok_or_else(|| {
             Error::new(format!(
                 "DSR material {} samples none of {}'s texture sets",
@@ -1034,10 +1106,199 @@ pub fn biped_body(
     Ok(body)
 }
 
+/// How a group of DSR material `material`, of `class`, lets its albedo's alpha through under
+/// `cutouts`. A class with no route is refused.
+fn blend_of(class: MtdClass, cutouts: Cutouts, material: usize) -> Result<Blend> {
+    match (class, cutouts) {
+        (MtdClass::Opaque, _)
+        | (MtdClass::AlphaTest | MtdClass::AlphaBlend, Cutouts::BodyMaterial) => Ok(Blend::Opaque),
+        (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => Ok(Blend::Cutout),
+        (MtdClass::AlphaBlend, Cutouts::EdgeMaterial) => Ok(Blend::Dither),
+        (class, _) => Err(Error::new(format!(
+            "DSR material {material} is {}, which has no Elden Ring route",
+            class_name(class)
+        ))),
+    }
+}
+
+/// What [`tail_slots`] makes of a tail for one part model.
+struct TailSlots {
+    slots: Vec<Slot>,
+    append: HeaderAppend,
+    /// The texture sets its materials sample, each once, in the order first drawn.
+    sets: Vec<usize>,
+    reports: Vec<SlotReport>,
+}
+
+/// `tail` (the tail half of a fit, [`tail::split`]) cut into slots of `donor`, the cloth part's
+/// model: its triangles grouped by DSR material and culling as the body's are, each group on the
+/// next of the donor's meshes laid out in the 40-byte `C[AMSN]` layout (most vertices first, no
+/// two sharing a material), that mesh's material retargeted onto the group's [`Blend`] with
+/// textures named `<prefix>_<set>_a`, `<prefix>_m` and `<prefix>_<set>_n` under the part's own
+/// folder. Refused unless the donor has [`tail::CHAIN`] hanging from its pelvis.
+#[allow(clippy::too_many_arguments)]
+fn tail_slots(
+    donor: &[u8],
+    tail: &Export,
+    character_flver: &[u8],
+    character: &Character,
+    sets: &TextureSets,
+    cutouts: Cutouts,
+    templates: &Templates,
+    prefix: &str,
+    part_stem: &str,
+) -> Result<TailSlots> {
+    let flver = Flver::parse(donor)?;
+    let bone = |name: &str| flver.bones.iter().position(|bone| bone.name == name);
+    for (index, link) in tail::CHAIN.iter().enumerate() {
+        let parent = if index == 0 {
+            "Pelvis"
+        } else {
+            tail::CHAIN[index - 1]
+        };
+        let at = bone(link).ok_or_else(|| Error::new(format!("the cloth part has no {link}")))?;
+        let up = usize::try_from(flver.bones[at].parent_index)
+            .ok()
+            .and_then(|up| flver.bones.get(up));
+        if up.map(|up| up.name.as_str()) != Some(parent) {
+            return Err(Error::new(format!(
+                "the cloth part's {link} hangs from {:?}, not from {parent}",
+                up.map(|up| up.name.as_str())
+            )));
+        }
+    }
+    let groups = group_by_material(tail, &source::parse(character_flver)?, character.id)?;
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    for (index, mesh) in flver.meshes.iter().enumerate() {
+        let buffers = parse_u32_list(donor, mesh.vertex_buffer_offset, mesh.vertex_buffer_count)?;
+        let [buffer] = buffers.as_slice() else {
+            continue;
+        };
+        let Some(buffer) = flver.vertex_buffers.get(*buffer as usize) else {
+            continue;
+        };
+        let lists = parse_u32_list(donor, mesh.face_set_offset, mesh.face_set_count)?
+            .iter()
+            .all(|&face_set| {
+                flver
+                    .face_sets
+                    .get(face_set as usize)
+                    .is_some_and(|face_set| {
+                        !face_set.triangle_strip && flver.index_size(face_set) == TAIL_INDEX_SIZE
+                    })
+            });
+        if buffer.vertex_size == C_AMSN_VERTEX_SIZE && lists {
+            candidates.push((buffer.vertex_count, index));
+        }
+    }
+    candidates.sort_by(|a, b| b.cmp(a));
+    let mut taken: Vec<usize> = Vec::new();
+    for (_, index) in candidates {
+        let material = flver.meshes[index].material_index;
+        if taken
+            .iter()
+            .all(|&other| flver.meshes[other].material_index != material)
+        {
+            taken.push(index);
+        }
+    }
+    if groups.len() > taken.len() {
+        return Err(Error::new(format!(
+            "{}'s tail has {} material groups, and the cloth part has {} meshes to put them on",
+            character.id,
+            groups.len(),
+            taken.len()
+        )));
+    }
+    let skinned = skin_to_donor(&tail.mesh, &flver)?;
+    let texture_dir = format!(r"N:\GR\data\Model\parts\FullBody\{part_stem}\tex");
+    let mut out = TailSlots {
+        slots: Vec::with_capacity(groups.len()),
+        append: HeaderAppend::for_donor(donor)?,
+        sets: Vec::new(),
+        reports: Vec::with_capacity(groups.len()),
+    };
+    for (group, donor_mesh) in groups.into_iter().zip(taken) {
+        let blend = blend_of(group.source.class, cutouts, group.source.material)?;
+        let set = sets.set_of(group.source.material).ok_or_else(|| {
+            Error::new(format!(
+                "DSR material {} samples none of {}'s texture sets",
+                group.source.material, character.id
+            ))
+        })?;
+        let material = flver.meshes[donor_mesh].material_index;
+        let name = Retarget {
+            material,
+            set,
+            blend,
+        }
+        .name(&format!("{}_tail", character.id));
+        retarget_any(
+            &mut out.append,
+            templates,
+            blend,
+            material as usize,
+            &name,
+            &named_textures(
+                &texture_dir,
+                &textures::part_set_prefix(prefix, set),
+                prefix,
+            ),
+        )
+        .context(format!("the tail's material {name}"))?;
+        if !out.sets.contains(&set) {
+            out.sets.push(set);
+        }
+        let buffer = slot_buffer(donor, &flver, donor_mesh)?;
+        let mut remap = vec![u32::MAX; skinned.len()];
+        for (new, &old) in group.vertices.iter().enumerate() {
+            remap[old] = u32::try_from(new)?;
+        }
+        let vertices: Vec<_> = group.vertices.iter().map(|&old| skinned[old]).collect();
+        let triangles: Vec<[u32; 3]> = group
+            .triangles
+            .iter()
+            .map(|triangle| triangle.map(|corner| remap[corner as usize]))
+            .collect();
+        let slot = Slot {
+            donor_mesh,
+            material,
+            cull_backfaces: group.source.cull_backfaces,
+            vertex_count: vertices.len(),
+            vertex_bytes: encode_vertices(
+                &buffer_members(donor, &flver, &buffer)?,
+                buffer.vertex_size,
+                &vertices,
+                flver.header.uv_factor(),
+            )?,
+            layout: None,
+            lods: [triangles.clone(), triangles.clone(), triangles],
+            obb: Obb::around(vertices.iter().map(|vertex| vertex.position))
+                .ok_or("a tail group has no vertices")?,
+        };
+        let mut report = slot_report(
+            &slot,
+            Some(SlotSource {
+                material: group.source.material,
+                mtd: group.source.mtd,
+                class: group.source.class,
+                meshes: group.source.meshes,
+                texture_set: set,
+            }),
+        );
+        let mtd = blend.mtd().rsplit('\\').next().unwrap_or("");
+        report.material_name = Some(format!("material {material} on {mtd}"));
+        out.reports.push(report);
+        out.slots.push(slot);
+    }
+    Ok(out)
+}
+
 fn slot_report(slot: &Slot, source: Option<SlotSource>) -> SlotReport {
     SlotReport {
         donor_mesh: slot.donor_mesh,
         material: slot.material,
+        material_name: None,
         cull_backfaces: slot.cull_backfaces,
         source,
         vertices: slot.vertex_count,
@@ -1291,6 +1552,121 @@ fn cloth_test_body(
         ],
     );
     write_part(path, &packed, &renamed, oodle)
+}
+
+/// `character`'s fit against `donor` with its tail on [`tail::CHAIN`], cut into body and tail
+/// ([`tail::split`]). Refused for a character with no tail bones.
+pub fn tail_split(
+    character: &Character,
+    character_flver: &[u8],
+    donor: &[u8],
+) -> Result<(Export, Export)> {
+    let bones = source::parse(character_flver)?.bones;
+    let tail_bones = tail::tail_bones(&bones);
+    if tail_bones.is_empty() {
+        return Err(Error::new(format!(
+            "{} has no tail bones (none is named tail...)",
+            character.id
+        )));
+    }
+    let full = fit::export_with_targets(
+        character,
+        character_flver,
+        donor,
+        &tail::chain_targets(&tail_bones),
+    )?;
+    tail::split(&full)
+}
+
+/// The naked body slot `bd_<gender>_0000<lod>` written to `path` as [`tail::CLOTH_PART_ID`]'s
+/// part with `tail` built into its model ([`tail_slots`]) and a TPF of the sets it draws
+/// ([`textures::part_tpf`]), every entry renamed onto the slot as `--cloth-test-body` renames
+/// them, so the part's cloth files come along unchanged. Returns the tail's slots too.
+#[allow(clippy::too_many_arguments)]
+fn tail_part(
+    archives: &ArchiveSet,
+    oodle: &Oodle,
+    character: &Character,
+    cutouts: Cutouts,
+    templates: &Templates,
+    dsr: &CharacterFiles,
+    tail: &Export,
+    gender: &str,
+    lod: &str,
+    path: &Path,
+) -> Result<(PathBuf, Vec<SlotReport>)> {
+    let id = tail::CLOTH_PART_ID;
+    let oodle = Some(oodle);
+    let logical = format!("/parts/bd_{gender}_{id}{lod}{PART_EXTENSION}");
+    let packed = archives.read(&logical)?;
+    let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
+    let (gender, lod_upper) = (gender.to_uppercase(), lod.to_uppercase());
+    let source_stem = format!("BD_{gender}_{id}");
+    let target_stem = format!("BD_{gender}_0000");
+    let flver_name = format!("{source_stem}{lod_upper}.flver");
+    let tpf_name = format!("{source_stem}{lod_upper}.tpf");
+    let donor = binder_file(&mut binder, &flver_name, &logical)?
+        .data
+        .clone();
+    let part = tail_model(
+        &donor, tail, dsr, character, cutouts, templates, &gender, lod,
+    )
+    .context(format!("rebuilding {flver_name}"))?;
+    binder_file(&mut binder, &flver_name, &logical)?.data = part.flver;
+    binder_file(&mut binder, &tpf_name, &logical)?.data = part.tpf;
+    let renamed = renamed(
+        &binder,
+        &[
+            (
+                &format!("{source_stem}{lod_upper}"),
+                &format!("{target_stem}{lod_upper}"),
+            ),
+            (&source_stem, &target_stem),
+        ],
+    );
+    Ok((write_part(path, &packed, &renamed, oodle)?, part.reports))
+}
+
+/// The tail part's model and TPF, as [`tail_part`] puts them into the binder.
+pub struct TailModel {
+    pub flver: Vec<u8>,
+    pub tpf: Vec<u8>,
+    pub reports: Vec<SlotReport>,
+}
+
+/// `tail` built into `donor`, the cloth part's model for `gender` (`M` or `F`) at `lod`: the
+/// rebuilt FLVER, every one of the part's own meshes hidden, and the TPF of the sets the tail
+/// draws, named for the slot `BD_<gender>_0000` it goes into. Needs no archive.
+#[allow(clippy::too_many_arguments)]
+pub fn tail_model(
+    donor: &[u8],
+    tail: &Export,
+    dsr: &CharacterFiles,
+    character: &Character,
+    cutouts: Cutouts,
+    templates: &Templates,
+    gender: &str,
+    lod: &str,
+) -> Result<TailModel> {
+    let target_stem = format!("BD_{}_0000", gender.to_uppercase());
+    let prefix = format!("{target_stem}_tail");
+    let part = tail_slots(
+        donor,
+        tail,
+        &dsr.flver,
+        character,
+        &dsr.textures,
+        cutouts,
+        templates,
+        &prefix,
+        &target_stem,
+    )?;
+    Ok(TailModel {
+        flver: rebuild(donor, &part.slots, true, &part.append)?,
+        tpf: textures::part_tpf(&dsr.texture_tpfs(), &dsr.textures, &part.sets, &prefix, lod)
+            .context(format!("{}'s tail textures", character.id))?,
+        reports: part.reports,
+    })
 }
 
 /// Whether `dir` already holds what `mushroom_man.dll` needs beside it to switch on.
@@ -1565,6 +1941,7 @@ mod tests {
         let slot = |donor_mesh, material, cull_backfaces, meshes: Vec<usize>, class| SlotReport {
             donor_mesh,
             material,
+            material_name: None,
             cull_backfaces,
             source: Some(SlotSource {
                 material: meshes[0],
@@ -1595,6 +1972,7 @@ mod tests {
             source_triangles: 14,
             head_parts: 0,
             head_parts_without_model: 0,
+            tail: Vec::new(),
         };
         assert_eq!(
             report.body_summary(),

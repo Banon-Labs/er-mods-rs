@@ -263,6 +263,9 @@ enum WeightTo {
     Bone(String),
     /// Shared among Elden Ring's pelvis and spine by fitted height.
     Trunk,
+    /// Shared among these bones in these proportions, which add up to one: a tail bone between
+    /// the pelvis and a cloth chain ([`export_with_targets`]).
+    Shares(Vec<(String, f32)>),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -338,6 +341,7 @@ impl Placement for BipedFit {
         let targets = match &fit.weight {
             WeightTo::Bone(name) => vec![(name.clone(), 1.0)],
             WeightTo::Trunk => trunk_split(&self.trunk, rest.y),
+            WeightTo::Shares(shares) => shares.clone(),
         };
         Ok(Carried {
             at,
@@ -863,6 +867,21 @@ pub fn kept_meshes(source: &Source, params: BipedParams) -> Result<(Vec<KeptMesh
 /// A Biped character's FLVER fitted to the donor's bind skeleton, its held items cut and its
 /// meshes run together in file order, each keeping only what its LOD0 draws.
 pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams) -> Result<Export> {
+    export_with_targets(id, flver, donor, params, &[])
+}
+
+/// [`export`], with the weight of each source bone `retargets` names shared out among its Elden
+/// Ring bones instead, in the proportions given: it is carried as the fit carries it, and weighs on
+/// bones the donor need not have. `crate::tail` shares a tail chain between the pelvis and a
+/// vanilla part's cloth bones this way. A named bone the fit has nowhere to put carries no weight
+/// (the fit would refuse a vertex on it), so it is left.
+pub fn export_with_targets(
+    id: &'static str,
+    flver: &[u8],
+    donor: &[u8],
+    params: BipedParams,
+    retargets: &[(String, Vec<(String, f32)>)],
+) -> Result<Export> {
     let source = source::parse(flver)?;
     if !skeleton::is_biped(&source.bones) {
         return Err(Error::new(format!(
@@ -871,7 +890,23 @@ pub fn export(id: &'static str, flver: &[u8], donor: &[u8], params: BipedParams)
     }
     let roles = skeleton::classify(&source.bones)?;
     let er_bones = Flver::parse(donor)?.bones;
-    let built = build(&source.bones, &roles, &er_bones, params)?;
+    let mut built = build(&source.bones, &roles, &er_bones, params)?;
+    for (bone, shares) in retargets {
+        let index = source
+            .bones
+            .iter()
+            .position(|candidate| candidate.name == *bone)
+            .ok_or_else(|| Error::new(format!("{id} has no bone {bone} to share out")))?;
+        let total: f32 = shares.iter().map(|(_, share)| share).sum();
+        if (total - 1.0).abs() > WEIGHT_FLOOR {
+            return Err(Error::new(format!(
+                "{id}'s bone {bone} is shared out {total} times over, not once"
+            )));
+        }
+        if let Some(fit) = built.fit.bones[index].as_mut() {
+            fit.weight = WeightTo::Shares(shares.clone());
+        }
+    }
     let (kept, strip) = source::strip_props(&source, &strip_roles(roles, params.held_items));
 
     let mut vertices = Vec::new();

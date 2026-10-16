@@ -18,6 +18,7 @@ pub mod oodle;
 pub mod package;
 pub mod profile;
 pub mod search;
+pub mod tail;
 pub mod textures;
 
 /// The installer's Steam discovery, shared by path; see [`locate`].

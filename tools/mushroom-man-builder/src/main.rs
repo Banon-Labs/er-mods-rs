@@ -91,6 +91,8 @@ struct Options {
     cutouts: Cutouts,
     /// Developer flag `--cloth-test-body <id>` ([`package::Inputs::cloth_test_body`]).
     cloth_test_body: Option<String>,
+    /// Developer flag `--tail-cloth` ([`package::Inputs::tail_cloth`]).
+    tail_cloth: bool,
 }
 
 fn main() -> ExitCode {
@@ -159,6 +161,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         writer: None,
         cutouts: Cutouts::EdgeMaterial,
         cloth_test_body: None,
+        tail_cloth: false,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -187,6 +190,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 }
                 options.cloth_test_body = Some(id);
             }
+            "--tail-cloth" => options.tail_cloth = true,
             "--writer" => {
                 options.writer = Some(match value()?.to_str() {
                     Some("patch") => Writer::Patch,
@@ -204,6 +208,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
         return Err(
             "--writer is a developer flag: it needs --source-obj and --source-weights".into(),
         );
+    }
+    if options.tail_cloth && options.cloth_test_body.is_some() {
+        return Err("--tail-cloth and --cloth-test-body both write the naked body slot".into());
     }
     if options.all && !options.list_characters {
         return Err("--all goes with --list-characters".into());
@@ -444,6 +451,7 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
             writer: options.writer.unwrap_or(character.writer),
             cutouts: options.cutouts,
             cloth_test_body: options.cloth_test_body.clone(),
+            tail_cloth: options.tail_cloth,
         },
         &out,
     )?;

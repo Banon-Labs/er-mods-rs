@@ -421,6 +421,63 @@ pub fn body_tpf(
     write_tpf(&built)
 }
 
+/// The prefix set `set`'s textures take in a part TPF ([`part_tpf`]): always numbered, since no
+/// matbin names a part's textures for it.
+pub fn part_set_prefix(prefix: &str, set: usize) -> String {
+    format!("{prefix}_{set}")
+}
+
+/// A TPF for a part whose every material is a retargeted `C[AMSN]` one: each set of `used` as an
+/// albedo and a normal map under its [`part_set_prefix`], a flat normal standing in for one it
+/// lacks, and the zero metallic map as `<prefix>_m`, every texture in name order. The tail part
+/// carries its own copies of the sets it draws, so nothing it samples lives in another binder.
+pub fn part_tpf(
+    tpfs: &[(&str, &[u8])],
+    sets: &TextureSets,
+    used: &[usize],
+    prefix: &str,
+    lod_suffix: &str,
+) -> Result<Vec<u8>> {
+    if used.is_empty() {
+        return Err("a part TPF with no texture set in it".into());
+    }
+    let sources = read_sources(tpfs)?;
+    let mut built = Tpf {
+        platform: TPF_PLATFORM_PC,
+        flag2: FLAG2,
+        encoding: TPF_ENCODING_UTF16,
+        textures: Vec::new(),
+    };
+    insert_in_name_order(
+        &mut built,
+        tpf_texture(
+            format!("{prefix}{METALLIC_SLOT}{lod_suffix}"),
+            zero_metallic(),
+        )?,
+    )?;
+    for &set in used {
+        let texture_set = sets.sets.get(set).ok_or_else(|| {
+            Error::new(format!(
+                "texture set {set}: the character has {}",
+                sets.sets.len()
+            ))
+        })?;
+        let set_prefix = part_set_prefix(prefix, set);
+        let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
+        let normal = match &texture_set.normal {
+            Some(texture) => lookup_in(&sources, texture)?,
+            None => flat_normal(),
+        };
+        for (slot_suffix, dds) in [(ALBEDO_SLOT, albedo), (NORMAL_SLOT, normal)] {
+            insert_in_name_order(
+                &mut built,
+                tpf_texture(format!("{set_prefix}{slot_suffix}{lod_suffix}"), dds)?,
+            )?;
+        }
+    }
+    write_tpf(&built)
+}
+
 /// Each `(owner, TPF)` of `tpfs` parsed, under the owner's lower-case id.
 fn read_sources(tpfs: &[(&str, &[u8])]) -> Result<Vec<(String, Tpf)>> {
     tpfs.iter()
