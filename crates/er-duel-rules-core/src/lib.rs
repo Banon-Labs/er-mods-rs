@@ -21,6 +21,7 @@
 //! `scripts/er-duel-rules-gen.py` with every row's name beside it.
 
 pub mod facts;
+pub mod feed;
 pub mod player;
 pub mod referee;
 pub mod rules;

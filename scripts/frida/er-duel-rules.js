@@ -1,14 +1,17 @@
 // er-duel-rules.js -- the competitive duel ruleset referee as a single Frida agent.
 //
 // Prints "Attention: Rule break: <player>. <rule>" whenever anyone in the session -- you or any
-// other player -- breaks the duel ruleset, with what broke it on the next line. The same checks as
-// er_duel_rules.dll (crates/er-duel-rules-core), for anyone who would rather not install a DLL.
+// other player -- breaks the duel ruleset, with what broke it on the next line, and appends each
+// break to er-duel-rules-breaks.txt beside eldenring.exe. The same checks as er_duel_rules.dll
+// (crates/er-duel-rules-core), for anyone who would rather not install a DLL; the DLL is the one
+// that also lists the breaks on screen.
 //
 // RUN IT (Windows, game started with EAC off, e.g. through Better Multiplayer or Seamless):
 //   pip install frida-tools
 //   frida -n eldenring.exe -l er-duel-rules.js
 // Leave that window open while you play. Every line it prints is also appended to
-// er-duel-rules-frida.log beside eldenring.exe, which is the file to send back.
+// er-duel-rules-frida.log beside eldenring.exe, which is the file to send back;
+// er-duel-rules-breaks.txt holds the rule breaks alone, one dated line each.
 //
 // WHAT IT TOUCHES: it reads memory and nothing else, except two Frida hooks whose first bytes are
 // checked before they are placed: the game's per-frame tick (the checks run there, on the game's
@@ -21,8 +24,9 @@
 //
 // WHAT IT CANNOT SEE: macros or third-party tools other than an FPS unlocker, hidden ping (BMP
 // keeps it where this script cannot find it yet), smurfing or faked results, transmog consent,
-// block desync, effect-duration tricks, bugged weapon states, void tech and pre-buffs. Rune Arc
-// needs no check: in vanilla the game only lets the host's Great Rune work.
+// block desync, effect-duration tricks, bugged weapon states, void tech and pre-buffs. Rune Arc is
+// checked only in Better Multiplayer, where every player must have one active; in vanilla the game
+// only lets the host's Great Rune work.
 //
 // Generated data lives between the GENERATED markers below and is rewritten by
 // scripts/er-duel-rules-gen.py --write; everything else is written by hand.
@@ -588,11 +592,25 @@ function headline(a) {
     return `Attention: Rule break: ${a.player}${a.isLocal ? ' (you)' : ''}. ${RULE_TEXT[a.rule]}`;
 }
 
+/// Every rule break, one line each, kept across runs; the same file and line as the DLL's
+/// (`er_duel_rules_core::feed::Entry::file_line`).
+const BREAKS_FILE_NAME = 'er-duel-rules-breaks.txt';
+
+/// `YYYY-MM-DD HH:MM:SS  <player>  <rule>  --  <detail>`. `when` is the local wall-clock time as
+/// `{ year, month, day, hour, minute, second }`, month counted from 1.
+function breakLine(when, a) {
+    const two = (n) => String(n).padStart(2, '0');
+    const stamp = `${when.year}-${two(when.month)}-${two(when.day)} ` +
+        `${two(when.hour)}:${two(when.minute)}:${two(when.second)}`;
+    const line = `${stamp}  ${a.player}${a.isLocal ? ' (you)' : ''}  ${RULE_TEXT[a.rule]}`;
+    return a.detail ? `${line}  --  ${a.detail}` : line;
+}
+
 // ============================================================================================
 // Reading the game. Everything below runs inside Frida only.
 // ============================================================================================
 if (typeof Process === 'undefined') {
-    module.exports = { T, check, equipLoad, correctGraphAt, Referee, headline, skillClip, animStarts, weaponBase, weaponAffinity, RULE_TEXT };
+    module.exports = { T, check, equipLoad, correctGraphAt, Referee, headline, breakLine, skillClip, animStarts, weaponBase, weaponAffinity, RULE_TEXT };
 } else {
     main();
 }
@@ -882,6 +900,27 @@ function main() {
         return true;
     }
 
+    // The time comes from Windows rather than `Date`: Frida's runtime ignores daylight saving on
+    // Windows, so `Date#getHours` ran an hour behind the clock (measured 2026-10-16, 08:27 against
+    // 09:27 PDT). `GetLocalTime` is also what the DLL stamps with.
+    const getLocalTime = new NativeFunction(Process.getModuleByName('kernel32.dll').getExportByName('GetLocalTime'), 'void', ['pointer']);
+    const localStamp = () => {
+        const st = Memory.alloc(16);  // SYSTEMTIME: eight u16 fields.
+        getLocalTime(st);
+        const field = (index) => st.add(index * 2).readU16();
+        return { year: field(0), month: field(1), day: field(3), hour: field(4), minute: field(5), second: field(6) };
+    };
+    const breaksPath = game.path.replace(/[^\\/]*$/, '') + BREAKS_FILE_NAME;
+    const recordBreak = (line) => {
+        try {
+            const file = new File(breaksPath, 'a');
+            file.write(line + '\n');
+            file.close();
+        } catch (e) {
+            say(`er-duel-rules: cannot append to ${breaksPath}: ${e.message}`);
+        }
+    };
+
     const referee = new Referee();
     const loggedBuilds = new Map();
     const started = Date.now();
@@ -906,6 +945,7 @@ function main() {
         for (const a of referee.observe(Date.now() - started, players, facts)) {
             alerts += 1;
             say(`${headline(a)}\n    -> ${a.detail}`);
+            recordBreak(breakLine(localStamp(), a));
         }
         for (const p of players) {
             const n = referee.flasksUsed(p.key);

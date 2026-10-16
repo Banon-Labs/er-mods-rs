@@ -340,4 +340,12 @@ test('the headline reads the way the popup does', () => {
     assert.strictEqual(A.headline({ player: 'Vagabond', isLocal: true, rule: 'RuneLevel' }), 'Attention: Rule break: Vagabond (you). Rune Level: 125');
 });
 
+test('a break is filed as the DLL files it (feed::Entry::file_line)', () => {
+    const when = { year: 2026, month: 10, day: 16, hour: 16, minute: 12, second: 5 };
+    assert.strictEqual(A.breakLine(when, { player: 'Lil Chud', isLocal: true, rule: 'SpiritAshes', detail: 'Noble Sorcerer Ashes' }),
+        '2026-10-16 16:12:05  Lil Chud (you)  Spirit Ashes  --  Noble Sorcerer Ashes');
+    assert.strictEqual(A.breakLine(when, { player: 'Opponent', isLocal: false, rule: 'SpiritAshes', detail: '' }),
+        '2026-10-16 16:12:05  Opponent  Spirit Ashes');
+});
+
 console.log(`test-er-duel-rules-frida: ${passed} passed`);
