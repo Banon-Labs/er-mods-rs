@@ -18,6 +18,7 @@
 //! first time they are judged (level, weapons, armour, talismans, tears), every skill clip a
 //! player starts, every blue flask counted, and a status line every ten seconds.
 
+mod breaks;
 mod log;
 
 #[cfg(windows)]

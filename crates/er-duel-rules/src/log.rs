@@ -11,8 +11,6 @@ use std::{
 };
 
 const LOG_FILE_NAME: &str = "er-duel-rules.log";
-/// Every rule break, one line each, kept across runs: the overlay lists only the newest.
-const BREAKS_FILE_NAME: &str = "er-duel-rules-breaks.txt";
 static START_MS: OnceLock<u128> = OnceLock::new();
 
 fn now_ms() -> u128 {
@@ -37,27 +35,6 @@ fn log_path() -> PathBuf {
 pub(crate) fn reset_log_file() {
     let _ = START_MS.set(now_ms());
     er_game_base::log::begin_fresh_run(&log_path());
-}
-
-/// Append one line to the rule-break file beside the game. It is never rotated, so every session's
-/// breaks stay in it, each line carrying its own date.
-pub(crate) fn record_break(line: &str) {
-    let path = er_game_base::log::game_directory_path()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(BREAKS_FILE_NAME);
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        Ok(mut file) => {
-            let _ = writeln!(file, "{line}");
-        }
-        Err(error) => rules_log(format_args!(
-            "breaks: cannot append to {}: {error}",
-            path.display()
-        )),
-    }
 }
 
 pub(crate) fn rules_log(args: std::fmt::Arguments<'_>) {

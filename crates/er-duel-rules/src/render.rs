@@ -1,6 +1,6 @@
 //! The rule-break list: the newest breaks in the top-right corner, one line each with the time,
 //! drawn through whatever imgui already exists in the process. Every break also goes to
-//! `er-duel-rules-breaks.txt` (`crate::log::record_break`), so what scrolls off is kept.
+//! `er-duel-rules-breaks.txt` (`crate::breaks::record_break`), so what scrolls off is kept.
 //!
 //! This DLL never installs a second `Present` hook. If another module hosts the overlay it
 //! registers as a guest and draws through it; if nobody does, it hosts and dispatches guests
@@ -22,7 +22,8 @@ use hudhook::hooks::dx12::ImguiDx12Hooks;
 use hudhook::imgui::{Condition, Context, Ui};
 use hudhook::{ImguiRenderLoop, RenderContext};
 
-use crate::log::{record_break, rules_log};
+use crate::breaks::record_break;
+use crate::log::rules_log;
 
 /// The list is authored for a 1080-line display and scaled from there.
 const REFERENCE_HEIGHT: f32 = 1080.0;

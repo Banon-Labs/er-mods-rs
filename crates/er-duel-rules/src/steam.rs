@@ -4,7 +4,7 @@
 
 #![cfg(windows)]
 
-use std::ffi::{CStr, c_char, c_void};
+use std::ffi::{c_char, c_void};
 
 use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
 use windows::core::{s, w};
@@ -34,13 +34,17 @@ pub(crate) fn persona_name() -> Option<String> {
     if interface.is_null() {
         return None;
     }
-    // SAFETY: a live ISteamFriends; the name it returns stays valid until the persona changes,
-    // and it is copied out at once.
+    // SAFETY: a live ISteamFriends.
     let name = unsafe { persona(interface) };
-    if name.is_null() {
-        return None;
-    }
-    // SAFETY: a NUL-terminated string from Steam.
-    let name = unsafe { CStr::from_ptr(name) }.to_str().ok()?.trim();
+    // The string is Steam's, not ours, so it is walked through `ReadProcessMemory` rather than
+    // trusted to be mapped and terminated. A Steam persona name is at most 128 bytes of UTF-8
+    // (k_cwchPersonaNameMax), so 256 leaves room and still bounds the walk.
+    // SAFETY: `safe_read_cstr` has no precondition on the address.
+    let bytes = unsafe { er_game_base::mem::safe_read_cstr(name as usize, PERSONA_NAME_MAX) }?;
+    let name = String::from_utf8(bytes).ok()?;
+    let name = name.trim();
     (!name.is_empty()).then(|| name.to_owned())
 }
+
+/// Upper bound on the persona name walk, past Steam's own 128-byte limit.
+const PERSONA_NAME_MAX: usize = 256;
