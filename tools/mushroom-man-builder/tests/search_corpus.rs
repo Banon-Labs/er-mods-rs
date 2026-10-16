@@ -53,22 +53,25 @@ const BODY_STEM: &str = "FC_M_0000";
 ///
 /// Legs shorter than the trunk are refused as too far from a human's proportions: c2270 Mushroom
 /// Parent, which the user left out after seeing it in game, and c3450 Stone Dragon. Folding
-/// materials that draw alike into one slot fits Nito.
+/// materials that draw alike into one slot fits c5220 Nito, but a trunk leaning more than 45
+/// degrees from upright is refused too: Nito, left out after the user saw him, and c2830 Phalanx.
+/// The same rule now turns away, before the fit, nine the fit used to: the four rats, c3110, c4520,
+/// c5210 and the two crows, leaning 64 to 98 degrees. The fit still turns down c2940 and c5390.
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 78),
+    ("maps", 67),
     ("no model", 8),
     ("not biped", 89),
     ("own fit", 1),
-    ("refused", 16),
+    ("refused", 27),
     ("textures", 1),
 ];
 const FITTED: [(&str, usize); 7] = [
-    ("fit", 11),
-    ("fits", 67),
+    ("fit", 2),
+    ("fits", 65),
     ("no model", 8),
     ("not biped", 89),
     ("own fit", 1),
-    ("refused", 16),
+    ("refused", 27),
     ("textures", 1),
 ];
 
@@ -125,6 +128,12 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
     assert_eq!(verdict(&hits, "c2280"), Verdict::OwnFit);
     // Quelaag's lettered limb sets (`W_LArm11`, `LLeg_d_1`) are not a Biped's.
     assert_eq!(verdict(&hits, "c5280"), Verdict::NotBiped);
+    for (id, why) in [("c5220", "leans 49 degrees"), ("c2830", "leans 63 degrees")] {
+        assert!(
+            matches!(verdict(&hits, id), Verdict::Refused(text) if text.contains(why)),
+            "{id}"
+        );
+    }
     for id in ["c2270", "c3450"] {
         assert!(
             matches!(verdict(&hits, id), Verdict::Refused(why) if why.contains("shorter than its trunk")),
@@ -235,20 +244,28 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
     }
     assert_eq!(tally(&hits), FITTED);
     assert!(matches!(verdict(&hits, "c2940"), Verdict::Fit(why) if why.contains("R Thigh01")));
-    assert!(matches!(verdict(&hits, "c3110"), Verdict::Fit(why) if why.contains("knots")));
-    assert!(matches!(verdict(&hits, "c5210"), Verdict::Fit(why) if why.contains("knots")));
+    for id in ["c3110", "c5210"] {
+        assert!(
+            matches!(verdict(&hits, id), Verdict::Refused(why) if why.contains("from upright")),
+            "{id}"
+        );
+    }
     // Priscilla's two alpha-blended materials draw dithered.
     assert!(matches!(
         verdict(&hits, "c2730"),
         Verdict::Maps { fitted: true, .. }
     ));
-    // FromSoft-named and Bloathead-named rigs, and Nito, whose 20 materials draw 8 ways.
-    for id in ["c4130", "c4150", "c4160", "c5220"] {
+    // FromSoft-named and Bloathead-named rigs.
+    for id in ["c4130", "c4150", "c4160"] {
         assert!(
             matches!(verdict(&hits, id), Verdict::Maps { fitted: true, .. }),
             "{id}"
         );
     }
+    // Nito is left out for his hunch, but still builds when asked for: his 20 materials draw 7
+    // ways, folded into 7 slots.
+    let nito = build_offline(&dsr, &donor, &templates, "c5220").unwrap();
+    assert!(nito.starts_with("c5220: 7 slots"), "{nito}");
 
     let offered: Vec<&str> = hits
         .iter()

@@ -65,7 +65,20 @@ impl Posture {
     pub fn short_legs(&self) -> Option<(f32, f32)> {
         self.legs_and_trunk.filter(|(legs, trunk)| legs < trunk)
     }
+
+    /// A trunk leaning further from upright than toward it, in degrees. c5220 Nito leans 49
+    /// degrees in his own pose, under a pile of corpses that hangs 0.5 m and more in front of him
+    /// once fitted, and the player's idle held 3470 of his 3857 arm vertices inside it; set
+    /// upright, the pile would still stand 0.54 m out at the chest, against 0.29 m at most for any
+    /// character checked in game, every one of which leans 11 degrees or less. The user left him
+    /// out (2026-10-15).
+    pub fn hunched(&self) -> Option<f32> {
+        self.torso_lean.filter(|&lean| lean > MAX_TORSO_LEAN)
+    }
 }
+
+/// Degrees a trunk may lean from upright in its own pose: halfway to lying down.
+const MAX_TORSO_LEAN: f32 = 45.0;
 
 #[derive(Debug)]
 pub struct MapReport {
@@ -173,10 +186,16 @@ fn posture(bones: &[crate::flver::Bone], roles: &[Role]) -> Posture {
     let Ok(positions) = bind_positions(bones) else {
         return Posture::default();
     };
+    // A bone with no parent keeps an offset, not a place, so only the pelvis, a Biped's root, may
+    // be one: c2220's and c2320's `Neck` hang from nothing, and read as leaning 166 and 163 degrees.
     let at = |target: &str| -> Option<Vec3> {
         roles
             .iter()
-            .position(|role| matches!(role, Role::Direct(name) if name == target))
+            .enumerate()
+            .position(|(index, role)| {
+                matches!(role, Role::Direct(name) if name == target)
+                    && (bones[index].parent_index >= 0 || target == "Pelvis")
+            })
             .map(|index| positions[index])
     };
     let pelvis = at("Pelvis");

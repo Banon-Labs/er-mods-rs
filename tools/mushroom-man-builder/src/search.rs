@@ -226,6 +226,12 @@ pub fn verdict_of(report: &MapReport) -> Verdict {
              a human's proportions for the player's animations"
         ));
     }
+    if let Some(lean) = report.posture.hunched() {
+        return Verdict::Refused(format!(
+            "its trunk leans {lean:.0} degrees from upright in its own pose, closer to lying down \
+             than to standing, and the player's upright skeleton cannot carry it"
+        ));
+    }
     Verdict::Maps {
         vertices: report.strip.kept_vertices,
         triangles: report.strip.kept_triangles,
