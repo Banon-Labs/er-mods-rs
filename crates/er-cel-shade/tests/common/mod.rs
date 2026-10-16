@@ -7,8 +7,8 @@
 //! stand in for a compile.
 
 // `mod common;` is compiled into each test binary on its own, and not every binary calls every
-// helper.
-#![allow(dead_code)]
+// helper. The ones some binary leaves unused carry a per-item `#[allow(dead_code)]` rather than a
+// file-level one, so a genuinely orphaned helper still shows up.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -121,6 +121,7 @@ pub fn verified(kind: PortKind, blob: &[u8]) -> Result<(), String> {
 }
 
 /// [`verified`], or a panic with the report.
+#[allow(dead_code)] // `reference.rs` calls `verified` itself.
 pub fn assert_verified(kind: PortKind, blob: &[u8], what: &str) {
     if let Err(report) = verified(kind, blob) {
         panic!("{what} at {kind:?} was refused:\n{report}");
@@ -204,6 +205,7 @@ pub fn try_carrier_listing(dxc: &Path, layers: &[PreparedLayer]) -> Result<Strin
 }
 
 /// [`try_carrier_listing`], or a panic naming `what` with dxc's output.
+#[allow(dead_code)] // `reference.rs` calls `try_carrier_listing` itself.
 pub fn carrier_listing(dxc: &Path, layers: &[PreparedLayer], what: &str) -> String {
     try_carrier_listing(dxc, layers)
         .unwrap_or_else(|output| panic!("{what}'s carrier did not compile:\n{output}"))

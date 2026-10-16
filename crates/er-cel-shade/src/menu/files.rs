@@ -315,6 +315,9 @@ mod process {
     /// `wine_get_unix_file_name(LPCWSTR) -> char*`, a Wine export with no Windows twin.
     type WineGetUnixFileName = unsafe extern "C" fn(*const u16) -> *mut u8;
 
+    /// Linux's `PATH_MAX`, terminator included: the longest host path read back from Wine.
+    const UNIX_PATH_BYTES: usize = 4096;
+
     /// `path` as the host names it, under Wine; `None` on Windows or when Wine cannot say.
     fn unix_path(path: &Path) -> Option<String> {
         // SAFETY: looking up an export of a module every process has loaded.
@@ -334,17 +337,15 @@ mod process {
         if raw.is_null() {
             return None;
         }
-        // SAFETY: Wine returns a NUL-terminated string it allocated on the process heap.
-        let bytes = unsafe { std::ffi::CStr::from_ptr(raw.cast()) }
-            .to_bytes()
-            .to_vec();
+        // SAFETY: a fault-safe read of the string Wine allocated on the process heap.
+        let bytes = unsafe { er_game_base::mem::safe_read_cstr(raw as usize, UNIX_PATH_BYTES) };
         // SAFETY: the buffer is Wine's process-heap allocation and is freed once, here.
         unsafe {
             if let Ok(heap) = GetProcessHeap() {
                 let _ = HeapFree(heap, HEAP_FLAGS(0), Some(raw.cast_const().cast()));
             }
         }
-        Some(er_shader_compiler::escape_utf8(&bytes))
+        Some(er_shader_compiler::escape_utf8(&bytes?))
     }
 }
 

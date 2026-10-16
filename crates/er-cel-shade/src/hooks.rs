@@ -1449,11 +1449,12 @@ unsafe extern "system" fn load_stream_hook(
 /// silent log from a build that never registered would otherwise read as a clean run.
 #[cfg(feature = "d3d12-debug")]
 mod debug_layer {
-    use core::ffi::{CStr, c_void};
+    use core::ffi::c_void;
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::Once;
     use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+    use er_game_base::mem::safe_read_cstr;
     use windows::Win32::Foundation::E_POINTER;
     use windows::Win32::Graphics::Direct3D12::{
         D3D12_DRED_ENABLEMENT_FORCED_ON, D3D12_MESSAGE_CALLBACK_FLAG_NONE, D3D12_MESSAGE_CATEGORY,
@@ -1481,6 +1482,10 @@ mod debug_layer {
     const WATCHED: GUID = GUID::from_u128(0x5f0c3a71_b2d4_4e86_9c1b_d7a0e4f26b38);
 
     static ENABLE: Once = Once::new();
+
+    /// The longest message text read, terminator included. A debug-layer message is a sentence or a
+    /// paragraph; a pointer with no terminator this far in is not one, and is logged as unreadable.
+    const MESSAGE_BYTES: usize = 16 * 1024;
 
     /// Severity names, indexed by `D3D12_MESSAGE_SEVERITY`, with a last slot for a value outside it.
     const SEVERITIES: [&str; 6] = [
@@ -1733,12 +1738,15 @@ mod debug_layer {
             .and_then(|at| CATEGORIES.get(at))
             .copied()
             .unwrap_or("unknown");
-        let text: &[u8] = if description.is_null() {
-            b""
+        let read = if description.is_null() {
+            Some(Vec::new())
         } else {
-            // SAFETY: the debug layer passes a null-terminated string, live for this call.
-            unsafe { CStr::from_ptr(description.0.cast()) }.to_bytes()
+            // SAFETY: a fault-safe read; the debug layer's string is live for this call.
+            unsafe { safe_read_cstr(description.0 as usize, MESSAGE_BYTES) }
         };
+        let text: &[u8] = read
+            .as_deref()
+            .unwrap_or(b"(text unreadable, or no terminator within MESSAGE_BYTES)");
         log(format_args!(
             "d3d12-debug: severity={} id={} category={category} repeat={repeat} \
              severity_total={total}: {}",

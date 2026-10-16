@@ -148,6 +148,9 @@ pub fn install() {
         refuse("no game module");
         return;
     };
+    // Version-gated rather than translated: the check above returned on anything but 1.17.1, and
+    // the opening bytes are compared below before anything is hooked, so the 1.17.1 rva is the
+    // right one by construction and `game_rva`'s 1.16.2 ledger has nothing to add.
     let entry = base + PARAM_DB_UPDATE_1171_RVA;
     let mut bytes = [0u8; PARAM_DB_UPDATE_1171_PROLOGUE.len()];
     // SAFETY: a fault-tolerant read of code bytes.

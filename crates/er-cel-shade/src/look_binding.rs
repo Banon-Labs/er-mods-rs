@@ -262,8 +262,10 @@ impl Binding {
 
 /// Slots in [`RootSignatures`].
 pub const ROOT_SIGNATURE_SLOTS: usize = 256;
-const SLOT_BITS: u32 = ROOT_SIGNATURE_SLOTS.trailing_zeros();
-const _: () = assert!(ROOT_SIGNATURE_SLOTS.is_power_of_two());
+/// Written out rather than taken from `ROOT_SIGNATURE_SLOTS.trailing_zeros()` so
+/// `scripts/rva_symbols.py` can read it; the assert keeps the two equal.
+const SLOT_BITS: u32 = 8;
+const _: () = assert!(ROOT_SIGNATURE_SLOTS == 1 << SLOT_BITS);
 
 /// A root signature pointer is a heap allocation aligned to at least 16 bytes, so its low four
 /// bits carry nothing.
