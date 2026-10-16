@@ -7,10 +7,9 @@
 //! skin `Body` material, or, for a texture set past the character's first, a generic `C[AMSN]`
 //! material of that set's own; what distinguishes the families in DSR's own shading is not carried
 //! over. Alpha testing has its own route, a generic `C[AMSN]_e` material on a material entry of its
-//! own.
-//! Everything else
-//! -- alpha blending, the additive ghosts, hair, an unbracketed or blank name -- has no route yet
-//! and is refused rather than drawn wrong.
+//! own, and alpha blending another, the dithered `C[AMSN]_Dither`. Everything else -- the additive
+//! ghosts, hair, an unbracketed or blank name -- has no route yet and is refused rather than drawn
+//! wrong.
 
 /// How a DSR material blends, and so which Elden Ring material can draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,7 +26,8 @@ impl MtdClass {
         match self {
             Self::Opaque => Some("P[FC_M_0000]_Body, material 0, or C[AMSN] for a further set"),
             Self::AlphaTest => Some("C[AMSN]_e, on a material of its own"),
-            Self::AlphaBlend | Self::Unsupported => None,
+            Self::AlphaBlend => Some("C[AMSN]_Dither, on a material of its own"),
+            Self::Unsupported => None,
         }
     }
 }
@@ -92,6 +92,6 @@ mod tests {
         }
         assert_eq!(classify(""), MtdClass::Unsupported);
         assert!(MtdClass::Opaque.route().is_some() && MtdClass::AlphaTest.route().is_some());
-        assert!(MtdClass::AlphaBlend.route().is_none() && MtdClass::Unsupported.route().is_none());
+        assert!(MtdClass::AlphaBlend.route().is_some() && MtdClass::Unsupported.route().is_none());
     }
 }

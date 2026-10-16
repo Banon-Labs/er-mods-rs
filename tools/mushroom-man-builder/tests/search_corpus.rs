@@ -40,23 +40,25 @@ const BODY_STEM: &str = "FC_M_0000";
 
 /// The verdicts over the install, by how many models get each, without the donor and with it:
 /// measured 2026-10-15. The fit turns down c2940 (its thighs are roots) and c3110 (a lizard on a
-/// Biped rig, its pelvis 0.13 m up). The one texture refusal is c4091, whose albedo is in no
-/// binder. Before characters with several texture sets were built, 26 more stopped there.
+/// Biped rig, its pelvis 0.13 m up), and the alpha-blended characters that are four-legged on a
+/// Biped rig (the four rats, Sif and Young Sif) or have no left upper arm (Four Kings). The one
+/// texture refusal is c4091, whose albedo is in no binder. Before characters with several texture
+/// sets were built, 26 more stopped there; before alpha blending had a route, 13 more were refused.
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 58),
+    ("maps", 71),
     ("no model", 8),
     ("not biped", 100),
     ("own fit", 1),
-    ("refused", 25),
+    ("refused", 12),
     ("textures", 1),
 ];
 const FITTED: [(&str, usize); 7] = [
-    ("fit", 2),
-    ("fits", 56),
+    ("fit", 9),
+    ("fits", 62),
     ("no model", 8),
     ("not biped", 100),
     ("own fit", 1),
-    ("refused", 25),
+    ("refused", 12),
     ("textures", 1),
 ];
 
@@ -217,6 +219,12 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
     assert_eq!(tally(&hits), FITTED);
     assert!(matches!(verdict(&hits, "c2940"), Verdict::Fit(why) if why.contains("R Thigh01")));
     assert!(matches!(verdict(&hits, "c3110"), Verdict::Fit(why) if why.contains("knots")));
+    assert!(matches!(verdict(&hits, "c5210"), Verdict::Fit(why) if why.contains("knots")));
+    // Priscilla's two alpha-blended materials draw dithered.
+    assert!(matches!(
+        verdict(&hits, "c2730"),
+        Verdict::Maps { fitted: true, .. }
+    ));
 
     let offered: Vec<&str> = hits
         .iter()

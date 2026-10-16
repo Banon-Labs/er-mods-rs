@@ -46,7 +46,9 @@ use crate::{
     bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
     character::{C2280, Character, FitConfig, Writer},
     dcx,
-    edge::{EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, retarget_append},
+    edge::{
+        Blend, EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, retarget_append,
+    },
     error::{Context, Error, Result},
     fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
     flver::{
@@ -149,14 +151,16 @@ pub struct Inputs<'a> {
     /// How the body is written. The character table (`Character.writer`) is meant to choose it,
     /// with the builder's `--writer` developer flag overriding that choice for an authored mesh.
     pub writer: Writer,
-    /// What a Biped character's alpha-tested meshes are drawn with.
+    /// What a Biped character's alpha-tested and alpha-blended meshes are drawn with.
     pub cutouts: Cutouts,
 }
 
-/// What a Biped character's alpha-tested (`*_Edge`) meshes are drawn with.
+/// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
+/// with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Cutouts {
-    /// The Edge material ([`crate::edge`]), which cuts them out where the albedo's alpha is low.
+    /// The Edge material ([`crate::edge`]), which cuts them out where the albedo's alpha is low,
+    /// and the Dither one, which dithers where it is partial.
     #[default]
     EdgeMaterial,
     /// The Body material, solid where they should have holes: the build before the Edge material
@@ -861,9 +865,10 @@ impl BipedBody {
 /// back-face culling, in the order the groups first appear, each group on the next of
 /// [`SLOT_DONOR_MESHES`]. A group drawing set 0 draws with [`BODY_MATERIAL`], or with
 /// [`EDGE_MATERIAL`] when its MTD is alpha-tested and `cutouts` asks for the Edge material; a group
-/// drawing another set draws with the next free one of [`SET_MATERIALS`], one per set and per
-/// opaque or cutout. A group keeps its source's culling, its own box, and its LOD0 triangles at
-/// every distance. A kept mesh whose MTD has no Elden Ring route is refused.
+/// drawing another set, or dithered because its MTD is alpha-blended, draws with the next free one
+/// of [`SET_MATERIALS`], one per set and per [`Blend`]. A group keeps its source's culling, its own
+/// box, and its LOD0 triangles at every distance. A kept mesh whose MTD has no Elden Ring route is
+/// refused.
 pub fn biped_body(
     donor: &[u8],
     character: &Character,
@@ -910,9 +915,11 @@ pub fn biped_body(
                 layout_of.vertex_size
             )));
         }
-        let cutout = match (group.source.class, cutouts) {
-            (MtdClass::Opaque, _) | (MtdClass::AlphaTest, Cutouts::BodyMaterial) => false,
-            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => true,
+        let blend = match (group.source.class, cutouts) {
+            (MtdClass::Opaque, _)
+            | (MtdClass::AlphaTest | MtdClass::AlphaBlend, Cutouts::BodyMaterial) => Blend::Opaque,
+            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => Blend::Cutout,
+            (MtdClass::AlphaBlend, Cutouts::EdgeMaterial) => Blend::Dither,
             (class, _) => {
                 return Err(Error::new(format!(
                     "DSR material {} is {}, which has no Elden Ring route",
@@ -927,13 +934,13 @@ pub fn biped_body(
                 group.source.material, character.id
             ))
         })?;
-        let material = match (set, cutout) {
-            (0, false) => BODY_MATERIAL,
-            (0, true) => EDGE_MATERIAL,
+        let material = match (set, blend) {
+            (0, Blend::Opaque) => BODY_MATERIAL,
+            (0, Blend::Cutout) => EDGE_MATERIAL,
             _ => match body
                 .retargets
                 .iter()
-                .find(|taken| (taken.set, taken.cutout) == (set, cutout))
+                .find(|taken| (taken.set, taken.blend) == (set, blend))
             {
                 Some(taken) => taken.material,
                 None => free_set_materials.next().ok_or_else(|| {
@@ -954,7 +961,7 @@ pub fn biped_body(
             body.retargets.push(Retarget {
                 material,
                 set,
-                cutout,
+                blend,
             });
         }
         // Every C[AMSN] material is drawn in the 40-byte layout vanilla gives it.

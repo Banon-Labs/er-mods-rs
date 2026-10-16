@@ -24,7 +24,7 @@
 //!
 //! The Body material can draw only the set in the donor's own slots, so a character with more
 //! than one ([`crate::textures::TextureSets`]) draws every further set with a material of its
-//! own, one per set and per opaque or cutout: one of the donor's materials 1 to 13
+//! own, one per set and per [`Blend`]: one of the donor's materials 1 to 13
 //! ([`SET_MATERIALS`]), which, like material 14, are `#NN#` Body materials of 13 texture entries
 //! that only their own mesh draws with. A cutout one is retargeted after the Edge template; an
 //! opaque one after `BD_M_1711.flver`'s material 8, `MetalAndLeather`, a vanilla `C[AMSN]`
@@ -33,6 +33,15 @@
 //! from the FLVER, and its meshes are laid out in the same 40-byte layout. Set `k`'s material
 //! samples `FC_M_0000_<k>_a`, the shared zero metallic map and `FC_M_0000_<k>_n`
 //! ([`set_textures`]).
+//!
+//! # Alpha blending
+//!
+//! Dark Souls' alpha-blended meshes (`_Alp` MTDs: Priscilla's fur, Sif's mane) have no blended
+//! `C[AMSN]` to go to, but `C[AMSN]_Dither` is the same matbin again with the alpha reference at
+//! `[128, 128]` and the blend mode still 0: it stays in the opaque pipeline, which ray tracing
+//! draws, and dithers where the albedo's alpha is partial. No vanilla part or character uses it
+//! (3492 FLVERs scanned 2026-10-15), so a dithered material takes the opaque template's flags and
+//! GX list under the Dither MTD, and goes on a set material of its own even for set 0.
 
 use std::ops::RangeInclusive;
 
@@ -70,6 +79,29 @@ pub const OPAQUE_MTD: &str = r"N:\GR\data\Material\mtd\Chr_Base\matxml\C[AMSN].m
 pub const OPAQUE_TEMPLATE_PART: &str = "/parts/bd_m_1711.partsbnd.dcx";
 pub const OPAQUE_TEMPLATE_FLVER: &str = "BD_M_1711.flver";
 pub const OPAQUE_TEMPLATE_MATERIAL: usize = 8;
+pub const DITHER_MTD: &str = r"N:\GR\data\Material\mtd\Chr_Base\matxml\C[AMSN]_Dither.matxml";
+
+/// How a retargeted material lets the albedo's alpha through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Blend {
+    /// `C[AMSN]`, after the opaque template.
+    Opaque,
+    /// `C[AMSN]_e`, alpha-tested, after the Edge template.
+    Cutout,
+    /// `C[AMSN]_Dither`, after the opaque template.
+    Dither,
+}
+
+impl Blend {
+    /// The matxml the material is pointed at.
+    pub fn mtd(self) -> &'static str {
+        match self {
+            Self::Opaque => OPAQUE_MTD,
+            Self::Cutout => EDGE_MTD,
+            Self::Dither => DITHER_MTD,
+        }
+    }
+}
 
 /// One donor material pointed at a `C[AMSN]` matxml for a texture set: the Edge material is
 /// [`Retarget::EDGE`], set 0 cut out on material 14.
@@ -77,25 +109,29 @@ pub const OPAQUE_TEMPLATE_MATERIAL: usize = 8;
 pub struct Retarget {
     pub material: u32,
     pub set: usize,
-    /// Alpha-tested, after the Edge template; otherwise opaque, after the `C[AMSN]` one.
-    pub cutout: bool,
+    pub blend: Blend,
 }
 
 impl Retarget {
     pub const EDGE: Self = Self {
         material: EDGE_MATERIAL,
         set: 0,
-        cutout: true,
+        blend: Blend::Cutout,
     };
 
-    /// The material's name for character `id`: `<id>_edge` for the Edge material, `<id>_<set>`
-    /// or `<id>_<set>_edge` for a further set.
+    /// The material's name for character `id`: `<id>_edge` for the Edge material, `<id>_<set>`,
+    /// `<id>_<set>_edge` or `<id>_<set>_dither` for a further set, and `<id>_dither` for set 0
+    /// dithered.
     pub fn name(&self, id: &str) -> String {
-        match (self.set, self.cutout) {
-            (0, true) => edge_material_name(id),
-            (0, false) => id.to_owned(),
-            (set, true) => format!("{id}_{set}_edge"),
-            (set, false) => format!("{id}_{set}"),
+        let suffix = match self.blend {
+            Blend::Opaque => "",
+            Blend::Cutout => "_edge",
+            Blend::Dither => "_dither",
+        };
+        match self.set {
+            0 if self.blend == Blend::Cutout => edge_material_name(id),
+            0 => format!("{id}{suffix}"),
+            set => format!("{id}_{set}{suffix}"),
         }
     }
 }
@@ -108,11 +144,19 @@ pub struct Templates {
 }
 
 impl Templates {
-    fn for_retarget(&self, retarget: &Retarget) -> &MaterialTemplate {
-        if retarget.cutout {
-            &self.cutout
-        } else {
-            &self.opaque
+    /// The template `retarget` is made after, and the matxml that template is checked to be.
+    fn for_retarget(&self, retarget: &Retarget) -> (&MaterialTemplate, &'static str, String) {
+        match retarget.blend {
+            Blend::Cutout => (
+                &self.cutout,
+                EDGE_MTD,
+                format!("{TEMPLATE_FLVER} material {TEMPLATE_MATERIAL}"),
+            ),
+            Blend::Opaque | Blend::Dither => (
+                &self.opaque,
+                OPAQUE_MTD,
+                format!("{OPAQUE_TEMPLATE_FLVER} material {OPAQUE_TEMPLATE_MATERIAL}"),
+            ),
         }
     }
 }
@@ -241,6 +285,11 @@ fn check_template(template: &MaterialTemplate, mtd: &str, context: &str) -> Resu
 /// its albedo: material 14 retargeted onto `C[AMSN]_e` after `template`, named for character
 /// `id`. Pass the result to [`crate::flver::rebuild::rebuild`] with that slot.
 pub fn edge_material(donor: &[u8], template: &MaterialTemplate, id: &str) -> Result<HeaderAppend> {
+    check_template(
+        template,
+        EDGE_MTD,
+        &format!("{TEMPLATE_FLVER} material {TEMPLATE_MATERIAL}"),
+    )?;
     let mut append = HeaderAppend::for_donor(donor)?;
     retarget_onto(
         &mut append,
@@ -264,13 +313,9 @@ pub fn retarget_materials(
     let flver = Flver::parse(donor)?;
     let mut append = HeaderAppend::for_donor(donor)?;
     for retarget in retargets {
-        retarget_onto(
-            &mut append,
-            &flver,
-            templates.for_retarget(retarget),
-            retarget,
-            id,
-        )?;
+        let (template, template_mtd, context) = templates.for_retarget(retarget);
+        check_template(template, template_mtd, &context)?;
+        retarget_onto(&mut append, &flver, template, retarget, id)?;
     }
     Ok(append)
 }
@@ -287,9 +332,9 @@ pub fn retarget_append(
     retarget_materials(donor, &read_templates(archives, oodle)?, id, retargets)
 }
 
-/// Retarget `retarget.material` of `donor` in `append`. Material `n` must be drawn by donor mesh
-/// `n` alone, as every one of the donor's materials is, so pointing it elsewhere changes no other
-/// mesh's material.
+/// Retarget `retarget.material` of `donor` in `append` onto its blend's matxml, after `template`,
+/// which the caller has checked. Material `n` must be drawn by donor mesh `n` alone, as every one
+/// of the donor's materials is, so pointing it elsewhere changes no other mesh's material.
 fn retarget_onto(
     append: &mut HeaderAppend,
     donor: &Flver,
@@ -297,18 +342,6 @@ fn retarget_onto(
     retarget: &Retarget,
     id: &str,
 ) -> Result<()> {
-    let (mtd, context) = if retarget.cutout {
-        (
-            EDGE_MTD,
-            format!("{TEMPLATE_FLVER} material {TEMPLATE_MATERIAL}"),
-        )
-    } else {
-        (
-            OPAQUE_MTD,
-            format!("{OPAQUE_TEMPLATE_FLVER} material {OPAQUE_TEMPLATE_MATERIAL}"),
-        )
-    };
-    check_template(template, mtd, &context)?;
     if retarget.material != EDGE_MATERIAL && !SET_MATERIALS.contains(&retarget.material) {
         return Err(Error::new(format!(
             "material {} is neither the Edge material {EDGE_MATERIAL} nor one of the set \
@@ -334,7 +367,7 @@ fn retarget_onto(
     append.retarget_material(
         material,
         &retarget.name(id),
-        mtd,
+        retarget.blend.mtd(),
         &set_textures(retarget.set),
         &template.gx,
         template.flags,
@@ -385,13 +418,39 @@ mod tests {
                 r"N:\GR\data\Model\parts\Face\FC_M_0000\tex\FC_M_0000_2_n.tif",
             ]
         );
-        let set = |set, cutout| Retarget {
+        let set = |set, blend| Retarget {
             material: 1,
             set,
-            cutout,
+            blend,
         };
-        assert_eq!(set(2, false).name("c2360"), "c2360_2");
-        assert_eq!(set(2, true).name("c2360"), "c2360_2_edge");
+        assert_eq!(set(2, Blend::Opaque).name("c2360"), "c2360_2");
+        assert_eq!(set(2, Blend::Cutout).name("c2360"), "c2360_2_edge");
+        assert_eq!(set(2, Blend::Dither).name("c2730"), "c2730_2_dither");
+        assert_eq!(set(0, Blend::Dither).name("c2730"), "c2730_dither");
+        assert_eq!(set(0, Blend::Cutout).name("c2730"), "c2730_edge");
+    }
+
+    #[test]
+    fn a_dithered_material_is_made_after_the_opaque_template_under_the_dither_matxml() {
+        let opaque = MaterialTemplate {
+            mtd: OPAQUE_MTD.to_owned(),
+            flags: 794,
+            ..template()
+        };
+        let templates = Templates {
+            cutout: template(),
+            opaque: opaque.clone(),
+        };
+        let dither = Retarget {
+            material: 1,
+            set: 0,
+            blend: Blend::Dither,
+        };
+        let (made_after, checked_as, _) = templates.for_retarget(&dither);
+        assert_eq!((made_after, checked_as), (&opaque, OPAQUE_MTD));
+        assert_eq!(dither.blend.mtd(), DITHER_MTD);
+        let (made_after, checked_as, _) = templates.for_retarget(&Retarget::EDGE);
+        assert_eq!((made_after, checked_as), (&template(), EDGE_MTD));
     }
 
     #[test]
