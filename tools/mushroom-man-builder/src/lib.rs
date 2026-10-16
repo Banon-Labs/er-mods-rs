@@ -6,6 +6,7 @@ pub mod bnd;
 pub mod bytes;
 pub mod character;
 pub mod dcx;
+pub mod ds3;
 pub mod edge;
 pub mod error;
 pub mod fit;

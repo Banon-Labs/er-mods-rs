@@ -46,6 +46,7 @@ use crate::{
         skeleton::{self, Role},
         source::{self, DsrVertex, KeptMesh, Source, StripReport},
     },
+    skirt::{BoneShares, Graded, Share},
 };
 
 /// Metres either side of an Elden Ring spine joint over which two spine bones share weight.
@@ -334,6 +335,8 @@ enum WeightTo {
     /// Shared among these bones in these proportions, which add up to one: a tail bone between
     /// the pelvis and a cloth chain ([`export_with_targets`]).
     Shares(Vec<(String, f32)>),
+    /// Shared vertex by vertex down a one-bone piece of hanging cloth.
+    Graded(Graded),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -417,6 +420,7 @@ impl Placement for BipedFit {
             WeightTo::Bone(name) => vec![(name.clone(), 1.0)],
             WeightTo::Trunk => trunk_split(&self.trunk, rest.y),
             WeightTo::Shares(shares) => shares.clone(),
+            WeightTo::Graded(graded) => graded.shares(vertex.position.y, at),
         };
         Ok(Carried {
             at,
@@ -1044,7 +1048,7 @@ pub fn export_with_targets(
     flver: &[u8],
     donor: &[u8],
     params: BipedParams,
-    retargets: &[(String, Vec<(String, f32)>)],
+    retargets: &[BoneShares],
 ) -> Result<Export> {
     let source = source::parse(flver)?;
     if !skeleton::is_biped(&source.bones) {
@@ -1055,20 +1059,26 @@ pub fn export_with_targets(
     let roles = skeleton::classify(&source.bones)?;
     let er_bones = Flver::parse(donor)?.bones;
     let mut built = build(&source.bones, &roles, &er_bones, params)?;
-    for (bone, shares) in retargets {
+    for (bone, share) in retargets {
         let index = source
             .bones
             .iter()
             .position(|candidate| candidate.name == *bone)
             .ok_or_else(|| Error::new(format!("{id} has no bone {bone} to share out")))?;
-        let total: f32 = shares.iter().map(|(_, share)| share).sum();
-        if (total - 1.0).abs() > WEIGHT_FLOOR {
-            return Err(Error::new(format!(
-                "{id}'s bone {bone} is shared out {total} times over, not once"
-            )));
-        }
+        let weight = match share {
+            Share::Fixed(shares) => {
+                let total: f32 = shares.iter().map(|(_, share)| share).sum();
+                if (total - 1.0).abs() > WEIGHT_FLOOR {
+                    return Err(Error::new(format!(
+                        "{id}'s bone {bone} is shared out {total} times over, not once"
+                    )));
+                }
+                WeightTo::Shares(shares.clone())
+            }
+            Share::Graded(graded) => WeightTo::Graded(graded.clone()),
+        };
         if let Some(fit) = built.fit.bones[index].as_mut() {
-            fit.weight = WeightTo::Shares(shares.clone());
+            fit.weight = weight;
         }
     }
     let (kept, strip) = source::strip_props(&source, &strip_roles(roles, params.held_items));

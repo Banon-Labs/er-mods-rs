@@ -32,6 +32,9 @@ pub enum Game {
     /// Dark Souls II: Scholar of the First Sin: `/model/chr/<id>.bnd` and `<id>.texbnd` in the
     /// archives beside `DarkSoulsII.exe`.
     Ds2,
+    /// Dark Souls III: `/chr/<id>.chrbnd.dcx` and `<id>.texbnd.dcx` in the archives beside
+    /// `DarkSoulsIII.exe`.
+    Ds3,
 }
 
 impl Game {
@@ -39,7 +42,24 @@ impl Game {
         match self {
             Self::Dsr => "Dark Souls Remastered",
             Self::Ds2 => "Dark Souls II",
+            Self::Ds3 => "Dark Souls III",
         }
+    }
+
+    /// What `--game` calls it.
+    pub fn flag(self) -> &'static str {
+        match self {
+            Self::Dsr => "dsr",
+            Self::Ds2 => "ds2",
+            Self::Ds3 => "ds3",
+        }
+    }
+
+    /// `--game`'s value, ignoring case.
+    pub fn from_flag(flag: &str) -> Option<Self> {
+        [Self::Dsr, Self::Ds2, Self::Ds3]
+            .into_iter()
+            .find(|game| game.flag().eq_ignore_ascii_case(flag.trim()))
     }
 }
 
@@ -84,6 +104,9 @@ pub struct Character {
     pub writer: Writer,
     /// Checked in game and approved. Only these are offered without `--unvalidated`.
     pub validated: bool,
+    /// For a Dark Souls III character, the `NpcParam` row whose outfit it wears
+    /// ([`crate::ds3`]); `None` takes the model's first row.
+    pub outfit: Option<u32>,
 }
 
 /// The Mushroom Man, as the user approved it in game: `FitParams::default()` on the patch path.
@@ -100,6 +123,7 @@ pub const C2280: Character = Character {
     }),
     writer: Writer::Patch,
     validated: true,
+    outfit: None,
 };
 
 /// The first Biped character. 2607 vertices with its lantern, 1745 without, so it needs the
@@ -114,6 +138,7 @@ pub const C2650: Character = Character {
     fit: FitConfig::Biped(BipedParams::DEFAULT),
     writer: Writer::Rebuild,
     validated: false,
+    outfit: None,
 };
 
 /// The plain Skeleton: NpcParam rows 290000-290002, `スケルトン＿曲剣`, `＿弓` and `＿大曲剣`,
@@ -132,6 +157,7 @@ pub const C2900: Character = Character {
     fit: FitConfig::Biped(BipedParams::DEFAULT),
     writer: Writer::Rebuild,
     validated: false,
+    outfit: None,
 };
 
 /// Lonesome Gavlan, Dark Souls II's travelling merchant: his EnemyParam rows 726000-726006 name
@@ -170,6 +196,7 @@ pub const DS2_C1350: Character = Character {
     }),
     writer: Writer::Rebuild,
     validated: false,
+    outfit: None,
 };
 
 /// Velstadt, the Royal Aegis, Dark Souls II's bell-helmed knight of Vendrick's crypt. At the full
@@ -195,6 +222,7 @@ pub const DS2_C3330: Character = Character {
     }),
     writer: Writer::Rebuild,
     validated: false,
+    outfit: None,
 };
 
 pub const CHARACTERS: &[Character] = &[C2280, C2650, C2900, DS2_C1350, DS2_C3330];
@@ -251,6 +279,7 @@ pub fn generic_in(game: Game, id: &str) -> &'static Character {
         fit: FitConfig::Biped(BipedParams::DEFAULT),
         writer: Writer::Rebuild,
         validated: false,
+        outfit: None,
     }))
 }
 
@@ -294,8 +323,9 @@ pub fn listing(all: bool) -> String {
         .filter(|character| all || character.validated)
         .map(|character| {
             let mut line = format!("{:<7} {}", character.id, character.label);
-            if character.game == Game::Ds2 {
-                line.push_str(" (Dark Souls II; --game ds2)");
+            if character.game != Game::Dsr {
+                let game = character.game;
+                line.push_str(&format!(" ({}; --game {})", game.name(), game.flag()));
             }
             if character.game == Game::Dsr && character.id == DEFAULT_ID {
                 line.push_str(" (default)");

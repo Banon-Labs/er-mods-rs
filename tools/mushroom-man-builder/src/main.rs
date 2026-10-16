@@ -10,7 +10,7 @@ use std::{
 
 use mushroom_man_builder::{
     archive::ArchiveSet,
-    bnd::Bnd4,
+    bnd::{self, Bnd4},
     character::{self, C2280, Character, FitConfig, Game, Writer},
     dcx,
     error::{Context, Error, Result},
@@ -54,9 +54,9 @@ OPTIONS:
     --search <text>        Find characters by name (`hollow`, `black knight`) or the start of a
                            model id (`c29`), say which this install holds and whether each one's
                            rig maps onto Elden Ring's, then stop.
-    --game <dsr|ds2>       Which game --character and --search read: Dark Souls Remastered (the
-                           default) or Dark Souls II: Scholar of the First Sin. A model id names
-                           a different character in each.
+    --game <dsr|ds2|ds3>   Which game --character and --search read: Dark Souls Remastered (the
+                           default), Dark Souls II: Scholar of the First Sin or Dark Souls III. A
+                           model id names a different character in each.
     --list-characters      List the characters this builder makes, then stop. With --all, also
                            the ones not yet checked in game.
     --unvalidated          Build a --character that has not been checked in game yet: every
@@ -66,7 +66,9 @@ OPTIONS:
                            DarkSoulsRemastered.exe and `chr`).
     --ds2 <dir>            Dark Souls II's `Game` folder (the one holding DarkSoulsII.exe and
                            GameDataEbl.bhd).
-    --out <dir>            Where to write the mod. Default: <er-game>/mushroom-man
+    --ds3 <dir>            Dark Souls III's `Game` folder (the one holding DarkSoulsIII.exe and
+                           Data1.bhd).
+    --out <dir>           Where to write the mod. Default: <er-game>/mushroom-man
     --dll <path>           The mushroom_man.dll to install. Default: the one beside this
                            program, or in a `dlls` folder beside it; none is fine.
     --source-obj <path>    Use an authored mesh instead of fitting c2280 here; c2280 only,
@@ -89,6 +91,8 @@ OPTIONS:
                            wide body; the head and limbs keep their size.
     --skirt-girth <share>  The same below the hips, where a skirt hangs over the legs (Gavlan's
                            is 0.75). Narrower than the legs and they show through it.
+    --outfit <npc-param>   Which outfit a Dark Souls III character wears: one of its model's
+                           NpcParam rows (c1100's are 110000 to 110099). Default: its first.
     -h, --help             Show this text.
 ";
 
@@ -105,6 +109,7 @@ struct Options {
     /// `--game`: which game `--character` and `--search` read.
     game: Game,
     ds2: Option<PathBuf>,
+    ds3: Option<PathBuf>,
     out: Option<PathBuf>,
     dll: Option<PathBuf>,
     source_obj: Option<PathBuf>,
@@ -127,6 +132,8 @@ struct Options {
     /// instead of its table entry's ([`with_girths`]).
     trunk_girth: Option<f32>,
     skirt_girth: Option<f32>,
+    /// `--outfit`: the Dark Souls III outfit for this build ([`with_outfit`]).
+    outfit: Option<u32>,
 }
 
 fn main() -> ExitCode {
@@ -146,6 +153,7 @@ fn run() -> ExitCode {
         Some("extract-inputs") => extract_inputs(&args[1..]),
         Some("export-obj") => export_obj(&args[1..]),
         Some("export-cloth") => export_cloth(&args[1..]),
+        Some("extract-binder") => extract_binder(&args[1..]),
         Some("map-report") => run_map_report(&args[1..]),
         Some("patch-flver") => patch_flver(&args[1..]),
         Some("rebuild-flver") => rebuild_flver(&args[1..]),
@@ -192,6 +200,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         dsr: None,
         game: Game::Dsr,
         ds2: None,
+        ds3: None,
         out: None,
         dll: None,
         source_obj: None,
@@ -204,6 +213,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         cape_rigidity: skirt::CAPE_RIGIDITY,
         trunk_girth: None,
         skirt_girth: None,
+        outfit: None,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -221,12 +231,12 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--er-game" => options.er_game = Some(value()?),
             "--dsr" => options.dsr = Some(value()?),
             "--ds2" => options.ds2 = Some(value()?),
+            "--ds3" => options.ds3 = Some(value()?),
             "--game" => {
-                options.game = match value()?.to_str().map(str::to_ascii_lowercase).as_deref() {
-                    Some("dsr") => Game::Dsr,
-                    Some("ds2") => Game::Ds2,
-                    _ => return Err("--game is dsr or ds2".into()),
-                };
+                options.game = value()?
+                    .to_str()
+                    .and_then(Game::from_flag)
+                    .ok_or(GAME_CHOICES)?;
             }
             "--out" => options.out = Some(value()?),
             "--dll" => options.dll = Some(value()?),
@@ -280,6 +290,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 } else {
                     options.skirt_girth = Some(share);
                 }
+            }
+            "--outfit" => {
+                options.outfit = Some(parse_outfit(value()?.to_str().unwrap_or_default())?);
             }
             "--writer" => {
                 options.writer = Some(match value()?.to_str() {
@@ -346,8 +359,8 @@ fn run_search(options: &Options, query: &str) -> Result<()> {
         .map(|hit| hit.id.as_str())
         .collect();
     let game_flag = match options.game {
-        Game::Dsr => "",
-        Game::Ds2 => " --game ds2",
+        Game::Dsr => String::new(),
+        game => format!(" --game {}", game.flag()),
     };
     match buildable.as_slice() {
         [] => println!("\nnone of these can be built"),
@@ -362,10 +375,11 @@ fn run_search(options: &Options, query: &str) -> Result<()> {
 }
 
 /// The install a character is read from, opened: a Dark Souls Remastered folder, or Dark Souls
-/// II's archives, whose headers are decrypted once here.
+/// II's or III's archives, whose headers are decrypted once here.
 enum SourceInstall {
     Dsr(PathBuf),
     Ds2(ArchiveSet),
+    Ds3(ArchiveSet),
 }
 
 impl SourceInstall {
@@ -381,6 +395,11 @@ impl SourceInstall {
                 println!("Dark Souls II:         {}", dir.display());
                 Self::Ds2(ArchiveSet::open_ds2(&dir)?)
             }
+            Game::Ds3 => {
+                let dir = find_ds3(options)?;
+                println!("Dark Souls III:        {}", dir.display());
+                Self::Ds3(ArchiveSet::open_ds3(&dir)?)
+            }
         })
     }
 
@@ -388,7 +407,29 @@ impl SourceInstall {
         match self {
             Self::Dsr(dir) => Install::Dsr(dir),
             Self::Ds2(archives) => Install::Ds2(archives),
+            Self::Ds3(archives) => Install::Ds3(archives),
         }
+    }
+}
+
+/// What `--game` takes, for its error.
+const GAME_CHOICES: &str = "--game is dsr, ds2 or ds3";
+
+/// `--ds3`, checked, or the install Steam knows about.
+fn find_ds3(options: &Options) -> Result<PathBuf> {
+    match &options.ds3 {
+        Some(dir) if locate::is_ds3_game_dir(dir) => Ok(dir.clone()),
+        Some(dir) => Err(Error::new(format!(
+            "{} is not Dark Souls III's `Game` folder (no DarkSoulsIII.exe and Data1.bhd) -- \
+             point --ds3 at it",
+            dir.display()
+        ))),
+        None => locate::find_ds3().ok_or_else(|| {
+            Error::new(
+                "could not find Dark Souls III through Steam -- pass --ds3 <folder> (its `Game` \
+                 folder, holding DarkSoulsIII.exe)",
+            )
+        }),
     }
 }
 
@@ -446,7 +487,8 @@ fn find_dsr(options: &Options) -> Result<PathBuf> {
 fn choose_character(options: &Options) -> Result<&'static Character> {
     if let Some(id) = &options.character {
         let character = character::resolve_in(options.game, id, options.unvalidated)?;
-        return with_girths(character, options.trunk_girth, options.skirt_girth);
+        let character = with_girths(character, options.trunk_girth, options.skirt_girth)?;
+        return with_outfit(character, options.outfit);
     }
     let offered: Vec<&'static Character> = character::validated().collect();
     // One character is no choice, so the prompt waits until a second one is approved.
@@ -664,6 +706,7 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
     let mut trunk_girth = None;
     let mut skirt_girth = None;
     let mut thumb = None;
+    let mut outfit = None;
     let mut rest = Vec::new();
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -690,22 +733,26 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
                 }
             }
             "--game" => {
-                game = match iter.next().map(|game| game.to_ascii_lowercase()).as_deref() {
-                    Some("dsr") => Game::Dsr,
-                    Some("ds2") => Game::Ds2,
-                    _ => return Err("--game is dsr or ds2".into()),
-                };
+                game = iter
+                    .next()
+                    .and_then(|game| Game::from_flag(game))
+                    .ok_or(GAME_CHOICES)?;
             }
             "--unvalidated" => {}
+            "--outfit" => {
+                outfit = Some(parse_outfit(
+                    iter.next().ok_or("--outfit needs an NpcParam row id")?,
+                )?);
+            }
             _ => rest.push(arg.clone()),
         }
     }
     let character = match id {
         Some(id) => character::resolve_in(game, id, true)?,
         None if game == Game::Dsr => character::default_character(),
-        None => return Err("--game ds2 needs a --character".into()),
+        None => return Err(format!("--game {} needs a --character", game.flag()).into()),
     };
-    let character = with_girths(character, trunk_girth, skirt_girth)?;
+    let character = with_outfit(with_girths(character, trunk_girth, skirt_girth)?, outfit)?;
     // `--thumb`: carry the thumb the other way, to measure it before it goes in a table entry.
     let character = match (thumb, character.fit) {
         (None, _) => character,
@@ -717,10 +764,39 @@ fn dev_character(args: &[String]) -> Result<(&'static Character, Vec<String>)> {
             fit: FitConfig::Biped(BipedParams { thumb, ..params }),
             writer: character.writer,
             validated: character.validated,
+            outfit: character.outfit,
         })),
         (Some(_), _) => return Err("--thumb needs a Biped character".into()),
     };
     Ok((character, rest))
+}
+
+/// `--outfit`'s value: an `NpcParam` row id.
+fn parse_outfit(text: &str) -> Result<u32> {
+    text.trim()
+        .parse()
+        .map_err(|_| Error::new(format!("--outfit takes an NpcParam row id; got {text}")))
+}
+
+/// `--outfit`: a Dark Souls III `character` wearing the outfit of `NpcParam` row `outfit`
+/// instead of its model's first. None given leaves the character as it is.
+fn with_outfit(character: &'static Character, outfit: Option<u32>) -> Result<&'static Character> {
+    match outfit {
+        None => Ok(character),
+        Some(_) if character.game != Game::Ds3 => {
+            Err("--outfit picks a Dark Souls III character's outfit (--game ds3)".into())
+        }
+        Some(outfit) => Ok(Box::leak(Box::new(Character {
+            game: character.game,
+            id: character.id,
+            label: character.label,
+            skeleton: character.skeleton,
+            fit: character.fit,
+            writer: character.writer,
+            validated: character.validated,
+            outfit: Some(outfit),
+        }))),
+    }
 }
 
 /// `--trunk-girth`, `--skirt-girth`: `character`'s Biped fit with the trunk or the skirt keeping
@@ -745,6 +821,7 @@ fn with_girths(
             }),
             writer: character.writer,
             validated: character.validated,
+            outfit: character.outfit,
         }))),
         (Some(_), _) => Err("--trunk-girth and --skirt-girth need a Biped character".into()),
     }
@@ -756,6 +833,7 @@ fn read_dev_character(character: &Character, dir: &str) -> Result<package::Chara
     match character.game {
         Game::Dsr => package::read_character(Path::new(dir), character),
         Game::Ds2 => package::read_ds2_character(&ArchiveSet::open_ds2(Path::new(dir))?, character),
+        Game::Ds3 => package::read_ds3_character(&ArchiveSet::open_ds3(Path::new(dir))?, character),
     }
 }
 
@@ -872,6 +950,35 @@ fn export_cloth(args: &[String]) -> Result<()> {
         cloth.mesh.triangles.len(),
         out.display()
     );
+    Ok(())
+}
+
+/// Developer check: `extract-binder --game <ds2|ds3> <game-dir> <logical-path> <out-dir>`, every
+/// file of one binder in a Dark Souls II or III install's archives (`/chr/c1300.chrbnd.dcx`)
+/// written under its own name, to read what the builder does not: a character's cloth
+/// simulation (`c1300_c.hkx`), its physics. Needs no Oodle.
+fn extract_binder(args: &[String]) -> Result<()> {
+    let usage = "extract-binder --game <ds2|ds3> <game-dir> <logical-path> <out-dir>";
+    let [flag, game, dir, path, out] = args else {
+        return Err(usage.into());
+    };
+    let archives = match (flag.as_str(), Game::from_flag(game)) {
+        ("--game", Some(Game::Ds2)) => ArchiveSet::open_ds2(Path::new(dir))?,
+        ("--game", Some(Game::Ds3)) => ArchiveSet::open_ds3(Path::new(dir))?,
+        _ => return Err(usage.into()),
+    };
+    let mut bytes = archives.read(path)?;
+    if dcx::is_dcx(&bytes) {
+        bytes = dcx::decompress(&bytes, None).context(path)?;
+    }
+    let binder = Bnd4::read(&bytes).context(path)?;
+    let out = Path::new(out);
+    fs::create_dir_all(out).context(out.display())?;
+    for file in &binder.files {
+        let name = bnd::file_name(&file.name);
+        fs::write(out.join(name), &file.data).context(name)?;
+        println!("{name} ({} bytes)", file.data.len());
+    }
     Ok(())
 }
 

@@ -3,20 +3,23 @@
 //! The games themselves name almost none of them: Dark Souls Remastered's English text carries a
 //! name only for a character the player talks to or fights as a boss (`NPC_name` 5220 is Gravelord
 //! Nito), and the param rows are labelled in Japanese. So the names come from Smithbox's alias
-//! lists, the ones the modding tools show, embedded as `data/dsr-character-names.tsv` and
-//! `data/ds2-character-names.tsv` with their MIT license beside them. A model id means a
+//! lists, the ones the modding tools show, embedded as `data/dsr-character-names.tsv`,
+//! `data/ds2-character-names.tsv` and `data/ds3-character-names.tsv` with their MIT license
+//! beside them. A model id means a
 //! different character in each game: c1000 is a Firebomb Hollow in one and a Goblin in the other.
 
 use crate::character::Game;
 
 const DSR_TABLE: &str = include_str!("../data/dsr-character-names.tsv");
 const DS2_TABLE: &str = include_str!("../data/ds2-character-names.tsv");
+const DS3_TABLE: &str = include_str!("../data/ds3-character-names.tsv");
 
 /// Every `(id, name)` in `game`'s table, in its order.
 pub fn entries(game: Game) -> impl Iterator<Item = (&'static str, &'static str)> {
     let table = match game {
         Game::Dsr => DSR_TABLE,
         Game::Ds2 => DS2_TABLE,
+        Game::Ds3 => DS3_TABLE,
     };
     table
         .lines()
@@ -57,7 +60,7 @@ mod tests {
 
     #[test]
     fn each_table_parses_with_unique_model_ids() {
-        for (game, count) in [(Game::Dsr, 170), (Game::Ds2, 204)] {
+        for (game, count) in [(Game::Dsr, 170), (Game::Ds2, 204), (Game::Ds3, 164)] {
             let all: Vec<_> = entries(game).collect();
             assert_eq!(all.len(), count, "{game:?}");
             let mut ids: Vec<&str> = all.iter().map(|(id, _)| *id).collect();
@@ -77,6 +80,8 @@ mod tests {
         assert_eq!(name_of(Game::Dsr, "c2501"), None);
         assert_eq!(name_of(Game::Ds2, "c3180"), Some("The Pursuer"));
         assert_eq!(name_of(Game::Ds2, "c1000"), Some("Goblin"));
+        assert_eq!(name_of(Game::Ds3, "c1100"), Some("Hollow Soldier"));
+        assert_eq!(name_of(Game::Ds3, "c5260"), Some("Yhorm the Giant"));
     }
 
     #[test]

@@ -163,6 +163,34 @@ pub fn ds2_archives_or_skip(test: &str) -> Option<mushroom_man_builder::archive:
     )
 }
 
+/// Dark Souls III's `Game` folder: `MMB_DS3_DIR`, default
+/// `$HOME/.local/share/Steam/steamapps/common/DARK SOULS III/Game`.
+pub fn ds3_dir() -> Option<PathBuf> {
+    env_dir(
+        "MMB_DS3_DIR",
+        ".local/share/Steam/steamapps/common/DARK SOULS III/Game",
+    )
+}
+
+/// Dark Souls III's archives, opened, or `None` (and a skip line) when the install is absent.
+pub fn ds3_archives_or_skip(test: &str) -> Option<mushroom_man_builder::archive::ArchiveSet> {
+    let Some(dir) = ds3_dir() else {
+        eprintln!("SKIP {test}: no HOME and no MMB_DS3_DIR");
+        return None;
+    };
+    if !dir.join("Data1.bhd").is_file() {
+        eprintln!(
+            "SKIP {test}: no Data1.bhd under {} (set MMB_DS3_DIR)",
+            dir.display()
+        );
+        return None;
+    }
+    Some(
+        mushroom_man_builder::archive::ArchiveSet::open_ds3(&dir)
+            .expect("open Dark Souls III's archives"),
+    )
+}
+
 /// c2280's FLVER and TPF out of the Dark Souls Remastered install, or `None` (and a skip line).
 pub fn c2280_or_skip(test: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let dsr = dsr_with_or_skip(test, "c2280")?;

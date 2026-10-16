@@ -30,6 +30,7 @@ use crate::{
         Vec2, Vec3,
         source::{DsrVertex, StripReport},
     },
+    skirt::BoneShares,
 };
 
 /// Weights at or below this are noise in the source skin and are dropped.
@@ -326,7 +327,7 @@ pub fn export_with_targets(
     character: &Character,
     flver: &[u8],
     donor: &[u8],
-    retargets: &[(String, Vec<(String, f32)>)],
+    retargets: &[BoneShares],
 ) -> Result<Export> {
     let fitted = match (character.fit, retargets) {
         (FitConfig::Mushroom(params), []) => mushroom::export(character.id, flver, donor, params),

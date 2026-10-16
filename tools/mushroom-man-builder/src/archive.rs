@@ -13,6 +13,10 @@
 //! `Lq*Ebl` archives beside `DarkSoulsII.exe`, each with its public key shipped beside it as
 //! `<name>KeyCode.pem`. Its records are narrower: a 32-bit path hash (multiplier 37), the padded
 //! size, the offset, and the hash and key offsets, with no unpadded size.
+//!
+//! Dark Souls III packs them the same way again in `Data1` to `Data5` and `DLC1`, `DLC2` beside
+//! `DarkSoulsIII.exe`, read with the keys in [`crate::keys::DS3_ARCHIVE_KEYS`]. It hashes paths as
+//! Dark Souls II does and widens the record to 0x28 bytes with the unpadded size last.
 
 use std::{
     collections::HashMap,
@@ -30,7 +34,7 @@ use num_bigint::BigUint;
 use crate::{
     bytes::{i32_le, i64_le, u8_at, u32_le, u64_le},
     error::{Context, Error, Result},
-    keys::{ARCHIVE_KEYS, RsaPublicKey},
+    keys::{ARCHIVE_KEYS, ArchiveKey, DS3_ARCHIVE_KEYS, RsaPublicKey},
 };
 
 const BHD5_MAGIC: &[u8; 4] = b"BHD5";
@@ -49,19 +53,20 @@ const DS2_KEY_SUFFIX: &str = "KeyCode.pem";
 enum Layout {
     EldenRing,
     DarkSouls2,
+    DarkSouls3,
 }
 
 impl Layout {
     fn hash(self, logical_path: &str) -> u64 {
         match self {
             Self::EldenRing => path_hash(logical_path),
-            Self::DarkSouls2 => u64::from(ds2_path_hash(logical_path)),
+            Self::DarkSouls2 | Self::DarkSouls3 => u64::from(ds2_path_hash(logical_path)),
         }
     }
 
     fn record_size(self) -> usize {
         match self {
-            Self::EldenRing => 0x28,
+            Self::EldenRing | Self::DarkSouls3 => 0x28,
             Self::DarkSouls2 => 0x20,
         }
     }
@@ -81,6 +86,13 @@ impl Layout {
                 u64::from(u32_le(plain, at)?),
                 u32_le(plain, at + 0x04)?,
                 0,
+                u64_le(plain, at + 0x08)?,
+                u64_le(plain, at + 0x18)?,
+            ),
+            Self::DarkSouls3 => (
+                u64::from(u32_le(plain, at)?),
+                u32_le(plain, at + 0x04)?,
+                u32::try_from(u64_le(plain, at + 0x20)?).context("unpadded size")?,
                 u64_le(plain, at + 0x08)?,
                 u64_le(plain, at + 0x18)?,
             ),
@@ -112,14 +124,34 @@ impl ArchiveSet {
     /// Open the archives beside `eldenring.exe`. The four base archives must all be present;
     /// the DLC archive is read when it is there.
     pub fn open(game_dir: &Path) -> Result<Self> {
+        Self::open_keyed(game_dir, ARCHIVE_KEYS, Layout::EldenRing, "Elden Ring")
+    }
+
+    /// Open the archives beside `DarkSoulsIII.exe`: `Data1` to `Data5` must be there, and the
+    /// two DLC archives are read when they are.
+    pub fn open_ds3(game_dir: &Path) -> Result<Self> {
+        Self::open_keyed(
+            game_dir,
+            DS3_ARCHIVE_KEYS,
+            Layout::DarkSouls3,
+            "Dark Souls III",
+        )
+    }
+
+    fn open_keyed(
+        game_dir: &Path,
+        keys: &[ArchiveKey],
+        layout: Layout,
+        game: &str,
+    ) -> Result<Self> {
         let mut archives = Vec::new();
-        for key in ARCHIVE_KEYS {
+        for key in keys {
             let bhd = game_dir.join(format!("{}.bhd", key.name));
             let bdt = game_dir.join(format!("{}.bdt", key.name));
             if !bhd.is_file() || !bdt.is_file() {
                 if key.required {
                     return Err(Error::new(format!(
-                        "{} is missing from {} -- is this the Elden Ring `Game` folder?",
+                        "{} is missing from {} -- is this the {game} `Game` folder?",
                         bhd.display(),
                         game_dir.display()
                     )));
@@ -129,14 +161,11 @@ impl ArchiveSet {
             let encrypted = std::fs::read(&bhd).context(format!("reading {}", bhd.display()))?;
             let plain = rsa_decrypt(&encrypted, &key.decode()?)
                 .context(format!("decrypting {}", bhd.display()))?;
-            let entries = parse_bhd5(&plain, Layout::EldenRing)
-                .context(format!("parsing {}", bhd.display()))?;
+            let entries =
+                parse_bhd5(&plain, layout).context(format!("parsing {}", bhd.display()))?;
             archives.push(Archive { bdt, entries });
         }
-        Ok(Self {
-            archives,
-            layout: Layout::EldenRing,
-        })
+        Ok(Self { archives, layout })
     }
 
     /// Open the archives beside `DarkSoulsII.exe`: every `<name>Ebl.bhd` with its `.bdt` and the
@@ -180,6 +209,11 @@ impl ArchiveSet {
             archives,
             layout: Layout::DarkSouls2,
         })
+    }
+
+    /// The folder the archives are in.
+    pub fn dir(&self) -> Option<&Path> {
+        self.archives.first()?.bdt.parent()
     }
 
     pub fn contains(&self, logical_path: &str) -> bool {

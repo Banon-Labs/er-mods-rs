@@ -6,7 +6,8 @@
 //! game. A Dark Souls Remastered install is accepted when it holds `DarkSoulsRemastered.exe` and
 //! a `chr` folder -- whether the chosen character's binder is in it is a separate question with
 //! its own error -- a Dark Souls II one when its `Game` folder holds `DarkSoulsII.exe` and
-//! `GameDataEbl.bhd`, and an Elden Ring one only when it holds `eldenring.exe` and its archives.
+//! `GameDataEbl.bhd`, a Dark Souls III one when its `Game` folder holds `DarkSoulsIII.exe` and
+//! `Data1.bhd`, and an Elden Ring one only when it holds `eldenring.exe` and its archives.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,11 @@ pub const DS2_APP_ID: &str = "335300";
 const DS2_DEFAULT_DIR: &str = "Dark Souls II Scholar of the First Sin";
 const DS2_GAME_DIR: &str = "Game";
 const DS2_PROBES: [&str; 2] = ["DarkSoulsII.exe", "GameDataEbl.bhd"];
+/// Dark Souls III on Steam.
+pub const DS3_APP_ID: &str = "374320";
+const DS3_DEFAULT_DIR: &str = "DARK SOULS III";
+const DS3_GAME_DIR: &str = "Game";
+const DS3_PROBES: [&str; 2] = ["DarkSoulsIII.exe", "Data1.bhd"];
 
 pub fn is_dsr_dir(dir: &Path) -> bool {
     dir.join(DSR_EXE).is_file() && dir.join(DSR_CHR_DIR).is_dir()
@@ -81,6 +87,25 @@ pub fn find_ds2() -> Option<PathBuf> {
         .flatten()
         .map(|install| install.join(DS2_GAME_DIR))
         .find(|dir| is_ds2_game_dir(dir))
+}
+
+/// Dark Souls III's `Game` folder: `DarkSoulsIII.exe` and its first archive.
+pub fn is_ds3_game_dir(dir: &Path) -> bool {
+    DS3_PROBES.iter().all(|probe| dir.join(probe).is_file())
+}
+
+/// The Dark Souls III `Game` folder Steam knows about.
+pub fn find_ds3() -> Option<PathBuf> {
+    steam::libraries()
+        .into_iter()
+        .flat_map(|library| {
+            let common = library.join("steamapps").join("common");
+            let named = steam::app_install_dir(&library, DS3_APP_ID).map(|dir| common.join(dir));
+            [named, Some(common.join(DS3_DEFAULT_DIR))]
+        })
+        .flatten()
+        .map(|install| install.join(DS3_GAME_DIR))
+        .find(|dir| is_ds3_game_dir(dir))
 }
 
 pub fn find_er() -> Option<PathBuf> {

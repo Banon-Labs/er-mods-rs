@@ -15,6 +15,10 @@
 //! (`C[Ibl][DSB]`, `Cskin[Ibl_s][DSB]`), `[DB]` for a diffuse and normal map without specular, and
 //! `_Alp_1bit` for a cutout, so it takes the same routes. Its eyes, hair and stone skins
 //! (`C[Eye][Ibl]`, `C[Hair][Ibl]`, `C[stone]`) name no texture slots and are refused.
+//!
+//! Dark Souls III brackets albedo, reflectance, shininess and normal as `[ARSN]` and spells its
+//! blend in words after the brackets: `_e` a cutout, `_al` alpha-blended, `_em_Glow` an emissive
+//! glow, which has no route. Its fur (`C[Fur]`) names no slots and is refused.
 
 /// How a DSR material blends, and so which Elden Ring material can draw it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,10 +65,27 @@ pub fn classify(mtd_path: &str) -> MtdClass {
         .filter_map(|group| group.split_once(']').map(|(slots, _)| slots))
         .collect();
     let has_slots = groups.iter().any(|slots| match *slots {
-        "dsb" | "dsbt" | "ds" | "d" => true,
+        "dsb" | "dsbt" | "ds" | "d" | "arsn" => true,
         "db" => !groups.contains(&"m"),
         _ => false,
     });
+    // Dark Souls III spells its blend as words after the last bracket: `C[ARSN]_e_Cloth_Decal`
+    // is a cutout (`_e`), `C[ARSN]_al` alpha-blended, `_em_Glow` an emissive glow. `_Decal`,
+    // `_Cloth`, `_SSS` and a `[cinder]` group shade the same albedo differently and draw opaque.
+    let words: Vec<&str> = stem
+        .rsplit_once(']')
+        .map_or("", |(_, rest)| rest)
+        .split('_')
+        .collect();
+    if words.contains(&"glow") {
+        return MtdClass::Unsupported;
+    }
+    if has_slots && words.contains(&"e") {
+        return MtdClass::AlphaTest;
+    }
+    if has_slots && words.contains(&"al") {
+        return MtdClass::AlphaBlend;
+    }
     if stem.contains("_alp_1bit") {
         return if has_slots {
             MtdClass::AlphaTest
@@ -126,6 +147,25 @@ mod tests {
             ("C[stone]", MtdClass::Unsupported),
         ] {
             assert_eq!(classify(&ds2(name)), class, "{name}");
+        }
+        let ds3 = |name: &str| format!(r"N:\FDP\data\Material\mtd\character\{name}.mtd");
+        for (name, class) in [
+            ("C[ARSN]", MtdClass::Opaque),
+            ("C[ARSN]_Decal", MtdClass::Opaque),
+            ("C[ARSN]_SSS", MtdClass::Opaque),
+            ("C[ARSN][cinder]", MtdClass::Opaque),
+            ("C[ARSN]_e", MtdClass::AlphaTest),
+            ("C[ARSN]_e_Decal", MtdClass::AlphaTest),
+            ("C[ARSN]_e_Cloth_Decal", MtdClass::AlphaTest),
+            ("C[ARSN]_SSS_e", MtdClass::AlphaTest),
+            ("C[ARSN][cinder]_e", MtdClass::AlphaTest),
+            ("C[ARSN]_al", MtdClass::AlphaBlend),
+            ("C[ARSN][cinder]_em_Glow", MtdClass::Unsupported),
+            ("C[ARSN][cinder]_em_e_Glow", MtdClass::Unsupported),
+            ("c5260_Ghost_FDP", MtdClass::Unsupported),
+            ("C[Fur]", MtdClass::Unsupported),
+        ] {
+            assert_eq!(classify(&ds3(name)), class, "{name}");
         }
         assert_eq!(classify(""), MtdClass::Unsupported);
         assert!(MtdClass::Opaque.route().is_some() && MtdClass::AlphaTest.route().is_some());

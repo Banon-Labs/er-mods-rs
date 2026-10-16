@@ -15,14 +15,19 @@
 //! - **The part.** A skirt, every chain hanging from the pelvis, goes on [`CLOTH_PART_ID`],
 //!   `bd_<gender>_1380`, which hangs 18 cloth chains all round the hips from 0.98 m down to
 //!   0.23 m, no gap wider than 57 degrees, from the thighs (`L_ThighTwist`, `L_ThighTwist1`,
-//!   `L_Thigh`), the calves and the pelvis. Cloth with a chain hanging from the spine is a cape
-//!   and goes on [`CAPE_PART_ID`], `bd_m_1485`, whose cape collides with the upper arms; the
-//!   female slot takes the male part.
-//! - **The weights.** Each hanging bone ([`hanging_bones`]) is shared out by where the fit puts
-//!   its joint ([`hanging_targets`]): between the two cloth bones nearest it, by inverse
-//!   distance, and the bones those hang from. How much stays put is the player's [`Rigidity`],
-//!   stiffer at the root than the hem; of that, the trunk bone the chain hangs at keeps it all at
-//!   the root, and the bones the cloth hangs from take it over toward the hem.
+//!   `L_Thigh`), the calves and the pelvis, and whose cloth collides with the thighs and calves.
+//!   Cloth with a chain hanging from the spine below the pelvis is a cape and goes on
+//!   [`CAPE_PART_ID`], `bd_m_1485`, whose cape collides with the upper arms; the female slot takes
+//!   the male part. A spine chain that stays above the pelvis is armour at the shoulders and
+//!   rides its spine link ([`hanging_cloth_of`]): on the cape, the Black Knight's (Dark Souls
+//!   III c1300) shoulder plates made his hip plates a cape's too, loose and through his legs
+//!   (the user, 2026-10-16).
+//! - **The weights.** Each bone of a hanging chain ([`hanging_bones`]) is shared out by where
+//!   the fit puts its joint ([`hanging_targets`]): between the two cloth bones nearest it, by
+//!   inverse distance, and the bones those hang from. How much stays put is the player's
+//!   [`Rigidity`], stiffer at the root than the hem; of that, the trunk bone the chain hangs at
+//!   keeps it all at the root, and the bones the cloth hangs from take it over toward the hem. A
+//!   piece on one bone is shared out the same way vertex by vertex down its length ([`Graded`]).
 //! - **The cut.** A triangle with a corner on a cloth bone is the cloth's ([`crate::tail::split`]);
 //!   the seam vertices weigh only on the body's own bones, so both halves move them alike.
 
@@ -31,6 +36,7 @@ use crate::{
     flver::{
         Bone, Vec3, bind_frames,
         skeleton::{self, Role},
+        source::Source,
     },
     tail::{CLOTH_PREFIX, Rigidity},
 };
@@ -51,9 +57,50 @@ const BODY_PART_PREFIX: &str = "BD_";
 /// by inverse distance cannot divide by nothing.
 const NEAREST_FLOOR: f32 = 0.01;
 
-/// A source bone and the Elden Ring bones its weight is shared among, each with its share, as
+/// A source bone and how its weight is shared among Elden Ring bones, as
 /// [`crate::fit::export_with_targets`] takes them.
-pub type BoneShares = (String, Vec<(String, f32)>);
+pub type BoneShares = (String, Share);
+
+/// How a hanging bone's weight is shared out.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Share {
+    /// The same shares for every vertex on the bone: a bone along a chain, each with its share.
+    Fixed(Vec<(String, f32)>),
+    /// Shares that change vertex by vertex down a one-bone piece ([`Graded`]).
+    Graded(Graded),
+}
+
+/// A piece of hanging cloth on one bone, which has no chain to grade its stiffness along, so
+/// it grades along its own length: the Black Knight's (Dark Souls III c1300) `L_tare` is a plate
+/// 0.66 m long off his pelvis. Each vertex takes `t` from how far below the joint it hangs,
+/// `top` to `bottom` in the source's own heights, and shares itself out as a chain bone that
+/// far down would ([`hanging_targets`]), with the cloth bones nearest where the fit puts it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Graded {
+    /// The trunk bone the piece hangs at.
+    root: String,
+    cloth: Vec<ClothBone>,
+    top: f32,
+    bottom: f32,
+    rigidity: Rigidity,
+}
+
+impl Graded {
+    /// The shares of a vertex `source_height` up in the source's own space that the fit put at
+    /// `at`.
+    pub fn shares(&self, source_height: f32, at: Vec3) -> Vec<(String, f32)> {
+        let length = (self.top - self.bottom).max(NEAREST_FLOOR);
+        let t = ((self.top - source_height) / length).clamp(0.0, 1.0);
+        shares_near(&self.root, &self.cloth, at, t, self.rigidity)
+    }
+}
+
+/// How a one-bone piece hangs, in the source's own heights: its joint, and its lowest vertex.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Piece {
+    pub top: f32,
+    pub bottom: f32,
+}
 
 /// A skirt's stiffness by default: 80% at the belt, 20% at the hem, so it follows the legs.
 pub const DEFAULT_RIGIDITY: Rigidity = Rigidity {
@@ -88,6 +135,9 @@ pub struct HangingBone {
     /// The chain's first bone, whose joint says where on the trunk the chain hangs.
     pub chain_root: String,
     pub root: Root,
+    /// For a chain of one bone, how far its piece hangs ([`hanging_cloth_of`]): it is graded
+    /// vertex by vertex ([`Graded`]).
+    pub piece: Option<Piece>,
 }
 
 /// The source's hanging cloth: every bone of a chain hanging straight from the pelvis or a spine
@@ -125,9 +175,80 @@ pub fn hanging_bones(bones: &[Bone]) -> Result<Vec<HangingBone>> {
             t: depth as f32 / last,
             chain_root: bones[root].name.clone(),
             root: from,
+            piece: None,
         }));
     }
     Ok(out)
+}
+
+/// The source's hanging cloth as it is skinned ([`hanging_bones`], then by its vertices): a chain
+/// off the spine is a cape only if its vertices hang below the pelvis's joint, and anything
+/// shorter -- the Black Knight's `L_pad` and `R_pad`, plates at his shoulders -- rides its spine
+/// link as the rest of his armour does. A chain of one bone carries how far its piece hangs.
+pub fn hanging_cloth_of(source: &Source) -> Result<Vec<HangingBone>> {
+    let bones = &source.bones;
+    let frames = bind_frames(bones)?;
+    let index_of = |name: &str| bones.iter().position(|bone| bone.name == name);
+    // The lowest vertex each bone carries the most of.
+    let mut lowest: Vec<Option<f32>> = vec![None; bones.len()];
+    for mesh in &source.meshes {
+        for vertex in &mesh.vertices {
+            let Some((slot, _)) = vertex
+                .bone_weights
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.total_cmp(b.1))
+            else {
+                continue;
+            };
+            let bone = mesh.bone(vertex.bone_indices[slot]);
+            if let Some(low) = lowest.get_mut(bone) {
+                let y = vertex.position.y;
+                *low = Some(low.map_or(y, |low: f32| low.min(y)));
+            }
+        }
+    }
+    let pelvis = skeleton::classify(bones)?
+        .iter()
+        .position(|role| matches!(role, Role::Direct(name) if name == PELVIS))
+        .map(|index| frames[index].origin.y)
+        .ok_or("the source has no pelvis to hang cloth from")?;
+    let mut hanging = hanging_bones(bones)?;
+    let chain_lowest = |chain_root: &str, hanging: &[HangingBone]| {
+        hanging
+            .iter()
+            .filter(|bone| bone.chain_root == chain_root)
+            .filter_map(|bone| index_of(&bone.name).and_then(|index| lowest[index]))
+            .reduce(f32::min)
+    };
+    let short_capes: Vec<String> = hanging
+        .iter()
+        .filter(|bone| bone.root == Root::Spine && bone.name == bone.chain_root)
+        .filter(|bone| chain_lowest(&bone.chain_root, &hanging).is_none_or(|low| low >= pelvis))
+        .map(|bone| bone.chain_root.clone())
+        .collect();
+    hanging.retain(|bone| !short_capes.contains(&bone.chain_root));
+    let lengths: Vec<usize> = hanging
+        .iter()
+        .map(|bone| {
+            hanging
+                .iter()
+                .filter(|other| other.chain_root == bone.chain_root)
+                .count()
+        })
+        .collect();
+    for (bone, length) in hanging.iter_mut().zip(lengths) {
+        let (Some(index), true) = (index_of(&bone.name), length == 1) else {
+            continue;
+        };
+        if let Some(bottom) = lowest[index] {
+            bone.piece = Some(Piece {
+                top: frames[index].origin.y,
+                bottom,
+            });
+        }
+    }
+    Ok(hanging)
 }
 
 /// One `[cloth]` bone of the cloth part: its name, the first bone above it that is not cloth (a
@@ -214,6 +335,7 @@ pub fn hanging_targets(
         t,
         chain_root,
         root,
+        piece,
     } in hanging
     {
         let at = joint(bone)?;
@@ -228,35 +350,59 @@ pub fn hanging_targets(
                     .map_or_else(|| PELVIS.to_owned(), |(name, _)| name.clone())
             }
         };
-        let distance = |cloth: &ClothBone| {
-            let (dx, dy, dz) = (cloth.at.x - at.x, cloth.at.y - at.y, cloth.at.z - at.z);
-            (dx * dx + dy * dy + dz * dz).sqrt()
+        let share = match piece {
+            Some(piece) => Share::Graded(Graded {
+                root: root_bone,
+                cloth: cloth.to_vec(),
+                top: piece.top,
+                bottom: piece.bottom,
+                rigidity,
+            }),
+            None => Share::Fixed(shares_near(&root_bone, cloth, at, *t, rigidity)),
         };
-        let mut nearest: Vec<(f32, &ClothBone)> =
-            cloth.iter().map(|cloth| (distance(cloth), cloth)).collect();
-        nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let pair = [nearest[0], nearest[1]];
-        let inverse = pair.map(|(distance, _)| 1.0 / distance.max(NEAREST_FLOOR));
-        let total = inverse[0] + inverse[1];
-        let stiff = 1.0 - rigidity.chain_share(*t);
-        let mut shares: Vec<(String, f32)> = vec![(root_bone, stiff * (1.0 - t))];
-        for ((_, cloth), inverse) in pair.iter().zip(inverse) {
-            let part = inverse / total;
-            shares.push((cloth.anchor.clone(), stiff * t * part));
-            shares.push((cloth.name.clone(), (1.0 - stiff) * part));
-        }
-        // One row per bone: the trunk bone may also be a cloth bone's anchor.
-        let mut merged: Vec<(String, f32)> = Vec::new();
-        for (name, share) in shares {
-            match merged.iter_mut().find(|(seen, _)| *seen == name) {
-                Some((_, sum)) => *sum += share,
-                None => merged.push((name, share)),
-            }
-        }
-        merged.retain(|(_, share)| *share > 0.0);
-        out.push((bone.clone(), merged));
+        out.push((bone.clone(), share));
     }
     Ok(out)
+}
+
+/// The shares of weight `t` down its chain at `at`, hanging at trunk bone `root`: what
+/// `rigidity` keeps stiff there, `1 - t` of it on `root` and `t` on the bones the two cloth
+/// bones nearest `at` hang from, and the rest on those two cloth bones, split by inverse
+/// distance. `cloth` holds two bones at least.
+fn shares_near(
+    root: &str,
+    cloth: &[ClothBone],
+    at: Vec3,
+    t: f32,
+    rigidity: Rigidity,
+) -> Vec<(String, f32)> {
+    let distance = |cloth: &ClothBone| {
+        let (dx, dy, dz) = (cloth.at.x - at.x, cloth.at.y - at.y, cloth.at.z - at.z);
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    };
+    let mut nearest: Vec<(f32, &ClothBone)> =
+        cloth.iter().map(|cloth| (distance(cloth), cloth)).collect();
+    nearest.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let pair = [nearest[0], nearest[1]];
+    let inverse = pair.map(|(distance, _)| 1.0 / distance.max(NEAREST_FLOOR));
+    let total = inverse[0] + inverse[1];
+    let stiff = 1.0 - rigidity.chain_share(t);
+    let mut shares: Vec<(String, f32)> = vec![(root.to_owned(), stiff * (1.0 - t))];
+    for ((_, cloth), inverse) in pair.iter().zip(inverse) {
+        let part = inverse / total;
+        shares.push((cloth.anchor.clone(), stiff * t * part));
+        shares.push((cloth.name.clone(), (1.0 - stiff) * part));
+    }
+    // One row per bone: the trunk bone may also be a cloth bone's anchor.
+    let mut merged: Vec<(String, f32)> = Vec::new();
+    for (name, share) in shares {
+        match merged.iter_mut().find(|(seen, _)| *seen == name) {
+            Some((_, sum)) => *sum += share,
+            None => merged.push((name, share)),
+        }
+    }
+    merged.retain(|(_, share)| *share > 0.0);
+    merged
 }
 
 #[cfg(test)]
@@ -323,6 +469,7 @@ mod tests {
             t,
             chain_root: chain_root.to_owned(),
             root,
+            piece: None,
         };
         assert_eq!(
             hanging_bones(&bones).unwrap(),
@@ -371,6 +518,7 @@ mod tests {
             t,
             chain_root: name.to_owned(),
             root,
+            piece: None,
         };
         let rigidity = DEFAULT_RIGIDITY;
         let targets = hanging_targets(
@@ -385,16 +533,19 @@ mod tests {
             rigidity,
         )
         .unwrap();
+        let fixed = |row: usize| match &targets[row].1 {
+            Share::Fixed(shares) => shares.clone(),
+            Share::Graded(_) => panic!("row {row} is a chain bone, shared the same everywhere"),
+        };
         let share = |row: usize, name: &str| {
-            targets[row]
-                .1
+            fixed(row)
                 .iter()
                 .find(|(bone, _)| bone == name)
                 .map_or(0.0, |(_, share)| *share)
         };
         let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        for (bone, shares) in &targets {
-            let total: f32 = shares.iter().map(|(_, share)| share).sum();
+        for (row, (bone, _)) in targets.iter().enumerate() {
+            let total: f32 = fixed(row).iter().map(|(_, share)| share).sum();
             assert!(close(total, 1.0), "{bone} adds up to {total}");
         }
         // At the belt: the pelvis keeps the stiff share, the cloth on the joint takes the rest.
@@ -419,5 +570,65 @@ mod tests {
         let unplaced = [hanging("Xtra09", 0.5, Root::Pelvis)];
         assert!(hanging_targets(&[], &joints, &cloth[..1], &trunk, rigidity).is_err());
         assert!(hanging_targets(&unplaced, &joints, &cloth, &trunk, rigidity).is_err());
+    }
+
+    #[test]
+    fn a_one_bone_piece_is_belted_at_its_joint_and_follows_the_cloth_nearest_each_vertex() {
+        let cloth = [
+            ClothBone {
+                name: "[cloth]Hip_L".to_owned(),
+                anchor: "L_ThighTwist".to_owned(),
+                at: v(0.15, 0.6, -0.05),
+            },
+            ClothBone {
+                name: "[cloth]Hip_R".to_owned(),
+                anchor: "R_ThighTwist".to_owned(),
+                at: v(-0.15, 0.6, -0.05),
+            },
+            ClothBone {
+                name: "[cloth]Belt".to_owned(),
+                anchor: "Pelvis".to_owned(),
+                at: v(0.0, 1.0, 0.0),
+            },
+        ];
+        let tare = HangingBone {
+            name: "L_tare".to_owned(),
+            t: 0.0,
+            chain_root: "L_tare".to_owned(),
+            root: Root::Pelvis,
+            piece: Some(Piece {
+                top: 1.5,
+                bottom: 0.9,
+            }),
+        };
+        let joints = [("L_tare".to_owned(), v(0.15, 1.0, -0.05))];
+        let rigidity = DEFAULT_RIGIDITY;
+        let targets = hanging_targets(&[tare], &joints, &cloth, &[], rigidity).unwrap();
+        let Share::Graded(graded) = &targets[0].1 else {
+            panic!("a one-bone piece is graded");
+        };
+        let share = |shares: &[(String, f32)], name: &str| {
+            shares
+                .iter()
+                .find(|(bone, _)| bone == name)
+                .map_or(0.0, |(_, share)| *share)
+        };
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        // At its joint the pelvis keeps the stiff share.
+        let belt = graded.shares(1.5, v(0.15, 1.0, -0.05));
+        assert!(close(share(&belt, "Pelvis"), rigidity.base), "{belt:?}");
+        // At its hem, placed by the left hip cloth: the stiff share is the left thigh's, the rest
+        // the left cloth's, and the pelvis keeps nothing of its own.
+        let hem = graded.shares(0.9, v(0.15, 0.6, -0.05));
+        let total: f32 = hem.iter().map(|(_, share)| share).sum();
+        assert!(close(total, 1.0), "{hem:?}");
+        assert!(share(&hem, "L_ThighTwist") > 0.9 * rigidity.tip, "{hem:?}");
+        assert!(
+            share(&hem, "[cloth]Hip_L") > 0.9 * (1.0 - rigidity.tip),
+            "{hem:?}"
+        );
+        assert!(share(&hem, "R_ThighTwist") < 0.01, "{hem:?}");
+        // Below its lowest vertex it is still at the hem.
+        assert_eq!(graded.shares(0.5, v(0.15, 0.6, -0.05)), hem);
     }
 }

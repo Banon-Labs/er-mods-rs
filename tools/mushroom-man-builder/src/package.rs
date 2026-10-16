@@ -45,7 +45,7 @@ use crate::{
     archive::ArchiveSet,
     bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
     character::{C2280, Character, FitConfig, Game, Writer},
-    dcx,
+    dcx, ds3,
     edge::{
         Blend, EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, Templates,
         named_textures, read_templates, retarget_any, retarget_append,
@@ -387,6 +387,8 @@ pub struct CharacterFiles {
     /// name, by owner id: c2900's body is drawn with c2909's textures.
     pub borrowed_tpfs: Vec<(String, Vec<u8>)>,
     pub textures: TextureSets,
+    /// A Dark Souls III character's outfit ([`crate::ds3`]) and how many meshes it left out.
+    pub outfit: Option<(ds3::Outfit, usize)>,
 }
 
 impl CharacterFiles {
@@ -424,11 +426,12 @@ pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<Character
 }
 
 /// Where a character's model is read from: a Dark Souls Remastered folder, or Dark Souls II's
-/// archives.
+/// or Dark Souls III's archives.
 #[derive(Clone, Copy)]
 pub enum Install<'a> {
     Dsr(&'a Path),
     Ds2(&'a ArchiveSet),
+    Ds3(&'a ArchiveSet),
 }
 
 impl Install<'_> {
@@ -436,6 +439,7 @@ impl Install<'_> {
         match self {
             Self::Dsr(_) => Game::Dsr,
             Self::Ds2(_) => Game::Ds2,
+            Self::Ds3(_) => Game::Ds3,
         }
     }
 
@@ -444,17 +448,23 @@ impl Install<'_> {
         match self {
             Self::Dsr(dir) => locate::chrbnd_path(dir, id).is_file(),
             Self::Ds2(archives) => archives.contains(&ds2_chr_path(id, "bnd")),
+            Self::Ds3(archives) => archives.contains(&ds3_chr_path(id, "chrbnd")),
         }
     }
 
     /// Every model id the install holds a binder for, sorted.
     pub fn installed_ids(&self) -> Result<Vec<String>> {
+        let in_archives =
+            |path: fn(&str, &str) -> String, extension: &str, archives: &ArchiveSet| {
+                (0..10_000)
+                    .map(|number| format!("c{number:04}"))
+                    .filter(|id| archives.contains(&path(id, extension)))
+                    .collect()
+            };
         match self {
             Self::Dsr(dir) => crate::search::installed_ids(dir),
-            Self::Ds2(archives) => Ok((0..10_000)
-                .map(|number| format!("c{number:04}"))
-                .filter(|id| archives.contains(&ds2_chr_path(id, "bnd")))
-                .collect()),
+            Self::Ds2(archives) => Ok(in_archives(ds2_chr_path, "bnd", archives)),
+            Self::Ds3(archives) => Ok(in_archives(ds3_chr_path, "chrbnd", archives)),
         }
     }
 
@@ -472,6 +482,16 @@ impl Install<'_> {
                     .find(|file| file_name(&file.name).eq_ignore_ascii_case(&wanted))
                     .map(|file| file.data))
             }
+            Self::Ds3(archives) => {
+                let path = ds3_chr_path(id, "chrbnd");
+                let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path)?;
+                let wanted = format!("{id}.flver");
+                Ok(binder
+                    .files
+                    .into_iter()
+                    .find(|file| file_name(&file.name).eq_ignore_ascii_case(&wanted))
+                    .map(|file| file.data))
+            }
         }
     }
 
@@ -480,8 +500,79 @@ impl Install<'_> {
         match self {
             Self::Dsr(dir) => read_character(dir, character),
             Self::Ds2(archives) => read_ds2_character(archives, character),
+            Self::Ds3(archives) => read_ds3_character(archives, character),
         }
     }
+}
+
+/// `<id>.flver` out of `/chr/<id>.chrbnd.dcx` in a Dark Souls III install's archives, and its
+/// textures out of `/chr/<id>.texbnd.dcx`.
+pub fn read_ds3_character(archives: &ArchiveSet, character: &Character) -> Result<CharacterFiles> {
+    let id = character.id;
+    let path = ds3_chr_path(id, "chrbnd");
+    if !archives.contains(&path) {
+        return Err(Error::new(format!(
+            "{path} is not in this Dark Souls III install's archives -- it has no {id}"
+        )));
+    }
+    let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path.clone())?;
+    let flver_name = format!("{id}.flver");
+    let mut flver = binder_entry(&binder.files, &flver_name, Path::new(&path))?;
+    let outfit = ds3_outfit(archives, character)?;
+    let hidden = match outfit {
+        Some(outfit) => ds3::dress(&mut flver, outfit)
+            .context(format!("dressing {id} as NpcParam {}", outfit.npc_param))?
+            .len(),
+        None => 0,
+    };
+    let tpf = binder_textures(
+        archives,
+        &ds3_chr_path(id, "texbnd"),
+        &format!("{id} draws with them"),
+        Game::Ds3,
+    )?;
+    let mut read = character_files(character, flver, &flver_name, tpf, |owner, why| {
+        binder_textures(archives, &ds3_chr_path(owner, "texbnd"), why, Game::Ds3)
+    })?;
+    read.outfit = outfit.map(|outfit| (outfit, hidden));
+    Ok(read)
+}
+
+/// The outfit a Dark Souls III `character` wears: the `NpcParam` row it names, or its model's
+/// first; none when the regulation has no row for the model.
+fn ds3_outfit(archives: &ArchiveSet, character: &Character) -> Result<Option<ds3::Outfit>> {
+    let dir = archives
+        .dir()
+        .ok_or("the Dark Souls III archives are in no folder")?;
+    let outfits = ds3::outfits_of(&ds3::read_outfits(dir)?, character.id);
+    match character.outfit {
+        None => Ok(outfits.first().copied()),
+        Some(row) => outfits
+            .iter()
+            .find(|outfit| outfit.npc_param == row)
+            .copied()
+            .map(Some)
+            .ok_or_else(|| {
+                let rows: Vec<String> = outfits
+                    .iter()
+                    .map(|outfit| outfit.npc_param.to_string())
+                    .collect();
+                Error::new(format!(
+                    "NpcParam {row} is not one of {}'s outfits ({})",
+                    character.id,
+                    if rows.is_empty() {
+                        "it has none".to_owned()
+                    } else {
+                        rows.join(", ")
+                    }
+                ))
+            }),
+    }
+}
+
+/// `/chr/<id>.<extension>.dcx`, as Dark Souls III's archives hash it.
+pub fn ds3_chr_path(id: &str, extension: &str) -> String {
+    format!("/chr/{id}.{extension}.dcx")
 }
 
 /// `<id>.flv` out of `/model/chr/<id>.bnd` in a Dark Souls II install's archives, and its
@@ -520,13 +611,18 @@ fn ds2_file(archives: &ArchiveSet, path: &str) -> Result<Vec<u8>> {
 
 /// Every TPF of `/model/chr/<owner>.texbnd`, merged into one.
 fn ds2_textures(archives: &ArchiveSet, owner: &str, why: &str) -> Result<Vec<u8>> {
-    let path = ds2_chr_path(owner, "texbnd");
-    if !archives.contains(&path) {
+    binder_textures(archives, &ds2_chr_path(owner, "texbnd"), why, Game::Ds2)
+}
+
+/// Every TPF of the texture binder at `path` in `game`'s archives, merged into one.
+fn binder_textures(archives: &ArchiveSet, path: &str, why: &str, game: Game) -> Result<Vec<u8>> {
+    if !archives.contains(path) {
         return Err(Error::new(format!(
-            "{path} is not in this Dark Souls II install's archives -- {why}"
+            "{path} is not in this {} install's archives -- {why}",
+            game.name()
         )));
     }
-    let binder = Bnd4::read(&ds2_file(archives, &path)?).context(path.clone())?;
+    let binder = Bnd4::read(&ds2_file(archives, path)?).context(path.to_owned())?;
     let tpfs = binder
         .files
         .iter()
@@ -539,7 +635,7 @@ fn ds2_textures(archives: &ArchiveSet, owner: &str, why: &str) -> Result<Vec<u8>
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    textures::merge_tpfs(&tpfs).context(path)
+    textures::merge_tpfs(&tpfs).context(path.to_owned())
 }
 
 /// What the build reads of `character`, from its FLVER (`flver_name`) and its own textures:
@@ -586,6 +682,7 @@ fn character_files(
         flver,
         borrowed_tpfs,
         textures,
+        outfit: None,
     };
     read.textures = read
         .textures
@@ -1781,7 +1878,7 @@ fn claim_folder(out_dir: &Path, character: &Character) -> Result<PathBuf> {
     fs::create_dir_all(out_dir).context(format!("creating {}", out_dir.display()))?;
     let line = match character.game {
         Game::Dsr => character.id.to_owned(),
-        Game::Ds2 => format!("ds2 {}", character.id),
+        game => format!("{} {}", game.flag(), character.id),
     };
     fs::write(&marker, format!("{line}\n")).context(format!("writing {}", marker.display()))?;
     Ok(marker)
@@ -1909,12 +2006,11 @@ pub fn tail_split(
             character.id
         )));
     }
-    let full = fit::export_with_targets(
-        character,
-        character_flver,
-        donor,
-        &tail::chain_targets(&tail_bones, rigidity),
-    )?;
+    let targets: Vec<skirt::BoneShares> = tail::chain_targets(&tail_bones, rigidity)
+        .into_iter()
+        .map(|(bone, shares)| (bone, skirt::Share::Fixed(shares)))
+        .collect();
+    let full = fit::export_with_targets(character, character_flver, donor, &targets)?;
     tail::split(&full)
 }
 
@@ -1937,11 +2033,10 @@ pub fn hanging_split(
             character.id
         )));
     };
-    let bones = source::parse(character_flver)?.bones;
-    let hanging = skirt::hanging_bones(&bones)?;
+    let hanging = skirt::hanging_cloth_of(&source::parse(character_flver)?)?;
     if hanging.is_empty() {
         return Err(Error::new(format!(
-            "{} has no hanging cloth (no chain hangs from its pelvis or spine)",
+            "{} has no hanging cloth (no chain hangs from its pelvis, or below it from its spine)",
             character.id
         )));
     }
@@ -1964,20 +2059,20 @@ pub fn hanging_split(
     tail::split(&full)
 }
 
-/// What `character`'s hanging cloth ([`skirt::hanging_bones`]) goes onto, if anything: a skirt's
-/// part when every chain hangs from the pelvis, the cape's when one hangs from the spine. Nothing
-/// for a character with a tail, since the one naked body slot carries one cloth part, or when
-/// the rigidity for its kind welds it.
+/// What `character`'s hanging cloth ([`skirt::hanging_cloth_of`]) goes onto, if anything: a
+/// skirt's part when every chain hangs from the pelvis, the cape's when one hangs from the spine
+/// below the pelvis. Nothing for a character with a tail, since the one naked body slot carries
+/// one cloth part, or when the rigidity for its kind welds it.
 pub fn hanging_cloth(
     character_flver: &[u8],
     skirt_rigidity: tail::Rigidity,
     cape_rigidity: tail::Rigidity,
 ) -> Result<Option<Cloth>> {
-    let bones = source::parse(character_flver)?.bones;
-    if !tail::tail_bones(&bones).is_empty() {
+    let source = source::parse(character_flver)?;
+    if !tail::tail_bones(&source.bones).is_empty() {
         return Ok(None);
     }
-    let hanging = skirt::hanging_bones(&bones)?;
+    let hanging = skirt::hanging_cloth_of(&source)?;
     let (cloth, rigidity) = if hanging.is_empty() {
         return Ok(None);
     } else if hanging.iter().any(|bone| bone.root == skirt::Root::Spine) {
