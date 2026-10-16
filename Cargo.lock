@@ -2840,12 +2840,14 @@ dependencies = [
 name = "er-cel-shade"
 version = "0.1.0"
 dependencies = [
+ "eldenring",
  "er-build-watermark-core",
  "er-dinput-suppress-core",
  "er-game-base",
  "er-hook",
  "er-hotkey-config",
  "er-shader-compiler",
+ "fromsoftware-shared",
  "hudhook",
  "iced-x86",
  "windows 0.62.2",

@@ -371,6 +371,8 @@ pub struct Settings {
     /// `[look]` only while [`Self::cel_layers`] is false, so a move that could not be made loses
     /// nothing.
     pub moved: LayerLook,
+    /// The Sky tab's time and weather, under `[sky]`.
+    pub sky: crate::sky::SkySettings,
 }
 
 impl Default for Settings {
@@ -390,6 +392,7 @@ impl Default for Settings {
             unfaithful_ports: 0,
             cel_layers: false,
             moved: preset.map_or_else(LayerLook::vanilla, |p| p.layers),
+            sky: crate::sky::SkySettings::default(),
         }
     }
 }
@@ -428,6 +431,7 @@ pub const FILE_NAME: &str = "er-cel-shade.toml";
 enum Section {
     Top,
     Look,
+    Sky,
     Preset,
 }
 
@@ -447,6 +451,10 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
         let at = number + 1;
         if line == "[look]" {
             section = Section::Look;
+            continue;
+        }
+        if line == "[sky]" {
+            section = Section::Sky;
             continue;
         }
         if line == "[[preset]]" {
@@ -485,6 +493,7 @@ pub fn parse(text: &str) -> (Settings, Vec<String>) {
                 _ => Err(format!("unknown key `{key}`")),
             },
             Section::Look => set_knob(&mut settings.look, &mut settings.moved, key, value),
+            Section::Sky => settings.sky.set(key, value),
             Section::Preset => match settings.presets.last_mut() {
                 Some(preset) if key == "name" => parse_string(value).map(|v| preset.name = v),
                 Some(preset) => set_knob(&mut preset.look, &mut preset.layers, key, value),
@@ -665,6 +674,8 @@ pub fn render(settings: &Settings) -> String {
         out.push_str("# Not moved into the editor's project yet; the next start moves them.\n");
         render_knobs(&mut out, &LAYER_KNOBS, &settings.moved.0, true);
     }
+    out.push('\n');
+    settings.sky.render(&mut out);
     for preset in &settings.presets {
         out.push_str("\n[[preset]]\n");
         out.push_str(&format!("name = {}\n", quote(&preset.name)));
@@ -788,6 +799,24 @@ mod tests {
             unfaithful_ports: PortKind::AoSsr.bit() | PortKind::TonemapLut.bit(),
             cel_layers: true,
             moved: Settings::default().moved,
+            sky: crate::sky::SkySettings {
+                lock_time: true,
+                time: crate::sky::Clock {
+                    hour: 6,
+                    minute: 45,
+                    second: 0,
+                },
+                day_minutes: Some(20.0),
+                weather: 41,
+                lock_weather: true,
+                sun: crate::sky::Sun {
+                    height: Some(35.0),
+                    exposure: Some(1.25),
+                    size: Some(2.9),
+                    shadow_rays: Some(4),
+                    ..crate::sky::Sun::default()
+                },
+            },
         }
     }
 

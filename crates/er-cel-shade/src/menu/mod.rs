@@ -96,6 +96,8 @@ pub mod layers_tab;
 #[cfg(windows)]
 mod look_tab;
 pub mod reference_panel;
+#[cfg(windows)]
+mod sky_tab;
 pub mod theme;
 pub mod widgets;
 
@@ -315,18 +317,26 @@ mod process {
     pub(super) enum Tab {
         Layers,
         Look,
+        Sky,
         Hunt,
         Diagnostics,
     }
 
     impl Tab {
-        const ALL: [Self; 4] = [Self::Layers, Self::Look, Self::Hunt, Self::Diagnostics];
+        const ALL: [Self; 5] = [
+            Self::Layers,
+            Self::Look,
+            Self::Sky,
+            Self::Hunt,
+            Self::Diagnostics,
+        ];
 
         /// The name on its tab.
         const fn label(self) -> &'static str {
             match self {
                 Self::Layers => "Layers",
                 Self::Look => "Look",
+                Self::Sky => "Sky",
                 Self::Hunt => "Hunt",
                 Self::Diagnostics => "Diagnostics",
             }
@@ -337,6 +347,7 @@ mod process {
             match self {
                 Self::Layers => "layers",
                 Self::Look => "look",
+                Self::Sky => "sky",
                 Self::Hunt => "hunt",
                 Self::Diagnostics => "diagnostics",
             }
@@ -347,6 +358,7 @@ mod process {
             match self {
                 Self::Layers => "##body-layers",
                 Self::Look => "##body-look",
+                Self::Sky => "##body-sky",
                 Self::Hunt => "##body-hunt",
                 Self::Diagnostics => "##body-diagnostics",
             }
@@ -805,6 +817,7 @@ mod process {
                     self.preset_look = Self::preset_of(&settings);
                     self.live = (*settings).clone();
                     self.saved = *settings;
+                    crate::sky::adopt(&self.live.sky);
                     // A `[look]` edited by hand in the nine-knob form: its four layer knobs go
                     // into the stock cel layers, as the move at start-up would have put them,
                     // and the next Save writes the file without them.
@@ -837,7 +850,7 @@ mod process {
         fn condensed(&self) -> bool {
             match self.tab {
                 Tab::Layers => self.code_view() || self.layers.selector_shown(),
-                Tab::Look => false,
+                Tab::Look | Tab::Sky => false,
                 Tab::Hunt | Tab::Diagnostics => true,
             }
         }
@@ -1388,6 +1401,7 @@ mod process {
             row.next(ui, [revert_width, frame]);
             if theme::button(ui, "Revert##toolbar", ButtonKind::Secondary, size) {
                 self.live = self.saved.clone();
+                crate::sky::adopt(&self.live.sky);
                 self.preset_look = Self::preset_of(&self.live);
                 self.status = "Back to the saved settings.".to_owned();
             }
@@ -1514,12 +1528,13 @@ mod process {
             let size = [area.width(), (area.bottom - top).max(1.0)];
             let pad = match self.tab {
                 Tab::Layers => [0.0, 0.0],
-                Tab::Look | Tab::Hunt | Tab::Diagnostics => theme::CONTENT_PAD,
+                Tab::Look | Tab::Sky | Tab::Hunt | Tab::Diagnostics => theme::CONTENT_PAD,
             };
             let tab = self.tab;
             theme::region(ui, tab.body_id(), pad, size, || match tab {
                 Tab::Layers => self.layers.draw(ui, status, editor_dir()),
                 Tab::Look => self.draw_look_tab(ui),
+                Tab::Sky => self.draw_sky_tab(ui),
                 Tab::Hunt => hunt_tab::draw(ui),
                 Tab::Diagnostics => diagnostics_tab::draw(ui, status),
             });
