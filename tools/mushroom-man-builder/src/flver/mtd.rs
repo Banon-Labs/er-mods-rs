@@ -4,8 +4,10 @@
 //! `C_Wet`), the texture slots in brackets (`[DSB]` diffuse, specular, bump; `[D]` diffuse only),
 //! and a blend suffix -- `_Edge` is alpha-tested (`g_BlendMode` 1, TexEdge), `_Alp` alpha-blended.
 //! Every bracketed opaque family goes to the one route the approved c2280 build uses, Elden Ring's
-//! skin `Body` material; what distinguishes the families in DSR's own shading is not carried over.
-//! Alpha testing has its own route, a generic `C[AMSN]_e` material on a material entry of its own.
+//! skin `Body` material, or, for a texture set past the character's first, a generic `C[AMSN]`
+//! material of that set's own; what distinguishes the families in DSR's own shading is not carried
+//! over. Alpha testing has its own route, a generic `C[AMSN]_e` material on a material entry of its
+//! own.
 //! Everything else
 //! -- alpha blending, the additive ghosts, hair, an unbracketed or blank name -- has no route yet
 //! and is refused rather than drawn wrong.
@@ -23,7 +25,7 @@ impl MtdClass {
     /// The Elden Ring material this class is drawn with, or `None` while it has no route.
     pub fn route(self) -> Option<&'static str> {
         match self {
-            Self::Opaque => Some("P[FC_M_0000]_Body, material 0"),
+            Self::Opaque => Some("P[FC_M_0000]_Body, material 0, or C[AMSN] for a further set"),
             Self::AlphaTest => Some("C[AMSN]_e, on a material of its own"),
             Self::AlphaBlend | Self::Unsupported => None,
         }

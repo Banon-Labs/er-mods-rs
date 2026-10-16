@@ -14,7 +14,9 @@
 //! and its meshes grouped by DSR material and back-face culling; each group becomes one slot of
 //! the rebuild writer on a donor body mesh laid out as mesh 13 is, drawn with the Body material,
 //! or with the Edge material when its MTD is alpha-tested ([`crate::edge`]), and every other mesh
-//! is hidden. The low-detail binder carries the same FLVER.
+//! is hidden. A group whose material samples another of the character's texture sets draws with
+//! a retargeted `C[AMSN]` material of that set's own. The low-detail binder carries the same
+//! FLVER.
 //!
 //! Why each exists. Character presets ask for many `fc_*` bodies, and a binder answers only to
 //! its own name -- inside and out -- so the patched body is copied under every name with its
@@ -44,7 +46,7 @@ use crate::{
     bnd::{BinderFile, Bnd4, file_name, read_bnd3, read_bxf3},
     character::{C2280, Character, FitConfig, Writer},
     dcx,
-    edge::{EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, edge_append},
+    edge::{EDGE_LAYOUT_DONOR_MESH, EDGE_MATERIAL, Retarget, SET_MATERIALS, retarget_append},
     error::{Context, Error, Result},
     fit::{self, Export, SourceMesh, biped, mushroom::export_c2280},
     flver::{
@@ -58,7 +60,7 @@ use crate::{
     },
     locate,
     oodle::Oodle,
-    textures::{self, TextureSet, character_tpf_from, with_zero_metallic},
+    textures::{self, TextureSets, body_tpf},
 };
 
 /// Every full-body part a character preset can ask for, from the community file list of Elden
@@ -179,7 +181,8 @@ pub enum BodyReport {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SlotReport {
     pub donor_mesh: usize,
-    /// The donor material it draws with: [`BODY_MATERIAL`], or [`EDGE_MATERIAL`] retargeted.
+    /// The donor material it draws with: [`BODY_MATERIAL`], or [`EDGE_MATERIAL`] or one of
+    /// [`SET_MATERIALS`] retargeted.
     pub material: u32,
     pub cull_backfaces: bool,
     /// The DSR meshes it holds; `None` for an authored mesh.
@@ -197,6 +200,8 @@ pub struct SlotSource {
     pub mtd: String,
     pub class: MtdClass,
     pub meshes: Vec<usize>,
+    /// The character's texture set the material samples ([`TextureSets`]).
+    pub texture_set: usize,
 }
 
 impl SlotReport {
@@ -205,7 +210,7 @@ impl SlotReport {
         let material = match self.material {
             BODY_MATERIAL => format!("Body material {BODY_MATERIAL}"),
             EDGE_MATERIAL => format!("Edge material {EDGE_MATERIAL}"),
-            other => format!("material {other}"),
+            other => format!("set material {other}"),
         };
         let sides = if self.cull_backfaces {
             "back faces culled"
@@ -231,6 +236,9 @@ impl SlotReport {
                 source.mtd,
                 class_name(source.class)
             );
+            if source.texture_set > 0 {
+                let _ = write!(line, ", texture set {}", source.texture_set);
+            }
         }
         line
     }
@@ -305,22 +313,22 @@ impl BuildReport {
     }
 }
 
-/// A DSR character's model, its TPF, and the texture set its kept materials name, with the TPF of
-/// every other character that set is read out of.
+/// A DSR character's model, its TPF, and the texture sets its kept materials name, with the TPF
+/// of every other character those sets are read out of.
 pub struct CharacterFiles {
     pub id: &'static str,
     pub flver: Vec<u8>,
     /// `<id>.tpf`, the character's own.
     pub tpf: Vec<u8>,
-    /// `<owner>.tpf` out of `chr/<owner>.chrbnd.dcx` for each other character the set's paths
+    /// `<owner>.tpf` out of `chr/<owner>.chrbnd.dcx` for each other character the sets' paths
     /// name, by owner id: c2900's body is drawn with c2909's textures.
     pub borrowed_tpfs: Vec<(String, Vec<u8>)>,
-    pub textures: TextureSet,
+    pub textures: TextureSets,
 }
 
 impl CharacterFiles {
     /// Every TPF [`Self::textures`] is read out of, under the id of the character holding it, as
-    /// [`crate::textures::character_tpf_from`] takes them.
+    /// [`crate::textures::body_tpf`] takes them.
     pub fn texture_tpfs(&self) -> Vec<(&str, &[u8])> {
         std::iter::once((self.id, self.tpf.as_slice()))
             .chain(
@@ -333,7 +341,7 @@ impl CharacterFiles {
 }
 
 /// `<id>.flver` and `<id>.tpf` out of `chr/<id>.chrbnd.dcx` in a Dark Souls Remastered install,
-/// and the texture set of the materials the build keeps ([`kept_materials`]): a stripped held
+/// and the texture sets of the materials the build keeps ([`kept_materials`]): a stripped held
 /// item's textures are never asked for. A texture its path puts in another character's folder
 /// is read out of that character's binder.
 pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<CharacterFiles> {
@@ -348,14 +356,15 @@ pub fn read_character(dsr_dir: &Path, character: &Character) -> Result<Character
     let kept = kept_materials(character, &source)?
         .into_iter()
         .map(|index| {
-            source.materials.get(index).cloned().ok_or_else(|| {
+            let material = source.materials.get(index).cloned().ok_or_else(|| {
                 Error::new(format!(
                     "{id}.flver draws with material {index}, which it does not have"
                 ))
-            })
+            })?;
+            Ok((index, material))
         })
         .collect::<Result<Vec<_>>>()?;
-    let textures = TextureSet::of_materials(&kept, id).context(format!("{id}.flver"))?;
+    let textures = TextureSets::of_materials(&kept, id).context(format!("{id}.flver"))?;
     let mut borrowed_tpfs = Vec::new();
     for owner in textures.owners() {
         if owner.eq_ignore_ascii_case(id) {
@@ -492,9 +501,22 @@ pub fn trial_build(donor: &[u8], character: &Character, files: &CharacterFiles) 
             character.id
         )));
     };
-    let body = biped_body(donor, character, &files.flver, Cutouts::EdgeMaterial)?;
+    let body = biped_body(
+        donor,
+        character,
+        &files.flver,
+        &files.textures,
+        Cutouts::EdgeMaterial,
+    )?;
     rebuild(donor, &body.slots, true, &HeaderAppend::default())?;
-    character_tpf_from(&files.texture_tpfs(), &files.textures, FC_SOURCE_STEM, "")?;
+    body_tpf(
+        &files.texture_tpfs(),
+        &files.textures,
+        &body.extra_sets(),
+        body.samples_metallic(),
+        FC_SOURCE_STEM,
+        "",
+    )?;
     Ok(body.slots.len())
 }
 
@@ -563,22 +585,35 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
             }
             // `buildable` has refused the patch writer for a Biped character.
             (None, FitConfig::Biped(_)) => {
-                let body = biped_body(&flver.data, character, &dsr.flver, inputs.cutouts)
-                    .context(&fitting)?;
-                let append = if body.edge {
-                    edge_append(inputs.archives, inputs.oodle, &flver.data, character.id)
-                        .context("the Edge material")?
-                } else {
+                let body = biped_body(
+                    &flver.data,
+                    character,
+                    &dsr.flver,
+                    &dsr.textures,
+                    inputs.cutouts,
+                )
+                .context(&fitting)?;
+                let append = if body.retargets.is_empty() {
                     HeaderAppend::default()
+                } else {
+                    retarget_append(
+                        inputs.archives,
+                        inputs.oodle,
+                        &flver.data,
+                        character.id,
+                        &body.retargets,
+                    )
+                    .context("the C[AMSN] materials")?
                 };
                 let bytes =
                     rebuild(&flver.data, &body.slots, true, &append).context(&rebuilding)?;
                 rebuilt = Some(Rebuilt {
                     donor: std::mem::replace(&mut flver.data, bytes.clone()),
                     body: bytes,
+                    extra_sets: body.extra_sets(),
+                    metallic: body.samples_metallic(),
                     slots: body.reports,
                     strip: Some(body.strip),
-                    edge: body.edge,
                     source_vertices: body.source_vertices,
                     source_triangles: body.source_triangles,
                 });
@@ -601,7 +636,8 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                             body: bytes,
                             slots: vec![report],
                             strip: None,
-                            edge: false,
+                            extra_sets: Vec::new(),
+                            metallic: false,
                             source_vertices: source.vertices.len(),
                             source_triangles: source.triangles.len(),
                         });
@@ -609,13 +645,19 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
                 }
             }
         }
-        let mut textures =
-            character_tpf_from(&dsr.texture_tpfs(), &dsr.textures, FC_SOURCE_STEM, lod)
-                .context(format!("{}'s textures", character.id))?;
-        // The Edge material samples a metallic map, which no DSR set has.
-        if rebuilt.as_ref().is_some_and(|done| done.edge) {
-            textures = with_zero_metallic(&textures, FC_SOURCE_STEM, lod)?;
-        }
+        // A C[AMSN] material samples a metallic map, which no DSR set has.
+        let (extra_sets, metallic) = rebuilt.as_ref().map_or((&[][..], false), |done| {
+            (&done.extra_sets[..], done.metallic)
+        });
+        let textures = body_tpf(
+            &dsr.texture_tpfs(),
+            &dsr.textures,
+            extra_sets,
+            metallic,
+            FC_SOURCE_STEM,
+            lod,
+        )
+        .context(format!("{}'s textures", character.id))?;
         binder_file(&mut binder, &format!("{stem}.tpf"), &logical)?.data = textures;
         bodies.push((binder, packed));
     }
@@ -736,8 +778,10 @@ struct Rebuilt {
     body: Vec<u8>,
     slots: Vec<SlotReport>,
     strip: Option<StripReport>,
-    /// A slot draws with the Edge material, so the body's TPFs need its metallic map.
-    edge: bool,
+    /// The texture sets past set 0 a slot draws, whose maps the body's TPFs carry too.
+    extra_sets: Vec<usize>,
+    /// A slot draws with a `C[AMSN]` material, so the body's TPFs need its metallic map.
+    metallic: bool,
     source_vertices: usize,
     source_triangles: usize,
 }
@@ -780,23 +824,51 @@ pub struct BipedBody {
     pub slots: Vec<Slot>,
     pub reports: Vec<SlotReport>,
     pub strip: StripReport,
-    /// Some slot draws with [`EDGE_MATERIAL`], so the rebuild needs the Edge material's
-    /// [`HeaderAppend`] (`edge::edge_append`) and the body's TPFs a metallic map.
-    pub edge: bool,
+    /// The donor materials the slots draw with that the rebuild's [`HeaderAppend`] must point at
+    /// a `C[AMSN]` matxml (`edge::retarget_append`), in the order they were first taken.
+    pub retargets: Vec<Retarget>,
     pub source_vertices: usize,
     pub source_triangles: usize,
 }
 
-/// `character` (a Biped one, its model `character_flver`) fitted to `donor` (`FC_M_0000.flver`)
-/// and cut into slots: its kept meshes grouped by DSR material and back-face culling, in the
-/// order the groups first appear, each group on the next of [`SLOT_DONOR_MESHES`]. A group
-/// draws with [`BODY_MATERIAL`], or with [`EDGE_MATERIAL`] when its MTD is alpha-tested and
-/// `cutouts` asks for the Edge material; it keeps its source's culling, its own box, and its
-/// LOD0 triangles at every distance. A kept mesh whose MTD has no Elden Ring route is refused.
+impl BipedBody {
+    /// Some slot draws with [`EDGE_MATERIAL`].
+    pub fn edge(&self) -> bool {
+        self.retargets.contains(&Retarget::EDGE)
+    }
+
+    /// Some slot draws with a `C[AMSN]` material, so the body's TPFs need its metallic map.
+    pub fn samples_metallic(&self) -> bool {
+        !self.retargets.is_empty()
+    }
+
+    /// The texture sets past set 0 a slot draws, each once, ascending.
+    pub fn extra_sets(&self) -> Vec<usize> {
+        let mut sets: Vec<usize> = self
+            .retargets
+            .iter()
+            .map(|retarget| retarget.set)
+            .filter(|&set| set > 0)
+            .collect();
+        sets.sort_unstable();
+        sets.dedup();
+        sets
+    }
+}
+
+/// `character` (a Biped one, its model `character_flver`, its texture sets `sets`) fitted to
+/// `donor` (`FC_M_0000.flver`) and cut into slots: its kept meshes grouped by DSR material and
+/// back-face culling, in the order the groups first appear, each group on the next of
+/// [`SLOT_DONOR_MESHES`]. A group drawing set 0 draws with [`BODY_MATERIAL`], or with
+/// [`EDGE_MATERIAL`] when its MTD is alpha-tested and `cutouts` asks for the Edge material; a group
+/// drawing another set draws with the next free one of [`SET_MATERIALS`], one per set and per
+/// opaque or cutout. A group keeps its source's culling, its own box, and its LOD0 triangles at
+/// every distance. A kept mesh whose MTD has no Elden Ring route is refused.
 pub fn biped_body(
     donor: &[u8],
     character: &Character,
     character_flver: &[u8],
+    sets: &TextureSets,
     cutouts: Cutouts,
 ) -> Result<BipedBody> {
     let export = fit::export(character, character_flver, donor)?;
@@ -813,13 +885,14 @@ pub fn biped_body(
     }
     let flver = Flver::parse(donor)?;
     let layout_of = slot_buffer(donor, &flver, FC_DONOR_MESH_INDEX)?;
-    let edge_buffer = slot_buffer(donor, &flver, EDGE_LAYOUT_DONOR_MESH)?;
+    let c_amsn_buffer = slot_buffer(donor, &flver, EDGE_LAYOUT_DONOR_MESH)?;
     let skinned = skin_to_donor(&export.mesh, &flver)?;
+    let mut free_set_materials = SET_MATERIALS;
     let mut body = BipedBody {
         slots: Vec::with_capacity(groups.len()),
         reports: Vec::with_capacity(groups.len()),
         strip,
-        edge: false,
+        retargets: Vec::new(),
         source_vertices: export.mesh.vertices.len(),
         source_triangles: export.mesh.triangles.len(),
     };
@@ -837,9 +910,9 @@ pub fn biped_body(
                 layout_of.vertex_size
             )));
         }
-        let material = match (group.source.class, cutouts) {
-            (MtdClass::Opaque, _) | (MtdClass::AlphaTest, Cutouts::BodyMaterial) => BODY_MATERIAL,
-            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => EDGE_MATERIAL,
+        let cutout = match (group.source.class, cutouts) {
+            (MtdClass::Opaque, _) | (MtdClass::AlphaTest, Cutouts::BodyMaterial) => false,
+            (MtdClass::AlphaTest, Cutouts::EdgeMaterial) => true,
             (class, _) => {
                 return Err(Error::new(format!(
                     "DSR material {} is {}, which has no Elden Ring route",
@@ -848,17 +921,53 @@ pub fn biped_body(
                 )));
             }
         };
-        body.edge |= material == EDGE_MATERIAL;
-        let (layout, layout_buffer) = if material == EDGE_MATERIAL {
+        let set = sets.set_of(group.source.material).ok_or_else(|| {
+            Error::new(format!(
+                "DSR material {} samples none of {}'s texture sets",
+                group.source.material, character.id
+            ))
+        })?;
+        let material = match (set, cutout) {
+            (0, false) => BODY_MATERIAL,
+            (0, true) => EDGE_MATERIAL,
+            _ => match body
+                .retargets
+                .iter()
+                .find(|taken| (taken.set, taken.cutout) == (set, cutout))
+            {
+                Some(taken) => taken.material,
+                None => free_set_materials.next().ok_or_else(|| {
+                    Error::new(format!(
+                        "{} needs more than the {} set materials the donor has",
+                        character.id,
+                        SET_MATERIALS.count()
+                    ))
+                })?,
+            },
+        };
+        if material != BODY_MATERIAL
+            && !body
+                .retargets
+                .iter()
+                .any(|taken| taken.material == material)
+        {
+            body.retargets.push(Retarget {
+                material,
+                set,
+                cutout,
+            });
+        }
+        // Every C[AMSN] material is drawn in the 40-byte layout vanilla gives it.
+        let (layout, layout_buffer) = if material == BODY_MATERIAL {
+            (None, buffer)
+        } else {
             (
                 Some(SlotLayout {
-                    layout_index: edge_buffer.layout_index,
-                    vertex_size: edge_buffer.vertex_size,
+                    layout_index: c_amsn_buffer.layout_index,
+                    vertex_size: c_amsn_buffer.vertex_size,
                 }),
-                edge_buffer,
+                c_amsn_buffer,
             )
-        } else {
-            (None, buffer)
         };
         let mut remap = vec![u32::MAX; skinned.len()];
         for (new, &old) in group.vertices.iter().enumerate() {
@@ -893,6 +1002,7 @@ pub fn biped_body(
                 mtd: group.source.mtd,
                 class: group.source.class,
                 meshes: group.source.meshes,
+                texture_set: set,
             }),
         ));
         body.slots.push(slot);
@@ -1406,6 +1516,7 @@ mod tests {
                 mtd: "C_DullLeather[DSB].mtd".to_owned(),
                 class,
                 meshes,
+                texture_set: 0,
             }),
             vertices: 10,
             triangles: [7; 3],

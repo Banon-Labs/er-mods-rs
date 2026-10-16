@@ -113,7 +113,7 @@ fn c2650_body(test: &str, cutouts: Cutouts) -> Option<(Vec<u8>, BipedBody)> {
         return None;
     };
     let files = read_character(&dsr, &C2650).unwrap();
-    let body = biped_body(&donor, &C2650, &files.flver, cutouts).unwrap();
+    let body = biped_body(&donor, &C2650, &files.flver, &files.textures, cutouts).unwrap();
     Some((donor, body))
 }
 
@@ -182,7 +182,8 @@ fn c2650_rebuilds_into_three_material_slots_with_its_cutouts_on_the_edge_materia
         return;
     };
     assert_eq!(shape(&body), CUTOUT_SLOTS);
-    assert!(body.edge);
+    assert!(body.edge());
+    assert!(body.extra_sets().is_empty(), "c2650 is one texture set");
     let vertices: usize = body.reports.iter().map(|slot| slot.vertices).sum();
     let triangles: usize = body.reports.iter().map(|slot| slot.triangles[0]).sum();
     assert_eq!((vertices, triangles), (1745, 2456));
@@ -248,7 +249,8 @@ fn c2650s_albedo_goes_in_as_srgb_bc7_and_the_metallic_map_only_with_the_edge_mat
     };
     let files = read_character(&dsr, &C2650).unwrap();
     for (lod, metallic, expected) in TPFS {
-        let mut tpf = character_tpf(&files.tpf, &files.textures, "FC_M_0000", lod).unwrap();
+        let mut tpf =
+            character_tpf(&files.tpf, files.textures.primary(), "FC_M_0000", lod).unwrap();
         if metallic {
             tpf = with_zero_metallic(&tpf, "FC_M_0000", lod).unwrap();
         }
@@ -312,7 +314,7 @@ fn the_fallback_draws_every_slot_with_the_body_material() {
         })
         .collect();
     assert_eq!(shape(&body), expected);
-    assert!(!body.edge);
+    assert!(!body.edge() && body.retargets.is_empty());
 
     let out = rebuild(&donor, &body.slots, true, &HeaderAppend::default()).unwrap();
     write_for_the_oracle("c2650-body.flver", &out);

@@ -14,6 +14,11 @@
 //! `chr/c2909.chrbnd.dcx`, and its own `c2900.tpf` holds only its weapons' textures. So each
 //! texture of a set carries the character its path names ([`TextureRef::owner`]), and
 //! [`character_tpf_from`] looks it up in that character's TPF.
+//!
+//! A character may draw with several sets ([`TextureSets`]): Smough's legs have their own. Only
+//! set 0 can go in the donor's slots, since the Body material's matbin names `FC_M_0000_a` and
+//! its neighbours itself. Every other set goes in under `FC_M_0000_<set>` ([`set_prefix`]), for a
+//! retargeted `C[AMSN]` material that names its textures by path ([`body_tpf`]).
 
 use er_tpf::{TEX_TYPE_TEXTURE, TPF_ENCODING_UTF16, TPF_PLATFORM_PC, Tpf, TpfTexture};
 
@@ -32,8 +37,8 @@ pub struct TextureRef {
     /// The file stem of the material's path, `c2909_n`.
     pub name: String,
     /// The character folder the path names, `c2909` for `...\chr\c2909\tex\c2909_n.tga`; for a
-    /// path under no `chr\<id>` folder (c2900's weapons, `...\parts\Weapon\...`), the character
-    /// whose model names it.
+    /// path under no `chr\<id>` folder (`...\parts\Arm\...\ref\c2799_AM_A_9490.tga`), the
+    /// character the file name starts with, and failing that the character whose model names it.
     pub owner: String,
 }
 
@@ -75,42 +80,154 @@ impl TextureSet {
         }
     }
 
-    /// The one set every one of `materials` samples, as character `id` names it. A character whose
-    /// materials name two different maps for one role carries several sets, which this builder
-    /// does not write yet; the caller passes only the materials it keeps, so a stripped weapon's
-    /// own set is never one of them.
+    /// The one set every one of `materials` samples, as character `id` names it. Two materials
+    /// naming different maps for one role carry two sets, and are refused here; see
+    /// [`TextureSets::of_materials`] for a character that has several.
     pub fn of_materials(materials: &[SourceMaterial], id: &str) -> Result<Self> {
+        let indexed: Vec<(usize, SourceMaterial)> = materials.iter().cloned().enumerate().collect();
+        let mut sets = TextureSets::of_materials(&indexed, id)?;
+        if let [_, second, ..] = sets.sets.as_slice() {
+            let first = &sets.sets[0];
+            return Err(Error::new(format!(
+                "the materials name two texture sets, {}'s {} and {}'s {}",
+                first.albedo.owner, first.albedo.name, second.albedo.owner, second.albedo.name
+            )));
+        }
+        Ok(sets.sets.remove(0))
+    }
+
+    /// The maps one material names, by role: albedo, specular, normal.
+    fn roles_of(material: &SourceMaterial, id: &str) -> [Option<TextureRef>; 3] {
         let mut found: [Option<TextureRef>; 3] = Default::default();
-        for material in materials {
-            for (texture_type, path) in &material.textures {
-                let role = [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
-                    .iter()
-                    .position(|name| texture_type.eq_ignore_ascii_case(name));
-                let (Some(role), Some(stem)) = (role, texture_stem(path)) else {
-                    continue;
-                };
-                let texture = TextureRef::new(texture_owner(path).unwrap_or(id), stem);
-                match &found[role] {
-                    Some(seen) if !seen.same(&texture) => {
-                        return Err(Error::new(format!(
-                            "the materials name two {texture_type} maps, {}'s {} and {}'s {}: \
-                             characters with more than one texture set are not supported yet",
-                            seen.owner, seen.name, texture.owner, texture.name
-                        )));
-                    }
-                    Some(_) => {}
-                    None => found[role] = Some(texture),
-                }
+        for (texture_type, path) in &material.textures {
+            let role = [DSR_ALBEDO, DSR_SPECULAR, DSR_NORMAL]
+                .iter()
+                .position(|name| texture_type.eq_ignore_ascii_case(name));
+            if let (Some(role), Some(stem)) = (role, texture_stem(path)) {
+                let owner = texture_owner(path)
+                    .or_else(|| stem_owner(stem))
+                    .unwrap_or(id);
+                found[role].get_or_insert(TextureRef::new(owner, stem));
             }
         }
-        let [albedo, specular, normal] = found;
+        found
+    }
+}
+
+/// Every texture set a character's kept materials sample, and which one each material samples.
+///
+/// Smough's body and his leg armour are two sets, `c2360` and `c2360_LG_M_9200`; the Black
+/// Knights' arms, body halves, helm and legs are five. A material joins the first set whose maps
+/// do not contradict its own -- a role either of them leaves empty, or the same map -- and fills
+/// in what that set lacked, so materials that share an albedo and differ only in naming a
+/// specular map stay one set. Set 0 is the set of the lowest-numbered kept material: the one
+/// the donor's own Body material draws.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureSets {
+    pub sets: Vec<TextureSet>,
+    /// `(DSR material index, set index)`, one per kept material, ascending.
+    materials: Vec<(usize, usize)>,
+}
+
+impl TextureSets {
+    /// One set for a character drawn by a single material set: c2280, or a test.
+    pub fn single(set: TextureSet) -> Self {
+        Self {
+            sets: vec![set],
+            materials: Vec::new(),
+        }
+    }
+
+    /// The sets `materials` (each with its DSR material index) sample, as character `id` names
+    /// them. The caller passes only the materials it keeps, so a stripped weapon's own set is
+    /// never one of them.
+    pub fn of_materials(materials: &[(usize, SourceMaterial)], id: &str) -> Result<Self> {
+        let mut found: Vec<[Option<TextureRef>; 3]> = Vec::new();
+        let mut assigned = Vec::with_capacity(materials.len());
+        let mut ordered: Vec<&(usize, SourceMaterial)> = materials.iter().collect();
+        ordered.sort_by_key(|(index, _)| *index);
+        for (index, material) in ordered {
+            let roles = TextureSet::roles_of(material, id);
+            let agrees = |set: &[Option<TextureRef>; 3]| {
+                set.iter().zip(&roles).all(|pair| match pair {
+                    (Some(seen), Some(texture)) => seen.same(texture),
+                    _ => true,
+                })
+            };
+            let at = match found.iter().position(agrees) {
+                Some(at) => at,
+                None => {
+                    found.push(Default::default());
+                    found.len() - 1
+                }
+            };
+            for (slot, texture) in found[at].iter_mut().zip(roles) {
+                if slot.is_none() {
+                    *slot = texture;
+                }
+            }
+            assigned.push((*index, at));
+        }
+        let sets = found
+            .into_iter()
+            .map(|[albedo, specular, normal]| {
+                Ok(TextureSet {
+                    albedo: albedo.ok_or("no material names an albedo (g_Diffuse) texture")?,
+                    specular,
+                    normal,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if sets.is_empty() {
+            return Err("no material names an albedo (g_Diffuse) texture".into());
+        }
         Ok(Self {
-            albedo: albedo.ok_or("no material names an albedo (g_Diffuse) texture")?,
-            specular,
-            normal,
+            sets,
+            materials: assigned,
         })
     }
 
+    /// The set DSR material `material` samples. A [`Self::single`] set is every material's.
+    pub fn set_of(&self, material: usize) -> Option<usize> {
+        if self.materials.is_empty() {
+            return Some(0);
+        }
+        self.materials
+            .iter()
+            .find(|(index, _)| *index == material)
+            .map(|&(_, set)| set)
+    }
+
+    /// The set the donor's Body material draws.
+    pub fn primary(&self) -> &TextureSet {
+        &self.sets[0]
+    }
+
+    /// The characters whose binders hold any of the sets, each once, set by set.
+    pub fn owners(&self) -> Vec<&str> {
+        let mut owners: Vec<&str> = Vec::new();
+        for owner in self.sets.iter().flat_map(TextureSet::owners) {
+            if !owners.contains(&owner) {
+                owners.push(owner);
+            }
+        }
+        owners
+    }
+
+    /// Every set [`TextureSet::without_absent_maps`].
+    pub fn without_absent_maps(self, tpfs: &[(&str, &[u8])]) -> Result<Self> {
+        Ok(Self {
+            sets: self
+                .sets
+                .into_iter()
+                .map(|set| set.without_absent_maps(tpfs))
+                .collect::<Result<_>>()?,
+            materials: self.materials,
+        })
+    }
+}
+
+impl TextureSet {
     /// The set without a specular or normal map that none of `tpfs` holds, as [`character_tpf_from`]
     /// takes them, so the generated flat one stands in. A missing albedo has no stand-in and is
     /// refused: c4091's materials name `c4090` and `c4090_s`, and c4090's TPF holds neither.
@@ -172,8 +289,23 @@ fn texture_owner(path: &str) -> Option<&str> {
     let mut parts = path.split(['\\', '/']);
     parts.find(|part| part.eq_ignore_ascii_case(CHR_FOLDER))?;
     let id = parts.next()?.trim();
-    let digits = id.strip_prefix(['c', 'C'])?;
-    (digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit())).then_some(id)
+    is_character_id(id).then_some(id)
+}
+
+/// `c2799_AM_A_9490` -> `c2799`: the character a texture's name starts with. The Black Knights'
+/// armour is drawn from `N:\FRPG\data\Model\parts\Arm\AM_A_9490\tex\ref\c2799_AM_A_9490.tga`, a
+/// path under no character folder, and `c2799`'s binder is the one holding it; a weapon's
+/// `c2900_WP_A_0400` names its own character the same way.
+fn stem_owner(stem: &str) -> Option<&str> {
+    let id = stem.get(..5)?;
+    let rest = &stem[5..];
+    (is_character_id(id) && rest.starts_with('_')).then_some(id)
+}
+
+/// `c` or `C` and four digits.
+fn is_character_id(id: &str) -> bool {
+    id.strip_prefix(['c', 'C'])
+        .is_some_and(|digits| digits.len() == 4 && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// The donor slots in the order the donor manifest lists them.
@@ -187,7 +319,7 @@ enum Slot {
 const SLOTS: [(Slot, &str); 3] = [
     (Slot::Mask, "_3m"),
     (Slot::Albedo, ALBEDO_SLOT),
-    (Slot::Normal, "_n"),
+    (Slot::Normal, NORMAL_SLOT),
 ];
 
 /// A TPF for `target_prefix` (`FC_M_0000`) holding c2280's three textures; `lod_suffix` is
@@ -221,26 +353,131 @@ pub fn character_tpf_from(
     target_prefix: &str,
     lod_suffix: &str,
 ) -> Result<Vec<u8>> {
-    let sources = tpfs
-        .iter()
+    let sources = read_sources(tpfs)?;
+    donor_tpf(
+        |texture| lookup_in(&sources, texture),
+        set,
+        target_prefix,
+        lod_suffix,
+    )
+}
+
+/// The prefix set `set`'s textures take in the body TPF: `FC_M_0000` for set 0, whose names the
+/// Body material's matbin fixes, and `FC_M_0000_<set>` for every other, which only a material
+/// naming them by path ([`crate::edge::set_textures`]) samples.
+pub fn set_prefix(target_prefix: &str, set: usize) -> String {
+    if set == 0 {
+        target_prefix.to_owned()
+    } else {
+        format!("{target_prefix}_{set}")
+    }
+}
+
+/// The body TPF for `sets`: set 0 in the donor's three slots, as [`character_tpf_from`] writes
+/// it; with `metallic`, the zero metallic map every `C[AMSN]` material samples
+/// ([`with_zero_metallic`]); and each set of `extra` as an albedo and a normal map under its
+/// [`set_prefix`], a flat normal standing in for one it lacks. A `C[AMSN]` material samples no
+/// specular map, so an extra set's is not carried. Every texture goes in in name order.
+pub fn body_tpf(
+    tpfs: &[(&str, &[u8])],
+    sets: &TextureSets,
+    extra: &[usize],
+    metallic: bool,
+    target_prefix: &str,
+    lod_suffix: &str,
+) -> Result<Vec<u8>> {
+    let mut tpf = character_tpf_from(tpfs, sets.primary(), target_prefix, lod_suffix)?;
+    if metallic {
+        tpf = with_zero_metallic(&tpf, target_prefix, lod_suffix)?;
+    }
+    if extra.is_empty() {
+        return Ok(tpf);
+    }
+    let sources = read_sources(tpfs)?;
+    let mut built = Tpf::parse(&tpf).map_err(|error| Error::new(format!("TPF: {error}")))?;
+    for &set in extra {
+        if set == 0 {
+            return Err("set 0 is the Body material's, in the donor's own slots".into());
+        }
+        let texture_set = sets.sets.get(set).ok_or_else(|| {
+            Error::new(format!(
+                "texture set {set}: the character has {}",
+                sets.sets.len()
+            ))
+        })?;
+        let prefix = set_prefix(target_prefix, set);
+        let albedo = as_srgb_albedo(lookup_in(&sources, &texture_set.albedo)?);
+        let normal = match &texture_set.normal {
+            Some(texture) => lookup_in(&sources, texture)?,
+            None => flat_normal(),
+        };
+        for (slot_suffix, dds) in [(ALBEDO_SLOT, albedo), (NORMAL_SLOT, normal)] {
+            insert_in_name_order(
+                &mut built,
+                tpf_texture(format!("{prefix}{slot_suffix}{lod_suffix}"), dds)?,
+            )?;
+        }
+    }
+    write_tpf(&built)
+}
+
+/// Each `(owner, TPF)` of `tpfs` parsed, under the owner's lower-case id.
+fn read_sources(tpfs: &[(&str, &[u8])]) -> Result<Vec<(String, Tpf)>> {
+    tpfs.iter()
         .map(|&(owner, bytes)| {
             let whose = format!("{owner}'s");
             Ok((owner.to_lowercase(), parse_dsr_tpf(bytes, &whose)?))
         })
-        .collect::<Result<Vec<(String, Tpf)>>>()?;
-    let lookup = |texture: &TextureRef| {
-        let (_, tpf) = sources
-            .iter()
-            .find(|(owner, _)| *owner == texture.owner)
-            .ok_or_else(|| {
-                Error::new(format!(
-                    "{} is {}'s, and no TPF of {} was read",
-                    texture.name, texture.owner, texture.owner
-                ))
-            })?;
-        find_texture(tpf, texture, &format!("{}'s", texture.owner))
-    };
-    donor_tpf(lookup, set, target_prefix, lod_suffix)
+        .collect()
+}
+
+/// `texture` out of the TPF of the character holding it.
+fn lookup_in(sources: &[(String, Tpf)], texture: &TextureRef) -> Result<Vec<u8>> {
+    let (_, tpf) = sources
+        .iter()
+        .find(|(owner, _)| *owner == texture.owner)
+        .ok_or_else(|| {
+            Error::new(format!(
+                "{} is {}'s, and no TPF of {} was read",
+                texture.name, texture.owner, texture.owner
+            ))
+        })?;
+    find_texture(tpf, texture, &format!("{}'s", texture.owner))
+}
+
+/// A TPF entry for `dds` under `name`, its format byte and mip count read out of the DDS.
+fn tpf_texture(name: String, dds: Vec<u8>) -> Result<TpfTexture> {
+    Ok(TpfTexture {
+        format: tpf_format_byte(&dds)?,
+        tex_type: TEX_TYPE_TEXTURE,
+        mip_count: dds_mip_count(&dds)?,
+        flags1: 0,
+        dds,
+        name,
+    })
+}
+
+/// `texture` added to `tpf` before the first name that sorts after its own, ignoring case. A name
+/// the TPF already holds is refused.
+fn insert_in_name_order(tpf: &mut Tpf, texture: TpfTexture) -> Result<()> {
+    if tpf
+        .textures
+        .iter()
+        .any(|other| other.name.eq_ignore_ascii_case(&texture.name))
+    {
+        return Err(Error::new(format!(
+            "the TPF already holds {}",
+            texture.name
+        )));
+    }
+    let key = texture.name.to_lowercase();
+    let at = tpf
+        .textures
+        .iter()
+        .position(|other| other.name.to_lowercase() > key)
+        .unwrap_or(tpf.textures.len());
+    tpf.textures.insert(at, texture);
+    Ok(())
 }
 
 /// One TPF holding every texture of `tpfs`, in order, with the first one's header: a character
@@ -382,6 +619,7 @@ pub fn write_tpf(tpf: &Tpf) -> Result<Vec<u8>> {
 }
 
 const ALBEDO_SLOT: &str = "_a";
+const NORMAL_SLOT: &str = "_n";
 const DDS_FOURCC_OFFSET: usize = 0x54;
 const DDS_HEADER_END: usize = 0x80;
 const DX10_HEADER_SIZE: usize = 20;
@@ -507,29 +745,7 @@ pub fn zero_metallic() -> Vec<u8> {
 pub fn with_zero_metallic(tpf: &[u8], target_prefix: &str, lod_suffix: &str) -> Result<Vec<u8>> {
     let mut built = Tpf::parse(tpf).map_err(|error| Error::new(format!("TPF: {error}")))?;
     let name = format!("{target_prefix}{METALLIC_SLOT}{lod_suffix}");
-    if built
-        .textures
-        .iter()
-        .any(|texture| texture.name.eq_ignore_ascii_case(&name))
-    {
-        return Err(Error::new(format!("the TPF already holds {name}")));
-    }
-    let dds = zero_metallic();
-    let texture = TpfTexture {
-        format: tpf_format_byte(&dds)?,
-        tex_type: TEX_TYPE_TEXTURE,
-        mip_count: dds_mip_count(&dds)?,
-        flags1: 0,
-        dds,
-        name,
-    };
-    let key = texture.name.to_lowercase();
-    let at = built
-        .textures
-        .iter()
-        .position(|other| other.name.to_lowercase() > key)
-        .unwrap_or(built.textures.len());
-    built.textures.insert(at, texture);
+    insert_in_name_order(&mut built, tpf_texture(name, zero_metallic())?)?;
     write_tpf(&built)
 }
 
@@ -808,6 +1024,12 @@ mod tests {
         ] {
             assert_eq!(texture_owner(elsewhere), None, "{elsewhere}");
         }
+        // With no character folder, a name that starts with a character id names its owner.
+        assert_eq!(stem_owner("c2799_AM_A_9490"), Some("c2799"));
+        assert_eq!(stem_owner("c2900_WP_A_0400"), Some("c2900"));
+        for unowned in ["c2909", "c29_x", "AM_M_9410_L", "c27990_a", "M_9470_hair_L"] {
+            assert_eq!(stem_owner(unowned), None, "{unowned}");
+        }
 
         // c2900's two body materials sample c2909's set; a weapon path names no character
         // folder, so it is c2900's own.
@@ -840,6 +1062,120 @@ mod tests {
             error.contains("c2909's c2909 and c2900's c2900_WP_A_0400"),
             "{error}"
         );
+    }
+
+    fn smough_material(stems: &[(&str, &str)]) -> SourceMaterial {
+        SourceMaterial {
+            textures: stems
+                .iter()
+                .map(|&(kind, stem)| {
+                    (
+                        kind.to_owned(),
+                        format!(r"N:\FRPG\data\Model\chr\c2360\tex\{stem}.tga"),
+                    )
+                })
+                .collect(),
+            ..SourceMaterial::default()
+        }
+    }
+
+    /// Smough's shape: a body set on materials 0, 2 and 3 (2 naming no specular map) and his
+    /// leg armour's own set on material 1.
+    fn smough() -> Vec<(usize, SourceMaterial)> {
+        let body = [
+            (DSR_ALBEDO, "c2360"),
+            (DSR_SPECULAR, "c2360_s"),
+            (DSR_NORMAL, "c2360_n"),
+        ];
+        let legs = [(DSR_ALBEDO, "c2360_LG_M_9200")];
+        vec![
+            (3, smough_material(&body)),
+            (1, smough_material(&legs)),
+            (0, smough_material(&body)),
+            (2, smough_material(&[body[0], body[2]])),
+        ]
+    }
+
+    #[test]
+    fn materials_split_into_sets_by_the_maps_they_disagree_on() {
+        let sets = TextureSets::of_materials(&smough(), "c2360").unwrap();
+        assert_eq!(sets.sets.len(), 2);
+        assert_eq!(*sets.primary(), TextureSet::named_after("c2360"));
+        assert_eq!(
+            sets.sets[1].albedo,
+            TextureRef::new("c2360", "c2360_LG_M_9200")
+        );
+        assert_eq!(
+            (&sets.sets[1].specular, &sets.sets[1].normal),
+            (&None, &None)
+        );
+        let of: Vec<Option<usize>> = (0..5).map(|material| sets.set_of(material)).collect();
+        assert_eq!(of, [Some(0), Some(1), Some(0), Some(0), None]);
+        assert_eq!(sets.owners(), ["c2360"]);
+        // The sets follow the material numbers, not the order the materials are passed in.
+        let reversed: Vec<_> = smough().into_iter().rev().collect();
+        assert_eq!(TextureSets::of_materials(&reversed, "c2360").unwrap(), sets);
+        // The one-set reading refuses the two, naming both albedos.
+        let flat: Vec<SourceMaterial> = smough().into_iter().map(|(_, m)| m).collect();
+        let error = TextureSet::of_materials(&flat, "c2360")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("c2360's c2360 and c2360's c2360_LG_M_9200"),
+            "{error}"
+        );
+        assert_eq!(
+            TextureSets::single(sets.primary().clone()).set_of(7),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn a_further_set_goes_into_the_body_tpf_as_an_albedo_and_a_normal_under_its_prefix() {
+        let source = source_tpf(vec![
+            texture("c2360", legacy_dds(5, 1, b"DXT1")),
+            texture("c2360_s", legacy_dds(5, 2, b"DXT1")),
+            texture("c2360_n", dx10_dds(5, 3, dxgi::BC5_UNORM)),
+            texture("c2360_LG_M_9200", dx10_dds(6, 4, dxgi::BC7_UNORM)),
+        ]);
+        let sets = TextureSets::of_materials(&smough(), "c2360").unwrap();
+        let tpfs = [("c2360", source.as_slice())];
+        for lod in ["", "_l"] {
+            let only = body_tpf(&tpfs, &sets, &[], false, "FC_M_0000", lod).unwrap();
+            assert_eq!(
+                only,
+                character_tpf_from(&tpfs, sets.primary(), "FC_M_0000", lod).unwrap(),
+                "with no further set it is the one-set TPF"
+            );
+            let built =
+                Tpf::parse(&body_tpf(&tpfs, &sets, &[1], true, "FC_M_0000", lod).unwrap()).unwrap();
+            let names: Vec<&str> = built.textures.iter().map(|t| t.name.as_str()).collect();
+            let expected = ["_1_a", "_1_n", "_3m", "_a", "_m", "_n"]
+                .map(|slot| format!("FC_M_0000{slot}{lod}"));
+            assert_eq!(names, expected);
+            let albedo = &built.textures[0];
+            assert_eq!(
+                crate::bytes::u32_le(&albedo.dds, DDS_HEADER_END).unwrap(),
+                dxgi::BC7_UNORM_SRGB,
+                "the legs' albedo goes in as sRGB"
+            );
+            assert_eq!((albedo.format, albedo.mip_count), (102, 6));
+            assert_eq!(
+                built.textures[1].dds,
+                flat_normal(),
+                "the legs name no normal map"
+            );
+        }
+        let refused = |extra: &[usize]| {
+            body_tpf(&tpfs, &sets, extra, true, "FC_M_0000", "")
+                .unwrap_err()
+                .to_string()
+        };
+        assert!(refused(&[0]).contains("set 0"));
+        assert!(refused(&[2]).contains("has 2"));
+        assert!(refused(&[1, 1]).contains("already holds"));
+        assert_eq!(set_prefix("FC_M_0000", 0), "FC_M_0000");
+        assert_eq!(set_prefix("FC_M_0000", 3), "FC_M_0000_3");
     }
 
     #[test]

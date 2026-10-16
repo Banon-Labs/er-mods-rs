@@ -4,13 +4,13 @@
 //! Without the donor the search reads each model and its textures and runs the map report; with
 //! it, it also makes the fit, the slots, the rebuilt FLVER and the body TPF. Every character the
 //! fitted search offers is then built here the rest of the way the package builds it -- the Edge
-//! material retargeted when a slot needs it, both body TPFs, and `verify-package`'s FLVER check
-//! against them -- on the donor out of the unpacked corpus. What is left to the Windows build is
-//! reading and writing Elden Ring's Kraken-compressed archives. A character the search offers that
-//! fails here is a search that promises too much.
+//! and set materials retargeted when a slot needs them, both body TPFs with every set's maps, and
+//! `verify-package`'s FLVER check against them -- on the donor out of the unpacked corpus. What is
+//! left to the Windows build is reading and writing Elden Ring's Kraken-compressed archives. A
+//! character the search offers that fails here is a search that promises too much.
 //!
-//! Corpus-gated: reads the Dark Souls Remastered install, and the donor and the Edge template out
-//! of the unpacked Elden Ring corpus (see `common`), and skips without them.
+//! Corpus-gated: reads the Dark Souls Remastered install, and the donor and both `C[AMSN]`
+//! templates out of the unpacked Elden Ring corpus (see `common`), and skips without them.
 
 mod common;
 
@@ -20,7 +20,10 @@ use common::{donor_or_skip, dsr_with_or_skip, part_or_skip};
 use er_tpf::Tpf;
 use mushroom_man_builder::{
     character::{self, FitConfig},
-    edge::{TEMPLATE_FLVER, edge_material, edge_template},
+    edge::{
+        OPAQUE_TEMPLATE_FLVER, TEMPLATE_FLVER, Templates, edge_template, opaque_template,
+        retarget_materials,
+    },
     error::{Error, Result},
     flver::{
         rebuild::{HeaderAppend, rebuild},
@@ -28,31 +31,33 @@ use mushroom_man_builder::{
     },
     package::{Cutouts, biped_body, read_character},
     search::{self, Hit, Verdict},
-    textures::{character_tpf_from, with_zero_metallic},
+    textures::body_tpf,
 };
 
 const TEMPLATE_BINDER: &str = "bd_f_1451-partsbnd-dcx";
+const OPAQUE_TEMPLATE_BINDER: &str = "bd_m_1711-partsbnd-dcx";
 const BODY_STEM: &str = "FC_M_0000";
 
 /// The verdicts over the install, by how many models get each, without the donor and with it:
 /// measured 2026-10-15. The fit turns down c2940 (its thighs are roots) and c3110 (a lizard on a
-/// Biped rig, its pelvis 0.13 m up).
+/// Biped rig, its pelvis 0.13 m up). The one texture refusal is c4091, whose albedo is in no
+/// binder. Before characters with several texture sets were built, 26 more stopped there.
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 32),
+    ("maps", 58),
     ("no model", 8),
     ("not biped", 100),
     ("own fit", 1),
     ("refused", 25),
-    ("textures", 27),
+    ("textures", 1),
 ];
 const FITTED: [(&str, usize); 7] = [
     ("fit", 2),
-    ("fits", 30),
+    ("fits", 56),
     ("no model", 8),
     ("not biped", 100),
     ("own fit", 1),
     ("refused", 25),
-    ("textures", 27),
+    ("textures", 1),
 ];
 
 fn kind(verdict: &Verdict) -> &'static str {
@@ -112,9 +117,9 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
     assert!(verdict(&hits, "c2230").maps());
     // c4091 draws with c4090's albedo and specular, and c4090's TPF holds neither.
     assert!(matches!(verdict(&hits, "c4091"), Verdict::Textures(why) if why.contains("albedo")));
-    assert!(
-        matches!(verdict(&hits, "c2060"), Verdict::Textures(why) if why.contains("texture set"))
-    );
+    // Two texture sets (body and cloth), and five drawn out of c2799's binder.
+    assert!(verdict(&hits, "c2060").maps());
+    assert!(verdict(&hits, "c2792").maps());
 
     let hollows = search::search(&dsr, "hollow", None).unwrap();
     let found: Vec<(&str, Option<&str>, bool)> = hollows
@@ -126,7 +131,7 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
         [
             ("c2500", Some("Hollow"), true),
             ("c2540", Some("Armored Hollow"), true),
-            ("c2820", Some("Prototype Claw Hollow"), false)
+            ("c2820", Some("Prototype Claw Hollow"), true)
         ]
     );
 }
@@ -135,7 +140,7 @@ fn without_the_donor_the_search_sorts_every_model_short_of_the_fit() {
 fn build_offline(
     dsr: &std::path::Path,
     donor: &[u8],
-    template: &mushroom_man_builder::flver::rebuild::MaterialTemplate,
+    templates: &Templates,
     id: &str,
 ) -> Result<String> {
     let character = character::resolve(id, true)?;
@@ -143,18 +148,28 @@ fn build_offline(
         return Err(Error::new(format!("{id} is not fitted as a Biped")));
     }
     let files = read_character(dsr, character)?;
-    let body = biped_body(donor, character, &files.flver, Cutouts::EdgeMaterial)?;
-    let append = if body.edge {
-        edge_material(donor, template, character.id)?
-    } else {
+    let body = biped_body(
+        donor,
+        character,
+        &files.flver,
+        &files.textures,
+        Cutouts::EdgeMaterial,
+    )?;
+    let append = if body.retargets.is_empty() {
         HeaderAppend::default()
+    } else {
+        retarget_materials(donor, templates, character.id, &body.retargets)?
     };
     let flver = rebuild(donor, &body.slots, true, &append)?;
     for lod in ["", "_l"] {
-        let mut tpf = character_tpf_from(&files.texture_tpfs(), &files.textures, BODY_STEM, lod)?;
-        if body.edge {
-            tpf = with_zero_metallic(&tpf, BODY_STEM, lod)?;
-        }
+        let tpf = body_tpf(
+            &files.texture_tpfs(),
+            &files.textures,
+            &body.extra_sets(),
+            body.samples_metallic(),
+            BODY_STEM,
+            lod,
+        )?;
         let names: Vec<String> = Tpf::parse(&tpf)
             .map_err(|error| Error::new(error.to_string()))?
             .textures
@@ -165,9 +180,15 @@ fn build_offline(
     }
     let vertices: usize = body.reports.iter().map(|slot| slot.vertices).sum();
     Ok(format!(
-        "{id}: {} slots, {vertices} vertices{}",
+        "{id}: {} slots, {vertices} vertices{}, {} texture set{}",
         body.reports.len(),
-        if body.edge { ", Edge material" } else { "" }
+        if body.edge() { ", Edge material" } else { "" },
+        files.textures.sets.len(),
+        if files.textures.sets.len() == 1 {
+            ""
+        } else {
+            "s"
+        }
     ))
 }
 
@@ -177,10 +198,16 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
     let (Some(dsr), Some(donor)) = (dsr_with_or_skip(test, "c2500"), donor_or_skip(test)) else {
         return;
     };
-    let Some(template) = part_or_skip(test, TEMPLATE_BINDER, TEMPLATE_FLVER) else {
+    let (Some(cutout), Some(opaque)) = (
+        part_or_skip(test, TEMPLATE_BINDER, TEMPLATE_FLVER),
+        part_or_skip(test, OPAQUE_TEMPLATE_BINDER, OPAQUE_TEMPLATE_FLVER),
+    ) else {
         return;
     };
-    let template = edge_template(&template).unwrap();
+    let templates = Templates {
+        cutout: edge_template(&cutout).unwrap(),
+        opaque: opaque_template(&opaque).unwrap(),
+    };
     let hits = search::search(&dsr, "c", Some(&donor)).unwrap();
     for hit in &hits {
         if let Verdict::Fit(why) = &hit.verdict {
@@ -198,7 +225,7 @@ fn every_character_the_fitted_search_offers_builds_short_of_the_archives() {
         .collect();
     let mut failures = Vec::new();
     for id in &offered {
-        match build_offline(&dsr, &donor, &template, id) {
+        match build_offline(&dsr, &donor, &templates, id) {
             Ok(line) => eprintln!("{line}"),
             Err(error) => failures.push(format!("{id}: {error}")),
         }

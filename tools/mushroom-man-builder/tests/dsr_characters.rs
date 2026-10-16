@@ -29,7 +29,7 @@ fn c2650_reads_its_own_model_and_texture_set() {
     };
     let files = read_character(&dsr, &C2650).unwrap();
     assert_eq!(&files.flver[..6], b"FLVER\0");
-    assert_eq!(files.textures, TextureSet::named_after("c2650"));
+    assert_eq!(files.textures.sets, [TextureSet::named_after("c2650")]);
     let tpf = er_tpf::Tpf::parse(&files.tpf).unwrap();
     let mut names: Vec<&str> = tpf.textures.iter().map(|t| t.name.as_str()).collect();
     names.sort_unstable();
@@ -43,7 +43,7 @@ fn c2280_resolves_the_set_it_has_always_shipped() {
         return;
     };
     let files = read_character(&dsr, &C2280).unwrap();
-    assert_eq!(files.textures, TextureSet::named_after("c2280"));
+    assert_eq!(files.textures.sets, [TextureSet::named_after("c2280")]);
 }
 
 #[test]
@@ -436,9 +436,9 @@ fn c2900_draws_with_c2909s_textures_out_of_c2909s_binder() {
                 .map(|stem| format!(r"N:\FRPG\data\Model\chr\c2909\tex\{stem}.tga"))
         );
     }
-    assert_eq!(files.textures, TextureSet::named_after("c2909"));
+    assert_eq!(files.textures.sets, [TextureSet::named_after("c2909")]);
     assert_eq!(files.textures.owners(), ["c2909"]);
-    // Read from every material, the weapons' four sets would refuse the build.
+    // Read from every material, the body and the weapons are five sets, not one.
     assert!(TextureSet::of_materials(&source.materials, C2900.id).is_err());
 
     // c2900's own TPF holds only the weapons' textures; c2909's binder holds the body's.
@@ -468,8 +468,13 @@ fn c2900_draws_with_c2909s_textures_out_of_c2909s_binder() {
 
     // The body TPF the package carries: c2909's specular and normal map byte for byte, its
     // albedo under the sRGB header (BC1 sRGB, 72) with the same blocks.
-    let built =
-        character_tpf_from(&files.texture_tpfs(), &files.textures, "FC_M_0000", "").unwrap();
+    let built = character_tpf_from(
+        &files.texture_tpfs(),
+        files.textures.primary(),
+        "FC_M_0000",
+        "",
+    )
+    .unwrap();
     assert_eq!(
         formats(&built),
         [
