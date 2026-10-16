@@ -393,4 +393,60 @@ test('the local player is named by Steam, and marked (you) only without it (feed
     assert.strictEqual(A.playerLabel('Opponent', false, 'The Nut Wizard'), 'Opponent');
 });
 
+// -- your own rules: the cases the Cheat Engine port runs too ----------------------------------
+const BANS = JSON.parse(require('fs').readFileSync(path.join(__dirname, 'test-er-duel-rules-bans.json'), 'utf8'));
+const fixtureFacts = (() => {
+    const weapons = {};
+    for (const [id, wf] of Object.entries(BANS.facts.weapons)) weapons[id] = w(wf.wepType);
+    return facts(weapons, BANS.facts.effects);
+})();
+for (const c of BANS.cases) {
+    test(`rules file: ${c.name}`, () => {
+        const { config, problems } = A.readConfig(c.configText !== undefined ? c.configText : JSON.stringify(c.config));
+        assert.strictEqual(problems.length, c.problems || 0, problems.join('; '));
+        let referee = new A.Referee(config);
+        const got = [];
+        for (const step of c.steps) {
+            if (!c.oneReferee) referee = new A.Referee(config);
+            const players = [player(Object.assign({ key: '1' }, step.player))];
+            if (step.match) players.push(player({ key: '2' }));
+            for (const a of referee.observe(step.t, players, fixtureFacts)) {
+                if (a.key === '1') got.push({ rule: a.rule, text: a.text, detail: a.detail });
+            }
+        }
+        assert.deepStrictEqual(got, c.expect);
+    });
+}
+
+test('a rules file reads back the way it was written', () => {
+    const C = A.conditionBuilders(A.CATALOG);
+    let cfg = A.configWith.ban(A.DEFAULT_CONFIG, 'No 2H Rivers', [C.weapon('rivers of blood', { where: 'twoHanded' })]);
+    cfg = A.configWith.rule(cfg, A.ruleKey('Light Roll (<30% Equip Load)'), false);
+    cfg = A.configWith.setting(cfg, 'runeLevel', 150);
+    const { config, problems } = A.readConfig(A.writeConfig(cfg));
+    assert.deepStrictEqual(problems, []);
+    assert.deepStrictEqual(config, cfg);
+    assert.deepStrictEqual(config.off, ['LightRoll']);
+    assert.strictEqual(config.bans[0].all[0].items[0].name, 'Rivers of Blood');
+    assert.strictEqual(A.describeConfig(config),
+        '48 of 49 built-in rules on (off: LightRoll), runeLevel=150, 1 of 1 bans of your own on');
+    // Re-banning a name replaces the ban; turning a rule back on removes it from `off`.
+    cfg = A.configWith.ban(cfg, 'No 2H Rivers', [C.talisman("Lord of Blood's Exultation")]);
+    assert.strictEqual(cfg.bans.length, 1);
+    assert.strictEqual(cfg.bans[0].all[0].kind, 'talisman');
+    assert.deepStrictEqual(A.configWith.rule(cfg, 'LightRoll', true).off, []);
+});
+
+test('the catalog finds names and refuses ones it does not have', () => {
+    const hits = A.searchCatalog(A.CATALOG, 'katana').map((h) => `${h.pick}: ${h.name}`);
+    assert.ok(hits.includes('class: Katana') && hits.includes('class: Great Katana'), hits.join(', '));
+    const C = A.conditionBuilders(A.CATALOG);
+    assert.throws(() => C.armor('Not An Armour'), /findItem/);
+    assert.throws(() => C.weapon(null, { where: 'nowhere' }), /where is one of/);
+    const blood = C.weapon(null, { class: 'Katana', affinity: 'Blood' });
+    assert.deepStrictEqual([blood.classes[0].ids, blood.affinities[0].ids], [[13], [1100]]);
+    assert.ok(C.spell('Comet Azur').items[0].bullets.length > 0);
+    assert.deepStrictEqual(C.stat('arcane', '>=', 45), { kind: 'stat', stat: 7, op: '>=', value: 45 });
+});
+
 console.log(`test-er-duel-rules-frida: ${passed} passed`);

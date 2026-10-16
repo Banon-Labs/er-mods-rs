@@ -489,6 +489,99 @@ test('a hook an earlier table left behind is recognised, and nothing else is', f
     eq(A.leftoverRing(siteBytes, site, function() return other end), nil, "someone else's detour")
 end)
 
+-- -- your own rules: the cases the Frida agent runs too ----------------------------------------
+local function readFile(path)
+    local f = assert(io.open(path, 'rb'))
+    local s = f:read('a')
+    f:close()
+    return s
+end
+local BANS = A.json.decode(readFile(here .. '/test-er-duel-rules-bans.json'))
+local fixtureFacts = (function()
+    local weapons, effects = {}, {}
+    for id, wf in pairs(BANS.facts.weapons) do weapons[math.tointeger(tonumber(id))] = w(wf.wepType) end
+    for id, e in pairs(BANS.facts.effects) do effects[math.tointeger(tonumber(id))] = buff(e.category) end
+    return facts(weapons, effects)
+end)()
+for _, c in ipairs(BANS.cases) do
+    test('rules file: ' .. c.name, function()
+        local config, problems = A.readConfig(c.configText or A.json.encode(c.config))
+        eq(#problems, c.problems or 0, table.concat(problems, '; '))
+        local referee = A.Referee.new(config)
+        local got = {}
+        for _, step in ipairs(c.steps) do
+            if not c.oneReferee then referee = A.Referee.new(config) end
+            local players = { player(merge({ key = '1' }, step.player)) }
+            if step.match then players[2] = player({ key = '2' }) end
+            for _, a in ipairs(referee:observe(step.t, players, fixtureFacts)) do
+                if a.key == '1' then got[#got + 1] = { rule = a.rule, text = a.text, detail = a.detail } end
+            end
+        end
+        eq(got, c.expect)
+    end)
+end
+
+test('JSON reads and writes what the Frida agent and Python do', function()
+    local v = A.json.decode('{"a": [1, 2.5, "x\\"y\\u00e9\\ud83d\\ude00", true, null, {}], "b": {"c": -3e2}}')
+    eq(v.a[1], 1); eq(math.type(v.a[1]), 'integer'); eq(v.a[2], 2.5)
+    eq(v.a[3], 'x"y\u{e9}\u{1F600}'); eq(v.a[4], true); eq(v.a[5], A.json.null); eq(#v.a, 6)
+    eq(v.b.c, -300)
+    eq(A.json.encode(v), '{"a":[1,2.5,"x\\"y\u{e9}\u{1F600}",true,null,{}],"b":{"c":-300}}')
+    eq(A.json.encode(A.jsonArray()), '[]')
+    for _, bad in ipairs({ '{', '[1,]', '{"a" 1}', '"open', '1 2', 'nope' }) do
+        ok(not pcall(A.json.decode, bad), bad .. ' is not JSON')
+    end
+end)
+
+test('every built-in rule is listed once, in the agent\'s order', function()
+    local seen = {}
+    for _, k in ipairs(A.RULE_ORDER) do
+        ok(A.RULE_TEXT[k] ~= nil, k .. ' is not a rule'); ok(not seen[k], k .. ' twice'); seen[k] = true
+    end
+    for k in pairs(A.RULE_TEXT) do ok(seen[k], k .. ' is missing from RULE_ORDER') end
+    eq(A.ruleText('RuneLevel'), 'Rune Level: 125')
+    eq(A.ruleText('ShieldGuard'), A.RULE_TEXT.ShieldGuard)
+end)
+
+test('the ban editor builds the file the Frida agent builds', function()
+    local d = A.newDraft()
+    d.name = '  Bleed katanas with Lord of Blood  '
+    local hits = A.searchCatalog(A.CATALOG, 'katana', nil, 'class')
+    eq(map(hits, function(h) return h.name end), { 'Katana', 'Great Katana' })
+    eq(d:addPick(hits[1]), nil)
+    eq(d:addPick(A.searchCatalog(A.CATALOG, 'blood', nil, 'affinity')[1], 1), nil)
+    local exult = A.searchCatalog(A.CATALOG, "lord of blood's", nil, 'talisman')[1]
+    ok(d:addPick(exult, 1):find('cannot be one of the alternatives'), 'a talisman is not a weapon alternative')
+    eq(d:addPick(exult), nil)
+    d:setWeapon(1, 'twoHanded', true)
+    eq(A.describeCondition(d.all[1]), 'Weapon: class Katana, affinity Blood, two-handed, with a weapon buff')
+    eq(A.describeCondition(d.all[2]), "Talisman: Lord of Blood's Exultation")
+    eq(d:addIds('effect', 'none'), 'no ids in "none"')
+    eq(d:addIds('effect', '3310, 3314'), nil)
+    ok(d:addCompare('level', 'about 150'):find('comparison'), 'level needs a comparison')
+    eq(d:addCompare('level', '!= 125'), nil)
+    eq(d:addCompare('stat', 'arcane >= 45'), nil)
+    eq(A.describeCondition(d.all[5]), 'Arcane >= 45')
+    d:remove(3)
+    local ban = assert(d:ban())
+    eq(ban.name, 'Bleed katanas with Lord of Blood')
+    eq(map(ban.all, function(c) return c.kind end), { 'weapon', 'talisman', 'level', 'stat' })
+    eq(A.banJudged(ban), 'act', 'a buffed weapon is something done')
+    local cfg = A.withBan(A.defaultConfig(), nil, ban)
+    cfg.off[#cfg.off + 1] = 'LightRoll'
+    cfg.runeLevel = 150
+    local back, problems = A.readConfig(A.writeConfig(cfg))
+    eq(problems, {})
+    eq(back, cfg)
+    eq(A.describeConfig(back), '48 of 49 built-in rules on (off: LightRoll), runeLevel=150, 1 of 1 bans of your own on')
+    -- Renaming a ban in place keeps its position; saving one under an existing name replaces it.
+    local renamed = A.newDraft(ban)
+    renamed.name = 'Renamed'
+    cfg = A.withBan(A.withBan(cfg, nil, { name = 'Second', on = true, all = ban.all }), ban.name, assert(renamed:ban()))
+    eq(map(cfg.bans, function(b) return b.name end), { 'Renamed', 'Second' })
+    eq(A.newDraft():ban(), nil)
+end)
+
 test('the table carries this source, and its Lua compiles as Cheat Engine will run it', function()
     local f = assert(io.open(here .. '/cheat-engine/er-duel-rules.CT', 'rb'))
     local ct = f:read('a')

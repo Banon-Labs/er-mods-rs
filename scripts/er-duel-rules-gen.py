@@ -259,6 +259,42 @@ RESIST_RATE_FIELDS = tuple(f'regist{s}ChangeRate' for s in
                            ('Poizon', 'Disease', 'Blood', 'Curse', 'Freeze', 'Sleep', 'Madness'))
 STATUS_DISABLE_FIELDS = tuple(f'disable{s}' for s in
                               ('Poison', 'Disease', 'Blood', 'Curse', 'Freeze', 'Sleep', 'Madness'))
+# Every weapon class a player can hold, as the game's menus call it, by a weapon of that class.
+# The class code is read from the weapon, and a class the game has that is missing here stops the
+# catalog rather than listing weapons under no class.
+WEAPON_CLASS_NAMES = {
+    'Dagger': 'Dagger', 'Straight Sword': 'Longsword', 'Greatsword': 'Bastard Sword',
+    'Colossal Sword': 'Greatsword', 'Curved Sword': 'Falchion', 'Curved Greatsword': 'Dismounter',
+    'Katana': 'Uchigatana', 'Twinblade': 'Twinblade', 'Thrusting Sword': 'Estoc',
+    'Heavy Thrusting Sword': 'Sword Lance', 'Axe': 'Hand Axe', 'Greataxe': 'Greataxe',
+    'Hammer': 'Mace', 'Great Hammer': 'Large Club', 'Flail': 'Flail', 'Spear': 'Spear',
+    'Great Spear': 'Lance', 'Halberd': 'Halberd', 'Reaper': 'Scythe', 'Unarmed': 'Unarmed',
+    'Fist': 'Caestus', 'Claw': 'Hookclaws', 'Whip': 'Whip', 'Colossal Weapon': 'Anvil Hammer',
+    'Light Bow': 'Shortbow', 'Bow': 'Longbow', 'Greatbow': 'Greatbow',
+    'Crossbow': 'Light Crossbow', 'Ballista': 'Hand Ballista', 'Glintstone Staff': 'Glintstone Staff',
+    'Sacred Seal': 'Finger Seal', 'Small Shield': 'Buckler', 'Medium Shield': 'Kite Shield',
+    'Greatshield': 'Dragon Towershield', 'Arrow': 'Arrow', 'Greatarrow': 'Great Arrow',
+    'Bolt': 'Bolt', 'Ballista Bolt': 'Ballista Bolt', 'Torch': 'Torch',
+    'Hand-to-Hand Art': 'Dryleaf Arts', 'Perfume Bottle': 'Firespark Perfume Bottle',
+    'Thrusting Shield': 'Dueling Shield', 'Throwing Blade': 'Smithscript Dagger',
+    'Backhand Blade': 'Backhand Blade', 'Light Greatsword': 'Milady', 'Great Katana': 'Great Katana',
+    'Beast Claw': 'Beast Claw',
+}
+# Every affinity, by its offset in a weapon id, as the game's menus name it, and the word the
+# param's row names put before an infused weapon (checked). Standard has no word, and the row names
+# say "Bloody" where the menus say Blood.
+AFFINITY_NAMES = ((0, 'Standard', ''), (100, 'Heavy', 'Heavy'), (200, 'Keen', 'Keen'),
+                  (300, 'Quality', 'Quality'), (400, 'Fire', 'Fire'),
+                  (500, 'Flame Art', 'Flame Art'), (600, 'Lightning', 'Lightning'),
+                  (700, 'Sacred', 'Sacred'), (800, 'Magic', 'Magic'), (900, 'Cold', 'Cold'),
+                  (1000, 'Poison', 'Poison'), (1100, 'Blood', 'Bloody'), (1200, 'Occult', 'Occult'))
+AFFINITY_PROBE = 'Longsword'
+# `EquipParamGoods.goodsType` of the items a ban can name besides spells and tears: usable items
+# and both kinds of spirit ash.
+CATALOG_ITEM_GOODS_TYPES = (0,) + SPIRIT_ASH_GOODS_TYPES
+# The upgrade an item's name ends with.
+UPGRADE_SUFFIX = r' \+\d+$'
+
 # `BehaviorParam_PC.refType`.
 BEHAVIOR_REF_BULLET = 1
 BEHAVIOR_REF_SPEFFECT = 2
@@ -810,6 +846,91 @@ def build(g):
     return out
 
 
+def build_catalog(g):
+    """Everything a player can name in a ban of their own, with the ids the referee matches it on.
+
+    Each list holds `[name, ids...]` entries grouped by name, because the game reuses a name across
+    rows (a spirit ash per upgrade level, a DLC copy of a weapon) and a ban on the name means all of
+    them. A spell or item is matched on what it leaves on its user: its own bullets and the
+    effects it applies directly. A bullet or effect two names reach is evidence of neither, so it
+    is left out of both, the same rule `spell_bullets` follows; a spell or item left with nothing
+    of its own cannot be told apart and is not listed."""
+    cat = {}
+    classes = {}
+    for label, exemplar in WEAPON_CLASS_NAMES.items():
+        classes[g.weapon[g.weapon_base(exemplar)]['wepType']] = label
+    weapons = {}
+    for wid, name in sorted(g.text['WeaponName'].items()):
+        if wid % 10000 or wid not in g.weapon:
+            continue
+        wep_type = g.weapon[wid]['wepType']
+        if wep_type not in classes:
+            raise Missing(f'weapon class {wep_type} ({name}) has no name in WEAPON_CLASS_NAMES')
+        weapons.setdefault(name, (wep_type, []))[1].append(wid)
+    cat['weapons'] = [[n, t, ids] for n, (t, ids) in sorted(weapons.items())]
+    cat['classes'] = [[label, t] for t, label in sorted(classes.items())]
+    probe = g.weapon_base(AFFINITY_PROBE)
+    for offset, word, row_word in AFFINITY_NAMES:
+        row_name = g.weapon_rows.get(probe + offset, '')
+        if offset and not row_name.startswith(row_word + ' '):
+            raise Missing(f'affinity {word}: row {probe + offset} is named {row_name!r}')
+    cat['affinities'] = [[word, offset] for offset, word, _ in AFFINITY_NAMES]
+
+    def by_name(stem, keep=lambda i: True):
+        named = {}
+        for i, name in sorted(g.text[stem].items()):
+            if name and not name.startswith('[') and keep(i):
+                named.setdefault(name, []).append(i)
+        return [[n, ids] for n, ids in sorted(named.items())]
+
+    cat['armor'] = by_name('ProtectorName')
+    cat['talismans'] = by_name('AccessoryName')
+    cat['tears'] = by_name('GoodsName', lambda i: i in g.goods
+                           and g.goods[i]['goodsType'] == GOODS_TYPE_TEAR)
+    skills = {}
+    for aid, name in sorted(g.text['ArtsName'].items()):
+        if name and aid in g.arts and g.arts[aid]['swordArtsTypeNew'] >= 0:
+            skills.setdefault(name, set()).add(g.arts[aid]['swordArtsTypeNew'])
+    cat['skills'] = [[n, sorted(t)] for n, t in sorted(skills.items())]
+
+    refs = {}
+    for gid in sorted(g.goods):
+        name = g.text['GoodsName'].get(gid)
+        if not name or name.startswith('['):
+            continue
+        # Every strength of one flask is the flask: "Flask of Cerulean Tears +7" is listed as
+        # "Flask of Cerulean Tears".
+        name = re.sub(UPGRADE_SUFFIX, '', name)
+        goods_type = g.goods[gid]['goodsType']
+        if goods_type in g.B.SPELL_TYPES:
+            kind, (sp, bl) = 'spells', g.magic_refs(gid)
+        elif goods_type in CATALOG_ITEM_GOODS_TYPES:
+            kind, (sp, bl) = 'items', g.goods_refs(gid)
+            if goods_type in SPIRIT_ASH_GOODS_TYPES:
+                # A spirit ash names its BuddyParam trigger row whatever its category says.
+                r = g.goods[gid]
+                sp = [r['refId_default'], r['refId_1']]
+        else:
+            continue
+        bullets, effects = refs.setdefault((kind, name), (set(), set()))
+        bullets |= g.bullet_closure(bl)
+        effects |= {s for s in sp if s > 0 and s in g.sp}
+    reached = {}
+    for bullets, effects in refs.values():
+        for key in [('b', b) for b in bullets] + [('s', s) for s in effects]:
+            reached[key] = reached.get(key, 0) + 1
+    for kind in ('spells', 'items'):
+        cat[kind] = []
+        for (k, name), (bullets, effects) in sorted(refs.items()):
+            if k != kind:
+                continue
+            own_b = sorted(b for b in bullets if reached[('b', b)] == 1)
+            own_s = sorted(s for s in effects if reached[('s', s)] == 1)
+            if own_b or own_s:
+                cat[kind].append([name, own_b, own_s])
+    return cat
+
+
 def rust_str(s):
     return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
 
@@ -1014,13 +1135,15 @@ def agent_data(t):
     }
 
 
-def render_js(t, params):
-    """The agent's data block: the same tables as tables.rs, in JS."""
+def render_js(t, params, catalog):
+    """The agent's data block: the same tables as tables.rs, in JS, and the catalog its helpers
+    pick names from."""
     import json
     data = agent_data(t)
     return (f'{FRIDA_BEGIN}\n'
             f'const T = {json.dumps(data, sort_keys=True)};\n'
             f'const PARAM_FIELDS = {json.dumps(params, sort_keys=True)};\n'
+            f'const CATALOG = {json.dumps(catalog, sort_keys=True, ensure_ascii=False)};\n'
             f'{FRIDA_END}')
 
 
@@ -1049,11 +1172,12 @@ def lua_literal(value):
     raise TypeError(f'no Lua form for {value!r}')
 
 
-def render_lua(t, params):
+def render_lua(t, params, catalog):
     """The Cheat Engine port's data block: the same tables as the agent's, in Lua."""
     return (f'{LUA_BEGIN}\n'
             f'M.T = {lua_literal(agent_data(t))}\n'
             f'M.PARAM_FIELDS = {lua_literal(params)}\n'
+            f'M.CATALOG = {lua_literal(catalog)}\n'
             f'{LUA_END}')
 
 
@@ -1206,12 +1330,15 @@ def main():
             print(f'er-duel-rules-gen: node is required to test the Frida agent: {e}', file=sys.stderr)
             return 1
         # The Cheat Engine port is Lua 5.3 (Cheat Engine's own); 5.4 and later run it unchanged.
+        # The rules-file editor writes what both referees read; its selftest has the agent read it.
+        bans = subprocess.run([sys.executable, os.path.join(HERE, 'er-duel-rules-bans.py'),
+                               '--selftest'], timeout=25).returncode
         lua = next((shutil.which(n) for n in ('lua', 'lua5.4', 'lua5.3') if shutil.which(n)), None)
         if lua is None:
             print('er-duel-rules-gen: SKIP the Cheat Engine port tests (no lua 5.3+ on PATH)')
-            return code
+            return code or bans
         ce = subprocess.run([lua, os.path.join(HERE, 'test-er-duel-rules-ce.lua')], timeout=25).returncode
-        return code or ce
+        return code or bans or ce
     try:
         g = Game()
     except SystemExit as e:
@@ -1220,12 +1347,13 @@ def main():
             return 0
         raise
     t = build(g)
+    catalog = build_catalog(g)
     text = rustfmt(render(t))
     params = frida_param_fields(g)
     agent_now = open(FRIDA_OUT, encoding='utf-8').read()
-    agent = with_frida_block(agent_now, render_js(t, params))
+    agent = with_frida_block(agent_now, render_js(t, params, catalog))
     lua_now = open(CE_LUA, encoding='utf-8').read()
-    lua = with_block(lua_now, LUA_BEGIN, LUA_END, render_lua(t, params), CE_LUA)
+    lua = with_block(lua_now, LUA_BEGIN, LUA_END, render_lua(t, params, catalog), CE_LUA)
     table_now = open(CE_TABLE, encoding='utf-8').read() if os.path.exists(CE_TABLE) else ''
     table = render_ct(lua)
     if a.selftest:
@@ -1238,6 +1366,14 @@ def main():
                    for s, _, n, why in t['tear_effects']), t['tear_effects']
         assert params['EquipParamWeapon']['index'] == 0, params['EquipParamWeapon']
         assert params['SpEffectParam']['fields']['spCategory'][1] == 'u16'
+        # The catalog: every class named, the affinities in id order, a spell told apart by its
+        # own bullets, and a flask's strengths listed as one item.
+        assert any(n == 'Rivers of Blood' and t == 13 for n, t, _ in catalog['weapons'])
+        assert [o for _, o in catalog['affinities']] == list(range(0, 1300, 100))
+        comet = [b for n, b, _ in catalog['spells'] if n == 'Comet Azur']
+        assert comet and comet[0], comet
+        assert any(n == 'Flask of Cerulean Tears' for n, _, _ in catalog['items'])
+        assert not any(re.search(UPGRADE_SUFFIX, n) for n, _, _ in catalog['items'])
         print('er-duel-rules-gen selftest: PASS')
         return 0
     if a.check:

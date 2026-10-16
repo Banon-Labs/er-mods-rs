@@ -1,0 +1,157 @@
+{
+  "about": "Rules-file cases both ports of the referee must agree on: scripts/test-er-duel-rules-frida.cjs runs them against the Frida agent and scripts/test-er-duel-rules-ce.lua against the Cheat Engine port. Each case reads `config` (or the raw `configText`) as a rules file, expects `problems` complaints about it (0 when absent), then plays `steps` -- player 1's frame at time `t`, with a clean opponent when `match` -- and expects exactly the alerts listed for player 1, in order. Every step gets a new referee unless `oneReferee`, so a build changed between steps is not a build switch.",
+  "facts": {
+    "weapons": {
+      "9040000": {"wepType": 13}, "9041100": {"wepType": 13}, "9000000": {"wepType": 13},
+      "9001100": {"wepType": 13}, "2000000": {"wepType": 3}, "2000100": {"wepType": 3},
+      "2001100": {"wepType": 3}
+    },
+    "effects": {"9001": {"category": 162}, "9002": {"category": 163}}
+  },
+  "cases": [
+    {
+      "name": "a weapon ban waits for an opponent and then fires from any slot",
+      "config": {"bans": [{"name": "No Rivers", "all": [{"kind": "weapon", "items": [{"name": "Rivers of Blood", "ids": [9040000]}]}]}]},
+      "steps": [
+        {"t": 0, "match": false, "player": {"weaponsLeft": [-1, -1, 9041125]}},
+        {"t": 2000, "match": true, "player": {"weaponsLeft": [-1, -1, 9041125]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "No Rivers", "detail": "Rivers of Blood"}]
+    },
+    {
+      "name": "a grip condition needs the grip",
+      "config": {"bans": [{"name": "No 2H Rivers", "all": [{"kind": "weapon", "where": "twoHanded", "items": [{"name": "Rivers of Blood", "ids": [9040000]}]}]}]},
+      "steps": [
+        {"t": 0, "match": true, "player": {"weaponsRight": [9040010, -1, -1]}},
+        {"t": 2000, "match": true, "player": {"weaponsRight": [9040010, -1, -1], "armStyle": 3}}
+      ],
+      "expect": [{"rule": "Custom", "text": "No 2H Rivers", "detail": "Rivers of Blood two-handed"}]
+    },
+    {
+      "name": "a class and an affinity are one weapon, not two",
+      "config": {"bans": [{"name": "Blood katanas", "all": [{"kind": "weapon",
+        "classes": [{"name": "Katana", "ids": [13]}], "affinities": [{"name": "Blood", "ids": [1100]}]}]}]},
+      "steps": [
+        {"t": 0, "match": true, "player": {"weaponsRight": [9000000, -1, -1], "weaponsLeft": [2001100, -1, -1]}},
+        {"t": 2000, "match": true, "player": {"weaponsRight": [9001125, -1, -1], "weaponsLeft": [2000100, -1, -1]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "Blood katanas", "detail": "Blood Katana"}]
+    },
+    {
+      "name": "every condition must hold at once",
+      "config": {"bans": [{"name": "Rivers with Lord of Blood", "all": [
+        {"kind": "weapon", "items": [{"name": "Rivers of Blood", "ids": [9040000]}]},
+        {"kind": "talisman", "items": [{"name": "Lord of Blood's Exultation", "ids": [2160]}]}]}]},
+      "steps": [
+        {"t": 0, "match": true, "player": {"talismans": [2160, -1, -1, -1]}},
+        {"t": 2000, "match": true, "player": {"talismans": [2160, -1, -1, -1], "weaponsRight": [9040000, -1, -1]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "Rivers with Lord of Blood", "detail": "Rivers of Blood, Lord of Blood's Exultation"}]
+    },
+    {
+      "name": "a skill ban fires on every use, judged on the weapon it came from",
+      "oneReferee": true,
+      "config": {"off": ["BannedAsh"], "bans": [{"name": "No katana Bloodhound's Step", "all": [
+        {"kind": "skill", "items": [{"name": "Bloodhound's Step", "ids": [156]}]},
+        {"kind": "weapon", "where": "skill", "classes": [{"name": "Katana", "ids": [13]}]}]}]},
+      "steps": [
+        {"t": 0, "match": false, "player": {"weaponsRight": [2000000, -1, -1], "weaponsLeft": [9000000, -1, -1], "newAnims": [756040000]}},
+        {"t": 10, "match": false, "player": {"weaponsRight": [9000000, -1, -1], "newAnims": [756040000]}},
+        {"t": 20, "match": false, "player": {"weaponsRight": [9000000, -1, -1], "newAnims": [756040000]}}
+      ],
+      "expect": [
+        {"rule": "Custom", "text": "No katana Bloodhound's Step", "detail": "Bloodhound's Step, Katana (skill weapon)"},
+        {"rule": "Custom", "text": "No katana Bloodhound's Step", "detail": "Bloodhound's Step, Katana (skill weapon)"}
+      ]
+    },
+    {
+      "name": "a spell is seen by its own bullet, alone too, and once while it lasts",
+      "oneReferee": true,
+      "config": {"bans": [{"name": "No Comet Azur", "all": [{"kind": "spell", "items": [{"name": "Comet Azur", "bullets": [10420000, 10420001]}]}]}]},
+      "steps": [
+        {"t": 0, "match": false, "player": {"bullets": [10420001]}},
+        {"t": 100, "match": false, "player": {"bullets": [10420001]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "No Comet Azur", "detail": "Comet Azur"}]
+    },
+    {
+      "name": "an item is seen by the effect it applies",
+      "config": {"off": ["RotGrease"], "bans": [{"name": "No Rot Grease", "all": [{"kind": "item", "items": [{"name": "Rot Grease", "effects": [3310, 3314]}]}]}]},
+      "steps": [{"t": 0, "match": false, "player": {"speffects": [3314]}}],
+      "expect": [{"rule": "Custom", "text": "No Rot Grease", "detail": "Rot Grease"}]
+    },
+    {
+      "name": "a weapon buff counts only on the hand it sits on",
+      "config": {"bans": [{"name": "No buffed katanas", "all": [{"kind": "weapon", "where": "held", "buff": true, "classes": [{"name": "Katana", "ids": [13]}]}]}]},
+      "steps": [
+        {"t": 0, "match": false, "player": {"weaponsRight": [9000000, -1, -1], "speffects": [9002]}},
+        {"t": 2000, "match": false, "player": {"weaponsRight": [9000000, -1, -1], "speffects": [9001]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "No buffed katanas", "detail": "Katana in hand with a weapon buff"}]
+    },
+    {
+      "name": "powerstancing is both hands, one class, neither two-handed",
+      "config": {"bans": [{"name": "No katana powerstance", "all": [{"kind": "weapon", "where": "powerstanced", "classes": [{"name": "Katana", "ids": [13]}]}]}]},
+      "steps": [
+        {"t": 0, "match": true, "player": {"weaponsRight": [9000000, -1, -1], "weaponsLeft": [2000000, -1, -1]}},
+        {"t": 2000, "match": true, "player": {"weaponsRight": [9000000, -1, -1], "weaponsLeft": [9040000, -1, -1], "armStyle": 3}},
+        {"t": 4000, "match": true, "player": {"weaponsRight": [9000000, -1, -1], "weaponsLeft": [9040000, -1, -1]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "No katana powerstance", "detail": "Katana powerstanced"}]
+    },
+    {
+      "name": "rune level and attribute conditions, with the built-in level rule off",
+      "config": {"off": ["RuneLevel"], "bans": [{"name": "High arcane over 125", "all": [
+        {"kind": "level", "op": ">", "value": 125}, {"kind": "stat", "stat": 7, "op": ">=", "value": 45}]}]},
+      "steps": [
+        {"t": 0, "match": true, "player": {"level": 150, "attributes": [0, 0, 0, 0, 0, 0, 0, 40]}},
+        {"t": 2000, "match": true, "player": {"level": 150, "attributes": [0, 0, 0, 0, 0, 0, 0, 50]}}
+      ],
+      "expect": [{"rule": "Custom", "text": "High arcane over 125", "detail": "Rune Level 150, Arcane 50"}]
+    },
+    {
+      "name": "a changed rune level is the one judged and the one written",
+      "config": {"runeLevel": 150},
+      "steps": [
+        {"t": 0, "match": true, "player": {"level": 150}},
+        {"t": 2000, "match": true, "player": {"level": 125}}
+      ],
+      "expect": [{"rule": "RuneLevel", "text": "Rune Level: 150", "detail": "Rune Level 125"}]
+    },
+    {
+      "name": "a changed blue flask count",
+      "oneReferee": true,
+      "config": {"blueFlasks": 1},
+      "steps": [
+        {"t": 0, "match": true, "player": {"speffects": [501050]}},
+        {"t": 10, "match": true, "player": {}},
+        {"t": 20, "match": true, "player": {"speffects": [501050]}}
+      ],
+      "expect": [{"rule": "CeruleanFlasks", "text": "Blue flasks limited to 1", "detail": "Flask of Cerulean Tears number 2 this round"}]
+    },
+    {
+      "name": "a ban switched off never fires, and raw ids work",
+      "config": {"off": ["RotGrease"], "bans": [
+        {"name": "Off", "on": false, "all": [{"kind": "effect", "items": [{"name": "effect 3314", "ids": [3314]}]}]},
+        {"name": "Backstep", "all": [{"kind": "anim", "items": [{"name": "anim 27000", "ids": [27000]}]}]}]},
+      "steps": [{"t": 0, "match": false, "player": {"speffects": [3314], "newAnims": [27000]}}],
+      "expect": [{"rule": "Custom", "text": "Backstep", "detail": "anim 27000"}]
+    },
+    {
+      "name": "a ban with a condition that cannot be read is left out whole",
+      "config": {"bans": [{"name": "Half a ban", "all": [
+        {"kind": "talisman", "items": [{"name": "Lord of Blood's Exultation", "ids": [2160]}]},
+        {"kind": "no such kind"}]}]},
+      "problems": 2,
+      "steps": [{"t": 0, "match": true, "player": {"talismans": [2160, -1, -1, -1]}}],
+      "expect": []
+    },
+    {
+      "name": "a file that is not JSON leaves the ruleset as written",
+      "configText": "{ not json",
+      "problems": 1,
+      "steps": [{"t": 0, "match": true, "player": {"level": 150}}],
+      "expect": [{"rule": "RuneLevel", "text": "Rune Level: 125", "detail": "Rune Level 150"}]
+    }
+  ]
+}
