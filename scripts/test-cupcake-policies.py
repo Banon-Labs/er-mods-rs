@@ -2309,6 +2309,21 @@ def main() -> int:
             False,
             "teardown that does not relaunch",
         ),
+        # The command refused on 2026-10-15. The deny came from `.worktrees/er-sky/.cupcake`,
+        # which the global hook evaluates when the session's shell sits in that worktree (it
+        # passes no `--policy-dir`), and that branch lacks the name test for `NAME=/path`. This
+        # tree's rulebook allows it; run through the compiled engine because that test is
+        # `indexof`/`substring`/`split` arithmetic the WASM build has to agree with.
+        PolicyCase(
+            "allow-teardown-then-scratchpad-profile-user-launcher",
+            "python3 /home/banon/projects/er-mods-rs/scripts/er-teardown.py > /dev/null 2>&1;"
+            " ME3_PROFILE=/tmp/claude-1000/-home-banon-projects-er-mods-rs/"
+            "e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun.me3"
+            " /home/banon/Elden/launch.sh -o"
+            " > /tmp/claude-1000/-home-banon-projects-er-mods-rs/"
+            "e7edaee5-d1da-4868-ab95-fa3613643f52/scratchpad/er-sky-sun-launch.log 2>&1",
+            True,
+        ),
         PolicyCase(
             "deny-inline-python-file-write",
             "python3 -c \"open('notes.md','w').write('x')\"",
