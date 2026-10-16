@@ -309,3 +309,6 @@ portable	-	test-live-er-run-signal.py	runs the real signal and sentinel against 
 portable	-	check-shared-detour-signatures.py --selftest	source/AST/text analysis only	addresses
 portable	-	check-shared-detour-signatures.py	source/AST/text analysis only	addresses
 portable	-	er-run-natives-history.py --selftest	source/AST/text analysis only	runtime-tools
+blocked	game-install	er-duel-rules-gen.py --selftest	one line: SKIP (no game data). The ban table is read out of the installed regulation and item text, which a runner does not have	product
+blocked	game-install	er-duel-rules-gen.py --check	one line: SKIP (no game data). Whether tables.rs still matches the game is a question about the installed game	product
+portable	-	er-duel-rules-gen.py --test-agent	the agent carries its own tables; node runs the rule tests with no game data	product

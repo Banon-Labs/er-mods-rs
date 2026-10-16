@@ -2479,6 +2479,17 @@ cargo test --manifest-path "$repo_root/Cargo.toml" -p er-hotkey-conflicts --lib
 # stale-handle rejection that keeps it from reading a freed character.
 cargo test --manifest-path "$repo_root/Cargo.toml" -p er-target-bars --lib
 
+# er-duel-rules keeps every ruleset decision host-testable in its core: which grip a ban needs,
+# the hand a weapon buff sits on, the equip-load ratio, the per-round blue flask count and when a
+# popup may fire again. The ban table it reads is generated from the installed game, and the
+# generator's --check refuses a table that no longer matches it (skipping without a game).
+cargo test --manifest-path "$repo_root/Cargo.toml" -p er-duel-rules-core
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --selftest
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --check
+# The shareable Frida agent (scripts/frida/er-duel-rules.js) carries a JS port of the same rules;
+# its tests are the core's cases, run under node, so the two cannot drift apart unnoticed.
+python3 "$repo_root/scripts/er-duel-rules-gen.py" --test-agent
+
 # er-net-effects's host-portable modules. Six of them are ungated with a comment saying
 # "so its tests run on the host" -- and until this line existed nothing ran them: the workspace
 # pins `default-members` to er-quickload, so a bare `cargo test` never selects this crate and the
