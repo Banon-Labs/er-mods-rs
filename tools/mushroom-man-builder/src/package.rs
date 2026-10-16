@@ -125,7 +125,8 @@ const FG_FEMALE_ALIAS: &str = "fg_a_0000_f.partsbnd.dcx";
 const HEAD_PART_PREFIXES: [&str; 2] = ["fg_a", "hr_a"];
 const HEAD_PART_SUFFIXES: [&str; 3] = ["", "_l", "_m"];
 const HEAD_PART_ID_COUNT: u32 = 10_000;
-const NAKED_SLOTS: [&str; 4] = ["hd", "bd", "am", "lg"];
+const NAKED_SLOTS: [&str; 4] = ["hd", BODY_SLOT, "am", "lg"];
+const BODY_SLOT: &str = "bd";
 const GENDERS: [&str; 2] = ["m", "f"];
 const LODS: [&str; 2] = ["", "_l"];
 const FACEGEN: &str = "/facegen/facegen.fgbnd.dcx";
@@ -153,6 +154,11 @@ pub struct Inputs<'a> {
     pub writer: Writer,
     /// What a Biped character's alpha-tested and alpha-blended meshes are drawn with.
     pub cutouts: Cutouts,
+    /// Developer flag `--cloth-test-body <id>`: the naked body slots (`bd_m_0000`, `bd_f_0000`
+    /// and their `_l`) written as vanilla body part `bd_<gender>_<id>` renamed, its cloth files
+    /// and all, instead of emptied. It asks whether the slot `mushroom_man.dll` sends the game to
+    /// runs a part's cloth simulation, before a character's tail is built into it.
+    pub cloth_test_body: Option<String>,
 }
 
 /// What a Biped character's alpha-tested (`*_Edge`) and alpha-blended (`*_Alp`) meshes are drawn
@@ -724,6 +730,17 @@ pub fn build(inputs: Inputs<'_>, out_dir: &Path) -> Result<BuildReport> {
         for gender in GENDERS {
             for lod in LODS {
                 let name = format!("{slot}_{gender}_0000{lod}{PART_EXTENSION}");
+                if let (BODY_SLOT, Some(part)) = (slot, inputs.cloth_test_body.as_deref()) {
+                    files.push(cloth_test_body(
+                        inputs.archives,
+                        oodle,
+                        part,
+                        gender,
+                        lod,
+                        &parts_dir.join(&name),
+                    )?);
+                    continue;
+                }
                 let logical = format!("/parts/{name}");
                 let packed = inputs.archives.read(&logical)?;
                 let mut binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
@@ -1243,6 +1260,37 @@ fn write_part(
         .context(format!("packing {}", path.display()))?;
     fs::write(path, packed).context(format!("writing {}", path.display()))?;
     Ok(path.to_path_buf())
+}
+
+/// The naked body slot `bd_<gender>_0000<lod>` written to `path` as vanilla `bd_<gender>_<id><lod>`
+/// with every entry renamed onto the slot: its FLVER, its TPF, its cloth (`_c.hkx`, `_c.clm2`) and
+/// the anibnd holding the cloth bones' skeleton (see [`Inputs::cloth_test_body`]).
+fn cloth_test_body(
+    archives: &ArchiveSet,
+    oodle: Option<&Oodle>,
+    id: &str,
+    gender: &str,
+    lod: &str,
+    path: &Path,
+) -> Result<PathBuf> {
+    let logical = format!("/parts/bd_{gender}_{id}{lod}{PART_EXTENSION}");
+    let packed = archives
+        .read(&logical)
+        .context(format!("--cloth-test-body {id}"))?;
+    let binder = Bnd4::read(&dcx::decompress(&packed, oodle)?).context(&logical)?;
+    let (source, target) = (
+        format!("BD_{}_{id}", gender.to_uppercase()),
+        format!("BD_{}_0000", gender.to_uppercase()),
+    );
+    let lod = lod.to_uppercase();
+    let renamed = renamed(
+        &binder,
+        &[
+            (&format!("{source}{lod}"), &format!("{target}{lod}")),
+            (&source, &target),
+        ],
+    );
+    write_part(path, &packed, &renamed, oodle)
 }
 
 /// Whether `dir` already holds what `mushroom_man.dll` needs beside it to switch on.

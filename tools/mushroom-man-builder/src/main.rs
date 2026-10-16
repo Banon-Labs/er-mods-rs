@@ -89,6 +89,8 @@ struct Options {
     writer: Option<Writer>,
     /// `--no-cutout-material`: a Biped character's alpha-tested meshes on the Body material.
     cutouts: Cutouts,
+    /// Developer flag `--cloth-test-body <id>` ([`package::Inputs::cloth_test_body`]).
+    cloth_test_body: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -156,6 +158,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         source_weights: None,
         writer: None,
         cutouts: Cutouts::EdgeMaterial,
+        cloth_test_body: None,
     };
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
@@ -177,6 +180,13 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--source-obj" => options.source_obj = Some(value()?),
             "--source-weights" => options.source_weights = Some(value()?),
             "--no-cutout-material" => options.cutouts = Cutouts::BodyMaterial,
+            "--cloth-test-body" => {
+                let id = value()?.display().to_string();
+                if id.len() != 4 || !id.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("--cloth-test-body takes a body part's four-digit id".into());
+                }
+                options.cloth_test_body = Some(id);
+            }
             "--writer" => {
                 options.writer = Some(match value()?.to_str() {
                     Some("patch") => Writer::Patch,
@@ -433,6 +443,7 @@ fn build(options: &Options, character: &'static Character) -> Result<()> {
             source_override,
             writer: options.writer.unwrap_or(character.writer),
             cutouts: options.cutouts,
+            cloth_test_body: options.cloth_test_body.clone(),
         },
         &out,
     )?;
