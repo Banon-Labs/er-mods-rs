@@ -38,21 +38,21 @@ const BODY_STEM: &str = "FC_M_0000";
 /// measured 2026-10-15. The fit turns down c2940 (its thighs are roots) and c3110 (a lizard on a
 /// Biped rig, its pelvis 0.13 m up).
 const UNFITTED: [(&str, usize); 6] = [
-    ("maps", 26),
-    ("no model", 6),
-    ("not biped", 118),
+    ("maps", 32),
+    ("no model", 8),
+    ("not biped", 100),
     ("own fit", 1),
-    ("refused", 23),
-    ("textures", 19),
+    ("refused", 25),
+    ("textures", 27),
 ];
 const FITTED: [(&str, usize); 7] = [
     ("fit", 2),
-    ("fits", 24),
-    ("no model", 6),
-    ("not biped", 118),
+    ("fits", 30),
+    ("no model", 8),
+    ("not biped", 100),
     ("own fit", 1),
-    ("refused", 23),
-    ("textures", 19),
+    ("refused", 25),
+    ("textures", 27),
 ];
 
 fn kind(verdict: &Verdict) -> &'static str {

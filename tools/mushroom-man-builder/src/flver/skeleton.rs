@@ -86,9 +86,10 @@ pub fn normalise(name: &str) -> String {
     }
 }
 
-/// Whether this skeleton uses Biped names: some bone is `L UpperArm` or `R UpperArm`, spaced,
-/// with an optional `Bip01 ` in front and digits after. Exactly 74 DSR chrbnds pass, and the
-/// ER-style `L_UpperArm` rigs (c0000, c2220, ...) do not.
+/// Whether this skeleton uses Biped names: some bone is `L UpperArm` or `R UpperArm`, spaced or
+/// underscored, with an optional `Bip01 ` in front and digits after. [`normalise`] drops the
+/// underscore, so the `L_UpperArm` rigs (c2390 Darkwraith, the Black Knights, c2410) take the same
+/// rules as the spaced ones; letting them through on 2026-10-15 added 6 rigs that fit.
 pub fn is_biped(bones: &[Bone]) -> bool {
     bones.iter().any(|bone| {
         let name = bone.name.trim();
@@ -96,6 +97,8 @@ pub fn is_biped(bones: &[Bone]) -> bool {
         let Some(rest) = name
             .strip_prefix("L UpperArm")
             .or_else(|| name.strip_prefix("R UpperArm"))
+            .or_else(|| name.strip_prefix("L_UpperArm"))
+            .or_else(|| name.strip_prefix("R_UpperArm"))
         else {
             return false;
         };
@@ -551,11 +554,12 @@ mod tests {
     }
 
     #[test]
-    fn only_spaced_upper_arms_make_a_biped() {
+    fn spaced_or_underscored_upper_arms_make_a_biped() {
         let named = |name: &str| vec![bone(name, -1, [0.0; 3])];
         assert!(is_biped(&named("L UpperArm")));
         assert!(is_biped(&named("Bip01 R UpperArm01")));
-        assert!(!is_biped(&named("L_UpperArm")));
+        assert!(is_biped(&named("L_UpperArm")));
+        assert!(!is_biped(&named("L_UpperArmPad")));
         assert!(!is_biped(&named("CTRL_L UpperArm")));
         assert!(!is_biped(&named("LArm1")));
     }
