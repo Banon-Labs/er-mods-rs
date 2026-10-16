@@ -533,6 +533,30 @@ def main() -> int:
             False,
             "A build reports success or failure ONCE",
         ),
+        # 2026-10-15: a grep filtering git's path list inside a substitution, which a gate then
+        # reads as arguments, is not a grep over the gate's output. Live because the substitution
+        # token and the quote reading beside it are regexes the wasm runtime runs, not `opa test`.
+        PolicyCase(
+            "allow-gate-reading-a-git-path-list-filtered-in-a-substitution",
+            "files=$( (git diff --name-only 72ef6a9b; git ls-files --others --exclude-standard) "
+            "| sort -u | grep -E '^(crates/er-cel-shade|crates/er-shader-compiler|scripts)/' "
+            "| while read f; do [ -f \"$f\" ] && echo \"$f\"; done ); echo \"$files\" | wc -l; "
+            "python3 scripts/check-comment-caps.py $files; echo \"exit=$?\"",
+            True,
+        ),
+        PolicyCase(
+            "allow-gate-taking-a-filtered-git-path-list-as-arguments",
+            "python3 scripts/check-comment-caps.py "
+            "$(git diff --name-only 72ef6a9b | grep -E '^(crates/er-cel-shade|scripts)/'); "
+            "echo \"exit=$?\"",
+            True,
+        ),
+        PolicyCase(
+            "deny-build-in-a-substitution-whose-output-is-grepped",
+            "echo $(cargo build 2>&1) | grep error",
+            False,
+            "A build reports success or failure ONCE",
+        ),
         PolicyCase(
             "allow-local-shell-vars-before-commands-with-coarse-ast",
             "run_id=$(date +%Y%m%d-%H%M%S)\n"
