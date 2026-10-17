@@ -17,8 +17,9 @@ Run under uv so capstone is provisioned:
     uv run --with capstone python3 scripts/ersc_pe.py --help
 
 Env overrides (no hard-coded user paths):
-    ERSC_DLL  -- path to ersc.dll (default: the me3-profile copy, then the
-                 Steam game-install copy)
+    ERSC_DLL  -- path to ersc.dll (default: the Steam game-install copy, the build
+                 the me3 profiles load; ~/Elden/ersc.dll is a stale 1.9.9 copy and
+                 is not consulted)
 """
 from __future__ import annotations
 
@@ -29,7 +30,6 @@ BASE = 0x180000000
 
 _CANDIDATES = [
     os.environ.get('ERSC_DLL'),
-    os.path.join(os.path.expanduser('~'), 'Elden', 'ersc.dll'),
     os.path.join(
         os.path.expanduser('~'),
         '.local/share/Steam/steamapps/common/ELDEN RING/Game/SeamlessCoop/ersc.dll',
